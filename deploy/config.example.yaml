@@ -1,0 +1,65 @@
+# /etc/fairy/config.yaml  (non-secret settings; secrets live in /etc/fairy/fairy.env, referenced by NAME here)
+public_url: https://panel.example.com     # behind nginx; used for the OIDC redirect URI (<public_url>/auth/callback)
+request_timeout: 4                        # seconds per request (each source also gets a timeout below its interval)
+offline_after: 60                         # failing for longer than this => "offline" (before that: "stale")
+session_max_age: 604800                   # 7 d absolute; group membership is re-checked at each login
+session_idle_timeout: 43200               # 12 h without activity => sign in again
+step_up_window_s: 300                     # control actions need a Pocket ID sign-in from the last 5 min
+step_up_prompt_login: false               # also send prompt=login on step-up (max_age=0 is always sent)
+enable_docs: false                        # /docs + /api/openapi.json (login required)
+data_dir: /var/lib/fairy                  # state.json, sessions.json, tokens.json, settings, uploads, health.json
+audit_log: /var/lib/fairy/audit.log       # append-only JSON lines
+control_rate_per_min: 6
+login_rate_per_min: 20
+trusted_proxies: ["127.0.0.1/32", "::1/128"]  # X-Forwarded-For is believed only from these (rate limits + audit IPs)
+panel_hosts: []                           # system ids the panel itself runs on (power menu warns), e.g. [lxc-110]
+boost_while_viewing: true                 # 1 s polling while a host's page is open (30 s grace)
+intervals: {agent: 1, proxmox: 2, ups: 2, history: 5, stream: 1}
+
+oidc:
+  issuer: https://id.example.com          # Pocket ID; discovery = <issuer>/.well-known/openid-configuration
+  client_id: 00000000-0000-0000-0000-000000000000   # secret (if not a public client): FAIRY_OIDC_CLIENT_SECRET
+  scopes: [openid, profile, email, groups]
+  groups_claim: groups
+  allowed_groups: [homelab]
+  allowed_emails: []
+  control_groups: [homelab-admins]        # may use fans / power / Wake-on-LAN / polling. Empty = nobody.
+
+proxmox:
+  - id: teyvat
+    id_prefix: ""                         # keep ids unprefixed for the main cluster
+    cluster_name: NSX-TEYVAT
+    urls: [https://pve1.lan:8006, https://pve2.lan:8006]   # tried in order (failover)
+    token_id: fairy@pve!panel             # read-only token; secret: FAIRY_PROXMOX_TOKEN_SECRET (or token_secret_env)
+    verify_tls: true
+    ca_file: /etc/fairy/pve-root-ca.pem
+    # Optional separate token with only VM.PowerMgmt (role "FairyPower") -> guest start/shutdown/reboot/stop
+    # power_token_id: fairy@pve!power
+    # power_token_secret_env: FAIRY_PROXMOX_POWER_TOKEN
+    # node_power: false                   # nodes via Sys.PowerMgmt when no agent with power control runs on them
+
+agents:
+  - id: nsx-cyrene
+    name: NSX-CYRENE
+    url: http://100.64.0.10:9101
+    token_env: AGENT_TOKEN_NSX_CYRENE     # one token per machine (>= 24 chars)
+    group: Neptune
+    owner: neptune
+    tags: [server]
+    # fan_control: {vendor: supermicro, control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE}
+    # power_control: true                 # also needs the agent's --enable-power-control
+  # - {id: kachina-agent, url: "http://100.64.0.5:9101", token_env: AGENT_TOKEN_KACHINA, node: NSX-KACHINA}
+
+systems: []
+  # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming]}
+  # - {id: nsx-cyrene, wol: {mac: "3c:ec:ef:00:11:22", relay: kachina-agent, broadcast: 192.168.10.255}}
+
+power_sources: []
+  # - {id: plug-cyrene, type: tuya, device_id: bf0123456789abcdef, ip: 192.168.1.60, local_key_env: TUYA_KEY_PLUG, version: "3.4", system: nsx-cyrene}
+  # - {id: plug-desk, type: shelly, url: "http://192.168.1.61", password_env: SHELLY_PW}
+  # - {id: tasmota-1, type: tasmota, url: "http://192.168.1.62", password_env: TASMOTA_PW}
+  # - {id: idrac, type: redfish, url: "https://192.168.1.5", username: root, password_env: IDRAC_PW, verify_tls: false}
+  # - {id: ups-power, type: nut, host: 192.168.1.10, ups: ups}
+
+ups: []
+  # - {id: rack, host: 192.168.1.10, username: monuser, password_env: NUT_PASSWORD, powers: [node-pve1, node-pve2]}
