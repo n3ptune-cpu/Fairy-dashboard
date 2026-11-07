@@ -1,0 +1,907 @@
+// Fairy UI. Plain JS, no build step, strict-CSP friendly (no inline script/style).
+// Data: /api/me, /api/settings, /api/stream (SSE: full `systems` once, then `systems_delta` every second),
+// /api/ups, /api/power/history, per-page fetches. The DOM is patched in place (morph), so bars animate and
+// scroll / selection / open menus survive the 1 s updates.
+"use strict";
+
+const $ = (s, root = document) => root.querySelector(s);
+const state = {
+  me: null, systems: [], byId: {}, summary: null, power: null, history: [], settings: null, closed: {}, timer: null,
+  ups: null, upsHist: {}, upsEvents: [], menu: null, poll: {}, caps: {}, watch: undefined, es: null, flash: null,
+};
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const enc = encodeURIComponent;
+const controlOff = () => state.summary?.control_disabled || state.me?.control_disabled || null;
+const canControl = () => !!state.me?.can_control && !controlOff();
+const controlWhyNot = () => (controlOff() ? `Control is disabled by an administrator (${controlOff().by}). Re-enable on the server: admin control enable`
+  : !state.me?.can_control ? "You are not in a control group (read-only)." : "");
+
+// ------------------------------------------------------------ formatting
+const fmtBytes = (b) => {
+  if (b == null) return "–";
+  const u = ["B", "KiB", "MiB", "GiB", "TiB"]; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return `${b.toFixed(b >= 100 || i === 0 ? 0 : 1)} ${u[i]}`;
+};
+const fmtRate = (b) => (b == null ? "–" : `${fmtBytes(b)}/s`);
+const fmtUptime = (s) => {
+  if (s == null) return "–";
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+};
+const pct = (u, t) => (u != null && t ? Math.min(100, (100 * u) / t) : null);
+const fmtP = (p) => (p == null ? "–" : `${p.toFixed(0)}%`);
+const fmtW = (w) => (w == null ? "–" : `${w >= 100 ? w.toFixed(0) : w.toFixed(1)} W`);
+const ago = (iso) => {
+  if (!iso) return "never";
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  return s < 60 ? `${s.toFixed(0)}s ago` : s < 3600 ? `${(s / 60).toFixed(0)}m ago` : `${(s / 3600).toFixed(1)}h ago`;
+};
+const kindLabel = (s) => ({ node: "node", qemu: "VM", lxc: "CT", agent: s.platform || "agent" }[s.kind]);
+const live = (s) => s.status === "online" || s.status === "stale" || s.status === "paused";  // paused = frozen values
+const hottest = (s) => (s.temps || []).reduce((m, t) => (m == null || t.current_c > m.current_c ? t : m), null);
+
+// ------------------------------------------------------------ icons (inline SVG, currentColor)
+const svg = (d, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const I = {
+  overview: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
+  cluster: svg('<rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/>'),
+  machine: svg('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+  power: svg('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'),
+  settings: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>', 18),
+  caret: svg('<path d="m9 6 6 6-6 6"/>', 14),
+  collapse: svg('<path d="m15 6-6 6 6 6"/>', 18),
+  menu: svg('<path d="M4 6h16M4 12h16M4 18h16"/>', 20),
+  guests: svg('<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 13v8M13 17h8"/>'),
+  ext: svg('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', 13),
+};
+
+I.ups = svg('<rect x="6" y="3" width="12" height="18" rx="1"/><path d="M12 7l-2.5 5h5L12 17"/>');
+I.more = svg('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>', 16);
+I.shield = svg('<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/>', 18);
+I.audit = svg('<path d="M8 4h11v16H8z"/><path d="M5 7v13h11"/><path d="M11 8h5M11 12h5M11 16h3"/>');
+I.onoff = svg('<path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>', 15);
+
+const fmtRuntime = (s) => (s == null ? "–" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
+const fmtIv = (v) => (v == null ? "–" : `${+v.toFixed(1)}s`);
+const secsSince = (iso) => (iso ? Math.max(0, (Date.now() - new Date(iso)) / 1000) : null);
+
+// ------------------------------------------------------------ helpers
+async function api(path, opts = {}) {
+  const write = opts.method && opts.method !== "GET";
+  const res = await fetch(path, { credentials: "same-origin", ...opts,
+    headers: { Accept: "application/json", ...(write ? { "X-Requested-With": "fairy" } : {}),
+      ...(opts.body && typeof opts.body === "string" ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } });
+  const data = res.status === 204 ? null : await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const d = data?.detail;
+    const e = new Error(d?.message || d?.[0]?.msg || (typeof d === "string" ? d : null) || `HTTP ${res.status}`);
+    e.status = res.status; e.stepUp = d?.code === "step_up_required"; e.detail = d;
+    throw e;
+  }
+  return data;
+}
+// ---- step-up re-authentication: control actions need a recent Pocket ID sign-in
+const PENDING_KEY = "fairy-pending-action";
+function showStepUp(pending, detail) {
+  state.menu = null; render();
+  try { sessionStorage.setItem(PENDING_KEY, JSON.stringify({ ...pending, ts: Date.now(), hash: location.hash })); } catch { /* ignore */ }
+  const age = state.me?.auth_age_s, win = detail?.window_s || state.me?.step_up_window_s || 300;
+  const next = encodeURIComponent("/" + (location.hash || "#/"));
+  const m = $("#modal");
+  m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle">
+    <div class="stepup-ico">${I.shield}</div>
+    <h3 id="stitle">Confirm it's you</h3>
+    <p>Control actions need a Pocket ID sign-in from the last <b>${Math.round(win / 60)} minutes</b>.${age != null ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}</p>
+    <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b></div>
+    <p class="note">You'll sign in again at Pocket ID (passkey) and come straight back here to finish it. Nothing has been sent yet.</p>
+    <div class="row-gap end"><button class="btn" id="su-cancel">Cancel</button>
+      <a class="btn primary" id="su-go" href="/auth/login?step_up=1&amp;next=${next}">Continue to Pocket ID</a></div></div>`;
+  m.hidden = false;
+  $("#su-cancel").onclick = () => { m.hidden = true; m.innerHTML = ""; try { sessionStorage.removeItem(PENDING_KEY); } catch { /* ignore */ } };
+}
+// Run a control call; on "step_up_required" show the interstitial instead of an error.
+async function controlCall(pending, fn) {
+  try { return await fn(); }
+  catch (e) { if (e.stepUp) { showStepUp(pending, e.detail); return null; } throw e; }
+}
+function resumePending() {
+  let p = null;
+  try { p = JSON.parse(sessionStorage.getItem(PENDING_KEY) || "null"); } catch { p = null; }
+  if (!p || Date.now() - p.ts > 10 * 60 * 1000) return "";
+  return `<div class="alert-strip info resume" data-key="resume">${I.shield}<b>Signed in again.</b><span>Resume: ${esc(p.label)}</span>
+    <button class="btn push" data-act="resume">Continue</button><button class="btn" data-act="resume-drop">Dismiss</button></div>`;
+}
+async function runPending() {
+  let p = null;
+  try { p = JSON.parse(sessionStorage.getItem(PENDING_KEY) || "null"); sessionStorage.removeItem(PENDING_KEY); } catch { p = null; }
+  if (!p) return;
+  const s = state.byId[p.system];
+  try {
+    if (p.kind === "power" && s) { await refreshCaps(s.id); openPowerDialog(s, p.action); }
+    else if (p.kind === "request") { const r = await api(p.path, { method: p.method, body: JSON.stringify(p.body) }); flash(r?.message || `${p.label}: done`); }
+  } catch (e) { flash(e.message, true); }
+  render();
+}
+function spark(values, cls = "") {
+  const pts = values.filter((v) => v != null);
+  if (pts.length < 2) return `<svg class="spark ${cls}" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>`;
+  const lo = Math.min(...pts), hi = Math.max(...pts), span = hi - lo || 1;
+  const xy = values.map((v, i) => [(i / (values.length - 1)) * 100, v == null ? null : 28 - ((v - lo) / span) * 26]).filter((p) => p[1] != null);
+  const line = xy.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join("");
+  return `<svg class="spark ${cls}" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"><path class="area" d="${line}L${xy.at(-1)[0]},30L${xy[0][0]},30Z"/><path class="line" d="${line}" vector-effect="non-scaling-stroke"/></svg>`;
+}
+// Only capacity bars (RAM, disk) turn red when nearly full; high CPU/GPU utilisation or full VRAM is normal.
+const barEl = (kind, p) => `<div class="bar ${kind}${(kind === "mem" || kind === "disk") && p != null && p > 92 ? " hot" : ""}"><i data-w="${(p ?? 0).toFixed(1)}"></i></div>`;
+const mini = (kind, p) => (p == null ? '<span class="note">–</span>' : `<div class="mini">${barEl(kind, p)}<span>${fmtP(p)}</span></div>`);
+const metric = (kind, label, p, text) => `<div class="metric"><span class="k">${label}</span>${barEl(kind, p)}<span class="v">${text}</span></div>`;
+// CSP has no 'unsafe-inline' for styles: widths go through the CSSOM. Changing data-w on an existing bar
+// animates it (CSS transition) because morph() keeps the element.
+const applyWidths = (root) => root.querySelectorAll("[data-w]").forEach((el) => { const w = `${el.dataset.w}%`; if (el.style.width !== w) el.style.width = w; });
+new MutationObserver(() => applyWidths(document.body)).observe(document.documentElement,
+  { childList: true, subtree: true, attributes: true, attributeFilter: ["data-w"] });
+
+// Minimal DOM morph: patch `target` to match `html`, reusing nodes. Elements with data-key are replaced when the
+// key changes; [data-keep] subtrees (live tables filled by their own loaders) and form fields keep their content.
+function morph(target, html) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  patchChildren(target, tpl.content);
+}
+function patchChildren(a, b) {
+  const an = [...a.childNodes], bn = [...b.childNodes];
+  bn.forEach((y, i) => {
+    const x = an[i];
+    if (!x) return a.appendChild(y);
+    if (x.nodeType !== y.nodeType || x.nodeName !== y.nodeName || (x.nodeType === 1 && x.getAttribute("data-key") !== y.getAttribute("data-key"))) return a.replaceChild(y, x);
+    if (x.nodeType !== 1) { if (x.nodeValue !== y.nodeValue) x.nodeValue = y.nodeValue; return; }
+    if (x.namespaceURI !== "http://www.w3.org/1999/xhtml") { if (x.outerHTML !== y.outerHTML) a.replaceChild(y, x); return; }  // svg: swap
+    for (const { name } of [...x.attributes]) if (name !== "style" && !y.hasAttribute(name)) x.removeAttribute(name);
+    for (const { name, value } of [...y.attributes]) if (x.getAttribute(name) !== value) x.setAttribute(name, value);
+    if (x.hasAttribute("data-keep") || /^(INPUT|TEXTAREA|SELECT)$/.test(x.tagName)) return;
+    patchChildren(x, y);
+  });
+  for (let i = an.length - 1; i >= bn.length; i--) an[i].remove();
+}
+
+const linkedPower = (id) => {
+  const srcs = (state.power?.sources || []).filter((s) => s.readings.some((r) => r.system_id === id));
+  const w = srcs.flatMap((s) => s.readings).filter((r) => r.system_id === id && r.watts != null).reduce((a, r) => a + r.watts, 0);
+  return { sources: srcs, watts: srcs.length ? w : null, history: state.history.map((h) => srcs.reduce((a, s) => a + (h.sources[s.id] || 0), 0) || null) };
+};
+
+// ------------------------------------------------------------ grouping: clusters, standalone PVE hosts, owners
+const nodesOf = () => state.systems.filter((s) => s.kind === "node");
+const clusters = () => {  // [[cluster name, nodes]] for clustered nodes only
+  const out = {};
+  nodesOf().filter((n) => n.cluster).forEach((n) => (out[n.cluster] ||= []).push(n));
+  return Object.entries(out);
+};
+// Bare-metal agents AND standalone Proxmox hosts (no cluster heading), grouped by owner group
+const systemsByGroup = () => {
+  const groups = {};
+  state.systems.filter((s) => s.kind === "agent" || (s.kind === "node" && !s.cluster)).forEach((s) => (groups[s.group || s.owner || "Other"] ||= []).push(s));
+  return groups;
+};
+const guestsOf = (node) => state.systems.filter((g) => (g.kind === "qemu" || g.kind === "lxc") && g.parent === node.name && g.cluster_id === node.cluster_id);
+const guestNodes = () => [...clusters().flatMap(([, ns]) => ns), ...nodesOf().filter((n) => !n.cluster)];
+const hostIcon = (s) => (s.kind === "node" ? I.cluster : I.machine);
+const upsById = (id) => (state.ups?.ups || []).find((u) => u.id === id);
+const upsOf = (s) => (s.ups || []).map(upsById).filter(Boolean);
+const onBattery = (u) => u.status === "on_battery" || u.status === "low_battery";
+const model = (s) => s.hardware?.display || null;
+const subLine = (s) => s.kind === "node"
+  ? ["Proxmox node", model(s) || s.cpu_model, s.cores && `${s.cores} cores`, s.mem_total && fmtBytes(s.mem_total)].filter(Boolean).join(" · ")
+  : [model(s), s.os, s.cores && `${s.cores} threads`].filter(Boolean).join(" · ");
+const upsChips = (s) => upsOf(s).map((u) => `<span class="chip ups ${u.status === "low_battery" ? "bad" : onBattery(u) ? "warn" : ""}" title="Powered by ${esc(u.name)}${onBattery(u) ? " · ON BATTERY" : ""}">${I.ups}UPS${onBattery(u) ? " · battery" : ""}</span>`).join("");
+const statusText = (s) => (s.status === "paused" ? "paused" : s.status);
+
+// ------------------------------------------------------------ sidebar
+function navLink(href, ico, name, cls = "", extra = "") {
+  const active = location.hash === href || (href !== "#/" && location.hash.startsWith(href + "/"));
+  return `<a class="nav-link ${cls} ${active ? "active" : ""}" href="${href}" title="${esc(name)}">${ico}<span class="name">${esc(name)}</span>${extra}</a>`;
+}
+const sysLink = (s, cls) => navLink(`#/system/${enc(s.id)}`, `<span class="ico"><span class="dot ${s.status}"></span></span>`, s.name, cls,
+  `<span class="cpu">${s.status === "paused" ? "paused" : live(s) && s.cpu_percent != null ? fmtP(s.cpu_percent) : ""}</span>`);
+
+function renderNav() {
+  const caret = (key) => `<span class="caret ${state.closed[key] ? "" : "open"}" data-toggle="${esc(key)}">${I.caret}</span>`;
+  let html = navLink("#/", `<span class="ico">${I.overview}</span>`, "Overview");
+  html += `<div class="nav-sec"><div class="nav-title"><span class="ico">${I.machine}</span><span>Hosts</span></div>`;
+  for (const [name, ns] of clusters()) html += `<div class="nav-sub">Cluster · ${esc(name)}</div>${ns.map((n) => sysLink(n, "sub")).join("")}`;
+  for (const [g, items] of Object.entries(systemsByGroup())) html += `<div class="nav-sub">${esc(g)}</div>${items.map((s) => sysLink(s, "sub")).join("")}`;
+  html += "</div>";
+  const gn = guestNodes().filter((n) => guestsOf(n).length);
+  if (gn.length) {
+    html += `<div class="nav-sec"><div class="nav-title"><span class="ico">${I.guests}</span><span>Guests</span></div>`;
+    let lastCluster;
+    for (const n of gn) {
+      const gs = guestsOf(n), cl = n.cluster || n.group || n.owner || "";
+      if (cl !== lastCluster) { html += `<div class="nav-sub">${esc(n.cluster ? cl : `${cl} · standalone`)}</div>`; lastCluster = cl; }
+      html += `<a class="nav-link sub node-toggle" data-toggle="${esc(n.id)}" title="${esc(n.name)}"><span class="ico">${caret(n.id)}</span><span class="name">${esc(n.name)}</span>
+        <span class="cpu">${gs.filter((g) => g.status === "online").length}/${gs.length}</span></a>`;
+      if (!state.closed[n.id]) gs.forEach((g) => (html += sysLink(g, "sub2")));
+    }
+    html += "</div>";
+  }
+  const ups = state.ups?.ups || [], batt = ups.filter(onBattery);
+  html += `<div class="nav-sec">${navLink("#/power", `<span class="ico">${I.power}</span>`, "Power", "",
+    `<span class="cpu">${state.power?.total_w != null ? fmtW(state.power.total_w) : ""}</span>`)}
+    ${ups.length ? navLink("#/ups", `<span class="ico">${I.ups}</span>`, "UPS", batt.length ? "alarm" : "",
+      `<span class="cpu">${batt.length ? "on battery" : `${ups.length}`}</span>`) : ""}
+    ${navLink("#/settings", `<span class="ico">${I.settings}</span>`, "Settings")}
+    ${state.me?.can_control ? navLink("#/audit", `<span class="ico">${I.audit}</span>`, "Audit") : ""}</div>`;
+  const nav = $("#nav"), keep = nav.scrollTop;
+  morph(nav, html);
+  nav.scrollTop = keep;
+}
+
+// ------------------------------------------------------------ global alert strip (UPS on battery, pending shutdowns)
+function renderAlerts() {
+  const out = [];
+  const off = controlOff();
+  if (off) out.push(`<div class="alert-strip bad static" data-key="control-off">${I.onoff}<b>Control is disabled</b>
+    <span>by ${esc(off.by)} · ${esc(ago(off.at))}${off.reason ? ` · “${esc(off.reason)}”` : ""}</span>
+    <span class="note">fan, power, Wake-on-LAN and polling changes are refused for everyone · re-enable on the server: <code>fairy admin control enable</code></span></div>`);
+  const resume = resumePending();
+  if (resume && !off) out.push(resume);
+  for (const u of (state.ups?.ups || []).filter(onBattery)) {
+    const powered = u.powers.map((id) => state.byId[id]?.name || id);
+    out.push(`<a class="alert-strip ${u.status === "low_battery" ? "bad" : "warn"}" href="#/ups" data-key="ups-${esc(u.id)}">${I.ups}
+      <b>${esc(u.name)}</b><span>${u.status === "low_battery" ? "LOW BATTERY" : "on battery"}</span>
+      <span>${u.battery_charge != null ? `${u.battery_charge.toFixed(0)}%` : "–"} · ~${fmtRuntime(u.battery_runtime_s)} left</span>
+      ${u.on_battery_since ? `<span class="note">for ${fmtRuntime(secsSince(u.on_battery_since))}</span>` : ""}
+      ${powered.length ? `<span class="note">powers ${esc(powered.join(", "))}</span>` : ""}<span class="push">details →</span></a>`);
+  }
+  const here = current().id;  // the system page shows its own countdown strip
+  for (const s of state.systems.filter((x) => x.power_pending && x.id !== here)) {
+    const p = s.power_pending;
+    out.push(`<a class="alert-strip info" href="#/system/${enc(s.id)}" data-key="pend-${esc(s.id)}">${I.onoff}<b>${esc(s.name)}</b>
+      <span>${esc(p.action)} in <b data-countdown="${esc(p.at)}">${fmtRuntime(Math.max(0, (new Date(p.at) - Date.now()) / 1000))}</b></span>
+      <span class="note">requested by ${esc(p.requested_by || "?")}</span><span class="push">open →</span></a>`);
+  }
+  morph($("#alerts"), out.join(""));
+}
+
+// ------------------------------------------------------------ pages
+function setTitle(t, sub = "") { $("#page-title").textContent = t; $("#page-sub").textContent = sub; document.title = `${t} · Fairy`; }
+
+const watts = (s) => s.power_w ?? linkedPower(s.id).watts;
+const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.util_percent || 0), 0) / s.gpus.length : null);
+
+function hostRow(s) {
+  const gpus = s.gpus || [], w = watts(s);
+  return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="host-ico">${hostIcon(s)}</span>
+      <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${upsChips(s)}</a><span class="sub">${esc(subLine(s))}</span></td>
+    <td class="col-kind">${s.kind === "node" ? `<span class="chip">Proxmox</span>` : `<span class="note">${esc(s.owner || s.group || "–")}</span>`}</td>
+    <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}</span>`}</td>
+    <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
+    <td class="col-gpu">${live(s) && s.status !== "paused" && gpus.length ? mini("gpu", gpuAvg(s)) + (gpus.length > 1 ? `<span class="note">${gpus.length} GPUs · avg</span>` : "") : ""}</td>
+    <td class="num">${w != null ? `<b class="value pwr">${fmtW(w)}</b>` : '<span class="note">–</span>'}</td></tr>`;
+}
+const hostTable = (groups) => `<div class="panel glass scroll"><table class="table hosts"><thead><tr><th>Host</th><th class="col-kind">Owner</th>
+  <th>CPU</th><th>RAM</th><th class="col-gpu">GPU</th><th class="num">Wall power</th></tr></thead><tbody>${groups.map(([title, rows]) =>
+  (title ? `<tr class="group" data-key="g-${esc(title)}"><td colspan="6">${esc(title)}</td></tr>` : "") + rows.map(hostRow).join("")).join("")}</tbody></table></div>`;
+
+function guestRow(s, showNode = true) {
+  return `<tr class="row guest ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="dot ${s.status}"></span>${esc(s.name)}</a></td>
+    <td><span class="chip ${s.kind}">${esc(kindLabel(s))}</span> <span class="note">#${s.vmid}</span></td>
+    ${showNode ? `<td class="col-kind"><span class="note">${esc(s.parent)}</span></td>` : ""}
+    <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${esc(s.status)}</span>`}</td>
+    <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
+    <td class="col-disk">${live(s) && s.status !== "paused" && s.disk_total ? mini("disk", pct(s.disk_used, s.disk_total)) : ""}</td>
+    <td class="num">${live(s) ? `<span class="note">${fmtUptime(s.uptime_s)}</span>` : ""}</td></tr>`;
+}
+const guestTable = (groups, showNode = true) => `<div class="panel glass scroll"><table class="table guests"><thead><tr><th>Guest</th><th>Type</th>
+  ${showNode ? '<th class="col-kind">Node</th>' : ""}<th>CPU</th><th>RAM</th><th class="col-disk">Disk</th><th class="num">Uptime</th></tr></thead><tbody>${groups.map(([title, rows]) =>
+  (title ? `<tr class="group" data-key="g-${esc(title)}"><td colspan="7">${esc(title)}</td></tr>` : "") + rows.map((r) => guestRow(r, showNode)).join("")).join("")}</tbody></table></div>`;
+
+function pageOverview() {
+  setTitle("Overview", state.summary?.cluster?.name || "");
+  const sm = state.summary, c = sm?.cluster;
+  if (!sm) return '<div class="empty">Waiting for the first poll…</div>';
+  const attention = state.systems.flatMap((s) => {
+    const out = [];
+    if (s.status === "offline" || s.status === "stale") out.push([s, `${s.status}${s.error ? ` · ${s.error}` : ""}`]);
+    const t = hottest(s);
+    if (live(s) && t && t.current_c >= 85) out.push([s, `${t.label || t.sensor} ${t.current_c.toFixed(0)}°C`]);
+    (s.gpus || []).forEach((g) => live(s) && g.temp_c >= 85 && out.push([s, `GPU ${g.temp_c.toFixed(0)}°C`]));
+    return out;
+  });
+  (state.ups?.ups || []).filter((u) => onBattery(u) || u.flags.includes("replace_battery") || u.status === "unreachable").forEach((u) =>
+    attention.push([{ id: null, name: u.name, status: onBattery(u) ? "stale" : "offline", isUps: true },
+      u.flags.includes("replace_battery") ? "replace battery" : u.status.replace("_", " ")]));
+  const hostGroups = [...clusters().map(([name, ns]) => [`Cluster nodes · ${name}`, ns]), ...Object.entries(systemsByGroup())];
+  const guestGroups = guestNodes().map((n) => [`${n.cluster || `${n.group || n.owner || ""} · standalone`} · on ${n.name}`, guestsOf(n)]).filter(([, g]) => g.length);
+  const nGuests = guestGroups.reduce((a, [, g]) => a + g.length, 0);
+  const ups = state.ups?.ups || [];
+  return `<div class="tiles">
+    ${c ? `<div class="panel glass tile"><div class="label">Cluster CPU · ${esc(c.name)}</div><div class="value">${fmtP(c.cpu_percent)}<small> of ${c.cores} cores</small></div>${barEl("cpu", c.cpu_percent)}</div>
+    <div class="panel glass tile"><div class="label">Cluster memory</div><div class="value">${fmtBytes(c.mem_used)}<small> / ${fmtBytes(c.mem_total)}</small></div>${barEl("mem", pct(c.mem_used, c.mem_total))}</div>` : ""}
+    <div class="panel glass tile"><div class="label">Systems</div><div class="value">${sm.counts.online}<small> / ${sm.counts.total} online</small></div>
+      <div class="counts"><span><span class="dot online"></span><b>${sm.counts.online}</b></span><span><span class="dot"></span><b>${sm.counts.stopped}</b></span>
+      <span><span class="dot stale"></span><b>${sm.counts.stale}</b></span><span><span class="dot offline"></span><b>${sm.counts.offline}</b></span>
+      ${sm.counts.paused ? `<span><span class="dot paused"></span><b>${sm.counts.paused}</b> paused</span>` : ""}</div></div>
+    <div class="panel glass tile"><div class="label">Wall power${ups.length ? ` · ${ups.length} UPS` : ""}</div><div class="value pwr">${fmtW(state.power?.total_w)}</div>${spark(state.history.map((p) => p.total_w))}</div>
+  </div>
+  ${attention.length ? `<div class="attention"><span class="t">Attention</span>${attention.map(([s, why]) => `<a href="${s.isUps ? "#/ups" : `#/system/${enc(s.id)}`}"><span class="dot ${s.status}"></span>${s.isUps ? I.ups : ""}${esc(s.name)} <small>${esc(why)}</small></a>`).join("")}</div>` : ""}
+  <div class="section-title">Hosts <span class="count">${hostGroups.reduce((a, [, h]) => a + h.length, 0)}</span></div>${hostTable(hostGroups)}
+  ${nGuests ? `<div class="section-title">Virtual machines &amp; containers <span class="count">${nGuests}</span></div>${guestTable(guestGroups)}` : ""}`;
+}
+
+// ---- polling menu (⋯) and power menu on the detail page
+const POLL_CHOICES = [[1, "1s"], [2, "2s"], [5, "5s"], [10, "10s"], [30, "30s"], ["paused", "Paused"], ["default", "Default"]];
+function liveLabel(s) {
+  if (s.status === "paused" || s.poll_mode === "paused") return '<span class="live paused" title="Polling paused for this host">paused</span>';
+  if (!live(s)) return "";
+  return `<span class="live" title="${s.boosted ? "Boosted to 1 s while this page is open" : `Polled every ${fmtIv(s.poll_interval_s)}`}"><span class="pulse"></span>live · ${fmtIv(s.poll_interval_s)}${s.boosted ? " ⇡" : ""}</span>`;
+}
+function pollMenu(s) {
+  const st = state.poll[s.id], why = controlWhyNot();
+  const cur = s.poll_mode === "paused" ? "paused" : s.poll_mode === "default" ? "default" : st?.requested_s;
+  return `<div class="menu" role="menu"><div class="menu-title">Polling rate</div>
+    ${POLL_CHOICES.map(([v, label]) => `<button class="menu-item ${String(cur) === String(v) ? "on" : ""}" data-act="poll" data-v="${v}" ${why ? "disabled" : ""}>${label}${v === "default" ? '<span class="note">config</span>' : ""}</button>`).join("")}
+    ${why ? `<div class="menu-note">${esc(why)}</div>` : ""}
+    ${st ? `<div class="menu-sep"></div>${st.jobs.map((j) => `<div class="menu-row"><span>${esc(j.job)}</span><span>${j.paused ? "paused" : fmtIv(j.effective_s)}${j.clamped ? ` <span class="chip warn" title="this source never polls faster than ${j.floor_s}s">min ${j.floor_s}s</span>` : ""}</span></div>`).join("")}
+      ${st.note ? `<div class="menu-note">${esc(st.note)}</div>` : ""}
+      <div class="menu-note">${st.boost_enabled ? "Viewing a host boosts it to 1 s (30 s grace)." : "Boost while viewing is off."}</div>` : '<div class="menu-note">loading…</div>'}</div>`;
+}
+const POWER_LABEL = { shutdown: "Shut down", reboot: "Reboot", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)" };
+function powerMenu(s) {
+  const caps = state.caps[s.id], why = controlWhyNot();
+  if (!caps) return '<div class="menu"><div class="menu-note">loading…</div></div>';
+  return `<div class="menu power" role="menu"><div class="menu-title">Power · ${esc(s.name)}</div>
+    ${caps.actions.map((a) => `<button class="menu-item ${a.action === "stop" || a.action === "shutdown" ? "danger" : ""}" data-act="power" data-action="${a.action}" ${a.available && !why ? "" : "disabled"} title="${esc(a.reason || "")}">
+      ${esc(POWER_LABEL[a.action])}${a.available ? `<span class="note">${esc(a.via_label ? `via ${a.via_label}` : a.via || "")}${a.delayed ? " · countdown" : ""}</span>` : ""}</button>
+      ${!a.available && a.reason ? `<div class="menu-why">${esc(a.reason)}</div>` : ""}`).join("")}
+    ${why ? `<div class="menu-note">${esc(why)}</div>` : ""}
+    ${caps.warning ? `<div class="menu-note warn">${esc(caps.warning)}</div>` : ""}</div>`;
+}
+
+function pageSystem(id, tab) {
+  const s = state.byId[id];
+  if (!s) { setTitle("Not found"); return '<div class="empty">Unknown system.</div>'; }
+  setTitle(s.name, s.kind === "agent" ? s.group || "" : s.parent ? `on ${s.parent}` : s.cluster || s.group || "");
+  const tabs = [["overview", "Overview"], ...(s.processes_available || s.kind === "agent" ? [["processes", "Processes"]] : []), ...(s.fan_control ? [["fans", "Fans"]] : [])];
+  if (!tabs.some(([k]) => k === tab)) tab = "overview";
+  const sub = s.kind === "agent" || s.kind === "node" ? [subLine(s), s.kind === "agent" && s.owner && `owner ${s.owner}`].filter(Boolean).join(" · ")
+    : `${kindLabel(s)} #${s.vmid} on ${s.parent}${s.cluster ? ` · ${s.cluster}` : ""}`;
+  const menuOpen = state.menu?.id === id ? state.menu.kind : null;
+  const why = controlWhyNot();
+  const hasPower = (s.power_actions || []).length > 0;
+  const head = `<div class="detail-head"><span class="dot ${s.status}"></span><h2>${esc(s.name)}</h2><span class="chip">${esc(kindLabel(s))}</span>
+    ${s.kind === "node" && !s.cluster ? '<span class="chip">Proxmox</span>' : ""}
+    <span class="chip ${s.status === "online" ? "ok" : s.status === "stale" ? "warn" : s.status === "offline" ? "bad" : ""}">${esc(statusText(s))}</span>
+    ${upsChips(s)}${(s.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}
+    <div class="actions">${liveLabel(s)}
+      ${s.dwservice_url ? `<a class="btn" href="${esc(s.dwservice_url)}" target="_blank" rel="noopener noreferrer">Remote ${I.ext}</a>` : ""}
+      <div class="menu-wrap"><button class="btn ${menuOpen === "power" ? "on" : ""}" data-act="menu" data-menu="power" ${hasPower ? "" : "disabled"}
+        title="${esc(hasPower ? why || "Power actions" : "No power control configured for this system")}">${I.onoff}Power</button>${menuOpen === "power" ? powerMenu(s) : ""}</div>
+      <div class="menu-wrap"><button class="btn icon ${menuOpen === "poll" ? "on" : ""}" data-act="menu" data-menu="poll" title="Polling rate" aria-label="Polling rate">${I.more}</button>${menuOpen === "poll" ? pollMenu(s) : ""}</div>
+    </div>
+    <div class="sub">${esc(sub)}${s.updated_at ? ` · <span class="note">updated <span data-ago="${esc(s.updated_at)}">${ago(s.updated_at)}</span></span>` : ""}</div></div>
+    ${s.power_pending ? `<div class="pending-strip"><b>${esc(POWER_LABEL[s.power_pending.action])}</b> in <b data-countdown="${esc(s.power_pending.at)}">${fmtRuntime(Math.max(0, (new Date(s.power_pending.at) - Date.now()) / 1000))}</b>
+      <span class="note">requested by ${esc(s.power_pending.requested_by || "?")}</span>
+      <button class="btn push" data-act="power-now" data-action="cancel" ${why ? "disabled" : ""}>Cancel</button></div>` : ""}
+    <nav class="tabs">${tabs.map(([k, label]) => `<a href="#/system/${enc(id)}${k === "overview" ? "" : "/" + k}" class="${k === tab ? "active" : ""}">${label}</a>`).join("")}</nav>`;
+  if (tab === "processes") return head + '<div id="tab-body" data-keep><div class="empty">Loading processes…</div></div>';
+  if (tab === "fans") return head + '<div id="tab-body" data-keep><div class="empty">Loading fan status…</div></div>';
+  return head + systemOverview(s);
+}
+
+function wakeBlock(s) {
+  if (!(s.power_actions || []).includes("wake") || !(s.status === "offline" || s.status === "stale")) return "";
+  const cap = state.caps[s.id]?.actions.find((a) => a.action === "wake"), why = controlWhyNot();
+  const label = `Power on (WoL via ${cap?.via_label || cap?.via?.replace("wol:", "") || "relay"})`;
+  return `<div class="wake"><button class="btn primary" data-act="power-now" data-action="wake" ${cap?.available && !why ? "" : "disabled"}>${I.onoff}${esc(label)}</button>
+    <div class="note">${esc(why || (cap && !cap.available ? cap.reason : "Sends a magic packet from an always-on agent on the same LAN."))}</div></div>`;
+}
+
+function systemOverview(s) {
+  if (!live(s)) {
+    return `<div class="empty">${s.status === "stopped" ? "Stopped." : `No data · ${esc(s.error || s.status)} · last seen ${ago(s.last_seen)}`}${wakeBlock(s)}</div>`;
+  }
+  const lp = linkedPower(s.id), cp = s.component_power;
+  const res = `<div class="panel glass pad"><h3>Resources</h3>
+    ${metric("cpu", "CPU", s.cpu_percent, `${fmtP(s.cpu_percent)}${s.cores ? ` · ${s.cores} cores` : ""}`)}
+    ${metric("mem", "Memory", pct(s.mem_used, s.mem_total), `${fmtBytes(s.mem_used)} / ${fmtBytes(s.mem_total)}`)}
+    ${s.disk_total ? metric("disk", "Disk", pct(s.disk_used, s.disk_total), `${fmtBytes(s.disk_used)} / ${fmtBytes(s.disk_total)}`) : ""}
+    ${(s.disks || []).length > 1 ? s.disks.map((d) => metric("disk", esc(d.mount), pct(d.used, d.total), `${fmtBytes(d.used)} / ${fmtBytes(d.total)}`)).join("") : ""}
+    ${s.net_rx_bps != null || s.net_tx_bps != null ? `<div class="list-row"><span>Network</span><span>↓ ${fmtRate(s.net_rx_bps)} · ↑ ${fmtRate(s.net_tx_bps)}</span></div>` : ""}
+    ${s.cpu_model ? `<div class="list-row"><span>Processor</span><span>${esc(s.cpu_model)}</span></div>` : ""}
+    ${s.hardware?.display ? `<div class="list-row"><span>Model</span><span>${esc(s.hardware.display)}${s.hardware.bios_version ? ` <span class="note">BIOS ${esc(s.hardware.bios_version)}</span>` : ""}</span></div>` : ""}
+    <div class="list-row"><span>Uptime</span><span>${fmtUptime(s.uptime_s)}</span></div>
+    ${s.load_avg ? `<div class="list-row"><span>Load</span><span>${s.load_avg.join(" · ")}</span></div>` : ""}
+    <div class="list-row"><span>Last change</span><span data-ago="${esc(s.updated_at || s.last_seen)}">${ago(s.updated_at || s.last_seen)}</span></div></div>`;
+  const ups = upsOf(s);
+  const power = `<div class="panel glass pad"><h3>Power</h3>
+    ${lp.watts != null ? `<div class="big-w">${fmtW(lp.watts)} <small>wall · ${lp.sources.map((x) => esc(x.name)).join(", ")}</small></div>${spark(lp.history)}` : '<div class="note">No wall-power source linked.</div>'}
+    ${ups.map((u) => `<div class="list-row"><span>${I.ups} UPS · <a href="#/ups">${esc(u.name)}</a></span><span class="${onBattery(u) ? "warn-t" : ""}">${esc(u.status.replace("_", " "))} · ${u.battery_charge?.toFixed(0) ?? "–"}% · ${fmtRuntime(u.battery_runtime_s)}</span></div>`).join("")}
+    ${cp ? [["CPU package", cp.cpu_package_w], ["GPU", cp.gpu_w], ["Battery", cp.battery_w != null ? cp.battery_w : null], ["BMC (in-band)", cp.bmc_w]]
+      .filter(([, v]) => v != null).map(([k, v]) => `<div class="list-row"><span>${k}${k === "Battery" && cp.battery_state ? ` · ${esc(cp.battery_state)}` : ""}</span><span>${fmtW(v)}</span></div>`).join("")
+      + (cp.bmc_note ? `<div class="note">BMC: ${esc(cp.bmc_note)}</div>` : "") + '<div class="note">Component power from the agent, not wall power.</div>' : ""}</div>`;
+  const gpuPanel = (s.gpus || []).length ? `<div class="panel glass pad"><h3>GPUs (${s.gpus.length})</h3><div class="gpu-grid">${s.gpus.map((g, i) => `
+    <div class="gpu-card"><div class="gpu-head"><span class="chip">GPU ${i}</span><b>${esc(g.name)}</b></div>
+      ${metric("gpu", "Util", g.util_percent, fmtP(g.util_percent))}
+      ${g.vram_total ? metric("vram", "VRAM", pct(g.vram_used, g.vram_total), `${fmtBytes(g.vram_used)} / ${fmtBytes(g.vram_total)}`) : ""}
+      <div class="gpu-facts"><span>${g.temp_c != null ? `${g.temp_c.toFixed(0)}°C` : "–"}</span><span>${g.power_w != null ? fmtW(g.power_w) : "–"}</span><span class="note">${esc(g.vendor)}</span></div>
+    </div>`).join("")}</div></div>` : "";
+  const sensors = (s.temps || []).length || (s.fans || []).length || (s.voltages || []).length ? `<div class="panel glass pad"><h3>Sensors</h3>
+    ${(s.temps || []).slice(0, 12).map((t) => `<div class="list-row"><span>${esc(t.label || t.sensor)}</span><span>${t.current_c.toFixed(0)}°C</span></div>`).join("")}
+    ${(s.fans || []).map((f) => `<div class="list-row"><span>${esc(f.name)}</span><span>${f.rpm} rpm</span></div>`).join("")}
+    ${(s.voltages || []).map((v) => `<div class="list-row"><span>${esc(v.name)}</span><span>${v.volts.toFixed(2)} V</span></div>`).join("")}</div>` : "";
+  const gs = s.kind === "node" ? guestsOf(s) : [];
+  const guests = s.kind === "node" ? `<div class="section-title">Guests on this node <span class="count">${gs.length}</span></div>
+    ${gs.length ? guestTable([[null, gs]], false) : '<div class="empty">No VMs or containers on this node.</div>'}` : "";
+  return `<div class="grid2"><div class="stack">${res}${gpuPanel}</div><div class="stack">${power}${sensors}</div></div>${guests}`;
+}
+
+let procSort = "cpu";
+async function loadProcesses(id) {
+  const body = $("#tab-body");
+  if (!body) return;
+  try {
+    const d = await api(`/api/systems/${enc(id)}/processes?limit=25&sort=${procSort}`);
+    if (!$("#tab-body") || current().id !== id || current().tab !== "processes") return;
+    if (d.disabled_by_host) { body.innerHTML = '<div class="empty">Process view disabled by host.<br><span class="note">The machine owner turned it off on their agent (--no-processes).</span></div>'; return; }
+    morph(body, `<div class="toolbar">Sort by ${["cpu", "mem", "gpu"].map((k) => `<button class="btn ${k === procSort ? "on" : ""}" data-sort="${k}">${k.toUpperCase()}</button>`).join("")}
+      <span class="push">${d.total_processes ?? "?"} processes · CPU % is per core · refreshes every 2 s</span></div>
+      <div class="panel glass scroll"><table class="table"><thead><tr><th>PID</th><th>Name</th><th>User</th><th class="num">CPU %</th><th class="num">RSS</th><th class="num">GPU mem</th><th>Command line (redacted)</th></tr></thead>
+      <tbody>${d.processes.map((p) => `<tr class="row" data-key="p${p.pid}"><td>${p.pid}</td><td><b>${esc(p.name)}</b></td><td>${esc(p.username || "–")}</td>
+        <td class="num">${p.cpu_percent?.toFixed(1) ?? "–"}</td><td class="num">${fmtBytes(p.rss)}</td><td class="num">${p.gpu_mem ? fmtBytes(p.gpu_mem) : "–"}${p.gpu_mem_by_gpu ? `<div class="note">${p.gpu_mem_by_gpu.map((b, i) => `GPU${i} ${fmtBytes(b)}`).join(" · ")}</div>` : ""}</td>
+        <td class="cmd" title="${esc(p.cmdline || "")}">${esc(p.cmdline || "–")}</td></tr>`).join("")}</tbody></table></div>`);
+    body.querySelectorAll("[data-sort]").forEach((b) => (b.onclick = () => { procSort = b.dataset.sort; loadProcesses(id); }));
+  } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  schedule(() => loadProcesses(id), 2000);
+}
+
+async function loadFans(id) {
+  const body = $("#tab-body");
+  if (!body) return;
+  if (body.contains(document.activeElement) && document.activeElement.type === "range") return schedule(() => loadFans(id));
+  const canCtl = canControl();
+  try {
+    const f = await api(`/api/systems/${enc(id)}/fan`);
+    if (!$("#tab-body")) return;
+    const full = f.mode === "full";
+    body.innerHTML = `<div class="warnbox">Writes go to the BMC. The agent enforces a ${f.min_duty}% minimum and reverts to <b>Optimal</b>
+      if a CPU/system temperature exceeds ${f.max_temp_c?.toFixed(0)}°C or readings disappear.${canCtl ? "" : ` ${esc(controlWhyNot())}`}</div>
+      <div class="grid2"><div class="panel glass pad"><h3>Mode</h3><div class="row-gap">${["optimal", "standard", "heavyio", "full"].map((m) =>
+        `<button class="btn ${f.mode === m ? "on" : ""}" data-mode="${m}" ${canCtl ? "" : "disabled"}>${m}</button>`).join("")}</div>
+        <h3 class="gap">Zone duty (full mode only)</h3>${[0, 1].map((z) => {
+          const v = f.duty[z] ?? 50;
+          return `<div class="duty-row"><span>Zone ${z}</span><input type="range" min="${f.min_duty}" max="100" step="5" value="${v}" data-zone="${z}" ${canCtl && full ? "" : "disabled"}>
+          <b data-duty-label="${z}">${v}%</b><button class="btn" data-apply="${z}" ${canCtl && full ? "" : "disabled"}>Set</button></div>`; }).join("")}
+        <div class="note">Zone 0: CPU/system headers (FAN1…), zone 1: peripheral (FANA). Verify on your board.</div><div class="error" id="fan-err"></div></div>
+      <div class="stack"><div class="panel glass pad"><h3>Fans</h3>${f.fans.map((x) => `<div class="list-row"><span>${esc(x.name)}</span><span>${x.rpm} rpm</span></div>`).join("") || '<div class="note">no fan sensors</div>'}</div>
+        <div class="panel glass pad"><h3>Events</h3>${(f.events || []).slice().reverse().map((e) => `<div class="list-row"><span>${new Date(e.t * 1000).toLocaleTimeString()}</span><span>${esc(e.action)} · ${esc(e.detail)}</span></div>`).join("") || '<div class="note">none</div>'}</div></div></div>`;
+    const post = async (path, payload) => {
+      const url = `/api/systems/${enc(id)}${path}`;
+      try {
+        await controlCall({ kind: "request", label: `Fan ${path.split("/").pop()} ${JSON.stringify(payload)} on ${state.byId[id]?.name || id}`, system: id, method: "POST", path: url, body: payload },
+          () => api(url, { method: "POST", body: JSON.stringify(payload) }));
+        loadFans(id);
+      } catch (e) { $("#fan-err").textContent = e.message; }
+    };
+    body.querySelectorAll("[data-zone]").forEach((r) => (r.oninput = () => ($(`[data-duty-label="${r.dataset.zone}"]`, body).textContent = `${r.value}%`)));
+    body.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => post("/fan/mode", { mode: b.dataset.mode })));
+    body.querySelectorAll("[data-apply]").forEach((b) => (b.onclick = () => post("/fan/duty", { zone: +b.dataset.apply, percent: +$(`[data-zone="${b.dataset.apply}"]`, body).value })));
+  } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  schedule(() => loadFans(id));
+}
+
+function pagePower() {
+  setTitle("Power", "wall power from plugs, UPS and BMCs");
+  const p = state.power;
+  if (!p) return '<div class="empty">Waiting for data…</div>';
+  const chip = (st) => `<span class="chip ${st === "ok" ? "ok" : st === "stale" ? "warn" : "bad"}">${st}</span>`;
+  return `<div class="panel glass pad power-hero"><div><div class="tile"><div class="label">Total wall power</div></div><div class="big-w">${fmtW(p.total_w)}</div>
+    <div class="note">${p.sources.filter((s) => s.include_in_total).length} sources counted · ${state.history.length} samples</div></div>${spark(state.history.map((h) => h.total_w))}</div>
+    <div class="section-title">Sources</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
+    <th class="num">Volts</th><th class="num">Amps</th><th class="num">kWh</th><th>Linked</th><th>Last hour</th></tr></thead><tbody>${p.sources.map((s) => {
+      const r = s.readings[0] || {};
+      const linked = state.systems.find((x) => x.id === r.system_id);
+      return `<tr class="row"><td><b>${esc(s.name)}</b>${s.via ? `<div class="note">via agent ${esc(s.via)}</div>` : ""}</td><td>${esc(s.type)}</td>
+        <td>${chip(s.status)}${s.error ? `<div class="error">${esc(s.error)}</div>` : ""}</td><td class="num"><b class="value pwr">${fmtW(r.watts)}</b></td>
+        <td class="num">${r.voltage?.toFixed(1) ?? "–"}</td><td class="num">${r.current?.toFixed(2) ?? "–"}</td><td class="num">${r.energy_kwh_total?.toFixed(2) ?? "–"}</td>
+        <td>${linked ? `<a href="#/system/${enc(linked.id)}">${esc(linked.name)}</a>` : "–"}${s.include_in_total ? "" : ' <span class="chip">not in total</span>'}</td>
+        <td>${spark(state.history.map((h) => h.sources[s.id] ?? null))}</td></tr>`; }).join("")}</tbody></table></div>
+    <p class="note">CPU/GPU/battery readings on system pages are component power reported by the agent, not wall power.</p>`;
+}
+
+// ------------------------------------------------------------ UPS page
+const UPS_STATUS = { online: ["ok", "online"], on_battery: ["warn", "on battery"], low_battery: ["bad", "LOW BATTERY"],
+  off: ["", "off"], unknown: ["", "unknown"], unreachable: ["bad", "unreachable"] };
+function upsCard(u) {
+  const [cls, label] = UPS_STATUS[u.status] || ["", u.status];
+  const hist = state.upsHist[u.id] || [];
+  const ch = u.battery_charge;
+  const powered = u.powers.map((id) => state.byId[id]).filter(Boolean);
+  return `<div class="panel glass pad ups-card ${onBattery(u) ? "alarm" : ""} ${u.stale ? "stale" : ""}" data-key="${esc(u.id)}">
+    <div class="ups-head">${I.ups}<div><b>${esc(u.name)}</b><div class="note">${esc([u.mfr, u.model].filter(Boolean).join(" ") || u.ups_name)}${u.via ? ` · via agent ${esc(u.via)}` : " · polled by the panel"}</div></div>
+      <span class="chip ${cls} push">${esc(label)}${u.stale ? " · stale" : ""}</span></div>
+    ${u.error && u.status === "unreachable" ? `<div class="error">${esc(u.error)}</div>` : ""}
+    <div class="ups-grid">
+      <div><div class="k">Battery</div><div class="big">${ch != null ? `${ch.toFixed(0)}%` : "–"}</div>${barEl(ch != null && ch < 30 ? "hot" : "ok", ch)}</div>
+      <div><div class="k">Runtime</div><div class="big">${fmtRuntime(u.battery_runtime_s)}</div><div class="note">mm:ss at current load</div></div>
+      <div><div class="k">Load</div><div class="big">${u.load_percent != null ? `${u.load_percent.toFixed(0)}%` : "–"}</div>
+        <div class="note">${u.watts != null ? `${u.watts_estimated ? "≈" : ""}${fmtW(u.watts)}${u.watts_estimated ? ` (est. from ${u.nominal_w} W nominal)` : ""}` : "–"}</div></div>
+    </div>
+    ${spark(hist.map((p) => p.watts), "ups")}<div class="note">load (W), last ${hist.length ? fmtUptime((Date.now() - new Date(hist[0].t)) / 1000) : "–"}</div>
+    <div class="ups-facts">
+      <div class="list-row"><span>Input / output</span><span>${u.input_voltage?.toFixed(0) ?? "–"} V / ${u.output_voltage?.toFixed(0) ?? "–"} V${u.input_frequency ? ` · ${u.input_frequency.toFixed(1)} Hz` : ""}</span></div>
+      <div class="list-row"><span>Battery voltage</span><span>${u.battery_voltage?.toFixed(1) ?? "–"} V</span></div>
+      <div class="list-row"><span>Battery date</span><span>${esc(u.battery_date || "–")}</span></div>
+      ${u.test_result ? `<div class="list-row"><span>Self-test</span><span>${esc(u.test_result)}</span></div>` : ""}
+      ${u.flags.length ? `<div class="list-row"><span>Flags</span><span>${u.flags.map((f) => `<span class="chip ${f === "replace_battery" || f === "overload" ? "bad" : ""}">${esc(f.replace("_", " "))}</span>`).join(" ")}</span></div>` : ""}
+      <div class="list-row"><span>Powers</span><span>${powered.length ? powered.map((p) => `<a href="#/system/${enc(p.id)}">${esc(p.name)}</a>`).join(", ") : '<span class="note">nothing linked</span>'}</span></div>
+      <div class="list-row"><span>Raw status</span><span><code>${esc(u.status_raw || "–")}</code></span></div>
+    </div></div>`;
+}
+function pageUps() {
+  setTitle("UPS", "Network UPS Tools · read-only");
+  const ups = state.ups?.ups || [];
+  if (!ups.length) return '<div class="empty">No UPS configured. See README → UPS (NUT).</div>';
+  const ev = state.upsEvents.slice(0, 30);
+  return `<div class="ups-cards">${ups.map(upsCard).join("")}</div>
+    <div class="section-title">Events <span class="count">${state.upsEvents.length}</span></div>
+    <div class="panel glass scroll"><table class="table"><thead><tr><th>When</th><th>UPS</th><th>Event</th><th>Details</th></tr></thead><tbody>
+    ${ev.length ? ev.map((e) => `<tr class="row" data-key="e${e.seq}"><td><span data-ago="${esc(e.t)}">${ago(e.t)}</span> <span class="note">${new Date(e.t).toLocaleTimeString()}</span></td>
+      <td>${esc(e.ups_name)}</td><td><span class="chip ${e.severity === "critical" ? "bad" : e.severity === "warning" ? "warn" : "ok"}">${esc(e.kind.replace("_", " "))}</span></td>
+      <td>${esc(e.message)}</td></tr>`).join("") : '<tr><td colspan="4" class="note">No transitions since the panel started.</td></tr>'}</tbody></table></div>
+    <p class="note">The panel only reads (LIST UPS / LIST VAR): no instant commands, no SET VAR. Shutdown on low battery stays with upsmon on each host.</p>`;
+}
+
+// ------------------------------------------------------------ audit page (control group only)
+const audit = { entries: [], next: null, q: "", action: "", host: "", loading: false, error: null };
+const AUDIT_ACTIONS = [["", "All actions"], ["auth", "Sign-in / step-up / denied"], ["power", "Power"], ["fan", "Fans"], ["poll", "Polling"],
+  ["settings", "Settings"], ["token", "API tokens"], ["control", "Kill switch"], ["host", "Host admin"], ["sessions", "Sessions"]];
+async function loadAudit(reset) {
+  if (audit.loading) return;
+  audit.loading = true;
+  const qs = new URLSearchParams({ limit: "50" });
+  if (audit.q) qs.set("q", audit.q);
+  if (audit.action) qs.set("action", audit.action);
+  if (audit.host) qs.set("host", audit.host);
+  if (!reset && audit.next != null) qs.set("before", audit.next);
+  try {
+    const d = await api(`/api/audit?${qs}`);
+    audit.entries = reset ? d.entries : [...audit.entries, ...d.entries];
+    audit.next = d.next; audit.error = null;
+  } catch (e) { audit.error = e.message; }
+  audit.loading = false;
+  render();
+}
+const auditOutcome = (o) => {
+  const t = String(o || "");
+  const cls = /^ok|^required|redirected/.test(t) ? (t.startsWith("required") || t.startsWith("redirected") ? "warn" : "ok") : /^(denied|failed|error|4\d\d|5\d\d)/.test(t) ? "bad" : "";
+  return `<span class="chip ${cls}" title="${esc(t)}">${esc(t.length > 30 ? t.slice(0, 28) + "…" : t)}</span>`;
+};
+function pageAudit() {
+  setTitle("Audit", "who did what, newest first");
+  if (!state.me?.can_control) return '<div class="empty">The audit log is visible to the control group only.</div>';
+  const hosts = state.systems.map((s) => s.id).sort();
+  return `<form class="toolbar audit-filters" id="audit-form" data-keep>
+      <input class="input" id="af-q" placeholder="User, token or source…" value="${esc(audit.q)}">
+      <select class="select" id="af-action">${AUDIT_ACTIONS.map(([v, l]) => `<option value="${v}" ${audit.action === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+      <select class="select" id="af-host"><option value="">All hosts</option>${hosts.map((h) => `<option ${audit.host === h ? "selected" : ""}>${esc(h)}</option>`).join("")}</select>
+      <button class="btn" type="submit">Filter</button><span class="push note">append-only · nothing can be deleted from the UI</span></form>
+    ${audit.error ? `<div class="error">${esc(audit.error)}</div>` : ""}
+    <div class="panel glass scroll"><table class="table audit"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Result</th><th>Source</th><th>IP</th></tr></thead><tbody>
+    ${audit.entries.map((e) => `<tr class="row" data-key="a${e.id}"><td class="nowrap"><span data-ago="${esc(e.ts)}">${ago(e.ts)}</span><div class="note">${new Date(e.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div></td>
+      <td>${esc(e.actor)}</td><td><code>${esc(e.action)}</code>${Object.keys(e.params || {}).length ? `<div class="note">${esc(Object.entries(e.params).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ")).slice(0, 64)}</div>` : ""}</td>
+      <td>${e.target ? (state.byId[e.target] ? `<a href="#/system/${enc(e.target)}">${esc(state.byId[e.target].name)}</a>` : esc(e.target)) : '<span class="note">–</span>'}</td>
+      <td>${auditOutcome(e.outcome)}</td><td><span class="chip ${e.source === "cli" ? "warn" : e.source.startsWith("token:") ? "tok" : ""}" title="${esc(e.source)}">${esc(e.source.length > 16 ? e.source.slice(0, 15) + "…" : e.source)}</span></td>
+      <td class="note">${esc(e.ip || "–")}</td></tr>`).join("") || `<tr><td colspan="7" class="note">${audit.loading ? "Loading…" : "No entries match."}</td></tr>`}</tbody></table></div>
+    ${audit.next != null ? `<div class="row-gap center"><button class="btn" data-act="audit-more">${audit.loading ? "Loading…" : "Older entries"}</button></div>` : ""}`;
+}
+document.addEventListener("submit", (e) => {
+  if (e.target.id !== "audit-form") return;
+  e.preventDefault();
+  audit.q = $("#af-q").value.trim(); audit.action = $("#af-action").value; audit.host = $("#af-host").value;
+  loadAudit(true);
+});
+document.addEventListener("click", (e) => { if (e.target.closest('[data-act="audit-more"]')) loadAudit(false); });
+
+// ------------------------------------------------------------ power confirmation dialog
+function openPowerDialog(s, action) {
+  const caps = state.caps[s.id], cap = caps?.actions.find((a) => a.action === action);
+  if (!cap) return;
+  const typed = cap.confirm === "typed", label = POWER_LABEL[action];
+  state.menu = null; render();
+  const m = $("#modal");
+  m.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="mtitle">
+    <h3 id="mtitle">${esc(label)} ${esc(s.name)}?</h3>
+    <p>${action === "stop" ? "Hard stop: like pulling the power plug. Unsaved data in the guest is lost." :
+      action === "shutdown" ? "Clean shutdown (ACPI / OS shutdown)." : action === "reboot" ? "Clean reboot." : ""}
+      <span class="note">via ${esc(cap.via_label || cap.via)}</span></p>
+    ${caps.kills_panel ? `<div class="warnbox">${esc(caps.warning)}</div>` : ""}
+    ${cap.delayed ? `<label class="mfield">Delay <select id="m-delay"><option value="10">10 s</option><option value="60" selected>1 min</option><option value="300">5 min</option><option value="900">15 min</option></select>
+      <span class="note">a countdown with Cancel is shown${s.platform === "Linux" ? "; Linux rounds up to whole minutes" : ""}</span></label>` : ""}
+    ${typed ? `<label class="mfield"><span>Type <b>${esc(s.name)}</b> to confirm</span><input class="input" id="m-confirm" autocomplete="off" spellcheck="false" placeholder="${esc(s.name)}"></label>` : ""}
+    <div class="error" id="m-err"></div>
+    <div class="row-gap end"><button class="btn" id="m-cancel">Cancel</button><button class="btn danger-solid" id="m-go" ${typed ? "disabled" : ""}>${esc(label)}</button></div></div>`;
+  m.hidden = false;
+  const input = $("#m-confirm"), go = $("#m-go");
+  if (input) { input.oninput = () => (go.disabled = input.value.trim().toLowerCase() !== s.name.toLowerCase()); setTimeout(() => input.focus(), 0); }
+  const close = () => { m.hidden = true; m.innerHTML = ""; };
+  $("#m-cancel").onclick = close;
+  m.onclick = (e) => { if (e.target === m) close(); };
+  go.onclick = async () => {
+    go.disabled = true;
+    try {
+      const body = { action, confirm: input ? input.value : null };
+      if ($("#m-delay")) body.delay_s = +$("#m-delay").value;
+      const r = await api(`/api/systems/${enc(s.id)}/power`, { method: "POST", body: JSON.stringify(body) });
+      close(); state.menu = null; flash(r.message); refreshCaps(s.id);
+    } catch (e) {
+      if (e.stepUp) { close(); showStepUp({ kind: "power", action, system: s.id, label: `${label} ${s.name}` }, e.detail); return; }
+      $("#m-err").textContent = e.message; go.disabled = false;
+    }
+  };
+}
+async function powerNow(s, action) {
+  const path = `/api/systems/${enc(s.id)}/power`;
+  try {
+    const r = await controlCall({ kind: "request", label: `${POWER_LABEL[action]} · ${s.name}`, system: s.id, method: "POST", path, body: { action } },
+      () => api(path, { method: "POST", body: JSON.stringify({ action }) }));
+    if (r) { flash(r.message); refreshCaps(s.id); }
+  } catch (e) { flash(e.message, true); }
+}
+async function refreshCaps(id) {
+  try { state.caps[id] = await api(`/api/systems/${enc(id)}/power`); } catch { /* ignore */ }
+  render();
+}
+async function refreshPoll(id) {
+  try { state.poll[id] = await api(`/api/systems/${enc(id)}/poll`); } catch { /* ignore */ }
+  render();
+}
+function flash(msg, bad = false) {
+  state.flash = { msg, bad, until: Date.now() + 5000 };
+  const f = $("#flash"); f.textContent = msg; f.className = `flash ${bad ? "bad" : ""}`; f.hidden = false;
+  clearTimeout(flash.t); flash.t = setTimeout(() => (f.hidden = true), 5000);
+}
+
+// Delegated clicks: survive DOM patching.
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest("[data-act],[data-toggle]");
+  const r = current();
+  if (!t) { if (state.menu && !e.target.closest(".menu")) { state.menu = null; render(); } return; }
+  if (t.dataset.toggle) { e.preventDefault(); e.stopPropagation(); state.closed[t.dataset.toggle] = !state.closed[t.dataset.toggle]; renderNav(); return; }
+  const s = state.byId[r.id];
+  const act = t.dataset.act;
+  if (act === "menu" && s) {
+    const kind = t.dataset.menu;
+    state.menu = state.menu?.kind === kind && state.menu.id === s.id ? null : { id: s.id, kind };
+    render();
+    if (state.menu) (kind === "poll" ? refreshPoll : refreshCaps)(s.id);
+  } else if (act === "poll" && s) {
+    const v = t.dataset.v, body = { interval_s: v === "paused" || v === "default" ? v : +v };
+    const label = `Polling for ${s.name}: ${v === "default" ? "back to default" : v === "paused" ? "paused" : `${v}s`}`;
+    try {
+      const r = await controlCall({ kind: "request", label, system: s.id, method: "PUT", path: `/api/systems/${enc(s.id)}/poll`, body },
+        () => api(`/api/systems/${enc(s.id)}/poll`, { method: "PUT", body: JSON.stringify(body) }));
+      if (r) { state.poll[s.id] = r; flash(label); }
+    } catch (x) { flash(x.message, true); }
+    render();
+  } else if (act === "power" && s) {
+    const a = t.dataset.action;
+    const cap = state.caps[s.id]?.actions.find((c) => c.action === a);
+    if (cap?.confirm === "none") powerNow(s, a); else openPowerDialog(s, a);
+  } else if (act === "resume") { runPending();
+  } else if (act === "resume-drop") { try { sessionStorage.removeItem(PENDING_KEY); } catch { /* ignore */ } render();
+  } else if (act === "power-now" && s) {
+    if (!state.caps[s.id]) await refreshCaps(s.id);
+    powerNow(s, t.dataset.action);
+  }
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { state.menu = null; const m = $("#modal"); if (!m.hidden) { m.hidden = true; m.innerHTML = ""; } render(); } });
+
+function pageSettings() {
+  setTitle("Settings", "appearance");
+  const s = state.settings;
+  const bg = s.background;
+  return `<div class="settings stack"><div class="panel glass pad"><h3>Background</h3>
+    <div class="note">Theme: true black. Optional background image: upload (PNG, JPEG, WebP, GIF, AVIF, max 8 MiB, no SVG) or paste an https URL.</div>
+    <div class="row-gap section-title"><label class="btn" for="bg-file">Upload image…</label><input id="bg-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" hidden>
+      <button class="btn danger" id="bg-clear" ${bg.kind === "none" ? "disabled" : ""}>Remove background</button></div>
+    <div class="row-gap"><input class="input" id="bg-url" type="url" placeholder="https://example.com/wallpaper.jpg" value="${bg.kind === "url" ? esc(bg.url) : ""}"><button class="btn" id="bg-url-apply">Use URL</button></div>
+    <div class="preview" id="bg-preview"></div><div class="error" id="set-err"></div></div>
+    <div class="panel glass pad"><h3>Readability</h3>
+    <div class="field"><label for="dim">Background dim</label><input type="range" id="dim" min="0" max="90" step="5" value="${s.dim}"><output id="dim-v">${s.dim}%</output></div>
+    <div class="field"><label for="blur">Card blur</label><input type="range" id="blur" min="0" max="40" step="2" value="${s.blur}"><output id="blur-v">${s.blur}px</output></div>
+    <div class="field"><label for="op">Card opacity</label><input type="range" id="op" min="20" max="100" step="2" value="${s.card_opacity}"><output id="op-v">${s.card_opacity}%</output></div>
+    <div class="note" id="saved-note">Saved to your account (per Pocket ID user).</div></div></div>`;
+}
+
+function bindSettings() {
+  const url = bgUrl(state.settings);
+  if (url) $("#bg-preview").style.backgroundImage = cssUrl(url);
+  const err = (e) => ($("#set-err").textContent = e.message || String(e));
+  $("#bg-file").onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try { state.settings = await api("/api/settings/background", { method: "POST", body: file, headers: { "Content-Type": file.type || "application/octet-stream" } }); afterSettings(); }
+    catch (x) { err(x); }
+  };
+  $("#bg-clear").onclick = async () => {
+    try {
+      state.settings = state.settings.background.kind === "upload" ? await api("/api/settings/background", { method: "DELETE" })
+        : { ...state.settings, background: { kind: "none", url: null, version: state.settings.background.version } };
+      await saveSettings(); afterSettings();
+    } catch (x) { err(x); }
+  };
+  $("#bg-url-apply").onclick = async () => {
+    const v = $("#bg-url").value.trim();
+    if (!/^https:\/\//i.test(v)) return err("URL must start with https://");
+    state.settings = { ...state.settings, background: { kind: "url", url: v, version: state.settings.background.version } };
+    await saveSettings(); afterSettings();
+  };
+  for (const [id, key, unit] of [["dim", "dim", "%"], ["blur", "blur", "px"], ["op", "card_opacity", "%"]]) {
+    const el = $(`#${id}`);
+    el.oninput = () => { state.settings[key] = +el.value; $(`#${id}-v`).textContent = `${el.value}${unit}`; applySettings(); };
+    el.onchange = () => saveSettings();
+  }
+}
+function afterSettings() { applySettings(); route(); }
+
+// ------------------------------------------------------------ settings persistence (server, localStorage fallback)
+const LS_KEY = "fairy-settings";
+const cssUrl = (u) => `url("${String(u).replace(/["\\\n\r]/g, encodeURIComponent)}")`;
+const bgUrl = (s) => (s.background.kind === "upload" ? `/api/settings/background?v=${s.background.version}` : s.background.kind === "url" ? s.background.url : null);
+function applySettings() {
+  const s = state.settings, root = document.documentElement.style, url = bgUrl(s);
+  document.body.classList.toggle("has-bg", !!url);
+  $("#bg").style.backgroundImage = url ? cssUrl(url) : "none";
+  root.setProperty("--dim", String(s.dim / 100));
+  root.setProperty("--blur", `${s.blur}px`);
+  root.setProperty("--card-alpha", String(s.card_opacity / 100));
+}
+async function loadSettings() {
+  try { state.settings = await api("/api/settings"); }
+  catch { try { state.settings = JSON.parse(localStorage.getItem(LS_KEY)); } catch { state.settings = null; } }
+  state.settings ||= { theme: "black", background: { kind: "none", url: null, version: 0 }, dim: 60, blur: 14, card_opacity: 72 };
+  applySettings();
+}
+async function saveSettings() {
+  try {
+    state.settings = await api("/api/settings", { method: "PUT", body: JSON.stringify(state.settings) });
+    const n = $("#saved-note"); if (n) n.textContent = "Saved to your account (per Pocket ID user).";
+  } catch (e) {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(state.settings)); } catch { /* storage blocked */ }
+    const n = $("#saved-note"); if (n) n.textContent = `Server save failed (${e.message}); kept in this browser only.`;
+  }
+}
+
+
+
+// ------------------------------------------------------------ routing + rendering
+function schedule(fn, ms = 3000) { clearTimeout(state.timer); state.timer = setTimeout(fn, ms); }
+function current() {
+  const h = location.hash || "#/";
+  const m = h.match(/^#\/system\/([^/]+)(?:\/(\w+))?$/);
+  if (m) return { page: "system", id: decodeURIComponent(m[1]), tab: m[2] || "overview" };
+  if (h.startsWith("#/power")) return { page: "power" };
+  if (h.startsWith("#/ups")) return { page: "ups" };
+  if (h.startsWith("#/settings")) return { page: "settings" };
+  if (h.startsWith("#/audit")) return { page: "audit" };
+  return { page: "overview" };
+}
+const routeKey = (r) => `${r.page}:${r.id || ""}:${r.tab || ""}`;
+function pageHtml(r) {
+  return r.page === "system" ? pageSystem(r.id, r.tab) : r.page === "power" ? pagePower() : r.page === "ups" ? pageUps()
+    : r.page === "settings" ? pageSettings() : r.page === "audit" ? pageAudit() : pageOverview();
+}
+let renderQueued = false;
+function render() {  // coalesced to one DOM patch per frame
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; renderNow(); });
+}
+function renderNow() {
+  const r = current();
+  renderNav(); renderAlerts();
+  if (r.page === "settings") return;  // has live inputs; rendered once on route
+  morph($("#page"), `<div data-key="${esc(routeKey(r))}">${pageHtml(r)}</div>`);
+}
+function route() {
+  clearTimeout(state.timer);
+  state.menu = null;
+  const r = current();
+  if (r.page === "system") {
+    const s = state.byId[r.id];
+    if (s?.parent) { const n = nodesOf().find((x) => x.name === s.parent && x.cluster_id === s.cluster_id); if (n) state.closed[n.id] = false; }
+    if (s && (s.power_actions || []).includes("wake")) refreshCaps(r.id);
+  }
+  $("#page").innerHTML = `<div data-key="${esc(routeKey(r))}">${pageHtml(r)}</div>`;
+  if (r.page === "settings") bindSettings();
+  if (r.page === "system" && r.tab === "processes") loadProcesses(r.id);
+  if (r.page === "system" && r.tab === "fans") loadFans(r.id);
+  if (r.page === "ups") loadUpsEvents();
+  if (r.page === "audit") loadAudit(true);
+  renderNav(); renderAlerts();
+  $("#shell").classList.remove("drawer"); $("#scrim").hidden = true;
+  connect(r.page === "system" ? r.id : null);  // boost the viewed host to 1 s polling
+  window.scrollTo(0, 0);
+}
+
+// ------------------------------------------------------------ live data
+function indexSystems() { state.byId = Object.fromEntries(state.systems.map((s) => [s.id, s])); }
+function pushUpsHistory(ov) {
+  for (const u of ov.ups) {
+    const h = (state.upsHist[u.id] ||= []);
+    h.push({ t: ov.generated_at, watts: u.watts, charge: u.battery_charge });
+    if (h.length > 720) h.shift();
+  }
+}
+function connect(watch) {
+  if (state.es && state.watch === watch) return;
+  if (state.es) state.es.close();
+  state.watch = watch;
+  const es = new EventSource(`/api/stream${watch ? `?watch=${enc(watch)}` : ""}`);
+  state.es = es;
+  es.addEventListener("systems", (e) => { state.systems = JSON.parse(e.data).systems; indexSystems(); render(); });
+  es.addEventListener("systems_delta", (e) => {
+    const d = JSON.parse(e.data), gone = new Set(d.removed);
+    d.changed.forEach((s) => (state.byId[s.id] = s));
+    gone.forEach((id) => delete state.byId[id]);
+    // keep server order for existing ids; new ids go at the end until the next full snapshot
+    const seen = new Set();
+    state.systems = state.systems.filter((s) => !gone.has(s.id)).map((s) => (seen.add(s.id), state.byId[s.id]));
+    d.changed.forEach((s) => { if (!seen.has(s.id)) state.systems.push(s); });
+    render();
+  });
+  es.addEventListener("summary", (e) => { state.summary = JSON.parse(e.data); render(); });
+  es.addEventListener("ups", (e) => { state.ups = JSON.parse(e.data); pushUpsHistory(state.ups); render(); });
+  es.addEventListener("ups_event", (e) => { state.upsEvents.unshift(JSON.parse(e.data)); render(); });
+  es.addEventListener("power", (e) => {
+    state.power = JSON.parse(e.data);
+    const sources = {};
+    state.power.sources.forEach((s) => (sources[s.id] = s.readings.reduce((a, r) => a + (r.watts || 0), 0) || null));
+    state.history.push({ t: state.power.generated_at, total_w: state.power.total_w, sources });
+    if (state.history.length > 720) state.history.shift();
+    render();
+  });
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED && state.es === es) { state.es = null; setTimeout(() => connect(state.watch), 3000); } };
+}
+async function loadUpsEvents() {
+  try { state.upsEvents = await api("/api/ups/events?limit=50"); render(); } catch { /* ignore */ }
+}
+// 1 s ticker for relative times and countdowns (no re-render needed)
+setInterval(() => {
+  document.querySelectorAll("[data-ago]").forEach((el) => { const v = ago(el.dataset.ago); if (el.textContent !== v) el.textContent = v; });
+  document.querySelectorAll("[data-countdown]").forEach((el) => { el.textContent = fmtRuntime(Math.max(0, (new Date(el.dataset.countdown) - Date.now()) / 1000)); });
+}, 1000);
+
+async function boot() {
+  try { state.me = await api("/api/me"); }
+  catch (e) { if (e.status === 401) { $("#login").hidden = false; return; } throw e; }
+  $("#shell").hidden = false;
+  $("#demo-banner").hidden = !state.me.demo;
+  const bannerH = () => document.documentElement.style.setProperty("--banner-h", `${$("#demo-banner").hidden ? 0 : $("#demo-banner").offsetHeight}px`);
+  bannerH(); window.addEventListener("resize", bannerH);
+  $("#collapse").innerHTML = I.collapse; $("#menu").innerHTML = I.menu; $("#gear").innerHTML = I.settings;
+  const wide = matchMedia("(min-width: 761px)");
+  let collapsed = false; try { collapsed = localStorage.getItem("fairy-collapsed") === "1"; } catch { /* ignore */ }
+  const setCollapsed = (v) => { collapsed = v; $("#shell").classList.toggle("collapsed", v && wide.matches); try { localStorage.setItem("fairy-collapsed", v ? "1" : "0"); } catch { /* ignore */ } };
+  setCollapsed(collapsed); wide.addEventListener("change", () => setCollapsed(collapsed));
+  $("#collapse").onclick = () => setCollapsed(!collapsed);
+  $("#menu").onclick = () => { $("#shell").classList.add("drawer"); $("#scrim").hidden = false; };
+  $("#scrim").onclick = () => { $("#shell").classList.remove("drawer"); $("#scrim").hidden = true; };
+  const who = state.me.name || state.me.preferred_username || state.me.sub;
+  $("#side-user").innerHTML = `<span class="avatar">${esc((who[0] || "?").toUpperCase())}</span><span class="who">${esc(who)}${state.me.can_control ? ' <span class="chip ok">control</span>' : ""}</span>
+    ${state.me.demo ? "" : '<form method="post" action="/auth/logout"><button class="btn">Sign out</button></form>'}`;
+  await loadSettings();
+  try {
+    const h = await api("/api/power/history");
+    state.history = h.points.map((p) => ({ t: p.t, total_w: p.total_w, sources: p.sources }));
+  } catch { state.history = []; }
+  try {
+    const u = await api("/api/ups");
+    state.ups = { generated_at: u.generated_at, ups: u.ups };
+    for (const [id, pts] of Object.entries(u.history)) state.upsHist[id] = pts.map((p) => ({ t: p.t, watts: p.watts, charge: p.charge }));
+  } catch { /* no UPS */ }
+  window.addEventListener("hashchange", route);
+  route();
+}
+boot();

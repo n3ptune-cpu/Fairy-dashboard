@@ -1,0 +1,390 @@
+package web
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/nsxservices/fairy/internal/config"
+	"github.com/nsxservices/fairy/internal/model"
+	"github.com/nsxservices/fairy/internal/poller"
+	"github.com/nsxservices/fairy/internal/testutil"
+)
+
+type env struct {
+	t   *testing.T
+	s   *Server
+	srv *httptest.Server
+	b   *testutil.Backend
+}
+
+func setup(t *testing.T) *env {
+	t.Helper()
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	b := testutil.NewBackend()
+	p, err := poller.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.PollOnce(context.Background())
+	s := New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, p, nil, "test")
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	return &env{t: t, s: s, srv: srv, b: b}
+}
+
+var viewer = model.User{Sub: "u1", Name: model.P("Neptune"), Email: model.P("n@example.com"), Groups: []string{"viewers"}}
+
+func controller() model.User {
+	u := viewer
+	u.Groups = []string{"viewers", "controllers"}
+	return u
+}
+
+// cookie mints a session like a real login: registered sid, auth_time as given.
+func (e *env) cookie(u model.User, authAge time.Duration) string {
+	sid := randToken(18)
+	if err := e.s.Poller.Admin.AddSession(sid, map[string]any{"sub": u.Sub}); err != nil {
+		e.t.Fatal(err)
+	}
+	now := time.Now()
+	rec := httptest.NewRecorder()
+	e.s.codec.write(rec, &sessionData{SID: sid, User: &u, IAT: now.Unix(), Seen: now.Unix(),
+		AuthTime: float64(now.Add(-authAge).Unix())})
+	return strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]
+}
+
+type resp struct {
+	code int
+	body map[string]any
+	raw  []byte
+	hdr  http.Header
+}
+
+func (e *env) do(method, path string, body any, hdr ...string) resp {
+	var rd io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rd = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, e.srv.URL+path, rd)
+	for i := 0; i+1 < len(hdr); i += 2 {
+		req.Header.Set(hdr[i], hdr[i+1])
+	}
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	r, err := c.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer r.Body.Close()
+	raw, _ := io.ReadAll(r.Body)
+	out := resp{code: r.StatusCode, raw: raw, hdr: r.Header}
+	_ = json.Unmarshal(raw, &out.body)
+	return out
+}
+
+func TestUnauthenticatedGets401JSONNeverRedirect(t *testing.T) {
+	e := setup(t)
+	for _, p := range []string{"/api/me", "/api/systems", "/api/summary", "/api/stream", "/api/audit", "/api/settings", "/api/openapi.json"} {
+		r := e.do("GET", p, nil)
+		if r.code != 401 || r.body["detail"] != "not authenticated" {
+			t.Errorf("%s: %d %s", p, r.code, r.raw)
+		}
+	}
+	if r := e.do("GET", "/healthz", nil); r.code != 200 || r.body["status"] != "ok" {
+		t.Fatal("healthz")
+	}
+	if r := e.do("GET", "/docs", nil); r.code != 303 || r.hdr.Get("Location") != "/auth/login?next=/docs" {
+		t.Fatal("docs gate", r.code)
+	}
+	r := e.do("GET", "/", nil)
+	if r.code != 200 || !strings.Contains(string(r.raw), "Fairy") {
+		t.Fatal("index")
+	}
+	for _, h := range []string{"Content-Security-Policy", "X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy", "Permissions-Policy", "Strict-Transport-Security"} {
+		if r.hdr.Get(h) == "" {
+			t.Errorf("missing %s", h)
+		}
+	}
+	if r := e.do("GET", "/api/nope", nil); r.code != 404 {
+		t.Fatal("404")
+	}
+}
+
+func TestSessionsAreRevocableAndTamperProof(t *testing.T) {
+	e := setup(t)
+	ck := e.cookie(viewer, 0)
+	r := e.do("GET", "/api/me", nil, "Cookie", ck)
+	if r.code != 200 || r.body["can_control"] != false || r.body["auth"] != "session" {
+		t.Fatalf("%d %s", r.code, r.raw)
+	}
+	bad := ck[:len(ck)-3] + "abc"
+	if e.do("GET", "/api/me", nil, "Cookie", bad).code != 401 {
+		t.Fatal("tampered cookie accepted")
+	}
+	if _, err := e.s.Poller.Admin.RevokeAllSessions(); err != nil { // `fairy admin sessions revoke-all`
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 401 {
+		t.Fatal("revoked session still valid", r.code)
+	}
+}
+
+func TestAPITokensScopesAndEndpoints(t *testing.T) {
+	e := setup(t)
+	raw, rec, err := e.s.Tokens.Create("ha", "system", "read", "cli:test", 0)
+	if err != nil || !strings.HasPrefix(raw, "fy_") {
+		t.Fatal(err)
+	}
+	ctl, _, _ := e.s.Tokens.Create("ops", "system", "control", "cli:test", 0)
+	if _, _, err := e.s.Tokens.Create("ha", "system", "read", "cli:test", 0); err == nil {
+		t.Fatal("duplicate active name accepted")
+	}
+	auth := func(tok string) []string { return []string{"Authorization", "Bearer " + tok} }
+	if r := e.do("GET", "/api/me", nil, auth(raw)...); r.code != 200 || r.body["token_scope"] != "read" || r.body["auth"] != "token" {
+		t.Fatalf("%s", r.raw)
+	}
+	if r := e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, auth(raw)...); r.code != 403 {
+		t.Fatal("read token controlled", r.code)
+	}
+	if r := e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, auth(ctl)...); r.code != 200 || r.body["mode"] != "override" {
+		t.Fatalf("control token (no CSRF header needed): %d %s", r.code, r.raw)
+	}
+	if r := e.do("GET", "/api/settings", nil, auth(raw)...); r.code != 403 {
+		t.Fatal("tokens must not reach settings")
+	}
+	if r := e.do("GET", "/auth/login", nil, auth(raw)...); r.code != 403 {
+		t.Fatal("tokens must not reach /auth")
+	}
+	if r := e.do("GET", "/api/me", nil, auth("fy_nope")...); r.code != 401 || r.body["detail"] != "invalid API token" {
+		t.Fatal("bogus token")
+	}
+	if _, err := e.s.Tokens.Revoke(rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.do("GET", "/api/me", nil, auth(raw)...); r.code != 401 {
+		t.Fatal("revoked token still works")
+	}
+}
+
+func TestControlNeedsGroupCSRFStepUpAndKillSwitch(t *testing.T) {
+	e := setup(t)
+	csrf := []string{"X-Requested-With", "fairy"}
+	body := map[string]any{"interval_s": 5}
+	v := e.cookie(viewer, 0)
+	if r := e.do("PUT", "/api/systems/laptop/poll", body, append([]string{"Cookie", v}, csrf...)...); r.code != 403 || r.body["detail"] != "not in a control group" {
+		t.Fatalf("viewer: %d %s", r.code, r.raw)
+	}
+	c := e.cookie(controller(), 0)
+	if r := e.do("PUT", "/api/systems/laptop/poll", body, "Cookie", c); r.code != 403 || !strings.Contains(r.raw2(), "X-Requested-With") {
+		t.Fatalf("csrf: %d", r.code)
+	}
+	if r := e.do("PUT", "/api/systems/laptop/poll", body, "Cookie", c, "X-Requested-With", "fairy", "Origin", "https://evil.example"); r.code != 403 {
+		t.Fatal("cross-origin accepted")
+	}
+	if r := e.do("PUT", "/api/systems/laptop/poll", body, "Cookie", c, "X-Requested-With", "fairy", "Sec-Fetch-Site", "cross-site"); r.code != 403 {
+		t.Fatal("cross-site accepted")
+	}
+	// step-up: last Pocket ID sign-in 10 min ago (window 5 min)
+	old := e.cookie(controller(), 10*time.Minute)
+	r := e.do("PUT", "/api/systems/laptop/poll", body, append([]string{"Cookie", old}, csrf...)...)
+	d, _ := r.body["detail"].(map[string]any)
+	if r.code != 401 || d["code"] != "step_up_required" || d["window_s"] != 300.0 {
+		t.Fatalf("step-up: %d %s", r.code, r.raw)
+	}
+	if r := e.do("PUT", "/api/systems/laptop/poll", body, append([]string{"Cookie", c}, csrf...)...); r.code != 200 {
+		t.Fatalf("fresh controller: %d %s", r.code, r.raw)
+	}
+	// kill switch (fairy admin control disable): everyone refused with 423
+	_ = e.s.Poller.Admin.SetControlDisabled(true, "root (cli)", "maintenance")
+	r = e.do("PUT", "/api/systems/laptop/poll", body, append([]string{"Cookie", c}, csrf...)...)
+	if r.code != 423 || !strings.Contains(r.raw2(), "maintenance") {
+		t.Fatalf("kill switch: %d %s", r.code, r.raw)
+	}
+	if me := e.do("GET", "/api/me", nil, "Cookie", c); me.body["control_disabled"] == nil {
+		t.Fatal("me must show the kill switch")
+	}
+	caps := e.do("GET", "/api/systems/laptop/power", nil, "Cookie", c)
+	for _, a := range caps.body["actions"].([]any) {
+		if a.(map[string]any)["available"] == true {
+			t.Fatal("power actions must be unavailable while control is disabled")
+		}
+	}
+	_ = e.s.Poller.Admin.SetControlDisabled(false, "root", "")
+	// per-host power-control flag
+	_ = e.s.Poller.Admin.SetPowerDisabled("laptop", true)
+	caps = e.do("GET", "/api/systems/laptop/power", nil, "Cookie", c)
+	if !strings.Contains(string(caps.raw), "power-control enable") {
+		t.Fatal("per-host flag")
+	}
+	_ = e.s.Poller.Admin.SetPowerDisabled("laptop", false)
+	// typed confirmation, then the agent call with the requester name
+	pw := map[string]any{"action": "shutdown", "delay_s": 120}
+	if r := e.do("POST", "/api/systems/laptop/power", pw, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
+		t.Fatalf("typed confirmation: %d %s", r.code, r.raw)
+	}
+	pw["confirm"] = "LAPTOP"
+	r = e.do("POST", "/api/systems/laptop/power", pw, append([]string{"Cookie", c}, csrf...)...)
+	if r.code != 200 || r.body["via"] != "agent" || !strings.Contains(strings.Join(e.b.Requests, "\n"), "laptop POST /power") {
+		t.Fatalf("power: %d %s", r.code, r.raw)
+	}
+	// guest power goes to Proxmox with the power token path
+	r = e.do("POST", "/api/systems/qemu-100/power", map[string]any{"action": "reboot"}, append([]string{"Cookie", c}, csrf...)...)
+	if r.code != 200 || len(e.b.PVECalls) != 1 || e.b.PVECalls[0] != "pve /nodes/NSX-KACHINA/qemu/100/status/reboot " {
+		t.Fatalf("guest power: %d %s %v", r.code, r.raw, e.b.PVECalls)
+	}
+	// rate limit (control_rate_per_min default)
+	limited := false
+	for i := 0; i < 40 && !limited; i++ {
+		limited = e.do("POST", "/api/systems/laptop/fan/mode", map[string]any{"mode": "full"}, append([]string{"Cookie", c}, csrf...)...).code == 429
+	}
+	if !limited {
+		t.Fatal("no rate limit")
+	}
+}
+
+func (r resp) raw2() string { return string(r.raw) }
+
+func TestAuditLogAndPage(t *testing.T) {
+	e := setup(t)
+	c := e.cookie(controller(), 0)
+	v := e.cookie(viewer, 0)
+	csrf := []string{"X-Requested-With", "fairy"}
+	e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 7}, append([]string{"Cookie", c}, csrf...)...)
+	e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 7}, append([]string{"Cookie", v}, csrf...)...)
+	if r := e.do("GET", "/api/audit", nil, "Cookie", v); r.code != 403 {
+		t.Fatal("viewer read the audit log")
+	}
+	r := e.do("GET", "/api/audit?limit=1", nil, "Cookie", c)
+	cursor := int64(r.body["next"].(float64))
+	entries := r.body["entries"].([]any)
+	first := entries[0].(map[string]any)
+	if r.code != 200 || len(entries) != 1 || r.body["next"] == nil || first["action"] != "auth.denied" { // newest first: the 403s
+		t.Fatalf("%s", r.raw)
+	}
+	r = e.do("GET", "/api/audit?action=poll", nil, "Cookie", c)
+	got := r.body["entries"].([]any)[0].(map[string]any)
+	if got["action"] != "poll.set" || got["target"] != "laptop" || got["outcome"] != "ok" || got["actor"] != "n@example.com" || got["source"] != "ui" {
+		t.Fatalf("%v", got)
+	}
+	if r := e.do("GET", "/api/audit?before="+itoa(cursor), nil, "Cookie", c); len(r.body["entries"].([]any)) == 0 {
+		t.Fatal("pagination")
+	}
+	if r := e.do("GET", "/api/audit?action=Bad%20Action", nil, "Cookie", c); r.code != 422 {
+		t.Fatal("filter validation")
+	}
+}
+
+func itoa(n int64) string { b, _ := json.Marshal(n); return string(b) }
+
+func TestSettingsAndBackgroundUpload(t *testing.T) {
+	e := setup(t)
+	c := e.cookie(viewer, 0) // settings are per user, no control group needed
+	csrf := []string{"Cookie", c, "X-Requested-With", "fairy"}
+	if r := e.do("GET", "/api/settings", nil, "Cookie", c); r.code != 200 || r.body["dim"] != 60.0 {
+		t.Fatal("defaults")
+	}
+	if r := e.do("PUT", "/api/settings", map[string]any{"theme": "black", "background": map[string]any{"kind": "url", "url": "http://x"}, "dim": 50, "blur": 10, "card_opacity": 70}, csrf...); r.code != 422 {
+		t.Fatal("http background url accepted")
+	}
+	if r := e.do("PUT", "/api/settings", map[string]any{"background": map[string]any{"kind": "upload"}}, csrf...); r.code != 400 {
+		t.Fatal("upload kind without a file")
+	}
+	upload := func(ct string, data []byte) resp {
+		req, _ := http.NewRequest("POST", e.srv.URL+"/api/settings/background", bytes.NewReader(data))
+		req.Header.Set("Content-Type", ct)
+		req.Header.Set("Cookie", c)
+		req.Header.Set("X-Requested-With", "fairy")
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		raw, _ := io.ReadAll(r.Body)
+		out := resp{code: r.StatusCode, raw: raw}
+		_ = json.Unmarshal(raw, &out.body)
+		return out
+	}
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...)
+	if r := upload("image/svg+xml", []byte("<svg onload=alert(1)>")); r.code != 415 {
+		t.Fatal("svg accepted")
+	}
+	if r := upload("image/png", []byte("GIF89a....")); r.code != 415 {
+		t.Fatal("mismatched content accepted")
+	}
+	if r := upload("image/png", make([]byte, 8<<20+1)); r.code != 413 {
+		t.Fatal("too large accepted", r.code)
+	}
+	r := upload("image/png", png)
+	if r.code != 201 || r.body["background"].(map[string]any)["kind"] != "upload" {
+		t.Fatalf("%d %s", r.code, r.raw)
+	}
+	g := e.do("GET", "/api/settings/background", nil, "Cookie", c)
+	if g.code != 200 || g.hdr.Get("Content-Type") != "image/png" || g.hdr.Get("Content-Security-Policy") != "default-src 'none'" {
+		t.Fatal("background download", g.code)
+	}
+	if r := e.do("DELETE", "/api/settings/background", nil, csrf...); r.code != 200 {
+		t.Fatal("delete")
+	}
+}
+
+func TestSafeNextAndLoginRateLimit(t *testing.T) {
+	for in, want := range map[string]string{"/": "/", "/#/system/x": "/#/system/x", "//evil.com": "/", "https://evil.com": "/",
+		"/\\evil": "/", "": "/", "javascript:alert(1)": "/"} {
+		if got := safeNext(in); got != want {
+			t.Errorf("%q -> %q", in, got)
+		}
+	}
+	e := setup(t)
+	e.s.Cfg.OIDC.Issuer = "http://127.0.0.1:1" // discovery fails fast (502) until the limiter kicks in
+	codes := map[int]int{}
+	for i := 0; i < 25; i++ {
+		codes[e.do("GET", "/auth/login", nil).code]++
+	}
+	if codes[429] == 0 { // 20/min default (discovery fails: 502 before the limit)
+		t.Fatal(codes)
+	}
+}
+
+func TestDemoServesLoopbackOnly(t *testing.T) {
+	e := setup(t)
+	u := viewer
+	u.Auth = "demo"
+	e.s.DemoUser = &u
+	// httptest listens on 127.0.0.1 -> served
+	if r := e.do("GET", "/api/me", nil); r.code != 200 || r.body["demo"] != true {
+		t.Fatal("demo on loopback", r.code)
+	}
+	if isLoopback(fakeAddr("192.168.1.5:8090")) || !isLoopback(fakeAddr("127.0.0.1:8090")) || !isLoopback(fakeAddr("[::1]:8090")) {
+		t.Fatal("loopback detection")
+	}
+}
+
+type fakeAddr string
+
+func (a fakeAddr) Network() string { return "tcp" }
+func (a fakeAddr) String() string  { return string(a) }
+
+func TestClaimsPolicy(t *testing.T) {
+	u := userFromClaims(map[string]any{"sub": "x", "email": "A@B.c", "groups": []any{"viewers"}}, "groups")
+	o := config.OIDC{AllowedGroups: []string{"viewers"}, ControlGroups: []string{"controllers"}}
+	if !isAllowed(u, o) || canControl(&u, o) {
+		t.Fatal("viewer")
+	}
+	if isAllowed(userFromClaims(map[string]any{"sub": "y", "groups": []any{"other"}}, "groups"), o) {
+		t.Fatal("other group allowed")
+	}
+	if !isAllowed(u, config.OIDC{AllowedEmails: []string{"a@b.C"}}) {
+		t.Fatal("emails are case-insensitive")
+	}
+	if canControl(&u, config.OIDC{}) {
+		t.Fatal("no control groups -> nobody controls")
+	}
+}

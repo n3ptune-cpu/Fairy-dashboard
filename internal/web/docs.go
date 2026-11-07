@@ -1,0 +1,87 @@
+package web
+
+import (
+	"net/http"
+	"regexp"
+	"strings"
+)
+
+// A compact, hand-maintained OpenAPI description of the JSON API (paths, methods, summaries). /docs renders it
+// with Swagger UI; both need a signed-in session (the JSON also accepts an API token).
+var apiDoc = []struct{ method, path, summary string }{
+	{"GET", "/api/me", "Current user"},
+	{"GET", "/api/audit", "Audit log, newest first (control group only). Query: q, action, host, before, limit"},
+	{"GET", "/api/systems", "All systems (normalised). Query: kind, status, group"},
+	{"GET", "/api/systems/{id}", "One system"},
+	{"GET", "/api/systems/{id}/processes", "Top processes (fetched on demand from the agent). Query: limit, sort=cpu|mem|gpu"},
+	{"GET", "/api/summary", "Cluster totals and status counts"},
+	{"GET", "/api/power", "All power sources + total wall power"},
+	{"GET", "/api/power/history", "Ring buffer (default 1 h) for sparklines. Query: source"},
+	{"GET", "/api/ups", "All UPSes: state, battery, load, linked systems, history"},
+	{"GET", "/api/ups/events", "UPS transitions (newest first). Query: limit, after"},
+	{"GET", "/api/systems/{id}/fan", "Fan mode, RPMs, watchdog events"},
+	{"POST", "/api/systems/{id}/fan/mode", "Set BMC fan mode (control group + `X-Requested-With: fairy` header)"},
+	{"POST", "/api/systems/{id}/fan/duty", "Set zone duty % (requires mode=full; agent enforces minimum + temp watchdog)"},
+	{"GET", "/api/settings", "Current user's UI settings (session only)"},
+	{"PUT", "/api/settings", "Replace UI settings (CSRF header required)"},
+	{"POST", "/api/settings/background", "Upload a background image (raw body; PNG/JPEG/WebP/GIF/AVIF, max 8 MiB, no SVG)"},
+	{"GET", "/api/settings/background", "The uploaded background image"},
+	{"DELETE", "/api/settings/background", "Remove the uploaded background"},
+	{"GET", "/api/systems/{id}/power", "Power actions for one system: available or why not, confirmation needed, pending shutdown"},
+	{"POST", "/api/systems/{id}/power", "Shutdown / reboot / cancel / start / stop / wake (control group + CSRF header; `confirm` = the system name for typed actions)"},
+	{"GET", "/api/systems/{id}/poll", "Polling rate for one system: override, effective interval per source, floors, boost"},
+	{"PUT", "/api/systems/{id}/poll", "Set the polling rate: seconds (1-300), \"paused\" or \"default\""},
+	{"GET", "/api/stream", "Server-Sent Events: systems, systems_delta, summary, ups, power, ups_event. Query: watch=<id>"},
+}
+
+var paramRe = regexp.MustCompile(`\{(\w+)\}`)
+
+func openAPI(version string) map[string]any {
+	paths := map[string]any{}
+	for _, d := range apiDoc {
+		item, _ := paths[d.path].(map[string]any)
+		if item == nil {
+			item = map[string]any{}
+			paths[d.path] = item
+		}
+		op := map[string]any{"summary": d.summary, "responses": map[string]any{
+			"200": map[string]any{"description": "OK"}, "401": map[string]any{"description": "not authenticated"}}}
+		var params []any
+		for _, m := range paramRe.FindAllStringSubmatch(d.path, -1) {
+			params = append(params, map[string]any{"name": m[1], "in": "path", "required": true, "schema": map[string]any{"type": "string"}})
+		}
+		if params != nil {
+			op["parameters"] = params
+		}
+		item[strings.ToLower(d.method)] = op
+	}
+	return map[string]any{"openapi": "3.1.0", "info": map[string]any{"title": "Fairy", "version": version,
+		"description": "Homelab resource panel API. All `/api/*` routes need a session cookie (log in at `/auth/login`) or `Authorization: Bearer fy_...`; unauthenticated calls get `401` JSON."},
+		"paths": paths}
+}
+
+const swaggerHTML = `<!doctype html><html><head><meta charset="utf-8"><title>Fairy API</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui.css"></head>
+<body><div id="swagger-ui"></div>
+<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
+<script>SwaggerUIBundle({url: "/api/openapi.json", dom_id: "#swagger-ui"})</script></body></html>`
+
+func (s *Server) docsRoutes(m *http.ServeMux) {
+	m.HandleFunc("GET /api/openapi.json", s.h(func(c *reqCtx) error {
+		if _, err := c.requireUser(); err != nil {
+			return err
+		}
+		c.json(200, openAPI(s.Version))
+		return nil
+	}))
+	m.HandleFunc("GET /docs", s.h(func(c *reqCtx) error {
+		if c.sessionUser() == nil {
+			c.redirect("/auth/login?next=/docs")
+			return nil
+		}
+		c.flush()
+		c.w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = c.w.Write([]byte(swaggerHTML))
+		return nil
+	}))
+}

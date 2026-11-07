@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Fairy</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <!-- Starter UI: plain HTML/CSS/JS on top of the JSON API. Restyle or replace freely. -->
+  <div id="bg" aria-hidden="true"></div>
+  <div id="bg-dim" aria-hidden="true"></div>
+  <div id="demo-banner" class="demo-banner" hidden>FAIRY DEMO · simulated data · authentication bypassed · localhost only</div>
+
+  <section id="login" class="login" hidden>
+    <div class="logo big" aria-hidden="true"></div>
+    <h1>Fairy</h1>
+    <p>Sign in with your Pocket ID account to continue.</p>
+    <a class="btn primary" href="/auth/login">Sign in with Pocket ID</a>
+  </section>
+
+  <div class="shell" id="shell" hidden>
+    <div class="sidebar-col">
+    <aside class="sidebar" id="sidebar" aria-label="Navigation">
+      <div class="side-head">
+        <a class="brand" href="#/"><span class="logo" aria-hidden="true"></span><span class="label">Fairy</span></a>
+        <button class="icon-btn collapse-btn" id="collapse" aria-label="Collapse sidebar" title="Collapse sidebar"></button>
+      </div>
+      <nav id="nav"></nav>
+      <div class="side-foot" id="side-user"></div>
+    </aside>
+    </div>
+    <div class="scrim" id="scrim" hidden></div>
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menu" aria-label="Open navigation"></button>
+        <h1 id="page-title">Overview</h1>
+        <span class="crumb" id="page-sub"></span>
+        <a class="icon-btn gear" href="#/settings" id="gear" aria-label="Settings" title="Settings"></a>
+      </header>
+      <div id="alerts" class="alerts" aria-live="polite"></div>
+      <main id="page"></main>
+      <footer class="foot">starter UI · live data from <code>/api/stream</code><span id="doclink"> · <a href="/docs">API docs</a></span></footer>
+    </div>
+  </div>
+  <div id="modal" class="modal" hidden></div>
+  <div id="flash" class="flash" role="status" hidden></div>
+</body>
+</html>
