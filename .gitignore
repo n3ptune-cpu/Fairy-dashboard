@@ -1,0 +1,29 @@
+# build output
+/dist/
+/bin/
+*.exe
+*.zip
+/fairy
+/fairy-agent
+fairy-linux-*
+fairy-windows-*
+SHA256SUMS
+coverage.out
+*.test
+
+# runtime data / local testing (never commit secrets)
+.fairy-demo/
+*.env
+/config.yaml
+data/
+*.log
+health.json
+tokens.json
+sessions.json
+state.json
+
+# editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
