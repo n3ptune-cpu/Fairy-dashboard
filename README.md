@@ -101,6 +101,15 @@ The file is read once at start (path from the config only) and served at `/brand
   (`login_rate_per_min`) counts per client IP, and per user for a signed-in step-up, so nobody else's attempts
   can block an admin from confirming a control action.
 * Strict CSP, HSTS (https), frame/referrer/permissions policies, generic 500s, no secrets in logs or errors.
+* Sign-out is a POST with the CSRF header (no cross-site sign-out); visiting `/auth/login` keeps a valid session
+  until a new sign-in completes.
+* State files fail closed: an unreadable or corrupt `users.json`, `sessions.json`, `tokens.json` or `state.json`
+  stops the panel at start, and at run time grants nothing (no sessions, control off) instead of being read as
+  empty; such a file is never overwritten. Files are written `0600` by the service user, and `fairy admin`
+  commands that change something refuse to run as another user (use `sudo -u fairy fairy admin ...`).
+* Defence in depth: process command lines are redacted by the panel too; fan duty is never set below 30 %;
+  background uploads need a role and are rate limited; revoking a token ends its live streams.
+* See `SECURITY-FIXES.md` for the 2026-11 review fixes and what to configure.
 
 ## Map of the code
 
