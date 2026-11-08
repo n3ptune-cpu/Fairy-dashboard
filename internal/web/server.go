@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy/internal/access"
 	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/poller"
@@ -51,7 +52,11 @@ type Server struct {
 	Poller   *poller.Poller
 	Tokens   *tokens.Store
 	Settings *settings.Store
+	Access   *access.Store // users.json: roles, sites, site assignments
 	Version  string
+
+	seenMu sync.Mutex
+	seen   map[string]time.Time // subject -> last "last seen" write
 
 	codec *sessionCodec
 	oidc  *oidcClient
@@ -60,22 +65,43 @@ type Server struct {
 	DemoUser     *model.User
 	demoMu       sync.Mutex
 	demoAuthTime time.Time
+	demoView     *access.Grant // demo preview as another role (--demo-as or the switcher); nil = admin
 
-	control, pollCtl, login *rateLimiter
-	mux                     *http.ServeMux
+	control, pollCtl, login, adminRL *rateLimiter
+	mux                              *http.ServeMux
 }
 
 // New builds the server. demoUser != nil enables demo mode (caller guarantees a loopback listener).
 func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *model.User, version string) *Server {
 	s := &Server{Cfg: cfg, Secrets: secrets, Poller: p, Tokens: tokens.NewStore(cfg.DataDir),
-		Settings: settings.NewStore(cfg.DataDir), Version: version,
+		Settings: settings.NewStore(cfg.DataDir), Access: access.NewStore(cfg.DataDir), Version: version,
+		seen:     map[string]time.Time{},
 		codec:    newCodec(secrets.SessionSecret, cfg.SessionMaxAge, !secrets.InsecureCookies),
 		DemoUser: demoUser, demoAuthTime: time.Now().Add(-time.Hour), // first control action shows step-up
 		control: newRateLimiter(cfg.ControlRatePerMin), pollCtl: newRateLimiter(cfg.ControlRatePerMin * 2),
-		login: newRateLimiter(cfg.LoginRatePerMin)}
+		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60)}
 	s.oidc = newOIDC(cfg, secrets)
+	if err := s.Access.EnsureSites(cfg.Sites()); err != nil { // sites named in config.yaml exist on the Users page
+		slog.Error("users.json write failed", "error", err)
+	}
 	s.routes()
 	return s
+}
+
+// SetDemoView makes demo mode show the panel as another role would see it ("viewer:Straw", "pending", "admin").
+func (s *Server) SetDemoView(v string) error {
+	g, err := access.ParseView(v)
+	if err != nil {
+		return err
+	}
+	s.demoMu.Lock()
+	defer s.demoMu.Unlock()
+	if g.Admin() {
+		s.demoView = nil
+	} else {
+		s.demoView = &g
+	}
+	return nil
 }
 
 // DeploymentWarnings returns startup sanity warnings (behind nginx at e.g. https://panel.example.com).
@@ -179,6 +205,9 @@ func (s *Server) routes() {
 	s.apiRoutes(m)
 	if s.Cfg.EnableDocs {
 		s.docsRoutes(m)
+	}
+	if s.DemoUser != nil {
+		s.demoRoutes()
 	}
 	notFound := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

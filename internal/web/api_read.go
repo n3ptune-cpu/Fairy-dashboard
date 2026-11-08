@@ -15,24 +15,33 @@ import (
 )
 
 func (s *Server) me(c *reqCtx) error {
-	u, err := c.requireUser()
+	u, g, err := c.grant()
 	if err != nil {
 		return err
 	}
-	c.json(200, model.Me{User: *u, CanControl: canControl(u, s.Cfg.OIDC), Demo: s.DemoUser != nil,
-		ControlDisabled: s.Poller.Admin.ControlDisabled(), StepUpWindowS: s.Cfg.StepUpWindowS, AuthAgeS: c.authAge(u)})
+	me := model.Me{User: *u, CanControl: g.Admin(), Demo: s.DemoUser != nil,
+		ControlDisabled: s.Poller.Admin.ControlDisabled(), StepUpWindowS: s.Cfg.StepUpWindowS, AuthAgeS: c.authAge(u),
+		Role: g.Role, Sites: g.Sites, AllSites: g.SeesAll(), CanManageUsers: g.Admin() && u.Auth != "token"}
+	if me.Sites == nil {
+		me.Sites = []string{}
+	}
+	if s.DemoUser != nil {
+		me.DemoView = g.String()
+		me.DemoViews = s.demoViews()
+	}
+	c.json(200, me)
 	return nil
 }
 
 var actionRe = regexp.MustCompile(`^[a-z_.]+$`)
 
 func (s *Server) auditPage(c *reqCtx) error {
-	u, err := c.requireUser()
+	u, g, err := c.grant()
 	if err != nil {
 		return err
 	}
-	if !canControl(u, s.Cfg.OIDC) {
-		return c.deny(u, 403, "the audit log is visible to the control group only", "audit read denied")
+	if !g.Admin() {
+		return c.deny(u, 403, "the audit log is visible to admins only", "audit read denied")
 	}
 	q := c.r.URL.Query()
 	user, action, host := q.Get("q"), q.Get("action"), q.Get("host")
@@ -61,7 +70,8 @@ var kinds = map[string]bool{"node": true, "qemu": true, "lxc": true, "agent": tr
 var statuses = map[string]bool{"online": true, "offline": true, "stopped": true, "stale": true, "paused": true}
 
 func (s *Server) systems(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
+	v, err := c.view()
+	if err != nil {
 		return err
 	}
 	q := c.r.URL.Query()
@@ -70,7 +80,7 @@ func (s *Server) systems(c *reqCtx) error {
 		return apierr.New(422, "invalid kind or status filter")
 	}
 	items := []model.System{}
-	for _, x := range s.Poller.Snapshot() {
+	for _, x := range v.Systems() {
 		if (kind == "" || x.Kind == kind) && (status == "" || x.Status == status) && (!q.Has("group") || model.Deref(x.Group) == group) {
 			items = append(items, x)
 		}
@@ -80,9 +90,6 @@ func (s *Server) systems(c *reqCtx) error {
 }
 
 func (s *Server) system(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
-		return err
-	}
 	x, err := c.find(c.r.PathValue("id"))
 	if err != nil {
 		return err
@@ -92,9 +99,6 @@ func (s *Server) system(c *reqCtx) error {
 }
 
 func (s *Server) processes(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
-		return err
-	}
 	id := c.r.PathValue("id")
 	x, err := c.find(id)
 	if err != nil {
@@ -130,43 +134,48 @@ func (s *Server) processes(c *reqCtx) error {
 }
 
 func (s *Server) summary(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
+	v, err := c.view()
+	if err != nil {
 		return err
 	}
-	c.json(200, s.Poller.Summary())
+	c.json(200, v.Summary())
 	return nil
 }
 
 func (s *Server) power(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
+	v, err := c.view()
+	if err != nil {
 		return err
 	}
-	c.json(200, s.Poller.Power.Overview())
+	c.json(200, v.Power())
 	return nil
 }
 
 func (s *Server) powerHistory(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
+	v, err := c.view()
+	if err != nil {
 		return err
 	}
-	c.json(200, s.Poller.Power.HistoryView(c.r.URL.Query().Get("source")))
+	c.json(200, v.PowerHistory(c.r.URL.Query().Get("source")))
 	return nil
 }
 
 func (s *Server) ups(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
+	v, err := c.view()
+	if err != nil {
 		return err
 	}
 	hist := true
 	if v := strings.ToLower(c.r.URL.Query().Get("history")); v == "false" || v == "0" || v == "no" || v == "off" {
 		hist = false
 	}
-	c.json(200, s.Poller.UPS.Overview(hist))
+	c.json(200, v.UPS(hist))
 	return nil
 }
 
 func (s *Server) upsEvents(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
+	v, err := c.view()
+	if err != nil {
 		return err
 	}
 	q := c.r.URL.Query()
@@ -178,7 +187,7 @@ func (s *Server) upsEvents(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
-	evs := s.Poller.UPS.EventsSince(after)
+	evs := v.UPSEvents(after)
 	out := []model.UpsEvent{}
 	for i := len(evs) - 1; i >= 0 && len(out) < limit; i-- {
 		out = append(out, evs[i])

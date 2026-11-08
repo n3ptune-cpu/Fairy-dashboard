@@ -6,9 +6,6 @@ import (
 )
 
 func (s *Server) getPoll(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
-		return err
-	}
 	id := c.r.PathValue("id")
 	if _, err := c.find(id); err != nil {
 		return err

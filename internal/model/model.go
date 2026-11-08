@@ -298,6 +298,15 @@ type Me struct {
 	ControlDisabled *ControlState `json:"control_disabled"`
 	StepUpWindowS   int           `json:"step_up_window_s"`
 	AuthAgeS        *float64      `json:"auth_age_s"`
+	// Role is admin, viewer or pending (signed in, waiting for an admin to give access). Sites are the sites a
+	// viewer sees; AllSites is true for admins (and read tokens without a site list).
+	Role           string   `json:"role"`
+	Sites          []string `json:"sites"`
+	AllSites       bool     `json:"all_sites"`
+	CanManageUsers bool     `json:"can_manage_users"`
+	// Demo mode only: the role being previewed ("admin", "viewer:Straw", ...) and the choices.
+	DemoView  string   `json:"demo_view,omitempty"`
+	DemoViews []string `json:"demo_views,omitempty"`
 }
 
 // FanEvent is one entry of the agent's fan log (mode changes, watchdog).

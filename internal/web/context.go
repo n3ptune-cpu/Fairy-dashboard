@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/n3ptune-cpu/Fairy/internal/access"
 	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/security"
+	"github.com/n3ptune-cpu/Fairy/internal/tokens"
 )
 
 type reqCtx struct {
@@ -18,6 +20,8 @@ type reqCtx struct {
 	sess  *sessionData
 	dirty bool
 	user  *model.User
+	token *tokens.Record // the API token of this request, if any
+	g     *access.Grant  // what the user may see and do (see grant)
 }
 
 func (c *reqCtx) session() *sessionData {

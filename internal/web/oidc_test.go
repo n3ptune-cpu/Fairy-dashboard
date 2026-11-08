@@ -157,6 +157,9 @@ func TestPocketIDLoginAndStepUpRoundTrip(t *testing.T) {
 	if n := len(e.s.Poller.Admin.ListSessions()); n != 1 {
 		t.Fatal("session not registered", n)
 	}
+	if u := e.s.Access.Load().Users["u1"]; u.Role != "admin" || u.Via != "control_groups" || u.Email != "n@example.com" || u.LastSeen == nil {
+		t.Fatal("first sign-in of a control-group member must record an admin in users.json", u)
+	}
 
 	// Step-up: max_age=0 forces a fresh Pocket ID login; the same session gets a new auth_time.
 	q, rt = idp.login(e, "/auth/login?step_up=1&next=/", sess)

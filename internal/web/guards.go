@@ -45,11 +45,13 @@ func (c *reqCtx) controlGuard(bucket *rateLimiter) (*model.User, error) {
 	if err := c.checkCSRF(u); err != nil {
 		return nil, err
 	}
-	cfg := c.s.Cfg
-	if !canControl(u, cfg.OIDC) {
-		d := "not in a control group"
+	if _, g, _ := c.grant(); !g.Admin() {
+		d := "only admins can do this (an admin can change your role on the Users page)"
 		if u.Auth == "token" {
 			d = "this API token has read scope"
+			if model.Deref(u.TokenScope) == "control" {
+				d = "this API token's owner is not an admin"
+			}
 		}
 		return nil, c.deny(u, 403, d, "not allowed to control")
 	}
@@ -61,13 +63,42 @@ func (c *reqCtx) controlGuard(bucket *rateLimiter) (*model.User, error) {
 		return nil, c.deny(u, 423, fmt.Sprintf("control is disabled by an administrator (%s): %s", off.By, reason),
 			"control disabled (kill switch)")
 	}
-	if age := c.authAge(u); age != nil && *age > float64(cfg.StepUpWindowS) {
-		c.audit(u, "auth.step_up", c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, "required")
-		return nil, apierr.New(401, map[string]any{"code": "step_up_required", "window_s": cfg.StepUpWindowS,
-			"message": fmt.Sprintf("Confirm it's you: control actions need a Pocket ID sign-in from the last %d min.", cfg.StepUpWindowS/60)})
+	if err := c.stepUp(u, "control actions"); err != nil {
+		return nil, err
 	}
 	if !bucket.allow(u.Sub) {
 		return nil, apierr.New(429, "too many control requests; slow down")
+	}
+	return u, nil
+}
+
+// stepUp: sensitive actions need a Pocket ID sign-in from the last step_up_window_s (API tokens: no check).
+func (c *reqCtx) stepUp(u *model.User, what string) error {
+	cfg := c.s.Cfg
+	if age := c.authAge(u); age != nil && *age > float64(cfg.StepUpWindowS) {
+		c.audit(u, "auth.step_up", c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, "required")
+		return apierr.New(401, map[string]any{"code": "step_up_required", "window_s": cfg.StepUpWindowS,
+			"message": fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d min.", what, cfg.StepUpWindowS/60)})
+	}
+	return nil
+}
+
+// adminGuard protects the Users page's changes: browser session only (no API tokens), CSRF, admin role,
+// step-up within the same window as control actions, and a rate limit. The control kill switch does not apply:
+// it stops device control, not the management of who may sign in.
+func (c *reqCtx) adminGuard() (*model.User, error) {
+	u, err := c.sessionCSRF()
+	if err != nil {
+		return nil, err
+	}
+	if _, g, _ := c.grant(); !g.Admin() {
+		return nil, c.deny(u, 403, "only admins can manage users and sites", "not an admin")
+	}
+	if err := c.stepUp(u, "changes to users and sites"); err != nil {
+		return nil, err
+	}
+	if !c.s.adminRL.allow(u.Sub) {
+		return nil, apierr.New(429, "too many changes; slow down")
 	}
 	return u, nil
 }

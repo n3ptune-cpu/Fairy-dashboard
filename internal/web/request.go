@@ -12,13 +12,14 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
+// find returns a system the request may see (403 for a user without a role; 404 for unknown and hidden ids
+// alike, so a viewer cannot tell that a hidden host exists).
 func (c *reqCtx) find(id string) (model.System, error) {
-	for _, s := range c.s.Poller.Snapshot() {
-		if s.ID == id {
-			return s, nil
-		}
+	v, err := c.view()
+	if err != nil {
+		return model.System{}, err
 	}
-	return model.System{}, apierr.New(404, "system not found")
+	return v.Find(id)
 }
 
 // decodeBody: strict JSON (unknown fields rejected), at most 64 KiB.

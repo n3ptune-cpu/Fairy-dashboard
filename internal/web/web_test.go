@@ -42,8 +42,11 @@ func setup(t *testing.T) *env {
 
 var viewer = model.User{Sub: "u1", Name: model.P("Neptune"), Email: model.P("n@example.com"), Groups: []string{"viewers"}}
 
+// controller is in a control group: admin on first sign-in. A different subject from viewer, because roles
+// now belong to the user (users.json), not to the groups in one session.
 func controller() model.User {
 	u := viewer
+	u.Sub = "u2"
 	u.Groups = []string{"viewers", "controllers"}
 	return u
 }
@@ -180,7 +183,7 @@ func TestControlNeedsGroupCSRFStepUpAndKillSwitch(t *testing.T) {
 	csrf := []string{"X-Requested-With", "fairy"}
 	body := map[string]any{"interval_s": 5}
 	v := e.cookie(viewer, 0)
-	if r := e.do("PUT", "/api/systems/laptop/poll", body, append([]string{"Cookie", v}, csrf...)...); r.code != 403 || r.body["detail"] != "not in a control group" {
+	if r := e.do("PUT", "/api/systems/laptop/poll", body, append([]string{"Cookie", v}, csrf...)...); r.code != 403 || !strings.HasPrefix(r.raw2(), `{"detail":"only admins`) {
 		t.Fatalf("viewer: %d %s", r.code, r.raw)
 	}
 	c := e.cookie(controller(), 0)

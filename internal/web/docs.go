@@ -9,9 +9,9 @@ import (
 // A compact, hand-maintained OpenAPI description of the JSON API (paths, methods, summaries). /docs renders it
 // with Swagger UI; both need a signed-in session (the JSON also accepts an API token).
 var apiDoc = []struct{ method, path, summary string }{
-	{"GET", "/api/me", "Current user"},
-	{"GET", "/api/audit", "Audit log, newest first (control group only). Query: q, action, host, before, limit"},
-	{"GET", "/api/systems", "All systems (normalised). Query: kind, status, group"},
+	{"GET", "/api/me", "Current user, their role (admin | viewer | pending) and the sites they see"},
+	{"GET", "/api/audit", "Audit log, newest first (admins only). Query: q, action, host, before, limit"},
+	{"GET", "/api/systems", "The systems you may see (normalised). Query: kind, status, group"},
 	{"GET", "/api/systems/{id}", "One system"},
 	{"GET", "/api/systems/{id}/processes", "Top processes (fetched on demand from the agent). Query: limit, sort=cpu|mem|gpu"},
 	{"GET", "/api/summary", "Cluster totals and status counts"},
@@ -32,6 +32,13 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"GET", "/api/systems/{id}/poll", "Polling rate for one system: override, effective interval per source, floors, boost"},
 	{"PUT", "/api/systems/{id}/poll", "Set the polling rate: seconds (1-300), \"paused\" or \"default\""},
 	{"GET", "/api/stream", "Server-Sent Events: systems, systems_delta, summary, ups, power, ups_event. Query: watch=<id>"},
+	{"GET", "/api/admin/users", "Users, sites and site assignments (admins, browser session only)"},
+	{"PUT", "/api/admin/users/{sub}", "Set a user's role and sites: {role, sites} (admins; step-up + CSRF header)"},
+	{"DELETE", "/api/admin/users/{sub}", "Forget a user (admins; step-up + CSRF header; never the last admin)"},
+	{"POST", "/api/admin/sites", "Create a site: {name} (admins; step-up + CSRF header)"},
+	{"PUT", "/api/admin/sites/{name}", "Rename a site: {name} (admins; step-up + CSRF header)"},
+	{"DELETE", "/api/admin/sites/{name}", "Delete a site (admins; step-up + CSRF header)"},
+	{"PUT", "/api/admin/assign", "Put a host, power source (power:<id>) or UPS (ups:<id>) into a site: {target, site}; site null = default"},
 }
 
 var paramRe = regexp.MustCompile(`\{(\w+)\}`)
@@ -68,7 +75,7 @@ const swaggerHTML = `<!doctype html><html><head><meta charset="utf-8"><title>Fai
 
 func (s *Server) docsRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/openapi.json", s.h(func(c *reqCtx) error {
-		if _, err := c.requireUser(); err != nil {
+		if _, err := c.view(); err != nil {
 			return err
 		}
 		c.json(200, openAPI(s.Version))

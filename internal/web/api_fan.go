@@ -44,9 +44,6 @@ func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[s
 }
 
 func (s *Server) fanStatus(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
-		return err
-	}
 	id := c.r.PathValue("id")
 	a, err := c.fanAgent(id)
 	if err != nil {

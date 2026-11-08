@@ -6,14 +6,20 @@ import (
 )
 
 func (s *Server) powerCaps(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
-		return err
-	}
 	x, err := c.find(c.r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	c.json(200, powerctl.Capabilities(s.Poller, x))
+	caps := powerctl.Capabilities(s.Poller, x)
+	if _, g, _ := c.grant(); !g.Admin() { // read-only: no actions, and no relay / panel-host details
+		why := "read-only: only admins can use power actions"
+		for i := range caps.Actions {
+			a := &caps.Actions[i]
+			a.Available, a.Reason, a.Via, a.ViaLabel = false, model.P(why), nil, nil
+		}
+		caps.KillsPanel, caps.Warning = false, nil
+	}
+	c.json(200, caps)
 	return nil
 }
 

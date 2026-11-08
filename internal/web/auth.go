@@ -68,6 +68,7 @@ func (c *reqCtx) tokenUser() (*model.User, error) {
 		return nil, apierr.New(401, "invalid API token")
 	}
 	c.s.Tokens.Touch(rec)
+	c.token = rec
 	return &model.User{Sub: "token:" + rec.ID, Name: &rec.Name, Groups: []string{}, Auth: "token",
 		TokenName: &rec.Name, TokenScope: &rec.Scope, TokenOwner: &rec.Owner}, nil
 }
@@ -307,6 +308,9 @@ func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authT
 	c.dirty = true
 	slog.Info("login ok", "sub", u.Sub)
 	c.auditAnon("auth.login", "ok", actorOf(&u), &u.Sub, nil)
+	su := u
+	su.Auth = "session"
+	s.recordUser(c, &su) // first sign-in: admin via control_groups / bootstrap_admins, else pending
 	return nil
 }
 
