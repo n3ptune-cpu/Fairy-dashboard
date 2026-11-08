@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -177,5 +178,22 @@ func TestAgentPowerMergeNodeEnrichmentAndPause(t *testing.T) {
 	sm := p.Summary()
 	if sm.Cluster == nil || sm.Cluster.NodesOnline != 1 || sm.Cluster.GuestsTotal != 3 || sm.Counts.Total != len(p.Snapshot()) {
 		t.Fatalf("%+v", sm)
+	}
+}
+
+// The panel redacts secrets in process command lines itself, whatever the agent sent.
+func TestProcessCmdlinesAreRedacted(t *testing.T) {
+	pl, err := DecodeProcessList(jsonx.M{"processes": []any{
+		jsonx.M{"pid": 1.0, "cmdline": "backup --password=hunter2 --host db"},
+		jsonx.M{"pid": 2.0, "cmdline": nil},
+	}}, "straw-pc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := *pl.Processes[0].Cmdline; strings.Contains(c, "hunter2") || !strings.Contains(c, "--host db") {
+		t.Fatal(c)
+	}
+	if pl.Processes[1].Cmdline != nil {
+		t.Fatal("nil cmdline")
 	}
 }

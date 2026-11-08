@@ -19,6 +19,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/normalise"
 	"github.com/n3ptune-cpu/Fairy/internal/power"
+	"github.com/n3ptune-cpu/Fairy/internal/redact"
 )
 
 type httpBackend struct {
@@ -231,6 +232,12 @@ func DecodeProcessList(d jsonx.M, sid string) (model.ProcessList, error) {
 	pl.SystemID = sid
 	if pl.Sort == "" {
 		pl.Sort = "cpu"
+	}
+	for i := range pl.Processes { // defence in depth: agents redact too, but some are not ours to trust
+		if p := pl.Processes[i].Cmdline; p != nil {
+			v := redact.Cmdline(*p, 300)
+			pl.Processes[i].Cmdline = &v
+		}
 	}
 	model.Normalize(&pl)
 	return pl, nil
