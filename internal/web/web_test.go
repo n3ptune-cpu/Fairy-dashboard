@@ -136,6 +136,12 @@ func TestUnauthenticatedGets401JSONNeverRedirect(t *testing.T) {
 	if r := e.do("GET", "/api/nope", nil); r.code != 404 {
 		t.Fatal("404")
 	}
+	if r := e.do("GET", "/static/", nil); r.code != 404 || strings.Contains(string(r.raw), "app.js") {
+		t.Fatal("static directory listing", r.code)
+	}
+	if r := e.do("GET", "/static/app.js", nil); r.code != 200 {
+		t.Fatal("static file", r.code)
+	}
 }
 
 func TestSessionsAreRevocableAndTamperProof(t *testing.T) {

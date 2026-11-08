@@ -204,7 +204,13 @@ func (s *Server) routes() {
 	})
 	sub, _ := fs.Sub(staticFS, "static")
 	files := http.FileServerFS(sub)
-	m.Handle("GET /static/", http.StripPrefix("/static/", files))
+	m.Handle("GET /static/", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "" || strings.HasSuffix(r.URL.Path, "/") { // files only, no directory listings
+			http.NotFound(w, r)
+			return
+		}
+		files.ServeHTTP(w, r)
+	})))
 	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := fs.ReadFile(sub, "index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
