@@ -135,7 +135,13 @@ Three optional extras need a small permission each, and only if you want them:
 | Shutdown / reboot from the panel | `deploy/fairy-agent.polkit.rules` as `/etc/polkit-1/rules.d/49-fairy-agent.rules` | lets exactly this user power off / reboot through systemd |
 | BMC sensors / fan control in-band | `apt install ipmitool`, `deploy/fairy-agent.udev.rules` as `/etc/udev/rules.d/60-fairy-agent-ipmi.rules`, `modprobe ipmi_devintf ipmi_si`, `udevadm trigger` | lets the agent's group use /dev/ipmi0 |
 
-Temperatures, fans and voltages of the board come from `/sys/class/hwmon` and need nothing extra.
+Temperatures, fans and voltages of the board come from `/sys/class/hwmon` and need nothing extra. So do AMD
+graphics (built-in Radeon or a Radeon card): the agent reads the files the `amdgpu` kernel driver publishes under
+`/sys/class/drm/card*/device/` (busy %, VRAM, and from the card's hwmon the temperature and watts). Nothing to
+install; `gpu: amdgpu: off` switches it off. On a built-in Radeon "VRAM" is the small part of RAM the firmware
+sets aside for graphics; what the GPU borrows on top is already in the memory figure. A second (discrete) GPU
+that Linux has put to sleep is shown as idle and not woken up just to read it. AMD on Windows would need AMD's
+own driver interfaces and is not supported.
 
 If the firewall on the machine is on (nftables/ufw), allow TCP 9101 only on `tailscale0`, e.g.
 `ufw allow in on tailscale0 to any port 9101 proto tcp`.
@@ -244,7 +250,8 @@ panel's agent entry use `power_links:` / `ups_powers:` / `ups_names:` as for any
 | Load average | yes | no (Windows has none) |
 | CPU model, board / system model, BIOS | yes | yes |
 | NVIDIA GPU (use, memory, temperature, watts) | yes (nvidia-smi) | yes (nvidia-smi) |
-| AMD / Intel GPU | no | no |
+| AMD GPU (use, VRAM, temperature, watts) | yes (amdgpu driver's sysfs files, see below) | no |
+| Intel GPU | no | no |
 | CPU temperature | yes (coretemp / k10temp) | only what the BIOS publishes as an ACPI thermal zone, often nothing or a fixed value; per core with [Core Temp](#core-temp-optional-windows) |
 | Board fans and voltages | yes (hwmon chips) | only through the BMC (Supermicro, `ipmi:`) |
 | CPU watts | yes (RAPL, see the table above) | only with [Core Temp](#core-temp-optional-windows) |
@@ -311,6 +318,7 @@ The file is `C:\ProgramData\fairy-agent\config.yaml` (Windows) or `/etc/fairy-ag
 | `hide_host_details` | false | no hostname, no hardware model, just "Windows" / "Linux" |
 | `processes.enabled` / `cmdline` / `never_open` | true / true / none | the Processes tab |
 | `gpu.nvidia_smi` | auto | `off` or a full path |
+| `gpu.amdgpu` | auto | Linux: AMD GPUs through the amdgpu driver's sysfs files; `off` to switch off |
 | `sensors.coretemp` | false | Windows: CPU core temperatures and watts from Core Temp (see [Core Temp](#core-temp-optional-windows)) |
 | `ipmi`, `fan_control`, `power_control`, `wol` | off | see [Optional features](#optional-features) |
 | `control_rate_per_min` | 12 | all control requests together |

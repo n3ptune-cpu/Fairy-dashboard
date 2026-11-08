@@ -22,6 +22,7 @@ processes:
 
 gpu:
   nvidia_smi: auto             # auto | off | absolute path of nvidia-smi
+  amdgpu: auto                 # Linux: auto (AMD GPUs via the amdgpu driver's /sys files, if any) | off
   interval_s: 2
 
 # sensors:

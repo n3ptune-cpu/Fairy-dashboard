@@ -28,8 +28,10 @@ CPUWeight=20
 MemoryMax=64M
 TasksMax=64
 
-# Hardening. The agent only reads /proc and /sys, talks HTTP on its listen address and (only if enabled)
-# runs nvidia-smi, ipmitool and `systemctl poweroff|reboot`. It needs NO capabilities.
+# Hardening. The agent only reads /proc and /sys, talks HTTP on its listen address and (only if enabled) runs
+# nvidia-smi, ipmitool and `systemctl poweroff|reboot`. It needs NO capabilities. AMD GPUs are read from plain
+# sysfs files (/sys/class/drm/card*/device), not device nodes: DevicePolicy below does not affect them and
+# ProtectKernelTunables leaves /sys readable.
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=

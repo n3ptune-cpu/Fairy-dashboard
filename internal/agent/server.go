@@ -26,6 +26,43 @@ type GPUSource interface {
 	ComputeApps(ctx context.Context) map[int][]int64
 }
 
+// CombineGPUs lists the GPUs of several sources one after the other (NVIDIA first, so its indexes in
+// gpu_mem_by_gpu stay right); per-process VRAM comes from the first source that has it. nil sources are skipped.
+func CombineGPUs(sources ...GPUSource) GPUSource {
+	var m multiGPU
+	for _, s := range sources {
+		if s != nil {
+			m = append(m, s)
+		}
+	}
+	if len(m) == 1 {
+		return m[0]
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
+type multiGPU []GPUSource
+
+func (m multiGPU) GPUs() []collect.GPU {
+	var out []collect.GPU
+	for _, s := range m {
+		out = append(out, s.GPUs()...)
+	}
+	return out
+}
+
+func (m multiGPU) ComputeApps(ctx context.Context) map[int][]int64 {
+	for _, s := range m {
+		if apps := s.ComputeApps(ctx); apps != nil {
+			return apps
+		}
+	}
+	return nil
+}
+
 // Deps are the parts the agent is built from (real ones in cmd/fairy-agent, fakes in tests).
 type Deps struct {
 	Collector collect.Collector

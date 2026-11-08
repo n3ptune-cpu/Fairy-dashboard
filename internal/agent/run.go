@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -104,6 +105,12 @@ func Run(ctx context.Context, cfg *Config, version string) error {
 		go nv.Run(ctx)
 		d.GPU = nv
 		slog.Info("NVIDIA GPUs via nvidia-smi", "path", p)
+	}
+	if cfg.GPU.AMDGPU == "auto" && runtime.GOOS == "linux" {
+		if amd := collect.NewAMDGPU("/sys", time.Duration(cfg.GPU.IntervalS*float64(time.Second))); amd != nil {
+			d.GPU = CombineGPUs(d.GPU, amd)
+			slog.Info("AMD GPUs via amdgpu sysfs", "cards", amd.Cards())
+		}
 	}
 	var a *Agent
 	if cfg.IPMI.Enabled {

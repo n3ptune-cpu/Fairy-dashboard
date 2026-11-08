@@ -79,6 +79,7 @@ type ProcessesConfig struct {
 // GPUConfig is the NVIDIA reader.
 type GPUConfig struct {
 	NvidiaSMI string  `yaml:"nvidia_smi"` // "auto" (default), "off", or the path to nvidia-smi
+	AMDGPU    string  `yaml:"amdgpu"`     // Linux: "auto" (default: on when an amdgpu card exists) or "off"
 	IntervalS float64 `yaml:"interval_s"` // default 2
 }
 
@@ -212,6 +213,9 @@ func (c *Config) defaults() {
 	if c.GPU.NvidiaSMI == "" {
 		c.GPU.NvidiaSMI = "auto"
 	}
+	if c.GPU.AMDGPU == "" {
+		c.GPU.AMDGPU = "auto"
+	}
 	if c.GPU.IntervalS == 0 {
 		c.GPU.IntervalS = 2
 	}
@@ -263,6 +267,9 @@ func (c *Config) Validate() error {
 				add("listen must use an IP address, not a host name")
 			}
 		}
+	}
+	if c.GPU.AMDGPU != "auto" && c.GPU.AMDGPU != "off" {
+		add("gpu.amdgpu must be auto or off")
 	}
 	if c.GPU.IntervalS < 1 || c.GPU.IntervalS > 60 {
 		add("gpu.interval_s must be 1-60")

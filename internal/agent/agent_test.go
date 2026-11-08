@@ -581,3 +581,33 @@ func TestMain(m *testing.M) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	os.Exit(m.Run())
 }
+
+type amdOnly struct{}
+
+func (amdOnly) GPUs() []collect.GPU {
+	return []collect.GPU{{Name: "AMD Radeon (amdgpu 1002:15bf)", Vendor: "amd", UtilPercent: collect.P(5.0)}}
+}
+func (amdOnly) ComputeApps(context.Context) map[int][]int64 { return nil }
+
+func TestCombineGPUs(t *testing.T) {
+	if CombineGPUs(nil, nil) != nil {
+		t.Fatal("no sources = nil")
+	}
+	if _, ok := CombineGPUs(nil, amdOnly{}).(amdOnly); !ok {
+		t.Fatal("one source is returned as is")
+	}
+	g := CombineGPUs(agenttest.GPU{}, amdOnly{})
+	gpus := g.GPUs()
+	if len(gpus) != 2 || gpus[0].Vendor != "nvidia" || gpus[1].Vendor != "amd" {
+		t.Fatalf("%+v", gpus)
+	}
+	if apps := g.ComputeApps(t.Context()); apps[6000][0] != 5<<30 {
+		t.Fatalf("%v", apps)
+	}
+	if c, err := Parse([]byte("gpu: {amdgpu: maybe}"), "c.yaml"); err == nil {
+		t.Fatal("amdgpu must be auto or off", c)
+	}
+	if c, err := Parse(nil, "c.yaml"); err != nil || c.GPU.AMDGPU != "auto" {
+		t.Fatal("amdgpu defaults to auto", err)
+	}
+}
