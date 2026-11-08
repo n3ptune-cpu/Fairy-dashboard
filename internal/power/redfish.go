@@ -16,6 +16,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
+// RedfishConfig is a `type: redfish` (or `ipmi`) power source: a BMC's Redfish power reading.
 type RedfishConfig struct {
 	Base        `yaml:",inline"`
 	URL         string `yaml:"url"`        // https://idrac.lan

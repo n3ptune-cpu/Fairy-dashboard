@@ -13,12 +13,13 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/normalise"
 )
 
+// AgentByID returns the configured agent with this id.
 func (p *Poller) AgentByID(id string) (config.Agent, bool) {
 	a, ok := p.agents[id]
 	return a, ok
 }
 
-// RelaySystem: the system an agent reports as (itself, or the node it enriches).
+// RelaySystem returns the system an agent reports as (itself, or the node it enriches).
 func (p *Poller) RelaySystem(agentID string) *model.System {
 	a, ok := p.agents[agentID]
 	if !ok {
@@ -35,7 +36,7 @@ func (p *Poller) RelaySystem(agentID string) *model.System {
 	return nil
 }
 
-// LinkOf: the Proxmox node (or guest) this agent runs on: links_to, or `node:` matched by node name.
+// LinkOf returns the Proxmox node (or guest) this agent runs on: links_to, or `node:` matched by node name.
 func (p *Poller) LinkOf(a config.Agent) string { return p.linkOfLocked(a) }
 
 // syncPresent refreshes the id set used by LinkOf. Caller holds p.mu.
@@ -129,15 +130,17 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	return 0
 }
 
+// FetchProcesses asks an agent for its top processes.
 func (p *Poller) FetchProcesses(ctx context.Context, a config.Agent, sid string, limit int, sortBy string) (model.ProcessList, error) {
 	return p.Backend.FetchProcesses(ctx, a, sid, limit, sortBy)
 }
 
+// AgentRequest calls an agent endpoint (GET with the read token, POST with the control token).
 func (p *Poller) AgentRequest(ctx context.Context, a config.Agent, method, path string, body any) (int, jsonx.M, error) {
 	return p.Backend.AgentRequest(ctx, a, method, path, body)
 }
 
-// AgentFor: the agent reporting for a system id (itself or linked).
+// AgentFor returns the agent reporting for a system id (itself or linked).
 func (p *Poller) AgentFor(id string) (config.Agent, bool) {
 	if a, ok := p.agents[id]; ok {
 		return a, true

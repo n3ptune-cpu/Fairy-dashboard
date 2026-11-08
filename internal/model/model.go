@@ -20,6 +20,7 @@ func Deref[T any](p *T) T {
 	return *p
 }
 
+// Temperature is one temperature sensor.
 type Temperature struct {
 	Sensor    string   `json:"sensor"`
 	Label     *string  `json:"label"`
@@ -28,16 +29,19 @@ type Temperature struct {
 	CriticalC *float64 `json:"critical_c"`
 }
 
+// Fan is one fan's speed.
 type Fan struct {
 	Name string  `json:"name"`
 	RPM  float64 `json:"rpm"`
 }
 
+// Voltage is one voltage sensor.
 type Voltage struct {
 	Name  string  `json:"name"`
 	Volts float64 `json:"volts"`
 }
 
+// Disk is one mounted filesystem.
 type Disk struct {
 	Mount  string  `json:"mount"`
 	FSType *string `json:"fstype"`
@@ -45,6 +49,7 @@ type Disk struct {
 	Total  int64   `json:"total"`
 }
 
+// Gpu is one graphics card.
 type Gpu struct {
 	Name        string   `json:"name"`
 	Vendor      string   `json:"vendor"` // nvidia | amd | intel | other
@@ -55,11 +60,13 @@ type Gpu struct {
 	PowerW      *float64 `json:"power_w"`
 }
 
+// PowerSensor is one named power reading from an agent.
 type PowerSensor struct {
 	Name  string  `json:"name"`
 	Watts float64 `json:"watts"`
 }
 
+// ComponentPower is what an agent measures inside the host (CPU package, GPU, battery, BMC).
 type ComponentPower struct {
 	CPUPackageW  *float64      `json:"cpu_package_w"`
 	GPUW         *float64      `json:"gpu_w"`
@@ -71,6 +78,7 @@ type ComponentPower struct {
 	Source       []string      `json:"source"`
 }
 
+// Hardware is the host's DMI / board information; Display is the readable "vendor model".
 type Hardware struct {
 	SystemVendor *string `json:"system_vendor"`
 	SystemModel  *string `json:"system_model"`
@@ -80,6 +88,7 @@ type Hardware struct {
 	Display      *string `json:"display"`
 }
 
+// PowerPending is a scheduled (cancellable) shutdown or reboot.
 type PowerPending struct {
 	Action      string    `json:"action"` // shutdown | reboot
 	At          time.Time `json:"at"`
@@ -87,6 +96,7 @@ type PowerPending struct {
 	RequestedBy *string   `json:"requested_by"`
 }
 
+// System is one host, node or guest as the API and UI show it.
 type System struct {
 	ID                 string          `json:"id"`
 	Name               string          `json:"name"`
@@ -135,11 +145,13 @@ type System struct {
 	Boosted            bool            `json:"boosted"`
 }
 
+// SystemList is GET /api/systems.
 type SystemList struct {
 	GeneratedAt time.Time `json:"generated_at"`
 	Systems     []System  `json:"systems"`
 }
 
+// Process is one row of an agent's process list.
 type Process struct {
 	PID         int      `json:"pid"`
 	Name        *string  `json:"name"`
@@ -154,6 +166,7 @@ type Process struct {
 	Cmdline     *string  `json:"cmdline"`
 }
 
+// ProcessList is GET /api/systems/{id}/processes.
 type ProcessList struct {
 	SystemID       string    `json:"system_id"`
 	DisabledByHost bool      `json:"disabled_by_host"`
@@ -163,6 +176,7 @@ type ProcessList struct {
 	Processes      []Process `json:"processes"`
 }
 
+// PowerReading is one measurement of a power source.
 type PowerReading struct {
 	SourceID       string    `json:"source_id"`
 	Name           string    `json:"name"`
@@ -174,6 +188,7 @@ type PowerReading struct {
 	Timestamp      time.Time `json:"timestamp"`
 }
 
+// PowerSourceState is one power source (configured or relayed by an agent) with its latest readings.
 type PowerSourceState struct {
 	ID             string         `json:"id"`
 	Type           string         `json:"type"`
@@ -187,23 +202,27 @@ type PowerSourceState struct {
 	Via            *string        `json:"via"`
 }
 
+// PowerOverview is GET /api/power.
 type PowerOverview struct {
 	GeneratedAt time.Time          `json:"generated_at"`
 	TotalW      *float64           `json:"total_w"`
 	Sources     []PowerSourceState `json:"sources"`
 }
 
+// PowerPoint is one history sample: the total and each source's watts.
 type PowerPoint struct {
 	T       time.Time           `json:"t"`
 	TotalW  *float64            `json:"total_w"`
 	Sources map[string]*float64 `json:"sources"`
 }
 
+// PowerHistory is GET /api/power/history.
 type PowerHistory struct {
 	IntervalS float64      `json:"interval_s"`
 	Points    []PowerPoint `json:"points"`
 }
 
+// SourceStatus is the health of one polled source (a Proxmox cluster or an agent).
 type SourceStatus struct {
 	Name        string     `json:"name"`
 	OK          bool       `json:"ok"`
@@ -212,6 +231,7 @@ type SourceStatus struct {
 	LatencyMS   *float64   `json:"latency_ms"`
 }
 
+// ClusterTotals sums up one Proxmox cluster (or standalone host).
 type ClusterTotals struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
@@ -228,6 +248,7 @@ type ClusterTotals struct {
 	GuestsTotal   int      `json:"guests_total"`
 }
 
+// Counts are the systems per status.
 type Counts struct {
 	Total   int `json:"total"`
 	Online  int `json:"online"`
@@ -237,12 +258,14 @@ type Counts struct {
 	Paused  int `json:"paused"`
 }
 
+// ControlState says who turned control off, when and why (the kill switch).
 type ControlState struct {
 	By     string    `json:"by"`
 	At     time.Time `json:"at"`
 	Reason string    `json:"reason"`
 }
 
+// Summary is GET /api/summary.
 type Summary struct {
 	ControlDisabled *ControlState   `json:"control_disabled"`
 	GeneratedAt     time.Time       `json:"generated_at"`
@@ -253,6 +276,7 @@ type Summary struct {
 	Sources         []SourceStatus  `json:"sources"`
 }
 
+// User is the signed-in user (session), the API token's identity, or the demo user.
 type User struct {
 	Sub               string   `json:"sub"`
 	Name              *string  `json:"name"`
@@ -266,6 +290,7 @@ type User struct {
 	TokenOwner        *string  `json:"token_owner"`
 }
 
+// Me is GET /api/me.
 type Me struct {
 	User
 	CanControl      bool          `json:"can_control"`
@@ -275,12 +300,14 @@ type Me struct {
 	AuthAgeS        *float64      `json:"auth_age_s"`
 }
 
+// FanEvent is one entry of the agent's fan log (mode changes, watchdog).
 type FanEvent struct {
 	T      float64 `json:"t"`
 	Action string  `json:"action"`
 	Detail string  `json:"detail"`
 }
 
+// FanStatus is GET /api/systems/{id}/fan.
 type FanStatus struct {
 	SystemID   string         `json:"system_id"`
 	Enabled    bool           `json:"enabled"`
@@ -295,11 +322,13 @@ type FanStatus struct {
 	Events     []FanEvent     `json:"events"`
 }
 
+// ControlResult is the answer to a fan write: the agent's reply passed through.
 type ControlResult struct {
 	OK     bool           `json:"ok"`
 	Result map[string]any `json:"result"`
 }
 
+// UpsState is one UPS.
 type UpsState struct {
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
@@ -331,6 +360,7 @@ type UpsState struct {
 	Error           *string    `json:"error"`
 }
 
+// UpsEvent is a UPS transition (on battery, power restored, low battery, ...).
 type UpsEvent struct {
 	Seq       int       `json:"seq"`
 	T         time.Time `json:"t"`
@@ -342,6 +372,7 @@ type UpsEvent struct {
 	StatusRaw *string   `json:"status_raw"`
 }
 
+// UpsPoint is one UPS history sample.
 type UpsPoint struct {
 	T        time.Time `json:"t"`
 	Charge   *float64  `json:"charge"`
@@ -350,12 +381,14 @@ type UpsPoint struct {
 	RuntimeS *int      `json:"runtime_s"`
 }
 
+// UpsOverview is GET /api/ups.
 type UpsOverview struct {
 	GeneratedAt time.Time             `json:"generated_at"`
 	UPS         []UpsState            `json:"ups"`
 	History     map[string][]UpsPoint `json:"history"`
 }
 
+// PollJob describes one polling job that feeds a system.
 type PollJob struct {
 	Job             string   `json:"job"`
 	DefaultS        float64  `json:"default_s"`
@@ -370,6 +403,7 @@ type PollJob struct {
 	LastDurationMS  *float64 `json:"last_duration_ms"`
 }
 
+// PollStatus is GET /api/systems/{id}/poll.
 type PollStatus struct {
 	SystemID     string    `json:"system_id"`
 	Mode         string    `json:"mode"`
@@ -381,6 +415,7 @@ type PollStatus struct {
 	Note         *string   `json:"note"`
 }
 
+// PowerActionCap is one power action of a system: whether it is available (or why not) and how to confirm it.
 type PowerActionCap struct {
 	Action    string  `json:"action"`
 	Available bool    `json:"available"`
@@ -391,6 +426,7 @@ type PowerActionCap struct {
 	Delayed   bool    `json:"delayed"`
 }
 
+// PowerCaps is GET /api/systems/{id}/power.
 type PowerCaps struct {
 	SystemID   string           `json:"system_id"`
 	Name       string           `json:"name"`
@@ -400,6 +436,7 @@ type PowerCaps struct {
 	Warning    *string          `json:"warning"`
 }
 
+// PowerResult is the answer to POST /api/systems/{id}/power.
 type PowerResult struct {
 	SystemID string        `json:"system_id"`
 	Action   string        `json:"action"`

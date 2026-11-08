@@ -1,7 +1,8 @@
-// Package power: pluggable power sources (wall power from plugs / UPS / BMC, plus agent component power), the
-// per-source runners with backoff, and the manager (overview, linked watts, history, agent-relayed devices).
+// Package power reads wall power from plugs, UPSes and BMCs (plus component power reported by agents): one
+// Source per device type, a Runner per configured source (with backoff) and the Manager (overview, watts per
+// system, history, devices relayed by agents).
 //
-// Adding a type = one Source implementation plus a case in build().
+// Adding a device type = one Source implementation in its own file plus a case in Build.
 package power
 
 import (
@@ -24,6 +25,7 @@ type Base struct {
 	Interval       *float64 `yaml:"interval"`         // default per type
 }
 
+// DisplayName is the source's name, or its id.
 func (b Base) DisplayName() string {
 	if b.Name != "" {
 		return b.Name

@@ -9,6 +9,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/scheduler"
 )
 
+// HasSystem reports whether a system with this id is currently known.
 func (p *Poller) HasSystem(id string) bool {
 	for _, s := range p.Snapshot() {
 		if s.ID == id {
@@ -18,6 +19,7 @@ func (p *Poller) HasSystem(id string) bool {
 	return false
 }
 
+// SetPoll sets a system's polling override (nil = back to the default) and reschedules its jobs at once.
 func (p *Poller) SetPoll(id string, v *scheduler.Override) error {
 	err := p.Scheduler.SetOverride(id, v)
 	p.mu.Lock()
@@ -32,6 +34,7 @@ func (p *Poller) SetPoll(id string, v *scheduler.Override) error {
 
 func fmtG(f float64) string { return strconv.FormatFloat(f, 'g', -1, 64) }
 
+// PollStatus describes how often a system is polled and why.
 func (p *Poller) PollStatus(id string) model.PollStatus {
 	sch := p.Scheduler
 	req, has := sch.Overrides()[id]

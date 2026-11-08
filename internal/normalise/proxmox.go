@@ -31,7 +31,8 @@ func pct(v any) *float64 {
 	return model.P(Round(*f*100, 1))
 }
 
-// ProxmoxOpts: prefix keeps ids unique across clusters (e.g. straw-qemu-100 vs qemu-100).
+// ProxmoxOpts are the per-cluster settings for NormaliseProxmox; Prefix keeps ids unique across clusters (e.g.
+// straw-qemu-100 vs qemu-100).
 type ProxmoxOpts struct {
 	IncludeTemplates bool
 	Prefix           string
@@ -42,6 +43,8 @@ type ProxmoxOpts struct {
 
 var guestStatus = map[string]string{"running": "online", "stopped": "stopped", "paused": "stopped", "suspended": "stopped"}
 
+// NormaliseProxmox converts cluster/resources rows (nodes, VMs, containers) into systems; storage and, unless
+// IncludeTemplates, templates are skipped.
 func NormaliseProxmox(resources []jsonx.M, now time.Time, ts float64, rates *RateTracker, o ProxmoxOpts) []model.System {
 	out := []model.System{}
 	for _, r := range resources {

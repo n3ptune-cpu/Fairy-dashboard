@@ -8,7 +8,7 @@ import (
 	"hash/crc32"
 )
 
-// Pack55AA: prefix, seqno, cmd, length (BE uint32) | payload | crc32 or hmac-sha256 | suffix.
+// Pack55AA builds a 3.3/3.4 frame: prefix, seqno, cmd, length (BE uint32) | payload | crc32 or hmac-sha256 | suffix.
 func Pack55AA(seq, cmd uint32, payload, hmacKey []byte) []byte {
 	endLen := 8
 	if hmacKey != nil {
@@ -28,8 +28,8 @@ func Pack55AA(seq, cmd uint32, payload, hmacKey []byte) []byte {
 	return binary.BigEndian.AppendUint32(buf, suffix55AA)
 }
 
-// Pack6699: prefix(4) unknown(2)=0 seqno(4) cmd(4) length(4) | iv(12) | AES-GCM(ciphertext) | tag(16) | suffix.
-// The 14 header bytes after the prefix are the GCM additional data.
+// Pack6699 builds a 3.5 frame: prefix(4) unknown(2)=0 seqno(4) cmd(4) length(4) | iv(12) | AES-GCM(ciphertext) |
+// tag(16) | suffix. The 14 header bytes after the prefix are the GCM additional data.
 func Pack6699(seq, cmd uint32, payload, key, iv []byte) ([]byte, error) {
 	if len(iv) != 12 {
 		return nil, errors.New("tuya: iv must be 12 bytes")

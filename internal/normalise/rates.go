@@ -20,12 +20,15 @@ type rateSample struct {
 	rx, tx *int64
 }
 
+// NewRateTracker returns an empty tracker.
 func NewRateTracker() *RateTracker {
 	return &RateTracker{prev: map[string]rateSample{}, last: map[string][2]*float64{}}
 }
 
 func eqp(a, b *int64) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
 
+// Update records counters rx and tx for key at time ts (seconds) and returns the bytes/s since the previous
+// sample (nil for the first sample or after a counter reset).
 func (r *RateTracker) Update(key string, ts float64, rx, tx *int64, holdS float64) (*float64, *float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

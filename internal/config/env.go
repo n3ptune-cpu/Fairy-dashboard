@@ -61,6 +61,7 @@ type Secrets struct {
 	InsecureCookies    bool
 }
 
+// LoadSecrets reads the FAIRY_* secrets from the environment; FAIRY_SESSION_SECRET (32+ characters) is required.
 func LoadSecrets() (Secrets, error) {
 	s := Secrets{
 		SessionSecret:      os.Getenv("FAIRY_SESSION_SECRET"),

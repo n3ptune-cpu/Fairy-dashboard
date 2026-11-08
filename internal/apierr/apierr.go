@@ -13,6 +13,7 @@ type Error struct {
 	Detail any
 }
 
+// Error formats the status and detail (for logs; clients get the JSON body).
 func (e *Error) Error() string { return fmt.Sprintf("%d: %v", e.Status, e.Detail) }
 
 // New returns an *Error with the given status and detail.

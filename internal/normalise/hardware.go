@@ -47,8 +47,9 @@ func trimmed(m jsonx.M, k string) *string {
 	return &s
 }
 
-// HardwareDisplay: system vendor + model, falling back to the mainboard when the model is a placeholder
-// ("System Product Name", "To be filled by O.E.M." ...), e.g. a Supermicro X11SCA-F in a custom build.
+// HardwareDisplay builds the hardware block and its display name: system vendor + model, falling back to the
+// mainboard when the model is a placeholder ("System Product Name", "To be filled by O.E.M." ...), e.g. a
+// Supermicro X11SCA-F in a custom build.
 func HardwareDisplay(hw jsonx.M) *model.Hardware {
 	if len(hw) == 0 {
 		return nil

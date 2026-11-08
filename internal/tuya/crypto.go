@@ -24,7 +24,7 @@ func pkcs7Unpad(b []byte) ([]byte, error) {
 	return b[:len(b)-n], nil
 }
 
-// EncryptECB: AES-128-ECB (Tuya's choice, not ours), PKCS#7-padded when pad is true.
+// EncryptECB encrypts with AES-128-ECB (Tuya's choice, not ours), PKCS#7-padded when pad is true.
 func EncryptECB(key, data []byte, pad bool) ([]byte, error) {
 	blk, err := aes.NewCipher(key)
 	if err != nil {
@@ -43,6 +43,7 @@ func EncryptECB(key, data []byte, pad bool) ([]byte, error) {
 	return out, nil
 }
 
+// DecryptECB decrypts AES-128-ECB, optionally removing PKCS#7 padding.
 func DecryptECB(key, data []byte, unpad bool) ([]byte, error) {
 	blk, err := aes.NewCipher(key)
 	if err != nil {

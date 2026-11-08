@@ -1,4 +1,4 @@
-// Package config: non-secret settings from /etc/fairy/config.yaml, secrets from the environment
+// Package config loads the non-secret settings from /etc/fairy/config.yaml and the secrets from the environment
 // (/etc/fairy/fairy.env is loaded at startup without overriding variables that are already set).
 package config
 
@@ -15,7 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Default locations.
+// DefaultConfigPath is the platform's default config file (/etc/fairy/config.yaml on Linux).
 func DefaultConfigPath() string {
 	if runtime.GOOS == "windows" {
 		return `C:\ProgramData\Fairy\config.yaml`
@@ -31,6 +31,7 @@ func PathFromEnv() string {
 	return DefaultConfigPath()
 }
 
+// DefaultEnvFile is the platform's default secrets file (/etc/fairy/fairy.env on Linux).
 func DefaultEnvFile() string {
 	if runtime.GOOS == "windows" {
 		return `C:\ProgramData\Fairy\fairy.env`
@@ -38,6 +39,7 @@ func DefaultEnvFile() string {
 	return "/etc/fairy/fairy.env"
 }
 
+// OIDC is the Pocket ID client and who may sign in (allowed groups / emails) or use control actions.
 type OIDC struct {
 	Issuer        string   `yaml:"issuer"`
 	ClientID      string   `yaml:"client_id"`
@@ -48,6 +50,8 @@ type OIDC struct {
 	ControlGroups []string `yaml:"control_groups"`
 }
 
+// Proxmox is one `proxmox:` cluster (or standalone host): API URLs for failover, the read-only token and the
+// optional separate power token.
 type Proxmox struct {
 	ID                  string   `yaml:"id"`
 	ClusterName         string   `yaml:"cluster_name"`
@@ -66,6 +70,7 @@ type Proxmox struct {
 	NodePower           bool     `yaml:"node_power"`
 }
 
+// Prefix is the id prefix that keeps system ids unique across clusters ("" for the legacy single cluster).
 func (p Proxmox) Prefix() string {
 	if p.IDPrefix == nil {
 		return ""
@@ -73,19 +78,24 @@ func (p Proxmox) Prefix() string {
 	return *p.IDPrefix
 }
 
+// Verify reports whether the cluster's TLS certificate is verified (the default).
 func (p Proxmox) Verify() bool { return p.VerifyTLS == nil || *p.VerifyTLS }
 
+// FanControl enables BMC fan control through an agent (only vendor "supermicro").
 type FanControl struct {
 	Vendor          string `yaml:"vendor"`
 	ControlTokenEnv string `yaml:"control_token_env"`
 }
 
+// Labels are optional grouping fields shared by agents and `systems:` overrides.
 type Labels struct {
 	Group *string  `yaml:"group"`
 	Owner *string  `yaml:"owner"`
 	Tags  []string `yaml:"tags"`
 }
 
+// Agent is one `agents:` entry: a Fairy agent reached over HTTP with a read token (and optionally a separate
+// control token for fans, power and Wake-on-LAN).
 type Agent struct {
 	Labels                `yaml:",inline"`
 	ID                    string              `yaml:"id"`
@@ -117,6 +127,7 @@ func (a Agent) ControlEnv() string {
 	return ""
 }
 
+// DisplayName is the agent's name, or its id when no name is configured.
 func (a Agent) DisplayName() string {
 	if a.Name != "" {
 		return a.Name
@@ -124,6 +135,7 @@ func (a Agent) DisplayName() string {
 	return a.ID
 }
 
+// Wol is a system's Wake-on-LAN setting: the magic packet is sent by a relay agent on the same LAN.
 type Wol struct {
 	MAC         string `yaml:"mac"`
 	Relay       string `yaml:"relay"`
@@ -132,6 +144,7 @@ type Wol struct {
 	PasswordEnv string `yaml:"password_env"`
 }
 
+// SystemOverride is a `systems:` entry: display name, labels, DWService link and Wake-on-LAN for one system id.
 type SystemOverride struct {
 	Labels       `yaml:",inline"`
 	ID           string `yaml:"id"`
@@ -140,6 +153,7 @@ type SystemOverride struct {
 	Wol          *Wol   `yaml:"wol"`
 }
 
+// Intervals are the default polling intervals in seconds (each 1-300).
 type Intervals struct {
 	Agent   float64 `yaml:"agent"`
 	Proxmox float64 `yaml:"proxmox"`
@@ -148,6 +162,7 @@ type Intervals struct {
 	Stream  float64 `yaml:"stream"`
 }
 
+// Panel is the whole config.yaml. Parse fills in defaults and validates it.
 type Panel struct {
 	PublicURL          string           `yaml:"public_url"`
 	Intervals          Intervals        `yaml:"intervals"`
@@ -179,6 +194,7 @@ type Panel struct {
 // ProxmoxList accepts either a single mapping (legacy: unprefixed ids) or a list (prefix "<id>-").
 type ProxmoxList []Proxmox
 
+// UnmarshalYAML accepts either a single mapping (legacy: unprefixed ids) or a list.
 func (l *ProxmoxList) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		var p Proxmox
@@ -200,8 +216,13 @@ func (l *ProxmoxList) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-func (c *Panel) BaseURL() string         { return strings.TrimRight(c.PublicURL, "/") }
-func (c *Panel) Boost() bool             { return c.BoostWhileViewing == nil || *c.BoostWhileViewing }
+// BaseURL is public_url without a trailing slash.
+func (c *Panel) BaseURL() string { return strings.TrimRight(c.PublicURL, "/") }
+
+// Boost reports whether boost-while-viewing is on (the default).
+func (c *Panel) Boost() bool { return c.BoostWhileViewing == nil || *c.BoostWhileViewing }
+
+// Trusted returns trusted_proxies as parsed network prefixes.
 func (c *Panel) Trusted() []netip.Prefix { return c.trusted }
 
 // Load reads and validates a config file.

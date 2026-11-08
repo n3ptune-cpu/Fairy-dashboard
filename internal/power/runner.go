@@ -12,6 +12,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/normalise"
 )
 
+// Runner polls one configured source with exponential backoff while it fails.
 type Runner struct {
 	Source       Source
 	Interval     float64
@@ -26,6 +27,7 @@ type Runner struct {
 	clock       func() float64
 }
 
+// ID is the source's id.
 func (r *Runner) ID() string { return r.Source.Info().ID }
 
 // Poll reads the source once (respecting its backoff).
@@ -74,6 +76,7 @@ func (r *Runner) Poll(ctx context.Context, timeout time.Duration) {
 	r.readings, r.lastSuccess, r.err, r.failures, r.nextAttempt = out.rd, &now, nil, 0, 0
 }
 
+// State is the source's current state: ok, stale (failing, but last reading still fresh) or unreachable.
 func (r *Runner) State() model.PowerSourceState {
 	r.mu.Lock()
 	defer r.mu.Unlock()

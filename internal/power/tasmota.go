@@ -11,6 +11,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
+// TasmotaConfig is a `type: tasmota` power source.
 type TasmotaConfig struct {
 	Base        `yaml:",inline"`
 	URL         string `yaml:"url"`

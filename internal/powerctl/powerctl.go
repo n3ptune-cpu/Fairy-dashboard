@@ -1,4 +1,4 @@
-// Package powerctl: which power actions a system offers (and why not), and carrying them out.
+// Package powerctl decides which power actions a system offers (and why not) and carries them out.
 //
 // Routes, in order of preference:
 //   - hosts / Proxmox nodes with an agent that has --enable-power-control: shutdown / reboot (delayed, cancellable)
@@ -26,6 +26,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/poller"
 )
 
+// Actions are the power actions the API accepts.
 var Actions = []string{"start", "shutdown", "reboot", "stop", "cancel", "wake"}
 
 // Request is the POST /api/systems/{id}/power body.
@@ -35,6 +36,7 @@ type Request struct {
 	Confirm *string `json:"confirm"` // the system's name, typed (shutdown / stop)
 }
 
+// Validate checks the request and fills in the default delay (60 s).
 func (r *Request) Validate() error {
 	if !slices.Contains(Actions, r.Action) {
 		return apierr.New(422, "action must be one of start, shutdown, reboot, stop, cancel, wake")
@@ -76,7 +78,7 @@ func or(a, b string) string {
 	return b
 }
 
-// KillsPanel: the panel itself runs on this system (or on a guest of this node).
+// KillsPanel reports whether the panel itself runs on this system (or on a guest of this node).
 func KillsPanel(p *poller.Poller, s model.System) bool {
 	if slices.Contains(p.Cfg.PanelHosts, s.ID) {
 		return true
@@ -210,6 +212,7 @@ func wakeCap(p *poller.Poller, s model.System) model.PowerActionCap {
 	return c
 }
 
+// CheckConfirmation enforces typed confirmation: the system's name must be typed (case-insensitive).
 func CheckConfirmation(s model.System, c model.PowerActionCap, confirm *string) error {
 	if c.Confirm != "typed" {
 		return nil

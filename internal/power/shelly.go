@@ -13,6 +13,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
+// ShellyConfig is a `type: shelly` power source (Gen1 /status or Gen2+ RPC).
 type ShellyConfig struct {
 	Base        `yaml:",inline"`
 	URL         string `yaml:"url"` // http://192.168.1.50

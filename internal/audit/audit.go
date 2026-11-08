@@ -1,4 +1,4 @@
-// Package audit: append-only audit log (JSON lines) shared by the server and the admin CLI, plus a reverse
+// Package audit is the append-only audit log (JSON lines) shared by the server and the admin CLI, plus a reverse
 // reader for the UI.
 //
 // Entry: {ts, actor, sub, action, target, params, outcome, source, ip}. `source` is "ui" (browser session),
@@ -21,6 +21,7 @@ var mu sync.Mutex
 
 const block = 64 * 1024
 
+// Entry is one audit-log line. Write fills in TS and defaults Params, Outcome ("ok") and Source ("ui").
 type Entry struct {
 	TS      string         `json:"ts"`
 	Actor   string         `json:"actor"`

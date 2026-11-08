@@ -10,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
+// NutConfig is a `type: nut` power source: wall power of a UPS read from upsd.
 type NutConfig struct {
 	Base        `yaml:",inline"`
 	Host        string `yaml:"host"`

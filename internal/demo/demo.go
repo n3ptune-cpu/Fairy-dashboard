@@ -1,4 +1,4 @@
-// Package demo: a realistic simulator for Proxmox, agents, power sources, UPSes and a Supermicro BMC.
+// Package demo is a realistic simulator for Proxmox, agents, power sources, UPSes and a Supermicro BMC.
 //
 // The simulator produces *raw* payloads (Proxmox cluster/resources JSON, agent /metrics JSON) and feeds them
 // through the real normalisation, power-merge and API code. Authentication is bypassed with a fake user, so the
@@ -13,6 +13,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/poller"
 )
 
+// User is the fake signed-in user of demo mode (in the control group).
 var User = model.User{Sub: "demo-neptune", Name: model.P("Neptune"), PreferredUsername: model.P("neptune"),
 	Email: model.P("neptune@example.invalid"), Groups: []string{"viewers", "controllers"}, Auth: "demo"}
 

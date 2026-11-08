@@ -1,5 +1,5 @@
-// Package notify: optional notification on control actions. FAIRY_NOTIFY_URL in fairy.env (an ntfy topic URL
-// or a Discord webhook). Off unless set. Fire-and-forget; failures are logged at debug level and never block.
+// Package notify sends an optional notification on control actions to FAIRY_NOTIFY_URL in fairy.env (an ntfy
+// topic URL or a Discord webhook). Off unless set. Fire-and-forget; failures are logged at debug level and never block.
 package notify
 
 import (
@@ -13,6 +13,7 @@ import (
 	"time"
 )
 
+// URL is FAIRY_NOTIFY_URL when it is an https:// URL, else "" (notifications off).
 func URL() string {
 	u := strings.TrimSpace(os.Getenv("FAIRY_NOTIFY_URL"))
 	if strings.HasPrefix(u, "https://") {

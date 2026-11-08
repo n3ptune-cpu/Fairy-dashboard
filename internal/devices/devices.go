@@ -1,4 +1,4 @@
-// Package devices: power-device and UPS protocol code shared by the panel and the agent (agent-side devices on
+// Package devices is the power-device and UPS protocol code shared by the panel and the agent (agent-side devices on
 // a friend's LAN use the same code). Errors are safe to show: they never contain credentials or URLs.
 package devices
 
@@ -11,6 +11,7 @@ import (
 // Error is a failure whose message is safe to show in the API.
 type Error struct{ Msg string }
 
+// Error returns the message.
 func (e *Error) Error() string { return e.Msg }
 
 // Errf returns an *Error with a formatted message. Never put credentials, URLs or headers into it.
@@ -20,7 +21,7 @@ func Errf(f string, a ...any) error { return &Error{Msg: fmt.Sprintf(f, a...)} }
 // (config.EnvSecret, tuya). Without it, normalise.Describe reduces unknown errors to a generic word.
 func Safe(err error) error { return &Error{Msg: err.Error()} }
 
-// Reading: watts, volts, amps, kWh total (nil = unknown).
+// Reading is one power measurement: watts, volts, amps, kWh total (nil = unknown).
 type Reading struct {
 	Watts, Voltage, Current, EnergyKWh *float64
 }

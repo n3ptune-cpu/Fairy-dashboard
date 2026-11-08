@@ -1,4 +1,4 @@
-// Package security: client IP resolution behind the reverse proxy (for rate limiting and the audit log only).
+// Package security resolves the client IP behind the reverse proxy (for rate limiting and the audit log only).
 package security
 
 import (
@@ -34,8 +34,9 @@ func PeerIP(r *http.Request) string {
 	return host
 }
 
-// ClientIP: X-Forwarded-For is only believed when the peer is a configured trusted proxy (nginx), and then the
-// right-most address that is not itself a trusted proxy wins. Never used for authorisation.
+// ClientIP returns the client's address. X-Forwarded-For is only believed when the peer is a configured trusted
+// proxy (nginx), and then the right-most address that is not itself a trusted proxy wins. Never used for
+// authorisation.
 func ClientIP(r *http.Request, nets []netip.Prefix) string {
 	peer := PeerIP(r)
 	if !trusted(peer, nets) {

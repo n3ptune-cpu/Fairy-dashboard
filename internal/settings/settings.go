@@ -1,4 +1,4 @@
-// Package settings: per-user UI settings (JSON file keyed by OIDC sub) and background-image uploads.
+// Package settings stores per-user UI settings (JSON file keyed by OIDC sub) and background-image uploads.
 package settings
 
 import (
@@ -16,19 +16,23 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 )
 
+// MaxBackgroundBytes is the largest background image accepted (8 MiB).
 const MaxBackgroundBytes = 8 * 1024 * 1024
 
-// ImageTypes: raster formats only. SVG is refused on purpose: it can carry script.
+// ImageTypes maps the accepted image types to file extensions: raster formats only. SVG is refused on purpose: it
+// can carry script.
 var ImageTypes = map[string]string{"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "image/avif": "avif"}
 
 var typeOrder = []string{"image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"}
 
+// Background is the page background: none, an uploaded image or an https URL.
 type Background struct {
 	Kind    string  `json:"kind"`    // none | upload | url
 	URL     *string `json:"url"`     // only for kind=url (https only)
 	Version int     `json:"version"` // bumped on every upload (cache busting)
 }
 
+// UserSettings are one user's UI settings.
 type UserSettings struct {
 	Theme       string     `json:"theme"`
 	Background  Background `json:"background"`
@@ -37,6 +41,7 @@ type UserSettings struct {
 	CardOpacity int        `json:"card_opacity"` // 20-100 %
 }
 
+// Defaults are the settings of a user who never changed them.
 func Defaults() UserSettings {
 	return UserSettings{Theme: "black", Background: Background{Kind: "none"}, Dim: 60, Blur: 14, CardOpacity: 72}
 }
@@ -121,11 +126,13 @@ func ValidateUpload(contentType string, data []byte) (string, error) {
 	return claimed, nil
 }
 
+// Store keeps every user's settings in one JSON file and background images in a directory.
 type Store struct {
 	dir, bgDir, file string
 	mu               sync.Mutex
 }
 
+// NewStore returns the store in dataDir.
 func NewStore(dataDir string) *Store {
 	return &Store{dir: dataDir, bgDir: filepath.Join(dataDir, "backgrounds"), file: filepath.Join(dataDir, "settings.json")}
 }
@@ -157,6 +164,7 @@ func key(sub string) string {
 	return hex.EncodeToString(h[:])[:24]
 }
 
+// Get returns a user's settings (the defaults when none are saved).
 func (s *Store) Get(sub string) UserSettings {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -175,6 +183,7 @@ func (s *Store) get(sub string) UserSettings {
 	return st
 }
 
+// Put validates and saves a user's settings.
 func (s *Store) Put(sub string, st UserSettings) (UserSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,6 +214,7 @@ func (s *Store) removeAll(sub string) {
 	}
 }
 
+// SaveBackground stores an uploaded image (replacing the previous one) and switches the background to it.
 func (s *Store) SaveBackground(sub, mime string, data []byte) (UserSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -221,6 +231,7 @@ func (s *Store) SaveBackground(sub, mime string, data []byte) (UserSettings, err
 	return st, s.put(sub, st)
 }
 
+// DeleteBackground removes the uploaded image and switches the background back to none.
 func (s *Store) DeleteBackground(sub string) (UserSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

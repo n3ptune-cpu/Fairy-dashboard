@@ -40,11 +40,13 @@ type Backend struct {
 	guestPending map[guestKey]guestChange
 }
 
+// NewBackend returns a simulator for the demo configuration.
 func NewBackend(cfg *config.Panel) *Backend {
 	return &Backend{cfg: cfg, bmc: &simBMC{mode: "optimal", duty: map[int]int{}}, pending: map[string]map[string]any{},
 		downUntil: map[string]float64{}, guestStatus: map[guestKey]string{}, guestPending: map[guestKey]guestChange{}}
 }
 
+// FetchProxmox returns simulated cluster/resources rows, with guests' simulated power state applied.
 func (b *Backend) FetchProxmox(_ context.Context, pve config.Proxmox, _ time.Duration) ([]jsonx.M, error) {
 	rows := proxmoxResources()
 	if pve.ID == "straw" {
@@ -77,6 +79,7 @@ func (b *Backend) FetchProxmox(_ context.Context, pve config.Proxmox, _ time.Dur
 	return rows, nil
 }
 
+// FetchNodeStatus returns a simulated node status (CPU model).
 func (b *Backend) FetchNodeStatus(_ context.Context, _ config.Proxmox, node string) (jsonx.M, error) {
 	m, ok := nodeCPU[node]
 	if !ok {
@@ -85,6 +88,7 @@ func (b *Backend) FetchNodeStatus(_ context.Context, _ config.Proxmox, node stri
 	return jsonx.M{"cpuinfo": map[string]any{"model": m, "cpus": 8.0, "sockets": 1.0}}, nil
 }
 
+// FetchAgentMetrics returns a simulated /metrics payload, or an error while the host is "down".
 func (b *Backend) FetchAgentMetrics(_ context.Context, a config.Agent, _ time.Duration) (jsonx.M, error) {
 	b.mu.Lock()
 	now := epoch()
@@ -124,6 +128,7 @@ func (b *Backend) FetchAgentMetrics(_ context.Context, a config.Agent, _ time.Du
 	return out, nil
 }
 
+// PVEPower changes the simulated guest's state after a short delay (or shuts a node's agent down).
 func (b *Backend) PVEPower(_ context.Context, clusterID, path string, _ url.Values) (any, error) {
 	parts := strings.Split(strings.Trim(path, "/"), "/") // nodes/{node}/{kind}/{vmid}/status/{action}
 	if len(parts) == 6 {
@@ -146,6 +151,7 @@ func (b *Backend) PVEPower(_ context.Context, clusterID, path string, _ url.Valu
 	return "UPID:demo:node", nil
 }
 
+// FetchProcesses returns a simulated process list for the agent's host.
 func (b *Backend) FetchProcesses(_ context.Context, a config.Agent, sid string, limit int, sortBy string) (model.ProcessList, error) {
 	switch a.ID {
 	case "straw-pc":
@@ -158,6 +164,7 @@ func (b *Backend) FetchProcesses(_ context.Context, a config.Agent, sid string, 
 
 var reqClean = regexp.MustCompile(`[^A-Za-z0-9 ._@-]`)
 
+// AgentRequest answers the agent's fan, power and Wake-on-LAN endpoints from the simulation.
 func (b *Backend) AgentRequest(_ context.Context, a config.Agent, _ string, path string, body any) (int, jsonx.M, error) {
 	bm := map[string]any{}
 	if body != nil {

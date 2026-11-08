@@ -1,4 +1,5 @@
-// Package adminstate: server-side state the admin CLI can change while the panel runs (no restart, no web login):
+// Package adminstate holds the server-side state the admin CLI can change while the panel runs (no restart, no web
+// login):
 //
 //	state.json     poll_overrides, control_disabled {by, at, reason}, power_control_disabled [system ids],
 //	               sessions_revoked_before (epoch)
@@ -17,13 +18,16 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/statefile"
 )
 
+// SessionKeepS is how long (s) a session stays in sessions.json before it is pruned.
 const SessionKeepS = 30 * 86400
 
+// State gives typed access to state.json and sessions.json in the data directory.
 type State struct {
 	StatePath, SessionsPath string
 	state, sessions         *statefile.Watched
 }
 
+// New returns the state files of dataDir.
 func New(dataDir string) *State {
 	sp, ss := filepath.Join(dataDir, "state.json"), filepath.Join(dataDir, "sessions.json")
 	return &State{StatePath: sp, SessionsPath: ss, state: statefile.NewWatched(sp), sessions: statefile.NewWatched(ss)}
@@ -36,7 +40,7 @@ func num(v any) float64 {
 	return f
 }
 
-// ControlDisabled: the global kill switch (nil = control allowed).
+// ControlDisabled returns the global kill switch (nil = control allowed).
 func (a *State) ControlDisabled() *model.ControlState {
 	v, ok := a.state.Get()["control_disabled"].(map[string]any)
 	if !ok {
@@ -51,17 +55,20 @@ func (a *State) ControlDisabled() *model.ControlState {
 	return cs
 }
 
-// StateVersion changes whenever state.json changes (for syncing poll overrides).
+// StateData returns state.json and a version number that changes whenever the file changes (for syncing poll
+// overrides).
 func (a *State) StateData() (statefile.Data, int) {
 	d := a.state.Get()
 	return d, a.state.Version
 }
 
+// PowerDisabled reports whether an administrator turned power control off for this system.
 func (a *State) PowerDisabled(id string) bool {
 	l, _ := a.state.Get()["power_control_disabled"].([]any)
 	return slices.Contains(l, any(id))
 }
 
+// PowerDisabledList returns the systems whose power control is off (read straight from disk).
 func (a *State) PowerDisabledList() []string {
 	l, _ := statefile.Read(a.StatePath)["power_control_disabled"].([]any)
 	out := []string{}
@@ -73,6 +80,8 @@ func (a *State) PowerDisabledList() []string {
 	return out
 }
 
+// SessionValid reports whether a cookie's session id is still registered and was issued (iat, Unix seconds)
+// after the last revoke-all.
 func (a *State) SessionValid(sid string, iat float64) bool {
 	if sid == "" {
 		return false
@@ -86,6 +95,7 @@ func (a *State) SessionValid(sid string, iat float64) bool {
 	return known && iat > num(a.state.Get()["sessions_revoked_before"])
 }
 
+// Session is one registered login, as listed by `fairy admin sessions list`.
 type Session struct {
 	SID       string
 	Sub       string
@@ -96,6 +106,7 @@ type Session struct {
 	CreatedTS float64
 }
 
+// ListSessions returns the registered sessions, oldest first.
 func (a *State) ListSessions() []Session {
 	ss, _ := statefile.Read(a.SessionsPath)["sessions"].(map[string]any)
 	out := []Session{}
@@ -146,6 +157,7 @@ func (a *State) AddSession(sid string, info NewSession) error {
 	return err
 }
 
+// RemoveSession forgets one session (logout, idle timeout); its cookie stops working.
 func (a *State) RemoveSession(sid string) error {
 	if sid == "" {
 		return nil
@@ -180,6 +192,7 @@ func (a *State) RevokeSession(prefix string) (int, error) {
 	return n, err
 }
 
+// RevokeAllSessions removes every session and invalidates every cookie issued before now.
 func (a *State) RevokeAllSessions() (int, error) {
 	n := len(a.ListSessions())
 	if _, err := statefile.Update(a.SessionsPath, func(d statefile.Data) error { d["sessions"] = map[string]any{}; return nil }); err != nil {
@@ -193,6 +206,7 @@ func (a *State) RevokeAllSessions() (int, error) {
 	return n, nil
 }
 
+// SetControlDisabled turns the global kill switch on (with who and why) or off.
 func (a *State) SetControlDisabled(disabled bool, by, reason string) error {
 	_, err := statefile.Update(a.StatePath, func(d statefile.Data) error {
 		if disabled {
@@ -206,6 +220,7 @@ func (a *State) SetControlDisabled(disabled bool, by, reason string) error {
 	return err
 }
 
+// SetPowerDisabled turns power control off (or back on) for one system.
 func (a *State) SetPowerDisabled(id string, disabled bool) error {
 	_, err := statefile.Update(a.StatePath, func(d statefile.Data) error {
 		cur := map[string]bool{}
@@ -232,7 +247,7 @@ func (a *State) SetPowerDisabled(id string, disabled bool) error {
 	return err
 }
 
-// SetPoll: value is seconds (float64), "paused", or nil (back to default).
+// SetPoll stores a polling override: value is seconds (float64), "paused", or nil (back to default).
 func (a *State) SetPoll(id string, value any) error {
 	_, err := statefile.Update(a.StatePath, func(d statefile.Data) error {
 		po, _ := d["poll_overrides"].(map[string]any)

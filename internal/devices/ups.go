@@ -6,12 +6,13 @@ import (
 	"time"
 )
 
+// UPSFlags maps NUT ups.status words to the flags and states Fairy shows.
 var UPSFlags = map[string]string{"OL": "online", "OB": "on_battery", "LB": "low_battery", "HB": "high_battery",
 	"RB": "replace_battery", "CHRG": "charging", "DISCHRG": "discharging", "BYPASS": "bypass", "CAL": "calibrating",
 	"OFF": "off", "OVER": "overload", "TRIM": "trim", "BOOST": "boost", "FSD": "forced_shutdown", "ALARM": "alarm",
 	"TEST": "test"}
 
-// ParseUPSStatus: NUT ups.status ("OB DISCHRG LB") -> state (online|on_battery|low_battery|off|unknown), flags.
+// ParseUPSStatus splits NUT ups.status ("OB DISCHRG LB") -> state (online|on_battery|low_battery|off|unknown), flags.
 func ParseUPSStatus(raw string) (string, []string) {
 	toks := strings.Fields(strings.ToUpper(raw))
 	has := map[string]bool{}

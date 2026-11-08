@@ -89,6 +89,8 @@ func GetJSON(ctx context.Context, c *http.Client, rawURL, auth, user, pass strin
 	return out, nil
 }
 
+// HTTPStatusError is an HTTP error status from a device (shown as "http <code>").
 type HTTPStatusError struct{ Code int }
 
+// Error returns "http <code>".
 func (e *HTTPStatusError) Error() string { return fmt.Sprintf("http %d", e.Code) }

@@ -1,5 +1,5 @@
-// Package ups: UPS as a first-class feature: NUT polling (backend or agent-relayed), state, transitions, events,
-// history.
+// Package ups makes UPSes a first-class feature: NUT polling (by the panel or relayed by an agent), state,
+// transitions, events and history.
 //
 // Read-only by design: only LIST UPS / LIST VAR are ever sent (no INSTCMD, no SET VAR).
 package ups
@@ -17,6 +17,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/normalise"
 )
 
+// Manager holds every UPS (polled by the panel or relayed by agents), their history and events.
 type Manager struct {
 	Sources      []*Source
 	timeout      time.Duration
@@ -34,6 +35,8 @@ type Manager struct {
 	OnEvent func(model.UpsEvent)
 }
 
+// NewManager builds the configured sources. interval is the history sample interval (s), historyS the
+// history length (s), eventsFile the JSON-lines event log ("" = none).
 func NewManager(configs []map[string]any, interval float64, timeout time.Duration, offlineAfter float64,
 	historyS int, eventsFile string) (*Manager, error) {
 	m := &Manager{timeout: timeout, offlineAfter: offlineAfter, eventsFile: eventsFile,
@@ -142,6 +145,7 @@ func (m *Manager) PollSource(ctx context.Context, c *Source, timeout time.Durati
 	m.emit(evs)
 }
 
+// PollAll polls every source once, then samples history (tests).
 func (m *Manager) PollAll(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, s := range m.Sources {
@@ -152,6 +156,7 @@ func (m *Manager) PollAll(ctx context.Context) {
 	m.SampleHistory()
 }
 
+// SampleHistory appends one point per reachable UPS to its history ring.
 func (m *Manager) SampleHistory() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -236,6 +241,7 @@ func (m *Manager) UpdateFromAgent(agentID string, rows []map[string]any, unreach
 	m.emit(evs)
 }
 
+// Overview is GET /api/ups (with or without history).
 func (m *Manager) Overview(history bool) model.UpsOverview {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -251,7 +257,7 @@ func (m *Manager) Overview(history bool) model.UpsOverview {
 	return ov
 }
 
-// SystemsMap: system id -> UPS ids powering it.
+// SystemsMap returns system id -> ids of the UPSes powering it.
 func (m *Manager) SystemsMap() map[string][]string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -265,7 +271,7 @@ func (m *Manager) SystemsMap() map[string][]string {
 	return out
 }
 
-// States returns a copy (for tests).
+// State returns a copy of one UPS's state (for tests).
 func (m *Manager) State(key string) *model.UpsState {
 	m.mu.Lock()
 	defer m.mu.Unlock()

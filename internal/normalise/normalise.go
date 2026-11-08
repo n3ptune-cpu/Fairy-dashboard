@@ -1,4 +1,5 @@
-// Package normalise: pure functions turning Proxmox / agent payloads into the unified System schema.
+// Package normalise turns Proxmox and agent payloads into the unified System schema (pure functions, plus the
+// tracker that turns byte counters into rates).
 package normalise
 
 import (
@@ -15,6 +16,7 @@ func Round(v float64, n int) float64 {
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
+// Slug lowercases v and turns every run of other characters into a dash (node names -> ids).
 func Slug(v string) string {
 	return strings.Trim(slugRe.ReplaceAllString(strings.ToLower(v), "-"), "-")
 }

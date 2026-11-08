@@ -12,6 +12,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
+// FmtRuntime formats seconds as m:ss ("?" when unknown).
 func FmtRuntime(s *int) string {
 	if s == nil {
 		return "?"
@@ -118,12 +119,14 @@ func (m *Manager) emit(evs []model.UpsEvent) {
 	}
 }
 
+// EventsSince returns the events after sequence number seq, oldest first.
 func (m *Manager) EventsSince(seq int) []model.UpsEvent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.newEvents(seq)
 }
 
+// Seq is the latest event's sequence number.
 func (m *Manager) Seq() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

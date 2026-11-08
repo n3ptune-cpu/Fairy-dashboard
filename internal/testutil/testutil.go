@@ -1,4 +1,4 @@
-// Package testutil: shared fixtures for the poller and web tests.
+// Package testutil has shared fixtures for the poller and web tests.
 package testutil
 
 import (
@@ -15,6 +15,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
+// ReadToken and ControlToken are the agent tokens Config puts into the environment.
 const (
 	ReadToken    = "read-token-aaaaaaaaaaaaaaaaaaaa"
 	ControlToken = "control-token-bbbbbbbbbbbbbbbbbb"
@@ -61,6 +62,7 @@ systems:
 	return cfg
 }
 
+// PVEResources is a cluster/resources fixture.
 func PVEResources() []jsonx.M {
 	return []jsonx.M{
 		{"id": "node/NSX-KACHINA", "type": "node", "node": "NSX-KACHINA", "status": "online", "cpu": 0.125,
@@ -75,6 +77,7 @@ func PVEResources() []jsonx.M {
 	}
 }
 
+// AgentMetrics is an agent /metrics fixture.
 func AgentMetrics() jsonx.M {
 	return jsonx.M{"hostname": "laptop", "platform": jsonx.M{"system": "Linux", "pretty": "Ubuntu 24.04.1 LTS"}, "uptime_s": 3600.0,
 		"cpu": jsonx.M{"percent": 12.5, "logical": 8.0}, "memory": jsonx.M{"total": float64(16 << 30), "used": float64(6 << 30)},
@@ -102,6 +105,7 @@ type Backend struct {
 	FanStatus jsonx.M
 }
 
+// NewBackend returns a fake backend serving PVEResources and AgentMetrics.
 func NewBackend() *Backend {
 	return &Backend{PVE: func() ([]jsonx.M, error) { return PVEResources(), nil },
 		Metrics: map[string]func() (jsonx.M, error){
@@ -111,16 +115,19 @@ func NewBackend() *Backend {
 		FanStatus: jsonx.M{"enabled": true, "vendor": "supermicro", "mode": "optimal", "duty": jsonx.M{}, "fans": []any{}, "events": []any{}}}
 }
 
+// FetchProxmox returns the fixture rows (or the configured error).
 func (b *Backend) FetchProxmox(context.Context, config.Proxmox, time.Duration) ([]jsonx.M, error) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
 	return b.PVE()
 }
 
+// FetchNodeStatus returns a fixed CPU model.
 func (b *Backend) FetchNodeStatus(context.Context, config.Proxmox, string) (jsonx.M, error) {
 	return jsonx.M{"cpuinfo": jsonx.M{"model": "Intel(R) Core(TM) i7-8700T CPU @ 2.40GHz"}}, nil
 }
 
+// FetchAgentMetrics returns the fixture payload (or the configured error).
 func (b *Backend) FetchAgentMetrics(_ context.Context, a config.Agent, _ time.Duration) (jsonx.M, error) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
@@ -130,6 +137,7 @@ func (b *Backend) FetchAgentMetrics(_ context.Context, a config.Agent, _ time.Du
 	return nil, devices.Errf("connection failed")
 }
 
+// PVEPower records the call.
 func (b *Backend) PVEPower(_ context.Context, cluster, path string, data url.Values) (any, error) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
@@ -137,10 +145,12 @@ func (b *Backend) PVEPower(_ context.Context, cluster, path string, data url.Val
 	return "UPID:test", nil
 }
 
+// FetchProcesses returns an empty list.
 func (b *Backend) FetchProcesses(_ context.Context, _ config.Agent, sid string, _ int, s string) (model.ProcessList, error) {
 	return model.ProcessList{SystemID: sid, Sort: s, Processes: []model.Process{}}, nil
 }
 
+// AgentRequest records the call and answers with the configured reply.
 func (b *Backend) AgentRequest(_ context.Context, a config.Agent, method, path string, body any) (int, jsonx.M, error) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()

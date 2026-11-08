@@ -12,6 +12,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/tuya"
 )
 
+// TuyaConfig is a `type: tuya` power source: a metering plug on the LAN (protocol 3.1-3.5).
 type TuyaConfig struct {
 	Base        `yaml:",inline"`
 	DeviceID    string                      `yaml:"device_id"`

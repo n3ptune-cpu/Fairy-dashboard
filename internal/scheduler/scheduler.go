@@ -1,4 +1,4 @@
-// Package scheduler: per-source polling.
+// Package scheduler runs the per-source polling jobs.
 //
 //   - Every source (one Proxmox cluster, one agent, one plug, one UPS daemon) is a Job with its own interval.
 //   - A job never overlaps itself: if the previous run is still going when it is due, that slot is skipped.
@@ -20,6 +20,8 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/statefile"
 )
 
+// Interval limits (overrides are clamped to MinInterval-MaxInterval) and boost-while-viewing: viewed systems
+// are polled every BoostInterval, until BoostGrace after the last viewer left. All in seconds.
 const (
 	MinInterval   = 1.0
 	MaxInterval   = 300.0
@@ -27,12 +29,13 @@ const (
 	BoostGrace    = 30.0
 )
 
-// Override: Paused or seconds.
+// Override is a per-system polling override: Paused, or an interval in Seconds.
 type Override struct {
 	Paused  bool
 	Seconds float64
 }
 
+// JSON is the override as stored in state.json: "paused" or the seconds.
 func (o Override) JSON() any {
 	if o.Paused {
 		return "paused"
@@ -43,6 +46,7 @@ func (o Override) JSON() any {
 // Fn runs one poll with the given per-request timeout; it may return a backoff (seconds) to delay the next run.
 type Fn func(ctx context.Context, timeout time.Duration) float64
 
+// Job is one polling source. Systems lists the system ids it feeds (for overrides and boosts).
 type Job struct {
 	Key        string
 	Fn         Fn
@@ -71,6 +75,7 @@ type boostRef struct {
 	releaseAt float64
 }
 
+// Scheduler starts due jobs (Tick), applies overrides and boosts, and keeps per-job statistics.
 type Scheduler struct {
 	mu           sync.Mutex
 	jobs         map[string]*Job
@@ -90,6 +95,7 @@ var start = time.Now()
 // Monotonic seconds since process start.
 func Monotonic() float64 { return time.Since(start).Seconds() }
 
+// New returns a scheduler that persists overrides in stateFile ("" = memory only); clock nil = Monotonic.
 func New(stateFile string, boostEnabled bool, clock func() float64) *Scheduler {
 	if clock == nil {
 		clock = Monotonic
@@ -158,7 +164,7 @@ func (s *Scheduler) Reload(raw any) bool {
 	return true
 }
 
-// SetOverride: nil = back to the configured default. Reschedules immediately and persists.
+// SetOverride sets a system's override (nil = back to the configured default). Reschedules immediately and persists.
 func (s *Scheduler) SetOverride(id string, v *Override) error {
 	s.mu.Lock()
 	if v == nil {
@@ -186,6 +192,7 @@ func (s *Scheduler) SetOverride(id string, v *Override) error {
 	return nil
 }
 
+// Overrides returns a copy of the per-system overrides.
 func (s *Scheduler) Overrides() map[string]Override {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -196,13 +203,14 @@ func (s *Scheduler) Overrides() map[string]Override {
 	return out
 }
 
+// IsPaused reports whether polling is paused for a system.
 func (s *Scheduler) IsPaused(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.overrides[id].Paused
 }
 
-// ------------------------------------------------------------- boost while viewing
+// BoostAcquire starts boosting a system for one more viewer (no-op when boost_while_viewing is off).
 func (s *Scheduler) BoostAcquire(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -224,6 +232,7 @@ func (s *Scheduler) BoostAcquire(id string) {
 	s.dirty = true
 }
 
+// BoostRelease ends one viewer's boost; the boost lasts BoostGrace seconds after the last viewer leaves.
 func (s *Scheduler) BoostRelease(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -235,6 +244,7 @@ func (s *Scheduler) BoostRelease(id string) {
 	}
 }
 
+// Boosted reports whether a system is boosted (viewed now or within the grace period).
 func (s *Scheduler) Boosted(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -253,7 +263,6 @@ func (s *Scheduler) boosted(id string) bool {
 	return false
 }
 
-// ------------------------------------------------------------- effective interval
 func (s *Scheduler) requested(j *Job, id string) float64 {
 	if o, ok := s.overrides[id]; ok && !o.Paused {
 		return o.Seconds
@@ -293,13 +302,14 @@ func (s *Scheduler) effective(j *Job) *float64 {
 
 func (j *Job) floor() float64 { return math.Max(MinInterval, j.FloorS) }
 
+// Effective is the interval the job runs at now (nil while all its systems are paused).
 func (s *Scheduler) Effective(j *Job) *float64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.effective(j)
 }
 
-// TimeoutFor: per-request timeout below the interval (at least 0.8 s), capped by the source's own timeout.
+// TimeoutFor is the per-request timeout: below the interval (at least 0.8 s), capped by the source's own timeout.
 func TimeoutFor(j *Job, interval float64) time.Duration {
 	c := j.TimeoutCap
 	if c <= 0 {
@@ -344,7 +354,7 @@ func (s *Scheduler) TakeDirty() bool {
 	return d
 }
 
-// ------------------------------------------------------------- running
+// Add registers a job (replacing one with the same key).
 func (s *Scheduler) Add(j *Job) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -354,6 +364,7 @@ func (s *Scheduler) Add(j *Job) {
 	s.jobs[j.Key] = j
 }
 
+// Jobs returns the jobs in the order they were added.
 func (s *Scheduler) Jobs() []*Job {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -42,7 +42,8 @@ func (p *Poller) Snapshot() []model.System {
 	return out
 }
 
-// SnapshotJSON: id -> JSON, cached per version (shared by every SSE client). Also returns the id order.
+// SnapshotJSON returns each system's JSON by id, cached per version (shared by every SSE client). Also returns the
+// id order.
 func (p *Poller) SnapshotJSON() (map[string][]byte, []string) {
 	snap := p.Snapshot()
 	order := make([]string, len(snap))

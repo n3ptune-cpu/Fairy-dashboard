@@ -12,12 +12,14 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/power"
 )
 
-// Powers: a list applies to every UPS of this source; a map maps NUT UPS name -> system ids.
+// Powers says which systems a source's UPSes power: a list applies to every UPS of this source; a map maps NUT UPS
+// name -> system ids.
 type Powers struct {
 	All    []string
 	ByName map[string][]string
 }
 
+// For returns the systems powered by the named UPS.
 func (p Powers) For(upsName string) []string {
 	if p.ByName != nil {
 		return slices.Clone(p.ByName[upsName])
@@ -25,6 +27,7 @@ func (p Powers) For(upsName string) []string {
 	return slices.Clone(p.All)
 }
 
+// NutConfig is a `ups:` entry of type nut: an upsd to poll (all its UPSes, or the listed ones).
 type NutConfig struct {
 	ID          string   `yaml:"id"`
 	Type        string   `yaml:"type"`
@@ -120,6 +123,7 @@ func buildNut(raw map[string]any) (*NutConfig, error) {
 	return c, nil
 }
 
+// ValidateConfigs checks every `ups:` entry (config check / startup).
 func ValidateConfigs(raws []map[string]any) error {
 	for _, r := range raws {
 		if _, err := Build(r); err != nil {

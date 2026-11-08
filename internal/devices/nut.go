@@ -21,7 +21,7 @@ func unquote(v string) string {
 	return nutUnescape(v)
 }
 
-// ParseNUTVarLine: `VAR <ups> <name> "<value>"`.
+// ParseNUTVarLine parses `VAR <ups> <name> "<value>"`.
 func ParseNUTVarLine(line, ups string) (string, string, bool) {
 	prefix := "VAR " + ups + " "
 	if !strings.HasPrefix(line, prefix) {
@@ -31,7 +31,7 @@ func ParseNUTVarLine(line, ups string) (string, string, bool) {
 	return name, unquote(value), true
 }
 
-// ParseNUTUPSLine: `UPS <name> "<description>"` from LIST UPS.
+// ParseNUTUPSLine parses `UPS <name> "<description>"` from LIST UPS.
 func ParseNUTUPSLine(line string) (string, string, bool) {
 	if !strings.HasPrefix(line, "UPS ") {
 		return "", "", false
@@ -40,6 +40,7 @@ func ParseNUTUPSLine(line string) (string, string, bool) {
 	return name, unquote(desc), true
 }
 
+// NUTUPS is one UPS as listed by upsd, with all its variables.
 type NUTUPS struct {
 	Name, Description string
 	Vars              map[string]string
@@ -96,8 +97,8 @@ func (n *nutConn) listing(what string) ([]string, error) {
 	}
 }
 
-// NUTReadAll: one connection, optional login, LIST UPS (unless names given), LIST VAR for each. Read-only:
-// never sends INSTCMD / SET VAR / FSD.
+// NUTReadAll reads UPS variables over one connection: optional login, LIST UPS (unless names given), LIST VAR
+// for each. Read-only: never sends INSTCMD / SET VAR / FSD.
 func NUTReadAll(ctx context.Context, host string, port int, username, password string, timeout time.Duration, names []string) ([]NUTUPS, error) {
 	d := net.Dialer{Timeout: timeout}
 	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
@@ -176,7 +177,8 @@ func strVar(v map[string]string, keys ...string) *string {
 	return nil
 }
 
-// NUTWatts: (watts, input volts, output amps); estimated from load% x nominal when realpower is missing.
+// NUTWatts returns (watts, input volts, output amps); watts are estimated from load% x nominal when realpower is
+// missing.
 func NUTWatts(v map[string]string) (watts, volts, amps *float64) {
 	watts = numVar(v, "ups.realpower")
 	if watts == nil {

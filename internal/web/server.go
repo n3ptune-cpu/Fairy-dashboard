@@ -1,5 +1,7 @@
-// Package web: the HTTP server. Everything is behind Pocket ID (OIDC Authorization Code + PKCE S256); the only
-// other credentials are personal API tokens (CLI-created, Bearer). No password login of any kind.
+// Package web is the HTTP server: the JSON API, Server-Sent Events, the embedded UI and the Pocket ID login.
+//
+// Everything is behind Pocket ID (OIDC Authorization Code + PKCE S256); the only other credentials are personal
+// API tokens (CLI-created, Bearer). No password login of any kind.
 package web
 
 import (
@@ -27,18 +29,22 @@ import (
 //go:embed static
 var staticFS embed.FS
 
+// CSRFHeader: CSRFValue is the header every browser write must carry (it forces a CORS preflight, and no CORS
+// is enabled).
 const (
 	CSRFHeader = "X-Requested-With"
 	CSRFValue  = "fairy"
 )
 
-// CSP: img-src allows https: so a user-chosen background URL can load (the backend never fetches it: no SSRF).
+// CSP is the Content-Security-Policy of every page except /docs. img-src allows https: so a user-chosen background
+// URL can load (the backend never fetches it: no SSRF).
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; " +
 	"form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
 
 const permissionsPolicy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), " +
 	"payment=(), usb=(), interest-cohort=()"
 
+// Server is the HTTP server: routes, middleware, sessions, OIDC client and rate limiters.
 type Server struct {
 	Cfg      *config.Panel
 	Secrets  config.Secrets
@@ -72,7 +78,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	return s
 }
 
-// DeploymentWarnings: startup sanity checks (behind nginx at e.g. https://panel.example.com).
+// DeploymentWarnings returns startup sanity warnings (behind nginx at e.g. https://panel.example.com).
 func DeploymentWarnings(cfg *config.Panel, secrets config.Secrets) []string {
 	var out []string
 	if u, err := url.Parse(cfg.PublicURL); err != nil || u.Scheme != "https" {

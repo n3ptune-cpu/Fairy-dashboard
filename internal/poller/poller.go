@@ -1,4 +1,5 @@
-// Package poller: background polling of Proxmox + agents + power sources + UPSes into an in-memory cache.
+// Package poller polls Proxmox, agents, power sources and UPSes in the background into an in-memory cache and
+// builds the views the API serves from it (system list, summary, polling status, health file).
 //
 // Every source is its own scheduler job: per-source interval, per-request timeout below the interval, never
 // overlapping itself, per-host overrides / pause / boost-while-viewing.
@@ -36,6 +37,7 @@ type Backend interface {
 	AgentRequest(ctx context.Context, a config.Agent, method, path string, body any) (int, jsonx.M, error)
 }
 
+// Poller owns the in-memory state of every system and source and the jobs that refresh it.
 type Poller struct {
 	Cfg       *config.Panel
 	Secrets   config.Secrets
@@ -227,11 +229,13 @@ func (p *Poller) source(name string, ok bool, now time.Time, latency *time.Durat
 	p.sources[name] = st
 }
 
+// ClusterCfg returns the configured Proxmox cluster with this id.
 func (p *Poller) ClusterCfg(id string) (config.Proxmox, bool) {
 	c, ok := p.clusters[id]
 	return c, ok
 }
 
+// PVERef returns the Proxmox cluster, node, kind and vmid behind a system id (ok=false until seen).
 func (p *Poller) PVERef(id string) (cluster, node, kind string, vmid *int, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -239,6 +243,7 @@ func (p *Poller) PVERef(id string) (cluster, node, kind string, vmid *int, ok bo
 	return r.Cluster, r.Node, r.Kind, r.VMID, ok
 }
 
+// Override returns the `systems:` entry for a system id, or nil.
 func (p *Poller) Override(id string) *config.SystemOverride { return p.overrides[id] }
 
 // Bump records that the poller's data changed, so the cached snapshots are rebuilt on the next read.

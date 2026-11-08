@@ -9,8 +9,10 @@ import (
 	"time"
 )
 
+// GiB is 2^30 bytes.
 const GiB = 1 << 30
 
+// T0 is when the simulation started; the simulated values drift with time since T0.
 var T0 = time.Now()
 
 func since() float64 { return time.Since(T0).Seconds() }

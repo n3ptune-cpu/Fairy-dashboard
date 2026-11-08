@@ -28,6 +28,7 @@ func DecodeStrict(raw map[string]any, out any) error {
 	return dec.Decode(out)
 }
 
+// Types are the built-in `type:` values of power_sources entries.
 var Types = []string{"agent", "ipmi", "nut", "redfish", "shelly", "tasmota", "tuya"}
 
 // Extra holds additional source types (the demo simulator registers "demo").

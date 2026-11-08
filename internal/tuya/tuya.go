@@ -48,6 +48,7 @@ const (
 var noHeaderCmds = map[uint32]bool{DPQuery: true, DPQueryNew: true, UpdateDPS: true, HeartBeat: true,
 	SessKeyNegStart: true, SessKeyNegResp: true, SessKeyNegFinish: true, LanExtStream: true}
 
+// ErrDecode means a frame could not be decoded (bad length, CRC/HMAC/GCM tag or padding).
 var ErrDecode = errors.New("tuya: decode error")
 
 // Device is one plug. Tuya devices accept a single TCP connection, so it is kept open (persistent) and
@@ -67,6 +68,7 @@ type Device struct {
 	randIV   func() []byte // tests
 }
 
+// NewDevice returns a plug (not yet connected). localKey must be 16 characters; version "" means 3.3.
 func NewDevice(id, ip, localKey, version string, timeout time.Duration) (*Device, error) {
 	if len(localKey) != 16 {
 		return nil, errors.New("tuya: local_key must be 16 characters")
@@ -188,6 +190,7 @@ func (d *Device) queryPayload(now time.Time) (uint32, []byte) {
 	return DPQuery, []byte(fmt.Sprintf(`{"gwId":%s,"devId":%s,"uid":%s,"t":"%s"}`, id, id, id, t))
 }
 
+// Close closes the connection (the next Status reconnects).
 func (d *Device) Close() {
 	d.mu.Lock()
 	defer d.mu.Unlock()

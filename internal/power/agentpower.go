@@ -10,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
+// AgentPowerConfig is a `type: agent` power source: one metric of an agent's component power.
 type AgentPowerConfig struct {
 	Base   `yaml:",inline"`
 	Agent  string `yaml:"agent"`

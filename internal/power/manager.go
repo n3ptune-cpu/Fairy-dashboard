@@ -9,6 +9,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/normalise"
 )
 
+// Manager holds every power source: the configured ones (Runners) and the ones relayed by agents.
 type Manager struct {
 	Runners      []*Runner
 	IntervalS    float64
@@ -22,6 +23,8 @@ type Manager struct {
 	remoteKeys []string
 }
 
+// NewManager builds a Runner per config entry. interval is the history sample interval (s), historyS the
+// history length (s), clock a monotonic clock for backoff.
 func NewManager(configs []map[string]any, interval float64, timeout time.Duration, offlineAfter float64,
 	historyS int, agentPower AgentPowerFn, clock func() float64) (*Manager, error) {
 	m := &Manager{IntervalS: interval, Timeout: timeout, offlineAfter: offlineAfter,
@@ -64,6 +67,7 @@ func sumW(rs []model.PowerReading) *float64 {
 	return &s
 }
 
+// SampleHistory appends one point (total and per-source watts) to the history ring.
 func (m *Manager) SampleHistory() {
 	m.mu.Lock()
 	empty := len(m.Runners) == 0 && len(m.remote) == 0
@@ -84,6 +88,7 @@ func (m *Manager) SampleHistory() {
 	m.mu.Unlock()
 }
 
+// Overview is GET /api/power: every source, and the total of the sources counted in it.
 func (m *Manager) Overview() model.PowerOverview {
 	states := make([]model.PowerSourceState, 0, len(m.Runners))
 	for _, r := range m.Runners {
@@ -114,7 +119,7 @@ func (m *Manager) Overview() model.PowerOverview {
 	return ov
 }
 
-// LinkedWatts: system id -> watts from linked sources.
+// LinkedWatts returns system id -> watts from the sources linked to that system.
 func (m *Manager) LinkedWatts() map[string]float64 {
 	out := map[string]float64{}
 	for _, s := range m.Overview().Sources {
@@ -130,6 +135,7 @@ func (m *Manager) LinkedWatts() map[string]float64 {
 	return out
 }
 
+// HistoryView is GET /api/power/history; with a source id, every point holds only that source.
 func (m *Manager) HistoryView(source string) model.PowerHistory {
 	m.mu.Lock()
 	pts := append([]model.PowerPoint{}, m.history...)
@@ -143,6 +149,7 @@ func (m *Manager) HistoryView(source string) model.PowerHistory {
 	return model.PowerHistory{IntervalS: m.IntervalS, Points: pts}
 }
 
+// Close releases the sources' connections (Tuya keeps one open).
 func (m *Manager) Close() {
 	for _, r := range m.Runners {
 		r.Source.Close()

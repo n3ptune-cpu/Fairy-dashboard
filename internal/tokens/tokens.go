@@ -1,4 +1,4 @@
-// Package tokens: personal API tokens (scripted access to /api with `Authorization: Bearer fy_...`).
+// Package tokens manages personal API tokens (scripted access to /api with `Authorization: Bearer fy_...`).
 //
 // Created only with the admin CLI. Stored as SHA-256 hashes in <data_dir>/tokens.json; the plaintext is shown
 // once. Scope `read` or `control`. Tokens never work on /auth/* or the settings endpoints.
@@ -22,8 +22,10 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/statefile"
 )
 
+// Prefix starts every API token.
 const Prefix = "fy_"
 
+// Record is a stored token: never the token itself, only its SHA-256 hash and a 4-character hint.
 type Record struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
@@ -38,15 +40,18 @@ type Record struct {
 	Hash      string     `json:"hash"`
 }
 
+// Active reports whether the token is neither revoked nor expired.
 func (r Record) Active() bool {
 	return r.RevokedAt == nil && (r.ExpiresAt == nil || r.ExpiresAt.After(time.Now()))
 }
 
+// HashToken is the stored form of a token (hex SHA-256).
 func HashToken(raw string) string {
 	h := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(h[:])
 }
 
+// Store is tokens.json. Every lookup re-checks the file, so a revoke from the CLI applies at once.
 type Store struct {
 	Path    string
 	watch   *statefile.Watched
@@ -54,6 +59,7 @@ type Store struct {
 	touched map[string]time.Time
 }
 
+// NewStore returns the token store in dataDir.
 func NewStore(dataDir string) *Store {
 	p := filepath.Join(dataDir, "tokens.json")
 	return &Store{Path: p, watch: statefile.NewWatchedEvery(p, 0), touched: map[string]time.Time{}}
@@ -72,6 +78,7 @@ func records(d statefile.Data) map[string]Record {
 	return out
 }
 
+// List returns every token record (active, expired and revoked).
 func (s *Store) List() []Record {
 	out := []Record{}
 	for _, r := range records(statefile.Read(s.Path)) {
@@ -132,6 +139,7 @@ func (s *Store) Create(name, owner, scope, createdBy string, expiresDays int) (s
 	return raw, r, nil
 }
 
+// ErrNotFound means no active token has that id or name.
 var ErrNotFound = errors.New("no active token with that id or name")
 
 // Revoke by id or name.

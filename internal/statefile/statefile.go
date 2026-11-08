@@ -1,5 +1,5 @@
-// Package statefile: small JSON state files shared by the server and the admin CLI (state.json, sessions.json,
-// tokens.json).
+// Package statefile reads and writes the small JSON state files shared by the server and the admin CLI
+// (state.json, sessions.json, tokens.json).
 //
 // Writes take an exclusive lock on <file>.lock, re-read, modify and atomically replace the file (mode 0600), so
 // the CLI and the running server never lose each other's changes. Readers reload when the file's mtime changes.
@@ -14,6 +14,7 @@ import (
 	"time"
 )
 
+// Data is a state file's top-level JSON object.
 type Data = map[string]any
 
 // Read returns the file's top-level object ({} when missing or invalid).
@@ -69,19 +70,23 @@ type Watched struct {
 	Version int
 }
 
+// NewWatched returns a cached view that checks the file at most once a second.
 func NewWatched(path string) *Watched { return NewWatchedEvery(path, time.Second) }
 
-// NewWatchedEvery: every=0 stats the file on every Get (used for API tokens, so a revoke applies at once).
+// NewWatchedEvery returns a cached view that checks the file at most every `every`; every=0 stats it on every
+// Get (used for API tokens, so a revoke applies at once).
 func NewWatchedEvery(path string, every time.Duration) *Watched {
 	return &Watched{Path: path, every: every, data: Data{}, mtime: -1}
 }
 
+// Get returns the cached data, reloading it if the file changed.
 func (w *Watched) Get() Data {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.getLocked(false)
 }
 
+// Refresh checks the file now (after this process wrote it).
 func (w *Watched) Refresh() Data {
 	w.mu.Lock()
 	defer w.mu.Unlock()
