@@ -1,7 +1,7 @@
 // Package powerctl decides which power actions a system offers (and why not) and carries them out.
 //
 // Routes, in order of preference:
-//   - hosts / Proxmox nodes with an agent that has --enable-power-control: shutdown / reboot (delayed, cancellable)
+//   - hosts / Proxmox nodes with an agent that has power_control enabled: shutdown / reboot (delayed, cancellable)
 //   - Proxmox nodes without one, when the cluster entry has `node_power: true`: POST /nodes/{node}/status
 //   - Proxmox guests, when the cluster entry has a power token: start / shutdown (ACPI) / reboot / stop (hard)
 //   - offline hosts with `wol:` configured: magic packet sent by a relay agent on the same LAN
@@ -178,9 +178,10 @@ func hostCaps(p *poller.Poller, s model.System, pve config.Proxmox, hasPVE bool,
 	case s.Kind == "node" && hasPVE && pve.NodePower:
 		via = "proxmox-api"
 	case hasAgent:
-		why = "power control is not enabled on " + agent.DisplayName() + "'s agent (owner opts in: --enable-power-control)"
+		why = "power control is not enabled on " + agent.DisplayName() + "'s agent (owner opts in: power_control: " +
+			"enabled: true in the agent's config.yaml, and power_control: true in the panel's agents: entry)"
 	case s.Kind == "node":
-		why = "no agent with --enable-power-control on this node and node_power is off for its cluster"
+		why = "no agent with power_control enabled on this node and node_power is off for its cluster"
 	default:
 		why = "power control is not enabled for this host"
 	}

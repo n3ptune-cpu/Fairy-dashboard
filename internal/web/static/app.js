@@ -473,7 +473,7 @@ async function loadProcesses(id) {
   try {
     const d = await api(`/api/systems/${enc(id)}/processes?limit=25&sort=${procSort}`);
     if (!$("#tab-body") || current().id !== id || current().tab !== "processes") return;
-    if (d.disabled_by_host) { body.innerHTML = '<div class="empty">Process view disabled by host.<br><span class="note">The machine owner turned it off on their agent (--no-processes).</span></div>'; return; }
+    if (d.disabled_by_host) { body.innerHTML = '<div class="empty">Process view disabled by host.<br><span class="note">The machine owner turned it off on their agent (processes: enabled: false in its config.yaml).</span></div>'; return; }
     morph(body, `<div class="toolbar">Sort by ${["cpu", "mem", "gpu"].map((k) => `<button class="btn ${k === procSort ? "on" : ""}" data-sort="${k}">${k.toUpperCase()}</button>`).join("")}
       <span class="push">${d.total_processes ?? "?"} processes · CPU % is per core · refreshes every 2 s</span></div>
       <div class="panel glass scroll"><table class="table"><thead><tr><th>PID</th><th>Name</th><th>User</th><th class="num">CPU %</th><th class="num">RSS</th><th class="num">GPU mem</th><th>Command line (redacted)</th></tr></thead>
