@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
@@ -24,6 +25,7 @@ import (
 
 type httpBackend struct {
 	p             *Poller
+	tokMu         sync.RWMutex // agentTokens / controlTokens change when hosts are added in the panel
 	pve           map[string]*http.Client
 	pveSecrets    map[string]string
 	powerSecrets  map[string]string
@@ -39,20 +41,8 @@ func newHTTPBackend(p *Poller) (*httpBackend, error) {
 		agents: devices.LANClient(0)} // never via a proxy; per-request timeouts via context
 	// Resolve every agent token at startup: a missing/short token is a config error.
 	for _, a := range cfg.Agents {
-		t, err := configutil.EnvSecret(a.TokenEnv, "agent "+a.ID, 24)
-		if err != nil {
+		if err := b.SetAgentTokens(a); err != nil {
 			return nil, err
-		}
-		b.agentTokens[a.ID] = t
-		if env := a.ControlEnv(); env != "" {
-			ct, err := configutil.EnvSecret(env, "agent "+a.ID+" control", 24)
-			if err != nil {
-				return nil, err
-			}
-			if ct == t {
-				return nil, fmt.Errorf("agent %s: control token must differ from the read token", a.ID)
-			}
-			b.controlTokens[a.ID] = ct
 		}
 	}
 	for _, c := range cfg.Proxmox { // one client per cluster: each has its own CA / verify setting and token
@@ -200,19 +190,73 @@ func (b *httpBackend) PVEPower(ctx context.Context, clusterID, path string, data
 	return nil, apierr.New(502, "proxmox: "+last)
 }
 
+// SetAgentTokens resolves an agent's tokens: from the environment (config.yaml's token_env /
+// control_token_env), or for a host added in the panel from its managed secrets.
+func (b *httpBackend) SetAgentTokens(a config.Agent) error {
+	var t, ct string
+	if a.Managed {
+		t, ct = a.Token, a.ControlToken
+		if len(t) < 24 || (ct != "" && len(ct) < 24) {
+			return fmt.Errorf("agent %s: managed tokens too short", a.ID)
+		}
+	} else {
+		var err error
+		if t, err = configutil.EnvSecret(a.TokenEnv, "agent "+a.ID, 24); err != nil {
+			return err
+		}
+		if env := a.ControlEnv(); env != "" {
+			if ct, err = configutil.EnvSecret(env, "agent "+a.ID+" control", 24); err != nil {
+				return err
+			}
+		}
+	}
+	if ct != "" && ct == t {
+		return fmt.Errorf("agent %s: control token must differ from the read token", a.ID)
+	}
+	b.tokMu.Lock()
+	defer b.tokMu.Unlock()
+	b.agentTokens[a.ID] = t
+	if ct != "" {
+		b.controlTokens[a.ID] = ct
+	} else {
+		delete(b.controlTokens, a.ID)
+	}
+	return nil
+}
+
+// ForgetAgent drops a removed agent's tokens.
+func (b *httpBackend) ForgetAgent(id string) {
+	b.tokMu.Lock()
+	defer b.tokMu.Unlock()
+	delete(b.agentTokens, id)
+	delete(b.controlTokens, id)
+}
+
+func (b *httpBackend) readToken(id string) string {
+	b.tokMu.RLock()
+	defer b.tokMu.RUnlock()
+	return b.agentTokens[id]
+}
+
+func (b *httpBackend) controlToken(id string) string {
+	b.tokMu.RLock()
+	defer b.tokMu.RUnlock()
+	return b.controlTokens[id]
+}
+
 func (b *httpBackend) agentURL(a config.Agent, path string) string {
 	return strings.TrimRight(a.URL, "/") + path
 }
 
 func (b *httpBackend) FetchAgentMetrics(ctx context.Context, a config.Agent, timeout time.Duration) (jsonx.M, error) {
-	d, _, err := getJSON(ctx, b.agents, b.agentURL(a, "/metrics"), map[string]string{"Authorization": "Bearer " + b.agentTokens[a.ID]}, timeout)
+	d, _, err := getJSON(ctx, b.agents, b.agentURL(a, "/metrics"), map[string]string{"Authorization": "Bearer " + b.readToken(a.ID)}, timeout)
 	return d, err
 }
 
 func (b *httpBackend) FetchProcesses(ctx context.Context, a config.Agent, sid string, limit int, sortBy string) (model.ProcessList, error) {
 	q := url.Values{"limit": {strconv.Itoa(limit)}, "sort": {sortBy}}
 	d, code, err := getJSON(ctx, b.agents, b.agentURL(a, "/processes?"+q.Encode()),
-		map[string]string{"Authorization": "Bearer " + b.agentTokens[a.ID]}, time.Duration((b.p.Cfg.RequestTimeout+2)*float64(time.Second)))
+		map[string]string{"Authorization": "Bearer " + b.readToken(a.ID)}, time.Duration((b.p.Cfg.RequestTimeout+2)*float64(time.Second)))
 	if code == 403 && jsonx.S(d, "code") == "processes_disabled" {
 		return model.ProcessList{SystemID: sid, DisabledByHost: true, Sort: sortBy, Processes: []model.Process{}}, nil
 	}
@@ -244,9 +288,9 @@ func DecodeProcessList(d jsonx.M, sid string) (model.ProcessList, error) {
 }
 
 func (b *httpBackend) AgentRequest(ctx context.Context, a config.Agent, method, path string, body any) (int, jsonx.M, error) {
-	tok := b.agentTokens[a.ID]
+	tok := b.readToken(a.ID)
 	if method == http.MethodPost {
-		tok = b.controlTokens[a.ID]
+		tok = b.controlToken(a.ID)
 	}
 	var rd io.Reader
 	if body != nil {

@@ -368,6 +368,24 @@ func (s *Scheduler) Add(j *Job) {
 	s.jobs[j.Key] = j
 }
 
+// Remove drops a job (a host removed in the panel); a run in flight finishes on its own.
+func (s *Scheduler) Remove(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.jobs, key)
+	s.order = slices.DeleteFunc(s.order, func(k string) bool { return k == key })
+	s.dirty = true
+}
+
+// Kick makes a job due now (a host just added: poll it on the next tick).
+func (s *Scheduler) Kick(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if j := s.jobs[key]; j != nil {
+		j.nextDue = 0
+	}
+}
+
 // Jobs returns the jobs in the order they were added.
 func (s *Scheduler) Jobs() []*Job {
 	s.mu.Lock()

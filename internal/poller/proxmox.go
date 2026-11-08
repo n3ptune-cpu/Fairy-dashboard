@@ -118,7 +118,7 @@ func (p *Poller) prepareProxmoxSystemLocked(pve config.Proxmox, s model.System, 
 		}
 	}
 	linked := false
-	for _, a := range p.Cfg.Agents {
+	for _, a := range p.Agents() {
 		if p.linkOfLocked(a) == s.ID {
 			linked = true
 		}

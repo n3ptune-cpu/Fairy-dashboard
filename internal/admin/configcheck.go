@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 )
 
 // secretEnv is an environment variable that must hold a secret, and what it is for.
@@ -85,6 +87,7 @@ func (c *cli) configCheck() int {
 		problems = append(problems, "oidc.allowed_groups is empty: any Pocket ID user of this client may sign in")
 	}
 	problems, notes = adminCheck(cfg, problems, notes)
+	problems, notes = managedCheck(cfg, problems, notes)
 	for _, e := range secretEnvs(cfg) {
 		if os.Getenv(e.env) != "" {
 			notes = append(notes, fmt.Sprintf("%s (%s): present", e.env, e.what))
@@ -107,6 +110,29 @@ func (c *cli) configCheck() int {
 		return 1
 	}
 	return 0
+}
+
+// managedCheck reports the hosts added in the panel (Add host): managed-hosts.yaml and their tokens in the data
+// folder, validated like config.yaml's own entries (a host with the same id in config.yaml wins).
+func managedCheck(cfg *config.Panel, problems, notes []string) ([]string, []string) {
+	st := managed.NewStore(cfg.DataDir)
+	c := *cfg
+	c.Agents, c.Systems = slices.Clone(cfg.Agents), slices.Clone(cfg.Systems)
+	added, skipped, err := st.Merge(&c)
+	if err != nil {
+		return append(problems, "hosts added in the panel: "+err.Error()), notes
+	}
+	for _, e := range added {
+		where := e.Agent.URL
+		if e.Host.Node != "" {
+			where += ", on node " + e.Host.Node
+		}
+		notes = append(notes, fmt.Sprintf("managed host %s (%s): valid, tokens present  (%s)", e.Host.ID, e.Host.Name, where))
+	}
+	if len(added) == 0 && len(skipped) == 0 {
+		notes = append(notes, "managed hosts (Add host): none ("+st.Path()+")")
+	}
+	return append(problems, skipped...), notes
 }
 
 // adminCheck reports who can administer the panel. Roles live in users.json (Users page / `fairy admin users`);

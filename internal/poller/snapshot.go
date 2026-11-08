@@ -137,7 +137,7 @@ func (p *Poller) buildSnapshot() []model.System {
 		systems[k] = v
 	}
 	// An agent running ON a Proxmox node (links_to node-…) enriches that node instead of being a second host.
-	for _, a := range p.Cfg.Agents {
+	for _, a := range p.Agents() {
 		node, okN := systems[p.linkOfLocked(a)]
 		agent, okA := systems[a.ID]
 		if !okN || !okA || node.Kind != "node" {

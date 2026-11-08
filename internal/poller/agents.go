@@ -16,13 +16,15 @@ import (
 
 // AgentByID returns the configured agent with this id.
 func (p *Poller) AgentByID(id string) (config.Agent, bool) {
+	p.cfgMu.RLock()
+	defer p.cfgMu.RUnlock()
 	a, ok := p.agents[id]
 	return a, ok
 }
 
 // RelaySystem returns the system an agent reports as (itself, or the node it enriches).
 func (p *Poller) RelaySystem(agentID string) *model.System {
-	a, ok := p.agents[agentID]
+	a, ok := p.AgentByID(agentID)
 	if !ok {
 		return nil
 	}
@@ -178,10 +180,10 @@ func (p *Poller) AgentRequest(ctx context.Context, a config.Agent, method, path 
 
 // AgentFor returns the agent reporting for a system id (itself or linked).
 func (p *Poller) AgentFor(id string) (config.Agent, bool) {
-	if a, ok := p.agents[id]; ok {
+	if a, ok := p.AgentByID(id); ok {
 		return a, true
 	}
-	for _, a := range p.Cfg.Agents {
+	for _, a := range p.Agents() {
 		if p.linkOfLocked(a) == id {
 			return a, true
 		}

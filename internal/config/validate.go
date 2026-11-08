@@ -48,6 +48,9 @@ func (c *Panel) Validate() error {
 			errs.add("updates: %q is not a GitHub repository name like %s (not a URL)", r, release.AgentRepo)
 		}
 	}
+	if a := c.Enroll.PanelAddress; a != "" && (net.ParseIP(a) == nil || net.ParseIP(a).To4() == nil) {
+		errs.add("enroll.panel_address must be the panel's Tailscale IPv4 address, e.g. 100.88.109.47")
+	}
 	for _, h := range c.PanelHosts {
 		if !configutil.ValidID(h) {
 			errs.add("panel_hosts: invalid id %q", h)

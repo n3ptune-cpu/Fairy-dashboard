@@ -8,6 +8,7 @@ package poller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"hash/fnv"
 	"math"
 	"net/url"
@@ -49,7 +50,10 @@ type Poller struct {
 	Scheduler *scheduler.Scheduler
 	StartedAt time.Time
 
-	rates     *normalise.RateTracker
+	rates *normalise.RateTracker
+	// cfgMu guards agents, overrides and the Cfg.Agents / Cfg.Systems slices, which hosts added or removed in
+	// the panel (Add host) change at run time. The slices are replaced, never changed in place.
+	cfgMu     sync.RWMutex
 	overrides map[string]*config.SystemOverride
 	agents    map[string]config.Agent
 	clusters  map[string]config.Proxmox
@@ -145,15 +149,7 @@ func (p *Poller) buildJobs() {
 			}})
 	}
 	for _, a := range cfg.Agents {
-		a := a
-		sch.Add(&scheduler.Job{Key: "agent:" + a.ID, DefaultS: iv.Agent, TimeoutCap: tc,
-			Fn: func(ctx context.Context, t time.Duration) float64 { return p.pollAgent(ctx, a, t) },
-			Systems: func() []string {
-				if l := p.LinkOf(a); l != "" {
-					return []string{l}
-				}
-				return []string{a.ID}
-			}})
+		sch.Add(p.agentJob(a))
 	}
 	for _, r := range p.Power.Runners { // phase 1: `agent` power sources read the latest agent metrics
 		r := r
@@ -174,6 +170,18 @@ func (p *Poller) buildJobs() {
 	}
 	sch.Add(&scheduler.Job{Key: "history", DefaultS: iv.History, Phase: 2,
 		Fn: func(context.Context, time.Duration) float64 { p.Power.SampleHistory(); p.UPS.SampleHistory(); return 0 }})
+}
+
+// agentJob polls one agent.
+func (p *Poller) agentJob(a config.Agent) *scheduler.Job {
+	return &scheduler.Job{Key: "agent:" + a.ID, DefaultS: p.Cfg.Intervals.Agent, TimeoutCap: p.Cfg.RequestTimeout,
+		Fn: func(ctx context.Context, t time.Duration) float64 { return p.pollAgent(ctx, a, t) },
+		Systems: func() []string {
+			if l := p.LinkOf(a); l != "" {
+				return []string{l}
+			}
+			return []string{a.ID}
+		}}
 }
 
 func (p *Poller) now() (time.Time, float64) {
@@ -245,7 +253,94 @@ func (p *Poller) PVERef(id string) (cluster, node, kind string, vmid *int, ok bo
 }
 
 // Override returns the `systems:` entry for a system id, or nil.
-func (p *Poller) Override(id string) *config.SystemOverride { return p.overrides[id] }
+func (p *Poller) Override(id string) *config.SystemOverride {
+	p.cfgMu.RLock()
+	defer p.cfgMu.RUnlock()
+	return p.overrides[id]
+}
+
+// Agents is every configured agent: config.yaml's, then the ones added in the panel. Do not modify it.
+func (p *Poller) Agents() []config.Agent {
+	p.cfgMu.RLock()
+	defer p.cfgMu.RUnlock()
+	return p.Cfg.Agents
+}
+
+// SystemsConfig is every systems: entry (config.yaml's and the ones of hosts added in the panel). Do not modify it.
+func (p *Poller) SystemsConfig() []config.SystemOverride {
+	p.cfgMu.RLock()
+	defer p.cfgMu.RUnlock()
+	return p.Cfg.Systems
+}
+
+// TokenSetter is a Backend that learns tokens of agents added at run time (the real HTTP backend).
+type TokenSetter interface {
+	SetAgentTokens(a config.Agent) error
+	ForgetAgent(id string)
+}
+
+// AddAgent starts polling an agent added in the panel (Add host), with its Wake-on-LAN systems: entry if any,
+// without a restart. The caller has validated it (managed.Check).
+func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
+	p.cfgMu.Lock()
+	if _, dup := p.agents[a.ID]; dup {
+		p.cfgMu.Unlock()
+		return fmt.Errorf("agent %s is already configured", a.ID)
+	}
+	if ts, ok := p.Backend.(TokenSetter); ok {
+		if err := ts.SetAgentTokens(a); err != nil {
+			p.cfgMu.Unlock()
+			return err
+		}
+	}
+	p.agents[a.ID] = a
+	p.Cfg.Agents = append(slices.Clone(p.Cfg.Agents), a)
+	if o != nil {
+		oo := *o
+		p.Cfg.Systems = append(slices.Clone(p.Cfg.Systems), oo)
+		p.overrides[oo.ID] = &oo
+	}
+	p.cfgMu.Unlock()
+	p.Scheduler.Add(p.agentJob(a))
+	p.Scheduler.Kick("agent:" + a.ID)
+	return nil
+}
+
+// RemoveAgent stops polling an agent added in the panel and forgets what it reported.
+func (p *Poller) RemoveAgent(id string) {
+	p.cfgMu.Lock()
+	a, ok := p.agents[id]
+	delete(p.agents, id)
+	p.Cfg.Agents = slices.DeleteFunc(slices.Clone(p.Cfg.Agents), func(x config.Agent) bool { return x.ID == id })
+	shown := id
+	if ok {
+		if l := p.linkOfLocked(a); l != "" {
+			shown = l
+		}
+	}
+	if o := p.overrides[shown]; o != nil && ok && a.Managed {
+		delete(p.overrides, shown)
+		p.Cfg.Systems = slices.DeleteFunc(slices.Clone(p.Cfg.Systems), func(x config.SystemOverride) bool { return x.ID == shown })
+	}
+	p.cfgMu.Unlock()
+	p.Scheduler.Remove("agent:" + id)
+	if ts, ok := p.Backend.(TokenSetter); ok {
+		ts.ForgetAgent(id)
+	}
+	p.mu.Lock()
+	delete(p.systems, id)
+	delete(p.agentInfo, id)
+	delete(p.agentFailures, id)
+	delete(p.agentPower, id)
+	delete(p.sources, "agent:"+id)
+	p.sourceOrder = slices.DeleteFunc(p.sourceOrder, func(x string) bool { return x == "agent:"+id })
+	p.syncPresent()
+	p.snapVer, p.snapJSONVer = -1, -1
+	p.version++
+	p.mu.Unlock()
+	p.Power.UpdateRemote(id, nil, false, nil, nil)
+	p.UPS.UpdateFromAgent(id, nil, false, nil, nil)
+}
 
 // Bump records that the poller's data changed, so the cached snapshots are rebuilt on the next read.
 func (p *Poller) Bump() {

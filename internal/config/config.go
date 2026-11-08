@@ -159,10 +159,10 @@ func (a Agent) DisplayName() string {
 type Wol struct {
 	MAC         string   `yaml:"mac"`
 	MACs        []string `yaml:"macs"`
-	Relay       string `yaml:"relay"`
-	Broadcast   string `yaml:"broadcast"`
-	Port        int    `yaml:"port"`
-	PasswordEnv string `yaml:"password_env"`
+	Relay       string   `yaml:"relay"`
+	Broadcast   string   `yaml:"broadcast"`
+	Port        int      `yaml:"port"`
+	PasswordEnv string   `yaml:"password_env"`
 }
 
 // AllMACs is mac followed by macs, without duplicates (compared case-insensitively, - and : alike).
@@ -207,6 +207,14 @@ type Updates struct {
 // Check reports whether the latest agent release is looked up on GitHub.
 func (u Updates) Check() bool { return u.CheckLatest == nil || *u.CheckLatest }
 
+// Enroll is the `enroll:` block (Add host).
+type Enroll struct {
+	// PanelAddress is the panel's Tailscale IPv4 address as the agents see it: the install command passes it to
+	// the agent, which then answers pairing only from there. Default: the only 100.64.0.0/10 address of this
+	// machine.
+	PanelAddress string `yaml:"panel_address"`
+}
+
 // Intervals are the default polling intervals in seconds (each 1-300).
 type Intervals struct {
 	Agent   float64 `yaml:"agent"`
@@ -246,6 +254,7 @@ type Panel struct {
 	LoginRatePerMin    int              `yaml:"login_rate_per_min"`
 	Branding           Branding         `yaml:"branding"`
 	Updates            Updates          `yaml:"updates"`
+	Enroll             Enroll           `yaml:"enroll"`
 
 	trusted []netip.Prefix
 }

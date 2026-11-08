@@ -226,3 +226,50 @@ func TestPVEPowerErrorStatus(t *testing.T) {
 		}
 	}
 }
+
+// Hosts added in the panel (Add host) are polled at once with their own tokens and forgotten when removed,
+// without a restart; the real HTTP backend sends exactly their tokens.
+func TestAddAndRemoveAgentAtRunTime(t *testing.T) {
+	var auth atomic.Value
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth.Store(r.Header.Get("Authorization"))
+		_ = json.NewEncoder(w).Encode(testutil.AgentMetrics())
+	}))
+	defer agent.Close()
+	cfg := testutil.Config(t, []string{deadURL(t)}, deadURL(t), deadURL(t))
+	p, err := New(cfg, config.Secrets{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	p.PollOnce(ctx)
+	a := config.Agent{ID: "nsx-furina", Name: "NSX-FURINA", URL: agent.URL, Managed: true,
+		Token: "managed-read-token-xxxxxxxxxxxxxxxx", ControlToken: "managed-control-token-yyyyyyyyyyyy", PowerControl: true}
+	o := &config.SystemOverride{ID: "nsx-furina", Wol: &config.Wol{MACs: []string{"aa:bb:cc:dd:ee:ff"}, Relay: "laptop"}}
+	if err := p.AddAgent(a, o); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.AddAgent(a, nil); err == nil {
+		t.Fatal("duplicate accepted")
+	}
+	p.PollOnce(ctx)
+	if s, ok := snap(p)["nsx-furina"]; !ok || s.Status != "online" {
+		t.Fatalf("managed agent not polled: %+v", s)
+	}
+	if auth.Load() != "Bearer managed-read-token-xxxxxxxxxxxxxxxx" {
+		t.Fatal("wrong token sent")
+	}
+	if got, ok := p.AgentByID("nsx-furina"); !ok || !got.Managed || p.Override("nsx-furina") == nil {
+		t.Fatal("agent / override not registered")
+	}
+	p.RemoveAgent("nsx-furina")
+	p.PollOnce(ctx)
+	if _, ok := snap(p)["nsx-furina"]; ok || p.Override("nsx-furina") != nil {
+		t.Fatal("removed agent still shown")
+	}
+	for _, x := range p.Agents() {
+		if x.ID == "nsx-furina" {
+			t.Fatal("still in Agents()")
+		}
+	}
+}
