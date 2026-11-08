@@ -21,6 +21,7 @@ import (
 func TestAddHostPairsAndPolls(t *testing.T) {
 	e := setup(t)
 	e.s.Enroll.Interval = 20 * time.Millisecond
+	e.s.control = newRateLimiter(100)
 	e.s.Enroll.PanelAddr = "100.88.109.47"
 	var proofSeen atomic.Value
 	attempts := atomic.Int32{}
@@ -98,13 +99,20 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	if r := e.do("DELETE", "/api/admin/hosts/laptop", nil, append([]string{"Cookie", c}, csrf...)...); r.code != 404 {
 		t.Fatal("remove config host", r.code)
 	}
-	if r := e.do("POST", "/api/admin/hosts/nsx-furina/repair", map[string]any{}, append([]string{"Cookie", c}, csrf...)...); r.code != 201 ||
+	// Re-pair and Remove need the host's name typed (checked by the panel)
+	if r := e.do("POST", "/api/admin/hosts/nsx-furina/repair", map[string]any{}, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
+		t.Fatal("repair without the typed name", r.code)
+	}
+	if r := e.do("DELETE", "/api/admin/hosts/nsx-furina", map[string]any{"confirm": "nsx-fontaine"}, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
+		t.Fatal("remove with a wrong name", r.code)
+	}
+	if r := e.do("POST", "/api/admin/hosts/nsx-furina/repair", map[string]any{"confirm": "nsx-furina"}, append([]string{"Cookie", c}, csrf...)...); r.code != 201 ||
 		!strings.Contains(r.body["command"].(string), "-Join ") || r.body["code"] == code {
 		t.Fatal("repair", r.code, string(r.raw))
 	} else if !e.s.Enroll.Cancel(r.body["id"].(string)) {
 		t.Fatal("cancel")
 	}
-	if r := e.do("DELETE", "/api/admin/hosts/nsx-furina", nil, append([]string{"Cookie", c}, csrf...)...); r.code != 200 {
+	if r := e.do("DELETE", "/api/admin/hosts/nsx-furina", map[string]any{"confirm": " NSX-FURINA "}, append([]string{"Cookie", c}, csrf...)...); r.code != 200 {
 		t.Fatal("remove", r.code, string(r.raw))
 	}
 	e.s.Poller.PollOnce(context.Background())
@@ -114,9 +122,9 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.s.Cfg.DataDir, "secrets", "agent-nsx-furina.json")); !os.IsNotExist(err) {
 		t.Fatal("tokens kept after Remove", err)
 	}
-	for _, want := range []string{"host.add join code made", "host.pair online", "host.remove ok"} {
+	for _, want := range []string{"host.add join code made", "host.pair online", "host.remove refused: 400: type the host", "host.repair refused", "host.remove ok"} {
 		if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), want) {
-			t.Errorf("audit lacks %q", want)
+			t.Errorf("audit lacks %q in %s", want, auditOutcomes(e.s.Cfg.AuditLog))
 		}
 	}
 	n := e.do("GET", "/api/notifications?type=enroll", nil, "Cookie", c)

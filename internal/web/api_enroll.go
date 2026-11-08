@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
@@ -211,6 +212,10 @@ func (s *Server) hostRepair(c *reqCtx) error {
 	if !ok {
 		return apierr.New(404, "only hosts added with Add host can be re-paired here")
 	}
+	if err := c.typedName(h.Name, "re-pair"); err != nil {
+		c.audit(u, "host.repair", h.ID, nil, "refused: "+err.Error())
+		return err
+	}
 	cr, err := s.Enroll.Create(enrollment.Request{}, &h, actorOf(u), s.nodeSystemID)
 	if err != nil {
 		c.audit(u, "host.repair", id, nil, "refused: "+err.Error())
@@ -249,6 +254,10 @@ func (s *Server) hostRemove(c *reqCtx) error {
 	h, ok := s.managedHost(id)
 	if !ok {
 		return apierr.New(404, "only hosts added with Add host can be removed here (others: edit config.yaml)")
+	}
+	if err := c.typedName(h.Name, "remove"); err != nil {
+		c.audit(u, "host.remove", h.ID, nil, "refused: "+err.Error())
+		return err
 	}
 	if err := s.Managed.Remove(h.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
@@ -300,5 +309,20 @@ func (s *Server) enrollmentCancel(c *reqCtx) error {
 	}
 	c.audit(u, "host.cancel", c.r.PathValue("id"), nil, "ok")
 	c.json(200, map[string]any{"ok": true, "message": "cancelled"})
+	return nil
+}
+
+// typedName enforces the typed confirmation of Re-pair and Remove: the body is {"confirm": "<the host's name>"}
+// (case-insensitive), like a shutdown.
+func (c *reqCtx) typedName(name, what string) error {
+	var b struct {
+		Confirm string `json:"confirm"`
+	}
+	if err := c.decodeBody(&b); err != nil {
+		return apierr.New(400, fmt.Sprintf("type the host's name (%s) to confirm %s", name, what))
+	}
+	if !strings.EqualFold(strings.TrimSpace(b.Confirm), strings.TrimSpace(name)) {
+		return apierr.New(400, fmt.Sprintf("type the host's name (%s) to confirm %s", name, what))
+	}
 	return nil
 }
