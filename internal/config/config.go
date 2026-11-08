@@ -188,6 +188,8 @@ type Panel struct {
 	PowerHistoryS      int              `yaml:"power_history_s"`
 	DataDir            string           `yaml:"data_dir"`
 	AuditLog           string           `yaml:"audit_log"`
+	AuditMaxMB         int              `yaml:"audit_max_mb"` // rotate audit_log at this size (default 100; -1 = never)
+	AuditKeep          int              `yaml:"audit_keep"`   // rotated files kept (default 5)
 	ControlRatePerMin  int              `yaml:"control_rate_per_min"`
 	PanelHosts         []string         `yaml:"panel_hosts"`
 	TrustedProxies     []string         `yaml:"trusted_proxies"`
@@ -221,6 +223,14 @@ func (l *ProxmoxList) UnmarshalYAML(n *yaml.Node) error {
 	}
 	*l = list
 	return nil
+}
+
+// AuditRotation is the audit log's rotation size in bytes (0 = off) and the number of old files to keep.
+func (c *Panel) AuditRotation() (int64, int) {
+	if c.AuditMaxMB < 0 {
+		return 0, c.AuditKeep
+	}
+	return int64(c.AuditMaxMB) << 20, c.AuditKeep
 }
 
 // BaseURL is public_url without a trailing slash.

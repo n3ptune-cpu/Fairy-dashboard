@@ -65,6 +65,10 @@ no capabilities needed: the panel never runs local power or IPMI commands).
 * Writes: admin role (or control-scope token), CSRF header `X-Requested-With: fairy` + Origin /
   Sec-Fetch-Site checks for browsers, kill switch, per-host power flags, rate limits, typed confirmation for
   destructive power actions, append-only JSON-lines audit log (+ Audit page), optional ntfy/Discord notification.
+  The audit log is bounded: lines are capped at 8 KiB, the file rotates by size (`audit_max_mb`, `audit_keep`;
+  the Audit page shows the current file), and entries anyone can cause without signing in (rejected API tokens,
+  failed or rate-limited sign-ins) are limited to 10 per client IP per minute and 300 in all, the rest summed
+  up in one `audit.suppressed` entry a minute. An audit write failure never blocks a sign-in but is logged loudly.
   Changes to users and sites: admin browser session only, CSRF checks, step-up (same window), audited + notified;
   the kill switch does not block them.
 * `trusted_proxies` is used only to find the client IP for rate limits and the audit log.

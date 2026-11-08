@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/n3ptune-cpu/Fairy/internal/audit"
 	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/demo"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
@@ -61,6 +62,7 @@ func serve(args []string) int {
 	if p == nil {
 		return code
 	}
+	audit.SetRotation(p.cfg.AuditRotation())
 	if !ensureAuditLog(p.cfg.AuditLog) || !checkStateFiles(p.cfg.DataDir) {
 		return 1
 	}

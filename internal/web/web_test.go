@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy/internal/audit"
 	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/poller"
@@ -448,5 +449,41 @@ func TestCorruptUsersFileFailsClosed(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(e.s.Access.Path); string(b) != string(garbage) {
 		t.Fatal("corrupt users.json was rewritten", string(b))
+	}
+}
+
+// Anyone can send a bogus Bearer token: those audit entries are throttled per client IP and summed up, so an
+// anonymous flood cannot fill the disk with the audit log.
+func TestAnonymousAuditEntriesAreThrottled(t *testing.T) {
+	e := setup(t)
+	for i := 0; i < 200; i++ {
+		if r := e.do("GET", "/api/me", nil, "Authorization", "Bearer fy_bogus"); r.code != 401 {
+			t.Fatal(r.code)
+		}
+	}
+	count := func(action string) int {
+		return strings.Count(auditOutcomes(e.s.Cfg.AuditLog), action+" ")
+	}
+	if n := count("auth.token_rejected"); n != anonPerIP {
+		t.Fatal("rejected-token entries written", n)
+	}
+	e.s.anonAudit.mu.Lock()
+	e.s.anonAudit.window = e.s.anonAudit.window.Add(-61 * time.Second) // a minute later
+	e.s.anonAudit.mu.Unlock()
+	e.do("GET", "/api/me", nil, "Authorization", "Bearer fy_bogus")
+	entries, _ := audit.Read(e.s.Cfg.AuditLog, "", "audit.suppressed", "", nil, 10)
+	if len(entries) != 1 || entries[0]["params"].(map[string]any)["dropped"] != 190.0 {
+		t.Fatal("summary entry", entries)
+	}
+	if n := count("auth.token_rejected"); n != anonPerIP+1 {
+		t.Fatal("next minute logs again", n)
+	}
+	// signed-in actions are never throttled
+	c := e.cookie(controller(), 0)
+	for i := 0; i < 30; i++ {
+		e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, "Cookie", c)
+	}
+	if n := count("auth.denied"); n != 30 {
+		t.Fatal("authenticated entries", n)
 	}
 }

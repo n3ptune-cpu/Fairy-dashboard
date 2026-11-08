@@ -67,6 +67,11 @@ type Server struct {
 	demoAuthTime time.Time
 	demoView     *access.Grant // demo preview as another role (--demo-as or the switcher); nil = admin
 
+	anonAudit  *auditThrottle // unauthenticated audit entries, per client IP
+	auditErrMu sync.Mutex
+	auditErrAt time.Time
+	auditLost  int
+
 	control, pollCtl, login, adminRL *rateLimiter
 	mux                              *http.ServeMux
 }
@@ -79,7 +84,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 		codec:    newCodec(secrets.SessionSecret, cfg.SessionMaxAge, !secrets.InsecureCookies),
 		DemoUser: demoUser, demoAuthTime: time.Now().Add(-time.Hour), // first control action shows step-up
 		control: newRateLimiter(cfg.ControlRatePerMin), pollCtl: newRateLimiter(cfg.ControlRatePerMin * 2),
-		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60)}
+		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60), anonAudit: newAuditThrottle()}
 	s.oidc = newOIDC(cfg, secrets)
 	if err := s.Access.EnsureSites(cfg.Sites()); err != nil { // sites named in config.yaml exist on the Users page
 		slog.Error("users.json write failed", "error", err)
@@ -226,6 +231,18 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(sctx)
+	}()
+	go func() { // write the throttled-entries summary even when the flood stops
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				s.auditSuppressed(s.anonAudit.flush(now))
+			}
+		}
 	}()
 	err := srv.Serve(ln)
 	if errors.Is(err, http.ErrServerClosed) {

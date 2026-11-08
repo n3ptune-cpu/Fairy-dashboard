@@ -59,3 +59,41 @@ func TestAppendOnlyReverseReaderFiltersAndCursor(t *testing.T) {
 		t.Fatal("missing file")
 	}
 }
+
+// A flood of entries cannot fill the disk: lines are capped and the file rotates by size, keeping K old files.
+func TestLinesAreCappedAndTheFileRotates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	SetRotation(32<<10, 2)
+	defer SetRotation(DefaultMaxBytes, DefaultKeep)
+	huge := strings.Repeat("A", 16<<10)
+	ip := "203.0.113.9"
+	for i := 0; i < 200; i++ {
+		if _, err := Write(path, Entry{Actor: huge, Action: "auth.token_rejected", Target: huge, Outcome: huge,
+			Params: map[string]any{"x": huge}, IP: &ip}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var total int64
+	for _, p := range []string{path, path + ".1", path + ".2"} {
+		st, err := os.Stat(p)
+		if err != nil {
+			t.Fatal("rotated file missing", p, err)
+		}
+		if st.Size() > 32<<10 {
+			t.Fatal("file over the limit", p, st.Size())
+		}
+		total += st.Size()
+	}
+	if _, err := os.Stat(path + ".3"); err == nil {
+		t.Fatal("kept more than 2 old files")
+	}
+	entries, _ := Read(path, "", "", "", nil, 1000)
+	if len(entries) == 0 {
+		t.Fatal("no entries")
+	}
+	for _, e := range entries {
+		if len(e["actor"].(string)) > 600 || e["params"].(map[string]any)["_truncated"] == nil {
+			t.Fatal("line not capped", len(e["actor"].(string)))
+		}
+	}
+}

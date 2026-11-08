@@ -81,6 +81,8 @@ func (c *Panel) applyDefaults() {
 	defi(&c.ControlRatePerMin, 6)
 	defi(&c.StepUpWindowS, 300)
 	defi(&c.LoginRatePerMin, 20)
+	defi(&c.AuditMaxMB, 100)
+	defi(&c.AuditKeep, 5)
 	if c.DataDir == "" {
 		if runtime.GOOS == "windows" {
 			c.DataDir = `C:\ProgramData\Fairy\data`
@@ -126,6 +128,9 @@ func (c *Panel) validateGeneral(errs *problems) {
 	}
 	if c.StepUpWindowS < 30 || c.StepUpWindowS > 86400 {
 		errs.add("step_up_window_s must be 30-86400")
+	}
+	if c.AuditMaxMB < -1 || c.AuditKeep < 1 || c.AuditKeep > 100 {
+		errs.add("audit_max_mb must be -1 (no rotation) or a size in MiB, audit_keep 1-100")
 	}
 }
 

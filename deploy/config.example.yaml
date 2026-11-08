@@ -9,7 +9,9 @@ step_up_prompt_login: true                # also send prompt=login on step-up (m
                                           # Pocket ID must put auth_time in the ID token, or step-up fails.
 enable_docs: false                        # /docs + /api/openapi.json (login required)
 data_dir: /var/lib/fairy                  # state.json, sessions.json, tokens.json, users.json, settings, uploads, health.json
-audit_log: /var/lib/fairy/audit.log       # append-only JSON lines
+audit_log: /var/lib/fairy/audit.log       # append-only JSON lines (each line at most 8 KiB)
+audit_max_mb: 100                         # rotate audit.log -> audit.log.1 ... at this size; -1 = never (use logrotate)
+audit_keep: 5                             # rotated files kept (the oldest is deleted)
 control_rate_per_min: 6
 login_rate_per_min: 20
 trusted_proxies: ["127.0.0.1/32", "::1/128"]  # X-Forwarded-For is believed only from these (rate limits + audit IPs)

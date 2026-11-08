@@ -2,7 +2,11 @@
 // reader for the UI.
 //
 // Entry: {ts, actor, sub, action, target, params, outcome, source, ip}. `source` is "ui" (browser session),
-// "token:<name>" (API token), "cli" (admin CLI, actor = local OS user) or "demo". Nothing deletes entries.
+// "token:<name>" (API token), "cli" (admin CLI, actor = local OS user) or "demo". Nothing edits entries.
+//
+// Size limits: a line is at most MaxLine bytes (long fields are cut, oversized params replaced by a note), and
+// the file is rotated by size (audit.log -> audit.log.1 ... audit.log.<keep>, the oldest dropped) so a flood of
+// entries cannot fill the disk. SetRotation(0, 0) turns rotation off (e.g. when logrotate handles the file).
 package audit
 
 import (
@@ -10,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +25,80 @@ import (
 var mu sync.Mutex
 
 const block = 64 * 1024
+
+// MaxLine is the largest audit line written (bytes); maxField caps actor, target, outcome and the like.
+const (
+	MaxLine  = 8 << 10
+	maxField = 512
+)
+
+// Rotation defaults: rotate at 100 MiB, keep 5 old files.
+const (
+	DefaultMaxBytes = 100 << 20
+	DefaultKeep     = 5
+)
+
+var rotMaxBytes, rotKeep int64 = DefaultMaxBytes, DefaultKeep
+
+// SetRotation sets size-based rotation: rotate when the file would exceed maxBytes, keep `keep` old files.
+// maxBytes <= 0 turns rotation off.
+func SetRotation(maxBytes int64, keep int) {
+	mu.Lock()
+	defer mu.Unlock()
+	rotMaxBytes, rotKeep = maxBytes, int64(max(keep, 1))
+}
+
+func cut(s string) string {
+	if len(s) <= maxField {
+		return s
+	}
+	return strings.ToValidUTF8(s[:maxField], "") + "…"
+}
+
+// bounded caps the entry's fields so its JSON line stays under MaxLine.
+func bounded(e Entry) ([]byte, error) {
+	e.Actor, e.Action, e.Target, e.Outcome, e.Source = cut(e.Actor), cut(e.Action), cut(e.Target), cut(e.Outcome), cut(e.Source)
+	if e.Sub != nil {
+		s := cut(*e.Sub)
+		e.Sub = &s
+	}
+	if e.IP != nil {
+		s := cut(*e.IP)
+		e.IP = &s
+	}
+	b, err := json.Marshal(e)
+	if err != nil || len(b) < MaxLine {
+		return b, err
+	}
+	e.Params = map[string]any{"_truncated": fmt.Sprintf("params were %d bytes", len(b))}
+	return json.Marshal(e)
+}
+
+// rotateLocked renames path to path.1 (path.1 to path.2, ...) when appending n bytes would pass the limit.
+// A lock file serialises rotation between the server and the CLI.
+func rotateLocked(path string, n int) error {
+	if rotMaxBytes <= 0 {
+		return nil
+	}
+	if st, err := os.Stat(path); err != nil || st.Size()+int64(n) <= rotMaxBytes {
+		return nil
+	}
+	lf, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lf.Close()
+	unlock := lockFile(lf)
+	defer unlock()
+	if st, err := os.Stat(path); err != nil || st.Size()+int64(n) <= rotMaxBytes { // the other process did it
+		return nil
+	}
+	_ = os.Remove(fmt.Sprintf("%s.%d", path, rotKeep))
+	for i := rotKeep - 1; i >= 1; i-- {
+		_ = os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
+	}
+	return os.Rename(path, path+".1")
+}
 
 // Entry is one audit-log line. Write fills in TS and defaults Params, Outcome ("ok") and Source ("ui").
 type Entry struct {
@@ -47,7 +126,7 @@ func Write(path string, e Entry) (Entry, error) {
 	if e.Source == "" {
 		e.Source = "ui"
 	}
-	b, err := json.Marshal(e)
+	b, err := bounded(e)
 	if err != nil {
 		return e, err
 	}
@@ -56,6 +135,9 @@ func Write(path string, e Entry) (Entry, error) {
 	defer mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return e, err
+	}
+	if err := rotateLocked(path, len(b)); err != nil { // keep appending: losing entries is worse than a big file
+		slog.Error("audit log rotation failed; still appending to the current file", "path", path, "error", err)
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {

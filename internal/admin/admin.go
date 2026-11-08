@@ -62,6 +62,7 @@ func (c *cli) load() error {
 		return err
 	}
 	c.cfg = cfg
+	audit.SetRotation(cfg.AuditRotation())
 	if c.readOnly {
 		return nil
 	}
