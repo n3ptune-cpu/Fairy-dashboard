@@ -132,8 +132,10 @@ func agentMetrics(id string) (map[string]any, error) {
 			"memory":   map[string]any{"total": int64(32 * GiB), "used": int64(wave(250, 11, 22, 0) * GiB)},
 			"disks":    []any{map[string]any{"mount": `C:\`, "fstype": "NTFS", "total": int64(2000 * GiB), "used": int64(1220 * GiB)}},
 			"net":      map[string]any{"bytes_recv": counter(id+"/rx", 8e9, wave(35, 5e4, 6e6, 0)), "bytes_sent": counter(id+"/tx", 1e9, wave(35, 2e4, 9e5, 0))},
-			// Ryzen + Radeon on Windows: no ACPI thermal zone, and fairy-agent reads NVIDIA GPUs only
-			"temps": []any{}, "gpus": []any{},
+			// Ryzen + Radeon on Windows: no ACPI thermal zone; the Radeon from Windows' own GPU counters (no °C / W)
+			"temps": []any{}, "gpus": []any{map[string]any{"name": "AMD Radeon RX 5600 XT", "vendor": "amd", "source": "windows",
+				"util_percent": r1(wave(40, 2, 68, 1)), "vram_used": int64(wave(60, 0.9, 4.2, 0) * GiB), "vram_total": int64(6 * GiB),
+				"temp_c": nil, "power_w": nil}},
 			"power_sources": []any{map[string]any{"id": "desk-plug", "name": "Straw's Tuya desk plug", "type": "tuya", "ok": true,
 				"watts": r1(wave(45, 95, 420, 0)), "voltage": 229.8, "current": nil, "energy_kwh_total": nil,
 				"system_hint": "self", "error": nil}}})

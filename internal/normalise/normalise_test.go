@@ -130,8 +130,9 @@ func TestNormaliseAgentAndOverride(t *testing.T) {
 		"cpu": jsonx.M{"percent": 12.5, "logical": 8.0}, "memory": jsonx.M{"total": float64(16 << 30), "used": float64(6 << 30)},
 		"disks": []any{jsonx.M{"mount": "/", "fstype": "ext4", "total": float64(500 << 30), "used": float64(100 << 30)},
 			jsonx.M{"mount": "/home", "total": float64(1000 << 30), "used": float64(300 << 30)}},
-		"temps":         []any{jsonx.M{"sensor": "coretemp", "label": "Package id 0", "current": 55.0}, jsonx.M{"sensor": "x"}},
-		"gpus":          []any{jsonx.M{"name": "", "vendor": "weird"}},
+		"temps": []any{jsonx.M{"sensor": "coretemp", "label": "Package id 0", "current": 55.0}, jsonx.M{"sensor": "x"}},
+		"gpus": []any{jsonx.M{"name": "", "vendor": "weird", "source": "elsewhere"},
+			jsonx.M{"name": "AMD Radeon RX 5600 XT", "vendor": "amd", "source": "windows", "util_percent": 12.0}},
 		"fans":          []any{jsonx.M{"name": "fan1", "rpm": 2400.0}, jsonx.M{"name": "bad", "rpm": true}},
 		"power_control": jsonx.M{"pending": jsonx.M{"action": "shutdown", "at": 1.7e9, "delay_s": 120.0, "requested_by": "Neptune"}},
 		"features":      jsonx.M{"processes": false, "fan_control": true}, "hardware": hw("system_vendor", "LENOVO", "system_model", "T14", "cpu_model", "i7")}
@@ -140,6 +141,9 @@ func TestNormaliseAgentAndOverride(t *testing.T) {
 	if s.Name != "laptop" || *s.DiskTotal != 1500<<30 || len(s.Temps) != 1 || len(s.Fans) != 1 || s.GPUs[0].Vendor != "other" ||
 		s.GPUs[0].Name != "GPU" || s.ProcessesAvailable || !s.FanControl || *s.CPUModel != "i7" || s.PowerPending.DelayS != 120 {
 		t.Fatalf("%+v", s)
+	}
+	if g := s.GPUs[1]; s.GPUs[0].Source != "" || g.Source != "windows" || g.Vendor != "amd" || g.TempC != nil || *g.UtilPercent != 12 {
+		t.Fatalf("GPU via Windows %+v", g)
 	}
 	if s.LoadAvg != nil {
 		t.Fatal("missing load_avg stays null")

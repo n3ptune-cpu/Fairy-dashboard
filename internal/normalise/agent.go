@@ -107,6 +107,14 @@ func agentTemps(m jsonx.M) []model.Temperature {
 	return temps
 }
 
+// gpuSource keeps the sources the UI knows ("windows"); anything else is dropped.
+func gpuSource(s string) string {
+	if s == "windows" {
+		return s
+	}
+	return ""
+}
+
 // agentGPUs maps the vendor to nvidia / amd / intel / other.
 func agentGPUs(m jsonx.M) []model.Gpu {
 	gpus := []model.Gpu{}
@@ -121,7 +129,7 @@ func agentGPUs(m jsonx.M) []model.Gpu {
 		}
 		gpus = append(gpus, model.Gpu{Name: name, Vendor: vendor, UtilPercent: jsonx.Num(g, "util_percent"),
 			VRAMUsed: jsonx.Int(g, "vram_used"), VRAMTotal: jsonx.Int(g, "vram_total"), TempC: jsonx.Num(g, "temp_c"),
-			PowerW: jsonx.Num(g, "power_w")})
+			PowerW: jsonx.Num(g, "power_w"), Source: gpuSource(jsonx.S(g, "source"))})
 	}
 	return gpus
 }

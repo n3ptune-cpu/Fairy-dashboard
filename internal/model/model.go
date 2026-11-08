@@ -60,6 +60,7 @@ type Gpu struct {
 	VRAMTotal   *int64   `json:"vram_total"`
 	TempC       *float64 `json:"temp_c"`
 	PowerW      *float64 `json:"power_w"`
+	Source      string   `json:"source,omitempty"` // "windows": Windows' own GPU counters (no temperature or watts)
 }
 
 // PowerSensor is one named power reading from an agent.

@@ -509,7 +509,8 @@ function systemOverview(s) {
     <div class="gpu-card"><div class="gpu-head"><span class="chip">GPU ${i}</span><b>${esc(g.name)}</b></div>
       ${metric("gpu", "Util", g.util_percent, fmtP(g.util_percent))}
       ${g.vram_total ? metric("vram", "VRAM", pct(g.vram_used, g.vram_total), `${fmtBytes(g.vram_used)} / ${fmtBytes(g.vram_total)}`) : ""}
-      <div class="gpu-facts"><span>${g.temp_c != null ? `${g.temp_c.toFixed(0)}°C` : "–"}</span><span>${g.power_w != null ? fmtW(g.power_w) : "–"}</span><span class="note">${esc(g.vendor)}</span></div>
+      <div class="gpu-facts">${g.temp_c != null ? `<span>${g.temp_c.toFixed(0)}°C</span>` : ""}${g.power_w != null ? `<span>${fmtW(g.power_w)}</span>` : ""}<span class="note">${esc(g.vendor)}${g.source === "windows"
+        ? ' · <span title="From the GPU counters Windows keeps (as in Task Manager): no temperature or watts">via Windows</span>' : ""}</span></div>
     </div>`).join("")}</div></div>` : "";
   const temps = s.temps || [];  // all of them (a 16-core CPU has 16 "Core n"); two columns when there are many
   const sensors = temps.length || (s.fans || []).length || (s.voltages || []).length ? `<div class="panel glass pad"><h3>Sensors</h3>
