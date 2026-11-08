@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,9 @@ type fakeIDP struct {
 	userinfo      map[string]any // userinfo response (nil = 404)
 	verifierOK    bool           // the last token request carried the right PKCE verifier
 	tokenRequests int
+	tokenStatus   int    // non-zero: the token endpoint answers with this status and tokenBody
+	tokenBody     string // (as application/json)
+	lastSecret    string // client_secret of the last token request
 }
 
 func newFakeIDP(t *testing.T) *fakeIDP {
@@ -61,6 +65,16 @@ func newFakeIDP(t *testing.T) *fakeIDP {
 		f.tokenRequests++
 		sum := sha256.Sum256([]byte(r.PostForm.Get("code_verifier")))
 		f.verifierOK = base64.RawURLEncoding.EncodeToString(sum[:]) == f.challenge
+		f.lastSecret = r.PostForm.Get("client_secret")
+		if _, pw, ok := r.BasicAuth(); ok {
+			f.lastSecret = pw
+		}
+		if f.tokenStatus != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(f.tokenStatus)
+			_, _ = w.Write([]byte(f.tokenBody))
+			return
+		}
 		claims := map[string]any{"iss": f.srv.URL, "aud": "cid", "sub": "u1", "nonce": f.nonce,
 			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(), "email": "n@example.com"}
 		for k, v := range f.claims {
@@ -245,6 +259,133 @@ func TestMissingAuthTimeFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), "auth.step_up failed: identity provider sent no auth_time") {
 		t.Fatal("audit")
+	}
+}
+
+// syncBuf is a log sink the test server's goroutines can write to while the test reads it.
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) take() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.b.String()
+	s.b.Reset()
+	return out
+}
+
+// captureLog sends slog's default logger (text format, as `fairy serve` uses) to a buffer for this test.
+func captureLog(t *testing.T) *syncBuf {
+	buf := &syncBuf{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
+// A failed sign-in says why in the server log (OAuth error, description, HTTP status; the go-oidc message for
+// a bad ID token), never to the client, and never logs the client secret, the code, the verifier, tokens or
+// the token endpoint's response body.
+func TestCallbackFailureIsLoggedSafely(t *testing.T) {
+	e := setup(t)
+	idp := newFakeIDP(t)
+	e.s.Cfg.OIDC.Issuer = idp.srv.URL
+	const secret = "client-secret-DO-NOT-LOG-1234"
+	const code = "auth-code-DO-NOT-LOG-5678"
+	e.s.oidc.secret = secret
+	idp.claims = map[string]any{"groups": []string{"viewers"}, "auth_time": time.Now().Unix()}
+	logs := captureLog(t)
+	callback := func() resp {
+		t.Helper()
+		q, rt := idp.login(e, "/auth/login", "")
+		return e.do("GET", "/auth/callback?code="+code+"&state="+q.Get("state"), nil, "Cookie", rt)
+	}
+	noLeak := func(log string) {
+		t.Helper()
+		for _, bad := range []string{secret, code, "code_verifier", "leaked-body-marker"} {
+			if strings.Contains(log, bad) {
+				t.Errorf("log contains %q:\n%s", bad, log)
+			}
+		}
+	}
+
+	// Pocket ID refuses the client: the RFC 6749 fields and the status are logged, the rest of the body is not.
+	idp.tokenStatus = 401
+	idp.tokenBody = `{"error":"invalid_client","error_description":"client authentication failed","debug":"leaked-body-marker ` + secret + `"}`
+	r := callback()
+	if r.code != 400 || strings.Contains(string(r.raw), "invalid_client") || idp.lastSecret != secret {
+		t.Fatal("token exchange failure", r.code, string(r.raw), idp.lastSecret == secret)
+	}
+	log := logs.take()
+	want := `msg="OIDC callback failed" reason="token exchange" error=invalid_client error_description="client authentication failed" http_status=401`
+	if !strings.Contains(log, want) {
+		t.Fatalf("log lacks %q:\n%s", want, log)
+	}
+	noLeak(log)
+	if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), "auth.login failed: token exchange (invalid_client)") {
+		t.Error("audit lacks the OAuth error code", auditOutcomes(e.s.Cfg.AuditLog))
+	}
+
+	// A non-OAuth error page: only the status, never the body.
+	idp.tokenStatus, idp.tokenBody = 502, `<html>leaked-body-marker</html>`
+	if r := callback(); r.code != 400 {
+		t.Fatal(r.code)
+	}
+	log = logs.take()
+	if !strings.Contains(log, `error="no OAuth error in the response" http_status=502`) {
+		t.Fatal(log)
+	}
+	noLeak(log)
+
+	// A bad ID token: the go-oidc message.
+	idp.tokenStatus = 0
+	idp.claims["aud"] = "someone-else"
+	if r := callback(); r.code != 400 {
+		t.Fatal(r.code)
+	}
+	log = logs.take()
+	if !strings.Contains(log, `reason="invalid id_token" error="oidc: expected audience`) {
+		t.Fatal(log)
+	}
+	noLeak(log)
+	delete(idp.claims, "aud")
+
+	// Nonce mismatch: says so, without either nonce.
+	q, rt := idp.login(e, "/auth/login", "")
+	idp.mu.Lock()
+	idp.nonce = "other-nonce-value"
+	idp.mu.Unlock()
+	if r := e.do("GET", "/auth/callback?code="+code+"&state="+q.Get("state"), nil, "Cookie", rt); r.code != 400 {
+		t.Fatal(r.code)
+	}
+	log = logs.take()
+	if !strings.Contains(log, `reason="nonce mismatch" id_token_nonce=different`) || strings.Contains(log, "other-nonce-value") {
+		t.Fatal(log)
+	}
+	noLeak(log)
+}
+
+func TestSafeErr(t *testing.T) {
+	err := fmt.Errorf(`Post "https://id.example.com/api/oidc/token?code=abc&client_secret=xyz#frag": dial tcp: refused`)
+	if got := safeErr(err); got != `Post "https://id.example.com/api/oidc/token": dial tcp: refused` {
+		t.Fatal(got)
+	}
+	if got := safeErr(fmt.Errorf("401 Unauthorized: {\"secret\":\"body\"}")); got != "HTTP 401 Unauthorized" {
+		t.Fatal(got)
+	}
+	if got := safeErr(fmt.Errorf("bad verifier-value-1234 here"), "verifier-value-1234"); got != "bad [redacted] here" {
+		t.Fatal(got)
+	}
+	if got := safeErr(fmt.Errorf("%s", strings.Repeat("é", 300))); len(got) > 203 || !strings.HasSuffix(got, "...") {
+		t.Fatal(len(got))
 	}
 }
 

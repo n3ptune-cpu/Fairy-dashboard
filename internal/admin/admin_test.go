@@ -65,8 +65,17 @@ func TestBreakGlassCLI(t *testing.T) {
 	if code, out = run("health"); code != 1 || !strings.Contains(out, "is the panel running") {
 		t.Fatal(out)
 	}
+	t.Setenv("FAIRY_OIDC_CLIENT_SECRET", "")
 	if code, out = run("config", "check"); code != 1 || !strings.Contains(out, "WARN") || strings.Contains(out, "fy_") {
 		t.Fatal(out)
+	}
+	if !strings.Contains(out, "ok    FAIRY_OIDC_CLIENT_SECRET: not set (public client: PKCE only)") {
+		t.Fatal("config check must say the client is public", out)
+	}
+	t.Setenv("FAIRY_OIDC_CLIENT_SECRET", "not-printed-oidc-secret")
+	if _, out = run("config", "check"); !strings.Contains(out, "ok    FAIRY_OIDC_CLIENT_SECRET: present") ||
+		strings.Contains(out, "not-printed-oidc-secret") {
+		t.Fatal("config check must report the client secret as present only", out)
 	}
 	entries, _ := audit.Read(filepath.Join(dir, "data", "audit.log"), "", "", "", nil, 50)
 	if len(entries) < 6 || entries[0]["source"] != "cli" || entries[0]["ip"] != "local" {

@@ -73,6 +73,11 @@ func (c *cli) configCheck() int {
 	} else {
 		notes = append(notes, fmt.Sprintf("oidc.issuer: %s  (callback %s/auth/callback)", cfg.OIDC.Issuer, cfg.BaseURL()))
 	}
+	if os.Getenv("FAIRY_OIDC_CLIENT_SECRET") != "" {
+		notes = append(notes, "FAIRY_OIDC_CLIENT_SECRET: present")
+	} else {
+		notes = append(notes, "FAIRY_OIDC_CLIENT_SECRET: not set (public client: PKCE only)")
+	}
 	if !strings.HasPrefix(cfg.PublicURL, "https://") {
 		problems = append(problems, "public_url "+cfg.BaseURL()+" is not https")
 	}

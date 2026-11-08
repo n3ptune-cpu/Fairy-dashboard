@@ -209,26 +209,31 @@ func (s *Server) authCallback(c *reqCtx) error {
 	}
 	sess := c.session()
 	q := c.r.URL.Query()
-	fail := func(why string) error {
-		slog.Warn("OIDC callback failed", "reason", why)
-		c.auditAnon("auth.login", "failed: "+why, "", nil, nil)
+	fail := func(f *loginFailure) error {
+		slog.Warn("OIDC callback failed", append([]any{"reason", f.reason}, f.attrs...)...)
+		c.auditAnon("auth.login", f.auditOutcome(), "", nil, nil)
 		return apierr.New(400, "login failed")
 	}
 	if e := q.Get("error"); e != "" {
-		return fail(truncate(e, 60))
+		f := &loginFailure{reason: oauthCode(truncate(e, 60))}
+		if d := q.Get("error_description"); d != "" {
+			f.attrs = []any{"error_description", safeText(d, 200)}
+		}
+		return fail(f)
 	}
 	if sess.State == "" || q.Get("state") != sess.State || time.Now().Unix()-sess.Started > 600 {
-		return fail("mismatching_state")
+		return fail(&loginFailure{reason: "mismatching_state"})
 	}
 	p, err := s.oidc.provider(c.r.Context())
 	if err != nil {
+		slog.Warn("OIDC callback failed", "reason", "discovery", "error", safeErr(err))
 		return apierr.New(502, "identity provider unreachable")
 	}
 	ctx, cancel := context.WithTimeout(s.oidc.ctx(c.r.Context()), 15*time.Second)
 	defer cancel()
-	claims, why := s.verifiedClaims(ctx, p, q.Get("code"), sess)
-	if why != "" {
-		return fail(why)
+	claims, lf := s.verifiedClaims(ctx, p, q.Get("code"), sess)
+	if lf != nil {
+		return fail(lf)
 	}
 	u := userFromClaims(claims, s.Cfg.OIDC.GroupsClaim)
 	if !isAllowed(u, s.Cfg.OIDC) {
@@ -276,50 +281,64 @@ func (s *Server) authCallback(c *reqCtx) error {
 
 // verifiedClaims exchanges the authorization code (with the PKCE verifier), verifies the ID token and its nonce
 // and returns the claims, merged with userinfo when the groups claim is missing from the ID token. On failure it
-// returns a short reason for the log and audit trail instead (never shown to the client).
-func (s *Server) verifiedClaims(ctx context.Context, p *oidc.Provider, code string, sess *sessionData) (map[string]any, string) {
+// returns why, for the log and audit trail only (never shown to the client).
+func (s *Server) verifiedClaims(ctx context.Context, p *oidc.Provider, code string, sess *sessionData) (map[string]any, *loginFailure) {
+	redact := []string{code, sess.Verifier, s.oidc.secret}
 	tok, err := s.oidc.oauth(p).Exchange(ctx, code, oauth2.VerifierOption(sess.Verifier))
 	if err != nil {
-		return nil, "token exchange"
+		return nil, exchangeFailure(err, redact...)
 	}
 	rawID, _ := tok.Extra("id_token").(string)
 	if rawID == "" {
-		return nil, "no id_token"
+		return nil, &loginFailure{reason: "no id_token", attrs: []any{"error",
+			"the token response has no id_token (is the openid scope requested?)"}}
 	}
+	redact = append(redact, rawID, tok.AccessToken, tok.RefreshToken)
 	idt, err := p.Verifier(&oidc.Config{ClientID: s.Cfg.OIDC.ClientID}).Verify(ctx, rawID)
 	if err != nil {
-		return nil, "invalid id_token"
+		return nil, &loginFailure{reason: "invalid id_token", attrs: []any{"error", safeErr(err, redact...)}}
 	}
 	if idt.Nonce != sess.Nonce {
-		return nil, "nonce mismatch"
+		got := "different"
+		if idt.Nonce == "" {
+			got = "missing"
+		}
+		return nil, &loginFailure{reason: "nonce mismatch", attrs: []any{"id_token_nonce", got,
+			"hint", "another sign-in was started in this browser, or the identity provider dropped the nonce"}}
 	}
 	claims := map[string]any{}
 	if err := idt.Claims(&claims); err != nil {
-		return nil, "invalid claims"
+		return nil, &loginFailure{reason: "invalid claims", attrs: []any{"error", safeErr(err, redact...)}}
 	}
 	if _, ok := claims[s.Cfg.OIDC.GroupsClaim]; !ok && slices.Contains(s.Cfg.OIDC.Scopes, "groups") {
-		mergeUserInfo(ctx, p, tok, idt.Subject, claims)
+		mergeUserInfo(ctx, p, tok, idt.Subject, claims, redact)
 	}
 	if idt.Subject == "" {
-		return nil, "no sub claim"
+		return nil, &loginFailure{reason: "no sub claim"}
 	}
 	claims["sub"] = idt.Subject
-	return claims, ""
+	return claims, nil
 }
 
 // mergeUserInfo adds the userinfo endpoint's claims (some providers only put groups there), but only when
 // userinfo is about the same subject as the ID token.
-func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, subject string, claims map[string]any) {
+func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, subject string, claims map[string]any, redact []string) {
 	ui, err := p.UserInfo(ctx, oauth2.StaticTokenSource(tok))
 	if err != nil {
-		slog.Warn("OIDC userinfo request failed")
+		slog.Warn("OIDC userinfo request failed", "error", safeErr(err, redact...))
 		return
 	}
 	extra := map[string]any{}
-	if ui.Claims(&extra) == nil && fmt.Sprint(extra["sub"]) == subject {
-		for k, v := range extra {
-			claims[k] = v
-		}
+	if err := ui.Claims(&extra); err != nil {
+		slog.Warn("OIDC userinfo ignored", "error", safeErr(err, redact...))
+		return
+	}
+	if fmt.Sprint(extra["sub"]) != subject {
+		slog.Warn("OIDC userinfo ignored", "error", "userinfo sub differs from the ID token's")
+		return
+	}
+	for k, v := range extra {
+		claims[k] = v
 	}
 }
 
