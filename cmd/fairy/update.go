@@ -16,6 +16,7 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/panelupdate"
 )
 
 // `fairy update`: the panel host's manual update (release.CLI, the same as `fairy-agent update`), as root on
@@ -26,7 +27,10 @@ import (
 //	                       hash, install it as /usr/local/bin/fairy keeping fairy.old, restart fairy.service and
 //	                       check it stays up and answers /healthz; otherwise put the old binary back.
 //
-// --yes skips the question, --force reinstalls the same or an older release. Nothing runs this automatically.
+// --yes skips the question, --force reinstalls the same or an older release. Nothing runs this automatically,
+// except fairy-panel-update.service when an admin presses "Update panel" (--from-panel: no question, steps
+// written to /var/lib/fairy-panel-update/status.json). Run by hand as root, it also installs or refreshes that
+// unit and its polkit rule, so the button works from then on.
 func update(args []string) int {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	check := fs.Bool("check", false, "only show the installed and the latest version")
@@ -34,7 +38,12 @@ func update(args []string) int {
 	yes := fs.Bool("yes", false, "do not ask before installing")
 	cfgPath := fs.String("config", "/etc/fairy/config.yaml", "panel config (updates.panel_repo, listen)")
 	envFile := fs.String("env-file", "/etc/fairy/fairy.env", "panel env file (FAIRY_LISTEN)")
+	fromPanel := fs.Bool("from-panel", false, "run by fairy-panel-update.service (the Update panel button): no question, status file")
 	_ = fs.Parse(args)
+	if *fromPanel && *force {
+		fmt.Fprintln(os.Stderr, "fairy update: --from-panel never forces (no downgrades from the web page)")
+		return 2
+	}
 
 	repo := release.PanelRepo
 	var cfg *config.Panel
@@ -71,6 +80,13 @@ func update(args []string) int {
 			return 1
 		}
 	}
+	var status *panelupdate.Writer
+	if *fromPanel {
+		*yes = true
+		status = &panelupdate.Writer{Path: panelupdate.StatusPath, From: version}
+	} else if !*check {
+		setupPanelButton()
+	}
 	healthURL := "http://" + healthAddr(cfg, *envFile) + "/healthz"
 	cli := &release.CLI{Client: client, Key: key, Program: release.PanelProgram, Current: version, Target: exe,
 		Asset: release.AssetName(release.PanelProgram, runtime.GOOS, runtime.GOARCH), Out: os.Stdout, In: os.Stdin,
@@ -80,6 +96,9 @@ func update(args []string) int {
 			out, err := exec.Command(path, "version").Output()
 			return string(out), err
 		}}
+	if status != nil {
+		cli.Progress = status.Step
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	if err := cli.Run(ctx); err != nil {
@@ -87,6 +106,27 @@ func update(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// setupPanelButton installs or refreshes fairy-panel-update.service and its polkit rule (the Updates page's
+// "Update panel" button). Problems are only reported: the manual update goes on.
+func setupPanelButton() {
+	run := func(name string, args ...string) error {
+		out, err := exec.Command(name, args...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s %s: %v %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	changed, err := panelupdate.Install(panelupdate.UnitPath, panelupdate.PolkitPath, run)
+	for _, c := range changed {
+		fmt.Println("Update panel button: installed", c)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fairy update: the Update panel button will not work yet:", err)
+	} else if len(changed) > 0 {
+		fmt.Println("Update panel button: ready (Updates page, admins).")
+	}
 }
 
 // healthAddr is where the panel listens (FAIRY_LISTEN in fairy.env, else listen: in config.yaml, else the

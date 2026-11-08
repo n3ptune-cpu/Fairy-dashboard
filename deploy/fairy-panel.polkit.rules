@@ -1,0 +1,9 @@
+// /etc/polkit-1/rules.d/49-fairy-panel.rules  (installed by `fairy update`)
+// Lets the panel's service user (fairy) START exactly one unit, fairy-panel-update.service, and nothing else:
+// no other unit, no stop / restart / enable. The unit checks the release signature itself before installing.
+polkit.addRule(function (action, subject) {
+    if (subject.user === "fairy" && action.id === "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") === "fairy-panel-update.service" && action.lookup("verb") === "start") {
+        return polkit.Result.YES;
+    }
+});

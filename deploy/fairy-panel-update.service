@@ -1,0 +1,47 @@
+# /etc/systemd/system/fairy-panel-update.service  (installed and kept up to date by `fairy update`)
+#
+# The panel's "Update panel" button (Updates page, admins, fresh Pocket ID sign-in, audited) starts this unit;
+# nothing else does (no [Install] section, no timer). The panel itself stays the unprivileged user fairy: the
+# polkit rule /etc/polkit-1/rules.d/49-fairy-panel.rules lets that user START exactly this unit, and the unit
+# takes no input from the web request (fixed command line). As root it runs `fairy update --yes --from-panel`:
+#   - checks the latest Fairy-dashboard release's signature with the key built into the INSTALLED binary, and
+#     the binary's SHA-256; refuses an older release (no downgrades);
+#   - keeps /usr/local/bin/fairy.old, swaps in the new binary, restarts fairy.service, waits until it answers
+#     /healthz, else puts the old binary back and restarts that;
+#   - writes each step to /var/lib/fairy-panel-update/status.json (the Updates page shows it, also across the
+#     panel's restart). Messages: journalctl -u fairy-panel-update
+[Unit]
+Description=Fairy panel update (installs the latest signed release when an admin asks)
+Documentation=https://github.com/n3ptune-cpu/Fairy-dashboard#updates
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fairy update --yes --from-panel
+TimeoutStartSec=600
+StateDirectory=fairy-panel-update
+StateDirectoryMode=0755
+UMask=0022
+
+# Root, but a read-only system except /usr/local/bin and its own state folder.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/usr/local/bin
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# Unprivileged LXC without nesting: namespace options can fail with status=226/NAMESPACE; then comment out
+# PrivateTmp/PrivateDevices/Protect*/RestrictNamespaces (as for fairy.service).
