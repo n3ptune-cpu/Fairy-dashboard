@@ -43,6 +43,15 @@ func (c *reqCtx) sessionUser() *model.User {
 		c.clearSession()
 		return nil
 	}
+	if c.s.Access.Err() == nil {
+		if _, known := c.s.Access.Load().Users[s.User.Sub]; !known {
+			// Removed from users.json, or a cookie from before users.json existed: sign in again. Roles are only
+			// ever bootstrapped at a fresh sign-in, never from the groups cached in a (possibly days old) cookie.
+			_ = admin.RemoveSession(s.SID)
+			c.clearSession()
+			return nil
+		}
+	}
 	if now-seen > 60 {
 		s.Seen = now
 		c.dirty = true
@@ -302,15 +311,23 @@ func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authT
 	_ = admin.RemoveSession(oldSID)
 	sid := randToken(18)
 	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip()}); err != nil {
-		return err
+		slog.Error("sign-in failed: cannot register the session in sessions.json (disk full? wrong owner?)", "error", err)
+		c.auditAnon("auth.login", "failed: sessions.json not writable", actorOf(&u), &u.Sub, nil)
+		return apierr.New(503, "sign-in could not be recorded (the panel cannot write its session file); see the server log")
+	}
+	su := u
+	su.Auth = "session"
+	// a real sign-in: a new user may be bootstrapped (control_groups / bootstrap_admins)
+	if _, err := s.recordUser(c, &su, true); err != nil {
+		_ = admin.RemoveSession(sid)
+		c.clearSession()
+		c.auditAnon("auth.login", "failed: users.json not writable", actorOf(&u), &u.Sub, nil)
+		return apierr.New(503, "sign-in could not be recorded (the panel cannot write its users file); see the server log")
 	}
 	c.sess = &sessionData{SID: sid, User: &u, IAT: int64(now), Seen: int64(now), AuthTime: authTime}
 	c.dirty = true
 	slog.Info("login ok", "sub", u.Sub)
 	c.auditAnon("auth.login", "ok", actorOf(&u), &u.Sub, nil)
-	su := u
-	su.Auth = "session"
-	s.recordUser(c, &su) // first sign-in: admin via control_groups / bootstrap_admins, else pending
 	return nil
 }
 

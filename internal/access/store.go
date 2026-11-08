@@ -52,11 +52,20 @@ func (u User) Label() string {
 	return u.Sub
 }
 
+// Removal is the record ("tombstone") of a user an admin removed: such a subject is never made admin again by
+// oidc.control_groups / oidc.bootstrap_admins; if they sign in again they wait for access like a new user.
+type Removal struct {
+	Label string    `json:"label"` // email, name or subject at the time
+	At    time.Time `json:"at"`
+	By    string    `json:"by"`
+}
+
 // Data is the content of users.json.
 type Data struct {
-	Users  map[string]User   `json:"users"`  // by subject
-	Sites  []string          `json:"sites"`  // sorted
-	Assign map[string]string `json:"assign"` // system id, "power:<id>" or "ups:<id>" -> site
+	Users   map[string]User    `json:"users"`   // by subject
+	Sites   []string           `json:"sites"`   // sorted
+	Assign  map[string]string  `json:"assign"`  // system id, "power:<id>" or "ups:<id>" -> site
+	Removed map[string]Removal `json:"removed"` // removed subjects (never bootstrapped again)
 }
 
 func decode(raw statefile.Data) Data {
@@ -68,6 +77,9 @@ func decode(raw statefile.Data) Data {
 	}
 	if d.Assign == nil {
 		d.Assign = map[string]string{}
+	}
+	if d.Removed == nil {
+		d.Removed = map[string]Removal{}
 	}
 	for k, u := range d.Users {
 		if !ValidRole(u.Role) {
@@ -189,7 +201,7 @@ func (s *Store) update(fn func(*Data) error) (Data, error) {
 // Seen records a sign-in (or the first request of a session that predates users.json): a new user gets
 // newRole (admin when bootstrapped via control_groups / bootstrap_admins, else pending) with the reason via;
 // an existing user keeps their role and only has email, name and last-seen refreshed. created reports a new
-// user.
+// user. A subject an admin removed never gets admin this way: they start as pending.
 func (s *Store) Seen(sub, email, name, newRole, via string) (u User, created bool, err error) {
 	if sub == "" {
 		return User{}, false, apierr.New(400, "missing subject")
@@ -198,6 +210,9 @@ func (s *Store) Seen(sub, email, name, newRole, via string) (u User, created boo
 		now := time.Now().UTC()
 		cur, ok := d.Users[sub]
 		if !ok {
+			if _, removed := d.Removed[sub]; removed && newRole == RoleAdmin {
+				newRole, via = RolePending, "first sign-in (removed before: no bootstrap)"
+			}
 			cur = User{Sub: sub, Role: newRole, Sites: []string{}, CreatedAt: now, Via: via}
 			created = true
 		}
@@ -262,9 +277,10 @@ func (d *Data) checkSites(sites []string) error {
 	return nil
 }
 
-// Remove forgets a user (they become pending again at their next sign-in, or admin if they are in
-// control_groups / bootstrap_admins). Removing the last admin is refused unless force is set.
-func (s *Store) Remove(ident string, force bool) (User, error) {
+// Remove forgets a user and keeps a tombstone (see Removal): if they sign in again they start as pending, never
+// as admin via control_groups / bootstrap_admins. The caller also revokes their sessions and API tokens.
+// Removing the last admin is refused unless force is set.
+func (s *Store) Remove(ident string, force bool, by string) (User, error) {
 	var out User
 	_, err := s.update(func(d *Data) error {
 		u, err := d.Find(ident)
@@ -275,6 +291,7 @@ func (s *Store) Remove(ident string, force bool) (User, error) {
 			return errLastAdmin
 		}
 		delete(d.Users, u.Sub)
+		d.Removed[u.Sub] = Removal{Label: u.Label(), At: time.Now().UTC(), By: by}
 		out = u
 		return nil
 	})

@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -198,14 +199,30 @@ func (s *Server) adminRemoveUser(c *reqCtx) error {
 		return err
 	}
 	sub := c.r.PathValue("sub")
-	gone, err := s.Access.Remove(sub, false)
+	gone, err := s.Access.Remove(sub, false, "panel by "+actorOf(u))
 	if err != nil {
 		c.audit(u, "user.remove", sub, map[string]any{"sub": sub}, errorOutcome(err))
 		return err
 	}
-	c.audit(u, "user.remove", gone.Label(), map[string]any{"sub": sub, "was": access.Describe(gone)}, "ok")
+	sessions, tokens := s.revokeUser(gone.Sub)
+	c.audit(u, "user.remove", gone.Label(), map[string]any{"sub": gone.Sub, "was": access.Describe(gone),
+		"sessions_revoked": sessions, "tokens_revoked": tokens}, "ok")
 	c.json(200, map[string]any{"ok": true, "message": gone.Label() + " was removed from the list"})
 	return nil
+}
+
+// revokeUser ends a removed user's sessions and revokes their API tokens (their access is gone already: this
+// makes it final even if they are given a role again later).
+func (s *Server) revokeUser(sub string) (sessions, tokens int) {
+	sessions, err := s.Poller.Admin.RevokeUserSessions(sub)
+	if err != nil {
+		slog.Error("revoking a removed user's sessions failed", "sub", sub, "error", err)
+	}
+	tokens, err = s.Tokens.RevokeOwner(sub)
+	if err != nil {
+		slog.Error("revoking a removed user's API tokens failed", "sub", sub, "error", err)
+	}
+	return sessions, tokens
 }
 
 type siteReq struct {

@@ -47,6 +47,12 @@ func (c *cli) tokensCreate(store *tokens.Store, args []string) (int, error) {
 	if *name == "" || *owner == "" {
 		return 2, errors.New("--name and --owner are required")
 	}
+	if *owner != "system" {
+		if _, ok := access.NewStore(c.cfg.DataDir).Load().Users[*owner]; !ok {
+			return 2, fmt.Errorf("--owner %q is not a panel user (they must sign in once; see `fairy admin users list`), "+
+				"or use --owner system: a token of an unknown owner has no access", *owner)
+		}
+	}
 	var sites []string
 	if *sitesArg != "" {
 		var err error
@@ -73,8 +79,9 @@ func (c *cli) tokensCreate(store *tokens.Store, args []string) (int, error) {
 	c.log("token.create", r.Name, map[string]any{"id": r.ID, "owner": r.Owner, "scope": r.Scope, "expires_at": exp, "sites": r.Sites})
 	fmt.Fprintf(c.out, "Created API token %q (id %s, scope %s, sites %s, owner %s, expires %s)\n\n    %s\n\n", r.Name, r.ID, r.Scope,
 		tokenSites(r), r.Owner, expStr, raw)
-	if _, ok := access.NewStore(c.cfg.DataDir).Load().Users[r.Owner]; ok {
-		fmt.Fprintln(c.out, "The owner is a panel user: the token never sees or does more than they may (Users page).")
+	if r.Owner != "system" {
+		fmt.Fprintln(c.out, "The owner is a panel user: the token never sees or does more than they may (Users page),")
+		fmt.Fprintln(c.out, "and it stops working if they are removed.")
 	}
 	fmt.Fprintln(c.out, "This is the only time the token is shown; only its SHA-256 hash is stored.")
 	fmt.Fprintf(c.out, "Use it as:  curl -H 'Authorization: Bearer %s…' %s/api/summary\n", raw[:7], c.cfg.BaseURL())

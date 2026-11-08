@@ -48,15 +48,17 @@ no capabilities needed: the panel never runs local power or IPMI commands).
   else (guests) its node's site. Power sources and UPSes follow the hosts they are attached to unless assigned.
   No site = admins only.
 * Bootstrap / upgrade: a user without a `users.json` entry who is in `oidc.control_groups` or
-  `oidc.bootstrap_admins` becomes admin on first sign-in (also for sessions started before the upgrade). After
-  that the panel decides. The last admin cannot be demoted or removed (server-enforced; the CLI needs `--force`).
+  `oidc.bootstrap_admins` becomes admin at their first real sign-in (a fresh Pocket ID login; never from the
+  groups cached in a session cookie, and never for someone an admin removed). After that the panel decides.
+  Removing a user also ends their sessions and revokes their API tokens. The last admin cannot be demoted or removed (server-enforced; the CLI needs `--force`).
 * Step-up: control actions need a sign-in from the last `step_up_window_s` (default 5 min); the re-login sends
   `max_age=0` (optionally `prompt=login`) and the callback checks `auth_time`.
 * Sessions: HMAC-signed `fairy_session` cookie (HttpOnly, Secure, SameSite=Lax) that is valid only while its id is
   in `sessions.json`, within the idle timeout and absolute lifetime; revocable with `fairy admin sessions`.
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never
   accepted on `/auth/*`, the settings endpoints or the Users page. `control` acts as an admin; `read` sees every
-  site, or only `--sites A,B`. A token owned by a panel user is capped to that user's current role and sites.
+  site, or only `--sites A,B`. A token owned by a panel user is capped to that user's current role and sites; a token whose owner is not
+  (or no longer) in `users.json` has no access. Only `--owner system` tokens keep their own scope.
 * Writes: admin role (or control-scope token), CSRF header `X-Requested-With: fairy` + Origin /
   Sec-Fetch-Site checks for browsers, kill switch, per-host power flags, rate limits, typed confirmation for
   destructive power actions, append-only JSON-lines audit log (+ Audit page), optional ntfy/Discord notification.

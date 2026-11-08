@@ -208,6 +208,23 @@ func (a *State) RevokeSession(prefix string) (int, error) {
 	return n, err
 }
 
+// RevokeUserSessions removes every session of one subject (when the user is removed). Returns the number removed.
+func (a *State) RevokeUserSessions(sub string) (int, error) {
+	n := 0
+	_, err := statefile.Update(a.SessionsPath, func(d statefile.Data) error {
+		ss, _ := d["sessions"].(map[string]any)
+		for k, v := range ss {
+			if m, _ := v.(map[string]any); m["sub"] == sub {
+				delete(ss, k)
+				n++
+			}
+		}
+		return nil
+	})
+	a.sessions.Refresh()
+	return n, err
+}
+
 // RevokeAllSessions removes every session and invalidates every cookie issued before now.
 func (a *State) RevokeAllSessions() (int, error) {
 	list, err := a.ListSessions()

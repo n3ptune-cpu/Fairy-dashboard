@@ -52,8 +52,23 @@ func controller() model.User {
 	return u
 }
 
-// cookie mints a session like a real login: registered sid, auth_time as given.
+// cookie mints a session like a real login: the sign-in is recorded in users.json (a new user may be
+// bootstrapped, as at the OIDC callback), registered sid, auth_time as given.
 func (e *env) cookie(u model.User, authAge time.Duration) string {
+	e.signIn(u)
+	return e.staleCookie(u, authAge)
+}
+
+// signIn records a fresh Pocket ID sign-in of u (what the OIDC callback does after verifying the ID token).
+func (e *env) signIn(u model.User) {
+	c := &reqCtx{s: e.s, w: httptest.NewRecorder(), r: httptest.NewRequest("GET", "/auth/callback", nil)}
+	u.Auth = "session"
+	e.s.recordUser(c, &u, true)
+}
+
+// staleCookie mints a registered session without a sign-in: like a cookie issued days ago, before users.json
+// knew the user.
+func (e *env) staleCookie(u model.User, authAge time.Duration) string {
 	sid := randToken(18)
 	if err := e.s.Poller.Admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub}); err != nil {
 		e.t.Fatal(err)

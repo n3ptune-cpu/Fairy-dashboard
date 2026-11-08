@@ -4,8 +4,9 @@
 // once. Scope `read` or `control`. Tokens never work on /auth/* or the settings endpoints.
 //
 // A read token may be limited to some sites (Sites); without a list it sees every site, as tokens did before
-// sites existed. A token never sees more than its owner: when the owner is a user in users.json, the panel caps
-// the token to that user's role and sites (see web.tokenGrant).
+// sites existed. A token never sees more than its owner: unless the owner is "system", the panel caps the token
+// to that user's role and sites in users.json, and a token whose owner is not (or no longer) in users.json
+// gets no access at all (see web.tokenGrant). Removing a user also revokes their tokens.
 package tokens
 
 import (
@@ -191,6 +192,26 @@ func (s *Store) Revoke(ident string) (Record, error) {
 	var r Record
 	_ = json.Unmarshal(b, &r)
 	return r, nil
+}
+
+// RevokeOwner revokes every active token owned by sub (when the user is removed). Returns the number revoked.
+func (s *Store) RevokeOwner(owner string) (int, error) {
+	if owner == "" || owner == "system" {
+		return 0, errors.New("refusing to revoke by this owner")
+	}
+	n := 0
+	_, err := statefile.Update(s.Path, func(d statefile.Data) error {
+		toks, _ := d["tokens"].(map[string]any)
+		for _, t := range toks {
+			if m, _ := t.(map[string]any); m["owner"] == owner && m["revoked_at"] == nil {
+				m["revoked_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+				n++
+			}
+		}
+		return nil
+	})
+	s.watch.Refresh()
+	return n, err
 }
 
 // Verify returns the active record for a presented token (constant-time hash comparison).

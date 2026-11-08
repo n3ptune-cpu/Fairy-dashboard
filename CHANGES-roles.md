@@ -39,7 +39,7 @@ set that up). Fairy refuses to demote or remove the **last admin**, so you can't
 2. **Make sure you become admin.** Either keep your admin group in `oidc: control_groups: [homelab-admins]`
    (anyone in it becomes **admin the first time they sign in**), or list your email:
    `oidc: bootstrap_admins: [you@example.com]`. If you already used `control_groups` before this update, you
-   don't have to change anything: you'll be admin on your next visit.
+   don't have to change anything: sign in again (an old session is asked to) and you'll be admin.
 3. Optional: write default sites into `config.yaml`, e.g. `site: Neptune` on your Proxmox cluster and agents,
    `site: Straw` on Straw's. Those sites appear on the Users page automatically. (Sites from `config.yaml` can
    only be renamed or removed in `config.yaml`.)
@@ -54,8 +54,8 @@ Good to know:
 * After the first sign-in, the Users page is in charge: removing someone from `control_groups` in Pocket ID
   does **not** take their admin role away. Change it on the Users page.
 * To lock someone out completely, set them to **No access** (and remove them from the Pocket ID group).
-  "Remove" only clears them from the list; if they sign in again they start as waiting (or admin, if they are
-  still in `control_groups` / `bootstrap_admins`).
+  "Remove" takes them off the list, signs them out everywhere and revokes their API tokens; if they sign in
+  again they start as waiting, never as admin (Fairy remembers that they were removed).
 * The control kill switch (`fairy admin control disable`) stops power/fan/polling actions, not the Users page.
 
 ## API tokens
@@ -66,7 +66,8 @@ Good to know:
   only sees the Straw site. Control tokens cannot be limited (they act as an admin).
 * A token whose `--owner` is a person who has signed in (their subject id from `fairy admin users list`) is
   never allowed more than that person: if you make them a viewer of Straw, their tokens see only Straw; if you
-  set them to No access, their tokens stop working. Tokens owned by `system` keep their own scope.
+  set them to No access or remove them, their tokens stop working. A token whose owner is not on the Users list
+  works for nothing (the CLI refuses to create one). Tokens owned by `system` keep their own scope.
 * Why "read without sites = every site": only someone with a shell on the panel's server can create tokens, and
   existing scripts (Home Assistant etc.) must not break. Use `--sites` for anything you hand to someone else.
 
@@ -89,7 +90,8 @@ fairy admin sites assign straw-pc -                     # back to its default si
 The running panel picks these changes up within a second. They are written to the Audit log as source "cli".
 Everything is stored in one file, `users.json`, in Fairy's data folder (`/var/lib/fairy` or
 `C:\ProgramData\Fairy\data`). Deleting that file starts over: the next sign-in of someone in `control_groups` /
-`bootstrap_admins` makes them admin again.
+`bootstrap_admins` makes them admin again. A users.json that cannot be read or is damaged is never treated as
+empty: the panel refuses to start (or gives nobody access) until it is fixed.
 
 ## Trying it in the demo
 

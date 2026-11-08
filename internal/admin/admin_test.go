@@ -161,3 +161,15 @@ func TestCLIRefusesToWriteAsTheWrongUser(t *testing.T) {
 		t.Fatal("tokens.json created by the wrong user")
 	}
 }
+
+// A token for an owner who is not a panel user would have no access: the CLI says so instead of creating it.
+func TestTokenOwnerMustBeAPanelUser(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	_ = os.WriteFile(cfg, []byte("public_url: https://p.example\ndata_dir: "+dir+"/data\noidc: {issuer: https://id.example, client_id: c}\n"), 0o600)
+	var out bytes.Buffer
+	code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "tokens", "create", "--name", "x", "--owner", "nobody"}, &out, &out)
+	if code == 0 || !strings.Contains(out.String(), "not a panel user") {
+		t.Fatal(code, out.String())
+	}
+}

@@ -67,7 +67,7 @@ func TestStoreRolesSitesAndLastAdmin(t *testing.T) {
 	if _, _, err := s.SetRole("n@example.com", RoleViewer, nil, "test", false); status(err) != 409 {
 		t.Fatal("last admin demoted", err)
 	}
-	if _, err := s.Remove("sub-n", false); status(err) != 409 {
+	if _, err := s.Remove("sub-n", false, "test"); status(err) != 409 {
 		t.Fatal("last admin removed", err)
 	}
 	if _, _, err := s.SetRole("straw@example.com", RoleViewer, []string{"Straw"}, "test", false); status(err) != 422 {
@@ -115,10 +115,10 @@ func TestStoreRolesSitesAndLastAdmin(t *testing.T) {
 	if d := s.Load(); len(d.Assign) != 0 || d.HasSite("Straw's place") {
 		t.Fatal("delete site", d)
 	}
-	if _, err := s.Remove("nobody", false); status(err) != 404 {
+	if _, err := s.Remove("nobody", false, "test"); status(err) != 404 {
 		t.Fatal("remove unknown user")
 	}
-	if _, err := s.Remove("sub-s", true); err != nil {
+	if _, err := s.Remove("sub-s", true, "test"); err != nil {
 		t.Fatal("forced removal of the last admin (CLI --force)", err)
 	}
 }

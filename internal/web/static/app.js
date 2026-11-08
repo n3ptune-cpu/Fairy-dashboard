@@ -694,7 +694,7 @@ document.addEventListener("click", (e) => {
   const t = e.target.closest('[data-act="u-remove"],[data-act="s-rename"],[data-act="s-delete"]');
   if (!t) return;
   const a = t.dataset.act;
-  if (a === "u-remove" && confirm(`Remove ${t.dataset.name} from the list? If they sign in again they wait for access (or become admin if they are in control_groups / bootstrap_admins).`)) {
+  if (a === "u-remove" && confirm(`Remove ${t.dataset.name} from the list? They are signed out and their API tokens are revoked. If they sign in again they wait for access.`)) {
     adminCall(`Remove ${t.dataset.name}`, "DELETE", userPath(t.dataset.sub));
   } else if (a === "s-rename") {
     const name = prompt(`New name for site “${t.dataset.site}”`, t.dataset.site);

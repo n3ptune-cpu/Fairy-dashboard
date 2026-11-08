@@ -456,7 +456,12 @@ func TestUserAndSiteChangesNeedAdminCSRFStepUp(t *testing.T) {
 func TestMigrationViaControlGroupsAndBootstrapAdmins(t *testing.T) {
 	e := setup(t)
 	e.s.Cfg.OIDC.BootstrapAdmins = []string{"Boss@Example.com"}
-	c := e.cookie(controller(), 0) // a session from before the upgrade: no users.json at all
+	// a session from before the upgrade (no users.json at all) must sign in again: roles are only bootstrapped
+	// at a fresh sign-in, never from the groups cached in a cookie
+	if r := e.do("GET", "/api/me", nil, "Cookie", e.staleCookie(controller(), 0)); r.code != 401 {
+		t.Fatal("pre-upgrade cookie", r.code, string(r.raw))
+	}
+	c := e.cookie(controller(), 0)
 	if r := e.do("GET", "/api/me", nil, "Cookie", c); r.body["role"] != "admin" || r.body["can_control"] != true || r.body["can_manage_users"] != true {
 		t.Fatal(string(r.raw))
 	}
@@ -517,5 +522,58 @@ func TestDemoPreviewAsViewer(t *testing.T) {
 	}
 	if err := e.s.SetDemoView("bogus"); err == nil {
 		t.Fatal("bad view accepted")
+	}
+}
+
+// Removing a user is final: their sessions and API tokens stop working at once, an old cookie (whose groups
+// may still say control_groups) never makes them admin again, and neither does signing in again.
+func TestRemovedUserRegainsNothing(t *testing.T) {
+	e := setup(t)
+	csrf := []string{"X-Requested-With", "fairy"}
+	auth := func(tok string) []string { return []string{"Authorization", "Bearer " + tok} }
+	ctl := controller()
+	c := e.cookie(ctl, 0) // first sign-in of a control-group member: admin
+	if u := e.s.Access.Load().Users[ctl.Sub]; u.Role != access.RoleAdmin {
+		t.Fatal("bootstrap", u)
+	}
+	boss := person("boss")
+	e.signIn(boss)
+	if _, _, err := e.s.Access.SetRole("boss", access.RoleAdmin, nil, "test", false); err != nil {
+		t.Fatal(err)
+	}
+	ctlTok, _, _ := e.s.Tokens.Create("ctl", ctl.Sub, "control", "cli:test", 0)
+	ghost, _, _ := e.s.Tokens.Create("ghost", "never-signed-in", "read", "cli:test", 0)
+	if r := e.do("GET", "/api/systems", nil, auth(ghost)...); r.code != 403 {
+		t.Fatal("a token whose owner is not a panel user has no access", r.code)
+	}
+	if r := e.do("GET", "/api/me", nil, auth(ctlTok)...); r.code != 200 || r.body["role"] != "admin" {
+		t.Fatal("setup token", string(r.raw))
+	}
+
+	r := e.do("DELETE", "/api/admin/users/"+ctl.Sub, nil, append([]string{"Cookie", e.cookie(boss, 0)}, csrf...)...)
+	if r.code != 200 {
+		t.Fatal("remove", r.code, string(r.raw))
+	}
+	if r := e.do("GET", "/api/me", nil, "Cookie", c); r.code != 401 {
+		t.Fatal("the removed user's session still works", r.code, string(r.raw))
+	}
+	if r := e.do("GET", "/api/me", nil, auth(ctlTok)...); r.code != 401 {
+		t.Fatal("the removed user's control token still works", r.code, string(r.raw))
+	}
+	// a cookie that was not revoked (minted before users.json knew them) does not bootstrap from its groups
+	old := e.staleCookie(ctl, 0)
+	if r := e.do("GET", "/api/systems", nil, "Cookie", old); r.code != 401 {
+		t.Fatal("an old cookie of a removed control-group member", r.code, string(r.raw))
+	}
+	if _, ok := e.s.Access.Load().Users[ctl.Sub]; ok {
+		t.Fatal("an old cookie re-created the user")
+	}
+	// signing in again: waits for access, never admin via control_groups
+	c = e.cookie(ctl, 0)
+	if r := e.do("GET", "/api/me", nil, "Cookie", c); r.body["role"] != "pending" {
+		t.Fatal("removed user bootstrapped again", string(r.raw))
+	}
+	if d := e.s.Access.Load(); d.Removed[ctl.Sub].By == "" || d.Users[ctl.Sub].Role != access.RolePending {
+		t.Fatal("tombstone", d.Removed, d.Users[ctl.Sub])
 	}
 }

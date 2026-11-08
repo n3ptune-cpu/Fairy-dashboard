@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy/internal/access"
+	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/health"
+	"github.com/n3ptune-cpu/Fairy/internal/tokens"
 )
 
 // takeFlag removes a boolean flag (e.g. --force) from anywhere in args.
@@ -105,16 +107,23 @@ func (c *cli) users(args []string) (int, error) {
 		if len(args) != 2 {
 			return 2, errUsage
 		}
-		u, err := st.Remove(args[1], force)
+		u, err := st.Remove(args[1], force, "cli by "+osUser())
 		if err != nil {
 			if err = friendly(err); strings.Contains(err.Error(), "last admin") {
 				err = fmt.Errorf("%w, or add --force", err)
 			}
 			return 1, err
 		}
-		c.log("user.remove", u.Label(), map[string]any{"sub": u.Sub, "was": access.Describe(u), "force": force})
-		fmt.Fprintf(c.out, "Removed %s (was %s). If they sign in again they start as pending\n", u.Label(), access.Describe(u))
-		fmt.Fprintln(c.out, "(or as admin, if they are in oidc.control_groups / oidc.bootstrap_admins).")
+		sessions, serr := adminstate.New(c.cfg.DataDir).RevokeUserSessions(u.Sub)
+		toks, terr := tokens.NewStore(c.cfg.DataDir).RevokeOwner(u.Sub)
+		c.log("user.remove", u.Label(), map[string]any{"sub": u.Sub, "was": access.Describe(u), "force": force,
+			"sessions_revoked": sessions, "tokens_revoked": toks})
+		fmt.Fprintf(c.out, "Removed %s (was %s). Revoked %d session(s) and %d API token(s).\n", u.Label(),
+			access.Describe(u), sessions, toks)
+		fmt.Fprintln(c.out, "If they sign in again they wait for access (never admin via oidc.control_groups / bootstrap_admins).")
+		if err := errors.Join(serr, terr); err != nil {
+			return 1, err
+		}
 		return 0, nil
 	}
 	return 2, errUsage
