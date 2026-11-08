@@ -74,6 +74,12 @@ agents:
     # control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE   # for power_control / wol_relay / self_update without fan_control
     # self_update: true                   # Update button on the Updates page; also needs self_update.enabled in the agent's config.yaml
   # - {id: kachina-agent, url: "http://100.64.0.5:9101", token_env: AGENT_TOKEN_KACHINA, node: NSX-KACHINA}
+# Hosts added with "Add host" in the panel are NOT written here: they live in <data_dir>/managed-hosts.yaml
+# (+ <data_dir>/secrets/agent-<id>.json, 0600) and are merged with this file at start; an id written here wins.
+
+# enroll:                                 # Add host
+#   panel_address: 100.88.109.47          # the panel's Tailscale IPv4 as the agents see it (default: this machine's
+#                                         # only 100.64.0.0/10 address; set it when there are several or none)
 
 systems: []
   # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming], site: Straw}

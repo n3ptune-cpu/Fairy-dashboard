@@ -78,10 +78,21 @@ public key from `release/signing.pub`, sign `SHA256SUMS` with the `FAIRY_RELEASE
 manual install per machine) is in Fairy-agent's
 [SETUP-UPDATES.md](https://github.com/n3ptune-cpu/Fairy-agent/blob/main/SETUP-UPDATES.md).
 
-* **The panel** updates only by hand on its host: `fairy update` (or the wrapper `deploy/fairy-update` as
+* **The panel**: `fairy update` on its host as root (or the wrapper `deploy/fairy-update` as
   `/usr/local/sbin/fairy-update`). It checks the release signature with the key built into the running binary,
   keeps `/usr/local/bin/fairy.old`, restarts `fairy.service` and rolls back if the service does not stay up and
-  answer `/healthz`.
+  answer `/healthz`. Or **Update panel** on the Updates page (admins): the panel (user `fairy`, no root) may only
+  *start* the root oneshot unit `fairy-panel-update.service` (`deploy/fairy-panel-update.service`), allowed by one
+  polkit rule (`deploy/fairy-panel.polkit.rules`: user `fairy`, that unit, verb `start`, nothing else). The unit
+  runs `fairy update --yes --from-panel`, takes nothing from the web request, never installs an older or the
+  same version, and writes its steps to `/var/lib/fairy-panel-update/status.json`, so the page shows
+  downloading, verified, restarting and "running X" / rolled back, also after the panel's restart. The button
+  needs a Pocket ID sign-in from the last **2 minutes** (always, also within the usual step-up window), the
+  CSRF header and the kill switch off; it is audited as `panel.update`.
+  **One-time setup**: every `fairy update` run by hand as root installs (or refreshes) the unit and the polkit
+  rule (`apt install polkitd` if it is missing). The release running today predates this, so the first time run
+  `fairy update` twice on the panel host: the first run installs the new panel, the second (now the new
+  `fairy`) sets up the button. Until then the button says what is missing.
 * **Agents**: admins see, in the panel, a banner when a newer Fairy-agent or Fairy-dashboard release exists
   (dismissed per release), an arrow next to each host's agent version when it is behind (click: release notes
   and **Start update**), a dot on the menu's **Updates** entry, and the **Updates** page (every agent's version
@@ -91,6 +102,52 @@ manual install per machine) is in Fairy-agent's
   downloads, verifies and installs the release itself (see Fairy-agent's AGENT.md). Viewers see none of it.
 * The latest releases are looked up on GitHub at most every 10 minutes, in the background and only while an
   admin uses the panel; `updates: {check_latest: false}` switches that off on a panel without internet access.
+
+### Add host
+
+Admins: **Add host** on the Overview. Give the machine's Tailscale name (the panel reaches it at
+`http://<name>:9101`; an address can be given instead), its system (Windows / Linux), site, options (power
+control, self-update, Wake-on-LAN relay, a local UPS through NUT, Core Temp on Windows, IPMI on Linux), whether
+it is a Proxmox node (`node:`), and optionally its Wake-on-LAN MAC(s) and the relay that wakes it. The panel
+makes a one-time join code (160 random bits, shown once, grouped as `ABCD-EFGH-...`, valid 15 minutes, single
+use, only its hash is kept) and one command:
+
+```text
+Windows (PowerShell as Administrator):
+iwr -useb https://github.com/n3ptune-cpu/Fairy-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\fairy-install.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\fairy-install.ps1 -Join <CODE> -PanelAddress <panel IP> [-PowerControl -SelfUpdate -CoreTemp ...]
+Linux:
+curl -fsSL https://github.com/n3ptune-cpu/Fairy-agent/releases/latest/download/install.sh | sudo sh -s -- --join <CODE> --panel <panel IP> [--power-control --self-update ...]
+```
+
+The installer checks the release's signature, installs the agent like the manual install, makes its tokens on
+the machine and waits for the panel. The panel tries to pair every few seconds; the dialog follows it
+(waiting -> paired -> online) and Cancel stops it. Pairing is `POST /pair` on the agent with a proof of the code,
+accepted once, only from the panel's address, at most 5 tries a minute; then the agent switches pairing off for
+good. Creating a code is a control action (admin, CSRF, kill switch, step-up sign-in, rate limit, audit
+`host.add` / `host.pair`).
+
+Hosts added this way are kept in `<data_dir>/managed-hosts.yaml` and their tokens in
+`<data_dir>/secrets/agent-<id>.json` (0600), not in config.yaml; both are merged at start (an id in config.yaml
+wins and the managed one is skipped with a log line) and checked by `fairy admin config check`. Their page has
+**Re-pair** (a new code, e.g. after the panel lost the tokens) and **Remove** (stops polling, deletes the tokens;
+the agent stays installed until uninstalled on the machine); both ask for the host's name to be typed and a
+step-up sign-in, and are audited. Hosts in config.yaml are not changed by the panel.
+
+`enroll: {panel_address: 100.x.y.z}` in config.yaml is the address the command gives the agent; by default the
+panel's only Tailscale (100.64.0.0/10) address. The panel must resolve MagicDNS names (or give the address).
+Not yet: adding a Proxmox node itself (the API token) from the panel; nodes stay in `proxmox:`.
+
+### Notifications
+
+The bell (top bar) and **Notifications** (sidebar): what changed, newest first. Events are made on state
+*changes* only: a host offline (after 30 s) and back, unstable (6 changes in 10 minutes: one warning, then quiet),
+"off (shut down from the panel)" instead of an alert when the panel shut it down, a temperature over 85 °C (for
+10 s) and back under 80 °C, UPS on battery / low battery / back on mains / connection lost, power actions,
+agent and panel updates, Add host results. Filters (severity, type, host, unread), mark read, mark all read,
+dismiss, per user; each person sees the hosts and UPSes of their sites (events without a host are for admins).
+Kept in `<data_dir>/notifications.json` for 30 days (at most 2000). The Overview shows one line, "N active
+alerts", for alerts whose condition still holds. Warnings and critical events also go to `FAIRY_NOTIFY_URL`
+(ntfy or Discord) when it is set.
 
 ### Custom logo
 
@@ -193,7 +250,11 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/health` | `health.json`, the status file the panel writes for `fairy admin health`. |
 | `internal/settings` | Per-user UI settings and uploaded background images. |
 | `internal/updates` | The latest Fairy-agent / Fairy-dashboard release for the Updates page (GitHub, cached, never blocking). |
-| `internal/notify` | Optional ntfy / Discord message on control actions. |
+| `internal/notify` | Optional ntfy / Discord message on control actions and notifications. |
+| `internal/notifications` | The Notifications page: events and per-user read / dismissed marks (`notifications.go`), made from the poller's snapshots on state changes only (`watcher.go`). |
+| `internal/managed` | Hosts added with Add host: `managed-hosts.yaml` and `secrets/`, merged with config.yaml. |
+| `internal/enrollment` | Add host: join codes, the command per OS, the pairing loop (waiting -> paired -> online). |
+| `internal/panelupdate` | Update panel: starting `fairy-panel-update.service` and reading its status file. |
 | `internal/security` | Finds the real client IP behind nginx (only for rate limits and the audit log). |
 | `internal/model` | The JSON shapes of the API (field names match the Python prototype). |
 | `internal/jsonx` | Helpers for reading loosely-typed JSON from Proxmox, agents and devices. |
@@ -201,7 +262,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/demo` | `fairy serve --demo`: a simulated homelab (fake Proxmox, agents, plugs, UPS, BMC). |
 | `internal/agentcontract` | The panel <-> agent contract test: the panel's real poller, normaliser, power/UPS managers and web API against the real `fairy-agent` handler (fake collectors, fake BMC, fake devices). |
 | `internal/testutil` | Shared test fixtures. |
-| `deploy/` | Example `config.yaml`, `fairy.env`, the systemd unit `fairy.service`, nginx, the `fairy-update` wrapper. (The agent's install files are in Fairy-agent.) |
+| `deploy/` | Example `config.yaml`, `fairy.env`, the systemd unit `fairy.service`, nginx, the `fairy-update` wrapper, the Update panel unit and its polkit rule. (The agent's install files are in Fairy-agent.) |
 | `.github/workflows` | `release.yml` (signed release on every push to main), `ci.yml` (tests on pull requests). |
 
 Shared code imported from [Fairy-agent](https://github.com/n3ptune-cpu/Fairy-agent) (`github.com/n3ptune-cpu/Fairy-agent/...`):
@@ -214,6 +275,7 @@ Shared code imported from [Fairy-agent](https://github.com/n3ptune-cpu/Fairy-age
 | `pkg/tuya` | The Tuya 3.3/3.4/3.5 local protocol (encryption, frames, one persistent connection per plug). |
 | `pkg/redact` | Removes passwords/tokens from process command lines (in the agent, and again in the panel). |
 | `pkg/configutil` | The id rule (`ValidID`) and secrets referenced by environment variable name (`EnvSecret`). |
+| `pkg/enroll` | Add host: join codes, the proof sent to the agent's `/pair`, and its answer. |
 | `pkg/release` | Signed releases: signature checks, the GitHub download, the swap / restart / rollback installer and the `update` command shared with `fairy-agent update`. |
 | `pkg/agent`, `pkg/agent/...` | Only in `internal/agentcontract`'s test: the agent's HTTP handler, fake collector and fake BMC. |
 
