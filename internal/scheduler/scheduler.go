@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/model"
-	"github.com/nsxservices/fairy/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/statefile"
 )
 
 const (

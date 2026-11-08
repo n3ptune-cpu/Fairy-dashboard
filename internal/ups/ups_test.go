@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/devices"
+	"github.com/n3ptune-cpu/Fairy/internal/devices"
 )
 
 func TestParseUPSStatus(t *testing.T) {

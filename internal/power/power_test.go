@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/devices"
-	"github.com/nsxservices/fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/devices"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
 func manager(t *testing.T, srcs []map[string]any, ap AgentPowerFn, clock func() float64) *Manager {

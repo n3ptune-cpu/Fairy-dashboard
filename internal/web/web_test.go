@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/config"
-	"github.com/nsxservices/fairy/internal/model"
-	"github.com/nsxservices/fairy/internal/poller"
-	"github.com/nsxservices/fairy/internal/testutil"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/poller"
+	"github.com/n3ptune-cpu/Fairy/internal/testutil"
 )
 
 type env struct {

@@ -24,16 +24,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/adminstate"
-	"github.com/nsxservices/fairy/internal/apierr"
-	"github.com/nsxservices/fairy/internal/config"
-	"github.com/nsxservices/fairy/internal/devices"
-	"github.com/nsxservices/fairy/internal/jsonx"
-	"github.com/nsxservices/fairy/internal/model"
-	"github.com/nsxservices/fairy/internal/normalise"
-	"github.com/nsxservices/fairy/internal/power"
-	"github.com/nsxservices/fairy/internal/scheduler"
-	"github.com/nsxservices/fairy/internal/ups"
+	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/devices"
+	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy/internal/power"
+	"github.com/n3ptune-cpu/Fairy/internal/scheduler"
+	"github.com/n3ptune-cpu/Fairy/internal/ups"
 )
 
 // Backend does the network I/O (replaced by the simulator in demo mode).

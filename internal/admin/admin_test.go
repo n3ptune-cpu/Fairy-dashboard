@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nsxservices/fairy/internal/adminstate"
-	"github.com/nsxservices/fairy/internal/audit"
-	"github.com/nsxservices/fairy/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy/internal/audit"
+	"github.com/n3ptune-cpu/Fairy/internal/statefile"
 )
 
 func TestBreakGlassCLI(t *testing.T) {

@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy/internal/statefile"
 )
 
 const Prefix = "fy_"

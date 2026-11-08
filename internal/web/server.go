@@ -18,15 +18,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/apierr"
-	"github.com/nsxservices/fairy/internal/audit"
-	"github.com/nsxservices/fairy/internal/config"
-	"github.com/nsxservices/fairy/internal/model"
-	"github.com/nsxservices/fairy/internal/notify"
-	"github.com/nsxservices/fairy/internal/poller"
-	"github.com/nsxservices/fairy/internal/security"
-	"github.com/nsxservices/fairy/internal/settings"
-	"github.com/nsxservices/fairy/internal/tokens"
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy/internal/audit"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/notify"
+	"github.com/n3ptune-cpu/Fairy/internal/poller"
+	"github.com/n3ptune-cpu/Fairy/internal/security"
+	"github.com/n3ptune-cpu/Fairy/internal/settings"
+	"github.com/n3ptune-cpu/Fairy/internal/tokens"
 )
 
 //go:embed static

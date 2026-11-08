@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nsxservices/fairy/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 )
 
 const MaxBackgroundBytes = 8 * 1024 * 1024

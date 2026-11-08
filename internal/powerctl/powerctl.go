@@ -20,12 +20,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/apierr"
-	"github.com/nsxservices/fairy/internal/config"
-	"github.com/nsxservices/fairy/internal/jsonx"
-	"github.com/nsxservices/fairy/internal/model"
-	"github.com/nsxservices/fairy/internal/normalise"
-	"github.com/nsxservices/fairy/internal/poller"
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy/internal/poller"
 )
 
 var Actions = []string{"start", "shutdown", "reboot", "stop", "cancel", "wake"}

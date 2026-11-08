@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/config"
-	"github.com/nsxservices/fairy/internal/devices"
-	"github.com/nsxservices/fairy/internal/jsonx"
-	"github.com/nsxservices/fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/devices"
+	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
 const (

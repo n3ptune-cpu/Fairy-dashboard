@@ -23,14 +23,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/config"
-	"github.com/nsxservices/fairy/internal/devices"
-	"github.com/nsxservices/fairy/internal/jsonx"
-	"github.com/nsxservices/fairy/internal/model"
-	"github.com/nsxservices/fairy/internal/poller"
-	"github.com/nsxservices/fairy/internal/power"
-	"github.com/nsxservices/fairy/internal/redact"
-	"github.com/nsxservices/fairy/internal/ups"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/devices"
+	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/poller"
+	"github.com/n3ptune-cpu/Fairy/internal/power"
+	"github.com/n3ptune-cpu/Fairy/internal/redact"
+	"github.com/n3ptune-cpu/Fairy/internal/ups"
 )
 
 const GiB = 1 << 30

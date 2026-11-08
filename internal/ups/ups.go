@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/config"
-	"github.com/nsxservices/fairy/internal/devices"
-	"github.com/nsxservices/fairy/internal/model"
-	"github.com/nsxservices/fairy/internal/normalise"
-	"github.com/nsxservices/fairy/internal/power"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/devices"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy/internal/power"
 )
 
 var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)

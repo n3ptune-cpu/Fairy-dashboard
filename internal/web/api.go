@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/apierr"
-	"github.com/nsxservices/fairy/internal/audit"
-	"github.com/nsxservices/fairy/internal/config"
-	"github.com/nsxservices/fairy/internal/model"
-	"github.com/nsxservices/fairy/internal/normalise"
-	"github.com/nsxservices/fairy/internal/powerctl"
-	"github.com/nsxservices/fairy/internal/scheduler"
-	"github.com/nsxservices/fairy/internal/settings"
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy/internal/audit"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy/internal/powerctl"
+	"github.com/n3ptune-cpu/Fairy/internal/scheduler"
+	"github.com/n3ptune-cpu/Fairy/internal/settings"
 )
 
 func (s *Server) apiRoutes(m *http.ServeMux) {

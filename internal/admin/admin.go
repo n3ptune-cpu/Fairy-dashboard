@@ -19,12 +19,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/adminstate"
-	"github.com/nsxservices/fairy/internal/audit"
-	"github.com/nsxservices/fairy/internal/config"
-	"github.com/nsxservices/fairy/internal/power"
-	"github.com/nsxservices/fairy/internal/tokens"
-	"github.com/nsxservices/fairy/internal/ups"
+	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy/internal/audit"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/power"
+	"github.com/n3ptune-cpu/Fairy/internal/tokens"
+	"github.com/n3ptune-cpu/Fairy/internal/ups"
 )
 
 const usage = `fairy admin: break-glass administration (no web login needed)

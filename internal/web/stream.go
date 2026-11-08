@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
 var watchRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)

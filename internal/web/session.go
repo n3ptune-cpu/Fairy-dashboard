@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nsxservices/fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
 const cookieName = "fairy_session"

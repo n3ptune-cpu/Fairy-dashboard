@@ -15,14 +15,14 @@ import (
 	"runtime"
 	"syscall"
 
-	"github.com/nsxservices/fairy/internal/admin"
-	"github.com/nsxservices/fairy/internal/config"
-	"github.com/nsxservices/fairy/internal/demo"
-	"github.com/nsxservices/fairy/internal/model"
-	"github.com/nsxservices/fairy/internal/poller"
-	"github.com/nsxservices/fairy/internal/power"
-	"github.com/nsxservices/fairy/internal/ups"
-	"github.com/nsxservices/fairy/internal/web"
+	"github.com/n3ptune-cpu/Fairy/internal/admin"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/demo"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/poller"
+	"github.com/n3ptune-cpu/Fairy/internal/power"
+	"github.com/n3ptune-cpu/Fairy/internal/ups"
+	"github.com/n3ptune-cpu/Fairy/internal/web"
 )
 
 var version = "dev" // set with -ldflags "-X main.version=..."

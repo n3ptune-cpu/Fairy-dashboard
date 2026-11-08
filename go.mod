@@ -1,4 +1,4 @@
-module github.com/nsxservices/fairy
+module github.com/n3ptune-cpu/Fairy
 
 go 1.27.3
 
