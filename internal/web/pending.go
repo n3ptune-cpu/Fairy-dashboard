@@ -128,6 +128,9 @@ func (s *Server) resumePending(c *reqCtx) {
 	if res.Message == "" {
 		res.Message, _ = body["message"].(string)
 	}
+	if id, ok := body["id"].(string); ok && res.OK && len(id) <= 64 {
+		res.Ref = id // e.g. the Add host the action made
+	}
 	if res.Message == "" && res.OK {
 		res.Message = "done"
 	}

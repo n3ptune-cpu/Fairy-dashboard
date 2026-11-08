@@ -191,6 +191,9 @@ func (s *Server) hostAdd(c *reqCtx) error {
 		return enrollErr(err)
 	}
 	c.audit(u, "host.add", cr.HostID, params, "join code made (valid 15 min)")
+	if c.resumed() {
+		s.Enroll.Hold(cr) // made right after a step-up sign-in: the browser fetches the code once (reveal=1)
+	}
 	c.json(201, cr)
 	return nil
 }
@@ -214,6 +217,9 @@ func (s *Server) hostRepair(c *reqCtx) error {
 		return enrollErr(err)
 	}
 	c.audit(u, "host.repair", id, nil, "join code made (valid 15 min)")
+	if c.resumed() {
+		s.Enroll.Hold(cr)
+	}
 	c.json(201, cr)
 	return nil
 }
@@ -261,8 +267,17 @@ func (s *Server) hostRemove(c *reqCtx) error {
 }
 
 func (s *Server) enrollmentGet(c *reqCtx) error {
-	if _, err := c.requireAdmin("Add host"); err != nil {
+	u, err := c.requireAdmin("Add host")
+	if err != nil {
 		return err
+	}
+	if c.r.URL.Query().Get("reveal") == "1" {
+		cr, ok := s.Enroll.Reveal(c.r.PathValue("id"), actorOf(u))
+		if !ok {
+			return apierr.New(404, "the code was already shown, or this Add host is over: make a new code")
+		}
+		c.json(200, cr)
+		return nil
 	}
 	e, ok := s.Enroll.Get(c.r.PathValue("id"))
 	if !ok {

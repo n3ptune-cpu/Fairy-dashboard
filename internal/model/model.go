@@ -324,6 +324,7 @@ type PendingResult struct {
 	Status  int    `json:"status"`
 	Message string `json:"message"`
 	Path    string `json:"path"`
+	Ref     string `json:"ref,omitempty"` // the id of what the action made (an Add host), if any
 }
 
 // FanEvent is one entry of the agent's fan log (mode changes, watchdog).

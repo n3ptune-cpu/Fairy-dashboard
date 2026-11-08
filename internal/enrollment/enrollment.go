@@ -74,6 +74,7 @@ type Enrollment struct {
 	host     managed.Host
 	cancel   context.CancelFunc
 	pairedAt time.Time
+	held     *Created // the code and command, kept for one Reveal (made by the panel's replay after a step-up)
 }
 
 // Created is what the dialog shows once: the code and the commands.
@@ -296,8 +297,33 @@ func Command(base string, h managed.Host, code, panel string) string {
 
 func (m *Manager) copyOf(e *Enrollment) Enrollment {
 	c := *e
-	c.proof, c.cancel = "", nil
+	c.proof, c.cancel, c.held = "", nil, nil
 	return c
+}
+
+// Hold keeps a new enrollment's code and command for one Reveal by its creator: the panel made it by itself
+// right after a step-up sign-in, so the browser has not seen the code yet.
+func (m *Manager) Hold(cr Created) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.items[cr.ID]; ok && !e.Done {
+		c := cr
+		e.held = &c
+	}
+}
+
+// Reveal returns a held code and command once, to the user who made the enrollment, while it still waits.
+func (m *Manager) Reveal(id, by string) (Created, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.items[id]
+	if !ok || e.held == nil || e.CreatedBy != by || e.Done {
+		return Created{}, false
+	}
+	c := *e.held
+	e.held = nil
+	c.Enrollment = m.copyOf(e)
+	return c, true
 }
 
 // prune forgets finished enrollments older than an hour. Caller holds m.mu.

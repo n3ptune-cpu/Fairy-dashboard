@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 )
 
@@ -490,4 +492,51 @@ func TestPendingActionRunsOnceAfterStepUp(t *testing.T) {
 	if r := e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, "Cookie", sess, "X-Requested-With", "fairy"); r.code != 200 {
 		t.Fatal("control right after the step-up", r.code, string(r.raw))
 	}
+}
+
+// Add host after a step-up: the panel makes the code by itself, and the browser gets it once (reveal=1).
+func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
+	e := setup(t)
+	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.Pair = func(ctx context.Context, _, _ string) (int, enroll.Response, string, error) {
+		<-ctx.Done()
+		return 0, enroll.Response{}, "", ctx.Err()
+	}
+	idp := newFakeIDP(t)
+	e.s.Cfg.OIDC.Issuer = idp.srv.URL
+	idp.claims = map[string]any{"groups": []string{"viewers", "controllers"}, "auth_time": time.Now().Add(-time.Hour).Unix()}
+	q, rt := idp.login(e, "/auth/login?next=/", "")
+	sess := sessionCookie(e, e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt).hdr)
+	body := map[string]any{"name": "NSX-FURINA", "os": "linux", "options": map[string]any{"power_control": true}}
+	r := e.do("POST", "/api/admin/hosts", body, "Cookie", sess, "X-Requested-With", "fairy", "Content-Type", "application/json",
+		"X-Fairy-Action", "Add host NSX-FURINA")
+	if r.code != 401 || !strings.Contains(string(r.raw), `"pending":true`) || len(e.s.Enroll.List()) != 0 {
+		t.Fatal("first try must ask for a step-up and make nothing", r.code, string(r.raw))
+	}
+	sess = sessionCookie(e, r.hdr)
+	q, rt = idp.login(e, "/auth/login?step_up=1&next=/%23/", sess)
+	idp.claims["auth_time"] = time.Now().Unix()
+	r = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	if r.code != 303 || len(e.s.Enroll.List()) != 1 {
+		t.Fatal("the Add host must be made once after the sign-in", r.code, len(e.s.Enroll.List()))
+	}
+	sess = sessionCookie(e, r.hdr)
+	me := e.do("GET", "/api/me", nil, "Cookie", sess)
+	pr, _ := me.body["pending_result"].(map[string]any)
+	if pr == nil || pr["ok"] != true || pr["ref"] == nil || strings.Contains(string(me.raw), `"command":`) || strings.Contains(string(me.raw), `"code":`) {
+		t.Fatal("pending result", string(me.raw))
+	}
+	sess = sessionCookie(e, me.hdr)
+	id := pr["ref"].(string)
+	g := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", sess)
+	if code, _ := g.body["code"].(string); g.code != 200 || code == "" || !strings.Contains(g.body["command"].(string), code) {
+		t.Fatal("reveal", g.code, string(g.raw))
+	}
+	if g := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", sess); g.code != 404 {
+		t.Fatal("the code is shown once", g.code)
+	}
+	if g := e.do("GET", "/api/admin/enrollments/"+id, nil, "Cookie", sess); g.code != 200 || g.body["code"] != nil {
+		t.Fatal("plain get must not carry the code", string(g.raw))
+	}
+	e.s.Enroll.Cancel(id)
 }
