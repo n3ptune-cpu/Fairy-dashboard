@@ -6,9 +6,13 @@
 
 const $ = (s, root = document) => root.querySelector(s);
 const state = {
-  me: null, systems: [], byId: {}, summary: null, power: null, history: [], settings: null, closed: {}, timer: null,
+  me: null, systems: [], byId: {}, summary: null, power: null, history: [], settings: null, timer: null,
   ups: null, upsHist: {}, upsEvents: [], menu: null, poll: {}, caps: {}, watch: undefined, es: null, flash: null,
+  sites: {}, open: {},
 };
+const OPEN_KEY = "fairy-open-hosts";  // hosts whose guests are shown in the sidebar (this browser)
+try { for (const id of JSON.parse(localStorage.getItem(OPEN_KEY) || "[]")) state.open[id] = true; } catch { /* ignore */ }
+const saveOpen = () => { try { localStorage.setItem(OPEN_KEY, JSON.stringify(Object.keys(state.open).filter((k) => state.open[k]))); } catch { /* ignore */ } };
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const enc = encodeURIComponent;
 const controlOff = () => state.summary?.control_disabled || state.me?.control_disabled || null;
@@ -199,21 +203,25 @@ const linkedPower = (id) => {
   return { sources: srcs, watts: srcs.length ? w : null, history: state.history.map((h) => srcs.reduce((a, s) => a + (h.sources[s.id] || 0), 0) || null) };
 };
 
-// ------------------------------------------------------------ grouping: clusters, standalone PVE hosts, owners
+// ------------------------------------------------------------ grouping: hosts by site
+// Every host (Proxmox node or agent) is listed under its site (site: in config.yaml, or set on the Users page);
+// without one, under its owner group, else "Other". A cluster name is only a small tag, for real multi-node clusters.
 const nodesOf = () => state.systems.filter((s) => s.kind === "node");
-const clusters = () => {  // [[cluster name, nodes]] for clustered nodes only
-  const out = {};
-  nodesOf().filter((n) => n.cluster).forEach((n) => (out[n.cluster] ||= []).push(n));
-  return Object.entries(out);
-};
-// Bare-metal agents AND standalone Proxmox hosts (no cluster heading), grouped by owner group
-const systemsByGroup = () => {
+const isHost = (s) => s.kind === "node" || s.kind === "agent";
+const siteOf = (s) => state.sites[s.id] || s.group || s.owner || "Other";
+const hostsBySite = () => {  // [[site, hosts]], sites A-Z, "Other" last
   const groups = {};
-  state.systems.filter((s) => s.kind === "agent" || (s.kind === "node" && !s.cluster)).forEach((s) => (groups[s.group || s.owner || "Other"] ||= []).push(s));
-  return groups;
+  state.systems.filter(isHost).forEach((s) => (groups[siteOf(s)] ||= []).push(s));
+  return Object.entries(groups).sort(([a], [b]) => (a === "Other") - (b === "Other") || a.localeCompare(b));
 };
+const clusterTag = (s) => (s.kind === "node" && s.cluster && nodesOf().filter((n) => n.cluster_id === s.cluster_id).length > 1
+  ? `<span class="tag" title="Proxmox cluster">${esc(s.cluster)}</span>` : "");
 const guestsOf = (node) => state.systems.filter((g) => (g.kind === "qemu" || g.kind === "lxc") && g.parent === node.name && g.cluster_id === node.cluster_id);
-const guestNodes = () => [...clusters().flatMap(([, ns]) => ns), ...nodesOf().filter((n) => !n.cluster)];
+const parentOf = (g) => (g.parent ? nodesOf().find((n) => n.name === g.parent && n.cluster_id === g.cluster_id) : null);
+const guestCount = (s) => {
+  const gs = s.kind === "node" ? guestsOf(s) : [];
+  return gs.length ? `<span class="guest-count"><b>${gs.length}</b> guest${gs.length === 1 ? "" : "s"} · ${gs.filter((g) => g.status === "online").length} running</span>` : "";
+};
 const hostIcon = (s) => (s.kind === "node" ? I.cluster : I.machine);
 const upsById = (id) => (state.ups?.ups || []).find((u) => u.id === id);
 const upsOf = (s) => (s.ups || []).map(upsById).filter(Boolean);
@@ -258,25 +266,21 @@ const sysLink = (s, cls) => navLink(`#/system/${enc(s.id)}`, `<span class="ico">
   `<span class="cpu">${s.status === "paused" ? "paused" : live(s) && s.cpu_percent != null ? fmtP(s.cpu_percent) : ""}</span>`);
 
 function renderNav() {
-  const caret = (key) => `<span class="caret ${state.closed[key] ? "" : "open"}" data-toggle="${esc(key)}">${I.caret}</span>`;
   let html = navLink("#/", `<span class="ico">${I.overview}</span>`, "Overview");
   html += `<div class="nav-sec"><div class="nav-title"><span class="ico">${I.machine}</span><span>Hosts</span></div>`;
-  for (const [name, ns] of clusters()) html += `<div class="nav-sub">Cluster · ${esc(name)}</div>${ns.map((n) => sysLink(n, "sub")).join("")}`;
-  for (const [g, items] of Object.entries(systemsByGroup())) html += `<div class="nav-sub">${esc(g)}</div>${items.map((s) => sysLink(s, "sub")).join("")}`;
-  html += "</div>";
-  const gn = guestNodes().filter((n) => guestsOf(n).length);
-  if (gn.length) {
-    html += `<div class="nav-sec"><div class="nav-title"><span class="ico">${I.guests}</span><span>Guests</span></div>`;
-    let lastCluster;
-    for (const n of gn) {
-      const gs = guestsOf(n), cl = n.cluster || n.group || n.owner || "";
-      if (cl !== lastCluster) { html += `<div class="nav-sub">${esc(n.cluster ? cl : `${cl} · standalone`)}</div>`; lastCluster = cl; }
-      html += `<a class="nav-link sub node-toggle" data-toggle="${esc(n.id)}" title="${esc(n.name)}"><span class="ico">${caret(n.id)}</span><span class="name">${esc(n.name)}</span>
-        <span class="cpu">${gs.filter((g) => g.status === "online").length}/${gs.length}</span></a>`;
-      if (!state.closed[n.id]) gs.forEach((g) => (html += sysLink(g, "sub2")));
+  const cur = state.byId[current().id], curParent = cur ? parentOf(cur) : null;
+  for (const [site, hosts] of hostsBySite()) {
+    html += `<div class="nav-sub">${esc(site)}</div>`;
+    for (const h of hosts) {
+      const gs = h.kind === "node" ? guestsOf(h) : [];
+      if (!gs.length) { html += `<div class="nav-host no-chev">${sysLink(h, "sub")}</div>`; continue; }
+      const open = !!state.open[h.id] || curParent?.id === h.id;
+      html += `<div class="nav-host"><button class="chev" type="button" data-host-toggle="${esc(h.id)}" aria-expanded="${open}"
+        aria-label="${esc(`${open ? "Hide" : "Show"} the ${gs.length} guests of ${h.name}`)}" title="${gs.length} guests">${I.caret}</button>${sysLink(h, "sub")}</div>`;
+      if (open) html += `<div class="nav-guests">${gs.map((g) => sysLink(g, "sub2")).join("")}</div>`;
     }
-    html += "</div>";
   }
+  html += "</div>";
   const ups = state.ups?.ups || [], batt = ups.filter(onBattery);
   html += `<div class="nav-sec">${navLink("#/power", `<span class="ico">${I.power}</span>`, "Power", "",
     `<span class="cpu">${state.power?.total_w != null ? fmtW(state.power.total_w) : ""}</span>`)}
@@ -325,8 +329,8 @@ const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.ut
 
 function hostRow(s) {
   const gpus = s.gpus || [], w = watts(s);
-  return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="host-ico">${hostIcon(s)}</span>
-      <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${upsChips(s)}${battChip(s)}</a><span class="sub">${esc(subLine(s))}${verChip(s.id)}</span></td>
+  return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="host-ico">${hostIcon(s)}</span>
+      <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${clusterTag(s)}${upsChips(s)}${battChip(s)}</a>${guestCount(s)}<span class="sub">${esc(subLine(s))}${verChip(s.id)}</span></td>
     <td class="col-kind">${s.kind === "node" ? `<span class="chip">Proxmox</span>` : `<span class="note">${esc(s.owner || s.group || "–")}</span>`}</td>
     <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}</span>`}</td>
     <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
@@ -338,7 +342,7 @@ const hostTable = (groups) => `<div class="panel glass scroll"><table class="tab
   (title ? `<tr class="group" data-key="g-${esc(title)}"><td colspan="6">${esc(title)}</td></tr>` : "") + rows.map(hostRow).join("")).join("")}</tbody></table></div>`;
 
 function guestRow(s, showNode = true) {
-  return `<tr class="row guest ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="dot ${s.status}"></span>${esc(s.name)}</a></td>
+  return `<tr class="row guest ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="dot ${s.status}"></span>${esc(s.name)}</a></td>
     <td><span class="chip ${s.kind}">${esc(kindLabel(s))}</span> <span class="note">#${s.vmid}</span></td>
     ${showNode ? `<td class="col-kind"><span class="note">${esc(s.parent)}</span></td>` : ""}
     <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${esc(s.status)}</span>`}</td>
@@ -365,9 +369,7 @@ function pageOverview() {
   (state.ups?.ups || []).filter((u) => onBattery(u) || u.flags.includes("replace_battery") || u.status === "unreachable").forEach((u) =>
     attention.push([{ id: null, name: u.name, status: onBattery(u) ? "stale" : "offline", isUps: true },
       u.flags.includes("replace_battery") ? "replace battery" : u.status.replace("_", " ")]));
-  const hostGroups = [...clusters().map(([name, ns]) => [`Cluster nodes · ${name}`, ns]), ...Object.entries(systemsByGroup())];
-  const guestGroups = guestNodes().map((n) => [`${n.cluster || `${n.group || n.owner || ""} · standalone`} · on ${n.name}`, guestsOf(n)]).filter(([, g]) => g.length);
-  const nGuests = guestGroups.reduce((a, [, g]) => a + g.length, 0);
+  const hostGroups = hostsBySite();
   const ups = state.ups?.ups || [];
   return `<div class="tiles">
     ${c ? `<div class="panel glass tile"><div class="label">Cluster CPU · ${esc(c.name)}</div><div class="value">${fmtP(c.cpu_percent)}<small> of ${c.cores} cores</small></div>${barEl("cpu", c.cpu_percent)}</div>
@@ -380,7 +382,7 @@ function pageOverview() {
   </div>
   ${attention.length ? `<div class="attention"><span class="t">Attention</span>${attention.map(([s, why]) => `<a href="${s.isUps ? "#/ups" : `#/system/${enc(s.id)}`}"><span class="dot ${s.status}"></span>${s.isUps ? I.ups : ""}${esc(s.name)} <small>${esc(why)}</small></a>`).join("")}</div>` : ""}
   <div class="section-title">Hosts <span class="count">${hostGroups.reduce((a, [, h]) => a + h.length, 0)}</span></div>${hostTable(hostGroups)}
-  ${nGuests ? `<div class="section-title">Virtual machines &amp; containers <span class="count">${nGuests}</span></div>${guestTable(guestGroups)}` : ""}`;
+  <p class="note">A Proxmox host's VMs and containers are on its page, and under it in the sidebar (the arrow).</p>`;
 }
 
 // ---- polling menu (⋯) and power menu on the detail page
@@ -482,8 +484,9 @@ function systemOverview(s) {
       ${g.vram_total ? metric("vram", "VRAM", pct(g.vram_used, g.vram_total), `${fmtBytes(g.vram_used)} / ${fmtBytes(g.vram_total)}`) : ""}
       <div class="gpu-facts"><span>${g.temp_c != null ? `${g.temp_c.toFixed(0)}°C` : "–"}</span><span>${g.power_w != null ? fmtW(g.power_w) : "–"}</span><span class="note">${esc(g.vendor)}</span></div>
     </div>`).join("")}</div></div>` : "";
-  const sensors = (s.temps || []).length || (s.fans || []).length || (s.voltages || []).length ? `<div class="panel glass pad"><h3>Sensors</h3>
-    ${(s.temps || []).slice(0, 12).map((t) => `<div class="list-row"><span>${esc(t.label || t.sensor)}</span><span>${t.current_c.toFixed(0)}°C</span></div>`).join("")}
+  const temps = s.temps || [];  // all of them (a 16-core CPU has 16 "Core n"); two columns when there are many
+  const sensors = temps.length || (s.fans || []).length || (s.voltages || []).length ? `<div class="panel glass pad"><h3>Sensors</h3>
+    <div class="sensor-grid ${temps.length > 8 ? "two" : ""}">${temps.map((t) => `<div class="list-row"><span>${esc(t.label || t.sensor)}</span><span>${t.current_c.toFixed(0)}°C</span></div>`).join("")}</div>
     ${(s.fans || []).map((f) => `<div class="list-row"><span>${esc(f.name)}</span><span>${f.rpm} rpm</span></div>`).join("")}
     ${(s.voltages || []).map((v) => `<div class="list-row"><span>${esc(v.name)}</span><span>${v.volts.toFixed(2)} V</span></div>`).join("")}</div>` : "";
   const gs = s.kind === "node" ? guestsOf(s) : [];
@@ -582,6 +585,15 @@ function pagePower() {
 // ------------------------------------------------------------ UPS page
 const UPS_STATUS = { online: ["ok", "online"], on_battery: ["warn", "on battery"], low_battery: ["bad", "LOW BATTERY"],
   off: ["", "off"], unknown: ["", "unknown"], unreachable: ["bad", "unreachable"] };
+// Watts: estimated from load % × nominal W when the UPS has no power reading. Many small UPSes report 0 % load
+// below their resolution, so "0 W" while online is shown as "0 W?" (unknown, not zero).
+function upsWatts(u) {
+  if (u.watts == null) return "–";
+  if (u.watts_estimated && u.watts === 0 && u.status === "online") {
+    return `<span title="${esc(`The UPS reports 0 % load. Small UPSes often report 0 below their resolution, so the real draw is unknown (estimate from ${u.nominal_w} W nominal).`)}">0 W?</span>`;
+  }
+  return `${u.watts_estimated ? "≈" : ""}${fmtW(u.watts)}${u.watts_estimated ? ` (est. from ${u.nominal_w} W nominal)` : ""}`;
+}
 function upsCard(u) {
   const [cls, label] = UPS_STATUS[u.status] || ["", u.status];
   const hist = state.upsHist[u.id] || [];
@@ -595,7 +607,7 @@ function upsCard(u) {
       <div><div class="k">Battery</div><div class="big">${ch != null ? `${ch.toFixed(0)}%` : "–"}</div>${barEl(ch != null && ch < 30 ? "hot" : "ok", ch)}</div>
       <div><div class="k">Runtime</div><div class="big">${fmtRuntime(u.battery_runtime_s)}</div><div class="note">mm:ss at current load</div></div>
       <div><div class="k">Load</div><div class="big">${u.load_percent != null ? `${u.load_percent.toFixed(0)}%` : "–"}</div>
-        <div class="note">${u.watts != null ? `${u.watts_estimated ? "≈" : ""}${fmtW(u.watts)}${u.watts_estimated ? ` (est. from ${u.nominal_w} W nominal)` : ""}` : "–"}</div></div>
+        <div class="note">${upsWatts(u)}</div></div>
     </div>
     ${spark(hist.map((p) => p.watts), "ups")}<div class="note">load (W), last ${hist.length ? fmtUptime((Date.now() - new Date(hist[0].t)) / 1000) : "–"}</div>
     <div class="ups-facts">
@@ -1017,10 +1029,18 @@ function flash(msg, bad = false) {
 
 // Delegated clicks: survive DOM patching.
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-act],[data-toggle]");
+  const ht = e.target.closest("[data-host-toggle]");
+  if (ht) {
+    const id = ht.dataset.hostToggle, cur = state.byId[current().id], forced = cur && parentOf(cur)?.id === id;
+    state.open[id] = !(state.open[id] || forced);
+    if (!state.open[id]) delete state.open[id];
+    saveOpen(); renderNav(); return;
+  }
+  const row = e.target.closest("tr[data-href]");
+  if (row && !e.target.closest("a,button,input,select,label")) { location.hash = row.dataset.href; return; }
+  const t = e.target.closest("[data-act]");
   const r = current();
   if (!t) { if (state.menu && !e.target.closest(".menu")) { state.menu = null; render(); } return; }
-  if (t.dataset.toggle) { e.preventDefault(); e.stopPropagation(); state.closed[t.dataset.toggle] = !state.closed[t.dataset.toggle]; renderNav(); return; }
   const s = state.byId[r.id];
   const act = t.dataset.act;
   if (act === "menu" && s) {
@@ -1169,7 +1189,6 @@ function route() {
   const r = current();
   if (r.page === "system") {
     const s = state.byId[r.id];
-    if (s?.parent) { const n = nodesOf().find((x) => x.name === s.parent && x.cluster_id === s.cluster_id); if (n) state.closed[n.id] = false; }
     if (s && (s.power_actions || []).includes("wake")) refreshCaps(r.id);
   }
   $("#page").innerHTML = `<div data-key="${esc(routeKey(r))}">${pageHtml(r)}</div>`;
@@ -1202,7 +1221,7 @@ function connect(watch) {
   const es = new EventSource(`/api/stream${watch ? `?watch=${enc(watch)}` : ""}`);
   state.es = es;
   es.addEventListener("open", () => { if (state.streamed) checkAccess(); state.streamed = true; });
-  es.addEventListener("systems", (e) => { state.systems = JSON.parse(e.data).systems; indexSystems(); render(); });
+  es.addEventListener("systems", (e) => { state.systems = JSON.parse(e.data).systems; indexSystems(); loadSites(); render(); });
   es.addEventListener("systems_delta", (e) => {
     const d = JSON.parse(e.data), gone = new Set(d.removed);
     d.changed.forEach((s) => (state.byId[s.id] = s));
@@ -1210,7 +1229,9 @@ function connect(watch) {
     // keep server order for existing ids; new ids go at the end until the next full snapshot
     const seen = new Set();
     state.systems = state.systems.filter((s) => !gone.has(s.id)).map((s) => (seen.add(s.id), state.byId[s.id]));
-    d.changed.forEach((s) => { if (!seen.has(s.id)) state.systems.push(s); });
+    let added = false;
+    d.changed.forEach((s) => { if (!seen.has(s.id)) { state.systems.push(s); added = true; } });
+    if (added) loadSites();
     render();
   });
   es.addEventListener("summary", (e) => { state.summary = JSON.parse(e.data); render(); });
@@ -1225,6 +1246,9 @@ function connect(watch) {
     render();
   });
   es.onerror = () => { if (es.readyState === EventSource.CLOSED && state.es === es) { state.es = null; setTimeout(() => connect(state.watch), 3000); } };
+}
+async function loadSites() {  // the site of each host, for the sidebar and Overview groups
+  try { state.sites = (await api("/api/system-sites")).sites || {}; render(); } catch { /* keep the last */ }
 }
 async function loadUpsEvents() {
   try { state.upsEvents = await api("/api/ups/events?limit=50"); render(); } catch { /* ignore */ }
