@@ -173,7 +173,7 @@ agents:
     ups_powers: {cyberpower: [nsx-cyrene]}
   - {id: sleepy, url: "http://127.0.0.1:1", token_env: AGENT_TOKEN_SLEEPY}
 systems:
-  - {id: sleepy, wol: {mac: "a8:5e:45:12:34:56", relay: nsx-cyrene, broadcast: 192.168.1.255}}
+  - {id: sleepy, wol: {mac: "a8:5e:45:12:34:56", macs: ["A8-5E-45-12-34-56", "a8:5e:45:12:34:57"], relay: nsx-cyrene, broadcast: 192.168.1.255}}
 `, filepath.Join(dir, "data"), filepath.Join(dir, "audit.log"), agentURL)
 	cfg, err := config.Parse([]byte(y))
 	if err != nil {
@@ -380,7 +380,7 @@ func TestPanelContract(t *testing.T) {
 	c.mu.Lock()
 	sent := strings.Join(c.wolSent, ",")
 	c.mu.Unlock()
-	if sent != "192.168.1.255:9 102" {
+	if sent != "192.168.1.255:9 102,192.168.1.255:9 102" { // both network cards; the duplicate MAC once
 		t.Fatal(sent)
 	}
 

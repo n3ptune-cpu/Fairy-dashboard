@@ -78,6 +78,8 @@ agents:
 systems: []
   # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming], site: Straw}
   # - {id: nsx-cyrene, wol: {mac: "3c:ec:ef:00:11:22", relay: kachina-agent, broadcast: 192.168.10.255}}
+  # a machine with two network cards (Wake sends a packet to each):
+  # - {id: straw-msi-5600x, wol: {macs: ["d4:0d:ab:14:16:36", "04:7c:16:aa:bb:cc"], relay: straw-asus-i7-agent}}
 
 # Power sources and UPSes follow the hosts they are attached to (system: / powers:); one without a host gets
 # its site on the Users page. Anything without a site is visible to admins only.

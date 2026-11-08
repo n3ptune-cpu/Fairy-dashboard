@@ -236,7 +236,7 @@ func (c *Panel) validateAgents(errs *problems) map[string]*Agent {
 		if u, err := url.Parse(a.URL); err != nil || u.Host == "" {
 			errs.add("agent %s: url must be http(s)://host:port", a.ID)
 		}
-		if !envNameRe.MatchString(a.TokenEnv) {
+		if !a.Managed && !envNameRe.MatchString(a.TokenEnv) {
 			errs.add("agent %s: token_env must be an env var name", a.ID)
 		}
 		if a.ControlTokenEnv != "" && !envNameRe.MatchString(a.ControlTokenEnv) {
@@ -245,7 +245,7 @@ func (c *Panel) validateAgents(errs *problems) map[string]*Agent {
 		if a.FanControl != nil && (a.FanControl.Vendor != "supermicro" || !envNameRe.MatchString(a.FanControl.ControlTokenEnv)) {
 			errs.add("agent %s: fan_control needs vendor: supermicro and control_token_env", a.ID)
 		}
-		if (a.PowerControl || a.WolRelay || a.SelfUpdate) && a.ControlEnv() == "" {
+		if (a.PowerControl || a.WolRelay || a.SelfUpdate) && !a.HasControl() {
 			errs.add("agent %s: power_control / wol_relay / self_update need control_token_env", a.ID)
 		}
 		if a.DWServiceURL != "" && !strings.HasPrefix(a.DWServiceURL, "https://") {
@@ -268,8 +268,16 @@ func (c *Panel) validateSystems(errs *problems, agents map[string]*Agent) {
 			continue
 		}
 		w := o.Wol
-		if !macRe.MatchString(w.MAC) {
-			errs.add("system %s: wol.mac must look like aa:bb:cc:dd:ee:ff", o.ID)
+		if len(w.AllMACs()) == 0 {
+			errs.add("system %s: wol needs mac (or macs) like aa:bb:cc:dd:ee:ff", o.ID)
+		}
+		for _, m := range append([]string{w.MAC}, w.MACs...) {
+			if m != "" && !macRe.MatchString(m) {
+				errs.add("system %s: wol MAC %q must look like aa:bb:cc:dd:ee:ff", o.ID, m)
+			}
+		}
+		if len(w.MACs) > 8 {
+			errs.add("system %s: wol.macs: at most 8", o.ID)
 		}
 		if w.Port == 0 {
 			w.Port = 9

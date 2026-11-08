@@ -124,7 +124,16 @@ type Agent struct {
 	// SelfUpdate shows the agent on the Updates page with an Update button (the agent needs
 	// self_update.enabled too). Needs control_token_env.
 	SelfUpdate bool `yaml:"self_update"`
+
+	// Managed is set for hosts added in the panel (Add host, managed-hosts.yaml): their tokens come from the
+	// panel's state folder (Token, ControlToken) instead of environment variables. Never read from config.yaml.
+	Managed      bool   `yaml:"-" json:"-"`
+	Token        string `yaml:"-" json:"-"`
+	ControlToken string `yaml:"-" json:"-"`
 }
+
+// HasControl reports whether the panel holds a control token for this agent (by env var, or managed).
+func (a Agent) HasControl() bool { return a.ControlEnv() != "" || (a.Managed && a.ControlToken != "") }
 
 // ControlEnv is the env var holding this agent's separate WRITE token.
 func (a Agent) ControlEnv() string {
@@ -145,13 +154,30 @@ func (a Agent) DisplayName() string {
 	return a.ID
 }
 
-// Wol is a system's Wake-on-LAN setting: the magic packet is sent by a relay agent on the same LAN.
+// Wol is a system's Wake-on-LAN setting: the magic packet is sent by a relay agent on the same LAN. A machine
+// with several network cards lists them all in macs (mac and macs may both be given); Wake sends to each.
 type Wol struct {
-	MAC         string `yaml:"mac"`
+	MAC         string   `yaml:"mac"`
+	MACs        []string `yaml:"macs"`
 	Relay       string `yaml:"relay"`
 	Broadcast   string `yaml:"broadcast"`
 	Port        int    `yaml:"port"`
 	PasswordEnv string `yaml:"password_env"`
+}
+
+// AllMACs is mac followed by macs, without duplicates (compared case-insensitively, - and : alike).
+func (w Wol) AllMACs() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range append([]string{w.MAC}, w.MACs...) {
+		k := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(m), "-", ":"))
+		if k == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, strings.TrimSpace(m))
+	}
+	return out
 }
 
 // SystemOverride is a `systems:` entry: display name, labels, DWService link and Wake-on-LAN for one system id.

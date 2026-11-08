@@ -279,19 +279,34 @@ func executeWake(ctx context.Context, p *poller.Poller, s model.System, res mode
 	if port == 0 {
 		port = 9
 	}
-	body := map[string]any{"mac": o.Wol.MAC, "broadcast": nil, "port": port}
-	if o.Wol.Broadcast != "" {
-		body["broadcast"] = o.Wol.Broadcast
-	}
-	if o.Wol.PasswordEnv != "" {
-		if pw := os.Getenv(o.Wol.PasswordEnv); pw != "" {
-			body["password"] = pw
+	macs := o.Wol.AllMACs()
+	var sent int
+	var firstErr error
+	for _, mac := range macs { // every network card of the machine (wol: macs), one packet each
+		body := map[string]any{"mac": mac, "broadcast": nil, "port": port}
+		if o.Wol.Broadcast != "" {
+			body["broadcast"] = o.Wol.Broadcast
 		}
+		if o.Wol.PasswordEnv != "" {
+			if pw := os.Getenv(o.Wol.PasswordEnv); pw != "" {
+				body["password"] = pw
+			}
+		}
+		if _, err := agentCall(ctx, p, relay, "/wol", body); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		sent++
 	}
-	if _, err := agentCall(ctx, p, relay, "/wol", body); err != nil {
-		return res, err
+	if sent == 0 {
+		return res, firstErr
 	}
 	res.Message = "magic packet sent via " + relay.DisplayName() + "; give it a minute to boot"
+	if len(macs) > 1 {
+		res.Message = fmt.Sprintf("magic packets sent to %d of %d network cards via %s; give it a minute to boot", sent, len(macs), relay.DisplayName())
+	}
 	return res, nil
 }
 
