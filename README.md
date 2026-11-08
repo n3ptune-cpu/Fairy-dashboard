@@ -46,6 +46,8 @@ fairy serve --demo --demo-as viewer:Straw   # ...as a viewer of the Straw site s
 fairy admin help              # break-glass CLI: users and sites, tokens, sessions, control kill switch, host
                               # power flags, polling, audit tail, config check, health (all audited as "cli")
 fairy admin users set-role you@example.com admin   # locked out? make yourself admin again
+fairy update --check          # installed vs the latest signed Fairy-dashboard release
+fairy update [--yes]          # as root on the panel host: install it, restart fairy.service, roll back on failure
 fairy version
 ```
 
@@ -66,6 +68,29 @@ token, `POST /fan/mode`, `/fan/duty`, `/power`, `/wol` with the separate control
 Laptops: newer agents add an optional `battery` object to `/metrics` (`percent`, `state` charging / discharging /
 full / idle, `ac_online`, `power_w` positive while discharging, `time_remaining_s`, `health_pct`). The panel
 shows it as a Battery box on the host page and the charge in the host list; agents without it keep working.
+
+### Updates
+
+Nothing updates on its own. Every push to `main` makes a signed GitHub release (`.github/workflows/release.yml`:
+vet, test, build `fairy-linux-amd64` / `fairy-linux-arm64` with the version `<run number>-<short commit>` and the
+public key from `release/signing.pub`, sign `SHA256SUMS` with the `FAIRY_RELEASE_KEY` secret, release
+`build-<run number>` with the commits since the last one as notes). The one-time setup (key, secrets, first
+manual install per machine) is in Fairy-agent's
+[SETUP-UPDATES.md](https://github.com/n3ptune-cpu/Fairy-agent/blob/main/SETUP-UPDATES.md).
+
+* **The panel** updates only by hand on its host: `fairy update` (or the wrapper `deploy/fairy-update` as
+  `/usr/local/sbin/fairy-update`). It checks the release signature with the key built into the running binary,
+  keeps `/usr/local/bin/fairy.old`, restarts `fairy.service` and rolls back if the service does not stay up and
+  answer `/healthz`.
+* **Agents**: admins see, in the panel, a banner when a newer Fairy-agent or Fairy-dashboard release exists
+  (dismissed per release), an arrow next to each host's agent version when it is behind (click: release notes
+  and **Start update**), a dot on the menu's **Updates** entry, and the **Updates** page (every agent's version
+  and state, **Update** per host, **Update all**, the panel's own version vs the latest panel release). Update is
+  a control action: admin, CSRF header, kill switch, step-up sign-in, rate limit, audit (`update.agent`), and only
+  for agents with `self_update: true` (needs `control_token_env`) whose own config enables it; the agent then
+  downloads, verifies and installs the release itself (see Fairy-agent's AGENT.md). Viewers see none of it.
+* The latest releases are looked up on GitHub at most every 10 minutes, in the background and only while an
+  admin uses the panel; `updates: {check_latest: false}` switches that off on a panel without internet access.
 
 ### Custom logo
 
@@ -150,7 +175,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 
 | Folder | What it does |
 | --- | --- |
-| `cmd/fairy` | The `fairy` program: `main.go` picks the sub-command, `serve.go` starts the panel (or demo mode). |
+| `cmd/fairy` | The `fairy` program: `main.go` picks the sub-command, `serve.go` starts the panel (or demo mode), `update.go` is `fairy update`. |
 | `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
 | `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |
 | `internal/scheduler` | Runs each source as a job at its own interval: overrides, pause, boost while viewing, never overlapping. |
@@ -167,6 +192,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |
 | `internal/health` | `health.json`, the status file the panel writes for `fairy admin health`. |
 | `internal/settings` | Per-user UI settings and uploaded background images. |
+| `internal/updates` | The latest Fairy-agent / Fairy-dashboard release for the Updates page (GitHub, cached, never blocking). |
 | `internal/notify` | Optional ntfy / Discord message on control actions. |
 | `internal/security` | Finds the real client IP behind nginx (only for rate limits and the audit log). |
 | `internal/model` | The JSON shapes of the API (field names match the Python prototype). |
@@ -175,7 +201,8 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/demo` | `fairy serve --demo`: a simulated homelab (fake Proxmox, agents, plugs, UPS, BMC). |
 | `internal/agentcontract` | The panel <-> agent contract test: the panel's real poller, normaliser, power/UPS managers and web API against the real `fairy-agent` handler (fake collectors, fake BMC, fake devices). |
 | `internal/testutil` | Shared test fixtures. |
-| `deploy/` | Example `config.yaml`, `fairy.env`, the systemd unit `fairy.service`, nginx. (The agent's install files are in Fairy-agent.) |
+| `deploy/` | Example `config.yaml`, `fairy.env`, the systemd unit `fairy.service`, nginx, the `fairy-update` wrapper. (The agent's install files are in Fairy-agent.) |
+| `.github/workflows` | `release.yml` (signed release on every push to main), `ci.yml` (tests on pull requests). |
 
 Shared code imported from [Fairy-agent](https://github.com/n3ptune-cpu/Fairy-agent) (`github.com/n3ptune-cpu/Fairy-agent/...`):
 
@@ -187,6 +214,7 @@ Shared code imported from [Fairy-agent](https://github.com/n3ptune-cpu/Fairy-age
 | `pkg/tuya` | The Tuya 3.3/3.4/3.5 local protocol (encryption, frames, one persistent connection per plug). |
 | `pkg/redact` | Removes passwords/tokens from process command lines (in the agent, and again in the panel). |
 | `pkg/configutil` | The id rule (`ValidID`) and secrets referenced by environment variable name (`EnvSecret`). |
+| `pkg/release` | Signed releases: signature checks, the GitHub download, the swap / restart / rollback installer and the `update` command shared with `fairy-agent update`. |
 | `pkg/agent`, `pkg/agent/...` | Only in `internal/agentcontract`'s test: the agent's HTTP handler, fake collector and fake BMC. |
 
 ## Notes
