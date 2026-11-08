@@ -1,0 +1,5 @@
+#!/bin/sh
+# /usr/local/sbin/fairy-update: update the Fairy panel on this host (root). Same as `fairy update`:
+#   fairy-update --check    show the installed and the latest version
+#   fairy-update            install the latest signed release, restart fairy.service, roll back if it fails
+exec /usr/local/bin/fairy update "$@"

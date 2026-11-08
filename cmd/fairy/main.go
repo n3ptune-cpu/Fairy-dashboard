@@ -24,6 +24,8 @@ usage:
         [--logo FILE]                            ...with your own logo (PNG/JPEG/WebP/GIF, also for serve)
         [--demo-as viewer:Straw]                 ...previewed as a viewer of one site (or pending)
   fairy admin ...                                break-glass CLI (fairy admin help)
+  fairy update [--check] [--force] [--yes]       install the latest signed Fairy-dashboard release (root, on
+                                                 the panel host; keeps /usr/local/bin/fairy.old, rolls back)
   fairy version
 `
 
@@ -37,8 +39,14 @@ func main() {
 		os.Exit(serve(os.Args[2:]))
 	case "admin":
 		os.Exit(admin.Main(os.Args[2:], os.Stdout, os.Stderr))
+	case "update":
+		os.Exit(update(os.Args[2:]))
 	case "version", "--version", "-v":
-		fmt.Printf("fairy %s (%s, %s/%s)\n", version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+		key := "none (local build, fairy update refuses)"
+		if releaseKey != "" {
+			key = "built in"
+		}
+		fmt.Printf("fairy %s (%s, %s/%s) - release key: %s\n", version, runtime.Version(), runtime.GOOS, runtime.GOARCH, key)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
