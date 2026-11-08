@@ -451,8 +451,9 @@ func TestUserAndSiteChangesNeedAdminCSRFStepUp(t *testing.T) {
 	}
 }
 
-// Upgrading from a version without roles: a user in control_groups (or bootstrap_admins) becomes admin on
-// first sign-in; everyone else waits for access; the panel's role wins afterwards.
+// Upgrading from a version without roles: while users.json has no admin, the first real sign-in of someone in
+// control_groups (or with a verified email in bootstrap_admins) makes them admin; everyone else waits for
+// access; the panel's role wins afterwards. Once there is an admin, nobody is bootstrapped any more.
 func TestMigrationViaControlGroupsAndBootstrapAdmins(t *testing.T) {
 	e := setup(t)
 	e.s.Cfg.OIDC.BootstrapAdmins = []string{"Boss@Example.com"}
@@ -461,16 +462,32 @@ func TestMigrationViaControlGroupsAndBootstrapAdmins(t *testing.T) {
 	if r := e.do("GET", "/api/me", nil, "Cookie", e.staleCookie(controller(), 0)); r.code != 401 {
 		t.Fatal("pre-upgrade cookie", r.code, string(r.raw))
 	}
+	// bootstrap_admins needs a verified email
+	unverified := model.User{Sub: "boss-unverified", Email: model.P("boss@example.com"), Groups: []string{"viewers"}}
+	if r := e.do("GET", "/api/me", nil, "Cookie", e.cookie(unverified, 0)); r.body["role"] != "pending" {
+		t.Fatal("bootstrap_admins with an unverified email", string(r.raw))
+	}
+	boss := model.User{Sub: "boss", Email: model.P("boss@example.com"), EmailVerified: true, Groups: []string{"viewers"}}
+	if r := e.do("GET", "/api/me", nil, "Cookie", e.cookie(boss, 0)); r.body["role"] != "admin" {
+		t.Fatal("bootstrap_admins", string(r.raw))
+	}
+	// there is an admin now: a control-group member signing in for the first time waits like anyone else
 	c := e.cookie(controller(), 0)
+	if r := e.do("GET", "/api/me", nil, "Cookie", c); r.body["role"] != "pending" {
+		t.Fatal("control_groups bootstrapped although an admin exists", string(r.raw))
+	}
+	if u := e.s.Access.Load().Users["u2"]; u.Role != access.RolePending {
+		t.Fatal(u)
+	}
+
+	// a fresh install whose first sign-in is a control-group member
+	e = setup(t)
+	c = e.cookie(controller(), 0)
 	if r := e.do("GET", "/api/me", nil, "Cookie", c); r.body["role"] != "admin" || r.body["can_control"] != true || r.body["can_manage_users"] != true {
 		t.Fatal(string(r.raw))
 	}
 	if u := e.s.Access.Load().Users["u2"]; u.Role != access.RoleAdmin || u.Via != "control_groups" {
 		t.Fatal(u)
-	}
-	boss := model.User{Sub: "boss", Email: model.P("boss@example.com"), Groups: []string{"viewers"}}
-	if r := e.do("GET", "/api/me", nil, "Cookie", e.cookie(boss, 0)); r.body["role"] != "admin" {
-		t.Fatal("bootstrap_admins", string(r.raw))
 	}
 	v := e.cookie(viewer, 0)
 	r := e.do("GET", "/api/me", nil, "Cookie", v)
@@ -487,8 +504,11 @@ func TestMigrationViaControlGroupsAndBootstrapAdmins(t *testing.T) {
 	if r := e.do("GET", "/api/me", nil, "Cookie", c); r.body["role"] != "viewer" {
 		t.Fatal("demoted control-group member", string(r.raw))
 	}
-	audit := e.do("GET", "/api/audit?action=user.first_sign_in", nil, "Cookie", e.cookie(boss, 0))
-	if n := len(audit.body["entries"].([]any)); n != 3 {
+	if _, _, err := e.s.Access.SetRole("u1", access.RoleAdmin, nil, "test", true); err != nil {
+		t.Fatal(err)
+	}
+	audit := e.do("GET", "/api/audit?action=user.first_sign_in", nil, "Cookie", e.cookie(viewer, 0))
+	if n := len(audit.body["entries"].([]any)); n != 2 {
 		t.Fatal("first sign-ins audited", n, string(audit.raw))
 	}
 }
@@ -500,6 +520,12 @@ func TestDemoPreviewAsViewer(t *testing.T) {
 	u.Auth = "demo"
 	e.s.DemoUser = &u
 	e.s.demoRoutes()
+	if _, _, err := e.s.Access.Seen(u.Sub, "", "", access.RolePending, "demo"); err != nil { // demo.SeedUsers
+		t.Fatal(err)
+	}
+	if _, _, err := e.s.Access.SetRole(u.Sub, access.RoleAdmin, nil, "demo", true); err != nil {
+		t.Fatal(err)
+	}
 	if r := e.do("GET", "/api/me", nil); r.body["role"] != "admin" || r.body["demo_view"] != "admin" {
 		t.Fatal(string(r.raw))
 	}

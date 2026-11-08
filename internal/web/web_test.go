@@ -401,8 +401,17 @@ func TestClaimsPolicy(t *testing.T) {
 	if isAllowed(userFromClaims(map[string]any{"sub": "y", "groups": []any{"other"}}, "groups"), o) {
 		t.Fatal("other group allowed")
 	}
-	if !isAllowed(u, config.OIDC{AllowedEmails: []string{"a@b.C"}}) {
-		t.Fatal("emails are case-insensitive")
+	if isAllowed(u, config.OIDC{AllowedEmails: []string{"a@b.C"}}) {
+		t.Fatal("allowed_emails must need email_verified")
+	}
+	for _, ev := range []any{true, "true"} {
+		u := userFromClaims(map[string]any{"sub": "x", "email": "A@B.c", "email_verified": ev}, "groups")
+		if !isAllowed(u, config.OIDC{AllowedEmails: []string{"a@b.C"}}) {
+			t.Fatal("emails are case-insensitive", ev)
+		}
+	}
+	if u := userFromClaims(map[string]any{"sub": "x", "email": "a@b.c", "email_verified": false}, "groups"); isAllowed(u, config.OIDC{AllowedEmails: []string{"a@b.c"}}) {
+		t.Fatal("email_verified=false allowed")
 	}
 	if canControl(&u, config.OIDC{}) {
 		t.Fatal("no control groups -> nobody controls")

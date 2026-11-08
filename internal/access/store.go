@@ -201,7 +201,8 @@ func (s *Store) update(fn func(*Data) error) (Data, error) {
 // Seen records a sign-in (or the first request of a session that predates users.json): a new user gets
 // newRole (admin when bootstrapped via control_groups / bootstrap_admins, else pending) with the reason via;
 // an existing user keeps their role and only has email, name and last-seen refreshed. created reports a new
-// user. A subject an admin removed never gets admin this way: they start as pending.
+// user. newRole admin is only applied while users.json has no admin (bootstrap of a fresh install or an
+// upgrade), and never to a subject an admin removed: otherwise they start as pending.
 func (s *Store) Seen(sub, email, name, newRole, via string) (u User, created bool, err error) {
 	if sub == "" {
 		return User{}, false, apierr.New(400, "missing subject")
@@ -212,6 +213,9 @@ func (s *Store) Seen(sub, email, name, newRole, via string) (u User, created boo
 		if !ok {
 			if _, removed := d.Removed[sub]; removed && newRole == RoleAdmin {
 				newRole, via = RolePending, "first sign-in (removed before: no bootstrap)"
+			}
+			if newRole == RoleAdmin && d.Admins() > 0 { // bootstrap only while there is no admin at all
+				newRole, via = RolePending, "first sign-in"
 			}
 			cur = User{Sub: sub, Role: newRole, Sites: []string{}, CreatedAt: now, Via: via}
 			created = true

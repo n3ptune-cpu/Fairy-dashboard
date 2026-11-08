@@ -37,7 +37,7 @@ no capabilities needed: the panel never runs local power or IPMI commands).
 ## Security model
 
 * Pocket ID only (OIDC code flow + PKCE S256, nonce, state). No passwords anywhere. Pocket ID (allowed_groups /
-  allowed_emails) decides who may sign in; nothing else.
+  allowed_emails, matched only for a verified email) decides who may sign in; nothing else.
 * Roles, managed in the panel (`users.json`, Users page or `fairy admin users|sites`), keyed by the OIDC subject:
   **admin** sees everything, may use control actions, the Audit and Users pages; **viewer** is read-only and sees
   only the systems, guests, power sources, UPSes (and their processes, sensors, history) of their sites;
@@ -47,8 +47,9 @@ no capabilities needed: the panel never runs local power or IPMI commands).
 * Sites: a host's site is the Users page's assignment, else `site:` in config.yaml (proxmox / agents / systems),
   else (guests) its node's site. Power sources and UPSes follow the hosts they are attached to unless assigned.
   No site = admins only.
-* Bootstrap / upgrade: a user without a `users.json` entry who is in `oidc.control_groups` or
-  `oidc.bootstrap_admins` becomes admin at their first real sign-in (a fresh Pocket ID login; never from the
+* Bootstrap / upgrade: only while `users.json` has no admin at all, a user without a `users.json` entry who is in
+  `oidc.control_groups` or whose **verified** email (`email_verified: true`) is in `oidc.bootstrap_admins` becomes
+  admin at their first real sign-in (a fresh Pocket ID login; never from the
   groups cached in a session cookie, and never for someone an admin removed). After that the panel decides.
   Removing a user also ends their sessions and revokes their API tokens. The last admin cannot be demoted or removed (server-enforced; the CLI needs `--force`).
 * Step-up: control actions need a sign-in from the last `step_up_window_s` (default 5 min); the re-login sends

@@ -37,7 +37,8 @@ set that up). Fairy refuses to demote or remove the **last admin**, so you can't
 1. **Pocket ID:** keep (or make) a group for everyone who may sign in at all, e.g. `homelab`, and put it in
    `config.yaml` under `oidc: allowed_groups: [homelab]`. Add Straw (and anyone else) to that group.
 2. **Make sure you become admin.** Either keep your admin group in `oidc: control_groups: [homelab-admins]`
-   (anyone in it becomes **admin the first time they sign in**), or list your email:
+   (while there is no admin yet, the first person in it to sign in becomes **admin**), or list your email
+   (it must be verified in Pocket ID):
    `oidc: bootstrap_admins: [you@example.com]`. If you already used `control_groups` before this update, you
    don't have to change anything: sign in again (an old session is asked to) and you'll be admin.
 3. Optional: write default sites into `config.yaml`, e.g. `site: Neptune` on your Proxmox cluster and agents,

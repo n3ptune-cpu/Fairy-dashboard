@@ -3,7 +3,6 @@ package web
 import (
 	"log/slog"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy/internal/access"
@@ -21,15 +20,15 @@ const seenEvery = 5 * time.Minute
 
 // bootstrapRole is the role a user gets at their first real sign-in (a fresh Pocket ID login, never a session
 // cookie): admin when they are in oidc.control_groups or their email is in oidc.bootstrap_admins (so an upgrade
-// from a version without roles, or a fresh users.json, never locks the owner out), else pending. The store
-// refuses admin for a subject an admin removed.
+// from a version without roles, or a fresh users.json, never locks the owner out), else pending. Only a
+// verified email counts. The store only applies it while users.json has no admin at all, and never for a
+// subject an admin removed.
 func (s *Server) bootstrapRole(u *model.User) (role, via string) {
 	o := s.Cfg.OIDC
 	if u.Auth != "token" && canControl(u, o) {
 		return access.RoleAdmin, "control_groups"
 	}
-	if e := strings.ToLower(model.Deref(u.Email)); e != "" &&
-		slices.ContainsFunc(o.BootstrapAdmins, func(x string) bool { return strings.ToLower(x) == e }) {
+	if emailIn(u, o.BootstrapAdmins) {
 		return access.RoleAdmin, "bootstrap_admins"
 	}
 	return access.RolePending, "first sign-in"

@@ -24,11 +24,13 @@ oidc:
   # Pocket ID only decides who may SIGN IN (allowed_groups / allowed_emails). What people see and may do is set
   # in the panel: Users page (admins), or `fairy admin users ...` on the server.
   allowed_groups: [homelab]
-  allowed_emails: []
-  # First sign-in only: people in these groups, or with these emails, start as admin. Everyone else waits for
-  # an admin to give them a role. After that the Users page decides (leaving the group changes nothing).
+  allowed_emails: []                      # only matched when Pocket ID says email_verified: true
+  # Bootstrap: ONLY while users.json has no admin at all (fresh install / upgrade), the first real sign-in of
+  # someone in these groups, or with one of these VERIFIED emails, makes them admin. Once there is an admin,
+  # everyone else waits for access and the Users page decides (leaving the group changes nothing). Someone an
+  # admin removed is never bootstrapped again. After your first sign-in you can empty both lists.
   control_groups: [homelab-admins]
-  bootstrap_admins: []                    # e.g. [neptune@example.com]
+  bootstrap_admins: []                    # e.g. [neptune@example.com]; recommended: [] once you are admin
 
 proxmox:
   - id: teyvat

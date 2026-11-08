@@ -282,6 +282,7 @@ type User struct {
 	Name              *string  `json:"name"`
 	PreferredUsername *string  `json:"preferred_username"`
 	Email             *string  `json:"email"`
+	EmailVerified     bool     `json:"email_verified,omitempty"` // the IdP's email_verified claim was true
 	Picture           *string  `json:"picture"`
 	Groups            []string `json:"groups"`
 	Auth              string   `json:"auth"` // session | token | demo

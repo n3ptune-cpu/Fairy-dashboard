@@ -22,6 +22,12 @@ func userFromClaims(claims map[string]any, groupsClaim string) model.User {
 	if u.Name == nil {
 		u.Name = str("display_name")
 	}
+	switch v := claims["email_verified"].(type) { // some providers send the string "true"
+	case bool:
+		u.EmailVerified = v
+	case string:
+		u.EmailVerified = strings.EqualFold(v, "true")
+	}
 	if gs, ok := claims[groupsClaim].([]any); ok {
 		for _, g := range gs {
 			u.Groups = append(u.Groups, fmt.Sprint(g))
@@ -30,15 +36,22 @@ func userFromClaims(claims map[string]any, groupsClaim string) model.User {
 	return u
 }
 
+// emailIn reports whether the user's email is in list (case-insensitive). Only a verified email counts: an
+// address a user could set on their own account must never decide who signs in or becomes admin.
+func emailIn(u *model.User, list []string) bool {
+	e := strings.ToLower(model.Deref(u.Email))
+	if e == "" || !u.EmailVerified {
+		return false
+	}
+	return slices.ContainsFunc(list, func(x string) bool { return strings.ToLower(x) == e })
+}
+
 func isAllowed(u model.User, o config.OIDC) bool {
 	if len(o.AllowedGroups) > 0 && !slices.ContainsFunc(u.Groups, func(g string) bool { return slices.Contains(o.AllowedGroups, g) }) {
 		return false
 	}
-	if len(o.AllowedEmails) > 0 {
-		e := strings.ToLower(model.Deref(u.Email))
-		if !slices.ContainsFunc(o.AllowedEmails, func(x string) bool { return strings.ToLower(x) == e }) {
-			return false
-		}
+	if len(o.AllowedEmails) > 0 && !emailIn(&u, o.AllowedEmails) {
+		return false
 	}
 	return true
 }
