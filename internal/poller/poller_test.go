@@ -273,3 +273,29 @@ func TestAddAndRemoveAgentAtRunTime(t *testing.T) {
 		}
 	}
 }
+
+// After a shutdown from the panel the host stops answering: its pending action (and the Cancel button and the
+// countdown banner) goes once the time has passed or the host is offline; a blip before the time keeps it.
+func TestPendingPowerClearsWhenHostGoesAway(t *testing.T) {
+	cfg := testutil.Config(t, []string{deadURL(t)}, deadURL(t), deadURL(t))
+	p, err := New(cfg, config.Secrets{}, testutil.NewBackend())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	seen := now.Add(-5 * time.Second)
+	s := model.System{ID: "x", Status: "online", LastSeen: &seen,
+		PowerPending: &model.PowerPending{Action: "shutdown", At: now.Add(30 * time.Second), DelayS: 60}}
+	if d := p.degrade(s, now, "timeout"); d.Status != "stale" || d.PowerPending == nil {
+		t.Fatal("a blip before the shutdown time keeps the pending action", d.Status, d.PowerPending)
+	}
+	s.PowerPending.At = now.Add(-time.Second)
+	if d := p.degrade(s, now, "timeout"); d.PowerPending != nil {
+		t.Fatal("after its time the shutdown is no longer pending")
+	}
+	old := now.Add(-time.Hour)
+	s.LastSeen, s.PowerPending.At = &old, now.Add(time.Hour)
+	if d := p.degrade(s, now, "timeout"); d.Status != "offline" || d.PowerPending != nil {
+		t.Fatal("offline host keeps its pending action", d.Status)
+	}
+}

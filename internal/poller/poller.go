@@ -199,6 +199,11 @@ func (p *Poller) degrade(s model.System, now time.Time, err string) model.System
 	}
 	s.Error = model.P(err)
 	s.NetRxBps, s.NetTxBps = nil, nil
+	// A shutdown / reboot the agent had scheduled is over once the host stops answering after its time (or
+	// once it is offline): no more "shutdown in 0:00" and no Cancel for a machine that is already off.
+	if s.PowerPending != nil && (s.Status == "offline" || !now.Before(s.PowerPending.At)) {
+		s.PowerPending = nil
+	}
 	return s
 }
 
