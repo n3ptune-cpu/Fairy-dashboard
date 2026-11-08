@@ -78,8 +78,8 @@ agents:
 # (+ <data_dir>/secrets/agent-<id>.json, 0600) and are merged with this file at start; an id written here wins.
 
 # enroll:                                 # Add host
-#   panel_address: 100.88.109.47          # the panel's Tailscale IPv4 as the agents see it (default: this machine's
-#                                         # only 100.64.0.0/10 address; set it when there are several or none)
+#   panel_address: 100.88.109.47          # optional: the panel's Tailscale IPv4 as the agents see it (default: found
+#                                         # at start on the tailscale* interface, else from tailscaled's LocalAPI)
 
 systems: []
   # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming], site: Straw}

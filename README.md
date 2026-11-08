@@ -133,8 +133,17 @@ wins and the managed one is skipped with a log line) and checked by `fairy admin
 the agent stays installed until uninstalled on the machine); both ask for the host's name to be typed and a
 step-up sign-in, and are audited. Hosts in config.yaml are not changed by the panel.
 
-`enroll: {panel_address: 100.x.y.z}` in config.yaml is the address the command gives the agent; by default the
-panel's only Tailscale (100.64.0.0/10) address. The panel must resolve MagicDNS names (or give the address).
+`enroll: {panel_address: 100.x.y.z}` in config.yaml is the address the command gives the agent. It is optional:
+without it the panel finds its own Tailscale address at start (logged once as `Add host: panel address`, and
+shown in the Add host dialog as "Panel address: 100.x.y.z (auto)"): the 100.64.0.0/10 address of an interface
+named `tailscale*` (else the only such address of any interface); when there is no such interface (tailscaled
+with `--tun=userspace-networking`, e.g. in an unprivileged LXC) it asks tailscaled itself over its LocalAPI
+socket `/var/run/tailscale/tailscaled.sock` (`GET /localapi/v0/status`, 2 s timeout). On Linux that socket is
+0666 and tailscaled gives every local user read-only access, so the `fairy` user needs no
+`tailscale set --operator=fairy`. A Tailscale IPv6 (fd7a:115c:a1e0::/48) is only used when there is no IPv4,
+and only shown: agents pair over IPv4, so set `panel_address` then. Set it too when the panel has several
+Tailscale-range addresses, or the agents reach it at another address. The panel must resolve MagicDNS names (or
+give the address).
 Not yet: adding a Proxmox node itself (the API token) from the panel; nodes stay in `proxmox:`.
 
 ### Notifications

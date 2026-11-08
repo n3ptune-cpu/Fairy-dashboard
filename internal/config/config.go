@@ -210,8 +210,8 @@ func (u Updates) Check() bool { return u.CheckLatest == nil || *u.CheckLatest }
 // Enroll is the `enroll:` block (Add host).
 type Enroll struct {
 	// PanelAddress is the panel's Tailscale IPv4 address as the agents see it: the install command passes it to
-	// the agent, which then answers pairing only from there. Default: the only 100.64.0.0/10 address of this
-	// machine.
+	// the agent, which then answers pairing only from there. Optional: by default the panel finds it at start
+	// (the tailscale* interface's 100.64.0.0/10 address, else tailscaled's LocalAPI; see enrollment.Detector).
 	PanelAddress string `yaml:"panel_address"`
 }
 

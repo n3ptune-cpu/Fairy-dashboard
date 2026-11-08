@@ -135,3 +135,22 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 		t.Fatal("viewer sees admin-only events", string(v.raw))
 	}
 }
+
+// The Add host dialog shows the panel's own address and where it came from; an IPv6-only detection is shown but
+// cannot make a command (agents pair over Tailscale IPv4).
+func TestAddHostPanelAddressSource(t *testing.T) {
+	e := setup(t)
+	e.s.control = newRateLimiter(100)
+	e.s.Enroll.PanelAddr, e.s.Enroll.PanelSource, e.s.Enroll.PanelVia = "100.88.109.47", "auto", "Tailscale LocalAPI"
+	c := e.cookie(controller(), 0)
+	pg := e.do("GET", "/api/admin/hosts", nil, "Cookie", c).body
+	if pg["panel_address"] != "100.88.109.47" || pg["panel_address_source"] != "auto" || pg["panel_address_via"] != "Tailscale LocalAPI" {
+		t.Fatal(pg)
+	}
+	e.s.Enroll.PanelAddr = "fd7a:115c:a1e0::5"
+	body := map[string]any{"name": "NSX-FURINA", "os": "linux"}
+	r := e.do("POST", "/api/admin/hosts", body, "Cookie", c, "X-Requested-With", "fairy")
+	if r.code != 400 || !strings.Contains(string(r.raw), "IPv4") {
+		t.Fatal(r.code, string(r.raw))
+	}
+}

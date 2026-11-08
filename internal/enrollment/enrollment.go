@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"slices"
 	"sort"
@@ -107,6 +108,8 @@ type Manager struct {
 	Interval    time.Duration // between pairing attempts (default 3 s)
 	OnlineWait  time.Duration // how long "paired" waits for the first good poll (default 90 s)
 	PanelAddr   string        // the panel's Tailscale IPv4 address, for the command
+	PanelSource string        // where PanelAddr came from: "config", "auto" (detected) or "demo"
+	PanelVia    string        // for "auto": how it was found ("interface tailscale0", "Tailscale LocalAPI")
 	InstallBase string        // https://github.com/<agent repo>/releases/latest/download
 
 	mu    sync.Mutex
@@ -210,6 +213,9 @@ func (m *Manager) Create(req Request, existing *managed.Host, by string, nodeSys
 	}
 	if m.PanelAddr == "" {
 		return Created{}, invalid("the panel does not know its own Tailscale address: set enroll: {panel_address: 100.x.y.z} in config.yaml")
+	}
+	if a, err := netip.ParseAddr(m.PanelAddr); err != nil || !a.Is4() {
+		return Created{}, invalid("the panel only found a Tailscale IPv6 address (%s), and agents pair over IPv4 only: give this machine a Tailscale IPv4 or set enroll: {panel_address: 100.x.y.z} in config.yaml", m.PanelAddr)
 	}
 	cfg := m.Hooks.Config()
 	if existing == nil {

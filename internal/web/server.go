@@ -119,11 +119,13 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	s.Notes = notifications.Open(filepath.Join(cfg.DataDir, "notifications.json"))
 	s.Notes.Push = notify.Notify
 	s.Watch = &notifications.Watcher{Store: s.Notes}
-	addr := cfg.Enroll.PanelAddress
+	addr, src, via := cfg.Enroll.PanelAddress, "config", ""
 	if addr == "" {
-		addr = enrollment.DetectPanelAddress()
+		d := enrollment.DetectPanelAddress()
+		addr, src, via = d.Addr, "auto", d.Via
 	}
 	s.Enroll = enrollment.New(s.Managed, s.enrollHooks(), addr, cfg.Updates.AgentRepo)
+	s.Enroll.PanelSource, s.Enroll.PanelVia = src, via
 	if err := s.Access.EnsureSites(cfg.Sites()); err != nil { // sites named in config.yaml exist on the Users page
 		slog.Error("users.json write failed", "error", err)
 	}

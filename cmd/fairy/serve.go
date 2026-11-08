@@ -137,6 +137,7 @@ func serve(args []string) int {
 		srv.Enroll.Pair = demo.Pair
 		if srv.Enroll.PanelAddr == "" {
 			srv.Enroll.PanelAddr = "100.88.109.47" // the demo has no Tailscale; any address shows the command
+			srv.Enroll.PanelSource, srv.Enroll.PanelVia = "demo", ""
 		}
 		to := srv.PanelUpdates.Latest().Version
 		srv.PanelRunner = &panelupdate.Demo{From: version, To: to}
@@ -146,6 +147,8 @@ func serve(args []string) int {
 	}
 	if srv.Enroll.PanelAddr == "" {
 		slog.Warn("Add host: this machine has no single Tailscale address; set enroll: {panel_address: 100.x.y.z} in config.yaml")
+	} else {
+		slog.Info("Add host: panel address", "address", srv.Enroll.PanelAddr, "source", srv.Enroll.PanelSource, "via", srv.Enroll.PanelVia)
 	}
 	if f.demoAs != "" {
 		if err := srv.SetDemoView(f.demoAs); err != nil {

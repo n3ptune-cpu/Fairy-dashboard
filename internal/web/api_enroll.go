@@ -93,6 +93,8 @@ func (s *Server) enrollEvent(e enrollment.Enrollment, kind, detail string) {
 
 type hostsPage struct {
 	PanelAddress string                  `json:"panel_address"`
+	PanelSource  string                  `json:"panel_address_source"` // config | auto | demo
+	PanelVia     string                  `json:"panel_address_via,omitempty"`
 	InstallBase  string                  `json:"install_base"`
 	Nodes        []nodeChoice            `json:"nodes"`
 	Relays       []idName                `json:"relays"`
@@ -133,7 +135,7 @@ func (s *Server) hostsPage(c *reqCtx) error {
 	if _, err := c.requireAdmin("Add host"); err != nil {
 		return err
 	}
-	p := hostsPage{PanelAddress: s.Enroll.PanelAddr, InstallBase: s.Enroll.InstallBase, Nodes: []nodeChoice{}, Relays: []idName{},
+	p := hostsPage{PanelAddress: s.Enroll.PanelAddr, PanelSource: s.Enroll.PanelSource, PanelVia: s.Enroll.PanelVia, InstallBase: s.Enroll.InstallBase, Nodes: []nodeChoice{}, Relays: []idName{},
 		Sites: []string{}, Managed: []managedRow{}, Enrollments: s.Enroll.List(), Skipped: s.ManagedSkipped}
 	for _, x := range s.Poller.Snapshot() {
 		if x.Kind == "node" {

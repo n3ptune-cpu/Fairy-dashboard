@@ -1299,7 +1299,8 @@ async function openAddHost() {
       <label class="mfield"><span>Wake-on-LAN MAC(s) <span class="note">optional</span></span><input class="input" id="ah-macs" autocomplete="off" spellcheck="false" placeholder="aa:bb:cc:dd:ee:ff"></label>
       <label class="mfield"><span>Woken by</span><select class="select" id="ah-relay"><option value="">–</option>${d.relays.map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}</select></label>
     </div>
-    ${d.panel_address ? "" : '<div class="warnbox">The panel does not know its own Tailscale address: set <code>enroll: {panel_address: 100.x.y.z}</code> in config.yaml.</div>'}
+    ${d.panel_address ? `<p class="note" id="ah-panel">Panel address: <code>${esc(d.panel_address)}</code> (${esc(d.panel_address_source || "config")})${d.panel_address_via ? ` <span title="how the panel found its own Tailscale address">· ${esc(d.panel_address_via)}</span>` : ""}${d.panel_address.includes(":") ? ' <b>IPv6 only: agents need the panel\'s Tailscale IPv4; set <code>enroll: {panel_address: 100.x.y.z}</code></b>' : ""}</p>`
+      : '<div class="warnbox">The panel does not know its own Tailscale address (no Tailscale interface or tailscaled status found): set <code>enroll: {panel_address: 100.x.y.z}</code> in config.yaml.</div>'}
     <div class="error" id="ah-err" role="alert"></div>
     <div class="row-gap end"><button class="btn" type="button" id="ah-cancel">Cancel</button><button class="btn primary" type="submit" id="ah-go">Make the code</button></div></form>`;
   m.hidden = false;
