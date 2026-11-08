@@ -2,6 +2,10 @@
 //
 // Created only with the admin CLI. Stored as SHA-256 hashes in <data_dir>/tokens.json; the plaintext is shown
 // once. Scope `read` or `control`. Tokens never work on /auth/* or the settings endpoints.
+//
+// A read token may be limited to some sites (Sites); without a list it sees every site, as tokens did before
+// sites existed. A token never sees more than its owner: when the owner is a user in users.json, the panel caps
+// the token to that user's role and sites (see web.tokenGrant).
 package tokens
 
 import (
@@ -29,8 +33,9 @@ const Prefix = "fy_"
 type Record struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
-	Owner     string     `json:"owner"` // an OIDC sub, or "system"
-	Scope     string     `json:"scope"` // read | control
+	Owner     string     `json:"owner"`           // an OIDC sub, or "system"
+	Scope     string     `json:"scope"`           // read | control
+	Sites     []string   `json:"sites,omitempty"` // read tokens only: limited to these sites (nil = every site)
 	CreatedAt time.Time  `json:"created_at"`
 	CreatedBy string     `json:"created_by"`
 	ExpiresAt *time.Time `json:"expires_at"`
@@ -95,13 +100,25 @@ func toMap(r Record) map[string]any {
 	return m
 }
 
-// Create returns the plaintext token (shown once) and its record.
+// Create returns the plaintext token (shown once) and its record. The token sees every site.
 func (s *Store) Create(name, owner, scope, createdBy string, expiresDays int) (string, Record, error) {
+	return s.CreateForSites(name, owner, scope, createdBy, expiresDays, nil)
+}
+
+// CreateForSites is Create for a read token limited to some sites (nil = every site). Control tokens act as
+// an admin and cannot be limited.
+func (s *Store) CreateForSites(name, owner, scope, createdBy string, expiresDays int, sites []string) (string, Record, error) {
 	if name == "" || len(name) > 64 {
 		return "", Record{}, errors.New("name must be 1-64 characters")
 	}
 	if scope != "read" && scope != "control" {
 		return "", Record{}, errors.New("scope must be read or control")
+	}
+	if sites != nil && scope != "read" {
+		return "", Record{}, errors.New("only read tokens can be limited to sites (a control token acts as an admin)")
+	}
+	if sites != nil && len(sites) == 0 {
+		return "", Record{}, errors.New("give at least one site")
 	}
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
@@ -112,7 +129,7 @@ func (s *Store) Create(name, owner, scope, createdBy string, expiresDays int) (s
 	_, _ = rand.Read(idb)
 	now := time.Now().UTC()
 	r := Record{ID: hex.EncodeToString(idb), Name: name, Owner: owner, Scope: scope, CreatedAt: now,
-		CreatedBy: createdBy, Hint: raw[len(raw)-4:], Hash: HashToken(raw)}
+		CreatedBy: createdBy, Hint: raw[len(raw)-4:], Hash: HashToken(raw), Sites: sites}
 	if expiresDays > 0 {
 		e := now.Add(time.Duration(expiresDays) * 24 * time.Hour)
 		r.ExpiresAt = &e
