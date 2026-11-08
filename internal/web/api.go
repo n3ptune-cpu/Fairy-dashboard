@@ -6,6 +6,7 @@ import (
 
 func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/me", s.h(s.me))
+	m.HandleFunc("DELETE /api/me/pending", s.h(s.dropPending))
 	m.HandleFunc("GET /api/audit", s.h(s.auditPage))
 	m.HandleFunc("GET /api/systems", s.h(s.systems))
 	m.HandleFunc("GET /api/systems/{id}", s.h(s.system))

@@ -152,3 +152,21 @@ func (c *reqCtx) readBody() {
 		c.r.Body = io.NopCloser(bytes.NewReader(b))
 	}
 }
+
+// dropPending forgets the session's pending action (Cancel in the "Confirm it's you" dialog), so a later
+// sign-in runs nothing.
+func (s *Server) dropPending(c *reqCtx) error {
+	u, err := c.requireUser()
+	if err != nil {
+		return err
+	}
+	if err := c.checkCSRF(u); err != nil {
+		return err
+	}
+	if sess := c.session(); sess.Pending != nil {
+		sess.Pending = nil
+		c.dirty = true
+	}
+	c.json(200, map[string]any{"ok": true})
+	return nil
+}

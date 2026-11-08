@@ -29,8 +29,13 @@ func (c *reqCtx) visibleEvents() (func(notifications.Event) bool, string, error)
 	if err != nil {
 		return nil, "", err
 	}
+	return eventVisibility(v), u.Sub, nil
+}
+
+// eventVisibility decides which events a view's user may see.
+func eventVisibility(v *view) func(notifications.Event) bool {
 	if v.all {
-		return func(notifications.Event) bool { return true }, u.Sub, nil
+		return func(notifications.Event) bool { return true }
 	}
 	return func(e notifications.Event) bool {
 		switch {
@@ -40,7 +45,7 @@ func (c *reqCtx) visibleEvents() (func(notifications.Event) bool, string, error)
 			return v.upsVis[e.UPSID]
 		}
 		return false
-	}, u.Sub, nil
+	}
 }
 
 func (s *Server) notificationsList(c *reqCtx) error {

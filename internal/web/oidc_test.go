@@ -540,3 +540,34 @@ func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
 	}
 	e.s.Enroll.Cancel(id)
 }
+
+// Cancel in "Confirm it's you" forgets the kept action: the next sign-in runs nothing.
+func TestCancelledPendingActionDoesNotRun(t *testing.T) {
+	e := setup(t)
+	e.s.Enroll.PanelAddr = "100.88.109.47"
+	idp := newFakeIDP(t)
+	e.s.Cfg.OIDC.Issuer = idp.srv.URL
+	idp.claims = map[string]any{"groups": []string{"viewers", "controllers"}, "auth_time": time.Now().Add(-time.Hour).Unix()}
+	q, rt := idp.login(e, "/auth/login?next=/", "")
+	sess := sessionCookie(e, e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt).hdr)
+	r := e.do("POST", "/api/admin/hosts", map[string]any{"name": "NSX-FURINA", "os": "linux"}, "Cookie", sess,
+		"X-Requested-With", "fairy", "Content-Type", "application/json")
+	if r.code != 401 {
+		t.Fatal(r.code)
+	}
+	sess = sessionCookie(e, r.hdr)
+	if d := e.do("DELETE", "/api/me/pending", nil, "Cookie", sess); d.code != 403 {
+		t.Fatal("CSRF header required", d.code)
+	}
+	d := e.do("DELETE", "/api/me/pending", nil, "Cookie", sess, "X-Requested-With", "fairy")
+	if d.code != 200 {
+		t.Fatal(d.code, string(d.raw))
+	}
+	sess = sessionCookie(e, d.hdr)
+	q, rt = idp.login(e, "/auth/login?step_up=1&next=/", sess)
+	idp.claims["auth_time"] = time.Now().Unix()
+	_ = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	if n := len(e.s.Enroll.List()); n != 0 {
+		t.Fatal("a cancelled action ran", n)
+	}
+}

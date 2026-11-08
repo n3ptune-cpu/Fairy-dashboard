@@ -50,6 +50,9 @@ func (s *Server) stream(c *reqCtx) error {
 		defer s.Poller.Scheduler.BoostRelease(boost)
 	}
 	st := &streamState{s: s, v: v, upsSeq: s.Poller.UPS.Seq(), last: map[string][]byte{}, quiet: time.Now()}
+	if c.user != nil {
+		st.sub = c.user.Sub
+	}
 	iv := time.Duration(s.Cfg.Intervals.Stream * float64(time.Second))
 	if iv <= 0 {
 		iv = time.Second
@@ -97,6 +100,7 @@ type streamState struct {
 	last      map[string][]byte // event name -> comparison key of the last summary / ups / power sent
 	upsSeq    int               // last UPS event sent (starts at "now": only events after connecting)
 	quiet     time.Time         // last keepalive
+	sub       string            // the user, for the `notes` counts
 }
 
 // next returns the events due in this tick (possibly none).
@@ -105,6 +109,7 @@ func (st *streamState) next() []byte {
 	st.writeSystems(&out)
 	st.writeChanged(&out)
 	st.writeUPSEvents(&out)
+	st.writeNotes(&out)
 	if time.Since(st.quiet) > keepaliveEvery { // always, even while data flows
 		st.quiet = time.Now()
 		out.WriteString(": keepalive\n\n")
@@ -196,4 +201,17 @@ func (st *streamState) writeUPSEvents(out *bytes.Buffer) {
 func withoutTime(s model.Summary) model.Summary {
 	s.GeneratedAt = time.Time{}
 	return s
+}
+
+// writeNotes sends `notes` {unread, active_alerts} (the bell and the Overview's summary) when they changed.
+func (st *streamState) writeNotes(out *bytes.Buffer) {
+	if st.s.Notes == nil || st.sub == "" {
+		return
+	}
+	unread, active := st.s.Notes.Counts(st.sub, eventVisibility(st.v))
+	b := []byte(fmt.Sprintf(`{"unread":%d,"active_alerts":%d}`, unread, active))
+	if !bytes.Equal(st.last["notes"], b) {
+		st.last["notes"] = b
+		fmt.Fprintf(out, "event: notes\ndata: %s\n\n", b)
+	}
 }
