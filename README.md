@@ -46,6 +46,42 @@ no capabilities needed: the panel never runs local power or IPMI commands).
 * `trusted_proxies` is used only to find the client IP for rate limits and the audit log.
 * Strict CSP, HSTS (https), frame/referrer/permissions policies, generic 500s, no secrets in logs or errors.
 
+## Map of the code
+
+How a request flows: `cmd/fairy` starts the **poller** (which fills an in-memory cache from Proxmox, agents,
+power sources and UPSes on a schedule) and the **web** server (which answers the API and the UI from that
+cache). Each folder below is one Go package; inside a package, files are named after what they contain.
+
+| Folder | What it does |
+| --- | --- |
+| `cmd/fairy` | The `fairy` program: `main.go` picks the sub-command, `serve.go` starts the panel (or demo mode). |
+| `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), API endpoints (`api_*.go`), the checks in front of every control action (`guards.go`), live updates (`stream.go`), API docs (`docs.go`) and the embedded UI (`static/`). |
+| `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |
+| `internal/scheduler` | Runs each source as a job at its own interval: overrides, pause, boost while viewing, never overlapping. |
+| `internal/normalise` | Turns raw Proxmox and agent data into the one "system" shape the UI uses; turns errors into short safe messages. |
+| `internal/power` | Wall power: one file per device type (`shelly.go`, `tasmota.go`, `tuya.go`, `nut.go`, `redfish.go`, `agentpower.go`), retry/backoff (`runner.go`), totals and history (`manager.go`), devices reported by agents (`remote.go`). |
+| `internal/ups` | UPSes via NUT: sources (`source.go`), state and history (`ups.go`), on-battery / restored events (`events.go`). |
+| `internal/devices` | Device protocols shared with the future `fairy-agent`: Shelly/Tasmota/Redfish/Tuya parsing, NUT client, HTTP helpers, digest auth. |
+| `internal/tuya` | The Tuya 3.3/3.4/3.5 local protocol (encryption, frames, one persistent connection per plug). |
+| `internal/powerctl` | Which power actions a system offers (and why not) and carrying them out: agent, Proxmox API or Wake-on-LAN. |
+| `internal/config` | Reads and checks `config.yaml` (`config.go`, `validate.go`) and secrets from `fairy.env` / the environment (`env.go`). |
+| `internal/admin` | The break-glass CLI `fairy admin`: one file per command (tokens, sessions, control, audit, config check, health). |
+| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the session list. |
+| `internal/statefile` | Safe shared JSON files: lock, re-read, write to a temp file, rename (so CLI and server never lose changes). |
+| `internal/tokens` | Personal API tokens (`fy_...`), stored only as hashes in `tokens.json`. |
+| `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |
+| `internal/health` | `health.json`, the status file the panel writes for `fairy admin health`. |
+| `internal/settings` | Per-user UI settings and uploaded background images. |
+| `internal/notify` | Optional ntfy / Discord message on control actions. |
+| `internal/security` | Finds the real client IP behind nginx (only for rate limits and the audit log). |
+| `internal/model` | The JSON shapes of the API (field names match the Python prototype). |
+| `internal/jsonx` | Helpers for reading loosely-typed JSON from Proxmox, agents and devices. |
+| `internal/apierr` | The error type that becomes an HTTP status + `{"detail": ...}`. |
+| `internal/redact` | Removes passwords/tokens from process command lines. |
+| `internal/demo` | `fairy serve --demo`: a simulated homelab (fake Proxmox, agents, plugs, UPS, BMC). |
+| `internal/testutil` | Shared test fixtures. |
+| `deploy/` | Example `config.yaml`, `fairy.env` and the systemd unit. |
+
 ## Notes
 
 * Frontend changes vs. the prototype: CSRF header value `fairy`, localStorage keys `fairy-*`, CLI hint text.
