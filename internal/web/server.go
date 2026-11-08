@@ -66,9 +66,11 @@ type Server struct {
 	seenMu sync.Mutex
 	seen   map[string]time.Time // subject -> last "last seen" write
 
-	codec *sessionCodec
-	oidc  *oidcClient
-	logo  *brandLogo // branding.logo, read once at startup (nil = built-in logo)
+	codec  *sessionCodec
+	oidc   *oidcClient
+	logo   *brandLogo // branding.logo, read once at startup (nil = built-in logo)
+	assetV string     // ?v= of the /static/* URLs (assetVersion)
+	index  []byte     // index.html with assetV filled in
 
 	// demo: set ONLY by demo mode (loopback-bound); authentication is bypassed with this user.
 	DemoUser     *model.User
@@ -210,20 +212,14 @@ func (s *Server) routes() {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	sub, _ := fs.Sub(staticFS, "static")
-	files := http.FileServerFS(sub)
-	m.Handle("GET /static/", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "" || strings.HasSuffix(r.URL.Path, "/") { // files only, no directory listings
-			http.NotFound(w, r)
-			return
-		}
-		files.ServeHTTP(w, r)
-	})))
+	s.assetV = assetVersion(s.Version, sub)
+	s.index = renderIndex(sub, s.assetV)
+	m.Handle("GET /static/", s.serveStatic(sub))
 	m.HandleFunc("GET /branding/logo", s.serveLogo)
 	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		b, _ := fs.ReadFile(sub, "index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		_, _ = w.Write(b)
+		w.Header().Set("Cache-Control", cacheNoCache)
+		_, _ = w.Write(s.index)
 	})
 	s.authRoutes(m)
 	s.apiRoutes(m)

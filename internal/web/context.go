@@ -75,9 +75,9 @@ func (c *reqCtx) errorPage(status int, title, msg, back string) error {
 	c.w.WriteHeader(status)
 	e := html.EscapeString
 	_, _ = fmt.Fprintf(c.w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>%s · Fairy</title>`+
-		`<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/static/app.css">`+
+		`<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="%s">`+
 		`</head><body><main class="error-page"><h1>%s</h1><p>%s</p><p><a class="btn" href="%s">Back to Fairy</a></p>`+
-		`</main></body></html>`, e(title), e(title), e(msg), e(safeNext(back)))
+		`</main></body></html>`, e(title), e(c.s.staticURL("app.css")), e(title), e(msg), e(safeNext(back)))
 	return nil
 }
 
