@@ -232,6 +232,13 @@ func (s *Store) Verify(raw string) *Record {
 	return nil
 }
 
+// ActiveID reports whether the token with this id still exists and is neither revoked nor expired (re-checked
+// for long-lived requests such as the SSE stream).
+func (s *Store) ActiveID(id string) bool {
+	r, ok := records(s.watch.Get())[id]
+	return ok && r.Active()
+}
+
 // Touch records last use, at most once a minute per token.
 func (s *Store) Touch(r *Record) {
 	s.mu.Lock()

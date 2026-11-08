@@ -61,6 +61,9 @@ func (s *Server) stream(c *reqCtx) error {
 		if isSession && c.sessionUser() == nil { // revoked / expired while streaming
 			return nil
 		}
+		if c.token != nil && !s.Tokens.ActiveID(c.token.ID) { // API token revoked / expired while streaming
+			return nil
+		}
 		if g := s.grantOf(c, c.user); !g.Same(grant) { // role or sites changed: start over, filtered anew
 			return nil
 		} else if st.ticks > 0 {

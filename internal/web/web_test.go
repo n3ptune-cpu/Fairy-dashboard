@@ -531,3 +531,26 @@ func TestFanDutyFloor(t *testing.T) {
 		t.Fatal("a refused duty reached the agent", e.b.Requests)
 	}
 }
+
+// Revoking an API token also ends the SSE streams it opened.
+func TestRevokedTokenEndsItsStream(t *testing.T) {
+	e := setup(t)
+	raw, rec, _ := e.s.Tokens.Create("ha", "system", "read", "cli:test", 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", e.srv.URL+"/api/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+raw)
+	r, err := http.DefaultClient.Do(req)
+	if err != nil || r.StatusCode != 200 {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	start := time.Now()
+	if _, err := e.s.Tokens.Revoke(rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(r.Body) // returns when the server ends the stream (or at the 8 s deadline)
+	if d := time.Since(start); d > 4*time.Second {
+		t.Fatal("stream of a revoked token kept running", d)
+	}
+}
