@@ -7,7 +7,7 @@ session_idle_timeout: 43200               # 12 h without activity => sign in aga
 step_up_window_s: 300                     # control actions need a Pocket ID sign-in from the last 5 min
 step_up_prompt_login: false               # also send prompt=login on step-up (max_age=0 is always sent)
 enable_docs: false                        # /docs + /api/openapi.json (login required)
-data_dir: /var/lib/fairy                  # state.json, sessions.json, tokens.json, settings, uploads, health.json
+data_dir: /var/lib/fairy                  # state.json, sessions.json, tokens.json, users.json, settings, uploads, health.json
 audit_log: /var/lib/fairy/audit.log       # append-only JSON lines
 control_rate_per_min: 6
 login_rate_per_min: 20
@@ -21,14 +21,20 @@ oidc:
   client_id: 00000000-0000-0000-0000-000000000000   # secret (if not a public client): FAIRY_OIDC_CLIENT_SECRET
   scopes: [openid, profile, email, groups]
   groups_claim: groups
+  # Pocket ID only decides who may SIGN IN (allowed_groups / allowed_emails). What people see and may do is set
+  # in the panel: Users page (admins), or `fairy admin users ...` on the server.
   allowed_groups: [homelab]
   allowed_emails: []
-  control_groups: [homelab-admins]        # may use fans / power / Wake-on-LAN / polling. Empty = nobody.
+  # First sign-in only: people in these groups, or with these emails, start as admin. Everyone else waits for
+  # an admin to give them a role. After that the Users page decides (leaving the group changes nothing).
+  control_groups: [homelab-admins]
+  bootstrap_admins: []                    # e.g. [neptune@example.com]
 
 proxmox:
   - id: teyvat
     id_prefix: ""                         # keep ids unprefixed for the main cluster
     cluster_name: NSX-TEYVAT
+    site: Neptune                         # optional default site of its nodes and guests (Users page overrides)
     urls: [https://pve1.lan:8006, https://pve2.lan:8006]   # tried in order (failover)
     token_id: fairy@pve!panel             # read-only token; secret: FAIRY_PROXMOX_TOKEN_SECRET (or token_secret_env)
     verify_tls: true
@@ -45,15 +51,18 @@ agents:
     token_env: AGENT_TOKEN_NSX_CYRENE     # one token per machine (>= 24 chars)
     group: Neptune
     owner: neptune
+    site: Neptune                         # optional default site: viewers of "Neptune" see this host
     tags: [server]
     # fan_control: {vendor: supermicro, control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE}
     # power_control: true                 # also needs the agent's --enable-power-control
   # - {id: kachina-agent, url: "http://100.64.0.5:9101", token_env: AGENT_TOKEN_KACHINA, node: NSX-KACHINA}
 
 systems: []
-  # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming]}
+  # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming], site: Straw}
   # - {id: nsx-cyrene, wol: {mac: "3c:ec:ef:00:11:22", relay: kachina-agent, broadcast: 192.168.10.255}}
 
+# Power sources and UPSes follow the hosts they are attached to (system: / powers:); one without a host gets
+# its site on the Users page. Anything without a site is visible to admins only.
 power_sources: []
   # - {id: plug-cyrene, type: tuya, device_id: bf0123456789abcdef, ip: 192.168.1.60, local_key_env: TUYA_KEY_PLUG, version: "3.4", system: nsx-cyrene}
   # - {id: plug-desk, type: shelly, url: "http://192.168.1.61", password_env: SHELLY_PW}

@@ -23,8 +23,11 @@ Static binary, no runtime dependencies besides `/etc/fairy/config.yaml` and `/et
 ```sh
 fairy serve [--config /etc/fairy/config.yaml] [--env-file /etc/fairy/fairy.env] [--listen 127.0.0.1:8080]
 fairy serve --demo            # simulated data, NO login, refuses anything but 127.0.0.1 / ::1 (port 8090)
-fairy admin help              # break-glass CLI: tokens, sessions, control kill switch, host power flags,
-                              # polling, audit tail, config check, health (all audited as source "cli")
+fairy serve --demo --demo-as viewer:Straw   # ...as a viewer of the Straw site sees it (or: pending, admin);
+                              # the demo sidebar has a "Preview as" switcher too
+fairy admin help              # break-glass CLI: users and sites, tokens, sessions, control kill switch, host
+                              # power flags, polling, audit tail, config check, health (all audited as "cli")
+fairy admin users set-role you@example.com admin   # locked out? make yourself admin again
 fairy version
 ```
 
@@ -33,16 +36,32 @@ no capabilities needed: the panel never runs local power or IPMI commands).
 
 ## Security model
 
-* Pocket ID only (OIDC code flow + PKCE S256, nonce, state). No passwords anywhere.
+* Pocket ID only (OIDC code flow + PKCE S256, nonce, state). No passwords anywhere. Pocket ID (allowed_groups /
+  allowed_emails) decides who may sign in; nothing else.
+* Roles, managed in the panel (`users.json`, Users page or `fairy admin users|sites`), keyed by the OIDC subject:
+  **admin** sees everything, may use control actions, the Audit and Users pages; **viewer** is read-only and sees
+  only the systems, guests, power sources, UPSes (and their processes, sensors, history) of their sites;
+  **pending** (first sign-in of anyone else) sees a "waiting for access" page and gets 403 from every data API.
+  Filtering is server-side for every endpoint and the SSE stream (`internal/web/view.go`); hidden ids answer the
+  same 404 as unknown ones; a viewer's summary counts and cluster totals only add up what they can see.
+* Sites: a host's site is the Users page's assignment, else `site:` in config.yaml (proxmox / agents / systems),
+  else (guests) its node's site. Power sources and UPSes follow the hosts they are attached to unless assigned.
+  No site = admins only.
+* Bootstrap / upgrade: a user without a `users.json` entry who is in `oidc.control_groups` or
+  `oidc.bootstrap_admins` becomes admin on first sign-in (also for sessions started before the upgrade). After
+  that the panel decides. The last admin cannot be demoted or removed (server-enforced; the CLI needs `--force`).
 * Step-up: control actions need a sign-in from the last `step_up_window_s` (default 5 min); the re-login sends
   `max_age=0` (optionally `prompt=login`) and the callback checks `auth_time`.
 * Sessions: HMAC-signed `fairy_session` cookie (HttpOnly, Secure, SameSite=Lax) that is valid only while its id is
   in `sessions.json`, within the idle timeout and absolute lifetime; revocable with `fairy admin sessions`.
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never
-  accepted on `/auth/*` or the settings endpoints.
-* Writes: control group (or control-scope token), CSRF header `X-Requested-With: fairy` + Origin /
+  accepted on `/auth/*`, the settings endpoints or the Users page. `control` acts as an admin; `read` sees every
+  site, or only `--sites A,B`. A token owned by a panel user is capped to that user's current role and sites.
+* Writes: admin role (or control-scope token), CSRF header `X-Requested-With: fairy` + Origin /
   Sec-Fetch-Site checks for browsers, kill switch, per-host power flags, rate limits, typed confirmation for
   destructive power actions, append-only JSON-lines audit log (+ Audit page), optional ntfy/Discord notification.
+  Changes to users and sites: admin browser session only, CSRF checks, step-up (same window), audited + notified;
+  the kill switch does not block them.
 * `trusted_proxies` is used only to find the client IP for rate limits and the audit log.
 * Strict CSP, HSTS (https), frame/referrer/permissions policies, generic 500s, no secrets in logs or errors.
 
@@ -55,7 +74,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | Folder | What it does |
 | --- | --- |
 | `cmd/fairy` | The `fairy` program: `main.go` picks the sub-command, `serve.go` starts the panel (or demo mode). |
-| `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), API endpoints (`api_*.go`), the checks in front of every control action (`guards.go`), live updates (`stream.go`), API docs (`docs.go`) and the embedded UI (`static/`). |
+| `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
 | `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |
 | `internal/scheduler` | Runs each source as a job at its own interval: overrides, pause, boost while viewing, never overlapping. |
 | `internal/normalise` | Turns raw Proxmox and agent data into the one "system" shape the UI uses; turns errors into short safe messages. |
@@ -65,9 +84,10 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/tuya` | The Tuya 3.3/3.4/3.5 local protocol (encryption, frames, one persistent connection per plug). |
 | `internal/powerctl` | Which power actions a system offers (and why not) and carrying them out: agent, Proxmox API or Wake-on-LAN. |
 | `internal/config` | Reads and checks `config.yaml` (`config.go`, `validate.go`) and secrets from `fairy.env` / the environment (`env.go`). |
-| `internal/admin` | The break-glass CLI `fairy admin`: one file per command (tokens, sessions, control, audit, config check, health). |
+| `internal/admin` | The break-glass CLI `fairy admin`: one file per command (users and sites, tokens, sessions, control, audit, config check, health). |
+| `internal/access` | `users.json`: users (by OIDC subject) with a role and sites, the list of sites, and which site each host / power source / UPS is assigned to. |
 | `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the session list. |
-| `internal/statefile` | Safe shared JSON files: lock, re-read, write to a temp file, rename (so CLI and server never lose changes). |
+| `internal/statefile` | Safe shared JSON files (state, sessions, tokens, users): lock, re-read, write to a temp file, rename (so CLI and server never lose changes). |
 | `internal/tokens` | Personal API tokens (`fy_...`), stored only as hashes in `tokens.json`. |
 | `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |
 | `internal/health` | `health.json`, the status file the panel writes for `fairy admin health`. |
