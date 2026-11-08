@@ -66,6 +66,8 @@ I.burger = svg('<path d="M4 6h16M4 12h16M4 18h16"/>', 18);
 I.panel = svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>', 20);
 I.signout = svg('<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 17l-5-5 5-5M5 12h11"/>');
 I.eye = svg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>');
+I.uparrow = svg('<circle cx="12" cy="12" r="9"/><path d="M12 16.5v-9M8.5 11 12 7.5l3.5 3.5"/>', 15);
+I.update = svg('<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>');
 I.onoff = svg('<path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>', 15);
 
 const fmtRuntime = (s) => (s == null ? "–" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
@@ -129,6 +131,8 @@ async function runPending() {
   } catch (e) { flash(e.message, true); }
   render();
   if (current().page === "users") loadAdmin();
+  if (current().page === "updates") loadUpdates();
+  if (p.kind === "request" && p.path?.startsWith("/api/admin/updates")) { upd.fastUntil = Date.now() + 30000; updTick(); }
 }
 function spark(values, cls = "") {
   const pts = values.filter((v) => v != null);
@@ -275,6 +279,8 @@ function renderAlerts() {
     <span class="note">fan, power, Wake-on-LAN and polling changes are refused for everyone · re-enable on the server: <code>fairy admin control enable</code></span></div>`);
   const resume = resumePending();
   if (resume && !off) out.push(resume);
+  const ub = updBanner();
+  if (ub) out.push(ub);
   for (const u of (state.ups?.ups || []).filter(onBattery)) {
     const powered = u.powers.map((id) => state.byId[id]?.name || id);
     out.push(`<a class="alert-strip ${u.status === "low_battery" ? "bad" : "warn"}" href="#/ups" data-key="ups-${esc(u.id)}">${I.ups}
@@ -302,7 +308,7 @@ const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.ut
 function hostRow(s) {
   const gpus = s.gpus || [], w = watts(s);
   return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="host-ico">${hostIcon(s)}</span>
-      <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${upsChips(s)}${battChip(s)}</a><span class="sub">${esc(subLine(s))}</span></td>
+      <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${upsChips(s)}${battChip(s)}</a><span class="sub">${esc(subLine(s))}${verChip(s.id)}</span></td>
     <td class="col-kind">${s.kind === "node" ? `<span class="chip">Proxmox</span>` : `<span class="note">${esc(s.owner || s.group || "–")}</span>`}</td>
     <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}</span>`}</td>
     <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
@@ -402,11 +408,13 @@ function pageSystem(id, tab) {
   const head = `<div class="detail-head"><span class="dot ${s.status}"></span><h2>${esc(s.name)}</h2><span class="chip">${esc(kindLabel(s))}</span>
     ${s.kind === "node" && !s.cluster ? '<span class="chip">Proxmox</span>' : ""}
     <span class="chip ${s.status === "online" ? "ok" : s.status === "stale" ? "warn" : s.status === "offline" ? "bad" : ""}">${esc(statusText(s))}</span>
-    ${upsChips(s)}${(s.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}
+    ${upsChips(s)}${(s.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}${verChip(s.id)}
     <div class="actions">${liveLabel(s)}
       ${s.dwservice_url ? `<a class="btn" href="${esc(s.dwservice_url)}" target="_blank" rel="noopener noreferrer">Remote ${I.ext}</a>` : ""}
       <div class="menu-wrap"><button class="btn ${menuOpen === "power" ? "on" : ""}" data-act="menu" data-menu="power" ${hasPower ? "" : "disabled"}
         title="${esc(hasPower ? why || "Power actions" : "No power control configured for this system")}">${I.onoff}Power</button>${menuOpen === "power" ? powerMenu(s) : ""}</div>
+      ${state.me?.can_control && upd.bySys[s.id] && (upd.bySys[s.id].behind === true || updBusy(upd.bySys[s.id]))
+        ? `<button class="btn" type="button" data-act="upd-pop" data-sys="${esc(s.id)}" aria-haspopup="dialog" aria-expanded="${upd.popSys === s.id}">${I.update}${updBusy(upd.bySys[s.id]) ? "Updating…" : "Update agent"}</button>` : ""}
       <div class="menu-wrap"><button class="btn icon ${menuOpen === "poll" ? "on" : ""}" data-act="menu" data-menu="poll" title="Polling rate" aria-label="Polling rate">${I.more}</button>${menuOpen === "poll" ? pollMenu(s) : ""}</div>
     </div>
     <div class="sub">${esc(sub)}${s.updated_at ? ` · <span class="note">updated <span data-ago="${esc(s.updated_at)}">${ago(s.updated_at)}</span></span>` : ""}</div></div>
@@ -586,7 +594,7 @@ function pageUps() {
 const audit = { entries: [], next: null, q: "", action: "", host: "", loading: false, error: null };
 const AUDIT_ACTIONS = [["", "All actions"], ["auth", "Sign-in / step-up / denied"], ["power", "Power"], ["fan", "Fans"], ["poll", "Polling"],
   ["settings", "Settings"], ["token", "API tokens"], ["control", "Kill switch"], ["host", "Host admin"], ["sessions", "Sessions"],
-  ["user", "Users / roles"], ["site", "Sites"]];
+  ["user", "Users / roles"], ["site", "Sites"], ["update", "Updates"]];
 async function loadAudit(reset) {
   if (audit.loading) return;
   audit.loading = true;
@@ -633,6 +641,186 @@ document.addEventListener("submit", (e) => {
   loadAudit(true);
 });
 document.addEventListener("click", (e) => { if (e.target.closest('[data-act="audit-more"]')) loadAudit(false); });
+
+// ------------------------------------------------------------ updates (admins only)
+// Each agent's version and self-update state next to the latest Fairy-agent release. Update makes the agent
+// download, verify and install the release itself (and roll back if the new version does not come up); nothing
+// updates on its own. Refreshed every 2 s while the page is open.
+const upd = { data: null, error: null, busy: {}, bySys: {} };
+const updBusy = (r) => ["downloading", "applying"].includes(r?.self_update?.state);
+async function fetchUpdates() {
+  if (!state.me?.can_control) return;
+  try { upd.data = await api("/api/admin/updates"); upd.error = null; }
+  catch (e) { upd.error = e.message; if (e.status === 403) upd.data = null; }
+  upd.bySys = {};
+  for (const r of upd.data?.agents || []) upd.bySys[r.system_id || r.id] = r;
+  const b = $("#upd-badge");
+  if (b) { const n = upd.data?.behind || 0; b.hidden = !n; b.title = `${n} update${n === 1 ? "" : "s"} available`; }
+  render();
+}
+async function loadUpdates() {  // the Updates page: every 2 s while it is open
+  await fetchUpdates();
+  if (current().page === "updates") schedule(loadUpdates, 2000);
+}
+// In the background (admins only): every minute, every 2 s while an agent is updating; feeds the banner, the
+// menu dot and the version arrows on the host list and host pages.
+function updTick() {
+  clearTimeout(upd.bgT);
+  const fast = (upd.data?.agents || []).some(updBusy) || Date.now() < (upd.fastUntil || 0);
+  const next = () => { upd.bgT = setTimeout(updTick, fast ? 2000 : 60000); };
+  if (current().page === "updates") { next(); return; }
+  fetchUpdates().then(next, next);
+}
+const buildLabel = (v) => { const m = /^(\d+)-([0-9a-f]{7,})$/.exec(v || ""); return m ? `build ${m[1]} (${m[2].slice(0, 7)})` : v || "–"; };
+function updState(r) {
+  const su = r.self_update;
+  if (!su) return '<span class="note">–</span>';
+  const st = su.state || "idle", cls = st === "failed" || st === "unavailable" ? "bad" : st === "idle" ? "" : "warn";
+  const last = su.last ? `<div class="note" title="${esc(su.last.message)}">${su.last.ok ? "last update OK" : "last update failed"}${su.last.at ? `, <span data-ago="${new Date(su.last.at * 1000).toISOString()}">${ago(new Date(su.last.at * 1000).toISOString())}</span>` : ""}</div>` : "";
+  return `<span class="chip ${cls}">${esc(st)}</span>${su.message ? `<div class="note">${esc(su.message)}</div>` : ""}${last}`;
+}
+function pageUpdates() {
+  setTitle("Updates", "agent versions and self-update");
+  if (!state.me?.can_control) return '<div class="empty">The Updates page is for admins only.</div>';
+  const d = upd.data;
+  if (!d) return upd.error ? `<div class="error">${esc(upd.error)}</div>` : '<div class="empty">Loading…</div>';
+  const L = d.latest, why = controlWhyNot();
+  const ready = d.agents.filter((r) => r.can_update);
+  const latest = L.tag ? `<b>${esc(L.version ? buildLabel(L.version) : L.tag)}</b> ${L.verified ? '<span class="chip ok" title="signature checked with this panel\'s release key">signed</span>' : '<span class="chip warn" title="this panel build has no release key, so the signature was not checked here (agents always check it)">unverified</span>'}
+      ${L.published_at ? `<span class="note">published <span data-ago="${esc(L.published_at)}">${ago(L.published_at)}</span></span>` : ""}
+      ${L.url ? `<a href="${esc(L.url)}" target="_blank" rel="noopener noreferrer">${esc(L.tag)} ${I.ext}</a>` : ""}` : '<span class="note">unknown</span>';
+  const row = (r) => {
+    const cur = r.version ? buildLabel(r.version) : "–";
+    const vcls = r.behind === true ? "warn" : r.behind === false ? "ok" : "";
+    const busy = upd.busy[r.id];
+    return `<tr class="row" data-key="up-${esc(r.id)}"><td class="namecell"><b>${state.byId[r.id] ? `<a href="#/system/${enc(r.id)}">${esc(r.name)}</a>` : esc(r.name)}</b><span class="sub">${esc(r.id)}</span></td>
+      <td><span class="chip ${vcls}" title="${esc(r.version || "")}">${esc(cur)}</span>${r.behind === true ? '<div class="note">update available</div>' : ""}</td>
+      <td><span class="chip ${r.status === "online" ? "ok" : r.status === "offline" ? "bad" : ""}">${esc(r.status)}</span></td>
+      <td>${r.configured ? updState(r) : '<span class="note">off</span>'}</td>
+      <td class="num"><button class="btn" data-act="upd-one" data-id="${esc(r.id)}" data-name="${esc(r.name)}" ${r.can_update && !why && !busy ? "" : "disabled"}
+        title="${esc(why || r.why || `Install the latest release on ${r.name}`)}">${I.update} ${busy ? "Sending…" : "Update"}</button></td></tr>`;
+  };
+  return `<div class="stack">
+    <div class="panel glass pad"><div class="row-gap"><span>Latest Fairy-agent release: ${latest}</span>
+      <button class="btn primary push" data-act="upd-all" ${ready.length && !why && !upd.busy.all ? "" : "disabled"} title="${esc(why || (ready.length ? "Update every agent that can update itself" : "No agent can update right now"))}">${I.update} Update all (${ready.length})</button></div>
+      ${L.error ? `<div class="note warn">${esc(L.error)}</div>` : ""}
+      <div class="note">Panel: fairy ${esc(buildLabel(d.panel_version))}${d.panel_latest?.tag ? ` · latest ${esc(d.panel_latest.version ? buildLabel(d.panel_latest.version) : d.panel_latest.tag)}` : ""}
+        ${d.panel_behind === false ? '<span class="chip ok">up to date</span>' : ""} · the panel updates only by hand: <code>fairy update</code> on its host (as root).</div>
+      ${d.panel_behind ? `<div class="note warn">${I.uparrow} Panel update available: run <code>fairy update</code> on the panel's host.${d.panel_latest.url ? ` <a href="${esc(d.panel_latest.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a>` : ""}</div>` : ""}
+      ${d.panel_latest?.error && !d.panel_latest.disabled ? `<div class="note warn">Panel release: ${esc(d.panel_latest.error)}</div>` : ""}</div>
+    ${why ? `<div class="note warn">${esc(why)}</div>` : ""}
+    <div class="panel glass scroll"><table class="table updates"><thead><tr><th>Host</th><th>Version</th><th>Status</th><th>Self-update</th><th class="num"></th></tr></thead>
+      <tbody>${d.agents.map(row).join("") || '<tr><td colspan="5" class="note">No agents in config.yaml.</td></tr>'}</tbody></table></div>
+    <div class="note">Nothing updates by itself. <b>Update</b> asks the agent to download the latest release from GitHub, check its signature,
+      install it, restart and roll back if the new version does not come up. Only agents with <code>self_update: true</code> here and
+      <code>self_update: enabled: true</code> in their own config.yaml can do this. Every Update asks you to confirm it's you and is written to the Audit log.</div></div>`;
+}
+async function updateCall(label, path, key) {
+  upd.busy[key] = true; render();
+  try {
+    const r = await controlCall({ kind: "request", label, method: "POST", path, body: {} }, () => api(path, { method: "POST", body: "{}" }));
+    if (r?.results) {
+      const bad = r.results.filter((x) => !x.ok);
+      flash(bad.length ? `${r.results.length - bad.length} started, ${bad.length} not: ${bad.map((x) => `${x.id} (${x.error})`).join(", ")}` : `Update started on ${r.results.length} agent(s)`, bad.length > 0);
+    } else if (r) flash(`${label}: started`);
+  } catch (e) { flash(e.message, true); }
+  delete upd.busy[key];
+  upd.fastUntil = Date.now() + 30000;  // the agents' new state arrives with the next polls
+  await loadUpdates();
+  updTick();
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="upd-one"],[data-act="upd-all"]');
+  if (!t || t.disabled) return;
+  const L = upd.data?.latest, to = L?.version ? buildLabel(L.version) : L?.tag || "the latest release";
+  if (t.dataset.act === "upd-one") {
+    if (confirm(`Update ${t.dataset.name} to ${to}? The agent restarts (a few seconds offline) and rolls back by itself if the new version does not come up.`)) {
+      updateCall(`Update ${t.dataset.name}`, `/api/admin/updates/${enc(t.dataset.id)}`, t.dataset.id);
+    }
+  } else if (confirm(`Update every agent that can update itself to ${to}? Each one restarts and rolls back by itself if needed.`)) {
+    updateCall("Update all agents", "/api/admin/updates", "all");
+  }
+});
+
+// ---- version + "update available" arrow (admins only), like Tailscale's machine list
+function verChip(sysId) {
+  const r = upd.bySys[sysId];
+  if (!r || !state.me?.can_control) return "";
+  const arrow = r.behind === true || updBusy(r);
+  return `<span class="ver"><span class="chip ${r.behind === true ? "warn" : ""}" title="fairy-agent ${esc(r.version || "?")}">${esc(r.version ? buildLabel(r.version) : "agent ?")}</span>${arrow
+    ? `<button class="upd-arrow ${updBusy(r) ? "busy" : ""}" type="button" data-act="upd-pop" data-sys="${esc(sysId)}" aria-haspopup="dialog" aria-expanded="${upd.popSys === sysId}"
+      aria-label="${esc(updBusy(r) ? `Update in progress on ${r.name}` : `Update available for ${r.name}`)}" title="${updBusy(r) ? "Update in progress" : "Update available"}">${I.uparrow}</button>` : ""}</span>`;
+}
+function updPopHtml(r) {
+  const d = upd.data, L = d.latest, why = controlWhyNot();
+  const rel = L.version ? buildLabel(L.version) : L.tag || "a newer release";
+  let body;
+  if (updBusy(r)) body = `<p>${esc(r.self_update.message || r.self_update.state)}</p>`;
+  else if (r.can_update && !why) body = `<button class="btn primary" type="button" data-act="upd-start" data-id="${esc(r.id)}" data-name="${esc(r.name)}">${I.update} Start update</button>`;
+  else if (why) body = `<p class="note warn">${esc(why)}</p>`;
+  else if (!r.configured) body = `<p class="note">This host cannot update itself yet: add <code>self_update: true</code> to its <code>agents:</code> entry in the panel's config.yaml and <code>self_update: enabled: true</code> in the agent's config.yaml. Or run <code>fairy-agent update</code> on the machine (root / Administrator).</p>`;
+  else if (!r.agent_enabled) body = `<p class="note">Self-update is off on the agent: set <code>self_update: enabled: true</code> in its config.yaml (or the agent is older than self-update: install this release by hand once, or run <code>fairy-agent update</code> on the machine).</p>`;
+  else body = `<p class="note">${esc(r.why || "cannot update right now")}. On the machine: <code>fairy-agent update</code>.</p>`;
+  return `<div class="menu-title" id="upd-pop-t">${updBusy(r) ? "Updating" : "Update available"}</div>
+    <div class="upd-pop-body"><p>Release <b>${esc(rel)}</b> is available.${r.version ? ` ${esc(r.name)} runs ${esc(buildLabel(r.version))}.` : ""}</p>
+      ${L.url ? `<p><a href="${esc(L.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a></p>` : ""}${body}</div>`;
+}
+function closeUpdPop(refocus) {
+  const el = $("#upd-pop");
+  if (!el) return;
+  el.remove();
+  const btn = upd.popBtn;
+  upd.popBtn = null; upd.popSys = null;
+  if (btn) { btn.setAttribute("aria-expanded", "false"); if (refocus && document.contains(btn)) btn.focus(); }
+}
+function openUpdPop(btn) {
+  const r = upd.bySys[btn.dataset.sys];
+  if (!r || !upd.data) return;
+  const was = upd.popBtn === btn;
+  closeUpdPop(false);
+  if (was) return;
+  const el = document.createElement("div");
+  el.id = "upd-pop"; el.className = "menu upd-pop"; el.setAttribute("role", "dialog"); el.setAttribute("aria-labelledby", "upd-pop-t");
+  el.innerHTML = updPopHtml(r);
+  document.body.appendChild(el);
+  const b = btn.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight;
+  el.style.left = `${Math.max(16, Math.min(b.left, innerWidth - w - 16))}px`;
+  el.style.top = `${b.bottom + 6 + h > innerHeight && b.top - h - 6 > 0 ? b.top - h - 6 : b.bottom + 6}px`;
+  upd.popBtn = btn; upd.popSys = btn.dataset.sys; btn.setAttribute("aria-expanded", "true");
+  (el.querySelector('[data-act="upd-start"]') || el.querySelector("button, a") || el).focus();
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest('[data-act="upd-pop"]');
+  if (a) { e.stopPropagation(); openUpdPop(a); return; }
+  const st = e.target.closest('[data-act="upd-start"]');
+  if (st) {
+    closeUpdPop(false);
+    if (confirm(`Update ${st.dataset.name}? The agent restarts (a few seconds offline) and rolls back by itself if the new version does not come up.`)) {
+      updateCall(`Update ${st.dataset.name}`, `/api/admin/updates/${enc(st.dataset.id)}`, st.dataset.id);
+    }
+    return;
+  }
+  if (e.target.closest('[data-act="upd-dismiss"]')) { try { localStorage.setItem(UPD_DISMISS, updKey()); } catch { /* ignore */ } renderAlerts(); return; }
+  if (!e.target.closest("#upd-pop")) closeUpdPop(false);
+}, true);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#upd-pop")) { e.stopPropagation(); closeUpdPop(true); } }, true);
+window.addEventListener("scroll", () => closeUpdPop(false), true);
+window.addEventListener("resize", () => closeUpdPop(false));
+// ---- the "update available" banner: per release pair, dismissed until the next one (this browser)
+const UPD_DISMISS = "fairy-update-dismissed";
+const updKey = () => `${upd.data?.latest?.tag || ""}|${upd.data?.panel_latest?.tag || ""}`;
+function updBanner() {
+  const d = upd.data;
+  if (!d || !state.me?.can_control || current().page === "updates") return "";
+  const agents = d.agents.filter((r) => r.behind === true).length;
+  if (!agents && !d.panel_behind) return "";
+  let dismissed = null; try { dismissed = localStorage.getItem(UPD_DISMISS); } catch { /* ignore */ }
+  if (dismissed === updKey()) return "";
+  const what = [agents ? `${agents} agent${agents === 1 ? "" : "s"}` : "", d.panel_behind ? "panel" : ""].filter(Boolean).join(", ");
+  return `<div class="alert-strip info static" data-key="upd-banner">${I.uparrow}<b>Update available</b><span>${esc(what)}</span>
+    <span class="note">${d.latest?.version ? `Fairy-agent ${esc(buildLabel(d.latest.version))}` : ""}${d.panel_behind ? ` · panel: <code>fairy update</code> on its host` : ""}</span>
+    <a class="btn push" href="#/updates">Open Updates</a><button class="btn" type="button" data-act="upd-dismiss">Dismiss</button></div>`;
+}
 
 // ------------------------------------------------------------ users, roles and sites (admins only)
 const admin = { data: null, error: null };
@@ -918,12 +1106,14 @@ function current() {
   if (h.startsWith("#/settings")) return { page: "settings" };
   if (h.startsWith("#/audit")) return { page: "audit" };
   if (h.startsWith("#/users")) return { page: "users" };
+  if (h.startsWith("#/updates")) return { page: "updates" };
   return { page: "overview" };
 }
 const routeKey = (r) => `${r.page}:${r.id || ""}:${r.tab || ""}`;
 function pageHtml(r) {
   return r.page === "system" ? pageSystem(r.id, r.tab) : r.page === "power" ? pagePower() : r.page === "ups" ? pageUps()
-    : r.page === "settings" ? pageSettings() : r.page === "audit" ? pageAudit() : r.page === "users" ? pageUsers() : pageOverview();
+    : r.page === "settings" ? pageSettings() : r.page === "audit" ? pageAudit() : r.page === "users" ? pageUsers()
+    : r.page === "updates" ? pageUpdates() : pageOverview();
 }
 let renderQueued = false;
 function render() {  // coalesced to one DOM patch per frame
@@ -939,6 +1129,7 @@ function renderNow() {
 }
 function route() {
   clearTimeout(state.timer);
+  closeUpdPop(false);
   state.menu = null;
   const r = current();
   if (r.page === "system") {
@@ -953,6 +1144,7 @@ function route() {
   if (r.page === "ups") loadUpsEvents();
   if (r.page === "audit") loadAudit(true);
   if (r.page === "users") loadAdmin();
+  if (r.page === "updates") loadUpdates();
   renderNav(); renderAlerts(); closeAcct(false); syncAcct();
   $("#shell").classList.remove("drawer"); $("#scrim").hidden = true;
   connect(r.page === "system" ? r.id : null);  // boost the viewed host to 1 s polling
@@ -1039,7 +1231,8 @@ function buildAcct() {
     <div class="menu-sep" role="separator"></div>
     ${item("#/settings", I.settings, "Settings")}
     ${me.can_control ? item("#/audit", I.audit, "Audit") : ""}
-    ${me.can_manage_users ? item("#/users", I.users, "Users") : ""}`;
+    ${me.can_manage_users ? item("#/users", I.users, "Users") : ""}
+    ${me.can_control ? item("#/updates", I.update, "Updates").replace("</span></a>", '</span><span class="upd-dot" id="upd-badge" hidden></span></a>') : ""}`;
   if (me.demo && (me.demo_views || []).length) {
     html += `<div class="menu-sep" role="separator"></div><div role="group" aria-labelledby="acct-demo-t"><div class="menu-title" id="acct-demo-t" role="none">Preview as · demo</div>
       ${me.demo_views.map((v) => `<button class="menu-item" type="button" role="menuitemradio" tabindex="-1" aria-checked="${v === me.demo_view}" data-demo-view="${esc(v)}">
@@ -1061,7 +1254,7 @@ function syncAcct() {
     a.classList.toggle("on", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
-  $("#acct-btn")?.classList.toggle("on", ["settings", "audit", "users"].includes(page));
+  $("#acct-btn")?.classList.toggle("on", ["settings", "audit", "users", "updates"].includes(page));
 }
 const acctItems = () => [...document.querySelectorAll('#acct-menu [role^="menuitem"]')];
 const acctOpen = () => !$("#acct-menu").hidden;
@@ -1163,5 +1356,6 @@ async function boot() {
   } catch { /* no UPS */ }
   window.addEventListener("hashchange", route);
   route();
+  updTick();
 }
 boot();

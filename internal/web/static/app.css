@@ -108,6 +108,8 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .dot.stale { background: var(--warn); box-shadow: 0 0 0 3px rgba(245, 184, 75, .14); }
 .dot.offline { background: var(--bad); box-shadow: 0 0 0 3px rgba(255, 93, 108, .14); }
 .note { color: var(--faint); font-size: 12px; }
+.note.warn { color: var(--warn); }
+.table.updates td .note { margin-top: 3px; max-width: 360px; }
 .error { color: var(--bad); font-size: 12px; }
 .empty { padding: 34px; text-align: center; color: var(--muted); border-radius: var(--radius); border: 1px dashed var(--line2); }
 
@@ -385,3 +387,15 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .bad-t { color: var(--bad); }
 .chip.batt svg { width: 13px; height: 13px; }
 .panel h3 svg { vertical-align: -2px; }
+
+/* update available: version chip + arrow (admins), popover, menu dot */
+.ver { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.upd-arrow { display: inline-flex; align-items: center; justify-content: center; padding: 1px; border: 0; background: none; color: var(--warn);
+  cursor: pointer; border-radius: 50%; }
+.upd-arrow:hover, .upd-arrow:focus-visible { background: rgba(245, 184, 75, .14); outline: none; box-shadow: 0 0 0 2px rgba(245, 184, 75, .45); }
+.upd-arrow.busy { color: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.menu.upd-pop { position: fixed; right: auto; width: 300px; max-width: calc(100vw - 32px); padding: 6px; }
+.upd-pop-body { padding: 2px 8px 8px; font-size: 12.5px; color: var(--text); }
+.upd-pop-body p { margin: 6px 0; }
+.upd-pop-body .btn { margin-top: 4px; }
+.upd-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
