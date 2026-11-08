@@ -1,9 +1,6 @@
 package web
 
 import (
-	"fmt"
-
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/powerctl"
 )
 
@@ -49,11 +46,7 @@ func (s *Server) powerAction(c *reqCtx) error {
 	}
 	res, err := powerctl.Execute(c.r.Context(), s.Poller, x, req, who)
 	if err != nil {
-		st, detail := 500, "internal error"
-		if ae, ok := err.(*apierr.Error); ok {
-			st, detail = ae.Status, ae.Detail
-		}
-		c.audit(u, "power."+req.Action, id, params, fmt.Sprintf("error %d: %s", st, detail))
+		c.audit(u, "power."+req.Action, id, params, errorOutcome(err))
 		return err
 	}
 	params["via"] = res.Via

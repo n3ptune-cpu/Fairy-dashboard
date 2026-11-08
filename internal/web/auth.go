@@ -12,6 +12,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
@@ -63,7 +64,7 @@ func (c *reqCtx) tokenUser() (*model.User, error) {
 	rec := c.s.Tokens.Verify(raw)
 	if rec == nil {
 		c.auditAnon("auth.token_rejected", "denied: unknown, revoked or expired token", "?", nil, nil)
-		return nil, herr(401, "invalid API token")
+		return nil, apierr.New(401, "invalid API token")
 	}
 	c.s.Tokens.Touch(rec)
 	return &model.User{Sub: "token:" + rec.ID, Name: &rec.Name, Groups: []string{}, Auth: "token",
@@ -86,7 +87,7 @@ func (c *reqCtx) requireUser() (*model.User, error) {
 		u = c.sessionUser()
 	}
 	if u == nil {
-		return nil, herr(401, "not authenticated")
+		return nil, apierr.New(401, "not authenticated")
 	}
 	c.user = u
 	return u, nil
@@ -95,11 +96,11 @@ func (c *reqCtx) requireUser() (*model.User, error) {
 // requireSession: session-only endpoints (UI settings): API tokens are refused here.
 func (c *reqCtx) requireSession() (*model.User, error) {
 	if c.r.Header.Get("Authorization") != "" {
-		return nil, herr(403, "API tokens are not accepted on this endpoint")
+		return nil, apierr.New(403, "API tokens are not accepted on this endpoint")
 	}
 	u := c.sessionUser()
 	if u == nil {
-		return nil, herr(401, "not authenticated")
+		return nil, apierr.New(401, "not authenticated")
 	}
 	c.user = u
 	return u, nil
@@ -133,11 +134,11 @@ func (s *Server) authRoutes(m *http.ServeMux) {
 
 func (s *Server) authLogin(c *reqCtx) error {
 	if c.r.Header.Get("Authorization") != "" {
-		return herr(403, "API tokens are not accepted on /auth")
+		return apierr.New(403, "API tokens are not accepted on /auth")
 	}
 	if !s.login.allow(c.ip()) {
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
-		return herr(429, "too many login attempts; try again in a minute")
+		return apierr.New(429, "too many login attempts; try again in a minute")
 	}
 	q := c.r.URL.Query()
 	target := safeNext(q.Get("next"))
@@ -161,7 +162,7 @@ func (s *Server) authLogin(c *reqCtx) error {
 	p, err := s.oidc.provider(c.r.Context())
 	if err != nil {
 		slog.Error("OIDC discovery failed", "error", err)
-		return herr(502, "identity provider unreachable")
+		return apierr.New(502, "identity provider unreachable")
 	}
 	sess := c.session()
 	sess.Next, sess.StepUp = target, current != nil
@@ -182,14 +183,14 @@ func (s *Server) authLogin(c *reqCtx) error {
 func (s *Server) authCallback(c *reqCtx) error {
 	if !s.login.allow(c.ip()) {
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
-		return herr(429, "too many login attempts; try again in a minute")
+		return apierr.New(429, "too many login attempts; try again in a minute")
 	}
 	sess := c.session()
 	q := c.r.URL.Query()
 	fail := func(why string) error {
 		slog.Warn("OIDC callback failed", "reason", why)
 		c.auditAnon("auth.login", "failed: "+why, "", nil, nil)
-		return herr(400, "login failed")
+		return apierr.New(400, "login failed")
 	}
 	if e := q.Get("error"); e != "" {
 		return fail(truncate(e, 60))
@@ -199,7 +200,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 	}
 	p, err := s.oidc.provider(c.r.Context())
 	if err != nil {
-		return herr(502, "identity provider unreachable")
+		return apierr.New(502, "identity provider unreachable")
 	}
 	oc := s.oidc.oauth(p)
 	ctx, cancel := context.WithTimeout(s.oidc.ctx(c.r.Context()), 15*time.Second)
@@ -244,7 +245,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 		slog.Warn("login denied", "sub", u.Sub)
 		c.auditAnon("auth.login", "denied: not in an allowed group", actorOf(&u), &u.Sub, nil)
 		c.clearSession()
-		return herr(403, "not allowed")
+		return apierr.New(403, "not allowed")
 	}
 	now := float64(time.Now().UnixNano()) / 1e9
 	authTime := now
@@ -254,7 +255,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 	target := safeNext(sess.Next)
 	if sess.StepUp && now-authTime > 120 {
 		c.auditAnon("auth.step_up", "failed: identity provider did not re-authenticate (auth_time too old)", actorOf(&u), &u.Sub, nil)
-		return herr(400, "re-authentication was not performed by the identity provider")
+		return apierr.New(400, "re-authentication was not performed by the identity provider")
 	}
 	admin := s.Poller.Admin
 	if sess.StepUp && sess.User != nil && sess.User.Sub == u.Sub && sess.SID != "" {

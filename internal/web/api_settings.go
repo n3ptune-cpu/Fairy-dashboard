@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/settings"
 )
 
@@ -23,7 +24,7 @@ func (s *Server) putSettings(c *reqCtx) error {
 	}
 	raw, err := io.ReadAll(io.LimitReader(c.r.Body, 64<<10))
 	if err != nil {
-		return herr(400, "unreadable body")
+		return apierr.New(400, "unreadable body")
 	}
 	body, err := settings.Decode(raw)
 	if err != nil {
@@ -32,7 +33,7 @@ func (s *Server) putSettings(c *reqCtx) error {
 	cur := s.Settings.Get(u.Sub)
 	if body.Background.Kind == "upload" {
 		if p, _ := s.Settings.BackgroundPath(u.Sub); p == "" {
-			return herr(400, "no uploaded background; POST /api/settings/background first")
+			return apierr.New(400, "no uploaded background; POST /api/settings/background first")
 		}
 		body.Background.Version = cur.Background.Version // server-owned
 	}
@@ -52,14 +53,14 @@ func (s *Server) uploadBackground(c *reqCtx) error {
 		return err
 	}
 	if c.r.ContentLength > settings.MaxBackgroundBytes {
-		return herr(413, "image too large")
+		return apierr.New(413, "image too large")
 	}
 	data, err := io.ReadAll(io.LimitReader(c.r.Body, settings.MaxBackgroundBytes+1)) // bounded even without Content-Length
 	if err != nil {
-		return herr(400, "unreadable body")
+		return apierr.New(400, "unreadable body")
 	}
 	if len(data) > settings.MaxBackgroundBytes {
-		return herr(413, "image too large")
+		return apierr.New(413, "image too large")
 	}
 	mime, err := settings.ValidateUpload(c.r.Header.Get("Content-Type"), data)
 	if err != nil {
@@ -81,11 +82,11 @@ func (s *Server) getBackground(c *reqCtx) error {
 	}
 	p, mime := s.Settings.BackgroundPath(u.Sub)
 	if p == "" {
-		return herr(404, "no background uploaded")
+		return apierr.New(404, "no background uploaded")
 	}
 	b, err := os.ReadFile(p)
 	if err != nil {
-		return herr(404, "no background uploaded")
+		return apierr.New(404, "no background uploaded")
 	}
 	c.flush()
 	h := c.w.Header()

@@ -5,12 +5,13 @@ import (
 	"math"
 	"net/url"
 
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
 func (c *reqCtx) deny(u *model.User, status int, detail any, why string) error {
 	c.audit(u, "auth.denied", c.r.URL.Path, map[string]any{"method": c.r.Method}, fmt.Sprintf("%d: %s", status, why))
-	return herr(status, detail)
+	return apierr.New(status, detail)
 }
 
 // checkCSRF: browsers need the custom header (forces a CORS preflight; no CORS is enabled) + Origin check.
@@ -62,11 +63,11 @@ func (c *reqCtx) controlGuard(bucket *rateLimiter) (*model.User, error) {
 	}
 	if age := c.authAge(u); age != nil && *age > float64(cfg.StepUpWindowS) {
 		c.audit(u, "auth.step_up", c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, "required")
-		return nil, herr(401, map[string]any{"code": "step_up_required", "window_s": cfg.StepUpWindowS,
+		return nil, apierr.New(401, map[string]any{"code": "step_up_required", "window_s": cfg.StepUpWindowS,
 			"message": fmt.Sprintf("Confirm it's you: control actions need a Pocket ID sign-in from the last %d min.", cfg.StepUpWindowS/60)})
 	}
 	if !bucket.allow(u.Sub) {
-		return nil, herr(429, "too many control requests; slow down")
+		return nil, apierr.New(429, "too many control requests; slow down")
 	}
 	return u, nil
 }

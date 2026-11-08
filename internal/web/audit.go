@@ -2,9 +2,12 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/audit"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/notify"
@@ -70,4 +73,14 @@ func (c *reqCtx) auditAnon(action, outcome, actor string, sub *string, params ma
 		Outcome: outcome, Source: src, IP: &ip}); err != nil {
 		slog.Error("audit log write failed", "error", err)
 	}
+}
+
+// errorOutcome is the audit-log outcome for a failed control action: "error <status>: <detail>", with
+// unexpected (non-API) errors recorded as the generic 500 the client sees.
+func errorOutcome(err error) string {
+	var ae *apierr.Error
+	if errors.As(err, &ae) {
+		return fmt.Sprintf("error %d: %v", ae.Status, ae.Detail)
+	}
+	return "error 500: internal error"
 }

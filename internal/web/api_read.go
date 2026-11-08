@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/audit"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/normalise"
@@ -36,7 +37,7 @@ func (s *Server) auditPage(c *reqCtx) error {
 	q := c.r.URL.Query()
 	user, action, host := q.Get("q"), q.Get("action"), q.Get("host")
 	if len(user) > 100 || len(action) > 40 || (action != "" && !actionRe.MatchString(action)) || len(host) > 80 {
-		return herr(422, "invalid filter")
+		return apierr.New(422, "invalid filter")
 	}
 	limit, err := queryInt(q, "limit", 50, 1, 200)
 	if err != nil {
@@ -46,7 +47,7 @@ func (s *Server) auditPage(c *reqCtx) error {
 	if b := q.Get("before"); b != "" {
 		n, err := strconv.ParseInt(b, 10, 64)
 		if err != nil || n < 0 {
-			return herr(422, "before must be a non-negative integer")
+			return apierr.New(422, "before must be a non-negative integer")
 		}
 		before = &n
 	}
@@ -66,7 +67,7 @@ func (s *Server) systems(c *reqCtx) error {
 	q := c.r.URL.Query()
 	kind, status, group := q.Get("kind"), q.Get("status"), q.Get("group")
 	if (kind != "" && !kinds[kind]) || (status != "" && !statuses[status]) {
-		return herr(422, "invalid kind or status filter")
+		return apierr.New(422, "invalid kind or status filter")
 	}
 	items := []model.System{}
 	for _, x := range s.Poller.Snapshot() {
@@ -109,7 +110,7 @@ func (s *Server) processes(c *reqCtx) error {
 		sortBy = "cpu"
 	}
 	if sortBy != "cpu" && sortBy != "mem" && sortBy != "gpu" {
-		return herr(422, "sort must be cpu, mem or gpu")
+		return apierr.New(422, "sort must be cpu, mem or gpu")
 	}
 	agent, ok := s.Poller.AgentFor(id)
 	if !ok {
@@ -117,12 +118,12 @@ func (s *Server) processes(c *reqCtx) error {
 		if x.Kind == "node" {
 			where = "on the node itself"
 		}
-		return herr(404, fmt.Sprintf("Per-process data for %s needs the Fairy agent running %s: the Proxmox API does "+
+		return apierr.New(404, fmt.Sprintf("Per-process data for %s needs the Fairy agent running %s: the Proxmox API does "+
 			"not expose guest processes. Install the agent and set `links_to: %s` in config.yaml.", id, where, id))
 	}
 	pl, err := s.Poller.FetchProcesses(c.r.Context(), agent, id, limit, sortBy)
 	if err != nil {
-		return herr(502, "agent unreachable: "+normalise.Describe(err))
+		return apierr.New(502, "agent unreachable: "+normalise.Describe(err))
 	}
 	c.json(200, pl)
 	return nil

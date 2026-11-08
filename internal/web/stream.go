@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
@@ -23,7 +24,7 @@ func (s *Server) stream(c *reqCtx) error {
 	}
 	watch := c.r.URL.Query().Get("watch")
 	if watch != "" && (len(watch) > 80 || !watchRe.MatchString(watch)) {
-		return herr(422, "invalid watch id")
+		return apierr.New(422, "invalid watch id")
 	}
 	boost := ""
 	if watch != "" && s.Poller.HasSystem(watch) {

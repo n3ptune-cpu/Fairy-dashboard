@@ -38,16 +38,6 @@ func (c *reqCtx) flush() {
 
 func (c *reqCtx) ip() string { return security.ClientIP(c.r, c.s.Cfg.Trusted()) }
 
-// httpErr carries a status and a JSON-able detail (string or object).
-type httpErr struct {
-	Status int
-	Detail any
-}
-
-func (e *httpErr) Error() string { return http.StatusText(e.Status) }
-
-func herr(status int, detail any) *httpErr { return &httpErr{status, detail} }
-
 func (c *reqCtx) json(status int, v any) {
 	c.flush()
 	b, err := json.Marshal(v)
@@ -61,18 +51,14 @@ func (c *reqCtx) json(status int, v any) {
 }
 
 func (c *reqCtx) fail(err error) {
-	var he *httpErr
 	var ae *apierr.Error
-	switch {
-	case errors.As(err, &he):
-		c.json(he.Status, map[string]any{"detail": he.Detail})
-	case errors.As(err, &ae):
+	if errors.As(err, &ae) {
 		c.json(ae.Status, map[string]any{"detail": ae.Detail})
-	default:
-		// No stack traces or internals to clients; details go to the server log only.
-		slog.Error("unhandled error", "method", c.r.Method, "path", c.r.URL.Path, "error", err)
-		c.json(500, map[string]any{"detail": "internal error"})
+		return
 	}
+	// No stack traces or internals to clients; details go to the server log only.
+	slog.Error("unhandled error", "method", c.r.Method, "path", c.r.URL.Path, "error", err)
+	c.json(500, map[string]any{"detail": "internal error"})
 }
 
 func (c *reqCtx) redirect(target string) {

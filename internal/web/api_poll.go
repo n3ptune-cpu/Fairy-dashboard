@@ -1,6 +1,7 @@
 package web
 
 import (
+	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/scheduler"
 )
 
@@ -38,10 +39,10 @@ func (s *Server) putPoll(c *reqCtx) error {
 			ov = &scheduler.Override{Paused: true}
 		case "default":
 		default:
-			return herr(422, `interval_s must be seconds, "paused" or "default"`)
+			return apierr.New(422, `interval_s must be seconds, "paused" or "default"`)
 		}
 	default:
-		return herr(422, `interval_s must be seconds, "paused" or "default"`)
+		return apierr.New(422, `interval_s must be seconds, "paused" or "default"`)
 	}
 	u, err := c.controlGuard(s.pollCtl)
 	if err != nil {
@@ -53,7 +54,7 @@ func (s *Server) putPoll(c *reqCtx) error {
 	}
 	if num != nil && (*num < 1 || *num > 300) {
 		c.audit(u, "poll.set", id, map[string]any{"interval_s": *num}, "error 422: out of range")
-		return herr(422, "interval_s must be between 1 and 300 seconds")
+		return apierr.New(422, "interval_s must be between 1 and 300 seconds")
 	}
 	if err := s.Poller.SetPoll(id, ov); err != nil {
 		return err
