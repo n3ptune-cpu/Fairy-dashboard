@@ -14,7 +14,7 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"GET", "/api/systems", "The systems you may see (normalised). Query: kind, status, group"},
 	{"GET", "/api/systems/{id}", "One system"},
 	{"GET", "/api/systems/{id}/processes", "Top processes (fetched on demand from the agent). Query: limit, sort=cpu|mem|gpu"},
-	{"GET", "/api/summary", "Cluster totals and status counts"},
+	{"GET", "/api/summary", "Status counts, per-cluster totals and all-hosts totals (CPU, memory), over what the caller may see"},
 	{"GET", "/api/power", "All power sources + total wall power"},
 	{"GET", "/api/power/history", "Ring buffer (default 1 h) for sparklines. Query: source"},
 	{"GET", "/api/ups", "All UPSes: state, battery, load, linked systems, history"},

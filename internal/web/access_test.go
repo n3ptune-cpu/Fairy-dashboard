@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -292,6 +293,9 @@ func TestAuthorizationMatrix(t *testing.T) {
 	if sm["counts"].(map[string]any)["total"] != 5.0 || len(sm["clusters"].([]any)) != 1 {
 		t.Fatal("Neptune summary", sm)
 	}
+	if tot := sm["totals"].(map[string]any); tot["hosts"] != 3.0 {
+		t.Fatal("Neptune totals: both visible nodes and the laptop", tot)
+	}
 	pw := e.do("GET", "/api/power", nil, "Cookie", n).body
 	if pw["total_w"] != 80.0 || len(pw["sources"].([]any)) != 1 {
 		t.Fatal("Neptune power: only the laptop plug counts", pw)
@@ -305,6 +309,9 @@ func TestAuthorizationMatrix(t *testing.T) {
 	cl := sm["clusters"].([]any)[0].(map[string]any)
 	if sm["counts"].(map[string]any)["total"] != 2.0 || cl["nodes_total"] != 0.0 || cl["guests_total"] != 1.0 {
 		t.Fatal("Straw summary: cluster totals only over what Straw sees", sm)
+	}
+	if tot := sm["totals"].(map[string]any); fmt.Sprint(tot) != fmt.Sprint(map[string]any{"hosts": 1.0, "hosts_online": 0.0, "cores": 0.0, "cpu_percent": nil, "mem_used": 0.0, "mem_total": 0.0}) {
+		t.Fatal("Straw totals: only his own host, none of the hidden nodes' sums", tot)
 	}
 	if pw := e.do("GET", "/api/power", nil, "Cookie", s).body; pw["total_w"] != nil {
 		t.Fatal("Straw has no power source", pw)

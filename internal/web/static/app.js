@@ -391,15 +391,17 @@ function alertSummary() {
   if (!n) return "";
   return `<a class="alert-sum" href="#/notifications">${I.bell}<b>${n}</b> active alert${n === 1 ? "" : "s"} →</a>`;
 }
+// "5 hosts", or "4 of 5 online" when some are offline (they do not add to the CPU / memory totals).
+const hostsOf = (t) => (t.hosts_online === t.hosts ? `${t.hosts} host${t.hosts === 1 ? "" : "s"}` : `${t.hosts_online} of ${t.hosts} online`);
 function pageOverview() {
-  setTitle("Overview", state.summary?.cluster?.name || "");
-  const sm = state.summary, c = sm?.cluster;
+  setTitle("Overview");
+  const sm = state.summary, t = sm?.totals;
   if (!sm) return '<div class="empty">Waiting for the first poll…</div>';
   const hostGroups = hostsBySite();
   const ups = state.ups?.ups || [];
   return `<div class="tiles">
-    ${c ? `<div class="panel glass tile"><div class="label">Cluster CPU · ${esc(c.name)}</div><div class="value">${fmtP(c.cpu_percent)}<small> of ${c.cores} cores</small></div>${barEl("cpu", c.cpu_percent)}</div>
-    <div class="panel glass tile"><div class="label">Cluster memory</div><div class="value">${fmtBytes(c.mem_used)}<small> / ${fmtBytes(c.mem_total)}</small></div>${barEl("mem", pct(c.mem_used, c.mem_total))}</div>` : ""}
+    ${t?.hosts ? `<div class="panel glass tile"><div class="label">CPU <span class="label-sub" title="Offline hosts do not add to the CPU and memory totals">all hosts · ${hostsOf(t)}</span></div><div class="value">${fmtP(t.cpu_percent)}<small> of ${t.cores} cores</small></div>${barEl("cpu", t.cpu_percent)}</div>
+    <div class="panel glass tile"><div class="label">Memory <span class="label-sub">all hosts</span></div><div class="value">${t.mem_total ? `${fmtBytes(t.mem_used)}<small> / ${fmtBytes(t.mem_total)}</small>` : `–<small> ${hostsOf(t)}</small>`}</div>${barEl("mem", pct(t.mem_used, t.mem_total))}</div>` : ""}
     <div class="panel glass tile"><div class="label">Systems</div><div class="value">${sm.counts.online}<small> / ${sm.counts.total} online</small></div>
       <div class="counts"><span><span class="dot online"></span><b>${sm.counts.online}</b></span><span><span class="dot"></span><b>${sm.counts.stopped}</b></span>
       <span><span class="dot stale"></span><b>${sm.counts.stale}</b></span><span><span class="dot offline"></span><b>${sm.counts.offline}</b></span>

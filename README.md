@@ -182,7 +182,7 @@ The file is read once at start (path from the config only) and served at `/brand
   only the systems, guests, power sources, UPSes (and their processes, sensors, history) of their sites;
   **pending** (first sign-in of anyone else) sees a "waiting for access" page and gets 403 from every data API.
   Filtering is server-side for every endpoint and the SSE stream (`internal/web/view.go`); hidden ids answer the
-  same 404 as unknown ones; a viewer's summary counts and cluster totals only add up what they can see.
+  same 404 as unknown ones; a viewer's summary counts, cluster totals and the Overview's all-hosts CPU / memory totals (`totals` in `/api/summary`) only add up what they can see.
 * Sites: a host's site is the Users page's assignment, else `site:` in config.yaml (proxmox / agents / systems),
   else (guests) its node's site. Power sources and UPSes follow the hosts they are attached to unless assigned.
   No site = admins only.
@@ -234,7 +234,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | --- | --- |
 | `cmd/fairy` | The `fairy` program: `main.go` picks the sub-command, `serve.go` starts the panel (or demo mode), `update.go` is `fairy update`. |
 | `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
-| `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |
+| `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster and all-hosts totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |
 | `internal/scheduler` | Runs each source as a job at its own interval: overrides, pause, boost while viewing, never overlapping. |
 | `internal/normalise` | Turns raw Proxmox and agent data into the one "system" shape the UI uses. |
 | `internal/power` | Wall power on the panel: retry/backoff per source (`runner.go`), totals and history (`manager.go`), devices reported by agents (`remote.go`), and the `type: agent` component-power metrics (`agentpower.go`). The device types themselves are Fairy-agent's `pkg/power`. |

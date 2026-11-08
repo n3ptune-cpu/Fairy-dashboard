@@ -42,6 +42,7 @@ func (p *Poller) SummaryOf(systems []model.System, keepSource func(name string) 
 		}
 		clusters = append(clusters, ct)
 	}
+	totals := hostTotals(systems, p.guestAgents())
 	p.mu.Lock()
 	srcs := []model.SourceStatus{}
 	for _, k := range p.sourceOrder {
@@ -51,7 +52,7 @@ func (p *Poller) SummaryOf(systems []model.System, keepSource func(name string) 
 	}
 	p.mu.Unlock()
 	return model.Summary{ControlDisabled: p.Admin.ControlDisabled(), GeneratedAt: time.Now().UTC(),
-		Cluster: mainCluster(clusters), Clusters: clusters, Counts: counts, ByKind: byKind, Sources: srcs}
+		Cluster: mainCluster(clusters), Clusters: clusters, Totals: totals, Counts: counts, ByKind: byKind, Sources: srcs}
 }
 
 // clusterTotals adds up one Proxmox cluster: online nodes' cores and memory, a core-weighted CPU %, and guests.
@@ -90,6 +91,53 @@ func clusterTotals(c config.Proxmox, systems []model.System) model.ClusterTotals
 		ct.CPUPercent = model.P(normalise.Round(busy/float64(ct.Cores), 1))
 	}
 	return ct
+}
+
+// hostTotals adds up the hosts among systems: Proxmox nodes and agent hosts (an agent on a node is already
+// merged into it; agents in skip run inside a guest, whose resources are part of its node's). Offline, stale and
+// paused hosts are counted as hosts but not towards usage; CPU % is weighted by cores.
+func hostTotals(systems []model.System, skip map[string]bool) model.HostTotals {
+	var t model.HostTotals
+	busy := 0.0
+	for _, s := range systems {
+		if s.Kind != "node" && (s.Kind != "agent" || skip[s.ID]) {
+			continue
+		}
+		t.Hosts++
+		if s.Status != "online" {
+			continue
+		}
+		t.HostsOnline++
+		cores := model.Deref(s.Cores)
+		t.Cores += cores
+		if s.CPUPercent != nil {
+			busy += *s.CPUPercent * float64(cores)
+		}
+		t.MemUsed += model.Deref(s.MemUsed)
+		t.MemTotal += model.Deref(s.MemTotal)
+	}
+	if t.Cores > 0 {
+		t.CPUPercent = model.P(normalise.Round(busy/float64(t.Cores), 1))
+	}
+	return t
+}
+
+// guestAgents is the set of agents whose links_to is a VM or container (they stay separate entries but are not
+// hosts of their own).
+func (p *Poller) guestAgents() map[string]bool {
+	out := map[string]bool{}
+	agents := p.Agents()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, a := range agents {
+		if a.LinksTo == "" {
+			continue
+		}
+		if s, ok := p.systems[a.LinksTo]; ok && (s.Kind == "qemu" || s.Kind == "lxc") {
+			out[a.ID] = true
+		}
+	}
+	return out
 }
 
 // mainCluster is the first non-standalone cluster (else the first one); nil without Proxmox.

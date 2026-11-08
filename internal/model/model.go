@@ -254,6 +254,17 @@ type ClusterTotals struct {
 	GuestsTotal   int      `json:"guests_total"`
 }
 
+// HostTotals adds up every host a viewer may see: all Proxmox nodes of all clusters plus the agent hosts that
+// are not merged into a node (nor run inside a guest). Only online hosts count towards cores, CPU and memory.
+type HostTotals struct {
+	Hosts       int      `json:"hosts"`
+	HostsOnline int      `json:"hosts_online"`
+	Cores       int      `json:"cores"`
+	CPUPercent  *float64 `json:"cpu_percent"`
+	MemUsed     int64    `json:"mem_used"`
+	MemTotal    int64    `json:"mem_total"`
+}
+
 // Counts are the systems per status.
 type Counts struct {
 	Total   int `json:"total"`
@@ -277,6 +288,7 @@ type Summary struct {
 	GeneratedAt     time.Time       `json:"generated_at"`
 	Cluster         *ClusterTotals  `json:"cluster"`
 	Clusters        []ClusterTotals `json:"clusters"`
+	Totals          HostTotals      `json:"totals"`
 	Counts          Counts          `json:"counts"`
 	ByKind          map[string]int  `json:"by_kind"`
 	Sources         []SourceStatus  `json:"sources"`

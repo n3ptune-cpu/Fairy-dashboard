@@ -179,7 +179,9 @@ func TestAgentPowerMergeNodeEnrichmentAndPause(t *testing.T) {
 		t.Fatal("agent devices must go stale, not stay ok")
 	}
 	sm := p.Summary()
-	if sm.Cluster == nil || sm.Cluster.NodesOnline != 1 || sm.Cluster.GuestsTotal != 3 || sm.Counts.Total != len(p.Snapshot()) {
+	if sm.Cluster == nil || sm.Cluster.NodesOnline != 1 || sm.Cluster.GuestsTotal != 3 || sm.Counts.Total != len(p.Snapshot()) ||
+		// both nodes (the laptop agent merged into one) and cyrene; only the online node adds usage
+		sm.Totals.Hosts != 3 || sm.Totals.HostsOnline != 1 || sm.Totals.Cores != sm.Cluster.Cores || sm.Totals.MemTotal != sm.Cluster.MemTotal {
 		t.Fatalf("%+v", sm)
 	}
 }
@@ -297,5 +299,30 @@ func TestPendingPowerClearsWhenHostGoesAway(t *testing.T) {
 	s.LastSeen, s.PowerPending.At = &old, now.Add(time.Hour)
 	if d := p.degrade(s, now, "timeout"); d.Status != "offline" || d.PowerPending != nil {
 		t.Fatal("offline host keeps its pending action", d.Status)
+	}
+}
+
+// The Overview's CPU / memory cards add up every visible host: nodes of all clusters and standalone agents, not
+// agents inside a guest; offline hosts are counted as hosts but not towards usage.
+func TestHostTotals(t *testing.T) {
+	node := func(id, cluster, status string, cores int, cpu float64, used, total int64) model.System {
+		return model.System{ID: id, Kind: "node", ClusterID: model.P(cluster), Status: status, Cores: model.P(cores),
+			CPUPercent: model.P(cpu), MemUsed: model.P(used), MemTotal: model.P(total)}
+	}
+	agent := node("pc", "", "online", 8, 50, 4, 16)
+	agent.Kind, agent.ClusterID = "agent", nil
+	inVM := agent
+	inVM.ID = "vm-agent"
+	guest := node("qemu-100", "a", "online", 4, 100, 2, 8)
+	guest.Kind = "qemu"
+	systems := []model.System{node("node-a", "a", "online", 8, 10, 10, 32), node("node-b", "b", "online", 4, 40, 6, 16),
+		node("node-c", "b", "offline", 16, 90, 30, 64), agent, inVM, guest}
+	got := hostTotals(systems, map[string]bool{"vm-agent": true})
+	// cores 8+4+8 = 20; busy 80+160+400 = 640 -> 32 %; memory 10+6+4 of 32+16+16
+	if got.Hosts != 4 || got.HostsOnline != 3 || got.Cores != 20 || *got.CPUPercent != 32 || got.MemUsed != 20 || got.MemTotal != 64 {
+		t.Fatalf("%+v", got)
+	}
+	if e := hostTotals(nil, nil); e.Hosts != 0 || e.CPUPercent != nil || e.MemTotal != 0 {
+		t.Fatalf("empty: %+v", e)
 	}
 }
