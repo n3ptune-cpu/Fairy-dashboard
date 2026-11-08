@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/n3ptune-cpu/Fairy/internal/devices"
@@ -35,7 +36,6 @@ func agentMetrics(id string) (map[string]any, error) {
 	feat := m["features"].(map[string]any)
 	switch id {
 	case "nsx-cyrene":
-		pkg := r1(wave(100, 18, 70, 0))
 		g := gpuRow("NVIDIA GeForce RTX 2080 SUPER", 3, 85, 8, 18, 210, 38, 72, 0)
 		set(map[string]any{"hostname": "NSX-CYRENE", "uptime_s": int64(86400*6 + t),
 			"platform": map[string]any{"system": "Windows", "pretty": "Windows 11 Enterprise 24H2"},
@@ -47,19 +47,19 @@ func agentMetrics(id string) (map[string]any, error) {
 			"temps": []any{temp("IPMI", "CPU Temp", r1(wave(100, 38, 66, 0))), temp("IPMI", "PCH Temp", r1(wave(300, 44, 50, 0))),
 				temp("IPMI", "System Temp", r1(wave(300, 29, 33, 0))), temp("IPMI", "Peripheral Temp", r1(wave(300, 31, 36, 0))),
 				temp("IPMI", "VcpuVRM Temp", r1(wave(100, 36, 52, 0)))},
-			"fans": []any{}, "voltages": []any{map[string]any{"name": "IPMI 12V", "volts": 12.09}, map[string]any{"name": "IPMI 5VCC", "volts": 5.03},
+			"fans": []any{map[string]any{"name": "IPMI FAN1", "rpm": 400 + 100*math.Round(wave(100, 0, 6, 0))},
+				map[string]any{"name": "IPMI FAN2", "rpm": 400 + 100*math.Round(wave(100, 0, 6, 0))}, map[string]any{"name": "IPMI FANA", "rpm": 900.0}},
+			"voltages": []any{map[string]any{"name": "IPMI 12V", "volts": 12.09}, map[string]any{"name": "IPMI 5VCC", "volts": 5.03},
 				map[string]any{"name": "IPMI 3.3VCC", "volts": 3.31}, map[string]any{"name": "IPMI Vcpu", "volts": 0.91}},
 			"gpus": []any{g},
-			"power": map[string]any{"cpu_package_w": pkg, "gpu_w": g["power_w"], "battery_w": nil, "battery_state": nil,
-				"bmc_w": nil, "bmc_note": "DCMI power reading unavailable (completion code 0xC1)",
-				"sensors": []any{map[string]any{"name": "Intel Xeon E-2278G CPU Package", "watts": pkg}},
-				"source":  []any{"lhm-http", "gpu"}},
+			// fairy-agent on Windows has no CPU package power (that needs a kernel driver): GPU only
+			"power": map[string]any{"cpu_package_w": nil, "gpu_w": g["power_w"], "battery_w": nil, "battery_state": nil,
+				"bmc_w": nil, "sensors": []any{}, "source": []any{"gpu"}},
 			"hardware": map[string]any{"system_vendor": "System manufacturer", "system_model": "System Product Name",
 				"board_vendor": "Supermicro", "board_model": "X11SCA-F", "bios_version": "1.8",
 				"cpu_model": "Intel(R) Xeon(R) E-2278G CPU @ 3.40GHz"}})
 		feat["fan_control"] = true
 	case "neptune-laptop":
-		bat := r1(wave(60, 11, 26, 0))
 		g := gpuRow("NVIDIA GeForce RTX 3050 Laptop GPU", 0, 35, 4, 4, 38, 40, 63, 1.5)
 		set(map[string]any{"hostname": "NEPTUNE-VIVOBOOK", "uptime_s": int64(3600*5 + t),
 			"platform": map[string]any{"system": "Windows", "pretty": "Windows 11 Home 24H2"},
@@ -67,10 +67,10 @@ func agentMetrics(id string) (map[string]any, error) {
 			"memory":   map[string]any{"total": int64(16 * GiB), "used": int64(wave(300, 8, 12, 0) * GiB)},
 			"disks":    []any{map[string]any{"mount": `C:\`, "fstype": "NTFS", "total": int64(512 * GiB), "used": int64(301 * GiB)}},
 			"net":      map[string]any{"bytes_recv": counter(id+"/rx", 1e9, wave(30, 2e4, 2e6, 0)), "bytes_sent": counter(id+"/tx", 3e8, wave(30, 1e4, 4e5, 0))},
-			"temps":    []any{temp("lhm", "CPU Package", r1(wave(60, 48, 74, 0)))},
+			"temps":    []any{temp("acpi", "ACPI thermal zone TZ00", r1(wave(60, 48, 74, 0)))},
 			"gpus":     []any{g},
-			"power": map[string]any{"cpu_package_w": r1(wave(60, 6, 28, 0)), "gpu_w": g["power_w"], "battery_w": bat,
-				"battery_state": "discharging", "bmc_w": nil, "sensors": []any{}, "source": []any{"lhm-http", "wmi-battery", "gpu"}},
+			"power": map[string]any{"cpu_package_w": nil, "gpu_w": g["power_w"], "battery_w": nil,
+				"battery_state": "discharging", "bmc_w": nil, "sensors": []any{}, "source": []any{"battery", "gpu"}},
 			"hardware": map[string]any{"system_vendor": "ASUSTeK COMPUTER INC.", "system_model": "Vivobook 16X K3605ZC",
 				"board_vendor": "ASUSTeK COMPUTER INC.", "board_model": "K3605ZC", "bios_version": "K3605ZC.305",
 				"cpu_model": "12th Gen Intel(R) Core(TM) i5-12500H"}})
@@ -103,7 +103,7 @@ func agentMetrics(id string) (map[string]any, error) {
 				"bios_version": "F31", "cpu_model": "AMD Ryzen 9 7950X 16-Core Processor"}})
 	case "asus-i7-agent": // agent on Straw's standalone PVE host, relaying its local upsd
 		row := ups.RowMap(devices.UPSFromVars("cyberpower", cyberpowerVars(), "CyberPower CP1500"))
-		set(map[string]any{"hostname": nil, "uptime_s": int64(86400*2 + t), "platform": map[string]any{"system": "Linux", "pretty": "Proxmox VE 9"},
+		set(map[string]any{"hostname": "asus-i7", "uptime_s": int64(86400*2 + t), "platform": map[string]any{"system": "Linux", "pretty": "Proxmox VE 9.0"},
 			"cpu":    map[string]any{"percent": r1(wave(55, 8, 30, 4)), "logical": 8},
 			"memory": map[string]any{"total": int64(32 * GiB), "used": int64(wave(250, 14, 19, 0) * GiB)},
 			"disks":  []any{}, "net": map[string]any{"bytes_recv": 0, "bytes_sent": 0},
@@ -111,7 +111,7 @@ func agentMetrics(id string) (map[string]any, error) {
 			"ups": []any{row},
 			"hardware": map[string]any{"system_vendor": "ASUS", "system_model": "All Series", "board_vendor": "ASUSTeK COMPUTER INC.",
 				"board_model": "Z97-A", "bios_version": "2801", "cpu_model": "Intel(R) Core(TM) i7-4790K CPU @ 4.00GHz"}})
-		feat["processes"], feat["cmdline"] = false, false // Straw keeps --no-processes
+		feat["processes"], feat["cmdline"] = false, false // Straw keeps processes: {enabled: false}
 	case "kachina-agent": // agent on the NSX-KACHINA Proxmox node
 		set(map[string]any{"hostname": "NSX-KACHINA", "uptime_s": int64(86400*12 + t),
 			"platform": map[string]any{"system": "Linux", "pretty": "Proxmox VE 9.0"},
@@ -124,19 +124,14 @@ func agentMetrics(id string) (map[string]any, error) {
 			"hardware": map[string]any{"system_vendor": "LENOVO", "system_model": "ThinkCentre M720q", "board_vendor": "LENOVO",
 				"board_model": "3136", "bios_version": "M1UKT77A", "cpu_model": "Intel(R) Core(TM) i7-8700T CPU @ 2.40GHz"}})
 	case "straw-pc":
-		gw := r1(wave(45, 12, 250, 0))
-		set(map[string]any{"hostname": nil, "uptime_s": int64(3600*30 + t), // owner set --no-hostname-details
+		set(map[string]any{"hostname": nil, "uptime_s": int64(3600*30 + t), // owner set hide_host_details: true
 			"platform": map[string]any{"system": "Windows", "pretty": "Windows"},
 			"cpu":      map[string]any{"percent": r1(wave(45, 6, 70, 2)), "logical": 16},
 			"memory":   map[string]any{"total": int64(32 * GiB), "used": int64(wave(250, 11, 22, 0) * GiB)},
 			"disks":    []any{map[string]any{"mount": `C:\`, "fstype": "NTFS", "total": int64(2000 * GiB), "used": int64(1220 * GiB)}},
 			"net":      map[string]any{"bytes_recv": counter(id+"/rx", 8e9, wave(35, 5e4, 6e6, 0)), "bytes_sent": counter(id+"/tx", 1e9, wave(35, 2e4, 9e5, 0))},
-			"temps":    []any{temp("lhm", "Core (Tctl/Tdie)", r1(wave(70, 45, 82, 0)))},
-			"gpus": []any{map[string]any{"name": "AMD Radeon RX 7800 XT", "vendor": "amd", "util_percent": r1(wave(45, 2, 97, 0)),
-				"vram_used": int64(wave(45, 1.5, 11, 0) * GiB), "vram_total": int64(16 * GiB),
-				"temp_c": r1(wave(45, 35, 74, 0)), "power_w": gw}},
-			"power": map[string]any{"cpu_package_w": r1(wave(45, 28, 88, 2)), "gpu_w": gw, "battery_w": nil,
-				"battery_state": nil, "bmc_w": nil, "sensors": []any{}, "source": []any{"lhm-http"}},
+			// Ryzen + Radeon on Windows: no ACPI thermal zone, and fairy-agent reads NVIDIA GPUs only
+			"temps": []any{}, "gpus": []any{},
 			"power_sources": []any{map[string]any{"id": "desk-plug", "name": "Straw's Tuya desk plug", "type": "tuya", "ok": true,
 				"watts": r1(wave(45, 95, 420, 0)), "voltage": 229.8, "current": nil, "energy_kwh_total": nil,
 				"system_hint": "self", "error": nil}}})
@@ -191,8 +186,9 @@ func demoProcesses(id string, limit int, sortBy string) jsonx.M {
 		total = 312
 	} else {
 		type p struct {
-			name, user        string
-			cpu, rssMiB, gMiB float64
+			name, user  string
+			cpu, rssMiB float64
+			_           float64 // VRAM MiB (Windows reports none per process)
 		}
 		var names []p
 		switch id {
@@ -200,30 +196,35 @@ func demoProcesses(id string, limit int, sortBy string) jsonx.M {
 			names = []p{{"Plex Media Server.exe", `NSX-CYRENE\plex`, 12, 900, 0}, {"obs64.exe", `NSX-CYRENE\neptune`, 9, 620, 410},
 				{"chrome.exe", `NSX-CYRENE\neptune`, 6, 1400, 120}, {"MsMpEng.exe", `NT AUTHORITY\SYSTEM`, 4, 310, 0},
 				{"Ollama.exe", `NSX-CYRENE\neptune`, 3, 5200, 5600}, {"dwagsvc.exe", `NT AUTHORITY\SYSTEM`, 1.2, 45, 0},
-				{"fairy-agent.exe", `NT AUTHORITY\SYSTEM`, 0.6, 24, 0}, {"svchost.exe", "", 0.4, 60, 0},
-				{"System", "", 0.9, 2, 0}, {"LibreHardwareMonitor.exe", `NT AUTHORITY\SYSTEM`, 0.8, 160, 0}}
-		case "neptune-laptop":
-			names = []p{{"Code.exe", `NEPTUNE-VIVOBOOK\neptune`, 7, 900, 0}, {"firefox.exe", `NEPTUNE-VIVOBOOK\neptune`, 11, 1600, 90},
-				{"Discord.exe", `NEPTUNE-VIVOBOOK\neptune`, 2, 420, 60}, {"fairy-agent.exe", `NT AUTHORITY\SYSTEM`, 0.5, 22, 0}}
+				{"fairy-agent.exe", `NT AUTHORITY\SYSTEM`, 0.6, 18, 0}, {"svchost.exe", `NT AUTHORITY\SYSTEM`, 0.4, 60, 0},
+				{"System", `NT AUTHORITY\SYSTEM`, 0.9, 2, 0}, {"tailscaled.exe", `NT AUTHORITY\SYSTEM`, 0.3, 40, 0}}
+		case "neptune-laptop": // the agent runs as LocalService here: other accounts' programs are listed by name only
+			names = []p{{"Code.exe", "", 7, 900, 0}, {"firefox.exe", "", 11, 1600, 90},
+				{"Discord.exe", "", 2, 420, 60}, {"fairy-agent.exe", `NT AUTHORITY\LOCAL SERVICE`, 0.5, 16, 0}}
 		}
-		cmd := map[string]string{"Ollama.exe": "ollama.exe serve --host 127.0.0.1 --api-key=***",
-			"obs64.exe":       `"C:\Program Files\obs-studio\bin\64bit\obs64.exe" --startreplaybuffer`,
-			"fairy-agent.exe": `"C:\Program Files\Fairy\fairy-agent.exe" run`}
+		// fairy-agent on Windows sends the program's path (never reads another process's memory for its
+		// arguments) and no per-process VRAM (nvidia-smi reports none under WDDM).
+		path := map[string]string{"Ollama.exe": `C:\Users\neptune\AppData\Local\Programs\Ollama\ollama.exe`,
+			"obs64.exe":       `C:\Program Files\obs-studio\bin\64bit\obs64.exe`,
+			"chrome.exe":      `C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			"fairy-agent.exe": `C:\Program Files\Fairy\fairy-agent.exe`, "System": "",
+			"Plex Media Server.exe": `C:\Program Files\Plex\Plex Media Server\Plex Media Server.exe`,
+			"tailscaled.exe":        `C:\Program Files\Tailscale\tailscaled.exe`}
 		for i, x := range names {
-			c, ok := cmd[x.name]
-			if !ok {
-				c = x.name
+			row := map[string]any{"pid": 1000 + i*412, "name": x.name, "username": nil, "status": "running",
+				"cpu_percent": nil, "rss": nil, "mem_percent": nil, "gpu_mem": nil, "create_time": nil, "cmdline": nil}
+			if x.user != "" { // the agent could open it (PROCESS_QUERY_LIMITED_INFORMATION)
+				c, ok := path[x.name]
+				if !ok {
+					c = `C:\Windows\System32\` + x.name
+				}
+				row["username"], row["cpu_percent"], row["rss"] = x.user, r1(x.cpu*uniform(0.6, 1.5)), int64(x.rssMiB*(1<<20))
+				row["mem_percent"], row["create_time"] = r2(x.rssMiB/655.36), t0-3600*float64(i+1)
+				if c != "" {
+					row["cmdline"] = c
+				}
 			}
-			var user, gm any
-			if x.user != "" {
-				user = x.user
-			}
-			if x.gMiB > 0 {
-				gm = int64(x.gMiB * (1 << 20))
-			}
-			rows = append(rows, map[string]any{"pid": 1000 + i*412, "name": x.name, "username": user, "status": "running",
-				"cpu_percent": r1(x.cpu * uniform(0.6, 1.5)), "rss": int64(x.rssMiB * (1 << 20)),
-				"mem_percent": r2(x.rssMiB / 655.36), "gpu_mem": gm, "create_time": t0 - 3600*float64(i+1), "cmdline": c})
+			rows = append(rows, row)
 		}
 		total = 180 + len(rows)
 	}

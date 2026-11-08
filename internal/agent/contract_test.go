@@ -1,0 +1,452 @@
+package agent_test
+
+// The panel contract test: the panel's real poller, normaliser, power/UPS managers and web API talk over HTTP
+// to the real fairy-agent handler (with fake collectors, a fake BMC and fake devices). If this passes, the panel
+// works with fairy-agent without any panel change.
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy/internal/agent"
+	"github.com/n3ptune-cpu/Fairy/internal/agent/agenttest"
+	"github.com/n3ptune-cpu/Fairy/internal/agent/collect"
+	"github.com/n3ptune-cpu/Fairy/internal/agent/ipmi/fakebmc"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/demo"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/poller"
+	"github.com/n3ptune-cpu/Fairy/internal/web"
+)
+
+const (
+	readTok = "contract-read-token-xxxxxxxxxxxxxxx"
+	ctlTok  = "contract-control-token-yyyyyyyyyyyy"
+)
+
+// fakeUpsd answers NUT's LIST UPS / LIST VAR like upsd with one CyberPower UPS.
+func fakeUpsd(t *testing.T) int {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					switch strings.TrimSpace(line) {
+					case "LIST UPS":
+						fmt.Fprint(c, "BEGIN LIST UPS\nUPS cyberpower \"CyberPower CP1500\"\nEND LIST UPS\n")
+					case "LIST VAR cyberpower":
+						fmt.Fprint(c, "BEGIN LIST VAR cyberpower\nVAR cyberpower ups.status \"OL CHRG\"\n"+
+							"VAR cyberpower battery.charge \"100\"\nVAR cyberpower ups.load \"20\"\n"+
+							"VAR cyberpower ups.realpower.nominal \"900\"\nVAR cyberpower battery.runtime \"3000\"\nEND LIST VAR cyberpower\n")
+					case "LOGOUT":
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+type contract struct {
+	agentSrv *httptest.Server
+	bmc      *fakebmc.BMC
+	power    *agenttest.PowerExec
+	mu       sync.Mutex
+	wolSent  []string
+}
+
+func startAgent(t *testing.T) *contract {
+	t.Helper()
+	plug := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"apower": 120.5, "voltage": 230.1, "current": 0.52, "aenergy": map[string]any{"total": 5000.0}})
+	}))
+	t.Cleanup(plug.Close)
+	yaml := fmt.Sprintf(`
+listen: 127.0.0.1:9101
+ipmi: {enabled: true}
+fan_control: {enabled: true}
+power_control: {enabled: true}
+wol: {enabled: true}
+control_rate_per_min: 60
+power_sources:
+  - {id: desk-plug, type: shelly, name: "Desk plug", url: %q, gen: "2", system_hint: self}
+ups:
+  - {id: local, host: 127.0.0.1, port: %d}
+`, plug.URL, fakeUpsd(t))
+	cfg, err := agent.Parse([]byte(yaml), filepath.Join(t.TempDir(), "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &contract{bmc: fakebmc.X11SCAF(), power: &agenttest.PowerExec{}}
+	relay, err := agent.NewRelay(cfg.PowerSources, cfg.UPS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay.PollOnce(context.Background())
+	bmc := agent.NewBMC(c.bmc, 10*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go bmc.Run(ctx)
+	deadline := time.Now().Add(5 * time.Second)
+	for bmc.Readings() == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	wol := agent.NewWOL(nil)
+	wol.Send = func(addr string, pkt []byte) error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.wolSent = append(c.wolSent, fmt.Sprintf("%s %d", addr, len(pkt)))
+		return nil
+	}
+	var a *agent.Agent
+	d := agent.Deps{Collector: agenttest.NewCollector(), GPU: agenttest.GPU{}, BMC: bmc,
+		Fan:   agent.NewFan(c.bmc, bmc, cfg.FanControl, func() []collect.Temp { return a.LocalTemps() }),
+		Power: agent.NewPower(c.power, cfg.PowerControl.MinDelayS), WOL: wol, Relay: relay, Version: "contract"}
+	a = agent.New(cfg, agent.Tokens{Read: readTok, Control: ctlTok}, d)
+	c.agentSrv = httptest.NewServer(a.Handler())
+	t.Cleanup(c.agentSrv.Close)
+	return c
+}
+
+func panelConfig(t *testing.T, agentURL string) *config.Panel {
+	t.Setenv("AGENT_TOKEN_NSX_CYRENE", readTok)
+	t.Setenv("AGENT_CONTROL_TOKEN_NSX_CYRENE", ctlTok)
+	t.Setenv("AGENT_TOKEN_SLEEPY", readTok)
+	dir := t.TempDir()
+	y := fmt.Sprintf(`
+public_url: https://panel.example.com
+request_timeout: 2
+data_dir: %q
+audit_log: %q
+oidc: {issuer: "https://id.example.com", client_id: cid, allowed_groups: [homelab], control_groups: [admins]}
+agents:
+  - id: nsx-cyrene
+    name: NSX-CYRENE
+    url: %q
+    token_env: AGENT_TOKEN_NSX_CYRENE
+    group: Neptune
+    fan_control: {vendor: supermicro, control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE}
+    power_control: true
+    wol_relay: true
+    ups_powers: {cyberpower: [nsx-cyrene]}
+  - {id: sleepy, url: "http://127.0.0.1:1", token_env: AGENT_TOKEN_SLEEPY}
+systems:
+  - {id: sleepy, wol: {mac: "a8:5e:45:12:34:56", relay: nsx-cyrene, broadcast: 192.168.1.255}}
+`, filepath.Join(dir, "data"), filepath.Join(dir, "audit.log"), agentURL)
+	cfg, err := config.Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+type api struct {
+	t   *testing.T
+	srv *httptest.Server
+	tok string
+}
+
+func (a api) do(method, path string, body any) (int, map[string]any) {
+	a.t.Helper()
+	var rd io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rd = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, a.srv.URL+path, rd)
+	req.Header.Set("Authorization", "Bearer "+a.tok)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	out := map[string]any{}
+	if len(raw) > 0 && raw[0] == '{' {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return resp.StatusCode, out
+}
+
+func TestPanelContract(t *testing.T) {
+	c := startAgent(t)
+	cfg := panelConfig(t, c.agentSrv.URL)
+	p, err := poller.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	p.Clock = func() time.Time { return now }
+	ctx := context.Background()
+	p.PollOnce(ctx)
+	time.Sleep(300 * time.Millisecond) // the agent computes /metrics at most every 250 ms
+	now = now.Add(2 * time.Second)
+	p.PollOnce(ctx)
+
+	var s model.System
+	for _, x := range p.Snapshot() {
+		if x.ID == "nsx-cyrene" {
+			s = x
+		}
+	}
+	// --- /metrics through the panel's normaliser
+	if s.Status != "online" || s.Name != "NSX-CYRENE" || s.Kind != "agent" || s.Error != nil {
+		t.Fatalf("%+v", s)
+	}
+	if *s.CPUPercent != 23.5 || *s.Cores != 16 || *s.MemTotal != 64<<30 || *s.MemUsed != 20<<30 || len(s.Disks) != 2 ||
+		*s.DiskTotal != 5000<<30 || *s.UptimeS != 86400*6 {
+		t.Fatalf("cpu/mem/disk %+v", s)
+	}
+	if s.NetRxBps == nil || *s.NetRxBps != 500000 || *s.NetTxBps != 250000 {
+		t.Fatal("network rate from the cumulative counters", s.NetRxBps, s.NetTxBps)
+	}
+	if model.Deref(s.OS) != "Windows 11 Enterprise 24H2" || model.Deref(s.Platform) != "Windows" || s.LoadAvg != nil {
+		t.Fatal(s.OS, s.Platform, s.LoadAvg)
+	}
+	if s.Hardware == nil || model.Deref(s.Hardware.Display) != "Supermicro X11SCA-F" || model.Deref(s.CPUModel) == "" {
+		t.Fatalf("hardware %+v", s.Hardware)
+	}
+	temps := map[string]float64{}
+	for _, x := range s.Temps {
+		temps[x.Sensor+"/"+model.Deref(x.Label)] = x.CurrentC
+	}
+	if temps["IPMI/CPU Temp"] != 45 || temps["acpi/ACPI thermal zone TZ00"] != 27.8 {
+		t.Fatal(temps)
+	}
+	if len(s.Fans) != 2 || s.Fans[0].Name != "IPMI FAN1" || s.Fans[0].RPM != 1400 || len(s.Voltages) != 1 || s.Voltages[0].Volts != 12.12 {
+		t.Fatal(s.Fans, s.Voltages)
+	}
+	if len(s.GPUs) != 1 || s.GPUs[0].Name != "NVIDIA GeForce RTX 2080 SUPER" || s.GPUs[0].Vendor != "nvidia" ||
+		*s.GPUs[0].PowerW != 87.5 || *s.GPUs[0].VRAMTotal != 8<<30 || *s.GPUs[0].TempC != 61 {
+		t.Fatalf("gpu %+v", s.GPUs)
+	}
+	if s.ComponentPower == nil || *s.ComponentPower.GPUW != 87.5 || s.ComponentPower.CPUPackageW != nil {
+		t.Fatalf("power %+v", s.ComponentPower)
+	}
+	if !s.ProcessesAvailable || !s.FanControl || s.PowerPending != nil {
+		t.Fatal("features", s.ProcessesAvailable, s.FanControl)
+	}
+
+	// --- devices relayed by the agent
+	ov := p.Power.Overview()
+	var plug *model.PowerSourceState
+	for i := range ov.Sources {
+		if ov.Sources[i].ID == "nsx-cyrene/desk-plug" {
+			plug = &ov.Sources[i]
+		}
+	}
+	if plug == nil || plug.Status != "ok" || *plug.Readings[0].Watts != 120.5 || model.Deref(plug.Readings[0].SystemID) != "nsx-cyrene" ||
+		model.Deref(plug.Via) != "nsx-cyrene" {
+		t.Fatalf("relayed plug %+v", ov.Sources)
+	}
+	upsOv, _ := json.Marshal(p.UPS.Overview(false))
+	if !strings.Contains(string(upsOv), `"nsx-cyrene/cyberpower"`) || !strings.Contains(string(upsOv), `"online"`) {
+		t.Fatal("relayed UPS", string(upsOv))
+	}
+
+	// --- the web API on top (processes, fan, power, Wake-on-LAN), as the UI uses it
+	srv := web.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, p, nil, "test")
+	hs := httptest.NewServer(srv.Handler())
+	t.Cleanup(hs.Close)
+	tok, _, err := srv.Tokens.Create("contract", "system", "control", "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := api{t, hs, tok}
+
+	st, pl := a.do("GET", "/api/systems/nsx-cyrene/processes?limit=3&sort=cpu", nil)
+	procs, _ := pl["processes"].([]any)
+	if st != 200 || pl["disabled_by_host"] != false || pl["total_processes"] != 212.0 || len(procs) != 3 {
+		t.Fatal(st, pl)
+	}
+	if first := procs[0].(map[string]any); first["name"] != "Ollama.exe" || first["gpu_mem"] != float64(5<<30) {
+		t.Fatal(first)
+	}
+	if third := procs[2].(map[string]any); third["cmdline"] != "backup.exe --password=*** --target s3" {
+		t.Fatal(third)
+	}
+
+	st, fs := a.do("GET", "/api/systems/nsx-cyrene/fan", nil)
+	if st != 200 || fs["enabled"] != true || fs["mode"] != "optimal" || fs["vendor"] != "supermicro" || fs["min_duty"] != 30.0 ||
+		fs["max_temp_c"] != 80.0 || len(fs["fans"].([]any)) != 2 {
+		t.Fatal(st, fs)
+	}
+	if st, b := a.do("POST", "/api/systems/nsx-cyrene/fan/duty", map[string]any{"zone": 0, "percent": 50}); st != 409 ||
+		!strings.Contains(fmt.Sprint(b["detail"]), "full") {
+		t.Fatal("agent's 409 passes through", st, b)
+	}
+	if st, b := a.do("POST", "/api/systems/nsx-cyrene/fan/mode", map[string]any{"mode": "full"}); st != 200 || b["ok"] != true {
+		t.Fatal(st, b)
+	}
+	if st, b := a.do("POST", "/api/systems/nsx-cyrene/fan/duty", map[string]any{"zone": 0, "percent": 45}); st != 200 {
+		t.Fatal(st, b)
+	}
+	if mode, duty := c.bmc.State(); mode != 1 || duty[0] != 45 {
+		t.Fatal(mode, duty)
+	}
+	_, fs = a.do("GET", "/api/systems/nsx-cyrene/fan", nil)
+	if fs["overridden"] != true || fs["duty"].(map[string]any)["0"] != 45.0 || len(fs["events"].([]any)) != 2 {
+		t.Fatal(fs)
+	}
+
+	st, caps := a.do("GET", "/api/systems/nsx-cyrene/power", nil)
+	if st != 200 || !strings.Contains(fmt.Sprint(caps["actions"]), "via:agent") {
+		t.Fatal(st, caps)
+	}
+	st, res := a.do("POST", "/api/systems/nsx-cyrene/power", map[string]any{"action": "shutdown", "delay_s": 300, "confirm": "NSX-CYRENE"})
+	if st != 200 || res["via"] != "agent" || res["pending"].(map[string]any)["action"] != "shutdown" {
+		t.Fatal(st, res)
+	}
+	p.PollOnce(ctx)
+	for _, x := range p.Snapshot() {
+		if x.ID == "nsx-cyrene" && (x.PowerPending == nil || x.PowerPending.Action != "shutdown" || x.PowerPending.DelayS != 300 ||
+			model.Deref(x.PowerPending.RequestedBy) == "") {
+			t.Fatalf("pending shutdown in /metrics: %+v", x.PowerPending)
+		}
+	}
+	if st, res := a.do("POST", "/api/systems/nsx-cyrene/power", map[string]any{"action": "cancel"}); st != 200 || res["pending"] != nil {
+		t.Fatal(st, res)
+	}
+	if strings.Join(c.power.Scheduled, ",") != "shutdown@5m0s" || c.power.Cancels != 1 {
+		t.Fatal(c.power.Scheduled, c.power.Cancels)
+	}
+
+	if st, res := a.do("POST", "/api/systems/sleepy/power", map[string]any{"action": "wake"}); st != 200 || res["via"] != "wol:nsx-cyrene" {
+		t.Fatal(st, res)
+	}
+	c.mu.Lock()
+	sent := strings.Join(c.wolSent, ",")
+	c.mu.Unlock()
+	if sent != "192.168.1.255:9 102" {
+		t.Fatal(sent)
+	}
+}
+
+// A read-only agent (the default config): processes off is shown as "disabled by host", the panel's fan and
+// power calls get the agent's "disabled" answers, never a wrong-token error.
+func TestPanelContractReadOnlyAgent(t *testing.T) {
+	cfg, err := agent.Parse([]byte("processes: {enabled: false}\n"), filepath.Join(t.TempDir(), "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := agent.New(cfg, agent.Tokens{Read: readTok}, agent.Deps{Collector: agenttest.NewCollector(), Version: "ro"})
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	pcfg := panelConfig(t, srv.URL)
+	p, err := poller.New(pcfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.PollOnce(context.Background())
+	ag, _ := p.AgentByID("nsx-cyrene")
+	pl, err := p.FetchProcesses(context.Background(), ag, "nsx-cyrene", 25, "cpu")
+	if err != nil || !pl.DisabledByHost {
+		t.Fatal(pl, err)
+	}
+	for _, x := range p.Snapshot() {
+		if x.ID == "nsx-cyrene" && (x.Status != "online" || x.ProcessesAvailable || x.FanControl) {
+			t.Fatalf("%+v", x)
+		}
+	}
+	st, body, err := p.AgentRequest(context.Background(), ag, "POST", "/power", map[string]any{"action": "shutdown", "delay_s": 60})
+	if err != nil || st != 404 || body["code"] != "power_control_disabled" {
+		t.Fatal(st, body, err)
+	}
+	st, body, _ = p.AgentRequest(context.Background(), ag, "GET", "/fan/status", nil)
+	if st != 404 {
+		t.Fatal(st, body)
+	}
+}
+
+// keys returns the key set of a JSON object.
+func keys(m map[string]any) map[string]bool {
+	out := map[string]bool{}
+	for k := range m {
+		out[k] = true
+	}
+	return out
+}
+
+// The demo's simulated agents (fairy serve --demo) send only what fairy-agent sends: every key of every demo
+// payload, and of its features / power / power_control blocks, exists in the real agent's /metrics.
+func TestDemoAgentsMatchTheRealAgent(t *testing.T) {
+	c := startAgent(t)
+	req, _ := http.NewRequest("GET", c.agentSrv.URL+"/metrics", nil)
+	req.Header.Set("Authorization", "Bearer "+readTok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var real map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&real)
+	resp.Body.Close()
+	real["hostname"] = "x" // the fake has every optional block except load_avg (Linux only) and battery
+	sub := func(name string, demo, real map[string]any) {
+		rk := keys(real)
+		for k := range demo {
+			if !rk[k] && k != "load_avg" {
+				t.Errorf("%s: demo sends %q, fairy-agent does not", name, k)
+			}
+		}
+	}
+	dcfg, err := demo.Config(t.TempDir(), "http://127.0.0.1:8090")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := demo.NewBackend(dcfg)
+	seen := 0
+	for _, ag := range dcfg.Agents {
+		m, err := b.FetchAgentMetrics(context.Background(), ag, time.Second)
+		if err != nil {
+			continue // simulated offline host
+		}
+		seen++
+		sub(ag.ID, m, real)
+		for _, blk := range []string{"features", "power", "power_control", "platform", "cpu", "memory", "net", "hardware"} {
+			if d, ok := m[blk].(map[string]any); ok {
+				r, _ := real[blk].(map[string]any)
+				sub(ag.ID+"."+blk, d, r)
+			}
+		}
+		if src, ok := m["power"].(map[string]any); ok {
+			for _, s := range src["source"].([]any) {
+				if s != "gpu" && s != "rapl" && s != "battery" {
+					t.Errorf("%s: power source %v is not one fairy-agent has", ag.ID, s)
+				}
+			}
+		}
+	}
+	if seen < 5 {
+		t.Fatal("demo agents online:", seen)
+	}
+}
