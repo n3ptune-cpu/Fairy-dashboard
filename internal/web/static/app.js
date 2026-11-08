@@ -495,7 +495,7 @@ function systemOverview(s) {
 let procSort = "cpu";
 async function loadProcesses(id) {
   const body = $("#tab-body");
-  if (!body) return;
+  if (!body) return waitForTab(id, "processes", () => loadProcesses(id));
   try {
     const d = await api(`/api/systems/${enc(id)}/processes?limit=25&sort=${procSort}`);
     if (!$("#tab-body") || current().id !== id || current().tab !== "processes") return;
@@ -512,9 +512,12 @@ async function loadProcesses(id) {
 }
 
 const fanMsg = {};  // the last fan write error per system, shown until the next write succeeds
+// Opened by a link or a reload (e.g. coming back from a step-up sign-in), the tab exists only once the host's
+// data has arrived: until then the loaders wait for it instead of leaving "Loading…" for good.
+const waitForTab = (id, tab, fn) => { const r = current(); if (r.page === "system" && r.id === id && r.tab === tab) schedule(fn, 300); };
 async function loadFans(id) {
   const body = $("#tab-body");
-  if (!body) return;
+  if (!body) return waitForTab(id, "fans", () => loadFans(id));
   if (body.contains(document.activeElement) && document.activeElement.type === "range") return schedule(() => loadFans(id));
   const canCtl = canControl();
   try {
