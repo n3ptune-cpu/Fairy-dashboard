@@ -8,171 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/devices"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/normalise"
-	"github.com/n3ptune-cpu/Fairy/internal/power"
 )
-
-var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-
-// Powers: a list applies to every UPS of this source; a map maps NUT UPS name -> system ids.
-type Powers struct {
-	All    []string
-	ByName map[string][]string
-}
-
-func (p Powers) For(upsName string) []string {
-	if p.ByName != nil {
-		return slices.Clone(p.ByName[upsName])
-	}
-	return slices.Clone(p.All)
-}
-
-type NutConfig struct {
-	ID          string   `yaml:"id"`
-	Type        string   `yaml:"type"`
-	Name        string   `yaml:"name"`
-	PowersRaw   any      `yaml:"powers"`
-	Host        string   `yaml:"host"`
-	Port        int      `yaml:"port"`
-	UPS         []string `yaml:"ups"` // empty = every UPS that upsd lists
-	Username    string   `yaml:"username"`
-	PasswordEnv string   `yaml:"password_env"`
-	powers      Powers
-}
-
-func parsePowers(id string, raw any) (Powers, error) {
-	ids := func(v any) ([]string, error) {
-		l, ok := v.([]any)
-		if !ok && v != nil {
-			return nil, fmt.Errorf("ups %s: powers must be a list of system ids or a mapping", id)
-		}
-		out := []string{}
-		for _, x := range l {
-			s, _ := x.(string)
-			if !idRe.MatchString(s) {
-				return nil, fmt.Errorf("ups %s: invalid system id in powers", id)
-			}
-			out = append(out, s)
-		}
-		return out, nil
-	}
-	switch x := raw.(type) {
-	case nil:
-		return Powers{All: []string{}}, nil
-	case map[string]any:
-		p := Powers{ByName: map[string][]string{}}
-		for k, v := range x {
-			l, err := ids(v)
-			if err != nil {
-				return p, err
-			}
-			p.ByName[k] = l
-		}
-		return p, nil
-	default:
-		l, err := ids(raw)
-		return Powers{All: l}, err
-	}
-}
-
-// Source is one configured UPS source (a NUT daemon, or a registered extra type).
-type Source struct {
-	ID, Name string
-	Powers   Powers
-	Read     func(ctx context.Context, timeout time.Duration) ([]map[string]any, error)
-}
-
-// Extra holds additional source types (the demo simulator registers "demo").
-var Extra = map[string]func(raw map[string]any) (*Source, error){}
-
-// ParsePowers is exported for Extra types.
-func ParsePowers(id string, raw any) (Powers, error) { return parsePowers(id, raw) }
-
-// Build validates one `ups:` entry.
-func Build(raw map[string]any) (*Source, error) {
-	if t, _ := raw["type"].(string); Extra[t] != nil {
-		return Extra[t](raw)
-	}
-	c, err := buildNut(raw)
-	if err != nil {
-		return nil, err
-	}
-	return &Source{ID: c.ID, Name: c.Name, Powers: c.powers, Read: c.read}, nil
-}
-
-func buildNut(raw map[string]any) (*NutConfig, error) {
-	c := &NutConfig{Type: "nut", Port: 3493}
-	if err := power.DecodeStrict(raw, c); err != nil {
-		return nil, fmt.Errorf("ups %v: %v", raw["id"], err)
-	}
-	if c.Type != "nut" {
-		return nil, fmt.Errorf("ups %q: unknown type %q (known: nut)", c.ID, c.Type)
-	}
-	if !idRe.MatchString(c.ID) {
-		return nil, fmt.Errorf("ups %q: id must be lowercase letters, digits and dashes", c.ID)
-	}
-	if c.Host == "" {
-		return nil, fmt.Errorf("ups %s: host is required", c.ID)
-	}
-	p, err := parsePowers(c.ID, c.PowersRaw)
-	if err != nil {
-		return nil, err
-	}
-	c.powers = p
-	return c, nil
-}
-
-func ValidateConfigs(raws []map[string]any) error {
-	for _, r := range raws {
-		if _, err := Build(r); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *NutConfig) read(ctx context.Context, timeout time.Duration) ([]map[string]any, error) {
-	pw, err := config.EnvSecret(c.PasswordEnv, "ups "+c.ID, 1)
-	if err != nil {
-		return nil, devices.Errf("%s", err.Error())
-	}
-	all, err := devices.NUTReadAll(ctx, c.Host, c.Port, c.Username, pw, timeout, c.UPS)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]map[string]any, 0, len(all))
-	for _, u := range all {
-		out = append(out, RowMap(devices.UPSFromVars(u.Name, u.Vars, u.Description)))
-	}
-	return out, nil
-}
-
-// RowMap converts a typed row to the generic shape agents send.
-func RowMap(r devices.UPSRow) map[string]any {
-	b, _ := json.Marshal(r)
-	var m map[string]any
-	_ = json.Unmarshal(b, &m)
-	return m
-}
-
-func FmtRuntime(s *int) string {
-	if s == nil {
-		return "?"
-	}
-	return fmt.Sprintf("%d:%02d", *s/60, *s%60)
-}
 
 type Manager struct {
 	Sources      []*Source
@@ -206,89 +49,6 @@ func NewManager(configs []map[string]any, interval float64, timeout time.Duratio
 	return m, nil
 }
 
-// ------------------------------------------------------------- events
-func (m *Manager) event(st *model.UpsState, kind, severity, msg string) {
-	m.seq++
-	ev := model.UpsEvent{Seq: m.seq, T: time.Now().UTC(), UpsID: st.ID, UpsName: st.Name, Kind: kind,
-		Severity: severity, Message: msg, StatusRaw: st.StatusRaw}
-	m.events = append(m.events, ev)
-	if len(m.events) > 500 {
-		m.events = m.events[len(m.events)-500:]
-	}
-	if severity != "info" {
-		slog.Warn("UPS event", "ups", st.Name, "message", msg)
-	} else {
-		slog.Info("UPS event", "ups", st.Name, "message", msg)
-	}
-	if m.eventsFile != "" {
-		if err := appendLine(m.eventsFile, ev); err != nil {
-			slog.Warn("cannot write UPS event log", "error", err)
-		}
-	}
-}
-
-func appendLine(path string, v any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(append(b, '\n'))
-	return err
-}
-
-func onBatt(s string) bool { return s == "on_battery" || s == "low_battery" }
-
-func fmtCharge(c *float64) string {
-	if c == nil || *c == 0 {
-		return "?"
-	}
-	if *c == float64(int64(*c)) {
-		return fmt.Sprintf("%.1f", *c) // Python prints floats as 87.0
-	}
-	return fmt.Sprint(*c)
-}
-
-func (m *Manager) transitions(prev, st *model.UpsState) {
-	was := ""
-	if prev != nil {
-		was = prev.Status
-	}
-	if was == "unreachable" && st.Status != "unreachable" {
-		m.event(st, "communication_restored", "info", "communication with UPS restored")
-	}
-	if onBatt(st.Status) && !onBatt(was) {
-		m.event(st, "on_battery", "warning", fmt.Sprintf("power lost: on battery, %s%% charge, %s runtime",
-			fmtCharge(st.BatteryCharge), FmtRuntime(st.BatteryRuntimeS)))
-	}
-	if st.Status == "low_battery" && was != "low_battery" {
-		m.event(st, "low_battery", "critical", "LOW BATTERY: "+FmtRuntime(st.BatteryRuntimeS)+" runtime left")
-	}
-	if st.Status == "online" && onBatt(was) {
-		msg := "power restored: back on line"
-		if prev != nil && prev.OnBatterySince != nil {
-			if d := time.Since(*prev.OnBatterySince).Seconds(); d >= 0.5 {
-				msg += fmt.Sprintf(" after %.0f s", d)
-			}
-		}
-		m.event(st, "power_restored", "info", msg)
-	}
-	for _, x := range [][3]string{{"replace_battery", "warning", "UPS reports: replace battery"},
-		{"overload", "warning", "UPS reports: overload"}} {
-		if slices.Contains(st.Flags, x[0]) && (prev == nil || !slices.Contains(prev.Flags, x[0])) {
-			m.event(st, x[0], x[1], x[2])
-		}
-	}
-}
-
-// ------------------------------------------------------------- updates
 var rowSkip = map[string]bool{"name": true, "status": true, "powers": true, "id": true, "via": true,
 	"ups_name": true, "last_seen": true, "on_battery_since": true, "stale": true}
 
@@ -380,24 +140,6 @@ func (m *Manager) PollSource(ctx context.Context, c *Source, timeout time.Durati
 	evs := m.newEvents(evBefore)
 	m.mu.Unlock()
 	m.emit(evs)
-}
-
-func (m *Manager) newEvents(after int) []model.UpsEvent {
-	var out []model.UpsEvent
-	for _, e := range m.events {
-		if e.Seq > after {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-func (m *Manager) emit(evs []model.UpsEvent) {
-	if m.OnEvent != nil {
-		for _, e := range evs {
-			m.OnEvent(e)
-		}
-	}
 }
 
 func (m *Manager) PollAll(ctx context.Context) {
@@ -494,7 +236,6 @@ func (m *Manager) UpdateFromAgent(agentID string, rows []map[string]any, unreach
 	m.emit(evs)
 }
 
-// ------------------------------------------------------------- views
 func (m *Manager) Overview(history bool) model.UpsOverview {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -508,18 +249,6 @@ func (m *Manager) Overview(history bool) model.UpsOverview {
 		}
 	}
 	return ov
-}
-
-func (m *Manager) EventsSince(seq int) []model.UpsEvent {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.newEvents(seq)
-}
-
-func (m *Manager) Seq() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.seq
 }
 
 // SystemsMap: system id -> UPS ids powering it.

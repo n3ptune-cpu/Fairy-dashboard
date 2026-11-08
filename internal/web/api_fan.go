@@ -1,0 +1,132 @@
+package web
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+)
+
+func (c *reqCtx) fanAgent(id string) (config.Agent, error) {
+	if _, err := c.find(id); err != nil {
+		return config.Agent{}, err
+	}
+	a, ok := c.s.Poller.AgentFor(id)
+	if !ok || a.FanControl == nil {
+		return config.Agent{}, herr(404, "fan control is not configured for this system")
+	}
+	return a, nil
+}
+
+func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[string]any, error) {
+	status, data, err := c.s.Poller.AgentRequest(c.r.Context(), a, method, path, body)
+	if err != nil {
+		return nil, herr(502, "agent unreachable: "+normalise.Describe(err))
+	}
+	if status == 401 { // never surface as our own 401 (that means "log in again")
+		return nil, herr(502, "agent rejected the control token")
+	}
+	if status >= 400 {
+		st := 502
+		if status == 400 || status == 404 || status == 409 {
+			st = status
+		}
+		msg := "agent error"
+		if e, ok := data["error"]; ok {
+			msg = fmt.Sprint(e)
+		}
+		return nil, herr(st, msg)
+	}
+	return data, nil
+}
+
+func (s *Server) fanStatus(c *reqCtx) error {
+	if _, err := c.requireUser(); err != nil {
+		return err
+	}
+	id := c.r.PathValue("id")
+	a, err := c.fanAgent(id)
+	if err != nil {
+		return err
+	}
+	data, err := c.agentCall(a, "GET", "/fan/status", nil)
+	if err != nil {
+		return err
+	}
+	data["system_id"] = id
+	b, _ := json.Marshal(data)
+	var fs model.FanStatus
+	if err := json.Unmarshal(b, &fs); err != nil {
+		return herr(502, "agent returned an invalid fan status")
+	}
+	model.Normalize(&fs)
+	c.json(200, fs)
+	return nil
+}
+
+type fanModeReq struct {
+	Mode string `json:"mode"`
+}
+
+type fanDutyReq struct {
+	Zone    *int `json:"zone"`
+	Percent *int `json:"percent"`
+}
+
+func (s *Server) fanWrite(c *reqCtx, action string, body any, params map[string]any) error {
+	u, err := c.controlGuard(s.control)
+	if err != nil {
+		return err
+	}
+	id := c.r.PathValue("id")
+	a, err := c.fanAgent(id)
+	if err != nil {
+		return err
+	}
+	path := "/fan/mode"
+	if action == "fan.duty" {
+		path = "/fan/duty"
+	}
+	data, err := c.agentCall(a, "POST", path, body)
+	if err != nil {
+		he := err.(*httpErr)
+		c.audit(u, action, id, params, fmt.Sprintf("error %d: %v", he.Status, he.Detail))
+		return err
+	}
+	c.audit(u, action, id, params, "ok")
+	c.json(200, model.ControlResult{OK: true, Result: data})
+	return nil
+}
+
+func (s *Server) fanMode(c *reqCtx) error {
+	if _, err := c.requireUser(); err != nil {
+		return err
+	}
+	var b fanModeReq
+	if err := c.decodeBody(&b); err != nil {
+		return err
+	}
+	switch b.Mode {
+	case "standard", "full", "optimal", "heavyio":
+	default:
+		return herr(422, "mode must be standard, full, optimal or heavyio")
+	}
+	return s.fanWrite(c, "fan.mode", b, map[string]any{"mode": b.Mode})
+}
+
+func (s *Server) fanDuty(c *reqCtx) error {
+	if _, err := c.requireUser(); err != nil {
+		return err
+	}
+	var b fanDutyReq
+	if err := c.decodeBody(&b); err != nil {
+		return err
+	}
+	if b.Zone == nil || (*b.Zone != 0 && *b.Zone != 1) || b.Percent == nil || *b.Percent < 0 || *b.Percent > 100 {
+		return herr(422, "zone must be 0 or 1 and percent 0-100")
+	}
+	return s.fanWrite(c, "fan.duty", map[string]any{"zone": *b.Zone, "percent": *b.Percent},
+		map[string]any{"zone": *b.Zone, "percent": *b.Percent})
+}

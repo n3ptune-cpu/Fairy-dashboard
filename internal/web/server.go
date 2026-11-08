@@ -5,7 +5,6 @@ package web
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
@@ -18,13 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/audit"
 	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/notify"
 	"github.com/n3ptune-cpu/Fairy/internal/poller"
-	"github.com/n3ptune-cpu/Fairy/internal/security"
 	"github.com/n3ptune-cpu/Fairy/internal/settings"
 	"github.com/n3ptune-cpu/Fairy/internal/tokens"
 )
@@ -93,186 +88,6 @@ func DeploymentWarnings(cfg *config.Panel, secrets config.Secrets) []string {
 	return out
 }
 
-// ---------------------------------------------------------------- request context
-type reqCtx struct {
-	s     *Server
-	w     http.ResponseWriter
-	r     *http.Request
-	sess  *sessionData
-	dirty bool
-	user  *model.User
-}
-
-func (c *reqCtx) session() *sessionData {
-	if c.sess == nil {
-		c.sess = c.s.codec.decode(c.r)
-	}
-	return c.sess
-}
-
-func (c *reqCtx) clearSession() { c.sess = &sessionData{}; c.dirty = true }
-
-func (c *reqCtx) flush() {
-	if c.dirty {
-		c.s.codec.write(c.w, c.sess)
-		c.dirty = false
-	}
-}
-
-func (c *reqCtx) ip() string { return security.ClientIP(c.r, c.s.Cfg.Trusted()) }
-
-// httpErr carries a status and a JSON-able detail (string or object).
-type httpErr struct {
-	Status int
-	Detail any
-}
-
-func (e *httpErr) Error() string { return http.StatusText(e.Status) }
-
-func herr(status int, detail any) *httpErr { return &httpErr{status, detail} }
-
-func (c *reqCtx) json(status int, v any) {
-	c.flush()
-	b, err := json.Marshal(v)
-	if err != nil {
-		slog.Error("encoding response", "path", c.r.URL.Path, "error", err)
-		status, b = 500, []byte(`{"detail":"internal error"}`)
-	}
-	c.w.Header().Set("Content-Type", "application/json")
-	c.w.WriteHeader(status)
-	_, _ = c.w.Write(b)
-}
-
-func (c *reqCtx) fail(err error) {
-	var he *httpErr
-	var ae *apierr.Error
-	switch {
-	case errors.As(err, &he):
-		c.json(he.Status, map[string]any{"detail": he.Detail})
-	case errors.As(err, &ae):
-		c.json(ae.Status, map[string]any{"detail": ae.Detail})
-	default:
-		// No stack traces or internals to clients; details go to the server log only.
-		slog.Error("unhandled error", "method", c.r.Method, "path", c.r.URL.Path, "error", err)
-		c.json(500, map[string]any{"detail": "internal error"})
-	}
-}
-
-func (c *reqCtx) redirect(target string) {
-	c.flush()
-	http.Redirect(c.w, c.r, target, http.StatusSeeOther)
-}
-
-type handler func(c *reqCtx) error
-
-func (s *Server) h(fn handler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		c := &reqCtx{s: s, w: w, r: r}
-		if err := fn(c); err != nil {
-			c.fail(err)
-			return
-		}
-		c.flush()
-	}
-}
-
-// ---------------------------------------------------------------- rate limiting
-type rateLimiter struct {
-	perMin int
-	mu     sync.Mutex
-	hits   map[string][]time.Time
-}
-
-func newRateLimiter(perMin int) *rateLimiter {
-	return &rateLimiter{perMin: max(perMin, 1), hits: map[string][]time.Time{}}
-}
-
-// allow records a hit and reports whether it is within the per-minute budget.
-func (l *rateLimiter) allow(key string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	q := l.hits[key]
-	i := 0
-	for i < len(q) && now.Sub(q[i]) > time.Minute {
-		i++
-	}
-	q = q[i:]
-	if len(q) >= l.perMin {
-		l.hits[key] = q
-		return false
-	}
-	l.hits[key] = append(q, now)
-	if len(l.hits) > 10000 { // bound memory under a spray of source addresses
-		l.hits = map[string][]time.Time{}
-	}
-	return true
-}
-
-// ---------------------------------------------------------------- audit helpers
-func sourceOf(u *model.User) string {
-	switch u.Auth {
-	case "token":
-		return "token:" + deref(u.TokenName)
-	case "demo":
-		return "demo"
-	}
-	return "ui"
-}
-
-func actorOf(u *model.User) string {
-	if u.Auth == "token" {
-		return deref(u.TokenName) + " (token, owner " + deref(u.TokenOwner) + ")"
-	}
-	for _, v := range []*string{u.Email, u.PreferredUsername, u.Name} {
-		if v != nil && *v != "" {
-			return *v
-		}
-	}
-	return u.Sub
-}
-
-func deref(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
-}
-
-var controlActions = []string{"fan.", "power.", "poll."}
-
-func (c *reqCtx) audit(u *model.User, action, target string, params map[string]any, outcome string) {
-	ip := c.ip()
-	sub := u.Sub
-	if _, err := audit.Write(c.s.Cfg.AuditLog, audit.Entry{Actor: actorOf(u), Sub: &sub, Action: action, Target: target,
-		Params: params, Outcome: outcome, Source: sourceOf(u), IP: &ip}); err != nil {
-		slog.Error("audit log write failed", "error", err)
-	}
-	for _, p := range controlActions {
-		if strings.HasPrefix(action, p) {
-			b, _ := json.Marshal(params)
-			notify.Notify("Fairy: "+action+" on "+target, actorOf(u)+" via "+sourceOf(u)+": "+outcome+" "+string(b))
-			break
-		}
-	}
-}
-
-func (c *reqCtx) auditAnon(action, outcome, actor string, sub *string, params map[string]any) {
-	ip := c.ip()
-	if actor == "" {
-		actor = "?"
-	}
-	src := "ui"
-	if action == "auth.token_rejected" {
-		src = "token"
-	}
-	if _, err := audit.Write(c.s.Cfg.AuditLog, audit.Entry{Actor: actor, Sub: sub, Action: action, Params: params,
-		Outcome: outcome, Source: src, IP: &ip}); err != nil {
-		slog.Error("audit log write failed", "error", err)
-	}
-}
-
-// ---------------------------------------------------------------- middleware
 type statusWriter struct {
 	http.ResponseWriter
 	wrote bool

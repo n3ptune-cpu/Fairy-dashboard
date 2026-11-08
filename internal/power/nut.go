@@ -1,0 +1,45 @@
+package power
+
+import (
+	"context"
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy/internal/devices"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
+)
+
+type NutConfig struct {
+	Base        `yaml:",inline"`
+	Host        string `yaml:"host"`
+	Port        int    `yaml:"port"`
+	UPS         string `yaml:"ups"`
+	Username    string `yaml:"username"`
+	PasswordEnv string `yaml:"password_env"`
+}
+
+type nut struct {
+	defaults
+	c NutConfig
+}
+
+func (s *nut) Info() Base { return s.c.Base }
+
+func (s *nut) Read(ctx context.Context, timeout time.Duration) ([]model.PowerReading, error) {
+	c := s.c
+	pw, err := secret(c.PasswordEnv, "power source "+c.ID)
+	if err != nil {
+		return nil, devices.Errf("%s", err.Error())
+	}
+	all, err := devices.NUTReadAll(ctx, c.Host, c.Port, c.Username, pw, timeout, []string{c.UPS})
+	if err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		return nil, devices.Errf("nut: no such UPS")
+	}
+	w, v, a := devices.NUTWatts(all[0].Vars)
+	if w == nil {
+		return nil, devices.Errf("nut: UPS reports neither ups.realpower nor ups.load + ups.realpower.nominal")
+	}
+	return []model.PowerReading{Reading(c.Base, devices.Reading{Watts: w, Voltage: v, Current: a})}, nil
+}

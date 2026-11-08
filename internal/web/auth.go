@@ -2,126 +2,19 @@ package web
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
-	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
-// ---------------------------------------------------------------- OIDC client (lazy discovery)
-type oidcClient struct {
-	cfg    *config.Panel
-	secret string
-	mu     sync.Mutex
-	prov   *oidc.Provider
-	http   *http.Client
-}
-
-func newOIDC(cfg *config.Panel, secrets config.Secrets) *oidcClient {
-	return &oidcClient{cfg: cfg, secret: secrets.OIDCClientSecret, http: &http.Client{Timeout: 10 * time.Second}}
-}
-
-func (o *oidcClient) ctx(parent context.Context) context.Context {
-	return oidc.ClientContext(parent, o.http)
-}
-
-// provider fetches the discovery document once (retried on the next login if it failed).
-func (o *oidcClient) provider(ctx context.Context) (*oidc.Provider, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.prov != nil {
-		return o.prov, nil
-	}
-	p, err := oidc.NewProvider(o.ctx(ctx), strings.TrimRight(o.cfg.OIDC.Issuer, "/"))
-	if err != nil {
-		return nil, err
-	}
-	o.prov = p
-	return p, nil
-}
-
-func (o *oidcClient) oauth(p *oidc.Provider) *oauth2.Config {
-	ep := p.Endpoint()
-	if o.secret == "" {
-		ep.AuthStyle = oauth2.AuthStyleInParams // Pocket ID "public client" (PKCE only)
-	}
-	return &oauth2.Config{ClientID: o.cfg.OIDC.ClientID, ClientSecret: o.secret, Endpoint: ep,
-		RedirectURL: o.cfg.BaseURL() + "/auth/callback", // from config, never from the Host header
-		Scopes:      o.cfg.OIDC.Scopes}
-}
-
-func randToken(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
-}
-
-// ---------------------------------------------------------------- policy helpers
-func userFromClaims(claims map[string]any, groupsClaim string) model.User {
-	str := func(k string) *string {
-		if v, ok := claims[k].(string); ok && v != "" {
-			return &v
-		}
-		return nil
-	}
-	u := model.User{Sub: fmt.Sprint(claims["sub"]), Name: str("name"), PreferredUsername: str("preferred_username"),
-		Email: str("email"), Picture: str("picture"), Groups: []string{}}
-	if u.Name == nil {
-		u.Name = str("display_name")
-	}
-	if gs, ok := claims[groupsClaim].([]any); ok {
-		for _, g := range gs {
-			u.Groups = append(u.Groups, fmt.Sprint(g))
-		}
-	}
-	return u
-}
-
-func isAllowed(u model.User, o config.OIDC) bool {
-	if len(o.AllowedGroups) > 0 && !slices.ContainsFunc(u.Groups, func(g string) bool { return slices.Contains(o.AllowedGroups, g) }) {
-		return false
-	}
-	if len(o.AllowedEmails) > 0 {
-		e := strings.ToLower(deref(u.Email))
-		if !slices.ContainsFunc(o.AllowedEmails, func(x string) bool { return strings.ToLower(x) == e }) {
-			return false
-		}
-	}
-	return true
-}
-
-func canControl(u *model.User, o config.OIDC) bool {
-	if u.Auth == "token" {
-		return deref(u.TokenScope) == "control"
-	}
-	return len(o.ControlGroups) > 0 && slices.ContainsFunc(u.Groups, func(g string) bool { return slices.Contains(o.ControlGroups, g) })
-}
-
-// safeNext only allows same-site relative redirects (no //evil.com, no schemes).
-func safeNext(t string) string {
-	if t == "" || !strings.HasPrefix(t, "/") || strings.HasPrefix(t, "//") || strings.Contains(t, "\\") {
-		return "/"
-	}
-	u, err := url.Parse(t)
-	if err != nil || u.Scheme != "" || u.Host != "" {
-		return "/"
-	}
-	return t
-}
-
-// ---------------------------------------------------------------- identity of a request
 // sessionUser: browser session (cookie) only. Valid while listed in sessions.json (not revoked by the CLI),
 // younger than session_max_age, and used within session_idle_timeout (activity recorded at most once a minute).
 func (c *reqCtx) sessionUser() *model.User {
@@ -232,7 +125,6 @@ func (c *reqCtx) authAge(u *model.User) *float64 {
 	return &v
 }
 
-// ---------------------------------------------------------------- /auth routes
 func (s *Server) authRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /auth/login", s.h(s.authLogin))
 	m.HandleFunc("GET /auth/callback", s.h(s.authCallback))
