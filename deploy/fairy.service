@@ -16,7 +16,8 @@ EnvironmentFile=/etc/fairy/fairy.env
 # Run as a dedicated system user (useradd --system --home /var/lib/fairy --shell /usr/sbin/nologin fairy).
 # Run `fairy admin` as the same user: sudo -u fairy fairy admin ...  (commands that change something refuse to
 # run as root, so they cannot leave files in /var/lib/fairy that the service can no longer read).
-# config.yaml: 0640 root:fairy. /etc/fairy: 0755 root:root.
+# /etc/fairy: 0750 root:fairy (only root and the service user may enter). config.yaml: 0640 root:fairy.
+# fairy.env: 0600 root:root (read by systemd, never by the service).
 User=fairy
 Group=fairy
 StateDirectory=fairy

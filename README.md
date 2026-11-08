@@ -74,7 +74,7 @@ The file is read once at start (path from the config only) and served at `/brand
 * `limit_req` on `/auth/` and `/api/`, buffering off for `/api/stream` (SSE), `client_max_body_size 128k`
   (9m for `/api/settings/background`). Security headers are Fairy's: do not add them in nginx.
 * The secrets file stays `0600 root:root`: systemd loads it (`EnvironmentFile=`), the unit passes
-  `--env-file ""`. Run the CLI as the service user: `sudo -u fairy fairy admin ...`.
+  `--env-file ""`. `/etc/fairy` itself is `0750 root:fairy` and `config.yaml` `0640 root:fairy`. Run the CLI as the service user: `sudo -u fairy fairy admin ...`.
 
 ## Security model
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/n3ptune-cpu/Fairy/internal/access"
 	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/power"
 	"github.com/n3ptune-cpu/Fairy/internal/ups"
@@ -78,9 +79,7 @@ func (c *cli) configCheck() int {
 	if len(cfg.OIDC.AllowedGroups) == 0 {
 		problems = append(problems, "oidc.allowed_groups is empty: any Pocket ID user of this client may sign in")
 	}
-	if len(cfg.OIDC.ControlGroups) == 0 {
-		notes = append(notes, "oidc.control_groups is empty: nobody can use control actions from the UI")
-	}
+	problems, notes = adminCheck(cfg, problems, notes)
 	for _, e := range secretEnvs(cfg) {
 		if os.Getenv(e.env) != "" {
 			notes = append(notes, fmt.Sprintf("%s (%s): present", e.env, e.what))
@@ -103,4 +102,24 @@ func (c *cli) configCheck() int {
 		return 1
 	}
 	return 0
+}
+
+// adminCheck reports who can administer the panel. Roles live in users.json (Users page / `fairy admin users`);
+// oidc.control_groups and oidc.bootstrap_admins only make someone admin while users.json has no admin at all.
+func adminCheck(cfg *config.Panel, problems, notes []string) ([]string, []string) {
+	st := access.NewStore(cfg.DataDir)
+	d := st.Load()
+	bootstrap := len(cfg.OIDC.ControlGroups)+len(cfg.OIDC.BootstrapAdmins) > 0
+	switch {
+	case st.Err() != nil:
+		problems = append(problems, "users.json cannot be read: nobody gets access until it is fixed (see SECURITY-FIXES.md, M6)")
+	case d.Admins() > 0:
+		notes = append(notes, fmt.Sprintf("admins in users.json: %d (roles and sites are managed on the Users page)", d.Admins()))
+	case bootstrap:
+		notes = append(notes, "users.json has no admin yet: the first sign-in through oidc.control_groups / oidc.bootstrap_admins becomes admin")
+	default:
+		problems = append(problems, "users.json has no admin and oidc.control_groups / oidc.bootstrap_admins are empty: nobody becomes "+
+			"admin by signing in (after your first sign-in: fairy admin users set-role <your email> admin)")
+	}
+	return problems, notes
 }

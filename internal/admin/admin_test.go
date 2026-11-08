@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy/internal/access"
 	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy/internal/audit"
+	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/health"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/statefile"
@@ -171,5 +173,42 @@ func TestTokenOwnerMustBeAPanelUser(t *testing.T) {
 	code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "tokens", "create", "--name", "x", "--owner", "nobody"}, &out, &out)
 	if code == 0 || !strings.Contains(out.String(), "not a panel user") {
 		t.Fatal(code, out.String())
+	}
+}
+
+// config check: control_groups being empty is no longer a warning by itself; what matters is whether anyone is
+// (or can become) admin.
+func TestConfigCheckAdminModel(t *testing.T) {
+	check := func(groups string, admin bool) []string {
+		t.Helper()
+		dir := t.TempDir()
+		cfg, err := config.Parse([]byte(`public_url: https://panel.example.com
+data_dir: ` + dir + `
+audit_log: ` + dir + `/audit.log
+oidc: {issuer: "https://id.example.com", client_id: cid, allowed_groups: [homelab]` + groups + `}
+`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if admin {
+			st := access.NewStore(dir)
+			if _, _, err := st.Seen("sub-1", "n@example.com", "N", access.RoleAdmin, "test"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		p, n := adminCheck(cfg, nil, nil)
+		return append(p, n...)
+	}
+	out := check("", true)
+	if len(out) != 1 || !strings.Contains(out[0], "admins in users.json: 1") {
+		t.Fatal(out)
+	}
+	out = check(", control_groups: [admins]", false)
+	if !strings.Contains(out[0], "first sign-in") {
+		t.Fatal(out)
+	}
+	out = check("", false)
+	if !strings.Contains(out[0], "nobody becomes admin") || strings.Contains(strings.Join(out, " "), "control actions from the UI") {
+		t.Fatal(out)
 	}
 }
