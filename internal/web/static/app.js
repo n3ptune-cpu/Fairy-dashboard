@@ -61,6 +61,10 @@ I.more = svg('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><
 I.shield = svg('<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/>', 18);
 I.audit = svg('<path d="M8 4h11v16H8z"/><path d="M5 7v13h11"/><path d="M11 8h5M11 12h5M11 16h3"/>');
 I.users = svg('<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M16 14.2c2.4.1 4 1.7 4.5 4.3"/>');
+I.burger = svg('<path d="M4 6h16M4 12h16M4 18h16"/>', 18);
+I.panel = svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>', 20);
+I.signout = svg('<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 17l-5-5 5-5M5 12h11"/>');
+I.eye = svg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>');
 I.onoff = svg('<path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>', 15);
 
 const fmtRuntime = (s) => (s == null ? "–" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
@@ -231,9 +235,7 @@ function renderNav() {
     `<span class="cpu">${state.power?.total_w != null ? fmtW(state.power.total_w) : ""}</span>`)}
     ${ups.length ? navLink("#/ups", `<span class="ico">${I.ups}</span>`, "UPS", batt.length ? "alarm" : "",
       `<span class="cpu">${batt.length ? "on battery" : `${ups.length}`}</span>`) : ""}
-    ${navLink("#/settings", `<span class="ico">${I.settings}</span>`, "Settings")}
-    ${state.me?.can_control ? navLink("#/audit", `<span class="ico">${I.audit}</span>`, "Audit") : ""}
-    ${state.me?.can_manage_users ? navLink("#/users", `<span class="ico">${I.users}</span>`, "Users") : ""}</div>`;
+      </div>`;
   const nav = $("#nav"), keep = nav.scrollTop;
   morph(nav, html);
   nav.scrollTop = keep;
@@ -926,7 +928,7 @@ function route() {
   if (r.page === "ups") loadUpsEvents();
   if (r.page === "audit") loadAudit(true);
   if (r.page === "users") loadAdmin();
-  renderNav(); renderAlerts();
+  renderNav(); renderAlerts(); closeAcct(false); syncAcct();
   $("#shell").classList.remove("drawer"); $("#scrim").hidden = true;
   connect(r.page === "system" ? r.id : null);  // boost the viewed host to 1 s polling
   window.scrollTo(0, 0);
@@ -997,6 +999,86 @@ document.addEventListener("change", async (e) => {
   catch (x) { flash(x.message, true); }
 });
 
+// ------------------------------------------------------------ account menu (top bar, hamburger)
+// The signed-in user, Settings / Audit / Users and Sign out. Static DOM in the top bar (not morphed); the
+// active page is marked on every route. Keyboard: arrows / Home / End move, Escape closes and refocuses the button.
+const demoViewLabel = (v) => (v === "admin" ? "Admin (everything)" : v === "pending" ? "Waiting for access" : `Viewer · ${v.slice(7)}`);
+function buildAcct() {
+  const me = state.me, who = me.name || me.preferred_username || me.sub;
+  const sites = me.all_sites ? "every site" : (me.sites || []).join(", ") || "no sites yet";
+  const roleChip = me.role === "admin" ? '<span class="chip ok">admin</span>' : `<span class="chip" title="${esc(sites)}">viewer</span>`;
+  const sub = [me.email && me.email !== who ? me.email : "", me.role === "admin" ? "" : `Sees: ${sites}`].filter(Boolean);
+  const item = (href, ico, name) => `<a class="menu-item" role="menuitem" tabindex="-1" href="${href}" data-page="${href.slice(2)}"><span class="ico">${ico}</span><span class="name">${esc(name)}</span></a>`;
+  let html = `<div class="acct-head" role="none"><span class="avatar">${esc((who[0] || "?").toUpperCase())}</span>
+    <span class="acct-who"><span class="acct-name"><b>${esc(who)}</b>${roleChip}</span>${sub.map((x) => `<span class="note">${esc(x)}</span>`).join("")}</span></div>
+    <div class="menu-sep" role="separator"></div>
+    ${item("#/settings", I.settings, "Settings")}
+    ${me.can_control ? item("#/audit", I.audit, "Audit") : ""}
+    ${me.can_manage_users ? item("#/users", I.users, "Users") : ""}`;
+  if (me.demo && (me.demo_views || []).length) {
+    html += `<div class="menu-sep" role="separator"></div><div role="group" aria-labelledby="acct-demo-t"><div class="menu-title" id="acct-demo-t" role="none">Preview as · demo</div>
+      ${me.demo_views.map((v) => `<button class="menu-item" type="button" role="menuitemradio" tabindex="-1" aria-checked="${v === me.demo_view}" data-demo-view="${esc(v)}">
+        <span class="ico">${v === me.demo_view ? I.eye : ""}</span><span class="name">${esc(demoViewLabel(v))}</span></button>`).join("")}</div>`;
+  }
+  if (!me.demo) {
+    html += `<div class="menu-sep" role="separator"></div><form method="post" action="/auth/logout" role="none">
+      <button class="menu-item" type="submit" role="menuitem" tabindex="-1"><span class="ico">${I.signout}</span><span class="name">Sign out</span></button></form>`;
+  }
+  const menu = $("#acct-menu");
+  menu.innerHTML = html;
+  menu.setAttribute("aria-label", `Signed in as ${who} (${me.role})`);
+  syncAcct();
+}
+function syncAcct() {
+  const page = current().page;
+  document.querySelectorAll("#acct-menu [data-page]").forEach((a) => {
+    const on = a.dataset.page === page;
+    a.classList.toggle("on", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+  $("#acct-btn")?.classList.toggle("on", ["settings", "audit", "users"].includes(page));
+}
+const acctItems = () => [...document.querySelectorAll('#acct-menu [role^="menuitem"]')];
+const acctOpen = () => !$("#acct-menu").hidden;
+function openAcct(focus = "first") {
+  const menu = $("#acct-menu"), btn = $("#acct-btn");
+  menu.hidden = false; btn.setAttribute("aria-expanded", "true");
+  const items = acctItems();
+  (focus === "last" ? items[items.length - 1] : items[0])?.focus();
+}
+function closeAcct(refocus = true) {
+  if (!acctOpen()) return;
+  $("#acct-menu").hidden = true; $("#acct-btn").setAttribute("aria-expanded", "false");
+  if (refocus) $("#acct-btn").focus();
+}
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("#acct-btn");
+  if (btn) { if (acctOpen()) closeAcct(); else openAcct(); return; }
+  if (!e.target.closest("#acct")) { closeAcct(false); return; }
+  const dv = e.target.closest("[data-demo-view]");
+  if (dv) {
+    try { await api("/api/demo/view", { method: "POST", body: JSON.stringify({ view: dv.dataset.demoView }) }); location.hash = "#/"; location.reload(); }
+    catch (x) { flash(x.message, true); }
+    return;
+  }
+  if (e.target.closest('a[role="menuitem"]')) closeAcct();
+});
+document.addEventListener("keydown", (e) => {
+  const btn = e.target.closest?.("#acct-btn");
+  if (btn && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); openAcct(e.key === "ArrowUp" ? "last" : "first"); return; }
+  if (!acctOpen()) return;
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeAcct(); return; }
+  if (!e.target.closest?.("#acct-menu")) return;
+  const items = acctItems(), i = items.indexOf(document.activeElement);
+  const go = (n) => { e.preventDefault(); items[(n + items.length) % items.length]?.focus(); };
+  if (e.key === "ArrowDown") go(i + 1);
+  else if (e.key === "ArrowUp") go(i - 1);
+  else if (e.key === "Home") go(0);
+  else if (e.key === "End") go(items.length - 1);
+  else if (e.key === "Tab") closeAcct(false);
+  else if (e.key === " " && document.activeElement?.tagName === "A") { e.preventDefault(); document.activeElement.click(); }
+}, true);
+
 async function boot() {
   try { state.me = await api("/api/me"); }
   catch (e) { if (e.status === 401) { $("#login").hidden = false; return; } throw e; }
@@ -1012,7 +1094,7 @@ async function boot() {
   $("#shell").hidden = false;
   const bannerH = () => document.documentElement.style.setProperty("--banner-h", `${$("#demo-banner").hidden ? 0 : $("#demo-banner").offsetHeight}px`);
   bannerH(); window.addEventListener("resize", bannerH);
-  $("#collapse").innerHTML = I.collapse; $("#menu").innerHTML = I.menu; $("#gear").innerHTML = I.settings;
+  $("#collapse").innerHTML = I.collapse; $("#menu").innerHTML = I.panel; $("#acct-btn").innerHTML = I.burger;
   const wide = matchMedia("(min-width: 761px)");
   let collapsed = false; try { collapsed = localStorage.getItem("fairy-collapsed") === "1"; } catch { /* ignore */ }
   const setCollapsed = (v) => { collapsed = v; $("#shell").classList.toggle("collapsed", v && wide.matches); try { localStorage.setItem("fairy-collapsed", v ? "1" : "0"); } catch { /* ignore */ } };
@@ -1020,12 +1102,7 @@ async function boot() {
   $("#collapse").onclick = () => setCollapsed(!collapsed);
   $("#menu").onclick = () => { $("#shell").classList.add("drawer"); $("#scrim").hidden = false; };
   $("#scrim").onclick = () => { $("#shell").classList.remove("drawer"); $("#scrim").hidden = true; };
-  const who = state.me.name || state.me.preferred_username || state.me.sub;
-  const roleChip = state.me.role === "admin" ? '<span class="chip ok">admin</span>'
-    : `<span class="chip" title="${esc(state.me.all_sites ? "every site" : (state.me.sites || []).join(", ") || "no sites yet")}">viewer</span>`;
-  $("#side-user").innerHTML = `<span class="avatar">${esc((who[0] || "?").toUpperCase())}</span><span class="who">${esc(who)} ${roleChip}</span>
-    ${state.me.demo ? "" : '<form method="post" action="/auth/logout"><button class="btn">Sign out</button></form>'}`;
-  if (state.me.demo) $("#side-user").insertAdjacentHTML("afterend", `<div class="side-demo">${demoSwitcher()}</div>`);
+  buildAcct();
   await loadSettings();
   try {
     const h = await api("/api/power/history");

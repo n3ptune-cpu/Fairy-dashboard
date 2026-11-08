@@ -3,7 +3,7 @@
 ## What's new
 
 Pocket ID now only decides **who can sign in** to Fairy. **What each person can see and do** is set inside
-Fairy, on a new **Users** page (admins only, in the sidebar under Audit).
+Fairy, on a new **Users** page (admins only, in the menu under Audit).
 
 Every person has one of three roles:
 
@@ -98,8 +98,16 @@ fairy serve --demo                          # as admin; Users page shows sites N
 fairy serve --demo --demo-as viewer:Straw   # exactly what a Straw-only viewer sees
 ```
 
-The demo sidebar also has a **Preview as** switcher (Admin, Viewer of each site, Waiting for access). The demo
+The demo menu also has a **Preview as** switcher (Admin, Viewer of each site, Waiting for access). The demo
 still has no login and only listens on 127.0.0.1.
+
+## Menu
+
+The gear in the top-right corner is now a **menu** button (three lines). It holds who you are signed in as (name,
+email and role; a viewer also sees which sites), **Settings**, **Audit** (admins), **Users** (admins), the demo's
+**Preview as** choices, and **Sign out**. The page you are on is marked. These entries are no longer in the sidebar,
+which now only lists hosts, guests, Power and UPS. On phones the sidebar drawer button is a panel icon, so the two
+buttons in the top bar don't look alike.
 
 ## Demo fix
 

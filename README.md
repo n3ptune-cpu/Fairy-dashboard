@@ -24,7 +24,7 @@ Static binary, no runtime dependencies besides `/etc/fairy/config.yaml` and `/et
 fairy serve [--config /etc/fairy/config.yaml] [--env-file /etc/fairy/fairy.env] [--listen 127.0.0.1:8080]
 fairy serve --demo            # simulated data, NO login, refuses anything but 127.0.0.1 / ::1 (port 8090)
 fairy serve --demo --demo-as viewer:Straw   # ...as a viewer of the Straw site sees it (or: pending, admin);
-                              # the demo sidebar has a "Preview as" switcher too
+                              # the demo menu (top right) has a "Preview as" switcher too
 fairy admin help              # break-glass CLI: users and sites, tokens, sessions, control kill switch, host
                               # power flags, polling, audit tail, config check, health (all audited as "cli")
 fairy admin users set-role you@example.com admin   # locked out? make yourself admin again
