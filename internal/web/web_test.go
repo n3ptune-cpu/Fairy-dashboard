@@ -15,9 +15,11 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/updates"
 )
 
 type env struct {
@@ -602,5 +604,106 @@ func TestCustomLogo(t *testing.T) {
 		if r := e.do("GET", p, nil); r.code == 200 && !bytes.Equal(r.raw, png) {
 			t.Fatal("served something else", p)
 		}
+	}
+}
+
+func TestUpdatesPageAndButton(t *testing.T) {
+	e := setup(t)
+	e.s.Updates = updates.Static{Tag: "build-42", Version: "42-bbbbbbb", Build: model.P(42), Verified: true}
+	e.b.Mu.Lock()
+	e.b.Metrics["laptop"] = func() (jsonx.M, error) {
+		m := testutil.AgentMetrics()
+		m["agent_version"] = "41-aaaaaaa"
+		m["features"].(jsonx.M)["self_update"] = true
+		m["self_update"] = jsonx.M{"state": "idle", "since": 1.0}
+		return m, nil
+	}
+	e.b.Mu.Unlock()
+	e.s.Poller.PollOnce(context.Background())
+	csrf := []string{"X-Requested-With", "fairy"}
+
+	// viewers: neither the page nor the button
+	v := e.cookie(viewer, 0)
+	if r := e.do("GET", "/api/admin/updates", nil, "Cookie", v); r.code != 403 || strings.Contains(r.raw2(), "41-aaaaaaa") {
+		t.Fatalf("viewer page: %d %s", r.code, r.raw)
+	}
+	if r := e.do("POST", "/api/admin/updates/laptop", map[string]any{}, append([]string{"Cookie", v}, csrf...)...); r.code != 403 {
+		t.Fatalf("viewer update: %d %s", r.code, r.raw)
+	}
+	if r := e.do("POST", "/api/admin/updates", map[string]any{}, append([]string{"Cookie", v}, csrf...)...); r.code != 403 {
+		t.Fatalf("viewer update all: %d %s", r.code, r.raw)
+	}
+	// admin page
+	c := e.cookie(controller(), 0)
+	r := e.do("GET", "/api/admin/updates", nil, "Cookie", c)
+	if r.code != 200 {
+		t.Fatalf("%d %s", r.code, r.raw)
+	}
+	rows := map[string]map[string]any{}
+	for _, x := range r.body["agents"].([]any) {
+		rows[x.(map[string]any)["id"].(string)] = x.(map[string]any)
+	}
+	if l := rows["laptop"]; l["version"] != "41-aaaaaaa" || l["behind"] != true || l["can_update"] != true || l["configured"] != true {
+		t.Fatalf("laptop row %v", l)
+	}
+	if cy := rows["cyrene"]; cy["can_update"] != false || cy["configured"] != false {
+		t.Fatalf("cyrene row %v", cy)
+	}
+	if r.body["latest"].(map[string]any)["version"] != "42-bbbbbbb" || r.body["panel_behind"] != nil || r.body["behind"] != 1.0 {
+		t.Fatal(r.body)
+	}
+	if l := rows["laptop"]; l["system_id"] != "laptop" {
+		t.Fatal(l)
+	}
+	// the panel's own version against the latest Fairy-dashboard release (shown, never installed from here)
+	e.s.PanelUpdates = updates.Static{Tag: "build-9", Version: "9-ccccccc", Build: model.P(9), Verified: true}
+	e.s.Version = "8-ddddddd"
+	r = e.do("GET", "/api/admin/updates", nil, "Cookie", c)
+	if r.body["panel_behind"] != true || r.body["behind"] != 2.0 || r.body["panel_latest"].(map[string]any)["tag"] != "build-9" {
+		t.Fatal(r.body)
+	}
+	// the button: CSRF, step-up, kill switch, configured agents only
+	if r := e.do("POST", "/api/admin/updates/laptop", map[string]any{}, "Cookie", c); r.code != 403 {
+		t.Fatalf("no CSRF header: %d", r.code)
+	}
+	old := e.cookie(controller(), 10*time.Minute)
+	r = e.do("POST", "/api/admin/updates/laptop", map[string]any{}, append([]string{"Cookie", old}, csrf...)...)
+	if d, _ := r.body["detail"].(map[string]any); r.code != 401 || d["code"] != "step_up_required" {
+		t.Fatalf("step-up: %d %s", r.code, r.raw)
+	}
+	r = e.do("POST", "/api/admin/updates", map[string]any{}, append([]string{"Cookie", old}, csrf...)...)
+	if d, _ := r.body["detail"].(map[string]any); r.code != 401 || d["code"] != "step_up_required" {
+		t.Fatalf("step-up (all): %d %s", r.code, r.raw)
+	}
+	if strings.Contains(strings.Join(e.b.Requests, "\n"), "/update") {
+		t.Fatal("an agent was asked to update without step-up")
+	}
+	if r := e.do("POST", "/api/admin/updates/cyrene", map[string]any{}, append([]string{"Cookie", c}, csrf...)...); r.code != 404 {
+		t.Fatalf("not configured: %d %s", r.code, r.raw)
+	}
+	_ = e.s.Poller.Admin.SetControlDisabled(true, "root (cli)", "maintenance")
+	if r := e.do("POST", "/api/admin/updates/laptop", map[string]any{}, append([]string{"Cookie", c}, csrf...)...); r.code != 423 {
+		t.Fatalf("kill switch: %d", r.code)
+	}
+	_ = e.s.Poller.Admin.SetControlDisabled(false, "root", "")
+	r = e.do("POST", "/api/admin/updates/laptop", map[string]any{}, append([]string{"Cookie", c}, csrf...)...)
+	if r.code != 200 || r.body["ok"] != true || !strings.Contains(strings.Join(e.b.Requests, "\n"), "laptop POST /update map[requested_by:Neptune]") {
+		t.Fatalf("update: %d %s %v", r.code, r.raw, e.b.Requests)
+	}
+	r = e.do("POST", "/api/admin/updates", map[string]any{}, append([]string{"Cookie", c}, csrf...)...)
+	if r.code != 200 || !strings.Contains(r.raw2(), `"id":"laptop","ok":true`) {
+		t.Fatalf("update all: %d %s", r.code, r.raw)
+	}
+	// audited
+	entries, _ := audit.Read(e.s.Cfg.AuditLog, "", "update", "laptop", nil, 20)
+	n := 0
+	for _, x := range entries {
+		p, _ := x["params"].(map[string]any)
+		if x["action"] == "update.agent" && x["target"] == "laptop" && x["outcome"] == "ok" && p["from"] == "41-aaaaaaa" && p["latest"] == "42-bbbbbbb" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("audit entries: %v", entries)
 	}
 }

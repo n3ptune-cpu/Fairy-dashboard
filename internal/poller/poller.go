@@ -70,6 +70,7 @@ type Poller struct {
 	clusterIDs    map[string][]string
 	fingerprints  map[string]uint64
 	agentFailures map[string]int
+	agentInfo     map[string]AgentInfo
 	version       int
 	snap          []model.System
 	snapVer       int
@@ -87,7 +88,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 		sources: map[string]model.SourceStatus{}, agentPower: map[string]*model.ComponentPower{},
 		pveRefs: map[string]pveRef{}, nodeCPU: map[string]string{}, nodeInflight: map[string]bool{},
 		pending: map[string]pendingNote{}, clusterIDs: map[string][]string{}, fingerprints: map[string]uint64{},
-		agentFailures: map[string]int{}, snapVer: -1, snapJSONVer: -1,
+		agentFailures: map[string]int{}, agentInfo: map[string]AgentInfo{}, snapVer: -1, snapJSONVer: -1,
 		stateVersion: -1, StartedAt: time.Now().UTC(), present: map[string]bool{}}
 	for i := range cfg.Systems {
 		p.overrides[cfg.Systems[i].ID] = &cfg.Systems[i]

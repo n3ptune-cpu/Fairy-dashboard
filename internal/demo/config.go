@@ -26,14 +26,14 @@ proxmox:
 agents:
   - {id: nsx-cyrene, name: NSX-CYRENE, url: "http://100.64.0.10:9101", token_env: DEMO_TOKEN, group: Neptune, owner: neptune, site: Neptune,
      tags: [server, supermicro], dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=demo-cyrene",
-     fan_control: {vendor: supermicro, control_token_env: DEMO_CONTROL_TOKEN}, power_control: true}
+     fan_control: {vendor: supermicro, control_token_env: DEMO_CONTROL_TOKEN}, power_control: true, self_update: true}
   - {id: neptune-laptop, name: "ASUS Vivobook 16X", url: "http://100.64.0.11:9101", token_env: DEMO_TOKEN,
-     group: Neptune, owner: neptune, site: Neptune, tags: [laptop], power_control: true, control_token_env: DEMO_CONTROL_TOKEN,
+     group: Neptune, owner: neptune, site: Neptune, tags: [laptop], power_control: true, control_token_env: DEMO_CONTROL_TOKEN, self_update: true,
      dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=demo-laptop"}
   - {id: llm-box, name: llm-box, url: "http://100.64.0.12:9101", token_env: DEMO_TOKEN, group: Neptune, owner: neptune, site: Neptune, tags: [llm]}
   # agent on the NSX-KACHINA node itself (matched by node name): adds board model, temps, power control
   - {id: kachina-agent, name: "NSX-KACHINA agent", url: "http://100.64.0.5:9101", token_env: DEMO_TOKEN,
-     node: NSX-KACHINA, power_control: true, wol_relay: true, control_token_env: DEMO_CONTROL_TOKEN}
+     node: NSX-KACHINA, power_control: true, wol_relay: true, control_token_env: DEMO_CONTROL_TOKEN, self_update: true}
   - {id: straw-pc, name: "Straw's Ryzen PC", url: "http://100.64.0.20:9101", token_env: DEMO_TOKEN,
      group: Straw, owner: straw, site: Straw, tags: [friend, gaming], power_links: {desk-plug: straw-pc}}
   - {id: asus-i7-agent, name: "ASUS-i7 agent", url: "http://100.64.0.22:9101", token_env: DEMO_TOKEN,

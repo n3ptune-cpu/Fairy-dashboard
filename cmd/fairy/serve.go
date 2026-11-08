@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -21,6 +22,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/updates"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/web"
 )
 
@@ -123,6 +125,8 @@ func serve(args []string) int {
 		return 1
 	}
 	srv := web.New(p.cfg, p.secrets, p.poller, p.demoUser, version)
+	srv.Updates = latestSource(p.cfg, f.demo, p.cfg.Updates.AgentRepo, release.AgentProgram)
+	srv.PanelUpdates = latestSource(p.cfg, f.demo, p.cfg.Updates.PanelRepo, release.PanelProgram)
 	if f.demoAs != "" {
 		if err := srv.SetDemoView(f.demoAs); err != nil {
 			fmt.Fprintf(os.Stderr, "--demo-as: %v\n", err)
@@ -173,6 +177,31 @@ func parseServeFlags(args []string) (serveFlags, bool) {
 		return serveFlags{}, false
 	}
 	return f, true
+}
+
+// latestSource is where the Updates page learns the newest release of a program (Fairy-agent, or the panel
+// itself): GitHub (cached, in the background), a fixed answer in demo mode, nothing with
+// updates.check_latest: false.
+func latestSource(cfg *config.Panel, isDemo bool, repo, program string) updates.Source {
+	if isDemo {
+		if program == release.PanelProgram {
+			return demo.PanelLatest()
+		}
+		return demo.Latest()
+	}
+	if !cfg.Updates.Check() {
+		return nil
+	}
+	key, err := release.ParsePublicKey(releaseKey)
+	if err != nil {
+		key = nil // this panel build has no release key: the Updates page shows the latest tag, unverified
+	}
+	ch, err := updates.NewChecker(repo, program, "fairy/"+version, key)
+	if err != nil {
+		slog.Warn("updates: release check off", "error", err)
+		return nil
+	}
+	return ch
 }
 
 // setupDemo builds the simulator. Demo mode has no login, so it refuses any listen address but loopback.

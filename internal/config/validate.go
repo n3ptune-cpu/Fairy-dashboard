@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 )
 
 var (
@@ -42,6 +43,11 @@ func (c *Panel) Validate() error {
 	agents := c.validateAgents(&errs)
 	c.validateSystems(&errs, agents)
 	c.validateSites(&errs)
+	for _, r := range []string{c.Updates.AgentRepo, c.Updates.PanelRepo} {
+		if !release.ValidRepo(r) {
+			errs.add("updates: %q is not a GitHub repository name like %s (not a URL)", r, release.AgentRepo)
+		}
+	}
 	for _, h := range c.PanelHosts {
 		if !configutil.ValidID(h) {
 			errs.add("panel_hosts: invalid id %q", h)
@@ -78,6 +84,12 @@ func (c *Panel) applyDefaults() {
 	defi(&c.ControlRatePerMin, 6)
 	defi(&c.StepUpWindowS, 300)
 	defi(&c.LoginRatePerMin, 20)
+	if c.Updates.AgentRepo == "" {
+		c.Updates.AgentRepo = release.AgentRepo
+	}
+	if c.Updates.PanelRepo == "" {
+		c.Updates.PanelRepo = release.PanelRepo
+	}
 	defi(&c.AuditMaxMB, 100)
 	defi(&c.AuditKeep, 5)
 	if c.DataDir == "" {
@@ -233,8 +245,8 @@ func (c *Panel) validateAgents(errs *problems) map[string]*Agent {
 		if a.FanControl != nil && (a.FanControl.Vendor != "supermicro" || !envNameRe.MatchString(a.FanControl.ControlTokenEnv)) {
 			errs.add("agent %s: fan_control needs vendor: supermicro and control_token_env", a.ID)
 		}
-		if (a.PowerControl || a.WolRelay) && a.ControlEnv() == "" {
-			errs.add("agent %s: power_control / wol_relay need control_token_env", a.ID)
+		if (a.PowerControl || a.WolRelay || a.SelfUpdate) && a.ControlEnv() == "" {
+			errs.add("agent %s: power_control / wol_relay / self_update need control_token_env", a.ID)
 		}
 		if a.DWServiceURL != "" && !strings.HasPrefix(a.DWServiceURL, "https://") {
 			errs.add("agent %s: dwservice_url must use https://", a.ID)

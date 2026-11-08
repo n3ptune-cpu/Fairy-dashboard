@@ -48,7 +48,7 @@ oidc: {issuer: "https://id.example.com", client_id: cid, allowed_groups: [viewer
 proxmox: {urls: [` + urls + `], token_id: "fairy@pve!panel", token_secret_env: PVE_SECRET, verify_tls: false,
           power_token_id: "fairy@pve!power", power_token_secret_env: PVE_SECRET}
 agents:
-  - {id: laptop, url: ` + q(laptopURL) + `, token_env: TOK_LAPTOP, group: Neptune, power_control: true,
+  - {id: laptop, url: ` + q(laptopURL) + `, token_env: TOK_LAPTOP, group: Neptune, power_control: true, self_update: true,
      control_token_env: CTL_CYRENE, dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=abc"}
   - {id: cyrene, url: ` + q(cyreneURL) + `, token_env: TOK_CYRENE,
      fan_control: {vendor: supermicro, control_token_env: CTL_CYRENE}}
@@ -158,6 +158,8 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, method, path s
 	switch path {
 	case "/fan/status":
 		return 200, b.FanStatus, nil
+	case "/update":
+		return 202, jsonx.M{"state": "downloading", "current": "41-aaaaaaa"}, nil
 	case "/power":
 		return 200, jsonx.M{"action": "shutdown", "pending": jsonx.M{"action": "shutdown", "at": 1.9e9, "delay_s": 120.0, "requested_by": "Neptune"}}, nil
 	}

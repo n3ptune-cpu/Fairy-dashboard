@@ -9,7 +9,12 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/admin"
 )
 
-var version = "dev" // set with -ldflags "-X main.version=..."
+// Set by the release workflow with -ldflags "-X main.version=... -X main.releaseKey=...". releaseKey is the
+// base64 ed25519 public key that signs releases; `fairy update` refuses to install anything without it.
+var (
+	version    = "dev"
+	releaseKey = ""
+)
 
 const usage = `Fairy homelab panel
 

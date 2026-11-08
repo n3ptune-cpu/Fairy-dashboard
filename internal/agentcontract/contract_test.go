@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,8 @@ import (
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/agenttest"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/collect"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/ipmi/fakebmc"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/release/releasetest"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/demo"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -80,6 +83,8 @@ type contract struct {
 	power    *agenttest.PowerExec
 	mu       sync.Mutex
 	wolSent  []string
+	gh       *releasetest.Server // fake GitHub with a signed Fairy-agent release
+	applied  atomic.Int32        // the agent started its installer
 }
 
 func startAgent(t *testing.T) *contract {
@@ -94,6 +99,7 @@ ipmi: {enabled: true}
 fan_control: {enabled: true}
 power_control: {enabled: true}
 wol: {enabled: true}
+self_update: {enabled: true}
 control_rate_per_min: 60
 power_sources:
   - {id: desk-plug, type: shelly, name: "Desk plug", url: %q, gen: "2", system_hint: self}
@@ -125,8 +131,15 @@ ups:
 		c.wolSent = append(c.wolSent, fmt.Sprintf("%s %d", addr, len(pkt)))
 		return nil
 	}
+	c.gh = releasetest.New(t, release.AgentRepo)
+	asset := release.AssetName(release.AgentProgram, "linux", "amd64")
+	c.gh.Publish("build-42", release.AgentProgram, "42-1a2b3c4", map[string][]byte{asset: []byte("fairy-agent 42")}, nil)
+	stage := t.TempDir()
+	upd := agent.NewUpdater(agent.UpdaterOptions{Version: "contract", Key: c.gh.Pub, Client: c.gh.Client(),
+		StageDir: filepath.Join(stage, "update"), ResultPath: filepath.Join(stage, "result.json"), Asset: asset,
+		ResultWait: 100 * time.Millisecond, Apply: func(context.Context) error { c.applied.Add(1); return nil }})
 	var a *agent.Agent
-	d := agent.Deps{Collector: agenttest.NewCollector(), GPU: agenttest.GPU{}, BMC: bmc,
+	d := agent.Deps{Collector: agenttest.NewCollector(), GPU: agenttest.GPU{}, BMC: bmc, Updater: upd,
 		Fan:   agent.NewFan(c.bmc, bmc, cfg.FanControl, func() []collect.Temp { return a.LocalTemps() }),
 		Power: agent.NewPower(c.power, cfg.PowerControl.MinDelayS), WOL: wol, Relay: relay, Version: "contract"}
 	a = agent.New(cfg, agent.Tokens{Read: readTok, Control: ctlTok}, d)
@@ -143,6 +156,7 @@ func panelConfig(t *testing.T, agentURL string) *config.Panel {
 	y := fmt.Sprintf(`
 public_url: https://panel.example.com
 request_timeout: 2
+control_rate_per_min: 30
 data_dir: %q
 audit_log: %q
 oidc: {issuer: "https://id.example.com", client_id: cid, allowed_groups: [homelab], control_groups: [admins]}
@@ -155,6 +169,7 @@ agents:
     fan_control: {vendor: supermicro, control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE}
     power_control: true
     wol_relay: true
+    self_update: true
     ups_powers: {cyberpower: [nsx-cyrene]}
   - {id: sleepy, url: "http://127.0.0.1:1", token_env: AGENT_TOKEN_SLEEPY}
 systems:
@@ -349,6 +364,43 @@ func TestPanelContract(t *testing.T) {
 	c.mu.Unlock()
 	if sent != "192.168.1.255:9 102" {
 		t.Fatal(sent)
+	}
+
+	// --- self-update: the Updates page shows the agent's version and state; Update reaches POST /update with
+	// the control token; the agent checks the signed release on (fake) GitHub, stages it and starts its installer.
+	st, page := a.do("GET", "/api/admin/updates", nil)
+	row := func(page map[string]any) map[string]any {
+		for _, x := range page["agents"].([]any) {
+			if x.(map[string]any)["id"] == "nsx-cyrene" {
+				return x.(map[string]any)
+			}
+		}
+		return nil
+	}
+	if r := row(page); st != 200 || r["version"] != "contract" || r["agent_enabled"] != true || r["can_update"] != true ||
+		r["self_update"].(map[string]any)["state"] != "idle" {
+		t.Fatal(st, page)
+	}
+	if st, res := a.do("POST", "/api/admin/updates/nsx-cyrene", map[string]any{}); st != 200 || res["ok"] != true ||
+		res["result"].(map[string]any)["state"] != "downloading" {
+		t.Fatal(st, res)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for c.applied.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if c.applied.Load() != 1 {
+		t.Fatal("the agent did not start its installer")
+	}
+	time.Sleep(300 * time.Millisecond)
+	now = now.Add(2 * time.Second)
+	p.PollOnce(ctx)
+	_, page = a.do("GET", "/api/admin/updates", nil)
+	if r := row(page); r["self_update"].(map[string]any)["target"] != "42-1a2b3c4" {
+		t.Fatal(page)
+	}
+	if st, res := a.do("POST", "/api/admin/updates/sleepy", map[string]any{}); st != 404 {
+		t.Fatal("update of an agent without self_update:", st, res)
 	}
 }
 

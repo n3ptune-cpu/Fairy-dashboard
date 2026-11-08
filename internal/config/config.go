@@ -121,6 +121,9 @@ type Agent struct {
 	ControlTokenEnv       string              `yaml:"control_token_env"`
 	PowerControl          bool                `yaml:"power_control"`
 	WolRelay              bool                `yaml:"wol_relay"`
+	// SelfUpdate shows the agent on the Updates page with an Update button (the agent needs
+	// self_update.enabled too). Needs control_token_env.
+	SelfUpdate bool `yaml:"self_update"`
 }
 
 // ControlEnv is the env var holding this agent's separate WRITE token.
@@ -166,6 +169,18 @@ type Branding struct {
 	Logo string `yaml:"logo"`
 }
 
+// Updates is the `updates:` block: where the panel looks for new releases (Updates page, `fairy update`).
+type Updates struct {
+	// CheckLatest asks GitHub for the newest Fairy-agent release (at most every 10 minutes, only while an admin
+	// has the Updates page open). Default true; false when the panel has no internet access.
+	CheckLatest *bool  `yaml:"check_latest"`
+	AgentRepo   string `yaml:"agent_repo"` // default n3ptune-cpu/Fairy-agent
+	PanelRepo   string `yaml:"panel_repo"` // default n3ptune-cpu/Fairy-dashboard (`fairy update`)
+}
+
+// Check reports whether the latest agent release is looked up on GitHub.
+func (u Updates) Check() bool { return u.CheckLatest == nil || *u.CheckLatest }
+
 // Intervals are the default polling intervals in seconds (each 1-300).
 type Intervals struct {
 	Agent   float64 `yaml:"agent"`
@@ -204,6 +219,7 @@ type Panel struct {
 	StepUpPromptLogin  bool             `yaml:"step_up_prompt_login"`
 	LoginRatePerMin    int              `yaml:"login_rate_per_min"`
 	Branding           Branding         `yaml:"branding"`
+	Updates            Updates          `yaml:"updates"`
 
 	trusted []netip.Prefix
 }

@@ -22,6 +22,9 @@ trusted_proxies: ["127.0.0.1/32", "::1/128"]
 panel_hosts: []                           # system ids the panel itself runs on (power menu warns), e.g. [lxc-110]
 boost_while_viewing: true                 # 1 s polling while a host's page is open (30 s grace)
 intervals: {agent: 1, proxmox: 2, ups: 2, history: 5, stream: 1}
+# Releases (Updates page, `fairy update`). The panel asks GitHub for the newest Fairy-agent release at most every
+# 10 min while an admin has the Updates page open; without internet access set check_latest: false.
+# updates: {check_latest: true, agent_repo: n3ptune-cpu/Fairy-agent, panel_repo: n3ptune-cpu/Fairy-dashboard}
 # branding:
 #   logo: /etc/fairy/logo.png             # your own logo instead of the built-in one (sidebar, sign-in page, favicon):
 #                                         # PNG, JPEG, WebP or GIF, at most 1 MiB, no SVG. Read once at start; a bad
@@ -68,7 +71,8 @@ agents:
     tags: [server]
     # fan_control: {vendor: supermicro, control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE}
     # power_control: true                 # also needs power_control.enabled in the agent's config.yaml
-    # control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE   # for power_control / wol_relay without fan_control
+    # control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE   # for power_control / wol_relay / self_update without fan_control
+    # self_update: true                   # Update button on the Updates page; also needs self_update.enabled in the agent's config.yaml
   # - {id: kachina-agent, url: "http://100.64.0.5:9101", token_env: AGENT_TOKEN_KACHINA, node: NSX-KACHINA}
 
 systems: []

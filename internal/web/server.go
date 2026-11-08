@@ -25,6 +25,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/settings"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/tokens"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/updates"
 )
 
 //go:embed static
@@ -57,6 +58,10 @@ type Server struct {
 	Settings *settings.Store
 	Access   *access.Store // users.json: roles, sites, site assignments
 	Version  string
+	Updates  updates.Source // the latest Fairy-agent release for the Updates page; nil = check off
+	// PanelUpdates is the latest Fairy-dashboard release (the panel's own version is compared with it; the
+	// panel is updated by hand with `fairy update`); nil = check off.
+	PanelUpdates updates.Source
 
 	seenMu sync.Mutex
 	seen   map[string]time.Time // subject -> last "last seen" write

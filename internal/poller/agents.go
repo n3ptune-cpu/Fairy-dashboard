@@ -118,7 +118,9 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	}
 	now, ts := p.now()
 	sys := normalise.NormaliseAgent(a, payload, now, ts, p.rates)
+	info := agentInfoOf(payload, now)
 	p.mu.Lock()
+	p.agentInfo[a.ID] = info
 	delete(p.agentFailures, a.ID)
 	p.systems[a.ID] = p.stamp(sys, now)
 	p.syncPresent()
@@ -129,6 +131,39 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)
 	p.UPS.UpdateFromAgent(a.ID, jsonx.Objs(payload["ups"]), false, a.UPSPowers, a.UPSNames)
 	return 0
+}
+
+// AgentInfo is what the Updates page shows about an agent, from its last good /metrics answer.
+type AgentInfo struct {
+	Version    string         // agent_version
+	SelfUpdate map[string]any // the agent's self_update block (nil: off or an older agent)
+	Enabled    bool           // features.self_update
+	SeenAt     time.Time
+	Online     bool // the latest poll succeeded
+}
+
+func agentInfoOf(payload jsonx.M, now time.Time) AgentInfo {
+	info := AgentInfo{SeenAt: now}
+	if v, ok := payload["agent_version"].(string); ok && len(v) <= 64 {
+		info.Version = v
+	}
+	if su, ok := payload["self_update"].(map[string]any); ok {
+		info.SelfUpdate = su
+	}
+	if f, ok := payload["features"].(map[string]any); ok {
+		info.Enabled, _ = f["self_update"].(bool)
+	}
+	return info
+}
+
+// AgentInfo returns the version and self-update state from the agent's last good poll.
+func (p *Poller) AgentInfo(id string) (AgentInfo, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	i, ok := p.agentInfo[id]
+	_, failing := p.agentFailures[id]
+	i.Online = ok && !failing
+	return i, ok
 }
 
 // FetchProcesses asks an agent for its top processes.

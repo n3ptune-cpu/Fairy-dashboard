@@ -39,6 +39,9 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"PUT", "/api/admin/sites/{name}", "Rename a site: {name} (admins; step-up + CSRF header)"},
 	{"DELETE", "/api/admin/sites/{name}", "Delete a site (admins; step-up + CSRF header)"},
 	{"PUT", "/api/admin/assign", "Put a host, power source (power:<id>) or UPS (ups:<id>) into a site: {target, site}; site null = default"},
+	{"GET", "/api/admin/updates", "Agent versions, self-update state and the latest Fairy-agent release (admins only)"},
+	{"POST", "/api/admin/updates/{id}", "Make one agent install the latest signed release (admins; step-up + CSRF header; self_update agents only)"},
+	{"POST", "/api/admin/updates", "Update every agent that can update itself (admins; step-up + CSRF header)"},
 }
 
 var paramRe = regexp.MustCompile(`\{(\w+)\}`)

@@ -134,7 +134,7 @@ func readRoutes() []route {
 	for _, p := range []string{"/api/me", "/api/systems", "/api/systems?kind=agent", "/api/summary", "/api/power",
 		"/api/power/history", "/api/power/history?source=secret-box/desk", "/api/power/history?source=laptop/desk",
 		"/api/ups", "/api/ups?history=false", "/api/ups/events", "/api/audit", "/api/settings", "/api/openapi.json",
-		"/api/admin/users"} {
+		"/api/admin/users", "/api/admin/updates"} {
 		out = append(out, route{"GET", p})
 	}
 	for _, id := range []string{"laptop", "cyrene", "secret-box", "node-nsx-kachina", "node-nsx-snezhnaya", "qemu-100",
@@ -167,6 +167,8 @@ func writeRoutes() []struct {
 		{route{"PUT", "/api/admin/sites/Straw"}, map[string]any{"name": "Strawberry"}},
 		{route{"DELETE", "/api/admin/sites/Straw"}, nil},
 		{route{"PUT", "/api/admin/assign"}, map[string]any{"target": "secret-box", "site": "Straw"}},
+		{route{"POST", "/api/admin/updates/laptop"}, map[string]any{}},
+		{route{"POST", "/api/admin/updates"}, map[string]any{}},
 	}
 }
 
@@ -219,7 +221,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 				want = 200
 			case tc.who == "pending":
 				want = 403
-			case rt.path == "/api/audit" || rt.path == "/api/admin/users":
+			case rt.path == "/api/audit" || rt.path == "/api/admin/users" || rt.path == "/api/admin/updates":
 				want = map[bool]int{true: 200, false: 403}[tc.who == "admin"]
 			case id != "" && tc.who != "admin" && !visible[tc.sub][id]:
 				want = 404

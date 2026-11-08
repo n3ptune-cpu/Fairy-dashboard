@@ -38,12 +38,14 @@ type Backend struct {
 	downUntil    map[string]float64        // agent id -> epoch it comes back (+Inf = until woken)
 	guestStatus  map[guestKey]string
 	guestPending map[guestKey]guestChange
+	updates      map[string]*simUpdate // agent id -> simulated self-update
 }
 
 // NewBackend returns a simulator for the demo configuration.
 func NewBackend(cfg *config.Panel) *Backend {
 	return &Backend{cfg: cfg, bmc: &simBMC{mode: "optimal", duty: map[int]int{}}, pending: map[string]map[string]any{},
-		downUntil: map[string]float64{}, guestStatus: map[guestKey]string{}, guestPending: map[guestKey]guestChange{}}
+		downUntil: map[string]float64{}, guestStatus: map[guestKey]string{}, guestPending: map[guestKey]guestChange{},
+		updates: map[string]*simUpdate{}}
 }
 
 // FetchProxmox returns simulated cluster/resources rows, with guests' simulated power state applied.
@@ -121,6 +123,12 @@ func (b *Backend) FetchAgentMetrics(_ context.Context, a config.Agent, _ time.Du
 		m["power_control"] = map[string]any{"enabled": true, "pending": p, "min_delay_s": 10.0}
 	}
 	feat["wol_relay"] = a.WolRelay
+	if a.SelfUpdate {
+		feat["self_update"] = true
+		b.mu.Lock()
+		m["agent_version"], m["self_update"] = b.updateState(a.ID, now)
+		b.mu.Unlock()
+	}
 	// round-trip through JSON so the poller sees exactly what a real agent would send
 	raw, _ := json.Marshal(m)
 	var out jsonx.M
@@ -185,6 +193,8 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, _ string, path
 	switch path {
 	case "/power":
 		return b.simPower(a, bm)
+	case "/update":
+		return b.simUpdate(a)
 	case "/wol":
 		mac, _ := bm["mac"].(string)
 		for _, o := range b.cfg.Systems {
