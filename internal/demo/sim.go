@@ -6,6 +6,7 @@ import (
 	"math"
 	mrand "math/rand/v2"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -42,7 +43,38 @@ func llmLoad() float64 {
 	return busy * uniform(0.93, 1.0)
 }
 
-// Straw's UPS: 40 s on battery every 150 s
+// counters holds the simulated cumulative byte counters (network rx/tx), keyed per host and direction.
+var counters = struct {
+	sync.Mutex
+	m map[string]*counterState
+}{m: map[string]*counterState{}}
+
+type counterState struct {
+	value, at float64 // bytes so far, seconds since T0 of the last sample
+}
+
+// counter returns a cumulative byte counter that only ever grows: the first call starts it at base (+ t*rate so
+// hosts don't all start equal), later calls add rate*dt for the time since the previous call. A real agent's
+// counters behave like this; deriving them as base + t*rate(t) with a jittery rate made them go backwards, which
+// the rate tracker treats as a counter reset (no rate, so the UI hid the Network row every other second).
+func counter(key string, base, rate float64) int64 {
+	return counterAt(key, base, rate, since())
+}
+
+func counterAt(key string, base, rate, t float64) int64 {
+	rate = math.Max(rate, 0)
+	counters.Lock()
+	defer counters.Unlock()
+	c := counters.m[key]
+	if c == nil {
+		c = &counterState{value: base + t*rate, at: t}
+		counters.m[key] = c
+	} else if dt := t - c.at; dt > 0 {
+		c.value += rate * dt
+		c.at = t
+	}
+	return int64(c.value)
+}
 
 func f0(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }
 

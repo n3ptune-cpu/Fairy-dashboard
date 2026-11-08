@@ -19,8 +19,9 @@ func guest(vmid int, kind, name, node string, cores int, memGiB, diskGiB, cpuLo,
 	if running {
 		r["cpu"] = wave(60+float64(vmid%17), cpuLo, cpuHi, v)
 		r["mem"] = float64(int64(wave(300, 0.35, 0.8, v) * memGiB * GiB))
-		r["netin"] = float64(int64(v*1e6 + t*wave(45, 2e4, 4e6, v)))
-		r["netout"] = float64(int64(v*5e5 + t*wave(50, 1e4, 1.5e6, v+1)))
+		key := fmt.Sprintf("%s/%s/%d", node, name, vmid)
+		r["netin"] = float64(counter(key+"/rx", v*1e6, wave(45, 2e4, 4e6, v)))
+		r["netout"] = float64(counter(key+"/tx", v*5e5, wave(50, 1e4, 1.5e6, v+1)))
 		r["uptime"] = float64(int64(86400*3 + t))
 	}
 	return r
