@@ -172,10 +172,9 @@ func (s *Server) authLogin(c *reqCtx) error {
 		c.redirect(target)
 		return nil
 	}
-	var current *model.User
-	if stepUp {
-		current = c.sessionUser()
-	}
+	// A valid session is kept until the round trip completes (the callback replaces it with a new session id),
+	// so another site cannot sign someone out by sending them to /auth/login. Anything else is cleared.
+	current := c.sessionUser()
 	if current == nil {
 		c.clearSession() // fresh session: avoids fixation of a pre-login session
 	}
@@ -185,11 +184,11 @@ func (s *Server) authLogin(c *reqCtx) error {
 		return apierr.New(502, "identity provider unreachable")
 	}
 	sess := c.session()
-	sess.Next, sess.StepUp = target, current != nil
+	sess.Next, sess.StepUp = target, stepUp && current != nil
 	sess.State, sess.Nonce, sess.Verifier, sess.Started = randToken(24), randToken(24), oauth2.GenerateVerifier(), time.Now().Unix()
 	c.dirty = true
 	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(sess.Verifier), oidc.Nonce(sess.Nonce)}
-	if current != nil { // step-up: force a fresh authentication at Pocket ID
+	if sess.StepUp { // step-up: force a fresh authentication at Pocket ID
 		opts = append(opts, oauth2.SetAuthURLParam("max_age", "0"))
 		if s.Cfg.StepUpPromptLogin {
 			opts = append(opts, oauth2.SetAuthURLParam("prompt", "login"))
@@ -351,7 +350,18 @@ func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authT
 	return nil
 }
 
+// authLogout needs the same CSRF header and same-origin checks as every other write, so another site cannot
+// sign a user out with a cross-site form post (the UI posts it with fetch).
 func (s *Server) authLogout(c *reqCtx) error {
+	if c.r.Header.Get(CSRFHeader) != CSRFValue {
+		return apierr.New(403, "missing "+CSRFHeader+": "+CSRFValue+" header")
+	}
+	if sfs := c.r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
+		return apierr.New(403, "cross-site request refused")
+	}
+	if o := c.r.Header.Get("Origin"); o != "" && strings.TrimRight(o, "/") != c.s.Cfg.BaseURL() {
+		return apierr.New(403, "cross-origin request refused")
+	}
 	u := c.sessionUser()
 	if s.DemoUser == nil {
 		_ = s.Poller.Admin.RemoveSession(c.session().SID)

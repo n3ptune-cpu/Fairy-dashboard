@@ -257,3 +257,32 @@ func auditOutcomes(path string) string {
 	}
 	return b.String()
 }
+
+// Another site cannot sign a user out: a cross-site form post to /auth/logout lacks the CSRF header, and
+// sending the user to /auth/login keeps their session until a new sign-in completes.
+func TestNoCrossSiteSignOut(t *testing.T) {
+	e := setup(t)
+	idp := newFakeIDP(t)
+	e.s.Cfg.OIDC.Issuer = idp.srv.URL
+	c := e.cookie(viewer, 0)
+	if r := e.do("POST", "/auth/logout", nil, "Cookie", c); r.code != 403 {
+		t.Fatal("logout without the CSRF header", r.code)
+	}
+	if r := e.do("POST", "/auth/logout", nil, "Cookie", c, "X-Requested-With", "fairy", "Origin", "https://evil.example"); r.code != 403 {
+		t.Fatal("cross-origin logout", r.code)
+	}
+	if r := e.do("GET", "/api/me", nil, "Cookie", c); r.code != 200 {
+		t.Fatal("session lost", r.code)
+	}
+	_, rt := idp.login(e, "/auth/login", c) // e.g. a link on another site
+	if r := e.do("GET", "/api/me", nil, "Cookie", rt); r.code != 200 {
+		t.Fatal("visiting /auth/login signed the user out", r.code)
+	}
+	r := e.do("POST", "/auth/logout", nil, "Cookie", c, "X-Requested-With", "fairy", "Accept", "application/json")
+	if r.code != 204 {
+		t.Fatal("logout", r.code)
+	}
+	if r := e.do("GET", "/api/me", nil, "Cookie", c); r.code != 401 {
+		t.Fatal("still signed in after logout", r.code)
+	}
+}

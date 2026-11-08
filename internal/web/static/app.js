@@ -1079,6 +1079,14 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === " " && document.activeElement?.tagName === "A") { e.preventDefault(); document.activeElement.click(); }
 }, true);
 
+// Sign out: the server wants the CSRF header, so the "Sign out" forms are posted with fetch.
+document.addEventListener("submit", async (e) => {
+  if (!e.target.matches?.('form[action="/auth/logout"]')) return;
+  e.preventDefault();
+  try { await api("/auth/logout", { method: "POST" }); } catch (x) { flash(x.message, true); return; }
+  location.href = "/";
+});
+
 async function boot() {
   try { state.me = await api("/api/me"); }
   catch (e) { if (e.status === 401) { $("#login").hidden = false; return; } throw e; }
