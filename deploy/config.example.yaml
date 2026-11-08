@@ -67,7 +67,8 @@ agents:
     site: Neptune                         # optional default site: viewers of "Neptune" see this host
     tags: [server]
     # fan_control: {vendor: supermicro, control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE}
-    # power_control: true                 # also needs the agent's --enable-power-control
+    # power_control: true                 # also needs power_control.enabled in the agent's config.yaml
+    # control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE   # for power_control / wol_relay without fan_control
   # - {id: kachina-agent, url: "http://100.64.0.5:9101", token_env: AGENT_TOKEN_KACHINA, node: NSX-KACHINA}
 
 systems: []

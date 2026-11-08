@@ -4,9 +4,11 @@ Homelab panel for Proxmox clusters, agent-monitored hosts, wall power (Shelly, T
 Redfish) and UPSes, behind Pocket ID. Go rewrite of the Python prototype with the same JSON API; the web UI is
 embedded in the binary.
 
-> Status: the `fairy` panel is complete (feature parity with the prototype). `fairy-agent` (the Go port of the
-> metrics agent) is not written yet: the panel works with the existing prototype agent, whose `/metrics` JSON it
-> reads unchanged. A full README (nginx / MikroTik deployment, load testing) follows in the next phase.
+> Status: the `fairy` panel is complete (feature parity with the prototype), and `fairy-agent`, the metrics agent
+> for the machines it watches, is written (Windows and Linux; see [AGENT.md](AGENT.md)). The agent speaks the
+> panel's existing agent contract, so the panel needed no change; `internal/agent/contract_test.go` runs the
+> panel's real poller and web API against it. The agent's Windows code is compiled and unit-tested but not yet
+> run on a real Windows PC (list in AGENT.md). A full README (nginx / MikroTik deployment, load testing) follows.
 
 ## Build
 
@@ -14,6 +16,10 @@ embedded in the binary.
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(git describe --always)" -o fairy ./cmd/fairy
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o fairy-linux-arm64 ./cmd/fairy
 go test ./... && go vet ./...
+
+# the agent (one static binary per platform, no dependencies)
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$(git describe --always)" -o fairy-agent-windows-amd64.exe ./cmd/fairy-agent
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=$(git describe --always)" -o fairy-agent-linux-arm64 ./cmd/fairy-agent
 ```
 
 Static binary, no runtime dependencies besides `/etc/fairy/config.yaml` and `/etc/fairy/fairy.env`.
@@ -35,6 +41,16 @@ fairy version
 
 See `deploy/config.example.yaml`, `deploy/fairy.env.example` and `deploy/fairy.service` (hardened systemd unit,
 no capabilities needed: the panel never runs local power or IPMI commands).
+
+### Agents
+
+Each watched machine runs `fairy-agent` (Windows service or systemd unit), reachable only over Tailscale on port
+9101. [AGENT.md](AGENT.md) explains installing it on Windows (PowerShell, `deploy/install-fairy-agent.ps1`) and
+Linux (`deploy/fairy-agent.service`), its settings (`deploy/fairy-agent.config.example.yaml`), how to add it to
+the panel's `agents:`, and what it never touches on a gaming PC (no driver, no access to other programs'
+memory). The contract, in short: `GET /metrics`, `GET /processes?limit=&sort=`, `GET /fan/status` with the read
+token, `POST /fan/mode`, `/fan/duty`, `/power`, `/wol` with the separate control token, both as
+`Authorization: Bearer`; every POST feature is off on the agent until its owner enables it.
 
 ### Custom logo
 
@@ -120,13 +136,17 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | Folder | What it does |
 | --- | --- |
 | `cmd/fairy` | The `fairy` program: `main.go` picks the sub-command, `serve.go` starts the panel (or demo mode). |
+| `cmd/fairy-agent` | The `fairy-agent` program: `main.go` (run, check-config, gen-token, version), `service_windows.go` (the Windows service: install, uninstall, run under the service manager). |
+| `internal/agent` | The agent's HTTP server and the panel contract (`server.go`), settings and tokens (`config.go`), BMC sensors (`bmc.go`), Supermicro fan control and its watchdog (`fan.go`), shutdown / reboot (`power*.go`), Wake-on-LAN (`wol.go`), plugs and UPSes it relays (`relay.go`), Tailscale address (`listen.go`), start-up (`run.go`), and `contract_test.go`, which runs the panel against it. |
+| `internal/agent/collect` | What the agent measures: Linux `/proc` and `/sys` (`procfs.go`, `linux.go`), Windows APIs, registry and PDH (`windows.go`, `pdh_windows.go`), NVIDIA GPUs via nvidia-smi (`nvidia.go`). |
+| `internal/agent/ipmi` | Raw IPMI to the BMC: sensor list and readings (`sdr.go`), Supermicro fan commands (`ipmi.go`), through ipmitool or Windows' IPMI WMI class (`ipmitool.go`, `wmi_windows.go`); `fakebmc/` for tests. |
 | `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
 | `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |
 | `internal/scheduler` | Runs each source as a job at its own interval: overrides, pause, boost while viewing, never overlapping. |
 | `internal/normalise` | Turns raw Proxmox and agent data into the one "system" shape the UI uses; turns errors into short safe messages. |
 | `internal/power` | Wall power: one file per device type (`shelly.go`, `tasmota.go`, `tuya.go`, `nut.go`, `redfish.go`, `agentpower.go`), retry/backoff (`runner.go`), totals and history (`manager.go`), devices reported by agents (`remote.go`). |
 | `internal/ups` | UPSes via NUT: sources (`source.go`), state and history (`ups.go`), on-battery / restored events (`events.go`). |
-| `internal/devices` | Device protocols shared with the future `fairy-agent`: Shelly/Tasmota/Redfish/Tuya parsing, NUT client, HTTP helpers, digest auth. |
+| `internal/devices` | Device protocols shared by the panel and `fairy-agent` (which relays plugs and UPSes on its own LAN): Shelly/Tasmota/Redfish/Tuya parsing, NUT client, HTTP helpers, digest auth. |
 | `internal/tuya` | The Tuya 3.3/3.4/3.5 local protocol (encryption, frames, one persistent connection per plug). |
 | `internal/powerctl` | Which power actions a system offers (and why not) and carrying them out: agent, Proxmox API or Wake-on-LAN. |
 | `internal/config` | Reads and checks `config.yaml` (`config.go`, `validate.go`) and secrets from `fairy.env` / the environment (`env.go`). |
@@ -143,10 +163,10 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/model` | The JSON shapes of the API (field names match the Python prototype). |
 | `internal/jsonx` | Helpers for reading loosely-typed JSON from Proxmox, agents and devices. |
 | `internal/apierr` | The error type that becomes an HTTP status + `{"detail": ...}`. |
-| `internal/redact` | Removes passwords/tokens from process command lines. |
+| `internal/redact` | Removes passwords/tokens from process command lines (in the agent, and again in the panel). |
 | `internal/demo` | `fairy serve --demo`: a simulated homelab (fake Proxmox, agents, plugs, UPS, BMC). |
 | `internal/testutil` | Shared test fixtures. |
-| `deploy/` | Example `config.yaml`, `fairy.env` and the systemd unit. |
+| `deploy/` | Panel: example `config.yaml`, `fairy.env`, the systemd unit, nginx. Agent: `fairy-agent.service`, `fairy-agent.config.example.yaml`, `install-fairy-agent.ps1`, and the optional polkit / tmpfiles / udev rules. |
 
 ## Notes
 
