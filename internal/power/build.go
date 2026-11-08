@@ -80,7 +80,7 @@ func newDecoder(raw map[string]any) configDecoder {
 	id := fmt.Sprint(raw["id"])
 	return func(out any) error {
 		if err := DecodeStrict(raw, out); err != nil {
-			return fmt.Errorf("power source %q: %v", id, err)
+			return fmt.Errorf("power source %q: %w", id, err)
 		}
 		return nil
 	}

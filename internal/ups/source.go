@@ -101,7 +101,7 @@ func Build(raw map[string]any) (*Source, error) {
 func buildNut(raw map[string]any) (*NutConfig, error) {
 	c := &NutConfig{Type: "nut", Port: 3493}
 	if err := power.DecodeStrict(raw, c); err != nil {
-		return nil, fmt.Errorf("ups %v: %v", raw["id"], err)
+		return nil, fmt.Errorf("ups %v: %w", raw["id"], err)
 	}
 	if c.Type != "nut" {
 		return nil, fmt.Errorf("ups %q: unknown type %q (known: nut)", c.ID, c.Type)
@@ -132,7 +132,7 @@ func ValidateConfigs(raws []map[string]any) error {
 func (c *NutConfig) read(ctx context.Context, timeout time.Duration) ([]map[string]any, error) {
 	pw, err := config.EnvSecret(c.PasswordEnv, "ups "+c.ID, 1)
 	if err != nil {
-		return nil, devices.Errf("%s", err.Error())
+		return nil, devices.Safe(err)
 	}
 	all, err := devices.NUTReadAll(ctx, c.Host, c.Port, c.Username, pw, timeout, c.UPS)
 	if err != nil {

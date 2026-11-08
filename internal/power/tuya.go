@@ -53,11 +53,11 @@ func (s *tuyaSource) Read(_ context.Context, timeout time.Duration) ([]model.Pow
 	if s.dev == nil {
 		key, err := config.EnvSecret(c.LocalKeyEnv, "power source "+c.ID, 16)
 		if err != nil {
-			return nil, devices.Errf("%s", err.Error())
+			return nil, devices.Safe(err)
 		}
 		d, err := tuya.NewDevice(c.DeviceID, c.IP, key, c.Version, timeout)
 		if err != nil {
-			return nil, devices.Errf("%s", err.Error())
+			return nil, devices.Safe(err)
 		}
 		s.dev = d
 	}
@@ -68,7 +68,7 @@ func (s *tuyaSource) Read(_ context.Context, timeout time.Duration) ([]model.Pow
 	}
 	dps, err := s.dev.Status(refresh)
 	if err != nil {
-		return nil, devices.Errf("%s", err.Error()) // tuya errors never contain the key
+		return nil, devices.Safe(err) // tuya errors never contain the key
 	}
 	return []model.PowerReading{Reading(c.Base, devices.ParseTuyaDPS(dps, c.DPS))}, nil
 }

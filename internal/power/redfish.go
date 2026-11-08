@@ -52,7 +52,7 @@ func (s *redfish) Read(ctx context.Context, timeout time.Duration) ([]model.Powe
 	}
 	pw, err := config.EnvSecret(c.PasswordEnv, c.ID, 1)
 	if err != nil {
-		return nil, devices.Errf("%s", err.Error())
+		return nil, devices.Safe(err)
 	}
 	d, err := devices.GetJSON(ctx, devices.TLSClient(timeout, s.tls), strings.TrimRight(c.URL, "/")+path, "basic", c.Username, pw)
 	if err != nil {
@@ -103,7 +103,7 @@ func buildRedfish(decode configDecoder) (Source, error) {
 	}
 	tc, err := TLSConfig(c.VerifyTLS == nil || *c.VerifyTLS, c.CAFile)
 	if err != nil {
-		return nil, fmt.Errorf("power source %s: %v", c.ID, err)
+		return nil, fmt.Errorf("power source %s: %w", c.ID, err)
 	}
 	return &redfish{c: c, tls: tc}, nil
 }

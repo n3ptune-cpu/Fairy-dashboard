@@ -34,7 +34,7 @@ func (s *shelly) Read(ctx context.Context, timeout time.Duration) ([]model.Power
 	c := s.c
 	pw, err := config.EnvSecret(c.PasswordEnv, "power source "+c.ID, 1)
 	if err != nil {
-		return nil, devices.Errf("%s", err.Error())
+		return nil, devices.Safe(err)
 	}
 	base := strings.TrimRight(c.URL, "/")
 	hc := devices.LANClient(timeout)

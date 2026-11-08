@@ -13,7 +13,12 @@ type Error struct{ Msg string }
 
 func (e *Error) Error() string { return e.Msg }
 
+// Errf returns an *Error with a formatted message. Never put credentials, URLs or headers into it.
 func Errf(f string, a ...any) error { return &Error{Msg: fmt.Sprintf(f, a...)} }
+
+// Safe marks err's message as safe to show in the API, for errors whose text is known to hold no secrets
+// (config.EnvSecret, tuya). Without it, normalise.Describe reduces unknown errors to a generic word.
+func Safe(err error) error { return &Error{Msg: err.Error()} }
 
 // Reading: watts, volts, amps, kWh total (nil = unknown).
 type Reading struct {

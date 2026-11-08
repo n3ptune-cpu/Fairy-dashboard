@@ -30,7 +30,7 @@ func (s *tasmota) Read(ctx context.Context, timeout time.Duration) ([]model.Powe
 	q := url.Values{"cmnd": {"Status 8"}}
 	pw, err := config.EnvSecret(c.PasswordEnv, "power source "+c.ID, 1)
 	if err != nil {
-		return nil, devices.Errf("%s", err.Error())
+		return nil, devices.Safe(err)
 	}
 	if pw != "" { // Tasmota's own scheme; the URL is never logged
 		q.Set("user", c.Username)

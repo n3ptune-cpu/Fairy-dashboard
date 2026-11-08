@@ -57,7 +57,7 @@ func newHTTPBackend(p *Poller) (*httpBackend, error) {
 	for _, c := range cfg.Proxmox { // one client per cluster: each has its own CA / verify setting and token
 		tc, err := power.TLSConfig(c.Verify(), c.CAFile)
 		if err != nil {
-			return nil, fmt.Errorf("proxmox %s: %v", c.ID, err)
+			return nil, fmt.Errorf("proxmox %s: %w", c.ID, err)
 		}
 		b.pve[c.ID] = devices.TLSClient(0, tc)
 		if c.TokenSecretEnv != "" {
@@ -164,8 +164,13 @@ func (b *httpBackend) PVEPower(ctx context.Context, clusterID, path string, data
 	timeout := time.Duration((b.p.Cfg.RequestTimeout + 6) * float64(time.Second))
 	for _, base := range pve.URLs {
 		cctx, cancel := context.WithTimeout(ctx, timeout)
-		req, _ := http.NewRequestWithContext(cctx, http.MethodPost, strings.TrimRight(base, "/")+"/api2/json"+safe,
+		req, err := http.NewRequestWithContext(cctx, http.MethodPost, strings.TrimRight(base, "/")+"/api2/json"+safe,
 			strings.NewReader(data.Encode()))
+		if err != nil { // a malformed URL in config.yaml: try the next one (used to be a nil-pointer panic)
+			cancel()
+			last = "invalid url"
+			continue
+		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("Authorization", "PVEAPIToken="+pve.PowerTokenID+"="+secret)
 		resp, err := b.pve[clusterID].Do(req)

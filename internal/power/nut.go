@@ -30,7 +30,7 @@ func (s *nut) Read(ctx context.Context, timeout time.Duration) ([]model.PowerRea
 	c := s.c
 	pw, err := config.EnvSecret(c.PasswordEnv, "power source "+c.ID, 1)
 	if err != nil {
-		return nil, devices.Errf("%s", err.Error())
+		return nil, devices.Safe(err)
 	}
 	all, err := devices.NUTReadAll(ctx, c.Host, c.Port, c.Username, pw, timeout, []string{c.UPS})
 	if err != nil {
