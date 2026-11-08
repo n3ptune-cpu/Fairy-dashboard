@@ -23,6 +23,8 @@ Group=fairy
 StateDirectory=fairy
 StateDirectoryMode=0700
 ConfigurationDirectory=fairy
+# /etc/fairy is 0750 root:fairy; without this systemd warns that it differs from the default 0755.
+ConfigurationDirectoryMode=0750
 UMask=0077
 Restart=on-failure
 RestartSec=5
@@ -57,8 +59,10 @@ SystemCallFilter=~@privileged @resources
 # Network allow-list (needs cgroup BPF; in an unprivileged LXC use nftables instead): nginx, the tailnet, Pocket ID.
 # IPAddressDeny=any
 # IPAddressAllow=localhost 10.0.0.5 100.64.0.0/10 10.0.0.30
-# In an unprivileged LXC without nesting, namespace-based options can fail with status=226/NAMESPACE:
-# then comment out PrivateTmp/PrivateDevices/Protect*/ProcSubset.
+# Proxmox: an unprivileged LXC needs `features: nesting=1` (pct set <vmid> --features nesting=1, or Options ->
+# Features -> Nesting in the UI, then restart the container) for this sandboxing; without it the namespace-based
+# options fail with status=226/NAMESPACE. If nesting is not an option, comment out
+# PrivateTmp/PrivateDevices/Protect*/ProcSubset instead.
 
 [Install]
 WantedBy=multi-user.target
