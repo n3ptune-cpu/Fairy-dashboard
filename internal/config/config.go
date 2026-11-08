@@ -172,6 +172,7 @@ type Intervals struct {
 // Panel is the whole config.yaml. Parse fills in defaults and validates it.
 type Panel struct {
 	PublicURL          string           `yaml:"public_url"`
+	Listen             string           `yaml:"listen"` // host:port (--listen and $FAIRY_LISTEN win); default 127.0.0.1:8080
 	Intervals          Intervals        `yaml:"intervals"`
 	BoostWhileViewing  *bool            `yaml:"boost_while_viewing"`
 	RequestTimeout     float64          `yaml:"request_timeout"`

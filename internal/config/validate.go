@@ -111,6 +111,11 @@ func (c *Panel) validateGeneral(errs *problems) {
 			errs.add("intervals.%s must be 1-300 s", name)
 		}
 	}
+	if c.Listen != "" {
+		if _, port, err := net.SplitHostPort(c.Listen); err != nil || port == "" {
+			errs.add("listen must be host:port, e.g. 10.0.0.20:8080")
+		}
+	}
 	if !isHTTPURL(c.PublicURL) {
 		errs.add("public_url must be an http(s) URL")
 	}

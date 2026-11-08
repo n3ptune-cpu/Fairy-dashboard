@@ -134,6 +134,18 @@ func (c *reqCtx) authAge(u *model.User) *float64 {
 	return &v
 }
 
+// loginKey is the login rate limiter's bucket: the signed-in user for a request that carries a valid session
+// (a step-up or re-login), else the client IP. So clients sharing an address with someone (or flooding
+// /auth/login) can never stop a signed-in admin from confirming a control action.
+func (c *reqCtx) loginKey() string {
+	s := c.session()
+	if s.User != nil && s.SID != "" && c.s.Poller.Admin.SessionValid(s.SID, float64(s.IAT)) &&
+		time.Now().Unix()-s.IAT <= int64(c.s.Cfg.SessionMaxAge) {
+		return "sub:" + s.User.Sub
+	}
+	return "ip:" + c.ip()
+}
+
 func (s *Server) authRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /auth/login", s.h(s.authLogin))
 	m.HandleFunc("GET /auth/callback", s.h(s.authCallback))
@@ -144,7 +156,7 @@ func (s *Server) authLogin(c *reqCtx) error {
 	if c.r.Header.Get("Authorization") != "" {
 		return apierr.New(403, "API tokens are not accepted on /auth")
 	}
-	if !s.login.allow(c.ip()) {
+	if !s.login.allow(c.loginKey()) {
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
 		return apierr.New(429, "too many login attempts; try again in a minute")
 	}
@@ -192,7 +204,7 @@ func (s *Server) authLogin(c *reqCtx) error {
 // token and nonce, applies the allowed groups / emails and either completes a step-up re-authentication or
 // starts a new, server-registered session. Every failure is audited and answered with a generic 400.
 func (s *Server) authCallback(c *reqCtx) error {
-	if !s.login.allow(c.ip()) {
+	if !s.login.allow(c.loginKey()) {
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
 		return apierr.New(429, "too many login attempts; try again in a minute")
 	}

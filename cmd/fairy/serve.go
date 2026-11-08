@@ -24,11 +24,58 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/web"
 )
 
-// serveFlags are the `fairy serve` command-line options.
+// serveFlags are the `fairy serve` command-line options. Empty strings are filled in by resolve, after the env
+// file was loaded, so FAIRY_CONFIG_FILE / FAIRY_LISTEN / FAIRY_LOG_LEVEL may also come from fairy.env.
 type serveFlags struct {
 	cfgPath, envFile, listen, logLevel string
+	envFileSet                         bool // --env-file given explicitly (then an unreadable file is an error)
 	demo                               bool
 	demoAs                             string // demo only: preview as "viewer:Straw", "pending", ...
+}
+
+// defaultListen is where the panel listens when neither --listen, FAIRY_LISTEN nor `listen:` say otherwise.
+const defaultListen = "127.0.0.1:8080"
+
+// loadEnv loads the env file (secrets) before anything reads the environment. The default file may be
+// unreadable (0600 root, loaded by systemd's EnvironmentFile= instead): that is only a note. An explicit
+// --env-file that cannot be read is an error.
+func (f *serveFlags) loadEnv() error {
+	if f.demo || f.envFile == "" {
+		return nil
+	}
+	err := config.LoadEnvFile(f.envFile)
+	if err != nil && !f.envFileSet && errors.Is(err, os.ErrPermission) {
+		fmt.Fprintf(os.Stderr, "note: %s is not readable by this user; using the environment as given "+
+			"(e.g. systemd EnvironmentFile=)\n", f.envFile)
+		return nil
+	}
+	return err
+}
+
+// resolve fills in what the flags left empty from the environment (after loadEnv) and the defaults.
+func (f *serveFlags) resolve() {
+	if f.cfgPath == "" {
+		f.cfgPath = config.PathFromEnv()
+	}
+	if f.logLevel == "" {
+		f.logLevel = env("FAIRY_LOG_LEVEL", "info")
+	}
+	if f.demo && f.listen == "" {
+		f.listen = "127.0.0.1:8090"
+	}
+}
+
+// listenAddr is --listen, else $FAIRY_LISTEN, else `listen:` in config.yaml, else 127.0.0.1:8080.
+func (f *serveFlags) listenAddr(cfg *config.Panel) string {
+	switch {
+	case f.listen != "":
+		return f.listen
+	case os.Getenv("FAIRY_LISTEN") != "":
+		return os.Getenv("FAIRY_LISTEN")
+	case cfg != nil && cfg.Listen != "":
+		return cfg.Listen
+	}
+	return defaultListen
 }
 
 // panel is everything the HTTP server needs, from either the real config or the demo simulator.
@@ -45,6 +92,11 @@ func serve(args []string) int {
 	if !ok {
 		return 2
 	}
+	if err := f.loadEnv(); err != nil {
+		fmt.Fprintf(os.Stderr, "cannot read env file %s: %v\n", f.envFile, err)
+		return 1
+	}
+	f.resolve()
 	var lvl slog.Level
 	_ = lvl.UnmarshalText([]byte(f.logLevel)) // an unknown level keeps the default (info)
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})))
@@ -74,9 +126,16 @@ func serve(args []string) int {
 		}
 		slog.Warn("demo: previewing the panel as " + f.demoAs + " (switch in the sidebar)")
 	}
-	ln, err := net.Listen("tcp", f.listen)
+	addr := f.listenAddr(p.cfg)
+	if f.demo {
+		addr = f.listen
+	}
+	if w := proxyWarning(addr, p.cfg); w != "" && !f.demo {
+		slog.Warn(w)
+	}
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		slog.Error("listen failed", "addr", f.listen, "error", err)
+		slog.Error("listen failed", "addr", addr, "error", err)
 		return 1
 	}
 	go p.poller.Run(ctx)
@@ -93,22 +152,20 @@ func serve(args []string) int {
 // parseServeFlags parses the `fairy serve` flags; false means the flags were invalid (or -h was asked for).
 func parseServeFlags(args []string) (serveFlags, bool) {
 	fs := flag.NewFlagSet("fairy serve", flag.ContinueOnError)
-	cfgPath := fs.String("config", config.PathFromEnv(), "config.yaml")
-	envFile := fs.String("env-file", config.DefaultEnvFile(), "secrets file, loaded if present (never overrides the environment)")
-	listen := fs.String("listen", env("FAIRY_LISTEN", "127.0.0.1:8080"), "address:port (behind nginx)")
+	cfgPath := fs.String("config", "", "config.yaml (default $FAIRY_CONFIG_FILE or "+config.DefaultConfigPath()+")")
+	envFile := fs.String("env-file", config.DefaultEnvFile(), `secrets file, loaded if readable (never overrides the environment; "" = none)`)
+	listen := fs.String("listen", "", "address:port (default $FAIRY_LISTEN, else listen: in config.yaml, else "+defaultListen+")")
 	demoMode := fs.Bool("demo", false, "simulated data, NO authentication (loopback preview only)")
-	logLevel := fs.String("log-level", env("FAIRY_LOG_LEVEL", "info"), "debug|info|warn|error")
+	logLevel := fs.String("log-level", "", "debug|info|warn|error (default $FAIRY_LOG_LEVEL or info)")
 	demoAs := fs.String("demo-as", "", `demo only: preview as "viewer:Straw", "viewer:Neptune", "pending" or "admin"`)
 	if err := fs.Parse(args); err != nil {
 		return serveFlags{}, false
 	}
-	f := serveFlags{cfgPath: *cfgPath, envFile: *envFile, listen: *listen, logLevel: *logLevel, demo: *demoMode, demoAs: *demoAs}
+	f := serveFlags{cfgPath: *cfgPath, envFile: *envFile, envFileSet: flagSet(fs, "env-file"), listen: *listen,
+		logLevel: *logLevel, demo: *demoMode, demoAs: *demoAs}
 	if f.demoAs != "" && !f.demo {
 		fmt.Fprintln(os.Stderr, "--demo-as only works with --demo (a real panel takes roles from the Users page)")
 		return serveFlags{}, false
-	}
-	if f.demo && !flagSet(fs, "listen") {
-		f.listen = "127.0.0.1:8090"
 	}
 	return f, true
 }
@@ -132,15 +189,11 @@ func setupDemo(f serveFlags) (*panel, int) {
 	return &panel{cfg: cfg, secrets: secrets, poller: p, demoUser: &u}, 0
 }
 
-// setupPanel loads fairy.env, the secrets and config.yaml, validates the device configs and builds the poller.
+// setupPanel loads the secrets and config.yaml, validates the device configs and builds the poller.
 func setupPanel(f serveFlags) (*panel, int) {
-	if err := config.LoadEnvFile(f.envFile); err != nil {
-		slog.Error("cannot read env file", "path", f.envFile, "error", err)
-		return nil, 1
-	}
 	secrets, err := config.LoadSecrets()
 	if err != nil {
-		slog.Error(err.Error())
+		slog.Error(err.Error() + " (set it in fairy.env, loaded by systemd's EnvironmentFile= or --env-file)")
 		return nil, 1
 	}
 	cfg, err := config.Load(f.cfgPath)
@@ -202,6 +255,22 @@ func checkStateFiles(dataDir string) bool {
 		}
 	}
 	return ok
+}
+
+// proxyWarning warns when the panel listens beyond loopback (nginx in another container) but trusts only
+// loopback proxies: every request would then seem to come from nginx, so one client could use up the login
+// rate limit for everyone and the audit log would show nginx's address.
+func proxyWarning(addr string, cfg *config.Panel) string {
+	if cfg == nil || loopback(addr) {
+		return ""
+	}
+	for _, p := range cfg.Trusted() {
+		if !p.Addr().IsLoopback() {
+			return ""
+		}
+	}
+	return "listening on " + addr + " but trusted_proxies only lists loopback: set trusted_proxies to nginx's " +
+		"address (e.g. [10.0.0.5/32]) so rate limits and the audit log see the real client IP"
 }
 
 // env returns the environment variable k, or def when it is unset or empty.

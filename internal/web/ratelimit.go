@@ -31,8 +31,18 @@ func (l *rateLimiter) allow(key string) bool {
 		return false
 	}
 	l.hits[key] = append(q, now)
-	if len(l.hits) > 10000 { // bound memory under a spray of source addresses
-		l.hits = map[string][]time.Time{}
+	if len(l.hits) > maxKeys { // bound memory under a spray of source addresses
+		for k, q := range l.hits { // drop keys without a hit in the last minute first
+			if len(q) == 0 || now.Sub(q[len(q)-1]) > time.Minute {
+				delete(l.hits, k)
+			}
+		}
+		if len(l.hits) > maxKeys {
+			l.hits = map[string][]time.Time{key: l.hits[key]}
+		}
 	}
 	return true
 }
+
+// maxKeys bounds a limiter's memory.
+const maxKeys = 10000

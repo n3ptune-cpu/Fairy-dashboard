@@ -6,12 +6,17 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Static binary: /usr/local/bin/fairy. Behind nginx on 127.0.0.1:8080.
-ExecStart=/usr/local/bin/fairy serve --config /etc/fairy/config.yaml --env-file /etc/fairy/fairy.env --listen 127.0.0.1:8080
-# Secrets: systemd reads this file as root, so it can stay 0600 root:root.
+# Static binary: /usr/local/bin/fairy. The listen address comes from `listen:` in config.yaml (default
+# 127.0.0.1:8080; with nginx in another container use this LXC's LAN address, e.g. 10.0.0.20:8080, and allow
+# only nginx to reach it: see IPAddressAllow below or nftables).
+# --env-file "": the secrets come from EnvironmentFile= below; the service user cannot (and need not) read it.
+ExecStart=/usr/local/bin/fairy serve --config /etc/fairy/config.yaml --env-file ""
+# Secrets: systemd reads this file as root before dropping privileges, so it stays 0600 root:root.
 EnvironmentFile=/etc/fairy/fairy.env
-# Run as a dedicated system user (useradd --system --home /var/lib/fairy --shell /usr/sbin/nologin fairy),
-# so `fairy admin` can be run as the same user: sudo -u fairy fairy admin ...
+# Run as a dedicated system user (useradd --system --home /var/lib/fairy --shell /usr/sbin/nologin fairy).
+# Run `fairy admin` as the same user: sudo -u fairy fairy admin ...  (commands that change something refuse to
+# run as root, so they cannot leave files in /var/lib/fairy that the service can no longer read).
+# config.yaml: 0640 root:fairy. /etc/fairy: 0755 root:root.
 User=fairy
 Group=fairy
 StateDirectory=fairy
@@ -48,6 +53,9 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# Network allow-list (needs cgroup BPF; in an unprivileged LXC use nftables instead): nginx, the tailnet, Pocket ID.
+# IPAddressDeny=any
+# IPAddressAllow=localhost 10.0.0.5 100.64.0.0/10 10.0.0.30
 # In an unprivileged LXC without nesting, namespace-based options can fail with status=226/NAMESPACE:
 # then comment out PrivateTmp/PrivateDevices/Protect*/ProcSubset.
 

@@ -372,6 +372,19 @@ func TestSafeNextAndLoginRateLimit(t *testing.T) {
 	if codes[429] == 0 { // 20/min default (discovery fails: 502 before the limit)
 		t.Fatal(codes)
 	}
+	// the flood (same address) does not block a signed-in admin's step-up: their bucket is their own
+	c := e.cookie(controller(), 10*time.Minute)
+	if r := e.do("GET", "/auth/login?step_up=1&next=/", nil, "Cookie", c); r.code == 429 {
+		t.Fatal("step-up of a signed-in user blocked by other clients' login attempts")
+	}
+	// and the bucket follows the client IP behind a trusted nginx, not nginx's address
+	e.s.Cfg.TrustedProxies = []string{"127.0.0.1/32"}
+	if err := e.s.Cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.do("GET", "/auth/login", nil, "X-Forwarded-For", "203.0.113.50"); r.code == 429 {
+		t.Fatal("another client behind nginx is limited by the flood")
+	}
 }
 
 func TestDemoServesLoopbackOnly(t *testing.T) {

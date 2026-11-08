@@ -22,6 +22,8 @@ Static binary, no runtime dependencies besides `/etc/fairy/config.yaml` and `/et
 
 ```sh
 fairy serve [--config /etc/fairy/config.yaml] [--env-file /etc/fairy/fairy.env] [--listen 127.0.0.1:8080]
+                              # listen: --listen, else $FAIRY_LISTEN, else `listen:` in config.yaml, else
+                              # 127.0.0.1:8080. The env file is read first, so FAIRY_* settings in it count.
 fairy serve --demo            # simulated data, NO login, refuses anything but 127.0.0.1 / ::1 (port 8090)
 fairy serve --demo --demo-as viewer:Straw   # ...as a viewer of the Straw site sees it (or: pending, admin);
                               # the demo menu (top right) has a "Preview as" switcher too
@@ -33,6 +35,21 @@ fairy version
 
 See `deploy/config.example.yaml`, `deploy/fairy.env.example` and `deploy/fairy.service` (hardened systemd unit,
 no capabilities needed: the panel never runs local power or IPMI commands).
+
+### Behind nginx in another container (and Cloudflare)
+
+`deploy/nginx.example.conf` is a complete server block. In short:
+
+* Fairy: `listen: <this LXC's LAN IP>:8080` and `trusted_proxies: ["<nginx IP>/32"]` in config.yaml; firewall
+  port 8080 so only nginx reaches it (nftables in the LXC, or `IPAddressAllow=` in the unit). Fairy warns at
+  start when it listens beyond loopback but trusts only loopback proxies.
+* nginx: `set_real_ip_from <Cloudflare ranges>; real_ip_header CF-Connecting-IP;` and
+  `proxy_set_header X-Forwarded-For $remote_addr;` (overwrite, not `$proxy_add_x_forwarded_for`). Fairy then
+  takes the right-most X-Forwarded-For entry that is not a trusted proxy: the real visitor.
+* `limit_req` on `/auth/` and `/api/`, buffering off for `/api/stream` (SSE), `client_max_body_size 128k`
+  (9m for `/api/settings/background`). Security headers are Fairy's: do not add them in nginx.
+* The secrets file stays `0600 root:root`: systemd loads it (`EnvironmentFile=`), the unit passes
+  `--env-file ""`. Run the CLI as the service user: `sudo -u fairy fairy admin ...`.
 
 ## Security model
 
@@ -71,7 +88,9 @@ no capabilities needed: the panel never runs local power or IPMI commands).
   up in one `audit.suppressed` entry a minute. An audit write failure never blocks a sign-in but is logged loudly.
   Changes to users and sites: admin browser session only, CSRF checks, step-up (same window), audited + notified;
   the kill switch does not block them.
-* `trusted_proxies` is used only to find the client IP for rate limits and the audit log.
+* `trusted_proxies` is used only to find the client IP for rate limits and the audit log. The login limiter
+  (`login_rate_per_min`) counts per client IP, and per user for a signed-in step-up, so nobody else's attempts
+  can block an admin from confirming a control action.
 * Strict CSP, HSTS (https), frame/referrer/permissions policies, generic 500s, no secrets in logs or errors.
 
 ## Map of the code

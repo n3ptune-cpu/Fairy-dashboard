@@ -1,5 +1,7 @@
 # /etc/fairy/config.yaml  (non-secret settings; secrets live in /etc/fairy/fairy.env, referenced by NAME here)
 public_url: https://panel.example.com     # behind nginx; used for the OIDC redirect URI (<public_url>/auth/callback)
+listen: 127.0.0.1:8080                    # nginx in another container: this LXC's LAN IP, e.g. 10.0.0.20:8080,
+                                          # firewalled so only nginx can reach it (--listen / FAIRY_LISTEN override)
 request_timeout: 4                        # seconds per request (each source also gets a timeout below its interval)
 offline_after: 60                         # failing for longer than this => "offline" (before that: "stale")
 session_max_age: 604800                   # 7 d absolute; group membership is re-checked at each login
@@ -13,8 +15,10 @@ audit_log: /var/lib/fairy/audit.log       # append-only JSON lines (each line at
 audit_max_mb: 100                         # rotate audit.log -> audit.log.1 ... at this size; -1 = never (use logrotate)
 audit_keep: 5                             # rotated files kept (the oldest is deleted)
 control_rate_per_min: 6
-login_rate_per_min: 20
-trusted_proxies: ["127.0.0.1/32", "::1/128"]  # X-Forwarded-For is believed only from these (rate limits + audit IPs)
+login_rate_per_min: 20                    # per client IP (per user for a signed-in step-up)
+# X-Forwarded-For is believed only from these (rate limits + audit IPs). nginx in its own container: its address,
+# e.g. ["10.0.0.5/32"], with nginx setting X-Forwarded-For to the real client (deploy/nginx.example.conf).
+trusted_proxies: ["127.0.0.1/32", "::1/128"]
 panel_hosts: []                           # system ids the panel itself runs on (power menu warns), e.g. [lxc-110]
 boost_while_viewing: true                 # 1 s polling while a host's page is open (30 s grace)
 intervals: {agent: 1, proxmox: 2, ups: 2, history: 5, stream: 1}
