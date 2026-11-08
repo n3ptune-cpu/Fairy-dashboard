@@ -1,0 +1,108 @@
+# Every push to main (or a manual run) builds, signs and publishes a GitHub release of the panel. Nothing
+# installs it automatically: on the panel host run `fairy update` as root (see SETUP-UPDATES.md).
+#
+# Release tag: build-<run number> (never vX.Y.Z: Go would read that as a version of this Go module).
+# Version in the binary: <run number>-<short commit>, e.g. 42-1a2b3c4.
+# Needs the repository secret FAIRY_RELEASE_KEY (the same private key as in Fairy-agent) and the committed
+# public key release/signing.pub (the same file as in Fairy-agent).
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the release notes list the commits since the previous release
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check the signing key is set up
+        env:
+          FAIRY_RELEASE_KEY: ${{ secrets.FAIRY_RELEASE_KEY }}
+        run: |
+          if [ -z "$FAIRY_RELEASE_KEY" ]; then
+            echo "::error::The FAIRY_RELEASE_KEY secret is missing. Add the same private key as in Fairy-agent under Settings > Secrets and variables > Actions (see SETUP-UPDATES.md)."
+            exit 1
+          fi
+          if [ ! -s release/signing.pub ]; then
+            echo "::error::release/signing.pub is missing. Commit the same public key file as in Fairy-agent (see SETUP-UPDATES.md)."
+            exit 1
+          fi
+
+      - name: Vet and test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Build
+        run: |
+          set -eu
+          version="${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          pub="$(tr -d ' \r\n' < release/signing.pub)"
+          mkdir -p dist
+          for goarch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath \
+              -ldflags "-s -w -X main.version=${version} -X main.releaseKey=${pub}" -o "dist/fairy-linux-${goarch}" ./cmd/fairy
+          done
+          printf 'fairy %s\n' "$version" > dist/VERSION
+          (cd dist && sha256sum fairy-linux-* VERSION > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Sign
+        env:
+          FAIRY_RELEASE_KEY: ${{ secrets.FAIRY_RELEASE_KEY }}
+        run: |
+          # the signing tool lives in Fairy-agent (the version go.mod pins)
+          go run github.com/n3ptune-cpu/Fairy-agent/cmd/fairy-release-key sign --pub release/signing.pub dist/SHA256SUMS
+          go run github.com/n3ptune-cpu/Fairy-agent/cmd/fairy-release-key verify --pub release/signing.pub dist/SHA256SUMS
+
+      - name: Release notes (commits since the previous release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          prev="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)"
+          {
+            echo "fairy (panel) ${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}, built from ${GITHUB_SHA}."
+            echo
+            if [ -n "$prev" ] && git fetch --quiet origin "refs/tags/${prev}:refs/tags/${prev}" 2>/dev/null; then
+              echo "Changes since ${prev}:"
+              echo
+              git log --no-merges --format='- %s (%h)' "${prev}..${GITHUB_SHA}"
+            else
+              echo "Changes (last 20 commits):"
+              echo
+              git log --no-merges --format='- %s (%h)' -n 20 "$GITHUB_SHA"
+            fi
+            echo
+            echo "Install on the panel host: \`fairy update\` (as root). See SETUP-UPDATES.md in Fairy-agent."
+            echo "SHA256SUMS is signed (SHA256SUMS.sig, ed25519, public key release/signing.pub)."
+          } > notes.md
+          cat notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="build-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest \
+            --title "fairy panel build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" --notes-file notes.md
