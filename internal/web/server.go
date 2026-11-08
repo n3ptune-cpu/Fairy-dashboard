@@ -45,6 +45,9 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 's
 const permissionsPolicy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), " +
 	"payment=(), usb=(), interest-cohort=()"
 
+// uploadsPerMin is how many background images one user may upload per minute.
+const uploadsPerMin = 6
+
 // Server is the HTTP server: routes, middleware, sessions, OIDC client and rate limiters.
 type Server struct {
 	Cfg      *config.Panel
@@ -73,6 +76,7 @@ type Server struct {
 	auditLost  int
 
 	control, pollCtl, login, adminRL *rateLimiter
+	settingsRL, uploadRL             *rateLimiter // per user: settings changes, background uploads
 	mux                              *http.ServeMux
 }
 
@@ -84,7 +88,8 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 		codec:    newCodec(secrets.SessionSecret, cfg.SessionMaxAge, !secrets.InsecureCookies),
 		DemoUser: demoUser, demoAuthTime: time.Now().Add(-time.Hour), // first control action shows step-up
 		control: newRateLimiter(cfg.ControlRatePerMin), pollCtl: newRateLimiter(cfg.ControlRatePerMin * 2),
-		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60), anonAudit: newAuditThrottle()}
+		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60), anonAudit: newAuditThrottle(),
+		settingsRL: newRateLimiter(30), uploadRL: newRateLimiter(uploadsPerMin)}
 	s.oidc = newOIDC(cfg, secrets)
 	if err := s.Access.EnsureSites(cfg.Sites()); err != nil { // sites named in config.yaml exist on the Users page
 		slog.Error("users.json write failed", "error", err)

@@ -22,6 +22,9 @@ func (s *Server) putSettings(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
+	if !s.settingsRL.allow(u.Sub) {
+		return apierr.New(429, "too many settings changes; slow down")
+	}
 	raw, err := io.ReadAll(io.LimitReader(c.r.Body, 64<<10))
 	if err != nil {
 		return apierr.New(400, "unreadable body")
@@ -47,10 +50,19 @@ func (s *Server) putSettings(c *reqCtx) error {
 	return nil
 }
 
+// uploadBackground stores a background image (at most settings.MaxBackgroundBytes). Only users with a role
+// may upload (a user waiting for access may change the other settings but not store files), at most
+// uploadsPerMin times a minute.
 func (s *Server) uploadBackground(c *reqCtx) error {
 	u, err := c.sessionCSRF()
 	if err != nil {
 		return err
+	}
+	if _, g, _ := c.grant(); g.Pending() {
+		return apierr.New(403, pendingDetail)
+	}
+	if !s.uploadRL.allow(u.Sub) {
+		return apierr.New(429, "too many uploads; try again in a minute")
 	}
 	if c.r.ContentLength > settings.MaxBackgroundBytes {
 		return apierr.New(413, "image too large")

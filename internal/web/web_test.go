@@ -334,6 +334,12 @@ func TestSettingsAndBackgroundUpload(t *testing.T) {
 		return out
 	}
 	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...)
+	if r := upload("image/png", png); r.code != 403 {
+		t.Fatal("a user waiting for access stored a file", r.code)
+	}
+	if _, _, err := e.s.Access.SetRole(viewer.Sub, "viewer", []string{}, "test", true); err != nil {
+		t.Fatal(err)
+	}
 	if r := upload("image/svg+xml", []byte("<svg onload=alert(1)>")); r.code != 415 {
 		t.Fatal("svg accepted")
 	}
@@ -353,6 +359,13 @@ func TestSettingsAndBackgroundUpload(t *testing.T) {
 	}
 	if r := e.do("DELETE", "/api/settings/background", nil, csrf...); r.code != 200 {
 		t.Fatal("delete")
+	}
+	limited := false
+	for i := 0; i < uploadsPerMin && !limited; i++ {
+		limited = upload("image/png", png).code == 429
+	}
+	if !limited {
+		t.Fatal("uploads are not rate limited")
 	}
 }
 
