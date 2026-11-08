@@ -71,7 +71,7 @@ func (s *Server) systems(c *reqCtx) error {
 	}
 	items := []model.System{}
 	for _, x := range s.Poller.Snapshot() {
-		if (kind == "" || x.Kind == kind) && (status == "" || x.Status == status) && (!q.Has("group") || deref(x.Group) == group) {
+		if (kind == "" || x.Kind == kind) && (status == "" || x.Status == status) && (!q.Has("group") || model.Deref(x.Group) == group) {
 			items = append(items, x)
 		}
 	}

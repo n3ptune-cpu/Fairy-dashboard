@@ -67,11 +67,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("fairy admin", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
-	def := os.Getenv("FAIRY_CONFIG_FILE")
-	if def == "" {
-		def = config.DefaultConfigPath()
-	}
-	cfgPath := fs.String("config", def, "config.yaml")
+	cfgPath := fs.String("config", config.PathFromEnv(), "config.yaml")
 	envFile := fs.String("env-file", config.DefaultEnvFile(), "env file loaded if present (never overrides)")
 	if err := fs.Parse(args); err != nil {
 		return 2

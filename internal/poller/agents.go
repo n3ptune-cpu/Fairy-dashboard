@@ -124,20 +124,9 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	lat := time.Since(start)
 	p.source(name, true, now, &lat, nil)
 	p.mu.Unlock()
-	p.Power.UpdateRemote(a.ID, objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)
-	p.UPS.UpdateFromAgent(a.ID, objs(payload["ups"]), false, a.UPSPowers, a.UPSNames)
+	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)
+	p.UPS.UpdateFromAgent(a.ID, jsonx.Objs(payload["ups"]), false, a.UPSPowers, a.UPSNames)
 	return 0
-}
-
-func objs(v any) []map[string]any {
-	l, _ := v.([]any)
-	out := []map[string]any{}
-	for _, x := range l {
-		if m, ok := x.(map[string]any); ok {
-			out = append(out, m)
-		}
-	}
-	return out
 }
 
 func (p *Poller) FetchProcesses(ctx context.Context, a config.Agent, sid string, limit int, sortBy string) (model.ProcessList, error) {

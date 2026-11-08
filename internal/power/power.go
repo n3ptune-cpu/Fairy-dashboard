@@ -7,15 +7,12 @@ package power
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/devices"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
-
-var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // Base holds the fields every source type has.
 type Base struct {
@@ -35,10 +32,10 @@ func (b Base) DisplayName() string {
 }
 
 func (b Base) validate() error {
-	if !idRe.MatchString(b.ID) {
+	if !config.ValidID(b.ID) {
 		return fmt.Errorf("power source %q: id must be lowercase letters, digits and dashes", b.ID)
 	}
-	if b.System != "" && !idRe.MatchString(b.System) {
+	if b.System != "" && !config.ValidID(b.System) {
 		return fmt.Errorf("power source %s: invalid system id", b.ID)
 	}
 	if b.Interval != nil && (*b.Interval < 1 || *b.Interval > 300) {
@@ -72,11 +69,4 @@ func Reading(b Base, r devices.Reading) model.PowerReading {
 		pr.SystemID = model.P(b.System)
 	}
 	return pr
-}
-
-func secret(env, what string) (string, error) {
-	if env == "" {
-		return "", nil
-	}
-	return config.EnvSecret(env, what, 1)
 }

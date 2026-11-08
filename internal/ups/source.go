@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"time"
 
@@ -12,8 +11,6 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/devices"
 	"github.com/n3ptune-cpu/Fairy/internal/power"
 )
-
-var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // Powers: a list applies to every UPS of this source; a map maps NUT UPS name -> system ids.
 type Powers struct {
@@ -50,7 +47,7 @@ func parsePowers(id string, raw any) (Powers, error) {
 		out := []string{}
 		for _, x := range l {
 			s, _ := x.(string)
-			if !idRe.MatchString(s) {
+			if !config.ValidID(s) {
 				return nil, fmt.Errorf("ups %s: invalid system id in powers", id)
 			}
 			out = append(out, s)
@@ -109,7 +106,7 @@ func buildNut(raw map[string]any) (*NutConfig, error) {
 	if c.Type != "nut" {
 		return nil, fmt.Errorf("ups %q: unknown type %q (known: nut)", c.ID, c.Type)
 	}
-	if !idRe.MatchString(c.ID) {
+	if !config.ValidID(c.ID) {
 		return nil, fmt.Errorf("ups %q: id must be lowercase letters, digits and dashes", c.ID)
 	}
 	if c.Host == "" {

@@ -16,7 +16,7 @@ import (
 func sourceOf(u *model.User) string {
 	switch u.Auth {
 	case "token":
-		return "token:" + deref(u.TokenName)
+		return "token:" + model.Deref(u.TokenName)
 	case "demo":
 		return "demo"
 	}
@@ -25,7 +25,7 @@ func sourceOf(u *model.User) string {
 
 func actorOf(u *model.User) string {
 	if u.Auth == "token" {
-		return deref(u.TokenName) + " (token, owner " + deref(u.TokenOwner) + ")"
+		return model.Deref(u.TokenName) + " (token, owner " + model.Deref(u.TokenOwner) + ")"
 	}
 	for _, v := range []*string{u.Email, u.PreferredUsername, u.Name} {
 		if v != nil && *v != "" {
@@ -33,13 +33,6 @@ func actorOf(u *model.User) string {
 		}
 	}
 	return u.Sub
-}
-
-func deref(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
 }
 
 var controlActions = []string{"fan.", "power.", "poll."}

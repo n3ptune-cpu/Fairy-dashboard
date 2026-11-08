@@ -133,7 +133,7 @@ func (b *httpBackend) FetchProxmox(ctx context.Context, pve config.Proxmox, time
 			last = devices.Errf("invalid response")
 			continue
 		}
-		return objs(rows), nil
+		return jsonx.Objs(rows), nil
 	}
 	return nil, last
 }

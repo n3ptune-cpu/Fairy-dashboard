@@ -11,6 +11,15 @@ import (
 // P returns a pointer to v (for optional fields).
 func P[T any](v T) *T { return &v }
 
+// Deref returns *p, or the zero value ("" for strings) when p is nil.
+func Deref[T any](p *T) T {
+	if p == nil {
+		var zero T
+		return zero
+	}
+	return *p
+}
+
 type Temperature struct {
 	Sensor    string   `json:"sensor"`
 	Label     *string  `json:"label"`

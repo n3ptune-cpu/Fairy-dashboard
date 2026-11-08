@@ -23,6 +23,14 @@ func DefaultConfigPath() string {
 	return "/etc/fairy/config.yaml"
 }
 
+// PathFromEnv is the config file to use when --config is not given: $FAIRY_CONFIG_FILE, or DefaultConfigPath.
+func PathFromEnv() string {
+	if p := os.Getenv("FAIRY_CONFIG_FILE"); p != "" {
+		return p
+	}
+	return DefaultConfigPath()
+}
+
 func DefaultEnvFile() string {
 	if runtime.GOOS == "windows" {
 		return `C:\ProgramData\Fairy\fairy.env`

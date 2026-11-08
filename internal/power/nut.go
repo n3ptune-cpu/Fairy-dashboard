@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/devices"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
@@ -26,7 +27,7 @@ func (s *nut) Info() Base { return s.c.Base }
 
 func (s *nut) Read(ctx context.Context, timeout time.Duration) ([]model.PowerReading, error) {
 	c := s.c
-	pw, err := secret(c.PasswordEnv, "power source "+c.ID)
+	pw, err := config.EnvSecret(c.PasswordEnv, "power source "+c.ID, 1)
 	if err != nil {
 		return nil, devices.Errf("%s", err.Error())
 	}

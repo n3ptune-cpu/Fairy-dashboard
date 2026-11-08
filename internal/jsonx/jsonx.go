@@ -112,3 +112,16 @@ func Truthy(v any) bool {
 	}
 	return true
 }
+
+// Objs returns the objects in a JSON array, skipping elements that are not objects. It returns an empty
+// (non-nil) slice when v is not an array.
+func Objs(v any) []M {
+	l, _ := v.([]any)
+	out := make([]M, 0, len(l))
+	for _, x := range l {
+		if m, ok := x.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}

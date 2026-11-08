@@ -35,7 +35,7 @@ func isAllowed(u model.User, o config.OIDC) bool {
 		return false
 	}
 	if len(o.AllowedEmails) > 0 {
-		e := strings.ToLower(deref(u.Email))
+		e := strings.ToLower(model.Deref(u.Email))
 		if !slices.ContainsFunc(o.AllowedEmails, func(x string) bool { return strings.ToLower(x) == e }) {
 			return false
 		}
@@ -45,7 +45,7 @@ func isAllowed(u model.User, o config.OIDC) bool {
 
 func canControl(u *model.User, o config.OIDC) bool {
 	if u.Auth == "token" {
-		return deref(u.TokenScope) == "control"
+		return model.Deref(u.TokenScope) == "control"
 	}
 	return len(o.ControlGroups) > 0 && slices.ContainsFunc(u.Groups, func(g string) bool { return slices.Contains(o.ControlGroups, g) })
 }

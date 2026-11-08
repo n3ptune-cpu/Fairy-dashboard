@@ -8,6 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/devices"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
@@ -137,7 +138,7 @@ func Build(raw map[string]any, agentPower AgentPowerFn) (Source, error) {
 		if err := c.validate(); err != nil {
 			return nil, err
 		}
-		if !idRe.MatchString(c.Agent) {
+		if !config.ValidID(c.Agent) {
 			return nil, fmt.Errorf("power source %s: agent must be an agent id", c.ID)
 		}
 		switch c.Metric {

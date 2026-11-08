@@ -20,7 +20,9 @@ var (
 	macRe      = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{12}$`)
 )
 
-func validID(s string) bool { return systemIDRe.MatchString(s) }
+// ValidID reports whether s is a valid id for a system, agent, power source or UPS: lowercase letters, digits
+// and dashes, starting with a letter or digit, at most 63 characters.
+func ValidID(s string) bool { return systemIDRe.MatchString(s) }
 
 // Validate applies defaults and checks the same rules as the prototype.
 func (c *Panel) Validate() error {
@@ -117,7 +119,7 @@ func (c *Panel) Validate() error {
 			v := p.ID + "-"
 			p.IDPrefix = &v
 		}
-		if !validID(p.ID) || !prefixRe.MatchString(*p.IDPrefix) {
+		if !ValidID(p.ID) || !prefixRe.MatchString(*p.IDPrefix) {
 			add("proxmox %q: invalid id or id_prefix", p.ID)
 		}
 		if ids[p.ID] || prefixes[*p.IDPrefix] {
@@ -149,7 +151,7 @@ func (c *Panel) Validate() error {
 	agents := map[string]*Agent{}
 	for i := range c.Agents {
 		a := &c.Agents[i]
-		if !validID(a.ID) {
+		if !ValidID(a.ID) {
 			add("agent %q: invalid id", a.ID)
 		}
 		if strings.HasPrefix(a.ID, "node-") || strings.HasPrefix(a.ID, "qemu-") || strings.HasPrefix(a.ID, "lxc-") {
@@ -179,7 +181,7 @@ func (c *Panel) Validate() error {
 		}
 	}
 	for _, o := range c.Systems {
-		if !validID(o.ID) {
+		if !ValidID(o.ID) {
 			add("systems: invalid id %q", o.ID)
 		}
 		if o.DWServiceURL != "" && !strings.HasPrefix(o.DWServiceURL, "https://") {
@@ -205,7 +207,7 @@ func (c *Panel) Validate() error {
 		}
 	}
 	for _, h := range c.PanelHosts {
-		if !validID(h) {
+		if !ValidID(h) {
 			add("panel_hosts: invalid id %q", h)
 		}
 	}

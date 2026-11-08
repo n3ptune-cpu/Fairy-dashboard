@@ -328,7 +328,7 @@ func (s *Scheduler) Describe(id string) []model.PollJob {
 			Clamped: eff != nil && wanted < j.floor(), Boosted: boosted, Paused: eff == nil,
 			Shared: len(j.systems()) > 1, Runs: j.runs, SkippedOverlaps: j.skipped}
 		if j.lastDuration != nil {
-			pj.LastDurationMS = model.P(math.Round(*j.lastDuration*10000) / 10)
+			pj.LastDurationMS = model.P(secondsToMS(*j.lastDuration))
 		}
 		out = append(out, pj)
 	}
@@ -455,5 +455,8 @@ func (s *Scheduler) LastMS(j *Job) *float64 {
 	if j.lastDuration == nil {
 		return nil
 	}
-	return model.P(math.Round(*j.lastDuration*10000) / 10)
+	return model.P(secondsToMS(*j.lastDuration))
 }
+
+// secondsToMS converts seconds to milliseconds rounded to 0.1 ms.
+func secondsToMS(s float64) float64 { return math.Round(s*10000) / 10 }

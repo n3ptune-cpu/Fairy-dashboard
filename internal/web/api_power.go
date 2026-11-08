@@ -1,6 +1,7 @@
 package web
 
 import (
+	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/powerctl"
 )
 
@@ -37,9 +38,9 @@ func (s *Server) powerAction(c *reqCtx) error {
 		return err
 	}
 	params := map[string]any{"action": req.Action, "delay_s": *req.DelayS}
-	who := deref(u.Name)
+	who := model.Deref(u.Name)
 	if who == "" {
-		who = deref(u.Email)
+		who = model.Deref(u.Email)
 	}
 	if who == "" {
 		who = u.Sub

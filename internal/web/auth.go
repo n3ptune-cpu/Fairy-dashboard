@@ -148,7 +148,7 @@ func (s *Server) authLogin(c *reqCtx) error {
 		s.demoAuthTime = time.Now()
 		s.demoMu.Unlock()
 		d := s.DemoUser
-		c.auditAnon("auth.step_up", "ok (demo: simulated Pocket ID re-authentication)", deref(d.Email), &d.Sub, nil)
+		c.auditAnon("auth.step_up", "ok (demo: simulated Pocket ID re-authentication)", model.Deref(d.Email), &d.Sub, nil)
 		c.redirect(target)
 		return nil
 	}

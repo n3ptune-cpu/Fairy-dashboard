@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/devices"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
@@ -48,7 +49,7 @@ func (s *redfish) Read(ctx context.Context, timeout time.Duration) ([]model.Powe
 	if path == "" {
 		path = "/redfish/v1/Chassis/" + url.PathEscape(c.ChassisID) + "/Power"
 	}
-	pw, err := secret(c.PasswordEnv, c.ID)
+	pw, err := config.EnvSecret(c.PasswordEnv, c.ID, 1)
 	if err != nil {
 		return nil, devices.Errf("%s", err.Error())
 	}

@@ -25,19 +25,8 @@ func pending(pc jsonx.M) *model.PowerPending {
 	if v := jsonx.Num(p, "delay_s"); v != nil {
 		d = int(*v)
 	}
-	sec, frac := math.Modf(*at)
-	return &model.PowerPending{Action: a, At: time.Unix(int64(sec), int64(frac*1e9)).UTC(), DelayS: d,
+	return &model.PowerPending{Action: a, At: EpochTime(*at), DelayS: d,
 		RequestedBy: jsonx.Str(p, "requested_by")}
-}
-
-func objs(l []any) []jsonx.M {
-	out := make([]jsonx.M, 0, len(l))
-	for _, v := range l {
-		if m, ok := v.(map[string]any); ok {
-			out = append(out, m)
-		}
-	}
-	return out
 }
 
 func strOr(m jsonx.M, k, def string) string {
@@ -56,7 +45,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	cpu, mem, nett, plat := jsonx.Obj(m, "cpu"), jsonx.Obj(m, "memory"), jsonx.Obj(m, "net"), jsonx.Obj(m, "platform")
 	disks := []model.Disk{}
 	var used, total int64
-	for _, d := range objs(jsonx.List(m, "disks")) {
+	for _, d := range jsonx.Objs(m["disks"]) {
 		mount, ok := d["mount"].(string)
 		u, t := jsonx.Int(d, "used"), jsonx.Int(d, "total")
 		if !ok || u == nil || t == nil {
@@ -68,7 +57,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	}
 	rx, tx := rates.Update(cfg.ID, ts, jsonx.Int(nett, "bytes_recv"), jsonx.Int(nett, "bytes_sent"), 0)
 	temps := []model.Temperature{}
-	for _, t := range objs(jsonx.List(m, "temps")) {
+	for _, t := range jsonx.Objs(m["temps"]) {
 		cur := jsonx.Num(t, "current")
 		if cur == nil {
 			continue
@@ -77,7 +66,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 			CurrentC: *cur, HighC: jsonx.Num(t, "high"), CriticalC: jsonx.Num(t, "critical")})
 	}
 	gpus := []model.Gpu{}
-	for _, g := range objs(jsonx.List(m, "gpus")) {
+	for _, g := range jsonx.Objs(m["gpus"]) {
 		vendor := jsonx.S(g, "vendor")
 		if vendor != "nvidia" && vendor != "amd" && vendor != "intel" {
 			vendor = "other"
@@ -95,7 +84,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 		power = &model.ComponentPower{CPUPackageW: jsonx.Num(p, "cpu_package_w"), GPUW: jsonx.Num(p, "gpu_w"),
 			BatteryW: jsonx.Num(p, "battery_w"), BatteryState: jsonx.Str(p, "battery_state"),
 			BMCW: jsonx.Num(p, "bmc_w"), BMCNote: jsonx.Str(p, "bmc_note")}
-		for _, s := range objs(jsonx.List(p, "sensors")) {
+		for _, s := range jsonx.Objs(p["sensors"]) {
 			if w := jsonx.Num(s, "watts"); w != nil {
 				power.Sensors = append(power.Sensors, model.PowerSensor{Name: strOr(s, "name", "?"), Watts: *w})
 			}
@@ -107,13 +96,13 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 		}
 	}
 	fans := []model.Fan{}
-	for _, f := range objs(jsonx.List(m, "fans")) {
+	for _, f := range jsonx.Objs(m["fans"]) {
 		if r := jsonx.Num(f, "rpm"); r != nil {
 			fans = append(fans, model.Fan{Name: strOr(f, "name", "?"), RPM: *r})
 		}
 	}
 	volts := []model.Voltage{}
-	for _, v := range objs(jsonx.List(m, "voltages")) {
+	for _, v := range jsonx.Objs(m["voltages"]) {
 		if x := jsonx.Num(v, "volts"); x != nil {
 			volts = append(volts, model.Voltage{Name: strOr(v, "name", "?"), Volts: *x})
 		}
@@ -156,4 +145,10 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	}
 	model.Normalize(&s)
 	return s
+}
+
+// EpochTime converts Unix seconds with a fraction (as agents send them) to a UTC time.
+func EpochTime(sec float64) time.Time {
+	whole, frac := math.Modf(sec)
+	return time.Unix(int64(whole), int64(frac*1e9)).UTC()
 }

@@ -77,7 +77,7 @@ func loopback(hostport string) bool {
 
 func serve(args []string) int {
 	fs := flag.NewFlagSet("fairy serve", flag.ContinueOnError)
-	cfgPath := fs.String("config", env("FAIRY_CONFIG_FILE", config.DefaultConfigPath()), "config.yaml")
+	cfgPath := fs.String("config", config.PathFromEnv(), "config.yaml")
 	envFile := fs.String("env-file", config.DefaultEnvFile(), "secrets file, loaded if present (never overrides the environment)")
 	listen := fs.String("listen", env("FAIRY_LISTEN", "127.0.0.1:8080"), "address:port (behind nginx)")
 	demoMode := fs.Bool("demo", false, "simulated data, NO authentication (loopback preview only)")

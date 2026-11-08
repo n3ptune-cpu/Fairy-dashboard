@@ -191,7 +191,7 @@ func (p *Poller) buildSnapshot() []model.System {
 		if an != bn {
 			return !an
 		}
-		ap, bp := deref(a.Parent), deref(b.Parent)
+		ap, bp := model.Deref(a.Parent), model.Deref(b.Parent)
 		if ap != bp {
 			return ap < bp
 		}
@@ -228,17 +228,10 @@ func (p *Poller) buildSnapshot() []model.System {
 	return list
 }
 
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
 // powerActions: configured (not necessarily currently available) power actions, for list badges / menus.
 func (p *Poller) powerActions(s model.System) []string {
 	out := []string{}
-	c, hasC := p.clusters[deref(s.ClusterID)]
+	c, hasC := p.clusters[model.Deref(s.ClusterID)]
 	if s.Kind == "qemu" || s.Kind == "lxc" {
 		if hasC && c.PowerTokenID != "" {
 			out = append(out, "start", "shutdown", "reboot", "stop")

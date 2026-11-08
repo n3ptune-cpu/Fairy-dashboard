@@ -13,12 +13,10 @@ package powerctl
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/url"
 	"os"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/config"
@@ -314,8 +312,7 @@ func parsePending(m jsonx.M) *model.PowerPending {
 	if at == nil {
 		return nil
 	}
-	sec, frac := math.Modf(*at)
-	pp := &model.PowerPending{Action: jsonx.S(m, "action"), At: time.Unix(int64(sec), int64(frac*1e9)).UTC(),
+	pp := &model.PowerPending{Action: jsonx.S(m, "action"), At: normalise.EpochTime(*at),
 		RequestedBy: jsonx.Str(m, "requested_by")}
 	if d := jsonx.Num(m, "delay_s"); d != nil {
 		pp.DelayS = int(*d)
