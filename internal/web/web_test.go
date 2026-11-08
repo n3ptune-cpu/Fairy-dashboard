@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy/internal/config"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/poller"
@@ -50,7 +51,7 @@ func controller() model.User {
 // cookie mints a session like a real login: registered sid, auth_time as given.
 func (e *env) cookie(u model.User, authAge time.Duration) string {
 	sid := randToken(18)
-	if err := e.s.Poller.Admin.AddSession(sid, map[string]any{"sub": u.Sub}); err != nil {
+	if err := e.s.Poller.Admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub}); err != nil {
 		e.t.Fatal(err)
 	}
 	now := time.Now()

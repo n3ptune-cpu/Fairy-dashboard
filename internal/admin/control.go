@@ -4,10 +4,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy/internal/health"
 )
 
 func (c *cli) control(args []string) (int, error) {
@@ -83,13 +85,8 @@ func (c *cli) poll(args []string) (int, error) {
 	if err := c.load(); err != nil {
 		return 1, err
 	}
-	h := c.healthData()
-	if known, _ := h["system_ids"].([]any); len(known) > 0 {
-		found := false
-		for _, k := range known {
-			found = found || k == id
-		}
-		if !found {
+	if h, err := health.Read(c.cfg.DataDir); err == nil && len(h.SystemIDs) > 0 {
+		if !slices.Contains(h.SystemIDs, id) {
 			fmt.Fprintf(c.errw, "warning: %q is not a known system id right now\n", id)
 		}
 	}

@@ -52,7 +52,7 @@ func (s *Server) auditPage(c *reqCtx) error {
 		before = &n
 	}
 	entries, next := audit.Read(s.Cfg.AuditLog, user, action, host, before, limit)
-	c.json(200, map[string]any{"entries": entries, "next": next})
+	c.json(200, model.AuditPage{Entries: entries, Next: next})
 	return nil
 }
 

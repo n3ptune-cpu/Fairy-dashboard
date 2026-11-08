@@ -408,22 +408,13 @@ type PowerResult struct {
 	Message  string        `json:"message"`
 }
 
-type AuditEntry struct {
-	ID      int64          `json:"id"`
-	TS      string         `json:"ts"`
-	Actor   string         `json:"actor"`
-	Sub     *string        `json:"sub"`
-	Action  string         `json:"action"`
-	Target  string         `json:"target"`
-	Params  map[string]any `json:"params"`
-	Outcome string         `json:"outcome"`
-	Source  string         `json:"source"`
-	IP      *string        `json:"ip"`
-}
-
+// AuditPage is one page of GET /api/audit, newest entry first.
+//
+// Entries are the audit-log lines as written (see audit.Entry) plus "id", the entry's byte offset. They stay
+// generic maps so that lines written by older versions, with other keys, are passed through unchanged.
 type AuditPage struct {
-	Entries []AuditEntry `json:"entries"`
-	Next    *int64       `json:"next"`
+	Entries []map[string]any `json:"entries"`
+	Next    *int64           `json:"next"` // pass as ?before= for the next page; null on the last page
 }
 
 // Normalize replaces nil slices and maps with empty ones (recursively), so JSON never has `null` where the

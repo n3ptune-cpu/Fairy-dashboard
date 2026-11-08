@@ -6,9 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy/internal/audit"
+	"github.com/n3ptune-cpu/Fairy/internal/health"
+	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/statefile"
 )
 
@@ -75,5 +78,42 @@ func TestBreakGlassCLI(t *testing.T) {
 	}
 	if code, _ = run("bogus"); code != 2 {
 		t.Fatal("usage")
+	}
+}
+
+func TestHealthReportsTheLastHealthFile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	_ = os.WriteFile(cfg, []byte("public_url: https://p.example\ndata_dir: "+dir+"/data\noidc: {issuer: https://id.example, client_id: c}\n"), 0o600)
+	now := time.Now().UTC()
+	err := health.Write(dir+"/data", health.Report{
+		StartedAt: now.Add(-time.Hour).Format(time.RFC3339Nano), WrittenAt: now.Format(time.RFC3339Nano),
+		Systems:      map[string]int{"online": 3, "stale": 0, "offline": 1, "stopped": 0, "paused": 0},
+		SystemIDs:    []string{"nsx-cyrene"},
+		Sources:      []model.SourceStatus{{Name: "agent:nsx-cyrene", OK: true, LatencyMS: model.P(1.5), LastSuccess: &now}},
+		PowerSources: []health.Source{{ID: "plug", Status: "unreachable", Error: model.P("timeout")}},
+		UPS:          []health.Source{{ID: "rack/ups", Status: "ok"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "health"}, &out, &errb)
+	want := []string{"panel: RUNNING", "control: enabled", "systems: online 3, stale 0, offline 1, stopped 0, paused 0",
+		"agent:nsx-cyrene", "1.5 ms", "power:plug", "unreachable", "timeout", "ups:rack/ups"}
+	for _, w := range want {
+		if !strings.Contains(out.String(), w) {
+			t.Fatalf("missing %q in\n%s", w, out.String())
+		}
+	}
+	if code != 0 {
+		t.Fatal("fresh health file must exit 0", code, errb.String())
+	}
+	// `poll` warns about ids the panel does not know (from the same file).
+	out.Reset()
+	errb.Reset()
+	if code = Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "poll", "nope", "5"}, &out, &errb); code != 0 ||
+		!strings.Contains(errb.String(), `"nope" is not a known system id`) {
+		t.Fatal(code, errb.String())
 	}
 }

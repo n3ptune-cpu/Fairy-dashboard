@@ -113,7 +113,16 @@ func (a *State) ListSessions() []Session {
 	return out
 }
 
-func (a *State) AddSession(sid string, info map[string]any) error {
+// NewSession is what the panel records about a fresh login in sessions.json.
+type NewSession struct {
+	Sub   string
+	Name  *string
+	Email *string
+	IP    string
+}
+
+// AddSession registers a new login (and drops registry entries older than SessionKeepS).
+func (a *State) AddSession(sid string, info NewSession) error {
 	_, err := statefile.Update(a.SessionsPath, func(d statefile.Data) error {
 		ss, _ := d["sessions"].(map[string]any)
 		if ss == nil {
@@ -127,10 +136,7 @@ func (a *State) AddSession(sid string, info map[string]any) error {
 				delete(ss, k)
 			}
 		}
-		rec := map[string]any{}
-		for k, v := range info {
-			rec[k] = v
-		}
+		rec := map[string]any{"sub": info.Sub, "name": info.Name, "email": info.Email, "ip": info.IP}
 		rec["created"] = time.Now().UTC().Format(time.RFC3339Nano)
 		rec["created_ts"] = now()
 		ss[sid] = rec

@@ -12,6 +12,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
@@ -268,7 +269,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 	}
 	_ = admin.RemoveSession(sess.SID)
 	sid := randToken(18)
-	if err := admin.AddSession(sid, map[string]any{"sub": u.Sub, "name": u.Name, "email": u.Email, "ip": c.ip()}); err != nil {
+	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip()}); err != nil {
 		return err
 	}
 	c.sess = &sessionData{SID: sid, User: &u, IAT: int64(now), Seen: int64(now), AuthTime: authTime}
