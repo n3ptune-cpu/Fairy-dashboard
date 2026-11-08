@@ -109,23 +109,38 @@ function showStepUp(pending, detail) {
     <div class="row-gap end"><button class="btn" id="su-cancel">Cancel</button>
       <a class="btn primary" id="su-go" href="/auth/login?step_up=1&amp;next=${next}">Continue to Pocket ID</a></div></div>`;
   m.hidden = false;
-  $("#su-cancel").onclick = () => { m.hidden = true; m.innerHTML = ""; try { sessionStorage.removeItem(PENDING_KEY); } catch { /* ignore */ } };
+  $("#su-cancel").onclick = () => { m.hidden = true; m.innerHTML = ""; dropPending(); };
 }
-// Run a control call; on "step_up_required" show the interstitial instead of an error.
-async function controlCall(pending, fn) {
-  try { return await fn(); }
-  catch (e) { if (e.stepUp) { showStepUp(pending, e.detail); return null; } throw e; }
-}
-function resumePending() {
+// The action waiting for a step-up sign-in (sessionStorage: this tab only), offered as "Resume" once back.
+function readPending() {
   let p = null;
   try { p = JSON.parse(sessionStorage.getItem(PENDING_KEY) || "null"); } catch { p = null; }
-  if (!p || Date.now() - p.ts > 10 * 60 * 1000) return "";
+  return p && Date.now() - p.ts <= 10 * 60 * 1000 ? p : null;
+}
+function dropPending() { try { sessionStorage.removeItem(PENDING_KEY); } catch { /* ignore */ } }
+const onPendingPage = (p) => (p.hash || "#/") === (location.hash || "#/");
+const sameAction = (a, b) => !!a && !!b && a.kind === b.kind && (a.kind === "power" ? a.system === b.system && a.action === b.action
+  : a.method === b.method && a.path === b.path && JSON.stringify(a.body ?? null) === JSON.stringify(b.body ?? null));
+// An action ran (by Resume, or the user simply did it again): its Resume offer is done.
+function actionDone(action) { if (sameAction(readPending(), action)) { dropPending(); renderAlerts(); } }
+// Run a control call; on "step_up_required" show the interstitial instead of an error.
+async function controlCall(pending, fn) {
+  let r;
+  try { r = await fn(); }
+  catch (e) { if (e.stepUp) { showStepUp(pending, e.detail); return null; } throw e; }
+  actionDone(pending);
+  return r;
+}
+function resumePending() {
+  const p = readPending();
+  if (!p || !onPendingPage(p)) return "";  // only on the page where it was asked for
   return `<div class="alert-strip info resume" data-key="resume">${I.shield}<b>Signed in again.</b><span>Resume: ${esc(p.label)}</span>
     <button class="btn push" data-act="resume">Continue</button><button class="btn" data-act="resume-drop">Dismiss</button></div>`;
 }
 async function runPending() {
-  let p = null;
-  try { p = JSON.parse(sessionStorage.getItem(PENDING_KEY) || "null"); sessionStorage.removeItem(PENDING_KEY); } catch { p = null; }
+  const p = readPending();
+  dropPending();
+  renderAlerts();  // the banner goes at once, not when the action has finished
   if (!p) return;
   const s = state.byId[p.system];
   try {
@@ -968,6 +983,7 @@ function openPowerDialog(s, action) {
       if ($("#m-delay")) body.delay_s = +$("#m-delay").value;
       const r = await api(`/api/systems/${enc(s.id)}/power`, { method: "POST", body: JSON.stringify(body) });
       close(); state.menu = null; flash(r.message); refreshCaps(s.id);
+      actionDone({ kind: "power", system: s.id, action });
     } catch (e) {
       if (e.stepUp) { close(); showStepUp({ kind: "power", action, system: s.id, label: `${label} ${s.name}` }, e.detail); return; }
       $("#m-err").textContent = e.message; go.disabled = false;
@@ -1023,7 +1039,7 @@ document.addEventListener("click", async (e) => {
     const cap = state.caps[s.id]?.actions.find((c) => c.action === a);
     if (cap?.confirm === "none") powerNow(s, a); else openPowerDialog(s, a);
   } else if (act === "resume") { runPending();
-  } else if (act === "resume-drop") { try { sessionStorage.removeItem(PENDING_KEY); } catch { /* ignore */ } render();
+  } else if (act === "resume-drop") { dropPending(); render();
   } else if (act === "power-now" && s) {
     if (!state.caps[s.id]) await refreshCaps(s.id);
     powerNow(s, t.dataset.action);
@@ -1143,6 +1159,8 @@ function renderNow() {
 }
 function route() {
   clearTimeout(state.timer);
+  const pend = readPending();
+  if (pend && !onPendingPage(pend)) dropPending();  // navigated away: the offer is gone
   closeUpdPop(false);
   state.menu = null;
   const r = current();
