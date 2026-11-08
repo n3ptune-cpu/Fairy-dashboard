@@ -99,6 +99,12 @@ func (m *Manager) Overview() model.PowerOverview {
 		states = append(states, m.remote[k])
 	}
 	m.mu.Unlock()
+	return model.PowerOverview{GeneratedAt: time.Now().UTC(), Sources: states, TotalW: Total(states)}
+}
+
+// Total is the wall power of the sources counted in the total (include_in_total, not unreachable); nil when
+// none of them has a reading.
+func Total(states []model.PowerSourceState) *float64 {
 	var total float64
 	n := 0
 	for _, s := range states {
@@ -112,11 +118,10 @@ func (m *Manager) Overview() model.PowerOverview {
 			}
 		}
 	}
-	ov := model.PowerOverview{GeneratedAt: time.Now().UTC(), Sources: states}
-	if n > 0 {
-		ov.TotalW = model.P(normalise.Round(total, 1))
+	if n == 0 {
+		return nil
 	}
-	return ov
+	return model.P(normalise.Round(total, 1))
 }
 
 // LinkedWatts returns system id -> watts from the sources linked to that system.

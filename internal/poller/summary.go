@@ -10,7 +10,13 @@ import (
 
 // Summary is GET /api/summary: status counts, per-cluster totals and the state of every polled source.
 func (p *Poller) Summary() model.Summary {
-	systems := p.Snapshot()
+	return p.SummaryOf(p.Snapshot(), nil)
+}
+
+// SummaryOf is the summary of some systems only (what a viewer may see): counts and cluster totals are added up
+// over those systems, clusters without any of them are left out, and so are the polled sources for which
+// keepSource returns false. keepSource nil keeps every source and every cluster (the full summary).
+func (p *Poller) SummaryOf(systems []model.System, keepSource func(name string) bool) model.Summary {
 	counts := model.Counts{Total: len(systems)}
 	byKind := map[string]int{}
 	for _, s := range systems {
@@ -30,12 +36,18 @@ func (p *Poller) Summary() model.Summary {
 	}
 	clusters := []model.ClusterTotals{}
 	for _, c := range p.Cfg.Proxmox {
-		clusters = append(clusters, clusterTotals(c, systems))
+		ct := clusterTotals(c, systems)
+		if keepSource != nil && ct.NodesTotal+ct.GuestsTotal == 0 {
+			continue
+		}
+		clusters = append(clusters, ct)
 	}
 	p.mu.Lock()
 	srcs := []model.SourceStatus{}
 	for _, k := range p.sourceOrder {
-		srcs = append(srcs, p.sources[k])
+		if keepSource == nil || keepSource(k) {
+			srcs = append(srcs, p.sources[k])
+		}
 	}
 	p.mu.Unlock()
 	return model.Summary{ControlDisabled: p.Admin.ControlDisabled(), GeneratedAt: time.Now().UTC(),
