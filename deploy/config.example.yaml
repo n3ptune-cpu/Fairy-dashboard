@@ -76,7 +76,9 @@ power_sources: []
   # - {id: plug-cyrene, type: tuya, device_id: bf0123456789abcdef, ip: 192.168.1.60, local_key_env: TUYA_KEY_PLUG, version: "3.4", system: nsx-cyrene}
   # - {id: plug-desk, type: shelly, url: "http://192.168.1.61", password_env: SHELLY_PW}
   # - {id: tasmota-1, type: tasmota, url: "http://192.168.1.62", password_env: TASMOTA_PW}
-  # - {id: idrac, type: redfish, url: "https://192.168.1.5", username: root, password_env: IDRAC_PW, verify_tls: false}
+  # BMCs: keep verify_tls (the default, true) and give the BMC's certificate or CA in ca_file; use a read-only
+  # BMC account. verify_tls: false sends the BMC password to anyone who can intercept that network.
+  # - {id: idrac, type: redfish, url: "https://192.168.1.5", username: fairy-ro, password_env: IDRAC_PW, ca_file: /etc/fairy/idrac-ca.pem}
   # - {id: ups-power, type: nut, host: 192.168.1.10, ups: ups}
 
 ups: []

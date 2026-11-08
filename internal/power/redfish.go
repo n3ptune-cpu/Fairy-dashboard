@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -29,8 +30,8 @@ type RedfishConfig struct {
 }
 
 type redfish struct {
-	c   RedfishConfig
-	tls *tls.Config
+	c  RedfishConfig
+	tr *http.Transport // one per BMC: connections are reused across polls
 }
 
 func (s *redfish) Info() Base { return s.c.Base }
@@ -43,7 +44,7 @@ func (s *redfish) FloorInterval() float64 { return 10 }
 func (s *redfish) MaxBackoff() float64 { return 300 }
 
 // BMCs are often not cabled: back off up to 5 min
-func (s *redfish) Close() {}
+func (s *redfish) Close() { s.tr.CloseIdleConnections() }
 
 func (s *redfish) Read(ctx context.Context, timeout time.Duration) ([]model.PowerReading, error) {
 	c := s.c
@@ -55,7 +56,7 @@ func (s *redfish) Read(ctx context.Context, timeout time.Duration) ([]model.Powe
 	if err != nil {
 		return nil, devices.Safe(err)
 	}
-	d, err := devices.GetJSON(ctx, devices.TLSClient(timeout, s.tls), strings.TrimRight(c.URL, "/")+path, "basic", c.Username, pw)
+	d, err := devices.GetJSON(ctx, devices.ClientWith(timeout, s.tr), strings.TrimRight(c.URL, "/")+path, "basic", c.Username, pw)
 	if err != nil {
 		return nil, err
 	}
@@ -106,5 +107,5 @@ func buildRedfish(decode configDecoder) (Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("power source %s: %w", c.ID, err)
 	}
-	return &redfish{c: c, tls: tc}, nil
+	return &redfish{c: c, tr: devices.TLSTransport(tc)}, nil
 }

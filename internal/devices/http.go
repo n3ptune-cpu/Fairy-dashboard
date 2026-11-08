@@ -23,10 +23,21 @@ func LANClient(timeout time.Duration) *http.Client {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-// TLSClient for BMCs: optional custom CA / verification off (owner's choice in config).
+// TLSClient for BMCs: optional custom CA / verification off (owner's choice in config). It has its own
+// transport: build it once per device, not per request, so connections (and BMC sessions) are reused.
 func TLSClient(timeout time.Duration, cfg *tls.Config) *http.Client {
+	return ClientWith(timeout, TLSTransport(cfg))
+}
+
+// TLSTransport is a LAN transport (no proxy) with these TLS settings.
+func TLSTransport(cfg *tls.Config) *http.Transport {
 	tr := lanTransport.Clone()
 	tr.TLSClientConfig = cfg
+	return tr
+}
+
+// ClientWith is a client with this timeout on a shared transport.
+func ClientWith(timeout time.Duration, tr http.RoundTripper) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: tr}
 }
 

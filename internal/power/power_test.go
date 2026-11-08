@@ -4,11 +4,15 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -159,6 +163,35 @@ func TestRedfishParseAndBackoffWhenUnreachable(t *testing.T) {
 	st = pm.Overview().Sources[0]
 	if st.Status != "unreachable" || *st.Error != "connection failed" || len(st.Readings) != 0 || *st.NextAttemptInS != 300 {
 		t.Fatalf("%+v", st)
+	}
+}
+
+// A BMC with its own CA (ca_file) is verified, and polls reuse one connection instead of opening a new TLS
+// connection (and BMC session) every time.
+func TestRedfishVerifiesWithCAFileAndReusesConnections(t *testing.T) {
+	t.Setenv("IDRAC_PW", "calvin")
+	var conns atomic.Int32
+	srv := httptest.NewUnstartedServer(jsonHandler(map[string]any{"PowerControl": []any{map[string]any{"PowerConsumedWatts": 90}}}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.StartTLS()
+	defer srv.Close()
+	ca := filepath.Join(t.TempDir(), "bmc-ca.pem")
+	_ = os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600)
+	now := 1000.0
+	pm := manager(t, []map[string]any{{"id": "bmc", "type": "redfish", "url": srv.URL, "password_env": "IDRAC_PW", "ca_file": ca}}, nil, func() float64 { return now })
+	for i := 0; i < 3; i++ {
+		pm.Runners[0].nextAttempt = 0
+		pm.PollAll(context.Background())
+		if st := pm.Overview().Sources[0]; st.Status != "ok" {
+			t.Fatalf("poll %d: %+v", i, st)
+		}
+	}
+	if n := conns.Load(); n != 1 {
+		t.Fatal("TLS connections opened for 3 polls:", n)
 	}
 }
 
