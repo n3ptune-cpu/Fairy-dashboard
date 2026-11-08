@@ -181,6 +181,9 @@ func (s *Server) authLogin(c *reqCtx) error {
 	return nil
 }
 
+// authCallback finishes the Pocket ID round trip: it checks state, exchanges the code (PKCE), verifies the ID
+// token and nonce, applies the allowed groups / emails and either completes a step-up re-authentication or
+// starts a new, server-registered session. Every failure is audited and answered with a generic 400.
 func (s *Server) authCallback(c *reqCtx) error {
 	if !s.login.allow(c.ip()) {
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
@@ -203,44 +206,12 @@ func (s *Server) authCallback(c *reqCtx) error {
 	if err != nil {
 		return apierr.New(502, "identity provider unreachable")
 	}
-	oc := s.oidc.oauth(p)
 	ctx, cancel := context.WithTimeout(s.oidc.ctx(c.r.Context()), 15*time.Second)
 	defer cancel()
-	tok, err := oc.Exchange(ctx, q.Get("code"), oauth2.VerifierOption(sess.Verifier))
-	if err != nil {
-		return fail("token exchange")
+	claims, why := s.verifiedClaims(ctx, p, q.Get("code"), sess)
+	if why != "" {
+		return fail(why)
 	}
-	rawID, _ := tok.Extra("id_token").(string)
-	if rawID == "" {
-		return fail("no id_token")
-	}
-	idt, err := p.Verifier(&oidc.Config{ClientID: s.Cfg.OIDC.ClientID}).Verify(ctx, rawID)
-	if err != nil {
-		return fail("invalid id_token")
-	}
-	if idt.Nonce != sess.Nonce {
-		return fail("nonce mismatch")
-	}
-	claims := map[string]any{}
-	if err := idt.Claims(&claims); err != nil {
-		return fail("invalid claims")
-	}
-	if _, ok := claims[s.Cfg.OIDC.GroupsClaim]; !ok && slices.Contains(s.Cfg.OIDC.Scopes, "groups") {
-		if ui, err := p.UserInfo(ctx, oauth2.StaticTokenSource(tok)); err == nil {
-			extra := map[string]any{}
-			if ui.Claims(&extra) == nil && fmt.Sprint(extra["sub"]) == idt.Subject {
-				for k, v := range extra {
-					claims[k] = v
-				}
-			}
-		} else {
-			slog.Warn("OIDC userinfo request failed")
-		}
-	}
-	if idt.Subject == "" {
-		return fail("no sub claim")
-	}
-	claims["sub"] = idt.Subject
 	u := userFromClaims(claims, s.Cfg.OIDC.GroupsClaim)
 	if !isAllowed(u, s.Cfg.OIDC) {
 		slog.Warn("login denied", "sub", u.Sub)
@@ -258,8 +229,8 @@ func (s *Server) authCallback(c *reqCtx) error {
 		c.auditAnon("auth.step_up", "failed: identity provider did not re-authenticate (auth_time too old)", actorOf(&u), &u.Sub, nil)
 		return apierr.New(400, "re-authentication was not performed by the identity provider")
 	}
-	admin := s.Poller.Admin
 	if sess.StepUp && sess.User != nil && sess.User.Sub == u.Sub && sess.SID != "" {
+		// Step-up for the same user: keep the session, record the fresh authentication time.
 		sess.AuthTime, sess.Seen = authTime, int64(now)
 		sess.StepUp, sess.Next, sess.State, sess.Nonce, sess.Verifier, sess.Started = false, "", "", "", "", 0
 		c.dirty = true
@@ -267,7 +238,67 @@ func (s *Server) authCallback(c *reqCtx) error {
 		c.redirect(target)
 		return nil
 	}
-	_ = admin.RemoveSession(sess.SID)
+	if err := s.startSession(c, sess.SID, u, now, authTime); err != nil {
+		return err
+	}
+	c.redirect(target)
+	return nil
+}
+
+// verifiedClaims exchanges the authorization code (with the PKCE verifier), verifies the ID token and its nonce
+// and returns the claims, merged with userinfo when the groups claim is missing from the ID token. On failure it
+// returns a short reason for the log and audit trail instead (never shown to the client).
+func (s *Server) verifiedClaims(ctx context.Context, p *oidc.Provider, code string, sess *sessionData) (map[string]any, string) {
+	tok, err := s.oidc.oauth(p).Exchange(ctx, code, oauth2.VerifierOption(sess.Verifier))
+	if err != nil {
+		return nil, "token exchange"
+	}
+	rawID, _ := tok.Extra("id_token").(string)
+	if rawID == "" {
+		return nil, "no id_token"
+	}
+	idt, err := p.Verifier(&oidc.Config{ClientID: s.Cfg.OIDC.ClientID}).Verify(ctx, rawID)
+	if err != nil {
+		return nil, "invalid id_token"
+	}
+	if idt.Nonce != sess.Nonce {
+		return nil, "nonce mismatch"
+	}
+	claims := map[string]any{}
+	if err := idt.Claims(&claims); err != nil {
+		return nil, "invalid claims"
+	}
+	if _, ok := claims[s.Cfg.OIDC.GroupsClaim]; !ok && slices.Contains(s.Cfg.OIDC.Scopes, "groups") {
+		mergeUserInfo(ctx, p, tok, idt.Subject, claims)
+	}
+	if idt.Subject == "" {
+		return nil, "no sub claim"
+	}
+	claims["sub"] = idt.Subject
+	return claims, ""
+}
+
+// mergeUserInfo adds the userinfo endpoint's claims (some providers only put groups there), but only when
+// userinfo is about the same subject as the ID token.
+func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, subject string, claims map[string]any) {
+	ui, err := p.UserInfo(ctx, oauth2.StaticTokenSource(tok))
+	if err != nil {
+		slog.Warn("OIDC userinfo request failed")
+		return
+	}
+	extra := map[string]any{}
+	if ui.Claims(&extra) == nil && fmt.Sprint(extra["sub"]) == subject {
+		for k, v := range extra {
+			claims[k] = v
+		}
+	}
+}
+
+// startSession replaces the previous session (oldSID) with a fresh one: a new random id registered in
+// sessions.json (so the CLI can revoke it) and a signed cookie holding the user.
+func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authTime float64) error {
+	admin := s.Poller.Admin
+	_ = admin.RemoveSession(oldSID)
 	sid := randToken(18)
 	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip()}); err != nil {
 		return err
@@ -276,7 +307,6 @@ func (s *Server) authCallback(c *reqCtx) error {
 	c.dirty = true
 	slog.Info("login ok", "sub", u.Sub)
 	c.auditAnon("auth.login", "ok", actorOf(&u), &u.Sub, nil)
-	c.redirect(target)
 	return nil
 }
 

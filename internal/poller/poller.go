@@ -241,8 +241,6 @@ func (p *Poller) PVERef(id string) (cluster, node, kind string, vmid *int, ok bo
 
 func (p *Poller) Override(id string) *config.SystemOverride { return p.overrides[id] }
 
-func (p *Poller) bumpAfter() { p.Bump() }
-
 // Bump records that the poller's data changed, so the cached snapshots are rebuilt on the next read.
 func (p *Poller) Bump() {
 	p.mu.Lock()

@@ -46,3 +46,18 @@ func (s *tasmota) Read(ctx context.Context, timeout time.Duration) ([]model.Powe
 	}
 	return []model.PowerReading{Reading(c.Base, r)}, nil
 }
+
+// buildTasmota validates a `type: tasmota` entry (default user admin).
+func buildTasmota(decode configDecoder) (Source, error) {
+	c := TasmotaConfig{Username: "admin"}
+	if err := decode(&c); err != nil {
+		return nil, err
+	}
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	if err := httpURL(c.ID, "url", c.URL); err != nil {
+		return nil, err
+	}
+	return &tasmota{c: c}, nil
+}

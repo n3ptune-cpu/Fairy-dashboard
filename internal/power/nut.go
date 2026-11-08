@@ -2,6 +2,7 @@ package power
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy/internal/config"
@@ -43,4 +44,19 @@ func (s *nut) Read(ctx context.Context, timeout time.Duration) ([]model.PowerRea
 		return nil, devices.Errf("nut: UPS reports neither ups.realpower nor ups.load + ups.realpower.nominal")
 	}
 	return []model.PowerReading{Reading(c.Base, devices.Reading{Watts: w, Voltage: v, Current: a})}, nil
+}
+
+// buildNut validates a `type: nut` entry (defaults: port 3493, UPS name "ups").
+func buildNut(decode configDecoder) (Source, error) {
+	c := NutConfig{Port: 3493, UPS: "ups"}
+	if err := decode(&c); err != nil {
+		return nil, err
+	}
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	if c.Host == "" {
+		return nil, fmt.Errorf("power source %s: host is required", c.ID)
+	}
+	return &nut{c: c}, nil
 }

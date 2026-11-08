@@ -29,20 +29,10 @@ func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout ti
 	data, err := p.Backend.FetchProxmox(cctx, pve, timeout)
 	cancel()
 	p.mu.Lock()
-	defer p.bumpAfter()
+	defer p.Bump()
 	defer p.mu.Unlock()
 	if err != nil {
-		msg := normalise.Describe(err)
-		now, _ := p.now()
-		if prev, ok := p.sources[src]; !ok || prev.OK {
-			slog.Warn("proxmox poll failed", "cluster", pve.ID, "error", msg)
-		}
-		for sid, s := range p.systems {
-			if s.Source == "proxmox" && s.ClusterID != nil && *s.ClusterID == pve.ID && !p.Scheduler.IsPaused(sid) {
-				p.systems[sid] = p.degrade(s, now, msg)
-			}
-		}
-		p.source(src, false, now, nil, &msg)
+		p.proxmoxFailedLocked(pve, src, normalise.Describe(err))
 		return
 	}
 	now, ts := p.now()
@@ -54,45 +44,11 @@ func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout ti
 	list := normalise.NormaliseProxmox(data, now, ts, p.rates, normalise.ProxmoxOpts{
 		IncludeTemplates: pve.IncludeTemplates, Prefix: prefix, ClusterID: model.P(pve.ID), Cluster: cluster,
 		Group: pve.Group, Owner: pve.Owner})
-	for _, r := range data {
-		typ, node := jsonx.S(r, "type"), jsonx.S(r, "node")
-		if node == "" {
-			continue
-		}
-		if typ == "node" {
-			p.pveRefs[prefix+"node-"+normalise.Slug(node)] = pveRef{pve.ID, node, "node", nil}
-		} else if (typ == "qemu" || typ == "lxc") && jsonx.Num(r, "vmid") != nil {
-			v := int(*jsonx.Num(r, "vmid"))
-			p.pveRefs[fmt.Sprintf("%s%s-%d", prefix, typ, v)] = pveRef{pve.ID, node, typ, &v}
-		}
-	}
+	p.recordPVERefsLocked(pve.ID, prefix, data)
 	fresh := map[string]model.System{}
 	ids := make([]string, 0, len(list))
 	for _, s := range list {
-		s = normalise.ApplyOverride(s, p.overrides[s.ID])
-		if old, ok := p.systems[s.ID]; ok && s.LastSeen == nil { // keep last_seen for guests whose node is down
-			s.LastSeen = old.LastSeen
-		}
-		if s.Kind == "node" {
-			if m, ok := p.nodeCPU[s.ID]; ok {
-				s.CPUModel = model.P(m)
-			} else if s.Status == "online" && !p.nodeInflight[s.ID] {
-				p.nodeInflight[s.ID] = true
-				go p.fetchNodeCPU(pve, s.ID)
-			}
-		}
-		linked := false
-		for _, a := range p.Cfg.Agents {
-			if p.linkOfLocked(a) == s.ID {
-				linked = true
-			}
-		}
-		s.ProcessesAvailable = linked
-		if old, ok := p.systems[s.ID]; ok && p.Scheduler.IsPaused(s.ID) {
-			s = old // paused: keep the frozen values
-		} else {
-			s = p.stamp(s, now)
-		}
+		s = p.prepareProxmoxSystemLocked(pve, s, now)
 		fresh[s.ID] = s
 		ids = append(ids, s.ID)
 	}
@@ -110,6 +66,67 @@ func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout ti
 	p.syncPresent()
 	lat := time.Since(start)
 	p.source(src, true, now, &lat, nil)
+}
+
+// proxmoxFailedLocked marks the cluster's systems stale / offline (paused ones keep their frozen values) and
+// logs the first failure of a run of failures. Caller holds p.mu.
+func (p *Poller) proxmoxFailedLocked(pve config.Proxmox, src, msg string) {
+	now, _ := p.now()
+	if prev, ok := p.sources[src]; !ok || prev.OK {
+		slog.Warn("proxmox poll failed", "cluster", pve.ID, "error", msg)
+	}
+	for sid, s := range p.systems {
+		if s.Source == "proxmox" && s.ClusterID != nil && *s.ClusterID == pve.ID && !p.Scheduler.IsPaused(sid) {
+			p.systems[sid] = p.degrade(s, now, msg)
+		}
+	}
+	p.source(src, false, now, nil, &msg)
+}
+
+// recordPVERefsLocked remembers which cluster, node and vmid each system id maps to (for power actions).
+// Caller holds p.mu.
+func (p *Poller) recordPVERefsLocked(clusterID, prefix string, data []jsonx.M) {
+	for _, r := range data {
+		typ, node := jsonx.S(r, "type"), jsonx.S(r, "node")
+		if node == "" {
+			continue
+		}
+		if typ == "node" {
+			p.pveRefs[prefix+"node-"+normalise.Slug(node)] = pveRef{clusterID, node, "node", nil}
+		} else if (typ == "qemu" || typ == "lxc") && jsonx.Num(r, "vmid") != nil {
+			v := int(*jsonx.Num(r, "vmid"))
+			p.pveRefs[fmt.Sprintf("%s%s-%d", prefix, typ, v)] = pveRef{clusterID, node, typ, &v}
+		}
+	}
+}
+
+// prepareProxmoxSystemLocked applies the `systems:` override, keeps last_seen for guests whose node is down,
+// fills in the node's CPU model (fetched once, in the background), marks whether an agent provides processes,
+// and keeps the frozen values of a paused system. Caller holds p.mu.
+func (p *Poller) prepareProxmoxSystemLocked(pve config.Proxmox, s model.System, now time.Time) model.System {
+	s = normalise.ApplyOverride(s, p.overrides[s.ID])
+	if old, ok := p.systems[s.ID]; ok && s.LastSeen == nil { // keep last_seen for guests whose node is down
+		s.LastSeen = old.LastSeen
+	}
+	if s.Kind == "node" {
+		if m, ok := p.nodeCPU[s.ID]; ok {
+			s.CPUModel = model.P(m)
+		} else if s.Status == "online" && !p.nodeInflight[s.ID] {
+			p.nodeInflight[s.ID] = true
+			go p.fetchNodeCPU(pve, s.ID)
+		}
+	}
+	linked := false
+	for _, a := range p.Cfg.Agents {
+		if p.linkOfLocked(a) == s.ID {
+			linked = true
+		}
+	}
+	s.ProcessesAvailable = linked
+	if old, ok := p.systems[s.ID]; ok && p.Scheduler.IsPaused(s.ID) {
+		return old // paused: keep the frozen values
+	}
+	return p.stamp(s, now)
 }
 
 // fetchNodeCPU: CPU model from /nodes/{node}/status (cpuinfo.model). The PVE API exposes no DMI/board model;

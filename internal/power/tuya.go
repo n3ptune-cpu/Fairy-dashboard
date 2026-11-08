@@ -2,6 +2,7 @@ package power
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -70,4 +71,33 @@ func (s *tuyaSource) Read(_ context.Context, timeout time.Duration) ([]model.Pow
 		return nil, devices.Errf("%s", err.Error()) // tuya errors never contain the key
 	}
 	return []model.PowerReading{Reading(c.Base, devices.ParseTuyaDPS(dps, c.DPS))}, nil
+}
+
+// buildTuya validates a `type: tuya` entry (default protocol 3.3, default metering DPS).
+func buildTuya(decode configDecoder) (Source, error) {
+	c := TuyaConfig{Version: "3.3"}
+	if err := decode(&c); err != nil {
+		return nil, err
+	}
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	if c.DeviceID == "" || c.IP == "" || c.LocalKeyEnv == "" {
+		return nil, fmt.Errorf("power source %s: device_id, ip and local_key_env are required", c.ID)
+	}
+	switch c.Version {
+	case "3.1", "3.2", "3.3", "3.4", "3.5":
+	default:
+		return nil, fmt.Errorf("power source %s: version must be 3.1-3.5", c.ID)
+	}
+	if len(c.DPS) == 0 {
+		c.DPS = devices.DefaultTuyaDPS()
+	}
+	for k, f := range c.DPS {
+		if f.Scale == 0 {
+			f.Scale = 1
+			c.DPS[k] = f
+		}
+	}
+	return &tuyaSource{c: c}, nil
 }

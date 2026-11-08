@@ -11,6 +11,36 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/ups"
 )
 
+// secretEnv is an environment variable that must hold a secret, and what it is for.
+type secretEnv struct{ what, env string }
+
+// secretEnvs lists the secret variables the config refers to: agent read and control tokens, then Proxmox
+// read-only and power tokens.
+func secretEnvs(cfg *config.Panel) []secretEnv {
+	var envs []secretEnv
+	for _, a := range cfg.Agents {
+		envs = append(envs, secretEnv{"agent " + a.ID, a.TokenEnv})
+	}
+	for _, a := range cfg.Agents {
+		if e := a.ControlEnv(); e != "" {
+			envs = append(envs, secretEnv{"agent " + a.ID + " control", e})
+		}
+	}
+	for _, p := range cfg.Proxmox {
+		e := p.TokenSecretEnv
+		if e == "" {
+			e = "FAIRY_PROXMOX_TOKEN_SECRET"
+		}
+		envs = append(envs, secretEnv{"proxmox " + p.ID, e})
+	}
+	for _, p := range cfg.Proxmox {
+		if p.PowerTokenSecretEnv != "" {
+			envs = append(envs, secretEnv{"proxmox " + p.ID + " power", p.PowerTokenSecretEnv})
+		}
+	}
+	return envs
+}
+
 // configCheck validates config.yaml and the environment. Secrets are reported as present/missing only.
 func (c *cli) configCheck() int {
 	var problems, notes []string
@@ -51,29 +81,7 @@ func (c *cli) configCheck() int {
 	if len(cfg.OIDC.ControlGroups) == 0 {
 		notes = append(notes, "oidc.control_groups is empty: nobody can use control actions from the UI")
 	}
-	type ev struct{ what, env string }
-	var envs []ev
-	for _, a := range cfg.Agents {
-		envs = append(envs, ev{"agent " + a.ID, a.TokenEnv})
-	}
-	for _, a := range cfg.Agents {
-		if e := a.ControlEnv(); e != "" {
-			envs = append(envs, ev{"agent " + a.ID + " control", e})
-		}
-	}
-	for _, p := range cfg.Proxmox {
-		e := p.TokenSecretEnv
-		if e == "" {
-			e = "FAIRY_PROXMOX_TOKEN_SECRET"
-		}
-		envs = append(envs, ev{"proxmox " + p.ID, e})
-	}
-	for _, p := range cfg.Proxmox {
-		if p.PowerTokenSecretEnv != "" {
-			envs = append(envs, ev{"proxmox " + p.ID + " power", p.PowerTokenSecretEnv})
-		}
-	}
-	for _, e := range envs {
+	for _, e := range secretEnvs(cfg) {
 		if os.Getenv(e.env) != "" {
 			notes = append(notes, fmt.Sprintf("%s (%s): present", e.env, e.what))
 		} else {

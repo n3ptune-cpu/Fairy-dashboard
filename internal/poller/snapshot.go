@@ -125,6 +125,8 @@ func laterOf(a, b *time.Time) *time.Time {
 	return a
 }
 
+// buildSnapshot merges agents into the nodes they run on, sorts the list and adds the fields that come from
+// other parts of the poller (linked watts, UPSes, polling mode, pending power actions, configured actions).
 func (p *Poller) buildSnapshot() []model.System {
 	watts, upsMap := p.Power.LinkedWatts(), p.UPS.SystemsMap()
 	poll := p.pollFields()
@@ -140,70 +142,16 @@ func (p *Poller) buildSnapshot() []model.System {
 		if !okN || !okA || node.Kind != "node" {
 			continue
 		}
-		if len(agent.Temps) > 0 {
-			node.Temps = agent.Temps
-		}
-		if len(agent.Fans) > 0 {
-			node.Fans = agent.Fans
-		}
-		if len(agent.Voltages) > 0 {
-			node.Voltages = agent.Voltages
-		}
-		if len(agent.GPUs) > 0 {
-			node.GPUs = agent.GPUs
-		}
-		if agent.ComponentPower != nil {
-			node.ComponentPower = agent.ComponentPower
-		}
-		if agent.Hardware != nil {
-			node.Hardware = agent.Hardware
-		}
-		if agent.CPUModel != nil && *agent.CPUModel != "" {
-			node.CPUModel = agent.CPUModel
-		}
-		if agent.PowerPending != nil {
-			node.PowerPending = agent.PowerPending
-		}
-		node.ProcessesAvailable, node.FanControl = agent.ProcessesAvailable, agent.FanControl
-		if node.DWServiceURL == nil {
-			node.DWServiceURL = agent.DWServiceURL
-		}
-		node.UpdatedAt = laterOf(node.UpdatedAt, agent.UpdatedAt)
-		systems[node.ID] = node
+		systems[node.ID] = mergeAgentIntoNode(node, agent)
 		delete(systems, a.ID)
 	}
-	pend := map[string]pendingNote{}
-	for k, v := range p.pending {
-		if time.Since(v.at) < 5*time.Second {
-			pend[k] = v
-		} else {
-			delete(p.pending, k)
-		}
-	}
+	pend := p.freshPendingLocked()
 	p.mu.Unlock()
 	list := make([]model.System, 0, len(systems))
 	for _, s := range systems {
 		list = append(list, s)
 	}
-	sort.SliceStable(list, func(i, j int) bool {
-		a, b := list[i], list[j]
-		an, bn := a.Kind != "node", b.Kind != "node"
-		if an != bn {
-			return !an
-		}
-		ap, bp := model.Deref(a.Parent), model.Deref(b.Parent)
-		if ap != bp {
-			return ap < bp
-		}
-		if a.Kind != b.Kind {
-			return a.Kind < b.Kind
-		}
-		al, bl := strings.ToLower(a.Name), strings.ToLower(b.Name)
-		if al != bl {
-			return al < bl
-		}
-		return a.ID < b.ID
-	})
+	sortSystems(list)
 	for i, s := range list {
 		if w, ok := watts[s.ID]; ok {
 			s.PowerW = model.P(w)
@@ -226,6 +174,77 @@ func (p *Poller) buildSnapshot() []model.System {
 		list[i] = s
 	}
 	return list
+}
+
+// mergeAgentIntoNode copies what an agent on a Proxmox node measures (sensors, GPUs, hardware, power,
+// pending shutdown, processes / fan control) onto the node's entry.
+func mergeAgentIntoNode(node, agent model.System) model.System {
+	if len(agent.Temps) > 0 {
+		node.Temps = agent.Temps
+	}
+	if len(agent.Fans) > 0 {
+		node.Fans = agent.Fans
+	}
+	if len(agent.Voltages) > 0 {
+		node.Voltages = agent.Voltages
+	}
+	if len(agent.GPUs) > 0 {
+		node.GPUs = agent.GPUs
+	}
+	if agent.ComponentPower != nil {
+		node.ComponentPower = agent.ComponentPower
+	}
+	if agent.Hardware != nil {
+		node.Hardware = agent.Hardware
+	}
+	if agent.CPUModel != nil && *agent.CPUModel != "" {
+		node.CPUModel = agent.CPUModel
+	}
+	if agent.PowerPending != nil {
+		node.PowerPending = agent.PowerPending
+	}
+	node.ProcessesAvailable, node.FanControl = agent.ProcessesAvailable, agent.FanControl
+	if node.DWServiceURL == nil {
+		node.DWServiceURL = agent.DWServiceURL
+	}
+	node.UpdatedAt = laterOf(node.UpdatedAt, agent.UpdatedAt)
+	return node
+}
+
+// freshPendingLocked returns the power actions noted in the last 5 s and forgets older notes. Caller holds p.mu.
+func (p *Poller) freshPendingLocked() map[string]pendingNote {
+	pend := map[string]pendingNote{}
+	for k, v := range p.pending {
+		if time.Since(v.at) < 5*time.Second {
+			pend[k] = v
+		} else {
+			delete(p.pending, k)
+		}
+	}
+	return pend
+}
+
+// sortSystems orders the list as the UI shows it: nodes first, then by parent node, kind, name and id.
+func sortSystems(list []model.System) {
+	sort.SliceStable(list, func(i, j int) bool {
+		a, b := list[i], list[j]
+		an, bn := a.Kind != "node", b.Kind != "node"
+		if an != bn {
+			return !an
+		}
+		ap, bp := model.Deref(a.Parent), model.Deref(b.Parent)
+		if ap != bp {
+			return ap < bp
+		}
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		al, bl := strings.ToLower(a.Name), strings.ToLower(b.Name)
+		if al != bl {
+			return al < bl
+		}
+		return a.ID < b.ID
+	})
 }
 
 // powerActions: configured (not necessarily currently available) power actions, for list badges / menus.

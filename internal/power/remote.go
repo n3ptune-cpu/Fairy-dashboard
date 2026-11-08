@@ -3,11 +3,125 @@ package power
 import (
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
+// UpdateRemote merges agent-reported devices (`power_sources` in the agent's /metrics). rows=nil means the agent
+// itself was unreachable this cycle. Device credentials never leave the agent.
+func (m *Manager) UpdateRemote(agentID string, rows []map[string]any, unreachable bool, links map[string]string, exclude []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	if unreachable {
+		m.markAgentUnreachable(agentID, now)
+		return
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		rid := str(row["id"])
+		if rid == "" {
+			continue
+		}
+		key := agentID + "/" + rid
+		seen[key] = true
+		prev, hasPrev := m.remote[key]
+		if !hasPrev {
+			m.remoteKeys = append(m.remoteKeys, key)
+		}
+		m.remote[key] = m.remoteState(agentID, key, rid, row, prev, hasPrev, now, links, exclude)
+	}
+	m.dropUnreported(agentID, seen)
+}
+
+// agedStatus is "stale" while the last good reading is younger than offline_after, then "unreachable".
+func (m *Manager) agedStatus(last *time.Time, now time.Time) string {
+	if last != nil && now.Sub(*last).Seconds() < m.offlineAfter {
+		return "stale"
+	}
+	return "unreachable"
+}
+
+// markAgentUnreachable ages every device relayed by the agent; readings are kept only while "stale".
+func (m *Manager) markAgentUnreachable(agentID string, now time.Time) {
+	for k, st := range m.remote {
+		if st.Via != nil && *st.Via == agentID {
+			st.Status = m.agedStatus(st.LastSuccess, now)
+			st.Error = model.P("agent unreachable")
+			if st.Status != "stale" {
+				st.Readings = []model.PowerReading{}
+			}
+			m.remote[k] = st
+		}
+	}
+}
+
+// remoteState builds the state of one agent-reported device row. The device is linked to a system by the
+// agent's `power_links`, or to the agent itself when the row says system_hint "self" (or the agent id).
+func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev model.PowerSourceState, hasPrev bool,
+	now time.Time, links map[string]string, exclude []string) model.PowerSourceState {
+	var link *string
+	if l, ok := links[rid]; ok && l != "" {
+		link = model.P(l)
+	} else if h := str(row["system_hint"]); h == "self" || h == agentID {
+		link = model.P(agentID)
+	}
+	name := str(row["name"])
+	if name == "" {
+		name = rid
+	}
+	var status string
+	var last *time.Time
+	readings := []model.PowerReading{}
+	var errp *string
+	if ok, _ := row["ok"].(bool); ok {
+		status, last = "ok", &now
+		readings = []model.PowerReading{{SourceID: key, Name: name, Watts: f(row["watts"]),
+			Voltage: f(row["voltage"]), Current: f(row["current"]), EnergyKWhTotal: f(row["energy_kwh_total"]),
+			SystemID: link, Timestamp: now}}
+	} else {
+		if hasPrev {
+			last = prev.LastSuccess
+		}
+		status = m.agedStatus(last, now)
+		if hasPrev && status == "stale" {
+			readings = prev.Readings
+		}
+		e := str(row["error"])
+		if e == "" {
+			e = "error"
+		}
+		if len(e) > 120 {
+			e = e[:120]
+		}
+		errp = &e
+	}
+	typ := str(row["type"])
+	if typ == "" {
+		typ = "unknown"
+	}
+	return model.PowerSourceState{ID: key, Type: typ, Name: name, Status: status,
+		IncludeInTotal: !slices.Contains(exclude, rid), Readings: readings, LastSuccess: last, Error: errp,
+		Via: model.P(agentID)}
+}
+
+// dropUnreported forgets the agent's devices that were not in this report (removed from the agent's config).
+func (m *Manager) dropUnreported(agentID string, seen map[string]bool) {
+	keys := m.remoteKeys[:0]
+	for _, k := range m.remoteKeys {
+		st := m.remote[k]
+		if st.Via != nil && *st.Via == agentID && !seen[k] {
+			delete(m.remote, k)
+			continue
+		}
+		keys = append(keys, k)
+	}
+	m.remoteKeys = keys
+}
+
+// str formats a JSON value as a string: whole numbers without a decimal point ("7", not "7.0"), nil as "".
 func str(v any) string {
 	switch x := v.(type) {
 	case nil:
@@ -22,107 +136,10 @@ func str(v any) string {
 	return fmt.Sprint(v)
 }
 
+// f returns v as a number, or nil when it is not a JSON number.
 func f(v any) *float64 {
 	if x, ok := v.(float64); ok {
 		return &x
 	}
 	return nil
-}
-
-// UpdateRemote merges agent-reported devices (`power_sources` in the agent's /metrics). rows=nil means the agent
-// itself was unreachable this cycle. Device credentials never leave the agent.
-func (m *Manager) UpdateRemote(agentID string, rows []map[string]any, unreachable bool, links map[string]string, exclude []string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	now := time.Now().UTC()
-	aged := func(last *time.Time) string {
-		if last != nil && now.Sub(*last).Seconds() < m.offlineAfter {
-			return "stale"
-		}
-		return "unreachable"
-	}
-	if unreachable {
-		for k, st := range m.remote {
-			if st.Via != nil && *st.Via == agentID {
-				st.Status = aged(st.LastSuccess)
-				st.Error = model.P("agent unreachable")
-				if st.Status != "stale" {
-					st.Readings = []model.PowerReading{}
-				}
-				m.remote[k] = st
-			}
-		}
-		return
-	}
-	seen := map[string]bool{}
-	for _, row := range rows {
-		rid := str(row["id"])
-		if rid == "" {
-			continue
-		}
-		key := agentID + "/" + rid
-		seen[key] = true
-		prev, hasPrev := m.remote[key]
-		var link *string
-		if l, ok := links[rid]; ok && l != "" {
-			link = model.P(l)
-		} else if h := str(row["system_hint"]); h == "self" || h == agentID {
-			link = model.P(agentID)
-		}
-		name := str(row["name"])
-		if name == "" {
-			name = rid
-		}
-		var status string
-		var last *time.Time
-		readings := []model.PowerReading{}
-		var errp *string
-		if ok, _ := row["ok"].(bool); ok {
-			status, last = "ok", &now
-			readings = []model.PowerReading{{SourceID: key, Name: name, Watts: f(row["watts"]),
-				Voltage: f(row["voltage"]), Current: f(row["current"]), EnergyKWhTotal: f(row["energy_kwh_total"]),
-				SystemID: link, Timestamp: now}}
-		} else {
-			if hasPrev {
-				last = prev.LastSuccess
-			}
-			status = aged(last)
-			if hasPrev && status == "stale" {
-				readings = prev.Readings
-			}
-			e := str(row["error"])
-			if e == "" {
-				e = "error"
-			}
-			if len(e) > 120 {
-				e = e[:120]
-			}
-			errp = &e
-		}
-		typ := str(row["type"])
-		if typ == "" {
-			typ = "unknown"
-		}
-		incl := true
-		for _, x := range exclude {
-			if x == rid {
-				incl = false
-			}
-		}
-		if !hasPrev {
-			m.remoteKeys = append(m.remoteKeys, key)
-		}
-		m.remote[key] = model.PowerSourceState{ID: key, Type: typ, Name: name, Status: status, IncludeInTotal: incl,
-			Readings: readings, LastSuccess: last, Error: errp, Via: model.P(agentID)}
-	}
-	keys := m.remoteKeys[:0]
-	for _, k := range m.remoteKeys {
-		st := m.remote[k]
-		if st.Via != nil && *st.Via == agentID && !seen[k] {
-			delete(m.remote, k)
-			continue
-		}
-		keys = append(keys, k)
-	}
-	m.remoteKeys = keys
 }

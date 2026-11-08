@@ -113,71 +113,82 @@ func Capabilities(p *poller.Poller, s model.System) model.PowerCaps {
 }
 
 func capabilities(p *poller.Poller, s model.System) model.PowerCaps {
-	var caps []model.PowerActionCap
 	kill := KillsPanel(p, s)
-	up := s.Status == "online" || s.Status == "paused"
-	clusterID := ""
-	if s.ClusterID != nil {
-		clusterID = *s.ClusterID
-	}
-	pve, hasPVE := p.ClusterCfg(clusterID)
-	typedIfKill := "click"
+	pve, hasPVE := p.ClusterCfg(model.Deref(s.ClusterID))
+	typedIfKill := "click" // actions that take the panel down need the name typed, not just a click
 	if kill {
 		typedIfKill = "typed"
 	}
+	var caps []model.PowerActionCap
 	if s.Kind == "qemu" || s.Kind == "lxc" {
-		why := ""
-		if !hasPVE || pve.PowerTokenID == "" {
-			name := "this cluster"
-			if hasPVE {
-				name = pve.ClusterName
-			}
-			why = "no power token for " + name + " (see README: FairyPower role)"
-		}
-		running := ""
-		if !up {
-			running = "guest is not running"
-		}
-		caps = append(caps,
-			mkcap("start", why == "" && s.Status == "stopped", "proxmox-api", or(why, "guest is not stopped"), typedIfKill, false),
-			mkcap("shutdown", why == "" && up, "proxmox-api", or(why, running), "typed", false),
-			mkcap("reboot", why == "" && up, "proxmox-api", or(why, running), typedIfKill, false),
-			mkcap("stop", why == "" && up, "proxmox-api", or(why, running), "typed", false))
+		caps = guestCaps(s, pve, hasPVE, typedIfKill)
 	} else {
-		agent, hasAgent := p.AgentFor(s.ID)
-		via, why := "", ""
-		switch {
-		case hasAgent && agent.PowerControl:
-			via = "agent"
-		case s.Kind == "node" && hasPVE && pve.NodePower:
-			via = "proxmox-api"
-		case hasAgent:
-			why = "power control is not enabled on " + agent.DisplayName() + "'s agent (owner opts in: --enable-power-control)"
-		case s.Kind == "node":
-			why = "no agent with --enable-power-control on this node and node_power is off for its cluster"
-		default:
-			why = "power control is not enabled for this host"
-		}
-		offline := ""
-		if !up {
-			offline = "host is not online"
-		}
-		delayed := via == "agent"
-		cancelWhy := "only agent-scheduled shutdowns can be cancelled"
-		if via == "agent" {
-			cancelWhy = "nothing pending"
-		}
-		caps = append(caps,
-			mkcap("shutdown", why == "" && up, via, or(why, offline), "typed", delayed),
-			mkcap("reboot", why == "" && up, via, or(why, offline), typedIfKill, delayed),
-			mkcap("cancel", via == "agent" && s.PowerPending != nil, via, or(why, cancelWhy), "none", false),
-			wakeCap(p, s))
+		caps = hostCaps(p, s, pve, hasPVE, typedIfKill)
 	}
 	pc := model.PowerCaps{SystemID: s.ID, Name: s.Name, Actions: caps, Pending: s.PowerPending, KillsPanel: kill}
 	if kill {
 		pc.Warning = model.P("The panel itself runs here: shutting this down takes Fairy offline until it is powered on again by other means.")
 	}
 	return pc
+}
+
+// isUp: a paused system is still running (only its polling is paused).
+func isUp(s model.System) bool { return s.Status == "online" || s.Status == "paused" }
+
+// guestCaps: Proxmox guests are started and stopped through the API, with the cluster's power token.
+func guestCaps(s model.System, pve config.Proxmox, hasPVE bool, typedIfKill string) []model.PowerActionCap {
+	up := isUp(s)
+	why := ""
+	if !hasPVE || pve.PowerTokenID == "" {
+		name := "this cluster"
+		if hasPVE {
+			name = pve.ClusterName
+		}
+		why = "no power token for " + name + " (see README: FairyPower role)"
+	}
+	running := ""
+	if !up {
+		running = "guest is not running"
+	}
+	return []model.PowerActionCap{
+		mkcap("start", why == "" && s.Status == "stopped", "proxmox-api", or(why, "guest is not stopped"), typedIfKill, false),
+		mkcap("shutdown", why == "" && up, "proxmox-api", or(why, running), "typed", false),
+		mkcap("reboot", why == "" && up, "proxmox-api", or(why, running), typedIfKill, false),
+		mkcap("stop", why == "" && up, "proxmox-api", or(why, running), "typed", false)}
+}
+
+// hostCaps: hosts and nodes shut down / reboot through their own agent (delayed, cancellable) or, for nodes,
+// the Proxmox API when node_power is on; offline hosts can be woken over a relay agent.
+func hostCaps(p *poller.Poller, s model.System, pve config.Proxmox, hasPVE bool, typedIfKill string) []model.PowerActionCap {
+	up := isUp(s)
+	agent, hasAgent := p.AgentFor(s.ID)
+	via, why := "", ""
+	switch {
+	case hasAgent && agent.PowerControl:
+		via = "agent"
+	case s.Kind == "node" && hasPVE && pve.NodePower:
+		via = "proxmox-api"
+	case hasAgent:
+		why = "power control is not enabled on " + agent.DisplayName() + "'s agent (owner opts in: --enable-power-control)"
+	case s.Kind == "node":
+		why = "no agent with --enable-power-control on this node and node_power is off for its cluster"
+	default:
+		why = "power control is not enabled for this host"
+	}
+	offline := ""
+	if !up {
+		offline = "host is not online"
+	}
+	delayed := via == "agent"
+	cancelWhy := "only agent-scheduled shutdowns can be cancelled"
+	if via == "agent" {
+		cancelWhy = "nothing pending"
+	}
+	return []model.PowerActionCap{
+		mkcap("shutdown", why == "" && up, via, or(why, offline), "typed", delayed),
+		mkcap("reboot", why == "" && up, via, or(why, offline), typedIfKill, delayed),
+		mkcap("cancel", via == "agent" && s.PowerPending != nil, via, or(why, cancelWhy), "none", false),
+		wakeCap(p, s)}
 }
 
 func wakeCap(p *poller.Poller, s model.System) model.PowerActionCap {
@@ -213,7 +224,8 @@ func CheckConfirmation(s model.System, c model.PowerActionCap, confirm *string) 
 	return nil
 }
 
-// Execute carries out one action.
+// Execute carries out one action after re-checking that it is available and, for typed actions, that the
+// system's name was typed. The route (agent, Proxmox API or Wake-on-LAN relay) comes from Capabilities.
 func Execute(ctx context.Context, p *poller.Poller, s model.System, req Request, requestedBy string) (model.PowerResult, error) {
 	caps := Capabilities(p, s)
 	var c *model.PowerActionCap
@@ -235,58 +247,71 @@ func Execute(ctx context.Context, p *poller.Poller, s model.System, req Request,
 	if err := CheckConfirmation(s, *c, req.Confirm); err != nil {
 		return model.PowerResult{}, err
 	}
-	via := ""
-	if c.Via != nil {
-		via = *c.Via
+	res := model.PowerResult{SystemID: s.ID, Action: req.Action, Via: model.Deref(c.Via)}
+	switch {
+	case req.Action == "wake":
+		return executeWake(ctx, p, s, res)
+	case res.Via == "agent":
+		return executeViaAgent(ctx, p, s, req, requestedBy, res)
 	}
-	res := model.PowerResult{SystemID: s.ID, Action: req.Action, Via: via}
-	if req.Action == "wake" {
-		o := p.Override(s.ID)
-		relay, ok := p.AgentByID(o.Wol.Relay)
-		if !ok {
-			return res, apierr.New(409, "relay agent not configured")
-		}
-		port := o.Wol.Port
-		if port == 0 {
-			port = 9
-		}
-		body := map[string]any{"mac": o.Wol.MAC, "broadcast": nil, "port": port}
-		if o.Wol.Broadcast != "" {
-			body["broadcast"] = o.Wol.Broadcast
-		}
-		if o.Wol.PasswordEnv != "" {
-			if pw := os.Getenv(o.Wol.PasswordEnv); pw != "" {
-				body["password"] = pw
-			}
-		}
-		if _, err := agentCall(ctx, p, relay, "/wol", body); err != nil {
-			return res, err
-		}
-		res.Message = "magic packet sent via " + relay.DisplayName() + "; give it a minute to boot"
-		return res, nil
+	return executeViaProxmox(ctx, p, s, req, res)
+}
+
+// executeWake asks the relay agent named in the system's `wol:` entry to send the magic packet.
+func executeWake(ctx context.Context, p *poller.Poller, s model.System, res model.PowerResult) (model.PowerResult, error) {
+	o := p.Override(s.ID)
+	relay, ok := p.AgentByID(o.Wol.Relay)
+	if !ok {
+		return res, apierr.New(409, "relay agent not configured")
 	}
-	if via == "agent" {
-		agent, _ := p.AgentFor(s.ID)
-		data, err := agentCall(ctx, p, agent, "/power", map[string]any{"action": req.Action, "delay_s": *req.DelayS,
-			"requested_by": requestedBy})
-		if err != nil {
-			return res, err
-		}
-		pending := parsePending(jsonx.Obj(data, "pending"))
-		p.NotePending(s.ID, pending)
-		res.Pending = pending
-		if req.Action == "cancel" {
-			res.Message = "cancelled"
-		} else {
-			d := *req.DelayS
-			if pending != nil {
-				d = pending.DelayS
-			}
-			res.Message = fmt.Sprintf("%s in %d s", req.Action, d)
-		}
-		return res, nil
+	port := o.Wol.Port
+	if port == 0 {
+		port = 9
 	}
-	// Proxmox API with the separate power token
+	body := map[string]any{"mac": o.Wol.MAC, "broadcast": nil, "port": port}
+	if o.Wol.Broadcast != "" {
+		body["broadcast"] = o.Wol.Broadcast
+	}
+	if o.Wol.PasswordEnv != "" {
+		if pw := os.Getenv(o.Wol.PasswordEnv); pw != "" {
+			body["password"] = pw
+		}
+	}
+	if _, err := agentCall(ctx, p, relay, "/wol", body); err != nil {
+		return res, err
+	}
+	res.Message = "magic packet sent via " + relay.DisplayName() + "; give it a minute to boot"
+	return res, nil
+}
+
+// executeViaAgent schedules (or cancels) a delayed shutdown / reboot on the host's own agent and shows the
+// pending action at once, before the agent's next report.
+func executeViaAgent(ctx context.Context, p *poller.Poller, s model.System, req Request, requestedBy string,
+	res model.PowerResult) (model.PowerResult, error) {
+	agent, _ := p.AgentFor(s.ID)
+	data, err := agentCall(ctx, p, agent, "/power", map[string]any{"action": req.Action, "delay_s": *req.DelayS,
+		"requested_by": requestedBy})
+	if err != nil {
+		return res, err
+	}
+	pending := parsePending(jsonx.Obj(data, "pending"))
+	p.NotePending(s.ID, pending)
+	res.Pending = pending
+	if req.Action == "cancel" {
+		res.Message = "cancelled"
+	} else {
+		d := *req.DelayS
+		if pending != nil {
+			d = pending.DelayS
+		}
+		res.Message = fmt.Sprintf("%s in %d s", req.Action, d)
+	}
+	return res, nil
+}
+
+// executeViaProxmox posts the action to the Proxmox API with the cluster's separate power token: node
+// shutdown / reboot, or guest start / shutdown / reboot / stop.
+func executeViaProxmox(ctx context.Context, p *poller.Poller, s model.System, req Request, res model.PowerResult) (model.PowerResult, error) {
 	cluster, node, kind, vmid, ok := p.PVERef(s.ID)
 	if !ok {
 		return res, apierr.New(409, "not seen in the Proxmox API yet")

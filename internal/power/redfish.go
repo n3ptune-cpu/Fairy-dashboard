@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -83,4 +84,26 @@ func TLSConfig(verify bool, caFile string) (*tls.Config, error) {
 		cfg.RootCAs = pool
 	}
 	return cfg, nil
+}
+
+// buildRedfish validates a `type: redfish` (or `ipmi`) entry (defaults: chassis System.Embedded.1, user root).
+func buildRedfish(decode configDecoder) (Source, error) {
+	c := RedfishConfig{ChassisID: "System.Embedded.1", Username: "root"}
+	if err := decode(&c); err != nil {
+		return nil, err
+	}
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	if err := httpURL(c.ID, "url", c.URL); err != nil {
+		return nil, err
+	}
+	if c.PasswordEnv == "" {
+		return nil, fmt.Errorf("power source %s: password_env is required", c.ID)
+	}
+	tc, err := TLSConfig(c.VerifyTLS == nil || *c.VerifyTLS, c.CAFile)
+	if err != nil {
+		return nil, fmt.Errorf("power source %s: %v", c.ID, err)
+	}
+	return &redfish{c: c, tls: tc}, nil
 }

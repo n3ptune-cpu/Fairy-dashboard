@@ -7,10 +7,6 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
-
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/devices"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
 func httpURL(id, field, u string) error {
@@ -56,128 +52,38 @@ type Defaults = defaults
 // Build validates one config entry and constructs the source.
 func Build(raw map[string]any, agentPower AgentPowerFn) (Source, error) {
 	typ, _ := raw["type"].(string)
+	if fn, ok := Extra[typ]; ok {
+		return fn(raw)
+	}
+	decode := newDecoder(raw)
+	switch typ {
+	case "shelly":
+		return buildShelly(decode)
+	case "tasmota":
+		return buildTasmota(decode)
+	case "nut":
+		return buildNut(decode)
+	case "redfish", "ipmi":
+		return buildRedfish(decode)
+	case "agent":
+		return buildAgentPower(decode, agentPower)
+	case "tuya":
+		return buildTuya(decode)
+	}
+	return nil, fmt.Errorf("power source %q: unknown type %q (known: %s)", fmt.Sprint(raw["id"]), typ, strings.Join(Types, ", "))
+}
+
+// configDecoder decodes one raw `power_sources:` entry strictly (unknown keys are errors) into a typed config.
+type configDecoder func(out any) error
+
+func newDecoder(raw map[string]any) configDecoder {
 	id := fmt.Sprint(raw["id"])
-	strict := func(out any) error {
+	return func(out any) error {
 		if err := DecodeStrict(raw, out); err != nil {
 			return fmt.Errorf("power source %q: %v", id, err)
 		}
 		return nil
 	}
-	if fn, ok := Extra[typ]; ok {
-		return fn(raw)
-	}
-	switch typ {
-	case "shelly":
-		c := ShellyConfig{Gen: "auto", RPCMethod: "Switch.GetStatus", Username: "admin"}
-		if err := strict(&c); err != nil {
-			return nil, err
-		}
-		if err := c.validate(); err != nil {
-			return nil, err
-		}
-		if err := httpURL(c.ID, "url", c.URL); err != nil {
-			return nil, err
-		}
-		if c.Gen != "auto" && c.Gen != "1" && c.Gen != "2" {
-			return nil, fmt.Errorf("power source %s: gen must be auto, 1 or 2", c.ID)
-		}
-		if c.Channel < 0 {
-			return nil, fmt.Errorf("power source %s: channel must be >= 0", c.ID)
-		}
-		return &shelly{c: c}, nil
-	case "tasmota":
-		c := TasmotaConfig{Username: "admin"}
-		if err := strict(&c); err != nil {
-			return nil, err
-		}
-		if err := c.validate(); err != nil {
-			return nil, err
-		}
-		if err := httpURL(c.ID, "url", c.URL); err != nil {
-			return nil, err
-		}
-		return &tasmota{c: c}, nil
-	case "nut":
-		c := NutConfig{Port: 3493, UPS: "ups"}
-		if err := strict(&c); err != nil {
-			return nil, err
-		}
-		if err := c.validate(); err != nil {
-			return nil, err
-		}
-		if c.Host == "" {
-			return nil, fmt.Errorf("power source %s: host is required", c.ID)
-		}
-		return &nut{c: c}, nil
-	case "redfish", "ipmi":
-		c := RedfishConfig{ChassisID: "System.Embedded.1", Username: "root"}
-		if err := strict(&c); err != nil {
-			return nil, err
-		}
-		if err := c.validate(); err != nil {
-			return nil, err
-		}
-		if err := httpURL(c.ID, "url", c.URL); err != nil {
-			return nil, err
-		}
-		if c.PasswordEnv == "" {
-			return nil, fmt.Errorf("power source %s: password_env is required", c.ID)
-		}
-		tc, err := TLSConfig(c.VerifyTLS == nil || *c.VerifyTLS, c.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("power source %s: %v", c.ID, err)
-		}
-		return &redfish{c: c, tls: tc}, nil
-	case "agent":
-		c := AgentPowerConfig{Metric: "bmc_w"}
-		f := false
-		c.IncludeInTotal = &f // component power is not wall power (bmc_w is PSU input; opt in)
-		if err := strict(&c); err != nil {
-			return nil, err
-		}
-		if err := c.validate(); err != nil {
-			return nil, err
-		}
-		if !config.ValidID(c.Agent) {
-			return nil, fmt.Errorf("power source %s: agent must be an agent id", c.ID)
-		}
-		switch c.Metric {
-		case "cpu_package_w", "gpu_w", "battery_w", "bmc_w":
-		default:
-			return nil, fmt.Errorf("power source %s: metric must be cpu_package_w, gpu_w, battery_w or bmc_w", c.ID)
-		}
-		if agentPower == nil {
-			agentPower = func(string) *model.ComponentPower { return nil }
-		}
-		return &agentPowerSrc{c: c, fn: agentPower}, nil
-	case "tuya":
-		c := TuyaConfig{Version: "3.3"}
-		if err := strict(&c); err != nil {
-			return nil, err
-		}
-		if err := c.validate(); err != nil {
-			return nil, err
-		}
-		if c.DeviceID == "" || c.IP == "" || c.LocalKeyEnv == "" {
-			return nil, fmt.Errorf("power source %s: device_id, ip and local_key_env are required", c.ID)
-		}
-		switch c.Version {
-		case "3.1", "3.2", "3.3", "3.4", "3.5":
-		default:
-			return nil, fmt.Errorf("power source %s: version must be 3.1-3.5", c.ID)
-		}
-		if len(c.DPS) == 0 {
-			c.DPS = devices.DefaultTuyaDPS()
-		}
-		for k, f := range c.DPS {
-			if f.Scale == 0 {
-				f.Scale = 1
-				c.DPS[k] = f
-			}
-		}
-		return &tuyaSource{c: c}, nil
-	}
-	return nil, fmt.Errorf("power source %q: unknown type %q (known: %s)", id, typ, strings.Join(Types, ", "))
 }
 
 // ValidateConfigs checks every entry (config check / startup).

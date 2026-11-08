@@ -66,3 +66,24 @@ func (s *shelly) Read(ctx context.Context, timeout time.Duration) ([]model.Power
 	}
 	return []model.PowerReading{Reading(c.Base, r)}, nil
 }
+
+// buildShelly validates a `type: shelly` entry (defaults: gen auto, Switch.GetStatus, user admin).
+func buildShelly(decode configDecoder) (Source, error) {
+	c := ShellyConfig{Gen: "auto", RPCMethod: "Switch.GetStatus", Username: "admin"}
+	if err := decode(&c); err != nil {
+		return nil, err
+	}
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	if err := httpURL(c.ID, "url", c.URL); err != nil {
+		return nil, err
+	}
+	if c.Gen != "auto" && c.Gen != "1" && c.Gen != "2" {
+		return nil, fmt.Errorf("power source %s: gen must be auto, 1 or 2", c.ID)
+	}
+	if c.Channel < 0 {
+		return nil, fmt.Errorf("power source %s: channel must be >= 0", c.ID)
+	}
+	return &shelly{c: c}, nil
+}
