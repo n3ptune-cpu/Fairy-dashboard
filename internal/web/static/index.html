@@ -22,6 +22,15 @@
     <a class="btn primary" href="/auth/login">Sign in with Pocket ID</a>
   </section>
 
+  <section id="waiting" class="login" hidden>
+    <div class="logo big" aria-hidden="true"></div>
+    <h1>Waiting for access</h1>
+    <p>You are signed in as <b id="waiting-who"></b>, but nobody has given you access to anything yet.</p>
+    <p class="note">Ask an admin to open <b>Users</b> in Fairy and give you a role. Then reload this page.</p>
+    <div id="waiting-demo"></div>
+    <form method="post" action="/auth/logout"><button class="btn">Sign out</button></form>
+  </section>
+
   <div class="shell" id="shell" hidden>
     <div class="sidebar-col">
     <aside class="sidebar" id="sidebar" aria-label="Navigation">

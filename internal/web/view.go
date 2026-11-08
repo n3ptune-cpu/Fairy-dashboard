@@ -175,7 +175,8 @@ func (v *view) powerLinks(st model.PowerSourceState) []string {
 			}
 		}
 	}
-	return out
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 func (v *view) powerVisible(st model.PowerSourceState) bool {

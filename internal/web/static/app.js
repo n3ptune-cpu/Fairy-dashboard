@@ -14,7 +14,7 @@ const enc = encodeURIComponent;
 const controlOff = () => state.summary?.control_disabled || state.me?.control_disabled || null;
 const canControl = () => !!state.me?.can_control && !controlOff();
 const controlWhyNot = () => (controlOff() ? `Control is disabled by an administrator (${controlOff().by}). Re-enable on the server: admin control enable`
-  : !state.me?.can_control ? "You are not in a control group (read-only)." : "");
+  : !state.me?.can_control ? "Read-only: only admins can use control actions." : "");
 
 // ------------------------------------------------------------ formatting
 const fmtBytes = (b) => {
@@ -60,6 +60,7 @@ I.ups = svg('<rect x="6" y="3" width="12" height="18" rx="1"/><path d="M12 7l-2.
 I.more = svg('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>', 16);
 I.shield = svg('<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/>', 18);
 I.audit = svg('<path d="M8 4h11v16H8z"/><path d="M5 7v13h11"/><path d="M11 8h5M11 12h5M11 16h3"/>');
+I.users = svg('<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M16 14.2c2.4.1 4 1.7 4.5 4.3"/>');
 I.onoff = svg('<path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>', 15);
 
 const fmtRuntime = (s) => (s == null ? "–" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
@@ -122,6 +123,7 @@ async function runPending() {
     else if (p.kind === "request") { const r = await api(p.path, { method: p.method, body: JSON.stringify(p.body) }); flash(r?.message || `${p.label}: done`); }
   } catch (e) { flash(e.message, true); }
   render();
+  if (current().page === "users") loadAdmin();
 }
 function spark(values, cls = "") {
   const pts = values.filter((v) => v != null);
@@ -230,7 +232,8 @@ function renderNav() {
     ${ups.length ? navLink("#/ups", `<span class="ico">${I.ups}</span>`, "UPS", batt.length ? "alarm" : "",
       `<span class="cpu">${batt.length ? "on battery" : `${ups.length}`}</span>`) : ""}
     ${navLink("#/settings", `<span class="ico">${I.settings}</span>`, "Settings")}
-    ${state.me?.can_control ? navLink("#/audit", `<span class="ico">${I.audit}</span>`, "Audit") : ""}</div>`;
+    ${state.me?.can_control ? navLink("#/audit", `<span class="ico">${I.audit}</span>`, "Audit") : ""}
+    ${state.me?.can_manage_users ? navLink("#/users", `<span class="ico">${I.users}</span>`, "Users") : ""}</div>`;
   const nav = $("#nav"), keep = nav.scrollTop;
   morph(nav, html);
   nav.scrollTop = keep;
@@ -555,7 +558,8 @@ function pageUps() {
 // ------------------------------------------------------------ audit page (control group only)
 const audit = { entries: [], next: null, q: "", action: "", host: "", loading: false, error: null };
 const AUDIT_ACTIONS = [["", "All actions"], ["auth", "Sign-in / step-up / denied"], ["power", "Power"], ["fan", "Fans"], ["poll", "Polling"],
-  ["settings", "Settings"], ["token", "API tokens"], ["control", "Kill switch"], ["host", "Host admin"], ["sessions", "Sessions"]];
+  ["settings", "Settings"], ["token", "API tokens"], ["control", "Kill switch"], ["host", "Host admin"], ["sessions", "Sessions"],
+  ["user", "Users / roles"], ["site", "Sites"]];
 async function loadAudit(reset) {
   if (audit.loading) return;
   audit.loading = true;
@@ -579,7 +583,7 @@ const auditOutcome = (o) => {
 };
 function pageAudit() {
   setTitle("Audit", "who did what, newest first");
-  if (!state.me?.can_control) return '<div class="empty">The audit log is visible to the control group only.</div>';
+  if (!state.me?.can_control) return '<div class="empty">The audit log is visible to admins only.</div>';
   const hosts = state.systems.map((s) => s.id).sort();
   return `<form class="toolbar audit-filters" id="audit-form" data-keep>
       <input class="input" id="af-q" placeholder="User, token or source…" value="${esc(audit.q)}">
@@ -602,6 +606,107 @@ document.addEventListener("submit", (e) => {
   loadAudit(true);
 });
 document.addEventListener("click", (e) => { if (e.target.closest('[data-act="audit-more"]')) loadAudit(false); });
+
+// ------------------------------------------------------------ users, roles and sites (admins only)
+const admin = { data: null, error: null };
+async function loadAdmin() {
+  try { admin.data = await api("/api/admin/users"); admin.error = null; }
+  catch (e) { admin.error = e.message; if (e.status === 403) admin.data = null; }
+  if (current().page === "users") $("#page").innerHTML = `<div data-key="users">${pageUsers()}</div>`;
+}
+const ROLE_LABEL = { admin: "Admin", viewer: "Viewer", pending: "No access (waiting)" };
+const FROM_LABEL = { panel: "set here", config: "config.yaml", node: "from its node", link: "follows its hosts" };
+const KIND_TITLE = [["hosts", "Hosts", (t) => t.kind === "node" || t.kind === "agent"], ["guests", "VMs & containers", (t) => t.kind === "qemu" || t.kind === "lxc"],
+  ["power", "Power sources", (t) => t.kind === "power"], ["ups", "UPS", (t) => t.kind === "ups"]];
+function pageUsers() {
+  setTitle("Users", "who may see and do what");
+  if (!state.me?.can_manage_users) return '<div class="empty">The Users page is for admins only.</div>';
+  const d = admin.data;
+  if (!d) return admin.error ? `<div class="error">${esc(admin.error)}</div>` : '<div class="empty">Loading…</div>';
+  const sites = d.sites.map((x) => x.name);
+  const admins = d.users.filter((u) => u.role === "admin").length;
+  const userRow = (u) => {
+    const last = u.role === "admin" && admins <= 1;
+    return `<tr class="row" data-key="u-${esc(u.sub)}"><td class="namecell"><b>${esc(u.name || "–")}</b>${u.you ? ' <span class="chip ok">you</span>' : ""}
+        <span class="sub">${esc(u.email || u.sub)}</span></td>
+      <td><select class="select" data-act="u-role" data-sub="${esc(u.sub)}" ${last ? 'disabled title="The last admin cannot be demoted: make someone else admin first"' : ""}>
+        ${d.roles.map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select></td>
+      <td>${u.role === "admin" ? '<span class="note">every site</span>' : u.role === "pending" ? '<span class="note">nothing</span>'
+        : sites.length ? `<div class="site-checks">${sites.map((x) => `<label class="check"><input type="checkbox" data-act="u-site" data-sub="${esc(u.sub)}" value="${esc(x)}" ${u.sites.includes(x) ? "checked" : ""}>${esc(x)}</label>`).join("")}</div>`
+        : '<span class="note">create a site first</span>'}</td>
+      <td class="nowrap"><span data-ago="${esc(u.last_seen || "")}">${ago(u.last_seen)}</span><div class="note">${esc(u.via || "")}</div></td>
+      <td class="num"><button class="btn danger" data-act="u-remove" data-sub="${esc(u.sub)}" data-name="${esc(u.email || u.name || u.sub)}" ${last ? "disabled" : ""}>Remove</button></td></tr>`;
+  };
+  const siteRow = (x) => `<tr class="row" data-key="s-${esc(x.name)}"><td><b>${esc(x.name)}</b>${x.in_config ? ' <span class="chip" title="named in config.yaml (site:): rename or remove it there">config.yaml</span>' : ""}</td>
+    <td class="num">${x.hosts}</td><td class="num">${x.users}</td>
+    <td class="num"><button class="btn" data-act="s-rename" data-site="${esc(x.name)}" ${x.in_config ? "disabled" : ""}>Rename</button>
+      <button class="btn danger" data-act="s-delete" data-site="${esc(x.name)}" ${x.in_config ? "disabled" : ""}>Delete</button></td></tr>`;
+  const targetRow = (t) => {
+    const def = t.default ? `${t.default} (${FROM_LABEL[t.default_from] || t.default_from})` : "admins only";
+    const where = [t.parent && `on ${t.parent}`, t.follows.length && `follows ${t.follows.join(", ")}`].filter(Boolean).join(" · ");
+    return `<tr class="row" data-key="t-${esc(t.target)}"><td class="namecell"><b>${esc(t.name)}</b><span class="sub">${esc(t.target)}${where ? ` · ${esc(where)}` : ""}</span></td>
+      <td><select class="select" data-act="a-site" data-target="${esc(t.target)}"><option value="">Default: ${esc(def)}</option>
+        ${sites.map((x) => `<option value="${esc(x)}" ${t.assigned === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></td>
+      <td>${t.site ? `<span class="chip ok">${esc(t.site)}</span>` : '<span class="chip warn">admins only</span>'}</td></tr>`;
+  };
+  return `<div class="stack">
+    <div class="note users-help">Pocket ID decides who may <b>sign in</b>. Here you decide what they <b>see</b>: <b>Admin</b> sees and controls everything;
+      <b>Viewer</b> only sees the sites ticked (read-only); new people wait with <b>No access</b> until you give them a role. Every change asks you to confirm it's you and is written to the Audit log.</div>
+    <div class="section-title">People <span class="count">${d.users.length}</span></div>
+    <div class="panel glass scroll"><table class="table users"><thead><tr><th>User</th><th>Role</th><th>Sites they see</th><th>Last seen</th><th class="num"></th></tr></thead>
+      <tbody>${d.users.map(userRow).join("") || '<tr><td colspan="5" class="note">Nobody has signed in yet.</td></tr>'}</tbody></table></div>
+    <div class="section-title">Sites <span class="count">${d.sites.length}</span></div>
+    <form class="toolbar" id="site-form"><input class="input" id="site-name" maxlength="40" placeholder="New site name, e.g. Straw" autocomplete="off"><button class="btn" type="submit">Create site</button></form>
+    <div class="panel glass scroll"><table class="table sites"><thead><tr><th>Site</th><th class="num">Hosts</th><th class="num">Viewers</th><th class="num"></th></tr></thead>
+      <tbody>${d.sites.map(siteRow).join("") || '<tr><td colspan="4" class="note">No sites yet.</td></tr>'}</tbody></table></div>
+    ${KIND_TITLE.map(([k, title, f]) => {
+      const rows = d.targets.filter(f);
+      return rows.length ? `<div class="section-title">${title} <span class="count">${rows.length}</span></div>
+        <div class="panel glass scroll"><table class="table assign"><thead><tr><th>${k === "guests" ? "Guest" : "Name"}</th><th>Site</th><th>Visible to</th></tr></thead>
+        <tbody>${rows.map(targetRow).join("")}</tbody></table></div>` : "";
+    }).join("")}
+    <div class="note">Guests follow their node and power sources / UPSes follow the hosts they are attached to, unless you pick a site here. Anything without a site is visible to admins only.</div></div>`;
+}
+async function adminCall(label, method, path, body) {
+  try {
+    const r = await controlCall({ kind: "request", label, method, path, body },
+      () => api(path, { method, body: body === undefined ? undefined : JSON.stringify(body) }));
+    if (r) flash(r.message || `${label}: done`);
+  } catch (e) { flash(e.message, true); }
+  await loadAdmin();
+}
+const userPath = (sub) => `/api/admin/users/${enc(sub)}`;
+const checkedSites = (sub) => [...document.querySelectorAll(`input[data-act="u-site"]`)].filter((x) => x.dataset.sub === sub && x.checked).map((x) => x.value);
+document.addEventListener("change", (e) => {
+  const t = e.target, a = t.dataset?.act;
+  if (a === "u-role") {
+    const sites = t.value === "viewer" ? checkedSites(t.dataset.sub) : [];
+    adminCall(`Role: ${ROLE_LABEL[t.value]}`, "PUT", userPath(t.dataset.sub), { role: t.value, sites });
+  } else if (a === "u-site") {
+    adminCall(`Sites for a viewer`, "PUT", userPath(t.dataset.sub), { role: "viewer", sites: checkedSites(t.dataset.sub) });
+  } else if (a === "a-site") {
+    adminCall(t.value ? `Put ${t.dataset.target} in ${t.value}` : `${t.dataset.target}: default site`, "PUT", "/api/admin/assign", { target: t.dataset.target, site: t.value || null });
+  }
+});
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="u-remove"],[data-act="s-rename"],[data-act="s-delete"]');
+  if (!t) return;
+  const a = t.dataset.act;
+  if (a === "u-remove" && confirm(`Remove ${t.dataset.name} from the list? If they sign in again they wait for access (or become admin if they are in control_groups / bootstrap_admins).`)) {
+    adminCall(`Remove ${t.dataset.name}`, "DELETE", userPath(t.dataset.sub));
+  } else if (a === "s-rename") {
+    const name = prompt(`New name for site “${t.dataset.site}”`, t.dataset.site);
+    if (name && name.trim() !== t.dataset.site) adminCall(`Rename site ${t.dataset.site}`, "PUT", `/api/admin/sites/${enc(t.dataset.site)}`, { name: name.trim() });
+  } else if (a === "s-delete" && confirm(`Delete site “${t.dataset.site}”? Its hosts become admin-only (or go back to their config.yaml site) and viewers lose it.`)) {
+    adminCall(`Delete site ${t.dataset.site}`, "DELETE", `/api/admin/sites/${enc(t.dataset.site)}`);
+  }
+});
+document.addEventListener("submit", (e) => {
+  if (e.target.id !== "site-form") return;
+  e.preventDefault();
+  const name = $("#site-name").value.trim();
+  if (name) adminCall(`Create site ${name}`, "POST", "/api/admin/sites", { name });
+});
 
 // ------------------------------------------------------------ power confirmation dialog
 function openPowerDialog(s, action) {
@@ -785,12 +890,13 @@ function current() {
   if (h.startsWith("#/ups")) return { page: "ups" };
   if (h.startsWith("#/settings")) return { page: "settings" };
   if (h.startsWith("#/audit")) return { page: "audit" };
+  if (h.startsWith("#/users")) return { page: "users" };
   return { page: "overview" };
 }
 const routeKey = (r) => `${r.page}:${r.id || ""}:${r.tab || ""}`;
 function pageHtml(r) {
   return r.page === "system" ? pageSystem(r.id, r.tab) : r.page === "power" ? pagePower() : r.page === "ups" ? pageUps()
-    : r.page === "settings" ? pageSettings() : r.page === "audit" ? pageAudit() : pageOverview();
+    : r.page === "settings" ? pageSettings() : r.page === "audit" ? pageAudit() : r.page === "users" ? pageUsers() : pageOverview();
 }
 let renderQueued = false;
 function render() {  // coalesced to one DOM patch per frame
@@ -801,7 +907,7 @@ function render() {  // coalesced to one DOM patch per frame
 function renderNow() {
   const r = current();
   renderNav(); renderAlerts();
-  if (r.page === "settings") return;  // has live inputs; rendered once on route
+  if (r.page === "settings" || r.page === "users") return;  // live inputs; rendered on route / after changes
   morph($("#page"), `<div data-key="${esc(routeKey(r))}">${pageHtml(r)}</div>`);
 }
 function route() {
@@ -819,6 +925,7 @@ function route() {
   if (r.page === "system" && r.tab === "fans") loadFans(r.id);
   if (r.page === "ups") loadUpsEvents();
   if (r.page === "audit") loadAudit(true);
+  if (r.page === "users") loadAdmin();
   renderNav(); renderAlerts();
   $("#shell").classList.remove("drawer"); $("#scrim").hidden = true;
   connect(r.page === "system" ? r.id : null);  // boost the viewed host to 1 s polling
@@ -840,6 +947,7 @@ function connect(watch) {
   state.watch = watch;
   const es = new EventSource(`/api/stream${watch ? `?watch=${enc(watch)}` : ""}`);
   state.es = es;
+  es.addEventListener("open", () => { if (state.streamed) checkAccess(); state.streamed = true; });
   es.addEventListener("systems", (e) => { state.systems = JSON.parse(e.data).systems; indexSystems(); render(); });
   es.addEventListener("systems_delta", (e) => {
     const d = JSON.parse(e.data), gone = new Set(d.removed);
@@ -873,11 +981,35 @@ setInterval(() => {
   document.querySelectorAll("[data-countdown]").forEach((el) => { el.textContent = fmtRuntime(Math.max(0, (new Date(el.dataset.countdown) - Date.now()) / 1000)); });
 }, 1000);
 
+// The stream ends when an admin changes your role or sites; on reconnect, reload if access changed.
+async function checkAccess() {
+  try {
+    const me = await api("/api/me");
+    if (me.role !== state.me.role || (me.sites || []).join() !== (state.me.sites || []).join()) location.reload();
+  } catch (e) { if (e.status === 401) location.reload(); }
+}
+const demoSwitcher = () => (state.me.demo ? `<label class="demo-view" title="Demo only: see the panel as this role would">
+  <span class="note">Preview as</span><select class="select" id="demo-view">${(state.me.demo_views || []).map((v) =>
+    `<option value="${esc(v)}" ${v === state.me.demo_view ? "selected" : ""}>${esc(v === "admin" ? "Admin (everything)" : v === "pending" ? "Waiting for access" : `Viewer · ${v.slice(7)}`)}</option>`).join("")}</select></label>` : "");
+document.addEventListener("change", async (e) => {
+  if (e.target.id !== "demo-view") return;
+  try { await api("/api/demo/view", { method: "POST", body: JSON.stringify({ view: e.target.value }) }); location.hash = "#/"; location.reload(); }
+  catch (x) { flash(x.message, true); }
+});
+
 async function boot() {
   try { state.me = await api("/api/me"); }
   catch (e) { if (e.status === 401) { $("#login").hidden = false; return; } throw e; }
-  $("#shell").hidden = false;
   $("#demo-banner").hidden = !state.me.demo;
+  if (state.me.role === "pending") {  // signed in, but no role yet: nothing else to load
+    const w = $("#waiting");
+    $("#waiting-who").textContent = state.me.email || state.me.name || state.me.sub;
+    $("#waiting-demo").innerHTML = demoSwitcher();
+    if (state.me.demo) w.querySelector("form").hidden = true;
+    w.hidden = false;
+    return;
+  }
+  $("#shell").hidden = false;
   const bannerH = () => document.documentElement.style.setProperty("--banner-h", `${$("#demo-banner").hidden ? 0 : $("#demo-banner").offsetHeight}px`);
   bannerH(); window.addEventListener("resize", bannerH);
   $("#collapse").innerHTML = I.collapse; $("#menu").innerHTML = I.menu; $("#gear").innerHTML = I.settings;
@@ -889,8 +1021,11 @@ async function boot() {
   $("#menu").onclick = () => { $("#shell").classList.add("drawer"); $("#scrim").hidden = false; };
   $("#scrim").onclick = () => { $("#shell").classList.remove("drawer"); $("#scrim").hidden = true; };
   const who = state.me.name || state.me.preferred_username || state.me.sub;
-  $("#side-user").innerHTML = `<span class="avatar">${esc((who[0] || "?").toUpperCase())}</span><span class="who">${esc(who)}${state.me.can_control ? ' <span class="chip ok">control</span>' : ""}</span>
+  const roleChip = state.me.role === "admin" ? '<span class="chip ok">admin</span>'
+    : `<span class="chip" title="${esc(state.me.all_sites ? "every site" : (state.me.sites || []).join(", ") || "no sites yet")}">viewer</span>`;
+  $("#side-user").innerHTML = `<span class="avatar">${esc((who[0] || "?").toUpperCase())}</span><span class="who">${esc(who)} ${roleChip}</span>
     ${state.me.demo ? "" : '<form method="post" action="/auth/logout"><button class="btn">Sign out</button></form>'}`;
+  if (state.me.demo) $("#side-user").insertAdjacentHTML("afterend", `<div class="side-demo">${demoSwitcher()}</div>`);
   await loadSettings();
   try {
     const h = await api("/api/power/history");
