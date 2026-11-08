@@ -134,12 +134,6 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .counts { display: flex; gap: 14px; color: var(--muted); font-size: 12.5px; align-items: center; }
 .counts span { display: inline-flex; align-items: center; gap: 6px; }
 .counts b { color: var(--text); }
-.attention { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 14px; padding: 10px 14px;
-  border: 1px solid rgba(255, 93, 108, .25); background: rgba(255, 93, 108, .05); border-radius: var(--radius); font-size: 12.5px; }
-.attention .t { color: var(--bad); font-weight: 700; margin-right: 4px; }
-.attention a { color: var(--text); display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: var(--radius);
-  border: 1px solid var(--line2); background: #0d0d0d; }
-.attention a small { color: var(--muted); }
 
 .table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .table th { text-align: left; color: var(--faint); font-weight: 700; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
@@ -434,3 +428,38 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .sensor-grid { display: grid; grid-template-columns: 1fr; column-gap: 22px; }
 .sensor-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 760px) { .sensor-grid.two { grid-template-columns: 1fr; } .table.hosts .namecell .sub { max-width: 32ch; } }
+
+/* ------------------------------------------------ notifications */
+.topbar .bell { position: relative; margin-left: auto; }
+.topbar .bell + .acct { margin-left: 4px; }
+.bell .count { position: absolute; top: 2px; right: 1px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
+  background: var(--warn); color: #000; font-size: 10px; font-weight: 800; line-height: 15px; text-align: center; }
+.notes .row.unread td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.notes .row.unread .ntext { color: var(--text); font-weight: 600; }
+.notes .ntext { color: var(--muted); }
+.notes td { vertical-align: top; }
+.sev { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--off); margin-right: 6px; }
+.sev.warning { background: var(--warn); } .sev.critical { background: var(--bad); } .sev.info { background: var(--accent); }
+.notes .btn { padding: 4px 8px; font-size: 11.5px; }
+.chip.active { color: var(--warn); border-color: rgba(245, 184, 75, .3); }
+
+/* ------------------------------------------------ Add host dialog */
+.modal-box.wide { max-width: 640px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
+.form-grid .full { grid-column: 1 / -1; }
+.mfield .select { width: 100%; }
+.opts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; margin: 6px 0 4px; }
+.opts .opt { align-items: flex-start; }
+.opts .opt input { margin-top: 2px; flex: none; }
+.opts .opt:has(input:disabled) { opacity: .45; }
+.opts .opt .note { display: block; font-size: 11.5px; }
+.cmd-box { position: relative; background: #050505; border: 1px solid var(--line2); padding: 10px 12px; margin: 10px 0;
+  font-family: ui-monospace, "Cascadia Code", Menlo, monospace; font-size: 11.5px; color: #cfe0ff; word-break: break-all; white-space: pre-wrap; }
+.code-big { font-family: ui-monospace, "Cascadia Code", Menlo, monospace; font-size: 15px; letter-spacing: .06em; color: var(--text); }
+.steps { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 2px; }
+.steps span { font-size: 11.5px; padding: 3px 8px; border: 1px solid var(--line2); color: var(--faint); }
+.steps span.done { color: var(--ok); border-color: rgba(61, 220, 151, .35); }
+.steps span.now { color: var(--accent); border-color: rgba(122, 162, 255, .5); animation: pulse 1.4s ease-in-out infinite; }
+.steps span.bad { color: var(--bad); border-color: rgba(255, 93, 108, .45); }
+@media (max-width: 760px) { .form-grid, .opts { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .steps span.now { animation: none; } }

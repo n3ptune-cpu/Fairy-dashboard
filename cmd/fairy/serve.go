@@ -140,6 +140,7 @@ func serve(args []string) int {
 		}
 		to := srv.PanelUpdates.Latest().Version
 		srv.PanelRunner = &panelupdate.Demo{From: version, To: to}
+		demo.SeedNotes(srv.Notes)
 	case runtime.GOOS == "linux":
 		srv.PanelRunner = panelupdate.Systemd{}
 	}

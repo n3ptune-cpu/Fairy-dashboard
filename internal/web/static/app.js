@@ -8,7 +8,7 @@ const $ = (s, root = document) => root.querySelector(s);
 const state = {
   me: null, systems: [], byId: {}, summary: null, power: null, history: [], settings: null, timer: null,
   ups: null, upsHist: {}, upsEvents: [], menu: null, poll: {}, caps: {}, watch: undefined, es: null, flash: null,
-  sites: {}, open: {},
+  sites: {}, open: {}, notes: { unread: 0, active_alerts: 0 }, managed: {},
 };
 const OPEN_KEY = "fairy-open-hosts";  // hosts whose guests are shown in the sidebar (this browser)
 try { for (const id of JSON.parse(localStorage.getItem(OPEN_KEY) || "[]")) state.open[id] = true; } catch { /* ignore */ }
@@ -43,7 +43,6 @@ const ago = (iso) => {
 };
 const kindLabel = (s) => ({ node: "node", qemu: "VM", lxc: "CT", agent: s.platform || "agent" }[s.kind]);
 const live = (s) => s.status === "online" || s.status === "stale" || s.status === "paused";  // paused = frozen values
-const hottest = (s) => (s.temps || []).reduce((m, t) => (m == null || t.current_c > m.current_c ? t : m), null);
 
 // ------------------------------------------------------------ icons (inline SVG, currentColor)
 const svg = (d, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
@@ -72,6 +71,9 @@ I.signout = svg('<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M
 I.eye = svg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>');
 I.uparrow = svg('<circle cx="12" cy="12" r="9"/><path d="M12 16.5v-9M8.5 11 12 7.5l3.5 3.5"/>', 15);
 I.update = svg('<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>');
+I.bell = svg('<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/>', 18);
+I.plus = svg('<path d="M12 5v14M5 12h14"/>', 15);
+I.copy = svg('<rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>', 14);
 I.onoff = svg('<path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>', 15);
 
 const fmtRuntime = (s) => (s == null ? "–" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
@@ -79,11 +81,14 @@ const fmtIv = (v) => (v == null ? "–" : `${+v.toFixed(1)}s`);
 const secsSince = (iso) => (iso ? Math.max(0, (Date.now() - new Date(iso)) / 1000) : null);
 
 // ------------------------------------------------------------ helpers
+let ctlLabel = null;  // set by controlCall while it starts its request: sent as X-Fairy-Action (the step-up dialog's label)
 async function api(path, opts = {}) {
   const write = opts.method && opts.method !== "GET";
+  if (write && !opts.label && ctlLabel) opts = { ...opts, label: ctlLabel };
   const res = await fetch(path, { credentials: "same-origin", ...opts,
     headers: { Accept: "application/json", ...(write ? { "X-Requested-With": "fairy" } : {}),
-      ...(opts.body && typeof opts.body === "string" ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } });
+      ...(opts.body && typeof opts.body === "string" ? { "Content-Type": "application/json" } : {}),
+      ...(opts.label ? { "X-Fairy-Action": String(opts.label).replace(/[\r\n]/g, " ").slice(0, 120) } : {}), ...(opts.headers || {}) } });
   const data = res.status === 204 ? null : await res.json().catch(() => ({}));
   if (!res.ok) {
     const d = data?.detail;
@@ -98,22 +103,40 @@ async function api(path, opts = {}) {
 }
 // ---- step-up re-authentication: control actions need a recent Pocket ID sign-in
 const PENDING_KEY = "fairy-pending-action";
+// When the server kept the refused request (detail.pending), it runs it by itself right after the sign-in and
+// /api/me reports the result: the browser re-sends nothing (no dialog shown again). Otherwise (rare: a large
+// request) the old "Resume" offer is used.
 function showStepUp(pending, detail) {
   state.menu = null; render();
-  try { sessionStorage.setItem(PENDING_KEY, JSON.stringify({ ...pending, ts: Date.now(), hash: location.hash })); } catch { /* ignore */ }
+  const kept = !!detail?.pending;
+  if (!kept) { try { sessionStorage.setItem(PENDING_KEY, JSON.stringify({ ...pending, ts: Date.now(), hash: location.hash })); } catch { /* ignore */ } }
   const age = state.me?.auth_age_s, win = detail?.window_s || state.me?.step_up_window_s || 300;
+  const winText = win < 300 ? `${win} seconds` : `${Math.round(win / 60)} minutes`;
   const next = encodeURIComponent("/" + (location.hash || "#/"));
   const m = $("#modal");
   m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle">
     <div class="stepup-ico">${I.shield}</div>
     <h3 id="stitle">Confirm it's you</h3>
-    <p>Control actions need a Pocket ID sign-in from the last <b>${Math.round(win / 60)} minutes</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}</p>
+    <p>${win < 300 ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${winText}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}</p>
     <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b></div>
-    <p class="note">You'll sign in again at Pocket ID (passkey) and come straight back here to finish it. Nothing has been sent yet.</p>
+    <p class="note">${kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
+      : "You'll sign in again at Pocket ID (passkey) and come straight back here to finish it. Nothing has been sent yet."}</p>
     <div class="row-gap end"><button class="btn" id="su-cancel">Cancel</button>
       <a class="btn primary" id="su-go" href="/auth/login?step_up=1&amp;next=${next}">Continue to Pocket ID</a></div></div>`;
   m.hidden = false;
-  $("#su-cancel").onclick = () => { m.hidden = true; m.innerHTML = ""; dropPending(); };
+  $("#su-cancel").onclick = async () => {
+    m.hidden = true; m.innerHTML = ""; dropPending();
+    // Cancel: drop the kept action too, so a later sign-in runs nothing (the server forgets it)
+    if (kept) { try { await api("/api/me/pending", { method: "DELETE" }); } catch { /* ignore */ } }
+  };
+}
+// After a step-up sign-in: the result of the action the panel ran by itself (shown once).
+function showPendingResult(pr) {
+  if (!pr) return;
+  dropPending();
+  flash(`${pr.label}: ${pr.ok ? pr.message || "done" : `failed · ${pr.message || `HTTP ${pr.status}`}`}`, !pr.ok);
+  if (pr.ok && pr.ref && /^\/api\/admin\/hosts(\/[^/]+\/repair)?$/.test(pr.path)) revealEnrollment(pr.ref);
+  if (pr.path?.startsWith("/api/admin/updates")) upd.fastUntil = Date.now() + 30000;
 }
 // The action waiting for a step-up sign-in (sessionStorage: this tab only), offered as "Resume" once back.
 function readPending() {
@@ -130,7 +153,11 @@ function actionDone(action) { if (sameAction(readPending(), action)) { dropPendi
 // Run a control call; on "step_up_required" show the interstitial instead of an error.
 async function controlCall(pending, fn) {
   let r;
-  try { r = await fn(); }
+  pending.label ||= "Control action";
+  let started;
+  ctlLabel = pending.label;
+  try { started = fn(); } finally { ctlLabel = null; }
+  try { r = await started; }
   catch (e) { if (e.stepUp) { showStepUp(pending, e.detail); return null; } throw e; }
   actionDone(pending);
   return r;
@@ -267,6 +294,9 @@ const sysLink = (s, cls) => navLink(`#/system/${enc(s.id)}`, `<span class="ico">
 
 function renderNav() {
   let html = navLink("#/", `<span class="ico">${I.overview}</span>`, "Overview");
+  const un = state.notes.unread;
+  html += navLink("#/notifications", `<span class="ico">${I.bell}</span>`, "Notifications", state.notes.active_alerts ? "alarm" : "",
+    `<span class="cpu">${un ? `${un} new` : ""}</span>`);
   html += `<div class="nav-sec"><div class="nav-title"><span class="ico">${I.machine}</span><span>Hosts</span></div>`;
   const cur = state.byId[current().id], curParent = cur ? parentOf(cur) : null;
   for (const [site, hosts] of hostsBySite()) {
@@ -354,21 +384,17 @@ const guestTable = (groups, showNode = true) => `<div class="panel glass scroll"
   ${showNode ? '<th class="col-kind">Node</th>' : ""}<th>CPU</th><th>RAM</th><th class="col-disk">Disk</th><th class="num">Uptime</th></tr></thead><tbody>${groups.map(([title, rows]) =>
   (title ? `<tr class="group" data-key="g-${esc(title)}"><td colspan="7">${esc(title)}</td></tr>` : "") + rows.map((r) => guestRow(r, showNode)).join("")).join("")}</tbody></table></div>`;
 
+// One line instead of a list: the alarms that still hold (host offline, too hot, UPS on battery...) are on the
+// Notifications page.
+function alertSummary() {
+  const n = state.notes.active_alerts;
+  if (!n) return "";
+  return `<a class="alert-sum" href="#/notifications">${I.bell}<b>${n}</b> active alert${n === 1 ? "" : "s"} →</a>`;
+}
 function pageOverview() {
   setTitle("Overview", state.summary?.cluster?.name || "");
   const sm = state.summary, c = sm?.cluster;
   if (!sm) return '<div class="empty">Waiting for the first poll…</div>';
-  const attention = state.systems.flatMap((s) => {
-    const out = [];
-    if (s.status === "offline" || s.status === "stale") out.push([s, `${s.status}${s.error ? ` · ${s.error}` : ""}`]);
-    const t = hottest(s);
-    if (live(s) && t && t.current_c >= 85) out.push([s, `${t.label || t.sensor} ${t.current_c.toFixed(0)}°C`]);
-    (s.gpus || []).forEach((g) => live(s) && g.temp_c >= 85 && out.push([s, `GPU ${g.temp_c.toFixed(0)}°C`]));
-    return out;
-  });
-  (state.ups?.ups || []).filter((u) => onBattery(u) || u.flags.includes("replace_battery") || u.status === "unreachable").forEach((u) =>
-    attention.push([{ id: null, name: u.name, status: onBattery(u) ? "stale" : "offline", isUps: true },
-      u.flags.includes("replace_battery") ? "replace battery" : u.status.replace("_", " ")]));
   const hostGroups = hostsBySite();
   const ups = state.ups?.ups || [];
   return `<div class="tiles">
@@ -380,8 +406,9 @@ function pageOverview() {
       ${sm.counts.paused ? `<span><span class="dot paused"></span><b>${sm.counts.paused}</b> paused</span>` : ""}</div></div>
     <div class="panel glass tile"><div class="label">Wall power${ups.length ? ` · ${ups.length} UPS` : ""}</div><div class="value pwr">${fmtW(state.power?.total_w)}</div>${spark(state.history.map((p) => p.total_w))}</div>
   </div>
-  ${attention.length ? `<div class="attention"><span class="t">Attention</span>${attention.map(([s, why]) => `<a href="${s.isUps ? "#/ups" : `#/system/${enc(s.id)}`}"><span class="dot ${s.status}"></span>${s.isUps ? I.ups : ""}${esc(s.name)} <small>${esc(why)}</small></a>`).join("")}</div>` : ""}
-  <div class="section-title">Hosts <span class="count">${hostGroups.reduce((a, [, h]) => a + h.length, 0)}</span></div>${hostTable(hostGroups)}
+  ${alertSummary()}
+  <div class="section-title overview-head">Hosts <span class="count">${hostGroups.reduce((a, [, h]) => a + h.length, 0)}</span>
+    ${state.me?.can_manage_users ? `<button class="btn push" type="button" data-act="add-host" ${controlOff() ? `disabled title="${esc(controlWhyNot())}"` : ""}>${I.plus}Add host</button>` : ""}</div>${hostTable(hostGroups)}
   <p class="note">A Proxmox host's VMs and containers are on its page, and under it in the sidebar (the arrow).</p>`;
 }
 
@@ -457,7 +484,7 @@ function wakeBlock(s) {
 
 function systemOverview(s) {
   if (!live(s)) {
-    return `<div class="empty">${s.status === "stopped" ? "Stopped." : `No data · ${esc(s.error || s.status)} · last seen ${ago(s.last_seen)}`}${wakeBlock(s)}</div>`;
+    return `<div class="empty">${s.status === "stopped" ? "Stopped." : `No data · ${esc(s.error || s.status)} · last seen ${ago(s.last_seen)}`}${wakeBlock(s)}</div>${managedBox(s)}`;
   }
   const lp = linkedPower(s.id), cp = s.component_power;
   const res = `<div class="panel glass pad"><h3>Resources</h3>
@@ -492,7 +519,7 @@ function systemOverview(s) {
   const gs = s.kind === "node" ? guestsOf(s) : [];
   const guests = s.kind === "node" ? `<div class="section-title">Guests on this node <span class="count">${gs.length}</span></div>
     ${gs.length ? guestTable([[null, gs]], false) : '<div class="empty">No VMs or containers on this node.</div>'}` : "";
-  return `<div class="grid2"><div class="stack">${res}${gpuPanel}</div><div class="stack">${batteryBox(s)}${power}${sensors}</div></div>${guests}`;
+  return `<div class="grid2"><div class="stack">${res}${gpuPanel}</div><div class="stack">${batteryBox(s)}${power}${sensors}${managedBox(s)}</div></div>${guests}`;
 }
 
 let procSort = "cpu";
@@ -703,7 +730,7 @@ async function fetchUpdates() {
   render();
 }
 async function loadUpdates() {  // the Updates page: every 2 s while it is open
-  await fetchUpdates();
+  await Promise.all([fetchPanelUpdate(), fetchUpdates()]);
   if (current().page === "updates") schedule(loadUpdates, 2000);
 }
 // In the background (admins only): every minute, every 2 s while an agent is updating; feeds the banner, the
@@ -748,10 +775,8 @@ function pageUpdates() {
     <div class="panel glass pad"><div class="row-gap"><span>Latest Fairy-agent release: ${latest}</span>
       <button class="btn primary push" data-act="upd-all" ${ready.length && !why && !upd.busy.all ? "" : "disabled"} title="${esc(why || (ready.length ? "Update every agent that can update itself" : "No agent can update right now"))}">${I.update} Update all (${ready.length})</button></div>
       ${L.error ? `<div class="note warn">${esc(L.error)}</div>` : ""}
-      <div class="note">Panel: fairy ${esc(buildLabel(d.panel_version))}${d.panel_latest?.tag ? ` · latest ${esc(d.panel_latest.version ? buildLabel(d.panel_latest.version) : d.panel_latest.tag)}` : ""}
-        ${d.panel_behind === false ? '<span class="chip ok">up to date</span>' : ""} · the panel updates only by hand: <code>fairy update</code> on its host (as root).</div>
-      ${d.panel_behind ? `<div class="note warn">${I.uparrow} Panel update available: run <code>fairy update</code> on the panel's host.${d.panel_latest.url ? ` <a href="${esc(d.panel_latest.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a>` : ""}</div>` : ""}
       ${d.panel_latest?.error && !d.panel_latest.disabled ? `<div class="note warn">Panel release: ${esc(d.panel_latest.error)}</div>` : ""}</div>
+    <div class="panel glass pad">${panelUpdateBox(d)}</div>
     ${why ? `<div class="note warn">${esc(why)}</div>` : ""}
     <div class="panel glass scroll"><table class="table updates"><thead><tr><th>Host</th><th>Version</th><th>Status</th><th>Self-update</th><th class="num"></th></tr></thead>
       <tbody>${d.agents.map(row).join("") || '<tr><td colspan="5" class="note">No agents in config.yaml.</td></tr>'}</tbody></table></div>
@@ -862,7 +887,7 @@ function updBanner() {
   if (dismissed === updKey()) return "";
   const what = [agents ? `${agents} agent${agents === 1 ? "" : "s"}` : "", d.panel_behind ? "panel" : ""].filter(Boolean).join(", ");
   return `<div class="alert-strip info static" data-key="upd-banner">${I.uparrow}<b>Update available</b><span>${esc(what)}</span>
-    <span class="note">${d.latest?.version ? `Fairy-agent ${esc(buildLabel(d.latest.version))}` : ""}${d.panel_behind ? ` · panel: <code>fairy update</code> on its host` : ""}</span>
+    <span class="note">${d.latest?.version ? `Fairy-agent ${esc(buildLabel(d.latest.version))}` : ""}${d.panel_behind ? " · panel: Update panel on the Updates page" : ""}</span>
     <a class="btn push" href="#/updates">Open Updates</a><button class="btn" type="button" data-act="upd-dismiss">Dismiss</button></div>`;
 }
 
@@ -996,7 +1021,7 @@ function openPowerDialog(s, action) {
     try {
       const body = { action, confirm: input ? input.value : null };
       if ($("#m-delay")) body.delay_s = +$("#m-delay").value;
-      const r = await api(`/api/systems/${enc(s.id)}/power`, { method: "POST", body: JSON.stringify(body) });
+      const r = await api(`/api/systems/${enc(s.id)}/power`, { method: "POST", body: JSON.stringify(body), label: `${label} ${s.name}` });
       close(); state.menu = null; flash(r.message); refreshCaps(s.id);
       actionDone({ kind: "power", system: s.id, action });
     } catch (e) {
@@ -1068,7 +1093,7 @@ document.addEventListener("click", async (e) => {
     powerNow(s, t.dataset.action);
   }
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { state.menu = null; const m = $("#modal"); if (!m.hidden) { m.hidden = true; m.innerHTML = ""; } render(); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { state.menu = null; if (!$("#modal").hidden) closeModal(); render(); } });
 
 function pageSettings() {
   setTitle("Settings", "appearance");
@@ -1148,6 +1173,317 @@ async function saveSettings() {
 
 
 
+// ------------------------------------------------------------ notifications (everyone with a role)
+// Events made on state changes (host offline / back, too hot / normal, UPS, power, updates, Add host), newest
+// first, with this user's read / dismissed marks. The bell and the sidebar show the unread count (from the stream).
+const notes = { list: [], next: null, f: { severity: "", type: "", host: "", unread: false }, loading: false, error: null, seen: -1 };
+const NOTE_TYPES = [["", "All types"], ["host", "Hosts"], ["temperature", "Temperature"], ["ups", "UPS"], ["power", "Power"], ["update", "Updates"], ["enroll", "Add host"]];
+const NOTE_SEV = [["", "All severities"], ["critical", "Critical"], ["warning", "Warning"], ["info", "Info"]];
+async function loadNotes(reset = true) {
+  if (notes.loading) return;
+  notes.loading = true;
+  const qs = new URLSearchParams({ limit: "50" });
+  for (const k of ["severity", "type", "host"]) if (notes.f[k]) qs.set(k, notes.f[k]);
+  if (notes.f.unread) qs.set("unread", "1");
+  if (!reset && notes.next != null) qs.set("before", notes.next);
+  try {
+    const d = await api(`/api/notifications?${qs}`);
+    notes.list = reset ? d.events : [...notes.list, ...d.events];
+    notes.next = d.next; notes.error = null;
+    state.notes = { unread: d.unread, active_alerts: d.active_alerts };
+    updateBell();
+  } catch (e) { notes.error = e.message; }
+  notes.loading = false;
+  render();
+}
+function noteLink(e) {
+  if (e.system_id && state.byId[e.system_id]) return `#/system/${enc(e.system_id)}`;
+  if (e.ups_id) return "#/ups";
+  if (e.type === "update" && state.me?.can_control) return "#/updates";
+  return "";
+}
+function noteRow(e) {
+  const href = noteLink(e);
+  const when = new Date(e.t);
+  const host = e.host ? (href ? `<a href="${href}">${esc(e.host)}</a>` : esc(e.host)) : '<span class="note">–</span>';
+  return `<tr class="row ${e.read ? "" : "unread"}" data-key="n${e.id}"><td class="nowrap"><span data-ago="${esc(e.t)}">${ago(e.t)}</span>
+      <div class="note">${when.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div></td>
+    <td class="nowrap"><span class="sev ${esc(e.severity)}" aria-hidden="true"></span>${esc(e.severity)}</td>
+    <td>${host}</td>
+    <td><span class="ntext">${esc(e.text)}</span>${e.active ? ' <span class="chip active" title="this condition still holds">active</span>'
+      : e.resolved ? ` <span class="note">· resolved <span data-ago="${esc(e.resolved)}">${ago(e.resolved)}</span></span>` : ""}</td>
+    <td class="note">${esc((NOTE_TYPES.find(([k]) => k === e.type) || [, e.type])[1])}</td>
+    <td class="num nowrap">${e.read ? "" : `<button class="btn" type="button" data-act="n-read" data-id="${e.id}" aria-label="Mark read">Mark read</button>`}
+      <button class="btn" type="button" data-act="n-dismiss" data-id="${e.id}" aria-label="Dismiss" title="Hide it from your list">Dismiss</button></td></tr>`;
+}
+function pageNotifications() {
+  setTitle("Notifications", "what changed, newest first");
+  const hosts = state.systems.filter(isHost).sort((a, b) => a.name.localeCompare(b.name));
+  const f = notes.f;
+  return `<form class="toolbar audit-filters" id="notes-form" data-keep>
+      <select class="select" id="nf-sev" aria-label="Severity">${NOTE_SEV.map(([v, l]) => `<option value="${v}" ${f.severity === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+      <select class="select" id="nf-type" aria-label="Type">${NOTE_TYPES.map(([v, l]) => `<option value="${v}" ${f.type === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+      <select class="select" id="nf-host" aria-label="Host"><option value="">All hosts</option>${hosts.map((h) => `<option value="${esc(h.id)}" ${f.host === h.id ? "selected" : ""}>${esc(h.name)}</option>`).join("")}</select>
+      <label class="check"><input type="checkbox" id="nf-unread" ${f.unread ? "checked" : ""}>Unread only</label>
+      <button class="btn push" type="button" data-act="n-all-read" ${state.notes.unread ? "" : "disabled"}>Mark all read</button></form>
+    ${notes.error ? `<div class="error">${esc(notes.error)}</div>` : ""}
+    <div class="panel glass scroll"><table class="table notes"><thead><tr><th>When</th><th>Severity</th><th>Host</th><th>What happened</th><th>Type</th><th class="num"></th></tr></thead><tbody>
+    ${notes.list.map(noteRow).join("") || `<tr><td colspan="6" class="note">${notes.loading ? "Loading…" : "Nothing here."}</td></tr>`}</tbody></table></div>
+    ${notes.next != null ? `<div class="row-gap center"><button class="btn" type="button" data-act="n-more">${notes.loading ? "Loading…" : "Older"}</button></div>` : ""}
+    <p class="note">Kept for 30 days. A host shut down from the panel shows as “off”, not as an alert; a host that keeps going offline and online gets one “unstable” warning.</p>`;
+}
+function updateBell() {
+  const b = $("#bell");
+  if (!b) return;
+  const n = state.notes.unread;
+  const c = b.querySelector(".count");
+  c.textContent = n > 99 ? "99+" : String(n); c.hidden = !n;
+  b.setAttribute("aria-label", n ? `Notifications: ${n} unread` : "Notifications");
+  b.classList.toggle("on", current().page === "notifications");
+}
+function onNotesCounts(n) {
+  const changed = n.unread !== state.notes.unread || n.active_alerts !== state.notes.active_alerts;
+  state.notes = n; updateBell();
+  if (changed && current().page === "notifications" && !notes.loading) loadNotes(true);
+  else render();
+}
+async function notesWrite(path, body) {
+  try { await api(path, { method: "POST", body: JSON.stringify(body) }); } catch (e) { flash(e.message, true); }
+  loadNotes(true);
+}
+document.addEventListener("change", (e) => {
+  if (!e.target.closest?.("#notes-form")) return;
+  notes.f = { severity: $("#nf-sev").value, type: $("#nf-type").value, host: $("#nf-host").value, unread: $("#nf-unread").checked };
+  loadNotes(true);
+});
+document.addEventListener("submit", (e) => { if (e.target.id === "notes-form") e.preventDefault(); });
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act^="n-"]');
+  if (!t || t.disabled) return;
+  const id = +t.dataset.id;
+  if (t.dataset.act === "n-read") notesWrite("/api/notifications/read", { ids: [id] });
+  else if (t.dataset.act === "n-dismiss") notesWrite("/api/notifications/dismiss", { ids: [id] });
+  else if (t.dataset.act === "n-all-read") notesWrite("/api/notifications/read", { all: true });
+  else if (t.dataset.act === "n-more") loadNotes(false);
+});
+
+// ------------------------------------------------------------ Add host (admins)
+// A form makes a one-time join code (15 min) and the one line to run on the machine; the panel then pairs by
+// itself and the dialog follows it: waiting -> paired -> online.
+const enr = { id: null, timer: null, page: null };
+const OPT_LABEL = [["power_control", "Power control", "shut down / reboot from the panel"], ["self_update", "Self-update", "Update from the Updates page"],
+  ["wol_relay", "Wake-on-LAN relay", "always-on machine that wakes others"], ["ups", "Local UPS (NUT)", "a UPS plugged into this machine by USB"],
+  ["coretemp", "Core Temp", "Windows: CPU temperatures from Core Temp"], ["ipmi", "IPMI", "Linux: BMC sensors and fans"]];
+function closeModal() { const m = $("#modal"); m.hidden = true; m.innerHTML = ""; clearTimeout(enr.timer); enr.id = null; }
+async function openAddHost() {
+  let d;
+  try { d = await api("/api/admin/hosts"); } catch (e) { flash(e.message, true); return; }
+  enr.page = d;
+  const m = $("#modal");
+  m.innerHTML = `<form class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="ah-t" id="ah-form">
+    <h3 id="ah-t">Add host</h3>
+    <p>Fairy makes a one-time code and one command. Run it on the machine; the panel pairs with it by itself. The machine must be in your Tailscale network.</p>
+    <div class="form-grid">
+      <label class="mfield"><span>Name in Tailscale <b>*</b></span><input class="input" id="ah-name" required maxlength="63" autocomplete="off" spellcheck="false" placeholder="e.g. straw-pc"></label>
+      <label class="mfield"><span>System</span><select class="select" id="ah-os"><option value="windows">Windows</option><option value="linux">Linux</option></select></label>
+      <label class="mfield"><span>Site</span><select class="select" id="ah-site"><option value="">No site (admins only)</option>${d.sites.map((x) => `<option>${esc(x)}</option>`).join("")}</select></label>
+      <label class="mfield"><span>Is it a Proxmox node?</span><select class="select" id="ah-node"><option value="">No</option>${d.nodes.map((n) => `<option value="${esc(n.name)}">Yes: ${esc(n.name)}${n.cluster ? ` (${esc(n.cluster)})` : ""}</option>`).join("")}</select></label>
+      <label class="mfield full"><span>Address <span class="note">optional: only if the panel cannot reach the name (Tailscale IP or full name)</span></span><input class="input" id="ah-addr" maxlength="253" autocomplete="off" spellcheck="false" placeholder="100.x.y.z"></label>
+    </div>
+    <div class="opts" role="group" aria-label="Options">${OPT_LABEL.map(([k, l, n]) => `<label class="check opt"><input type="checkbox" data-opt="${k}"><span>${esc(l)}<span class="note">${esc(n)}</span></span></label>`).join("")}
+      <label class="mfield full" id="ah-ups-row" hidden><span>UPS name in NUT <span class="note">optional</span></span><input class="input" id="ah-ups" maxlength="64" autocomplete="off" placeholder="ups"></label></div>
+    <div class="form-grid">
+      <label class="mfield"><span>Wake-on-LAN MAC(s) <span class="note">optional</span></span><input class="input" id="ah-macs" autocomplete="off" spellcheck="false" placeholder="aa:bb:cc:dd:ee:ff"></label>
+      <label class="mfield"><span>Woken by</span><select class="select" id="ah-relay"><option value="">–</option>${d.relays.map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}</select></label>
+    </div>
+    ${d.panel_address ? "" : '<div class="warnbox">The panel does not know its own Tailscale address: set <code>enroll: {panel_address: 100.x.y.z}</code> in config.yaml.</div>'}
+    <div class="error" id="ah-err" role="alert"></div>
+    <div class="row-gap end"><button class="btn" type="button" id="ah-cancel">Cancel</button><button class="btn primary" type="submit" id="ah-go">Make the code</button></div></form>`;
+  m.hidden = false;
+  const os = $("#ah-os");
+  const syncOs = () => {
+    const win = os.value === "windows";
+    m.querySelector('[data-opt="coretemp"]').disabled = !win;
+    m.querySelector('[data-opt="ipmi"]').disabled = win;
+    if (win) m.querySelector('[data-opt="ipmi"]').checked = false; else m.querySelector('[data-opt="coretemp"]').checked = false;
+  };
+  os.onchange = syncOs; syncOs();
+  m.querySelector('[data-opt="ups"]').onchange = (e) => ($("#ah-ups-row").hidden = !e.target.checked);
+  $("#ah-node").onchange = (e) => { if (e.target.value) os.value = "linux"; syncOs(); };
+  $("#ah-cancel").onclick = closeModal;
+  setTimeout(() => $("#ah-name").focus(), 0);
+  $("#ah-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const opts = {};
+    m.querySelectorAll("[data-opt]").forEach((x) => (opts[x.dataset.opt] = x.checked && !x.disabled));
+    if (opts.ups) opts.ups_name = $("#ah-ups").value.trim();
+    const body = { name: $("#ah-name").value.trim(), address: $("#ah-addr").value.trim(), os: os.value, site: $("#ah-site").value,
+      node: $("#ah-node").value, options: opts, wol_macs: $("#ah-macs").value.split(/[\s,;]+/).filter(Boolean), wol_relay: $("#ah-relay").value };
+    $("#ah-go").disabled = true;
+    try {
+      const r = await controlCall({ kind: "request", label: `Add host ${body.name}` }, () => api("/api/admin/hosts", { method: "POST", body: JSON.stringify(body) }));
+      if (r) openEnrollDialog(r);
+    } catch (x) { $("#ah-err").textContent = x.message; $("#ah-go").disabled = false; }
+  };
+}
+const groupCode = (c) => String(c || "");  // the panel sends it grouped (ABCD-EFGH-...)
+const ENR_STEPS = [["waiting", "Waiting for the machine"], ["paired", "Paired"], ["online", "Online"]];
+function enrollSteps(e) {
+  const bad = ["failed", "expired", "cancelled"].includes(e.state);
+  const at = ENR_STEPS.findIndex(([k]) => k === e.state);
+  return `<div class="steps">${ENR_STEPS.map(([k, l], i) => `<span class="${bad && i === Math.max(0, at) ? "bad" : at > i || e.state === "online" ? "done" : at === i ? "now" : ""}">${esc(l)}</span>`).join("")}
+    ${bad ? `<span class="bad">${esc(e.state)}</span>` : ""}</div>`;
+}
+function openEnrollDialog(cr) {
+  const m = $("#modal");
+  enr.id = cr.id;
+  const win = cr.os === "windows";
+  m.innerHTML = `<div class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="en-t">
+    <h3 id="en-t">${cr.repair ? "Re-pair" : "Add"} ${esc(cr.name)}</h3>
+    <p>On <b>${esc(cr.name)}</b>, ${win ? "open <b>PowerShell as Administrator</b>" : cr.node ? "open a <b>root shell</b> (the node's Shell in Proxmox)" : "open a terminal"} and run:</p>
+    <div class="cmd-box" id="en-cmd">${esc(cr.command)}</div>
+    <div class="row-gap"><button class="btn" type="button" id="en-copy">${I.copy}Copy command</button>
+      <span class="note">Join code <span class="code-big">${esc(groupCode(cr.code))}</span> · single use · valid until ${new Date(cr.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
+    <p class="note">It installs the signed Fairy agent (checked before it runs), writes its settings and waits for the panel. Nothing else on the machine changes. The code is shown only now.</p>
+    <div id="en-progress" aria-live="polite">${enrollSteps(cr)}<div class="note" id="en-msg">${esc(cr.message)}</div></div>
+    <div class="row-gap end"><button class="btn" type="button" id="en-cancel">Cancel Add host</button><button class="btn primary" type="button" id="en-close">Close</button></div></div>`;
+  m.hidden = false;
+  $("#en-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(cr.command); flash("Command copied"); }
+    catch { const r = document.createRange(); r.selectNodeContents($("#en-cmd")); getSelection().removeAllRanges(); getSelection().addRange(r); flash("Select and copy the command (Ctrl+C)"); }
+  };
+  $("#en-close").onclick = closeModal;
+  $("#en-cancel").onclick = async () => {
+    try { await api(`/api/admin/enrollments/${enc(cr.id)}`, { method: "DELETE" }); flash(`Add host ${cr.name}: cancelled`); } catch (x) { flash(x.message, true); }
+    closeModal();
+  };
+  pollEnroll(cr.id);
+}
+async function pollEnroll(id) {
+  clearTimeout(enr.timer);
+  if (enr.id !== id) return;
+  let e;
+  try { e = await api(`/api/admin/enrollments/${enc(id)}`); } catch (x) { const msg = $("#en-msg"); if (msg) msg.textContent = x.message; return; }
+  if (enr.id !== id || !$("#en-progress")) return;
+  $("#en-progress").innerHTML = `${enrollSteps(e)}<div class="note" id="en-msg">${esc(e.message)}${e.state === "online" && state.byId[e.host_id]
+    ? ` · <a href="#/system/${enc(e.host_id)}">open ${esc(e.name)} →</a>` : ""}</div>`;
+  if (e.done) { $("#en-cancel").hidden = true; if (e.state === "online") loadManaged(); return; }
+  enr.timer = setTimeout(() => pollEnroll(id), 2000);
+}
+// After a step-up sign-in the panel made the code itself: fetch it once and show it.
+async function revealEnrollment(id) {
+  try { openEnrollDialog(await api(`/api/admin/enrollments/${enc(id)}?reveal=1`)); } catch (e) { flash(e.message, true); }
+}
+// Hosts added with Add host (admins): Re-pair and Remove on their page.
+async function loadManaged() {
+  if (!state.me?.can_manage_users) return;
+  try {
+    const d = await api("/api/admin/hosts");
+    state.managed = Object.fromEntries((d.managed || []).map((h) => [h.system_id, h]));
+  } catch { /* keep */ }
+  render();
+}
+function managedBox(s) {
+  const h = state.managed[s.id];
+  if (!h || !state.me?.can_manage_users) return "";
+  const why = controlWhyNot();
+  return `<div class="panel glass pad"><h3>Added with Add host</h3>
+    <div class="list-row"><span>Added</span><span>${h.added_at ? new Date(h.added_at).toLocaleDateString() : "–"}${h.added_by ? ` · by ${esc(h.added_by)}` : ""}</span></div>
+    <div class="list-row"><span>Address</span><span><code>${esc(h.url)}</code></span></div>
+    <div class="row-gap"><button class="btn" type="button" data-act="mh-repair" ${why ? "disabled" : ""} title="A new join code, when the panel lost this host's tokens">Re-pair</button>
+      <button class="btn danger" type="button" data-act="mh-remove" ${why ? "disabled" : ""}>Remove from the panel</button></div>
+    <div class="note">Remove stops polling and deletes the panel's tokens for it; the agent keeps running on the machine until you uninstall it there.</div></div>`;
+}
+// Re-pair / Remove: type the host's name (checked by the panel too), then the usual step-up.
+function typedDialog(title, text, name, go, fn) {
+  const m = $("#modal");
+  m.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="td-t"><h3 id="td-t">${esc(title)}</h3><p>${text}</p>
+    <label class="mfield"><span>Type <b>${esc(name)}</b> to confirm</span><input class="input" id="td-in" autocomplete="off" spellcheck="false" placeholder="${esc(name)}"></label>
+    <div class="error" id="td-err" role="alert"></div>
+    <div class="row-gap end"><button class="btn" type="button" id="td-cancel">Cancel</button><button class="btn danger-solid" type="button" id="td-go" disabled>${esc(go)}</button></div></div>`;
+  m.hidden = false;
+  const input = $("#td-in"), b = $("#td-go");
+  input.oninput = () => (b.disabled = input.value.trim().toLowerCase() !== name.toLowerCase());
+  setTimeout(() => input.focus(), 0);
+  $("#td-cancel").onclick = closeModal;
+  b.onclick = async () => {
+    b.disabled = true;
+    try { await fn(input.value); } catch (x) { $("#td-err").textContent = x.message; b.disabled = false; }
+  };
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="add-host"],[data-act="mh-repair"],[data-act="mh-remove"]');
+  if (!t || t.disabled) return;
+  if (t.dataset.act === "add-host") { openAddHost(); return; }
+  const s = state.byId[current().id], h = s && state.managed[s.id];
+  if (!h) return;
+  const path = `/api/admin/hosts/${enc(h.id)}`;
+  if (t.dataset.act === "mh-repair") {
+    typedDialog(`Re-pair ${h.name}?`, "Makes a new join code. Run the new command on the machine; the old tokens stop working once it pairs.", h.name, "Make a new code", async (v) => {
+      const r = await controlCall({ kind: "request", label: `Re-pair ${h.name}` }, () => api(`${path}/repair`, { method: "POST", body: JSON.stringify({ confirm: v }) }));
+      if (r) openEnrollDialog(r);
+    });
+  } else {
+    typedDialog(`Remove ${h.name} from the panel?`, "The panel stops polling it and deletes its tokens. The agent keeps running on the machine until you uninstall it there.", h.name, "Remove", async (v) => {
+      const r = await controlCall({ kind: "request", label: `Remove ${h.name}` }, () => api(path, { method: "DELETE", body: JSON.stringify({ confirm: v }) }));
+      if (r) { closeModal(); flash(r.message || `${h.name} removed`); location.hash = "#/"; loadManaged(); }
+    });
+  }
+});
+
+// ------------------------------------------------------------ Update panel (admins, Updates page)
+// The panel asks systemd to start fairy-panel-update.service (nothing from the request reaches it); the unit
+// writes its steps to a status file that survives the panel's restart. A sign-in from the last 2 minutes is needed.
+const pupd = { data: null, error: null, startedFrom: null, restarting: false };
+const PANEL_STEPS = [["downloading", "Download"], ["staged", "Verified"], ["restarting", "Restart"], ["done", "Running"]];
+async function fetchPanelUpdate() {
+  if (!state.me?.can_control) return;
+  try {
+    const d = await api("/api/admin/panel-update");
+    if (pupd.startedFrom && d.version !== pupd.startedFrom && d.status?.finished) {
+      flash(d.status.state === "done" ? `The panel is back, now on ${buildLabel(d.version)}` : `Panel update: ${d.status.state.replace("_", " ")} · ${d.status.message}`, d.status.state !== "done");
+      pupd.startedFrom = null;
+    } else if (pupd.startedFrom && d.status?.finished && d.status.state !== "done") {
+      flash(`Panel update: ${d.status.state.replace("_", " ")} · ${d.status.message}`, true); pupd.startedFrom = null;
+    }
+    pupd.data = d; pupd.error = null; pupd.restarting = false;
+  } catch (e) {
+    if (pupd.startedFrom || (pupd.data?.status && !pupd.data.status.finished)) pupd.restarting = true;  // the panel is restarting
+    else pupd.error = e.message;
+  }
+}
+function panelUpdateBox(d) {
+  const p = pupd.data, why = controlWhyNot();
+  const st = p?.status, running = (st && !st.finished) || pupd.restarting;
+  const to = d.panel_latest?.version ? buildLabel(d.panel_latest.version) : d.panel_latest?.tag || "the latest release";
+  const canGo = p?.ready && p?.behind === true && !running && !why;
+  const title = why || (!p ? "loading…" : !p.ready ? p.why : p.behind !== true ? "No newer signed panel release" : running ? "An update is running" : `Install ${to} on the panel's host`);
+  const at = st ? PANEL_STEPS.findIndex(([k]) => k === st.state) : -1;
+  const bad = st && ["failed", "rolled_back"].includes(st.state);
+  const steps = st && (running || Date.now() - new Date(st.updated_at) < 3600e3) ? `<div class="steps">${PANEL_STEPS.map(([k, l], i) =>
+    `<span class="${st.state === "done" || at > i ? "done" : at === i ? (st.finished ? "done" : "now") : ""}">${l}</span>`).join("")}${bad ? `<span class="bad">${esc(st.state.replace("_", " "))}</span>` : ""}</div>
+    <div class="note">${pupd.restarting ? "The panel is restarting… this page reconnects by itself." : esc(st.message)}${st.started_at ? ` · started <span data-ago="${esc(st.started_at)}">${ago(st.started_at)}</span>` : ""}</div>` : "";
+  return `<div class="row-gap"><span>Panel: fairy <b>${esc(buildLabel(d.panel_version))}</b>${d.panel_latest?.tag ? ` · latest ${esc(d.panel_latest.version ? buildLabel(d.panel_latest.version) : d.panel_latest.tag)}` : ""}
+      ${d.panel_behind === false ? ' <span class="chip ok">up to date</span>' : ""}${d.panel_latest?.url ? ` <a href="${esc(d.panel_latest.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a>` : ""}</span>
+    <button class="btn push" type="button" data-act="panel-upd" ${canGo ? "" : "disabled"} title="${esc(title)}">${I.update} ${running ? "Updating…" : "Update panel"}</button></div>
+    ${steps}
+    ${p && !p.ready ? `<div class="note warn">${esc(p.why)}</div>` : ""}
+    <div class="note">Update panel installs the latest signed release on the panel's host, restarts the panel and rolls back if it does not come up. It never installs an older version and needs a Pocket ID sign-in from the last 2 minutes. By hand: <code>fairy update</code> on the panel's host (as root).</div>`;
+}
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest('[data-act="panel-upd"]');
+  if (!t || t.disabled) return;
+  const d = upd.data, to = d?.panel_latest?.version ? buildLabel(d.panel_latest.version) : d?.panel_latest?.tag || "the latest release";
+  if (!confirm(`Update the panel to ${to}? It restarts (about a minute without the panel) and rolls back by itself if the new version does not come up.`)) return;
+  t.disabled = true;
+  try {
+    const from = pupd.data?.version;
+    const r = await controlCall({ kind: "request", label: "Update panel" }, () => api("/api/admin/panel-update", { method: "POST", body: "{}" }));
+    if (r) { pupd.startedFrom = from; flash(r.message || "Panel update started"); }
+  } catch (x) { flash(x.message, true); }
+  await fetchPanelUpdate(); render();
+});
+
 // ------------------------------------------------------------ routing + rendering
 function schedule(fn, ms = 3000) { clearTimeout(state.timer); state.timer = setTimeout(fn, ms); }
 function current() {
@@ -1160,13 +1496,14 @@ function current() {
   if (h.startsWith("#/audit")) return { page: "audit" };
   if (h.startsWith("#/users")) return { page: "users" };
   if (h.startsWith("#/updates")) return { page: "updates" };
+  if (h.startsWith("#/notifications")) return { page: "notifications" };
   return { page: "overview" };
 }
 const routeKey = (r) => `${r.page}:${r.id || ""}:${r.tab || ""}`;
 function pageHtml(r) {
   return r.page === "system" ? pageSystem(r.id, r.tab) : r.page === "power" ? pagePower() : r.page === "ups" ? pageUps()
     : r.page === "settings" ? pageSettings() : r.page === "audit" ? pageAudit() : r.page === "users" ? pageUsers()
-    : r.page === "updates" ? pageUpdates() : pageOverview();
+    : r.page === "updates" ? pageUpdates() : r.page === "notifications" ? pageNotifications() : pageOverview();
 }
 let renderQueued = false;
 function render() {  // coalesced to one DOM patch per frame
@@ -1199,6 +1536,9 @@ function route() {
   if (r.page === "audit") loadAudit(true);
   if (r.page === "users") loadAdmin();
   if (r.page === "updates") loadUpdates();
+  if (r.page === "notifications") loadNotes(true);
+  if (r.page === "system" && state.me?.can_manage_users) loadManaged();
+  updateBell();
   renderNav(); renderAlerts(); closeAcct(false); syncAcct();
   $("#shell").classList.remove("drawer"); $("#scrim").hidden = true;
   connect(r.page === "system" ? r.id : null);  // boost the viewed host to 1 s polling
@@ -1236,6 +1576,7 @@ function connect(watch) {
   });
   es.addEventListener("summary", (e) => { state.summary = JSON.parse(e.data); render(); });
   es.addEventListener("ups", (e) => { state.ups = JSON.parse(e.data); pushUpsHistory(state.ups); render(); });
+  es.addEventListener("notes", (e) => onNotesCounts(JSON.parse(e.data)));
   es.addEventListener("ups_event", (e) => { state.upsEvents.unshift(JSON.parse(e.data)); render(); });
   es.addEventListener("power", (e) => {
     state.power = JSON.parse(e.data);
@@ -1395,6 +1736,7 @@ async function boot() {
   const bannerH = () => document.documentElement.style.setProperty("--banner-h", `${$("#demo-banner").hidden ? 0 : $("#demo-banner").offsetHeight}px`);
   bannerH(); window.addEventListener("resize", bannerH);
   $("#collapse").innerHTML = I.collapse; $("#menu").innerHTML = I.panel; $("#acct-btn").innerHTML = I.burger;
+  $("#bell").innerHTML = `${I.bell}<span class="count" hidden></span>`;
   const wide = matchMedia("(min-width: 761px)");
   let collapsed = false; try { collapsed = localStorage.getItem("fairy-collapsed") === "1"; } catch { /* ignore */ }
   const setCollapsed = (v) => { collapsed = v; $("#shell").classList.toggle("collapsed", v && wide.matches); try { localStorage.setItem("fairy-collapsed", v ? "1" : "0"); } catch { /* ignore */ } };
@@ -1413,8 +1755,10 @@ async function boot() {
     state.ups = { generated_at: u.generated_at, ups: u.ups };
     for (const [id, pts] of Object.entries(u.history)) state.upsHist[id] = pts.map((p) => ({ t: p.t, watts: p.watts, charge: p.charge }));
   } catch { /* no UPS */ }
+  try { state.notes = await api("/api/notifications/count"); } catch { /* the stream sends them */ }
   window.addEventListener("hashchange", route);
   route();
   updTick();
+  showPendingResult(state.me.pending_result);  // an action that waited for this sign-in, run by the panel
 }
 boot();
