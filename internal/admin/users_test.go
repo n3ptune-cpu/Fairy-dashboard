@@ -65,7 +65,7 @@ func TestUsersAndSitesCLI(t *testing.T) {
 	if code, _ := run("tokens", "create", "--name", "x", "--owner", "system", "--sites", "Nowhere"); code != 2 {
 		t.Fatal("token for unknown site")
 	}
-	if r := tokens.NewStore(dir + "/data").List(); len(r) != 1 || strings.Join(r[0].Sites, ",") != "Straw" {
+	if r, _ := tokens.NewStore(dir + "/data").List(); len(r) != 1 || strings.Join(r[0].Sites, ",") != "Straw" {
 		t.Fatal(r)
 	}
 	if code, out := run("tokens", "list"); !strings.Contains(out, "Straw") || code != 0 {

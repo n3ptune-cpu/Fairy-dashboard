@@ -84,13 +84,17 @@ func records(d statefile.Data) map[string]Record {
 }
 
 // List returns every token record (active, expired and revoked).
-func (s *Store) List() []Record {
+func (s *Store) List() ([]Record, error) {
+	d, err := statefile.Read(s.Path)
+	if err != nil {
+		return nil, err
+	}
 	out := []Record{}
-	for _, r := range records(statefile.Read(s.Path)) {
+	for _, r := range records(d) {
 		out = append(out, r)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	return out
+	return out, nil
 }
 
 func toMap(r Record) map[string]any {

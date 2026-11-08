@@ -39,9 +39,9 @@ func (s *Server) bootstrapRole(u *model.User) (role, via string) {
 func (s *Server) recordUser(c *reqCtx, u *model.User) (access.User, bool) {
 	role, via := s.bootstrapRole(u)
 	rec, created, err := s.Access.Seen(u.Sub, model.Deref(u.Email), model.Deref(u.Name), role, via)
-	if err != nil {
-		slog.Error("users.json write failed", "error", err)
-		return access.User{Sub: u.Sub, Role: role}, false
+	if err != nil { // fail closed: a role that could not be recorded is not granted
+		slog.Error("users.json write failed: the user gets no access until it is fixed", "sub", u.Sub, "error", err)
+		return access.User{Sub: u.Sub, Role: access.RolePending}, false
 	}
 	s.seenMu.Lock()
 	s.seen[u.Sub] = time.Now()
@@ -54,6 +54,9 @@ func (s *Server) recordUser(c *reqCtx, u *model.User) (access.User, bool) {
 
 // userGrant is the access of a signed-in user (browser session or demo user).
 func (s *Server) userGrant(c *reqCtx, u *model.User) access.Grant {
+	if s.Access.Err() != nil { // users.json unreadable or corrupt: nobody gets access (fail closed)
+		return access.Grant{Role: access.RolePending}
+	}
 	rec, ok := s.Access.Load().Users[u.Sub]
 	if !ok {
 		rec, _ = s.recordUser(c, u)
@@ -76,6 +79,9 @@ func (s *Server) userGrant(c *reqCtx, u *model.User) access.Grant {
 // in users.json the token is capped to that user's role and sites, so demoting or removing a user's access also
 // limits their tokens. Tokens owned by "system" (or by a subject that never signed in) keep their own scope.
 func (s *Server) tokenGrant(rec *tokens.Record) access.Grant {
+	if s.Access.Err() != nil {
+		return access.Grant{Role: access.RolePending}
+	}
 	g := access.Grant{Role: access.RoleViewer, All: rec.Sites == nil, Sites: slices.Clone(rec.Sites)}
 	if rec.Scope == "control" {
 		g = access.AdminGrant()

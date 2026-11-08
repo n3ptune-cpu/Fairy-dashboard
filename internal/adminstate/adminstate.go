@@ -40,8 +40,12 @@ func num(v any) float64 {
 	return f
 }
 
-// ControlDisabled returns the global kill switch (nil = control allowed).
+// ControlDisabled returns the global kill switch (nil = control allowed). While state.json is unreadable or
+// corrupt, control counts as disabled (fail closed).
 func (a *State) ControlDisabled() *model.ControlState {
+	if err := a.state.Err(); err != nil {
+		return &model.ControlState{By: "fairy", Reason: "state.json is unreadable or corrupt (see the server log)"}
+	}
 	v, ok := a.state.Get()["control_disabled"].(map[string]any)
 	if !ok {
 		return nil
@@ -62,28 +66,36 @@ func (a *State) StateData() (statefile.Data, int) {
 	return d, a.state.Version
 }
 
-// PowerDisabled reports whether an administrator turned power control off for this system.
+// PowerDisabled reports whether an administrator turned power control off for this system (always true while
+// state.json is unreadable).
 func (a *State) PowerDisabled(id string) bool {
+	if a.state.Err() != nil {
+		return true
+	}
 	l, _ := a.state.Get()["power_control_disabled"].([]any)
 	return slices.Contains(l, any(id))
 }
 
 // PowerDisabledList returns the systems whose power control is off (read straight from disk).
-func (a *State) PowerDisabledList() []string {
-	l, _ := statefile.Read(a.StatePath)["power_control_disabled"].([]any)
+func (a *State) PowerDisabledList() ([]string, error) {
+	d, err := statefile.Read(a.StatePath)
+	if err != nil {
+		return nil, err
+	}
+	l, _ := d["power_control_disabled"].([]any)
 	out := []string{}
 	for _, v := range l {
 		if s, ok := v.(string); ok {
 			out = append(out, s)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // SessionValid reports whether a cookie's session id is still registered and was issued (iat, Unix seconds)
-// after the last revoke-all.
+// after the last revoke-all. While sessions.json or state.json is unreadable no session is valid (fail closed).
 func (a *State) SessionValid(sid string, iat float64) bool {
-	if sid == "" {
+	if sid == "" || a.state.Err() != nil || a.sessions.Err() != nil {
 		return false
 	}
 	ss, _ := a.sessions.Get()["sessions"].(map[string]any)
@@ -107,8 +119,12 @@ type Session struct {
 }
 
 // ListSessions returns the registered sessions, oldest first.
-func (a *State) ListSessions() []Session {
-	ss, _ := statefile.Read(a.SessionsPath)["sessions"].(map[string]any)
+func (a *State) ListSessions() ([]Session, error) {
+	d, err := statefile.Read(a.SessionsPath)
+	if err != nil {
+		return nil, err
+	}
+	ss, _ := d["sessions"].(map[string]any)
 	out := []Session{}
 	for sid, v := range ss {
 		m, _ := v.(map[string]any)
@@ -121,7 +137,7 @@ func (a *State) ListSessions() []Session {
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedTS < out[j].CreatedTS })
-	return out
+	return out, nil
 }
 
 // NewSession is what the panel records about a fresh login in sessions.json.
@@ -194,7 +210,11 @@ func (a *State) RevokeSession(prefix string) (int, error) {
 
 // RevokeAllSessions removes every session and invalidates every cookie issued before now.
 func (a *State) RevokeAllSessions() (int, error) {
-	n := len(a.ListSessions())
+	list, err := a.ListSessions()
+	if err != nil {
+		return 0, err
+	}
+	n := len(list)
 	if _, err := statefile.Update(a.SessionsPath, func(d statefile.Data) error { d["sessions"] = map[string]any{}; return nil }); err != nil {
 		return 0, err
 	}

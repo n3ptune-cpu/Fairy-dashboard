@@ -83,8 +83,12 @@ func (c *cli) tokensCreate(store *tokens.Store, args []string) (int, error) {
 
 // tokensList prints every token with its state (active, revoked, expired); never the token itself.
 func (c *cli) tokensList(store *tokens.Store) (int, error) {
+	list, err := store.List()
+	if err != nil {
+		return 1, err
+	}
 	var rows [][]string
-	for _, r := range store.List() {
+	for _, r := range list {
 		state := "active"
 		if r.RevokedAt != nil {
 			state = "revoked"

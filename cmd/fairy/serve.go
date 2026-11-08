@@ -18,6 +18,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 	"github.com/n3ptune-cpu/Fairy/internal/poller"
 	"github.com/n3ptune-cpu/Fairy/internal/power"
+	"github.com/n3ptune-cpu/Fairy/internal/statefile"
 	"github.com/n3ptune-cpu/Fairy/internal/ups"
 	"github.com/n3ptune-cpu/Fairy/internal/web"
 )
@@ -60,7 +61,7 @@ func serve(args []string) int {
 	if p == nil {
 		return code
 	}
-	if !ensureAuditLog(p.cfg.AuditLog) {
+	if !ensureAuditLog(p.cfg.AuditLog) || !checkStateFiles(p.cfg.DataDir) {
 		return 1
 	}
 	srv := web.New(p.cfg, p.secrets, p.poller, p.demoUser, version)
@@ -175,6 +176,10 @@ func ensureAuditLog(path string) bool {
 		slog.Error("audit log directory", "error", err)
 		return false
 	}
+	if err := statefile.CheckOwner(path); err != nil {
+		slog.Error("refusing to start: audit log", "error", err)
+		return false
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		slog.Error("audit log", "error", err)
@@ -182,6 +187,19 @@ func ensureAuditLog(path string) bool {
 	}
 	f.Close()
 	return true
+}
+
+// checkStateFiles refuses to start when a security state file is unreadable, corrupt or owned by another user:
+// the panel never treats such a file as empty (that could hand out roles again or lose revocations).
+func checkStateFiles(dataDir string) bool {
+	ok := true
+	for _, name := range []string{"users.json", "sessions.json", "tokens.json", "state.json"} {
+		if err := statefile.Check(filepath.Join(dataDir, name)); err != nil {
+			slog.Error("refusing to start: fix this state file first", "error", err)
+			ok = false
+		}
+	}
+	return ok
 }
 
 // env returns the environment variable k, or def when it is unset or empty.

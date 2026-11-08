@@ -154,7 +154,7 @@ func TestPocketIDLoginAndStepUpRoundTrip(t *testing.T) {
 	if me.code != 200 || me.body["sub"] != "u1" || me.body["can_control"] != true || me.body["auth"] != "session" {
 		t.Fatal("me after login", me.code, string(me.raw))
 	}
-	if n := len(e.s.Poller.Admin.ListSessions()); n != 1 {
+	if n := len(must(e.s.Poller.Admin.ListSessions())); n != 1 {
 		t.Fatal("session not registered", n)
 	}
 	if u := e.s.Access.Load().Users["u1"]; u.Role != "admin" || u.Via != "control_groups" || u.Email != "n@example.com" || u.LastSeen == nil {
@@ -173,7 +173,7 @@ func TestPocketIDLoginAndStepUpRoundTrip(t *testing.T) {
 	q, rt = idp.login(e, "/auth/login?step_up=1&next=/", sess)
 	idp.claims["auth_time"] = time.Now().Unix()
 	r = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
-	if r.code != 303 || len(e.s.Poller.Admin.ListSessions()) != 1 {
+	if r.code != 303 || len(must(e.s.Poller.Admin.ListSessions())) != 1 {
 		t.Fatal("step-up callback", r.code, string(r.raw))
 	}
 	if me := e.do("GET", "/api/me", nil, "Cookie", sessionCookie(e, r.hdr)); me.code != 200 || me.body["auth_age_s"].(float64) > 60 {

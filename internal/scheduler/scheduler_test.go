@@ -57,7 +57,8 @@ func TestEffectiveIntervalsOverridesFloorsPause(t *testing.T) {
 		t.Fatal(*s.Effective(cluster))
 	}
 	// persisted for the CLI / restarts
-	po := statefile.Read(filepath.Join(dir, "state.json"))["poll_overrides"].(map[string]any)
+	sd, _ := statefile.Read(filepath.Join(dir, "state.json"))
+	po := sd["poll_overrides"].(map[string]any)
 	if po["node-a"] != "paused" || po["qemu-1"] != 300.0 || po["llm-box"] != 1.0 {
 		t.Fatalf("%v", po)
 	}

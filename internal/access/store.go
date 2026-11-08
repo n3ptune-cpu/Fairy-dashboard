@@ -159,8 +159,12 @@ func NewStore(dataDir string) *Store {
 	return &Store{Path: p, watch: statefile.NewWatched(p)}
 }
 
-// Load returns the current content (cached).
+// Load returns the current content (cached). While users.json is unreadable or corrupt it is empty and Err
+// says why: callers must then grant nothing (fail closed).
 func (s *Store) Load() Data { return decode(s.watch.Get()) }
+
+// Err is why users.json cannot be used (nil when it is fine or does not exist yet).
+func (s *Store) Err() error { return s.watch.Err() }
 
 // update is a locked read-modify-write of users.json.
 func (s *Store) update(fn func(*Data) error) (Data, error) {

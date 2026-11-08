@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -390,5 +391,38 @@ func TestClaimsPolicy(t *testing.T) {
 	}
 	if canControl(&u, config.OIDC{}) {
 		t.Fatal("no control groups -> nobody controls")
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+// A corrupt (or unreadable) users.json is never read as "no users": nobody gets access, the file is not
+// rewritten, and control-group members are not made admin again.
+func TestCorruptUsersFileFailsClosed(t *testing.T) {
+	e := setup(t)
+	c := e.cookie(controller(), 0)
+	if r := e.do("GET", "/api/me", nil, "Cookie", c); r.body["role"] != "admin" {
+		t.Fatal("setup", string(r.raw))
+	}
+	garbage := []byte(`{"users": {`)
+	if err := os.WriteFile(e.s.Access.Path, garbage, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond) // users.json is re-checked once a second
+	for _, ck := range []string{c, e.cookie(controller(), 0), e.cookie(viewer, 0)} {
+		if r := e.do("GET", "/api/systems", nil, "Cookie", ck); r.code != 403 {
+			t.Fatal("access with a corrupt users.json", r.code, string(r.raw))
+		}
+	}
+	if r := e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, "Cookie", c, "X-Requested-With", "fairy"); r.code != 403 {
+		t.Fatal("control with a corrupt users.json", r.code)
+	}
+	if b, _ := os.ReadFile(e.s.Access.Path); string(b) != string(garbage) {
+		t.Fatal("corrupt users.json was rewritten", string(b))
 	}
 }

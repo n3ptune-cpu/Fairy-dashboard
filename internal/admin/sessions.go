@@ -17,8 +17,12 @@ func (c *cli) sessions(args []string) (int, error) {
 	st := adminstate.New(c.cfg.DataDir)
 	switch args[0] {
 	case "list":
+		list, err := st.ListSessions()
+		if err != nil {
+			return 1, err
+		}
 		var rows [][]string
-		for _, s := range st.ListSessions() {
+		for _, s := range list {
 			who := s.Email
 			if who == "" {
 				who = s.Name

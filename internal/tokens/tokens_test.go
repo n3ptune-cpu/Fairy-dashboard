@@ -48,7 +48,7 @@ func TestTokensHashedScopedExpiringRevocable(t *testing.T) {
 		t.Fatal("double revoke")
 	}
 	s.Touch(&r)
-	if len(s.List()) != 2 {
-		t.Fatal(len(s.List()))
+	if l, _ := s.List(); len(l) != 2 {
+		t.Fatal(len(l))
 	}
 }

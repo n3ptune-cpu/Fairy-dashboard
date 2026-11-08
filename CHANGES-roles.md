@@ -72,7 +72,7 @@ Good to know:
 
 ## If you lock yourself out
 
-On the server running Fairy (as root or the service user):
+On the server running Fairy, as the service user (`sudo -u fairy fairy admin ...`; commands that change something refuse to run as root, so they cannot leave files the panel can no longer read):
 
 ```sh
 fairy admin users list                                  # who is there, with which role

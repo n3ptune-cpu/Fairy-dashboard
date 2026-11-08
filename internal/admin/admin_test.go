@@ -44,13 +44,13 @@ func TestBreakGlassCLI(t *testing.T) {
 	if cs := st.ControlDisabled(); cs == nil || cs.Reason != "psu swap" {
 		t.Fatal("kill switch not set")
 	}
-	if code, _ = run("host", "nsx-cyrene", "power-control", "disable"); code != 0 || len(st.PowerDisabledList()) != 1 {
+	if code, _ = run("host", "nsx-cyrene", "power-control", "disable"); code != 0 || len(must(st.PowerDisabledList())) != 1 {
 		t.Fatal("host flag")
 	}
 	if code, _ = run("poll", "llm-box", "2s"); code != 0 {
 		t.Fatal("poll")
 	}
-	po := statefile.Read(st.StatePath)["poll_overrides"].(map[string]any)
+	po := must(statefile.Read(st.StatePath))["poll_overrides"].(map[string]any)
 	if po["llm-box"] != 2.0 {
 		t.Fatal(po)
 	}
@@ -115,5 +115,49 @@ func TestHealthReportsTheLastHealthFile(t *testing.T) {
 	if code = Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "poll", "nope", "5"}, &out, &errb); code != 0 ||
 		!strings.Contains(errb.String(), `"nope" is not a known system id`) {
 		t.Fatal(code, errb.String())
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+// Run as another user than the data directory's owner (e.g. root on the service user's files), changes are
+// refused before anything is written; looking (list) still works.
+func TestCLIRefusesToWriteAsTheWrongUser(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to hand the data directory to another uid")
+	}
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	_ = os.WriteFile(cfg, []byte("public_url: https://p.example\ndata_dir: "+dir+"/data\noidc: {issuer: https://id.example, client_id: c}\n"), 0o600)
+	run := func(args ...string) (int, string) {
+		var out, errb bytes.Buffer
+		code := Main(append([]string{"--config", cfg, "--env-file", dir + "/none.env"}, args...), &out, &errb)
+		return code, out.String() + errb.String()
+	}
+	if code, out := run("sites", "create", "Lab"); code != 0 {
+		t.Fatal(out)
+	}
+	_ = filepath.Walk(dir+"/data", func(p string, _ os.FileInfo, _ error) error { return os.Chown(p, 4242, 4242) })
+	code, out := run("users", "set-role", "x@example.com", "admin")
+	if code == 0 || !strings.Contains(out, "sudo -u fairy") {
+		t.Fatal("ran as the wrong user", code, out)
+	}
+	if code, out := run("tokens", "create", "--name", "x", "--owner", "system"); code == 0 {
+		t.Fatal("token created as the wrong user", out)
+	}
+	if code, out := run("sites", "list"); code != 0 || !strings.Contains(out, "Lab") {
+		t.Fatal("read-only commands still work", code, out)
+	}
+	var st os.FileInfo
+	if st, _ = os.Stat(dir + "/data/users.json"); st == nil {
+		t.Fatal("users.json")
+	}
+	if _, err := os.Stat(dir + "/data/tokens.json"); err == nil {
+		t.Fatal("tokens.json created by the wrong user")
 	}
 }

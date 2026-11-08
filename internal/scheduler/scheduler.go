@@ -103,7 +103,11 @@ func New(stateFile string, boostEnabled bool, clock func() float64) *Scheduler {
 	s := &Scheduler{jobs: map[string]*Job{}, overrides: map[string]Override{}, stateFile: stateFile,
 		BoostEnabled: boostEnabled, Clock: clock, boost: map[string]*boostRef{}, ctx: context.Background()}
 	if stateFile != "" {
-		s.overrides = Valid(statefile.Read(stateFile)["poll_overrides"])
+		d, err := statefile.Read(stateFile)
+		if err != nil { // the panel refuses to start on this (see serve); keep the defaults otherwise
+			slog.Error("poll overrides not loaded", "error", err)
+		}
+		s.overrides = Valid(d["poll_overrides"])
 	}
 	return s
 }

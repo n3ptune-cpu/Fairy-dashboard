@@ -1,7 +1,8 @@
 // Package admin is the break-glass CLI: `fairy admin ...`.
 //
-// Run on the panel's host as the service user or root, e.g. while Pocket ID is down. It edits the panel's state
-// files directly (the running server picks the changes up within a second) and writes every action to the audit
+// Run on the panel's host as the service user (sudo -u fairy fairy admin ...), e.g. while Pocket ID is down.
+// Commands that change something refuse to run as any other user (e.g. root), because files they write would
+// become unreadable for the panel. It edits the panel's state files directly (the running server picks the changes up within a second) and writes every action to the audit
 // log with source "cli" and the local OS user. It never creates a web session or any password login.
 package admin
 
@@ -11,9 +12,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/n3ptune-cpu/Fairy/internal/audit"
 	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy/internal/statefile"
 )
 
 const usage = `fairy admin: break-glass administration (no web login needed)
@@ -43,10 +46,11 @@ usage: fairy admin [--config FILE] [--env-file FILE] <command> ...
 `
 
 type cli struct {
-	cfgPath string
-	out     io.Writer
-	errw    io.Writer
-	cfg     *config.Panel
+	readOnly bool // list / check / tail commands: may run as any user that can read the files
+	cfgPath  string
+	out      io.Writer
+	errw     io.Writer
+	cfg      *config.Panel
 }
 
 func (c *cli) load() error {
@@ -58,6 +62,14 @@ func (c *cli) load() error {
 		return err
 	}
 	c.cfg = cfg
+	if c.readOnly {
+		return nil
+	}
+	for _, p := range []string{filepath.Join(cfg.DataDir, "users.json"), cfg.AuditLog} {
+		if err := statefile.CheckOwner(p); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -87,7 +99,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	if err := config.LoadEnvFile(*envFile); err != nil && !errors.Is(err, os.ErrPermission) {
 		fmt.Fprintf(stderr, "warning: %s: %v\n", *envFile, err)
 	}
-	c := &cli{cfgPath: *cfgPath, out: stdout, errw: stderr}
+	c := &cli{cfgPath: *cfgPath, out: stdout, errw: stderr, readOnly: readOnlyCommand(rest)}
 	var err error
 	code := 0
 	switch rest[0] {
@@ -129,6 +141,15 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return code
+}
+
+// readOnlyCommand reports commands that change nothing (they may run as another user, e.g. root, to look).
+func readOnlyCommand(args []string) bool {
+	switch args[0] {
+	case "config", "audit", "health", "help", "-h", "--help":
+		return true
+	}
+	return len(args) == 2 && args[1] == "list"
 }
 
 var errUsage = errors.New("invalid arguments (see `fairy admin help`)")
