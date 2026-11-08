@@ -85,6 +85,9 @@ type GPUConfig struct {
 // SensorsConfig is the OS temperature sources.
 type SensorsConfig struct {
 	ACPIThermal *bool `yaml:"acpi_thermal"` // Windows: ACPI thermal zones via PDH (default true)
+	// CoreTemp (Windows): read CPU core temperatures and package watts from Core Temp's shared memory when the
+	// Core Temp program is running (default false). The agent loads no driver; Core Temp's own one does.
+	CoreTemp bool `yaml:"coretemp"`
 }
 
 // IPMIConfig is the BMC connection (Supermicro boards and others).
@@ -286,6 +289,9 @@ func (c *Config) Validate() error {
 	}
 	if c.IPMI.SensorIntervalS < 2 || c.IPMI.SensorIntervalS > 300 {
 		add("ipmi.sensor_interval_s must be 2-300")
+	}
+	if c.Sensors.CoreTemp && runtime.GOOS != "windows" {
+		add("sensors.coretemp is only available on Windows (Linux reads CPU temperatures from hwmon already)")
 	}
 	if c.FanControl.Enabled {
 		if !c.IPMI.Enabled {

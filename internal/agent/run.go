@@ -94,6 +94,9 @@ func Run(ctx context.Context, cfg *Config, version string) error {
 	defer cancel()
 
 	d := Deps{Collector: collect.NewSystem(), Relay: relay, Version: version}
+	if cfg.Sensors.CoreTemp {
+		d.Collector = collect.WithCoreTemp(d.Collector)
+	}
 	if p, err := nvidiaPath(cfg.GPU); err != nil {
 		return err
 	} else if p != "" {
@@ -137,7 +140,8 @@ func Run(ctx context.Context, cfg *Config, version string) error {
 	}
 	var on []string
 	for name, ok := range map[string]bool{"processes": cfg.ProcessesEnabled(), "fan_control": d.Fan != nil,
-		"power_control": d.Power != nil, "wol_relay": d.WOL != nil, "ipmi": d.BMC != nil, "gpu": d.GPU != nil} {
+		"power_control": d.Power != nil, "wol_relay": d.WOL != nil, "ipmi": d.BMC != nil, "gpu": d.GPU != nil,
+		"coretemp": cfg.Sensors.CoreTemp} {
 		if ok {
 			on = append(on, name)
 		}

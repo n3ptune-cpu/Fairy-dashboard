@@ -26,6 +26,8 @@ gpu:
 
 # sensors:
 #   acpi_thermal: true         # Windows: ACPI thermal-zone temperatures (often the only CPU-ish temperature)
+#   coretemp: false            # Windows: CPU core temperatures and package watts from the Core Temp program, if
+#                              #   it is running with "Enable global shared memory (SNMP)"; see AGENT.md
 
 # The board's BMC (e.g. Supermicro X11SCA-F) over IPMI: temperatures, fans and voltages in the panel.
 ipmi:

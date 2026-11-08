@@ -1,7 +1,8 @@
 // Package collect reads this machine's metrics for fairy-agent: CPU, memory, disks, network, sensors, GPUs,
 // component power and processes. Every value comes from a documented, read-only user-mode interface (procfs and
-// sysfs on Linux; Win32 APIs, the registry and PDH on Windows; nvidia-smi for NVIDIA GPUs). Nothing here opens
-// a driver of its own, reads another process's memory or changes anything on the machine.
+// sysfs on Linux; Win32 APIs, the registry and PDH on Windows; nvidia-smi for NVIDIA GPUs; optionally the
+// shared memory the Core Temp program publishes for other programs). Nothing here opens a driver of its own,
+// reads another process's memory or changes anything on the machine.
 //
 // The JSON field names and units are the panel's agent contract (internal/normalise/agent.go): bytes, bytes
 // per second counters, percent, degrees Celsius, RPM, volts, watts, Unix seconds.

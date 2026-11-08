@@ -135,6 +135,24 @@ func TestConfigValidation(t *testing.T) {
 		if _, err := Parse([]byte("ipmi: {transport: wmi}"), "c.yaml"); err == nil {
 			t.Fatal("wmi is Windows-only")
 		}
+		if _, err := Parse([]byte("sensors: {coretemp: true}"), "c.yaml"); err == nil {
+			t.Fatal("coretemp is Windows-only")
+		}
+	}
+	if c, err := Parse([]byte("sensors: {acpi_thermal: true}"), "c.yaml"); err != nil || c.Sensors.CoreTemp {
+		t.Fatal("coretemp must default to off", err)
+	}
+}
+
+// Core Temp's readings (sensor "coretemp", labels "Core N") count as CPU temperatures for the fan watchdog,
+// ahead of an ACPI thermal zone.
+func TestMaxCPUTempCoreTemp(t *testing.T) {
+	zone := "ACPI thermal zone TZ00"
+	local := []collect.Temp{{Sensor: "coretemp", Label: collect.P("Core 0"), Current: 61},
+		{Sensor: "coretemp", Label: collect.P("Core 1"), Current: 72.5}, {Sensor: "acpi", Label: &zone, Current: 90}}
+	v, name, ok := MaxCPUTemp(nil, local)
+	if !ok || v != 72.5 || name != "coretemp Core 1" {
+		t.Fatal(v, name, ok)
 	}
 }
 

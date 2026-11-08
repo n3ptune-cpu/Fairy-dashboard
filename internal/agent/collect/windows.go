@@ -10,6 +10,8 @@ package collect
 //   - OS name and SMBIOS strings: the registry (HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion and
 //     HKLM\HARDWARE\DESCRIPTION\System), which Windows fills at boot
 //   - temperatures: the "Thermal Zone Information" performance counters (PDH), i.e. the ACPI thermal zones
+//   - optionally (sensors.coretemp) CPU core temperatures and package watts from Core Temp's shared memory,
+//     read-only (coretemp_windows.go); Core Temp's own driver does the reading, the agent loads none
 //   - battery: GetSystemPowerStatus (state only; watts would need the battery driver's IOCTL, left out)
 //   - processes: a Toolhelp32 snapshot (names and ids, no handles), then, per process, OpenProcess with
 //     PROCESS_QUERY_LIMITED_INFORMATION only, for GetProcessTimes, GetProcessMemoryInfo,

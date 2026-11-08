@@ -14,6 +14,7 @@ fans, or wake other computers on the network, but only if you switch each of tho
 * [Point the panel at it](#point-the-panel-at-it)
 * [Optional features](#optional-features): fan control, shutdown / reboot, Wake-on-LAN, plugs and UPSes
 * [What it can and cannot show](#what-it-can-and-cannot-show)
+* [Core Temp (optional, Windows)](#core-temp-optional-windows): CPU core temperatures and watts on Windows
 * [Settings (config.yaml)](#settings-configyaml)
 * [Checking, logs, updating, removing](#checking-logs-updating-removing)
 * [Security in short](#security-in-short)
@@ -42,7 +43,8 @@ BattlEye, FACEIT...) without looking like a cheat:
 * Graphics card numbers come from `nvidia-smi`, NVIDIA's own tool that comes with the driver, started once and
   left running in its "repeat every 2 seconds" mode.
 * Temperatures on Windows come from the ACPI thermal zones that Windows itself publishes as performance
-  counters. Fan control talks to the server's management chip (BMC) through Windows' own built-in IPMI support.
+  counters, and, only if you switch it on, from the Core Temp program you already run (see
+  [Core Temp](#core-temp-optional-windows)). Fan control talks to the server's management chip (BMC) through Windows' own built-in IPMI support.
 
 What it does **not** do on Windows as a result: see [What it can and cannot show](#what-it-can-and-cannot-show).
 
@@ -243,9 +245,9 @@ panel's agent entry use `power_links:` / `ups_powers:` / `ups_names:` as for any
 | CPU model, board / system model, BIOS | yes | yes |
 | NVIDIA GPU (use, memory, temperature, watts) | yes (nvidia-smi) | yes (nvidia-smi) |
 | AMD / Intel GPU | no | no |
-| CPU temperature | yes (coretemp / k10temp) | only what the BIOS publishes as an ACPI thermal zone, often nothing or a fixed value |
+| CPU temperature | yes (coretemp / k10temp) | only what the BIOS publishes as an ACPI thermal zone, often nothing or a fixed value; per core with [Core Temp](#core-temp-optional-windows) |
 | Board fans and voltages | yes (hwmon chips) | only through the BMC (Supermicro, `ipmi:`) |
-| CPU watts | yes (RAPL, see the table above) | **no** |
+| CPU watts | yes (RAPL, see the table above) | only with [Core Temp](#core-temp-optional-windows) |
 | Battery | watts and state | state only |
 | Processes | all, with command lines (passwords blanked) | all names; details for programs it may open; the program's path instead of its command line; no per-program GPU memory |
 
@@ -254,6 +256,48 @@ watts, motherboard sensor chips (fans, voltages), and other programs' command-li
 these (HWiNFO, LibreHardwareMonitor, Afterburner) load a kernel driver, which is exactly what anti-cheat
 software watches for. On a Supermicro board the BMC fills most of the gap (CPU temperature, fans, voltages).
 The panel simply leaves out what the agent does not send.
+
+## Core Temp (optional, Windows)
+
+[Core Temp](https://www.alcpu.com/CoreTemp/) is a free Windows program that shows the temperature of every CPU
+core and the CPU's power draw. It reads them with **its own** kernel driver, and it offers those readings to
+other programs through a documented shared-memory block
+([developer page](https://www.alcpu.com/CoreTemp/developers.html)). With `sensors: coretemp: true` fairy-agent
+copies that block every couple of seconds and shows the cores as "Core 0", "Core 1"... (with Tj. Max as the
+critical value) and the CPU package watts as "CPU watts", exactly where Linux machines show theirs. The fan
+watchdog counts them as CPU temperatures.
+
+**Anti-cheat:** fairy-agent itself still loads no driver and only opens the block read-only. The driver that
+anti-cheat software can see is Core Temp's, the same situation as running Core Temp without fairy-agent. If a
+game objects to Core Temp, close Core Temp before playing: the agent notices, writes one line in its log and
+carries on without those readings (and picks them up again when Core Temp comes back).
+
+**Set it up:**
+
+1. Install Core Temp and start it. In *Options > Settings*: on *General* tick **Start Core Temp with Windows**
+   (Core Temp does this with a scheduled task, as administrator) and on *Display* tick **Start Core Temp
+   minimized** (and, if you like, *Close Core Temp to the notification area*).
+2. Still in *Options > Settings*, on *Advanced*, tick **Enable global shared memory (SNMP)**. This is needed:
+   without it Core Temp shares its readings only inside your own Windows sign-in session, and the fairy-agent
+   service (like every service) runs outside it. In `CoreTemp.ini` this is `SnmpSharedMemory=1` under
+   `[Advanced]`.
+3. The fairy-agent service must run as **LocalSystem** (`install-fairy-agent.ps1 -LocalSystem`, or
+   `install --account LocalSystem`; the same as for fan control). Core Temp runs as administrator and does not
+   open its readings to other accounts, so the default LocalService account is turned away ("access denied" in
+   the agent's log).
+4. In `C:\ProgramData\fairy-agent\config.yaml`:
+
+   ```yaml
+   sensors:
+     coretemp: true
+   ```
+
+   then `Restart-Service fairy-agent`. The log says "Core Temp readings available" once it has found them.
+
+The agent looks for `Global\CoreTempMappingObjectEx` first, then the older `CoreTempMappingObject`, then the
+same names in the signed-in user's session. Core Temp has no CPU package *temperature* in its shared block, so
+only the cores are shown. Core Temp's Fahrenheit and "distance to Tj. Max" display options are converted back to
+°C. Package watts appear only when Core Temp shows a "Power" value for your CPU.
 
 ## Settings (config.yaml)
 
@@ -267,6 +311,7 @@ The file is `C:\ProgramData\fairy-agent\config.yaml` (Windows) or `/etc/fairy-ag
 | `hide_host_details` | false | no hostname, no hardware model, just "Windows" / "Linux" |
 | `processes.enabled` / `cmdline` / `never_open` | true / true / none | the Processes tab |
 | `gpu.nvidia_smi` | auto | `off` or a full path |
+| `sensors.coretemp` | false | Windows: CPU core temperatures and watts from Core Temp (see [Core Temp](#core-temp-optional-windows)) |
 | `ipmi`, `fan_control`, `power_control`, `wol` | off | see [Optional features](#optional-features) |
 | `control_rate_per_min` | 12 | all control requests together |
 | `log_file` | Windows: `C:\ProgramData\fairy-agent\logs\agent.log` (5 MB, one old copy); Linux: the journal | |
@@ -317,6 +362,8 @@ on the first install and report anything odd:
   entry on a failed start, automatic restart;
 * CPU %, memory, disks, network counters, uptime, OS name and hardware strings (registry);
 * ACPI thermal-zone temperatures (PDH);
+* Core Temp's shared memory: which name the service finds (global setting on/off), LocalService vs LocalSystem,
+  the values against Core Temp's window (unit conversions, package watts);
 * the process list (Toolhelp snapshot + limited handles), LocalService vs LocalSystem;
 * nvidia-smi on Windows (looping mode, path detection);
 * shutdown / reboot / cancel (InitiateSystemShutdownEx / AbortSystemShutdown) as LocalService;
