@@ -26,6 +26,7 @@ import (
 type serveFlags struct {
 	cfgPath, envFile, listen, logLevel string
 	demo                               bool
+	demoAs                             string // demo only: preview as "viewer:Straw", "pending", ...
 }
 
 // panel is everything the HTTP server needs, from either the real config or the demo simulator.
@@ -63,6 +64,13 @@ func serve(args []string) int {
 		return 1
 	}
 	srv := web.New(p.cfg, p.secrets, p.poller, p.demoUser, version)
+	if f.demoAs != "" {
+		if err := srv.SetDemoView(f.demoAs); err != nil {
+			fmt.Fprintf(os.Stderr, "--demo-as: %v\n", err)
+			return 2
+		}
+		slog.Warn("demo: previewing the panel as " + f.demoAs + " (switch in the sidebar)")
+	}
 	ln, err := net.Listen("tcp", f.listen)
 	if err != nil {
 		slog.Error("listen failed", "addr", f.listen, "error", err)
@@ -87,10 +95,15 @@ func parseServeFlags(args []string) (serveFlags, bool) {
 	listen := fs.String("listen", env("FAIRY_LISTEN", "127.0.0.1:8080"), "address:port (behind nginx)")
 	demoMode := fs.Bool("demo", false, "simulated data, NO authentication (loopback preview only)")
 	logLevel := fs.String("log-level", env("FAIRY_LOG_LEVEL", "info"), "debug|info|warn|error")
+	demoAs := fs.String("demo-as", "", `demo only: preview as "viewer:Straw", "viewer:Neptune", "pending" or "admin"`)
 	if err := fs.Parse(args); err != nil {
 		return serveFlags{}, false
 	}
-	f := serveFlags{cfgPath: *cfgPath, envFile: *envFile, listen: *listen, logLevel: *logLevel, demo: *demoMode}
+	f := serveFlags{cfgPath: *cfgPath, envFile: *envFile, listen: *listen, logLevel: *logLevel, demo: *demoMode, demoAs: *demoAs}
+	if f.demoAs != "" && !f.demo {
+		fmt.Fprintln(os.Stderr, "--demo-as only works with --demo (a real panel takes roles from the Users page)")
+		return serveFlags{}, false
+	}
 	if f.demo && !flagSet(fs, "listen") {
 		f.listen = "127.0.0.1:8090"
 	}

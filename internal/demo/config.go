@@ -16,32 +16,32 @@ audit_log: %q
 data_dir: %q
 oidc: {issuer: "https://id.example.invalid", client_id: demo, control_groups: [controllers]}
 proxmox:
-  - {id: teyvat, id_prefix: "", cluster_name: NSX-TEYVAT, urls: ["https://nsx-kachina.invalid:8006"],
+  - {id: teyvat, id_prefix: "", cluster_name: NSX-TEYVAT, site: Neptune, urls: ["https://nsx-kachina.invalid:8006"],
      token_id: "fairy@pve!panel", token_secret_env: DEMO_PVE_TOKEN,
      # separate token with only the FairyPower role (VM.PowerMgmt) -> guest start/shutdown/reboot/stop
      power_token_id: "fairy@pve!power", power_token_secret_env: DEMO_PVE_POWER_TOKEN}
   # Straw's standalone PVE host, reached over Tailscale node sharing with a read-only token he gave Neptune
-  - {id: straw, cluster_name: ASUS-i7, standalone: true, group: Straw, owner: straw,
+  - {id: straw, cluster_name: ASUS-i7, standalone: true, group: Straw, owner: straw, site: Straw,
      urls: ["https://asus-i7.straws-tailnet.invalid:8006"], token_id: "fairy@pve!panel", token_secret_env: DEMO_STRAW_PVE_TOKEN}
 agents:
-  - {id: nsx-cyrene, name: NSX-CYRENE, url: "http://100.64.0.10:9101", token_env: DEMO_TOKEN, group: Neptune, owner: neptune,
+  - {id: nsx-cyrene, name: NSX-CYRENE, url: "http://100.64.0.10:9101", token_env: DEMO_TOKEN, group: Neptune, owner: neptune, site: Neptune,
      tags: [server, supermicro], dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=demo-cyrene",
      fan_control: {vendor: supermicro, control_token_env: DEMO_CONTROL_TOKEN}, power_control: true}
   - {id: neptune-laptop, name: "ASUS Vivobook 16X", url: "http://100.64.0.11:9101", token_env: DEMO_TOKEN,
-     group: Neptune, owner: neptune, tags: [laptop], power_control: true, control_token_env: DEMO_CONTROL_TOKEN,
+     group: Neptune, owner: neptune, site: Neptune, tags: [laptop], power_control: true, control_token_env: DEMO_CONTROL_TOKEN,
      dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=demo-laptop"}
-  - {id: llm-box, name: llm-box, url: "http://100.64.0.12:9101", token_env: DEMO_TOKEN, group: Neptune, owner: neptune, tags: [llm]}
+  - {id: llm-box, name: llm-box, url: "http://100.64.0.12:9101", token_env: DEMO_TOKEN, group: Neptune, owner: neptune, site: Neptune, tags: [llm]}
   # agent on the NSX-KACHINA node itself (matched by node name): adds board model, temps, power control
   - {id: kachina-agent, name: "NSX-KACHINA agent", url: "http://100.64.0.5:9101", token_env: DEMO_TOKEN,
      node: NSX-KACHINA, power_control: true, wol_relay: true, control_token_env: DEMO_CONTROL_TOKEN}
   - {id: straw-pc, name: "Straw's Ryzen PC", url: "http://100.64.0.20:9101", token_env: DEMO_TOKEN,
-     group: Straw, owner: straw, tags: [friend, gaming], power_links: {desk-plug: straw-pc}}
+     group: Straw, owner: straw, site: Straw, tags: [friend, gaming], power_links: {desk-plug: straw-pc}}
   - {id: asus-i7-agent, name: "ASUS-i7 agent", url: "http://100.64.0.22:9101", token_env: DEMO_TOKEN,
-     group: Straw, owner: straw, links_to: straw-node-asus-i7,
+     group: Straw, owner: straw, site: Straw, links_to: straw-node-asus-i7,
      ups_powers: {cyberpower: [straw-node-asus-i7, straw-pc]}, ups_names: {cyberpower: "Straw's CyberPower"},
      wol_relay: true, control_token_env: DEMO_CONTROL_TOKEN}
   - {id: straw-laptop, name: "Straw's laptop", url: "http://100.64.0.21:9101", token_env: DEMO_TOKEN,
-     group: Straw, owner: straw, tags: [friend, laptop]}
+     group: Straw, owner: straw, site: Straw, tags: [friend, laptop]}
 systems:
   - {id: qemu-100, dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=demo-win11"}
   - {id: lxc-101, tags: [games]}

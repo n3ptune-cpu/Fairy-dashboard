@@ -16,6 +16,7 @@ const usage = `Fairy homelab panel
 usage:
   fairy serve [--config FILE] [--env-file FILE] [--listen 127.0.0.1:8080]
   fairy serve --demo [--listen 127.0.0.1:8090]   simulated data, NO login, loopback only
+        [--demo-as viewer:Straw]                 ...previewed as a viewer of one site (or pending)
   fairy admin ...                                break-glass CLI (fairy admin help)
   fairy version
 `
