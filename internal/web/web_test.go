@@ -513,3 +513,21 @@ func TestAnonymousAuditEntriesAreThrottled(t *testing.T) {
 		t.Fatal("authenticated entries", n)
 	}
 }
+
+// The panel never sends a fan duty below FanDutyFloor, even to an agent that would accept it.
+func TestFanDutyFloor(t *testing.T) {
+	e := setup(t)
+	c := e.cookie(controller(), 0)
+	hdr := []string{"Cookie", c, "X-Requested-With", "fairy"}
+	for _, pct := range []int{0, 10, FanDutyFloor - 1} {
+		if r := e.do("POST", "/api/systems/cyrene/fan/duty", map[string]any{"zone": 0, "percent": pct}, hdr...); r.code != 422 {
+			t.Fatal("duty below the floor accepted", pct, r.code)
+		}
+	}
+	if r := e.do("POST", "/api/systems/cyrene/fan/duty", map[string]any{"zone": 0, "percent": FanDutyFloor}, hdr...); r.code != 200 {
+		t.Fatal("duty at the floor", r.code, string(r.raw))
+	}
+	if strings.Contains(strings.Join(e.b.Requests, "\n"), "percent:0") {
+		t.Fatal("a refused duty reached the agent", e.b.Requests)
+	}
+}

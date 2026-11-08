@@ -469,13 +469,13 @@ async function loadFans(id) {
     const f = await api(`/api/systems/${enc(id)}/fan`);
     if (!$("#tab-body")) return;
     const full = f.mode === "full";
-    body.innerHTML = `<div class="warnbox">Writes go to the BMC. The agent enforces a ${f.min_duty}% minimum and reverts to <b>Optimal</b>
+    body.innerHTML = `<div class="warnbox">Writes go to the BMC. The panel never goes below 30% and the agent enforces a ${f.min_duty}% minimum and reverts to <b>Optimal</b>
       if a CPU/system temperature exceeds ${f.max_temp_c?.toFixed(0)}°C or readings disappear.${canCtl ? "" : ` ${esc(controlWhyNot())}`}</div>
       <div class="grid2"><div class="panel glass pad"><h3>Mode</h3><div class="row-gap">${["optimal", "standard", "heavyio", "full"].map((m) =>
         `<button class="btn ${f.mode === m ? "on" : ""}" data-mode="${m}" ${canCtl ? "" : "disabled"}>${m}</button>`).join("")}</div>
         <h3 class="gap">Zone duty (full mode only)</h3>${[0, 1].map((z) => {
           const v = f.duty[z] ?? 50;
-          return `<div class="duty-row"><span>Zone ${z}</span><input type="range" min="${f.min_duty}" max="100" step="5" value="${v}" data-zone="${z}" ${canCtl && full ? "" : "disabled"}>
+          return `<div class="duty-row"><span>Zone ${z}</span><input type="range" min="${Math.max(30, f.min_duty || 0)}" max="100" step="5" value="${v}" data-zone="${z}" ${canCtl && full ? "" : "disabled"}>
           <b data-duty-label="${z}">${v}%</b><button class="btn" data-apply="${z}" ${canCtl && full ? "" : "disabled"}>Set</button></div>`; }).join("")}
         <div class="note">Zone 0: CPU/system headers (FAN1…), zone 1: peripheral (FANA). Verify on your board.</div><div class="error" id="fan-err"></div></div>
       <div class="stack"><div class="panel glass pad"><h3>Fans</h3>${f.fans.map((x) => `<div class="list-row"><span>${esc(x.name)}</span><span>${x.rpm} rpm</span></div>`).join("") || '<div class="note">no fan sensors</div>'}</div>

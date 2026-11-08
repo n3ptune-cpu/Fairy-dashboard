@@ -113,6 +113,10 @@ func (s *Server) fanMode(c *reqCtx) error {
 	return s.fanWrite(c, "fan.mode", b, map[string]any{"mode": b.Mode})
 }
 
+// FanDutyFloor is the lowest fan duty (%) the panel sends, whatever the agent's own minimum: a wrong click
+// or an old agent must never stop the fans of a server.
+const FanDutyFloor = 30
+
 func (s *Server) fanDuty(c *reqCtx) error {
 	if _, err := c.requireUser(); err != nil {
 		return err
@@ -121,8 +125,9 @@ func (s *Server) fanDuty(c *reqCtx) error {
 	if err := c.decodeBody(&b); err != nil {
 		return err
 	}
-	if b.Zone == nil || (*b.Zone != 0 && *b.Zone != 1) || b.Percent == nil || *b.Percent < 0 || *b.Percent > 100 {
-		return apierr.New(422, "zone must be 0 or 1 and percent 0-100")
+	if b.Zone == nil || (*b.Zone != 0 && *b.Zone != 1) || b.Percent == nil || *b.Percent < FanDutyFloor || *b.Percent > 100 {
+		return apierr.New(422, fmt.Sprintf("zone must be 0 or 1 and percent %d-100 (the panel never sets fans below %d%%)",
+			FanDutyFloor, FanDutyFloor))
 	}
 	return s.fanWrite(c, "fan.duty", map[string]any{"zone": *b.Zone, "percent": *b.Percent},
 		map[string]any{"zone": *b.Zone, "percent": *b.Percent})
