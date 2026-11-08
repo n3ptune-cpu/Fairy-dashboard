@@ -1,7 +1,11 @@
 package web
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/powerctl"
 )
 
@@ -58,6 +62,25 @@ func (s *Server) powerAction(c *reqCtx) error {
 	}
 	params["via"] = res.Via
 	c.audit(u, "power."+req.Action, id, params, "ok")
+	s.powerEvent(x, req, res, who)
 	c.json(200, res)
 	return nil
+}
+
+// powerEvent is the notification for a power action, and tells the watcher that a shutdown / reboot from the
+// panel is expected (the host going offline is then "off", not an alarm).
+func (s *Server) powerEvent(x model.System, req powerctl.Request, res model.PowerResult, who string) {
+	s.Watch.NotePanelPower(x.ID, req.Action, time.Now())
+	e := notifications.Event{Type: "power", Severity: notifications.Info, SystemID: x.ID, Host: x.Name}
+	switch req.Action {
+	case "shutdown", "reboot":
+		e.Kind, e.Text = "power_requested", fmt.Sprintf("%s requested by %s (%s)", req.Action, who, res.Message)
+	case "cancel":
+		e.Kind, e.Text = "power_cancelled", "pending shutdown / reboot cancelled by "+who
+	case "wake":
+		e.Kind, e.Text = "wake_sent", "Wake-on-LAN sent by "+who
+	default:
+		e.Kind, e.Text = "power_"+req.Action, req.Action+" by "+who
+	}
+	s.Notes.Add(e)
 }

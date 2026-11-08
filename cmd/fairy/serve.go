@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
@@ -19,7 +20,9 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/demo"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/panelupdate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/updates"
@@ -87,6 +90,7 @@ type panel struct {
 	secrets  config.Secrets
 	poller   *poller.Poller
 	demoUser *model.User // non-nil only in demo mode (authentication bypassed, loopback only)
+	skipped  []string    // hosts added in the panel that could not be loaded (and why)
 }
 
 // serve runs `fairy serve` and returns the process exit code.
@@ -127,6 +131,21 @@ func serve(args []string) int {
 	srv := web.New(p.cfg, p.secrets, p.poller, p.demoUser, version)
 	srv.Updates = latestSource(p.cfg, f.demo, p.cfg.Updates.AgentRepo, release.AgentProgram)
 	srv.PanelUpdates = latestSource(p.cfg, f.demo, p.cfg.Updates.PanelRepo, release.PanelProgram)
+	srv.ManagedSkipped = p.skipped
+	switch {
+	case f.demo:
+		srv.Enroll.Pair = demo.Pair
+		if srv.Enroll.PanelAddr == "" {
+			srv.Enroll.PanelAddr = "100.88.109.47" // the demo has no Tailscale; any address shows the command
+		}
+		to := srv.PanelUpdates.Latest().Version
+		srv.PanelRunner = &panelupdate.Demo{From: version, To: to}
+	case runtime.GOOS == "linux":
+		srv.PanelRunner = panelupdate.Systemd{}
+	}
+	if srv.Enroll.PanelAddr == "" {
+		slog.Warn("Add host: this machine has no single Tailscale address; set enroll: {panel_address: 100.x.y.z} in config.yaml")
+	}
 	if f.demoAs != "" {
 		if err := srv.SetDemoView(f.demoAs); err != nil {
 			fmt.Fprintf(os.Stderr, "--demo-as: %v\n", err)
@@ -247,6 +266,18 @@ func setupPanel(f serveFlags) (*panel, int) {
 		slog.Error("invalid config", "error", err)
 		return nil, 1
 	}
+	// Hosts added in the panel (Add host): merged after config.yaml, which wins on the same id; each one is
+	// validated like a hand-written entry, a bad one is skipped (logged, shown on the Add host dialog).
+	added, skipped, err := managed.NewStore(cfg.DataDir).Merge(cfg)
+	if err != nil {
+		slog.Error("hosts added in the panel not loaded", "error", err)
+	}
+	for _, w := range skipped {
+		slog.Warn(w)
+	}
+	if len(added) > 0 {
+		slog.Info("hosts added in the panel", "count", len(added))
+	}
 	p, err := poller.New(cfg, secrets, nil)
 	if err != nil {
 		slog.Error("startup failed", "error", err)
@@ -255,7 +286,7 @@ func setupPanel(f serveFlags) (*panel, int) {
 	for _, w := range web.DeploymentWarnings(cfg, secrets) {
 		slog.Warn(w)
 	}
-	return &panel{cfg: cfg, secrets: secrets, poller: p}, 0
+	return &panel{cfg: cfg, secrets: secrets, poller: p, skipped: skipped}, 0
 }
 
 // ensureAuditLog creates the append-only JSON-lines audit log (mode 0600, directory 0700) before serving, so a

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -21,7 +22,12 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/enrollment"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notify"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/panelupdate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/settings"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/tokens"
@@ -62,6 +68,15 @@ type Server struct {
 	// PanelUpdates is the latest Fairy-dashboard release (the panel's own version is compared with it; the
 	// panel is updated by hand with `fairy update`); nil = check off.
 	PanelUpdates updates.Source
+	// PanelRunner starts the panel's own update (fairy-panel-update.service); nil = not available here.
+	PanelRunner panelupdate.Runner
+	// Add host: the managed hosts, the pending enrollments, and the managed hosts skipped at start (and why).
+	Managed        *managed.Store
+	Enroll         *enrollment.Manager
+	ManagedSkipped []string
+	// Notifications page: the events and the watcher that makes them from the poller's snapshots.
+	Notes *notifications.Store
+	Watch *notifications.Watcher
 
 	seenMu sync.Mutex
 	seen   map[string]time.Time // subject -> last "last seen" write
@@ -100,6 +115,15 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 		settingsRL: newRateLimiter(30), uploadRL: newRateLimiter(uploadsPerMin)}
 	s.oidc = newOIDC(cfg, secrets)
 	s.logo = loadLogo(cfg.Branding.Logo)
+	s.Managed = managed.NewStore(cfg.DataDir)
+	s.Notes = notifications.Open(filepath.Join(cfg.DataDir, "notifications.json"))
+	s.Notes.Push = notify.Notify
+	s.Watch = &notifications.Watcher{Store: s.Notes}
+	addr := cfg.Enroll.PanelAddress
+	if addr == "" {
+		addr = enrollment.DetectPanelAddress()
+	}
+	s.Enroll = enrollment.New(s.Managed, s.enrollHooks(), addr, cfg.Updates.AgentRepo)
 	if err := s.Access.EnsureSites(cfg.Sites()); err != nil { // sites named in config.yaml exist on the Users page
 		slog.Error("users.json write failed", "error", err)
 	}
@@ -247,6 +271,7 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
+	go s.watch(ctx)
 	go func() { // write the throttled-entries summary even when the flood stops
 		t := time.NewTicker(time.Minute)
 		defer t.Stop()
@@ -264,4 +289,67 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		return nil
 	}
 	return err
+}
+
+// watch turns the poller's snapshots into notifications (every 2 s) and saves them (every 10 s, and at the end).
+func (s *Server) watch(ctx context.Context) {
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	seq := s.Poller.UPS.Seq()
+	last := time.Now()
+	s.notePanelUpdateResult()
+	vers, lastAt := map[string]string{}, map[string]float64{}
+	for {
+		select {
+		case <-ctx.Done():
+			_ = s.Notes.Flush()
+			return
+		case now := <-t.C:
+			evs := s.Poller.UPS.EventsSince(seq)
+			if len(evs) > 0 {
+				seq = evs[len(evs)-1].Seq
+			}
+			s.Watch.Observe(now, s.Poller.Snapshot(), evs)
+			s.watchAgentUpdates(vers, lastAt)
+			if now.Sub(last) >= 10*time.Second {
+				last = now
+				if err := s.Notes.Flush(); err != nil {
+					slog.Warn("notifications: cannot save", "error", err)
+				}
+			}
+		}
+	}
+}
+
+// watchAgentUpdates makes a notification when an agent comes back with another version, or reports a failed
+// self-update (rolled back).
+func (s *Server) watchAgentUpdates(vers map[string]string, lastAt map[string]float64) {
+	for _, a := range s.Poller.Agents() {
+		info, seen := s.Poller.AgentInfo(a.ID)
+		if !seen || info.Version == "" {
+			continue
+		}
+		sys, name := a.ID, a.DisplayName()
+		if x := s.Poller.RelaySystem(a.ID); x != nil {
+			sys, name = x.ID, x.Name
+		}
+		if prev, ok := vers[a.ID]; ok && prev != info.Version {
+			s.Notes.Add(notifications.Event{Kind: "update_done", Type: "update", Severity: notifications.Info, SystemID: sys,
+				Host: name, Text: "agent now runs " + info.Version + " (was " + prev + ")"})
+		}
+		vers[a.ID] = info.Version
+		last, _ := info.SelfUpdate["last"].(map[string]any)
+		at, _ := last["at"].(float64)
+		if at == 0 {
+			continue
+		}
+		if prev, ok := lastAt[a.ID]; ok && at > prev {
+			if okv, _ := last["ok"].(bool); !okv {
+				msg, _ := last["message"].(string)
+				s.Notes.Add(notifications.Event{Kind: "update_failed", Type: "update", Severity: notifications.Warning,
+					SystemID: sys, Host: name, Text: "agent update failed: " + msg})
+			}
+		}
+		lastAt[a.ID] = at
+	}
 }

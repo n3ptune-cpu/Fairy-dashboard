@@ -6,10 +6,12 @@
 package demo
 
 import (
+	"log/slog"
 	"os"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 )
@@ -36,6 +38,14 @@ func Build(dir, publicURL string) (*config.Panel, config.Secrets, *poller.Poller
 		return nil, config.Secrets{}, nil, err
 	}
 	secrets := config.Secrets{SessionSecret: randTok() + randTok(), InsecureCookies: true}
+	added, skipped, err := managed.NewStore(cfg.DataDir).Merge(cfg) // hosts added with Add host in an earlier demo run
+	if err != nil {
+		return nil, config.Secrets{}, nil, err
+	}
+	for _, w := range skipped {
+		slog.Warn(w)
+	}
+	rememberPaired(added)
 	p, err := poller.New(cfg, secrets, NewBackend(cfg))
 	if err != nil {
 		return nil, config.Secrets{}, nil, err

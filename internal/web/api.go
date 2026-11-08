@@ -30,4 +30,6 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/stream", s.h(s.stream))
 	s.adminRoutes()
 	s.updateRoutes()
+	s.enrollRoutes()
+	s.notificationRoutes()
 }

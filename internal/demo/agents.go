@@ -139,6 +139,9 @@ func agentMetrics(id string) (map[string]any, error) {
 				"system_hint": "self", "error": nil}}})
 		feat["processes"], feat["cmdline"] = false, false
 	default:
+		if platform, ok := pairedPlatform(id); ok {
+			return pairedMetrics(id, platform), nil
+		}
 		return nil, fmt.Errorf("simulated: agent unreachable: %w", context.DeadlineExceeded)
 	}
 	return m, nil

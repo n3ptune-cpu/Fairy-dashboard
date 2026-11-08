@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/updates"
 )
 
@@ -44,6 +46,8 @@ func (s *Server) updateRoutes() {
 	s.mux.HandleFunc("GET /api/admin/updates", s.h(s.updatesList))
 	s.mux.HandleFunc("POST /api/admin/updates", s.h(s.updateAll))
 	s.mux.HandleFunc("POST /api/admin/updates/{id}", s.h(s.updateOne))
+	s.mux.HandleFunc("GET /api/admin/panel-update", s.h(s.panelUpdateGet))
+	s.mux.HandleFunc("POST /api/admin/panel-update", s.h(s.panelUpdatePost))
 }
 
 func (s *Server) latest() updates.Latest {
@@ -128,7 +132,7 @@ func (s *Server) updatesList(c *reqCtx) error {
 			page.Behind++
 		}
 	}
-	for _, a := range s.Cfg.Agents {
+	for _, a := range s.Poller.Agents() {
 		r := s.updateRow(c, a, latest)
 		if r.Behind != nil && *r.Behind {
 			page.Behind++
@@ -188,6 +192,7 @@ func (s *Server) updateOne(c *reqCtx) error {
 		return err
 	}
 	c.audit(u, "update.agent", id, params, "ok")
+	s.updateEvent(a, params)
 	c.json(200, model.ControlResult{OK: true, Result: data})
 	return nil
 }
@@ -216,7 +221,7 @@ func (s *Server) updateAll(c *reqCtx) error {
 	}
 	var jobs []*job
 	out := []updateResult{}
-	for _, a := range s.Cfg.Agents {
+	for _, a := range s.Poller.Agents() {
 		if !a.SelfUpdate {
 			continue
 		}
@@ -247,9 +252,22 @@ func (s *Server) updateAll(c *reqCtx) error {
 			j.res.Error = outcome
 		}
 		c.audit(u, "update.agent", j.a.ID, j.params, outcome)
+		if j.err == nil {
+			s.updateEvent(j.a, j.params)
+		}
 		out = append(out, j.res)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	c.json(200, map[string]any{"results": out})
 	return nil
+}
+
+func (s *Server) updateEvent(a config.Agent, params map[string]any) {
+	sys := a.ID
+	name := a.DisplayName()
+	if x := s.Poller.RelaySystem(a.ID); x != nil {
+		sys, name = x.ID, x.Name
+	}
+	s.Notes.Add(notifications.Event{Kind: "update_started", Type: "update", Severity: notifications.Info, SystemID: sys,
+		Host: name, Text: fmt.Sprintf("agent update started (%v to %v)", params["from"], params["latest"])})
 }

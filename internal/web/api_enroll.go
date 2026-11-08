@@ -1,0 +1,289 @@
+package web
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"sort"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/enrollment"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+)
+
+// Add host (admins): the dialog's data, creating a pending enrollment (a control action: CSRF, kill switch,
+// step-up, rate limit, audit host.add), its progress, cancel, and for hosts added this way Re-pair (a new code
+// when the panel lost the tokens) and Remove. The machine runs one command; the panel pairs by itself.
+
+func (s *Server) enrollRoutes() {
+	s.mux.HandleFunc("GET /api/admin/hosts", s.h(s.hostsPage))
+	s.mux.HandleFunc("POST /api/admin/hosts", s.h(s.hostAdd))
+	s.mux.HandleFunc("POST /api/admin/hosts/{id}/repair", s.h(s.hostRepair))
+	s.mux.HandleFunc("DELETE /api/admin/hosts/{id}", s.h(s.hostRemove))
+	s.mux.HandleFunc("GET /api/admin/enrollments/{id}", s.h(s.enrollmentGet))
+	s.mux.HandleFunc("DELETE /api/admin/enrollments/{id}", s.h(s.enrollmentCancel))
+}
+
+// enrollHooks connects the enrollment manager to the poller, the managed store, the audit log and notifications.
+func (s *Server) enrollHooks() enrollment.Hooks {
+	return enrollment.Hooks{
+		Config: func() *config.Panel {
+			c := *s.Cfg
+			c.Agents, c.Systems = s.Poller.Agents(), s.Poller.SystemsConfig()
+			return &c
+		},
+		Add: func(e managed.Entry) error {
+			if e.Host.Site != "" {
+				_ = s.Access.EnsureSites([]string{e.Host.Site})
+			}
+			return s.Poller.AddAgent(e.Agent, e.Override)
+		},
+		Remove: s.Poller.RemoveAgent,
+		Online: func(id string) (bool, string) {
+			info, _ := s.Poller.AgentInfo(id)
+			if info.Online {
+				return true, ""
+			}
+			for _, x := range s.Poller.Snapshot() {
+				if x.ID == id && x.Error != nil {
+					return false, *x.Error
+				}
+			}
+			return false, ""
+		},
+		Event: s.enrollEvent,
+	}
+}
+
+func (s *Server) enrollEvent(e enrollment.Enrollment, kind, detail string) {
+	outcome := kind
+	if detail != "" {
+		outcome += ": " + detail
+	}
+	action := "host.pair"
+	if e.Repair {
+		action = "host.repair"
+	}
+	s.writeAudit(audit.Entry{Actor: e.CreatedBy, Action: action, Target: e.HostID, Source: "fairy",
+		Params: map[string]any{"enrollment": e.ID, "url": e.URL}, Outcome: outcome})
+	n := notifications.Event{Type: "enroll", SystemID: e.HostID, Host: e.Name}
+	switch kind {
+	case "online":
+		n.Kind, n.Severity, n.Text = "host_added", notifications.Info, "added with Add host and online"
+		if e.Repair {
+			n.Text = "re-paired and online"
+		}
+	case "paired":
+		return // the "online" event follows (or the host page shows why not)
+	case "failed":
+		n.Kind, n.Severity, n.Text = "pairing_failed", notifications.Warning, "Add host failed: "+detail
+	case "expired":
+		n.Kind, n.Severity, n.Text = "pairing_expired", notifications.Info, "Add host: the code expired before the machine ran the command"
+	default:
+		return
+	}
+	if s.Notes != nil {
+		s.Notes.Add(n)
+	}
+}
+
+type hostsPage struct {
+	PanelAddress string                  `json:"panel_address"`
+	InstallBase  string                  `json:"install_base"`
+	Nodes        []nodeChoice            `json:"nodes"`
+	Relays       []idName                `json:"relays"`
+	Sites        []string                `json:"sites"`
+	Managed      []managedRow            `json:"managed"`
+	Enrollments  []enrollment.Enrollment `json:"enrollments"`
+	Skipped      []string                `json:"skipped,omitempty"`
+}
+
+type nodeChoice struct {
+	Name     string `json:"name"`
+	SystemID string `json:"system_id"`
+	Cluster  string `json:"cluster"`
+}
+
+type idName struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type managedRow struct {
+	managed.Host
+	SystemID string `json:"system_id"`
+	Online   bool   `json:"online"`
+	Active   bool   `json:"active"` // polled now (false: skipped at start, see the log)
+}
+
+func (s *Server) nodeSystemID(name string) string {
+	for _, x := range s.Poller.Snapshot() {
+		if x.Kind == "node" && x.Name == name {
+			return x.ID
+		}
+	}
+	return ""
+}
+
+func (s *Server) hostsPage(c *reqCtx) error {
+	if _, err := c.requireAdmin("Add host"); err != nil {
+		return err
+	}
+	p := hostsPage{PanelAddress: s.Enroll.PanelAddr, InstallBase: s.Enroll.InstallBase, Nodes: []nodeChoice{}, Relays: []idName{},
+		Sites: []string{}, Managed: []managedRow{}, Enrollments: s.Enroll.List(), Skipped: s.ManagedSkipped}
+	for _, x := range s.Poller.Snapshot() {
+		if x.Kind == "node" {
+			cl := ""
+			if x.Cluster != nil {
+				cl = *x.Cluster
+			}
+			p.Nodes = append(p.Nodes, nodeChoice{Name: x.Name, SystemID: x.ID, Cluster: cl})
+		}
+	}
+	for _, a := range s.Poller.Agents() {
+		if a.WolRelay {
+			p.Relays = append(p.Relays, idName{a.ID, a.DisplayName()})
+		}
+	}
+	p.Sites = append(p.Sites, s.Access.Load().Sites...)
+	sort.Strings(p.Sites)
+	hosts, err := s.Managed.Load()
+	if err != nil {
+		return apierr.New(500, "managed-hosts.yaml: "+err.Error())
+	}
+	for _, h := range hosts {
+		info, _ := s.Poller.AgentInfo(h.ID)
+		a, ok := s.Poller.AgentByID(h.ID)
+		p.Managed = append(p.Managed, managedRow{Host: h, SystemID: h.Shown(), Online: info.Online, Active: ok && a.Managed})
+	}
+	c.json(200, p)
+	return nil
+}
+
+func enrollErr(err error) error {
+	var v *enrollment.Validation
+	if errors.As(err, &v) {
+		return apierr.New(400, v.Msg)
+	}
+	return err
+}
+
+func (s *Server) hostAdd(c *reqCtx) error {
+	if _, err := c.requireUser(); err != nil {
+		return err
+	}
+	var req enrollment.Request
+	if err := c.decodeBody(&req); err != nil {
+		return err
+	}
+	u, err := c.controlGuard(s.control)
+	if err != nil {
+		return err
+	}
+	cr, err := s.Enroll.Create(req, nil, actorOf(u), s.nodeSystemID)
+	params := map[string]any{"name": req.Name, "os": req.OS, "site": req.Site, "node": req.Node, "options": req.Options,
+		"wol_macs": len(req.WolMACs)}
+	if err != nil {
+		c.audit(u, "host.add", managed.IDFor(req.Name), params, "refused: "+err.Error())
+		return enrollErr(err)
+	}
+	c.audit(u, "host.add", cr.HostID, params, "join code made (valid 15 min)")
+	c.json(201, cr)
+	return nil
+}
+
+func (s *Server) hostRepair(c *reqCtx) error {
+	if _, err := c.requireUser(); err != nil {
+		return err
+	}
+	u, err := c.controlGuard(s.control)
+	if err != nil {
+		return err
+	}
+	id := c.r.PathValue("id")
+	h, ok := s.managedHost(id)
+	if !ok {
+		return apierr.New(404, "only hosts added with Add host can be re-paired here")
+	}
+	cr, err := s.Enroll.Create(enrollment.Request{}, &h, actorOf(u), s.nodeSystemID)
+	if err != nil {
+		c.audit(u, "host.repair", id, nil, "refused: "+err.Error())
+		return enrollErr(err)
+	}
+	c.audit(u, "host.repair", id, nil, "join code made (valid 15 min)")
+	c.json(201, cr)
+	return nil
+}
+
+func (s *Server) managedHost(id string) (managed.Host, bool) {
+	hosts, err := s.Managed.Load()
+	if err != nil {
+		return managed.Host{}, false
+	}
+	for _, h := range hosts {
+		if h.ID == id || h.Shown() == id {
+			return h, true
+		}
+	}
+	return managed.Host{}, false
+}
+
+func (s *Server) hostRemove(c *reqCtx) error {
+	if _, err := c.requireUser(); err != nil {
+		return err
+	}
+	u, err := c.controlGuard(s.control)
+	if err != nil {
+		return err
+	}
+	id := c.r.PathValue("id")
+	h, ok := s.managedHost(id)
+	if !ok {
+		return apierr.New(404, "only hosts added with Add host can be removed here (others: edit config.yaml)")
+	}
+	if err := s.Managed.Remove(h.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
+		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
+		return err
+	}
+	if a, ok := s.Poller.AgentByID(h.ID); ok && a.Managed { // a config.yaml agent with the same id stays
+		s.Poller.RemoveAgent(h.ID)
+	}
+	c.audit(u, "host.remove", h.ID, map[string]any{"name": h.Name}, "ok")
+	if s.Notes != nil {
+		s.Notes.Add(notifications.Event{Kind: "host_removed", Type: "enroll", Severity: notifications.Info, Host: h.Name,
+			Text: fmt.Sprintf("removed from the panel by %s (the agent on the machine keeps running until you uninstall it)", actorOf(u))})
+	}
+	c.json(200, map[string]any{"ok": true, "message": h.Name + " removed from the panel"})
+	return nil
+}
+
+func (s *Server) enrollmentGet(c *reqCtx) error {
+	if _, err := c.requireAdmin("Add host"); err != nil {
+		return err
+	}
+	e, ok := s.Enroll.Get(c.r.PathValue("id"))
+	if !ok {
+		return apierr.New(404, "no such Add host (the panel restarted? make a new code)")
+	}
+	c.json(200, e)
+	return nil
+}
+
+func (s *Server) enrollmentCancel(c *reqCtx) error {
+	u, err := c.requireAdmin("Add host")
+	if err != nil {
+		return err
+	}
+	if err := c.checkCSRF(u); err != nil {
+		return err
+	}
+	if !s.Enroll.Cancel(c.r.PathValue("id")) {
+		return apierr.New(409, "nothing waiting to cancel")
+	}
+	c.audit(u, "host.cancel", c.r.PathValue("id"), nil, "ok")
+	c.json(200, map[string]any{"ok": true, "message": "cancelled"})
+	return nil
+}
