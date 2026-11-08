@@ -39,7 +39,9 @@ func DefaultEnvFile() string {
 	return "/etc/fairy/fairy.env"
 }
 
-// OIDC is the Pocket ID client and who may sign in (allowed groups / emails) or use control actions.
+// OIDC is the Pocket ID client and who may sign in (allowed groups / emails). Who may see and do what is
+// managed in the panel (users.json); ControlGroups and BootstrapAdmins only decide who becomes an admin the
+// first time they sign in.
 type OIDC struct {
 	Issuer        string   `yaml:"issuer"`
 	ClientID      string   `yaml:"client_id"`
@@ -48,6 +50,8 @@ type OIDC struct {
 	AllowedGroups []string `yaml:"allowed_groups"`
 	AllowedEmails []string `yaml:"allowed_emails"`
 	ControlGroups []string `yaml:"control_groups"`
+	// BootstrapAdmins are email addresses that become admin on their first sign-in (like control_groups).
+	BootstrapAdmins []string `yaml:"bootstrap_admins"`
 }
 
 // Proxmox is one `proxmox:` cluster (or standalone host): API URLs for failover, the read-only token and the
@@ -59,6 +63,7 @@ type Proxmox struct {
 	Standalone          bool     `yaml:"standalone"`
 	Group               *string  `yaml:"group"`
 	Owner               *string  `yaml:"owner"`
+	Site                string   `yaml:"site"` // default site of its nodes and guests (the Users page can override)
 	URLs                []string `yaml:"urls"`
 	TokenID             string   `yaml:"token_id"`
 	TokenSecretEnv      string   `yaml:"token_secret_env"`
@@ -87,11 +92,13 @@ type FanControl struct {
 	ControlTokenEnv string `yaml:"control_token_env"`
 }
 
-// Labels are optional grouping fields shared by agents and `systems:` overrides.
+// Labels are optional grouping fields shared by agents and `systems:` overrides. Site is the default site
+// (who may see the system); a site assigned on the Users page overrides it.
 type Labels struct {
 	Group *string  `yaml:"group"`
 	Owner *string  `yaml:"owner"`
 	Tags  []string `yaml:"tags"`
+	Site  string   `yaml:"site"`
 }
 
 // Agent is one `agents:` entry: a Fairy agent reached over HTTP with a read token (and optionally a separate

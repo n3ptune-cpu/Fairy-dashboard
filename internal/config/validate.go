@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -18,7 +19,12 @@ var (
 	prefixRe   = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-)?$`)
 	tokenIDRe  = regexp.MustCompile(`^[^@\s]+@[^!\s]+![A-Za-z0-9_.-]+$`)
 	macRe      = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{12}$`)
+	siteRe     = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._'&-]{0,39}$`)
 )
+
+// ValidSite reports whether s is a valid site name: 1-40 letters, digits, spaces and . _ ' & -, starting with a
+// letter or digit (no leading or trailing space).
+func ValidSite(s string) bool { return siteRe.MatchString(s) && strings.TrimSpace(s) == s }
 
 // ValidID reports whether s is a valid id for a system, agent, power source or UPS: lowercase letters, digits
 // and dashes, starting with a letter or digit, at most 63 characters.
@@ -38,6 +44,7 @@ func (c *Panel) Validate() error {
 	c.validateProxmox(&errs)
 	agents := c.validateAgents(&errs)
 	c.validateSystems(&errs, agents)
+	c.validateSites(&errs)
 	for _, h := range c.PanelHosts {
 		if !ValidID(h) {
 			errs.add("panel_hosts: invalid id %q", h)
@@ -258,4 +265,50 @@ func (c *Panel) validateSystems(errs *problems, agents map[string]*Agent) {
 			errs.add("system %s: wol.relay %q must be an agent with wol_relay: true", o.ID, w.Relay)
 		}
 	}
+}
+
+// validateSites checks the optional `site:` defaults and oidc.bootstrap_admins.
+func (c *Panel) validateSites(errs *problems) {
+	check := func(where, site string) {
+		if site != "" && !ValidSite(site) {
+			errs.add("%s: invalid site %q (1-40 letters, digits, spaces and . _ ' & -)", where, site)
+		}
+	}
+	for _, p := range c.Proxmox {
+		check("proxmox "+p.ID, p.Site)
+	}
+	for _, a := range c.Agents {
+		check("agent "+a.ID, a.Site)
+	}
+	for _, o := range c.Systems {
+		check("system "+o.ID, o.Site)
+	}
+	for _, e := range c.OIDC.BootstrapAdmins {
+		if !strings.Contains(e, "@") {
+			errs.add("oidc.bootstrap_admins: %q is not an email address", e)
+		}
+	}
+}
+
+// Sites returns every site named in the config (`site:` defaults), sorted, without duplicates.
+func (c *Panel) Sites() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(s string) {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, p := range c.Proxmox {
+		add(p.Site)
+	}
+	for _, a := range c.Agents {
+		add(a.Site)
+	}
+	for _, o := range c.Systems {
+		add(o.Site)
+	}
+	sort.Strings(out)
+	return out
 }
