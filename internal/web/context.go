@@ -24,11 +24,16 @@ type reqCtx struct {
 	user  *model.User
 	token *tokens.Record // the API token of this request, if any
 	g     *access.Grant  // what the user may see and do (see grant)
+	body  []byte         // a write request's body as received (see readBody)
 }
 
 func (c *reqCtx) session() *sessionData {
 	if c.sess == nil {
-		c.sess = c.s.codec.decode(c.r)
+		if s, ok := c.r.Context().Value(sessionKey).(*sessionData); ok {
+			c.sess = s // the replay of a pending action uses the session that just signed in again
+		} else {
+			c.sess = c.s.codec.decode(c.r)
+		}
 	}
 	return c.sess
 }
@@ -91,6 +96,7 @@ type handler func(c *reqCtx) error
 func (s *Server) h(fn handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c := &reqCtx{s: s, w: w, r: r}
+		c.readBody()
 		if err := fn(c); err != nil {
 			c.fail(err)
 			return

@@ -313,6 +313,17 @@ type Me struct {
 	// Demo mode only: the role being previewed ("admin", "viewer:Straw", ...) and the choices.
 	DemoView  string   `json:"demo_view,omitempty"`
 	DemoViews []string `json:"demo_views,omitempty"`
+	// PendingResult is the outcome of an action the panel ran right after a step-up sign-in (shown once).
+	PendingResult *PendingResult `json:"pending_result,omitempty"`
+}
+
+// PendingResult is what happened to the action that waited for a step-up sign-in.
+type PendingResult struct {
+	Label   string `json:"label"`
+	OK      bool   `json:"ok"`
+	Status  int    `json:"status"`
+	Message string `json:"message"`
+	Path    string `json:"path"`
 }
 
 // FanEvent is one entry of the agent's fan log (mode changes, watchdog).

@@ -427,3 +427,67 @@ func TestNoCrossSiteSignOut(t *testing.T) {
 		t.Fatal("still signed in after logout", r.code)
 	}
 }
+
+// A control action refused for a step-up runs by itself, exactly once, right after the sign-in: the panel keeps
+// the request (with the typed confirmation as sent) in the session and replays it through every check; the
+// browser never re-submits it and is not shown the confirmation dialog again (the "Shut down ... ?" loop).
+func TestPendingActionRunsOnceAfterStepUp(t *testing.T) {
+	e := setup(t)
+	idp := newFakeIDP(t)
+	e.s.Cfg.OIDC.Issuer = idp.srv.URL
+	idp.claims = map[string]any{"groups": []string{"viewers", "controllers"}, "auth_time": time.Now().Add(-time.Hour).Unix()}
+	q, rt := idp.login(e, "/auth/login?next=/", "")
+	r := e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	sess := sessionCookie(e, r.hdr)
+	name := e.do("GET", "/api/systems/laptop", nil, "Cookie", sess).body["name"].(string)
+	powerCalls := func() int {
+		e.b.Mu.Lock()
+		defer e.b.Mu.Unlock()
+		n := 0
+		for _, x := range e.b.Requests {
+			if strings.HasPrefix(x, "laptop POST /power") {
+				n++
+			}
+		}
+		return n
+	}
+	body := map[string]any{"action": "shutdown", "delay_s": 10, "confirm": name}
+	r = e.do("POST", "/api/systems/laptop/power", body, "Cookie", sess, "X-Requested-With", "fairy",
+		"Content-Type", "application/json", "X-Fairy-Action", "Shut down "+name)
+	if r.code != 401 || !strings.Contains(string(r.raw), `"pending":true`) || powerCalls() != 0 {
+		t.Fatal("first try must ask for a step-up and keep the action", r.code, string(r.raw))
+	}
+	sess = sessionCookie(e, r.hdr) // the cookie now carries the pending action
+	q, rt = idp.login(e, "/auth/login?step_up=1&next=/%23/system/laptop", sess)
+	idp.claims["auth_time"] = time.Now().Unix()
+	r = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	if r.code != 303 || r.hdr.Get("Location") != "/#/system/laptop" {
+		t.Fatal("step-up callback", r.code, string(r.raw))
+	}
+	if powerCalls() != 1 {
+		t.Fatal("the pending shutdown must run exactly once after the sign-in, got", powerCalls())
+	}
+	sess = sessionCookie(e, r.hdr)
+	me := e.do("GET", "/api/me", nil, "Cookie", sess)
+	pr, _ := me.body["pending_result"].(map[string]any)
+	if pr == nil || pr["ok"] != true || pr["label"] != "Shut down "+name {
+		t.Fatal("pending result", string(me.raw))
+	}
+	sess = sessionCookie(e, me.hdr)
+	if me := e.do("GET", "/api/me", nil, "Cookie", sess); me.body["pending_result"] != nil {
+		t.Fatal("the result is shown once")
+	}
+	// another step-up runs nothing again
+	q, rt = idp.login(e, "/auth/login?step_up=1&next=/", sess)
+	_ = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	if powerCalls() != 1 {
+		t.Fatal("ran twice")
+	}
+	if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), "power.shutdown ok") {
+		t.Fatal("not audited")
+	}
+	// the follow-up request right after the step-up is not refused again (no loop)
+	if r := e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, "Cookie", sess, "X-Requested-With", "fairy"); r.code != 200 {
+		t.Fatal("control right after the step-up", r.code, string(r.raw))
+	}
+}

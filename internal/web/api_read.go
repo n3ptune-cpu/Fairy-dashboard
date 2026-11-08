@@ -30,6 +30,10 @@ func (s *Server) me(c *reqCtx) error {
 		me.DemoView = g.String()
 		me.DemoViews = s.demoViews()
 	}
+	if sess := c.session(); sess.PendingResult != nil && u.Auth != "token" { // shown once
+		me.PendingResult, sess.PendingResult = sess.PendingResult, nil
+		c.dirty = true
+	}
 	c.json(200, me)
 	return nil
 }

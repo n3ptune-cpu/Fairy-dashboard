@@ -29,6 +29,10 @@ type sessionData struct {
 	Nonce    string `json:"nonce,omitempty"`
 	Verifier string `json:"verifier,omitempty"`
 	Started  int64  `json:"started,omitempty"`
+	// Pending is the control action that asked for the step-up sign-in; the panel runs it once right after
+	// the sign-in (see pending.go). PendingResult is its outcome, shown once by /api/me.
+	Pending       *pendingAction       `json:"pending,omitempty"`
+	PendingResult *model.PendingResult `json:"pending_result,omitempty"`
 }
 
 type sessionCodec struct {
@@ -75,7 +79,7 @@ func (c *sessionCodec) decode(r *http.Request) *sessionData {
 }
 
 func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
-	if s == nil || (*s == sessionData{}) {
+	if s == nil || s.empty() {
 		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
 			Secure: c.secure, SameSite: http.SameSiteLaxMode})
 		return
@@ -89,4 +93,9 @@ func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
 	// cookie with state/nonce/PKCE verifier. Writes are protected by the CSRF header + Origin checks.
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: payload + "." + c.sign(payload), Path: "/",
 		MaxAge: c.maxAge, HttpOnly: true, Secure: c.secure, SameSite: http.SameSiteLaxMode})
+}
+
+func (s *sessionData) empty() bool {
+	return s.SID == "" && s.User == nil && s.IAT == 0 && s.Seen == 0 && s.AuthTime == 0 && s.Next == "" && !s.StepUp &&
+		s.State == "" && s.Nonce == "" && s.Verifier == "" && s.Started == 0 && s.Pending == nil && s.PendingResult == nil
 }

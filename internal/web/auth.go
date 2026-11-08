@@ -169,6 +169,7 @@ func (s *Server) authLogin(c *reqCtx) error {
 		s.demoMu.Unlock()
 		d := s.DemoUser
 		c.auditAnon("auth.step_up", "ok (demo: simulated Pocket ID re-authentication)", model.Deref(d.Email), &d.Sub, nil)
+		s.resumePending(c)
 		c.redirect(target)
 		return nil
 	}
@@ -269,9 +270,11 @@ func (s *Server) authCallback(c *reqCtx) error {
 		sess.StepUp, sess.Next, sess.State, sess.Nonce, sess.Verifier, sess.Started = false, "", "", "", "", 0
 		c.dirty = true
 		c.auditAnon("auth.step_up", "ok", actorOf(&u), &u.Sub, nil)
+		s.resumePending(c)
 		c.redirect(target)
 		return nil
 	}
+	sess.Pending = nil // a new session (another user, or no session before): nothing waits
 	if err := s.startSession(c, sess.SID, u, now, authTime); err != nil {
 		return err
 	}

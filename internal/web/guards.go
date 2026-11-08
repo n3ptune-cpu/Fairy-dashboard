@@ -17,7 +17,7 @@ func (c *reqCtx) deny(u *model.User, status int, detail any, why string) error {
 // checkCSRF: browsers need the custom header (forces a CORS preflight; no CORS is enabled) + Origin check.
 // API tokens are not sent automatically by browsers, so they need neither.
 func (c *reqCtx) checkCSRF(u *model.User) error {
-	if u.Auth == "token" {
+	if u.Auth == "token" || c.resumed() { // resumed: the panel's own replay of a request that passed these checks
 		return nil
 	}
 	if c.r.Header.Get(CSRFHeader) != CSRFValue {
@@ -75,10 +75,20 @@ func (c *reqCtx) controlGuard(bucket *rateLimiter) (*model.User, error) {
 // stepUp: sensitive actions need a Pocket ID sign-in from the last step_up_window_s (API tokens: no check).
 func (c *reqCtx) stepUp(u *model.User, what string) error {
 	cfg := c.s.Cfg
-	if age := c.authAge(u); age != nil && *age > float64(cfg.StepUpWindowS) {
+	return c.stepUpWithin(u, what, cfg.StepUpWindowS)
+}
+
+// stepUpWithin is stepUp with its own window (the panel's own update wants a sign-in from the last 2 minutes).
+// A refused browser request is kept and runs by itself right after the sign-in (pending.go).
+func (c *reqCtx) stepUpWithin(u *model.User, what string, window int) error {
+	if age := c.authAge(u); age != nil && *age > float64(window) {
 		c.audit(u, "auth.step_up", c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, "required")
-		return apierr.New(401, map[string]any{"code": "step_up_required", "window_s": cfg.StepUpWindowS,
-			"message": fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d min.", what, cfg.StepUpWindowS/60)})
+		kept := c.keepPending(u)
+		msg := fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d min.", what, max(1, window/60))
+		if window < 60 || window%60 != 0 {
+			msg = fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d seconds.", what, window)
+		}
+		return apierr.New(401, map[string]any{"code": "step_up_required", "window_s": window, "pending": kept, "message": msg})
 	}
 	return nil
 }
