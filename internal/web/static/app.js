@@ -97,7 +97,7 @@ function showStepUp(pending, detail) {
   m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle">
     <div class="stepup-ico">${I.shield}</div>
     <h3 id="stitle">Confirm it's you</h3>
-    <p>Control actions need a Pocket ID sign-in from the last <b>${Math.round(win / 60)} minutes</b>.${age != null ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}</p>
+    <p>Control actions need a Pocket ID sign-in from the last <b>${Math.round(win / 60)} minutes</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}</p>
     <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b></div>
     <p class="note">You'll sign in again at Pocket ID (passkey) and come straight back here to finish it. Nothing has been sent yet.</p>
     <div class="row-gap end"><button class="btn" id="su-cancel">Cancel</button>

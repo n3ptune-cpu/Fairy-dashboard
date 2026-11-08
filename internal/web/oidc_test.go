@@ -216,6 +216,38 @@ func TestPocketIDLoginAndStepUpRoundTrip(t *testing.T) {
 	}
 }
 
+// An ID token without auth_time never counts as a fresh sign-in: control actions need a step-up, and a step-up
+// whose ID token still has no auth_time fails with a page that says why (no silent success, no loop).
+func TestMissingAuthTimeFailsClosed(t *testing.T) {
+	e := setup(t)
+	idp := newFakeIDP(t)
+	e.s.Cfg.OIDC.Issuer = idp.srv.URL
+	idp.claims = map[string]any{"groups": []string{"viewers", "controllers"}} // no auth_time
+	q, rt := idp.login(e, "/auth/login", "")
+	r := e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	if r.code != 303 {
+		t.Fatal("login without auth_time still signs in", r.code, string(r.raw))
+	}
+	sess := sessionCookie(e, r.hdr)
+	poll := func() resp {
+		return e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, "Cookie", sess, "X-Requested-With", "fairy")
+	}
+	if r := poll(); r.code != 401 || !strings.Contains(string(r.raw), "step_up_required") {
+		t.Fatal("a session without auth_time must not count as fresh", r.code, string(r.raw))
+	}
+	q, rt = idp.login(e, "/auth/login?step_up=1&next=/", sess)
+	r = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	if r.code != 400 || !strings.HasPrefix(r.hdr.Get("Content-Type"), "text/html") || !strings.Contains(string(r.raw), "auth_time") {
+		t.Fatal("step-up without auth_time must fail visibly", r.code, string(r.raw))
+	}
+	if r := poll(); r.code != 401 {
+		t.Fatal("control after a failed step-up", r.code)
+	}
+	if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), "auth.step_up failed: identity provider sent no auth_time") {
+		t.Fatal("audit")
+	}
+}
+
 // auditOutcomes returns the audit log as "action outcome" lines.
 func auditOutcomes(path string) string {
 	entries, _ := audit.Read(path, "", "", "", nil, 500)

@@ -117,7 +117,9 @@ func (c *reqCtx) requireSession() (*model.User, error) {
 	return u, nil
 }
 
-// authAge: seconds since the user last authenticated at Pocket ID (nil for API tokens).
+// authAge: seconds since the user last authenticated at Pocket ID (nil for API tokens). A session without an
+// auth_time from the identity provider counts as authenticated long ago (fail closed): control actions then
+// need a step-up, and the step-up itself must return auth_time.
 func (c *reqCtx) authAge(u *model.User) *float64 {
 	switch u.Auth {
 	case "token":
@@ -128,12 +130,7 @@ func (c *reqCtx) authAge(u *model.User) *float64 {
 		v := time.Since(c.s.demoAuthTime).Seconds()
 		return &v
 	}
-	s := c.session()
-	at := s.AuthTime
-	if at == 0 {
-		at = float64(s.IAT)
-	}
-	v := float64(time.Now().UnixNano())/1e9 - at
+	v := float64(time.Now().UnixNano())/1e9 - c.session().AuthTime // AuthTime 0 = unknown: very old
 	return &v
 }
 
@@ -230,14 +227,25 @@ func (s *Server) authCallback(c *reqCtx) error {
 		return apierr.New(403, "not allowed")
 	}
 	now := float64(time.Now().UnixNano()) / 1e9
-	authTime := now
-	if v, ok := claims["auth_time"].(float64); ok {
+	authTime := 0.0 // unknown: counts as long ago (never as "just now")
+	if v, ok := claims["auth_time"].(float64); ok && v > 0 {
 		authTime = v
 	}
 	target := safeNext(sess.Next)
+	if sess.StepUp && authTime == 0 {
+		slog.Error("step-up failed: the identity provider sent no auth_time claim (OIDC Core requires it when " +
+			"max_age is requested); control actions cannot be confirmed until it does")
+		c.auditAnon("auth.step_up", "failed: identity provider sent no auth_time", actorOf(&u), &u.Sub, nil)
+		return c.errorPage(400, "Could not confirm it's you",
+			"Pocket ID did not say when you signed in (the ID token has no auth_time), so Fairy cannot tell that you "+
+				"just signed in again. Control actions stay locked. An administrator must make the identity provider "+
+				"send auth_time (it is required when Fairy asks for a fresh sign-in with max_age=0).", target)
+	}
 	if sess.StepUp && now-authTime > 120 {
 		c.auditAnon("auth.step_up", "failed: identity provider did not re-authenticate (auth_time too old)", actorOf(&u), &u.Sub, nil)
-		return apierr.New(400, "re-authentication was not performed by the identity provider")
+		return c.errorPage(400, "Could not confirm it's you",
+			"Pocket ID did not ask you to sign in again (your last sign-in there is more than two minutes old). "+
+				"Try again; if this keeps happening, an administrator can set step_up_prompt_login: true in Fairy's config.", target)
 	}
 	if sess.StepUp && sess.User != nil && sess.User.Sub == u.Sub && sess.SID != "" {
 		// Step-up for the same user: keep the session, record the fresh authentication time.

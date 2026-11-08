@@ -373,3 +373,6 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .acct-menu .menu-item:focus { outline: none; }
 .acct-menu .menu-item:focus-visible { background: var(--hover); box-shadow: inset 0 0 0 1px var(--line2); }
 .acct-menu .menu-item.on:focus-visible { box-shadow: inset 2px 0 0 var(--accent), inset 0 0 0 1px var(--line2); }
+.error-page { max-width: 560px; margin: 12vh auto; padding: 0 20px; }
+.error-page h1 { font-size: 20px; margin-bottom: 12px; }
+.error-page p { margin-bottom: 16px; }

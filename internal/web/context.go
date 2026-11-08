@@ -3,6 +3,8 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 
@@ -63,6 +65,20 @@ func (c *reqCtx) fail(err error) {
 	// No stack traces or internals to clients; details go to the server log only.
 	slog.Error("unhandled error", "method", c.r.Method, "path", c.r.URL.Path, "error", err)
 	c.json(500, map[string]any{"detail": "internal error"})
+}
+
+// errorPage answers a browser navigation (e.g. the OIDC callback) with a small HTML page instead of JSON: what
+// went wrong and a link back. Everything is escaped; the page has no script or inline style (strict CSP).
+func (c *reqCtx) errorPage(status int, title, msg, back string) error {
+	c.flush()
+	c.w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	c.w.WriteHeader(status)
+	e := html.EscapeString
+	_, _ = fmt.Fprintf(c.w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>%s · Fairy</title>`+
+		`<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/static/app.css">`+
+		`</head><body><main class="error-page"><h1>%s</h1><p>%s</p><p><a class="btn" href="%s">Back to Fairy</a></p>`+
+		`</main></body></html>`, e(title), e(title), e(msg), e(safeNext(back)))
+	return nil
 }
 
 func (c *reqCtx) redirect(target string) {
