@@ -20,7 +20,14 @@ const usage = `fairy admin: break-glass administration (no web login needed)
 
 usage: fairy admin [--config FILE] [--env-file FILE] <command> ...
 
-  tokens create --name NAME --owner SUB|system [--scope read|control] [--expires-days N]
+  users list
+  users set-role <email|subject> admin|viewer|pending [--sites A,B] [--force]
+  users sites <email|subject> <site,site,...|->     make them a viewer of these sites
+  users remove <email|subject> [--force]            (--force: even the last admin)
+  sites list
+  sites assign <system-id|power:ID|ups:ID> <site|->  (- = back to the default; creates the site)
+  sites create <name> | sites rename <old> <new> | sites delete <name>
+  tokens create --name NAME --owner SUB|system [--scope read|control] [--sites A,B] [--expires-days N]
   tokens list
   tokens revoke <id-or-name>
   sessions list
@@ -84,6 +91,10 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	var err error
 	code := 0
 	switch rest[0] {
+	case "users":
+		code, err = c.users(rest[1:])
+	case "sites":
+		code, err = c.sites(rest[1:])
 	case "tokens":
 		code, err = c.tokens(rest[1:])
 	case "sessions":

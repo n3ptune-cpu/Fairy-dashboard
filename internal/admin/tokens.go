@@ -4,8 +4,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy/internal/access"
 	"github.com/n3ptune-cpu/Fairy/internal/tokens"
 )
 
@@ -37,13 +40,27 @@ func (c *cli) tokensCreate(store *tokens.Store, args []string) (int, error) {
 	owner := fs.String("owner", "", `an OIDC sub, or "system"`)
 	scope := fs.String("scope", "read", "read or control")
 	days := fs.Int("expires-days", 0, "expiry in days (0 = never)")
+	sitesArg := fs.String("sites", "", "read tokens: only these sites (comma-separated; default every site)")
 	if err := fs.Parse(args); err != nil {
 		return 2, errUsage
 	}
 	if *name == "" || *owner == "" {
 		return 2, errors.New("--name and --owner are required")
 	}
-	raw, r, err := store.Create(*name, *owner, *scope, "cli:"+osUser(), *days)
+	var sites []string
+	if *sitesArg != "" {
+		var err error
+		if sites, err = access.ParseSites(*sitesArg); err != nil {
+			return 2, err
+		}
+		known := access.NewStore(c.cfg.DataDir).Load()
+		for _, s := range sites {
+			if !known.HasSite(s) && !slices.Contains(c.cfg.Sites(), s) {
+				return 2, fmt.Errorf("unknown site %q (create it first: fairy admin sites create NAME)", s)
+			}
+		}
+	}
+	raw, r, err := store.CreateForSites(*name, *owner, *scope, "cli:"+osUser(), *days, sites)
 	if err != nil {
 		return 2, err
 	}
@@ -53,8 +70,12 @@ func (c *cli) tokensCreate(store *tokens.Store, args []string) (int, error) {
 		exp = r.ExpiresAt.Format(time.RFC3339)
 		expStr = r.ExpiresAt.Format("2006-01-02")
 	}
-	c.log("token.create", r.Name, map[string]any{"id": r.ID, "owner": r.Owner, "scope": r.Scope, "expires_at": exp})
-	fmt.Fprintf(c.out, "Created API token %q (id %s, scope %s, owner %s, expires %s)\n\n    %s\n\n", r.Name, r.ID, r.Scope, r.Owner, expStr, raw)
+	c.log("token.create", r.Name, map[string]any{"id": r.ID, "owner": r.Owner, "scope": r.Scope, "expires_at": exp, "sites": r.Sites})
+	fmt.Fprintf(c.out, "Created API token %q (id %s, scope %s, sites %s, owner %s, expires %s)\n\n    %s\n\n", r.Name, r.ID, r.Scope,
+		tokenSites(r), r.Owner, expStr, raw)
+	if _, ok := access.NewStore(c.cfg.DataDir).Load().Users[r.Owner]; ok {
+		fmt.Fprintln(c.out, "The owner is a panel user: the token never sees or does more than they may (Users page).")
+	}
 	fmt.Fprintln(c.out, "This is the only time the token is shown; only its SHA-256 hash is stored.")
 	fmt.Fprintf(c.out, "Use it as:  curl -H 'Authorization: Bearer %s…' %s/api/summary\n", raw[:7], c.cfg.BaseURL())
 	return 0, nil
@@ -74,12 +95,12 @@ func (c *cli) tokensList(store *tokens.Store) (int, error) {
 		if r.ExpiresAt != nil {
 			exp = r.ExpiresAt.Format("2006-01-02")
 		}
-		rows = append(rows, []string{r.ID, r.Name, r.Scope, r.Owner, state, "…" + r.Hint, r.CreatedAt.Format("2006-01-02"), exp, ago(r.LastUsed)})
+		rows = append(rows, []string{r.ID, r.Name, r.Scope, tokenSites(r), r.Owner, state, "…" + r.Hint, r.CreatedAt.Format("2006-01-02"), exp, ago(r.LastUsed)})
 	}
 	if len(rows) == 0 {
 		fmt.Fprintln(c.out, "No API tokens.")
 	} else {
-		fmt.Fprintln(c.out, table(rows, []string{"ID", "NAME", "SCOPE", "OWNER", "STATE", "ENDS", "CREATED", "EXPIRES", "LAST USED"}))
+		fmt.Fprintln(c.out, table(rows, []string{"ID", "NAME", "SCOPE", "SITES", "OWNER", "STATE", "ENDS", "CREATED", "EXPIRES", "LAST USED"}))
 	}
 	return 0, nil
 }
@@ -100,4 +121,12 @@ func (c *cli) tokensRevoke(store *tokens.Store, args []string) (int, error) {
 	c.log("token.revoke", r.Name, map[string]any{"id": r.ID})
 	fmt.Fprintf(c.out, "Revoked API token %q (id %s). It stops working immediately.\n", r.Name, r.ID)
 	return 0, nil
+}
+
+// tokenSites is "all" or the token's site list.
+func tokenSites(r tokens.Record) string {
+	if r.Sites == nil {
+		return "all"
+	}
+	return strings.Join(r.Sites, ",")
 }
