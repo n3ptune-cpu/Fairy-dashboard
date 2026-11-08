@@ -54,24 +54,27 @@ func (r *Request) Validate() error {
 	return nil
 }
 
-func ptr(s string) *string {
+// nonEmpty returns &s, or nil for "" (JSON null).
+func nonEmpty(s string) *string {
 	if s == "" {
 		return nil
 	}
 	return &s
 }
 
+// mkcap builds one action entry: the route (via) when available, else the reason why not.
 func mkcap(action string, ok bool, via, reason, confirm string, delayed bool) model.PowerActionCap {
 	c := model.PowerActionCap{Action: action, Available: ok, Confirm: confirm, Delayed: delayed}
 	if ok {
-		c.Via = ptr(via)
+		c.Via = nonEmpty(via)
 	} else {
-		c.Reason = ptr(reason)
+		c.Reason = nonEmpty(reason)
 	}
 	return c
 }
 
-func or(a, b string) string {
+// orElse returns a, or b when a is empty.
+func orElse(a, b string) string {
 	if a != "" {
 		return a
 	}
@@ -85,7 +88,7 @@ func KillsPanel(p *poller.Poller, s model.System) bool {
 	}
 	if s.Kind == "node" {
 		for _, g := range p.Snapshot() {
-			if slices.Contains(p.Cfg.PanelHosts, g.ID) && eq(g.ClusterID, s.ClusterID) && g.Parent != nil && *g.Parent == s.Name {
+			if slices.Contains(p.Cfg.PanelHosts, g.ID) && sameString(g.ClusterID, s.ClusterID) && g.Parent != nil && *g.Parent == s.Name {
 				return true
 			}
 		}
@@ -93,7 +96,10 @@ func KillsPanel(p *poller.Poller, s model.System) bool {
 	return false
 }
 
-func eq(a, b *string) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
+// sameString reports whether two optional strings are both nil or equal.
+func sameString(a, b *string) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+}
 
 // Capabilities lists every action with availability, reason, confirmation and route.
 func Capabilities(p *poller.Poller, s model.System) model.PowerCaps {
@@ -153,10 +159,10 @@ func guestCaps(s model.System, pve config.Proxmox, hasPVE bool, typedIfKill stri
 		running = "guest is not running"
 	}
 	return []model.PowerActionCap{
-		mkcap("start", why == "" && s.Status == "stopped", "proxmox-api", or(why, "guest is not stopped"), typedIfKill, false),
-		mkcap("shutdown", why == "" && up, "proxmox-api", or(why, running), "typed", false),
-		mkcap("reboot", why == "" && up, "proxmox-api", or(why, running), typedIfKill, false),
-		mkcap("stop", why == "" && up, "proxmox-api", or(why, running), "typed", false)}
+		mkcap("start", why == "" && s.Status == "stopped", "proxmox-api", orElse(why, "guest is not stopped"), typedIfKill, false),
+		mkcap("shutdown", why == "" && up, "proxmox-api", orElse(why, running), "typed", false),
+		mkcap("reboot", why == "" && up, "proxmox-api", orElse(why, running), typedIfKill, false),
+		mkcap("stop", why == "" && up, "proxmox-api", orElse(why, running), "typed", false)}
 }
 
 // hostCaps: hosts and nodes shut down / reboot through their own agent (delayed, cancellable) or, for nodes,
@@ -187,9 +193,9 @@ func hostCaps(p *poller.Poller, s model.System, pve config.Proxmox, hasPVE bool,
 		cancelWhy = "nothing pending"
 	}
 	return []model.PowerActionCap{
-		mkcap("shutdown", why == "" && up, via, or(why, offline), "typed", delayed),
-		mkcap("reboot", why == "" && up, via, or(why, offline), typedIfKill, delayed),
-		mkcap("cancel", via == "agent" && s.PowerPending != nil, via, or(why, cancelWhy), "none", false),
+		mkcap("shutdown", why == "" && up, via, orElse(why, offline), "typed", delayed),
+		mkcap("reboot", why == "" && up, via, orElse(why, offline), typedIfKill, delayed),
+		mkcap("cancel", via == "agent" && s.PowerPending != nil, via, orElse(why, cancelWhy), "none", false),
 		wakeCap(p, s)}
 }
 

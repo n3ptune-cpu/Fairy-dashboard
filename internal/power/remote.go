@@ -21,7 +21,7 @@ func (m *Manager) UpdateRemote(agentID string, rows []map[string]any, unreachabl
 	}
 	seen := map[string]bool{}
 	for _, row := range rows {
-		rid := str(row["id"])
+		rid := jsonString(row["id"])
 		if rid == "" {
 			continue
 		}
@@ -65,10 +65,10 @@ func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev
 	var link *string
 	if l, ok := links[rid]; ok && l != "" {
 		link = model.P(l)
-	} else if h := str(row["system_hint"]); h == "self" || h == agentID {
+	} else if h := jsonString(row["system_hint"]); h == "self" || h == agentID {
 		link = model.P(agentID)
 	}
-	name := str(row["name"])
+	name := jsonString(row["name"])
 	if name == "" {
 		name = rid
 	}
@@ -78,8 +78,8 @@ func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev
 	var errp *string
 	if ok, _ := row["ok"].(bool); ok {
 		status, last = "ok", &now
-		readings = []model.PowerReading{{SourceID: key, Name: name, Watts: f(row["watts"]),
-			Voltage: f(row["voltage"]), Current: f(row["current"]), EnergyKWhTotal: f(row["energy_kwh_total"]),
+		readings = []model.PowerReading{{SourceID: key, Name: name, Watts: jsonNumber(row["watts"]),
+			Voltage: jsonNumber(row["voltage"]), Current: jsonNumber(row["current"]), EnergyKWhTotal: jsonNumber(row["energy_kwh_total"]),
 			SystemID: link, Timestamp: now}}
 	} else {
 		if hasPrev {
@@ -89,7 +89,7 @@ func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev
 		if hasPrev && status == "stale" {
 			readings = prev.Readings
 		}
-		e := str(row["error"])
+		e := jsonString(row["error"])
 		if e == "" {
 			e = "error"
 		}
@@ -98,7 +98,7 @@ func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev
 		}
 		errp = &e
 	}
-	typ := str(row["type"])
+	typ := jsonString(row["type"])
 	if typ == "" {
 		typ = "unknown"
 	}
@@ -121,8 +121,8 @@ func (m *Manager) dropUnreported(agentID string, seen map[string]bool) {
 	m.remoteKeys = keys
 }
 
-// str formats a JSON value as a string: whole numbers without a decimal point ("7", not "7.0"), nil as "".
-func str(v any) string {
+// jsonString formats a JSON value as a string: whole numbers without a decimal point ("7", not "7.0"), nil as "".
+func jsonString(v any) string {
 	switch x := v.(type) {
 	case nil:
 		return ""
@@ -136,8 +136,8 @@ func str(v any) string {
 	return fmt.Sprint(v)
 }
 
-// f returns v as a number, or nil when it is not a JSON number.
-func f(v any) *float64 {
+// jsonNumber returns v as a number, or nil when it is not a JSON number.
+func jsonNumber(v any) *float64 {
 	if x, ok := v.(float64); ok {
 		return &x
 	}

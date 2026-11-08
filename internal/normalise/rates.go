@@ -25,7 +25,8 @@ func NewRateTracker() *RateTracker {
 	return &RateTracker{prev: map[string]rateSample{}, last: map[string][2]*float64{}}
 }
 
-func eqp(a, b *int64) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
+// sameInt reports whether two optional counters are both nil or equal.
+func sameInt(a, b *int64) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
 
 // Update records counters rx and tx for key at time ts (seconds) and returns the bytes/s since the previous
 // sample (nil for the first sample or after a counter reset).
@@ -33,7 +34,7 @@ func (r *RateTracker) Update(key string, ts float64, rx, tx *int64, holdS float6
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	prev, ok := r.prev[key]
-	if ok && holdS > 0 && eqp(rx, prev.rx) && eqp(tx, prev.tx) && ts-prev.ts < holdS {
+	if ok && holdS > 0 && sameInt(rx, prev.rx) && sameInt(tx, prev.tx) && ts-prev.ts < holdS {
 		l := r.last[key]
 		return l[0], l[1]
 	}

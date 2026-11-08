@@ -7,7 +7,8 @@ import (
 	"github.com/n3ptune-cpu/Fairy/internal/model"
 )
 
-func or(a, b *string) *string {
+// firstSet returns a when it is set and non-empty, else b.
+func firstSet(a, b *string) *string {
 	if a != nil && *a != "" {
 		return a
 	}
@@ -32,8 +33,8 @@ func ApplyOverride(s model.System, o *config.SystemOverride) model.System {
 		tags = []string{}
 	}
 	s.Tags = tags
-	s.Group = or(o.Group, s.Group)
-	s.Owner = or(o.Owner, s.Owner)
+	s.Group = firstSet(o.Group, s.Group)
+	s.Owner = firstSet(o.Owner, s.Owner)
 	if o.DWServiceURL != "" {
 		s.DWServiceURL = model.P(o.DWServiceURL)
 	}
