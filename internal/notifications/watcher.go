@@ -26,7 +26,6 @@ type Watcher struct {
 	mu       sync.Mutex
 	started  bool
 	hosts    map[string]*hostState
-	upsSeq   int
 	panelOff map[string]time.Time // system id -> until when "offline" is the panel's own shutdown / reboot
 }
 
@@ -94,7 +93,7 @@ func hottest(s model.System) (float64, string) {
 }
 
 // Observe compares a snapshot with the last one. The first call only learns the current state (no events at
-// panel start). upsEvents are the UPS manager's new events (see UPSSeq).
+// panel start). upsEvents are the UPS manager's events since the last call.
 func (w *Watcher) Observe(now time.Time, systems []model.System, upsEvents []model.UpsEvent) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
