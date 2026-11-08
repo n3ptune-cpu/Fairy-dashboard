@@ -103,6 +103,10 @@ type Backend struct {
 	Requests  []string
 	PVECalls  []string
 	FanStatus jsonx.M
+	// Reply, when set and returning a status (or an error), answers AgentRequest instead of the defaults.
+	Reply func(agentID, path string) (int, jsonx.M, error)
+	// ProcErr makes FetchProcesses fail.
+	ProcErr error
 }
 
 // NewBackend returns a fake backend serving PVEResources and AgentMetrics.
@@ -145,8 +149,11 @@ func (b *Backend) PVEPower(_ context.Context, cluster, path string, data url.Val
 	return "UPID:test", nil
 }
 
-// FetchProcesses returns an empty list.
+// FetchProcesses returns an empty list (or ProcErr).
 func (b *Backend) FetchProcesses(_ context.Context, _ config.Agent, sid string, _ int, s string) (model.ProcessList, error) {
+	if b.ProcErr != nil {
+		return model.ProcessList{}, b.ProcErr
+	}
 	return model.ProcessList{SystemID: sid, Sort: s, Processes: []model.Process{}}, nil
 }
 
@@ -155,6 +162,11 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, method, path s
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
 	b.Requests = append(b.Requests, fmt.Sprintf("%s %s %s %v", a.ID, method, path, body))
+	if b.Reply != nil {
+		if st, data, err := b.Reply(a.ID, path); st != 0 || err != nil {
+			return st, data, err
+		}
+	}
 	switch path {
 	case "/fan/status":
 		return 200, b.FanStatus, nil

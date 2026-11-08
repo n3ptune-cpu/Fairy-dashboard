@@ -83,7 +83,10 @@ async function api(path, opts = {}) {
   const data = res.status === 204 ? null : await res.json().catch(() => ({}));
   if (!res.ok) {
     const d = data?.detail;
-    const e = new Error(d?.message || d?.[0]?.msg || (typeof d === "string" ? d : null) || `HTTP ${res.status}`);
+    // No JSON detail on a 5xx: a proxy (e.g. Cloudflare on 502/504) answered instead of the panel. The panel
+    // itself sends 502 only when an agent or Proxmox cannot be reached; errors they report come as 4xx.
+    const proxy = d == null && res.status >= 500 ? `HTTP ${res.status} from the proxy in front of the panel: the panel, or the host it had to reach, did not answer` : null;
+    const e = new Error(d?.message || d?.[0]?.msg || (typeof d === "string" ? d : null) || proxy || `HTTP ${res.status}`);
     e.status = res.status; e.stepUp = d?.code === "step_up_required"; e.detail = d;
     throw e;
   }

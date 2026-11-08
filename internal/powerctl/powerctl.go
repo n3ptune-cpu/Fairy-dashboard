@@ -368,12 +368,12 @@ func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path strin
 		return def
 	}
 	switch {
-	case status == 401:
-		return nil, apierr.New(502, "agent refused the control token (check control_token_env)")
+	case status == 401: // the agent answered: 424, never 502 (see apierr.Upstream)
+		return nil, apierr.New(apierr.Upstream, "agent refused the control token (check control_token_env)")
 	case status == 404:
 		return nil, apierr.New(409, errMsg("disabled on that agent"))
 	case status >= 500:
-		return nil, apierr.New(502, errMsg(fmt.Sprintf("agent error %d", status)))
+		return nil, apierr.New(apierr.Upstream, errMsg(fmt.Sprintf("agent error %d", status)))
 	case status >= 400:
 		return nil, apierr.New(400, errMsg(fmt.Sprintf("agent error %d", status)))
 	}

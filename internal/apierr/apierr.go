@@ -4,7 +4,16 @@
 // prototype), so Detail must be safe to show to the client: no secrets, URLs or internal error text.
 package apierr
 
-import "fmt"
+import (
+	"fmt"
+	"net/http"
+)
+
+// Upstream is the status for a failure that an agent, its BMC or Proxmox reported: they answered, but with an
+// error (424 Failed Dependency). Never 502/504 for these: Cloudflare and other proxies replace the body of a
+// 502/504 with their own error page, so the user would see "invalid or incomplete response" instead of, say,
+// "BMC refused the fan mode". 502 stays for "could not reach it at all".
+const Upstream = http.StatusFailedDependency
 
 // Error is a client-facing failure: an HTTP status code plus a JSON-encodable detail (usually a string; the
 // step-up response uses an object).

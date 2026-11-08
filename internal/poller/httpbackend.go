@@ -187,11 +187,11 @@ func (b *httpBackend) PVEPower(ctx context.Context, clusterID, path string, data
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
 		cancel()
-		if resp.StatusCode == 403 {
-			return nil, apierr.New(502, "proxmox refused the power token (needs VM.PowerMgmt / Sys.PowerMgmt)")
+		if resp.StatusCode == 403 { // Proxmox answered: 424, not 502 (see apierr.Upstream)
+			return nil, apierr.New(apierr.Upstream, "proxmox refused the power token (needs VM.PowerMgmt / Sys.PowerMgmt)")
 		}
 		if resp.StatusCode >= 400 {
-			return nil, apierr.Errf(502, "proxmox: http %d", resp.StatusCode)
+			return nil, apierr.Errf(apierr.Upstream, "proxmox: http %d", resp.StatusCode)
 		}
 		var out jsonx.M
 		_ = json.Unmarshal(body, &out)

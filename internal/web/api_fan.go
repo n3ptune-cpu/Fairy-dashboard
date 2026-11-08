@@ -27,11 +27,12 @@ func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[s
 		return nil, apierr.New(502, "agent unreachable: "+devices.Describe(err))
 	}
 	if status == 401 { // never surface as our own 401 (that means "log in again")
-		return nil, apierr.New(502, "agent rejected the control token")
+		return nil, apierr.New(apierr.Upstream, "agent rejected the control token (check control_token_env)")
 	}
-	if status >= 400 {
-		st := 502
-		if status == 400 || status == 404 || status == 409 {
+	if status >= 400 { // the agent answered: its message must reach the user (no 502, see apierr.Upstream)
+		st := apierr.Upstream
+		switch status {
+		case 400, 404, 409, 422, 429:
 			st = status
 		}
 		msg := "agent error"
@@ -57,7 +58,7 @@ func (s *Server) fanStatus(c *reqCtx) error {
 	b, _ := json.Marshal(data)
 	var fs model.FanStatus
 	if err := json.Unmarshal(b, &fs); err != nil {
-		return apierr.New(502, "agent returned an invalid fan status")
+		return apierr.New(apierr.Upstream, "agent returned an invalid fan status")
 	}
 	model.Normalize(&fs)
 	c.json(200, fs)

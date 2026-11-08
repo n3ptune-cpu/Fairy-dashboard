@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -705,5 +707,62 @@ func TestUpdatesPageAndButton(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("audit entries: %v", entries)
+	}
+}
+
+// Errors the agent reports (it answered) are never 502/504: Cloudflare replaces those bodies with its own error
+// page, and the user would not see "BMC refused the fan mode". 502 only means "agent unreachable".
+func TestAgentErrorsAreNot502(t *testing.T) {
+	e := setup(t)
+	e.s.control = newRateLimiter(100)
+	c := e.cookie(controller(), 0)
+	hdr := []string{"Cookie", c, "X-Requested-With", "fairy"}
+	var reply struct {
+		st   int
+		body jsonx.M
+		err  error
+	}
+	e.b.Reply = func(string, string) (int, jsonx.M, error) { return reply.st, reply.body, reply.err }
+	refused := "BMC refused the fan mode optimal: BMC completion code 0xCC (invalid data field); this board's BMC does not support it"
+	for _, tc := range []struct {
+		name, method, path string
+		body               any
+		st                 int
+		agent              jsonx.M
+		err                error
+		want               int
+		detail             string
+	}{
+		{"unsupported mode", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "optimal"}, 422,
+			jsonx.M{"error": refused, "code": "fan_mode_unsupported"}, nil, 422, "0xCC"},
+		{"BMC failure", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "standard"}, 502,
+			jsonx.M{"error": "BMC refused the fan mode: BMC completion code 0xC3 (timeout)"}, nil, 424, "0xC3"},
+		{"duty conflict", "POST", "/api/systems/cyrene/fan/duty", map[string]any{"zone": 0, "percent": 50}, 409,
+			jsonx.M{"error": "fan mode is standard; set mode 'full' first"}, nil, 409, "full"},
+		{"wrong control token", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, 401, nil, nil, 424, "control token"},
+		{"agent 500 without a body", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, 500, nil, nil, 424, "agent error"},
+		{"agent rate limit", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, 429, jsonx.M{"error": "slow down"}, nil, 429, "slow down"},
+		{"unreachable", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, 0, nil, devices.Errf("connection refused"), 502, "agent unreachable"},
+		{"fan status error", "GET", "/api/systems/cyrene/fan", nil, 503, jsonx.M{"error": "BMC busy"}, nil, 424, "BMC busy"},
+		{"invalid fan status", "GET", "/api/systems/cyrene/fan", nil, 200, jsonx.M{"mode": 5}, nil, 424, "invalid fan status"},
+		{"update failed", "POST", "/api/admin/updates/laptop", map[string]any{}, 500, jsonx.M{"error": "cannot download the release"}, nil, 424, "cannot download"},
+		{"power: agent error", "POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "LAPTOP"}, 500,
+			jsonx.M{"error": "shutdown.exe failed"}, nil, 424, "shutdown.exe failed"},
+		{"power: control token", "POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "LAPTOP"}, 401,
+			nil, nil, 424, "control token"},
+	} {
+		reply.st, reply.body, reply.err = tc.st, tc.agent, tc.err
+		r := e.do(tc.method, tc.path, tc.body, hdr...)
+		if r.code != tc.want || !strings.Contains(fmt.Sprint(r.body["detail"]), tc.detail) {
+			t.Fatalf("%s: %d %s", tc.name, r.code, r.raw)
+		}
+	}
+	e.b.ProcErr = &devices.HTTPStatusError{Code: 500}
+	if r := e.do("GET", "/api/systems/laptop/processes", nil, "Cookie", c); r.code != 424 {
+		t.Fatal("processes: agent error", r.code, string(r.raw))
+	}
+	e.b.ProcErr = devices.Errf("timeout")
+	if r := e.do("GET", "/api/systems/laptop/processes", nil, "Cookie", c); r.code != 502 {
+		t.Fatal("processes: unreachable", r.code, string(r.raw))
 	}
 }

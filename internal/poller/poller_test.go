@@ -3,6 +3,8 @@ package poller
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -195,5 +198,31 @@ func TestProcessCmdlinesAreRedacted(t *testing.T) {
 	}
 	if pl.Processes[1].Cmdline != nil {
 		t.Fatal("nil cmdline")
+	}
+}
+
+// Proxmox answering with an error is 424 (its message must survive Cloudflare); not reaching it is 502.
+func TestPVEPowerErrorStatus(t *testing.T) {
+	status := atomic.Int32{}
+	pve := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(int(status.Load()))
+	}))
+	defer pve.Close()
+	for _, tc := range []struct {
+		url  string
+		code int32
+		want int
+		msg  string
+	}{{pve.URL, 403, 424, "power token"}, {pve.URL, 500, 424, "http 500"}, {deadURL(t), 0, 502, "proxmox:"}} {
+		status.Store(tc.code)
+		p, err := New(testutil.Config(t, []string{tc.url}, deadURL(t), deadURL(t)), config.Secrets{SessionSecret: "x"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = p.PVEPower(context.Background(), "pve", "/nodes/n1/status", nil)
+		var ae *apierr.Error
+		if !errors.As(err, &ae) || ae.Status != tc.want || !strings.Contains(fmt.Sprint(ae.Detail), tc.msg) {
+			t.Fatal(tc.code, err)
+		}
 	}
 }
