@@ -1,0 +1,15 @@
+# Line endings: LF everywhere (deploy/fairy-update and other shell scripts break with CRLF on a Windows checkout).
+* text=auto eol=lf
+*.ps1 text eol=crlf
+
+# Binaries: never converted
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+*.gz binary
