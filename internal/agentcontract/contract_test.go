@@ -330,9 +330,27 @@ func TestPanelContract(t *testing.T) {
 		t.Fatal(mode, duty)
 	}
 	_, fs = a.do("GET", "/api/systems/nsx-cyrene/fan", nil)
-	if fs["overridden"] != true || fs["duty"].(map[string]any)["0"] != 45.0 || len(fs["events"].([]any)) != 2 {
+	if fs["overridden"] != true || fs["duty"].(map[string]any)["0"] != 45.0 || len(fs["events"].([]any)) != 2 ||
+		fs["auto_mode"] != "optimal" || len(fs["unsupported_modes"].([]any)) != 0 {
 		t.Fatal(fs)
 	}
+	// a board without "optimal" (Enginetech EG320W-G20): the BMC's refusal reaches the user as 422, not as a
+	// 502 that Cloudflare would replace, and the panel learns to grey the mode out
+	c.bmc.RefuseMode(2, 0xCC)
+	if st, b := a.do("POST", "/api/systems/nsx-cyrene/fan/mode", map[string]any{"mode": "optimal"}); st != 422 ||
+		!strings.Contains(fmt.Sprint(b["detail"]), "BMC completion code 0xCC") {
+		t.Fatal("refused mode", st, b)
+	}
+	_, fs = a.do("GET", "/api/systems/nsx-cyrene/fan", nil)
+	if um := fs["unsupported_modes"].([]any); len(um) != 1 || um[0] != "optimal" || fs["mode"] != "full" {
+		t.Fatal(fs)
+	}
+	c.bmc.RefuseMode(0, 0xC3) // a BMC failure (not "no such mode"): 424 with the agent's message
+	if st, b := a.do("POST", "/api/systems/nsx-cyrene/fan/mode", map[string]any{"mode": "standard"}); st != 424 ||
+		!strings.Contains(fmt.Sprint(b["detail"]), "0xC3") {
+		t.Fatal("BMC failure", st, b)
+	}
+	c.bmc.RefuseMode(0, 0)
 
 	st, caps := a.do("GET", "/api/systems/nsx-cyrene/power", nil)
 	if st != 200 || !strings.Contains(fmt.Sprint(caps["actions"]), "via:agent") {
