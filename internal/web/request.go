@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // find returns a system the request may see (403 for a user without a role; 404 for unknown and hidden ids

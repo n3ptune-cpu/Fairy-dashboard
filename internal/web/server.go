@@ -19,12 +19,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/access"
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/poller"
-	"github.com/n3ptune-cpu/Fairy/internal/settings"
-	"github.com/n3ptune-cpu/Fairy/internal/tokens"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/settings"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/tokens"
 )
 
 //go:embed static

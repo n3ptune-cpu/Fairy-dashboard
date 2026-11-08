@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/devices"
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/normalise"
-	"github.com/n3ptune-cpu/Fairy/internal/power"
-	"github.com/n3ptune-cpu/Fairy/internal/redact"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/redact"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 type httpBackend struct {
@@ -39,13 +39,13 @@ func newHTTPBackend(p *Poller) (*httpBackend, error) {
 		agents: devices.LANClient(0)} // never via a proxy; per-request timeouts via context
 	// Resolve every agent token at startup: a missing/short token is a config error.
 	for _, a := range cfg.Agents {
-		t, err := config.EnvSecret(a.TokenEnv, "agent "+a.ID, 24)
+		t, err := configutil.EnvSecret(a.TokenEnv, "agent "+a.ID, 24)
 		if err != nil {
 			return nil, err
 		}
 		b.agentTokens[a.ID] = t
 		if env := a.ControlEnv(); env != "" {
-			ct, err := config.EnvSecret(env, "agent "+a.ID+" control", 24)
+			ct, err := configutil.EnvSecret(env, "agent "+a.ID+" control", 24)
 			if err != nil {
 				return nil, err
 			}
@@ -62,7 +62,7 @@ func newHTTPBackend(p *Poller) (*httpBackend, error) {
 		}
 		b.pve[c.ID] = devices.TLSClient(0, tc)
 		if c.TokenSecretEnv != "" {
-			s, err := config.EnvSecret(c.TokenSecretEnv, "proxmox "+c.ID, 1)
+			s, err := configutil.EnvSecret(c.TokenSecretEnv, "proxmox "+c.ID, 1)
 			if err != nil {
 				return nil, err
 			}
@@ -71,7 +71,7 @@ func newHTTPBackend(p *Poller) (*httpBackend, error) {
 			b.pveSecrets[c.ID] = p.Secrets.ProxmoxTokenSecret
 		}
 		if c.PowerTokenID != "" && c.PowerTokenSecretEnv != "" { // separate token: VM.PowerMgmt only
-			s, err := config.EnvSecret(c.PowerTokenSecretEnv, "proxmox "+c.ID+" power", 1)
+			s, err := configutil.EnvSecret(c.PowerTokenSecretEnv, "proxmox "+c.ID+" power", 1)
 			if err != nil {
 				return nil, err
 			}
@@ -181,7 +181,7 @@ func (b *httpBackend) PVEPower(ctx context.Context, clusterID, path string, data
 			if errors.As(err, &ne) && ne.Timeout() {
 				return nil, apierr.New(502, "proxmox: timeout") // may have been delivered: never resend
 			}
-			last = normalise.Describe(err)
+			last = devices.Describe(err)
 			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

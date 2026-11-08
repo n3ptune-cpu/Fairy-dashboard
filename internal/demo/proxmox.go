@@ -5,7 +5,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
 
 func guest(vmid int, kind, name, node string, cores int, memGiB, diskGiB, cpuLo, cpuHi float64, status, tags string) jsonx.M {

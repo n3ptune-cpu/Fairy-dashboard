@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/audit"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 )
 
 // fakeIDP is a minimal OpenID provider (discovery, JWKS, token, userinfo) that signs RS256 ID tokens, so the

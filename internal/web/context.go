@@ -8,11 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/n3ptune-cpu/Fairy/internal/access"
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/security"
-	"github.com/n3ptune-cpu/Fairy/internal/tokens"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/security"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/tokens"
 )
 
 type reqCtx struct {

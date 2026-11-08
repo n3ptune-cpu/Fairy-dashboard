@@ -14,8 +14,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 // SessionKeepS is how long (s) a session stays in sessions.json before it is pruned.

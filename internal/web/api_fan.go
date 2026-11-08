@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 func (c *reqCtx) fanAgent(id string) (config.Agent, error) {
@@ -24,7 +24,7 @@ func (c *reqCtx) fanAgent(id string) (config.Agent, error) {
 func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[string]any, error) {
 	status, data, err := c.s.Poller.AgentRequest(c.r.Context(), a, method, path, body)
 	if err != nil {
-		return nil, apierr.New(502, "agent unreachable: "+normalise.Describe(err))
+		return nil, apierr.New(502, "agent unreachable: "+devices.Describe(err))
 	}
 	if status == 401 { // never surface as our own 401 (that means "log in again")
 		return nil, apierr.New(502, "agent rejected the control token")

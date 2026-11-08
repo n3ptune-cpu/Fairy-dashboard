@@ -13,15 +13,15 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/n3ptune-cpu/Fairy/internal/audit"
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/demo"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/poller"
-	"github.com/n3ptune-cpu/Fairy/internal/power"
-	"github.com/n3ptune-cpu/Fairy/internal/statefile"
-	"github.com/n3ptune-cpu/Fairy/internal/ups"
-	"github.com/n3ptune-cpu/Fairy/internal/web"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/demo"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/web"
 )
 
 // serveFlags are the `fairy serve` command-line options. Empty strings are filled in by resolve, after the env

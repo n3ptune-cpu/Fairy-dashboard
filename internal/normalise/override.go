@@ -3,8 +3,8 @@ package normalise
 import (
 	"slices"
 
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // firstSet returns a when it is set and non-empty, else b.

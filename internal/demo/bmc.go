@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
 
 type simBMC struct {

@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/devices"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/power"
-	"github.com/n3ptune-cpu/Fairy/internal/ups"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 type demoPower struct {
@@ -37,7 +37,7 @@ func (d *demoPower) Read(context.Context, time.Duration) ([]model.PowerReading, 
 	v := r1(d.volts + uniform(-2, 2))
 	a := math.Round(w/v*1000) / 1000
 	e := math.Round((1234.5+since()*w/3.6e6)*1000) / 1000
-	return []model.PowerReading{power.Reading(d.b, devices.Reading{Watts: &w, Voltage: &v, Current: &a, EnergyKWh: &e})}, nil
+	return []model.PowerReading{power.NewReading(d.b, devices.Reading{Watts: &w, Voltage: &v, Current: &a, EnergyKWh: &e})}, nil
 }
 
 func num(raw map[string]any, k string, def float64) float64 {

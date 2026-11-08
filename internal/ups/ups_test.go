@@ -7,33 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/devices"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	upssrc "github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
 )
 
-func TestParseUPSStatus(t *testing.T) {
-	cases := map[string]string{"OL": "online", "OL CHRG": "online", "OB DISCHRG": "on_battery", "OB LB": "low_battery",
-		"OFF": "off", "": "unknown"}
-	for raw, want := range cases {
-		if st, _ := devices.ParseUPSStatus(raw); st != want {
-			t.Errorf("%q: %s want %s", raw, st, want)
-		}
-	}
-	_, flags := devices.ParseUPSStatus("OL RB OVER")
-	if strings.Join(flags, ",") != "online,replace_battery,overload" {
-		t.Fatal(flags)
-	}
-}
-
-func TestEstimatedWattsWithoutRealpower(t *testing.T) {
-	r := devices.UPSFromVars("cp", map[string]string{"ups.status": "OL", "ups.load": "25", "ups.realpower.nominal": "900",
-		"battery.runtime": "2100", "battery.mfr.date": "2023/05/14"}, "CyberPower")
-	if *r.Watts != 225 || !r.WattsEstimated || *r.BatteryRuntimeS != 2100 || *r.BatteryDate != "2023/05/14" || *r.Description != "CyberPower" {
-		t.Fatalf("%+v", r)
-	}
-}
-
 func rows(status, charge string) []map[string]any {
-	return []map[string]any{RowMap(devices.UPSFromVars("cyberpower", map[string]string{"ups.status": status,
+	return []map[string]any{upssrc.RowMap(devices.UPSFromVars("cyberpower", map[string]string{"ups.status": status,
 		"battery.charge": charge, "battery.runtime": "1500", "ups.load": "20", "ups.realpower.nominal": "900"}, ""))}
 }
 
@@ -93,10 +72,10 @@ func TestNUTSourceFailureAndConfig(t *testing.T) {
 	if len(m.Overview(true).UPS) != 0 {
 		t.Fatal("unexpected state")
 	}
-	if _, err := Build(map[string]any{"id": "x", "type": "apcupsd", "host": "h"}); err == nil {
+	if _, err := upssrc.Build(map[string]any{"id": "x", "type": "apcupsd", "host": "h"}); err == nil {
 		t.Fatal("unknown type")
 	}
-	if _, err := Build(map[string]any{"id": "x", "host": "h", "powers": []any{"Not Valid"}}); err == nil {
+	if _, err := upssrc.Build(map[string]any{"id": "x", "host": "h", "powers": []any{"Not Valid"}}); err == nil {
 		t.Fatal("bad system id")
 	}
 	if FmtRuntime(nil) != "?" || FmtRuntime(func() *int { v := 125; return &v }()) != "2:05" {

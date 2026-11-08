@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
-	"github.com/n3ptune-cpu/Fairy/internal/health"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/health"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // health prints the panel's last health report (`fairy admin health`). Exit code 1 when the report is

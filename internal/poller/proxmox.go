@@ -8,10 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 )
 
 type pveRef struct {
@@ -32,7 +33,7 @@ func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout ti
 	defer p.Bump()
 	defer p.mu.Unlock()
 	if err != nil {
-		p.proxmoxFailedLocked(pve, src, normalise.Describe(err))
+		p.proxmoxFailedLocked(pve, src, devices.Describe(err))
 		return
 	}
 	now, ts := p.now()
@@ -147,7 +148,7 @@ func (p *Poller) fetchNodeCPU(pve config.Proxmox, sid string) {
 	defer cancel()
 	st, err := p.Backend.FetchNodeStatus(ctx, pve, ref.Node)
 	if err != nil {
-		slog.Debug("node status", "system", sid, "error", normalise.Describe(err))
+		slog.Debug("node status", "system", sid, "error", devices.Describe(err))
 		return
 	}
 	if m := jsonx.S(jsonx.Obj(st, "cpuinfo"), "model"); m != "" {

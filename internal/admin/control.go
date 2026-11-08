@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
-	"github.com/n3ptune-cpu/Fairy/internal/health"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/health"
 )
 
 func (c *cli) control(args []string) (int, error) {

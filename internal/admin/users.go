@@ -6,11 +6,11 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/n3ptune-cpu/Fairy/internal/access"
-	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/health"
-	"github.com/n3ptune-cpu/Fairy/internal/tokens"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/health"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/tokens"
 )
 
 // takeFlag removes a boolean flag (e.g. --force) from anywhere in args.

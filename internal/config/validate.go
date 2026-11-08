@@ -11,24 +11,21 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
 )
 
 var (
-	systemIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	envNameRe  = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
-	prefixRe   = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-)?$`)
-	tokenIDRe  = regexp.MustCompile(`^[^@\s]+@[^!\s]+![A-Za-z0-9_.-]+$`)
-	macRe      = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{12}$`)
-	siteRe     = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._'&-]{0,39}$`)
+	envNameRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+	prefixRe  = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-)?$`)
+	tokenIDRe = regexp.MustCompile(`^[^@\s]+@[^!\s]+![A-Za-z0-9_.-]+$`)
+	macRe     = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{12}$`)
+	siteRe    = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._'&-]{0,39}$`)
 )
 
 // ValidSite reports whether s is a valid site name: 1-40 letters, digits, spaces and . _ ' & -, starting with a
 // letter or digit (no leading or trailing space).
 func ValidSite(s string) bool { return siteRe.MatchString(s) && strings.TrimSpace(s) == s }
-
-// ValidID reports whether s is a valid id for a system, agent, power source or UPS: lowercase letters, digits
-// and dashes, starting with a letter or digit, at most 63 characters.
-func ValidID(s string) bool { return systemIDRe.MatchString(s) }
 
 // problems collects every validation error so the user sees all of them at once.
 type problems []string
@@ -46,7 +43,7 @@ func (c *Panel) Validate() error {
 	c.validateSystems(&errs, agents)
 	c.validateSites(&errs)
 	for _, h := range c.PanelHosts {
-		if !ValidID(h) {
+		if !configutil.ValidID(h) {
 			errs.add("panel_hosts: invalid id %q", h)
 		}
 	}
@@ -178,7 +175,7 @@ func (c *Panel) validateProxmox(errs *problems) {
 			v := p.ID + "-"
 			p.IDPrefix = &v
 		}
-		if !ValidID(p.ID) || !prefixRe.MatchString(*p.IDPrefix) {
+		if !configutil.ValidID(p.ID) || !prefixRe.MatchString(*p.IDPrefix) {
 			errs.add("proxmox %q: invalid id or id_prefix", p.ID)
 		}
 		if ids[p.ID] || prefixes[*p.IDPrefix] {
@@ -214,7 +211,7 @@ func (c *Panel) validateAgents(errs *problems) map[string]*Agent {
 	agents := map[string]*Agent{}
 	for i := range c.Agents {
 		a := &c.Agents[i]
-		if !ValidID(a.ID) {
+		if !configutil.ValidID(a.ID) {
 			errs.add("agent %q: invalid id", a.ID)
 		}
 		if strings.HasPrefix(a.ID, "node-") || strings.HasPrefix(a.ID, "qemu-") || strings.HasPrefix(a.ID, "lxc-") {
@@ -249,7 +246,7 @@ func (c *Panel) validateAgents(errs *problems) map[string]*Agent {
 // validateSystems checks the `systems:` overrides, including Wake-on-LAN (default port 9, relay agent).
 func (c *Panel) validateSystems(errs *problems, agents map[string]*Agent) {
 	for _, o := range c.Systems {
-		if !ValidID(o.ID) {
+		if !configutil.ValidID(o.ID) {
 			errs.add("systems: invalid id %q", o.ID)
 		}
 		if o.DWServiceURL != "" && !strings.HasPrefix(o.DWServiceURL, "https://") {

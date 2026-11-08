@@ -1,4 +1,4 @@
-package agent_test
+package agentcontract_test
 
 // The panel contract test: the panel's real poller, normaliser, power/UPS managers and web API talk over HTTP
 // to the real fairy-agent handler (with fake collectors, a fake BMC and fake devices). If this passes, the panel
@@ -20,15 +20,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/agent"
-	"github.com/n3ptune-cpu/Fairy/internal/agent/agenttest"
-	"github.com/n3ptune-cpu/Fairy/internal/agent/collect"
-	"github.com/n3ptune-cpu/Fairy/internal/agent/ipmi/fakebmc"
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/demo"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/poller"
-	"github.com/n3ptune-cpu/Fairy/internal/web"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/agenttest"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/collect"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/ipmi/fakebmc"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/demo"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/web"
 )
 
 const (

@@ -1,15 +1,12 @@
 package normalise
 
 import (
-	"context"
-	"errors"
 	"testing"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/devices"
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 func i64(v int64) *int64 { return &v }
@@ -154,12 +151,7 @@ func TestNormaliseAgentAndOverride(t *testing.T) {
 	}
 }
 
-func TestDescribeNeverLeaksDetails(t *testing.T) {
-	if Describe(context.DeadlineExceeded) != "timeout" || Describe(&devices.HTTPStatusError{Code: 500}) != "http 500" ||
-		Describe(devices.Errf("nut: ERR ACCESS-DENIED")) != "nut: ERR ACCESS-DENIED" ||
-		Describe(errors.New("Get https://user:pw@host/: something")) != "error" {
-		t.Fatal("describe")
-	}
+func TestSlug(t *testing.T) {
 	if Slug("NSX-KACHINA") != "nsx-kachina" || Slug(" ASUS i7 ") != "asus-i7" {
 		t.Fatal("slug")
 	}

@@ -6,7 +6,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/n3ptune-cpu/Fairy/internal/admin"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/admin"
 )
 
 var version = "dev" // set with -ldflags "-X main.version=..."

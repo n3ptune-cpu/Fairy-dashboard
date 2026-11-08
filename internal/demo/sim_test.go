@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
 
 func TestCounterNeverDecreases(t *testing.T) {

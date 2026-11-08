@@ -16,14 +16,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/normalise"
-	"github.com/n3ptune-cpu/Fairy/internal/power"
-	"github.com/n3ptune-cpu/Fairy/internal/scheduler"
-	"github.com/n3ptune-cpu/Fairy/internal/ups"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/power"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/scheduler"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/ups"
 )
 
 // Backend does the network I/O (replaced by the simulator in demo mode).

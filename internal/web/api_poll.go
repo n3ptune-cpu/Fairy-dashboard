@@ -1,8 +1,8 @@
 package web
 
 import (
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/scheduler"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/scheduler"
 )
 
 func (s *Server) getPoll(c *reqCtx) error {

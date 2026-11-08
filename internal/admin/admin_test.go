@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/access"
-	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
-	"github.com/n3ptune-cpu/Fairy/internal/audit"
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/health"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/health"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 func TestBreakGlassCLI(t *testing.T) {

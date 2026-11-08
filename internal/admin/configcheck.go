@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/n3ptune-cpu/Fairy/internal/access"
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/power"
-	"github.com/n3ptune-cpu/Fairy/internal/ups"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 )
 
 // secretEnv is an environment variable that must hold a secret, and what it is for.

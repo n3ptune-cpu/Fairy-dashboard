@@ -7,10 +7,10 @@ import (
 	"math"
 	"sort"
 
-	"github.com/n3ptune-cpu/Fairy/internal/devices"
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
-	"github.com/n3ptune-cpu/Fairy/internal/redact"
-	"github.com/n3ptune-cpu/Fairy/internal/ups"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/redact"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
 
 func gpuRow(name string, uLo, uHi, vramGiB, pLo, pHi, tLo, tHi, phase float64) map[string]any {

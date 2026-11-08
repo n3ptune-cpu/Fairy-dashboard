@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/access"
-	"github.com/n3ptune-cpu/Fairy/internal/tokens"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/tokens"
 )
 
 // tokens runs `fairy admin tokens create|list|revoke`.

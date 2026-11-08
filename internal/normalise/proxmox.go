@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 var tagSplit = regexp.MustCompile(`[;,\s]+`)

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 type clock struct {

@@ -7,14 +7,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/devices"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	powersrc "github.com/n3ptune-cpu/Fairy-agent/pkg/power"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // Runner polls one configured source with exponential backoff while it fails.
 type Runner struct {
-	Source       Source
+	Source       powersrc.Source
 	Interval     float64
 	offlineAfter float64
 
@@ -61,7 +61,7 @@ func (r *Runner) Poll(ctx context.Context, timeout time.Duration) {
 	defer r.mu.Unlock()
 	if out.err != nil { // never let a source crash the poller
 		r.failures++
-		msg := normalise.Describe(out.err)
+		msg := devices.Describe(out.err)
 		r.err = &msg
 		r.nextAttempt = mono + math.Min(r.Source.MaxBackoff(), r.Interval*math.Pow(2, float64(r.failures-1)))
 		if r.failures == 1 {

@@ -5,8 +5,8 @@ import (
 	"math"
 	"net/url"
 
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 func (c *reqCtx) deny(u *model.User, status int, detail any, why string) error {

@@ -1,5 +1,6 @@
 // Package ups makes UPSes a first-class feature: NUT polling (by the panel or relayed by an agent), state,
-// transitions, events and history.
+// transitions, events and history. The NUT sources themselves are fairy-agent's pkg/ups (the agent relays the
+// UPSes on its own network with the same code).
 //
 // Read-only by design: only LIST UPS / LIST VAR are ever sent (no INSTCMD, no SET VAR).
 package ups
@@ -13,13 +14,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	upssrc "github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // Manager holds every UPS (polled by the panel or relayed by agents), their history and events.
 type Manager struct {
-	Sources      []*Source
+	Sources      []*upssrc.Source
 	timeout      time.Duration
 	offlineAfter float64
 	eventsFile   string
@@ -43,7 +45,7 @@ func NewManager(configs []map[string]any, interval float64, timeout time.Duratio
 		maxlen: max(1, int(float64(historyS)/interval)), states: map[string]*model.UpsState{},
 		history: map[string][]model.UpsPoint{}}
 	for _, raw := range configs {
-		c, err := Build(raw)
+		c, err := upssrc.Build(raw)
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +115,7 @@ func (m *Manager) fail(keys []string, errMsg string) {
 }
 
 // PollSource polls one configured NUT source.
-func (m *Manager) PollSource(ctx context.Context, c *Source, timeout time.Duration) {
+func (m *Manager) PollSource(ctx context.Context, c *upssrc.Source, timeout time.Duration) {
 	if timeout <= 0 {
 		timeout = m.timeout
 	}
@@ -127,7 +129,7 @@ func (m *Manager) PollSource(ctx context.Context, c *Source, timeout time.Durati
 				keys = append(keys, k)
 			}
 		}
-		m.fail(keys, normalise.Describe(err))
+		m.fail(keys, devices.Describe(err))
 	} else {
 		for _, row := range rows {
 			n := fmt.Sprint(row["name"])
@@ -150,7 +152,7 @@ func (m *Manager) PollAll(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, s := range m.Sources {
 		wg.Add(1)
-		go func(s *Source) { defer wg.Done(); m.PollSource(ctx, s, 0) }(s)
+		go func(s *upssrc.Source) { defer wg.Done(); m.PollSource(ctx, s, 0) }(s)
 	}
 	wg.Wait()
 	m.SampleHistory()

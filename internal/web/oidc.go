@@ -12,7 +12,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
-	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 )
 
 type oidcClient struct {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 func TestWriteReadRoundTripAndKeyOrder(t *testing.T) {

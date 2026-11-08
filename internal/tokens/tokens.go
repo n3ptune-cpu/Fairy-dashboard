@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 // Prefix starts every API token.

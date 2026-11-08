@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 )
 
 func status(err error) int {

@@ -14,9 +14,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/n3ptune-cpu/Fairy/internal/audit"
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 const usage = `fairy admin: break-glass administration (no web login needed)

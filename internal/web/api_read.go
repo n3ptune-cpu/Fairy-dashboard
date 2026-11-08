@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/audit"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 func (s *Server) me(c *reqCtx) error {
@@ -127,7 +127,7 @@ func (s *Server) processes(c *reqCtx) error {
 	}
 	pl, err := s.Poller.FetchProcesses(c.r.Context(), agent, id, limit, sortBy)
 	if err != nil {
-		return apierr.New(502, "agent unreachable: "+normalise.Describe(err))
+		return apierr.New(502, "agent unreachable: "+devices.Describe(err))
 	}
 	c.json(200, pl)
 	return nil

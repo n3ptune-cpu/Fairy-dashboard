@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/n3ptune-cpu/Fairy/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 )
 
 func (c *cli) sessions(args []string) (int, error) {

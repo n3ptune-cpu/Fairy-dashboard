@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 )
 
 const configYAML = `

@@ -4,8 +4,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/settings"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/settings"
 )
 
 func (s *Server) getSettings(c *reqCtx) error {

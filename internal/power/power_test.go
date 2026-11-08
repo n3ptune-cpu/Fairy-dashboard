@@ -16,8 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/devices"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	powersrc "github.com/n3ptune-cpu/Fairy-agent/pkg/power"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 func manager(t *testing.T, srcs []map[string]any, ap AgentPowerFn, clock func() float64) *Manager {
@@ -97,13 +98,6 @@ func TestShellyGen2DigestAuth(t *testing.T) {
 	pm.PollAll(context.Background())
 	if st := pm.Overview().Sources[0]; st.Status != "ok" || *st.Readings[0].Watts != 5 {
 		t.Fatalf("%+v", st)
-	}
-}
-
-func TestShellyGen1Emeter(t *testing.T) {
-	r, err := devices.ParseShellyGen1(map[string]any{"emeters": []any{map[string]any{"power": 100.0, "voltage": 230.0, "current": 0.5, "total": 2500.0}}}, 0)
-	if err != nil || *r.Watts != 100 || *r.Voltage != 230 || *r.Current != 0.5 || *r.EnergyKWh != 2.5 {
-		t.Fatal(r, err)
 	}
 }
 
@@ -243,18 +237,6 @@ func TestNUTPowerSourceWithFakeUpsd(t *testing.T) {
 	}
 }
 
-func TestTuyaDPSParsingAndCustomMapping(t *testing.T) {
-	r := devices.ParseTuyaDPS(map[string]any{"1": true, "17": 3.0, "18": 412.0, "19": 935.0, "20": 2301.0}, nil)
-	if *r.Watts != 93.5 || *r.Voltage != 230.1 || *r.Current != 0.412 || r.EnergyKWh != nil {
-		t.Fatalf("%+v", r)
-	}
-	custom := map[string]devices.DpsField{"power": {DP: "104", Scale: 1}, "voltage": {DP: "106", Scale: 0.1}, "energy_kwh_total": {DP: "101", Scale: 0.01}}
-	r = devices.ParseTuyaDPS(map[string]any{"104": 55.0, "106": 2299.0, "101": 12345.0}, custom)
-	if *r.Watts != 55 || *r.Voltage != 229.9 || r.Current != nil || *r.EnergyKWh != 123.45 {
-		t.Fatalf("%+v", r)
-	}
-}
-
 func TestAgentPowerSourceAndUnknownType(t *testing.T) {
 	cp := &model.ComponentPower{CPUPackageW: model.P(33.3)}
 	pm := manager(t, []map[string]any{{"id": "cpu", "type": "agent", "agent": "laptop", "metric": "cpu_package_w"},
@@ -270,10 +252,10 @@ func TestAgentPowerSourceAndUnknownType(t *testing.T) {
 	if _, err := NewManager([]map[string]any{{"id": "x", "type": "zigbee"}}, 5, time.Second, 60, 60, nil, nil); err == nil || !strings.Contains(err.Error(), "unknown type") {
 		t.Fatal(err)
 	}
-	if err := ValidateConfigs([]map[string]any{{"id": "x", "type": "shelly", "url": "http://a", "bogus": 1}}); err == nil {
+	if err := powersrc.ValidateConfigs([]map[string]any{{"id": "x", "type": "shelly", "url": "http://a", "bogus": 1}}); err == nil {
 		t.Fatal("unknown keys must be rejected")
 	}
-	if err := ValidateConfigs([]map[string]any{{"id": "x", "type": "tuya", "device_id": "d", "ip": "1.2.3.4", "local_key_env": "K", "version": "3.6"}}); err == nil {
+	if err := powersrc.ValidateConfigs([]map[string]any{{"id": "x", "type": "tuya", "device_id": "d", "ip": "1.2.3.4", "local_key_env": "K", "version": "3.6"}}); err == nil {
 		t.Fatal("bad tuya version accepted")
 	}
 }

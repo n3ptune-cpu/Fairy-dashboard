@@ -3,7 +3,6 @@ package config
 import (
 	"bufio"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 )
@@ -39,18 +38,6 @@ func LoadEnvFile(path string) error {
 		}
 	}
 	return sc.Err()
-}
-
-// EnvSecret resolves a secret referenced by env-var name.
-func EnvSecret(name, what string, minLen int) (string, error) {
-	if name == "" {
-		return "", nil
-	}
-	v := os.Getenv(name)
-	if len(v) < max(minLen, 1) {
-		return "", fmt.Errorf("%s: env var %s is missing or shorter than %d chars", what, name, max(minLen, 1))
-	}
-	return v, nil
 }
 
 // Secrets read from FAIRY_* environment variables.

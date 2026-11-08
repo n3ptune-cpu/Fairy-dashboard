@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/scheduler"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/scheduler"
 )
 
 // HasSystem reports whether a system with this id is currently known.

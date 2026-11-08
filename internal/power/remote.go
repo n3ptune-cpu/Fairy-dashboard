@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // UpdateRemote merges agent-reported devices (`power_sources` in the agent's /metrics). rows=nil means the agent

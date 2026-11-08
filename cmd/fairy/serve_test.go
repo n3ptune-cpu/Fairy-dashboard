@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/n3ptune-cpu/Fairy/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 )
 
 // The env file is loaded before the environment is read: FAIRY_LISTEN / FAIRY_LOG_LEVEL / FAIRY_CONFIG_FILE

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/audit"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 )
 
 func fmtEntry(e map[string]any) string {

@@ -6,6 +6,8 @@ package model
 import (
 	"reflect"
 	"time"
+
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
 )
 
 // P returns a pointer to v (for optional fields).
@@ -188,17 +190,8 @@ type ProcessList struct {
 	Processes      []Process `json:"processes"`
 }
 
-// PowerReading is one measurement of a power source.
-type PowerReading struct {
-	SourceID       string    `json:"source_id"`
-	Name           string    `json:"name"`
-	Watts          *float64  `json:"watts"`
-	Voltage        *float64  `json:"voltage"`
-	Current        *float64  `json:"current"`
-	EnergyKWhTotal *float64  `json:"energy_kwh_total"`
-	SystemID       *string   `json:"system_id"`
-	Timestamp      time.Time `json:"timestamp"`
-}
+// PowerReading is one measurement of a power source (defined with the sources in fairy-agent's pkg/power).
+type PowerReading = power.Reading
 
 // PowerSourceState is one power source (configured or relayed by an agent) with its latest readings.
 type PowerSourceState struct {

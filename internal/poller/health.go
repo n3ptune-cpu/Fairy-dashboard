@@ -4,8 +4,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/health"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/health"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // WriteHealth writes <data_dir>/health.json for `fairy admin health` (the CLI never needs a web login).

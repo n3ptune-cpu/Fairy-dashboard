@@ -18,12 +18,13 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/normalise"
-	"github.com/n3ptune-cpu/Fairy/internal/poller"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 )
 
 // Actions are the power actions the API accepts.
@@ -357,7 +358,7 @@ func parsePending(m jsonx.M) *model.PowerPending {
 func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path string, body any) (jsonx.M, error) {
 	status, data, err := p.AgentRequest(ctx, a, "POST", path, body)
 	if err != nil {
-		return nil, apierr.New(502, "agent unreachable: "+normalise.Describe(err))
+		return nil, apierr.New(502, "agent unreachable: "+devices.Describe(err))
 	}
 	errMsg := func(def string) string {
 		if e := jsonx.S(data, "error"); e != "" {

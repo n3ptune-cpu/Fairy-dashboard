@@ -1,8 +1,8 @@
 package web
 
 import (
-	"github.com/n3ptune-cpu/Fairy/internal/access"
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 )
 
 // demoViews are the roles the demo can preview: admin, a viewer of each site, and a pending user.

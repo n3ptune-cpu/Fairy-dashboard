@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/n3ptune-cpu/Fairy/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 )
 
 // MaxBackgroundBytes is the largest background image accepted (8 MiB).

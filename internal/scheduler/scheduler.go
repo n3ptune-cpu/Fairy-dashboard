@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/statefile"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 // Interval limits (overrides are clamped to MinInterval-MaxInterval) and boost-while-viewing: viewed systems

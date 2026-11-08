@@ -7,10 +7,11 @@ import (
 	"slices"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/config"
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 )
 
 // AgentByID returns the configured agent with this id.
@@ -85,7 +86,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	cancel()
 	defer p.Bump()
 	if err != nil {
-		msg := normalise.Describe(err)
+		msg := devices.Describe(err)
 		p.mu.Lock()
 		now, _ := p.now()
 		if prev, ok := p.sources[name]; !ok || prev.OK {

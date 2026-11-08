@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/n3ptune-cpu/Fairy/internal/jsonx"
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // Placeholders are SMBIOS strings that board vendors leave unfilled (compared case-insensitively, trimmed).

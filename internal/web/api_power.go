@@ -1,8 +1,8 @@
 package web
 
 import (
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/powerctl"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/powerctl"
 )
 
 func (s *Server) powerCaps(c *reqCtx) error {

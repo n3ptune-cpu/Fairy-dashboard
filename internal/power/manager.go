@@ -1,3 +1,7 @@
+// Package power is the panel's wall power: a Runner per configured source (with backoff) and the Manager
+// (overview, watts per system, history, devices relayed by agents). The sources themselves (one per device type:
+// plugs, UPSes and BMCs, plus component power reported by agents) are fairy-agent's pkg/power, which the agent
+// uses to relay the devices on its own network.
 package power
 
 import (
@@ -5,8 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/model"
-	"github.com/n3ptune-cpu/Fairy/internal/normalise"
+	powersrc "github.com/n3ptune-cpu/Fairy-agent/pkg/power"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 )
 
 // Manager holds every power source: the configured ones (Runners) and the ones relayed by agents.
@@ -30,7 +35,7 @@ func NewManager(configs []map[string]any, interval float64, timeout time.Duratio
 	m := &Manager{IntervalS: interval, Timeout: timeout, offlineAfter: offlineAfter,
 		maxHistory: max(1, int(float64(historyS)/interval)), remote: map[string]model.PowerSourceState{}}
 	for _, raw := range configs {
-		s, err := Build(raw, agentPower)
+		s, err := powersrc.Build(raw, agentPower.metric())
 		if err != nil {
 			return nil, err
 		}

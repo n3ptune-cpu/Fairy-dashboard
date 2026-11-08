@@ -9,7 +9,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // FmtRuntime formats seconds as m:ss ("?" when unknown).

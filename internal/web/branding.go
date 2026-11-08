@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/n3ptune-cpu/Fairy/internal/settings"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/settings"
 )
 
 // MaxLogoBytes is the largest logo file accepted (branding.logo).
