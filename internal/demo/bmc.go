@@ -3,17 +3,30 @@ package demo
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"sync"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
 
+// simBMC is NSX-CYRENE's BMC as it really behaves: a Supermicro OEM board without "optimal" (the BMC answers
+// completion code 0xCC), so the agent runs with auto_mode: standard and reports optimal as unsupported.
 type simBMC struct {
-	mu     sync.Mutex
-	mode   string
-	duty   map[int]int
-	events []map[string]any
+	mu          sync.Mutex
+	mode        string
+	duty        map[int]int
+	events      []map[string]any
+	refuses     map[string]bool // modes the board does not have
+	unsupported map[string]bool // modes the agent has seen refused
+}
+
+const simAutoMode = "standard"
+
+func newSimBMC() *simBMC {
+	return &simBMC{mode: simAutoMode, duty: map[int]int{}, refuses: map[string]bool{"optimal": true},
+		unsupported: map[string]bool{"optimal": true}, events: []map[string]any{{"t": epoch() - 3600, "action": "mode optimal unsupported",
+			"detail": "BMC refused it: BMC completion code 0xCC (invalid data field)"}}}
 }
 
 var modeRPM = map[string]float64{"standard": 900, "full": 1900, "optimal": 420, "heavyio": 1200}
@@ -38,8 +51,14 @@ func (b *simBMC) status() map[string]any {
 	if len(ev) > 10 {
 		ev = ev[len(ev)-10:]
 	}
+	unsupported := []string{}
+	for m := range b.unsupported {
+		unsupported = append(unsupported, m)
+	}
+	sort.Strings(unsupported)
 	return map[string]any{"enabled": true, "vendor": "supermicro", "mode": b.mode, "error": nil,
-		"overridden": b.mode != "optimal", "duty": duty, "min_duty": 30, "max_temp_c": 80.0, "events": ev,
+		"overridden": b.mode != simAutoMode, "duty": duty, "min_duty": 30, "max_temp_c": 80.0, "events": ev,
+		"auto_mode": simAutoMode, "unsupported_modes": unsupported,
 		"fans": []any{map[string]any{"name": "CPU_FAN1", "rpm": rpm(0, 1.0)}, map[string]any{"name": "CPU_FAN2", "rpm": rpm(0, 0.95)},
 			map[string]any{"name": "SYS_FAN3", "rpm": rpm(0, 1.1)}}}
 }
@@ -54,6 +73,11 @@ func (b *simBMC) handle(path string, body map[string]any) (int, jsonx.M) {
 		mode, _ := body["mode"].(string)
 		if _, ok := modeRPM[mode]; !ok {
 			return 400, jsonx.M{"error": "bad mode"}
+		}
+		if b.refuses[mode] { // what fairy-agent answers for a mode the BMC rejects
+			b.unsupported[mode] = true
+			return 422, jsonx.M{"error": "BMC refused the fan mode " + mode + ": BMC completion code 0xCC (invalid data field); this board's BMC does not support it",
+				"code": "fan_mode_unsupported", "mode": mode}
 		}
 		b.mode, b.duty = mode, map[int]int{}
 		b.events = append(b.events, map[string]any{"t": epoch(), "action": "mode=" + mode, "detail": "api"})

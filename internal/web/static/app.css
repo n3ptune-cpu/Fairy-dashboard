@@ -95,6 +95,7 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .btn.on { background: rgba(122, 162, 255, .14); border-color: var(--accent); color: var(--accent); }
 .btn.danger:hover { border-color: var(--bad); color: var(--bad); }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.unsupported { text-decoration: line-through; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
 .pad { padding: 16px 18px; }
 .section-title { margin: 26px 0 10px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }

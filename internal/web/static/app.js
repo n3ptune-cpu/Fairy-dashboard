@@ -496,6 +496,7 @@ async function loadProcesses(id) {
   schedule(() => loadProcesses(id), 2000);
 }
 
+const fanMsg = {};  // the last fan write error per system, shown until the next write succeeds
 async function loadFans(id) {
   const body = $("#tab-body");
   if (!body) return;
@@ -504,25 +505,35 @@ async function loadFans(id) {
   try {
     const f = await api(`/api/systems/${enc(id)}/fan`);
     if (!$("#tab-body")) return;
-    const full = f.mode === "full";
-    body.innerHTML = `<div class="warnbox">Writes go to the BMC. The panel never goes below 30% and the agent enforces a ${f.min_duty}% minimum and reverts to <b>Optimal</b>
-      if a CPU/system temperature exceeds ${f.max_temp_c?.toFixed(0)}°C or readings disappear.${canCtl ? "" : ` ${esc(controlWhyNot())}`}</div>
-      <div class="grid2"><div class="panel glass pad"><h3>Mode</h3><div class="row-gap">${["optimal", "standard", "heavyio", "full"].map((m) =>
-        `<button class="btn ${f.mode === m ? "on" : ""}" data-mode="${m}" ${canCtl ? "" : "disabled"}>${m}</button>`).join("")}</div>
+    const full = f.mode === "full", floor = Math.max(30, f.min_duty || 0);
+    const unsupported = new Set(f.unsupported_modes || []);
+    const limits = f.max_temp_c != null
+      ? ` While a manual speed is set, the agent's watchdog sets both zones to <b>100%</b> if a CPU temperature reaches <b>${esc(f.max_temp_c.toFixed(0))}°C</b> or no temperature can be read for 30 s.`
+      : "";
+    const modeBtn = (m) => {
+      const no = unsupported.has(m);
+      const title = no ? "this board's BMC doesn't support this mode" : m === f.auto_mode ? "this board's automatic mode (fan_control.auto_mode)" : "";
+      return `<button class="btn ${f.mode === m ? "on" : ""} ${no ? "unsupported" : ""}" data-mode="${m}" ${canCtl && !no ? "" : "disabled"}${title ? ` title="${esc(title)}"` : ""}${no ? ' aria-disabled="true"' : ""}>${m}${m === f.auto_mode ? ' <span class="note">auto</span>' : ""}</button>`;
+    };
+    body.innerHTML = `<div class="warnbox">Writes go to the BMC. Manual speeds are never below <b>${floor}%</b> (the agent's minimum; the panel never sends less than 30%).${limits}${canCtl ? "" : ` ${esc(controlWhyNot())}`}</div>
+      ${f.error ? `<div class="error">${esc(f.error)}</div>` : ""}
+      <div class="grid2"><div class="panel glass pad"><h3>Mode</h3><div class="row-gap">${["optimal", "standard", "heavyio", "full"].map(modeBtn).join("")}</div>
+        ${unsupported.size ? `<div class="note">Greyed out: this board's BMC doesn't support ${esc([...unsupported].join(", "))}.</div>` : ""}
         <h3 class="gap">Zone duty (full mode only)</h3>${[0, 1].map((z) => {
           const v = f.duty[z] ?? 50;
-          return `<div class="duty-row"><span>Zone ${z}</span><input type="range" min="${Math.max(30, f.min_duty || 0)}" max="100" step="5" value="${v}" data-zone="${z}" ${canCtl && full ? "" : "disabled"}>
+          return `<div class="duty-row"><span>Zone ${z}</span><input type="range" min="${floor}" max="100" step="5" value="${v}" data-zone="${z}" ${canCtl && full ? "" : "disabled"}>
           <b data-duty-label="${z}">${v}%</b><button class="btn" data-apply="${z}" ${canCtl && full ? "" : "disabled"}>Set</button></div>`; }).join("")}
-        <div class="note">Zone 0: CPU/system headers (FAN1…), zone 1: peripheral (FANA). Verify on your board.</div><div class="error" id="fan-err"></div></div>
+        <div class="note">Zone 0: CPU/system headers (FAN1…), zone 1: peripheral (FANA). Verify on your board.</div><div class="error" id="fan-err" role="alert">${esc(fanMsg[id] || "")}</div></div>
       <div class="stack"><div class="panel glass pad"><h3>Fans</h3>${f.fans.map((x) => `<div class="list-row"><span>${esc(x.name)}</span><span>${x.rpm} rpm</span></div>`).join("") || '<div class="note">no fan sensors</div>'}</div>
         <div class="panel glass pad"><h3>Events</h3>${(f.events || []).slice().reverse().map((e) => `<div class="list-row"><span>${new Date(e.t * 1000).toLocaleTimeString()}</span><span>${esc(e.action)} · ${esc(e.detail)}</span></div>`).join("") || '<div class="note">none</div>'}</div></div></div>`;
     const post = async (path, payload) => {
       const url = `/api/systems/${enc(id)}${path}`;
       try {
-        await controlCall({ kind: "request", label: `Fan ${path.split("/").pop()} ${JSON.stringify(payload)} on ${state.byId[id]?.name || id}`, system: id, method: "POST", path: url, body: payload },
+        const r = await controlCall({ kind: "request", label: `Fan ${path.split("/").pop()} ${JSON.stringify(payload)} on ${state.byId[id]?.name || id}`, system: id, method: "POST", path: url, body: payload },
           () => api(url, { method: "POST", body: JSON.stringify(payload) }));
-        loadFans(id);
-      } catch (e) { $("#fan-err").textContent = e.message; }
+        if (r) delete fanMsg[id];
+      } catch (e) { fanMsg[id] = e.message; }
+      loadFans(id);  // also shows a mode the BMC just refused as greyed out
     };
     body.querySelectorAll("[data-zone]").forEach((r) => (r.oninput = () => ($(`[data-duty-label="${r.dataset.zone}"]`, body).textContent = `${r.value}%`)));
     body.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => post("/fan/mode", { mode: b.dataset.mode })));

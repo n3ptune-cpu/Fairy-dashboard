@@ -19,7 +19,7 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"GET", "/api/power/history", "Ring buffer (default 1 h) for sparklines. Query: source"},
 	{"GET", "/api/ups", "All UPSes: state, battery, load, linked systems, history"},
 	{"GET", "/api/ups/events", "UPS transitions (newest first). Query: limit, after"},
-	{"GET", "/api/systems/{id}/fan", "Fan mode, RPMs, watchdog events"},
+	{"GET", "/api/systems/{id}/fan", "Fan mode, RPMs, watchdog events, modes the BMC refused (unsupported_modes)"},
 	{"POST", "/api/systems/{id}/fan/mode", "Set BMC fan mode (control group + `X-Requested-With: fairy` header)"},
 	{"POST", "/api/systems/{id}/fan/duty", "Set zone duty % (requires mode=full; agent enforces minimum + temp watchdog)"},
 	{"GET", "/api/settings", "Current user's UI settings (session only)"},

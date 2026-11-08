@@ -43,7 +43,7 @@ type Backend struct {
 
 // NewBackend returns a simulator for the demo configuration.
 func NewBackend(cfg *config.Panel) *Backend {
-	return &Backend{cfg: cfg, bmc: &simBMC{mode: "optimal", duty: map[int]int{}}, pending: map[string]map[string]any{},
+	return &Backend{cfg: cfg, bmc: newSimBMC(), pending: map[string]map[string]any{},
 		downUntil: map[string]float64{}, guestStatus: map[guestKey]string{}, guestPending: map[guestKey]guestChange{},
 		updates: map[string]*simUpdate{}}
 }

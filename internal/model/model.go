@@ -324,17 +324,19 @@ type FanEvent struct {
 
 // FanStatus is GET /api/systems/{id}/fan.
 type FanStatus struct {
-	SystemID   string         `json:"system_id"`
-	Enabled    bool           `json:"enabled"`
-	Vendor     *string        `json:"vendor"`
-	Mode       *string        `json:"mode"`
-	Error      *string        `json:"error"`
-	Overridden bool           `json:"overridden"`
-	Duty       map[string]int `json:"duty"`
-	MinDuty    *int           `json:"min_duty"`
-	MaxTempC   *float64       `json:"max_temp_c"`
-	Fans       []Fan          `json:"fans"`
-	Events     []FanEvent     `json:"events"`
+	SystemID    string         `json:"system_id"`
+	Enabled     bool           `json:"enabled"`
+	Vendor      *string        `json:"vendor"`
+	Mode        *string        `json:"mode"`
+	Error       *string        `json:"error"`
+	Overridden  bool           `json:"overridden"`
+	Duty        map[string]int `json:"duty"`
+	MinDuty     *int           `json:"min_duty"`
+	MaxTempC    *float64       `json:"max_temp_c"`
+	AutoMode    *string        `json:"auto_mode"`         // the agent's fan_control.auto_mode (nil: older agent)
+	Unsupported []string       `json:"unsupported_modes"` // modes this board's BMC refused (empty: none, or older agent)
+	Fans        []Fan          `json:"fans"`
+	Events      []FanEvent     `json:"events"`
 }
 
 // ControlResult is the answer to a fan write: the agent's reply passed through.

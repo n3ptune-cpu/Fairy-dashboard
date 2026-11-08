@@ -55,3 +55,18 @@ func TestDemoNetworkCountersMonotonic(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// The demo's NSX-CYRENE has no "optimal" fan mode, like the real board: refused with the agent's 422, listed.
+func TestDemoBMCRefusesOptimal(t *testing.T) {
+	b := newSimBMC()
+	if st, out := b.handle("/fan/mode", map[string]any{"mode": "optimal"}); st != 422 || out["code"] != "fan_mode_unsupported" {
+		t.Fatal(st, out)
+	}
+	if st, _ := b.handle("/fan/mode", map[string]any{"mode": "full"}); st != 200 {
+		t.Fatal(st)
+	}
+	_, s := b.handle("/fan/status", nil)
+	if s["mode"] != "full" || s["overridden"] != true || s["auto_mode"] != "standard" || len(s["unsupported_modes"].([]string)) != 1 {
+		t.Fatal(s)
+	}
+}
