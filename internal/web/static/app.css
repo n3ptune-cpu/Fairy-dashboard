@@ -44,6 +44,8 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 16px; letter-spacing: .02em; }
 .logo { width: 24px; height: 24px; flex: none; border-radius: var(--radius); background: conic-gradient(from 200deg, var(--accent), var(--accent2), #49c6e5, var(--accent)); }
 .logo.big { width: 44px; height: 44px; border-radius: var(--radius); margin: 0 auto 10px; }
+.logo.has-img { background: none; border-radius: 0; }
+.logo.has-img img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .collapse-btn { margin-left: auto; }
 .side-head { flex-shrink: 0; }
 #nav { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 8px 16px; scrollbar-width: thin; scrollbar-color: #222 transparent; }

@@ -31,6 +31,7 @@ type serveFlags struct {
 	envFileSet                         bool // --env-file given explicitly (then an unreadable file is an error)
 	demo                               bool
 	demoAs                             string // demo only: preview as "viewer:Straw", "pending", ...
+	logo                               string // --logo: overrides branding.logo (handy to try a logo in the demo)
 }
 
 // defaultListen is where the panel listens when neither --listen, FAIRY_LISTEN nor `listen:` say otherwise.
@@ -114,6 +115,9 @@ func serve(args []string) int {
 	if p == nil {
 		return code
 	}
+	if f.logo != "" {
+		p.cfg.Branding.Logo = f.logo
+	}
 	audit.SetRotation(p.cfg.AuditRotation())
 	if !ensureAuditLog(p.cfg.AuditLog) || !checkStateFiles(p.cfg.DataDir) {
 		return 1
@@ -157,12 +161,13 @@ func parseServeFlags(args []string) (serveFlags, bool) {
 	listen := fs.String("listen", "", "address:port (default $FAIRY_LISTEN, else listen: in config.yaml, else "+defaultListen+")")
 	demoMode := fs.Bool("demo", false, "simulated data, NO authentication (loopback preview only)")
 	logLevel := fs.String("log-level", "", "debug|info|warn|error (default $FAIRY_LOG_LEVEL or info)")
+	logo := fs.String("logo", "", "logo image (PNG, JPEG, WebP or GIF, at most 1 MiB): overrides branding.logo; works with --demo")
 	demoAs := fs.String("demo-as", "", `demo only: preview as "viewer:Straw", "viewer:Neptune", "pending" or "admin"`)
 	if err := fs.Parse(args); err != nil {
 		return serveFlags{}, false
 	}
 	f := serveFlags{cfgPath: *cfgPath, envFile: *envFile, envFileSet: flagSet(fs, "env-file"), listen: *listen,
-		logLevel: *logLevel, demo: *demoMode, demoAs: *demoAs}
+		logLevel: *logLevel, demo: *demoMode, demoAs: *demoAs, logo: *logo}
 	if f.demoAs != "" && !f.demo {
 		fmt.Fprintln(os.Stderr, "--demo-as only works with --demo (a real panel takes roles from the Users page)")
 		return serveFlags{}, false

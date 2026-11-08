@@ -160,6 +160,12 @@ type SystemOverride struct {
 	Wol          *Wol   `yaml:"wol"`
 }
 
+// Branding is the optional look of the panel: Logo is a PNG, JPEG, WebP or GIF file (at most 1 MiB, no SVG)
+// shown instead of the built-in logo and used as the favicon.
+type Branding struct {
+	Logo string `yaml:"logo"`
+}
+
 // Intervals are the default polling intervals in seconds (each 1-300).
 type Intervals struct {
 	Agent   float64 `yaml:"agent"`
@@ -197,6 +203,7 @@ type Panel struct {
 	StepUpWindowS      int              `yaml:"step_up_window_s"`
 	StepUpPromptLogin  bool             `yaml:"step_up_prompt_login"`
 	LoginRatePerMin    int              `yaml:"login_rate_per_min"`
+	Branding           Branding         `yaml:"branding"`
 
 	trusted []netip.Prefix
 }

@@ -36,6 +36,15 @@ fairy version
 See `deploy/config.example.yaml`, `deploy/fairy.env.example` and `deploy/fairy.service` (hardened systemd unit,
 no capabilities needed: the panel never runs local power or IPMI commands).
 
+### Custom logo
+
+Copy your image to `/etc/fairy/logo.png` (PNG, JPEG, WebP or GIF, at most 1 MiB; SVG is refused because it can
+carry script; make it readable by the service, e.g. `0644`), set `branding: {logo: /etc/fairy/logo.png}` in
+config.yaml and restart Fairy. It replaces the built-in logo in the sidebar and on the sign-in and waiting
+pages, and becomes the favicon. A missing or invalid file only logs a warning. To try one first:
+`fairy serve --demo --logo C:\path\to\logo.png` (Windows) or `fairy serve --demo --logo ./logo.png`.
+The file is read once at start (path from the config only) and served at `/branding/logo` without sign-in.
+
 ### Behind nginx in another container (and Cloudflare)
 
 `deploy/nginx.example.conf` is a complete server block. In short:

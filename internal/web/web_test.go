@@ -560,3 +560,47 @@ func TestRevokedTokenEndsItsStream(t *testing.T) {
 		t.Fatal("stream of a revoked token kept running", d)
 	}
 }
+
+// branding.logo: read once at startup, served without sign-in at a fixed path with its sniffed type; anything
+// but a small raster image is ignored (built-in logo) without stopping the panel.
+func TestCustomLogo(t *testing.T) {
+	e := setup(t)
+	if r := e.do("GET", "/branding/logo", nil); r.code != 404 {
+		t.Fatal("no logo configured", r.code)
+	}
+	dir := t.TempDir()
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 100)...)
+	write := func(name string, b []byte) string {
+		p := dir + "/" + name
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for name, b := range map[string][]byte{
+		"logo.svg": []byte(`<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>`),
+		"fake.png": []byte("<html>not an image</html>"),
+		"big.png":  append(append([]byte{}, png...), make([]byte, MaxLogoBytes)...),
+	} {
+		if loadLogo(write(name, b)) != nil {
+			t.Fatal("accepted", name)
+		}
+	}
+	if loadLogo(dir+"/missing.png") != nil || loadLogo(dir) != nil {
+		t.Fatal("missing file or directory accepted")
+	}
+	e.s.logo = loadLogo(write("logo.png", png))
+	r := e.do("GET", "/branding/logo?path=/etc/passwd", nil) // no parameters are used
+	if r.code != 200 || r.hdr.Get("Content-Type") != "image/png" || !bytes.Equal(r.raw, png) ||
+		r.hdr.Get("X-Content-Type-Options") != "nosniff" || r.hdr.Get("Content-Security-Policy") != "default-src 'none'" {
+		t.Fatal("logo", r.code, r.hdr)
+	}
+	if r2 := e.do("GET", "/branding/logo", nil, "If-None-Match", r.hdr.Get("ETag")); r2.code != 304 {
+		t.Fatal("etag", r2.code)
+	}
+	for _, p := range []string{"/branding/logo/../../etc/passwd", "/branding/", "/branding/x"} {
+		if r := e.do("GET", p, nil); r.code == 200 && !bytes.Equal(r.raw, png) {
+			t.Fatal("served something else", p)
+		}
+	}
+}

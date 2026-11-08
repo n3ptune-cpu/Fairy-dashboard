@@ -22,6 +22,10 @@ trusted_proxies: ["127.0.0.1/32", "::1/128"]
 panel_hosts: []                           # system ids the panel itself runs on (power menu warns), e.g. [lxc-110]
 boost_while_viewing: true                 # 1 s polling while a host's page is open (30 s grace)
 intervals: {agent: 1, proxmox: 2, ups: 2, history: 5, stream: 1}
+# branding:
+#   logo: /etc/fairy/logo.png             # your own logo instead of the built-in one (sidebar, sign-in page, favicon):
+#                                         # PNG, JPEG, WebP or GIF, at most 1 MiB, no SVG. Read once at start; a bad
+#                                         # file only logs a warning. Served at /branding/logo (no sign-in needed).
 
 oidc:
   issuer: https://id.example.com          # Pocket ID; discovery = <issuer>/.well-known/openid-configuration

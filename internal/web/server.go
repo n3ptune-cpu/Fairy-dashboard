@@ -63,6 +63,7 @@ type Server struct {
 
 	codec *sessionCodec
 	oidc  *oidcClient
+	logo  *brandLogo // branding.logo, read once at startup (nil = built-in logo)
 
 	// demo: set ONLY by demo mode (loopback-bound); authentication is bypassed with this user.
 	DemoUser     *model.User
@@ -91,6 +92,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60), anonAudit: newAuditThrottle(),
 		settingsRL: newRateLimiter(30), uploadRL: newRateLimiter(uploadsPerMin)}
 	s.oidc = newOIDC(cfg, secrets)
+	s.logo = loadLogo(cfg.Branding.Logo)
 	if err := s.Access.EnsureSites(cfg.Sites()); err != nil { // sites named in config.yaml exist on the Users page
 		slog.Error("users.json write failed", "error", err)
 	}
@@ -211,6 +213,7 @@ func (s *Server) routes() {
 		}
 		files.ServeHTTP(w, r)
 	})))
+	m.HandleFunc("GET /branding/logo", s.serveLogo)
 	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := fs.ReadFile(sub, "index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

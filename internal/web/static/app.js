@@ -1079,6 +1079,21 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === " " && document.activeElement?.tagName === "A") { e.preventDefault(); document.activeElement.click(); }
 }, true);
 
+// Custom logo (branding.logo in config.yaml): when the server has one, it replaces the built-in logo on the
+// sign-in, waiting and main pages and becomes the favicon. Without one (404) nothing changes.
+(() => {
+  const probe = new Image();
+  probe.onload = () => {
+    document.querySelectorAll(".logo").forEach((el) => {
+      const img = new Image(); img.src = "/branding/logo"; img.alt = "";
+      el.classList.add("has-img"); el.replaceChildren(img);
+    });
+    const icon = document.querySelector('link[rel="icon"]');
+    if (icon) icon.href = "/branding/logo";
+  };
+  probe.src = "/branding/logo";
+})();
+
 // Sign out: the server wants the CSRF header, so the "Sign out" forms are posted with fetch.
 document.addEventListener("submit", async (e) => {
   if (!e.target.matches?.('form[action="/auth/logout"]')) return;
