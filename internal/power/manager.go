@@ -2,7 +2,6 @@ package power
 
 import (
 	"context"
-	"sort"
 	"sync"
 	"time"
 
@@ -142,19 +141,6 @@ func (m *Manager) HistoryView(source string) model.PowerHistory {
 		}
 	}
 	return model.PowerHistory{IntervalS: m.IntervalS, Points: pts}
-}
-
-// SourceIDs lists local + remote ids (sorted remote) for tests.
-func (m *Manager) SourceIDs() []string {
-	var out []string
-	for _, r := range m.Runners {
-		out = append(out, r.ID())
-	}
-	m.mu.Lock()
-	rk := append([]string{}, m.remoteKeys...)
-	m.mu.Unlock()
-	sort.Strings(rk)
-	return append(out, rk...)
 }
 
 func (m *Manager) Close() {

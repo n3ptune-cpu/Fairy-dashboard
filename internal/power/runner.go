@@ -98,6 +98,3 @@ func (r *Runner) State() model.PowerSourceState {
 
 // SystemOf returns the linked system of a local source (for scheduler job membership).
 func (r *Runner) SystemOf() string { return r.Source.Info().System }
-
-// Kind returns the source type.
-func (r *Runner) Kind() string { return r.Source.Info().Type }

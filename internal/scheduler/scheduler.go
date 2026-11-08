@@ -261,13 +261,6 @@ func (s *Scheduler) requested(j *Job, id string) float64 {
 	return j.DefaultS
 }
 
-// Requested is the per-host interval (override or job default).
-func (s *Scheduler) Requested(j *Job, id string) float64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.requested(j, id)
-}
-
 // effective: nil = paused. A shared job (a Proxmox cluster) runs as fast as the fastest of its non-paused
 // systems asks; systems without an override count at the job default, so slowing one node never slows the rest.
 func (s *Scheduler) effective(j *Job) *float64 {
@@ -361,12 +354,6 @@ func (s *Scheduler) Add(j *Job) {
 	s.jobs[j.Key] = j
 }
 
-func (s *Scheduler) Job(key string) *Job {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.jobs[key]
-}
-
 func (s *Scheduler) Jobs() []*Job {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -424,20 +411,6 @@ func (s *Scheduler) Tick(ctx context.Context) {
 		j.running = true
 		s.wg.Add(1)
 		go func(j *Job, iv float64) { defer s.wg.Done(); s.run(ctx, j, iv) }(j, *eff)
-	}
-}
-
-// Loop ticks every 100 ms until ctx ends.
-func (s *Scheduler) Loop(ctx context.Context) {
-	t := time.NewTicker(100 * time.Millisecond)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			s.Tick(ctx)
-		}
 	}
 }
 

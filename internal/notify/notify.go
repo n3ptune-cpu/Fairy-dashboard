@@ -68,15 +68,9 @@ func send(u, title, message string) {
 	resp.Body.Close()
 }
 
-// Notify sends in the background. Sync sends synchronously (CLI).
+// Notify sends in the background.
 func Notify(title, message string) {
 	if u := URL(); u != "" {
 		go send(u, title, message)
-	}
-}
-
-func Sync(title, message string) {
-	if u := URL(); u != "" {
-		send(u, title, message)
 	}
 }

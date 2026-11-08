@@ -195,9 +195,6 @@ func (l *ProxmoxList) UnmarshalYAML(n *yaml.Node) error {
 func (c *Panel) BaseURL() string         { return strings.TrimRight(c.PublicURL, "/") }
 func (c *Panel) Boost() bool             { return c.BoostWhileViewing == nil || *c.BoostWhileViewing }
 func (c *Panel) Trusted() []netip.Prefix { return c.trusted }
-func (o OIDC) DiscoveryURL() string {
-	return strings.TrimRight(o.Issuer, "/") + "/.well-known/openid-configuration"
-}
 
 // Load reads and validates a config file.
 func Load(path string) (*Panel, error) {

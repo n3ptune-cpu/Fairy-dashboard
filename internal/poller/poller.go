@@ -69,7 +69,6 @@ type Poller struct {
 	fingerprints  map[string]uint64
 	agentFailures map[string]int
 	version       int
-	changed       chan struct{}
 	snap          []model.System
 	snapVer       int
 	snapJSON      map[string][]byte
@@ -86,7 +85,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 		sources: map[string]model.SourceStatus{}, agentPower: map[string]*model.ComponentPower{},
 		pveRefs: map[string]pveRef{}, nodeCPU: map[string]string{}, nodeInflight: map[string]bool{},
 		pending: map[string]pendingNote{}, clusterIDs: map[string][]string{}, fingerprints: map[string]uint64{},
-		agentFailures: map[string]int{}, changed: make(chan struct{}), snapVer: -1, snapJSONVer: -1,
+		agentFailures: map[string]int{}, snapVer: -1, snapJSONVer: -1,
 		stateVersion: -1, StartedAt: time.Now().UTC(), present: map[string]bool{}}
 	for i := range cfg.Systems {
 		p.overrides[cfg.Systems[i].ID] = &cfg.Systems[i]
@@ -244,20 +243,11 @@ func (p *Poller) Override(id string) *config.SystemOverride { return p.overrides
 
 func (p *Poller) bumpAfter() { p.Bump() }
 
-// Bump publishes a new version to SSE waiters.
+// Bump records that the poller's data changed, so the cached snapshots are rebuilt on the next read.
 func (p *Poller) Bump() {
 	p.mu.Lock()
 	p.version++
-	close(p.changed)
-	p.changed = make(chan struct{})
 	p.mu.Unlock()
-}
-
-// Version returns the current version and a channel closed on the next change.
-func (p *Poller) Version() (int, <-chan struct{}) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.version, p.changed
 }
 
 // PollOnce runs every source once in dependency order and waits (first poll, tests).

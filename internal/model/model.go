@@ -126,9 +126,6 @@ type System struct {
 	Boosted            bool            `json:"boosted"`
 }
 
-// Copy returns a shallow copy (slices shared; callers replace, never mutate in place).
-func (s System) Copy() System { return s }
-
 type SystemList struct {
 	GeneratedAt time.Time `json:"generated_at"`
 	Systems     []System  `json:"systems"`
@@ -267,10 +264,6 @@ type Me struct {
 	ControlDisabled *ControlState `json:"control_disabled"`
 	StepUpWindowS   int           `json:"step_up_window_s"`
 	AuthAgeS        *float64      `json:"auth_age_s"`
-}
-
-type Health struct {
-	Status string `json:"status"`
 }
 
 type FanEvent struct {
