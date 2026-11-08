@@ -195,6 +195,9 @@ func mergeAgentIntoNode(node, agent model.System) model.System {
 	if agent.ComponentPower != nil {
 		node.ComponentPower = agent.ComponentPower
 	}
+	if agent.Battery != nil {
+		node.Battery = agent.Battery
+	}
 	if agent.Hardware != nil {
 		node.Hardware = agent.Hardware
 	}

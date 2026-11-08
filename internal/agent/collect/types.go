@@ -134,7 +134,8 @@ type Sample struct {
 	Temps      []Temp
 	Fans       []Fan
 	Voltages   []Voltage
-	Power      Power // CPU package (RAPL) and battery; GPU power is added from the GPU reader
+	Power      Power          // CPU package (RAPL) and battery; GPU power is added from the GPU reader
+	Battery    *BatteryStatus // nil without a system battery
 }
 
 // Process is one row of /processes. CPUPercent is of one CPU (a busy 4-thread process shows ~400).

@@ -78,6 +78,17 @@ type ComponentPower struct {
 	Source       []string      `json:"source"`
 }
 
+// Battery is a laptop's battery as its agent reports it (nil for machines without one). PowerW is the battery's
+// draw while discharging (then effectively the whole machine's draw), negative while charging.
+type Battery struct {
+	Percent        *float64 `json:"percent"`
+	State          string   `json:"state"` // charging | discharging | full | idle | unknown
+	ACOnline       *bool    `json:"ac_online"`
+	PowerW         *float64 `json:"power_w"`
+	TimeRemainingS *int64   `json:"time_remaining_s"`
+	HealthPct      *float64 `json:"health_pct"`
+}
+
 // Hardware is the host's DMI / board information; Display is the readable "vendor model".
 type Hardware struct {
 	SystemVendor *string `json:"system_vendor"`
@@ -126,6 +137,7 @@ type System struct {
 	GPUs               []Gpu           `json:"gpus"`
 	PowerW             *float64        `json:"power_w"`
 	ComponentPower     *ComponentPower `json:"component_power"`
+	Battery            *Battery        `json:"battery"`
 	UPS                []string        `json:"ups"`
 	FanControl         bool            `json:"fan_control"`
 	ProcessesAvailable bool            `json:"processes_available"`

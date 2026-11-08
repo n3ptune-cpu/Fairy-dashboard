@@ -52,6 +52,10 @@ memory). The contract, in short: `GET /metrics`, `GET /processes?limit=&sort=`, 
 token, `POST /fan/mode`, `/fan/duty`, `/power`, `/wol` with the separate control token, both as
 `Authorization: Bearer`; every POST feature is off on the agent until its owner enables it.
 
+Laptops: newer agents add an optional `battery` object to `/metrics` (`percent`, `state` charging / discharging /
+full / idle, `ac_online`, `power_w` positive while discharging, `time_remaining_s`, `health_pct`). The panel
+shows it as a Battery box on the host page and the charge in the host list; agents without it keep working.
+
 ### Custom logo
 
 Copy your image to `/etc/fairy/logo.png` (PNG, JPEG, WebP or GIF, at most 1 MiB; SVG is refused because it can
@@ -138,7 +142,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `cmd/fairy` | The `fairy` program: `main.go` picks the sub-command, `serve.go` starts the panel (or demo mode). |
 | `cmd/fairy-agent` | The `fairy-agent` program: `main.go` (run, check-config, gen-token, version), `service_windows.go` (the Windows service: install, uninstall, run under the service manager). |
 | `internal/agent` | The agent's HTTP server and the panel contract (`server.go`), settings and tokens (`config.go`), BMC sensors (`bmc.go`), Supermicro fan control and its watchdog (`fan.go`), shutdown / reboot (`power*.go`), Wake-on-LAN (`wol.go`), plugs and UPSes it relays (`relay.go`), Tailscale address (`listen.go`), start-up (`run.go`), and `contract_test.go`, which runs the panel against it. |
-| `internal/agent/collect` | What the agent measures: Linux `/proc` and `/sys` (`procfs.go`, `linux.go`), Windows APIs, registry and PDH (`windows.go`, `pdh_windows.go`), NVIDIA GPUs via nvidia-smi (`nvidia.go`). |
+| `internal/agent/collect` | What the agent measures: Linux `/proc` and `/sys` (`procfs.go`, `linux.go`), Windows APIs, registry and PDH (`windows.go`, `pdh_windows.go`), NVIDIA GPUs via nvidia-smi (`nvidia.go`), AMD GPUs via amdgpu sysfs (`amdgpu.go`), laptop batteries (`battery.go`), Core Temp's shared memory on Windows (`coretemp*.go`). |
 | `internal/agent/ipmi` | Raw IPMI to the BMC: sensor list and readings (`sdr.go`), Supermicro fan commands (`ipmi.go`), through ipmitool or Windows' IPMI WMI class (`ipmitool.go`, `wmi_windows.go`); `fakebmc/` for tests. |
 | `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
 | `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |

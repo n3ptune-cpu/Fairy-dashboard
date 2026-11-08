@@ -57,6 +57,7 @@ const I = {
 };
 
 I.ups = svg('<rect x="6" y="3" width="12" height="18" rx="1"/><path d="M12 7l-2.5 5h5L12 17"/>');
+I.battery = svg('<rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/>');
 I.more = svg('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>', 16);
 I.shield = svg('<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/>', 18);
 I.audit = svg('<path d="M8 4h11v16H8z"/><path d="M5 7v13h11"/><path d="M11 8h5M11 12h5M11 16h3"/>');
@@ -200,6 +201,30 @@ const subLine = (s) => s.kind === "node"
   ? ["Proxmox node", model(s) || s.cpu_model, s.cores && `${s.cores} cores`, s.mem_total && fmtBytes(s.mem_total)].filter(Boolean).join(" · ")
   : [model(s), s.os, s.cores && `${s.cores} threads`].filter(Boolean).join(" · ");
 const upsChips = (s) => upsOf(s).map((u) => `<span class="chip ups ${u.status === "low_battery" ? "bad" : onBattery(u) ? "warn" : ""}" title="Powered by ${esc(u.name)}${onBattery(u) ? " · ON BATTERY" : ""}">${I.ups}UPS${onBattery(u) ? " · battery" : ""}</span>`).join("");
+// Laptop battery (agent's `battery` block): a chip in host rows and a box on the detail page.
+const BATT_STATE = { charging: "charging", discharging: "on battery", full: "full", idle: "plugged in, not charging", unknown: "unknown" };
+const battLow = (b) => b.state === "discharging" && b.percent != null && b.percent < 20;
+const battChip = (s) => {
+  const b = s.battery;
+  if (!b || !live(s)) return "";
+  const cls = battLow(b) ? "bad" : b.state === "discharging" ? "warn" : "";
+  const title = [`Battery ${fmtP(b.percent)}`, BATT_STATE[b.state] || b.state, b.time_remaining_s != null ? `${fmtUptime(b.time_remaining_s)} ${b.state === "charging" ? "to full" : "left"}` : ""].filter(Boolean).join(" · ");
+  return `<span class="chip batt ${cls}" title="${esc(title)}">${I.battery}${fmtP(b.percent)}${b.state === "charging" ? " ⚡" : ""}</span>`;
+};
+function batteryBox(s) {
+  const b = s.battery;
+  if (!b) return "";
+  const p = b.percent, w = b.power_w;
+  const rate = w == null ? "" : w > 0 ? `<div class="list-row"><span>Battery draw</span><span>${fmtW(w)}</span></div>`
+    : w < 0 ? `<div class="list-row"><span>Charging at</span><span>${fmtW(-w)}</span></div>` : "";
+  return `<div class="panel glass pad"><h3>${I.battery} Battery</h3>
+    <div class="metric"><span class="k">Charge</span><div class="bar batt${battLow(b) ? " low" : ""}"><i data-w="${(p ?? 0).toFixed(1)}"></i></div><span class="v">${fmtP(p)}</span></div>
+    <div class="list-row"><span>State</span><span class="${battLow(b) ? "bad-t" : b.state === "discharging" ? "warn-t" : ""}">${esc(BATT_STATE[b.state] || b.state)}${b.ac_online != null ? ` <span class="note">· AC ${b.ac_online ? "connected" : "unplugged"}</span>` : ""}</span></div>
+    ${rate}
+    ${b.time_remaining_s != null ? `<div class="list-row"><span>${b.state === "charging" ? "Time to full" : "Time left"}</span><span>${fmtUptime(b.time_remaining_s)}</span></div>` : ""}
+    ${b.health_pct != null ? `<div class="list-row"><span>Health</span><span>${b.health_pct.toFixed(0)}% <span class="note">of design capacity</span></span></div>` : ""}
+    ${w != null && w > 0 ? '<div class="note">On battery the draw is the whole laptop\'s, measured by the battery (not wall power).</div>' : ""}</div>`;
+}
 const statusText = (s) => (s.status === "paused" ? "paused" : s.status);
 
 // ------------------------------------------------------------ sidebar
@@ -277,7 +302,7 @@ const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.ut
 function hostRow(s) {
   const gpus = s.gpus || [], w = watts(s);
   return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="host-ico">${hostIcon(s)}</span>
-      <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${upsChips(s)}</a><span class="sub">${esc(subLine(s))}</span></td>
+      <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${upsChips(s)}${battChip(s)}</a><span class="sub">${esc(subLine(s))}</span></td>
     <td class="col-kind">${s.kind === "node" ? `<span class="chip">Proxmox</span>` : `<span class="note">${esc(s.owner || s.group || "–")}</span>`}</td>
     <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}</span>`}</td>
     <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
@@ -422,7 +447,7 @@ function systemOverview(s) {
   const power = `<div class="panel glass pad"><h3>Power</h3>
     ${lp.watts != null ? `<div class="big-w">${fmtW(lp.watts)} <small>wall · ${lp.sources.map((x) => esc(x.name)).join(", ")}</small></div>${spark(lp.history)}` : '<div class="note">No wall-power source linked.</div>'}
     ${ups.map((u) => `<div class="list-row"><span>${I.ups} UPS · <a href="#/ups">${esc(u.name)}</a></span><span class="${onBattery(u) ? "warn-t" : ""}">${esc(u.status.replace("_", " "))} · ${u.battery_charge?.toFixed(0) ?? "–"}% · ${fmtRuntime(u.battery_runtime_s)}</span></div>`).join("")}
-    ${cp ? [["CPU package", cp.cpu_package_w], ["GPU", cp.gpu_w], ["Battery", cp.battery_w != null ? cp.battery_w : null], ["BMC (in-band)", cp.bmc_w]]
+    ${cp ? [["CPU package", cp.cpu_package_w], ["GPU", cp.gpu_w], ["Battery", cp.battery_w != null && !s.battery ? cp.battery_w : null], ["BMC (in-band)", cp.bmc_w]]
       .filter(([, v]) => v != null).map(([k, v]) => `<div class="list-row"><span>${k}${k === "Battery" && cp.battery_state ? ` · ${esc(cp.battery_state)}` : ""}</span><span>${fmtW(v)}</span></div>`).join("")
       + (cp.bmc_note ? `<div class="note">BMC: ${esc(cp.bmc_note)}</div>` : "") + '<div class="note">Component power from the agent, not wall power.</div>' : ""}</div>`;
   const gpuPanel = (s.gpus || []).length ? `<div class="panel glass pad"><h3>GPUs (${s.gpus.length})</h3><div class="gpu-grid">${s.gpus.map((g, i) => `
@@ -438,7 +463,7 @@ function systemOverview(s) {
   const gs = s.kind === "node" ? guestsOf(s) : [];
   const guests = s.kind === "node" ? `<div class="section-title">Guests on this node <span class="count">${gs.length}</span></div>
     ${gs.length ? guestTable([[null, gs]], false) : '<div class="empty">No VMs or containers on this node.</div>'}` : "";
-  return `<div class="grid2"><div class="stack">${res}${gpuPanel}</div><div class="stack">${power}${sensors}</div></div>${guests}`;
+  return `<div class="grid2"><div class="stack">${res}${gpuPanel}</div><div class="stack">${batteryBox(s)}${power}${sensors}</div></div>${guests}`;
 }
 
 let procSort = "cpu";

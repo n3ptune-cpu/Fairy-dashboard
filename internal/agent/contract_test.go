@@ -410,7 +410,11 @@ func TestDemoAgentsMatchTheRealAgent(t *testing.T) {
 	var real map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&real)
 	resp.Body.Close()
-	real["hostname"] = "x" // the fake has every optional block except load_avg (Linux only) and battery
+	real["hostname"] = "x"  // the fake has every optional block except load_avg (Linux only) and battery
+	var batt map[string]any // the battery block's keys (the fake PC is a desktop)
+	bb, _ := json.Marshal(collect.BatteryStatus{})
+	_ = json.Unmarshal(bb, &batt)
+	real["battery"] = batt
 	sub := func(name string, demo, real map[string]any) {
 		rk := keys(real)
 		for k := range demo {
@@ -432,7 +436,7 @@ func TestDemoAgentsMatchTheRealAgent(t *testing.T) {
 		}
 		seen++
 		sub(ag.ID, m, real)
-		for _, blk := range []string{"features", "power", "power_control", "platform", "cpu", "memory", "net", "hardware"} {
+		for _, blk := range []string{"features", "power", "power_control", "platform", "cpu", "memory", "net", "hardware", "battery"} {
 			if d, ok := m[blk].(map[string]any); ok {
 				r, _ := real[blk].(map[string]any)
 				sub(ag.ID+"."+blk, d, r)

@@ -255,7 +255,7 @@ panel's agent entry use `power_links:` / `ups_powers:` / `ups_names:` as for any
 | CPU temperature | yes (coretemp / k10temp) | only what the BIOS publishes as an ACPI thermal zone, often nothing or a fixed value; per core with [Core Temp](#core-temp-optional-windows) |
 | Board fans and voltages | yes (hwmon chips) | only through the BMC (Supermicro, `ipmi:`) |
 | CPU watts | yes (RAPL, see the table above) | only with [Core Temp](#core-temp-optional-windows) |
-| Battery | watts and state | state only |
+| Battery (laptops) | charge %, state, AC, draw in watts, time left, health | charge %, state, AC, Windows' own time-left estimate (no watts) |
 | Processes | all, with command lines (passwords blanked) | all names; details for programs it may open; the program's path instead of its command line; no per-program GPU memory |
 
 **Not possible on Windows without a driver**, and therefore never done: CPU core temperatures, CPU package
@@ -263,6 +263,12 @@ watts, motherboard sensor chips (fans, voltages), and other programs' command-li
 these (HWiNFO, LibreHardwareMonitor, Afterburner) load a kernel driver, which is exactly what anti-cheat
 software watches for. On a Supermicro board the BMC fills most of the gap (CPU temperature, fans, voltages).
 The panel simply leaves out what the agent does not send.
+
+**Laptop battery.** On a machine with a battery the panel shows a small *Battery* box on the host's page (charge,
+state, time left, health) and the charge next to the host's name in the list. While the laptop runs on battery,
+"Battery draw" is what the battery delivers, i.e. the whole laptop's consumption (not wall power). On Linux it
+comes from `/sys/class/power_supply` and needs nothing extra; on Windows from GetSystemPowerStatus, which has no
+watts. Desktops send nothing and the box does not appear.
 
 ## Core Temp (optional, Windows)
 

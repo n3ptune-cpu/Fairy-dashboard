@@ -71,6 +71,8 @@ func agentMetrics(id string) (map[string]any, error) {
 			"gpus":     []any{g},
 			"power": map[string]any{"cpu_package_w": nil, "gpu_w": g["power_w"], "battery_w": nil,
 				"battery_state": "discharging", "bmc_w": nil, "sensors": []any{}, "source": []any{"battery", "gpu"}},
+			"battery": map[string]any{"percent": float64(max(5, 78-int(t)/300)), "state": "discharging", "ac_online": false,
+				"power_w": nil, "time_remaining_s": int64(max(300, 3*3600-t)), "health_pct": nil},
 			"hardware": map[string]any{"system_vendor": "ASUSTeK COMPUTER INC.", "system_model": "Vivobook 16X K3605ZC",
 				"board_vendor": "ASUSTeK COMPUTER INC.", "board_model": "K3605ZC", "bios_version": "K3605ZC.305",
 				"cpu_model": "12th Gen Intel(R) Core(TM) i5-12500H"}})

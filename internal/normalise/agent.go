@@ -61,7 +61,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 		Disks: disks, NetRxBps: rx, NetTxBps: tx, UptimeS: jsonx.Int(m, "uptime_s"),
 		OS: jsonx.Str(plat, "pretty"), Platform: jsonx.Str(plat, "system"), LoadAvg: agentLoadAvg(m),
 		Temps: agentTemps(m), Fans: agentFans(m), Voltages: agentVoltages(m), GPUs: agentGPUs(m),
-		ComponentPower:     agentComponentPower(m),
+		ComponentPower: agentComponentPower(m), Battery: agentBattery(m),
 		ProcessesAvailable: jsonx.Bool(features, "processes", true),
 		FanControl:         cfg.FanControl != nil && jsonx.Truthy(features["fan_control"]),
 		Hardware:           HardwareDisplay(hw), CPUModel: jsonx.Str(hw, "cpu_model"),
@@ -124,6 +124,36 @@ func agentGPUs(m jsonx.M) []model.Gpu {
 			PowerW: jsonx.Num(g, "power_w")})
 	}
 	return gpus
+}
+
+// agentBattery is the optional `battery` block (agents before it, and machines without a battery, send none).
+// Out-of-range values are dropped rather than shown.
+func agentBattery(m jsonx.M) *model.Battery {
+	b := jsonx.Obj(m, "battery")
+	if b == nil {
+		return nil
+	}
+	out := &model.Battery{State: "unknown"}
+	switch st := jsonx.S(b, "state"); st {
+	case "charging", "discharging", "full", "idle":
+		out.State = st
+	}
+	if p := jsonx.Num(b, "percent"); p != nil && *p >= 0 && *p <= 100 {
+		out.Percent = p
+	}
+	if v, ok := b["ac_online"].(bool); ok {
+		out.ACOnline = &v
+	}
+	if w := jsonx.Num(b, "power_w"); w != nil && math.Abs(*w) < 1000 {
+		out.PowerW = w
+	}
+	if t := jsonx.Num(b, "time_remaining_s"); t != nil && *t >= 0 && *t < 30*86400 {
+		out.TimeRemainingS = model.P(int64(*t))
+	}
+	if h := jsonx.Num(b, "health_pct"); h != nil && *h > 0 && *h <= 200 {
+		out.HealthPct = h
+	}
+	return out
 }
 
 // agentComponentPower is the `power` block (CPU package, GPU, battery, BMC watts); nil when the agent sent none.

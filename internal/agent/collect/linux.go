@@ -138,6 +138,7 @@ func (l *Linux) Sample(context.Context) Sample {
 	}
 	s.Temps, s.Fans, s.Voltages = l.hwmon(now)
 	s.Power = l.power(now)
+	s.Battery = ReadBatteryStatus(l.sys)
 	return s
 }
 

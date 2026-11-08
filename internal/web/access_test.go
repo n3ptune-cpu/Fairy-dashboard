@@ -603,3 +603,49 @@ func TestRemovedUserRegainsNothing(t *testing.T) {
 		t.Fatal("tombstone", d.Removed, d.Users[ctl.Sub])
 	}
 }
+
+// A laptop's battery reaches the API as part of its system, so it follows the host's site: Neptune's viewer and
+// the admin see it, Straw's viewer sees neither the host nor the battery; hosts without one have battery null.
+func TestBatteryFollowsTheHost(t *testing.T) {
+	e := setupSites(t)
+	e.b.Mu.Lock()
+	e.b.Metrics["laptop"] = func() (jsonx.M, error) {
+		m := testutil.AgentMetrics()
+		m["battery"] = jsonx.M{"percent": 64.0, "state": "discharging", "ac_online": false, "power_w": 11.4,
+			"time_remaining_s": 12600.0, "health_pct": 88.5}
+		return m, nil
+	}
+	e.b.Mu.Unlock()
+	e.s.Poller.PollOnce(context.Background())
+	e.s.Poller.Bump()
+	battery := func(sub, id string) (map[string]any, bool) {
+		r := e.do("GET", "/api/systems", nil, "Cookie", e.cookie(person(sub), 0))
+		if r.code != 200 {
+			t.Fatalf("%s: %d", sub, r.code)
+		}
+		for _, x := range r.body["systems"].([]any) {
+			if s := x.(map[string]any); s["id"] == id {
+				b, _ := s["battery"].(map[string]any)
+				return b, true
+			}
+		}
+		return nil, false
+	}
+	for _, sub := range []string{subAdmin, subNeptune} {
+		b, found := battery(sub, "laptop")
+		if !found || b == nil || b["percent"] != 64.0 || b["state"] != "discharging" || b["power_w"] != 11.4 ||
+			b["ac_online"] != false || b["time_remaining_s"] != 12600.0 || b["health_pct"] != 88.5 {
+			t.Fatalf("%s: %v", sub, b)
+		}
+	}
+	if _, found := battery(subStraw, "laptop"); found {
+		t.Fatal("Straw's viewer sees Neptune's laptop")
+	}
+	if b, found := battery(subStraw, "cyrene"); !found || b != nil {
+		t.Fatalf("a host without a battery has battery null: %v %v", found, b)
+	}
+	r := e.do("GET", "/api/systems/laptop", nil, "Cookie", e.cookie(person(subStraw), 0))
+	if r.code == 200 || strings.Contains(string(r.raw), "12600") {
+		t.Fatalf("hidden host's details: %d %s", r.code, r.raw)
+	}
+}

@@ -164,3 +164,28 @@ func TestDescribeNeverLeaksDetails(t *testing.T) {
 		t.Fatal("slug")
 	}
 }
+
+func TestNormaliseAgentBattery(t *testing.T) {
+	a := config.Agent{ID: "perlica"}
+	// older agents (and machines without a battery) send no block
+	if s := NormaliseAgent(a, jsonx.M{"hostname": "x"}, time.Now(), 0, NewRateTracker()); s.Battery != nil {
+		t.Fatalf("%+v", s.Battery)
+	}
+	m := jsonx.M{"battery": jsonx.M{"percent": 81.5, "state": "discharging", "ac_online": false, "power_w": 12.3,
+		"time_remaining_s": 9000.0, "health_pct": 91.2}}
+	b := NormaliseAgent(a, m, time.Now(), 0, NewRateTracker()).Battery
+	if b == nil || *b.Percent != 81.5 || b.State != "discharging" || *b.ACOnline || *b.PowerW != 12.3 ||
+		*b.TimeRemainingS != 9000 || *b.HealthPct != 91.2 {
+		t.Fatalf("%+v", b)
+	}
+	// garbage is dropped, an unknown state stays visible as "unknown"
+	m = jsonx.M{"battery": jsonx.M{"percent": 140.0, "state": "exploding", "ac_online": "yes", "power_w": 1e6,
+		"time_remaining_s": -5.0, "health_pct": 0.0}}
+	b = NormaliseAgent(a, m, time.Now(), 0, NewRateTracker()).Battery
+	if b == nil || b.Percent != nil || b.State != "unknown" || b.ACOnline != nil || b.PowerW != nil || b.TimeRemainingS != nil || b.HealthPct != nil {
+		t.Fatalf("%+v", b)
+	}
+	if s := NormaliseAgent(a, jsonx.M{"battery": "nope"}, time.Now(), 0, NewRateTracker()); s.Battery != nil {
+		t.Fatalf("%+v", s.Battery)
+	}
+}

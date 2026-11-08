@@ -195,7 +195,11 @@ func (w *Windows) Sample(context.Context) Sample {
 	s.Temps, s.Fans, s.Voltages = w.thermalZones(now), []Fan{}, []Voltage{}
 	s.Power = Power{Sensors: []PowerSensor{}, Source: []string{}}
 	var ps systemPowerStatus
-	if r, _, _ := procGetSystemPowerStatus.Call(uintptr(unsafe.Pointer(&ps))); r != 0 && ps.BatteryFlag != 128 && ps.BatteryFlag != 255 {
+	ok, _, _ := procGetSystemPowerStatus.Call(uintptr(unsafe.Pointer(&ps)))
+	if ok != 0 {
+		s.Battery = WindowsBattery(ps.ACLineStatus, ps.BatteryFlag, ps.BatteryLifePercent, ps.BatteryLifeTime)
+	}
+	if ok != 0 && ps.BatteryFlag != 128 && ps.BatteryFlag != 255 {
 		state := "discharging"
 		switch {
 		case ps.BatteryFlag&8 != 0:

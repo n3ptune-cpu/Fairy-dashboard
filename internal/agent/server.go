@@ -354,6 +354,9 @@ func (a *Agent) Metrics(ctx context.Context) map[string]any {
 	if !pw.Empty() {
 		m["power"] = pw
 	}
+	if s.Battery != nil {
+		m["battery"] = s.Battery
+	}
 	if a.cfg.HideHostDetails {
 		m["platform"] = collect.Platform{System: st.Platform.System, Pretty: st.Platform.System}
 	} else {
