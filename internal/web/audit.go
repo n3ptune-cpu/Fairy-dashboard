@@ -38,7 +38,7 @@ func actorOf(u *model.User) string {
 
 // controlActions are the audited actions that also send the optional ntfy / Discord notification: control
 // actions and every change to users, roles and sites (including a new user waiting for access).
-var controlActions = []string{"fan.", "power.", "poll.", "user.", "site.", "update.", "panel.", "host."}
+var controlActions = []string{"fan.", "power.", "helper_", "poll.", "user.", "site.", "update.", "panel.", "host."}
 
 func (c *reqCtx) audit(u *model.User, action, target string, params map[string]any, outcome string) {
 	ip := c.ip()

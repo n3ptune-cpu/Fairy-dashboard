@@ -282,6 +282,55 @@ function batteryBox(s) {
     ${b.health_pct != null ? `<div class="list-row"><span>Health</span><span>${b.health_pct.toFixed(0)}% <span class="note">of design capacity</span></span></div>` : ""}
     ${w != null && w > 0 ? '<div class="note">On battery the draw is the whole laptop\'s, measured by the battery (not wall power).</div>' : ""}</div>`;
 }
+// ---- the Windows agent's elevated helper (Fairy-agent v0.5.0+: Core Temp, BMC sensors, fans, power, updates).
+// Shown only on hosts that need it; Linux and older agents have none.
+const HELPER_STATE = { running: ["ok", "running"], starting: ["warn", "starting…"], stopped: ["warn", "stopped"], error: ["bad", "error"],
+  not_installed: ["", "not installed"], unknown: ["", "unknown"] };
+const HELPER_READING = { coretemp: "Core Temp", ipmi: "BMC sensor" };
+const HELPER_FEATURE = { coretemp: "Core Temp", ipmi: "BMC sensors", fans: "fans", power: "power actions", update: "updates" };
+const helperOf = (s) => (s?.helper?.needed ? s.helper : null);
+const helperPaused = (s, g) => (s?.helper?.paused || []).includes(g);
+const andList = (xs) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+// Host list: a small flag only when the helper needs attention (stopped, or an error).
+function helperChip(s) {
+  const h = helperOf(s);
+  if (!h || !live(s) || (h.state !== "stopped" && h.state !== "error")) return "";
+  const tip = h.state === "error" ? `Elevated helper error: ${h.error || "no details"}` : "Elevated helper stopped: its readings are paused and the fans are on the BMC's automatic control";
+  return `<span class="chip hchip ${h.state === "error" ? "bad" : "warn"}" title="${esc(tip)}">helper ${h.state === "error" ? "error" : "stopped"}</span>`;
+}
+// Host page, next to the name: the state, opening a small menu with the details and Stop / Start.
+function helperBadge(s, open) {
+  const h = helperOf(s);
+  if (!h || !live(s)) return "";
+  const [cls, label] = HELPER_STATE[h.state] || HELPER_STATE.unknown;
+  const tip = h.state === "error" ? `Error: ${h.error || "no details"}` : "The agent's elevated helper: details, Stop / Start";
+  return `<div class="menu-wrap"><button class="chip hbadge ${cls} ${open ? "on" : ""}" type="button" data-act="menu" data-menu="helper" aria-haspopup="menu" aria-expanded="${!!open}"
+    title="${esc(tip)}">Elevated helper: ${label}</button>${open ? helperMenu(s, h) : ""}</div>`;
+}
+function helperMenu(s, h) {
+  const why = controlWhyNot(), down = h.state === "stopped" || h.state === "error";
+  const rows = [["State", `${(HELPER_STATE[h.state] || HELPER_STATE.unknown)[1]}${h.since ? ` · since ${ago(h.since).replace(" ago", "")}` : ""}`],
+    ["Does", (h.features || []).map((f) => HELPER_FEATURE[f]).filter(Boolean).join(", ") || "–"],
+    ...((h.features || []).includes("fans") ? [["Fan watchdog", h.watchdog ? "on" : "off"]] : []),
+    ["Version", h.version || "–"], ...(s.service_account ? [["Agent runs as", s.service_account]] : [])];
+  const act = h.state === "not_installed" ? '<div class="menu-note">Not installed: the agent\'s Windows installer (v0.5.0 or newer) sets it up.</div>'
+    : `<button class="menu-item ${down ? "" : "danger"}" data-act="helper" data-action="${down ? "start" : "stop"}" ${why || h.state === "starting" ? "disabled" : ""}>
+      ${down ? "Start helper…" : "Stop helper…"}<span class="note">${h.state === "starting" ? "starting" : "type the name"}</span></button>`;
+  return `<div class="menu helper" role="menu"><div class="menu-title">Elevated helper · ${esc(s.name)}</div>
+    ${rows.map(([k, v]) => `<div class="menu-row"><span>${k}</span><span>${esc(v)}</span></div>`).join("")}
+    ${h.state === "error" && h.error ? `<div class="menu-note bad">${esc(h.error)}</div>` : ""}
+    <div class="menu-sep"></div>${act}${why ? `<div class="menu-note">${esc(why)}</div>` : ""}</div>`;
+}
+// One line in the Sensors box instead of empty boxes: what is paused because the helper is not running.
+function helperPausedLine(s) {
+  const h = s.helper, groups = h?.paused || [];
+  if (!groups.length) return "";
+  const readings = groups.map((g) => HELPER_READING[g]).filter(Boolean);
+  const why = h.state === "starting" ? "helper starting" : h.state === "error" ? "helper error" : "helper stopped";
+  const text = `${readings.length ? `${andList(readings)} readings` : "Fan control"} paused — ${why}${groups.includes("fans") ? "; fans on the BMC's automatic control" : ""}`;
+  const btn = h.state === "starting" ? "" : `<button class="btn sm" type="button" data-act="helper" data-action="start" ${canControl() ? "" : `disabled title="${esc(controlWhyNot() || "only admins can start it")}"`}>Start</button>`;
+  return `<div class="paused-line"><span>${esc(text)}</span>${btn}</div>`;
+}
 const statusText = (s) => (s.status === "paused" ? "paused" : s.asleep ? "asleep (from panel)" : s.status);
 
 // ------------------------------------------------------------ sidebar
@@ -360,7 +409,7 @@ const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.ut
 function hostRow(s) {
   const gpus = s.gpus || [], w = watts(s);
   return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="host-ico">${hostIcon(s)}</span>
-      <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${clusterTag(s)}${upsChips(s)}${battChip(s)}</a>${guestCount(s)}<span class="sub">${esc(subLine(s))}${verChip(s.id)}</span></td>
+      <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${clusterTag(s)}${upsChips(s)}${battChip(s)}${helperChip(s)}</a>${guestCount(s)}<span class="sub">${esc(subLine(s))}${verChip(s.id)}</span></td>
     <td class="col-kind">${s.kind === "node" ? `<span class="chip">Proxmox</span>` : `<span class="note">${esc(s.owner || s.group || "–")}</span>`}</td>
     <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
     <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
@@ -454,10 +503,9 @@ function pageSystem(id, tab) {
   const menuOpen = state.menu?.id === id ? state.menu.kind : null;
   const why = controlWhyNot();
   const hasPower = (s.power_actions || []).length > 0;
-  const head = `<div class="detail-head"><span class="dot ${s.status}"></span><h2>${esc(s.name)}</h2><span class="chip">${esc(kindLabel(s))}</span>
-    ${s.kind === "node" && !s.cluster ? '<span class="chip">Proxmox</span>' : ""}
+  const head = `<div class="detail-head"><div class="dh-title"><span class="dot ${s.status}"></span><h2>${esc(s.name)}</h2>
     <span class="chip ${s.status === "online" ? "ok" : s.status === "stale" ? "warn" : s.status === "offline" ? "bad" : ""}">${esc(statusText(s))}</span>
-    ${upsChips(s)}${(s.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}${verChip(s.id)}
+    ${helperBadge(s, menuOpen === "helper")}</div>
     <div class="actions">${liveLabel(s)}
       ${s.dwservice_url ? `<a class="btn" href="${esc(s.dwservice_url)}" target="_blank" rel="noopener noreferrer">Remote ${I.ext}</a>` : ""}
       <div class="menu-wrap"><button class="btn ${menuOpen === "power" ? "on" : ""}" data-act="menu" data-menu="power" ${hasPower ? "" : "disabled"}
@@ -466,6 +514,8 @@ function pageSystem(id, tab) {
         ? `<button class="btn" type="button" data-act="upd-pop" data-sys="${esc(s.id)}" aria-haspopup="dialog" aria-expanded="${upd.popSys === s.id}">${I.update}${updBusy(upd.bySys[s.id]) ? "Updating…" : "Update agent"}</button>` : ""}
       <div class="menu-wrap"><button class="btn icon ${menuOpen === "poll" ? "on" : ""}" data-act="menu" data-menu="poll" title="Polling rate" aria-label="Polling rate">${I.more}</button>${menuOpen === "poll" ? pollMenu(s) : ""}</div>
     </div>
+    <div class="dh-meta"><span class="chip">${esc(kindLabel(s))}</span>${s.kind === "node" && !s.cluster ? '<span class="chip">Proxmox</span>' : ""}
+      ${upsChips(s)}${(s.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}${verChip(s.id)}</div>
     <div class="sub">${esc(sub)}${s.updated_at ? ` · <span class="note">updated <span data-ago="${esc(s.updated_at)}">${ago(s.updated_at)}</span></span>` : ""}</div></div>
     ${s.power_pending ? `<div class="pending-strip"><b>${esc(POWER_LABEL[s.power_pending.action])}</b> in <b data-countdown="${esc(s.power_pending.at)}">${fmtRuntime(Math.max(0, (new Date(s.power_pending.at) - Date.now()) / 1000))}</b>
       <span class="note">requested by ${esc(s.power_pending.requested_by || "?")}</span>
@@ -508,6 +558,7 @@ function systemOverview(s) {
     ${s.net_rx_bps != null || s.net_tx_bps != null ? `<div class="list-row"><span>Network</span><span>↓ ${fmtRate(s.net_rx_bps)} · ↑ ${fmtRate(s.net_tx_bps)}</span></div>` : ""}
     ${s.cpu_model ? `<div class="list-row"><span>Processor</span><span>${esc(s.cpu_model)}</span></div>` : ""}
     ${s.hardware?.display ? `<div class="list-row"><span>Model</span><span>${esc(s.hardware.display)}${s.hardware.bios_version ? ` <span class="note">BIOS ${esc(s.hardware.bios_version)}</span>` : ""}</span></div>` : ""}
+    ${s.service_account ? `<div class="list-row"><span>Agent runs as</span><span>${esc(s.service_account)}</span></div>` : ""}
     <div class="list-row"><span>Uptime</span><span>${fmtUptime(s.uptime_s)}</span></div>
     ${s.load_avg ? `<div class="list-row"><span>Load</span><span>${s.load_avg.join(" · ")}</span></div>` : ""}
     <div class="list-row"><span>Last change</span><span data-ago="${esc(s.updated_at || s.last_seen)}">${ago(s.updated_at || s.last_seen)}</span></div></div>`;
@@ -527,7 +578,8 @@ function systemOverview(s) {
         : g.source === "amd" ? ' · <span title="Load and VRAM from the GPU counters Windows keeps; temperature and watts from AMD\'s driver library (ADL)">via AMD</span>' : ""}</span></div>
     </div>`).join("")}</div></div>` : "";
   const temps = s.temps || [];  // all of them (a 16-core CPU has 16 "Core n"); two columns when there are many
-  const sensors = temps.length || (s.fans || []).length || (s.voltages || []).length ? `<div class="panel glass pad"><h3>Sensors</h3>
+  const paused = helperPausedLine(s);
+  const sensors = temps.length || (s.fans || []).length || (s.voltages || []).length || paused ? `<div class="panel glass pad"><h3>Sensors</h3>${paused}
     <div class="sensor-grid ${temps.length > 8 ? "two" : ""}">${temps.map((t) => `<div class="list-row"><span>${esc(t.label || t.sensor)}</span><span>${t.current_c.toFixed(0)}°C</span></div>`).join("")}</div>
     ${(s.fans || []).map((f) => `<div class="list-row"><span>${esc(f.name)}</span><span>${f.rpm} rpm</span></div>`).join("")}
     ${(s.voltages || []).map((v) => `<div class="list-row"><span>${esc(v.name)}</span><span>${v.volts.toFixed(2)} V</span></div>`).join("")}</div>` : "";
@@ -564,10 +616,11 @@ async function loadFans(id) {
   const body = $("#tab-body");
   if (!body) return waitForTab(id, "fans", () => loadFans(id));
   if (body.contains(document.activeElement) && document.activeElement.type === "range") return schedule(() => loadFans(id));
-  const canCtl = canControl();
+  const paused = helperPaused(state.byId[id], "fans"), canCtl = canControl() && !paused;
   try {
     const f = await api(`/api/systems/${enc(id)}/fan`);
     if (!$("#tab-body")) return;
+    if (paused) { morph(body, fansPaused(state.byId[id], f)); return schedule(() => loadFans(id)); }
     const full = f.mode === "full", floor = Math.max(30, f.min_duty || 0);
     const unsupported = new Set(f.unsupported_modes || []);
     const limits = f.max_temp_c != null
@@ -603,6 +656,15 @@ async function loadFans(id) {
     body.querySelectorAll("[data-apply]").forEach((b) => (b.onclick = () => post("/fan/duty", { zone: +b.dataset.apply, percent: +$(`[data-zone="${b.dataset.apply}"]`, body).value })));
   } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   schedule(() => loadFans(id));
+}
+
+// The Fans tab while the helper is not running: the explanation and the mode buttons, disabled.
+function fansPaused(s, f) {
+  const h = s.helper, why = h.state === "starting" ? "is starting" : h.state === "error" ? "has an error" : "is stopped";
+  return `<div class="calmbox"><span>Fan control paused: the elevated helper ${why}. The fans are on the BMC's own automatic control, and the agent's temperature watchdog is off until the helper runs again.</span>
+    ${h.state === "starting" ? "" : `<button class="btn sm" type="button" data-act="helper" data-action="start" ${canControl() ? "" : `disabled title="${esc(controlWhyNot() || "only admins can start it")}"`}>Start helper</button>`}</div>
+    <div class="panel glass pad narrow"><h3>Mode</h3><div class="row-gap">${["optimal", "standard", "heavyio", "full"].map((m) => `<button class="btn ${f.mode === m ? "on" : ""}" disabled>${m}</button>`).join("")}</div>
+      <div class="note">Zone duty and modes come back when the helper runs.</div></div>`;
 }
 
 function pagePower() {
@@ -678,7 +740,7 @@ function pageUps() {
 
 // ------------------------------------------------------------ audit page (control group only)
 const audit = { entries: [], next: null, q: "", action: "", host: "", loading: false, error: null };
-const AUDIT_ACTIONS = [["", "All actions"], ["auth", "Sign-in / step-up / denied"], ["power", "Power"], ["fan", "Fans"], ["poll", "Polling"],
+const AUDIT_ACTIONS = [["", "All actions"], ["auth", "Sign-in / step-up / denied"], ["power", "Power"], ["helper", "Elevated helper"], ["fan", "Fans"], ["poll", "Polling"],
   ["settings", "Settings"], ["token", "API tokens"], ["control", "Kill switch"], ["host", "Host admin"], ["sessions", "Sessions"],
   ["user", "Users / roles"], ["site", "Sites"], ["update", "Updates"]];
 async function loadAudit(reset) {
@@ -1101,7 +1163,7 @@ document.addEventListener("click", async (e) => {
     const kind = t.dataset.menu;
     state.menu = state.menu?.kind === kind && state.menu.id === s.id ? null : { id: s.id, kind };
     render();
-    if (state.menu) (kind === "poll" ? refreshPoll : refreshCaps)(s.id);
+    if (state.menu && kind !== "helper") (kind === "poll" ? refreshPoll : refreshCaps)(s.id);
   } else if (act === "poll" && s) {
     const v = t.dataset.v, body = { interval_s: v === "paused" || v === "default" ? v : +v };
     const label = `Polling for ${s.name}: ${v === "default" ? "back to default" : v === "paused" ? "paused" : `${v}s`}`;
@@ -1431,12 +1493,12 @@ function managedBox(s) {
     <div class="note">Remove stops polling and deletes the panel's tokens for it; the agent keeps running on the machine until you uninstall it there.</div></div>`;
 }
 // Re-pair / Remove: type the host's name (checked by the panel too), then the usual step-up.
-function typedDialog(title, text, name, go, fn) {
+function typedDialog(title, text, name, go, fn, goClass = "danger-solid") {
   const m = $("#modal");
-  m.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="td-t"><h3 id="td-t">${esc(title)}</h3><p>${text}</p>
+  m.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="td-t"><h3 id="td-t">${esc(title)}</h3>${text.startsWith("<") ? text : `<p>${text}</p>`}
     <label class="mfield"><span>Type <b>${esc(name)}</b> to confirm</span><input class="input" id="td-in" autocomplete="off" spellcheck="false" placeholder="${esc(name)}"></label>
     <div class="error" id="td-err" role="alert"></div>
-    <div class="row-gap end"><button class="btn" type="button" id="td-cancel">Cancel</button><button class="btn danger-solid" type="button" id="td-go" disabled>${esc(go)}</button></div></div>`;
+    <div class="row-gap end"><button class="btn" type="button" id="td-cancel">Cancel</button><button class="btn ${goClass}" type="button" id="td-go" disabled>${esc(go)}</button></div></div>`;
   m.hidden = false;
   const input = $("#td-in"), b = $("#td-go");
   input.oninput = () => (b.disabled = input.value.trim().toLowerCase() !== name.toLowerCase());
@@ -1474,6 +1536,41 @@ document.addEventListener("click", (e) => {
       $("#rm-ok").onclick = closeModal;
     });
   }
+});
+
+// ------------------------------------------------------------ elevated helper Stop / Start
+// Same prompt as a power action: the host's name typed, then the step-up sign-in if needed; audited by the panel.
+function openHelperDialog(s, action) {
+  const f = s.helper?.features || [], stop = action === "stop";
+  state.menu = null; render();
+  const has = (x) => f.includes(x);
+  const readings = [has("coretemp") && "Core Temp", has("ipmi") && "BMC sensor"].filter(Boolean);
+  const waits = [has("power") && "Shut down / reboot", has("update") && "agent updates"].filter(Boolean);
+  const lines = stop ? [
+    has("fans") && "Fans go back to the BMC's own automatic control; the agent's temperature watchdog stops with the helper.",
+    readings.length && `${andList(readings)} readings pause until the helper is started again.`,
+    waits.length && `${andList(waits)} from the panel wait for it as well.`,
+    "CPU, memory, disks, GPUs and network keep reporting: the agent itself keeps running."]
+    : [readings.length && `${andList(readings)} readings come back within a few seconds.`,
+      has("fans") && "Fan control from the panel works again, with the agent's temperature watchdog.",
+      "The helper is the agent's local service with administrator rights; it has no network access of its own."];
+  typedDialog(`${stop ? "Stop" : "Start"} the elevated helper on ${s.name}?`,
+    `<ul class="dlg-list">${lines.filter(Boolean).map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`, s.name, stop ? "Stop helper" : "Start helper",
+    async (v) => {
+      const path = `/api/systems/${enc(s.id)}/helper/${action}`, body = { confirm: v };
+      const r = await controlCall({ kind: "request", label: `${stop ? "Stop" : "Start"} elevated helper on ${s.name}`, system: s.id, method: "POST", path, body },
+        () => api(path, { method: "POST", body: JSON.stringify(body) }));
+      if (!r) return;  // the step-up sign-in took over
+      closeModal(); flash(`${s.name}: ${r.message}`);
+      const cur = state.byId[s.id];
+      if (cur?.helper) { cur.helper.state = r.state; cur.helper.since = new Date().toISOString(); }
+      render();
+    }, stop ? "danger-solid" : "go");
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="helper"]');
+  const s = t && !t.disabled && state.byId[current().id];
+  if (s?.helper) openHelperDialog(s, t.dataset.action);
 });
 
 // ------------------------------------------------------------ Update panel (admins, Updates page)

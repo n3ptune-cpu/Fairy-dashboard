@@ -26,6 +26,8 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("DELETE /api/settings/background", s.h(s.deleteBackground))
 	m.HandleFunc("GET /api/systems/{id}/power", s.h(s.powerCaps))
 	m.HandleFunc("POST /api/systems/{id}/power", s.h(s.powerAction))
+	m.HandleFunc("POST /api/systems/{id}/helper/stop", s.h(s.helperStop))
+	m.HandleFunc("POST /api/systems/{id}/helper/start", s.h(s.helperStart))
 	m.HandleFunc("GET /api/systems/{id}/poll", s.h(s.getPoll))
 	m.HandleFunc("PUT /api/systems/{id}/poll", s.h(s.putPoll))
 	m.HandleFunc("GET /api/stream", s.h(s.stream))

@@ -534,10 +534,13 @@ func TestDemoAgentsMatchTheRealAgent(t *testing.T) {
 	if pc, ok := real["power_control"].(map[string]any); ok {
 		pc["sleep_note"] = "" // only sent when the machine cannot sleep (the fake one can)
 	}
+	// Fairy-agent v0.5.0 (the Windows elevated helper) adds these; it is not released yet and go.mod still pins
+	// v0.4.4. Drop this list once go.mod requires v0.5.0, so the demo is checked against the real names.
+	pendingV050 := map[string]bool{"helper": true, "service_account": true, "unavailable": true}
 	sub := func(name string, demo, real map[string]any) {
 		rk := keys(real)
 		for k := range demo {
-			if !rk[k] && k != "load_avg" {
+			if !rk[k] && k != "load_avg" && !pendingV050[k] {
 				t.Errorf("%s: demo sends %q, fairy-agent does not", name, k)
 			}
 		}

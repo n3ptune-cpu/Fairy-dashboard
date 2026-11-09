@@ -392,3 +392,54 @@ func TestSelfUpdateBlockFromAHostileAgent(t *testing.T) {
 		t.Fatal(ok)
 	}
 }
+
+// The elevated helper (Fairy-agent v0.5.0): what was seen while it ran decides what is announced as paused once
+// it stops, so a host whose helper provides nothing visible gets no "paused" line.
+func TestHelperPausedFollowsWhatRan(t *testing.T) {
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	b := testutil.NewBackend()
+	all := []string{"coretemp", "ipmi", "fans", "power", "update"}
+	set := func(id string, m jsonx.M) {
+		b.Mu.Lock()
+		b.Metrics[id] = func() (jsonx.M, error) { return m, nil }
+		b.Mu.Unlock()
+	}
+	p, err := New(cfg, config.Secrets{}, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// cyrene (fan control configured): running with Core Temp, BMC sensors and fans, then stopped
+	set("cyrene", testutil.HelperMetrics("running", all...))
+	// laptop: running, but this board has no BMC and Core Temp is not installed: nothing of the helper's shows
+	lap := testutil.HelperMetrics("running", all...)
+	lap["temps"] = []any{jsonx.M{"sensor": "acpi", "label": "TZ00", "current": 50.0}}
+	lap["fans"], lap["voltages"] = []any{}, []any{}
+	set("laptop", lap)
+	p.PollOnce(ctx)
+	if s := snap(p)["cyrene"]; s.Helper == nil || s.Helper.State != "running" || len(s.Helper.Paused) != 0 || !s.FanControl {
+		t.Fatalf("running: %+v", s.Helper)
+	}
+	set("cyrene", testutil.HelperMetrics("stopped", all...))
+	set("laptop", testutil.HelperMetrics("stopped", all...))
+	p.PollOnce(ctx)
+	got := snap(p)
+	if c := got["cyrene"]; fmt.Sprint(c.Helper.Paused) != "[coretemp ipmi fans]" || !c.FanControl {
+		t.Fatalf("cyrene stopped: %v fan tab %v", c.Helper.Paused, c.FanControl)
+	}
+	if l := got["laptop"]; len(l.Helper.Paused) != 0 {
+		t.Fatalf("laptop had none of the helper's readings while it ran: %v", l.Helper.Paused)
+	}
+	// an agent that no longer sends a helper (downgraded): forgotten
+	set("cyrene", testutil.AgentMetrics())
+	p.PollOnce(ctx)
+	if c := snap(p)["cyrene"]; c.Helper != nil {
+		t.Fatal(c.Helper)
+	}
+	p.mu.Lock()
+	_, kept := p.helperSeen["cyrene"]
+	p.mu.Unlock()
+	if kept {
+		t.Fatal("helper history kept for an agent without a helper")
+	}
+}

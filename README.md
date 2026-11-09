@@ -69,6 +69,16 @@ Laptops: newer agents add an optional `battery` object to `/metrics` (`percent`,
 full / idle, `ac_online`, `power_w` positive while discharging, `time_remaining_s`, `health_pct`). The panel
 shows it as a Battery box on the host page and the charge in the host list; agents without it keep working.
 
+**Elevated helper** (Fairy-agent v0.5.0+, Windows): the agent runs as `NT SERVICE\fairy-agent` and a separate
+LocalSystem service without network access, `fairy-agent-helper`, reads Core Temp and the BMC's sensors, drives
+the fans (with the agent's temperature watchdog), runs power actions and installs updates. `/metrics` then carries a
+`helper` block (state, needed, version, since, watchdog, features, error) and `service_account`. The host page shows
+"Elevated helper: running / stopped / error" next to the name (only on hosts that need it), with Stop / Start in its
+menu: admins only, typed host name, step-up sign-in, rate limit, audited as `helper_stop` / `helper_start`
+(`POST /api/systems/{id}/helper/stop|start`, sent to the agent's `/helper/stop|start` with its control token). While it
+is stopped the readings it provides collapse into one "paused" line with a Start button, the Fans tab's controls are
+disabled (the panel also refuses fan writes) and the host list flags the host. Linux and older agents send no helper.
+
 **Sleep** (Fairy-agent v0.4.2+): the Power menu of a host whose agent has power control and reports
 `power_control.sleep: true` offers Sleep next to Shut down / Reboot, with the same typed name, step-up sign-in,
 audit, delay and Cancel. If the agent says the machine cannot sleep (e.g. a Modern-Standby-only laptop) the menu

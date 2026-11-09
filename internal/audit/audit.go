@@ -225,7 +225,8 @@ func str(v any) string {
 	return fmt.Sprint(v)
 }
 
-// Matches applies the UI/CLI filters: user (substring of actor/sub/source), action (exact or prefix "x."),
+// Matches applies the UI/CLI filters: user (substring of actor/sub/source), action (exact, or prefix "x." or
+// "x_": "helper" finds helper_stop and helper_start),
 // host (exact target).
 func Matches(e map[string]any, user, action, host string) bool {
 	if user != "" {
@@ -242,7 +243,7 @@ func Matches(e map[string]any, user, action, host string) bool {
 	}
 	if action != "" {
 		a := str(e["action"])
-		if a != action && !strings.HasPrefix(a, action+".") {
+		if a != action && !strings.HasPrefix(a, action+".") && !strings.HasPrefix(a, action+"_") {
 			return false
 		}
 	}

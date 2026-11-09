@@ -124,6 +124,11 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	sys := normalise.NormaliseAgent(a, payload, now, ts, p.rates)
 	info := agentInfoOf(payload, now)
 	p.mu.Lock()
+	if sys.Helper != nil {
+		normalise.ApplyHelperPause(a, &sys, normalise.HelperUnavailable(payload), p.helperSeenLocked(a.ID, sys, now))
+	} else {
+		delete(p.helperSeen, a.ID)
+	}
 	p.agentInfo[a.ID] = info
 	delete(p.agentFailures, a.ID)
 	p.systems[a.ID] = p.stamp(sys, now)
@@ -135,6 +140,36 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)
 	p.UPS.UpdateFromAgent(a.ID, jsonx.Objs(payload["ups"]), false, a.UPSPowers, a.UPSNames)
 	return 0
+}
+
+// helperSeenFor is how long a helper reading counts as "this host has it" after it was last seen while the
+// helper ran (a sensor that stopped answering a while before the helper was stopped is not announced as paused).
+const helperSeenFor = 10 * time.Minute
+
+// helperSeenLocked records which helper readings the host has while its helper runs, and returns the groups
+// seen recently enough (nil: the panel never saw the helper running since it started). Caller holds p.mu.
+func (p *Poller) helperSeenLocked(id string, s model.System, now time.Time) map[string]bool {
+	seen := p.helperSeen[id]
+	if s.Helper.State == "running" {
+		if seen == nil {
+			seen = map[string]time.Time{}
+			p.helperSeen[id] = seen
+		}
+		for _, g := range normalise.HelperGroupsIn(s) {
+			seen[g] = now
+		}
+		seen[""] = now // the last poll with the helper running
+	}
+	if seen == nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for g, at := range seen {
+		if g != "" && seen[""].Sub(at) <= helperSeenFor {
+			out[g] = true
+		}
+	}
+	return out
 }
 
 // AgentInfo is what the Updates page shows about an agent, from its last good /metrics answer.

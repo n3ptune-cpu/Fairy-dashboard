@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
 
@@ -68,5 +69,60 @@ func TestDemoBMCRefusesOptimal(t *testing.T) {
 	_, s := b.handle("/fan/status", nil)
 	if s["mode"] != "full" || s["overridden"] != true || s["auto_mode"] != "standard" || len(s["unsupported_modes"].([]string)) != 1 {
 		t.Fatal(s)
+	}
+}
+
+// The demo's Windows agents: NSX-CYRENE's elevated helper runs, the laptop's is stopped; Stop / Start work.
+func TestDemoHelperStopStart(t *testing.T) {
+	b := NewBackend(nil)
+	metrics := func(id string) jsonx.M {
+		m, err := agentMetrics(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.mu.Lock()
+		b.applyHelper(id, m)
+		b.mu.Unlock()
+		return m
+	}
+	state := func(m jsonx.M) string { return jsonx.S(jsonx.Obj(m, "helper"), "state") }
+	hasIPMI := func(m jsonx.M) bool {
+		for _, x := range jsonx.Objs(m["temps"]) {
+			if x["sensor"] == "IPMI" || x["sensor"] == "coretemp" {
+				return true
+			}
+		}
+		return false
+	}
+	if m := metrics("nsx-cyrene"); state(m) != "running" || !hasIPMI(m) || m["unavailable"] != nil {
+		t.Fatal("cyrene", m["helper"])
+	}
+	if m := metrics("neptune-laptop"); state(m) != "stopped" || hasIPMI(m) || jsonx.S(jsonx.Obj(m, "unavailable"), "coretemp") != "helper_stopped" {
+		t.Fatal("laptop", m["helper"], m["unavailable"])
+	}
+	if m := metrics("straw-pc"); state(m) != "not_installed" || jsonx.Bool(jsonx.Obj(m, "helper"), "needed", true) {
+		t.Fatal("straw-pc", m["helper"])
+	}
+	if st, out := b.simHelperControl("nsx-cyrene", "stop"); st != 200 || out["state"] != "stopped" {
+		t.Fatal(st, out)
+	}
+	m := metrics("nsx-cyrene")
+	if state(m) != "stopped" || hasIPMI(m) || len(jsonx.Objs(m["fans"])) != 0 || jsonx.Obj(m, "features")["fan_control"] != false {
+		t.Fatal("stopped cyrene still reads the BMC", m["temps"], m["fans"])
+	}
+	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "nsx-cyrene"}, "POST", "/fan/mode", map[string]any{"mode": "full"}); st != 409 || out["error"] != "helper_stopped" {
+		t.Fatal("fan write while stopped", st, out)
+	}
+	if st, out := b.simHelperControl("nsx-cyrene", "start"); st != 200 || out["state"] != "starting" {
+		t.Fatal(st, out)
+	}
+	b.mu.Lock()
+	b.helpers["nsx-cyrene"].readyAt = time.Now()
+	b.mu.Unlock()
+	if m := metrics("nsx-cyrene"); state(m) != "running" || !hasIPMI(m) {
+		t.Fatal("restarted", m["helper"])
+	}
+	if st, out := b.simHelperControl("straw-pc", "start"); st != 409 || out["error"] != "not_installed" {
+		t.Fatal(st, out)
 	}
 }

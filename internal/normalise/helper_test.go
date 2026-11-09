@@ -1,0 +1,135 @@
+package normalise
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
+)
+
+var fanCfg = config.Agent{ID: "cyrene", FanControl: &config.FanControl{Vendor: "supermicro", ControlTokenEnv: "CTL"}}
+
+func norm(cfg config.Agent, m jsonx.M) model.System {
+	raw, _ := json.Marshal(m) // as from the wire
+	var w jsonx.M
+	_ = json.Unmarshal(raw, &w)
+	s := NormaliseAgent(cfg, w, time.Now(), 1, NewRateTracker())
+	if s.Helper != nil {
+		ApplyHelperPause(cfg, &s, HelperUnavailable(w), nil) // as the poller does before it saw the helper run
+	}
+	return s
+}
+
+func TestMetricsWithoutHelperBlock(t *testing.T) {
+	s := norm(config.Agent{ID: "laptop"}, testutil.AgentMetrics())
+	if s.Helper != nil || s.ServiceAccount != nil {
+		t.Fatalf("Linux / older agents have no helper: %+v %v", s.Helper, s.ServiceAccount)
+	}
+	b, _ := json.Marshal(s)
+	if strings.Contains(string(b), `"helper"`) || strings.Contains(string(b), "service_account") {
+		t.Fatal("no helper keys in the API for hosts without one:", string(b))
+	}
+}
+
+func TestMetricsWithHelperBlock(t *testing.T) {
+	s := norm(fanCfg, testutil.HelperMetrics("running", "coretemp", "ipmi", "fans", "power", "update"))
+	h := s.Helper
+	if h == nil || h.State != "running" || !h.Needed || h.Version != "0.5.0" || !h.Watchdog || h.Since == nil ||
+		!h.Since.Equal(time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)) || fmt.Sprint(h.Features) != "[coretemp ipmi fans power update]" ||
+		len(h.Paused) != 0 || model.Deref(s.ServiceAccount) != `NT SERVICE\fairy-agent` || !s.FanControl {
+		t.Fatalf("%+v %v", h, s.ServiceAccount)
+	}
+	if g := fmt.Sprint(HelperGroupsIn(s)); g != "[coretemp ipmi fans]" {
+		t.Fatal("helper groups while running:", g)
+	}
+	b, _ := json.Marshal(s)
+	if !strings.Contains(string(b), `"paused":[]`) {
+		t.Fatal("paused must be a list, never null:", string(b))
+	}
+}
+
+func TestHostileHelperBlock(t *testing.T) {
+	m := testutil.AgentMetrics()
+	m["helper"] = jsonx.M{"state": "pwned", "needed": "yes", "version": "<script>", "since": "yesterday",
+		"features": []any{"coretemp", "rm -rf", 5.0, "coretemp"}, "error": "bad\x1b[31m\u202e" + strings.Repeat("x", 500)}
+	m["service_account"] = "NT SERVICE\\fairy-agent\r\n" + strings.Repeat("y", 200)
+	s := norm(config.Agent{ID: "x"}, m)
+	h := s.Helper
+	if h.State != "unknown" || h.Needed || h.Version != "" || h.Since != nil || fmt.Sprint(h.Features) != "[coretemp]" {
+		t.Fatalf("%+v", h)
+	}
+	if strings.ContainsAny(h.Error, "\x1b\u202e") || len(h.Error) > 310 || strings.ContainsAny(*s.ServiceAccount, "\r\n") || len(*s.ServiceAccount) > 90 {
+		t.Fatalf("text not cleaned: %q %q", h.Error, *s.ServiceAccount)
+	}
+	m["helper"] = "not an object"
+	if s := norm(config.Agent{ID: "x"}, m); s.Helper != nil {
+		t.Fatal("a non-object helper is no helper")
+	}
+}
+
+// The adapter accepts each likely shape of the "helper_stopped" markers (Fairy-agent v0.5.0 had not fixed it).
+func TestHelperUnavailableShapes(t *testing.T) {
+	for name, m := range map[string]jsonx.M{
+		"map of reasons": {"unavailable": map[string]any{"coretemp": "helper_stopped", "bmc": map[string]any{"reason": "helper_stopped"}, "gpu": "helper_stopped"}},
+		"in helper":      {"helper": map[string]any{"unavailable": map[string]any{"core_temp": "helper_stopped", "ipmi": "helper_stopped"}}},
+		"list":           {"unavailable": []any{map[string]any{"feature": "coretemp", "reason": "helper_stopped"}, map[string]any{"id": "ipmi", "reason": "helper_stopped"}, map[string]any{"feature": "fans", "reason": "no_bmc"}}},
+		"per section":    {"coretemp": map[string]any{"available": false, "reason": "helper_stopped"}, "bmc": map[string]any{"available": false, "reason": "HELPER_STOPPED"}},
+	} {
+		if got := HelperUnavailable(m); !got["coretemp"] || !got["ipmi"] || len(got) != 2 {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+	if got := HelperUnavailable(testutil.AgentMetrics()); len(got) != 0 {
+		t.Fatal(got)
+	}
+}
+
+func TestHelperPausedOnlyWhatTheHostUses(t *testing.T) {
+	all := []string{"coretemp", "ipmi", "fans", "power", "update"}
+	stopped := func(features ...string) *model.System {
+		s := norm(fanCfg, testutil.HelperMetrics("stopped", features...))
+		return &s
+	}
+	// never seen running: what the agent marks helper_stopped
+	if s := stopped(all...); fmt.Sprint(s.Helper.Paused) != "[coretemp ipmi fans]" || !s.FanControl {
+		t.Fatalf("fallback: %v fan tab %v", s.Helper.Paused, s.FanControl)
+	}
+	// seen running with Core Temp only (no BMC on this board): only Core Temp is announced as paused
+	s := &model.System{}
+	*s = NormaliseAgent(fanCfg, testutil.HelperMetrics("stopped", all...), time.Now(), 1, NewRateTracker())
+	ApplyHelperPause(fanCfg, s, HelperUnavailable(testutil.HelperMetrics("stopped", all...)), map[string]bool{"coretemp": true})
+	if fmt.Sprint(s.Helper.Paused) != "[coretemp]" || s.FanControl {
+		t.Fatalf("seen: %v fan tab %v", s.Helper.Paused, s.FanControl)
+	}
+	// a helper that only does power and updates here: nothing to show
+	if s := stopped("power", "update"); len(s.Helper.Paused) != 0 {
+		t.Fatal(s.Helper.Paused)
+	}
+	// no Fans tab configured in the panel: fan control is not announced
+	s2 := norm(config.Agent{ID: "laptop"}, testutil.HelperMetrics("stopped", all...))
+	if fmt.Sprint(s2.Helper.Paused) != "[coretemp ipmi]" || s2.FanControl {
+		t.Fatal(s2.Helper.Paused, s2.FanControl)
+	}
+	// running, not installed, unknown: nothing paused
+	for _, st := range []string{"running", "not_installed", "bogus"} {
+		m := testutil.HelperMetrics("stopped", all...)
+		m["helper"].(jsonx.M)["state"] = st
+		if s := norm(fanCfg, m); len(s.Helper.Paused) != 0 {
+			t.Errorf("%s: %v", st, s.Helper.Paused)
+		}
+	}
+	// starting and error count as down
+	for _, st := range []string{"starting", "error"} {
+		m := testutil.HelperMetrics("stopped", all...)
+		m["helper"].(jsonx.M)["state"] = st
+		if s := norm(fanCfg, m); len(s.Helper.Paused) != 3 {
+			t.Errorf("%s: %v", st, s.Helper.Paused)
+		}
+	}
+}

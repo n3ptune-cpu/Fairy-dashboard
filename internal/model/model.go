@@ -102,6 +102,24 @@ type Hardware struct {
 	Display      *string `json:"display"`
 }
 
+// Helper is the Windows agent's elevated helper (Fairy-agent v0.5.0+): a separate LocalSystem service,
+// "fairy-agent-helper", with no network access, that reads Core Temp and the BMC's sensors, drives the fans (with
+// the agent's temperature watchdog), runs power actions and installs updates, while the agent itself runs as an
+// unprivileged account. Linux agents and older agents send no helper block (System.Helper is nil).
+type Helper struct {
+	State    string     `json:"state"`   // running | stopped | starting | not_installed | error | unknown
+	Needed   bool       `json:"needed"`  // this host uses something only the helper can do
+	Version  string     `json:"version"` // "" when unknown
+	Since    *time.Time `json:"since"`   // in the current state since
+	Watchdog bool       `json:"watchdog"`
+	Features []string   `json:"features"` // what it does on this host: coretemp | ipmi | fans | power | update
+	Error    string     `json:"error"`
+	// Paused is the helper's readings this host normally shows that are missing because the helper is not
+	// running: coretemp (Core Temp), ipmi (BMC sensors), fans (fan control). Empty while it runs; only groups this
+	// host actually had while the helper ran (or that the agent marks as helper_stopped) are listed.
+	Paused []string `json:"paused"`
+}
+
 // PowerPending is a scheduled (cancellable) shutdown or reboot.
 type PowerPending struct {
 	Action      string    `json:"action"` // shutdown | reboot
@@ -158,6 +176,10 @@ type System struct {
 	// true, or false with SleepNote saying why. Not copied onto a Proxmox node an agent runs on.
 	Sleep     *bool   `json:"sleep,omitempty"`
 	SleepNote *string `json:"sleep_note,omitempty"`
+	// Helper is the Windows agent's elevated helper (nil: Linux, or an agent older than v0.5.0).
+	Helper *Helper `json:"helper,omitempty"`
+	// ServiceAccount is the account the agent runs as, when it says (e.g. `NT SERVICE\fairy-agent`).
+	ServiceAccount *string `json:"service_account,omitempty"`
 	// Asleep: offline because the panel sent it to sleep (until it is seen online again).
 	Asleep bool `json:"asleep,omitempty"`
 	// BMCRelayTargets: the bmc_relay target ids this agent reports (nil: no relay, or older than v0.4.2).

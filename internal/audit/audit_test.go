@@ -51,6 +51,11 @@ func TestAppendOnlyReverseReaderFiltersAndCursor(t *testing.T) {
 	if len(p) != 100 || len(h) != 1 {
 		t.Fatal(len(p), len(h))
 	}
+	if !Matches(map[string]any{"action": "helper_stop"}, "", "helper", "") || !Matches(map[string]any{"action": "helper_start"}, "", "helper", "") ||
+		Matches(map[string]any{"action": "helperx"}, "", "helper", "") || !Matches(map[string]any{"action": "helper_stop"}, "", "helper_stop", "") ||
+		Matches(map[string]any{"action": "helper_start"}, "", "helper_stop", "") {
+		t.Fatal("helper_ prefix filter")
+	}
 	if !Matches(map[string]any{"action": "power.shutdown"}, "", "power", "") || Matches(map[string]any{"action": "powerx"}, "", "power", "") {
 		t.Fatal("prefix match")
 	}

@@ -50,6 +50,12 @@ func (s *Server) fanStatus(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
+	if x, _ := c.find(id); helperPaused(x, "fans") { // the agent cannot reach the BMC without its helper
+		fs := model.FanStatus{SystemID: id, Error: model.P(fanHelperStopped)}
+		model.Normalize(&fs)
+		c.json(200, fs)
+		return nil
+	}
 	data, err := c.agentCall(a, "GET", "/fan/status", nil)
 	if err != nil {
 		return err
@@ -64,6 +70,9 @@ func (s *Server) fanStatus(c *reqCtx) error {
 	c.json(200, fs)
 	return nil
 }
+
+// fanHelperStopped is why fan control is unavailable while the host's elevated helper is not running.
+const fanHelperStopped = "the elevated helper is stopped: the fans are on the BMC's own automatic control. Start the helper to set fan modes again."
 
 type fanModeReq struct {
 	Mode string `json:"mode"`
@@ -82,6 +91,11 @@ func (s *Server) fanWrite(c *reqCtx, action string, body any, params map[string]
 	id := c.r.PathValue("id")
 	a, err := c.fanAgent(id)
 	if err != nil {
+		return err
+	}
+	if x, _ := c.find(id); helperPaused(x, "fans") {
+		err := apierr.New(409, fanHelperStopped)
+		c.audit(u, action, id, params, errorOutcome(err))
 		return err
 	}
 	path := "/fan/mode"

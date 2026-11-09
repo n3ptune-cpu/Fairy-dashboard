@@ -177,3 +177,37 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, method, path s
 	}
 	return 200, jsonx.M{"ok": true}, nil
 }
+
+// HelperMetrics is the /metrics of a Windows agent with the elevated helper (Fairy-agent v0.5.0) in the given
+// state: while it runs, Core Temp and BMC (IPMI) readings and fan control; otherwise none of them, marked
+// "helper_stopped". features lists what the helper does on that host.
+func HelperMetrics(state string, features ...string) jsonx.M {
+	m := AgentMetrics()
+	m["platform"] = jsonx.M{"system": "Windows", "pretty": "Windows 11 Pro 24H2"}
+	m["load_avg"] = nil
+	feat := make([]any, len(features))
+	for i, f := range features {
+		feat[i] = f
+	}
+	m["helper"] = jsonx.M{"state": state, "needed": true, "version": "0.5.0", "since": "2026-11-09T10:00:00Z",
+		"watchdog": state == "running", "features": feat, "error": ""}
+	m["service_account"] = `NT SERVICE\fairy-agent`
+	m["temps"] = []any{jsonx.M{"sensor": "acpi", "label": "ACPI thermal zone", "current": 48.0}}
+	m["fans"], m["voltages"] = []any{}, []any{}
+	if state == "running" {
+		m["temps"] = append(m["temps"].([]any), jsonx.M{"sensor": "coretemp", "label": "CPU Package", "current": 61.0},
+			jsonx.M{"sensor": "IPMI", "label": "CPU Temp", "current": 55.0})
+		m["fans"] = []any{jsonx.M{"name": "IPMI FAN1", "rpm": 900.0}}
+		m["voltages"] = []any{jsonx.M{"name": "IPMI 12V", "volts": 12.1}}
+		m["features"].(jsonx.M)["fan_control"] = true
+		return m
+	}
+	un := jsonx.M{}
+	for _, f := range features {
+		if f == "coretemp" || f == "ipmi" || f == "fans" {
+			un[f] = "helper_stopped"
+		}
+	}
+	m["unavailable"] = un
+	return m
+}

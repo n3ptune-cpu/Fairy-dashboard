@@ -29,6 +29,8 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"DELETE", "/api/settings/background", "Remove the uploaded background"},
 	{"GET", "/api/systems/{id}/power", "Power actions for one system: available or why not, confirmation needed, pending shutdown"},
 	{"POST", "/api/systems/{id}/power", "Shutdown / reboot / cancel / start / stop / wake (control group + CSRF header; `confirm` = the system name for typed actions)"},
+	{"POST", "/api/systems/{id}/helper/stop", "Stop a Windows agent's elevated helper (admins, CSRF header, recent sign-in; `confirm` = the host name). Fans go back to the BMC's automatic control, Core Temp / BMC readings pause"},
+	{"POST", "/api/systems/{id}/helper/start", "Start a Windows agent's elevated helper again (same checks as stop)"},
 	{"GET", "/api/systems/{id}/poll", "Polling rate for one system: override, effective interval per source, floors, boost"},
 	{"PUT", "/api/systems/{id}/poll", "Set the polling rate: seconds (1-300), \"paused\" or \"default\""},
 	{"GET", "/api/stream", "Server-Sent Events: systems, systems_delta, summary, ups, power, ups_event, notes {unread, active_alerts}. Query: watch=<id>"},

@@ -39,13 +39,14 @@ type Backend struct {
 	guestStatus  map[guestKey]string
 	guestPending map[guestKey]guestChange
 	updates      map[string]*simUpdate // agent id -> simulated self-update
+	helpers      map[string]*simHelper // agent id -> the Windows agent's elevated helper (helper.go)
 }
 
 // NewBackend returns a simulator for the demo configuration.
 func NewBackend(cfg *config.Panel) *Backend {
 	return &Backend{cfg: cfg, bmc: newSimBMC(), pending: map[string]map[string]any{},
 		downUntil: map[string]float64{}, guestStatus: map[guestKey]string{}, guestPending: map[guestKey]guestChange{},
-		updates: map[string]*simUpdate{}}
+		updates: map[string]*simUpdate{}, helpers: newSimHelpers()}
 }
 
 // FetchProxmox returns simulated cluster/resources rows, with guests' simulated power state applied.
@@ -140,6 +141,9 @@ func (b *Backend) FetchAgentMetrics(_ context.Context, a config.Agent, _ time.Du
 		m["agent_version"], m["self_update"] = b.updateState(a.ID, now)
 		b.mu.Unlock()
 	}
+	b.mu.Lock()
+	b.applyHelper(a.ID, m)
+	b.mu.Unlock()
 	// round-trip through JSON so the poller sees exactly what a real agent would send
 	raw, _ := json.Marshal(m)
 	var out jsonx.M
@@ -214,6 +218,9 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, _ string, path
 		return 200, jsonx.M{"target": "cyrene-bmc", "action": bm["action"], "power": "on", "backend": "ipmitool"}, nil
 	case "/update":
 		return b.simUpdate(a)
+	case "/helper/stop", "/helper/start":
+		st, out := b.simHelperControl(a.ID, strings.TrimPrefix(path, "/helper/"))
+		return st, out, nil
 	case "/wol":
 		mac, _ := bm["mac"].(string)
 		for _, o := range b.cfg.Systems {
@@ -232,6 +239,9 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, _ string, path
 			port = 9
 		}
 		return 200, jsonx.M{"sent": true, "mac": mac, "broadcast": bm["broadcast"], "port": port, "bytes": 102}, nil
+	}
+	if strings.HasPrefix(path, "/fan/") && b.helperBlocksFans(a.ID) {
+		return 409, jsonx.M{"error": "helper_stopped"}, nil
 	}
 	st, out := b.bmc.handle(path, bm)
 	return st, out, nil
