@@ -1,5 +1,17 @@
 # Fairy-dashboard
 
+> [!WARNING]
+> Heads up: this whole thing was written by AI. We're not programmers,
+> so we can't help you set it up or fix your install. If you want a
+> feature or found a bug, open an issue and we'll have the AI look at it.
+> It might not work on your hardware.
+>
+> It's MIT, so no warranty, use it at your own risk. Nobody has
+> professionally security-tested it. It can shut down and reboot PCs
+> and change fan speeds if you turn those on, and on Windows part of
+> it runs as SYSTEM. Only connect to the agents over Tailscale, never
+> straight from the internet, and only install from our Releases page.
+
 The Fairy panel: a homelab panel for Proxmox clusters, agent-monitored hosts, wall power (Shelly, Tasmota, Tuya 3.3/3.4/3.5, NUT,
 Redfish) and UPSes, behind Pocket ID. Go rewrite of the Python prototype with the same JSON API; the web UI is
 embedded in the binary.
