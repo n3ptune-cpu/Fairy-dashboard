@@ -310,7 +310,8 @@ func (s *Server) hostRemove(c *reqCtx) error {
 		c.audit(u, "host.remove", h.ID, nil, "refused: "+err.Error())
 		return err
 	}
-	s.unpoll(h.ID) // before the store forgets which node is the host's
+	s.Enroll.CancelHost(h.ID) // a Re-pair still pairing must not bring the host back
+	s.unpoll(h.ID)            // before the store forgets which node is the host's
 	if err := s.Managed.Remove(h.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
 		return err

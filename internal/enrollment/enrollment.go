@@ -125,8 +125,9 @@ type Manager struct {
 	// is shown; nil or a failing check refuses Add host / Re-pair.
 	Scripts ScriptSource
 
-	mu    sync.Mutex
-	items map[string]*Enrollment
+	mu       sync.Mutex
+	items    map[string]*Enrollment
+	commitMu sync.Mutex // a pairing's store + start of polling vs Cancel / CancelHost (taken before mu)
 }
 
 // New builds a manager with the real HTTP pairing call. scripts checks the install scripts (see Verifier).
@@ -412,8 +413,10 @@ func (m *Manager) List() []Enrollment {
 	return out
 }
 
-// Cancel stops a waiting enrollment.
+// Cancel stops a waiting enrollment (also one whose pairing answer is being stored: see commit).
 func (m *Manager) Cancel(id string) bool {
+	m.commitMu.Lock()
+	defer m.commitMu.Unlock()
 	m.mu.Lock()
 	e, ok := m.items[id]
 	if !ok || e.Done || e.State != Waiting {
@@ -426,6 +429,68 @@ func (m *Manager) Cancel(id string) bool {
 	m.mu.Unlock()
 	m.Hooks.Event(cp, "cancelled", "")
 	return true
+}
+
+// commit stores a paired host's tokens and starts polling it, unless the enrollment was cancelled meanwhile
+// (Cancel, or Remove of the host while its Re-pair was pairing): commitMu makes a cancel either wait for a
+// commit in progress (and the caller then removes the result) or stop it before anything is stored.
+func (m *Manager) commit(e *Enrollment, h managed.Host, sec managed.Secret, entry managed.Entry, caPEM []byte, fail func(string)) bool {
+	m.commitMu.Lock()
+	defer m.commitMu.Unlock()
+	m.mu.Lock()
+	cancelled := e.Done
+	m.mu.Unlock()
+	if cancelled {
+		return false
+	}
+	if e.Repair {
+		m.Hooks.Remove(h.ID)
+	} else if err := managed.Check(m.Hooks.Config(), entry); err != nil {
+		fail("cannot add it: " + err.Error())
+		return false
+	}
+	if caPEM != nil {
+		if err := m.Store.PutCA(h.ID, caPEM); err != nil {
+			fail("cannot save the node's CA: " + err.Error())
+			return false
+		}
+	} else if e.Repair { // re-paired without a Proxmox grant: the old node's CA goes with its old token
+		if err := os.Remove(m.Store.CAPath(h.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fail("cannot delete the node's old CA: " + err.Error())
+			return false
+		}
+	}
+	// Store.Put replaces the secrets file: the tokens of the previous pairing (read, control, Proxmox) are gone
+	// from disk, and Hooks.Remove above made the poller forget them.
+	if err := m.Store.Put(h, sec); err != nil {
+		fail("cannot save it: " + err.Error())
+		return false
+	}
+	if err := m.Hooks.Add(entry); err != nil {
+		fail("saved, but polling did not start (" + err.Error() + "): restart the panel")
+		return false
+	}
+	return true
+}
+
+// CancelHost cancels every unfinished enrollment of a host (Remove): one that is pairing right now either
+// stops before it stores anything or has finished storing when CancelHost returns.
+func (m *Manager) CancelHost(hostID string) {
+	m.commitMu.Lock()
+	m.mu.Lock()
+	var gone []Enrollment
+	for _, e := range m.items {
+		if e.HostID == hostID && !e.Done {
+			e.State, e.Message, e.Done = Cancelled, "cancelled: the host was removed", true
+			e.cancel()
+			gone = append(gone, m.copyOf(e))
+		}
+	}
+	m.mu.Unlock()
+	m.commitMu.Unlock()
+	for _, cp := range gone {
+		m.Hooks.Event(cp, "cancelled", "")
+	}
 }
 
 func (m *Manager) set(e *Enrollment, state, msg string, done bool) Enrollment {
@@ -521,31 +586,7 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 		}
 	}
 	entry := m.Store.EntryOf(h, sec)
-	if e.Repair {
-		m.Hooks.Remove(h.ID)
-	} else if err := managed.Check(m.Hooks.Config(), entry); err != nil {
-		fail("cannot add it: " + err.Error())
-		return
-	}
-	if caPEM != nil {
-		if err := m.Store.PutCA(h.ID, caPEM); err != nil {
-			fail("cannot save the node's CA: " + err.Error())
-			return
-		}
-	} else if e.Repair { // re-paired without a Proxmox grant: the old node's CA goes with its old token
-		if err := os.Remove(m.Store.CAPath(h.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			fail("cannot delete the node's old CA: " + err.Error())
-			return
-		}
-	}
-	// Store.Put replaces the secrets file: the tokens of the previous pairing (read, control, Proxmox) are gone
-	// from disk, and Hooks.Remove above made the poller forget them.
-	if err := m.Store.Put(h, sec); err != nil {
-		fail("cannot save it: " + err.Error())
-		return
-	}
-	if err := m.Hooks.Add(entry); err != nil {
-		fail("saved, but polling did not start (" + err.Error() + "): restart the panel")
+	if !m.commit(e, h, sec, entry, caPEM, fail) {
 		return
 	}
 	note := pveNote

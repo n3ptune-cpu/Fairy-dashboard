@@ -117,6 +117,9 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	if r := e.do("DELETE", "/api/admin/hosts/nsx-furina", map[string]any{"confirm": "nsx-fontaine"}, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
 		t.Fatal("remove with a wrong name", r.code)
 	}
+	e.s.Enroll.Pair = func(context.Context, string, string) (int, enroll.Response, string, error) { // nobody ran the new command
+		return 0, enroll.Response{}, "", errors.New("dial tcp: connection refused")
+	}
 	if r := e.do("POST", "/api/admin/hosts/nsx-furina/repair", map[string]any{"confirm": "nsx-furina"}, append([]string{"Cookie", c}, csrf...)...); r.code != 201 ||
 		!strings.Contains(r.body["command"].(string), "-Join ") || r.body["code"] == code {
 		t.Fatal("repair", r.code, string(r.raw))

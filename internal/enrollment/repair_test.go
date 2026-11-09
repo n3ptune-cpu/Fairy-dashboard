@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,5 +74,50 @@ func TestRepairDropsTheOldTokens(t *testing.T) {
 	}
 	if strings.Join(calls, ", ") != "remove nsx-kachina, add new-read-token-xxxxxxxxxxxxxxxxxx" {
 		t.Fatal(calls)
+	}
+}
+
+// Remove while a Re-pair is pairing: the host does not come back. CancelHost either stops the pairing before it
+// stores anything or waits until it has (and the caller then removes it).
+func TestRemoveDuringRepairDoesNotBringTheHostBack(t *testing.T) {
+	store := managed.NewStore(t.TempDir())
+	h := managed.Host{ID: "nsx-furina", Name: "nsx-furina", URL: "http://nsx-furina:9101", OS: "linux"}
+	if err := store.Put(h, managed.Secret{Token: "old-read-token-xxxxxxxxxxxxxxxxxx"}); err != nil {
+		t.Fatal(err)
+	}
+	answering := make(chan struct{})
+	release := make(chan struct{})
+	var adds atomic.Int32
+	m := &Manager{Store: store, Now: time.Now, Interval: time.Millisecond, OnlineWait: time.Second, PanelAddr: "100.88.109.47",
+		Scripts: Fixed(testInstallers), items: map[string]*Enrollment{},
+		Hooks: Hooks{
+			Config: func() *config.Panel { return &config.Panel{} },
+			Remove: func(string) {},
+			Add:    func(managed.Entry) error { adds.Add(1); return nil },
+			Online: func(string) (bool, string) { return true, "" },
+			Event:  func(Enrollment, string, string) {},
+		},
+		Pair: func(context.Context, string, string) (int, enroll.Response, string, error) {
+			close(answering) // the machine answers: the pairing is in flight
+			<-release
+			return 200, enroll.Response{Token: "new-read-token-xxxxxxxxxxxxxxxxxx"}, "", nil
+		}}
+	cr, err := m.Create(context.Background(), Request{}, &h, "neptune", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-answering
+	m.CancelHost(h.ID) // Remove
+	_ = store.Remove(h.ID)
+	close(release)
+	time.Sleep(50 * time.Millisecond)
+	if e, _ := m.Get(cr.ID); e.State != Cancelled || adds.Load() != 0 {
+		t.Fatalf("%+v adds=%d", e, adds.Load())
+	}
+	if hosts, _ := store.Load(); len(hosts) != 0 {
+		t.Fatal("the removed host came back", hosts)
+	}
+	if m.Cancel(cr.ID) {
+		t.Fatal("cancelled twice")
 	}
 }
