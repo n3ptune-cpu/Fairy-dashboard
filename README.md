@@ -146,13 +146,13 @@ use, only its hash is kept) and one command:
 
 ```text
 Windows (PowerShell as Administrator):
-$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-10'; $f="$env:TEMP\fairy-install.ps1"; iwr -useb "$u/install.ps1" -OutFile $f; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '<SHA-256>') { throw '...' }; powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u -Join <CODE> -PanelAddress <panel IP> [-PowerControl -SelfUpdate -CoreTemp ...]
+$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-11'; $f="$env:TEMP\fairy-install.ps1"; iwr -useb "$u/install.ps1" -OutFile $f; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '<SHA-256>') { throw '...' }; powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u -Join <CODE> -PanelAddress <panel IP> [-PowerControl -SelfUpdate -CoreTemp ...]
 Linux:
-f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-10/install.sh && echo "<SHA-256>  $f" | sha256sum -c - && sudo env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-10 sh "$f" --join <CODE> --panel <panel IP> [--power-control --self-update ...]
+f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-11/install.sh && echo "<SHA-256>  $f" | sha256sum -c - && sudo env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-11 sh "$f" --join <CODE> --panel <panel IP> [--power-control --self-update ...]
 ```
 
 The command never runs "the latest" script. It names one Fairy-agent release: the one this panel was built
-against (`build-10` = Fairy-agent v0.4.4; `enroll: {agent_release: build-N}` picks another). Before it shows a
+against (`build-11` = Fairy-agent v0.5.0; `enroll: {agent_release: build-N}` picks another). Before it shows a
 command the panel downloads that release's `SHA256SUMS`, `SHA256SUMS.sig`, `VERSION`, `install.sh` and
 `install.ps1` and checks them with the release key built into the panel (`release/signing.pub`); a panel build
 without the key, an unreachable GitHub or a bad signature refuses Add host (HTTP 503) instead. The command runs
