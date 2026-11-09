@@ -373,6 +373,15 @@ func TestPanelContract(t *testing.T) {
 	if strings.Join(c.power.Scheduled, ",") != "shutdown@5m0s" || c.power.Cancels != 1 {
 		t.Fatal(c.power.Scheduled, c.power.Cancels)
 	}
+	// sleep (agent v0.4.2): reported in /metrics, offered, carried out through the agent, cancelled
+	st, res = a.do("POST", "/api/systems/nsx-cyrene/power", map[string]any{"action": "sleep", "delay_s": 30, "confirm": "nsx-cyrene"})
+	if st != 200 || res["via"] != "agent" || res["pending"].(map[string]any)["action"] != "sleep" {
+		t.Fatal(st, res)
+	}
+	if st, _ := a.do("POST", "/api/systems/nsx-cyrene/power", map[string]any{"action": "cancel"}); st != 200 ||
+		strings.Join(c.power.Scheduled, ",") != "shutdown@5m0s,sleep@30s" {
+		t.Fatal(st, c.power.Scheduled)
+	}
 
 	if st, res := a.do("POST", "/api/systems/sleepy/power", map[string]any{"action": "wake"}); st != 200 || res["via"] != "wol:nsx-cyrene" {
 		t.Fatal(st, res)
@@ -485,6 +494,9 @@ func TestDemoAgentsMatchTheRealAgent(t *testing.T) {
 	bb, _ := json.Marshal(collect.BatteryStatus{})
 	_ = json.Unmarshal(bb, &batt)
 	real["battery"] = batt
+	if pc, ok := real["power_control"].(map[string]any); ok {
+		pc["sleep_note"] = "" // only sent when the machine cannot sleep (the fake one can)
+	}
 	sub := func(name string, demo, real map[string]any) {
 		rk := keys(real)
 		for k := range demo {

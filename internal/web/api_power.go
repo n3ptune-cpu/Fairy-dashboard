@@ -71,12 +71,20 @@ func (s *Server) powerAction(c *reqCtx) error {
 // panel is expected (the host going offline is then "off", not an alarm).
 func (s *Server) powerEvent(x model.System, req powerctl.Request, res model.PowerResult, who string) {
 	s.Watch.NotePanelPower(x.ID, req.Action, time.Now())
+	switch {
+	case req.Action == "sleep" && res.Pending != nil:
+		s.Poller.NoteSleep(x.ID, &res.Pending.At)
+	case req.Action == "sleep":
+		s.Poller.NoteSleep(x.ID, model.P(time.Now().Add(time.Duration(*req.DelayS)*time.Second)))
+	case req.Action == "cancel":
+		s.Poller.NoteSleep(x.ID, nil)
+	}
 	e := notifications.Event{Type: "power", Severity: notifications.Info, SystemID: x.ID, Host: x.Name}
 	switch req.Action {
-	case "shutdown", "reboot":
+	case "shutdown", "reboot", "sleep":
 		e.Kind, e.Text = "power_requested", fmt.Sprintf("%s requested by %s (%s)", req.Action, who, res.Message)
 	case "cancel":
-		e.Kind, e.Text = "power_cancelled", "pending shutdown / reboot cancelled by "+who
+		e.Kind, e.Text = "power_cancelled", "pending shutdown / reboot / sleep cancelled by "+who
 	case "wake":
 		e.Kind, e.Text = "wake_sent", "Wake-on-LAN sent by "+who
 	default:

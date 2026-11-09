@@ -69,6 +69,15 @@ Laptops: newer agents add an optional `battery` object to `/metrics` (`percent`,
 full / idle, `ac_online`, `power_w` positive while discharging, `time_remaining_s`, `health_pct`). The panel
 shows it as a Battery box on the host page and the charge in the host list; agents without it keep working.
 
+**Sleep** (Fairy-agent v0.4.2+): the Power menu of a host whose agent has power control and reports
+`power_control.sleep: true` offers Sleep next to Shut down / Reboot, with the same typed name, step-up sign-in,
+audit, delay and Cancel. If the agent says the machine cannot sleep (e.g. a Modern-Standby-only laptop) the menu
+shows why; older agents show "needs v0.4.2". Proxmox nodes are not offered Sleep. While it sleeps the host shows
+"asleep (from panel)" (and an informational notification, not an alarm) until it is seen again; Power on
+(Wake-on-LAN) wakes it, which from sleep needs the network card's "Allow this device to wake the computer" /
+"Wake on Magic Packet". Radeon cards on Windows whose agent reads AMD's ADL (v0.4.2) show their temperature and
+watts "via AMD".
+
 ### Updates
 
 Nothing updates on its own. Every push to `main` makes a signed GitHub release (`.github/workflows/release.yml`:
@@ -150,7 +159,8 @@ Not yet: adding a Proxmox node itself (the API token) from the panel; nodes stay
 
 The bell (top bar) and **Notifications** (sidebar): what changed, newest first. Events are made on state
 *changes* only: a host offline (after 30 s) and back, unstable (6 changes in 10 minutes: one warning, then quiet),
-"off (shut down from the panel)" instead of an alert when the panel shut it down, a temperature over 85 °C (for
+"off (shut down from the panel)" or "asleep (sent to sleep from the panel)" instead of an alert when the panel
+did it, a temperature over 85 °C (for
 10 s) and back under 80 °C, UPS on battery / low battery / back on mains / connection lost, power actions,
 agent and panel updates, Add host results. Filters (severity, type, host, unread), mark read, mark all read,
 dismiss, per user; each person sees the hosts and UPSes of their sites (events without a host are for admins).

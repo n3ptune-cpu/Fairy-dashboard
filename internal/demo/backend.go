@@ -120,7 +120,11 @@ func (b *Backend) FetchAgentMetrics(_ context.Context, a config.Agent, _ time.Du
 		if pend != nil {
 			p = pend
 		}
-		m["power_control"] = map[string]any{"enabled": true, "pending": p, "min_delay_s": 10.0}
+		pc := map[string]any{"enabled": true, "pending": p, "min_delay_s": 10.0, "sleep": true}
+		if a.ID == "neptune-laptop" { // a Modern Standby laptop: the agent says why it cannot sleep
+			pc["sleep"], pc["sleep_note"] = false, "only Modern Standby (S0 low power idle), which a service cannot start; sleep (S3) is not available"
+		}
+		m["power_control"] = pc
 	}
 	feat["wol_relay"] = a.WolRelay
 	if a.SelfUpdate {

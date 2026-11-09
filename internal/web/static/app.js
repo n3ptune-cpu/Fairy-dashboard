@@ -282,7 +282,7 @@ function batteryBox(s) {
     ${b.health_pct != null ? `<div class="list-row"><span>Health</span><span>${b.health_pct.toFixed(0)}% <span class="note">of design capacity</span></span></div>` : ""}
     ${w != null && w > 0 ? '<div class="note">On battery the draw is the whole laptop\'s, measured by the battery (not wall power).</div>' : ""}</div>`;
 }
-const statusText = (s) => (s.status === "paused" ? "paused" : s.status);
+const statusText = (s) => (s.status === "paused" ? "paused" : s.asleep ? "asleep (from panel)" : s.status);
 
 // ------------------------------------------------------------ sidebar
 function navLink(href, ico, name, cls = "", extra = "") {
@@ -362,7 +362,7 @@ function hostRow(s) {
   return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="host-ico">${hostIcon(s)}</span>
       <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${clusterTag(s)}${upsChips(s)}${battChip(s)}</a>${guestCount(s)}<span class="sub">${esc(subLine(s))}${verChip(s.id)}</span></td>
     <td class="col-kind">${s.kind === "node" ? `<span class="chip">Proxmox</span>` : `<span class="note">${esc(s.owner || s.group || "–")}</span>`}</td>
-    <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}</span>`}</td>
+    <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
     <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
     <td class="col-gpu">${live(s) && s.status !== "paused" && gpus.length ? mini("gpu", gpuAvg(s)) + (gpus.length > 1 ? `<span class="note">${gpus.length} GPUs · avg</span>` : "") : ""}</td>
     <td class="num">${w != null ? `<b class="value pwr">${fmtW(w)}</b>` : '<span class="note">–</span>'}</td></tr>`;
@@ -431,7 +431,7 @@ function pollMenu(s) {
       ${st.note ? `<div class="menu-note">${esc(st.note)}</div>` : ""}
       <div class="menu-note">${st.boost_enabled ? "Viewing a host boosts it to 1 s (30 s grace)." : "Boost while viewing is off."}</div>` : '<div class="menu-note">loading…</div>'}</div>`;
 }
-const POWER_LABEL = { shutdown: "Shut down", reboot: "Reboot", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)" };
+const POWER_LABEL = { shutdown: "Shut down", reboot: "Reboot", sleep: "Sleep", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)" };
 function powerMenu(s) {
   const caps = state.caps[s.id], why = controlWhyNot();
   if (!caps) return '<div class="menu"><div class="menu-note">loading…</div></div>';
@@ -481,12 +481,12 @@ function wakeBlock(s) {
   const cap = state.caps[s.id]?.actions.find((a) => a.action === "wake"), why = controlWhyNot();
   const label = `Power on (WoL via ${cap?.via_label || cap?.via?.replace("wol:", "") || "relay"})`;
   return `<div class="wake"><button class="btn primary" data-act="power-now" data-action="wake" ${cap?.available && !why ? "" : "disabled"}>${I.onoff}${esc(label)}</button>
-    <div class="note">${esc(why || (cap && !cap.available ? cap.reason : "Sends a magic packet from an always-on agent on the same LAN."))}</div></div>`;
+    <div class="note">${esc(why || (cap && !cap.available ? cap.reason : `Sends a magic packet from an always-on agent on the same LAN.${s.asleep ? " From sleep this needs the network card's \"Allow this device to wake the computer\" / \"Wake on Magic Packet\"." : ""}`))}</div></div>`;
 }
 
 function systemOverview(s) {
   if (!live(s)) {
-    return `<div class="empty">${s.status === "stopped" ? "Stopped." : `No data · ${esc(s.error || s.status)} · last seen ${ago(s.last_seen)}`}${wakeBlock(s)}</div>${managedBox(s)}`;
+    return `<div class="empty">${s.status === "stopped" ? "Stopped." : s.asleep ? `Asleep (sent to sleep from the panel) · last seen ${ago(s.last_seen)}` : `No data · ${esc(s.error || s.status)} · last seen ${ago(s.last_seen)}`}${wakeBlock(s)}</div>${managedBox(s)}`;
   }
   const lp = linkedPower(s.id), cp = s.component_power;
   const res = `<div class="panel glass pad"><h3>Resources</h3>
@@ -512,7 +512,8 @@ function systemOverview(s) {
       ${metric("gpu", "Util", g.util_percent, fmtP(g.util_percent))}
       ${g.vram_total ? metric("vram", "VRAM", pct(g.vram_used, g.vram_total), `${fmtBytes(g.vram_used)} / ${fmtBytes(g.vram_total)}`) : ""}
       <div class="gpu-facts">${g.temp_c != null ? `<span>${g.temp_c.toFixed(0)}°C</span>` : ""}${g.power_w != null ? `<span>${fmtW(g.power_w)}</span>` : ""}<span class="note">${esc(g.vendor)}${g.source === "windows"
-        ? ' · <span title="From the GPU counters Windows keeps (as in Task Manager): no temperature or watts">via Windows</span>' : ""}</span></div>
+        ? ' · <span title="From the GPU counters Windows keeps (as in Task Manager): no temperature or watts">via Windows</span>'
+        : g.source === "amd" ? ' · <span title="Load and VRAM from the GPU counters Windows keeps; temperature and watts from AMD\'s driver library (ADL)">via AMD</span>' : ""}</span></div>
     </div>`).join("")}</div></div>` : "";
   const temps = s.temps || [];  // all of them (a 16-core CPU has 16 "Core n"); two columns when there are many
   const sensors = temps.length || (s.fans || []).length || (s.voltages || []).length ? `<div class="panel glass pad"><h3>Sensors</h3>
@@ -1005,7 +1006,8 @@ function openPowerDialog(s, action) {
   m.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="mtitle">
     <h3 id="mtitle">${esc(label)} ${esc(s.name)}?</h3>
     <p>${action === "stop" ? "Hard stop: like pulling the power plug. Unsaved data in the guest is lost." :
-      action === "shutdown" ? "Clean shutdown (ACPI / OS shutdown)." : action === "reboot" ? "Clean reboot." : ""}
+      action === "shutdown" ? "Clean shutdown (ACPI / OS shutdown)." : action === "reboot" ? "Clean reboot." :
+      action === "sleep" ? "Sleep (suspend to RAM, not hibernate). Wake it with Power on (Wake-on-LAN): from sleep that needs the network card's \"Allow this device to wake the computer\" / \"Wake on Magic Packet\"." : ""}
       <span class="note">via ${esc(cap.via_label || cap.via)}</span></p>
     ${caps.kills_panel ? `<div class="warnbox">${esc(caps.warning)}</div>` : ""}
     ${cap.delayed ? `<label class="mfield">Delay <select id="m-delay"><option value="10">10 s</option><option value="60" selected>1 min</option><option value="300">5 min</option><option value="900">15 min</option></select>

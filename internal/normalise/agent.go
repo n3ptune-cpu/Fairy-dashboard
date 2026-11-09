@@ -18,7 +18,7 @@ func pending(pc jsonx.M) *model.PowerPending {
 	}
 	a := jsonx.S(p, "action")
 	at := jsonx.Num(p, "at")
-	if (a != "shutdown" && a != "reboot") || at == nil {
+	if (a != "shutdown" && a != "reboot" && a != "sleep") || at == nil {
 		return nil
 	}
 	d := 0
@@ -71,6 +71,14 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	if len(disks) > 0 {
 		s.DiskUsed, s.DiskTotal = &used, &total
 	}
+	if pc := jsonx.Obj(m, "power_control"); pc != nil {
+		if v, ok := pc["sleep"].(bool); ok {
+			s.Sleep = model.P(v)
+			if !v {
+				s.SleepNote = jsonx.Str(pc, "sleep_note")
+			}
+		}
+	}
 	if cfg.DWServiceURL != "" {
 		s.DWServiceURL = model.P(cfg.DWServiceURL)
 	}
@@ -107,9 +115,10 @@ func agentTemps(m jsonx.M) []model.Temperature {
 	return temps
 }
 
-// gpuSource keeps the sources the UI knows ("windows"); anything else is dropped.
+// gpuSource keeps the sources the UI knows ("windows"; "amd": Windows' counters plus AMD's ADL for temperature
+// and watts, Fairy-agent v0.4.2); anything else is dropped.
 func gpuSource(s string) string {
-	if s == "windows" {
+	if s == "windows" || s == "amd" {
 		return s
 	}
 	return ""

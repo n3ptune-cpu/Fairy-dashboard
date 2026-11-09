@@ -71,6 +71,7 @@ type Poller struct {
 	nodeCPU       map[string]string
 	nodeInflight  map[string]bool
 	pending       map[string]pendingNote
+	asleep        map[string]time.Time // system id -> when the panel's sleep takes effect (see NoteSleep)
 	clusterIDs    map[string][]string
 	fingerprints  map[string]uint64
 	agentFailures map[string]int
@@ -91,7 +92,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 		clusters: map[string]config.Proxmox{}, systems: map[string]model.System{},
 		sources: map[string]model.SourceStatus{}, agentPower: map[string]*model.ComponentPower{},
 		pveRefs: map[string]pveRef{}, nodeCPU: map[string]string{}, nodeInflight: map[string]bool{},
-		pending: map[string]pendingNote{}, clusterIDs: map[string][]string{}, fingerprints: map[string]uint64{},
+		pending: map[string]pendingNote{}, asleep: map[string]time.Time{}, clusterIDs: map[string][]string{}, fingerprints: map[string]uint64{},
 		agentFailures: map[string]int{}, agentInfo: map[string]AgentInfo{}, snapVer: -1, snapJSONVer: -1,
 		stateVersion: -1, StartedAt: time.Now().UTC(), present: map[string]bool{}}
 	for i := range cfg.Systems {

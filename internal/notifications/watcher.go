@@ -26,7 +26,8 @@ type Watcher struct {
 	mu       sync.Mutex
 	started  bool
 	hosts    map[string]*hostState
-	panelOff map[string]time.Time // system id -> until when "offline" is the panel's own shutdown / reboot
+	panelOff map[string]time.Time // system id -> until when "offline" is the panel's own shutdown / reboot / sleep
+	asleep   map[string]bool      // ... and it was a sleep
 }
 
 type hostState struct {
@@ -53,18 +54,22 @@ func (w *Watcher) defaults() {
 	if w.hosts == nil {
 		w.hosts = map[string]*hostState{}
 		w.panelOff = map[string]time.Time{}
+		w.asleep = map[string]bool{}
 	}
 }
 
-// NotePanelPower records a shutdown / reboot requested in the panel: the host going offline in the next 30
-// minutes (shutdown) or 10 minutes (reboot) is expected.
+// NotePanelPower records a shutdown / reboot / sleep requested in the panel: the host going offline in the next
+// 30 minutes (shutdown, sleep) or 10 minutes (reboot) is expected.
 func (w *Watcher) NotePanelPower(systemID, action string, now time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.defaults()
+	delete(w.asleep, systemID)
 	switch action {
 	case "shutdown":
 		w.panelOff[systemID] = now.Add(30 * time.Minute)
+	case "sleep":
+		w.panelOff[systemID], w.asleep[systemID] = now.Add(30*time.Minute), true
 	case "reboot":
 		w.panelOff[systemID] = now.Add(10 * time.Minute)
 	case "cancel":
@@ -126,6 +131,7 @@ func (w *Watcher) Observe(now time.Time, systems []model.System, upsEvents []mod
 	for id, until := range w.panelOff {
 		if now.After(until) {
 			delete(w.panelOff, id)
+			delete(w.asleep, id)
 		}
 	}
 	if !first {
@@ -165,6 +171,11 @@ func (w *Watcher) observeStatus(now time.Time, s model.System, st *hostState, up
 	if !up {
 		if until, ok := w.panelOff[s.ID]; ok && now.Before(until) {
 			st.offByPanel = true
+			if w.asleep[s.ID] {
+				w.Store.Add(Event{Kind: "host_asleep", Type: "host", Severity: Info, SystemID: s.ID, Host: s.Name,
+					Text: "asleep (sent to sleep from the panel)"})
+				return
+			}
 			w.Store.Add(Event{Kind: "host_off", Type: "host", Severity: Info, SystemID: s.ID, Host: s.Name,
 				Text: "off (shut down from the panel)"})
 			return
@@ -181,8 +192,12 @@ func (w *Watcher) observeStatus(now time.Time, s model.System, st *hostState, up
 	if st.offByPanel {
 		text = "on again"
 	}
+	if st.offByPanel && w.asleep[s.ID] {
+		text = "awake again"
+	}
 	st.offByPanel = false
 	delete(w.panelOff, s.ID)
+	delete(w.asleep, s.ID)
 	w.Store.Add(Event{Kind: "host_online", Type: "host", Severity: Info, SystemID: s.ID, Host: s.Name, Text: text, Key: key})
 }
 

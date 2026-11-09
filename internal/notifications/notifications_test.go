@@ -70,6 +70,18 @@ func TestWatcherDebounceAndPanelOff(t *testing.T) {
 	if kinds(s) != "host_offline,host_online,host_off,host_online" || len(pushed) != 1 {
 		t.Fatal(kinds(s), pushed)
 	}
+	// sent to sleep from the panel: "asleep", informational, then "awake again"
+	w.NotePanelPower("b", "sleep", at(1450))
+	w.Observe(at(1500), []model.System{host("b", "offline", 0)}, nil)
+	w.Observe(at(1540), []model.System{host("b", "offline", 0)}, nil)
+	w.Observe(at(1600), []model.System{host("b", "online", 40)}, nil)
+	w.Observe(at(1640), []model.System{host("b", "online", 40)}, nil)
+	if kinds(s) != "host_offline,host_online,host_off,host_online,host_asleep,host_online" || len(pushed) != 1 {
+		t.Fatal(kinds(s), pushed)
+	}
+	if l := s.List("u", func(Event) bool { return true }, Filter{Limit: 1}); l.Events[0].Text != "awake again" {
+		t.Fatal(l.Events[0])
+	}
 }
 
 func TestWatcherTemperatureAndFlapping(t *testing.T) {

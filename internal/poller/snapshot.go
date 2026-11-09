@@ -23,6 +23,34 @@ func (p *Poller) NotePending(id string, pending *model.PowerPending) {
 	p.Bump()
 }
 
+// NoteSleep records that the panel sent a host to sleep at `at` (nil: cancelled): while it is offline after
+// that it shows as asleep, until it is seen online again.
+func (p *Poller) NoteSleep(id string, at *time.Time) {
+	p.mu.Lock()
+	if at == nil {
+		delete(p.asleep, id)
+	} else {
+		p.asleep[id] = *at
+	}
+	p.snapVer, p.snapJSONVer = -1, -1
+	p.mu.Unlock()
+	p.Bump()
+}
+
+// asleepLocked says whether s is asleep from the panel, and forgets the note once the host is back (or after 30
+// days). Caller holds p.mu.
+func (p *Poller) asleepLocked(s model.System, now time.Time) bool {
+	at, ok := p.asleep[s.ID]
+	switch {
+	case !ok:
+		return false
+	case now.Sub(at) > 30*24*time.Hour, s.Status == "online" && now.Sub(at) > 3*time.Minute:
+		delete(p.asleep, s.ID)
+		return false
+	}
+	return (s.Status == "offline" || s.Status == "stale") && now.After(at.Add(-5*time.Second))
+}
+
 // Snapshot is the merged, sorted system list (cached per version).
 func (p *Poller) Snapshot() []model.System {
 	p.mu.Lock()
@@ -147,6 +175,13 @@ func (p *Poller) buildSnapshot() []model.System {
 		delete(systems, a.ID)
 	}
 	pend := p.freshPendingLocked()
+	now := time.Now()
+	for id, s := range systems {
+		if p.asleepLocked(s, now) {
+			s.Asleep = true
+			systems[id] = s
+		}
+	}
 	p.mu.Unlock()
 	list := make([]model.System, 0, len(systems))
 	for _, s := range systems {
@@ -264,6 +299,9 @@ func (p *Poller) powerActions(s model.System) []string {
 	a, hasA := p.AgentFor(s.ID)
 	if (hasA && a.PowerControl) || (s.Kind == "node" && hasC && c.NodePower) {
 		out = append(out, "shutdown", "reboot")
+		if s.Kind != "node" && hasA && a.PowerControl && model.Deref(s.Sleep) {
+			out = append(out, "sleep")
+		}
 	}
 	if o := p.overrides[s.ID]; o != nil && o.Wol != nil {
 		out = append(out, "wake")

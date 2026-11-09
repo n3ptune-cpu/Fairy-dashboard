@@ -766,3 +766,74 @@ func TestAgentErrorsAreNot502(t *testing.T) {
 		t.Fatal("processes: unreachable", r.code, string(r.raw))
 	}
 }
+
+// Sleep: offered when the host's agent says the machine can sleep (Fairy-agent v0.4.2), typed name like
+// shutdown, through the agent, cancellable; afterwards the host shows as asleep (from the panel) while offline.
+func TestSleepFromThePanel(t *testing.T) {
+	e := setup(t)
+	c := e.cookie(controller(), 0)
+	csrf := []string{"X-Requested-With", "fairy"}
+	sleepCap := func() map[string]any {
+		for _, a := range e.do("GET", "/api/systems/laptop/power", nil, "Cookie", c).body["actions"].([]any) {
+			if m := a.(map[string]any); m["action"] == "sleep" {
+				return m
+			}
+		}
+		return nil
+	}
+	poll := func(pc jsonx.M) {
+		e.b.Mu.Lock()
+		e.b.Metrics["laptop"] = func() (jsonx.M, error) {
+			m := testutil.AgentMetrics()
+			if pc != nil {
+				m["power_control"] = pc
+			}
+			return m, nil
+		}
+		e.b.Mu.Unlock()
+		e.s.Poller.PollOnce(context.Background())
+	}
+	poll(nil) // an older agent says nothing about sleep
+	if s := sleepCap(); s == nil || s["available"] != false || !strings.Contains(s["reason"].(string), "v0.4.2") {
+		t.Fatal(s)
+	}
+	poll(jsonx.M{"enabled": true, "sleep": false, "sleep_note": "only Modern Standby"})
+	if s := sleepCap(); s["available"] != false || !strings.Contains(s["reason"].(string), "Modern Standby") {
+		t.Fatal(s)
+	}
+	poll(jsonx.M{"enabled": true, "sleep": true})
+	if s := sleepCap(); s["available"] != true || s["confirm"] != "typed" || s["delayed"] != true {
+		t.Fatal(s)
+	}
+	// Proxmox nodes are not offered sleep
+	for _, a := range e.do("GET", "/api/systems/node-nsx-kachina/power", nil, "Cookie", c).body["actions"].([]any) {
+		if a.(map[string]any)["action"] == "sleep" {
+			t.Fatal("sleep offered for a node")
+		}
+	}
+	pw := map[string]any{"action": "sleep", "delay_s": 10}
+	if r := e.do("POST", "/api/systems/laptop/power", pw, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
+		t.Fatal("typed confirmation", r.code, string(r.raw))
+	}
+	pw["confirm"] = "laptop"
+	r := e.do("POST", "/api/systems/laptop/power", pw, append([]string{"Cookie", c}, csrf...)...)
+	if r.code != 200 || !strings.Contains(strings.Join(e.b.Requests, "\n"), "laptop POST /power map[action:sleep delay_s:10") {
+		t.Fatal(r.code, string(r.raw), e.b.Requests)
+	}
+	// the agent goes quiet: asleep, not just offline
+	e.b.Mu.Lock()
+	e.b.Metrics["laptop"] = func() (jsonx.M, error) { return nil, context.DeadlineExceeded }
+	e.b.Mu.Unlock()
+	e.s.Poller.NoteSleep("laptop", model.P(time.Now().Add(-time.Second)))
+	for i := 0; i < 3; i++ {
+		e.s.Poller.PollOnce(context.Background())
+	}
+	if x := e.do("GET", "/api/systems/laptop", nil, "Cookie", c).body; x["asleep"] != true {
+		t.Fatal("asleep", x["status"], x["asleep"])
+	}
+	// cancel forgets it
+	e.s.Poller.NoteSleep("laptop", nil)
+	if x := e.do("GET", "/api/systems/laptop", nil, "Cookie", c).body; x["asleep"] != nil {
+		t.Fatal("still asleep")
+	}
+}

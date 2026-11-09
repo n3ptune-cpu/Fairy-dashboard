@@ -1,7 +1,8 @@
 // Package powerctl decides which power actions a system offers (and why not) and carries them out.
 //
 // Routes, in order of preference:
-//   - hosts / Proxmox nodes with an agent that has power_control enabled: shutdown / reboot (delayed, cancellable)
+//   - hosts / Proxmox nodes with an agent that has power_control enabled: shutdown / reboot (delayed, cancellable),
+//     and for hosts (not nodes) whose agent reports it can, sleep
 //   - Proxmox nodes without one, when the cluster entry has `node_power: true`: POST /nodes/{node}/status
 //   - Proxmox guests, when the cluster entry has a power token: start / shutdown (ACPI) / reboot / stop (hard)
 //   - offline hosts with `wol:` configured: magic packet sent by a relay agent on the same LAN
@@ -28,7 +29,7 @@ import (
 )
 
 // Actions are the power actions the API accepts.
-var Actions = []string{"start", "shutdown", "reboot", "stop", "cancel", "wake"}
+var Actions = []string{"start", "shutdown", "reboot", "sleep", "stop", "cancel", "wake"}
 
 // Request is the POST /api/systems/{id}/power body.
 type Request struct {
@@ -40,7 +41,7 @@ type Request struct {
 // Validate checks the request and fills in the default delay (60 s).
 func (r *Request) Validate() error {
 	if !slices.Contains(Actions, r.Action) {
-		return apierr.New(422, "action must be one of start, shutdown, reboot, stop, cancel, wake")
+		return apierr.New(422, "action must be one of start, shutdown, reboot, sleep, stop, cancel, wake")
 	}
 	if r.DelayS == nil {
 		d := 60
@@ -194,11 +195,32 @@ func hostCaps(p *poller.Poller, s model.System, pve config.Proxmox, hasPVE bool,
 	if via == "agent" {
 		cancelWhy = "nothing pending"
 	}
-	return []model.PowerActionCap{
+	caps := []model.PowerActionCap{
 		mkcap("shutdown", why == "" && up, via, orElse(why, offline), "typed", delayed),
-		mkcap("reboot", why == "" && up, via, orElse(why, offline), typedIfKill, delayed),
+		mkcap("reboot", why == "" && up, via, orElse(why, offline), typedIfKill, delayed)}
+	if s.Kind != "node" { // a hypervisor is not put to sleep from the panel
+		caps = append(caps, sleepCap(s, via, why, offline))
+	}
+	return append(caps,
 		mkcap("cancel", via == "agent" && s.PowerPending != nil, via, orElse(why, cancelWhy), "none", false),
-		wakeCap(p, s)}
+		wakeCap(p, s))
+}
+
+// sleepCap: through the host's own agent only, when it reports that the machine can sleep (Fairy-agent v0.4.2+).
+func sleepCap(s model.System, via, why, offline string) model.PowerActionCap {
+	switch {
+	case why != "":
+	case via != "agent":
+		why = "sleep goes through the host's own agent"
+	case s.Sleep == nil && offline == "":
+		why = "the agent does not report sleep (needs Fairy-agent v0.4.2 or newer)"
+	case s.Sleep != nil && !*s.Sleep:
+		why = "this machine cannot sleep"
+		if n := model.Deref(s.SleepNote); n != "" {
+			why += ": " + n
+		}
+	}
+	return mkcap("sleep", why == "" && offline == "", via, orElse(why, offline), "typed", true)
 }
 
 func wakeCap(p *poller.Poller, s model.System) model.PowerActionCap {

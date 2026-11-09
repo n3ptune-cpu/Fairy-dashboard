@@ -60,7 +60,7 @@ type Gpu struct {
 	VRAMTotal   *int64   `json:"vram_total"`
 	TempC       *float64 `json:"temp_c"`
 	PowerW      *float64 `json:"power_w"`
-	Source      string   `json:"source,omitempty"` // "windows": Windows' own GPU counters (no temperature or watts)
+	Source      string   `json:"source,omitempty"` // "windows": Windows' own GPU counters (no temperature or watts); "amd": plus AMD's ADL
 }
 
 // PowerSensor is one named power reading from an agent.
@@ -154,10 +154,16 @@ type System struct {
 	Hardware           *Hardware       `json:"hardware"`
 	CPUModel           *string         `json:"cpu_model"`
 	PowerPending       *PowerPending   `json:"power_pending"`
-	PowerActions       []string        `json:"power_actions"`
-	PollIntervalS      *float64        `json:"poll_interval_s"`
-	PollMode           string          `json:"poll_mode"` // default | override | paused
-	Boosted            bool            `json:"boosted"`
+	// Sleep is what the host's agent says about sleep (nil: the agent does not say, older than v0.4.2):
+	// true, or false with SleepNote saying why. Not copied onto a Proxmox node an agent runs on.
+	Sleep     *bool   `json:"sleep,omitempty"`
+	SleepNote *string `json:"sleep_note,omitempty"`
+	// Asleep: offline because the panel sent it to sleep (until it is seen online again).
+	Asleep        bool     `json:"asleep,omitempty"`
+	PowerActions  []string `json:"power_actions"`
+	PollIntervalS *float64 `json:"poll_interval_s"`
+	PollMode      string   `json:"poll_mode"` // default | override | paused
+	Boosted       bool     `json:"boosted"`
 }
 
 // SystemList is GET /api/systems.
