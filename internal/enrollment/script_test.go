@@ -34,7 +34,13 @@ type fakeRelease struct {
 	pub   string
 }
 
-func newFakeRelease(t *testing.T, version string) *fakeRelease {
+// v0.4.3-style installers: they take the panel's hash of SHA256SUMS.
+const (
+	shWithPin  = "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --sums-sha256) SUMS_PIN=\"$2\"; shift ;;\n  esac\n  shift\ndone\n"
+	ps1WithPin = "param(\n    [switch]$Ipmi,\n    [string]$SumsSha256 = '',\n    [string]$ReleaseUrl = 'x'\n)\n"
+)
+
+func newFakeRelease(t *testing.T, version string, scripts ...string) *fakeRelease {
 	t.Helper()
 	pub, priv, err := release.GenerateKey()
 	if err != nil {
@@ -46,6 +52,9 @@ func newFakeRelease(t *testing.T, version string) *fakeRelease {
 		InstallPS1:          []byte("Write-Host installing\n"),
 		release.VersionFile: []byte("fairy-agent " + version + "\n"),
 	}}
+	if len(scripts) == 2 {
+		f.files[InstallSH], f.files[InstallPS1] = []byte(scripts[0]), []byte(scripts[1])
+	}
 	f.files[release.SumsFile] = release.FormatSums([]string{release.VersionFile, InstallSH, InstallPS1}, f.files)
 	f.files[release.SigFile] = release.Sign(k, f.files[release.SumsFile])
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +94,7 @@ func TestVerifierChecksThePinnedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	if in.Tag != "build-7" || in.Version != "7-6155fe6" || in.SH != hexSum(f.files[InstallSH]) || in.PS1 != hexSum(f.files[InstallPS1]) ||
+		in.Sums != hexSum(f.files[release.SumsFile]) || in.PinSH || in.PinPS1 ||
 		in.Base != f.srv.URL+"/n3ptune-cpu/Fairy-agent/releases/download/build-7" {
 		t.Fatalf("%+v", in)
 	}
@@ -228,6 +238,7 @@ func TestLinuxCommandRunsOnlyTheCheckedScript(t *testing.T) {
 	script := []byte("#!/bin/sh\necho \"$FAIRY_RELEASE_URL $*\" > \"" + marker + "\"\n")
 	in := testInstallers
 	in.SH = hexSum(script)
+	in.PinSH, in.Sums = true, strings.Repeat("c3", 32)
 	cmd := Command(in, managed.Host{OS: "linux", ProxmoxWanted: true}, "ABCD-EFGH", "100.88.109.47")
 	run := func() (string, error) {
 		os.Remove(marker)
@@ -252,7 +263,7 @@ func TestLinuxCommandRunsOnlyTheCheckedScript(t *testing.T) {
 		t.Fatal(err, out)
 	}
 	got, _ := os.ReadFile(marker)
-	if string(got) != in.Base+" --join ABCD-EFGH --panel 100.88.109.47 --proxmox\n" {
+	if string(got) != in.Base+" --sums-sha256 "+in.Sums+" --join ABCD-EFGH --panel 100.88.109.47 --proxmox\n" {
 		t.Fatalf("%q", got)
 	}
 }
@@ -269,5 +280,41 @@ func TestPinnedReleaseFollowsGoMod(t *testing.T) {
 	}
 	if !regexp.MustCompile(`^build-\d+$`).MatchString(AgentReleaseTag) || !strings.HasPrefix(AgentReleaseVersion, strings.TrimPrefix(AgentReleaseTag, "build-")+"-") {
 		t.Fatal("tag and version disagree", AgentReleaseTag, AgentReleaseVersion)
+	}
+}
+
+// Installers that take the panel's hash of SHA256SUMS (Fairy-agent v0.4.3) get the hash of the exact SHA256SUMS
+// bytes the panel verified; older ones (which refuse unknown options) do not.
+func TestCommandsPassTheVerifiedSumsHash(t *testing.T) {
+	f := newFakeRelease(t, "8-e38a516", shWithPin, ps1WithPin)
+	in, err := f.verifier(t, "8-e38a516").Installers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sums := hexSum(f.files[release.SumsFile])
+	if !in.PinSH || !in.PinPS1 || in.Sums != sums {
+		t.Fatalf("%+v", in)
+	}
+	lin := Command(in, managed.Host{OS: "linux"}, "CODE", "100.88.109.47")
+	if !strings.Contains(lin, `sh "$f" --sums-sha256 `+sums+` --join CODE --panel 100.88.109.47`) {
+		t.Fatal(lin)
+	}
+	win := Command(in, managed.Host{OS: "windows"}, "CODE", "100.88.109.47")
+	if !strings.Contains(win, `-File $f -ReleaseUrl $u -SumsSha256 `+sums+` -Join CODE -PanelAddress 100.88.109.47`) {
+		t.Fatal(win)
+	}
+	// only one of them updated: each command follows its own script
+	f2 := newFakeRelease(t, "8-e38a516", shWithPin, "param([string]$ReleaseUrl)\n")
+	in2, err := f2.verifier(t, "").Installers(context.Background())
+	if err != nil || !in2.PinSH || in2.PinPS1 {
+		t.Fatalf("%+v %v", in2, err)
+	}
+	if w := Command(in2, managed.Host{OS: "windows"}, "CODE", "100.88.109.47"); strings.Contains(w, "SumsSha256") {
+		t.Fatal(w)
+	}
+	bad := in
+	bad.Sums = "not-a-hash; curl evil"
+	if bad.valid() {
+		t.Fatal("unsafe sums hash accepted")
 	}
 }

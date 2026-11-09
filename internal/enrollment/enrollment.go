@@ -301,7 +301,7 @@ func Command(in Installers, h managed.Host, code, panel string) string {
 		var b strings.Builder
 		fmt.Fprintf(&b, `$u='%s'; $f="$env:TEMP\fairy-install.ps1"; iwr -useb "$u/%s" -OutFile $f; `+
 			`if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '%s') { throw 'install.ps1 is not the release the panel checked: not run' }; `+
-			`powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u -Join %s -PanelAddress %s`, in.Base, InstallPS1, in.PS1, code, panel)
+			`powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u%s -Join %s -PanelAddress %s`, in.Base, InstallPS1, in.PS1, pin(in.PinPS1, " -SumsSha256 ", in.Sums), code, panel)
 		for _, f := range []struct {
 			on   bool
 			flag string
@@ -323,7 +323,7 @@ func Command(in Installers, h managed.Host, code, panel string) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, `f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" %s/%s && echo "%s  $f" | sha256sum -c - && `+
-		`%senv FAIRY_RELEASE_URL=%s sh "$f" --join %s --panel %s`, in.Base, InstallSH, in.SH, sudo, in.Base, code, panel)
+		`%senv FAIRY_RELEASE_URL=%s sh "$f"%s --join %s --panel %s`, in.Base, InstallSH, in.SH, sudo, in.Base, pin(in.PinSH, " --sums-sha256 ", in.Sums), code, panel)
 	for _, f := range []struct {
 		on   bool
 		flag string
@@ -339,6 +339,14 @@ func Command(in Installers, h managed.Host, code, panel string) string {
 		b.WriteString(" --ups")
 	}
 	return b.String()
+}
+
+// pin is the installer option that passes the verified SHA256SUMS hash, when the script takes it.
+func pin(takes bool, flag, sums string) string {
+	if !takes {
+		return ""
+	}
+	return flag + sums
 }
 
 func (m *Manager) copyOf(e *Enrollment) Enrollment {

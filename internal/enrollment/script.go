@@ -25,7 +25,10 @@ import (
 // SHA256SUMS.sig, VERSION, install.sh and install.ps1 and checks them with the release key built into the panel
 // (release/signing.pub, set with -ldflags) before it shows any command. The command then refuses to run a
 // script whose SHA-256 differs from the one the panel checked, and points the script at that same release
-// (FAIRY_RELEASE_URL / -ReleaseUrl), whose files it checks against SHA256SUMS in turn.
+// (FAIRY_RELEASE_URL / -ReleaseUrl), whose files it checks against SHA256SUMS in turn. Installers from
+// Fairy-agent v0.4.3 on also take the SHA-256 of the SHA256SUMS the panel verified (--sums-sha256 /
+// -SumsSha256) and refuse any other before trusting a line of it, so even a first install rests on the
+// panel's key, not on the downloaded binary's own.
 
 // AgentModule is the Fairy-agent version in go.mod; AgentRelease is its GitHub release (tag build-<run>, VERSION
 // "<run>-<short commit>"). Bump both together (a test compares AgentModule with go.mod).
@@ -50,6 +53,11 @@ type Installers struct {
 	Base    string `json:"base"` // https://github.com/<repo>/releases/download/<tag>
 	SH      string `json:"install_sh_sha256"`
 	PS1     string `json:"install_ps1_sha256"`
+	// Sums is the SHA-256 of the verified SHA256SUMS (its exact bytes). PinSH / PinPS1: the checked script
+	// accepts it (--sums-sha256 / -SumsSha256, Fairy-agent v0.4.3+), so the command passes it.
+	Sums   string `json:"sha256sums_sha256"`
+	PinSH  bool   `json:"install_sh_takes_sums"`
+	PinPS1 bool   `json:"install_ps1_takes_sums"`
 }
 
 // ScriptSource gives the checked installers for the command (the real one fetches and verifies them once).
@@ -72,6 +80,11 @@ func (u *Unavailable) Error() string { return u.Msg }
 var (
 	tagRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 	hexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// The installers' own option parsing (signed, so it tells what the script accepts): install.sh's case arm
+	// and install.ps1's param() entry. Older scripts refuse unknown options, so the hash is only passed when
+	// the checked script takes it.
+	shTakesSums  = regexp.MustCompile(`(?m)^\s*--sums-sha256\)`)
+	ps1TakesSums = regexp.MustCompile(`(?im)^\s*\[string\]\$SumsSha256\b`)
 )
 
 // Limits for what the panel downloads to check a release.
@@ -161,7 +174,9 @@ func (v *Verifier) check(ctx context.Context) (Installers, error) {
 	if v.Version != "" && ch.Version != v.Version {
 		return Installers{}, fmt.Errorf("release %s is fairy-agent %s, expected %s", v.Tag, ch.Version, v.Version)
 	}
-	in := Installers{Repo: v.Repo, Tag: v.Tag, Version: ch.Version, Base: v.Base()}
+	sums := sha256.Sum256(files[release.SumsFile]) // the exact bytes whose signature was just checked
+	in := Installers{Repo: v.Repo, Tag: v.Tag, Version: ch.Version, Base: v.Base(), Sums: hex.EncodeToString(sums[:]),
+		PinSH: shTakesSums.Match(files[InstallSH]), PinPS1: ps1TakesSums.Match(files[InstallPS1])}
 	for name, dst := range map[string]*string{InstallSH: &in.SH, InstallPS1: &in.PS1} {
 		if err := ch.Sums.Check(name, files[name]); err != nil {
 			return Installers{}, err
@@ -219,7 +234,7 @@ func (v *Verifier) get(ctx context.Context, u string, max int64) ([]byte, error)
 func (in Installers) valid() bool {
 	u, err := url.Parse(in.Base)
 	return err == nil && u.Scheme == "https" && u.User == nil && u.RawQuery == "" && !strings.ContainsAny(in.Base, " '\"`$\\;&|<>(){}") &&
-		hexRe.MatchString(in.SH) && hexRe.MatchString(in.PS1)
+		hexRe.MatchString(in.SH) && hexRe.MatchString(in.PS1) && (!(in.PinSH || in.PinPS1) || hexRe.MatchString(in.Sums))
 }
 
 // PinnedVerifier checks the release Add host installs: tag (enroll.agent_release in config.yaml, any version)

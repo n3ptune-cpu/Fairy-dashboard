@@ -144,7 +144,10 @@ against (`build-7` = Fairy-agent v0.4.2; `enroll: {agent_release: build-N}` pick
 command the panel downloads that release's `SHA256SUMS`, `SHA256SUMS.sig`, `VERSION`, `install.sh` and
 `install.ps1` and checks them with the release key built into the panel (`release/signing.pub`); a panel build
 without the key, an unreachable GitHub or a bad signature refuses Add host (HTTP 503) instead. The command runs
-the script only if its SHA-256 is the one the panel checked, and points it at the same release. The installer
+the script only if its SHA-256 is the one the panel checked, and points it at the same release. When the checked
+installer takes it (Fairy-agent v0.4.3 and later), the command also passes the SHA-256 of the `SHA256SUMS` the
+panel verified (`--sums-sha256 <hash>` / `-SumsSha256 <hash>`): the installer refuses any other `SHA256SUMS`
+before it trusts a line of it, so even a first install rests on the panel's key. The installer
 checks every file it downloads against `SHA256SUMS` and its signature, installs the agent like the manual install, makes its tokens on
 the machine and waits for the panel. The panel tries to pair every few seconds; the dialog follows it
 (waiting -> paired -> online) and Cancel stops it. Pairing is `POST /pair` on the agent with a proof of the code,
