@@ -4,11 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"slices"
 	"time"
 
+	upssrc "github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
@@ -20,22 +19,21 @@ func FmtRuntime(s *int) string {
 	return fmt.Sprintf("%d:%02d", *s/60, *s%60)
 }
 
+// event records a transition. The shared limiter (Fairy-agent's pkg/ups, at most 10 events per UPS in 10
+// minutes) keeps a flapping or hostile UPS from flooding the list, the notifications and the log; the next
+// event that gets through says how many were dropped.
 func (m *Manager) event(st *model.UpsState, kind, severity, msg string) {
 	now := time.Now()
-	r := m.evRate[st.ID]
-	if now.Sub(r.since) >= time.Hour {
-		r = evRate{since: now}
-	}
-	r.n++
-	m.evRate[st.ID] = r
-	if r.n > MaxEventsPerHour {
-		if r.n == MaxEventsPerHour+1 {
-			slog.Warn("UPS events: too many for one UPS, dropping the rest of this hour", "ups", st.Name)
-		}
+	ok, dropped := m.limiter.Allow(st.ID, now)
+	if !ok {
 		return
 	}
+	if dropped > 0 {
+		msg += fmt.Sprintf(" (%d earlier events of this UPS not shown: too many in a short time)", dropped)
+		slog.Warn("UPS events were rate-limited", "ups", st.Name, "dropped", dropped)
+	}
 	m.seq++
-	ev := model.UpsEvent{Seq: m.seq, T: time.Now().UTC(), UpsID: st.ID, UpsName: st.Name, Kind: kind,
+	ev := model.UpsEvent{Seq: m.seq, T: now.UTC(), UpsID: st.ID, UpsName: st.Name, Kind: kind,
 		Severity: severity, Message: msg, StatusRaw: st.StatusRaw}
 	m.events = append(m.events, ev)
 	if len(m.events) > 500 {
@@ -47,41 +45,18 @@ func (m *Manager) event(st *model.UpsState, kind, severity, msg string) {
 		slog.Info("UPS event", "ups", st.Name, "message", msg)
 	}
 	if m.eventsFile != "" {
-		if err := appendLine(m.eventsFile, ev); err != nil {
+		b, err := json.Marshal(ev)
+		if err == nil {
+			err = upssrc.AppendLine(m.eventsFile, b, maxEventsFile) // rotated to .1: about 2 x 4 MiB on disk
+		}
+		if err != nil {
 			slog.Warn("cannot write UPS event log", "error", err)
 		}
 	}
 }
 
-type evRate struct {
-	since time.Time
-	n     int
-}
-
-// maxEventsFile: the event log is rotated to <file>.1 past this size (two files at most).
+// maxEventsFile: the event log is rotated to <file>.1 past this size.
 const maxEventsFile = 4 << 20
-
-func appendLine(path string, v any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	if st, err := os.Stat(path); err == nil && st.Size()+int64(len(b)) > maxEventsFile {
-		if err := os.Rename(path, path+".1"); err != nil {
-			return err
-		}
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(append(b, '\n'))
-	return err
-}
 
 func onBatt(s string) bool { return s == "on_battery" || s == "low_battery" }
 

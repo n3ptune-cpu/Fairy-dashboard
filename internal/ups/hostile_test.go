@@ -54,7 +54,8 @@ func TestHostileAgentUPSRows(t *testing.T) {
 	if err != nil || len(b) > 64<<10 {
 		t.Fatal("overview", len(b), err)
 	}
-	// a UPS that flaps every poll: events (and their log lines and notifications) stop at the hourly cap
+	// a UPS that flaps every poll: events (and their log lines and notifications) stop at the shared limiter's
+	// burst (10 per 10 minutes)
 	for i := range 200 {
 		state := "online"
 		if i%2 == 0 {
@@ -68,7 +69,7 @@ func TestHostileAgentUPSRows(t *testing.T) {
 			n++
 		}
 	}
-	if n != MaxEventsPerHour {
+	if n != 10 {
 		t.Fatalf("%d events", n)
 	}
 }
@@ -78,10 +79,12 @@ func TestEventsFileIsRotated(t *testing.T) {
 	if err := os.WriteFile(path, make([]byte, maxEventsFile), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLine(path, map[string]any{"kind": "on_battery"}); err != nil {
+	m, err := NewManager(nil, 5, time.Second, 60, 3600, path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := os.Stat(path); st.Size() > 100 {
+	m.UpdateFromAgent("a", []map[string]any{{"name": "u", "state": "on_battery"}}, false, nil, nil)
+	if st, _ := os.Stat(path); st.Size() > 1000 || st.Size() == 0 {
 		t.Fatal("not rotated", st.Size())
 	}
 	if st, err := os.Stat(path + ".1"); err != nil || st.Size() != maxEventsFile {

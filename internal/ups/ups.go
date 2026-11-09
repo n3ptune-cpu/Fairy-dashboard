@@ -34,7 +34,7 @@ type Manager struct {
 	history map[string][]model.UpsPoint
 	events  []model.UpsEvent
 	seq     int
-	evRate  map[string]evRate // events per UPS in the current hour
+	limiter upssrc.EventLimiter // events per UPS (shared with Fairy-agent: 10 per 10 minutes)
 	// OnEvent is called (outside the lock) for every new event (notifications).
 	OnEvent func(model.UpsEvent)
 }
@@ -45,7 +45,7 @@ func NewManager(configs []map[string]any, interval float64, timeout time.Duratio
 	historyS int, eventsFile string) (*Manager, error) {
 	m := &Manager{timeout: timeout, offlineAfter: offlineAfter, eventsFile: eventsFile,
 		maxlen: max(1, int(float64(historyS)/interval)), states: map[string]*model.UpsState{},
-		history: map[string][]model.UpsPoint{}, evRate: map[string]evRate{}}
+		history: map[string][]model.UpsPoint{}}
 	for _, raw := range configs {
 		c, err := upssrc.Build(raw)
 		if err != nil {
@@ -66,8 +66,6 @@ const (
 	maxText     = 128 // model, serial, raw status, error, ...
 	maxLabel    = 80  // the name shown on the card
 	maxFlags    = 16
-	// MaxEventsPerHour per UPS: a flapping (or hostile) UPS cannot flood the event log and notifications.
-	MaxEventsPerHour = 60
 )
 
 var (
