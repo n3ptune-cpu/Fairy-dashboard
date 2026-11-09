@@ -431,7 +431,7 @@ function pollMenu(s) {
       ${st.note ? `<div class="menu-note">${esc(st.note)}</div>` : ""}
       <div class="menu-note">${st.boost_enabled ? "Viewing a host boosts it to 1 s (30 s grace)." : "Boost while viewing is off."}</div>` : '<div class="menu-note">loading…</div>'}</div>`;
 }
-const POWER_LABEL = { shutdown: "Shut down", reboot: "Reboot", sleep: "Sleep", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)" };
+const POWER_LABEL = { shutdown: "Shut down", reboot: "Reboot", sleep: "Sleep", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)", bmc_on: "Power on (via BMC)" };
 function powerMenu(s) {
   const caps = state.caps[s.id], why = controlWhyNot();
   if (!caps) return '<div class="menu"><div class="menu-note">loading…</div></div>';
@@ -477,6 +477,17 @@ function pageSystem(id, tab) {
 }
 
 function wakeBlock(s) {
+  return wolBlock(s) + bmcBlock(s);
+}
+// "Power on (via BMC, through NSX-FURINA)": a relay agent powers the machine on through its BMC (typed name).
+function bmcBlock(s) {
+  if (!(s.power_actions || []).includes("bmc_on") || !(s.status === "offline" || s.status === "stale")) return "";
+  const cap = state.caps[s.id]?.actions.find((a) => a.action === "bmc_on"), why = controlWhyNot();
+  const label = `Power on (via BMC, through ${cap?.via_label || cap?.via?.replace("bmc:", "") || "relay"})`;
+  return `<div class="wake"><button class="btn primary" data-act="power" data-action="bmc_on" ${cap?.available && !why ? "" : "disabled"}>${I.onoff}${esc(label)}</button>
+    <div class="note">${esc(why || (cap && !cap.available ? cap.reason : "An always-on agent that can reach this machine's BMC asks the BMC to power it on."))}</div></div>`;
+}
+function wolBlock(s) {
   if (!(s.power_actions || []).includes("wake") || !(s.status === "offline" || s.status === "stale")) return "";
   const cap = state.caps[s.id]?.actions.find((a) => a.action === "wake"), why = controlWhyNot();
   const label = `Power on (WoL via ${cap?.via_label || cap?.via?.replace("wol:", "") || "relay"})`;
@@ -1007,6 +1018,7 @@ function openPowerDialog(s, action) {
     <h3 id="mtitle">${esc(label)} ${esc(s.name)}?</h3>
     <p>${action === "stop" ? "Hard stop: like pulling the power plug. Unsaved data in the guest is lost." :
       action === "shutdown" ? "Clean shutdown (ACPI / OS shutdown)." : action === "reboot" ? "Clean reboot." :
+      action === "bmc_on" ? `Power on through the BMC, asked by ${esc(cap.via_label || "the relay agent")}. If it fails, check that the relay is cabled to (or on the network of) the BMC.` :
       action === "sleep" ? "Sleep (suspend to RAM, not hibernate). Wake it with Power on (Wake-on-LAN): from sleep that needs the network card's \"Allow this device to wake the computer\" / \"Wake on Magic Packet\"." : ""}
       <span class="note">via ${esc(cap.via_label || cap.via)}</span></p>
     ${caps.kills_panel ? `<div class="warnbox">${esc(caps.warning)}</div>` : ""}
@@ -1300,6 +1312,8 @@ async function openAddHost() {
     <div class="form-grid">
       <label class="mfield"><span>Wake-on-LAN MAC(s) <span class="note">optional</span></span><input class="input" id="ah-macs" autocomplete="off" spellcheck="false" placeholder="aa:bb:cc:dd:ee:ff"></label>
       <label class="mfield"><span>Woken by</span><select class="select" id="ah-relay"><option value="">–</option>${d.relays.map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}</select></label>
+      <label class="mfield"><span>Or powered on via BMC by <span class="note">optional, agent v0.4.2 bmc_relay</span></span><select class="select" id="ah-bmc-relay"><option value="">–</option>${(d.bmc_relays || []).map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}</select></label>
+      <label class="mfield"><span>BMC target id <span class="note">as in that agent's bmc_relay</span></span><input class="input" id="ah-bmc-target" maxlength="40" autocomplete="off" spellcheck="false" placeholder="cyrene-bmc"></label>
     </div>
     ${d.panel_address ? `<p class="note" id="ah-panel">Panel address: <code>${esc(d.panel_address)}</code> (${esc(d.panel_address_source || "config")})${d.panel_address_via ? ` <span title="how the panel found its own Tailscale address">· ${esc(d.panel_address_via)}</span>` : ""}${d.panel_address.includes(":") ? ' <b>IPv6 only: agents need the panel\'s Tailscale IPv4; set <code>enroll: {panel_address: 100.x.y.z}</code></b>' : ""}</p>`
       : '<div class="warnbox">The panel does not know its own Tailscale address (no Tailscale interface or tailscaled status found): set <code>enroll: {panel_address: 100.x.y.z}</code> in config.yaml.</div>'}
@@ -1324,7 +1338,8 @@ async function openAddHost() {
     m.querySelectorAll("[data-opt]").forEach((x) => (opts[x.dataset.opt] = x.checked && !x.disabled));
     if (opts.ups) opts.ups_name = $("#ah-ups").value.trim();
     const body = { name: $("#ah-name").value.trim(), address: $("#ah-addr").value.trim(), os: os.value, site: $("#ah-site").value,
-      node: $("#ah-node").value, options: opts, wol_macs: $("#ah-macs").value.split(/[\s,;]+/).filter(Boolean), wol_relay: $("#ah-relay").value };
+      node: $("#ah-node").value, options: opts, wol_macs: $("#ah-macs").value.split(/[\s,;]+/).filter(Boolean), wol_relay: $("#ah-relay").value,
+      bmc_relay: $("#ah-bmc-relay").value, bmc_target: $("#ah-bmc-target").value.trim() };
     $("#ah-go").disabled = true;
     try {
       const r = await controlCall({ kind: "request", label: `Add host ${body.name}` }, () => api("/api/admin/hosts", { method: "POST", body: JSON.stringify(body) }));

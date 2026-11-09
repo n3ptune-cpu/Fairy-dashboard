@@ -75,7 +75,16 @@ audit, delay and Cancel. If the agent says the machine cannot sleep (e.g. a Mode
 shows why; older agents show "needs v0.4.2". Proxmox nodes are not offered Sleep. While it sleeps the host shows
 "asleep (from panel)" (and an informational notification, not an alarm) until it is seen again; Power on
 (Wake-on-LAN) wakes it, which from sleep needs the network card's "Allow this device to wake the computer" /
-"Wake on Magic Packet". Radeon cards on Windows whose agent reads AMD's ADL (v0.4.2) show their temperature and
+"Wake on Magic Packet".
+
+**Power on via BMC** (Fairy-agent v0.4.2 `bmc_relay`): for a machine Wake-on-LAN cannot wake (e.g. its BMC
+shares the LAN port), `systems: [{id: nsx-cyrene, bmc_power: {relay: nsx-furina-agent, target: cyrene-bmc}}]`
+(or "Or powered on via BMC by" in Add host) names an always-on agent that can reach the BMC and its
+`bmc_relay` target (see AGENT.md for the agent side: `fairy-agent bmc-relay add`, `fairy-agent secret set`). The
+relay agent's entry needs `control_token_env`. While the machine is offline and the relay is online and reports
+the target, the host page and Power menu offer "Power on (via BMC, through NSX-FURINA)", with typed name,
+step-up sign-in and audit like the other power actions; if the relay cannot reach the BMC (laptop not cabled)
+the error says so. Radeon cards on Windows whose agent reads AMD's ADL (v0.4.2) show their temperature and
 watts "via AMD".
 
 ### Updates

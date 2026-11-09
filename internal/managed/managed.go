@@ -51,8 +51,10 @@ type Host struct {
 	SystemID string      `yaml:"system_id,omitempty" json:"system_id"`
 	Options  Options     `yaml:"options" json:"options"`
 	Wol      *config.Wol `yaml:"wol,omitempty" json:"wol,omitempty"` // waking this host: its MACs and the relay agent
-	AddedAt  time.Time   `yaml:"added_at" json:"added_at"`
-	AddedBy  string      `yaml:"added_by,omitempty" json:"added_by"`
+	// BMCPower: powering it on through its BMC, by a relay agent's bmc_relay target.
+	BMCPower *config.BMCPower `yaml:"bmc_power,omitempty" json:"bmc_power,omitempty"`
+	AddedAt  time.Time        `yaml:"added_at" json:"added_at"`
+	AddedBy  string           `yaml:"added_by,omitempty" json:"added_by"`
 	// What the agent said when it paired.
 	AgentVersion string `yaml:"agent_version,omitempty" json:"agent_version"`
 	Hostname     string `yaml:"hostname,omitempty" json:"hostname"`
@@ -89,13 +91,21 @@ func (h Host) Shown() string {
 	return h.ID
 }
 
-// Override is the host's systems: entry (Wake-on-LAN), nil without MACs.
+// Override is the host's systems: entry (Wake-on-LAN, BMC power-on), nil without either.
 func (h Host) Override() *config.SystemOverride {
-	if h.Wol == nil || len(h.Wol.AllMACs()) == 0 {
+	o := &config.SystemOverride{ID: h.Shown()}
+	if h.Wol != nil && len(h.Wol.AllMACs()) > 0 {
+		w := *h.Wol
+		o.Wol = &w
+	}
+	if h.BMCPower != nil {
+		b := *h.BMCPower
+		o.BMCPower = &b
+	}
+	if o.Wol == nil && o.BMCPower == nil {
 		return nil
 	}
-	w := *h.Wol
-	return &config.SystemOverride{ID: h.Shown(), Wol: &w}
+	return o
 }
 
 // Entry builds the configuration entries for a host and its tokens.

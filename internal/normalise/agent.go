@@ -71,6 +71,14 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	if len(disks) > 0 {
 		s.DiskUsed, s.DiskTotal = &used, &total
 	}
+	if br := jsonx.Obj(m, "bmc_relay"); br != nil {
+		s.BMCRelayTargets = []string{}
+		for _, t := range jsonx.Objs(br["targets"]) {
+			if id := jsonx.S(t, "id"); id != "" {
+				s.BMCRelayTargets = append(s.BMCRelayTargets, id)
+			}
+		}
+	}
 	if pc := jsonx.Obj(m, "power_control"); pc != nil {
 		if v, ok := pc["sleep"].(bool); ok {
 			s.Sleep = model.P(v)

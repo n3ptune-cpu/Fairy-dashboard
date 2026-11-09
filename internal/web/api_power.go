@@ -87,6 +87,8 @@ func (s *Server) powerEvent(x model.System, req powerctl.Request, res model.Powe
 		e.Kind, e.Text = "power_cancelled", "pending shutdown / reboot / sleep cancelled by "+who
 	case "wake":
 		e.Kind, e.Text = "wake_sent", "Wake-on-LAN sent by "+who
+	case "bmc_on":
+		e.Kind, e.Text = "bmc_power_on", "power on through the BMC requested by "+who+" ("+res.Message+")"
 	default:
 		e.Kind, e.Text = "power_"+req.Action, req.Action+" by "+who
 	}

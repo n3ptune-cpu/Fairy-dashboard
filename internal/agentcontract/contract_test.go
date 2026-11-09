@@ -83,6 +83,7 @@ type contract struct {
 	power    *agenttest.PowerExec
 	mu       sync.Mutex
 	wolSent  []string
+	ipmitool []string            // the BMC relay's ipmitool command lines (and whether the password came by environment)
 	gh       *releasetest.Server // fake GitHub with a signed Fairy-agent release
 	applied  atomic.Int32        // the agent started its installer
 }
@@ -100,6 +101,9 @@ fan_control: {enabled: true}
 power_control: {enabled: true}
 wol: {enabled: true}
 self_update: {enabled: true}
+bmc_relay:
+  enabled: true
+  targets: [{id: sleepy-bmc, host: 192.168.1.50, username: fairy, password_env: CONTRACT_BMC_PASSWORD, cipher_suite: 17}]
 control_rate_per_min: 60
 power_sources:
   - {id: desk-plug, type: shelly, name: "Desk plug", url: %q, gen: "2", system_hint: self}
@@ -111,6 +115,15 @@ ups:
 		t.Fatal(err)
 	}
 	c := &contract{bmc: fakebmc.X11SCAF(), power: &agenttest.PowerExec{}}
+	t.Setenv("CONTRACT_BMC_PASSWORD", "hunter2")
+	bmcRelay := agent.NewBMCRelay(cfg.BMCRelay, "")
+	bmcRelay.FindIpmitool = func() (string, error) { return "/usr/bin/ipmitool", nil }
+	bmcRelay.Run = func(_ context.Context, path string, args, env []string) ([]byte, error) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.ipmitool = append(c.ipmitool, fmt.Sprintf("%s %s env=%v", path, strings.Join(args, " "), env))
+		return []byte("Chassis Power Control: Up/On\n"), nil
+	}
 	relay, err := agent.NewRelay(cfg.PowerSources, cfg.UPS)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +154,7 @@ ups:
 	var a *agent.Agent
 	d := agent.Deps{Collector: agenttest.NewCollector(), GPU: agenttest.GPU{}, BMC: bmc, Updater: upd,
 		Fan:   agent.NewFan(c.bmc, bmc, cfg.FanControl, func() []collect.Temp { return a.LocalTemps() }),
-		Power: agent.NewPower(c.power, cfg.PowerControl.MinDelayS), WOL: wol, Relay: relay, Version: "contract"}
+		Power: agent.NewPower(c.power, cfg.PowerControl.MinDelayS), WOL: wol, Relay: relay, BMCRelay: bmcRelay, Version: "contract"}
 	a = agent.New(cfg, agent.Tokens{Read: readTok, Control: ctlTok}, d)
 	c.agentSrv = httptest.NewServer(a.Handler())
 	t.Cleanup(c.agentSrv.Close)
@@ -173,7 +186,8 @@ agents:
     ups_powers: {cyberpower: [nsx-cyrene]}
   - {id: sleepy, url: "http://127.0.0.1:1", token_env: AGENT_TOKEN_SLEEPY}
 systems:
-  - {id: sleepy, wol: {mac: "a8:5e:45:12:34:56", macs: ["A8-5E-45-12-34-56", "a8:5e:45:12:34:57"], relay: nsx-cyrene, broadcast: 192.168.1.255}}
+  - {id: sleepy, wol: {mac: "a8:5e:45:12:34:56", macs: ["A8-5E-45-12-34-56", "a8:5e:45:12:34:57"], relay: nsx-cyrene, broadcast: 192.168.1.255},
+     bmc_power: {relay: nsx-cyrene, target: sleepy-bmc}}
 `, filepath.Join(dir, "data"), filepath.Join(dir, "audit.log"), agentURL)
 	cfg, err := config.Parse([]byte(y))
 	if err != nil {
@@ -391,6 +405,29 @@ func TestPanelContract(t *testing.T) {
 	c.mu.Unlock()
 	if sent != "192.168.1.255:9 102,192.168.1.255:9 102" { // both network cards; the duplicate MAC once
 		t.Fatal(sent)
+	}
+	// BMC power-on (agent v0.4.2 bmc_relay): offered while sleepy is off, typed name, through nsx-cyrene's relay
+	st, caps = a.do("GET", "/api/systems/sleepy/power", nil)
+	var bmcCap map[string]any
+	for _, x := range caps["actions"].([]any) {
+		if m := x.(map[string]any); m["action"] == "bmc_on" {
+			bmcCap = m
+		}
+	}
+	if st != 200 || bmcCap == nil || bmcCap["available"] != true || bmcCap["confirm"] != "typed" || bmcCap["via_label"] != "NSX-CYRENE" {
+		t.Fatal(st, caps)
+	}
+	if st, _ := a.do("POST", "/api/systems/sleepy/power", map[string]any{"action": "bmc_on"}); st != 400 {
+		t.Fatal("typed name", st)
+	}
+	if st, res := a.do("POST", "/api/systems/sleepy/power", map[string]any{"action": "bmc_on", "confirm": "sleepy"}); st != 200 || res["via"] != "bmc:nsx-cyrene" {
+		t.Fatal(st, res)
+	}
+	c.mu.Lock()
+	ipmi := strings.Join(c.ipmitool, "\n")
+	c.mu.Unlock()
+	if ipmi != "/usr/bin/ipmitool -I lanplus -H 192.168.1.50 -U fairy -E -C 17 chassis power on env=[IPMI_PASSWORD=hunter2]" {
+		t.Fatal(ipmi)
 	}
 
 	// --- self-update: the Updates page shows the agent's version and state; Update reaches POST /update with

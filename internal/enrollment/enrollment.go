@@ -50,6 +50,9 @@ type Request struct {
 	Node     string          `json:"node"`      // optional: the Proxmox node it runs on (node:)
 	WolMACs  []string        `json:"wol_macs"`  // optional: to wake this machine
 	WolRelay string          `json:"wol_relay"` // the agent that sends the packets
+	// BMCRelay / BMCTarget: optional, power it on through its BMC (a bmc_relay target of that agent).
+	BMCRelay  string `json:"bmc_relay"`
+	BMCTarget string `json:"bmc_target"`
 }
 
 // Enrollment is one pending (or finished) Add host / Re-pair.
@@ -124,10 +127,11 @@ func New(store *managed.Store, hooks Hooks, panelAddr, agentRepo string) *Manage
 }
 
 var (
-	nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,62}$`)
-	addrRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$`)
-	upsRe  = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
-	macRe  = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$`)
+	nameRe      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,62}$`)
+	addrRe      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$`)
+	upsRe       = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+	macRe       = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$`)
+	bmcTargetRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
 )
 
 // Validation is a user error in the dialog (400).
@@ -200,6 +204,12 @@ func (m *Manager) hostEntry(req Request, existing *managed.Host, nodeSystemID fu
 			macs[i] = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(x), "-", ":"))
 		}
 		h.Wol = &config.Wol{MACs: macs, Relay: req.WolRelay}
+	}
+	if r, t := strings.TrimSpace(req.BMCRelay), strings.TrimSpace(req.BMCTarget); r != "" || t != "" {
+		if r == "" || !bmcTargetRe.MatchString(t) {
+			return managed.Host{}, invalid("BMC power-on: choose the relay agent and give its bmc_relay target id (a-z, 0-9, -)")
+		}
+		h.BMCPower = &config.BMCPower{Relay: r, Target: t}
 	}
 	return h, nil
 }

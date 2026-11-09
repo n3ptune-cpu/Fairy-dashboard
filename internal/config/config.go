@@ -183,10 +183,18 @@ func (w Wol) AllMACs() []string {
 // SystemOverride is a `systems:` entry: display name, labels, DWService link and Wake-on-LAN for one system id.
 type SystemOverride struct {
 	Labels       `yaml:",inline"`
-	ID           string `yaml:"id"`
-	Name         string `yaml:"name"`
-	DWServiceURL string `yaml:"dwservice_url"`
-	Wol          *Wol   `yaml:"wol"`
+	ID           string    `yaml:"id"`
+	Name         string    `yaml:"name"`
+	DWServiceURL string    `yaml:"dwservice_url"`
+	Wol          *Wol      `yaml:"wol"`
+	BMCPower     *BMCPower `yaml:"bmc_power"`
+}
+
+// BMCPower powers a machine on through its BMC, by an always-on agent that can reach the BMC (Fairy-agent
+// v0.4.2 bmc_relay): the relay agent's id and the target id in that agent's bmc_relay.targets.
+type BMCPower struct {
+	Relay  string `yaml:"relay" json:"relay"`
+	Target string `yaml:"target" json:"target"`
 }
 
 // Branding is the optional look of the panel: Logo is a PNG, JPEG, WebP or GIF file (at most 1 MiB, no SVG)

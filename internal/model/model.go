@@ -159,11 +159,14 @@ type System struct {
 	Sleep     *bool   `json:"sleep,omitempty"`
 	SleepNote *string `json:"sleep_note,omitempty"`
 	// Asleep: offline because the panel sent it to sleep (until it is seen online again).
-	Asleep        bool     `json:"asleep,omitempty"`
-	PowerActions  []string `json:"power_actions"`
-	PollIntervalS *float64 `json:"poll_interval_s"`
-	PollMode      string   `json:"poll_mode"` // default | override | paused
-	Boosted       bool     `json:"boosted"`
+	Asleep bool `json:"asleep,omitempty"`
+	// BMCRelayTargets: the bmc_relay target ids this agent reports (nil: no relay, or older than v0.4.2).
+	// Internal: decides whether "Power on (via BMC)" is offered for the machines it can wake.
+	BMCRelayTargets []string `json:"-"`
+	PowerActions    []string `json:"power_actions"`
+	PollIntervalS   *float64 `json:"poll_interval_s"`
+	PollMode        string   `json:"poll_mode"` // default | override | paused
+	Boosted         bool     `json:"boosted"`
 }
 
 // SystemList is GET /api/systems.

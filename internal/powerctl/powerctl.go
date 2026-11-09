@@ -6,6 +6,7 @@
 //   - Proxmox nodes without one, when the cluster entry has `node_power: true`: POST /nodes/{node}/status
 //   - Proxmox guests, when the cluster entry has a power token: start / shutdown (ACPI) / reboot / stop (hard)
 //   - offline hosts with `wol:` configured: magic packet sent by a relay agent on the same LAN
+//   - offline hosts with `bmc_power:` configured: power on through their BMC, by a relay agent that can reach it
 //
 // Every write is control-group + CSRF + step-up + rate-limited + audited in the web package; typed confirmation
 // is enforced here.
@@ -29,7 +30,7 @@ import (
 )
 
 // Actions are the power actions the API accepts.
-var Actions = []string{"start", "shutdown", "reboot", "sleep", "stop", "cancel", "wake"}
+var Actions = []string{"start", "shutdown", "reboot", "sleep", "stop", "cancel", "wake", "bmc_on"}
 
 // Request is the POST /api/systems/{id}/power body.
 type Request struct {
@@ -41,7 +42,7 @@ type Request struct {
 // Validate checks the request and fills in the default delay (60 s).
 func (r *Request) Validate() error {
 	if !slices.Contains(Actions, r.Action) {
-		return apierr.New(422, "action must be one of start, shutdown, reboot, sleep, stop, cancel, wake")
+		return apierr.New(422, "action must be one of start, shutdown, reboot, sleep, stop, cancel, wake, bmc_on")
 	}
 	if r.DelayS == nil {
 		d := 60
@@ -201,9 +202,40 @@ func hostCaps(p *poller.Poller, s model.System, pve config.Proxmox, hasPVE bool,
 	if s.Kind != "node" { // a hypervisor is not put to sleep from the panel
 		caps = append(caps, sleepCap(s, via, why, offline))
 	}
-	return append(caps,
+	caps = append(caps,
 		mkcap("cancel", via == "agent" && s.PowerPending != nil, via, orElse(why, cancelWhy), "none", false),
 		wakeCap(p, s))
+	if o := p.Override(s.ID); o != nil && o.BMCPower != nil {
+		caps = append(caps, bmcCap(p, s, *o.BMCPower))
+	}
+	return caps
+}
+
+// bmcCap: "Power on (via BMC, through <relay>)" while the host is off and the relay agent is online and reports
+// the target.
+func bmcCap(p *poller.Poller, s model.System, b config.BMCPower) model.PowerActionCap {
+	via := "bmc:" + b.Relay
+	relay := p.RelaySystem(b.Relay)
+	label := b.Relay
+	if relay != nil {
+		label = relay.Name
+	}
+	c := func(ok bool, why string) model.PowerActionCap {
+		x := mkcap("bmc_on", ok, via, why, "typed", false)
+		x.ViaLabel = model.P(label)
+		return x
+	}
+	switch {
+	case s.Status != "offline" && s.Status != "stale":
+		return c(false, "host is already on")
+	case relay == nil || relay.Status != "online":
+		return c(false, "relay "+label+" is offline")
+	case relay.BMCRelayTargets == nil:
+		return c(false, label+"'s agent has no bmc_relay (needs Fairy-agent v0.4.2 with bmc_relay enabled)")
+	case !slices.Contains(relay.BMCRelayTargets, b.Target):
+		return c(false, label+"'s agent has no bmc_relay target "+b.Target)
+	}
+	return c(true, "")
 }
 
 // sleepCap: through the host's own agent only, when it reports that the machine can sleep (Fairy-agent v0.4.2+).
@@ -284,6 +316,8 @@ func Execute(ctx context.Context, p *poller.Poller, s model.System, req Request,
 	switch {
 	case req.Action == "wake":
 		return executeWake(ctx, p, s, res)
+	case req.Action == "bmc_on":
+		return executeBMC(ctx, p, s, requestedBy, res)
 	case res.Via == "agent":
 		return executeViaAgent(ctx, p, s, req, requestedBy, res)
 	}
@@ -329,6 +363,22 @@ func executeWake(ctx context.Context, p *poller.Poller, s model.System, res mode
 	if len(macs) > 1 {
 		res.Message = fmt.Sprintf("magic packets sent to %d of %d network cards via %s; give it a minute to boot", sent, len(macs), relay.DisplayName())
 	}
+	return res, nil
+}
+
+// executeBMC asks the relay agent named in the system's `bmc_power:` entry to power the machine on through its
+// BMC.
+func executeBMC(ctx context.Context, p *poller.Poller, s model.System, requestedBy string, res model.PowerResult) (model.PowerResult, error) {
+	o := p.Override(s.ID)
+	relay, ok := p.AgentByID(o.BMCPower.Relay)
+	if !ok {
+		return res, apierr.New(409, "relay agent not configured")
+	}
+	if _, err := agentCall(ctx, p, relay, "/bmc/power", map[string]any{"target": o.BMCPower.Target, "action": "on",
+		"requested_by": requestedBy}); err != nil {
+		return res, err
+	}
+	res.Message = "power on sent to the BMC via " + relay.DisplayName() + "; give it a minute or two to boot"
 	return res, nil
 }
 

@@ -17,11 +17,12 @@ import (
 )
 
 var (
-	envNameRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
-	prefixRe  = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-)?$`)
-	tokenIDRe = regexp.MustCompile(`^[^@\s]+@[^!\s]+![A-Za-z0-9_.-]+$`)
-	macRe     = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{12}$`)
-	siteRe    = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._'&-]{0,39}$`)
+	envNameRe   = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+	prefixRe    = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-)?$`)
+	tokenIDRe   = regexp.MustCompile(`^[^@\s]+@[^!\s]+![A-Za-z0-9_.-]+$`)
+	macRe       = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{12}$`)
+	bmcTargetRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+	siteRe      = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._'&-]{0,39}$`)
 )
 
 // ValidSite reports whether s is a valid site name: 1-40 letters, digits, spaces and . _ ' & -, starting with a
@@ -266,6 +267,16 @@ func (c *Panel) validateSystems(errs *problems, agents map[string]*Agent) {
 		}
 		if o.DWServiceURL != "" && !strings.HasPrefix(o.DWServiceURL, "https://") {
 			errs.add("system %s: dwservice_url must use https://", o.ID)
+		}
+		if b := o.BMCPower; b != nil {
+			if !bmcTargetRe.MatchString(b.Target) {
+				errs.add("system %s: bmc_power.target must be the id of a target in the relay agent's bmc_relay (a-z, 0-9, -)", o.ID)
+			}
+			if ag := agents[b.Relay]; ag == nil || !ag.HasControl() {
+				errs.add("system %s: bmc_power.relay %q must be an agent with control_token_env", o.ID, b.Relay)
+			} else if b.Relay == o.ID {
+				errs.add("system %s: bmc_power.relay cannot be the machine itself", o.ID)
+			}
 		}
 		if o.Wol == nil {
 			continue

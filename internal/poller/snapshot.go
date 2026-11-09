@@ -306,5 +306,8 @@ func (p *Poller) powerActions(s model.System) []string {
 	if o := p.overrides[s.ID]; o != nil && o.Wol != nil {
 		out = append(out, "wake")
 	}
+	if o := p.overrides[s.ID]; o != nil && o.BMCPower != nil {
+		out = append(out, "bmc_on")
+	}
 	return out
 }

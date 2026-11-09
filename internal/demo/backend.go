@@ -125,6 +125,10 @@ func (b *Backend) FetchAgentMetrics(_ context.Context, a config.Agent, _ time.Du
 			pc["sleep"], pc["sleep_note"] = false, "only Modern Standby (S0 low power idle), which a service cannot start; sleep (S3) is not available"
 		}
 		m["power_control"] = pc
+		if a.ID == "neptune-laptop" {
+			m["bmc_relay"] = map[string]any{"enabled": true, "targets": []any{map[string]any{"id": "cyrene-bmc", "backend": "ipmitool"}}}
+			feat["bmc_relay"] = true
+		}
 	}
 	feat["wol_relay"] = a.WolRelay
 	if a.SelfUpdate {
@@ -197,6 +201,14 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, _ string, path
 	switch path {
 	case "/power":
 		return b.simPower(a, bm)
+	case "/bmc/power": // Neptune's laptop powers NSX-CYRENE on through its BMC (ipmitool, shared LAN port)
+		if a.ID != "neptune-laptop" {
+			return 404, jsonx.M{"error": "bmc_relay is not enabled on this agent", "code": "bmc_relay_disabled"}, nil
+		}
+		if bm["target"] != "cyrene-bmc" {
+			return 404, jsonx.M{"error": fmt.Sprintf("no bmc_relay target %q on this agent", bm["target"]), "code": "unknown_target"}, nil
+		}
+		return 200, jsonx.M{"target": "cyrene-bmc", "action": bm["action"], "power": "on", "backend": "ipmitool"}, nil
 	case "/update":
 		return b.simUpdate(a)
 	case "/wol":

@@ -46,7 +46,9 @@ systems:
   - {id: qemu-100, dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=demo-win11"}
   - {id: lxc-101, tags: [games]}
   - {id: straw-laptop, wol: {mac: "a8:5e:45:12:34:56", relay: asus-i7-agent, broadcast: 192.168.1.255}}
-  - {id: nsx-cyrene, wol: {mac: "3c:ec:ef:00:11:22", relay: kachina-agent, broadcast: 192.168.10.255}}
+  # the BMC shares the LAN port (no Wake-on-LAN when off): the laptop, cabled to it, powers it on through the BMC
+  - {id: nsx-cyrene, wol: {mac: "3c:ec:ef:00:11:22", relay: kachina-agent, broadcast: 192.168.10.255},
+     bmc_power: {relay: neptune-laptop, target: cyrene-bmc}}
 panel_hosts: [node-nsx-kachina, lxc-110]
 ups:
   - {id: rack, type: demo, name: "Rack UPS · APC Smart-UPS 1500", powers: [node-nsx-fontaine, node-nsx-kachina, node-nsx-snezhnaya]}

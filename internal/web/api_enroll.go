@@ -98,6 +98,7 @@ type hostsPage struct {
 	InstallBase  string                  `json:"install_base"`
 	Nodes        []nodeChoice            `json:"nodes"`
 	Relays       []idName                `json:"relays"`
+	BMCRelays    []idName                `json:"bmc_relays"` // agents with a control token (BMC power-on relays)
 	Sites        []string                `json:"sites"`
 	Managed      []managedRow            `json:"managed"`
 	Enrollments  []enrollment.Enrollment `json:"enrollments"`
@@ -135,7 +136,7 @@ func (s *Server) hostsPage(c *reqCtx) error {
 	if _, err := c.requireAdmin("Add host"); err != nil {
 		return err
 	}
-	p := hostsPage{PanelAddress: s.Enroll.PanelAddr, PanelSource: s.Enroll.PanelSource, PanelVia: s.Enroll.PanelVia, InstallBase: s.Enroll.InstallBase, Nodes: []nodeChoice{}, Relays: []idName{},
+	p := hostsPage{PanelAddress: s.Enroll.PanelAddr, PanelSource: s.Enroll.PanelSource, PanelVia: s.Enroll.PanelVia, InstallBase: s.Enroll.InstallBase, Nodes: []nodeChoice{}, Relays: []idName{}, BMCRelays: []idName{},
 		Sites: []string{}, Managed: []managedRow{}, Enrollments: s.Enroll.List(), Skipped: s.ManagedSkipped}
 	for _, x := range s.Poller.Snapshot() {
 		if x.Kind == "node" {
@@ -149,6 +150,9 @@ func (s *Server) hostsPage(c *reqCtx) error {
 	for _, a := range s.Poller.Agents() {
 		if a.WolRelay {
 			p.Relays = append(p.Relays, idName{a.ID, a.DisplayName()})
+		}
+		if a.HasControl() {
+			p.BMCRelays = append(p.BMCRelays, idName{a.ID, a.DisplayName()})
 		}
 	}
 	p.Sites = append(p.Sites, s.Access.Load().Sites...)
