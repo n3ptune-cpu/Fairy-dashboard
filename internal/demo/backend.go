@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -205,6 +206,11 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, _ string, path
 			}
 		}
 	}
+	if strings.HasPrefix(path, "/fan/") || path == "/power" {
+		if st, out, blocked := b.helperBlocks(a.ID, path); blocked {
+			return st, out, nil
+		}
+	}
 	switch path {
 	case "/power":
 		return b.simPower(a, bm)
@@ -218,8 +224,8 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, _ string, path
 		return 200, jsonx.M{"target": "cyrene-bmc", "action": bm["action"], "power": "on", "backend": "ipmitool"}, nil
 	case "/update":
 		return b.simUpdate(a)
-	case "/helper/stop", "/helper/start":
-		st, out := b.simHelperControl(a.ID, strings.TrimPrefix(path, "/helper/"))
+	case api.PathHelperStop, api.PathHelperStart:
+		st, out := b.simHelperControl(a.ID, path)
 		return st, out, nil
 	case "/wol":
 		mac, _ := bm["mac"].(string)
@@ -239,9 +245,6 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, _ string, path
 			port = 9
 		}
 		return 200, jsonx.M{"sent": true, "mac": mac, "broadcast": bm["broadcast"], "port": port, "bytes": 102}, nil
-	}
-	if strings.HasPrefix(path, "/fan/") && b.helperBlocksFans(a.ID) {
-		return 409, jsonx.M{"error": "helper_stopped"}, nil
 	}
 	st, out := b.bmc.handle(path, bm)
 	return st, out, nil

@@ -23,12 +23,14 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/agenttest"
+	agentapi "github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/collect"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/ipmi/fakebmc"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release/releasetest"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/demo"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/web"
@@ -81,6 +83,7 @@ type contract struct {
 	agentSrv *httptest.Server
 	bmc      *fakebmc.BMC
 	power    *agenttest.PowerExec
+	helper   *agenttest.Helper // the Windows elevated helper (Fairy-agent v0.5.0), running at the start
 	mu       sync.Mutex
 	wolSent  []string
 	ipmitool []string            // the BMC relay's ipmitool command lines (and whether the password came by environment)
@@ -114,7 +117,7 @@ ups:
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &contract{bmc: fakebmc.X11SCAF(), power: &agenttest.PowerExec{}}
+	c := &contract{bmc: fakebmc.X11SCAF(), power: &agenttest.PowerExec{}, helper: agenttest.NewHelper()}
 	t.Setenv("CONTRACT_BMC_PASSWORD", "hunter2")
 	bmcRelay := agent.NewBMCRelay(cfg.BMCRelay, "")
 	bmcRelay.FindIpmitool = func() (string, error) { return "/usr/bin/ipmitool", nil }
@@ -154,7 +157,8 @@ ups:
 	var a *agent.Agent
 	d := agent.Deps{Collector: agenttest.NewCollector(), GPU: agenttest.GPU{}, BMC: bmc, Updater: upd,
 		Fan:   agent.NewFan(c.bmc, bmc, cfg.FanControl, func() []collect.Temp { return a.LocalTemps() }),
-		Power: agent.NewPower(c.power, cfg.PowerControl.MinDelayS), WOL: wol, Relay: relay, BMCRelay: bmcRelay, Version: "contract"}
+		Power: agent.NewPower(c.power, cfg.PowerControl.MinDelayS), WOL: wol, Relay: relay, BMCRelay: bmcRelay, Version: "contract",
+		Helper: c.helper, HelperSources: []string{agentapi.FeatureCoreTemp, agentapi.FeatureIPMI, agentapi.FeatureFans, agentapi.FeaturePower}}
 	a = agent.New(cfg, agent.Tokens{Read: readTok, Control: ctlTok}, d)
 	c.agentSrv = httptest.NewServer(a.Handler())
 	t.Cleanup(c.agentSrv.Close)
@@ -502,6 +506,76 @@ func TestPanelContractReadOnlyAgent(t *testing.T) {
 	if st != 404 {
 		t.Fatal(st, body)
 	}
+	// no elevated helper (Linux, or Windows without it): the agent's answer the panel maps to "not installed"
+	st, body, _ = p.AgentRequest(context.Background(), ag, "POST", agentapi.PathHelperStop, map[string]any{})
+	if st != 409 || body["error"] != agentapi.ErrHelperNotInstalled.Error() {
+		t.Fatal(st, body)
+	}
+}
+
+// The Windows elevated helper (Fairy-agent v0.5.0) end to end: the real agent handler with agenttest's fake
+// helper, the panel's poller and web API. Stop through the panel, readings and power actions wait for it,
+// Start again.
+func TestPanelContractHelper(t *testing.T) {
+	c := startAgent(t)
+	cfg := panelConfig(t, c.agentSrv.URL)
+	p, err := poller.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	sys := func() model.System {
+		time.Sleep(300 * time.Millisecond) // the agent computes /metrics at most every 250 ms
+		p.PollOnce(ctx)
+		for _, x := range p.Snapshot() {
+			if x.ID == "nsx-cyrene" {
+				return x
+			}
+		}
+		t.Fatal("nsx-cyrene missing")
+		return model.System{}
+	}
+	s := sys()
+	if h := s.Helper; h == nil || h.State != agentapi.HelperRunning || !h.Needed || h.Version != "0.5.0" || !h.Watchdog ||
+		fmt.Sprint(h.Features) != "[coretemp ipmi fans power]" || len(h.Paused) != 0 || s.PowerHelperReason != "" {
+		t.Fatalf("running: %+v", s.Helper)
+	}
+	srv := web.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, p, nil, "test")
+	hs := httptest.NewServer(srv.Handler())
+	t.Cleanup(hs.Close)
+	tok, _, err := srv.Tokens.Create("contract", "system", "control", "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := api{t, hs, tok}
+	if st, b := a.do("POST", "/api/systems/nsx-cyrene/helper/stop", map[string]any{"confirm": "nsx-cyrene"}); st != 200 ||
+		b["state"] != agentapi.HelperStopped || b["action"] != "stop" {
+		t.Fatal("stop", st, b)
+	}
+	if c.helper.Stops != 1 {
+		t.Fatal("the agent's helper was not stopped", c.helper.Stops)
+	}
+	s = sys()
+	// while it ran this host had BMC sensors and fan control (no Core Temp on the fake PC): those are paused
+	if h := s.Helper; h.State != agentapi.HelperStopped || fmt.Sprint(h.Paused) != "[ipmi fans]" || s.PowerHelperReason != agentapi.ReasonHelperStopped ||
+		!s.FanControl {
+		t.Fatalf("stopped: %+v power %q", s.Helper, s.PowerHelperReason)
+	}
+	st, caps := a.do("GET", "/api/systems/nsx-cyrene/power", nil)
+	for _, x := range caps["actions"].([]any) {
+		if m := x.(map[string]any); m["action"] == "shutdown" && (m["available"] != false || !strings.Contains(fmt.Sprint(m["reason"]), "start the helper first")) {
+			t.Fatal("power while stopped", st, m)
+		}
+	}
+	if st, b := a.do("GET", "/api/systems/nsx-cyrene/fan", nil); st != 200 || b["available"] != false {
+		t.Fatal("fan status while stopped", st, b)
+	}
+	if st, b := a.do("POST", "/api/systems/nsx-cyrene/helper/start", map[string]any{"confirm": "NSX-CYRENE"}); st != 200 || b["state"] != agentapi.HelperRunning {
+		t.Fatal("start", st, b)
+	}
+	if s := sys(); c.helper.Starts != 1 || s.Helper.State != agentapi.HelperRunning || len(s.Helper.Paused) != 0 || s.PowerHelperReason != "" {
+		t.Fatalf("restarted: %+v", s.Helper)
+	}
 }
 
 // keys returns the key set of a JSON object.
@@ -517,15 +591,36 @@ func keys(m map[string]any) map[string]bool {
 // payload, and of its features / power / power_control blocks, exists in the real agent's /metrics.
 func TestDemoAgentsMatchTheRealAgent(t *testing.T) {
 	c := startAgent(t)
-	req, _ := http.NewRequest("GET", c.agentSrv.URL+"/metrics", nil)
-	req.Header.Set("Authorization", "Bearer "+readTok)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
+	fetch := func() map[string]any {
+		req, _ := http.NewRequest("GET", c.agentSrv.URL+"/metrics", nil)
+		req.Header.Set("Authorization", "Bearer "+readTok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var m map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&m)
+		return m
+	}
+	real := fetch()
+	// and with the Windows helper stopped: the "unavailable" list and power_control's available / reason
+	if _, err := c.helper.Stop(context.Background(), "contract"); err != nil {
 		t.Fatal(err)
 	}
-	var real map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&real)
-	resp.Body.Close()
+	time.Sleep(300 * time.Millisecond) // the agent computes /metrics at most every 250 ms
+	stopped := fetch()
+	for k, v := range stopped {
+		if _, ok := real[k]; !ok {
+			real[k] = v
+		}
+	}
+	for k, v := range stopped["power_control"].(map[string]any) {
+		real["power_control"].(map[string]any)[k] = v
+	}
+	if stopped["unavailable"] == nil || real["helper"] == nil {
+		t.Fatal("the fake agent has no helper", stopped)
+	}
 	real["hostname"] = "x"  // the fake has every optional block except load_avg (Linux only) and battery
 	var batt map[string]any // the battery block's keys (the fake PC is a desktop)
 	bb, _ := json.Marshal(collect.BatteryStatus{})
@@ -534,13 +629,10 @@ func TestDemoAgentsMatchTheRealAgent(t *testing.T) {
 	if pc, ok := real["power_control"].(map[string]any); ok {
 		pc["sleep_note"] = "" // only sent when the machine cannot sleep (the fake one can)
 	}
-	// Fairy-agent v0.5.0 (the Windows elevated helper) adds these; it is not released yet and go.mod still pins
-	// v0.4.4. Drop this list once go.mod requires v0.5.0, so the demo is checked against the real names.
-	pendingV050 := map[string]bool{"helper": true, "service_account": true, "unavailable": true}
 	sub := func(name string, demo, real map[string]any) {
 		rk := keys(real)
 		for k := range demo {
-			if !rk[k] && k != "load_avg" && !pendingV050[k] {
+			if !rk[k] && k != "load_avg" {
 				t.Errorf("%s: demo sends %q, fairy-agent does not", name, k)
 			}
 		}
@@ -558,11 +650,14 @@ func TestDemoAgentsMatchTheRealAgent(t *testing.T) {
 		}
 		seen++
 		sub(ag.ID, m, real)
-		for _, blk := range []string{"features", "power", "power_control", "platform", "cpu", "memory", "net", "hardware", "battery"} {
+		for _, blk := range []string{"features", "power", "power_control", "platform", "cpu", "memory", "net", "hardware", "battery", "helper"} {
 			if d, ok := m[blk].(map[string]any); ok {
 				r, _ := real[blk].(map[string]any)
 				sub(ag.ID+"."+blk, d, r)
 			}
+		}
+		for _, u := range jsonx.Objs(m["unavailable"]) {
+			sub(ag.ID+".unavailable[]", u, jsonx.Objs(real["unavailable"])[0])
 		}
 		if src, ok := m["power"].(map[string]any); ok {
 			for _, s := range src["source"].([]any) {

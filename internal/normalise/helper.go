@@ -6,29 +6,34 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
-// The Windows agent's elevated helper (Fairy-agent v0.5.0+). /metrics carries
+// The Windows agent's elevated helper (Fairy-agent v0.5.0+; contract types in Fairy-agent's pkg/agent/api).
+// /metrics carries
 //
 //	"helper": {"state": "running"|"stopped"|"starting"|"not_installed"|"error", "needed": bool, "version": "...",
-//	           "since": RFC3339 or "", "watchdog": bool, "features": ["coretemp","ipmi","fans","power","update"],
-//	           "error": "..."}
+//	           "since": RFC 3339, "watchdog": bool, "features": ["coretemp","ipmi","fans","power"], "error": "..."}
+//	"unavailable": [{"source": "coretemp"|"ipmi"|"fans"|"power", "reason": "helper_stopped"|"helper_error"}]
 //
-// Linux agents and older agents leave it out. The panel's own copy of the shape is model.Helper (the agent
-// release that defines it is not tagged yet, so it is not imported from Fairy-agent's pkg/).
+// version, watchdog and features only while the helper runs; "unavailable" only while it does not, listing what
+// this agent normally gets through it. Linux agents and older agents send neither. The panel keeps its own
+// model.Helper (with Paused, filled by the poller); the names come from the agent's api package.
 
 // HelperGroups are the readings the helper provides that the host page shows: Core Temp, the BMC's sensors and
-// fan control. "power" (power actions) and "update" (installing updates) are helper features too, but no
-// readings disappear when they stop.
-var HelperGroups = []string{"coretemp", "ipmi", "fans"}
+// fan control. Power actions (and updates) are helper features too, but no readings disappear when they stop.
+var HelperGroups = []string{api.FeatureCoreTemp, api.FeatureIPMI, api.FeatureFans}
 
 var (
-	helperStates   = map[string]bool{"running": true, "stopped": true, "starting": true, "not_installed": true, "error": true}
-	helperFeatures = map[string]bool{"coretemp": true, "ipmi": true, "fans": true, "power": true, "update": true}
-	versionRe      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$`)
+	helperStates = map[string]bool{api.HelperRunning: true, api.HelperStopped: true, api.HelperStarting: true,
+		api.HelperNotInstalled: true, api.HelperError: true}
+	helperFeatures = map[string]bool{api.FeatureCoreTemp: true, api.FeatureIPMI: true, api.FeatureFans: true,
+		api.FeaturePower: true, api.FeatureUpdate: true}
+	helperReasons = map[string]bool{api.ReasonHelperStopped: true, api.ReasonHelperError: true}
+	versionRe     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$`)
 )
 
 // cleanText drops control characters and bounds the length of a string an agent sent for display.
@@ -47,7 +52,9 @@ func cleanText(s string, n int) string {
 }
 
 // agentHelper reads the optional `helper` block; nil when the agent sends none. Unknown states read as
-// "unknown", unknown features are dropped, text is bounded: an odd payload cannot break the page.
+// "unknown", unknown features are dropped, text is bounded: an odd payload cannot break the page. Features are
+// what the helper does on this host: while it runs the agent lists them, while it does not the "unavailable"
+// sources say it.
 func agentHelper(m jsonx.M) *model.Helper {
 	h := jsonx.Obj(m, "helper")
 	if h == nil {
@@ -66,83 +73,55 @@ func agentHelper(m jsonx.M) *model.Helper {
 			out.Since = model.P(t.UTC())
 		}
 	}
-	for _, f := range jsonx.List(h, "features") {
-		if s, ok := f.(string); ok && helperFeatures[s] && !slices.Contains(out.Features, s) {
-			out.Features = append(out.Features, s)
+	add := func(f string) {
+		if helperFeatures[f] && !slices.Contains(out.Features, f) {
+			out.Features = append(out.Features, f)
 		}
 	}
-	if out.State == "error" || out.State == "stopped" || out.State == "unknown" {
+	for _, f := range jsonx.List(h, "features") {
+		if s, ok := f.(string); ok {
+			add(s)
+		}
+	}
+	if out.State != api.HelperRunning {
+		un := HelperUnavailable(m)
+		for _, f := range []string{api.FeatureCoreTemp, api.FeatureIPMI, api.FeatureFans, api.FeaturePower} {
+			if un[f] {
+				add(f)
+			}
+		}
+	}
+	if out.State != api.HelperRunning && out.State != api.HelperStarting {
 		out.Error = cleanText(jsonx.S(h, "error"), 300)
 	}
 	return out
 }
 
-// agentServiceAccount is the account the agent runs as, when it says (top level, or in the helper block).
-func agentServiceAccount(m jsonx.M) *string {
-	v := jsonx.S(m, "service_account")
-	if v == "" {
-		v = jsonx.S(jsonx.Obj(m, "helper"), "service_account")
-	}
-	if v = cleanText(v, 80); v == "" {
-		return nil
-	}
-	return &v
-}
-
-// helperAlias maps the names an agent may use for a helper-provided section to the panel's feature names.
-var helperAlias = map[string]string{"coretemp": "coretemp", "core_temp": "coretemp", "ipmi": "ipmi", "bmc": "ipmi",
-	"bmc_sensors": "ipmi", "sensors_bmc": "ipmi", "fans": "fans", "fan": "fans", "fan_control": "fans",
-	"power": "power", "power_control": "power", "update": "update", "self_update": "update"}
-
-// HelperStoppedReason is the reason the agent gives for a reading it cannot take while the helper is stopped.
-const HelperStoppedReason = "helper_stopped"
-
-// HelperUnavailable is the ADAPTER for where the agent says that a reading is missing because the helper is
-// stopped: it returns the helper features (coretemp, ipmi, fans, power, update) the agent reports as unavailable
-// with reason "helper_stopped". Fairy-agent v0.5.0 had not fixed the field's location when this was written, so it
-// accepts each of the likely shapes; once the agent is released, keep the real one and drop the others.
-//
-//	"unavailable": {"coretemp": "helper_stopped", "ipmi": {"reason": "helper_stopped"}}   (top level or in "helper")
-//	"unavailable": [{"feature": "coretemp", "reason": "helper_stopped"}, ...]             (or id / name / section)
-//	"coretemp": {"available": false, "reason": "helper_stopped"}                          (a block per section)
+// HelperUnavailable is the ADAPTER for the agent's "unavailable" list: the helper sources (coretemp, ipmi,
+// fans, power) it reports as missing because the helper is stopped or not answering. Anything else in the list
+// (other sources or reasons, entries that are not objects) is ignored.
 func HelperUnavailable(m jsonx.M) map[string]bool {
 	out := map[string]bool{}
-	mark := func(name string, reason any) {
-		r, _ := reason.(string)
-		if g, ok := helperAlias[strings.ToLower(name)]; ok && strings.EqualFold(r, HelperStoppedReason) {
-			out[g] = true
-		}
-	}
-	scan := func(v any) {
-		switch x := v.(type) {
-		case map[string]any:
-			for k, r := range x {
-				if o, ok := r.(map[string]any); ok {
-					r = o["reason"]
-				}
-				mark(k, r)
-			}
-		case []any:
-			for _, e := range jsonx.Objs(x) {
-				for _, k := range []string{"feature", "id", "name", "section", "what"} {
-					if n := jsonx.S(e, k); n != "" {
-						mark(n, e["reason"])
-						break
-					}
-				}
-			}
-		}
-	}
-	for _, k := range []string{"unavailable", "sensors_unavailable"} {
-		scan(m[k])
-		scan(jsonx.Obj(m, "helper")[k])
-	}
-	for name := range helperAlias {
-		if b := jsonx.Obj(m, name); b != nil && !jsonx.Bool(b, "available", true) {
-			mark(name, b["reason"])
+	for _, e := range jsonx.Objs(m["unavailable"]) {
+		src, reason := jsonx.S(e, "source"), jsonx.S(e, "reason")
+		if helperFeatures[src] && helperReasons[reason] {
+			out[src] = true
 		}
 	}
 	return out
+}
+
+// powerHelperReason is the agent's power_control "reason" when power actions are unavailable because of the
+// helper ("helper_stopped" / "helper_error"); "" when they are available.
+func powerHelperReason(m jsonx.M) string {
+	pc := jsonx.Obj(m, "power_control")
+	if pc == nil || jsonx.Bool(pc, "available", true) {
+		return ""
+	}
+	if r := jsonx.S(pc, "reason"); helperReasons[r] {
+		return r
+	}
+	return api.ReasonHelperStopped
 }
 
 // HelperGroupsIn returns the helper-provided readings present in s: Core Temp temperatures (sensor "coretemp"),
@@ -167,7 +146,7 @@ func HelperGroupsIn(s model.System) []string {
 
 // helperDown: the helper's readings are missing in this state.
 func helperDown(state string) bool {
-	return state == "stopped" || state == "starting" || state == "error"
+	return state == api.HelperStopped || state == api.HelperStarting || state == api.HelperError
 }
 
 // ApplyHelperPause fills s.Helper.Paused: the helper's readings this host shows while the helper runs and that

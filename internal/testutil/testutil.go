@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -178,36 +179,46 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, method, path s
 	return 200, jsonx.M{"ok": true}, nil
 }
 
-// HelperMetrics is the /metrics of a Windows agent with the elevated helper (Fairy-agent v0.5.0) in the given
-// state: while it runs, Core Temp and BMC (IPMI) readings and fan control; otherwise none of them, marked
-// "helper_stopped". features lists what the helper does on that host.
+// HelperMetrics is the /metrics of a Windows agent with the elevated helper (Fairy-agent v0.5.0, the shapes of
+// its pkg/agent/api) in the given state, serving features (coretemp, ipmi, fans, power). While it runs: Core Temp
+// and BMC (IPMI) readings, fan control, the helper's version / watchdog / features. Otherwise none of the
+// readings, the "unavailable" list, and power_control.available false when it serves power.
 func HelperMetrics(state string, features ...string) jsonx.M {
 	m := AgentMetrics()
 	m["platform"] = jsonx.M{"system": "Windows", "pretty": "Windows 11 Pro 24H2"}
 	m["load_avg"] = nil
-	feat := make([]any, len(features))
-	for i, f := range features {
-		feat[i] = f
-	}
-	m["helper"] = jsonx.M{"state": state, "needed": true, "version": "0.5.0", "since": "2026-11-09T10:00:00Z",
-		"watchdog": state == "running", "features": feat, "error": ""}
-	m["service_account"] = `NT SERVICE\fairy-agent`
 	m["temps"] = []any{jsonx.M{"sensor": "acpi", "label": "ACPI thermal zone", "current": 48.0}}
 	m["fans"], m["voltages"] = []any{}, []any{}
+	m["features"].(jsonx.M)["fan_control"] = slices.Contains(features, "fans")
+	h := jsonx.M{"state": state, "needed": true, "since": "2026-11-09T10:00:00Z"}
+	m["helper"] = h
 	if state == "running" {
+		feat := make([]any, len(features))
+		for i, f := range features {
+			feat[i] = f
+		}
+		h["version"], h["watchdog"], h["features"] = "0.5.0", slices.Contains(features, "fans"), feat
 		m["temps"] = append(m["temps"].([]any), jsonx.M{"sensor": "coretemp", "label": "CPU Package", "current": 61.0},
 			jsonx.M{"sensor": "IPMI", "label": "CPU Temp", "current": 55.0})
 		m["fans"] = []any{jsonx.M{"name": "IPMI FAN1", "rpm": 900.0}}
 		m["voltages"] = []any{jsonx.M{"name": "IPMI 12V", "volts": 12.1}}
-		m["features"].(jsonx.M)["fan_control"] = true
 		return m
 	}
-	un := jsonx.M{}
+	reason := "helper_stopped"
+	if state == "error" {
+		reason, h["error"] = "helper_error", "the helper does not answer on its pipe"
+	}
+	var un []any
 	for _, f := range features {
-		if f == "coretemp" || f == "ipmi" || f == "fans" {
-			un[f] = "helper_stopped"
+		if f == "coretemp" || f == "ipmi" || f == "fans" || f == "power" {
+			un = append(un, jsonx.M{"source": f, "reason": reason})
 		}
 	}
-	m["unavailable"] = un
+	if len(un) > 0 {
+		m["unavailable"] = un
+	}
+	if slices.Contains(features, "power") {
+		m["power_control"] = jsonx.M{"enabled": true, "pending": nil, "min_delay_s": 10.0, "sleep": true, "available": false, "reason": reason}
+	}
 	return m
 }

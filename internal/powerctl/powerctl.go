@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -104,6 +105,9 @@ func sameString(a, b *string) bool {
 	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }
 
+// HelperStoppedWhy is why a Windows host's power actions are unavailable while its elevated helper is stopped.
+const HelperStoppedWhy = "the elevated helper is stopped: start the helper first (Elevated helper, next to the host name)"
+
 // Capabilities lists every action with availability, reason, confirmation and route.
 func Capabilities(p *poller.Poller, s model.System) model.PowerCaps {
 	caps := capabilities(p, s)
@@ -187,6 +191,16 @@ func hostCaps(p *poller.Poller, s model.System, pve config.Proxmox, hasPVE bool,
 	default:
 		why = "power control is not enabled for this host"
 	}
+	cancelBase := why                                // nothing pending: no need to blame the helper
+	if via == "agent" && s.PowerHelperReason != "" { // the agent shuts down / reboots / sleeps through its helper
+		why = HelperStoppedWhy
+		if s.PowerHelperReason == api.ReasonHelperError {
+			why = "the agent's elevated helper is not answering: power actions need it (see the Elevated helper menu)"
+		}
+	}
+	if s.PowerPending != nil {
+		cancelBase = why
+	}
 	offline := ""
 	if !up {
 		offline = "host is not online"
@@ -203,7 +217,7 @@ func hostCaps(p *poller.Poller, s model.System, pve config.Proxmox, hasPVE bool,
 		caps = append(caps, sleepCap(s, via, why, offline))
 	}
 	caps = append(caps,
-		mkcap("cancel", via == "agent" && s.PowerPending != nil, via, orElse(why, cancelWhy), "none", false),
+		mkcap("cancel", via == "agent" && s.PowerPending != nil && why == "", via, orElse(cancelBase, cancelWhy), "none", false),
 		wakeCap(p, s))
 	if o := p.Override(s.ID); o != nil && o.BMCPower != nil {
 		caps = append(caps, bmcCap(p, s, *o.BMCPower))
@@ -455,6 +469,8 @@ func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path strin
 		return def
 	}
 	switch {
+	case status == 503 && (jsonx.S(data, "code") == api.ReasonHelperStopped || jsonx.S(data, "code") == api.ReasonHelperError):
+		return nil, apierr.New(409, HelperStoppedWhy) // the helper stopped since the last poll: not an agent failure
 	case status == 401: // the agent answered: 424, never 502 (see apierr.Upstream)
 		return nil, apierr.New(apierr.Upstream, "agent refused the control token (check control_token_env)")
 	case status == 404:

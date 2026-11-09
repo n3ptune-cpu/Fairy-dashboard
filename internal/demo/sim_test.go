@@ -1,9 +1,11 @@
 package demo
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
@@ -76,13 +78,10 @@ func TestDemoBMCRefusesOptimal(t *testing.T) {
 func TestDemoHelperStopStart(t *testing.T) {
 	b := NewBackend(nil)
 	metrics := func(id string) jsonx.M {
-		m, err := agentMetrics(id)
+		m, err := b.FetchAgentMetrics(t.Context(), config.Agent{ID: id, PowerControl: true}, time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
-		b.mu.Lock()
-		b.applyHelper(id, m)
-		b.mu.Unlock()
 		return m
 	}
 	state := func(m jsonx.M) string { return jsonx.S(jsonx.Obj(m, "helper"), "state") }
@@ -97,23 +96,30 @@ func TestDemoHelperStopStart(t *testing.T) {
 	if m := metrics("nsx-cyrene"); state(m) != "running" || !hasIPMI(m) || m["unavailable"] != nil {
 		t.Fatal("cyrene", m["helper"])
 	}
-	if m := metrics("neptune-laptop"); state(m) != "stopped" || hasIPMI(m) || jsonx.S(jsonx.Obj(m, "unavailable"), "coretemp") != "helper_stopped" {
+	if m := metrics("neptune-laptop"); state(m) != "stopped" || hasIPMI(m) || fmt.Sprint(m["unavailable"]) != "[map[reason:helper_stopped source:coretemp] map[reason:helper_stopped source:power]]" ||
+		jsonx.Obj(m, "power_control")["available"] != false {
 		t.Fatal("laptop", m["helper"], m["unavailable"])
 	}
-	if m := metrics("straw-pc"); state(m) != "not_installed" || jsonx.Bool(jsonx.Obj(m, "helper"), "needed", true) {
+	if m := metrics("straw-pc"); state(m) != "not_installed" || m["unavailable"] != nil {
 		t.Fatal("straw-pc", m["helper"])
 	}
-	if st, out := b.simHelperControl("nsx-cyrene", "stop"); st != 200 || out["state"] != "stopped" {
+	if st, out := b.simHelperControl("nsx-cyrene", api.PathHelperStop); st != 200 || out["state"] != "stopped" {
 		t.Fatal(st, out)
 	}
 	m := metrics("nsx-cyrene")
-	if state(m) != "stopped" || hasIPMI(m) || len(jsonx.Objs(m["fans"])) != 0 || jsonx.Obj(m, "features")["fan_control"] != false {
+	if state(m) != "stopped" || hasIPMI(m) || len(jsonx.Objs(m["fans"])) != 0 || jsonx.Obj(m, "features")["fan_control"] != true {
 		t.Fatal("stopped cyrene still reads the BMC", m["temps"], m["fans"])
 	}
-	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "nsx-cyrene"}, "POST", "/fan/mode", map[string]any{"mode": "full"}); st != 409 || out["error"] != "helper_stopped" {
+	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "nsx-cyrene"}, "POST", "/fan/mode", map[string]any{"mode": "full"}); st != 503 || out["code"] != "helper_stopped" {
 		t.Fatal("fan write while stopped", st, out)
 	}
-	if st, out := b.simHelperControl("nsx-cyrene", "start"); st != 200 || out["state"] != "starting" {
+	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "nsx-cyrene", PowerControl: true}, "POST", "/power", map[string]any{"action": "reboot"}); st != 503 || out["code"] != "helper_stopped" {
+		t.Fatal("power while stopped", st, out)
+	}
+	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "nsx-cyrene"}, "GET", "/fan/status", nil); st != 200 || out["available"] != false {
+		t.Fatal("fan status while stopped", st, out)
+	}
+	if st, out := b.simHelperControl("nsx-cyrene", api.PathHelperStart); st != 200 || out["state"] != "starting" {
 		t.Fatal(st, out)
 	}
 	b.mu.Lock()
@@ -122,7 +128,7 @@ func TestDemoHelperStopStart(t *testing.T) {
 	if m := metrics("nsx-cyrene"); state(m) != "running" || !hasIPMI(m) {
 		t.Fatal("restarted", m["helper"])
 	}
-	if st, out := b.simHelperControl("straw-pc", "start"); st != 409 || out["error"] != "not_installed" {
+	if st, out := b.simHelperControl("straw-pc", api.PathHelperStart); st != 409 || out["error"] != "not_installed" {
 		t.Fatal(st, out)
 	}
 }

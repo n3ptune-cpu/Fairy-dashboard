@@ -1,24 +1,25 @@
 package demo
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
 
-// simHelper is a Windows agent's elevated helper (Fairy-agent v0.5.0): NSX-CYRENE's runs (Core Temp, its BMC's
-// sensors, fan control, power, updates), Neptune's laptop's is stopped (Core Temp readings paused), Straw's PC
-// has none installed and needs none. Stop / Start from the panel change it; a start takes a few seconds.
+// simHelper is a Windows agent's elevated helper (Fairy-agent v0.5.0, the shapes of its pkg/agent/api):
+// NSX-CYRENE's runs (Core Temp, its BMC's sensors, fan control, power), Neptune's laptop's is stopped (Core Temp
+// readings paused, power actions wait for it), Straw's PC has none installed and needs none. Stop / Start from
+// the panel change it; a start takes a few seconds.
 type simHelper struct {
 	state     string // running | stopped | starting | not_installed
 	since     time.Time
 	readyAt   time.Time // starting -> running
 	needed    bool
-	features  []string
-	watchdog  bool
-	runsAs    string
+	sources   []string     // what this agent gets through the helper (its "unavailable" list while it is stopped)
 	coreTemps func() []any // the Core Temp readings while it runs
 }
 
@@ -27,65 +28,63 @@ const helperStartS = 4
 func newSimHelpers() map[string]*simHelper {
 	t0 := time.Now().Add(-26 * time.Hour)
 	return map[string]*simHelper{
-		"nsx-cyrene": {state: "running", since: t0, needed: true, watchdog: true, runsAs: `NT SERVICE\fairy-agent`,
-			features: []string{"coretemp", "ipmi", "fans", "power", "update"},
+		"nsx-cyrene": {state: api.HelperRunning, since: t0, needed: true,
+			sources: []string{api.FeatureCoreTemp, api.FeatureIPMI, api.FeatureFans, api.FeaturePower},
 			coreTemps: func() []any {
 				p := r1(wave(100, 40, 71, 0.3))
 				return []any{temp("coretemp", "CPU Package", p), temp("coretemp", "Core 0", r1(p-2)), temp("coretemp", "Core 1", r1(p-4))}
 			}},
-		"neptune-laptop": {state: "stopped", since: time.Now().Add(-40 * time.Minute), needed: true, runsAs: `NT SERVICE\fairy-agent`,
-			features:  []string{"coretemp", "power", "update"},
+		"neptune-laptop": {state: api.HelperStopped, since: time.Now().Add(-40 * time.Minute), needed: true,
+			sources:   []string{api.FeatureCoreTemp, api.FeaturePower},
 			coreTemps: func() []any { return []any{temp("coretemp", "CPU Package", r1(wave(60, 52, 79, 0.8)))} }},
-		"straw-pc": {state: "not_installed", features: []string{}},
+		"straw-pc": {state: api.HelperNotInstalled, since: t0},
 	}
 }
 
+// status is the /metrics "helper" block (and the /helper/stop|start answer). Caller holds b.mu.
+func (h *simHelper) status() api.HelperStatus {
+	if h.state == api.HelperStarting && !time.Now().Before(h.readyAt) {
+		h.state, h.since = api.HelperRunning, time.Now()
+	}
+	st := api.HelperStatus{State: h.state, Needed: h.needed, Since: h.since.UTC().Format(time.RFC3339)}
+	if h.state == api.HelperRunning {
+		wd := slices.Contains(h.sources, api.FeatureFans)
+		st.Version, st.Watchdog, st.Features = "0.5.0", &wd, slices.Clone(h.sources)
+	}
+	return st
+}
+
 // applyHelper adds the helper block to a demo /metrics payload and, while the helper is not running, leaves out
-// what only it can read (and marks it helper_stopped, as the v0.5.0 agent does). Caller holds b.mu.
+// what only it can read and lists it as "unavailable", as the v0.5.0 agent does. Caller holds b.mu.
 func (b *Backend) applyHelper(id string, m map[string]any) {
 	h := b.helpers[id]
 	if h == nil {
 		return
 	}
-	if h.state == "starting" && !time.Now().Before(h.readyAt) {
-		h.state, h.since = "running", time.Now()
-	}
-	since := ""
-	if !h.since.IsZero() {
-		since = h.since.UTC().Format(time.RFC3339)
-	}
-	version := "0.5.0"
-	if h.state == "not_installed" {
-		version = ""
-	}
-	m["helper"] = map[string]any{"state": h.state, "needed": h.needed, "version": version, "since": since,
-		"watchdog": h.watchdog && h.state == "running", "features": slices.Clone(h.features), "error": ""}
-	if h.runsAs != "" {
-		m["service_account"] = h.runsAs
-	}
-	if h.state == "running" {
+	st := h.status()
+	m["helper"] = st
+	if st.Running() {
 		if h.coreTemps != nil {
 			temps, _ := m["temps"].([]any)
 			m["temps"] = append(h.coreTemps(), temps...)
 		}
 		return
 	}
-	unavailable := map[string]any{}
-	for _, f := range h.features {
-		if f == "coretemp" || f == "ipmi" || f == "fans" {
-			unavailable[f] = "helper_stopped"
-		}
+	if h.state == api.HelperNotInstalled || len(h.sources) == 0 {
+		return
 	}
-	if len(unavailable) > 0 && h.state != "not_installed" {
-		m["unavailable"] = unavailable
+	un := make([]api.Unavailable, 0, len(h.sources))
+	for _, src := range h.sources {
+		un = append(un, api.Unavailable{Source: src, Reason: api.ReasonHelperStopped})
 	}
-	if slices.Contains(h.features, "ipmi") { // the BMC's sensors come through the helper
+	m["unavailable"] = un
+	if slices.Contains(h.sources, api.FeatureIPMI) { // the BMC's sensors come through the helper
 		m["temps"] = dropIPMI(m["temps"], "sensor", func(v string) bool { return v == "IPMI" })
 		m["fans"] = dropIPMI(m["fans"], "name", func(v string) bool { return strings.HasPrefix(v, "IPMI ") })
 		m["voltages"] = dropIPMI(m["voltages"], "name", func(v string) bool { return strings.HasPrefix(v, "IPMI ") })
 	}
-	if slices.Contains(h.features, "fans") {
-		jsonx.Obj(m, "features")["fan_control"] = false
+	if pc, ok := m["power_control"].(map[string]any); ok && slices.Contains(h.sources, api.FeaturePower) {
+		pc["available"], pc["reason"] = false, api.ReasonHelperStopped
 	}
 }
 
@@ -103,28 +102,52 @@ func dropIPMI(v any, key string, drop func(string) bool) []any {
 	return out
 }
 
-// simHelperControl answers POST /helper/stop and /helper/start.
-func (b *Backend) simHelperControl(id, action string) (int, jsonx.M) {
+// simHelperControl answers POST /helper/stop and /helper/start: 200 with the helper block, or
+// 409 {"error": "not_installed"}.
+func (b *Backend) simHelperControl(id, path string) (int, jsonx.M) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	h := b.helpers[id]
-	if h == nil || h.state == "not_installed" {
-		return 409, jsonx.M{"error": "not_installed"}
+	if h == nil || h.state == api.HelperNotInstalled {
+		return 409, jsonx.M{"error": api.ErrHelperNotInstalled.Error(), "code": "not_installed"}
 	}
 	now := time.Now()
 	switch {
-	case action == "stop" && h.state != "stopped":
-		h.state, h.since = "stopped", now
-	case action == "start" && h.state == "stopped":
-		h.state, h.since, h.readyAt = "starting", now, now.Add(helperStartS*time.Second)
+	case path == api.PathHelperStop && h.state != api.HelperStopped:
+		h.state, h.since = api.HelperStopped, now
+	case path == api.PathHelperStart && h.state == api.HelperStopped:
+		h.state, h.since, h.readyAt = api.HelperStarting, now, now.Add(helperStartS*time.Second)
 	}
-	return 200, jsonx.M{"state": h.state}
+	raw, _ := json.Marshal(h.status())
+	var out jsonx.M
+	_ = json.Unmarshal(raw, &out)
+	return 200, out
 }
 
-// helperBlocksFans: NSX-CYRENE's fans cannot be driven while its helper is not running.
-func (b *Backend) helperBlocksFans(id string) bool {
+// helperBlocks answers a fan or power request the way the v0.5.0 agent does while its helper is not running:
+// /fan/status 200 with "available": false, changes 503 {"code": "helper_stopped"}. ok is false when the helper
+// does not stand in the way.
+func (b *Backend) helperBlocks(id, path string) (int, jsonx.M, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	h := b.helpers[id]
-	return h != nil && h.state != "running" && slices.Contains(h.features, "fans")
+	if h == nil || h.status().Running() {
+		return 0, nil, false
+	}
+	source := api.FeatureFans
+	if path == "/power" {
+		source = api.FeaturePower
+	}
+	if !slices.Contains(h.sources, source) {
+		return 0, nil, false
+	}
+	if path == "/fan/status" {
+		return 200, jsonx.M{"enabled": true, "vendor": "supermicro", "mode": nil, "error": nil, "overridden": false,
+			"duty": map[string]any{}, "fans": []any{}, "events": []any{}, "available": false, "reason": api.ReasonHelperStopped}, true
+	}
+	what := map[string]string{"/power": "shut down or reboot this machine"}[path]
+	if what == "" {
+		what = "change the fans"
+	}
+	return 503, jsonx.M{"error": "helper stopped: start fairy-agent-helper to " + what, "code": api.ReasonHelperStopped}, true
 }

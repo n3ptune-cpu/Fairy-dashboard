@@ -109,10 +109,10 @@ type Hardware struct {
 type Helper struct {
 	State    string     `json:"state"`   // running | stopped | starting | not_installed | error | unknown
 	Needed   bool       `json:"needed"`  // this host uses something only the helper can do
-	Version  string     `json:"version"` // "" when unknown
+	Version  string     `json:"version"` // of the running helper ("" while it does not run)
 	Since    *time.Time `json:"since"`   // in the current state since
 	Watchdog bool       `json:"watchdog"`
-	Features []string   `json:"features"` // what it does on this host: coretemp | ipmi | fans | power | update
+	Features []string   `json:"features"` // what it does on this host: coretemp | ipmi | fans | power (| update)
 	Error    string     `json:"error"`
 	// Paused is the helper's readings this host normally shows that are missing because the helper is not
 	// running: coretemp (Core Temp), ipmi (BMC sensors), fans (fan control). Empty while it runs; only groups this
@@ -178,8 +178,9 @@ type System struct {
 	SleepNote *string `json:"sleep_note,omitempty"`
 	// Helper is the Windows agent's elevated helper (nil: Linux, or an agent older than v0.5.0).
 	Helper *Helper `json:"helper,omitempty"`
-	// ServiceAccount is the account the agent runs as, when it says (e.g. `NT SERVICE\fairy-agent`).
-	ServiceAccount *string `json:"service_account,omitempty"`
+	// PowerHelperReason: the agent's power actions are unavailable because its helper is not running
+	// ("helper_stopped" / "helper_error"; power_control.available false). Internal: decides the power menu.
+	PowerHelperReason string `json:"-"`
 	// Asleep: offline because the panel sent it to sleep (until it is seen online again).
 	Asleep bool `json:"asleep,omitempty"`
 	// BMCRelayTargets: the bmc_relay target ids this agent reports (nil: no relay, or older than v0.4.2).
@@ -391,8 +392,12 @@ type FanStatus struct {
 	MaxTempC    *float64       `json:"max_temp_c"`
 	AutoMode    *string        `json:"auto_mode"`         // the agent's fan_control.auto_mode (nil: older agent)
 	Unsupported []string       `json:"unsupported_modes"` // modes this board's BMC refused (empty: none, or older agent)
-	Fans        []Fan          `json:"fans"`
-	Events      []FanEvent     `json:"events"`
+	// Available is false while the agent cannot reach the fans (Fairy-agent v0.5.0 on Windows: its elevated
+	// helper is not running; Reason says why). nil: older agents, which do not say.
+	Available *bool      `json:"available,omitempty"`
+	Reason    string     `json:"reason,omitempty"` // helper_stopped | helper_error
+	Fans      []Fan      `json:"fans"`
+	Events    []FanEvent `json:"events"`
 }
 
 // ControlResult is the answer to a fan write: the agent's reply passed through.

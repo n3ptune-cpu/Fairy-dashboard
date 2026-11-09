@@ -12,7 +12,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
 
-var helperAll = []string{"coretemp", "ipmi", "fans", "power", "update"}
+var helperAll = []string{"coretemp", "ipmi", "fans", "power"}
 
 // helperPoll makes the agent report its helper in this state and polls once.
 func (e *env) helperPoll(id, state string, features ...string) {
@@ -95,7 +95,7 @@ func TestHelperStopStartThroughTheAgent(t *testing.T) {
 	if r.code != 200 || r.body["state"] != "stopped" || r.body["action"] != "stop" || !strings.Contains(r.raw2(), "BMC") {
 		t.Fatalf("stop: %d %s", r.code, r.raw)
 	}
-	if reqs := e.agentRequests(); !strings.Contains(reqs, "laptop POST /helper/stop map[requested_by:n@example.com]") {
+	if reqs := e.agentRequests(); !strings.Contains(reqs, "laptop POST /helper/stop map[]") {
 		t.Fatal("agent call:", reqs)
 	}
 	e.helperPoll("laptop", "stopped", helperAll...)
@@ -238,7 +238,7 @@ func TestFansPausedWhileHelperStopped(t *testing.T) {
 	e.helperPoll("cyrene", "stopped", helperAll...)
 	sys := e.do("GET", "/api/systems/cyrene", nil, "Cookie", c)
 	h, _ := sys.body["helper"].(map[string]any)
-	if sys.body["fan_control"] != true || fmt.Sprint(h["paused"]) != "[coretemp ipmi fans]" || sys.body["service_account"] != `NT SERVICE\fairy-agent` {
+	if sys.body["fan_control"] != true || fmt.Sprint(h["paused"]) != "[coretemp ipmi fans]" {
 		t.Fatalf("stopped: %s", sys.raw)
 	}
 	e.b.Mu.Lock()
@@ -257,5 +257,64 @@ func TestFansPausedWhileHelperStopped(t *testing.T) {
 	r := e.do("GET", "/api/audit?action=fan", nil, "Cookie", c)
 	if first := r.body["entries"].([]any)[0].(map[string]any); !strings.HasPrefix(fmt.Sprint(first["outcome"]), "error 409") {
 		t.Fatal("refused fan write not audited:", first)
+	}
+}
+
+// Power actions of a Windows host go through its helper: while it is stopped they are offered as unavailable
+// ("start the helper first"), and an agent that refuses with 503 helper_stopped (stopped since the last poll)
+// gets the same calm answer, never "agent error".
+func TestPowerAndFansWaitForTheHelper(t *testing.T) {
+	e := setup(t)
+	e.s.control = newRateLimiter(100)
+	c := e.cookie(controller(), 0)
+	hdr := []string{"Cookie", c, "X-Requested-With", "fairy"}
+	capOf := func(action string) map[string]any {
+		for _, a := range e.do("GET", "/api/systems/laptop/power", nil, "Cookie", c).body["actions"].([]any) {
+			if m := a.(map[string]any); m["action"] == action {
+				return m
+			}
+		}
+		return nil
+	}
+	e.helperPoll("laptop", "running", helperAll...)
+	if a := capOf("shutdown"); a["available"] != true {
+		t.Fatal("running:", a)
+	}
+	e.helperPoll("laptop", "stopped", helperAll...)
+	for _, action := range []string{"shutdown", "reboot", "sleep"} {
+		if a := capOf(action); a["available"] != false || !strings.Contains(fmt.Sprint(a["reason"]), "start the helper first") {
+			t.Fatal("stopped:", action, a)
+		}
+	}
+	r := e.do("POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "laptop"}, hdr...)
+	if r.code != 409 || !strings.Contains(r.raw2(), "start the helper first") || strings.Contains(e.agentRequests(), "/power") {
+		t.Fatalf("power while stopped: %d %s", r.code, r.raw)
+	}
+	e.helperPoll("laptop", "error", helperAll...)
+	if a := capOf("shutdown"); a["available"] != false || !strings.Contains(fmt.Sprint(a["reason"]), "not answering") {
+		t.Fatal("error:", a)
+	}
+	// the helper stops between the poll and the click: the agent answers 503 helper_stopped
+	e.helperPoll("laptop", "running", helperAll...)
+	e.helperPoll("cyrene", "running", helperAll...)
+	e.b.Reply = func(_, path string) (int, jsonx.M, error) {
+		if path == "/power" || strings.HasPrefix(path, "/fan/") && path != "/fan/status" {
+			return 503, jsonx.M{"error": "helper stopped: start fairy-agent-helper", "code": "helper_stopped"}, nil
+		}
+		if path == "/fan/status" {
+			return 200, jsonx.M{"enabled": true, "vendor": "supermicro", "mode": nil, "error": nil, "duty": jsonx.M{}, "fans": []any{},
+				"events": []any{}, "available": false, "reason": "helper_stopped"}, nil
+		}
+		return 0, nil, nil
+	}
+	if r := e.do("POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "laptop"}, hdr...); r.code != 409 ||
+		!strings.Contains(r.raw2(), "start the helper first") {
+		t.Fatalf("power 503: %d %s", r.code, r.raw)
+	}
+	if r := e.do("POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, hdr...); r.code != 409 || !strings.Contains(r.raw2(), "helper is stopped") {
+		t.Fatalf("fan 503: %d %s", r.code, r.raw)
+	}
+	if r := e.do("GET", "/api/systems/cyrene/fan", nil, hdr...); r.code != 200 || r.body["available"] != false || r.body["reason"] != "helper_stopped" {
+		t.Fatalf("fan status: %d %s", r.code, r.raw)
 	}
 }

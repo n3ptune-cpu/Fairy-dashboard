@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
@@ -28,6 +30,9 @@ func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[s
 	}
 	if status == 401 { // never surface as our own 401 (that means "log in again")
 		return nil, apierr.New(apierr.Upstream, "agent rejected the control token (check control_token_env)")
+	}
+	if status == 503 && (jsonx.S(data, "code") == api.ReasonHelperStopped || jsonx.S(data, "code") == api.ReasonHelperError) {
+		return nil, apierr.New(409, fanHelperStopped) // the helper stopped since the last poll: not an agent failure
 	}
 	if status >= 400 { // the agent answered: its message must reach the user (no 502, see apierr.Upstream)
 		st := apierr.Upstream
@@ -51,7 +56,10 @@ func (s *Server) fanStatus(c *reqCtx) error {
 		return err
 	}
 	if x, _ := c.find(id); helperPaused(x, "fans") { // the agent cannot reach the BMC without its helper
-		fs := model.FanStatus{SystemID: id, Error: model.P(fanHelperStopped)}
+		fs := model.FanStatus{SystemID: id, Error: model.P(fanHelperStopped), Available: model.P(false), Reason: api.ReasonHelperStopped}
+		if x.Helper.State == api.HelperError {
+			fs.Reason = api.ReasonHelperError
+		}
 		model.Normalize(&fs)
 		c.json(200, fs)
 		return nil

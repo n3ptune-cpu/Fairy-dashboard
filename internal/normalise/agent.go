@@ -90,7 +90,10 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	if cfg.DWServiceURL != "" {
 		s.DWServiceURL = model.P(cfg.DWServiceURL)
 	}
-	s.Helper, s.ServiceAccount = agentHelper(m), agentServiceAccount(m) // Helper.Paused: the poller, ApplyHelperPause
+	s.Helper = agentHelper(m) // Helper.Paused: the poller, ApplyHelperPause
+	if s.Helper != nil {
+		s.PowerHelperReason = powerHelperReason(m)
+	}
 	model.Normalize(&s)
 	return s
 }

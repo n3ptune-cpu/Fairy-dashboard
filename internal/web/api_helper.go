@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
@@ -15,11 +16,13 @@ import (
 // .../start with {"confirm": "<the host's name>"}. The same checks as a power action: admins only, CSRF, the
 // control kill switch, a recent Pocket ID sign-in, the control rate limit, the typed name, and an audit entry
 // ("helper_stop" / "helper_start", with the host and the user). The panel calls the agent's POST /helper/stop
-// or /helper/start with that agent's control token; the agent answers 200 {"state": ...} or
-// 409 {"error": "not_installed"}.
+// or /helper/start (api.PathHelperStop / PathHelperStart) with that agent's control token and body {}; the agent
+// answers 200 with its helper block (api.HelperStatus, "state" at the top level), 409 {"error": "not_installed"},
+// or 502 when the service manager refused.
 
 // helperStates are the states the agent may answer with (anything else reads as "unknown").
-var helperStates = map[string]bool{"running": true, "stopped": true, "starting": true, "not_installed": true, "error": true}
+var helperStates = map[string]bool{api.HelperRunning: true, api.HelperStopped: true, api.HelperStarting: true,
+	api.HelperNotInstalled: true, api.HelperError: true}
 
 // HelperResult is the answer to a helper Stop / Start.
 type HelperResult struct {
@@ -64,13 +67,14 @@ func (s *Server) helperAction(c *reqCtx, action string) error {
 	if err := c.typedName(x.Name, map[string]string{"stop": "stopping its helper", "start": "starting its helper"}[action]); err != nil {
 		return fail(err)
 	}
-	status, data, err := s.Poller.AgentRequest(c.r.Context(), a, "POST", "/helper/"+action, map[string]any{"requested_by": actorOf(u)})
+	path := map[string]string{"stop": api.PathHelperStop, "start": api.PathHelperStart}[action]
+	status, data, err := s.Poller.AgentRequest(c.r.Context(), a, "POST", path, map[string]any{}) // the agent logs "panel <ip>"
 	switch {
 	case err != nil:
 		return fail(apierr.New(502, "agent unreachable: "+devices.Describe(err)))
 	case status == 401: // never our own 401 (that means "sign in again")
 		return fail(apierr.New(apierr.Upstream, "agent rejected the control token (check control_token_env)"))
-	case status == 409 && jsonx.S(data, "error") == "not_installed":
+	case status == 409 && jsonx.S(data, "error") == api.ErrHelperNotInstalled.Error():
 		return fail(apierr.New(409, "the elevated helper is not installed on this host"))
 	case status == 404:
 		return fail(apierr.New(409, "this agent has no helper control (Fairy-agent v0.5.0 or newer on Windows)"))

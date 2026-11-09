@@ -312,7 +312,7 @@ function helperMenu(s, h) {
   const rows = [["State", `${(HELPER_STATE[h.state] || HELPER_STATE.unknown)[1]}${h.since ? ` · since ${ago(h.since).replace(" ago", "")}` : ""}`],
     ["Does", (h.features || []).map((f) => HELPER_FEATURE[f]).filter(Boolean).join(", ") || "–"],
     ...((h.features || []).includes("fans") ? [["Fan watchdog", h.watchdog ? "on" : "off"]] : []),
-    ["Version", h.version || "–"], ...(s.service_account ? [["Agent runs as", s.service_account]] : [])];
+    ...(h.version ? [["Version", h.version]] : [])];
   const act = h.state === "not_installed" ? '<div class="menu-note">Not installed: the agent\'s Windows installer (v0.5.0 or newer) sets it up.</div>'
     : `<button class="menu-item ${down ? "" : "danger"}" data-act="helper" data-action="${down ? "start" : "stop"}" ${why || h.state === "starting" ? "disabled" : ""}>
       ${down ? "Start helper…" : "Stop helper…"}<span class="note">${h.state === "starting" ? "starting" : "type the name"}</span></button>`;
@@ -558,7 +558,6 @@ function systemOverview(s) {
     ${s.net_rx_bps != null || s.net_tx_bps != null ? `<div class="list-row"><span>Network</span><span>↓ ${fmtRate(s.net_rx_bps)} · ↑ ${fmtRate(s.net_tx_bps)}</span></div>` : ""}
     ${s.cpu_model ? `<div class="list-row"><span>Processor</span><span>${esc(s.cpu_model)}</span></div>` : ""}
     ${s.hardware?.display ? `<div class="list-row"><span>Model</span><span>${esc(s.hardware.display)}${s.hardware.bios_version ? ` <span class="note">BIOS ${esc(s.hardware.bios_version)}</span>` : ""}</span></div>` : ""}
-    ${s.service_account ? `<div class="list-row"><span>Agent runs as</span><span>${esc(s.service_account)}</span></div>` : ""}
     <div class="list-row"><span>Uptime</span><span>${fmtUptime(s.uptime_s)}</span></div>
     ${s.load_avg ? `<div class="list-row"><span>Load</span><span>${s.load_avg.join(" · ")}</span></div>` : ""}
     <div class="list-row"><span>Last change</span><span data-ago="${esc(s.updated_at || s.last_seen)}">${ago(s.updated_at || s.last_seen)}</span></div></div>`;
@@ -620,7 +619,7 @@ async function loadFans(id) {
   try {
     const f = await api(`/api/systems/${enc(id)}/fan`);
     if (!$("#tab-body")) return;
-    if (paused) { morph(body, fansPaused(state.byId[id], f)); return schedule(() => loadFans(id)); }
+    if (paused || f.available === false) { morph(body, fansPaused(state.byId[id], f)); return schedule(() => loadFans(id)); }
     const full = f.mode === "full", floor = Math.max(30, f.min_duty || 0);
     const unsupported = new Set(f.unsupported_modes || []);
     const limits = f.max_temp_c != null
@@ -660,7 +659,8 @@ async function loadFans(id) {
 
 // The Fans tab while the helper is not running: the explanation and the mode buttons, disabled.
 function fansPaused(s, f) {
-  const h = s.helper, why = h.state === "starting" ? "is starting" : h.state === "error" ? "has an error" : "is stopped";
+  const h = s?.helper || { state: f.reason === "helper_error" ? "error" : "stopped" };
+  const why = h.state === "starting" ? "is starting" : h.state === "error" ? "is not answering" : "is stopped";
   return `<div class="calmbox"><span>Fan control paused: the elevated helper ${why}. The fans are on the BMC's own automatic control, and the agent's temperature watchdog is off until the helper runs again.</span>
     ${h.state === "starting" ? "" : `<button class="btn sm" type="button" data-act="helper" data-action="start" ${canControl() ? "" : `disabled title="${esc(controlWhyNot() || "only admins can start it")}"`}>Start helper</button>`}</div>
     <div class="panel glass pad narrow"><h3>Mode</h3><div class="row-gap">${["optimal", "standard", "heavyio", "full"].map((m) => `<button class="btn ${f.mode === m ? "on" : ""}" disabled>${m}</button>`).join("")}</div>
