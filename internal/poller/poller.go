@@ -52,7 +52,9 @@ type Poller struct {
 
 	rates *normalise.RateTracker
 	// cfgMu guards agents, overrides and the Cfg.Agents / Cfg.Systems slices, which hosts added or removed in
-	// the panel (Add host) change at run time. The slices are replaced, never changed in place.
+	// the panel (Add host) change at run time. The slices are replaced, never changed in place. Read them only
+	// through AgentByID / Override / Agents / SystemsConfig. Lock order: p.mu may be held while taking cfgMu,
+	// never the other way round.
 	cfgMu     sync.RWMutex
 	overrides map[string]*config.SystemOverride
 	agents    map[string]config.Agent

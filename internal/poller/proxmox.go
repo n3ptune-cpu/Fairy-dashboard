@@ -107,7 +107,8 @@ func (p *Poller) recordPVERefsLocked(clusterID, prefix string, data []jsonx.M) {
 // fills in the node's CPU model (fetched once, in the background), marks whether an agent provides processes,
 // and keeps the frozen values of a paused system. Caller holds p.mu.
 func (p *Poller) prepareProxmoxSystemLocked(pve config.Proxmox, s model.System, now time.Time) model.System {
-	s = normalise.ApplyOverride(s, p.overrides[s.ID])
+	// Override takes cfgMu inside p.mu, the same order as p.Agents() below.
+	s = normalise.ApplyOverride(s, p.Override(s.ID))
 	if old, ok := p.systems[s.ID]; ok && s.LastSeen == nil { // keep last_seen for guests whose node is down
 		s.LastSeen = old.LastSeen
 	}

@@ -326,3 +326,46 @@ func TestHostTotals(t *testing.T) {
 		t.Fatalf("empty: %+v", e)
 	}
 }
+
+// Add host / Re-pair / Remove change the systems: overrides while snapshots and Proxmox polls read them. Under
+// -race this used to report a data race on p.overrides (and could crash with "concurrent map read and map
+// write").
+func TestOverridesRaceWithAddRepairRemove(t *testing.T) {
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	p, err := New(cfg, config.Secrets{}, testutil.NewBackend())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	p.PollOnce(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 200 {
+			id := fmt.Sprintf("host-%d", i%3)
+			a := config.Agent{ID: id, Name: id, URL: "http://" + id, Managed: true, Token: "managed-read-token-xxxxxxxxxxxxxxxx"}
+			o := &config.SystemOverride{ID: id, Wol: &config.Wol{MACs: []string{"aa:bb:cc:dd:ee:ff"}, Relay: "laptop"}}
+			p.RemoveAgent(id) // Re-pair = Remove + Add
+			if err := p.AddAgent(a, o); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			for i := range 3 {
+				p.RemoveAgent(fmt.Sprintf("host-%d", i))
+			}
+			if len(p.SystemsConfig()) != len(cfg.Systems) {
+				t.Fatalf("systems: entries left behind: %+v", p.SystemsConfig())
+			}
+			return
+		default:
+		}
+		p.Bump()
+		_ = p.Snapshot()
+		p.PollOnce(ctx)
+	}
+}
