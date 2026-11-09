@@ -12,6 +12,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/enrollment"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
 )
 
@@ -33,18 +34,34 @@ func (s *Server) enrollHooks() enrollment.Hooks {
 	return enrollment.Hooks{
 		Config: func() *config.Panel {
 			c := *s.Cfg
-			c.Agents, c.Systems = s.Poller.Agents(), s.Poller.SystemsConfig()
+			c.Agents, c.Systems, c.Proxmox = s.Poller.Agents(), s.Poller.SystemsConfig(), s.Poller.Clusters()
 			return &c
 		},
 		Add: func(e managed.Entry) error {
 			if e.Host.Site != "" {
 				_ = s.Access.EnsureSites([]string{e.Host.Site})
 			}
-			return s.Poller.AddAgent(e.Agent, e.Override)
+			if e.Proxmox != nil { // the node first, so the agent attaches to it at once
+				if err := s.Poller.AddProxmox(*e.Proxmox); err != nil {
+					return err
+				}
+			}
+			if err := s.Poller.AddAgent(e.Agent, e.Override); err != nil {
+				if e.Proxmox != nil {
+					s.Poller.RemoveProxmox(e.Proxmox.ID)
+				}
+				return err
+			}
+			return nil
 		},
-		Remove: s.Poller.RemoveAgent,
+		Remove: s.unpoll,
 		Online: func(id string) (bool, string) {
 			info, _ := s.Poller.AgentInfo(id)
+			if h, ok := s.managedHost(id); ok && h.Proxmox != nil { // a node: its Proxmox API must answer too
+				if ok, why := s.proxmoxOnline(h.Proxmox.ID); !ok {
+					return false, why
+				}
+			}
 			if info.Online {
 				return true, ""
 			}
@@ -57,6 +74,29 @@ func (s *Server) enrollHooks() enrollment.Hooks {
 		},
 		Event: s.enrollEvent,
 	}
+}
+
+// unpoll stops polling a managed host: its agent and, for a Proxmox node added with Add host, the node.
+func (s *Server) unpoll(id string) {
+	if h, ok := s.managedHost(id); ok && h.Proxmox != nil {
+		s.Poller.RemoveProxmox(h.Proxmox.ID)
+	}
+	if a, ok := s.Poller.AgentByID(id); ok && a.Managed { // a config.yaml agent with the same id stays
+		s.Poller.RemoveAgent(id)
+	}
+}
+
+// proxmoxOnline reports whether a cluster's last poll worked (and its error if not).
+func (s *Server) proxmoxOnline(id string) (bool, string) {
+	for _, src := range s.Poller.Summary().Sources {
+		if src.Name == "proxmox:"+id {
+			if src.OK {
+				return true, ""
+			}
+			return false, "Proxmox API: " + model.Deref(src.LastError)
+		}
+	}
+	return false, "Proxmox API: not polled yet"
 }
 
 func (s *Server) enrollEvent(e enrollment.Enrollment, kind, detail string) {
@@ -265,19 +305,22 @@ func (s *Server) hostRemove(c *reqCtx) error {
 		c.audit(u, "host.remove", h.ID, nil, "refused: "+err.Error())
 		return err
 	}
+	s.unpoll(h.ID) // before the store forgets which node is the host's
 	if err := s.Managed.Remove(h.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
 		return err
-	}
-	if a, ok := s.Poller.AgentByID(h.ID); ok && a.Managed { // a config.yaml agent with the same id stays
-		s.Poller.RemoveAgent(h.ID)
 	}
 	c.audit(u, "host.remove", h.ID, map[string]any{"name": h.Name}, "ok")
 	if s.Notes != nil {
 		s.Notes.Add(notifications.Event{Kind: "host_removed", Type: "enroll", Severity: notifications.Info, Host: h.Name,
 			Text: fmt.Sprintf("removed from the panel by %s (the agent on the machine keeps running until you uninstall it)", actorOf(u))})
 	}
-	c.json(200, map[string]any{"ok": true, "message": h.Name + " removed from the panel"})
+	msg := h.Name + " removed from the panel"
+	if h.Proxmox != nil {
+		msg += fmt.Sprintf(". Its read-only Proxmox token still exists on the node; to delete it, run there: pveum user token remove fairy@pve %s",
+			h.Proxmox.TokenName())
+	}
+	c.json(200, map[string]any{"ok": true, "message": msg})
 	return nil
 }
 

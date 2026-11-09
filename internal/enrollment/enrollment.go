@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -28,6 +30,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 )
 
 // States of an enrollment.
@@ -42,14 +45,17 @@ const (
 
 // Request is the Add host dialog.
 type Request struct {
-	Name     string          `json:"name"`    // the machine's Tailscale (MagicDNS) name, also its display name
-	Address  string          `json:"address"` // optional: Tailscale IP or full name instead of Name
-	Site     string          `json:"site"`
-	OS       string          `json:"os"` // linux | windows
-	Options  managed.Options `json:"options"`
-	Node     string          `json:"node"`      // optional: the Proxmox node it runs on (node:)
-	WolMACs  []string        `json:"wol_macs"`  // optional: to wake this machine
-	WolRelay string          `json:"wol_relay"` // the agent that sends the packets
+	Name    string          `json:"name"`    // the machine's Tailscale (MagicDNS) name, also its display name
+	Address string          `json:"address"` // optional: Tailscale IP or full name instead of Name
+	Site    string          `json:"site"`
+	OS      string          `json:"os"` // linux | windows
+	Options managed.Options `json:"options"`
+	Node    string          `json:"node"` // optional: the Proxmox node it runs on (node:)
+	// ProxmoxNew: the machine is a standalone Proxmox VE node the panel does not poll yet; the command makes it
+	// hand over a read-only API token at pairing (install.sh --proxmox, Fairy-agent v0.4.2).
+	ProxmoxNew bool     `json:"proxmox_new"`
+	WolMACs    []string `json:"wol_macs"`  // optional: to wake this machine
+	WolRelay   string   `json:"wol_relay"` // the agent that sends the packets
 	// BMCRelay / BMCTarget: optional, power it on through its BMC (a bmc_relay target of that agent).
 	BMCRelay  string `json:"bmc_relay"`
 	BMCTarget string `json:"bmc_target"`
@@ -171,6 +177,11 @@ func (m *Manager) hostEntry(req Request, existing *managed.Host, nodeSystemID fu
 		}
 		o.UPS = true
 	}
+	if req.ProxmoxNew {
+		if req.OS != "linux" || strings.TrimSpace(req.Node) != "" {
+			return managed.Host{}, invalid("a new Proxmox node is a Linux machine, not attached to another node")
+		}
+	}
 	if req.OS != "windows" {
 		o.CoreTemp = false
 	}
@@ -179,7 +190,7 @@ func (m *Manager) hostEntry(req Request, existing *managed.Host, nodeSystemID fu
 		return managed.Host{}, invalid("name: cannot make an id from it")
 	}
 	h := managed.Host{ID: id, Name: req.Name, URL: "http://" + net.JoinHostPort(addr, "9101"), Site: req.Site, OS: req.OS,
-		Options: o}
+		Options: o, ProxmoxWanted: req.ProxmoxNew}
 	if n := strings.TrimSpace(req.Node); n != "" {
 		h.Node = n
 		h.SystemID = nodeSystemID(n)
@@ -290,7 +301,7 @@ func Command(base string, h managed.Host, code, panel string) string {
 		return b.String()
 	}
 	sudo := "sudo "
-	if h.Node != "" { // a Proxmox node: a root shell, usually without sudo
+	if h.Node != "" || h.ProxmoxWanted { // a Proxmox node: a root shell, usually without sudo
 		sudo = ""
 	}
 	var b strings.Builder
@@ -298,7 +309,8 @@ func Command(base string, h managed.Host, code, panel string) string {
 	for _, f := range []struct {
 		on   bool
 		flag string
-	}{{o.PowerControl, "--power-control"}, {o.SelfUpdate, "--self-update"}, {o.WolRelay, "--wol"}, {o.IPMI, "--ipmi"}} {
+	}{{o.PowerControl, "--power-control"}, {o.SelfUpdate, "--self-update"}, {o.WolRelay, "--wol"}, {o.IPMI, "--ipmi"},
+		{h.ProxmoxWanted, "--proxmox"}} {
 		if f.on {
 			b.WriteString(" " + f.flag)
 		}
@@ -466,12 +478,34 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 	if h.Options.Control() && sec.ControlToken == "" {
 		h.Options.PowerControl, h.Options.SelfUpdate, h.Options.WolRelay = false, false, false
 	}
-	entry := h.Entry(sec)
+	pveNote := ""
+	var caPEM []byte
+	if h.ProxmoxWanted {
+		pve, ca, err := pveFromGrant(h, resp.Proxmox)
+		switch {
+		case err != nil:
+			fail("the node's Proxmox token is unusable: " + err.Error())
+			return
+		case pve == nil:
+			pveNote = " (the node sent no Proxmox API token: a cluster, or the command could not make one; it was added as a plain host)"
+			h.Proxmox = nil
+		default:
+			h.Proxmox, h.Node, h.SystemID = pve, pve.Node, pve.IDPrefix+"node-"+normalise.Slug(pve.Node)
+			sec.PVETokenSecret, caPEM = resp.Proxmox.TokenSecret, ca
+		}
+	}
+	entry := m.Store.EntryOf(h, sec)
 	if e.Repair {
 		m.Hooks.Remove(h.ID)
 	} else if err := managed.Check(m.Hooks.Config(), entry); err != nil {
 		fail("cannot add it: " + err.Error())
 		return
+	}
+	if caPEM != nil {
+		if err := m.Store.PutCA(h.ID, caPEM); err != nil {
+			fail("cannot save the node's CA: " + err.Error())
+			return
+		}
 	}
 	if err := m.Store.Put(h, sec); err != nil {
 		fail("cannot save it: " + err.Error())
@@ -481,9 +515,9 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 		fail("saved, but polling did not start (" + err.Error() + "): restart the panel")
 		return
 	}
-	note := ""
+	note := pveNote
 	if wanted := e.Options.Control(); wanted && sec.ControlToken == "" {
-		note = " (the agent sent no control token: power / update / Wake-on-LAN stay off)"
+		note += " (the agent sent no control token: power / update / Wake-on-LAN stay off)"
 	}
 	m.mu.Lock()
 	e.pairedAt = m.Now()
@@ -514,6 +548,58 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 		case <-tick.C:
 		}
 	}
+}
+
+var (
+	pveTokenIDRe = regexp.MustCompile(`^fairy@pve!panel-[a-z0-9-]{1,40}$`)
+	pveSecretRe  = regexp.MustCompile(`^[A-Za-z0-9-]{16,128}$`)
+	pveNodeRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,62}$`)
+	hostNameRe   = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+)
+
+// pveFromGrant checks the Proxmox token a node sent with its pairing answer and makes the managed proxmox:
+// entry: id prefix <site>-<node>- (unique among the panel's clusters; checked again by managed.Check), the API
+// at the address the panel reaches the agent at (port 8006), the certificate checked against the node's own CA
+// for the node's name. nil without a grant.
+func pveFromGrant(h managed.Host, g *enroll.ProxmoxGrant) (*managed.PVE, []byte, error) {
+	if g == nil {
+		return nil, nil, nil
+	}
+	switch {
+	case !pveTokenIDRe.MatchString(g.TokenID):
+		return nil, nil, fmt.Errorf("token id %q is not fairy@pve!panel-<node>", clip(g.TokenID, 80))
+	case !pveSecretRe.MatchString(g.TokenSecret):
+		return nil, nil, errors.New("no usable token secret")
+	case !pveNodeRe.MatchString(g.Node):
+		return nil, nil, fmt.Errorf("node name %q", clip(g.Node, 80))
+	case g.ServerName != "" && !hostNameRe.MatchString(g.ServerName):
+		return nil, nil, fmt.Errorf("certificate name %q", clip(g.ServerName, 80))
+	}
+	var ca []byte
+	if strings.TrimSpace(g.CAPEM) != "" {
+		ca = []byte(g.CAPEM)
+		if len(ca) > 64<<10 || !x509.NewCertPool().AppendCertsFromPEM(ca) {
+			return nil, nil, errors.New("the node's CA certificate does not parse")
+		}
+	}
+	prefix := normalise.Slug(g.Node) + "-"
+	if s := normalise.Slug(h.Site); s != "" {
+		prefix = s + "-" + prefix
+	}
+	if len(prefix) > 50 {
+		prefix = strings.Trim(prefix[:49], "-") + "-"
+	}
+	u, err := url.Parse(h.URL)
+	if err != nil || u.Hostname() == "" {
+		return nil, nil, errors.New("the agent's address does not parse")
+	}
+	apiURL := "https://" + net.JoinHostPort(u.Hostname(), "8006")
+	server := g.ServerName
+	if server == "" {
+		server = g.Node
+	}
+	return &managed.PVE{ID: strings.TrimSuffix(prefix, "-"), IDPrefix: prefix, Node: g.Node, URL: apiURL, ServerName: server,
+		TokenID: g.TokenID, CA: ca != nil}, ca, nil
 }
 
 func clip(s string, n int) string {

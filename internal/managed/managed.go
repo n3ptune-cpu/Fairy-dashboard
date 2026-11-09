@@ -51,6 +51,11 @@ type Host struct {
 	SystemID string      `yaml:"system_id,omitempty" json:"system_id"`
 	Options  Options     `yaml:"options" json:"options"`
 	Wol      *config.Wol `yaml:"wol,omitempty" json:"wol,omitempty"` // waking this host: its MACs and the relay agent
+	// Proxmox: the host is a standalone Proxmox VE node whose read-only API token came with the pairing
+	// (Add host "Yes: a new node"); its secret is in the host's secrets file, its CA next to it.
+	Proxmox *PVE `yaml:"proxmox,omitempty" json:"proxmox,omitempty"`
+	// ProxmoxWanted: Add host asked the node for its token (install.sh --proxmox); kept for Re-pair.
+	ProxmoxWanted bool `yaml:"proxmox_wanted,omitempty" json:"proxmox_wanted"`
 	// BMCPower: powering it on through its BMC, by a relay agent's bmc_relay target.
 	BMCPower *config.BMCPower `yaml:"bmc_power,omitempty" json:"bmc_power,omitempty"`
 	AddedAt  time.Time        `yaml:"added_at" json:"added_at"`
@@ -66,6 +71,25 @@ type Host struct {
 type Secret struct {
 	Token        string `json:"token"`
 	ControlToken string `json:"control_token,omitempty"`
+	// PVETokenSecret is the Proxmox API token's secret of a node added with Add host.
+	PVETokenSecret string `json:"pve_token_secret,omitempty"`
+}
+
+// PVE is a managed Proxmox VE node (no secret): the panel's proxmox: entry for it.
+type PVE struct {
+	ID         string `yaml:"id" json:"id"`                   // the proxmox: entry's id
+	IDPrefix   string `yaml:"id_prefix" json:"id_prefix"`     // <site>-<node>-: keeps its system ids unique
+	Node       string `yaml:"node" json:"node"`               // the node's name
+	URL        string `yaml:"url" json:"url"`                 // https://<Tailscale name>:8006
+	ServerName string `yaml:"server_name" json:"server_name"` // the name its certificate is issued for
+	TokenID    string `yaml:"token_id" json:"token_id"`       // fairy@pve!panel-<node>
+	CA         bool   `yaml:"ca" json:"ca"`                   // the node's own CA is kept (else public CAs)
+}
+
+// TokenName is the token's name on the node (for `pveum user token remove fairy@pve <name>`).
+func (p PVE) TokenName() string {
+	_, n, _ := strings.Cut(p.TokenID, "!")
+	return n
 }
 
 // Agent is the host as a config.yaml agents: entry.
@@ -79,6 +103,9 @@ func (h Host) Agent(sec Secret) config.Agent {
 	}
 	if sec.ControlToken != "" {
 		a.PowerControl, a.SelfUpdate, a.WolRelay = h.Options.PowerControl, h.Options.SelfUpdate, h.Options.WolRelay
+	}
+	if h.Proxmox != nil && h.SystemID != "" { // its own node: linked by id, not by name (names repeat across sites)
+		a.Node, a.LinksTo = "", h.SystemID
 	}
 	return a
 }
@@ -111,6 +138,25 @@ func (h Host) Override() *config.SystemOverride {
 // Entry builds the configuration entries for a host and its tokens.
 func (h Host) Entry(sec Secret) Entry {
 	return Entry{Host: h, Agent: h.Agent(sec), Override: h.Override()}
+}
+
+// ProxmoxEntry is the node's proxmox: entry (nil unless the host is a managed Proxmox node).
+func (h Host) ProxmoxEntry(sec Secret, caFile string) *config.Proxmox {
+	p := h.Proxmox
+	if p == nil {
+		return nil
+	}
+	prefix := p.IDPrefix
+	c := &config.Proxmox{ID: p.ID, ClusterName: p.Node, IDPrefix: &prefix, Standalone: true, Site: h.Site,
+		URLs: []string{p.URL}, TokenID: p.TokenID, TLSServerName: p.ServerName, Managed: true, TokenSecret: sec.PVETokenSecret}
+	if h.Site != "" {
+		g := h.Site
+		c.Group = &g
+	}
+	if p.CA {
+		c.CAFile = caFile
+	}
+	return c
 }
 
 var idRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -146,6 +192,26 @@ func (s *Store) Path() string { return filepath.Join(s.dir, FileName) }
 
 func (s *Store) secretPath(id string) string {
 	return filepath.Join(s.dir, "secrets", "agent-"+id+".json")
+}
+
+// CAPath is where a managed Proxmox node's CA certificate is kept.
+func (s *Store) CAPath(id string) string {
+	return filepath.Join(s.dir, "secrets", "pve-"+id+"-ca.pem")
+}
+
+// EntryOf is h.Entry plus its proxmox: entry (with the CA file of this store).
+func (s *Store) EntryOf(h Host, sec Secret) Entry {
+	e := h.Entry(sec)
+	e.Proxmox = h.ProxmoxEntry(sec, s.CAPath(h.ID))
+	return e
+}
+
+// PutCA keeps a managed Proxmox node's CA certificate (0600).
+func (s *Store) PutCA(id string, pemData []byte) error {
+	if !configutil.ValidID(id) {
+		return fmt.Errorf("invalid host id %q", id)
+	}
+	return writeAtomic(s.CAPath(id), pemData)
 }
 
 type fileData struct {
@@ -250,6 +316,9 @@ func (s *Store) Remove(id string) error {
 	if err := os.Remove(s.secretPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if err := os.Remove(s.CAPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	return nil
 }
 
@@ -272,11 +341,13 @@ func (s *Store) Secret(id string) (Secret, error) {
 	return sec, nil
 }
 
-// Entry is a host ready to be added to the configuration: the agent and (with Wake-on-LAN) its systems: entry.
+// Entry is a host ready to be added to the configuration: the agent, (with Wake-on-LAN / BMC power-on) its
+// systems: entry and (a Proxmox node) its proxmox: entry.
 type Entry struct {
 	Host     Host
 	Agent    config.Agent
 	Override *config.SystemOverride
+	Proxmox  *config.Proxmox
 }
 
 // Check validates one host against cfg exactly like a hand-written agents: (and systems:) entry, on a copy of
@@ -299,6 +370,17 @@ func Check(cfg *config.Panel, e Entry) error {
 		c.Systems = append(c.Systems, *e.Override)
 	}
 	c.Proxmox = slices.Clone(cfg.Proxmox)
+	if e.Proxmox != nil {
+		for _, x := range cfg.Proxmox {
+			if x.ID == e.Proxmox.ID {
+				return fmt.Errorf("a proxmox entry with id %s is already configured", x.ID)
+			}
+			if x.Prefix() == e.Proxmox.Prefix() {
+				return fmt.Errorf("the proxmox entry %s already uses the id prefix %q", x.ID, x.Prefix())
+			}
+		}
+		c.Proxmox = append(c.Proxmox, *e.Proxmox)
+	}
 	return c.Validate()
 }
 
@@ -317,7 +399,7 @@ func (s *Store) Merge(cfg *config.Panel) ([]Entry, []string, error) {
 			skipped = append(skipped, fmt.Sprintf("managed host %s: tokens unreadable (%v): Re-pair it", h.ID, err))
 			continue
 		}
-		e := h.Entry(sec)
+		e := s.EntryOf(h, sec)
 		if err := Check(cfg, e); err != nil {
 			skipped = append(skipped, fmt.Sprintf("managed host %s skipped: %v", h.ID, oneLine(err)))
 			continue
@@ -325,6 +407,9 @@ func (s *Store) Merge(cfg *config.Panel) ([]Entry, []string, error) {
 		cfg.Agents = append(cfg.Agents, e.Agent)
 		if e.Override != nil {
 			cfg.Systems = append(cfg.Systems, *e.Override)
+		}
+		if e.Proxmox != nil {
+			cfg.Proxmox = append(cfg.Proxmox, *e.Proxmox)
 		}
 		added = append(added, e)
 	}

@@ -2,6 +2,8 @@ package poller
 
 import (
 	"context"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -33,7 +35,7 @@ func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout ti
 	defer p.Bump()
 	defer p.mu.Unlock()
 	if err != nil {
-		p.proxmoxFailedLocked(pve, src, devices.Describe(err))
+		p.proxmoxFailedLocked(pve, src, proxmoxErr(err))
 		return
 	}
 	now, ts := p.now()
@@ -161,4 +163,15 @@ func (p *Poller) fetchNodeCPU(pve config.Proxmox, sid string) {
 // PVEPower posts with the separate power token (never the read-only one).
 func (p *Poller) PVEPower(ctx context.Context, clusterID, path string, data url.Values) (any, error) {
 	return p.Backend.PVEPower(ctx, clusterID, path, data)
+}
+
+// proxmoxErr describes a Proxmox poll error; a certificate issued for another name says how to fix it.
+func proxmoxErr(err error) string {
+	var he x509.HostnameError
+	if errors.As(err, &he) && he.Certificate != nil {
+		names := strings.Join(he.Certificate.DNSNames, ", ")
+		return fmt.Sprintf("the node's certificate is not issued for %q (it lists %s): run `pvecm updatecerts --force` and "+
+			"`systemctl restart pveproxy` on the node, or set tls_server_name to one of those names", he.Host, names)
+	}
+	return devices.Describe(err)
 }

@@ -57,22 +57,30 @@ type OIDC struct {
 // Proxmox is one `proxmox:` cluster (or standalone host): API URLs for failover, the read-only token and the
 // optional separate power token.
 type Proxmox struct {
-	ID                  string   `yaml:"id"`
-	ClusterName         string   `yaml:"cluster_name"`
-	IDPrefix            *string  `yaml:"id_prefix"`
-	Standalone          bool     `yaml:"standalone"`
-	Group               *string  `yaml:"group"`
-	Owner               *string  `yaml:"owner"`
-	Site                string   `yaml:"site"` // default site of its nodes and guests (the Users page can override)
-	URLs                []string `yaml:"urls"`
-	TokenID             string   `yaml:"token_id"`
-	TokenSecretEnv      string   `yaml:"token_secret_env"`
-	VerifyTLS           *bool    `yaml:"verify_tls"`
-	CAFile              string   `yaml:"ca_file"`
-	IncludeTemplates    bool     `yaml:"include_templates"`
-	PowerTokenID        string   `yaml:"power_token_id"`
-	PowerTokenSecretEnv string   `yaml:"power_token_secret_env"`
-	NodePower           bool     `yaml:"node_power"`
+	ID             string   `yaml:"id"`
+	ClusterName    string   `yaml:"cluster_name"`
+	IDPrefix       *string  `yaml:"id_prefix"`
+	Standalone     bool     `yaml:"standalone"`
+	Group          *string  `yaml:"group"`
+	Owner          *string  `yaml:"owner"`
+	Site           string   `yaml:"site"` // default site of its nodes and guests (the Users page can override)
+	URLs           []string `yaml:"urls"`
+	TokenID        string   `yaml:"token_id"`
+	TokenSecretEnv string   `yaml:"token_secret_env"`
+	VerifyTLS      *bool    `yaml:"verify_tls"`
+	CAFile         string   `yaml:"ca_file"`
+	// TLSServerName is the name the node's certificate must be issued for, when it differs from the URL's
+	// host (Proxmox's own certificate lists the node's name, not its Tailscale name).
+	TLSServerName       string `yaml:"tls_server_name"`
+	IncludeTemplates    bool   `yaml:"include_templates"`
+	PowerTokenID        string `yaml:"power_token_id"`
+	PowerTokenSecretEnv string `yaml:"power_token_secret_env"`
+	NodePower           bool   `yaml:"node_power"`
+
+	// Managed is set for a node added in the panel (Add host, managed-hosts.yaml): its token secret comes from
+	// the panel's state folder (TokenSecret) instead of an environment variable. Never read from config.yaml.
+	Managed     bool   `yaml:"-" json:"-"`
+	TokenSecret string `yaml:"-" json:"-"`
 }
 
 // Prefix is the id prefix that keeps system ids unique across clusters ("" for the legacy single cluster).

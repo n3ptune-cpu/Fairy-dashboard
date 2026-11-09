@@ -59,8 +59,11 @@ type Poller struct {
 	clusters  map[string]config.Proxmox
 
 	// idsMu guards clusterIDs and present (read by scheduler callbacks, which must never take mu).
-	idsMu   sync.Mutex
-	present map[string]bool
+	idsMu sync.Mutex
+	// clustersMu guards clusters and Cfg.Proxmox (Proxmox nodes added / removed in the panel). Never held while
+	// taking another lock.
+	clustersMu sync.RWMutex
+	present    map[string]bool
 
 	mu            sync.Mutex
 	systems       map[string]model.System
@@ -140,14 +143,7 @@ func (p *Poller) buildJobs() {
 	cfg, iv, sch := p.Cfg, p.Cfg.Intervals, p.Scheduler
 	tc := cfg.RequestTimeout
 	for _, c := range cfg.Proxmox {
-		c := c
-		sch.Add(&scheduler.Job{Key: "proxmox:" + c.ID, DefaultS: iv.Proxmox, TimeoutCap: tc,
-			Fn: func(ctx context.Context, t time.Duration) float64 { p.pollProxmox(ctx, c, t); return 0 },
-			Systems: func() []string {
-				p.idsMu.Lock()
-				defer p.idsMu.Unlock()
-				return slices.Clone(p.clusterIDs[c.ID])
-			}})
+		sch.Add(p.proxmoxJob(c))
 	}
 	for _, a := range cfg.Agents {
 		sch.Add(p.agentJob(a))
@@ -171,6 +167,17 @@ func (p *Poller) buildJobs() {
 	}
 	sch.Add(&scheduler.Job{Key: "history", DefaultS: iv.History, Phase: 2,
 		Fn: func(context.Context, time.Duration) float64 { p.Power.SampleHistory(); p.UPS.SampleHistory(); return 0 }})
+}
+
+// proxmoxJob polls one Proxmox cluster (or standalone node).
+func (p *Poller) proxmoxJob(c config.Proxmox) *scheduler.Job {
+	return &scheduler.Job{Key: "proxmox:" + c.ID, DefaultS: p.Cfg.Intervals.Proxmox, TimeoutCap: p.Cfg.RequestTimeout,
+		Fn: func(ctx context.Context, t time.Duration) float64 { p.pollProxmox(ctx, c, t); return 0 },
+		Systems: func() []string {
+			p.idsMu.Lock()
+			defer p.idsMu.Unlock()
+			return slices.Clone(p.clusterIDs[c.ID])
+		}}
 }
 
 // agentJob polls one agent.
@@ -246,8 +253,86 @@ func (p *Poller) source(name string, ok bool, now time.Time, latency *time.Durat
 
 // ClusterCfg returns the configured Proxmox cluster with this id.
 func (p *Poller) ClusterCfg(id string) (config.Proxmox, bool) {
+	p.clustersMu.RLock()
+	defer p.clustersMu.RUnlock()
 	c, ok := p.clusters[id]
 	return c, ok
+}
+
+// Clusters is every configured Proxmox cluster: config.yaml's, then the nodes added in the panel. Do not
+// modify it.
+func (p *Poller) Clusters() []config.Proxmox {
+	p.clustersMu.RLock()
+	defer p.clustersMu.RUnlock()
+	return p.Cfg.Proxmox
+}
+
+// ProxmoxSetter is implemented by backends that keep per-cluster clients (the HTTP backend).
+type ProxmoxSetter interface {
+	SetProxmox(c config.Proxmox) error
+	ForgetProxmox(id string)
+}
+
+// AddProxmox starts polling a Proxmox node added in the panel (Add host), without a restart. The caller has
+// validated it (managed.Check).
+func (p *Poller) AddProxmox(c config.Proxmox) error {
+	p.clustersMu.Lock()
+	if _, dup := p.clusters[c.ID]; dup {
+		p.clustersMu.Unlock()
+		return fmt.Errorf("proxmox %s is already configured", c.ID)
+	}
+	if ps, ok := p.Backend.(ProxmoxSetter); ok {
+		if err := ps.SetProxmox(c); err != nil {
+			p.clustersMu.Unlock()
+			return err
+		}
+	}
+	p.clusters[c.ID] = c
+	p.Cfg.Proxmox = append(slices.Clone(p.Cfg.Proxmox), c)
+	p.clustersMu.Unlock()
+	p.idsMu.Lock()
+	p.clusterIDs[c.ID] = []string{}
+	p.idsMu.Unlock()
+	p.Scheduler.Add(p.proxmoxJob(c))
+	p.Scheduler.Kick("proxmox:" + c.ID)
+	return nil
+}
+
+// RemoveProxmox stops polling a Proxmox node added in the panel and forgets its node and guests.
+func (p *Poller) RemoveProxmox(id string) {
+	p.clustersMu.Lock()
+	c, ok := p.clusters[id]
+	if !ok || !c.Managed {
+		p.clustersMu.Unlock()
+		return
+	}
+	delete(p.clusters, id)
+	p.Cfg.Proxmox = slices.DeleteFunc(slices.Clone(p.Cfg.Proxmox), func(x config.Proxmox) bool { return x.ID == id })
+	p.clustersMu.Unlock()
+	p.Scheduler.Remove("proxmox:" + id)
+	if ps, ok := p.Backend.(ProxmoxSetter); ok {
+		ps.ForgetProxmox(id)
+	}
+	p.idsMu.Lock()
+	delete(p.clusterIDs, id)
+	p.idsMu.Unlock()
+	p.mu.Lock()
+	for sid, s := range p.systems {
+		if s.Source == "proxmox" && model.Deref(s.ClusterID) == id {
+			delete(p.systems, sid)
+		}
+	}
+	for ref, r := range p.pveRefs {
+		if r.Cluster == id {
+			delete(p.pveRefs, ref)
+		}
+	}
+	delete(p.sources, "proxmox:"+id)
+	p.sourceOrder = slices.DeleteFunc(p.sourceOrder, func(x string) bool { return x == "proxmox:"+id })
+	p.syncPresent()
+	p.snapVer, p.snapJSONVer = -1, -1
+	p.version++
+	p.mu.Unlock()
 }
 
 // PVERef returns the Proxmox cluster, node, kind and vmid behind a system id (ok=false until seen).

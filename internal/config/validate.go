@@ -22,6 +22,7 @@ var (
 	tokenIDRe   = regexp.MustCompile(`^[^@\s]+@[^!\s]+![A-Za-z0-9_.-]+$`)
 	macRe       = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{12}$`)
 	bmcTargetRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+	hostnameRe  = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 	siteRe      = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._'&-]{0,39}$`)
 )
 
@@ -206,6 +207,12 @@ func (c *Panel) validateProxmox(errs *problems) {
 		}
 		if p.TokenSecretEnv != "" && !envNameRe.MatchString(p.TokenSecretEnv) {
 			errs.add("proxmox %s: token_secret_env must be an env var name", p.ID)
+		}
+		if p.Managed && len(p.TokenSecret) < 16 {
+			errs.add("proxmox %s: the token secret from Add host is missing (Re-pair the host)", p.ID)
+		}
+		if p.TLSServerName != "" && !hostnameRe.MatchString(p.TLSServerName) {
+			errs.add("proxmox %s: tls_server_name must be a host name", p.ID)
 		}
 		if (p.PowerTokenID == "") != (p.PowerTokenSecretEnv == "") {
 			errs.add("proxmox %s: power_token_id and power_token_secret_env go together", p.ID)

@@ -59,7 +59,7 @@ func (p *Poller) linkOfLocked(a config.Agent) string {
 	}
 	if a.Node != "" {
 		var ids []string
-		for _, c := range p.Cfg.Proxmox {
+		for _, c := range p.Clusters() {
 			ids = append(ids, c.Prefix()+"node-"+normalise.Slug(a.Node))
 		}
 		p.idsMu.Lock()

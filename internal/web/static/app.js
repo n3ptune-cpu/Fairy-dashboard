@@ -1304,7 +1304,7 @@ async function openAddHost() {
       <label class="mfield"><span>Name in Tailscale <b>*</b></span><input class="input" id="ah-name" required maxlength="63" autocomplete="off" spellcheck="false" placeholder="e.g. straw-pc"></label>
       <label class="mfield"><span>System</span><select class="select" id="ah-os"><option value="windows">Windows</option><option value="linux">Linux</option></select></label>
       <label class="mfield"><span>Site</span><select class="select" id="ah-site"><option value="">No site (admins only)</option>${d.sites.map((x) => `<option>${esc(x)}</option>`).join("")}</select></label>
-      <label class="mfield"><span>Is it a Proxmox node?</span><select class="select" id="ah-node"><option value="">No</option>${d.nodes.map((n) => `<option value="${esc(n.name)}">Yes: ${esc(n.name)}${n.cluster ? ` (${esc(n.cluster)})` : ""}</option>`).join("")}</select></label>
+      <label class="mfield"><span>Is it a Proxmox node?</span><select class="select" id="ah-node"><option value="">No</option><option value="__new__" title="The command makes the panel a read-only Proxmox API token on the node (standalone nodes)">Yes: a new node</option>${d.nodes.map((n) => `<option value="${esc(n.name)}">Yes: ${esc(n.name)}${n.cluster ? ` (${esc(n.cluster)})` : ""}, already in the panel</option>`).join("")}</select></label>
       <label class="mfield full"><span>Address <span class="note">optional: only if the panel cannot reach the name (Tailscale IP or full name)</span></span><input class="input" id="ah-addr" maxlength="253" autocomplete="off" spellcheck="false" placeholder="100.x.y.z"></label>
     </div>
     <div class="opts" role="group" aria-label="Options">${OPT_LABEL.map(([k, l, n]) => `<label class="check opt"><input type="checkbox" data-opt="${k}"><span>${esc(l)}<span class="note">${esc(n)}</span></span></label>`).join("")}
@@ -1312,8 +1312,8 @@ async function openAddHost() {
     <div class="form-grid">
       <label class="mfield"><span>Wake-on-LAN MAC(s) <span class="note">optional</span></span><input class="input" id="ah-macs" autocomplete="off" spellcheck="false" placeholder="aa:bb:cc:dd:ee:ff"></label>
       <label class="mfield"><span>Woken by</span><select class="select" id="ah-relay"><option value="">–</option>${d.relays.map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}</select></label>
-      <label class="mfield"><span>Or powered on via BMC by <span class="note">optional, agent v0.4.2 bmc_relay</span></span><select class="select" id="ah-bmc-relay"><option value="">–</option>${(d.bmc_relays || []).map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}</select></label>
-      <label class="mfield"><span>BMC target id <span class="note">as in that agent's bmc_relay</span></span><input class="input" id="ah-bmc-target" maxlength="40" autocomplete="off" spellcheck="false" placeholder="cyrene-bmc"></label>
+      <label class="mfield"><span title="An agent with bmc_relay (Fairy-agent v0.4.2) that can reach this machine's BMC">Or powered on via BMC by <span class="note">optional</span></span><select class="select" id="ah-bmc-relay"><option value="">–</option>${(d.bmc_relays || []).map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}</select></label>
+      <label class="mfield"><span>BMC target id <span class="note">its bmc_relay id</span></span><input class="input" id="ah-bmc-target" maxlength="40" autocomplete="off" spellcheck="false" placeholder="cyrene-bmc"></label>
     </div>
     ${d.panel_address ? `<p class="note" id="ah-panel">Panel address: <code>${esc(d.panel_address)}</code> (${esc(d.panel_address_source || "config")})${d.panel_address_via ? ` <span title="how the panel found its own Tailscale address">· ${esc(d.panel_address_via)}</span>` : ""}${d.panel_address.includes(":") ? ' <b>IPv6 only: agents need the panel\'s Tailscale IPv4; set <code>enroll: {panel_address: 100.x.y.z}</code></b>' : ""}</p>`
       : '<div class="warnbox">The panel does not know its own Tailscale address (no Tailscale interface or tailscaled status found): set <code>enroll: {panel_address: 100.x.y.z}</code> in config.yaml.</div>'}
@@ -1338,7 +1338,7 @@ async function openAddHost() {
     m.querySelectorAll("[data-opt]").forEach((x) => (opts[x.dataset.opt] = x.checked && !x.disabled));
     if (opts.ups) opts.ups_name = $("#ah-ups").value.trim();
     const body = { name: $("#ah-name").value.trim(), address: $("#ah-addr").value.trim(), os: os.value, site: $("#ah-site").value,
-      node: $("#ah-node").value, options: opts, wol_macs: $("#ah-macs").value.split(/[\s,;]+/).filter(Boolean), wol_relay: $("#ah-relay").value,
+      node: $("#ah-node").value === "__new__" ? "" : $("#ah-node").value, proxmox_new: $("#ah-node").value === "__new__", options: opts, wol_macs: $("#ah-macs").value.split(/[\s,;]+/).filter(Boolean), wol_relay: $("#ah-relay").value,
       bmc_relay: $("#ah-bmc-relay").value, bmc_target: $("#ah-bmc-target").value.trim() };
     $("#ah-go").disabled = true;
     try {
@@ -1411,6 +1411,8 @@ function managedBox(s) {
   return `<div class="panel glass pad"><h3>Added with Add host</h3>
     <div class="list-row"><span>Added</span><span>${h.added_at ? new Date(h.added_at).toLocaleDateString() : "–"}${h.added_by ? ` · by ${esc(h.added_by)}` : ""}</span></div>
     <div class="list-row"><span>Address</span><span><code>${esc(h.url)}</code></span></div>
+    ${h.proxmox ? `<div class="list-row"><span>Proxmox API</span><span><code>${esc(h.proxmox.url)}</code> · read-only token <code>${esc(h.proxmox.token_id)}</code></span></div>`
+      : h.proxmox_wanted ? '<div class="list-row"><span>Proxmox API</span><span class="note">no token came with the pairing (a cluster, or the command could not make one)</span></div>' : ""}
     <div class="row-gap"><button class="btn" type="button" data-act="mh-repair" ${why ? "disabled" : ""} title="A new join code, when the panel lost this host's tokens">Re-pair</button>
       <button class="btn danger" type="button" data-act="mh-remove" ${why ? "disabled" : ""}>Remove from the panel</button></div>
     <div class="note">Remove stops polling and deletes the panel's tokens for it; the agent keeps running on the machine until you uninstall it there.</div></div>`;
@@ -1445,9 +1447,18 @@ document.addEventListener("click", (e) => {
       if (r) openEnrollDialog(r);
     });
   } else {
-    typedDialog(`Remove ${h.name} from the panel?`, "The panel stops polling it and deletes its tokens. The agent keeps running on the machine until you uninstall it there.", h.name, "Remove", async (v) => {
+    typedDialog(`Remove ${h.name} from the panel?`, `The panel stops polling it and deletes its tokens${h.proxmox ? " (and its Proxmox node)" : ""}. The agent keeps running on the machine until you uninstall it there.`, h.name, "Remove", async (v) => {
       const r = await controlCall({ kind: "request", label: `Remove ${h.name}` }, () => api(path, { method: "DELETE", body: JSON.stringify({ confirm: v }) }));
-      if (r) { closeModal(); flash(r.message || `${h.name} removed`); location.hash = "#/"; loadManaged(); }
+      if (!r) return;
+      location.hash = "#/"; loadManaged();
+      if (!h.proxmox) { closeModal(); flash(r.message || `${h.name} removed`); return; }
+      const m = $("#modal"); // the node's token stays until deleted there: show the one command to do it
+      m.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="rm-t"><h3 id="rm-t">${esc(h.name)} removed</h3>
+        <p>Its read-only Proxmox token still exists on the node. To delete it, run this there (as root):</p>
+        <div class="cmd-box">pveum user token remove fairy@pve ${esc(h.proxmox.token_id.split("!")[1] || "")}</div>
+        <div class="row-gap end"><button class="btn primary" type="button" id="rm-ok">Done</button></div></div>`;
+      m.hidden = false;
+      $("#rm-ok").onclick = closeModal;
     });
   }
 });

@@ -2,7 +2,14 @@ package web
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +18,7 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
@@ -153,4 +161,107 @@ func TestAddHostPanelAddressSource(t *testing.T) {
 	if r.code != 400 || !strings.Contains(string(r.raw), "IPv4") {
 		t.Fatal(r.code, string(r.raw))
 	}
+}
+
+// Add host for a new Proxmox VE node (agent v0.4.2 --proxmox): the command asks the node for its read-only
+// token, the panel keeps the token secret (0600) and the node's CA, polls the node through the Proxmox API at
+// once, attaches the agent to it, and Remove takes both away and says how to delete the token on the node.
+func TestAddHostProxmoxNode(t *testing.T) {
+	e := setup(t)
+	e.s.Enroll.Interval = 20 * time.Millisecond
+	e.s.control = newRateLimiter(100)
+	e.s.Enroll.PanelAddr = "100.88.109.47"
+	ca := testCA(t)
+	e.s.Enroll.Pair = func(context.Context, string, string) (int, enroll.Response, string, error) {
+		return 200, enroll.Response{AgentVersion: "43-abc", Platform: "linux", Token: "node-read-token-xxxxxxxxxxxxxxxxxxxx",
+			ControlToken: "node-control-token-yyyyyyyyyyyyyyyyy", Proxmox: &enroll.ProxmoxGrant{TokenID: "fairy@pve!panel-nsx-kachina",
+				TokenSecret: "0b7c4e2a-1111-2222-3333-444455556666", CAPEM: string(ca), Node: "NSX-KACHINA",
+				URL: "https://nsx-kachina.tailnet.ts.net:8006", ServerName: "NSX-KACHINA"}}, "", nil
+	}
+	e.b.Mu.Lock()
+	e.b.Metrics["nsx-kachina-2"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	e.b.Mu.Unlock()
+	c := e.cookie(controller(), 0)
+	csrf := []string{"X-Requested-With", "fairy"}
+	bad := map[string]any{"name": "nsx-kachina-2", "os": "windows", "proxmox_new": true}
+	if r := e.do("POST", "/api/admin/hosts", bad, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
+		t.Fatal("a Proxmox node is Linux", r.code)
+	}
+	body := map[string]any{"name": "nsx-kachina-2", "os": "linux", "site": "Neptune", "proxmox_new": true, "options": map[string]any{"power_control": true}}
+	r := e.do("POST", "/api/admin/hosts", body, append([]string{"Cookie", c}, csrf...)...)
+	if r.code != 201 {
+		t.Fatal(r.code, string(r.raw))
+	}
+	cmd := r.body["command"].(string)
+	if !strings.Contains(cmd, "| sh -s -- --join ") || !strings.HasSuffix(cmd, "--power-control --proxmox") {
+		t.Fatal(cmd)
+	}
+	id := r.body["id"].(string)
+	var st string
+	for i := 0; i < 200 && st != "online"; i++ {
+		time.Sleep(20 * time.Millisecond)
+		e.s.Poller.PollOnce(context.Background())
+		st, _ = e.do("GET", "/api/admin/enrollments/"+id, nil, "Cookie", c).body["state"].(string)
+	}
+	if st != "online" {
+		t.Fatal("state", st, e.do("GET", "/api/admin/enrollments/"+id, nil, "Cookie", c).body["message"])
+	}
+	var pc *config.Proxmox
+	for _, x := range e.s.Poller.Clusters() {
+		if x.Managed {
+			x := x
+			pc = &x
+		}
+	}
+	if pc == nil || pc.ID != "neptune-nsx-kachina" || pc.Prefix() != "neptune-nsx-kachina-" || pc.TokenID != "fairy@pve!panel-nsx-kachina" ||
+		pc.URLs[0] != "https://nsx-kachina-2:8006" || pc.TLSServerName != "NSX-KACHINA" || !pc.Standalone || pc.Site != "Neptune" {
+		t.Fatalf("%+v", pc)
+	}
+	if b, _ := os.ReadFile(pc.CAFile); string(b) != string(ca) {
+		t.Fatal("CA not kept", pc.CAFile)
+	}
+	a, _ := e.s.Poller.AgentByID("nsx-kachina-2")
+	if a.LinksTo != "neptune-nsx-kachina-node-nsx-kachina" {
+		t.Fatalf("agent not attached to its node: %+v", a)
+	}
+	if g := e.do("GET", "/api/systems/neptune-nsx-kachina-node-nsx-kachina", nil, "Cookie", c); g.code != 200 || g.body["kind"] != "node" {
+		t.Fatal("node not polled", g.code, string(g.raw))
+	}
+	sec := filepath.Join(e.s.Cfg.DataDir, "secrets", "agent-nsx-kachina-2.json")
+	sb, _ := os.ReadFile(sec)
+	if fi, _ := os.Stat(sec); !strings.Contains(string(sb), "0b7c4e2a-1111-2222-3333-444455556666") || fi.Mode().Perm() != 0o600 {
+		t.Fatal("token secret", string(sb))
+	}
+	y, _ := os.ReadFile(filepath.Join(e.s.Cfg.DataDir, "managed-hosts.yaml"))
+	if strings.Contains(string(y), "0b7c4e2a") || !strings.Contains(string(y), "fairy@pve!panel-nsx-kachina") {
+		t.Fatal("managed-hosts.yaml", string(y))
+	}
+	// Remove: node and agent gone, CA and secret deleted, the token command shown
+	rm := e.do("DELETE", "/api/admin/hosts/nsx-kachina-2", map[string]any{"confirm": "nsx-kachina-2"}, append([]string{"Cookie", c}, csrf...)...)
+	if rm.code != 200 || !strings.Contains(rm.body["message"].(string), "pveum user token remove fairy@pve panel-nsx-kachina") {
+		t.Fatal(rm.code, string(rm.raw))
+	}
+	for _, x := range e.s.Poller.Clusters() {
+		if x.Managed {
+			t.Fatal("cluster kept", x.ID)
+		}
+	}
+	if _, err := os.Stat(pc.CAFile); !os.IsNotExist(err) {
+		t.Fatal("CA kept", err)
+	}
+	if g := e.do("GET", "/api/systems/neptune-nsx-kachina-node-nsx-kachina", nil, "Cookie", c); g.code != 404 {
+		t.Fatal("node still shown", g.code)
+	}
+}
+
+func testCA(t *testing.T) []byte {
+	t.Helper()
+	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Proxmox Virtual Environment"}, IsCA: true,
+		BasicConstraintsValid: true, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }

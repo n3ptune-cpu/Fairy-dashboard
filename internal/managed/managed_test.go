@@ -84,3 +84,58 @@ func TestStoreAndMerge(t *testing.T) {
 		t.Fatal(hosts)
 	}
 }
+
+// A Proxmox node added with Add host comes back at start as a proxmox: entry (its secret and CA from the
+// panel's state); config.yaml wins on the same id, and a clashing id_prefix is refused.
+func TestManagedProxmoxNode(t *testing.T) {
+	cfg := testutil.Config(t, []string{"https://pve.example:8006"}, "http://127.0.0.1:1", "http://127.0.0.1:2")
+	s := NewStore(cfg.DataDir)
+	node := Host{ID: "asus-i7", Name: "asus-i7", URL: "http://asus-i7:9101", Site: "Straw", OS: "linux", Node: "ASUS-i7",
+		SystemID: "straw-asus-i7-node-asus-i7", ProxmoxWanted: true,
+		Proxmox: &PVE{ID: "straw-asus-i7", IDPrefix: "straw-asus-i7-", Node: "ASUS-i7", URL: "https://asus-i7:8006", ServerName: "ASUS-i7",
+			TokenID: "fairy@pve!panel-asus-i7", CA: true}}
+	sec := Secret{Token: tokA, ControlToken: tokB, PVETokenSecret: "0b7c4e2a-1111-2222-3333-444455556666"}
+	if err := s.PutCA(node.ID, []byte("-----BEGIN CERTIFICATE-----\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(node, sec); err != nil {
+		t.Fatal(err)
+	}
+	if node.Proxmox.TokenName() != "panel-asus-i7" {
+		t.Fatal(node.Proxmox.TokenName())
+	}
+	c := *cfg
+	added, skipped, err := s.Merge(&c)
+	if err != nil || len(added) != 1 || len(skipped) != 0 {
+		t.Fatal(added, skipped, err)
+	}
+	px := c.Proxmox[len(c.Proxmox)-1]
+	if !px.Managed || px.TokenSecret != sec.PVETokenSecret || px.CAFile != s.CAPath("asus-i7") || px.TLSServerName != "ASUS-i7" ||
+		px.Prefix() != "straw-asus-i7-" || *px.Group != "Straw" {
+		t.Fatalf("%+v", px)
+	}
+	if a := c.Agents[len(c.Agents)-1]; a.LinksTo != "straw-asus-i7-node-asus-i7" || a.Node != "" {
+		t.Fatalf("%+v", a)
+	}
+	// a hand-written cluster with the same id prefix: refused
+	clash := *cfg
+	p := "straw-asus-i7-"
+	clash.Proxmox = append(clash.Proxmox[:len(clash.Proxmox):len(clash.Proxmox)], config.Proxmox{ID: "straw-by-hand", IDPrefix: &p,
+		URLs: []string{"https://x:8006"}, TokenID: "a@pve!b"})
+	if err := Check(&clash, s.EntryOf(node, sec)); err == nil || !strings.Contains(err.Error(), "id prefix") {
+		t.Fatal(err)
+	}
+	// config.yaml has a proxmox entry with the same id: it wins, the managed node is skipped at start
+	same := *cfg
+	same.Proxmox = append(same.Proxmox[:len(same.Proxmox):len(same.Proxmox)], config.Proxmox{ID: "straw-asus-i7", URLs: []string{"https://x:8006"}, TokenID: "a@pve!b"})
+	if _, skipped, _ := s.Merge(&same); len(skipped) != 1 || !strings.Contains(skipped[0], "already configured") {
+		t.Fatal(skipped)
+	}
+	// Remove deletes the CA too
+	if err := s.Remove("asus-i7"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(s.CAPath("asus-i7")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("CA kept", err)
+	}
+}

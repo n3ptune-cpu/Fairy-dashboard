@@ -35,7 +35,7 @@ func (p *Poller) SummaryOf(systems []model.System, keepSource func(name string) 
 		byKind[s.Kind]++
 	}
 	clusters := []model.ClusterTotals{}
-	for _, c := range p.Cfg.Proxmox {
+	for _, c := range p.Clusters() {
 		ct := clusterTotals(c, systems)
 		if keepSource != nil && ct.NodesTotal+ct.GuestsTotal == 0 {
 			continue

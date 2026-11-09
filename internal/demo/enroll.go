@@ -53,8 +53,14 @@ func Pair(_ context.Context, rawURL, proof string) (int, enroll.Response, string
 		platform = "windows"
 	}
 	paired[id] = platform
-	return 200, enroll.Response{AgentVersion: "42-1a2b3c4", Hostname: u.Hostname(), Platform: platform,
-		Features: map[string]bool{"processes": true, "power_control": true}, Token: token(), ControlToken: token()}, "", nil
+	resp := enroll.Response{AgentVersion: "42-1a2b3c4", Hostname: u.Hostname(), Platform: platform,
+		Features: map[string]bool{"processes": true, "power_control": true}, Token: token(), ControlToken: token()}
+	if strings.Contains(strings.ToLower(u.Hostname()), "pve") { // "Yes: a new node": the node's read-only token
+		node := strings.ToUpper(u.Hostname())
+		resp.Proxmox = &enroll.ProxmoxGrant{TokenID: "fairy@pve!panel-" + id, TokenSecret: "0b7c4e2a-demo-demo-demo-444455556666",
+			Node: node, URL: "https://" + u.Hostname() + ".demo.ts.net:8006", ServerName: node}
+	}
+	return 200, resp, "", nil
 }
 
 // rememberPaired makes managed hosts from an earlier demo run report again.

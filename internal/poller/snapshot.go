@@ -289,7 +289,7 @@ func sortSystems(list []model.System) {
 // powerActions: configured (not necessarily currently available) power actions, for list badges / menus.
 func (p *Poller) powerActions(s model.System) []string {
 	out := []string{}
-	c, hasC := p.clusters[model.Deref(s.ClusterID)]
+	c, hasC := p.ClusterCfg(model.Deref(s.ClusterID))
 	if s.Kind == "qemu" || s.Kind == "lxc" {
 		if hasC && c.PowerTokenID != "" {
 			out = append(out, "start", "shutdown", "reboot", "stop")

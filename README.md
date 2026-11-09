@@ -162,7 +162,22 @@ socket `/var/run/tailscale/tailscaled.sock` (`GET /localapi/v0/status`, 2 s time
 and only shown: agents pair over IPv4, so set `panel_address` then. Set it too when the panel has several
 Tailscale-range addresses, or the agents reach it at another address. The panel must resolve MagicDNS names (or
 give the address).
-Not yet: adding a Proxmox node itself (the API token) from the panel; nodes stay in `proxmox:`.
+
+**A new Proxmox VE node** (panel and Fairy-agent v0.4.2): "Is it a Proxmox node? → Yes: a new node". The Linux
+command gets `--proxmox`; run it as root on the node. There `fairy-agent join` makes the panel a read-only API
+token (user `fairy@pve`, role `PVEAuditor` on `/`, token `fairy@pve!panel-<node>` without privilege
+separation; a re-run replaces only that token) and the agent hands it to the panel once, with its own tokens.
+The panel then keeps the token secret with the host's tokens in `<data_dir>/secrets/agent-<id>.json` (0600) and
+the node's CA (`/etc/pve/pve-root-ca.pem`) in `<data_dir>/secrets/pve-<id>-ca.pem`, adds a `proxmox:` entry for
+the node at once (standalone, `id_prefix` `<site>-<node>-`, which must not clash with another entry's; URL
+`https://<the host's address>:8006`, certificate verified against that CA for the node's name, which Proxmox's
+own certificate lists: `tls_server_name`), and attaches the agent to the node. If the certificate is not issued
+for that name the host page and the Add host dialog say so (`pvecm updatecerts --force`, then `systemctl restart
+pveproxy`). **Remove** takes the node and its guests away too and shows the one command that deletes the token
+on the node (`pveum user token remove fairy@pve panel-<node>`). Standalone nodes only: for a node in a cluster
+the command says so and the host is added without the token (write the cluster under `proxmox:` by hand). A
+hand-written `proxmox:` entry keeps working and wins on the same id. `tls_server_name` can also be set on
+hand-written entries.
 
 ### Notifications
 

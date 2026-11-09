@@ -51,8 +51,11 @@ func NewBackend(cfg *config.Panel) *Backend {
 // FetchProxmox returns simulated cluster/resources rows, with guests' simulated power state applied.
 func (b *Backend) FetchProxmox(_ context.Context, pve config.Proxmox, _ time.Duration) ([]jsonx.M, error) {
 	rows := proxmoxResources()
-	if pve.ID == "straw" {
+	switch {
+	case pve.ID == "straw":
 		rows = strawResources()
+	case pve.Managed: // added in the demo with Add host
+		rows = newNodeResources(pve.ClusterName)
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()

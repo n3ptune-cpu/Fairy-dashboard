@@ -55,6 +55,8 @@ proxmox:
     token_id: fairy@pve!panel             # read-only token; secret: FAIRY_PROXMOX_TOKEN_SECRET (or token_secret_env)
     verify_tls: true
     ca_file: /etc/fairy/pve-root-ca.pem
+    # tls_server_name: NSX-KACHINA        # the name the certificate is issued for, when not the URL's host (Proxmox's own
+    #                                     # certificate lists the node's name, not its Tailscale name)
     # Optional separate token with only VM.PowerMgmt (role "FairyPower") -> guest start/shutdown/reboot/stop
     # power_token_id: fairy@pve!power
     # power_token_secret_env: FAIRY_PROXMOX_POWER_TOKEN

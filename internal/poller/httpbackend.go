@@ -26,6 +26,7 @@ import (
 type httpBackend struct {
 	p             *Poller
 	tokMu         sync.RWMutex // agentTokens / controlTokens change when hosts are added in the panel
+	pveMu         sync.RWMutex // pve / pveSecrets / powerSecrets change when Proxmox nodes are added in the panel
 	pve           map[string]*http.Client
 	pveSecrets    map[string]string
 	powerSecrets  map[string]string
@@ -46,29 +47,62 @@ func newHTTPBackend(p *Poller) (*httpBackend, error) {
 		}
 	}
 	for _, c := range cfg.Proxmox { // one client per cluster: each has its own CA / verify setting and token
-		tc, err := power.TLSConfig(c.Verify(), c.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("proxmox %s: %w", c.ID, err)
-		}
-		b.pve[c.ID] = devices.TLSClient(0, tc)
-		if c.TokenSecretEnv != "" {
-			s, err := configutil.EnvSecret(c.TokenSecretEnv, "proxmox "+c.ID, 1)
-			if err != nil {
-				return nil, err
-			}
-			b.pveSecrets[c.ID] = s
-		} else {
-			b.pveSecrets[c.ID] = p.Secrets.ProxmoxTokenSecret
-		}
-		if c.PowerTokenID != "" && c.PowerTokenSecretEnv != "" { // separate token: VM.PowerMgmt only
-			s, err := configutil.EnvSecret(c.PowerTokenSecretEnv, "proxmox "+c.ID+" power", 1)
-			if err != nil {
-				return nil, err
-			}
-			b.powerSecrets[c.ID] = s
+		if err := b.SetProxmox(c); err != nil {
+			return nil, err
 		}
 	}
 	return b, nil
+}
+
+// SetProxmox builds a cluster's HTTP client (its CA, verify setting and certificate name) and resolves its
+// tokens: from the environment, or for a node added in the panel from its managed secret.
+func (b *httpBackend) SetProxmox(c config.Proxmox) error {
+	tc, err := power.TLSConfig(c.Verify(), c.CAFile)
+	if err != nil {
+		return fmt.Errorf("proxmox %s: %w", c.ID, err)
+	}
+	if c.TLSServerName != "" {
+		tc.ServerName = c.TLSServerName
+	}
+	var secret, powerSecret string
+	switch {
+	case c.Managed:
+		secret = c.TokenSecret
+	case c.TokenSecretEnv != "":
+		if secret, err = configutil.EnvSecret(c.TokenSecretEnv, "proxmox "+c.ID, 1); err != nil {
+			return err
+		}
+	default:
+		secret = b.p.Secrets.ProxmoxTokenSecret
+	}
+	if c.PowerTokenID != "" && c.PowerTokenSecretEnv != "" { // separate token: VM.PowerMgmt only
+		if powerSecret, err = configutil.EnvSecret(c.PowerTokenSecretEnv, "proxmox "+c.ID+" power", 1); err != nil {
+			return err
+		}
+	}
+	b.pveMu.Lock()
+	defer b.pveMu.Unlock()
+	b.pve[c.ID], b.pveSecrets[c.ID] = devices.TLSClient(0, tc), secret
+	if powerSecret != "" {
+		b.powerSecrets[c.ID] = powerSecret
+	}
+	return nil
+}
+
+// ForgetProxmox drops a cluster's client and tokens (a node removed in the panel).
+func (b *httpBackend) ForgetProxmox(id string) {
+	b.pveMu.Lock()
+	defer b.pveMu.Unlock()
+	delete(b.pve, id)
+	delete(b.pveSecrets, id)
+	delete(b.powerSecrets, id)
+}
+
+// pveClient returns a cluster's client and read / power secrets.
+func (b *httpBackend) pveClient(id string) (*http.Client, string, string) {
+	b.pveMu.RLock()
+	defer b.pveMu.RUnlock()
+	return b.pve[id], b.pveSecrets[id], b.powerSecrets[id]
 }
 
 func getJSON(ctx context.Context, c *http.Client, u string, hdr map[string]string, timeout time.Duration) (jsonx.M, int, error) {
@@ -108,13 +142,18 @@ func getJSON(ctx context.Context, c *http.Client, u string, hdr map[string]strin
 }
 
 func (b *httpBackend) pveAuth(c config.Proxmox) map[string]string {
-	return map[string]string{"Authorization": "PVEAPIToken=" + c.TokenID + "=" + b.pveSecrets[c.ID]}
+	_, secret, _ := b.pveClient(c.ID)
+	return map[string]string{"Authorization": "PVEAPIToken=" + c.TokenID + "=" + secret}
 }
 
 func (b *httpBackend) FetchProxmox(ctx context.Context, pve config.Proxmox, timeout time.Duration) ([]jsonx.M, error) {
 	var last error = errors.New("no proxmox urls")
+	cl, _, _ := b.pveClient(pve.ID)
+	if cl == nil {
+		return nil, errors.New("proxmox " + pve.ID + " is not configured")
+	}
 	for _, base := range pve.URLs { // failover across cluster nodes
-		d, _, err := getJSON(ctx, b.pve[pve.ID], strings.TrimRight(base, "/")+"/api2/json/cluster/resources", b.pveAuth(pve), timeout)
+		d, _, err := getJSON(ctx, cl, strings.TrimRight(base, "/")+"/api2/json/cluster/resources", b.pveAuth(pve), timeout)
 		if err != nil {
 			last = err
 			continue
@@ -131,7 +170,11 @@ func (b *httpBackend) FetchProxmox(ctx context.Context, pve config.Proxmox, time
 
 func (b *httpBackend) FetchNodeStatus(ctx context.Context, pve config.Proxmox, node string) (jsonx.M, error) {
 	u := strings.TrimRight(pve.URLs[0], "/") + "/api2/json/nodes/" + url.PathEscape(node) + "/status"
-	d, _, err := getJSON(ctx, b.pve[pve.ID], u, b.pveAuth(pve), 0)
+	cl, _, _ := b.pveClient(pve.ID)
+	if cl == nil {
+		return nil, errors.New("proxmox " + pve.ID + " is not configured")
+	}
+	d, _, err := getJSON(ctx, cl, u, b.pveAuth(pve), 0)
 	if err != nil {
 		return nil, err
 	}
@@ -141,9 +184,9 @@ func (b *httpBackend) FetchNodeStatus(ctx context.Context, pve config.Proxmox, n
 // PVEPower: POST with the separate power token. Fails over across the cluster's URLs only on connection errors,
 // so an action is never sent twice.
 func (b *httpBackend) PVEPower(ctx context.Context, clusterID, path string, data url.Values) (any, error) {
-	pve := b.p.clusters[clusterID]
-	secret := b.powerSecrets[clusterID]
-	if secret == "" || pve.PowerTokenID == "" {
+	pve, _ := b.p.ClusterCfg(clusterID)
+	cl, _, secret := b.pveClient(clusterID)
+	if secret == "" || pve.PowerTokenID == "" || cl == nil {
 		return nil, apierr.New(409, "no power token configured")
 	}
 	segs := strings.Split(path, "/")
@@ -164,7 +207,7 @@ func (b *httpBackend) PVEPower(ctx context.Context, clusterID, path string, data
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("Authorization", "PVEAPIToken="+pve.PowerTokenID+"="+secret)
-		resp, err := b.pve[clusterID].Do(req)
+		resp, err := cl.Do(req)
 		if err != nil {
 			cancel()
 			var ne interface{ Timeout() bool }

@@ -81,6 +81,18 @@ func strawResources() []jsonx.M {
 	}
 }
 
+// newNodeResources is a Proxmox VE node added in the demo with Add host ("Yes: a new node").
+func newNodeResources(node string) []jsonx.M {
+	t := since()
+	return []jsonx.M{
+		{"id": "node/" + node, "type": "node", "node": node, "status": "online", "cpu": wave(50, 0.05, 0.25, 7),
+			"maxcpu": 12.0, "mem": float64(int64(wave(260, 9, 14, 1) * GiB)), "maxmem": float64(32 * GiB),
+			"disk": float64(40 * GiB), "maxdisk": float64(240 * GiB), "uptime": float64(int64(86400 + t))},
+		guest(100, "lxc", "home-assistant", node, 2, 2, 16, 0.02, 0.2, "running", "home"),
+		guest(101, "qemu", "nas", node, 4, 8, 64, 0.03, 0.3, "running", "storage"),
+	}
+}
+
 var nodeCPU = map[string]string{"NSX-FONTAINE": "AMD Ryzen 9 5950X 16-Core Processor",
 	"NSX-KACHINA": "Intel(R) Core(TM) i7-8700T CPU @ 2.40GHz", "NSX-SNEZHNAYA": "AMD Ryzen 7 5700G with Radeon Graphics",
 	"ASUS-i7": "Intel(R) Core(TM) i7-4790K CPU @ 4.00GHz"}
