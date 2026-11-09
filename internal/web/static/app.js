@@ -1055,6 +1055,17 @@ async function powerNow(s, action) {
     if (r) { flash(r.message); refreshCaps(s.id); }
   } catch (e) { flash(e.message, true); }
 }
+// The "Power on" buttons (Wake-on-LAN and BMC) are enabled from the power capabilities, so a system page that
+// can show one fetches them up front, without waiting for the Power menu to be opened.
+const POWER_ON_ACTIONS = ["wake", "bmc_on"];
+const hasPowerOnButton = (s) => !!s && (s.power_actions || []).some((a) => POWER_ON_ACTIONS.includes(a));
+let capsLoading = null;
+function ensurePowerOnCaps() {  // after a snapshot: the page may have opened before the system was known
+  const r = current();
+  if (r.page !== "system" || state.caps[r.id] || capsLoading === r.id || !hasPowerOnButton(state.byId[r.id])) return;
+  capsLoading = r.id;
+  refreshCaps(r.id).finally(() => { if (capsLoading === r.id) capsLoading = null; });
+}
 async function refreshCaps(id) {
   try { state.caps[id] = await api(`/api/systems/${enc(id)}/power`); } catch { /* ignore */ }
   render();
@@ -1558,7 +1569,7 @@ function route() {
   const r = current();
   if (r.page === "system") {
     const s = state.byId[r.id];
-    if (s && (s.power_actions || []).includes("wake")) refreshCaps(r.id);
+    if (hasPowerOnButton(s)) refreshCaps(r.id);
   }
   $("#page").innerHTML = `<div data-key="${esc(routeKey(r))}">${pageHtml(r)}</div>`;
   if (r.page === "settings") bindSettings();
@@ -1593,7 +1604,7 @@ function connect(watch) {
   const es = new EventSource(`/api/stream${watch ? `?watch=${enc(watch)}` : ""}`);
   state.es = es;
   es.addEventListener("open", () => { if (state.streamed) checkAccess(); state.streamed = true; });
-  es.addEventListener("systems", (e) => { state.systems = JSON.parse(e.data).systems; indexSystems(); loadSites(); render(); });
+  es.addEventListener("systems", (e) => { state.systems = JSON.parse(e.data).systems; indexSystems(); loadSites(); render(); ensurePowerOnCaps(); });
   es.addEventListener("systems_delta", (e) => {
     const d = JSON.parse(e.data), gone = new Set(d.removed);
     d.changed.forEach((s) => (state.byId[s.id] = s));
@@ -1604,7 +1615,7 @@ function connect(watch) {
     let added = false;
     d.changed.forEach((s) => { if (!seen.has(s.id)) { state.systems.push(s); added = true; } });
     if (added) loadSites();
-    render();
+    render(); ensurePowerOnCaps();
   });
   es.addEventListener("summary", (e) => { state.summary = JSON.parse(e.data); render(); });
   es.addEventListener("ups", (e) => { state.ups = JSON.parse(e.data); pushUpsHistory(state.ups); render(); });
