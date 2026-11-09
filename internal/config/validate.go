@@ -17,13 +17,14 @@ import (
 )
 
 var (
-	envNameRe   = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
-	prefixRe    = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-)?$`)
-	tokenIDRe   = regexp.MustCompile(`^[^@\s]+@[^!\s]+![A-Za-z0-9_.-]+$`)
-	macRe       = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{12}$`)
-	bmcTargetRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
-	hostnameRe  = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
-	siteRe      = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._'&-]{0,39}$`)
+	envNameRe    = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+	releaseTagRe = regexp.MustCompile(`^build-[0-9]{1,9}$`)
+	prefixRe     = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-)?$`)
+	tokenIDRe    = regexp.MustCompile(`^[^@\s]+@[^!\s]+![A-Za-z0-9_.-]+$`)
+	macRe        = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{12}$`)
+	bmcTargetRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+	hostnameRe   = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+	siteRe       = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._'&-]{0,39}$`)
 )
 
 // ValidSite reports whether s is a valid site name: 1-40 letters, digits, spaces and . _ ' & -, starting with a
@@ -52,6 +53,9 @@ func (c *Panel) Validate() error {
 	}
 	if a := c.Enroll.PanelAddress; a != "" && (net.ParseIP(a) == nil || net.ParseIP(a).To4() == nil) {
 		errs.add("enroll.panel_address must be the panel's Tailscale IPv4 address, e.g. 100.88.109.47")
+	}
+	if t := c.Enroll.AgentRelease; t != "" && !releaseTagRe.MatchString(t) {
+		errs.add("enroll.agent_release must be a Fairy-agent release tag like build-7")
 	}
 	for _, h := range c.PanelHosts {
 		if !configutil.ValidID(h) {

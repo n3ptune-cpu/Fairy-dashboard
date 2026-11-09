@@ -20,6 +20,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/demo"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/enrollment"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/panelupdate"
@@ -132,9 +133,15 @@ func serve(args []string) int {
 	srv.Updates = latestSource(p.cfg, f.demo, p.cfg.Updates.AgentRepo, release.AgentProgram)
 	srv.PanelUpdates = latestSource(p.cfg, f.demo, p.cfg.Updates.PanelRepo, release.PanelProgram)
 	srv.ManagedSkipped = p.skipped
+	if key, err := release.ParsePublicKey(releaseKey); err == nil { // Add host checks the install script with it
+		srv.Enroll.Scripts = enrollment.PinnedVerifier(p.cfg.Updates.AgentRepo, p.cfg.Enroll.AgentRelease, key)
+	} else if !f.demo {
+		slog.Warn("Add host is off: this build has no release key to check the Fairy-agent install script with", "error", err)
+	}
 	switch {
 	case f.demo:
 		srv.Enroll.Pair = demo.Pair
+		srv.Enroll.Scripts = demo.Installers()
 		if srv.Enroll.PanelAddr == "" {
 			srv.Enroll.PanelAddr = "100.88.109.47" // the demo has no Tailscale; any address shows the command
 			srv.Enroll.PanelSource, srv.Enroll.PanelVia = "demo", ""

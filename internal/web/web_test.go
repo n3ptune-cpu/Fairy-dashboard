@@ -17,6 +17,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/enrollment"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
@@ -41,6 +42,7 @@ func setup(t *testing.T) *env {
 	}
 	p.PollOnce(context.Background())
 	s := New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, p, nil, "test")
+	s.Enroll.Scripts = testInstallers // what a release build's check of the pinned release returns
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	return &env{t: t, s: s, srv: srv, b: b}
@@ -837,3 +839,7 @@ func TestSleepFromThePanel(t *testing.T) {
 		t.Fatal("still asleep")
 	}
 }
+
+var testInstallers = enrollment.Fixed{Repo: "n3ptune-cpu/Fairy-agent", Tag: "build-7", Version: "7-6155fe6",
+	Base: "https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7",
+	SH:   strings.Repeat("a1", 32), PS1: strings.Repeat("b2", 32)}

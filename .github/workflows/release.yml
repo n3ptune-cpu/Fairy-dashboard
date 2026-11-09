@@ -3,8 +3,9 @@
 #
 # Release tag: build-<run number> (never vX.Y.Z: Go would read that as a version of this Go module).
 # Version in the binary: <run number>-<short commit>, e.g. 42-1a2b3c4.
-# Needs the repository secret FAIRY_RELEASE_KEY (the same private key as in Fairy-agent) and the committed
-# public key release/signing.pub (the same file as in Fairy-agent).
+# Runs in the GitHub Environment "release": the owner can require an approval for every release there, and the
+# signing key FAIRY_RELEASE_KEY (the same private key as in Fairy-agent) is a secret of that environment, not of
+# the repository. Also needs the committed public key release/signing.pub (the same file as in Fairy-agent).
 name: release
 
 on:
@@ -23,6 +24,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: release # approval (if required) before the job starts; FAIRY_RELEASE_KEY is this environment's secret
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,7 +41,7 @@ jobs:
           FAIRY_RELEASE_KEY: ${{ secrets.FAIRY_RELEASE_KEY }}
         run: |
           if [ -z "$FAIRY_RELEASE_KEY" ]; then
-            echo "::error::The FAIRY_RELEASE_KEY secret is missing. Add the same private key as in Fairy-agent under Settings > Secrets and variables > Actions (see SETUP-UPDATES.md)."
+            echo "::error::The FAIRY_RELEASE_KEY secret is missing. Add the same private key as in Fairy-agent as a secret of the environment \"release\" (Settings > Environments > release > Environment secrets)."
             exit 1
           fi
           if [ ! -s release/signing.pub ]; then

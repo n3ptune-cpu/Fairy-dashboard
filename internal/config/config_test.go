@@ -21,6 +21,9 @@ func TestParseDefaultsAndProxmoxForms(t *testing.T) {
 		len(c.Trusted()) != 2 || c.Proxmox[0].Prefix() != "" || !c.Boost() || c.LoginRatePerMin != 20 {
 		t.Fatalf("%+v", c)
 	}
+	if c, err := Parse([]byte(base + `enroll: {agent_release: build-9}`)); err != nil || c.Enroll.AgentRelease != "build-9" {
+		t.Fatal(err)
+	}
 	c, err = Parse([]byte(base + `proxmox: [{id: straw, urls: ["https://a:8006"], token_id: "x@pve!y"}]`))
 	if err != nil || c.Proxmox[0].Prefix() != "straw-" {
 		t.Fatal(err)
@@ -34,6 +37,8 @@ func TestStrictValidation(t *testing.T) {
 		base + `proxmox: {urls: ["https://pve:8006"], token_id: "no-bang"}`,
 		base + `systems: [{id: x, wol: {mac: "zz:zz", relay: nope}}]`,
 		base + `trusted_proxies: ["not-a-cidr"]`,
+		base + `enroll: {agent_release: latest}`,
+		base + `enroll: {agent_release: "build-7; curl evil"}`,
 	}
 	for _, y := range bad {
 		if _, err := Parse([]byte(y)); err == nil {

@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
 	"sort"
@@ -90,9 +91,10 @@ type Enrollment struct {
 // Created is what the dialog shows once: the code and the commands.
 type Created struct {
 	Enrollment
-	Code    string `json:"code"`
-	Command string `json:"command"`
-	Panel   string `json:"panel_address"`
+	Code    string     `json:"code"`
+	Command string     `json:"command"`
+	Panel   string     `json:"panel_address"`
+	Release Installers `json:"release"` // the Fairy-agent release the command installs (checked by the panel)
 }
 
 // Hooks connect the manager to the panel.
@@ -119,17 +121,18 @@ type Manager struct {
 	PanelAddr   string        // the panel's Tailscale IPv4 address, for the command
 	PanelSource string        // where PanelAddr came from: "config", "auto" (detected) or "demo"
 	PanelVia    string        // for "auto": how it was found ("interface tailscale0", "Tailscale LocalAPI")
-	InstallBase string        // https://github.com/<agent repo>/releases/latest/download
+	// Scripts checks the pinned Fairy-agent release's install scripts (signed SHA256SUMS) before any command
+	// is shown; nil or a failing check refuses Add host / Re-pair.
+	Scripts ScriptSource
 
 	mu    sync.Mutex
 	items map[string]*Enrollment
 }
 
-// New builds a manager with the real HTTP pairing call.
-func New(store *managed.Store, hooks Hooks, panelAddr, agentRepo string) *Manager {
+// New builds a manager with the real HTTP pairing call. scripts checks the install scripts (see Verifier).
+func New(store *managed.Store, hooks Hooks, panelAddr string, scripts ScriptSource) *Manager {
 	return &Manager{Store: store, Hooks: hooks, Pair: HTTPPair, Now: time.Now, Interval: 3 * time.Second,
-		OnlineWait: 90 * time.Second, PanelAddr: panelAddr, InstallBase: "https://github.com/" + agentRepo + "/releases/latest/download",
-		items: map[string]*Enrollment{}}
+		OnlineWait: 90 * time.Second, PanelAddr: panelAddr, Scripts: scripts, items: map[string]*Enrollment{}}
 }
 
 var (
@@ -227,7 +230,7 @@ func (m *Manager) hostEntry(req Request, existing *managed.Host, nodeSystemID fu
 
 // Create starts an Add host (existing == nil) or a Re-pair of a managed host. nodeSystemID maps a Proxmox node
 // name to its system id ("" = unknown). The code is returned once and not kept.
-func (m *Manager) Create(req Request, existing *managed.Host, by string, nodeSystemID func(string) string) (Created, error) {
+func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Host, by string, nodeSystemID func(string) string) (Created, error) {
 	h, err := m.hostEntry(req, existing, nodeSystemID)
 	if err != nil {
 		return Created{}, err
@@ -254,6 +257,16 @@ func (m *Manager) Create(req Request, existing *managed.Host, by string, nodeSys
 		}
 	}
 	m.mu.Unlock()
+	if m.Scripts == nil {
+		return Created{}, &Unavailable{Msg: "Add host is off: the panel cannot check the Fairy-agent install script"}
+	}
+	inst, err := m.Scripts.Installers(ctx) // before any code exists: no command without a checked script
+	if err != nil {
+		return Created{}, err
+	}
+	if !inst.valid() {
+		return Created{}, &Unavailable{Msg: "the checked Fairy-agent release has an unusable download address or hash"}
+	}
 	code, err := enroll.NewCode()
 	if err != nil {
 		return Created{}, err
@@ -276,15 +289,19 @@ func (m *Manager) Create(req Request, existing *managed.Host, by string, nodeSys
 	cp := m.copyOf(e)
 	m.mu.Unlock()
 	go m.run(ctx, e)
-	return Created{Enrollment: cp, Code: code, Command: Command(m.InstallBase, h, code, m.PanelAddr), Panel: m.PanelAddr}, nil
+	return Created{Enrollment: cp, Code: code, Command: Command(inst, h, code, m.PanelAddr), Panel: m.PanelAddr, Release: inst}, nil
 }
 
-// Command is the one line to run on the machine.
-func Command(base string, h managed.Host, code, panel string) string {
+// Command is the one line to run on the machine. It downloads the install script of the checked release,
+// refuses to run it unless its SHA-256 is the one the panel verified against the signed SHA256SUMS, and runs it
+// against that same release (never "latest").
+func Command(in Installers, h managed.Host, code, panel string) string {
 	o := h.Options
 	if h.OS == "windows" {
 		var b strings.Builder
-		fmt.Fprintf(&b, `iwr -useb %s/install.ps1 -OutFile $env:TEMP\fairy-install.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\fairy-install.ps1 -Join %s -PanelAddress %s`, base, code, panel)
+		fmt.Fprintf(&b, `$u='%s'; $f="$env:TEMP\fairy-install.ps1"; iwr -useb "$u/%s" -OutFile $f; `+
+			`if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '%s') { throw 'install.ps1 is not the release the panel checked: not run' }; `+
+			`powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u -Join %s -PanelAddress %s`, in.Base, InstallPS1, in.PS1, code, panel)
 		for _, f := range []struct {
 			on   bool
 			flag string
@@ -305,7 +322,8 @@ func Command(base string, h managed.Host, code, panel string) string {
 		sudo = ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "curl -fsSL %s/install.sh | %ssh -s -- --join %s --panel %s", base, sudo, code, panel)
+	fmt.Fprintf(&b, `f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" %s/%s && echo "%s  $f" | sha256sum -c - && `+
+		`%senv FAIRY_RELEASE_URL=%s sh "$f" --join %s --panel %s`, in.Base, InstallSH, in.SH, sudo, in.Base, code, panel)
 	for _, f := range []struct {
 		on   bool
 		flag string
@@ -506,7 +524,14 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 			fail("cannot save the node's CA: " + err.Error())
 			return
 		}
+	} else if e.Repair { // re-paired without a Proxmox grant: the old node's CA goes with its old token
+		if err := os.Remove(m.Store.CAPath(h.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fail("cannot delete the node's old CA: " + err.Error())
+			return
+		}
 	}
+	// Store.Put replaces the secrets file: the tokens of the previous pairing (read, control, Proxmox) are gone
+	// from disk, and Hooks.Remove above made the poller forget them.
 	if err := m.Store.Put(h, sec); err != nil {
 		fail("cannot save it: " + err.Error())
 		return

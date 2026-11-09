@@ -92,7 +92,9 @@ watts "via AMD".
 Nothing updates on its own. Every push to `main` makes a signed GitHub release (`.github/workflows/release.yml`:
 vet, test, build `fairy-linux-amd64` / `fairy-linux-arm64` with the version `<run number>-<short commit>` and the
 public key from `release/signing.pub`, sign `SHA256SUMS` with the `FAIRY_RELEASE_KEY` secret, release
-`build-<run number>` with the commits since the last one as notes). The one-time setup (key, secrets, first
+`build-<run number>` with the commits since the last one as notes). The job runs in the GitHub Environment
+`release`: `FAIRY_RELEASE_KEY` is a secret of that environment (not of the repository), and the environment can
+require the owner's approval before each release is built and signed. The one-time setup (key, secrets, first
 manual install per machine) is in Fairy-agent's
 [SETUP-UPDATES.md](https://github.com/n3ptune-cpu/Fairy-agent/blob/main/SETUP-UPDATES.md).
 
@@ -132,12 +134,18 @@ use, only its hash is kept) and one command:
 
 ```text
 Windows (PowerShell as Administrator):
-iwr -useb https://github.com/n3ptune-cpu/Fairy-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\fairy-install.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\fairy-install.ps1 -Join <CODE> -PanelAddress <panel IP> [-PowerControl -SelfUpdate -CoreTemp ...]
+$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7'; $f="$env:TEMP\fairy-install.ps1"; iwr -useb "$u/install.ps1" -OutFile $f; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '<SHA-256>') { throw '...' }; powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u -Join <CODE> -PanelAddress <panel IP> [-PowerControl -SelfUpdate -CoreTemp ...]
 Linux:
-curl -fsSL https://github.com/n3ptune-cpu/Fairy-agent/releases/latest/download/install.sh | sudo sh -s -- --join <CODE> --panel <panel IP> [--power-control --self-update ...]
+f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7/install.sh && echo "<SHA-256>  $f" | sha256sum -c - && sudo env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7 sh "$f" --join <CODE> --panel <panel IP> [--power-control --self-update ...]
 ```
 
-The installer checks the release's signature, installs the agent like the manual install, makes its tokens on
+The command never runs "the latest" script. It names one Fairy-agent release: the one this panel was built
+against (`build-7` = Fairy-agent v0.4.2; `enroll: {agent_release: build-N}` picks another). Before it shows a
+command the panel downloads that release's `SHA256SUMS`, `SHA256SUMS.sig`, `VERSION`, `install.sh` and
+`install.ps1` and checks them with the release key built into the panel (`release/signing.pub`); a panel build
+without the key, an unreachable GitHub or a bad signature refuses Add host (HTTP 503) instead. The command runs
+the script only if its SHA-256 is the one the panel checked, and points it at the same release. The installer
+checks every file it downloads against `SHA256SUMS` and its signature, installs the agent like the manual install, makes its tokens on
 the machine and waits for the panel. The panel tries to pair every few seconds; the dialog follows it
 (waiting -> paired -> online) and Cancel stops it. Pairing is `POST /pair` on the agent with a proof of the code,
 accepted once, only from the panel's address, at most 5 tries a minute; then the agent switches pairing off for

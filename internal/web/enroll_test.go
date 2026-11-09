@@ -19,6 +19,7 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/enrollment"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
@@ -64,7 +65,9 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	}
 	code, cmd := r.body["code"].(string), r.body["command"].(string)
 	if _, err := enroll.Normalize(code); err != nil || !strings.Contains(cmd, "-Join "+code+" -PanelAddress 100.88.109.47") ||
-		!strings.Contains(cmd, "-PowerControl -SelfUpdate -CoreTemp") || !strings.HasPrefix(cmd, "iwr -useb https://github.com/n3ptune-cpu/Fairy-agent/releases/latest/download/install.ps1") {
+		!strings.Contains(cmd, "-PowerControl -SelfUpdate -CoreTemp") || !strings.HasPrefix(cmd, "$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7'; ") ||
+		!strings.Contains(cmd, ".Hash -ne '"+testInstallers.PS1+"')") || !strings.Contains(cmd, "-File $f -ReleaseUrl $u -Join ") ||
+		strings.Contains(cmd, "latest") {
 		t.Fatal(code, cmd)
 	}
 	id := r.body["id"].(string)
@@ -161,6 +164,19 @@ func TestAddHostPanelAddressSource(t *testing.T) {
 	if r.code != 400 || !strings.Contains(string(r.raw), "IPv4") {
 		t.Fatal(r.code, string(r.raw))
 	}
+	if pg["agent_release"] != "build-7 (fairy-agent 7-6155fe6)" {
+		t.Fatal("release shown in the dialog:", pg["agent_release"])
+	}
+	// a panel build without the release key cannot check the install script: no code, no command (503)
+	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.Scripts = enrollment.PinnedVerifier("n3ptune-cpu/Fairy-agent", "", nil)
+	r = e.do("POST", "/api/admin/hosts", body, "Cookie", c, "X-Requested-With", "fairy")
+	if r.code != 503 || !strings.Contains(string(r.raw), "release signing key") || r.body["command"] != nil || len(e.s.Enroll.List()) != 0 {
+		t.Fatal(r.code, string(r.raw))
+	}
+	if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), "host.add refused: cannot check the Fairy-agent install script") {
+		t.Fatal(auditOutcomes(e.s.Cfg.AuditLog))
+	}
 }
 
 // Add host for a new Proxmox VE node (agent v0.4.2 --proxmox): the command asks the node for its read-only
@@ -193,7 +209,8 @@ func TestAddHostProxmoxNode(t *testing.T) {
 		t.Fatal(r.code, string(r.raw))
 	}
 	cmd := r.body["command"].(string)
-	if !strings.Contains(cmd, "| sh -s -- --join ") || !strings.HasSuffix(cmd, "--power-control --proxmox") {
+	if !strings.Contains(cmd, `echo "`+testInstallers.SH+`  $f" | sha256sum -c - && env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7 sh "$f" --join `) ||
+		!strings.HasSuffix(cmd, "--power-control --proxmox") {
 		t.Fatal(cmd)
 	}
 	id := r.body["id"].(string)

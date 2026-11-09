@@ -3,7 +3,9 @@ package demo
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"strings"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/enrollment"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 )
 
@@ -98,4 +102,13 @@ func pairedMetrics(id, platform string) map[string]any {
 		"temps":    []any{temp("k10temp", "Tctl", r1(wave(60, 40, 58, 0)))}, "gpus": []any{},
 		"hardware": map[string]any{"system_vendor": "Micro-Star International Co., Ltd.", "system_model": "MS-7C56",
 			"board_vendor": "Micro-Star International Co., Ltd.", "board_model": "B550-A PRO", "cpu_model": "AMD Ryzen 5 5600X 6-Core Processor"}}
+}
+
+// Installers is the demo's "checked" Fairy-agent release for the Add host command (nothing is downloaded: the
+// hashes are placeholders, so the demo command is for show only).
+func Installers() enrollment.Fixed {
+	sum := func(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
+	return enrollment.Fixed{Repo: release.AgentRepo, Tag: enrollment.AgentReleaseTag, Version: enrollment.AgentReleaseVersion,
+		Base: "https://github.com/" + release.AgentRepo + "/releases/download/" + enrollment.AgentReleaseTag,
+		SH:   sum("demo install.sh"), PS1: sum("demo install.ps1")}
 }

@@ -1328,6 +1328,7 @@ async function openAddHost() {
     </div>
     ${d.panel_address ? `<p class="note" id="ah-panel">Panel address: <code>${esc(d.panel_address)}</code> (${esc(d.panel_address_source || "config")})${d.panel_address_via ? ` <span title="how the panel found its own Tailscale address">· ${esc(d.panel_address_via)}</span>` : ""}${d.panel_address.includes(":") ? ' <b>IPv6 only: agents need the panel\'s Tailscale IPv4; set <code>enroll: {panel_address: 100.x.y.z}</code></b>' : ""}</p>`
       : '<div class="warnbox">The panel does not know its own Tailscale address (no Tailscale interface or tailscaled status found): set <code>enroll: {panel_address: 100.x.y.z}</code> in config.yaml.</div>'}
+    ${d.agent_release ? `<p class="note">Installs Fairy-agent release <code>${esc(d.agent_release)}</code>. The panel checks its install script against the release's signed SHA256SUMS before it shows the command.</p>` : ""}
     <div class="error" id="ah-err" role="alert"></div>
     <div class="row-gap end"><button class="btn" type="button" id="ah-cancel">Cancel</button><button class="btn primary" type="submit" id="ah-go">Make the code</button></div></form>`;
   m.hidden = false;
@@ -1376,7 +1377,7 @@ function openEnrollDialog(cr) {
     <div class="cmd-box" id="en-cmd">${esc(cr.command)}</div>
     <div class="row-gap"><button class="btn" type="button" id="en-copy">${I.copy}Copy command</button>
       <span class="note">Join code <span class="code-big">${esc(groupCode(cr.code))}</span> · single use · valid until ${new Date(cr.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
-    <p class="note">It installs the signed Fairy agent (checked before it runs), writes its settings and waits for the panel. Nothing else on the machine changes. The code is shown only now.</p>
+    <p class="note">It installs Fairy-agent ${cr.release?.tag ? `release <code>${esc(cr.release.tag)}</code>${cr.release.version ? ` (${esc(cr.release.version)})` : ""}` : "(signed release)"}: the command runs the install script only if it is exactly the one the panel checked against the signed SHA256SUMS, and the script checks every file it installs. It writes the agent's settings and waits for the panel. Nothing else on the machine changes. The code is shown only now.</p>
     <div id="en-progress" aria-live="polite">${enrollSteps(cr)}<div class="note" id="en-msg">${esc(cr.message)}</div></div>
     <div class="row-gap end"><button class="btn" type="button" id="en-cancel">Cancel Add host</button><button class="btn primary" type="button" id="en-close">Close</button></div></div>`;
   m.hidden = false;

@@ -229,6 +229,10 @@ type Enroll struct {
 	// the agent, which then answers pairing only from there. Optional: by default the panel finds it at start
 	// (the tailscale* interface's 100.64.0.0/10 address, else tailscaled's LocalAPI; see enrollment.Detector).
 	PanelAddress string `yaml:"panel_address"`
+	// AgentRelease is the Fairy-agent release tag (build-<n>) whose install script Add host uses. Optional: by
+	// default the release this panel was built against. Either way the panel checks the script with its
+	// release key before it shows a command.
+	AgentRelease string `yaml:"agent_release"`
 }
 
 // Intervals are the default polling intervals in seconds (each 1-300).

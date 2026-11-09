@@ -132,10 +132,11 @@ func (s *Server) enrollEvent(e enrollment.Enrollment, kind, detail string) {
 }
 
 type hostsPage struct {
-	PanelAddress string                  `json:"panel_address"`
-	PanelSource  string                  `json:"panel_address_source"` // config | auto | demo
-	PanelVia     string                  `json:"panel_address_via,omitempty"`
-	InstallBase  string                  `json:"install_base"`
+	PanelAddress string `json:"panel_address"`
+	PanelSource  string `json:"panel_address_source"` // config | auto | demo
+	PanelVia     string `json:"panel_address_via,omitempty"`
+	// AgentRelease is the Fairy-agent release the command installs (tag; the version once checked).
+	AgentRelease string                  `json:"agent_release"`
 	Nodes        []nodeChoice            `json:"nodes"`
 	Relays       []idName                `json:"relays"`
 	BMCRelays    []idName                `json:"bmc_relays"` // agents with a control token (BMC power-on relays)
@@ -176,7 +177,7 @@ func (s *Server) hostsPage(c *reqCtx) error {
 	if _, err := c.requireAdmin("Add host"); err != nil {
 		return err
 	}
-	p := hostsPage{PanelAddress: s.Enroll.PanelAddr, PanelSource: s.Enroll.PanelSource, PanelVia: s.Enroll.PanelVia, InstallBase: s.Enroll.InstallBase, Nodes: []nodeChoice{}, Relays: []idName{}, BMCRelays: []idName{},
+	p := hostsPage{PanelAddress: s.Enroll.PanelAddr, PanelSource: s.Enroll.PanelSource, PanelVia: s.Enroll.PanelVia, AgentRelease: s.Enroll.ReleaseLabel(), Nodes: []nodeChoice{}, Relays: []idName{}, BMCRelays: []idName{},
 		Sites: []string{}, Managed: []managedRow{}, Enrollments: s.Enroll.List(), Skipped: s.ManagedSkipped}
 	for _, x := range s.Poller.Snapshot() {
 		if x.Kind == "node" {
@@ -215,6 +216,10 @@ func enrollErr(err error) error {
 	if errors.As(err, &v) {
 		return apierr.New(400, v.Msg)
 	}
+	var u *enrollment.Unavailable
+	if errors.As(err, &u) {
+		return apierr.New(503, u.Msg)
+	}
 	return err
 }
 
@@ -230,7 +235,7 @@ func (s *Server) hostAdd(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
-	cr, err := s.Enroll.Create(req, nil, actorOf(u), s.nodeSystemID)
+	cr, err := s.Enroll.Create(c.r.Context(), req, nil, actorOf(u), s.nodeSystemID)
 	params := map[string]any{"name": req.Name, "os": req.OS, "site": req.Site, "node": req.Node, "options": req.Options,
 		"wol_macs": len(req.WolMACs)}
 	if err != nil {
@@ -262,7 +267,7 @@ func (s *Server) hostRepair(c *reqCtx) error {
 		c.audit(u, "host.repair", h.ID, nil, "refused: "+err.Error())
 		return err
 	}
-	cr, err := s.Enroll.Create(enrollment.Request{}, &h, actorOf(u), s.nodeSystemID)
+	cr, err := s.Enroll.Create(c.r.Context(), enrollment.Request{}, &h, actorOf(u), s.nodeSystemID)
 	if err != nil {
 		c.audit(u, "host.repair", id, nil, "refused: "+err.Error())
 		return enrollErr(err)
