@@ -422,6 +422,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .upd-pop-body { padding: 2px 8px 8px; font-size: 12.5px; color: var(--text); }
 .upd-pop-body p { margin: 6px 0; }
 .upd-pop-body .btn { margin-top: 4px; }
+.upd-check { margin-top: 6px; }
+.upd-check .warn { color: var(--warn); }
+.spinner { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor;
+  border-right-color: transparent; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 .upd-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
 
 /* ------------------------------------------------ hosts by site (sidebar + overview) */

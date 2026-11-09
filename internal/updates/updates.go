@@ -1,6 +1,7 @@
 // Package updates finds the newest Fairy-agent release for the Updates page: one GitHub lookup at most every
 // 10 minutes (the signed VERSION file is checked when this build has the release key), never blocking a
-// request, and harmless when the panel has no internet access.
+// request (except an admin's "Check for updates", which waits for the answer), and harmless when the panel has
+// no internet access.
 package updates
 
 import (
@@ -32,6 +33,22 @@ type Source interface {
 	Latest() Latest
 }
 
+// CheckerNow is a Source that can also look the release up right now and wait for the answer (the Updates
+// page's "Check for updates"). A Source without it (a fixed answer) just returns Latest().
+type CheckerNow interface {
+	Source
+	CheckNow(ctx context.Context) Latest
+}
+
+// CheckNow looks the release up now through any Source: a CheckerNow asks GitHub, anything else returns its
+// fixed answer.
+func CheckNow(ctx context.Context, s Source) Latest {
+	if c, ok := s.(CheckerNow); ok {
+		return c.CheckNow(ctx)
+	}
+	return s.Latest()
+}
+
 // Static is a fixed answer (demo mode, or updates.check_latest: false).
 type Static Latest
 
@@ -46,6 +63,7 @@ type Checker struct {
 	TTL     time.Duration // default 10 min
 	ErrTTL  time.Duration // after a failure, default 2 min
 
+	nowMu    sync.Mutex // one CheckNow at a time
 	mu       sync.Mutex
 	last     Latest
 	at       time.Time
@@ -93,14 +111,36 @@ func (c *Checker) Refresh() Latest {
 	return c.last
 }
 
+// CheckNow looks the release up now (same client: same hosts, size and time limits as the background check)
+// and waits for the answer, at most 45 s. The lookup finishes even if ctx is cancelled (a closed browser tab
+// must not be cached as "cannot check GitHub"). A failure keeps the last good answer, with the error, as the
+// background check does. Calls are serialised.
+func (c *Checker) CheckNow(ctx context.Context) Latest {
+	c.nowMu.Lock()
+	defer c.nowMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+	defer cancel()
+	l, err := c.lookup(ctx)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.store(l, err)
+	return c.last
+}
+
 func (c *Checker) refresh() {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	l, err := c.lookup(ctx)
-	now := time.Now().UTC()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.inflight, c.at = false, now
+	c.inflight = false
+	c.store(l, err)
+}
+
+// store records a lookup's result. Caller holds c.mu.
+func (c *Checker) store(l Latest, err error) {
+	now := time.Now().UTC()
+	c.at = now
 	if err != nil {
 		c.ok = false
 		c.last.Error = "cannot check GitHub: " + devices.Describe(err)

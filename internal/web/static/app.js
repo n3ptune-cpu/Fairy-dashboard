@@ -71,6 +71,7 @@ I.signout = svg('<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M
 I.eye = svg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>');
 I.uparrow = svg('<circle cx="12" cy="12" r="9"/><path d="M12 16.5v-9M8.5 11 12 7.5l3.5 3.5"/>', 15);
 I.update = svg('<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>');
+I.recheck = svg('<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 3v5h5"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 21v-5h-5"/>');
 I.bell = svg('<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/>', 18);
 I.plus = svg('<path d="M12 5v14M5 12h14"/>', 15);
 I.copy = svg('<rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>', 14);
@@ -800,11 +801,14 @@ async function fetchUpdates() {
   if (!state.me?.can_control) return;
   try { upd.data = await api("/api/admin/updates"); upd.error = null; }
   catch (e) { upd.error = e.message; if (e.status === 403) upd.data = null; }
+  updIndex();
+  render();
+}
+function updIndex() {  // after upd.data changed: the per-host lookup and the menu dot
   upd.bySys = {};
   for (const r of upd.data?.agents || []) upd.bySys[r.system_id || r.id] = r;
   const b = $("#upd-badge");
   if (b) { const n = upd.data?.behind || 0; b.hidden = !n; b.title = `${n} update${n === 1 ? "" : "s"} available`; }
-  render();
 }
 async function loadUpdates() {  // the Updates page: every 2 s while it is open
   await Promise.all([fetchPanelUpdate(), fetchUpdates()]);
@@ -851,7 +855,9 @@ function pageUpdates() {
   };
   return `<div class="stack">
     <div class="panel glass pad"><div class="row-gap"><span>Latest Fairy-agent release: ${latest}</span>
-      <button class="btn primary push" data-act="upd-all" ${ready.length && !why && !upd.busy.all ? "" : "disabled"} title="${esc(why || (ready.length ? "Update every agent that can update itself" : "No agent can update right now"))}">${I.update} Update all (${ready.length})</button></div>
+      ${updCheckBtn(d)}
+      <button class="btn primary" data-act="upd-all" ${ready.length && !why && !upd.busy.all ? "" : "disabled"} title="${esc(why || (ready.length ? "Update every agent that can update itself" : "No agent can update right now"))}">${I.update} Update all (${ready.length})</button></div>
+      ${updCheckLine(d)}
       ${L.error ? `<div class="note warn">${esc(L.error)}</div>` : ""}
       ${d.panel_latest?.error && !d.panel_latest.disabled ? `<div class="note warn">Panel release: ${esc(d.panel_latest.error)}</div>` : ""}</div>
     <div class="panel glass pad">${panelUpdateBox(d)}</div>
@@ -862,6 +868,37 @@ function pageUpdates() {
       install it, restart and roll back if the new version does not come up. Only agents with <code>self_update: true</code> here and
       <code>self_update: enabled: true</code> in their own config.yaml can do this. Every Update asks you to confirm it's you and is written to the Audit log.</div></div>`;
 }
+// ---- Check for updates: GitHub now instead of the next background check (every 10 min). Read-only, so no
+// step-up; at most once every 30 s for the whole panel (the server says how long to wait).
+function updCheckBtn(d) {
+  const busy = upd.checking || d.check_running, wait = d.check_retry_s || 0;
+  const title = busy ? "Checking GitHub…" : wait ? `Checked just now: you can check again in ${wait} s` : "Look for new Fairy-agent and panel releases on GitHub now";
+  return `<button class="btn push" type="button" data-act="upd-check" ${busy || wait ? "disabled" : ""} aria-busy="${busy}" title="${esc(title)}">${busy
+    ? '<span class="spinner" aria-hidden="true"></span> Checking…' : `${I.recheck} Check for updates`}</button>`;
+}
+function updCheckLine(d) {
+  const at = [d.latest?.checked_at, d.panel_latest?.checked_at].filter(Boolean).sort((a, b) => new Date(a) - new Date(b)).pop();
+  const c = upd.check;
+  let res = "";
+  if (upd.checking) res = " · checking GitHub…";
+  else if (c && !c.ok) res = ` · <span class="warn">Check failed: ${esc(c.message)}</span>`;
+  else if (c) res = ` · <span class="chip ${/^Up to date/.test(c.message) ? "ok" : "warn"}">${esc(c.message)}</span>`;
+  return `<div class="note upd-check" role="status" aria-live="polite">Last checked on GitHub: ${!at ? "not yet" : secsSince(at) < 10 ? "just now" : `<span data-ago="${esc(at)}">${ago(at)}</span>`}${res}</div>`;
+}
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest('[data-act="upd-check"]');
+  if (!t || t.disabled || upd.checking) return;
+  upd.checking = true; upd.check = null; render();
+  try {
+    const r = await api("/api/admin/update-check", { method: "POST", body: "{}" });
+    upd.data = r.page; upd.error = null; updIndex();
+    upd.check = { ok: r.ok, message: r.message };
+  } catch (x) {
+    upd.check = { ok: false, message: x.message };
+    if (x.status === 429 && upd.data) upd.data.check_retry_s = x.detail?.retry_after_s || 30;
+  }
+  upd.checking = false; render();
+});
 async function updateCall(label, path, key) {
   upd.busy[key] = true; render();
   try {

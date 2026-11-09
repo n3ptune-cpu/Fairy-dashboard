@@ -134,6 +134,10 @@ manual install per machine) is in Fairy-agent's
   downloads, verifies and installs the release itself (see Fairy-agent's AGENT.md). Viewers see none of it.
 * The latest releases are looked up on GitHub at most every 10 minutes, in the background and only while an
   admin uses the panel; `updates: {check_latest: false}` switches that off on a panel without internet access.
+  **Check for updates** on the Updates page asks GitHub now (both the agent and the panel release) and shows
+  "Up to date", "N updates available" or the error, and when GitHub was last checked. It is read-only (no
+  step-up, works with the kill switch on) but admins only, browser session, CSRF header, at most once every
+  30 seconds for the whole panel, and audited as `update_check`.
 
 ### Add host
 

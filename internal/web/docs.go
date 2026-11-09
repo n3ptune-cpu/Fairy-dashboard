@@ -44,6 +44,7 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"GET", "/api/admin/updates", "Agent versions, self-update state and the latest Fairy-agent release (admins only)"},
 	{"POST", "/api/admin/updates/{id}", "Make one agent install the latest signed release (admins; step-up + CSRF header; self_update agents only)"},
 	{"POST", "/api/admin/updates", "Update every agent that can update itself (admins; step-up + CSRF header)"},
+	{"POST", "/api/admin/update-check", "Check GitHub for new agent and panel releases now, answer with the Updates page (admins, browser session; CSRF header; once per 30 s per panel)"},
 	{"DELETE", "/api/me/pending", "Forget the action that waits for a step-up sign-in (CSRF header)"},
 	{"GET", "/api/admin/panel-update", "The panel's own update: ready or why not, running version, newer release known, last run's progress (admins)"},
 	{"POST", "/api/admin/panel-update", "Start the panel's update unit (admins, browser session; sign-in from the last 2 minutes + CSRF header; never older)"},

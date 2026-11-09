@@ -1,6 +1,7 @@
 package updates
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -64,5 +65,41 @@ func TestCheckerWithoutKeyShowsTheTag(t *testing.T) {
 	c = &Checker{Client: gh.Client(), Key: other.Pub, Program: "fairy-agent"}
 	if l := c.Refresh(); l.Error == "" || l.Tag != "" {
 		t.Fatalf("%+v", l)
+	}
+}
+
+// Check for updates: asks GitHub at once (not waiting for the 10-minute cache), waits for the answer, keeps the
+// last good answer when GitHub fails, and does not disturb the background check.
+func TestCheckNow(t *testing.T) {
+	gh := releasetest.New(t, release.AgentRepo)
+	gh.Publish("build-42", "fairy-agent", "42-1a2b3c4", map[string][]byte{"fairy-agent-linux-amd64": []byte("x")}, nil)
+	c := &Checker{Client: gh.Client(), Key: gh.Pub, Program: "fairy-agent", TTL: time.Hour}
+	l := c.CheckNow(context.Background())
+	if l.Tag != "build-42" || !l.Verified || l.CheckedAt == nil || l.Error != "" {
+		t.Fatalf("%+v", l)
+	}
+	first := *l.CheckedAt
+	if got := c.Latest(); got.Tag != "build-42" { // cached: no second lookup started
+		t.Fatalf("%+v", got)
+	}
+	hits := len(gh.Hits())
+	gh.Publish("build-43", "fairy-agent", "43-5d6e7f8", map[string][]byte{"fairy-agent-linux-amd64": []byte("y")}, nil)
+	if c.Latest().Tag != "build-42" || len(gh.Hits()) != hits {
+		t.Fatal("the cache should still answer build-42 without asking GitHub")
+	}
+	time.Sleep(5 * time.Millisecond)
+	l = c.CheckNow(context.Background())
+	if l.Tag != "build-43" || l.Build == nil || *l.Build != 43 || !l.CheckedAt.After(first) || len(gh.Hits()) == hits {
+		t.Fatalf("CheckNow did not ask GitHub: %+v", l)
+	}
+	gh.SetBroken(true)
+	l = c.CheckNow(context.Background())
+	if l.Tag != "build-43" || !strings.Contains(l.Error, "cannot check GitHub") {
+		t.Fatalf("%+v", l)
+	}
+	// a fixed answer (demo, tests) just answers
+	s := Static{Tag: "build-1"}
+	if CheckNow(context.Background(), s).Tag != "build-1" || CheckNow(context.Background(), c).Tag != "build-43" {
+		t.Fatal("CheckNow on a Source")
 	}
 }

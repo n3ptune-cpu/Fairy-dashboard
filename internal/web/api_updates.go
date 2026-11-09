@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
@@ -40,12 +41,18 @@ type updatesPage struct {
 	PanelBehind  *bool          `json:"panel_behind"` // nil: unknown (local build, or no answer)
 	Behind       int            `json:"behind"`       // agents behind the latest release, + 1 if the panel is
 	Agents       []updateRow    `json:"agents"`
+	// Check for updates: when an admin last pressed it (nil: not since the panel started), seconds until it may
+	// be pressed again (0: now), and whether that check is still running.
+	LastCheck    *time.Time `json:"last_check"`
+	CheckRetryS  int        `json:"check_retry_s"`
+	CheckRunning bool       `json:"check_running"`
 }
 
 func (s *Server) updateRoutes() {
 	s.mux.HandleFunc("GET /api/admin/updates", s.h(s.updatesList))
 	s.mux.HandleFunc("POST /api/admin/updates", s.h(s.updateAll))
 	s.mux.HandleFunc("POST /api/admin/updates/{id}", s.h(s.updateOne))
+	s.mux.HandleFunc("POST /api/admin/update-check", s.h(s.updateCheck))
 	s.mux.HandleFunc("GET /api/admin/panel-update", s.h(s.panelUpdateGet))
 	s.mux.HandleFunc("POST /api/admin/panel-update", s.h(s.panelUpdatePost))
 }
@@ -123,6 +130,12 @@ func (s *Server) updatesList(c *reqCtx) error {
 	if _, err := c.requireAdmin("the Updates page"); err != nil {
 		return err
 	}
+	c.json(200, s.updatesPage(c))
+	return nil
+}
+
+// updatesPage is the Updates page's data (the caller has checked that c is an admin).
+func (s *Server) updatesPage(c *reqCtx) updatesPage {
 	latest := s.latest()
 	page := updatesPage{Latest: latest, PanelVersion: s.Version, PanelLatest: s.panelLatest(), Agents: []updateRow{}}
 	if n, ok := release.BuildNumber(s.Version); ok && page.PanelLatest.Build != nil {
@@ -140,8 +153,8 @@ func (s *Server) updatesList(c *reqCtx) error {
 		page.Agents = append(page.Agents, r)
 	}
 	sort.SliceStable(page.Agents, func(i, j int) bool { return page.Agents[i].Name < page.Agents[j].Name })
-	c.json(200, page)
-	return nil
+	page.LastCheck, page.CheckRetryS, page.CheckRunning = s.checks.status(time.Now())
+	return page
 }
 
 func displayName(u *model.User) string {

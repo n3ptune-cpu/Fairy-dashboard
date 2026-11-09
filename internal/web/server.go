@@ -68,6 +68,7 @@ type Server struct {
 	// PanelUpdates is the latest Fairy-dashboard release (the panel's own version is compared with it; the
 	// panel is updated by hand with `fairy update`); nil = check off.
 	PanelUpdates updates.Source
+	checks       updateCheckState // Check for updates: once per updateCheckEvery for the whole panel
 	// PanelRunner starts the panel's own update (fairy-panel-update.service); nil = not available here.
 	PanelRunner panelupdate.Runner
 	// Add host: the managed hosts, the pending enrollments, and the managed hosts skipped at start (and why).
