@@ -100,6 +100,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	if err := config.LoadEnvFile(*envFile); err != nil && !errors.Is(err, os.ErrPermission) {
 		fmt.Fprintf(stderr, "warning: %s: %v\n", *envFile, err)
 	}
+	stdout, stderr = newTermSafe(stdout), newTermSafe(stderr) // no terminal escape sequences from stored or remote text
 	c := &cli{cfgPath: *cfgPath, out: stdout, errw: stderr, readOnly: readOnlyCommand(rest)}
 	var err error
 	code := 0

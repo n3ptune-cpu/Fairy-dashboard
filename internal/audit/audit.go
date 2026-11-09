@@ -153,7 +153,12 @@ type line struct {
 	b   []byte
 }
 
+// maxScanLine bounds a line the reverse reader assembles: longer lines (never written by Write, which caps lines
+// at MaxLine, but possible in a damaged or hand-edited file) are skipped instead of read into memory.
+const maxScanLine = 1 << 20
+
 // reverseLines calls fn for each line from the end (or from `before`) towards the start; fn returns false to stop.
+// Memory stays bounded (one block plus at most maxScanLine) whatever the file holds.
 func reverseLines(path string, before *int64, fn func(off int64, b []byte) bool) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -168,13 +173,23 @@ func reverseLines(path string, before *int64, fn func(off int64, b []byte) bool)
 		end = max(0, *before)
 	}
 	pos := end
-	var buf []byte
+	var buf []byte    // the start of the line being assembled (begins at pos)
+	skipping := false // inside a line longer than maxScanLine: drop bytes until its start
 	for pos > 0 {
 		step := min(int64(block), pos)
 		pos -= step
 		chunk := make([]byte, step)
-		if _, err := f.ReadAt(chunk, pos); err != nil && err != io.EOF {
+		if n, err := f.ReadAt(chunk, pos); err != nil && err != io.EOF {
 			return err
+		} else if int64(n) < step { // the file shrank (rotated or truncated) under us
+			return nil
+		}
+		if skipping {
+			i := bytes.LastIndexByte(chunk, '\n')
+			if i < 0 {
+				continue
+			}
+			chunk, buf, skipping = chunk[:i+1], nil, false // the newline before the long line ends the previous one
 		}
 		buf = append(chunk, buf...)
 		parts := bytes.Split(buf, []byte("\n"))
@@ -189,6 +204,9 @@ func reverseLines(path string, before *int64, fn func(off int64, b []byte) bool)
 			if !fn(lines[i].off, lines[i].b) {
 				return nil
 			}
+		}
+		if len(buf) > maxScanLine {
+			buf, skipping = nil, true
 		}
 	}
 	if len(buf) > 0 {

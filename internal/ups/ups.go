@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ type Manager struct {
 	history map[string][]model.UpsPoint
 	events  []model.UpsEvent
 	seq     int
+	evRate  map[string]evRate // events per UPS in the current hour
 	// OnEvent is called (outside the lock) for every new event (notifications).
 	OnEvent func(model.UpsEvent)
 }
@@ -43,7 +45,7 @@ func NewManager(configs []map[string]any, interval float64, timeout time.Duratio
 	historyS int, eventsFile string) (*Manager, error) {
 	m := &Manager{timeout: timeout, offlineAfter: offlineAfter, eventsFile: eventsFile,
 		maxlen: max(1, int(float64(historyS)/interval)), states: map[string]*model.UpsState{},
-		history: map[string][]model.UpsPoint{}}
+		history: map[string][]model.UpsPoint{}, evRate: map[string]evRate{}}
 	for _, raw := range configs {
 		c, err := upssrc.Build(raw)
 		if err != nil {
@@ -57,23 +59,94 @@ func NewManager(configs []map[string]any, interval float64, timeout time.Duratio
 var rowSkip = map[string]bool{"name": true, "status": true, "powers": true, "id": true, "via": true,
 	"ups_name": true, "last_seen": true, "on_battery_since": true, "stale": true}
 
+// Limits for what an agent (or a NUT server) may put on the UPS page: rows come from machines the panel does
+// not control, so names, texts and lists are bounded and the state is one the page knows.
+const (
+	MaxAgentUPS = 16  // UPS rows taken from one agent's /metrics
+	maxText     = 128 // model, serial, raw status, error, ...
+	maxLabel    = 80  // the name shown on the card
+	maxFlags    = 16
+	// MaxEventsPerHour per UPS: a flapping (or hostile) UPS cannot flood the event log and notifications.
+	MaxEventsPerHour = 60
+)
+
+var (
+	upsNameRe = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
+	states    = map[string]bool{"online": true, "on_battery": true, "low_battery": true, "off": true, "unknown": true}
+	knownFlag = func() map[string]bool {
+		m := map[string]bool{}
+		for _, f := range devices.UPSFlags {
+			m[f] = true
+		}
+		return m
+	}()
+)
+
+// clip cuts s to n bytes (valid UTF-8) and drops control characters.
+func clip(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || (r >= 0x7f && r < 0xa0) {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) > n {
+		s = strings.ToValidUTF8(s[:n], "")
+	}
+	return s
+}
+
+func clipP(p **string) {
+	if *p != nil {
+		v := clip(**p, maxText)
+		*p = &v
+	}
+}
+
+// sanitize keeps a UPS state within what the page expects (see the limits above).
+func sanitize(st *model.UpsState) {
+	if !states[st.Status] {
+		st.Status = "unknown"
+	}
+	st.Name, st.UpsName = clip(st.Name, maxLabel), clip(st.UpsName, 64)
+	for _, p := range []**string{&st.StatusRaw, &st.Model, &st.Mfr, &st.Serial, &st.BatteryDate, &st.TestResult, &st.TransferReason, &st.Error} {
+		clipP(p)
+	}
+	flags := []string{}
+	for _, f := range st.Flags {
+		if knownFlag[f] && !slices.Contains(flags, f) && len(flags) < maxFlags {
+			flags = append(flags, f)
+		}
+	}
+	st.Flags = flags
+}
+
 func (m *Manager) apply(key string, row map[string]any, name string, via *string, powers []string) {
 	now := time.Now().UTC()
 	prev := m.states[key]
-	fields := map[string]any{}
-	for k, v := range row {
-		if !rowSkip[k] {
-			fields[k] = v
-		}
-	}
-	b, _ := json.Marshal(fields)
 	st := &model.UpsState{}
-	_ = json.Unmarshal(b, st)
+	for k, v := range row { // field by field: a value of the wrong type is dropped, not half-set
+		if rowSkip[k] {
+			continue
+		}
+		if k == "flags" { // the strings of the list (sanitize keeps the known ones)
+			l, _ := v.([]any)
+			for _, f := range l[:min(len(l), 64)] {
+				if f, ok := f.(string); ok {
+					st.Flags = append(st.Flags, f)
+				}
+			}
+			continue
+		}
+		b, err := json.Marshal(map[string]any{k: v})
+		if err != nil || json.Unmarshal(b, &model.UpsState{}) != nil {
+			continue
+		}
+		_ = json.Unmarshal(b, st)
+	}
 	st.ID, st.Name, st.UpsName, st.Via, st.Powers, st.LastSeen = key, name, fmt.Sprint(row["name"]), via, powers, &now
 	st.Status, _ = row["state"].(string)
-	if st.Status == "" {
-		st.Status = "unknown"
-	}
+	sanitize(st)
 	st.Stale = false
 	if st.Flags == nil {
 		st.Flags = []string{}
@@ -131,8 +204,14 @@ func (m *Manager) PollSource(ctx context.Context, c *upssrc.Source, timeout time
 		}
 		m.fail(keys, devices.Describe(err))
 	} else {
+		if len(rows) > MaxAgentUPS {
+			rows = rows[:MaxAgentUPS]
+		}
 		for _, row := range rows {
-			n := fmt.Sprint(row["name"])
+			n, _ := row["name"].(string)
+			if !upsNameRe.MatchString(n) {
+				continue
+			}
 			label := n
 			if c.Name != "" && len(rows) == 1 {
 				label = c.Name
@@ -191,9 +270,12 @@ func (m *Manager) UpdateFromAgent(agentID string, rows []map[string]any, unreach
 		m.fail(mine, "agent unreachable")
 	} else {
 		seen := map[string]bool{}
+		if len(rows) > MaxAgentUPS {
+			rows = rows[:MaxAgentUPS]
+		}
 		for _, row := range rows {
 			n, _ := row["name"].(string)
-			if n == "" {
+			if !upsNameRe.MatchString(n) { // it becomes the UPS's id: plain NUT names only
 				continue
 			}
 			key := agentID + "/" + n
@@ -205,12 +287,9 @@ func (m *Manager) UpdateFromAgent(agentID string, rows []map[string]any, unreach
 						seen[k] = true
 					}
 				}
-				e := fmt.Sprint(row["error"])
-				if row["error"] == nil || e == "" {
+				e, _ := row["error"].(string)
+				if e = clip(e, 120); e == "" {
 					e = "error"
-				}
-				if len(e) > 120 {
-					e = e[:120]
 				}
 				m.fail(hit, e)
 				continue

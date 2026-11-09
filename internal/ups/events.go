@@ -21,6 +21,19 @@ func FmtRuntime(s *int) string {
 }
 
 func (m *Manager) event(st *model.UpsState, kind, severity, msg string) {
+	now := time.Now()
+	r := m.evRate[st.ID]
+	if now.Sub(r.since) >= time.Hour {
+		r = evRate{since: now}
+	}
+	r.n++
+	m.evRate[st.ID] = r
+	if r.n > MaxEventsPerHour {
+		if r.n == MaxEventsPerHour+1 {
+			slog.Warn("UPS events: too many for one UPS, dropping the rest of this hour", "ups", st.Name)
+		}
+		return
+	}
 	m.seq++
 	ev := model.UpsEvent{Seq: m.seq, T: time.Now().UTC(), UpsID: st.ID, UpsName: st.Name, Kind: kind,
 		Severity: severity, Message: msg, StatusRaw: st.StatusRaw}
@@ -40,6 +53,14 @@ func (m *Manager) event(st *model.UpsState, kind, severity, msg string) {
 	}
 }
 
+type evRate struct {
+	since time.Time
+	n     int
+}
+
+// maxEventsFile: the event log is rotated to <file>.1 past this size (two files at most).
+const maxEventsFile = 4 << 20
+
 func appendLine(path string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -47,6 +68,11 @@ func appendLine(path string, v any) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
+	}
+	if st, err := os.Stat(path); err == nil && st.Size()+int64(len(b)) > maxEventsFile {
+		if err := os.Rename(path, path+".1"); err != nil {
+			return err
+		}
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {

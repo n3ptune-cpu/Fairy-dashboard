@@ -369,3 +369,26 @@ func TestOverridesRaceWithAddRepairRemove(t *testing.T) {
 		p.PollOnce(ctx)
 	}
 }
+
+// The Updates page shows an agent's self_update block: only known fields, right types, bounded texts, sane
+// times, whatever the agent sends.
+func TestSelfUpdateBlockFromAHostileAgent(t *testing.T) {
+	long := strings.Repeat("é", 10000)
+	got := SelfUpdateBlock(map[string]any{"state": "__proto__", "message": long + "\x1b[2J", "target": "1; rm -rf /",
+		"since": "yesterday", "extra": map[string]any{"deep": long},
+		"last": map[string]any{"ok": "yes", "at": 1e300, "message": []any{1.0}, "from": "41-abc", "to": long}})
+	b, _ := json.Marshal(got)
+	if got["state"] != "unknown" || len(got["message"].(string)) > 310 || strings.Contains(got["message"].(string), "\x1b") ||
+		got["target"] != nil || got["since"] != nil || got["extra"] != nil || len(b) > 1024 {
+		t.Fatalf("%s", b)
+	}
+	last := got["last"].(map[string]any)
+	if last["ok"] != false || last["at"] != nil || last["message"] != nil || last["from"] != "41-abc" || last["to"] != nil {
+		t.Fatalf("%v", last)
+	}
+	ok := SelfUpdateBlock(map[string]any{"state": "downloading", "target": "43-1a2b3c4", "since": 1.7e9,
+		"last": map[string]any{"ok": true, "at": 1.7e9, "message": "installed"}})
+	if ok["state"] != "downloading" || ok["target"] != "43-1a2b3c4" || ok["last"].(map[string]any)["at"] != 1.7e9 {
+		t.Fatal(ok)
+	}
+}

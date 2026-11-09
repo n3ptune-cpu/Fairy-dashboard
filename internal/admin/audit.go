@@ -1,11 +1,10 @@
 package admin
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
@@ -51,35 +50,22 @@ func (c *cli) audit(args []string) (int, error) {
 			fmt.Fprintln(c.out, fmtEntry(e))
 		}
 	}
-	entries, _ := audit.Read(c.cfg.AuditLog, "", "", "", nil, max(1, *n))
+	entries, _ := audit.Read(c.cfg.AuditLog, "", "", "", nil, min(max(1, *n), maxTail))
 	for i := len(entries) - 1; i >= 0; i-- {
 		show(entries[i])
 	}
 	if !*follow {
 		return 0, nil
 	}
-	f, err := os.Open(c.cfg.AuditLog)
-	if err != nil {
-		fmt.Fprintf(c.errw, "no audit log yet at %s\n", c.cfg.AuditLog)
-		return 1, nil
-	}
-	defer f.Close()
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+	if err := audit.Follow(c.cfg.AuditLog, show, nil, 500*time.Millisecond); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(c.errw, "no audit log yet at %s\n", c.cfg.AuditLog)
+			return 1, nil
+		}
 		return 1, err
 	}
-	r := bufio.NewReader(f)
-	for {
-		line, err := r.ReadBytes('\n')
-		if err == io.EOF {
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-		if err != nil {
-			return 1, err
-		}
-		var e map[string]any
-		if json.Unmarshal(line, &e) == nil {
-			show(e)
-		}
-	}
+	return 0, nil
 }
+
+// maxTail is the most entries `audit tail -n` prints.
+const maxTail = 10000

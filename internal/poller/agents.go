@@ -5,9 +5,11 @@ import (
 	"log/slog"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -146,16 +148,79 @@ type AgentInfo struct {
 
 func agentInfoOf(payload jsonx.M, now time.Time) AgentInfo {
 	info := AgentInfo{SeenAt: now}
-	if v, ok := payload["agent_version"].(string); ok && len(v) <= 64 {
+	if v, ok := payload["agent_version"].(string); ok && release.ValidVersion(v) {
 		info.Version = v
 	}
 	if su, ok := payload["self_update"].(map[string]any); ok {
-		info.SelfUpdate = su
+		info.SelfUpdate = SelfUpdateBlock(su)
 	}
 	if f, ok := payload["features"].(map[string]any); ok {
 		info.Enabled, _ = f["self_update"].(bool)
 	}
 	return info
+}
+
+var updateStates = map[string]bool{"idle": true, "downloading": true, "applying": true, "failed": true, "unavailable": true}
+
+// maxUnixTime bounds the timestamps an agent reports (seconds; year 2286), so the page can always show them.
+const maxUnixTime = 1e10
+
+// SelfUpdateBlock keeps only the fields of an agent's self_update block that the Updates page shows, with the
+// right types and bounded lengths: an agent (or whoever answers in its place) cannot break the page with an
+// odd payload. Unknown states read as "unknown".
+func SelfUpdateBlock(su map[string]any) map[string]any {
+	text := func(m map[string]any, k string, n int) (string, bool) {
+		v, ok := m[k].(string)
+		if !ok {
+			return "", false
+		}
+		v = strings.Map(func(r rune) rune {
+			if r < 0x20 || (r >= 0x7f && r < 0xa0) {
+				return -1
+			}
+			return r
+		}, v)
+		if len(v) > n {
+			v = strings.ToValidUTF8(v[:n], "") + "…"
+		}
+		return v, true
+	}
+	when := func(m map[string]any, k string) (float64, bool) {
+		f := jsonx.Num(m, k)
+		return model.Deref(f), f != nil && *f >= 0 && *f <= maxUnixTime
+	}
+	out := map[string]any{"state": "unknown"}
+	if st, _ := su["state"].(string); updateStates[st] {
+		out["state"] = st
+	}
+	if v, ok := text(su, "message", 300); ok {
+		out["message"] = v
+	}
+	if v, ok := su["target"].(string); ok && release.ValidVersion(v) {
+		out["target"] = v
+	}
+	if v, ok := when(su, "since"); ok {
+		out["since"] = v
+	}
+	if last, ok := su["last"].(map[string]any); ok {
+		l := map[string]any{"ok": jsonx.Bool(last, "ok", false)}
+		for _, k := range []string{"from", "to"} {
+			if v, ok := last[k].(string); ok && release.ValidVersion(v) {
+				l[k] = v
+			}
+		}
+		if v, ok := text(last, "id", 64); ok {
+			l["id"] = v
+		}
+		if v, ok := text(last, "message", 300); ok {
+			l["message"] = v
+		}
+		if v, ok := when(last, "at"); ok {
+			l["at"] = v
+		}
+		out["last"] = l
+	}
+	return out
 }
 
 // AgentInfo returns the version and self-update state from the agent's last good poll.

@@ -44,6 +44,11 @@ func agoISO(s string) string {
 
 func table(rows [][]string, head []string) string {
 	w := make([]int, len(head))
+	for _, r := range rows {
+		for i := range r {
+			r[i] = clean(r[i]) // widths of what is printed
+		}
+	}
 	for _, r := range append([][]string{head}, rows...) {
 		for i, c := range r {
 			w[i] = max(w[i], len([]rune(c)))
@@ -70,7 +75,7 @@ func table(rows [][]string, head []string) string {
 func cut(v any, n int) string {
 	t := ""
 	if v != nil {
-		t = fmt.Sprint(v)
+		t = clean(fmt.Sprint(v))
 	}
 	if t == "" {
 		t = "-"

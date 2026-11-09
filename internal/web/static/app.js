@@ -637,10 +637,10 @@ function upsWatts(u) {
   return `${u.watts_estimated ? "≈" : ""}${fmtW(u.watts)}${u.watts_estimated ? ` (est. from ${u.nominal_w} W nominal)` : ""}`;
 }
 function upsCard(u) {
-  const [cls, label] = UPS_STATUS[u.status] || ["", u.status];
+  const [cls, label] = (Object.hasOwn(UPS_STATUS, u.status) && UPS_STATUS[u.status]) || ["", String(u.status ?? "unknown")];
   const hist = state.upsHist[u.id] || [];
-  const ch = u.battery_charge;
-  const powered = u.powers.map((id) => state.byId[id]).filter(Boolean);
+  const ch = Number.isFinite(u.battery_charge) ? u.battery_charge : null;
+  const powered = (u.powers || []).map((id) => state.byId[id]).filter(Boolean);
   return `<div class="panel glass pad ups-card ${onBattery(u) ? "alarm" : ""} ${u.stale ? "stale" : ""}" data-key="${esc(u.id)}">
     <div class="ups-head">${I.ups}<div><b>${esc(u.name)}</b><div class="note">${esc([u.mfr, u.model].filter(Boolean).join(" ") || u.ups_name)}${u.via ? ` · via agent ${esc(u.via)}` : " · polled by the panel"}</div></div>
       <span class="chip ${cls} push">${esc(label)}${u.stale ? " · stale" : ""}</span></div>
@@ -657,7 +657,7 @@ function upsCard(u) {
       <div class="list-row"><span>Battery voltage</span><span>${u.battery_voltage?.toFixed(1) ?? "–"} V</span></div>
       <div class="list-row"><span>Battery date</span><span>${esc(u.battery_date || "–")}</span></div>
       ${u.test_result ? `<div class="list-row"><span>Self-test</span><span>${esc(u.test_result)}</span></div>` : ""}
-      ${u.flags.length ? `<div class="list-row"><span>Flags</span><span>${u.flags.map((f) => `<span class="chip ${f === "replace_battery" || f === "overload" ? "bad" : ""}">${esc(f.replace("_", " "))}</span>`).join(" ")}</span></div>` : ""}
+      ${u.flags?.length ? `<div class="list-row"><span>Flags</span><span>${u.flags.map((f) => `<span class="chip ${f === "replace_battery" || f === "overload" ? "bad" : ""}">${esc(f.replace("_", " "))}</span>`).join(" ")}</span></div>` : ""}
       <div class="list-row"><span>Powers</span><span>${powered.length ? powered.map((p) => `<a href="#/system/${enc(p.id)}">${esc(p.name)}</a>`).join(", ") : '<span class="note">nothing linked</span>'}</span></div>
       <div class="list-row"><span>Raw status</span><span><code>${esc(u.status_raw || "–")}</code></span></div>
     </div></div>`;
@@ -762,7 +762,8 @@ function updState(r) {
   const su = r.self_update;
   if (!su) return '<span class="note">–</span>';
   const st = su.state || "idle", cls = st === "failed" || st === "unavailable" ? "bad" : st === "idle" ? "" : "warn";
-  const last = su.last ? `<div class="note" title="${esc(su.last.message)}">${su.last.ok ? "last update OK" : "last update failed"}${su.last.at ? `, <span data-ago="${new Date(su.last.at * 1000).toISOString()}">${ago(new Date(su.last.at * 1000).toISOString())}</span>` : ""}</div>` : "";
+  const at = su.last && Number.isFinite(su.last.at) && su.last.at > 0 && su.last.at < 1e10 ? new Date(su.last.at * 1000).toISOString() : "";
+  const last = su.last ? `<div class="note" title="${esc(su.last.message)}">${su.last.ok ? "last update OK" : "last update failed"}${at ? `, <span data-ago="${at}">${ago(at)}</span>` : ""}</div>` : "";
   return `<span class="chip ${cls}">${esc(st)}</span>${su.message ? `<div class="note">${esc(su.message)}</div>` : ""}${last}`;
 }
 function pageUpdates() {
