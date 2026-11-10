@@ -45,3 +45,27 @@ func TestUIDoesNotRelyOnServerTypes(t *testing.T) {
 		}
 	}
 }
+
+// M2 (UI side): a system the panel could only describe as { id, name, kind, status: "error", error } is shown as
+// an error, never dropped: the page has the error strip, the error card and the red dot for it.
+func TestUIShowsErrorSystems(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const broken = (s) => s?.status === "error";`,
+		`for (const s of state.systems.filter(broken))`, // the strip on every page
+		`if (broken(s)) {`, // the system's own page
+		`cannot be shown`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	css, err := staticFS.ReadFile("static/app.css")
+	if err != nil || !strings.Contains(string(css), ".dot.error") {
+		t.Error("app.css lacks the error dot", err)
+	}
+	// nothing filters systems by a list of known statuses (which would hide "error")
+	if regexp.MustCompile(`state\.systems\s*=\s*[^;]*filter\([^;]*status`).MatchString(js) {
+		t.Error("the systems list must not be filtered by status")
+	}
+}

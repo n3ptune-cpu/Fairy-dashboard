@@ -109,6 +109,9 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .dot.online { background: var(--ok); box-shadow: 0 0 0 3px rgba(61, 220, 151, .14); }
 .dot.stale { background: var(--warn); box-shadow: 0 0 0 3px rgba(245, 184, 75, .14); }
 .dot.offline { background: var(--bad); box-shadow: 0 0 0 3px rgba(255, 93, 108, .14); }
+.dot.error { background: var(--bad); box-shadow: 0 0 0 3px rgba(255, 93, 108, .3); }
+.errcard { border-color: rgba(255, 93, 108, .6); }
+.errcard h3 { display: flex; align-items: center; gap: 10px; }
 .note { color: var(--faint); font-size: 12px; }
 .note.warn { color: var(--warn); }
 .table.updates td .note { margin-top: 3px; max-width: 360px; }

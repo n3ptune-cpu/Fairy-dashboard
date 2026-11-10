@@ -49,6 +49,11 @@ const ago = (iso) => {
 };
 const kindLabel = (s) => ({ node: "node", qemu: "VM", lxc: "CT", agent: s.platform || "agent" }[s.kind]);
 const live = (s) => s.status === "online" || s.status === "stale" || s.status === "paused";  // paused = frozen values
+// A system whose data the panel could not put into its answer (impossible numbers from an agent or Proxmox)
+// arrives as a small entry { id, name, kind, status: "error", error }. It is never dropped or hidden: it gets an
+// error strip on every page (renderAlerts), an error card as its own page, and a red dot wherever it is listed.
+const broken = (s) => s?.status === "error";
+const brokenWhy = (s) => s.error || "the panel could not read this system's data";
 
 // ------------------------------------------------------------ icons (inline SVG, currentColor)
 const svg = (d, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
@@ -460,6 +465,10 @@ function renderAlerts() {
       ${u.on_battery_since ? `<span class="note">for ${fmtRuntime(secsSince(u.on_battery_since))}</span>` : ""}
       ${powered.length ? `<span class="note">powers ${esc(powered.join(", "))}</span>` : ""}<span class="push">details →</span></a>`);
   }
+  for (const s of state.systems.filter(broken)) {
+    out.push(`<a class="alert-strip bad static" href="#/system/${enc(s.id)}" data-key="err-${esc(s.id)}">${I.machine}<b>${esc(s.name || s.id)}</b>
+      <span>cannot be shown: its data is not usable</span><span class="note">${esc(brokenWhy(s))}</span><span class="push">open →</span></a>`);
+  }
   const here = current().id;  // the system page shows its own countdown strip
   for (const s of state.systems.filter((x) => x.power_pending && x.id !== here)) {
     const p = s.power_pending;
@@ -565,6 +574,12 @@ function powerMenu(s) {
 function pageSystem(id, tab) {
   const s = state.byId[id];
   if (!s) { setTitle("Not found"); return '<div class="empty">Unknown system.</div>'; }
+  if (broken(s)) {  // nothing else of it is known: one card that says so
+    setTitle(s.name || id, "data error");
+    return `<div class="panel glass pad errcard" data-key="err"><h3><span class="dot error"></span> ${esc(s.name || id)} cannot be shown</h3>
+      <p>Fairy got data for this ${esc(kindLabel(s) || "system")} that it cannot use: <b>${esc(brokenWhy(s))}</b></p>
+      <p class="note">The other systems are not affected. This card stays until the system sends usable data again; check the agent (or Proxmox) on that machine.</p></div>`;
+  }
   setTitle(s.name, s.kind === "agent" ? s.group || "" : s.parent ? `on ${s.parent}` : s.cluster || s.group || "");
   const tabs = [["overview", "Overview"], ...(s.processes_available || s.kind === "agent" ? [["processes", "Processes"]] : []), ...(s.fan_control ? [["fans", "Fans"]] : [])];
   if (!tabs.some(([k]) => k === tab)) tab = "overview";
