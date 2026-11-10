@@ -689,6 +689,14 @@ func (m *Manager) report(e *Enrollment, kind, detail string) {
 
 func (m *Manager) run(ctx context.Context, e *Enrollment) {
 	defer e.cancel()
+	// However the enrollment ends (paired, expired, cancelled): the pairing key and a code still held for the
+	// browser leave the panel's memory with it. The finished entry stays listed for an hour without them.
+	defer func() {
+		m.mu.Lock()
+		clear(e.key)
+		e.key, e.held = nil, nil
+		m.mu.Unlock()
+	}()
 	t := time.NewTicker(m.Interval)
 	defer t.Stop()
 	for {
@@ -700,7 +708,7 @@ func (m *Manager) run(ctx context.Context, e *Enrollment) {
 			return
 		}
 		actx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		status, resp, code, err := m.Pair(actx, e.URL, e.key)
+		status, resp, code, err := m.Pair(actx, e.URL, e.key) // e.key is only touched by this goroutine
 		cancel()
 		var elsewhere *NotTailscale
 		var unverified *Unverified

@@ -686,6 +686,50 @@ func TestEnrollmentCopiesHoldNoKey(t *testing.T) {
 	r.m.Cancel(cr.ID)
 }
 
+// When an enrollment is over, however it ended, the panel no longer holds its pairing key or a code kept for
+// the browser.
+func TestFinishedEnrollmentForgetsItsKey(t *testing.T) {
+	held := func(r *rig, id string) (key []byte, code bool) {
+		r.m.mu.Lock()
+		defer r.m.mu.Unlock()
+		e := r.m.items[id]
+		return e.key, e.held != nil
+	}
+	gone := func(r *rig, id, what string) {
+		t.Helper()
+		for i := 0; i < 400; i++ {
+			if k, c := held(r, id); k == nil && !c {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatal(what + ": the key or the held code is still in memory")
+	}
+	// cancelled while waiting, with a code held for the browser
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	r := newRig(t, srv.URL)
+	cr := r.add(t, "box")
+	r.m.Hold(cr)
+	if k, c := held(r, cr.ID); len(k) != enroll.KeySize || !c {
+		t.Fatal("a waiting enrollment must hold its key and the code for one reveal")
+	}
+	r.m.Cancel(cr.ID)
+	gone(r, cr.ID, "cancelled")
+	if _, ok := r.m.Reveal(cr.ID, "neptune"); ok {
+		t.Fatal("a cancelled enrollment revealed its code")
+	}
+	// paired
+	machine := newSwap(t, http.NotFoundHandler())
+	r2 := newRig(t, machine.srv.URL)
+	cr2 := r2.add(t, "box2")
+	machine.set(v2Agent(keyOf(t, cr2.Code), goodAnswer))
+	if e := r2.wait(t, cr2.ID, "online", func(e Enrollment) bool { return e.Done }); e.State != Online {
+		t.Fatalf("%+v", e)
+	}
+	gone(r2, cr2.ID, "paired")
+}
+
 // The old exchange is gone from the panel: no non-test file of the packages that pair or simulate pairing
 // builds an old request, proof or verifier.
 func TestNoPairingV1InThePanel(t *testing.T) {
