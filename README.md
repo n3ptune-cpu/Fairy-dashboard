@@ -186,6 +186,8 @@ manual install per machine) is in Fairy-agent's
   * A release whose version does not start with a build number (a local build) is refused.
   * "rolled back to the previous version": the new version did not come up, and the old one runs again. The
     machine is fine.
+  * "the previous version was put back and started again, but ...": the old program was put back and started,
+    but its check could not be completed. Look at the machine; it is very likely running the old version.
   * "rolling back FAILED too": the agent may be down. Look at the machine.
 * The latest releases are looked up on GitHub at most every 10 minutes, in the background and only while an
   admin uses the panel; `updates: {check_latest: false}` switches that off on a panel without internet access.
