@@ -744,13 +744,13 @@ func TestFinishedEnrollmentForgetsItsKey(t *testing.T) {
 	defer srv.Close()
 	r := newRig(t, srv.URL)
 	cr := r.add(t, "box")
-	r.m.Hold(cr)
+	r.m.Hold(cr, "alice in her browser")
 	if k, c := held(r, cr.ID); len(k) != enroll.KeySize || !c {
 		t.Fatal("a waiting enrollment must hold its key and the code for one reveal")
 	}
 	r.m.Cancel(cr.ID)
 	gone(r, cr.ID, "cancelled")
-	if _, ok := r.m.Reveal(cr.ID, "alice"); ok {
+	if _, ok := r.m.Reveal(cr.ID, "alice in her browser"); ok {
 		t.Fatal("a cancelled enrollment revealed its code")
 	}
 	// paired

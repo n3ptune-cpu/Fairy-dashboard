@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -114,6 +115,7 @@ type Enrollment struct {
 	cancel   context.CancelFunc
 	pairedAt time.Time
 	held     *Created // the code and command, kept for one Reveal (made by the panel's replay after a step-up)
+	holder   string   // who may Reveal it (see Hold)
 }
 
 // Why an enrollment is still waiting (Enrollment.Hint).
@@ -487,7 +489,7 @@ func olderRelease(installed string, in Installers) string {
 
 func (m *Manager) copyOf(e *Enrollment) Enrollment {
 	c := *e
-	c.key, c.cancel, c.held, c.reported = nil, nil, nil, nil
+	c.key, c.cancel, c.held, c.holder, c.reported = nil, nil, nil, "", nil
 	return c
 }
 
@@ -505,27 +507,30 @@ func osName(os string) string {
 	return "Linux"
 }
 
-// Hold keeps a new enrollment's code and command for one Reveal by its creator: the panel made it by itself
-// right after a step-up sign-in, so the browser has not seen the code yet.
-func (m *Manager) Hold(cr Created) {
+// Hold keeps a new enrollment's code and command for one Reveal by holder: the panel made it by itself right
+// after a step-up sign-in, so the browser has not seen the code yet. holder is the caller's name for who
+// confirmed (the web layer: the account and the browser and address the confirmation came back to); only a
+// Reveal with the same holder gets the code. An empty holder holds nothing.
+func (m *Manager) Hold(cr Created, holder string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if e, ok := m.items[cr.ID]; ok && !e.Done {
+	if e, ok := m.items[cr.ID]; ok && !e.Done && holder != "" {
 		c := cr
-		e.held = &c
+		e.held, e.holder = &c, holder
 	}
 }
 
-// Reveal returns a held code and command once, to the user who made the enrollment, while it still waits.
-func (m *Manager) Reveal(id, by string) (Created, bool) {
+// Reveal returns a held code and command once, to the holder it is kept for, while the enrollment still waits.
+// A Reveal by anyone else gets nothing and leaves the code where it is.
+func (m *Manager) Reveal(id, holder string) (Created, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.items[id]
-	if !ok || e.held == nil || e.CreatedBy != by || e.Done {
+	if !ok || e.held == nil || e.Done || holder == "" || subtle.ConstantTimeCompare([]byte(e.holder), []byte(holder)) != 1 {
 		return Created{}, false
 	}
 	c := *e.held
-	e.held = nil
+	e.held, e.holder = nil, ""
 	c.Enrollment = m.copyOf(e)
 	return c, true
 }
@@ -706,7 +711,7 @@ func (m *Manager) run(ctx context.Context, e *Enrollment) {
 	defer func() {
 		m.mu.Lock()
 		clear(e.key)
-		e.key, e.held = nil, nil
+		e.key, e.held, e.holder = nil, nil, ""
 		m.mu.Unlock()
 	}()
 	limited := 0 // answers in a row that said the agent's pairing budget is used up

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -158,7 +159,8 @@ func TestJoinCodeIsNotRevealedToAPITokens(t *testing.T) {
 	}
 	id := r.body["id"].(string)
 	cr, _ := e.s.Enroll.Get(id)
-	e.s.Enroll.Hold(enrollment.Created{Enrollment: cr, Code: r.body["code"].(string), Command: r.body["command"].(string)})
+	holder := controller().Sub + "\x00" + e.s.codec.clientMark(client{ip: testIP, ua: sha256.Sum256([]byte(testUA))})
+	e.s.Enroll.Hold(enrollment.Created{Enrollment: cr, Code: r.body["code"].(string), Command: r.body["command"].(string)}, holder)
 	ctl, _, _ := e.s.Tokens.Create("ops", "system", "control", "cli:test", 0)
 	t1 := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Authorization", "Bearer "+ctl)
 	if t1.code != 403 || strings.Contains(string(t1.raw), r.body["code"].(string)) || t1.body["command"] != nil {

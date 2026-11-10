@@ -257,7 +257,7 @@ func (s *Server) hostAdd(c *reqCtx) error {
 	}
 	c.audit(u, "host.add", cr.HostID, params, "join code made (valid 15 min)")
 	if c.resumed() {
-		s.Enroll.Hold(cr) // made right after a step-up sign-in: the browser fetches the code once (reveal=1)
+		s.Enroll.Hold(cr, c.codeHolder(u)) // made right after a step-up sign-in: the browser fetches the code once (reveal=1)
 	}
 	c.json(201, cr)
 	return nil
@@ -296,7 +296,7 @@ func (s *Server) hostRepair(c *reqCtx) error {
 	}
 	c.audit(u, "host.repair", id, params, outcome)
 	if c.resumed() {
-		s.Enroll.Hold(cr)
+		s.Enroll.Hold(cr, c.codeHolder(u))
 	}
 	c.json(201, cr)
 	return nil
@@ -352,6 +352,13 @@ func (s *Server) hostRemove(c *reqCtx) error {
 	return nil
 }
 
+// codeHolder names who a join code is held for after a step-up: the account, and the client (address and
+// browser) whose confirmation made the panel create it. The replay that creates it carries that client's
+// address and browser, so Hold and the browser's Reveal agree, and nobody else's Reveal does.
+func (c *reqCtx) codeHolder(u *model.User) string {
+	return u.Sub + "\x00" + c.s.codec.clientMark(c.client())
+}
+
 func (s *Server) enrollmentGet(c *reqCtx) error {
 	u, err := c.requireAdmin("Add host")
 	if err != nil {
@@ -361,7 +368,15 @@ func (s *Server) enrollmentGet(c *reqCtx) error {
 		if u.Auth == "token" { // the join code goes to the browser that made it, never to an API token
 			return c.deny(u, 403, "the join code is shown to the signed-in admin who made it, not to an API token", "API token asked for a join code")
 		}
-		cr, ok := s.Enroll.Reveal(c.r.PathValue("id"), actorOf(u))
+		// NEW-7: the code goes once to the client that confirmed this Add host, while that confirmation still
+		// counts. authAge is the age of the sign-in as this very client (address and browser) confirmed it, so
+		// the same cookie from anywhere else is refused here, and codeHolder ties the code to the account and
+		// client the panel made it for. A refusal leaves the code where it is: it is not "shown" by asking.
+		if age := c.authAge(u); age == nil || *age > float64(max(s.Cfg.StepUpWindowS, perActionGrace)) {
+			return c.deny(u, 403, "the join code is shown once, to the browser that confirmed this Add host, right after "+
+				"the confirmation. Cancel this Add host and make a new code.", "join code asked for without a fresh confirmation from this client")
+		}
+		cr, ok := s.Enroll.Reveal(c.r.PathValue("id"), c.codeHolder(u))
 		if !ok {
 			return apierr.New(404, "the code was already shown, or this Add host is over: make a new code")
 		}

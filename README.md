@@ -259,6 +259,9 @@ If the agent still answers that its limit is reached (something else is asking i
 then 60 seconds between requests and says so in the dialog; the code stays valid. The dialog follows the pairing
 (waiting -> paired -> online) and Cancel stops it. Creating a code is a control action (admin, CSRF, kill switch,
 step-up sign-in, rate limit, audit `host.add` / `host.pair`); API tokens cannot do it.
+When the code was made right after "Confirm it's you", the page fetches it once. The panel gives it only to the
+browser and address that confirmed, and only while that confirmation still counts; anyone else who holds the
+session cookie gets 403 and the code stays where it is.
 
 Pairing is `POST /pair` on the agent, answered once, only to the panel's address, at most 5 tries a minute; then
 the agent switches pairing off for good. The panel speaks **pairing v2** only. The command carries `--pair-v2`

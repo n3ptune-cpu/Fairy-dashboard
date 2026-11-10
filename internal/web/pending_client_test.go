@@ -535,3 +535,85 @@ func TestParallelCallbacksRunTheKeptActionOnce(t *testing.T) {
 		t.Fatalf("the kept shutdown ran %d times", n)
 	}
 }
+
+// NEW-7: the one-time join code goes to the client that confirmed the Add host, while that confirmation still
+// counts. The same cookie from another address or browser used to take it (and the admin's page then got 404).
+func TestJoinCodeIsRevealedOnlyToTheClientThatConfirmed(t *testing.T) {
+	for _, perAction := range []bool{false, true} {
+		a := signedIn(t)
+		e := a.e
+		e.s.Cfg.StepUpPerAction = perAction
+		e.s.Enroll.PanelAddr = "100.64.0.10"
+		e.s.Enroll.Interval = time.Hour
+		add := func(name string) string {
+			r := e.do("POST", "/api/admin/hosts", map[string]any{"name": name, "os": "linux"}, "Cookie", a.sess,
+				"X-Requested-With", "fairy", "Content-Type", "application/json")
+			if !stepUpRequired(r) {
+				t.Fatal(r.code, string(r.raw))
+			}
+			if cb := a.confirm(pendingID(r), false); cb.code != 303 {
+				t.Fatal(cb.code, string(cb.raw))
+			}
+			pr, _ := e.do("GET", "/api/me", nil, "Cookie", a.sess).body["pending_result"].(map[string]any)
+			id, _ := pr["ref"].(string)
+			if id == "" {
+				t.Fatal("no Add host was made", pr)
+			}
+			return id
+		}
+		id := add("SRV-WINPC")
+		for who, hdr := range map[string][]string{"another address and browser": thief, "another address": otherAddr, "another browser": otherBrowser} {
+			// the copy can see that an Add host waits (it is the same session) ...
+			list := e.do("GET", "/api/admin/hosts", nil, append([]string{"Cookie", a.sess}, hdr...)...)
+			if enr, _ := list.body["enrollments"].([]any); list.code != 200 || len(enr) != 1 {
+				t.Fatal(list.code, string(list.raw))
+			}
+			// ... but not take its code
+			g := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, append([]string{"Cookie", a.sess}, hdr...)...)
+			if g.code != 403 || g.body["code"] != nil || g.body["command"] != nil {
+				t.Fatalf("per-action %v, %s took the join code: %d %s", perAction, who, g.code, g.raw)
+			}
+		}
+		own := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", a.sess)
+		if code, _ := own.body["code"].(string); own.code != 200 || code == "" {
+			t.Fatalf("per-action %v: the confirming browser must still get the code after the refusals: %d %s", perAction, own.code, own.raw)
+		}
+		if again := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", a.sess); again.code != 404 {
+			t.Fatal("the code is shown once:", again.code)
+		}
+		e.s.Enroll.Cancel(id)
+
+		// the confirming browser itself, once the confirmation no longer counts
+		long := time.Duration(max(e.s.Cfg.StepUpWindowS, perActionGrace)+5) * time.Second
+		a.clk.advance(long) // so that the next Add host is asked to confirm again
+		id = add("SRV-TOWER2")
+		a.clk.advance(time.Duration(max(e.s.Cfg.StepUpWindowS, perActionGrace)+5) * time.Second)
+		if g := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", a.sess); g.code != 403 || g.body["code"] != nil {
+			t.Fatalf("per-action %v: revealed after the window: %d %s", perAction, g.code, g.raw)
+		}
+		e.s.Enroll.Cancel(id)
+	}
+
+	// another admin, freshly signed in from the very same address and browser, is not who it is held for
+	a := signedIn(t)
+	e := a.e
+	e.s.Enroll.PanelAddr = "100.64.0.10"
+	e.s.Enroll.Interval = time.Hour
+	r := e.do("POST", "/api/admin/hosts", map[string]any{"name": "SRV-WINPC", "os": "linux"}, "Cookie", a.sess,
+		"X-Requested-With", "fairy", "Content-Type", "application/json")
+	if cb := a.confirm(pendingID(r), false); cb.code != 303 || len(e.s.Enroll.List()) != 1 {
+		t.Fatal(cb.code)
+	}
+	id := e.s.Enroll.List()[0].ID
+	second := model.User{Sub: "admin2", Name: model.P("Second"), Groups: []string{"viewers"}}
+	ck := e.cookie(second, 0)
+	if _, _, err := e.s.Access.SetRole("admin2", access.RoleAdmin, nil, "test", true); err != nil {
+		t.Fatal(err)
+	}
+	if g := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", ck); g.code != 404 || g.body["code"] != nil {
+		t.Fatalf("another admin took the code: %d %s", g.code, g.raw)
+	}
+	if g := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", a.sess); g.code != 200 {
+		t.Fatal("the admin who confirmed:", g.code, string(g.raw))
+	}
+}
