@@ -93,3 +93,13 @@ func TestUIConfirmIsAPostAndShowsWhatWillRun(t *testing.T) {
 		}
 	}
 }
+
+// NEW-3 in the page: "Cancel Add host" is a control call like the others, so a refusal for a step-up opens
+// "Confirm it's you" instead of showing an error.
+func TestUICancelAddHostIsAControlCall(t *testing.T) {
+	js := appJS(t)
+	want := "const r = await controlCall({ kind: \"request\", label: `Cancel Add host ${cr.name}`, method: \"DELETE\", path, body: null }, () => api(path, { method: \"DELETE\" }));"
+	if !strings.Contains(js, want) {
+		t.Errorf("app.js lacks %q", want)
+	}
+}

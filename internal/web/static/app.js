@@ -1621,7 +1621,12 @@ function openEnrollDialog(cr) {
   };
   $("#en-close").onclick = closeModal;
   $("#en-cancel").onclick = async () => {
-    try { await api(`/api/admin/enrollments/${enc(cr.id)}`, { method: "DELETE" }); flash(`Add host ${cr.name}: cancelled`); } catch (x) { flash(x.message, true); }
+    const path = `/api/admin/enrollments/${enc(cr.id)}`;
+    try {
+      const r = await controlCall({ kind: "request", label: `Cancel Add host ${cr.name}`, method: "DELETE", path, body: null }, () => api(path, { method: "DELETE" }));
+      if (r === null) return;  // "Confirm it's you" took the dialog's place: the cancel runs after the sign-in
+      flash(`Add host ${cr.name}: cancelled`);
+    } catch (x) { flash(x.message, true); }
     closeModal();
   };
   pollEnroll(cr.id);

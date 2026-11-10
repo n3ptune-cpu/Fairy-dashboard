@@ -4,16 +4,27 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // L3: an API token skips the step-up prompt, so the most sensitive control actions refuse tokens altogether:
-// helper stop / start, Add host, Re-pair and Remove. Everything else a control token could do, it still can.
+// helper stop / start, Add host, Re-pair, Remove and cancelling a waiting Add host (NEW-3). Everything else a
+// control token could do, it still can.
 func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 	e := setup(t)
 	e.helperPoll("laptop", "running", helperAll...)
 	ctl, _, _ := e.s.Tokens.Create("ops", "system", "control", "cli:test", 0)
 	ro, _, _ := e.s.Tokens.Create("ha", "system", "read", "cli:test", 0)
 	name := e.do("GET", "/api/systems/laptop", nil, "Authorization", "Bearer "+ctl).body["name"].(string)
+	// an Add host that an admin made and that is waiting: a token must not be able to call it off
+	e.s.Enroll.PanelAddr = "100.64.0.10"
+	e.s.Enroll.Interval = time.Hour
+	mk := e.do("POST", "/api/admin/hosts", map[string]any{"name": "SRV-WAITING", "os": "linux"}, "Cookie", e.cookie(controller(), 0),
+		"X-Requested-With", "fairy", "Content-Type", "application/json")
+	enrollID, _ := mk.body["id"].(string)
+	if mk.code != 201 || enrollID == "" {
+		t.Fatal("add host", mk.code, string(mk.raw))
+	}
 	refused := []struct {
 		method, path string
 		body         any
@@ -23,6 +34,7 @@ func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 		{"POST", "/api/admin/hosts", map[string]any{"name": "SRV-WINPC", "os": "linux"}},
 		{"POST", "/api/admin/hosts/srv-winpc/repair", map[string]any{"confirm": "SRV-WINPC"}},
 		{"DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "SRV-WINPC"}},
+		{"DELETE", "/api/admin/enrollments/" + enrollID, nil},
 	}
 	before := e.agentRequests()
 	for _, rt := range refused {
@@ -33,8 +45,11 @@ func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 			}
 		}
 	}
-	if after := e.agentRequests(); after != before || len(e.s.Enroll.List()) != 0 {
+	if after := e.agentRequests(); after != before || len(e.s.Enroll.List()) != 1 {
 		t.Fatal("a refused token request reached an agent or made an enrollment")
+	}
+	if en, ok := e.s.Enroll.Get(enrollID); !ok || en.Done {
+		t.Fatalf("a token called the waiting Add host off: %+v", en)
 	}
 	if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), "auth.denied 403: API token on an action that needs a browser sign-in") {
 		t.Fatal("the refusal is not in the audit log")
@@ -75,7 +90,7 @@ func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 // drop out of the list without anyone noticing.
 func TestSignInOnlyActionsAreRealRoutes(t *testing.T) {
 	e := setup(t)
-	if len(sessionOnlyControl) != 5 {
+	if len(sessionOnlyControl) != 6 {
 		t.Fatal("the list changed: update this test and the docs", len(sessionOnlyControl))
 	}
 	for pat := range sessionOnlyControl {

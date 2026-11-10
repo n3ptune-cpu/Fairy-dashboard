@@ -16,7 +16,7 @@ import (
 )
 
 // Add host (admins): the dialog's data, creating a pending enrollment (a control action: CSRF, kill switch,
-// step-up, rate limit, audit host.add), its progress, cancel, and for hosts added this way Re-pair (a new code
+// step-up, rate limit, audit host.add), its progress, cancel (browser session, CSRF, step-up), and for hosts added this way Re-pair (a new code
 // when the panel lost the tokens) and Remove. The machine runs one command; the panel pairs by itself, with
 // pairing v2 only (internal/enrollment): an answer that does not prove the join code is never stored, and an
 // agent or release from before v2 is reported as too old (409 for the release, a hint while it waits).
@@ -376,12 +376,11 @@ func (s *Server) enrollmentGet(c *reqCtx) error {
 	return nil
 }
 
+// enrollmentCancel calls a waiting Add host or Re-pair off. It is guarded like making one (NEW-3): browser
+// session only (an API token is refused), CSRF, admin, step-up, rate limit. The kill switch does not refuse it.
 func (s *Server) enrollmentCancel(c *reqCtx) error {
-	u, err := c.requireAdmin("Add host")
+	u, err := c.stopGuard(s.control)
 	if err != nil {
-		return err
-	}
-	if err := c.checkCSRF(u); err != nil {
 		return err
 	}
 	if !s.Enroll.Cancel(c.r.PathValue("id")) {

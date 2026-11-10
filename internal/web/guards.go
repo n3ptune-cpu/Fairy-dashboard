@@ -39,7 +39,8 @@ func (c *reqCtx) checkCSRF(u *model.User) error {
 // sessionOnlyControl lists the control actions (by the route pattern they are registered under) that an API
 // token may not run at all. A token cannot "confirm it's you": it skips the step-up, so for a token every other
 // control action is one request away. These are the ones that change what the panel trusts or switch off a
-// machine's protection: stop / start of the elevated helper (its fan watchdog), Add host, Re-pair and Remove.
+// machine's protection: stop / start of the elevated helper (its fan watchdog), Add host, Re-pair, Remove, and
+// cancelling an Add host or Re-pair that is waiting (NEW-3: it undoes what an admin just confirmed).
 // They need a browser session, which then goes through the step-up like everything else.
 var sessionOnlyControl = map[string]bool{
 	"POST /api/systems/{id}/helper/stop":  true,
@@ -47,11 +48,23 @@ var sessionOnlyControl = map[string]bool{
 	"POST /api/admin/hosts":               true,
 	"POST /api/admin/hosts/{id}/repair":   true,
 	"DELETE /api/admin/hosts/{id}":        true,
+	"DELETE /api/admin/enrollments/{id}":  true,
 }
 
 // controlGuard: CSRF, control group / control-scope token, admin kill switch, step-up, rate limit. API tokens
 // are refused outright on the routes in sessionOnlyControl.
 func (c *reqCtx) controlGuard(bucket *rateLimiter) (*model.User, error) {
+	return c.guardControl(bucket, true)
+}
+
+// stopGuard is controlGuard for an action that only stops something the panel itself is doing (cancelling an
+// Add host that waits): everything controlGuard checks, except that the kill switch does not refuse it. The
+// kill switch stops device control; it must not keep an admin from calling a pairing off.
+func (c *reqCtx) stopGuard(bucket *rateLimiter) (*model.User, error) {
+	return c.guardControl(bucket, false)
+}
+
+func (c *reqCtx) guardControl(bucket *rateLimiter, killSwitch bool) (*model.User, error) {
 	u, err := c.requireUser()
 	if err != nil {
 		return nil, err
@@ -73,7 +86,7 @@ func (c *reqCtx) controlGuard(bucket *rateLimiter) (*model.User, error) {
 		}
 		return nil, c.deny(u, 403, d, "not allowed to control")
 	}
-	if off := c.s.Poller.Admin.ControlDisabled(); off != nil {
+	if off := c.s.Poller.Admin.ControlDisabled(); off != nil && killSwitch {
 		reason := off.Reason
 		if reason == "" {
 			reason = "no reason given"

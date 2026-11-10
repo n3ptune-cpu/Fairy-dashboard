@@ -475,9 +475,10 @@ memory limit. Add it once:
    when the address is verified. Otherwise use the subject from `fairy admin users list`:
    `fairy admin users set-role <subject> admin`. Making an admin asks "Type yes to continue"; in a script add
    `--yes`.
-5. **Scripts with an API token** can no longer stop or start the elevated helper, or use Add host, Re-pair
-   and Remove. They get 403, "this action needs a browser sign-in". Everything else a token could do, it
-   still can.
+5. **Scripts with an API token** can no longer stop or start the elevated helper, or use Add host, Re-pair,
+   Remove, or cancel an Add host that is waiting. They get 403, "this action needs a browser sign-in".
+   Everything else a token could do, it still can. In the page, "Cancel Add host" asks "Confirm it's you"
+   when your last confirmation is older than the window.
 6. **Add host shows a new command**, and the panel pairs about 15 seconds after the command has run. Hosts
    you added before the update keep working. Their page says "Pairing: made by an older panel, not
    verified" until you Re-pair them.
@@ -542,7 +543,7 @@ session settings as whole seconds).
   stream and the page's timers never count, so a tab nobody touches signs out, and its stream ends.
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never
   accepted on `/auth/*`, the settings endpoints or the Users page, nor (they cannot "confirm it's you") for
-  stopping / starting the elevated helper, Add host, Re-pair and Remove, which need a browser sign-in. Otherwise `control` acts as an admin; `read` sees every
+  stopping / starting the elevated helper, Add host, Re-pair, Remove and cancelling a waiting Add host, which need a browser sign-in. Otherwise `control` acts as an admin; `read` sees every
   site, or only `--sites A,B`. A token owned by a panel user is capped to that user's current role and sites; a token whose owner is not
   (or no longer) in `users.json` has no access. Only `--owner system` tokens keep their own scope.
 * Writes: admin role (or control-scope token), CSRF header `X-Requested-With: fairy` + Origin /

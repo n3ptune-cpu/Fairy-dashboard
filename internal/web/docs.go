@@ -63,7 +63,7 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"POST", "/api/admin/hosts/{id}/repair", "Re-pair a host added with Add host: a new join code (admins, browser session only: API tokens get 403; step-up + CSRF header). Body: confirm (the host's name), node_renamed (accept another Proxmox node name than the one it was added as). The answer is checked like a new host's"},
 	{"DELETE", "/api/admin/hosts/{id}", "Remove a host added with Add host from the panel (admins, browser session only: API tokens get 403; step-up + CSRF header)"},
 	{"GET", "/api/admin/enrollments/{id}", "An Add host's progress: waiting, paired, online, failed, expired, cancelled. pairing: v2 once the agent proved it has the join code; agent_hostname: what that machine calls itself. hint while waiting: agent_too_old (update the agent first; the same code pairs afterwards), legacy_join_code, unverified_answer (what answers at the address is not a Fairy agent that has the join code: not added, nothing it sent was used; the message says what to do, and the hint stays when the code expires), not_tailscale, rate_limited (the agent's limit of pairing requests a minute was reached; the panel asks less often for a while). warning: the machine runs a newer agent than the command installs. Query: reveal=1 (the code once, after a step-up; browser session only)"},
-	{"DELETE", "/api/admin/enrollments/{id}", "Cancel a waiting Add host (admins; CSRF header)"},
+	{"DELETE", "/api/admin/enrollments/{id}", "Cancel a waiting Add host or Re-pair (admins, browser session: no API tokens; step-up + CSRF header; works with the kill switch on)"},
 }
 
 // apiDescription is the text above the route list: what holds for every route.
