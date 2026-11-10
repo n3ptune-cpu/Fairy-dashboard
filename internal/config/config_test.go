@@ -122,3 +122,29 @@ func TestStepUpWindowDefault(t *testing.T) {
 		}
 	}
 }
+
+// L35 (panel side): "not a number" and infinity are not valid timings. A range check written as "below the
+// minimum or above the maximum" lets .nan through, because every comparison with NaN is false.
+func TestNaNAndInfTimingsRefused(t *testing.T) {
+	for _, key := range []string{"request_timeout", "offline_after"} {
+		for _, v := range []string{".nan", ".NaN", ".inf", "-.inf", "-1", "1e9"} {
+			if _, err := Parse([]byte(base + key + ": " + v + "\n")); err == nil || !strings.Contains(err.Error(), key) {
+				t.Errorf("%s: %s accepted (%v)", key, v, err)
+			}
+		}
+	}
+	for _, key := range []string{"agent", "proxmox", "ups", "history", "stream"} {
+		for _, v := range []string{".nan", ".inf", "-.inf", "0.5", "301"} {
+			if _, err := Parse([]byte(base + "intervals: {" + key + ": " + v + "}\n")); err == nil || !strings.Contains(err.Error(), "intervals."+key) {
+				t.Errorf("intervals.%s: %s accepted (%v)", key, v, err)
+			}
+		}
+	}
+	c, err := Parse([]byte(base + "request_timeout: 2.5\noffline_after: 90\nintervals: {agent: 1, proxmox: 300, ups: 2.5}\n"))
+	if err != nil || c.RequestTimeout != 2.5 || c.OfflineAfter != 90 || c.Intervals.Proxmox != 300 || c.Intervals.Stream != 1 {
+		t.Fatal("ordinary values must still load:", err)
+	}
+	if c, err := Parse([]byte(base)); err != nil || c.RequestTimeout != 4 || c.OfflineAfter != 60 {
+		t.Fatal("defaults:", err)
+	}
+}

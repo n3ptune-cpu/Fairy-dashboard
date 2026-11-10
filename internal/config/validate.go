@@ -129,9 +129,15 @@ func (c *Panel) applyDefaults() {
 // validateGeneral checks intervals, URLs, the OIDC client and the session / step-up timings.
 func (c *Panel) validateGeneral(errs *problems) {
 	for name, v := range map[string]float64{"agent": c.Intervals.Agent, "proxmox": c.Intervals.Proxmox, "ups": c.Intervals.UPS, "history": c.Intervals.History, "stream": c.Intervals.Stream} {
-		if v < 1 || v > 300 {
+		if !inRange(v, 1, 300) {
 			errs.add("intervals.%s must be 1-300 s", name)
 		}
+	}
+	if !inRange(c.RequestTimeout, 0.1, 300) {
+		errs.add("request_timeout must be 0.1-300 s")
+	}
+	if !inRange(c.OfflineAfter, 1, 7*86400) {
+		errs.add("offline_after must be 1-604800 s")
 	}
 	if c.Listen != "" {
 		if _, port, err := net.SplitHostPort(c.Listen); err != nil || port == "" {
@@ -164,6 +170,10 @@ func (c *Panel) validateGeneral(errs *problems) {
 		errs.add("audit_max_mb must be -1 (no rotation) or a size in MiB, audit_keep 1-100")
 	}
 }
+
+// inRange reports whether v is a number from lo to hi. Written as "inside", not as "below or above": every
+// comparison with NaN is false, so `v < lo || v > hi` lets .nan through (and .inf must not pass either).
+func inRange(v, lo, hi float64) bool { return v >= lo && v <= hi }
 
 // isHTTPURL reports whether s is an absolute http:// or https:// URL with a host.
 func isHTTPURL(s string) bool {
