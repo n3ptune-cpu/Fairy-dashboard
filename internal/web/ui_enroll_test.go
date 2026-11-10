@@ -19,3 +19,11 @@ func TestUIRepairOffersNodeRenamed(t *testing.T) {
 		}
 	}
 }
+
+// L24 (UI side): the Add host / Re-pair dialog shows the panel's warning (a newer agent is installed than the
+// release the command installs), escaped.
+func TestUIEnrollDialogShowsTheWarning(t *testing.T) {
+	if want := "${cr.warning ? `<div class=\"note warn\" id=\"en-warn\">${esc(cr.warning)}</div>` : \"\"}"; !strings.Contains(appJS(t), want) {
+		t.Errorf("app.js lacks %q", want)
+	}
+}

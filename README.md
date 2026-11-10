@@ -196,6 +196,9 @@ step-up sign-in, and are audited. Hosts in config.yaml are not changed by the pa
 Re-pair is checked like a new host's, against everything else the panel has: an answer that would collide with
 another host or Proxmox node is refused and the host stays as it was. A host that is its own Proxmox node must
 answer with the node name it was added as, unless **The node was renamed** is ticked in the Re-pair dialog.
+When the machine runs a newer Fairy-agent than the release the command installs, the Re-pair dialog says so
+before the command is run; when the agent that answers afterwards is an older build than before, the dialog
+and the audit entry (`host.repair`) say that an older build was installed.
 
 Add host and Re-pair only pair over Tailscale. An address outside 100.64.0.0/10 and fd7a:115c:a1e0::/48 is
 refused in the dialog, and a name is checked every time the panel connects to it: when it leads anywhere else

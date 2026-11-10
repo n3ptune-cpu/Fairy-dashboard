@@ -198,3 +198,25 @@ func TestRepairNeedsTheSameNodeNameUnlessRenamed(t *testing.T) {
 		t.Fatal(p.code, string(p.raw))
 	}
 }
+
+// L24 through the API: the hosts of this rig run agent 43, the checked release is build-7. Re-pair answers with
+// the warning, the dialog's progress keeps it, and the audit entry records that the admin was told.
+func TestRepairWarnsWhenTheMachineRunsANewerAgent(t *testing.T) {
+	r := newRepairRig(t)
+	r.e.s.Enroll.Pair = func(context.Context, string, string) (int, enroll.Response, string, error) {
+		return 404, enroll.Response{}, "pairing_inactive", nil
+	}
+	p := r.e.do("POST", "/api/admin/hosts/beta/repair", map[string]any{"confirm": "beta"}, "Cookie", r.cookie, "X-Requested-With", "fairy")
+	w, _ := p.body["warning"].(string)
+	if p.code != 201 || !strings.Contains(w, "This machine runs Fairy-agent 43-abc, which is newer than the release this command installs (build-7, Fairy-agent 7-6155fe6)") {
+		t.Fatal(p.code, string(p.raw))
+	}
+	g := r.e.do("GET", "/api/admin/enrollments/"+p.body["id"].(string), nil, "Cookie", r.cookie)
+	if g.body["warning"] != w {
+		t.Fatal(string(g.raw))
+	}
+	if !strings.Contains(auditOutcomes(r.e.s.Cfg.AuditLog), "host.repair join code made (valid 15 min); warned: the machine runs a newer Fairy-agent than the release the command installs (build-7)") {
+		t.Fatal(auditOutcomes(r.e.s.Cfg.AuditLog))
+	}
+	r.e.s.Enroll.Cancel(p.body["id"].(string))
+}

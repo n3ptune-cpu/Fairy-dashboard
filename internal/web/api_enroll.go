@@ -70,6 +70,10 @@ func (s *Server) enrollHooks() enrollment.Hooks {
 			return false, ""
 		},
 		Event: s.enrollEvent,
+		AgentVersion: func(id string) string {
+			info, _ := s.Poller.AgentInfo(id)
+			return info.Version
+		},
 	}
 }
 
@@ -274,7 +278,11 @@ func (s *Server) hostRepair(c *reqCtx) error {
 		c.audit(u, "host.repair", id, params, "refused: "+err.Error())
 		return enrollErr(err)
 	}
-	c.audit(u, "host.repair", id, params, "join code made (valid 15 min)")
+	outcome := "join code made (valid 15 min)"
+	if cr.Warning != "" { // L24: on record that the admin was told
+		outcome += "; warned: the machine runs a newer Fairy-agent than the release the command installs (" + cr.Release.Tag + ")"
+	}
+	c.audit(u, "host.repair", id, params, outcome)
 	if c.resumed() {
 		s.Enroll.Hold(cr)
 	}

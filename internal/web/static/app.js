@@ -1574,6 +1574,7 @@ function openEnrollDialog(cr) {
     <div class="row-gap"><button class="btn" type="button" id="en-copy">${I.copy}Copy command</button>
       <span class="note">Join code <span class="code-big">${esc(groupCode(cr.code))}</span> · single use · valid until ${new Date(cr.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
     <p class="note">It installs Fairy-agent ${cr.release?.tag ? `release <code>${esc(cr.release.tag)}</code>${cr.release.version ? ` (${esc(cr.release.version)})` : ""}` : "(signed release)"}: the command runs the install script only if it is exactly the one the panel checked against the signed SHA256SUMS, and the script checks every file it installs. It writes the agent's settings and waits for the panel. Nothing else on the machine changes. The code is shown only now.</p>
+    ${cr.warning ? `<div class="note warn" id="en-warn">${esc(cr.warning)}</div>` : ""}
     <div id="en-progress" aria-live="polite">${enrollSteps(cr)}<div class="note" id="en-msg">${esc(cr.message)}</div></div>
     <div class="row-gap end"><button class="btn" type="button" id="en-cancel">Cancel Add host</button><button class="btn primary" type="button" id="en-close">Close</button></div></div>`;
   m.hidden = false;

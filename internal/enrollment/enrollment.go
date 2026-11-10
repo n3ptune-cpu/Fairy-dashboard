@@ -29,6 +29,7 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
@@ -83,13 +84,17 @@ type Enrollment struct {
 	ExpiresAt time.Time       `json:"expires_at"`
 	CreatedBy string          `json:"created_by"`
 	Done      bool            `json:"done"`
+	// Warning (Re-pair): the machine runs a newer Fairy-agent than the release the command installs.
+	Warning string `json:"warning,omitempty"`
 
-	proof    string
-	host     managed.Host
-	renamed  bool // Re-pair: the admin confirmed that the Proxmox node was renamed
-	cancel   context.CancelFunc
-	pairedAt time.Time
-	held     *Created // the code and command, kept for one Reveal (made by the panel's replay after a step-up)
+	proof   string
+	host    managed.Host
+	renamed bool // Re-pair: the admin confirmed that the Proxmox node was renamed
+	// installed is the agent version the machine ran before a Re-pair ("" when the panel never saw one).
+	installed string
+	cancel    context.CancelFunc
+	pairedAt  time.Time
+	held      *Created // the code and command, kept for one Reveal (made by the panel's replay after a step-up)
 }
 
 // Created is what the dialog shows once: the code and the commands.
@@ -112,6 +117,9 @@ type Hooks struct {
 	Online func(id string) (bool, string)
 	// Event is told about results (audit log, notifications): kind is paired, online, failed, expired, cancelled.
 	Event func(e Enrollment, kind, detail string)
+	// AgentVersion is the version a polled host's agent reports now ("" when unknown). Optional: without it a
+	// Re-pair goes by the version the host reported when it was paired.
+	AgentVersion func(id string) string
 }
 
 // Manager holds the enrollments (in memory: a panel restart drops pending ones; make a new code).
@@ -304,6 +312,15 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 		Node: h.Node, Options: h.Options, Repair: existing != nil, State: Waiting,
 		Message: "waiting for the machine: run the command there", CreatedAt: now, ExpiresAt: now.Add(enroll.TTL),
 		CreatedBy: by, proof: proof, host: h, renamed: existing != nil && req.NodeRenamed}
+	if existing != nil {
+		e.installed = existing.AgentVersion
+		if m.Hooks.AgentVersion != nil {
+			if v := m.Hooks.AgentVersion(h.ID); v != "" {
+				e.installed = v
+			}
+		}
+		e.Warning = olderRelease(e.installed, inst)
+	}
 	h.AddedBy = by
 	e.host = h
 	ctx, cancel := context.WithDeadline(context.Background(), e.ExpiresAt)
@@ -364,6 +381,21 @@ func Command(in Installers, h managed.Host, code, panel string) string {
 		b.WriteString(" --ups")
 	}
 	return b.String()
+}
+
+// olderRelease is the warning for a Re-pair whose command installs an older Fairy-agent than the machine runs
+// ("" when it does not, or when either build number is unknown). The install scripts of older releases replace
+// the program without comparing versions, so fixes could be lost without anyone noticing.
+func olderRelease(installed string, in Installers) string {
+	have, ok1 := release.BuildNumber(installed)
+	get, ok2 := release.BuildNumber(in.Version)
+	if !ok1 || !ok2 || have <= get {
+		return ""
+	}
+	return fmt.Sprintf("This machine runs Fairy-agent %s, which is newer than the release this command installs (%s, Fairy-agent %s). "+
+		"An install script that does not compare versions puts the older build over it. Afterwards check the agent's version on the Updates page "+
+		"and update it there, or first set enroll: {agent_release: build-%d} (or newer) in config.yaml and make a new code.",
+		clip(installed, 64), in.Tag, in.Version, have)
 }
 
 // pin is the installer option that passes the verified SHA256SUMS hash, when the script takes it.
@@ -654,11 +686,20 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 	if wanted := e.Options.Control(); wanted && sec.ControlToken == "" {
 		note += " (the agent sent no control token: power / update / Wake-on-LAN stay off)"
 	}
+	detail := clip(resp.AgentVersion, 64)
+	if was, ok1 := release.BuildNumber(e.installed); ok1 && e.Repair {
+		if now, ok2 := release.BuildNumber(resp.AgentVersion); ok2 && now < was {
+			// the command put an older build over the one that ran before: say so, here and in the audit log
+			note += fmt.Sprintf(" (the agent is now %s; before the Re-pair it was %s: an older build was installed, update it on the Updates page)",
+				detail, clip(e.installed, 64))
+			detail += " (was " + clip(e.installed, 64) + ": an older build was installed)"
+		}
+	}
 	m.mu.Lock()
 	e.pairedAt = m.Now()
 	m.mu.Unlock()
 	cp := m.set(e, Paired, "paired: tokens received, waiting for the first reading"+note, false)
-	m.Hooks.Event(cp, "paired", resp.AgentVersion)
+	m.Hooks.Event(cp, "paired", detail)
 	deadline := time.NewTimer(m.OnlineWait)
 	defer deadline.Stop()
 	tick := time.NewTicker(time.Second)
