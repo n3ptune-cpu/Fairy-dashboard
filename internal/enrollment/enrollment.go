@@ -456,8 +456,10 @@ var (
 )
 
 // olderRelease is the warning for a Re-pair whose command installs an older Fairy-agent than the machine runs
-// ("" when it does not, or when either build number is unknown). The install scripts of older releases replace
-// the program without comparing versions, so fixes could be lost without anyone noticing.
+// ("" when it does not, or when either build number is unknown). The install scripts the panel accepts are
+// written to keep a newer program (Fairy-agent v0.6.0 on; on Windows only when the program folder passes the
+// installer's own check), but the panel cannot see what happened on the machine: it says what it knows before,
+// and paired() says afterwards when the agent that answers is an older build than before.
 func olderRelease(installed string, in Installers) string {
 	have, ok1 := release.BuildNumber(installed)
 	get, ok2 := release.BuildNumber(in.Version)
@@ -465,8 +467,9 @@ func olderRelease(installed string, in Installers) string {
 		return ""
 	}
 	return fmt.Sprintf("This machine runs Fairy-agent %s, which is newer than the release this command installs (%s, Fairy-agent %s). "+
-		"An install script that does not compare versions puts the older build over it. Afterwards check the agent's version on the Updates page "+
-		"and update it there, or first set enroll: {agent_release: build-%d} (or newer) in config.yaml and make a new code.",
+		"The installer is meant to keep the newer program and only renew the settings and the pairing. Check the agent's version on the Updates page "+
+		"afterwards: if it is older than before, update it there. To install the same or a newer release instead, set enroll: {agent_release: build-%d} "+
+		"(or newer) in config.yaml and make a new code.",
 		clip(installed, 64), in.Tag, in.Version, have)
 }
 
