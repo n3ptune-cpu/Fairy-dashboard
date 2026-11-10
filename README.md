@@ -192,7 +192,10 @@ Hosts added this way are kept in `<data_dir>/managed-hosts.yaml` and their token
 wins and the managed one is skipped with a log line) and checked by `fairy admin config check`. Their page has
 **Re-pair** (a new code, e.g. after the panel lost the tokens) and **Remove** (stops polling, deletes the tokens;
 the agent stays installed until uninstalled on the machine); both ask for the host's name to be typed and a
-step-up sign-in, and are audited. Hosts in config.yaml are not changed by the panel.
+step-up sign-in, and are audited. Hosts in config.yaml are not changed by the panel. What a machine answers on
+Re-pair is checked like a new host's, against everything else the panel has: an answer that would collide with
+another host or Proxmox node is refused and the host stays as it was. A host that is its own Proxmox node must
+answer with the node name it was added as, unless **The node was renamed** is ticked in the Re-pair dialog.
 
 `enroll: {panel_address: 100.x.y.z}` in config.yaml is the address the command gives the agent. It is optional:
 without it the panel finds its own Tailscale address at start (logged once as `Add host: panel address`, and

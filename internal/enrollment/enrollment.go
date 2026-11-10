@@ -60,6 +60,9 @@ type Request struct {
 	// BMCRelay / BMCTarget: optional, power it on through its BMC (a bmc_relay target of that agent).
 	BMCRelay  string `json:"bmc_relay"`
 	BMCTarget string `json:"bmc_target"`
+	// NodeRenamed (Re-pair only): the admin says the Proxmox node this host is was renamed since it was added,
+	// so the pairing answer may name another node than the stored one. Without it such an answer is refused.
+	NodeRenamed bool `json:"-"`
 }
 
 // Enrollment is one pending (or finished) Add host / Re-pair.
@@ -83,6 +86,7 @@ type Enrollment struct {
 
 	proof    string
 	host     managed.Host
+	renamed  bool // Re-pair: the admin confirmed that the Proxmox node was renamed
 	cancel   context.CancelFunc
 	pairedAt time.Time
 	held     *Created // the code and command, kept for one Reveal (made by the panel's replay after a step-up)
@@ -279,7 +283,7 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 	e := &Enrollment{ID: hex.EncodeToString(idb), HostID: h.ID, Name: h.Name, URL: h.URL, OS: h.OS, Site: h.Site,
 		Node: h.Node, Options: h.Options, Repair: existing != nil, State: Waiting,
 		Message: "waiting for the machine: run the command there", CreatedAt: now, ExpiresAt: now.Add(enroll.TTL),
-		CreatedBy: by, proof: proof, host: h}
+		CreatedBy: by, proof: proof, host: h, renamed: existing != nil && req.NodeRenamed}
 	h.AddedBy = by
 	e.host = h
 	ctx, cancel := context.WithDeadline(context.Background(), e.ExpiresAt)
@@ -444,6 +448,13 @@ func (m *Manager) commit(e *Enrollment, h managed.Host, sec managed.Secret, entr
 		return false
 	}
 	if e.Repair {
+		// The same checks as Add host, against the configuration without the host as it was stored: what the
+		// machine answers now (its Proxmox node above all) must not collide with anything else the panel has.
+		// Only then is the old pairing forgotten; a refused answer leaves the host as it was.
+		if err := managed.Check(withoutHost(m.Hooks.Config(), e.host), entry); err != nil {
+			fail("cannot re-pair it: " + checkText(err) + ". Nothing was changed on the panel; make a new code to try again")
+			return false
+		}
 		m.Hooks.Remove(h.ID)
 	} else if err := managed.Check(m.Hooks.Config(), entry); err != nil {
 		fail("cannot add it: " + err.Error())
@@ -471,6 +482,26 @@ func (m *Manager) commit(e *Enrollment, h managed.Host, sec managed.Secret, entr
 		return false
 	}
 	return true
+}
+
+// withoutHost is cfg without the entries a managed host has in it (its agent, its systems: entry, its Proxmox
+// node): what a Re-pair's answer is checked against. Entries from config.yaml with the same ids stay, so a
+// host that config.yaml shadows is refused like a new one would be.
+func withoutHost(cfg *config.Panel, old managed.Host) *config.Panel {
+	c := *cfg
+	c.Agents = slices.DeleteFunc(slices.Clone(cfg.Agents), func(a config.Agent) bool { return a.Managed && a.ID == old.ID })
+	if o := old.Override(); o != nil {
+		c.Systems = slices.DeleteFunc(slices.Clone(cfg.Systems), func(x config.SystemOverride) bool { return x.ID == o.ID })
+	}
+	if old.Proxmox != nil {
+		c.Proxmox = slices.DeleteFunc(slices.Clone(cfg.Proxmox), func(x config.Proxmox) bool { return x.Managed && x.ID == old.Proxmox.ID })
+	}
+	return &c
+}
+
+// checkText is a managed.Check error as one line for the dialog.
+func checkText(err error) string {
+	return strings.Join(strings.Fields(strings.ReplaceAll(err.Error(), "config invalid:\n  -", "")), " ")
 }
 
 // CancelHost cancels every unfinished enrollment of a host (Remove): one that is pairing right now either
@@ -580,6 +611,12 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 		case pve == nil:
 			pveNote = " (the node sent no Proxmox API token: a cluster, or the command could not make one; it was added as a plain host)"
 			h.Proxmox = nil
+		case e.Repair && e.host.Proxmox != nil && !strings.EqualFold(pve.Node, e.host.Proxmox.Node) && !e.renamed:
+			// Re-pair: the machine was added as one Proxmox node and now names another. It may have been
+			// renamed, or something else answers in its place; either way it is the admin's call.
+			fail(fmt.Sprintf("the machine now says it is Proxmox node %q, but it was added as %q. Nothing was changed on the panel. "+
+				"If the node was renamed, Re-pair again and tick \"the node was renamed\"", clip(pve.Node, 80), e.host.Proxmox.Node))
+			return
 		default:
 			h.Proxmox, h.Node, h.SystemID = pve, pve.Node, pve.IDPrefix+"node-"+normalise.Slug(pve.Node)
 			sec.PVETokenSecret, caPEM = resp.Proxmox.TokenSecret, ca

@@ -13,6 +13,17 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 )
 
+// testConfig is a valid panel configuration without hosts (a Re-pair's answer is checked against the
+// configuration, like a new host's).
+func testConfig(t *testing.T) *config.Panel {
+	t.Helper()
+	cfg, err := config.Parse([]byte("public_url: https://panel.example.com\noidc: {issuer: \"https://id.example.com\", client_id: cid, allowed_groups: [homelab]}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
 // Re-pair keeps none of the previous pairing's secrets: the tokens file holds only the new tokens, the poller
 // is told to forget the old ones before the new ones are added, and a node that sends no Proxmox grant this
 // time loses its old CA file.
@@ -31,7 +42,7 @@ func TestRepairDropsTheOldTokens(t *testing.T) {
 	m := &Manager{Store: store, Now: time.Now, Interval: time.Millisecond, OnlineWait: time.Second, PanelAddr: "100.88.109.47",
 		Scripts: Fixed(testInstallers), items: map[string]*Enrollment{},
 		Hooks: Hooks{
-			Config: func() *config.Panel { return &config.Panel{} },
+			Config: func() *config.Panel { return testConfig(t) },
 			Remove: func(id string) { calls = append(calls, "remove "+id) },
 			Add:    func(e managed.Entry) error { calls = append(calls, "add "+e.Agent.Token); return nil },
 			Online: func(string) (bool, string) { return true, "" },
@@ -119,5 +130,74 @@ func TestRemoveDuringRepairDoesNotBringTheHostBack(t *testing.T) {
 	}
 	if m.Cancel(cr.ID) {
 		t.Fatal("cancelled twice")
+	}
+}
+
+// L12: Re-pair runs the checks of Add host. A managed host whose id config.yaml also uses (config.yaml wins, the
+// managed one is skipped at start) is refused before anything is stored or forgotten, like a new host would be.
+func TestRepairOfAHostThatConfigYAMLShadowsIsRefused(t *testing.T) {
+	store := managed.NewStore(t.TempDir())
+	h := managed.Host{ID: "nsx-furina", Name: "nsx-furina", URL: "http://nsx-furina:9101", OS: "linux"}
+	if err := store.Put(h, managed.Secret{Token: "old-read-token-xxxxxxxxxxxxxxxxxx"}); err != nil {
+		t.Fatal(err)
+	}
+	var removed, added atomic.Int32
+	m := &Manager{Store: store, Now: time.Now, Interval: time.Millisecond, OnlineWait: time.Second, PanelAddr: "100.88.109.47",
+		Scripts: Fixed(testInstallers), items: map[string]*Enrollment{},
+		Hooks: Hooks{
+			Config: func() *config.Panel {
+				c := testConfig(t)
+				c.Agents = append(c.Agents, config.Agent{ID: "nsx-furina", URL: "http://10.0.0.5:9101", TokenEnv: "TOK"}, // config.yaml's
+					config.Agent{ID: "other", URL: "http://other:9101", Managed: true, Token: "other-read-token-xxxxxxxxxxxxxxxx"})
+				return c
+			},
+			Remove: func(string) { removed.Add(1) },
+			Add:    func(managed.Entry) error { added.Add(1); return nil },
+			Online: func(string) (bool, string) { return true, "" },
+			Event:  func(Enrollment, string, string) {},
+		},
+		Pair: func(context.Context, string, string) (int, enroll.Response, string, error) {
+			return 200, enroll.Response{Token: "new-read-token-xxxxxxxxxxxxxxxxxx"}, "", nil
+		}}
+	cr, err := m.Create(context.Background(), Request{}, &h, "neptune", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e Enrollment
+	for i := 0; i < 200 && !e.Done; i++ {
+		time.Sleep(5 * time.Millisecond)
+		e, _ = m.Get(cr.ID)
+	}
+	if e.State != Failed || !strings.Contains(e.Message, "an agent with id nsx-furina is already configured") || removed.Load() != 0 || added.Load() != 0 {
+		t.Fatalf("%+v removed=%d added=%d", e, removed.Load(), added.Load())
+	}
+	if sec, err := store.Secret(h.ID); err != nil || sec.Token != "old-read-token-xxxxxxxxxxxxxxxxxx" {
+		t.Fatalf("the stored tokens changed: %+v %v", sec, err)
+	}
+}
+
+// withoutHost takes out exactly the host's own entries: other hosts, and entries of config.yaml with the same
+// ids, stay.
+func TestWithoutHost(t *testing.T) {
+	prefix := "s-a-"
+	cfg := &config.Panel{
+		Agents:  []config.Agent{{ID: "a", Managed: true}, {ID: "b", Managed: true}, {ID: "c"}},
+		Systems: []config.SystemOverride{{ID: "s-a-node-a"}, {ID: "b"}},
+		Proxmox: []config.Proxmox{{ID: "s-a", IDPrefix: &prefix, Managed: true}, {ID: "s-b", Managed: true}, {ID: "yaml"}},
+	}
+	old := managed.Host{ID: "a", SystemID: "s-a-node-a", Proxmox: &managed.PVE{ID: "s-a"}, Wol: &config.Wol{MACs: []string{"aa:bb:cc:dd:ee:ff"}, Relay: "b"}}
+	c := withoutHost(cfg, old)
+	if len(c.Agents) != 2 || c.Agents[0].ID != "b" || len(c.Systems) != 1 || c.Systems[0].ID != "b" || len(c.Proxmox) != 2 || c.Proxmox[0].ID != "s-b" {
+		t.Fatalf("%+v", c)
+	}
+	if len(cfg.Agents) != 3 || len(cfg.Systems) != 2 || len(cfg.Proxmox) != 3 {
+		t.Fatal("the shared configuration was changed")
+	}
+	// the same ids, but written in config.yaml (not managed): they stay, and a host without Wake-on-LAN or
+	// BMC power has no systems: entry to take out
+	c = withoutHost(&config.Panel{Agents: []config.Agent{{ID: "a"}}, Systems: []config.SystemOverride{{ID: "a"}}, Proxmox: []config.Proxmox{{ID: "s-a"}}},
+		managed.Host{ID: "a", Proxmox: &managed.PVE{ID: "s-a"}})
+	if len(c.Agents) != 1 || len(c.Systems) != 1 || len(c.Proxmox) != 1 {
+		t.Fatalf("%+v", c)
 	}
 }

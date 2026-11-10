@@ -260,16 +260,21 @@ func (s *Server) hostRepair(c *reqCtx) error {
 	if !ok {
 		return apierr.New(404, "only hosts added with Add host can be re-paired here")
 	}
-	if err := c.typedName(h.Name, "re-pair"); err != nil {
+	renamed, err := c.typedRepair(h.Name)
+	if err != nil {
 		c.audit(u, "host.repair", h.ID, nil, "refused: "+err.Error())
 		return err
 	}
-	cr, err := s.Enroll.Create(c.r.Context(), enrollment.Request{}, &h, actorOf(u), s.nodeSystemID)
+	var params map[string]any
+	if renamed { // the admin accepts another Proxmox node name in the answer: on record
+		params = map[string]any{"node_renamed": true}
+	}
+	cr, err := s.Enroll.Create(c.r.Context(), enrollment.Request{NodeRenamed: renamed}, &h, actorOf(u), s.nodeSystemID)
 	if err != nil {
-		c.audit(u, "host.repair", id, nil, "refused: "+err.Error())
+		c.audit(u, "host.repair", id, params, "refused: "+err.Error())
 		return enrollErr(err)
 	}
-	c.audit(u, "host.repair", id, nil, "join code made (valid 15 min)")
+	c.audit(u, "host.repair", id, params, "join code made (valid 15 min)")
 	if c.resumed() {
 		s.Enroll.Hold(cr)
 	}
@@ -364,8 +369,22 @@ func (s *Server) enrollmentCancel(c *reqCtx) error {
 	return nil
 }
 
-// typedName enforces the typed confirmation of Re-pair and Remove: the body is {"confirm": "<the host's name>"}
-// (case-insensitive), like a shutdown.
+// typedRepair is Re-pair's body: the typed confirmation like typedName, and optionally "node_renamed": true
+// (the admin says the Proxmox node was renamed, so the machine may answer with another node name than the one
+// it was added as).
+func (c *reqCtx) typedRepair(name string) (renamed bool, err error) {
+	var b struct {
+		Confirm     string `json:"confirm"`
+		NodeRenamed bool   `json:"node_renamed"`
+	}
+	if err := c.decodeBody(&b); err != nil || !strings.EqualFold(strings.TrimSpace(b.Confirm), strings.TrimSpace(name)) {
+		return false, apierr.New(400, fmt.Sprintf("type the host's name (%s) to confirm re-pair", name))
+	}
+	return b.NodeRenamed, nil
+}
+
+// typedName enforces the typed confirmation of Remove (and of stopping / starting a helper): the body is
+// {"confirm": "<the host's name>"} (case-insensitive), like a shutdown.
 func (c *reqCtx) typedName(name, what string) error {
 	var b struct {
 		Confirm string `json:"confirm"`

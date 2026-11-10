@@ -1650,8 +1650,11 @@ document.addEventListener("click", (e) => {
   if (!h) return;
   const path = `/api/admin/hosts/${enc(h.id)}`;
   if (t.dataset.act === "mh-repair") {
-    typedDialog(`Re-pair ${h.name}?`, "Makes a new join code. Run the new command on the machine; the old tokens stop working once it pairs.", h.name, "Make a new code", async (v) => {
-      const r = await controlCall({ kind: "request", label: `Re-pair ${h.name}` }, () => api(`${path}/repair`, { method: "POST", body: JSON.stringify({ confirm: v }) }));
+    // A host that is its own Proxmox node must answer with the node name it was added as, unless the admin says it was renamed.
+    const renamedBox = h.proxmox ? `<label class="note"><input type="checkbox" id="td-renamed"> The node was renamed: accept another Proxmox node name than <b>${esc(h.proxmox.node)}</b></label>` : "";
+    typedDialog(`Re-pair ${h.name}?`, `<p>Makes a new join code. Run the new command on the machine; the old tokens stop working once it pairs.</p>${renamedBox}`, h.name, "Make a new code", async (v) => {
+      const renamed = !!$("#td-renamed")?.checked;
+      const r = await controlCall({ kind: "request", label: `Re-pair ${h.name}${renamed ? " (node renamed)" : ""}` }, () => api(`${path}/repair`, { method: "POST", body: JSON.stringify(renamed ? { confirm: v, node_renamed: true } : { confirm: v }) }));
       if (r) openEnrollDialog(r);
     });
   } else {

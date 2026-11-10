@@ -59,7 +59,7 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"GET", "/api/system-sites", "The site of every visible host and guest"},
 	{"GET", "/api/admin/hosts", "Add host: panel address, Proxmox nodes, WoL relays, sites, hosts added with Add host, enrollments (admins)"},
 	{"POST", "/api/admin/hosts", "Add host: make a one-time join code and the command to run on the machine (admins, browser session only: API tokens get 403; step-up + CSRF header)"},
-	{"POST", "/api/admin/hosts/{id}/repair", "Re-pair a host added with Add host: a new join code (admins, browser session only: API tokens get 403; step-up + CSRF header)"},
+	{"POST", "/api/admin/hosts/{id}/repair", "Re-pair a host added with Add host: a new join code (admins, browser session only: API tokens get 403; step-up + CSRF header). Body: confirm (the host's name), node_renamed (accept another Proxmox node name than the one it was added as). The answer is checked like a new host's"},
 	{"DELETE", "/api/admin/hosts/{id}", "Remove a host added with Add host from the panel (admins, browser session only: API tokens get 403; step-up + CSRF header)"},
 	{"GET", "/api/admin/enrollments/{id}", "An Add host's progress: waiting, paired, online, failed, expired, cancelled. Query: reveal=1 (the code once, after a step-up)"},
 	{"DELETE", "/api/admin/enrollments/{id}", "Cancel a waiting Add host (admins; CSRF header)"},
