@@ -208,10 +208,10 @@ func TestCommandsPinTheCheckedRelease(t *testing.T) {
 	const base = "https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7"
 	win := Command(testInstallers, managed.Host{OS: "windows", Options: managed.Options{PowerControl: true, UPSName: "ups1"}}, testCode, "100.64.0.10")
 	want := `$u='` + base + `'; $b=(New-Object Net.WebClient).DownloadData("$u/install.ps1"); ` +
-		`if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -ne '` + testInstallers.PS1 + `') ` +
-		`{ throw 'install.ps1 is not the release the panel checked: not run' }; ` +
-		`$env:FAIRY_JOIN_CODE='` + testCode + `'; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 ` + testInstallers.Sums +
-		` -PanelAddress 100.64.0.10 -PairV2 -PowerControl -UpsName ups1`
+		`if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -eq '` + testInstallers.PS1 + `') ` +
+		`{ $env:FAIRY_JOIN_CODE='` + testCode + `'; try { & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 ` + testInstallers.Sums +
+		` -PanelAddress 100.64.0.10 -PairV2 -PowerControl -UpsName ups1 } finally { Remove-Item Env:FAIRY_JOIN_CODE -ErrorAction SilentlyContinue } } ` +
+		`else { throw 'install.ps1 is not the release the panel checked: not run' }`
 	if win != want {
 		t.Fatalf("\n got %s\nwant %s", win, want)
 	}
@@ -233,8 +233,8 @@ func TestCommandsPinTheCheckedRelease(t *testing.T) {
 		" --panel 100.64.0.10 --power-control --self-update --wol --ipmi --proxmox --ups") {
 		t.Fatal(c)
 	}
-	if c := Command(testInstallers, managed.Host{OS: "windows", Options: all}, testCode, "100.64.0.10"); !strings.HasSuffix(c,
-		" -PanelAddress 100.64.0.10 -PairV2 -PowerControl -SelfUpdate -Wol -CoreTemp -Ipmi -Ups") {
+	if c := Command(testInstallers, managed.Host{OS: "windows", Options: all}, testCode, "100.64.0.10"); !strings.Contains(c,
+		" -PanelAddress 100.64.0.10 -PairV2 -PowerControl -SelfUpdate -Wol -CoreTemp -Ipmi -Ups } finally { ") {
 		t.Fatal(c)
 	}
 	for _, c := range []string{win, lin, node} {
@@ -267,7 +267,7 @@ func TestCommandKeepsTheJoinCodeOffCommandLines(t *testing.T) {
 			if os == "linux" && !regexp.MustCompile(`sh "\$f" --sums-sha256 [0-9a-f]{64} --join-stdin --pair-v2 --panel `).MatchString(c) {
 				t.Error(c)
 			}
-			if os == "windows" && !strings.Contains(c, `; $env:FAIRY_JOIN_CODE='`+testCode+`'; & (`) {
+			if os == "windows" && !strings.Contains(c, `') { $env:FAIRY_JOIN_CODE='`+testCode+`'; try { & (`) {
 				t.Error("windows: the code must be set as an environment variable of the window:", c)
 			}
 		}
@@ -284,7 +284,7 @@ func TestWindowsCommandRunsTheCheckedBytesFromMemory(t *testing.T) {
 		}
 	}
 	for _, want := range []string{`$b=(New-Object Net.WebClient).DownloadData("$u/install.ps1")`, `ComputeHash($b)`,
-		`[scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))`, `-ne '` + testInstallers.PS1 + `') { throw `} {
+		`[scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))`, `-eq '` + testInstallers.PS1 + `') { $env:`} {
 		if !strings.Contains(c, want) {
 			t.Errorf("the line lacks %q: %s", want, c)
 		}
@@ -293,9 +293,49 @@ func TestWindowsCommandRunsTheCheckedBytesFromMemory(t *testing.T) {
 	if strings.Count(c, "$b") != 3 {
 		t.Error(c)
 	}
-	// check, then the code, then the run
-	if !(strings.Index(c, "throw ") < strings.Index(c, "FAIRY_JOIN_CODE") && strings.Index(c, "FAIRY_JOIN_CODE") < strings.Index(c, "scriptblock")) {
+	// the check, then the code, then the run, then the refusal: all inside one statement
+	at := func(sub string) int { return strings.Index(c, sub) }
+	if !(at("-eq '") < at("FAIRY_JOIN_CODE") && at("FAIRY_JOIN_CODE") < at("scriptblock") && at("scriptblock") < at("throw ")) {
 		t.Error("order:", c)
+	}
+}
+
+// N3 of the Windows review: with the check and the run as two statements ("if (hash -ne X) { throw }; run"),
+// a hash expression that itself fails skipped the check and the next statement ran the unchecked script: in
+// PowerShell an exception from a .NET call ends only the statement it is in. The run is now the body of the
+// "if" that makes the check, the refusal is its "else", and nothing comes after that one statement, whatever
+// options the line carries. The join code is on no command line and leaves the environment in "finally".
+func TestWindowsCommandRunsOnlyInsideTheCheck(t *testing.T) {
+	all := managed.Options{PowerControl: true, SelfUpdate: true, WolRelay: true, CoreTemp: true, IPMI: true, UPS: true}
+	named := all
+	named.UPSName = "ups1"
+	for name, o := range map[string]managed.Options{"no options": {}, "every option": all, "a named UPS": named} {
+		c := Command(testInstallers, managed.Host{OS: "windows", Options: o}, testCode, "100.64.0.10")
+		const check = `if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -eq '`
+		const tail = ` } finally { Remove-Item Env:FAIRY_JOIN_CODE -ErrorAction SilentlyContinue } } else { throw 'install.ps1 is not the release the panel checked: not run' }`
+		head := `$u='` + testInstallers.Base + `'; $b=(New-Object Net.WebClient).DownloadData("$u/install.ps1"); ` + check + testInstallers.PS1 +
+			`') { $env:FAIRY_JOIN_CODE='` + testCode + `'; try { & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 `
+		if !strings.HasPrefix(c, head) || !strings.HasSuffix(c, tail) {
+			t.Fatalf("%s: the line is not the checked form:\n%s", name, c)
+		}
+		// three statements, and the third is the "if ... else": no statement can run after a check that failed
+		// or could not be made. (Between head and tail there are only the script's own parameters.)
+		middle := strings.TrimSuffix(strings.TrimPrefix(c, head), tail)
+		if strings.ContainsAny(middle, ";{}|&`$()'\"\n") {
+			t.Errorf("%s: something other than plain parameters between the run and the end of the line: %q", name, middle)
+		}
+		if n := strings.Count(c, "; "); n != 3 { // $u=...; $b=...; and the one inside the body: $env:...; try
+			t.Errorf("%s: %d statement separators, want 3: %s", name, n, c)
+		}
+		for _, bad := range []string{"-ne '", "} ; ", "}; ", "$ErrorActionPreference", "-Join", "-EncodedCommand", "iex", "Invoke-Expression"} {
+			if strings.Contains(c, bad) {
+				t.Errorf("%s: the line contains %q: %s", name, bad, c)
+			}
+		}
+		if strings.Count(c, testCode) != 1 || strings.Count(c, "throw ") != 1 || strings.Count(c, " else ") != 1 ||
+			strings.Count(c, "{") != strings.Count(c, "}") || strings.Count(c, "(") != strings.Count(c, ")") {
+			t.Errorf("%s: %s", name, c)
+		}
 	}
 }
 
@@ -460,5 +500,36 @@ func TestCommandsPassTheVerifiedSumsHash(t *testing.T) {
 	}
 	if Command(in2, managed.Host{OS: "linux"}, testCode, "100.64.0.10") != "" || Command(in2, managed.Host{OS: "windows"}, testCode, "100.64.0.10") != "" {
 		t.Fatal("a command for a release that cannot take it")
+	}
+}
+
+// The two lines in the guide are the lines the panel prints, value for value (README.md "Add host"; the
+// agent's guide shows the same two). A change to Command that is not made in the guide fails here.
+func TestGuideShowsTheLinesThePanelPrints(t *testing.T) {
+	raw, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := map[string]string{}
+	for _, l := range strings.Split(string(raw), "\n") {
+		switch {
+		case strings.HasPrefix(l, "$u='BASE'; "):
+			guide["windows"] = l
+		case strings.HasPrefix(l, "f=$(mktemp) && curl "):
+			guide["linux"] = l
+		}
+	}
+	shape := strings.NewReplacer(testInstallers.Base, "BASE", testInstallers.SH, "SH_HASH", testInstallers.PS1, "PS1_HASH",
+		testInstallers.Sums, "SUMS", testCode, "CODE", "100.64.0.10", "PANEL")
+	// where the options go: before the end of the run on Windows, at the end of the line on Linux
+	options := strings.NewReplacer(" -PairV2 }", " -PairV2 [options] }", " --panel PANEL", " --panel PANEL [options]")
+	for os := range guide {
+		c := options.Replace(shape.Replace(Command(testInstallers, managed.Host{OS: os}, testCode, "100.64.0.10")))
+		if c != guide[os] {
+			t.Errorf("%s: the guide's line is not the panel's line.\nguide: %s\npanel: %s", os, guide[os], c)
+		}
+	}
+	if len(guide) != 2 {
+		t.Fatalf("found %d of the two command lines in README.md", len(guide))
 	}
 }

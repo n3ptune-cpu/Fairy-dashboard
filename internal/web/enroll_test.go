@@ -66,10 +66,11 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	code, cmd := r.body["code"].(string), r.body["command"].(string)
 	// the Windows line: the script is checked and run from memory, the code is set in the window's environment
 	// (on no command line), the fingerprint and the pairing v2 option are passed
-	if _, err := enroll.Normalize(code); err != nil || !strings.Contains(cmd, "; $env:FAIRY_JOIN_CODE='"+code+"'; & (") ||
-		!strings.HasSuffix(cmd, " -ReleaseUrl $u -SumsSha256 "+testInstallers.Sums+" -PanelAddress 100.64.0.10 -PairV2 -PowerControl -SelfUpdate -CoreTemp") ||
+	if _, err := enroll.Normalize(code); err != nil || !strings.Contains(cmd, "') { $env:FAIRY_JOIN_CODE='"+code+"'; try { & (") ||
+		!strings.HasSuffix(cmd, " -ReleaseUrl $u -SumsSha256 "+testInstallers.Sums+" -PanelAddress 100.64.0.10 -PairV2 -PowerControl -SelfUpdate -CoreTemp"+
+			" } finally { Remove-Item Env:FAIRY_JOIN_CODE -ErrorAction SilentlyContinue } } else { throw 'install.ps1 is not the release the panel checked: not run' }") ||
 		!strings.HasPrefix(cmd, "$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7'; ") ||
-		!strings.Contains(cmd, " -ne '"+testInstallers.PS1+"') { throw ") || strings.Count(cmd, code) != 1 ||
+		!strings.Contains(cmd, " -eq '"+testInstallers.PS1+"') { $env:") || strings.Count(cmd, code) != 1 ||
 		strings.Contains(cmd, "-Join") || strings.Contains(cmd, "$env:TEMP") || strings.Contains(cmd, "latest") {
 		t.Fatal(code, cmd)
 	}

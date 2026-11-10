@@ -405,7 +405,8 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 //
 // On Windows the script never touches the disk before it runs: the line downloads it into memory, checks
 // the SHA-256 of exactly those bytes and runs them as a script block, so there is no file that another
-// program could swap between the check and the run.
+// program could swap between the check and the run. The run sits inside the check ("if (hash -eq ...) { run }
+// else { throw }"), so a check that cannot be made runs nothing.
 //
 // There is one form per system. Command returns "" for a release whose script cannot be used this way
 // (Installers.Lacks) and for a code or panel address that is not what the panel itself makes; Create refuses
@@ -418,10 +419,16 @@ func Command(in Installers, h managed.Host, code, panel string) string {
 	o := h.Options
 	var b strings.Builder
 	if h.OS == "windows" {
+		// The run is inside the "if" whose condition is the check, and nothing follows that statement. In
+		// PowerShell an exception from a .NET call ends only the statement it is in: with the check and the run as
+		// two statements, a hash expression that throws (SHA256::Create() under the FIPS policy on an old .NET
+		// Framework) skipped the check and ran the unchecked bytes. Now an error in the condition ends the one
+		// statement and runs neither branch; a wrong hash goes to "else" and throws. try / finally takes the join
+		// code out of the window's environment also when the script never starts. (The line is the one in the
+		// agent's guide, AGENT.md "Add a host from the panel"; both must change together.)
 		fmt.Fprintf(&b, `$u='%s'; $b=(New-Object Net.WebClient).DownloadData("$u/%s"); `+
-			`if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -ne '%s') `+
-			`{ throw 'install.ps1 is not the release the panel checked: not run' }; `+
-			`$env:%s='%s'; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 %s -PanelAddress %s %s`,
+			`if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -eq '%s') `+
+			`{ $env:%s='%s'; try { & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 %s -PanelAddress %s %s`,
 			in.Base, InstallPS1, in.PS1, JoinCodeEnv, code, in.Sums, panel, FlagPairV2PS1)
 		for _, f := range []struct {
 			on   bool
@@ -436,6 +443,8 @@ func Command(in Installers, h managed.Host, code, panel string) string {
 		} else if o.UPS {
 			b.WriteString(" -Ups")
 		}
+		fmt.Fprintf(&b, ` } finally { Remove-Item Env:%s -ErrorAction SilentlyContinue } } `+
+			`else { throw 'install.ps1 is not the release the panel checked: not run' }`, JoinCodeEnv)
 		return b.String()
 	}
 	sudo := "sudo "
