@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // testClock moves the server's session clock (Server.now) without waiting: now = real time + skew.
@@ -160,14 +161,16 @@ func TestEndedSessionGets401JSONEverywhere(t *testing.T) {
 }
 
 // S-a: real use keeps the session: a request the UI marks as caused by input, the explicit activity signal,
-// and any write. API tokens have no idle timeout.
+// and any write the panel accepts. API tokens have no idle timeout.
 func TestActivityExtendsTheSession(t *testing.T) {
 	for name, use := range map[string]func(e *env, ck string) resp{
 		"marked read": func(e *env, ck string) resp { return e.do("GET", "/api/me", nil, "Cookie", ck, "X-Fairy-Active", "1") },
 		"activity signal": func(e *env, ck string) resp {
 			return e.do("POST", "/api/me/active", nil, "Cookie", ck, "X-Requested-With", "fairy")
 		},
-		"write": func(e *env, ck string) resp { return e.poll(ck) },
+		"write": func(e *env, ck string) resp {
+			return e.do("POST", "/api/notifications/read", map[string]any{"all": true}, "Cookie", ck, "X-Requested-With", "fairy")
+		},
 	} {
 		e := setup(t)
 		clk := e.fakeClock()
@@ -176,7 +179,7 @@ func TestActivityExtendsTheSession(t *testing.T) {
 		for i := 0; i < 4; i++ { // twice the timeout in all, used every half timeout
 			clk.advance(idle / 2)
 			r := use(e, ck)
-			if r.code != 200 && r.code != 204 && !stepUpRequired(r) {
+			if r.code != 200 && r.code != 204 {
 				t.Fatalf("%s, round %d: %d %s", name, i, r.code, r.raw)
 			}
 			if i == 0 && !strings.Contains(strings.Join(r.hdr.Values("Set-Cookie"), ";"), "=") {
@@ -425,5 +428,93 @@ func TestSessionCookieName(t *testing.T) {
 	secure := newCodec(strings.Repeat("s", 48), 3600, true)
 	if secure.decode(req).SID != "" {
 		t.Fatal("the plain name must not be read in normal mode")
+	}
+}
+
+// NEW-5: a request the panel refuses is not use of the session. Before, every non-GET request with the cookie
+// moved "last used" before anything was checked, so a form post from a sibling host (it carries a SameSite=Lax
+// cookie, is answered 403 for the missing header) kept an unattended session alive for ever.
+func TestRefusedRequestsAreNotUse(t *testing.T) {
+	csrf := []string{"X-Requested-With", "fairy"}
+	for name, send := range map[string]func(e *env, ck string) resp{
+		"a write without the CSRF header": func(e *env, ck string) resp { return e.do("POST", "/api/me/active", nil, "Cookie", ck) },
+		"a form post from a sibling host": func(e *env, ck string) resp {
+			return e.do("POST", "/api/me/active", nil, "Cookie", ck, "Content-Type", "application/x-www-form-urlencoded",
+				"Origin", "https://other.example.com", "Sec-Fetch-Site", "same-site")
+		},
+		"a write from another origin": func(e *env, ck string) resp {
+			return e.do("POST", "/api/me/active", nil, append([]string{"Cookie", ck, "Origin", "https://evil.example"}, csrf...)...)
+		},
+		"a write marked cross-site": func(e *env, ck string) resp {
+			return e.do("POST", "/api/me/active", nil, append([]string{"Cookie", ck, "Sec-Fetch-Site", "cross-site"}, csrf...)...)
+		},
+		"a write marked same-site": func(e *env, ck string) resp {
+			return e.do("POST", "/api/me/active", nil, append([]string{"Cookie", ck, "Sec-Fetch-Site", "same-site"}, csrf...)...)
+		},
+		"a sign-out without the CSRF header": func(e *env, ck string) resp { return e.do("POST", "/auth/logout", nil, "Cookie", ck) },
+		"a write to a route that does not exist": func(e *env, ck string) resp {
+			return e.do("POST", "/api/nope", nil, append([]string{"Cookie", ck}, csrf...)...)
+		},
+		"a write the user's role does not allow": func(e *env, ck string) resp { return e.poll(ck) }, // 403: not an admin
+		"a write with a body the panel refuses": func(e *env, ck string) resp {
+			return e.do("POST", "/api/notifications/read", map[string]any{"nope": 1}, append([]string{"Cookie", ck}, csrf...)...)
+		},
+		"a marked read from another site": func(e *env, ck string) resp {
+			return e.do("GET", "/api/me", nil, "Cookie", ck, "X-Fairy-Active", "1", "Sec-Fetch-Site", "cross-site")
+		},
+		"a marked read that is refused": func(e *env, ck string) resp {
+			return e.do("GET", "/api/audit", nil, "Cookie", ck, "X-Fairy-Active", "1") // 403: admins only
+		},
+		"a marked read of something that is not there": func(e *env, ck string) resp {
+			return e.do("GET", "/api/systems/nope", nil, "Cookie", ck, "X-Fairy-Active", "1")
+		},
+	} {
+		e := setup(t)
+		clk := e.fakeClock()
+		ck := e.cookie(model.User{Sub: "u7", Name: model.P("Vee"), Groups: []string{"viewers"}}, 0)
+		if _, _, err := e.s.Access.SetRole("u7", "viewer", nil, "test", false); err != nil {
+			t.Fatal(err)
+		}
+		idle := time.Duration(e.s.Cfg.SessionIdleTimeout) * time.Second
+		for i := 0; i < 3; i++ {
+			clk.advance(idle / 3)
+			if i == 2 {
+				clk.advance(time.Minute) // now the whole timeout has passed since the sign-in
+			}
+			r := send(e, ck)
+			answered := name == "a marked read from another site" // it is answered (a read), it only does not count
+			if i < 2 && (r.code == 401 || (r.code < 400) != answered) {
+				t.Fatalf("%s: answered %d, the test wants a refusal of a live session", name, r.code)
+			}
+			if i < 2 && strings.Contains(strings.Join(r.hdr.Values("Set-Cookie"), ";"), e.s.codec.name()+"=ey") {
+				t.Fatalf("%s: a refused request refreshed the cookie", name)
+			}
+		}
+		if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 401 {
+			t.Errorf("%s kept an unattended session alive past session_idle_timeout: %d", name, r.code)
+		}
+	}
+
+	// a control request that is asked to confirm is not use either; the confirmation is (the callback)
+	a := signedIn(t)
+	idle := time.Duration(a.e.s.Cfg.SessionIdleTimeout) * time.Second
+	a.clk.advance(idle - time.Minute)
+	id := a.shutdown()
+	if id == "" {
+		t.Fatal("not kept")
+	}
+	a.clk.advance(2 * time.Minute)
+	if r := a.e.do("GET", "/api/me", nil, "Cookie", a.sess); r.code != 401 {
+		t.Fatal("a request answered step_up_required counted as use:", r.code)
+	}
+	a = signedIn(t)
+	a.clk.advance(idle - time.Minute)
+	id = a.shutdown()
+	if r := a.confirm(id, false); r.code != 303 {
+		t.Fatal(r.code, string(r.raw))
+	}
+	a.clk.advance(idle - time.Minute)
+	if r := a.e.do("GET", "/api/me", nil, "Cookie", a.sess); r.code != 200 {
+		t.Fatal("confirming at Pocket ID is use:", r.code)
 	}
 }

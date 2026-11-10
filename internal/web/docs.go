@@ -73,7 +73,7 @@ const apiDescription = "Homelab resource panel API. All `/api/*` routes need a s
 	"`pending` (the request was kept) and, when it was kept, `pending_id` and `action` (the panel's own description of what would run): `POST /api/me/step-up` with `{\"pending_id\": ...}` answers with the sign-in address, and the panel runs the kept request once after that sign-in. " +
 	"A request is kept only for the browser and address the session was signed in or last confirmed from; otherwise `not_kept` says why (`new_client`: sign in again with `/auth/login?step_up=1`, then repeat the request; `too_large`). A link never runs a kept request. " +
 	"`per_action: true` is present when `step_up_per_action` is on: every such request needs its own sign-in. API tokens never get a step-up.\n\n" +
-	"**Headers.** Writes need `X-Requested-With: fairy`. `X-Fairy-Active: 1` marks a request as made while someone is using the page: only such requests, writes and `POST /api/me/active` move the idle timeout. " +
+	"**Headers.** Writes need `X-Requested-With: fairy`. `X-Fairy-Active: 1` marks a request as made while someone is using the page: only such requests, writes and `POST /api/me/active` move the idle timeout, and only when they are answered without an error. " +
 	"`X-Fairy-Action` (optional) is the action's label for the step-up dialog, percent-encoded UTF-8.\n\n" +
 	"**429** carries `Retry-After`."
 

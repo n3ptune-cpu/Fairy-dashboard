@@ -23,6 +23,7 @@ type reqCtx struct {
 	fn    handler // the route's handler this request was matched to (kept with a pending action, see pending.go)
 	sess  *sessionData
 	dirty bool
+	use   bool // this request counts as use of the session if it is answered without an error (see used)
 	user  *model.User
 	token *tokens.Record // the API token of this request, if any
 	g     *access.Grant  // what the user may see and do (see grant)
@@ -58,7 +59,6 @@ func (c *reqCtx) flush() {
 func (c *reqCtx) ip() string { return security.ClientIP(c.r, c.s.Cfg.Trusted()) }
 
 func (c *reqCtx) json(status int, v any) {
-	c.flush()
 	b, err := json.Marshal(v)
 	if err != nil { // one system, power source or UPS that cannot be written must not take the whole answer down
 		if rb, _, ok := safeJSON("response "+c.r.Pattern, v); ok {
@@ -69,6 +69,8 @@ func (c *reqCtx) json(status int, v any) {
 		slog.Error("encoding response", "path", c.r.URL.Path, "error", err)
 		status, b = 500, []byte(`{"detail":"internal error"}`)
 	}
+	c.used(status)
+	c.flush()
 	c.w.Header().Set("Content-Type", "application/json")
 	c.w.WriteHeader(status)
 	_, _ = c.w.Write(b)
@@ -88,6 +90,7 @@ func (c *reqCtx) fail(err error) {
 // errorPage answers a browser navigation (e.g. the OIDC callback) with a small HTML page instead of JSON: what
 // went wrong and a link back. Everything is escaped; the page has no script or inline style (strict CSP).
 func (c *reqCtx) errorPage(status int, title, msg, back string) error {
+	c.used(status)
 	c.flush()
 	c.w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	c.w.WriteHeader(status)
@@ -100,6 +103,7 @@ func (c *reqCtx) errorPage(status int, title, msg, back string) error {
 }
 
 func (c *reqCtx) redirect(target string) {
+	c.used(http.StatusSeeOther)
 	c.flush()
 	http.Redirect(c.w, c.r, target, http.StatusSeeOther)
 }

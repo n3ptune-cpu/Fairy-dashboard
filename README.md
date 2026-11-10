@@ -541,7 +541,8 @@ session settings as whole seconds).
 * Sessions: HMAC-signed `__Host-fairy_session` cookie (HttpOnly, Secure, SameSite=Lax, host-only; the plain name
   `fairy_session` only with `FAIRY_INSECURE_COOKIES`) that is valid only while its id is
   in `sessions.json`, within the idle timeout and absolute lifetime; revocable with `fairy admin sessions`.
-  The idle timeout counts real use only: writes, and requests the page marks `X-Fairy-Active: 1` because there
+  The idle timeout counts real use only: writes the panel accepts (a request it refuses, for example a form
+  post from another site, never counts), and requests the page marks `X-Fairy-Active: 1` because there
   was pointer / key / touch input in the last minute (`POST /api/me/active` is its explicit signal). The live
   stream and the page's timers never count, so a tab nobody touches signs out, and its stream ends.
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never

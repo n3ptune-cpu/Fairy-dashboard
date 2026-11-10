@@ -34,7 +34,7 @@ const (
 //
 // A session is valid while it is listed in sessions.json (not revoked by the CLI), younger than
 // session_max_age, and really used within session_idle_timeout. "Used" is kept on the server per session id
-// (the cookie's copy only seeds it after a restart) and moves only on real use, see active.
+// (the cookie's copy only seeds it after a restart) and moves only on real use, see markedRead and used.
 func (s *Server) sessionCheck(sd *sessionData) string {
 	now := s.now()
 	if sd.User == nil || sd.IAT == 0 {
@@ -70,24 +70,48 @@ func (s *Server) endSession(sid string) {
 	s.codec.live.forget(sid)
 }
 
-// active reports whether this request shows a person using the panel, which is what keeps a session from idling
-// out. Only these do: a write (the UI makes none on a timer), and a request the UI marks with X-Fairy-Active: 1
-// because there was pointer, key, touch or wheel input in the last minute (POST /api/me/active is the UI's
-// explicit signal for a user who only reads the live page). The page's background traffic (the live stream and
-// its reconnects, the once-a-minute updates poll, every other timer) is unmarked and never counts.
+// What keeps a session from idling out is a person using the panel, and only a request the panel accepted
+// shows that (NEW-5: a request it refuses must not count, whoever sent it). Two kinds of request can count:
+//
+//   - a read the page marks with X-Fairy-Active: 1, because there was pointer, key, touch or wheel input in the
+//     last minute (markedRead);
+//   - a write that passed the CSRF checks (checkCSRF: the custom header, the panel's own origin, same-origin
+//     fetch metadata). The UI makes no write on a timer; POST /api/me/active is its explicit signal for a user
+//     who only reads the live page. A form post from another site or a sibling host carries the cookie but not
+//     the header: it is refused and does not count.
+//
+// Either one only sets reqCtx.use. The session's "last used" moves when the answer is written and is not an
+// error (used, called by every way of answering). The page's background traffic (the live stream and its
+// reconnects, the once-a-minute updates poll, every other timer) is unmarked and never counts.
 //
 // This tells an attended browser from an unattended one. It is not a defence against someone who holds the
 // cookie: they can send the header.
-func (c *reqCtx) active() bool {
-	if c.resumed() {
-		return false // the panel's own replay; the sign-in that started it already counted
+func (c *reqCtx) markedRead() bool {
+	if c.resumed() || (c.r.Method != http.MethodGet && c.r.Method != http.MethodHead) || c.r.Header.Get(activeHdr) != "1" {
+		return false
 	}
-	return (c.r.Method != http.MethodGet && c.r.Method != http.MethodHead) || c.r.Header.Get(activeHdr) == "1"
+	sfs := c.r.Header.Get("Sec-Fetch-Site")
+	return sfs == "" || sfs == "same-origin"
+}
+
+// used moves the session's "last used" for a request that counts as use (reqCtx.use) and is being answered
+// with status: only an answer that is not an error counts. On the server at once, in the cookie at most once a
+// minute. Called before the answer's headers are written.
+func (c *reqCtx) used(status int) {
+	if !c.use || status >= 400 || c.sess == nil || c.sess.SID == "" || c.s.DemoUser != nil {
+		return
+	}
+	c.use = false
+	now := c.s.now()
+	c.s.codec.live.touch(c.sess.SID, now)
+	if now.Unix()-c.sess.Seen > seenPersist {
+		c.sess.Seen = now.Unix()
+		c.dirty = true
+	}
 }
 
 // sessionUser: browser session (cookie) only; see sessionCheck for what makes it valid. A session that reached
-// session_max_age, idled out or lost its user is removed from sessions.json and its cookie cleared. Real use (active) moves "last used" on the
-// server at once and in the cookie at most once a minute.
+// session_max_age, idled out or lost its user is removed from sessions.json and its cookie cleared.
 func (c *reqCtx) sessionUser() *model.User {
 	if c.s.DemoUser != nil {
 		u := *c.s.DemoUser
@@ -110,13 +134,8 @@ func (c *reqCtx) sessionUser() *model.User {
 		c.clearSession()
 		return nil
 	}
-	if c.active() {
-		now := c.s.now()
-		c.s.codec.live.touch(s.SID, now)
-		if now.Unix()-s.Seen > seenPersist {
-			s.Seen = now.Unix()
-			c.dirty = true
-		}
+	if c.markedRead() {
+		c.use = true
 	}
 	u := *s.User
 	u.Auth = "session"
@@ -232,8 +251,8 @@ func (s *Server) authRoutes(m *http.ServeMux) {
 // stepUpPath is "Continue" in the "Confirm it's you" dialog: the only way to arm a kept action (confirmStepUp).
 const stepUpPath = "/api/me/step-up"
 
-// meActive is the UI's "someone is using this page" signal (see active): a write with the CSRF header, sent at
-// most once a minute while there is input. Being a write is what makes it count; it does nothing else.
+// meActive is the UI's "someone is using this page" signal (see markedRead): a write with the CSRF header, sent
+// at most once a minute while there is input. Being an accepted write is what makes it count; it does nothing else.
 func (s *Server) meActive(c *reqCtx) error {
 	u, err := c.requireUser()
 	if err != nil {
@@ -242,6 +261,7 @@ func (s *Server) meActive(c *reqCtx) error {
 	if err := c.checkCSRF(u); err != nil {
 		return err
 	}
+	c.used(204)
 	c.flush()
 	c.w.WriteHeader(204)
 	return nil

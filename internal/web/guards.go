@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"math"
+	"net/http"
 	"net/url"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
@@ -32,6 +33,9 @@ func (c *reqCtx) checkCSRF(u *model.User) error {
 	}
 	if sfs := c.r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
 		return c.deny(u, 403, "cross-site request refused", "cross-site")
+	}
+	if c.r.Method != http.MethodGet && c.r.Method != http.MethodHead {
+		c.use = true // a write only the panel's own page can send: it counts as use once it is answered without an error
 	}
 	return nil
 }

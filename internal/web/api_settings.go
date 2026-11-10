@@ -100,6 +100,7 @@ func (s *Server) getBackground(c *reqCtx) error {
 	if err != nil {
 		return apierr.New(404, "no background uploaded")
 	}
+	c.used(200)
 	c.flush()
 	h := c.w.Header()
 	h.Set("Content-Type", mime)
