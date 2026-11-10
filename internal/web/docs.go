@@ -1,13 +1,16 @@
 package web
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"regexp"
 	"strings"
 )
 
 // A compact, hand-maintained OpenAPI description of the JSON API (paths, methods, summaries). /docs renders it
-// with Swagger UI; both need a signed-in session (the JSON also accepts an API token).
+// with Swagger UI; both need a signed-in user with a role (the JSON also accepts an API token, /docs only a
+// browser session).
 var apiDoc = []struct{ method, path, summary string }{
 	{"GET", "/api/me", "Current user, their role (admin | viewer | pending) and the sites they see"},
 	{"GET", "/api/audit", "Audit log, newest first (admins only). Query: q, action, host, before, limit"},
@@ -87,11 +90,54 @@ func openAPI(version string) map[string]any {
 		"paths": paths}
 }
 
-const swaggerHTML = `<!doctype html><html><head><meta charset="utf-8"><title>Fairy API</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui.css"></head>
+// Swagger UI is the one thing a Fairy page loads from another host, and only on /docs (enable_docs, off by
+// default). Its two files are pinned to one release and to the SHA-384 of their exact bytes: the browser checks
+// the hash before it runs or applies a file (Subresource Integrity) and refuses anything else, so a changed
+// file on the CDN cannot run in the panel with the signed-in user's session.
+//
+// The hashes are of the files jsDelivr serves for swagger-ui-dist 5.17.14 (downloaded 2026-11-10):
+//
+//	swagger-ui.css        152071 bytes  sha256 40170f0ee859d17f92131ba707329a88a070e4f66874d11365e9a77d232f6117
+//	swagger-ui-bundle.js 1452753 bytes  sha256 c2e4a9ef08144839ff47c14202063ecfe4e59e70a4e7154a26bd50d880c88ba1
+//
+// To move to another release change swaggerVersion and both hashes together:
+//
+//	curl -sL https://cdn.jsdelivr.net/npm/swagger-ui-dist@VERSION/FILE | openssl dgst -sha384 -binary | openssl base64 -A
+const (
+	swaggerVersion = "5.17.14"
+	swaggerBase    = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@" + swaggerVersion + "/"
+	swaggerCSS     = swaggerBase + "swagger-ui.css"
+	swaggerCSSHash = "sha384-wxLW6kwyHktdDGr6Pv1zgm/VGJh99lfUbzSn6HNHBENZlCN7W602k9VkGdxuFvPn"
+	swaggerJS      = swaggerBase + "swagger-ui-bundle.js"
+	swaggerJSHash  = "sha384-wmyclcVGX/WhUkdkATwhaK1X1JtiNrr2EoYJ+diV3vj4v6OC5yCeSu+yW13SYJep"
+
+	// swaggerInit is the page's only inline script. validatorUrl null: no badge request to validator.swagger.io
+	// (which would tell that site the panel's address).
+	swaggerInit = `SwaggerUIBundle({url: "/api/openapi.json", dom_id: "#swagger-ui", validatorUrl: null})`
+)
+
+// swaggerHTML is the /docs page: the two pinned files with their hashes, and the inline start-up line.
+const swaggerHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Fairy API</title>
+<link rel="stylesheet" href="` + swaggerCSS + `" integrity="` + swaggerCSSHash + `" crossorigin="anonymous" referrerpolicy="no-referrer"></head>
 <body><div id="swagger-ui"></div>
-<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
-<script>SwaggerUIBundle({url: "/api/openapi.json", dom_id: "#swagger-ui"})</script></body></html>`
+<script src="` + swaggerJS + `" integrity="` + swaggerJSHash + `" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>` + swaggerInit + `</script></body></html>`
+
+// docsCSP is the Content-Security-Policy of exactly the /docs page (every other page has the stricter CSP,
+// which allows nothing from other hosts). Scripts: only the pinned bundle and the one inline line above, by
+// its hash; nothing else can run, whatever the document or the bundle asks for. Styles: the pinned stylesheet,
+// plus inline styles, which Swagger UI sets on its elements. Requests: only back to the panel, for
+// /api/openapi.json and "Try it out". Images and fonts: the panel and data: URLs (the stylesheet embeds its
+// icons). No frames, no forms, no <base>.
+var docsCSP = "default-src 'none'; script-src " + swaggerJS + " '" + inlineScriptHash(swaggerInit) + "'; " +
+	"style-src " + swaggerCSS + " 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; " +
+	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+// inlineScriptHash is the CSP source that allows exactly this inline script.
+func inlineScriptHash(script string) string {
+	sum := sha256.Sum256([]byte(script))
+	return "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
+}
 
 func (s *Server) docsRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/openapi.json", s.h(func(c *reqCtx) error {
@@ -102,12 +148,24 @@ func (s *Server) docsRoutes(m *http.ServeMux) {
 		return nil
 	}))
 	m.HandleFunc("GET /docs", s.h(func(c *reqCtx) error {
-		if c.sessionUser() == nil {
+		// The middleware sets no policy for /docs (the page needs its own), so every answer here sets one.
+		c.w.Header().Set("Content-Security-Policy", CSP)
+		if c.r.Header.Get("Authorization") == "" && c.sessionUser() == nil {
 			c.redirect("/auth/login?next=/docs")
 			return nil
 		}
+		if _, err := c.requireSession(); err != nil { // a browser session only, as before (no API tokens)
+			return err
+		}
+		if _, g, _ := c.grant(); g.Pending() { // signed in but without a role: no data, and no third-party script either
+			return c.errorPage(403, "Waiting for access", "The API documentation is for people with a role. "+
+				"Ask an admin to give you one on the Users page.", "/")
+		}
 		c.flush()
-		c.w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		h := c.w.Header()
+		h.Set("Content-Security-Policy", docsCSP)
+		h.Set("Content-Type", "text/html; charset=utf-8")
+		h.Set("Cache-Control", "no-store")
 		_, _ = c.w.Write([]byte(swaggerHTML))
 		return nil
 	}))
