@@ -265,6 +265,14 @@ func TestHostileRelayedPowerRows(t *testing.T) {
 
 // The audit's plug: a Tasmota device answering Power [1e308, 1e308]. Each number is possible, the sum (made in
 // the shared device code) is not. Read by the panel itself, through the real source code.
+//
+// What the panel is handed depends on the agent module it is built with (the device code is shared):
+//   - up to v0.5.3 the sum arrives as an infinity, and the panel makes the source a failed one with the reason;
+//   - after it, the shared code leaves a sum that cannot be a reading out (watts: null) and keeps the row, so
+//     the source is "ok" without watts, like any source that reports no watts.
+//
+// Either way the impossible number is in no total, no linked watts and no history point, and every answer is
+// valid JSON. (The first case can go once go.mod requires the newer module.)
 func TestHostileTasmotaPlug(t *testing.T) {
 	var body atomic.Value
 	body.Store(`{"StatusSNS":{"ENERGY":{"Power":[1e308,1e308],"Voltage":230,"Current":0.5,"Total":12}}}`)
@@ -275,8 +283,18 @@ func TestHostileTasmotaPlug(t *testing.T) {
 	ov := pm.Overview()
 	validJSON(t, "overview", ov)
 	validJSON(t, "history", pm.HistoryView(""))
-	if st := ov.Sources[0]; st.Status == "ok" || st.Error == nil || ov.TotalW != nil || len(pm.LinkedWatts()) != 0 {
+	st := ov.Sources[0]
+	failed := st.Status != "ok" && st.Error != nil
+	noWatts := st.Status == "ok" && st.Error == nil && len(st.Readings) == 1 && st.Readings[0].Watts == nil
+	if failed == noWatts || ov.TotalW != nil || len(pm.LinkedWatts()) != 0 {
 		t.Fatalf("%+v", st)
+	}
+	for _, r := range st.Readings { // whatever else the plug said is shown only if it is a possible reading
+		for _, v := range []*float64{r.Watts, r.Voltage, r.Current, r.EnergyKWhTotal} {
+			if v != nil && (math.IsNaN(*v) || math.Abs(*v) > 1e9) {
+				t.Fatalf("%+v", r)
+			}
+		}
 	}
 	// the device is normal again: so is its source (after its back-off) and the history
 	body.Store(`{"StatusSNS":{"ENERGY":{"Power":[10,15],"Voltage":230,"Current":0.1,"Total":12}}}`)

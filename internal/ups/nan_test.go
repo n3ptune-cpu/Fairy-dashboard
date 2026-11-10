@@ -23,6 +23,15 @@ func nutRow(vars map[string]string) map[string]any {
 	return upssrc.RowMap(devices.UPSFromVars("cp", vars, ""))
 }
 
+// readerDropsBadValues reports which shared NUT reader this panel is built with (it comes with the agent
+// module). Up to agent v0.5.3 a UPS with one value that is not a number cannot be encoded at all: no row. After
+// it the reader leaves that value out and keeps the row, so the UPS's state ("low battery") always arrives.
+// The panel must be right with both, and with rows of agents of either age. (The "no row" cases of these tests
+// can go once go.mod requires the newer module.)
+func readerDropsBadValues() bool {
+	return nutRow(map[string]string{"ups.status": "OL", "ups.realpower": "NaN"}) != nil
+}
+
 func kindsOf(m *Manager, key string) string {
 	var out []string
 	for _, e := range m.EventsSince(0) {
@@ -74,10 +83,14 @@ func fakeUpsd(t *testing.T, vars *atomic.Value) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
-// L11: a UPS server that sends "NaN" (or "Inf") for one value. The shared reader cannot encode that UPS, and the
-// panel used to keep showing "online, charge 100" for ever: no error, no event, never stale. Now the UPS the panel
-// knows goes stale with a reason, then unreachable with an event (and with it a notification), and comes back
-// when its data does. Through the real NUT source and a fake upsd.
+// L11: a UPS server that sends "NaN" (or "Inf") for one value. The shared reader could not encode that UPS, and
+// the panel used to keep showing "online, charge 100" for ever: no error, no event, never stale. Through the real
+// NUT source and a fake upsd.
+//
+// With the shared reader up to agent v0.5.3 (no row for that UPS): the UPS the panel knows goes stale with a
+// reason, then unreachable with an event (and with it a notification), and comes back when its data does.
+// With the newer reader (the value is left out, the row stays): the UPS shows what it really is, on low
+// battery with its real charge, with the on-battery event, and the value that was no number is not shown.
 func TestUPSThatReportsNaNIsNotShownHealthy(t *testing.T) {
 	var logs bytes.Buffer
 	old := slog.Default()
@@ -99,19 +112,38 @@ func TestUPSThatReportsNaNIsNotShownHealthy(t *testing.T) {
 	if st == nil || st.Status != "online" || st.Stale || st.Error != nil || *st.BatteryCharge != 100 || *st.Watts != 180 {
 		t.Fatalf("control case: %+v", st)
 	}
+	rowStays := readerDropsBadValues()
 	for _, bad := range []string{"NaN", "Inf", "-Inf", "+Infinity", "nan"} {
 		// really on low battery, with one value that is not a number
 		vars.Store(map[string]string{"ups.status": "OB LB", "battery.charge": "4", "battery.runtime": "60", "ups.realpower": bad})
+		before := len(m.EventsSince(0))
 		m.PollAll(ctx)
 		st = m.State("rack/cp")
-		if !st.Stale || st.Error == nil || *st.Error != errUnreadable {
-			t.Fatalf("%s: still shown as healthy: %+v", bad, st)
-		}
-		time.Sleep(250 * time.Millisecond) // longer than offline_after
-		m.PollAll(ctx)
-		st = m.State("rack/cp")
-		if st.Status != "unreachable" || !st.Stale || !strings.HasSuffix(kindsOf(m, "rack/cp"), "communication_lost") {
-			t.Fatalf("%s: %+v, events %q", bad, st, kindsOf(m, "rack/cp"))
+		if rowStays {
+			// the real state, the real charge, no watts; never "online, charge 100, 180 W"
+			if st.Status != "low_battery" || st.Stale || st.Error != nil || *st.BatteryCharge != 4 || *st.BatteryRuntimeS != 60 || st.Watts != nil {
+				t.Fatalf("%s: not the UPS's real state: %+v", bad, st)
+			}
+			// its on-battery event (the first time: a UPS that goes on battery again and again is held back by
+			// the event limit per source)
+			if evs := m.EventsSince(0)[before:]; bad == "NaN" && (len(evs) == 0 || evs[0].UpsID != "rack/cp" || evs[0].Kind != "on_battery") {
+				t.Fatalf("%s: no on-battery event: %+v", bad, evs)
+			}
+			time.Sleep(250 * time.Millisecond) // longer than offline_after: it is still being read
+			m.PollAll(ctx)
+			if st = m.State("rack/cp"); st.Status != "low_battery" || st.Stale {
+				t.Fatalf("%s: %+v", bad, st)
+			}
+		} else {
+			if !st.Stale || st.Error == nil || *st.Error != errUnreadable {
+				t.Fatalf("%s: still shown as healthy: %+v", bad, st)
+			}
+			time.Sleep(250 * time.Millisecond) // longer than offline_after
+			m.PollAll(ctx)
+			st = m.State("rack/cp")
+			if st.Status != "unreachable" || !st.Stale || !strings.HasSuffix(kindsOf(m, "rack/cp"), "communication_lost") {
+				t.Fatalf("%s: %+v, events %q", bad, st, kindsOf(m, "rack/cp"))
+			}
 		}
 		if _, err := json.Marshal(m.Overview(true)); err != nil {
 			t.Fatal(err)
@@ -119,12 +151,19 @@ func TestUPSThatReportsNaNIsNotShownHealthy(t *testing.T) {
 		vars.Store(good)
 		m.PollAll(ctx)
 		st = m.State("rack/cp")
-		if st.Status != "online" || st.Stale || st.Error != nil || !strings.HasSuffix(kindsOf(m, "rack/cp"), "communication_restored") {
+		if st.Status != "online" || st.Stale || st.Error != nil || *st.BatteryCharge != 100 || *st.Watts != 180 {
 			t.Fatalf("%s: not back: %+v, events %q", bad, st, kindsOf(m, "rack/cp"))
 		}
+		if !rowStays && !strings.HasSuffix(kindsOf(m, "rack/cp"), "communication_restored") {
+			t.Fatalf("%s: not back: events %q", bad, kindsOf(m, "rack/cp"))
+		}
 	}
-	if n := strings.Count(logs.String(), "UPS data that cannot be read"); n != 5 { // once per episode, not per poll
-		t.Fatalf("logged %d times", n)
+	want := 5 // once per episode, not per poll
+	if rowStays {
+		want = 0 // every row could be read
+	}
+	if n := strings.Count(logs.String(), "UPS data that cannot be read"); n != want {
+		t.Fatalf("logged %d times, want %d", n, want)
 	}
 	// a UPS that is no longer in the server's answer is not "online with its last values" either
 	m.mu.Lock()
@@ -155,9 +194,13 @@ func TestAgentUPSThatReportsNaN(t *testing.T) {
 		return AgentRows(payload["ups"])
 	}
 	good := nutRow(map[string]string{"ups.status": "OL", "battery.charge": "100", "battery.runtime": "1500"})
-	nan := nutRow(map[string]string{"ups.status": "OB LB", "battery.charge": "4", "ups.realpower": "NaN"})
-	if good == nil || nan != nil {
-		t.Fatal("the shared reader's rows changed: adapt this test", good, nan)
+	if good == nil {
+		t.Fatal("the shared reader's rows changed: adapt this test", good)
+	}
+	// what an agent up to v0.5.3 sends for a UPS it could not encode: null, whatever reader this panel has
+	var nan map[string]any
+	if b, _ := json.Marshal(map[string]any{"ups": []map[string]any{nan}}); string(b) != `{"ups":[null]}` {
+		t.Fatal(string(b))
 	}
 	m.UpdateFromAgent("nas", wire(good), false, nil, nil)
 	if st := m.State("nas/cp"); st == nil || st.Status != "online" || st.Stale {
@@ -172,6 +215,32 @@ func TestAgentUPSThatReportsNaN(t *testing.T) {
 	m.UpdateFromAgent("nas", wire(nan), false, nil, nil)
 	if st = m.State("nas/cp"); st.Status != "unreachable" || kindsOf(m, "nas/cp") != "communication_lost" {
 		t.Fatalf("%+v %q", st, kindsOf(m, "nas/cp"))
+	}
+	m.UpdateFromAgent("nas", wire(good), false, nil, nil)
+	if st = m.State("nas/cp"); st.Status != "online" || st.Stale || st.Error != nil {
+		t.Fatalf("not back: %+v", st)
+	}
+	// What a newer agent sends for the same UPS. Its reader leaves the value that is no number out and keeps
+	// the row: the UPS shows its real state. (Literal rows, so this does not depend on the reader in this build.)
+	m.UpdateFromAgent("nas", wire(map[string]any{"name": "cp", "ok": true, "state": "low_battery", "status_raw": "OB LB",
+		"flags": []any{"on_battery", "low_battery"}, "battery_charge": 4.0, "watts": nil}), false, nil, nil)
+	if st = m.State("nas/cp"); st.Status != "low_battery" || st.Stale || st.Error != nil || *st.BatteryCharge != 4 || st.Watts != nil {
+		t.Fatalf("%+v", st)
+	}
+	// ... and for a UPS it still cannot write: a failed row with the name. Failed and visible with the agent's
+	// reason, not applied as a state.
+	m.UpdateFromAgent("nas", wire(map[string]any{"name": "cp", "ok": false, "error": "ups reports impossible values", "flags": []any{}}), false, nil, nil)
+	if st = m.State("nas/cp"); st == nil || !st.Stale || st.Error == nil || *st.Error != "ups reports impossible values" || st.Status != "low_battery" {
+		t.Fatalf("%+v", st)
+	}
+	if row := nutRow(map[string]string{"ups.status": "OB LB", "battery.charge": "4", "ups.realpower": "NaN"}); readerDropsBadValues() {
+		// the reader in this build: the row it makes is that first kind
+		m.UpdateFromAgent("nas", wire(row), false, nil, nil)
+		if st = m.State("nas/cp"); st.Status != "low_battery" || st.Stale || st.Error != nil || *st.BatteryCharge != 4 || st.Watts != nil {
+			t.Fatalf("%+v", st)
+		}
+	} else if row != nil {
+		t.Fatal("the shared reader's rows changed: adapt this test", row)
 	}
 	m.UpdateFromAgent("nas", wire(good), false, nil, nil)
 	if st = m.State("nas/cp"); st.Status != "online" || st.Stale || st.Error != nil {
@@ -194,13 +263,18 @@ func TestAgentUPSThatReportsNaN(t *testing.T) {
 // L11, range checks: charge 0 to 100, load and run time not negative, nothing absurd. Such a value is dropped
 // and the UPS says so (stale, with the names of the values) instead of showing it; what the UPS says about its
 // state still counts, so "on battery" still raises its event.
+//
+// The first row is written out as an agent up to v0.5.3 sends it (its reader passed such values on). A newer
+// agent's reader, and the one in a panel built with the newer agent module, leaves them out itself: then the
+// panel has nothing to drop and nothing to report, which the last part checks through the reader of this build.
 func TestUPSValuesOutOfRange(t *testing.T) {
 	m, err := NewManager(nil, 5, time.Second, 60, 3600, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.UpdateFromAgent("nas", []map[string]any{nutRow(map[string]string{"ups.status": "OB", "battery.charge": "250", "battery.runtime": "-5",
-		"ups.load": "-1", "ups.realpower": "1e308", "input.voltage": "231", "battery.voltage": "1e300"})}, false, nil, nil)
+	m.UpdateFromAgent("nas", []map[string]any{{"name": "cp", "ok": true, "state": "on_battery", "status_raw": "OB", "flags": []any{"on_battery"},
+		"battery_charge": 250.0, "battery_runtime_s": -5.0, "load_percent": -1.0, "watts": 1e308, "input_voltage": 231.0,
+		"battery_voltage": 1e300}}, false, nil, nil)
 	st := m.State("nas/cp")
 	if st.Status != "on_battery" || st.BatteryCharge != nil || st.BatteryRuntimeS != nil || st.LoadPercent != nil || st.Watts != nil ||
 		st.BatteryVoltage != nil || *st.InputVoltage != 231 {
@@ -233,5 +307,21 @@ func TestUPSValuesOutOfRange(t *testing.T) {
 	if st.Stale || st.Error != nil || *st.BatteryCharge != 100 || *st.BatteryRuntimeS != 0 || *st.LoadPercent != 0 || *st.Watts != 0 ||
 		!st.WattsEstimated || *st.NominalW != 900 || *st.InputVoltage != 231.5 || *st.InputFrequency != 50 || *st.BatteryVoltage != 27.1 {
 		t.Fatalf("%+v", st)
+	}
+	// the same hostile UPS through the shared reader of this build: none of the impossible values is shown, the
+	// state and the good value are. Only a reader that passes them on (agent module up to v0.5.3) gives the
+	// panel something to report.
+	m.UpdateFromAgent("nas", []map[string]any{nutRow(map[string]string{"ups.status": "OB", "battery.charge": "250", "battery.runtime": "-5",
+		"ups.load": "-1", "ups.realpower": "1e308", "input.voltage": "231", "battery.voltage": "1e300"})}, false, nil, nil)
+	st = m.State("nas/cp")
+	if st.Status != "on_battery" || st.BatteryCharge != nil || st.BatteryRuntimeS != nil || st.LoadPercent != nil || st.Watts != nil ||
+		st.BatteryVoltage != nil || *st.InputVoltage != 231 {
+		t.Fatalf("%+v", st)
+	}
+	if dropsItself := readerDropsBadValues(); st.Stale == dropsItself || (st.Error == nil) != dropsItself {
+		t.Fatalf("reader drops the values itself: %v, stale %v, error %v", dropsItself, st.Stale, st.Error)
+	}
+	if _, err := json.Marshal(m.Overview(true)); err != nil {
+		t.Fatal(err)
 	}
 }
