@@ -150,7 +150,7 @@ func adminCheck(cfg *config.Panel, problems, notes []string) ([]string, []string
 		notes = append(notes, "users.json has no admin yet: the first sign-in through oidc.control_groups / oidc.bootstrap_admins becomes admin")
 	default:
 		problems = append(problems, "users.json has no admin and oidc.control_groups / oidc.bootstrap_admins are empty: nobody becomes "+
-			"admin by signing in (after your first sign-in: fairy admin users set-role <your email> admin)")
+			"admin by signing in (after your first sign-in: fairy admin users set-role <your email or subject> admin)")
 	}
 	return problems, notes
 }

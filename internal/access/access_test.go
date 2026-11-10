@@ -57,13 +57,14 @@ func TestGrantSeesAndCap(t *testing.T) {
 
 func TestStoreRolesSitesAndLastAdmin(t *testing.T) {
 	s := NewStore(t.TempDir())
-	if u, created, err := s.Seen("sub-n", "N@example.com", "Neptune", RoleAdmin, "control_groups"); err != nil || !created || u.Role != RoleAdmin {
+	// the identity provider verified both addresses: the tests below find the users by them
+	if u, created, err := s.SeenIdentity(Identity{Sub: "sub-n", Email: "N@example.com", EmailVerified: true, Name: "Neptune"}, RoleAdmin, "control_groups"); err != nil || !created || u.Role != RoleAdmin {
 		t.Fatal(u, err)
 	}
 	if u, created, _ := s.Seen("sub-n", "", "Neptune 2", RolePending, "first sign-in"); created || u.Role != RoleAdmin || u.Email != "N@example.com" || u.Name != "Neptune 2" {
 		t.Fatal("an existing user keeps their role", u)
 	}
-	_, _, _ = s.Seen("sub-s", "straw@example.com", "Straw", RolePending, "first sign-in")
+	_, _, _ = s.SeenIdentity(Identity{Sub: "sub-s", Email: "straw@example.com", EmailVerified: true, Name: "Straw"}, RolePending, "first sign-in")
 	if _, _, err := s.SetRole("n@example.com", RoleViewer, nil, "test", false); status(err) != 409 {
 		t.Fatal("last admin demoted", err)
 	}

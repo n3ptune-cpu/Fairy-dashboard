@@ -18,14 +18,22 @@ func validSite(s string) bool { return config.ValidSite(s) }
 
 // User is one person who has signed in (keyed by their stable OIDC subject). Email and name are kept for
 // display and for finding the user from the CLI; they are refreshed at every sign-in.
+//
+// The subject is the only thing the identity provider guarantees. Name and email are what the account claims,
+// and a user may be able to edit them at the provider; EmailVerified says whether the provider vouched for the
+// address. An address that is not verified is shown, marked as such, but never selects an account (Find).
 type User struct {
-	Sub       string     `json:"sub"`
-	Email     string     `json:"email"`
-	Name      string     `json:"name"`
-	Role      string     `json:"role"`
-	Sites     []string   `json:"sites"` // viewers only
-	CreatedAt time.Time  `json:"created_at"`
-	LastSeen  *time.Time `json:"last_seen"`
+	Sub   string `json:"sub"`
+	Email string `json:"email"`
+	// EmailVerified is the provider's email_verified claim at the last sign-in. nil = not known: the entry was
+	// written by a version without this field (or without a provider) and counts as not verified until the
+	// user's next sign-in or request.
+	EmailVerified *bool      `json:"email_verified"`
+	Name          string     `json:"name"`
+	Role          string     `json:"role"`
+	Sites         []string   `json:"sites"` // viewers only
+	CreatedAt     time.Time  `json:"created_at"`
+	LastSeen      *time.Time `json:"last_seen"`
 	// Via says how the user got their current role: "first sign-in", "control_groups", "bootstrap_admins",
 	// "panel by <admin>", "cli by <os user>".
 	Via string `json:"via"`
@@ -40,6 +48,26 @@ func (u User) Grant() Grant {
 		return Grant{Role: RoleViewer, Sites: normSites(u.Sites)}
 	}
 	return Grant{Role: RolePending}
+}
+
+// Verified reports whether the user has an email address the identity provider vouched for.
+func (u User) Verified() bool {
+	return u.Email != "" && u.EmailVerified != nil && *u.EmailVerified
+}
+
+// Account says exactly which account this is, for confirmations and command output: the label, a note when
+// the email is only claimed, and the subject: "n@example.com (subject 4f2c)" or
+// "n@example.com (e-mail not verified, subject 9a1b)". Two accounts can show the same name and address; the
+// subject tells them apart.
+func (u User) Account() string {
+	l := u.Label()
+	switch {
+	case l == u.Sub:
+		return "subject " + u.Sub
+	case u.Email != "" && !u.Verified():
+		return l + " (e-mail not verified, subject " + u.Sub + ")"
+	}
+	return l + " (subject " + u.Sub + ")"
 }
 
 // Label is the user's email, name or subject (for messages).
@@ -138,24 +166,53 @@ func (d Data) SortedUsers() []User {
 // HasSite reports whether the site exists.
 func (d Data) HasSite(name string) bool { return slices.Contains(d.Sites, name) }
 
-// Find returns the user with this subject, or the one user with this email (case-insensitive).
+// ByEmail returns the users whose email is this address (case-insensitive): those for whom the identity
+// provider verified it, and those who only claim it. Both lists are sorted by subject.
+func (d Data) ByEmail(email string) (verified, claimed []User) {
+	if email == "" {
+		return nil, nil
+	}
+	for _, u := range d.Users {
+		switch {
+		case !strings.EqualFold(u.Email, email):
+		case u.Verified():
+			verified = append(verified, u)
+		default:
+			claimed = append(claimed, u)
+		}
+	}
+	bySub := func(l []User) { sort.Slice(l, func(i, j int) bool { return l[i].Sub < l[j].Sub }) }
+	bySub(verified)
+	bySub(claimed)
+	return verified, claimed
+}
+
+// errEmailNotVerified is Find's answer for an address that accounts only claim.
+var errEmailNotVerified = apierr.New(409, "no user has that email verified by the identity provider "+
+	"(an account only claims it): use the subject id instead")
+
+// IsEmailNotVerified reports whether err is Find's refusal to select an account by an email address that no
+// account has verified.
+func IsEmailNotVerified(err error) bool { return err == errEmailNotVerified }
+
+// Find returns the user with this subject, or the one user whose verified email is this address
+// (case-insensitive). An address the identity provider did not verify never selects an account: a user who
+// can edit their own profile at the provider could otherwise put someone else's address on their account and
+// be given that person's role. Such accounts are reached by their subject (ByEmail lists them).
 func (d Data) Find(ident string) (User, error) {
 	if u, ok := d.Users[ident]; ok {
 		return u, nil
 	}
-	var hits []User
-	for _, u := range d.Users {
-		if u.Email != "" && strings.EqualFold(u.Email, ident) {
-			hits = append(hits, u)
-		}
+	verified, claimed := d.ByEmail(ident)
+	switch {
+	case len(verified) == 1:
+		return verified[0], nil
+	case len(verified) > 1:
+		return User{}, apierr.New(409, "several users have that email: use their subject id instead")
+	case len(claimed) > 0:
+		return User{}, errEmailNotVerified
 	}
-	switch len(hits) {
-	case 1:
-		return hits[0], nil
-	case 0:
-		return User{}, apierr.New(404, "no such user (they must sign in once before they can be given a role)")
-	}
-	return User{}, apierr.New(409, "several users have that email: use their subject id instead")
+	return User{}, apierr.New(404, "no such user (they must sign in once before they can be given a role)")
 }
 
 // Store is users.json in the data directory.
@@ -203,7 +260,28 @@ func (s *Store) update(fn func(*Data) error) (Data, error) {
 // an existing user keeps their role and only has email, name and last-seen refreshed. created reports a new
 // user. newRole admin is only applied while users.json has no admin (bootstrap of a fresh install or an
 // upgrade), and never to a subject an admin removed: otherwise they start as pending.
+//
+// Seen does not know whether the email is verified: a new or changed address is stored as "not known" (which
+// counts as not verified), an unchanged one keeps what is stored. Sign-ins use SeenIdentity.
 func (s *Store) Seen(sub, email, name, newRole, via string) (u User, created bool, err error) {
+	return s.seen(sub, email, nil, name, newRole, via)
+}
+
+// Identity is what the identity provider said about a user at a sign-in.
+type Identity struct {
+	Sub           string
+	Email         string
+	EmailVerified bool // the email_verified claim was true
+	Name          string
+}
+
+// SeenIdentity is Seen for a sign-in at the identity provider: it also records whether the provider verified
+// the email address. A sign-in without an address keeps the stored one, as not verified.
+func (s *Store) SeenIdentity(id Identity, newRole, via string) (u User, created bool, err error) {
+	return s.seen(id.Sub, id.Email, &id.EmailVerified, id.Name, newRole, via)
+}
+
+func (s *Store) seen(sub, email string, verified *bool, name, newRole, via string) (u User, created bool, err error) {
 	if sub == "" {
 		return User{}, false, apierr.New(400, "missing subject")
 	}
@@ -220,7 +298,18 @@ func (s *Store) Seen(sub, email, name, newRole, via string) (u User, created boo
 			cur = User{Sub: sub, Role: newRole, Sites: []string{}, CreatedAt: now, Via: via}
 			created = true
 		}
-		if email != "" {
+		switch {
+		case verified != nil && email != "":
+			v := *verified
+			cur.Email, cur.EmailVerified = email, &v
+		case verified != nil: // the provider sent no address: the stored one is no longer vouched for
+			if cur.Email != "" {
+				cur.EmailVerified = new(bool)
+			}
+		case email != "":
+			if cur.Email != email {
+				cur.EmailVerified = nil
+			}
 			cur.Email = email
 		}
 		if name != "" {

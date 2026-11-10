@@ -163,7 +163,7 @@ func TestEveryPrintedFieldStaysOnItsLine(t *testing.T) {
 	if code != 0 {
 		t.Fatal(code, out)
 	}
-	oneLinePerRow(t, "users list", out, 2+2)
+	oneLinePerRow(t, "users list", out, 2+2+3) // table, an empty line, two lines about "(unverified)"
 	code, out = run("sites", "list")
 	if code != 0 {
 		t.Fatal(code, out)
@@ -189,15 +189,36 @@ func TestEveryPrintedFieldStaysOnItsLine(t *testing.T) {
 	}
 	oneLinePerRow(t, "sessions list", out, 2+1)
 
-	// sentences about one user: a role change and a removal name the account.
+	// sentences about one user: a role change and a removal print the account found, then what was done. An
+	// address that accounts only claim lists them instead.
+	if _, _, err := st.Seen("sub-h2", "x"+hostile, hostile, access.RolePending, hostile); err != nil {
+		t.Fatal(err)
+	}
+	code, out = run("users", "set-role", "x"+hostile, "viewer")
+	if code != 1 {
+		t.Fatal(code, out)
+	}
+	oneLinePerRow(t, "users set-role by a claimed address", out, 1+1+3+1) // count, the account, three lines of advice, the error
 	code, out = run("users", "set-role", hostile, "pending")
 	if code != 0 {
 		t.Fatal(code, out)
 	}
-	oneLinePerRow(t, "users set-role", out, 1)
+	oneLinePerRow(t, "users set-role", out, 2)
+	code, out = run("users", "set-role", hostile, "admin", "--yes")
+	if code != 0 {
+		t.Fatal(code, out)
+	}
+	oneLinePerRow(t, "users set-role admin", out, 2)
+	stdin = strings.NewReader("no\n")
+	t.Cleanup(func() { stdin = os.Stdin })
+	code, out = run("users", "set-role", "sub-h2", "admin")
+	if code != 1 {
+		t.Fatal(code, out)
+	}
+	oneLinePerRow(t, "users set-role admin, asked", out, 2) // the account; the question, whose line the typed answer ends
 	code, out = run("users", "remove", hostile)
 	if code != 0 {
 		t.Fatal(code, out)
 	}
-	oneLinePerRow(t, "users remove", out, 2)
+	oneLinePerRow(t, "users remove", out, 3)
 }

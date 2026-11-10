@@ -24,9 +24,12 @@ const usage = `fairy admin: break-glass administration (no web login needed)
 usage: fairy admin [--config FILE] [--env-file FILE] <command> ...
 
   users list
-  users set-role <email|subject> admin|viewer|pending [--sites A,B] [--force]
+  users set-role <email|subject> admin|viewer|pending [--sites A,B] [--force] [--yes]
   users sites <email|subject> <site,site,...|->     make them a viewer of these sites
   users remove <email|subject> [--force]            (--force: even the last admin)
+      An e-mail finds an account only when the identity provider verified it (see users list);
+      otherwise use the subject. The account found is always printed; making an admin asks first
+      (--yes: do not ask).
   sites list
   sites assign <system-id|power:ID|ups:ID> <site|->  (- = back to the default; creates the site)
   sites create <name> | sites rename <old> <new> | sites delete <name>

@@ -1,8 +1,11 @@
 package admin
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"slices"
 	"strings"
 
@@ -55,6 +58,79 @@ func friendly(err error) error {
 	return err
 }
 
+// stdin is where the CLI reads the answer to a question from (a variable so the tests can answer).
+var stdin io.Reader = os.Stdin
+
+// confirm asks a yes/no question on the terminal. Only "yes" (or "y") is a yes; no answer (no terminal, end of
+// input) is a no.
+func (c *cli) confirm(question string) bool {
+	fmt.Fprintf(c.out, "%s Type yes to continue: ", question)
+	line, _ := bufio.NewReader(stdin).ReadString('\n')
+	if !strings.HasSuffix(line, "\n") {
+		fmt.Fprintln(c.out)
+	}
+	a := strings.ToLower(strings.TrimSpace(line))
+	return a == "yes" || a == "y"
+}
+
+// emailNote is the user's email as the CLI shows it: an address the identity provider did not verify is
+// marked, because the account's owner may have typed it in.
+func emailNote(u access.User) string {
+	switch {
+	case u.Email == "":
+		return "-"
+	case u.Verified():
+		return u.Email
+	}
+	return u.Email + " (unverified)"
+}
+
+// accountLine describes one account completely on one line: the subject is the only part that cannot be
+// claimed, so it is always there.
+func accountLine(u access.User) string {
+	name := u.Name
+	if name == "" {
+		name = "-"
+	}
+	return fmt.Sprintf("subject %s, e-mail %s, name %s, %s (%s), last seen %s", cell(u.Sub), cell(emailNote(u)), cell(name),
+		cell(access.Describe(u)), cell(u.Via), ago(u.LastSeen))
+}
+
+// resolve finds the account an identifier means and prints it, so the operator sees which account the command
+// changes: two accounts can show the same name and address. A subject always selects its account. An e-mail
+// address selects an account only when the identity provider verified it there; for an address that accounts
+// only claim, they are listed with their subjects and nothing is changed.
+func (c *cli) resolve(st *access.Store, ident string) (access.User, error) {
+	if err := st.Err(); err != nil {
+		return access.User{}, err
+	}
+	d := st.Load()
+	u, err := d.Find(ident)
+	verified, claimed := d.ByEmail(ident)
+	if err != nil {
+		if list := append(verified, claimed...); len(list) > 0 {
+			fmt.Fprintf(c.errw, "%d account(s) have the e-mail %s:\n", len(list), cell(ident))
+			for _, x := range list {
+				fmt.Fprintln(c.errw, "  "+accountLine(x))
+			}
+			if access.IsEmailNotVerified(err) {
+				fmt.Fprintln(c.errw, "The identity provider has not verified this address for any of them (or they last signed in before")
+				fmt.Fprintln(c.errw, "the panel recorded that), and an unverified address can be typed in by the account's owner.")
+			}
+			fmt.Fprintln(c.errw, "Name the account by its subject instead, e.g.: fairy admin users set-role <subject> admin")
+		}
+		return access.User{}, friendly(err)
+	}
+	fmt.Fprintln(c.out, "Account: "+accountLine(u))
+	if _, bySubject := d.Users[ident]; !bySubject && len(claimed) > 0 {
+		fmt.Fprintf(c.out, "Note: %d other account(s) claim this e-mail without verification and are not changed:\n", len(claimed))
+		for _, x := range claimed {
+			fmt.Fprintln(c.out, "  "+accountLine(x))
+		}
+	}
+	return u, nil
+}
+
 func dash(list []string) string {
 	if len(list) == 0 {
 		return "-"
@@ -75,6 +151,10 @@ func (c *cli) users(args []string) (int, error) {
 		return 1, err
 	}
 	args, force := takeFlag(args, "force")
+	args, yes := takeFlag(args, "yes")
+	if len(args) == 0 {
+		return 2, errUsage
+	}
 	switch args[0] {
 	case "list":
 		return c.usersList(st)
@@ -90,7 +170,7 @@ func (c *cli) users(args []string) (int, error) {
 				return 2, err
 			}
 		}
-		return c.usersSetRole(st, args[1], args[2], sites, force)
+		return c.usersSetRole(st, args[1], args[2], sites, force, yes)
 	case "sites":
 		if len(args) != 3 {
 			return 2, errUsage
@@ -102,12 +182,16 @@ func (c *cli) users(args []string) (int, error) {
 				return 2, err
 			}
 		}
-		return c.usersSetRole(st, args[1], access.RoleViewer, sites, force)
+		return c.usersSetRole(st, args[1], access.RoleViewer, sites, force, yes)
 	case "remove":
 		if len(args) != 2 {
 			return 2, errUsage
 		}
-		u, err := st.Remove(args[1], force, "cli by "+osUser())
+		u, err := c.resolve(st, args[1])
+		if err != nil {
+			return 1, err
+		}
+		u, err = st.Remove(u.Sub, force, "cli by "+osUser()) // by subject: the account that was shown
 		if err != nil {
 			if err = friendly(err); strings.Contains(err.Error(), "last admin") {
 				err = fmt.Errorf("%w, or add --force", err)
@@ -133,31 +217,46 @@ func (c *cli) usersList(st *access.Store) (int, error) {
 	d := st.Load()
 	var rows [][]string
 	for _, u := range d.SortedUsers() {
-		rows = append(rows, []string{u.Sub, u.Name, u.Email, u.Role, dash(u.Sites), ago(u.LastSeen), u.Via})
+		rows = append(rows, []string{u.Sub, u.Name, emailNote(u), u.Role, dash(u.Sites), ago(u.LastSeen), u.Via})
 	}
 	if len(rows) == 0 {
 		fmt.Fprintln(c.out, "No users yet: users appear here after their first sign-in.")
 		if len(c.cfg.OIDC.ControlGroups)+len(c.cfg.OIDC.BootstrapAdmins) == 0 {
 			fmt.Fprintln(c.out, "warning: oidc.control_groups and oidc.bootstrap_admins are empty, so nobody becomes admin by")
-			fmt.Fprintln(c.out, "signing in. After your first sign-in run: fairy admin users set-role <your email> admin")
+			fmt.Fprintln(c.out, "signing in. After your first sign-in run: fairy admin users set-role <your email or subject> admin")
 		}
 		return 0, nil
 	}
 	fmt.Fprintln(c.out, table(rows, []string{"SUBJECT", "NAME", "EMAIL", "ROLE", "SITES", "LAST SEEN", "HOW"}))
 	if d.Admins() == 0 {
-		fmt.Fprintln(c.out, "\nwarning: there is no admin. Make one with: fairy admin users set-role <email> admin")
+		fmt.Fprintln(c.out, "\nwarning: there is no admin. Make one with: fairy admin users set-role <email or subject> admin")
+	}
+	if slices.ContainsFunc(d.SortedUsers(), func(u access.User) bool { return u.Email != "" && !u.Verified() }) {
+		fmt.Fprintln(c.out, "\n(unverified): the identity provider did not verify that address (or the user last signed in before the")
+		fmt.Fprintln(c.out, "panel recorded it). The account's owner may have typed it in: name such an account by its SUBJECT.")
 	}
 	return 0, nil
 }
 
-func (c *cli) usersSetRole(st *access.Store, ident, role string, sites []string, force bool) (int, error) {
+// usersSetRole changes one account's role. It prints the account it found first, and asks before making it an
+// admin (--yes skips the question): the address typed may belong to another account than the operator thinks.
+func (c *cli) usersSetRole(st *access.Store, ident, role string, sites []string, force, yes bool) (int, error) {
 	if !access.ValidRole(role) {
 		return 2, errors.New("role must be admin, viewer or pending")
 	}
 	if role != access.RoleViewer && len(sites) > 0 {
 		return 2, errors.New("only viewers have sites (admins see everything)")
 	}
-	before, after, err := st.SetRole(ident, role, sites, "cli by "+osUser(), force)
+	found, err := c.resolve(st, ident)
+	if err != nil {
+		return 1, err
+	}
+	if role == access.RoleAdmin && found.Role != access.RoleAdmin && !yes &&
+		!c.confirm("Make this account an admin? An admin controls every host and manages the users.") {
+		fmt.Fprintln(c.errw, "Nothing changed (answer yes, or add --yes to skip the question).")
+		return 1, nil
+	}
+	before, after, err := st.SetRole(found.Sub, role, sites, "cli by "+osUser(), force) // by subject: the account that was shown
 	if err != nil {
 		err = friendly(err)
 		if strings.Contains(err.Error(), "unknown site") {

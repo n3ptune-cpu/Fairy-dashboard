@@ -26,9 +26,12 @@ func TestUsersAndSitesCLI(t *testing.T) {
 		t.Fatal(code, out)
 	}
 	st := access.NewStore(dir + "/data")
-	_, _, _ = st.Seen("sub-n", "neptune@example.com", "Neptune", access.RolePending, "first sign-in") // locked out
-	_, _, _ = st.Seen("sub-s", "straw@example.com", "Straw", access.RolePending, "first sign-in")
-	if code, out := run("users", "set-role", "Neptune@Example.com", "admin"); code != 0 || !strings.Contains(out, "pending -> admin") {
+	// both addresses are verified by the identity provider, so they find their accounts (identity_test.go has the rest)
+	_, _, _ = st.SeenIdentity(access.Identity{Sub: "sub-n", Email: "neptune@example.com", EmailVerified: true, Name: "Neptune"},
+		access.RolePending, "first sign-in") // locked out
+	_, _, _ = st.SeenIdentity(access.Identity{Sub: "sub-s", Email: "straw@example.com", EmailVerified: true, Name: "Straw"},
+		access.RolePending, "first sign-in")
+	if code, out := run("users", "set-role", "Neptune@Example.com", "admin", "--yes"); code != 0 || !strings.Contains(out, "pending -> admin") {
 		t.Fatal("recovery: make yourself admin", code, out)
 	}
 	if code, out := run("users", "sites", "straw@example.com", "Straw"); code != 0 || !strings.Contains(out, "viewer of Straw") {

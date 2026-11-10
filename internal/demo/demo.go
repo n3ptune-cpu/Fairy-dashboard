@@ -19,7 +19,7 @@ import (
 // User is the fake signed-in user of demo mode (in the control group, so admin; `--demo-as` or the switcher in
 // the sidebar previews the panel as a viewer or a pending user instead).
 var User = model.User{Sub: "demo-neptune", Name: model.P("Neptune"), PreferredUsername: model.P("neptune"),
-	Email: model.P("neptune@example.invalid"), Groups: []string{"viewers", "controllers"}, Auth: "demo"}
+	Email: model.P("neptune@example.invalid"), EmailVerified: true, Groups: []string{"viewers", "controllers"}, Auth: "demo"}
 
 // Build returns the demo config, secrets and a poller wired to the simulator.
 func Build(dir, publicURL string) (*config.Panel, config.Secrets, *poller.Poller, error) {
@@ -69,7 +69,8 @@ func SeedUsers(cfg *config.Panel) error {
 		{"demo-straw", "straw@example.invalid", "Straw", access.RoleViewer, []string{"Straw"}},
 		{"demo-kaveh", "kaveh@example.invalid", "Kaveh", access.RolePending, nil},
 	} {
-		if _, _, err := st.Seen(u.sub, u.email, u.name, u.role, "demo"); err != nil {
+		id := access.Identity{Sub: u.sub, Email: u.email, EmailVerified: u.sub != "demo-kaveh", Name: u.name}
+		if _, _, err := st.SeenIdentity(id, u.role, "demo"); err != nil { // Kaveh's address is only claimed: shown as unverified
 			return err
 		}
 		if _, _, err := st.SetRole(u.sub, u.role, u.sites, "demo", true); err != nil {

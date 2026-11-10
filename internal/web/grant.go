@@ -34,6 +34,13 @@ func (s *Server) bootstrapRole(u *model.User) (role, via string) {
 	return access.RolePending, "first sign-in"
 }
 
+// identityOf is what the identity provider said about u, for users.json: the subject, the name, and the email
+// address with whether the provider verified it (the Users page and the admin CLI mark an address that is only
+// claimed, and never find an account by it).
+func identityOf(u *model.User) access.Identity {
+	return access.Identity{Sub: u.Sub, Email: model.Deref(u.Email), EmailVerified: u.EmailVerified, Name: model.Deref(u.Name)}
+}
+
 // recordUser adds a user to users.json the first time they are seen and refreshes email, name and last seen.
 // signIn is true only for a fresh Pocket ID login (the OIDC callback): only then may control_groups /
 // bootstrap_admins make a new user admin. A user first seen through an existing session cookie (whose groups
@@ -43,7 +50,7 @@ func (s *Server) recordUser(c *reqCtx, u *model.User, signIn bool) (access.User,
 	if signIn {
 		role, via = s.bootstrapRole(u)
 	}
-	rec, created, err := s.Access.Seen(u.Sub, model.Deref(u.Email), model.Deref(u.Name), role, via)
+	rec, created, err := s.Access.SeenIdentity(identityOf(u), role, via)
 	if err != nil { // fail closed: a role that could not be recorded is not granted
 		slog.Error("users.json write failed: the user gets no access until it is fixed", "sub", u.Sub, "error", err)
 		return access.User{Sub: u.Sub, Role: access.RolePending}, err
@@ -77,7 +84,7 @@ func (s *Server) userGrant(c *reqCtx, u *model.User) access.Grant {
 	}
 	s.seenMu.Unlock()
 	if stale {
-		_, _, _ = s.Access.Seen(u.Sub, model.Deref(u.Email), model.Deref(u.Name), access.RolePending, "")
+		_, _, _ = s.Access.SeenIdentity(identityOf(u), access.RolePending, "")
 	}
 	return rec.Grant()
 }
