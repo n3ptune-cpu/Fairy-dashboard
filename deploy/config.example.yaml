@@ -53,18 +53,18 @@ oidc:
   # everyone else waits for access and the Users page decides (leaving the group changes nothing). Someone an
   # admin removed is never bootstrapped again. After your first sign-in you can empty both lists.
   control_groups: [homelab-admins]
-  bootstrap_admins: []                    # e.g. [neptune@example.com]; recommended: [] once you are admin
+  bootstrap_admins: []                    # e.g. [admin@example.com]; recommended: [] once you are admin
 
 proxmox:
-  - id: teyvat
+  - id: main
     id_prefix: ""                         # keep ids unprefixed for the main cluster
-    cluster_name: NSX-TEYVAT
-    site: Neptune                         # optional default site of its nodes and guests (Users page overrides)
+    cluster_name: MAIN
+    site: Home                            # optional default site of its nodes and guests (Users page overrides)
     urls: [https://pve1.lan:8006, https://pve2.lan:8006]   # tried in order (failover)
     token_id: fairy@pve!panel             # read-only token; secret: FAIRY_PROXMOX_TOKEN_SECRET (or token_secret_env)
     verify_tls: true
     ca_file: /etc/fairy/pve-root-ca.pem
-    # tls_server_name: NSX-KACHINA        # the name the certificate is issued for, when not the URL's host (Proxmox's own
+    # tls_server_name: PVE-NODE-1         # the name the certificate is issued for, when not the URL's host (Proxmox's own
     #                                     # certificate lists the node's name, not its Tailscale name)
     # Optional separate token with only VM.PowerMgmt (role "FairyPower") -> guest start/shutdown/reboot/stop
     # power_token_id: fairy@pve!power
@@ -72,24 +72,24 @@ proxmox:
     # node_power: false                   # nodes via Sys.PowerMgmt when no agent with power control runs on them
 
 agents:
-  - id: nsx-cyrene
-    name: NSX-CYRENE
-    url: http://100.64.0.10:9101
-    token_env: AGENT_TOKEN_NSX_CYRENE     # one token per machine (>= 24 chars)
-    group: Neptune
-    owner: neptune
-    site: Neptune                         # optional default site: viewers of "Neptune" see this host
+  - id: agent-1
+    name: AGENT-1
+    url: http://100.64.0.21:9101
+    token_env: AGENT_TOKEN_AGENT_1        # one token per machine (>= 24 chars)
+    group: Home
+    owner: alice
+    site: Home                            # optional default site: viewers of "Home" see this host
     tags: [server]
-    # fan_control: {vendor: supermicro, control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE}
+    # fan_control: {vendor: supermicro, control_token_env: AGENT_CONTROL_TOKEN_AGENT_1}
     # power_control: true                 # also needs power_control.enabled in the agent's config.yaml
-    # control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE   # for power_control / wol_relay / self_update without fan_control
+    # control_token_env: AGENT_CONTROL_TOKEN_AGENT_1     # for power_control / wol_relay / self_update without fan_control
     # self_update: true                   # Update button on the Updates page; also needs self_update.enabled in the agent's config.yaml
-  # - {id: kachina-agent, url: "http://100.64.0.5:9101", token_env: AGENT_TOKEN_KACHINA, node: NSX-KACHINA}
+  # - {id: pve1-agent, url: "http://100.64.0.5:9101", token_env: AGENT_TOKEN_PVE1, node: PVE-NODE-1}
 # Hosts added with "Add host" in the panel are NOT written here: they live in <data_dir>/managed-hosts.yaml
 # (+ <data_dir>/secrets/agent-<id>.json, 0600) and are merged with this file at start; an id written here wins.
 
 # enroll:                                 # Add host
-#   panel_address: 100.88.109.47          # optional: the panel's Tailscale IPv4 as the agents see it (default: found
+#   panel_address: 100.64.0.10            # optional: the panel's Tailscale IPv4 as the agents see it (default: found
 #                                         # at start on the tailscale* interface, else from tailscaled's LocalAPI)
 #   agent_release: build-13               # optional: the Fairy-agent release whose install script the command
 #                                         # runs (default: the one this panel was built with); always checked
@@ -99,18 +99,18 @@ agents:
 #                                         # can listen in or answer in its place. true = also over other networks
 
 systems: []
-  # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming], site: Straw}
-  # - {id: nsx-cyrene, wol: {mac: "3c:ec:ef:00:11:22", relay: kachina-agent, broadcast: 192.168.10.255}}
+  # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming], site: Office}
+  # - {id: agent-1, wol: {mac: "00:00:5e:00:53:01", relay: pve1-agent, broadcast: 192.168.10.255}}
   # powered on through its BMC by an agent that can reach the BMC (Fairy-agent v0.4.2 bmc_relay target; the
   # relay agent needs control_token_env): "Power on (via BMC, through <relay>)" while the machine is off
-  # - {id: nsx-cyrene, bmc_power: {relay: nsx-furina-agent, target: cyrene-bmc}}
+  # - {id: agent-1, bmc_power: {relay: agent-2, target: server-bmc}}
   # a machine with two network cards (Wake sends a packet to each):
-  # - {id: straw-msi-5600x, wol: {macs: ["d4:0d:ab:14:16:36", "04:7c:16:aa:bb:cc"], relay: straw-asus-i7-agent}}
+  # - {id: agent-3, wol: {macs: ["00:00:5e:00:53:02", "00:00:5e:00:53:03"], relay: pve1-agent}}
 
 # Power sources and UPSes follow the hosts they are attached to (system: / powers:); one without a host gets
 # its site on the Users page. Anything without a site is visible to admins only.
 power_sources: []
-  # - {id: plug-cyrene, type: tuya, device_id: bf0123456789abcdef, ip: 192.168.1.60, local_key_env: TUYA_KEY_PLUG, version: "3.4", system: nsx-cyrene}
+  # - {id: plug-agent-1, type: tuya, device_id: bf0123456789abcdef, ip: 192.168.1.60, local_key_env: TUYA_KEY_PLUG, version: "3.4", system: agent-1}
   # - {id: plug-desk, type: shelly, url: "http://192.168.1.61", password_env: SHELLY_PW}
   # - {id: tasmota-1, type: tasmota, url: "http://192.168.1.62", password_env: TASMOTA_PW}
   # BMCs: keep verify_tls (the default, true) and give the BMC's certificate or CA in ca_file; use a read-only

@@ -13,7 +13,7 @@ Every person has one of three roles:
 | **Viewer** | Read-only. Only the hosts, VMs/containers, power plugs, UPSes, processes and sensors of the **sites** you tick for them. |
 | **No access** (pending) | Signed in, but sees only a "Waiting for access, ask an admin" page. Everyone new starts here. |
 
-A **site** is a group of hosts, for example "Neptune" (your machines) and "Straw" (Straw's machines). You can
+A **site** is a group of hosts, for example "Alice" (your machines) and "Bob" (Bob's machines). You can
 make as many as you like. Each thing belongs to one site:
 
 * **Hosts** (Proxmox nodes and agent machines): the site you pick on the Users page. If you didn't pick one,
@@ -35,18 +35,18 @@ set that up). Fairy refuses to demote or remove the **last admin**, so you can't
 ## How to set it up
 
 1. **Pocket ID:** keep (or make) a group for everyone who may sign in at all, e.g. `homelab`, and put it in
-   `config.yaml` under `oidc: allowed_groups: [homelab]`. Add Straw (and anyone else) to that group.
+   `config.yaml` under `oidc: allowed_groups: [homelab]`. Add Bob (and anyone else) to that group.
 2. **Make sure you become admin.** Either keep your admin group in `oidc: control_groups: [homelab-admins]`
    (while there is no admin yet, the first person in it to sign in becomes **admin**), or list your email
    (it must be verified in Pocket ID):
    `oidc: bootstrap_admins: [you@example.com]`. If you already used `control_groups` before this update, you
    don't have to change anything: sign in again (an old session is asked to) and you'll be admin.
-3. Optional: write default sites into `config.yaml`, e.g. `site: Neptune` on your Proxmox cluster and agents,
-   `site: Straw` on Straw's. Those sites appear on the Users page automatically. (Sites from `config.yaml` can
+3. Optional: write default sites into `config.yaml`, e.g. `site: Alice` on your Proxmox cluster and agents,
+   `site: Bob` on Bob's. Those sites appear on the Users page automatically. (Sites from `config.yaml` can
    only be renamed or removed in `config.yaml`.)
 4. Restart Fairy, sign in, open **Users**.
-5. Straw signs in once. He shows up under People with **No access (waiting)**. Set him to **Viewer** and tick
-   **Straw**. He now sees only his own machines, read-only.
+5. Bob signs in once. He shows up under People with **No access (waiting)**. Set him to **Viewer** and tick
+   **Bob**. He now sees only his own machines, read-only.
 6. Check the **Sites** part of the page: every host, VM, plug and UPS shows which site it is in and who can see
    it. Pick a site for anything that says "admins only" and should be shared.
 
@@ -63,10 +63,10 @@ Good to know:
 
 * Tokens made before this update keep working exactly as before: a **read** token sees every site, a
   **control** token can do what an admin can.
-* New: `fairy admin tokens create --name ha --owner system --scope read --sites Straw` makes a read token that
-  only sees the Straw site. Control tokens cannot be limited (they act as an admin).
+* New: `fairy admin tokens create --name ha --owner system --scope read --sites Bob` makes a read token that
+  only sees the Bob site. Control tokens cannot be limited (they act as an admin).
 * A token whose `--owner` is a person who has signed in (their subject id from `fairy admin users list`) is
-  never allowed more than that person: if you make them a viewer of Straw, their tokens see only Straw; if you
+  never allowed more than that person: if you make them a viewer of Bob, their tokens see only Bob; if you
   set them to No access or remove them, their tokens stop working. A token whose owner is not on the Users list
   works for nothing (the CLI refuses to create one). Tokens owned by `system` keep their own scope.
 * Why "read without sites = every site": only someone with a shell on the panel's server can create tokens, and
@@ -81,13 +81,13 @@ fairy admin users list                                  # who is there, with whi
 fairy admin users set-role you@example.com admin        # make yourself admin again: shows the account and asks
 fairy admin users set-role you@example.com admin --yes  # ...without the question (no terminal: script, cron)
 fairy admin users set-role <subject> admin --yes        # ...for an address the list marks "(unverified)"
-fairy admin users sites straw@example.com Straw         # make Straw a viewer of the Straw site
-fairy admin users set-role straw@example.com pending    # take Straw's access away
+fairy admin users sites bob@example.com Bob         # make Bob a viewer of the Bob site
+fairy admin users set-role bob@example.com pending    # take Bob's access away
 fairy admin users remove someone@example.com            # forget someone (--force even for the last admin)
 fairy admin sites list                                  # sites, who sees them, what is assigned
-fairy admin sites assign straw-pc Straw                 # put a host in a site (creates the site if needed)
-fairy admin sites assign power:desk-plug Straw          # a power plug (power:<id>) or UPS (ups:<id>)
-fairy admin sites assign straw-pc -                     # back to its default site
+fairy admin sites assign bob-pc Bob                 # put a host in a site (creates the site if needed)
+fairy admin sites assign power:desk-plug Bob          # a power plug (power:<id>) or UPS (ups:<id>)
+fairy admin sites assign bob-pc -                     # back to its default site
 ```
 
 Since the fix for an unverified e-mail address (L4): `set-role`, `sites` and `remove` print the account they found
@@ -105,8 +105,8 @@ empty: the panel refuses to start (or gives nobody access) until it is fixed.
 ## Trying it in the demo
 
 ```sh
-fairy serve --demo                          # as admin; Users page shows sites Neptune and Straw
-fairy serve --demo --demo-as viewer:Straw   # exactly what a Straw-only viewer sees
+fairy serve --demo                          # as admin; Users page shows sites Alice and Bob
+fairy serve --demo --demo-as viewer:Bob   # exactly what a Bob-only viewer sees
 ```
 
 The demo menu also has a **Preview as** switcher (Admin, Viewer of each site, Waiting for access). The demo

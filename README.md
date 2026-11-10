@@ -53,7 +53,7 @@ fairy serve [--config /etc/fairy/config.yaml] [--env-file /etc/fairy/fairy.env] 
                               # listen: --listen, else $FAIRY_LISTEN, else `listen:` in config.yaml, else
                               # 127.0.0.1:8080. The env file is read first, so FAIRY_* settings in it count.
 fairy serve --demo            # simulated data, NO login, refuses anything but 127.0.0.1 / ::1 (port 8090)
-fairy serve --demo --demo-as viewer:Straw   # ...as a viewer of the Straw site sees it (or: pending, admin);
+fairy serve --demo --demo-as viewer:Bob   # ...as a viewer of the Bob site sees it (or: pending, admin);
                               # the demo menu (top right) has a "Preview as" switcher too
 fairy admin help              # break-glass CLI: users and sites, tokens, sessions, control kill switch, host
                               # power flags, polling, audit tail, config check, health (all audited as "cli")
@@ -106,11 +106,11 @@ shows why; older agents show "needs v0.4.2". Proxmox nodes are not offered Sleep
 "Wake on Magic Packet".
 
 **Power on via BMC** (Fairy-agent v0.4.2 `bmc_relay`): for a machine Wake-on-LAN cannot wake (e.g. its BMC
-shares the LAN port), `systems: [{id: nsx-cyrene, bmc_power: {relay: nsx-furina-agent, target: cyrene-bmc}}]`
+shares the LAN port), `systems: [{id: srv-tower, bmc_power: {relay: srv-winpc-agent, target: tower-bmc}}]`
 (or "Or powered on via BMC by" in Add host) names an always-on agent that can reach the BMC and its
 `bmc_relay` target (see AGENT.md for the agent side: `fairy-agent bmc-relay add`, `fairy-agent secret set`). The
 relay agent's entry needs `control_token_env`. While the machine is offline and the relay is online and reports
-the target, the host page and Power menu offer "Power on (via BMC, through NSX-FURINA)", with typed name,
+the target, the host page and Power menu offer "Power on (via BMC, through SRV-WINPC)", with typed name,
 step-up sign-in and audit like the other power actions; if the relay cannot reach the BMC (laptop not cabled)
 the error says so. Radeon cards on Windows whose agent reads AMD's ADL (v0.4.2) show their temperature and
 watts "via AMD".
@@ -207,8 +207,8 @@ at that address is not added, and the audit log says so: `host.pair unverified`)
 exchange learns the tokens. Hosts paired this way show "Pairing: verified" on their page; hosts added by an
 older panel show "not verified" until they are re-paired. The join code proves that the answer comes from a
 machine the command was run on; which machine that is, the panel cannot know. The dialog and the audit entry
-therefore show what the machine calls itself next to the address you typed ("it calls itself NSX-FURINA, at
-nsx-furina"): look at it when you add a host.
+therefore show what the machine calls itself next to the address you typed ("it calls itself SRV-WINPC, at
+srv-winpc"): look at it when you add a host.
 
 There is no fallback to the old exchange, in which the panel sent the same proof every time and the agent
 answered with its tokens in clear:
