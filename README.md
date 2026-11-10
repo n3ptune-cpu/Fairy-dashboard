@@ -329,8 +329,14 @@ refused in the dialog, and a name is checked every time the panel connects to it
 (the local network, a stale record), no connection is opened and the dialog says where the name leads. Over
 Tailscale the path is encrypted and addresses are authenticated, so nobody outside the machine can listen to
 the pairing or answer in its place. `enroll: {allow_non_tailscale: true}` in config.yaml switches the check
-off for machines that are only reachable over another network (default: `false`). The check covers pairing;
-after it the panel polls the host at the same name, with its tokens, like every agent in config.yaml.
+off for machines that are only reachable over another network (default: `false`).
+
+The check covers pairing and nothing after it. Once a host is paired, the panel polls it at the same name
+with its tokens, like every agent in config.yaml, and those requests are not checked against the Tailscale
+ranges: they are plain HTTP to wherever the name leads at that moment, the read token goes with every poll
+and the control token with every action, and an answer is not signed. This is the same as for every agent in
+config.yaml and it has not changed in this release. Keep the names of your hosts on the tailnet (MagicDNS
+names or 100.x addresses); a name that a local DNS server can answer is only as safe as that network.
 
 The two refusals that are on by default, and how each is changed:
 
