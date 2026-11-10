@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -233,6 +234,88 @@ func TestSwaggerHashesMatchTheCDN(t *testing.T) {
 		}
 		if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
 			t.Errorf("%s: no Access-Control-Allow-Origin: the browser could not check the hash", u)
+		}
+	}
+}
+
+// The route list of /docs is written by hand. This keeps it complete: every /api route the server registers is
+// in the list (read from the package's source, where every route is one HandleFunc line), every listed route
+// exists, and the additions of this release are described.
+func TestOpenAPIListsEveryRoute(t *testing.T) {
+	documented := map[string]bool{}
+	for _, d := range apiDoc {
+		if documented[d.method+" "+d.path] {
+			t.Errorf("listed twice: %s %s", d.method, d.path)
+		}
+		documented[d.method+" "+d.path] = true
+	}
+	// not part of the described API: the description itself and the demo preview's switch
+	exempt := map[string]bool{"GET /api/openapi.json": true, "POST /api/demo/view": true}
+	consts := map[string]string{"activePath": activePath}
+	routeRe := regexp.MustCompile(`HandleFunc\("([A-Z]+) ([^"]*)"(?:\s*\+\s*(\w+))?`)
+	files, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered := map[string]bool{}
+	for _, f := range files {
+		if !strings.HasSuffix(f.Name(), ".go") || strings.HasSuffix(f.Name(), "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range routeRe.FindAllStringSubmatch(string(src), -1) {
+			path := m[2]
+			if m[3] != "" {
+				c, ok := consts[m[3]]
+				if !ok {
+					t.Fatalf("%s: route built from %q: add it to consts in this test", f.Name(), m[3])
+				}
+				path += c
+			}
+			if strings.HasPrefix(path, "/api/") {
+				registered[m[1]+" "+path] = true
+			}
+		}
+	}
+	if len(registered) < 40 {
+		t.Fatalf("only %d routes found in the source: the pattern no longer matches", len(registered))
+	}
+	for r := range registered {
+		if !documented[r] && !exempt[r] {
+			t.Errorf("route %s is not in the /docs list (apiDoc)", r)
+		}
+	}
+	for r := range documented {
+		if !registered[r] {
+			t.Errorf("/docs lists %s, which is not a route", r)
+		}
+	}
+
+	doc, err := json.Marshal(openAPI("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Info  struct{ Description string }
+		Paths map[string]map[string]struct{ Summary string }
+	}
+	if err := json.Unmarshal(doc, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := parsed.Paths["/api/me/active"]["post"]; !ok {
+		t.Error("POST /api/me/active is missing")
+	}
+	for _, want := range []string{"step_up_required", "window_s", "auth_age_s", "pending_id", "per_action", "X-Fairy-Active", "X-Fairy-Action", "Retry-After"} {
+		if !strings.Contains(parsed.Info.Description, want) {
+			t.Errorf("the description does not mention %s", want)
+		}
+	}
+	for path, want := range map[string]string{"/api/systems": "error", "/api/admin/users": "email_verified", "/api/notifications": "`count`", "/api/stream": "429"} {
+		if !strings.Contains(parsed.Paths[path]["get"].Summary, want) {
+			t.Errorf("%s: the summary does not mention %s", path, want)
 		}
 	}
 }
