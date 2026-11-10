@@ -138,7 +138,7 @@ func (f *fakeIDP) login(e *env, path, cookie string) (url.Values, string) {
 
 func sessionCookie(e *env, h http.Header) string {
 	for _, c := range h.Values("Set-Cookie") {
-		if strings.HasPrefix(c, cookieName+"=") {
+		if strings.HasPrefix(c, e.s.codec.name()+"=") && !strings.Contains(c, "Max-Age=0") {
 			return strings.Split(c, ";")[0]
 		}
 	}

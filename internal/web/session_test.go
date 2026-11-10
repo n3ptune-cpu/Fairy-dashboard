@@ -358,3 +358,72 @@ func (e *env) holdStream(hdr ...string) (int, http.Header, context.CancelFunc) {
 	go func() { defer r.Body.Close(); _, _ = io.Copy(io.Discard, r.Body) }()
 	return r.StatusCode, r.Header, cancel
 }
+
+// L9: the session cookie is called __Host-fairy_session (Secure, Path=/, no Domain), which a sibling site cannot
+// plant. A cookie under the old name is ignored and expired; only the FAIRY_INSECURE_COOKIES test mode keeps
+// the plain name.
+func TestSessionCookieName(t *testing.T) {
+	e := setup(t)
+	clk := e.fakeClock()
+	ck := e.cookie(viewer, 0)
+	if !strings.HasPrefix(ck, "__Host-fairy_session=") {
+		t.Fatal("cookie name:", ck[:30])
+	}
+	if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 200 {
+		t.Fatal("round trip under the __Host- name", r.code)
+	}
+	// the same signed value under the old name (a session from before the change, or a planted cookie)
+	old := "fairy_session=" + strings.TrimPrefix(ck, "__Host-fairy_session=")
+	if r := e.do("GET", "/api/me", nil, "Cookie", old); r.code != 401 {
+		t.Fatal("a cookie under the old name must be ignored", r.code)
+	}
+	// both present: only the __Host- one counts, whatever the other says
+	planted := "fairy_session=" + strings.TrimPrefix(e.cookie(controller(), 0), "__Host-fairy_session=")
+	if r := e.do("GET", "/api/me", nil, "Cookie", planted+"; "+ck); r.code != 200 || r.body["sub"] != viewer.Sub {
+		t.Fatal("a planted old-name cookie changed who is signed in", r.code, string(r.raw))
+	}
+	// what a response that sets the cookie looks like
+	clk.advance(2 * time.Minute)
+	r := e.do("GET", "/api/me", nil, "Cookie", ck, "X-Fairy-Active", "1")
+	var set, expired string
+	for _, c := range r.hdr.Values("Set-Cookie") {
+		if strings.HasPrefix(c, "__Host-fairy_session=") {
+			set = c
+		}
+		if strings.HasPrefix(c, "fairy_session=;") {
+			expired = c
+		}
+	}
+	for _, want := range []string{"Path=/", "Secure", "HttpOnly", "SameSite=Lax"} {
+		if !strings.Contains(set, want) {
+			t.Errorf("Set-Cookie lacks %s: %s", want, set)
+		}
+	}
+	if set == "" || strings.Contains(strings.ToLower(set), "domain=") {
+		t.Error("a __Host- cookie must not carry a Domain:", set)
+	}
+	if !strings.Contains(expired, "Max-Age=0") {
+		t.Error("the old name must be expired on a response that sets the new one:", r.hdr.Values("Set-Cookie"))
+	}
+	if h := r.hdr.Get("Strict-Transport-Security"); h != "max-age=63072000" {
+		t.Error("HSTS must stay without includeSubDomains:", h)
+	}
+
+	// FAIRY_INSECURE_COOKIES (local http testing): the plain name, not Secure
+	insecure := newCodec(strings.Repeat("s", 48), 3600, false)
+	rec := httptest.NewRecorder()
+	insecure.write(rec, &sessionData{SID: "x", User: &viewer, IAT: time.Now().Unix()})
+	got := rec.Header().Values("Set-Cookie")
+	if len(got) != 1 || !strings.HasPrefix(got[0], "fairy_session=") || strings.Contains(got[0], "Secure") {
+		t.Fatal("insecure test mode:", got)
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Cookie", strings.Split(got[0], ";")[0])
+	if insecure.decode(req).SID != "x" {
+		t.Fatal("round trip under the plain name in the test mode")
+	}
+	secure := newCodec(strings.Repeat("s", 48), 3600, true)
+	if secure.decode(req).SID != "" {
+		t.Fatal("the plain name must not be read in normal mode")
+	}
+}

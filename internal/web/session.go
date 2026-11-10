@@ -13,7 +13,32 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
-const cookieName = "fairy_session"
+// The session cookie's name. With the __Host- prefix a browser only accepts (and only sends) the cookie when it
+// was set by this very host over HTTPS with Path=/ and no Domain, so a site on a sibling host name cannot plant
+// one for the panel. Browsers refuse a __Host- cookie that is not Secure, so the plain name remains for the
+// FAIRY_INSECURE_COOKIES test mode (local http) only. A cookie under the plain name is never read in normal
+// mode: sessions from before this change sign in once more.
+const (
+	hostCookieName  = "__Host-fairy_session"
+	plainCookieName = "fairy_session"
+)
+
+// name is the cookie name in use.
+func (c *sessionCodec) name() string {
+	if c.secure {
+		return hostCookieName
+	}
+	return plainCookieName
+}
+
+// expireOld tells the browser to drop a cookie left under the plain name by an older version (normal mode only;
+// in the test mode the plain name is the one in use).
+func (c *sessionCodec) expireOld(w http.ResponseWriter) {
+	if c.secure {
+		http.SetCookie(w, &http.Cookie{Name: plainCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
+			Secure: true, SameSite: http.SameSiteLaxMode})
+	}
+}
 
 // sessionData is stored client-side in a signed (HMAC-SHA256), HttpOnly cookie. It holds no secrets: the
 // server-side registry (sessions.json) decides whether a sid is still valid, so sessions are revocable.
@@ -76,7 +101,7 @@ func (c *sessionCodec) sign(payload string) string {
 // too old only expiredSID is set).
 func (c *sessionCodec) decode(r *http.Request) *sessionData {
 	s := &sessionData{}
-	ck, err := r.Cookie(cookieName)
+	ck, err := r.Cookie(c.name())
 	if err != nil || len(ck.Value) > 8192 {
 		return s
 	}
@@ -104,8 +129,9 @@ func (c *sessionCodec) decode(r *http.Request) *sessionData {
 
 func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
 	if s == nil || s.empty() {
-		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
+		http.SetCookie(w, &http.Cookie{Name: c.name(), Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
 			Secure: c.secure, SameSite: http.SameSiteLaxMode})
+		c.expireOld(w)
 		return
 	}
 	raw, _ := json.Marshal(struct {
@@ -115,8 +141,10 @@ func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
 	payload := base64.RawURLEncoding.EncodeToString(raw)
 	// SameSite=Lax (not Strict): the OIDC callback is a top-level navigation from Pocket ID and must carry the
 	// cookie with state/nonce/PKCE verifier. Writes are protected by the CSRF header + Origin checks.
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: payload + "." + c.sign(payload), Path: "/",
+	// No Domain attribute, Path=/ and Secure: what the __Host- prefix requires.
+	http.SetCookie(w, &http.Cookie{Name: c.name(), Value: payload + "." + c.sign(payload), Path: "/",
 		MaxAge: c.maxAge, HttpOnly: true, Secure: c.secure, SameSite: http.SameSiteLaxMode})
+	c.expireOld(w)
 }
 
 func (s *sessionData) empty() bool {
