@@ -21,6 +21,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 )
 
 type httpBackend struct {
@@ -105,7 +106,25 @@ func (b *httpBackend) pveClient(id string) (*http.Client, string, string) {
 	return b.pve[id], b.pveSecrets[id], b.powerSecrets[id]
 }
 
-func getJSON(ctx context.Context, c *http.Client, u string, hdr map[string]string, timeout time.Duration) (jsonx.M, int, error) {
+// How much of an answer the panel reads. An agent is a machine the panel does not control: its answers (a
+// /metrics report is a few KiB, the process list at most 200 rows) get 1 MiB. Proxmox's cluster/resources lists
+// every guest of the cluster and keeps the larger limit. A longer answer is refused as "invalid response", never
+// read to its end.
+const (
+	maxAgentBody   = 1 << 20
+	maxProxmoxBody = 32 << 20
+)
+
+// readBody reads at most max bytes of an answer; ok is false when the answer is longer.
+func readBody(r io.Reader, max int64) (body []byte, ok bool, err error) {
+	body, err = io.ReadAll(io.LimitReader(r, max+1))
+	if int64(len(body)) > max {
+		return nil, false, err
+	}
+	return body, true, err
+}
+
+func getJSON(ctx context.Context, c *http.Client, u string, hdr map[string]string, timeout time.Duration, maxBody int64) (jsonx.M, int, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -125,9 +144,12 @@ func getJSON(ctx context.Context, c *http.Client, u string, hdr map[string]strin
 	}
 	defer resp.Body.Close()
 	var out jsonx.M
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	body, fits, err := readBody(resp.Body, maxBody)
 	if err != nil {
 		return nil, resp.StatusCode, err
+	}
+	if !fits {
+		return nil, resp.StatusCode, devices.Errf("invalid response")
 	}
 	if resp.StatusCode >= 400 {
 		_ = json.Unmarshal(body, &out)
@@ -153,7 +175,7 @@ func (b *httpBackend) FetchProxmox(ctx context.Context, pve config.Proxmox, time
 		return nil, errors.New("proxmox " + pve.ID + " is not configured")
 	}
 	for _, base := range pve.URLs { // failover across cluster nodes
-		d, _, err := getJSON(ctx, cl, strings.TrimRight(base, "/")+"/api2/json/cluster/resources", b.pveAuth(pve), timeout)
+		d, _, err := getJSON(ctx, cl, strings.TrimRight(base, "/")+"/api2/json/cluster/resources", b.pveAuth(pve), timeout, maxProxmoxBody)
 		if err != nil {
 			last = err
 			continue
@@ -174,7 +196,7 @@ func (b *httpBackend) FetchNodeStatus(ctx context.Context, pve config.Proxmox, n
 	if cl == nil {
 		return nil, errors.New("proxmox " + pve.ID + " is not configured")
 	}
-	d, _, err := getJSON(ctx, cl, u, b.pveAuth(pve), 0)
+	d, _, err := getJSON(ctx, cl, u, b.pveAuth(pve), 0, maxProxmoxBody)
 	if err != nil {
 		return nil, err
 	}
@@ -292,14 +314,14 @@ func (b *httpBackend) agentURL(a config.Agent, path string) string {
 }
 
 func (b *httpBackend) FetchAgentMetrics(ctx context.Context, a config.Agent, timeout time.Duration) (jsonx.M, error) {
-	d, _, err := getJSON(ctx, b.agents, b.agentURL(a, "/metrics"), map[string]string{"Authorization": "Bearer " + b.readToken(a.ID)}, timeout)
+	d, _, err := getJSON(ctx, b.agents, b.agentURL(a, "/metrics"), map[string]string{"Authorization": "Bearer " + b.readToken(a.ID)}, timeout, maxAgentBody)
 	return d, err
 }
 
 func (b *httpBackend) FetchProcesses(ctx context.Context, a config.Agent, sid string, limit int, sortBy string) (model.ProcessList, error) {
 	q := url.Values{"limit": {strconv.Itoa(limit)}, "sort": {sortBy}}
 	d, code, err := getJSON(ctx, b.agents, b.agentURL(a, "/processes?"+q.Encode()),
-		map[string]string{"Authorization": "Bearer " + b.readToken(a.ID)}, time.Duration((b.p.Cfg.RequestTimeout+2)*float64(time.Second)))
+		map[string]string{"Authorization": "Bearer " + b.readToken(a.ID)}, time.Duration((b.p.Cfg.RequestTimeout+2)*float64(time.Second)), maxAgentBody)
 	if code == 403 && jsonx.S(d, "code") == "processes_disabled" {
 		return model.ProcessList{SystemID: sid, DisabledByHost: true, Sort: sortBy, Processes: []model.Process{}}, nil
 	}
@@ -309,8 +331,26 @@ func (b *httpBackend) FetchProcesses(ctx context.Context, a config.Agent, sid st
 	return DecodeProcessList(d, sid)
 }
 
-// DecodeProcessList validates an agent /processes payload.
+// Limits for an agent's process list: the panel asks for at most 200 rows.
+const (
+	maxProcesses   = 500
+	maxProcName    = 256
+	maxProcGPUs    = 16
+	maxProcCmdline = 300
+	// maxProcCmdlineIn is how much of a command line is looked at before it is redacted and cut to maxProcCmdline.
+	maxProcCmdlineIn = 4096
+)
+
+// DecodeProcessList validates an agent /processes payload and bounds its rows and texts.
 func DecodeProcessList(d jsonx.M, sid string) (model.ProcessList, error) {
+	if l, ok := d["processes"].([]any); ok && len(l) > maxProcesses {
+		c := make(jsonx.M, len(d))
+		for k, v := range d {
+			c[k] = v
+		}
+		c["processes"] = l[:maxProcesses]
+		d = c
+	}
 	b, _ := json.Marshal(d)
 	var pl model.ProcessList
 	if err := json.Unmarshal(b, &pl); err != nil {
@@ -320,10 +360,28 @@ func DecodeProcessList(d jsonx.M, sid string) (model.ProcessList, error) {
 	if pl.Sort == "" {
 		pl.Sort = "cpu"
 	}
+	pl.Sort = normalise.ClipText(pl.Sort, 16)
+	clip := func(p **string, n int) {
+		if *p != nil && len(**p) > n {
+			v := normalise.ClipText(**p, n)
+			*p = &v
+		}
+	}
 	for i := range pl.Processes { // defence in depth: agents redact too, but some are not ours to trust
-		if p := pl.Processes[i].Cmdline; p != nil {
-			v := redact.Cmdline(*p, 300)
-			pl.Processes[i].Cmdline = &v
+		pr := &pl.Processes[i]
+		if p := pr.Cmdline; p != nil {
+			in := *p
+			if len(in) > maxProcCmdlineIn { // the redaction's patterns are not run over megabytes of text
+				in = strings.ToValidUTF8(in[:maxProcCmdlineIn], "")
+			}
+			v := redact.Cmdline(in, maxProcCmdline)
+			pr.Cmdline = &v
+		}
+		clip(&pr.Name, maxProcName)
+		clip(&pr.Username, maxProcName)
+		clip(&pr.Status, 32)
+		if len(pr.GPUMemByGPU) > maxProcGPUs {
+			pr.GPUMemByGPU = pr.GPUMemByGPU[:maxProcGPUs]
 		}
 	}
 	model.Normalize(&pl)
@@ -355,7 +413,10 @@ func (b *httpBackend) AgentRequest(ctx context.Context, a config.Agent, method, 
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	raw, fits, _ := readBody(resp.Body, maxAgentBody)
+	if !fits {
+		return resp.StatusCode, nil, devices.Errf("invalid response")
+	}
 	out := jsonx.M{}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &out); err != nil {

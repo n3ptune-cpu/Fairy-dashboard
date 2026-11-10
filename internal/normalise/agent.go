@@ -26,7 +26,7 @@ func pending(pc jsonx.M) *model.PowerPending {
 		d = int(*v)
 	}
 	return &model.PowerPending{Action: a, At: EpochTime(*at), DelayS: d,
-		RequestedBy: jsonx.Str(p, "requested_by")}
+		RequestedBy: clipP(jsonx.Str(p, "requested_by"), maxName)}
 }
 
 func strOr(m jsonx.M, k, def string) string {
@@ -35,13 +35,14 @@ func strOr(m jsonx.M, k, def string) string {
 		return def
 	}
 	if s, ok := v.(string); ok {
-		return s
+		return ClipText(s, maxName)
 	}
-	return fmt.Sprint(v)
+	return ClipText(fmt.Sprint(v), maxName)
 }
 
 // NormaliseAgent converts an agent /metrics payload. Malformed entries in the lists (a disk without sizes, a
-// sensor without a reading) are skipped rather than failing the whole host.
+// sensor without a reading) are skipped rather than failing the whole host; lists and texts are bounded (see
+// limits.go), so one agent cannot make its entry arbitrarily large.
 func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rates *RateTracker) model.System {
 	cpu, mem, nett, plat := jsonx.Obj(m, "cpu"), jsonx.Obj(m, "memory"), jsonx.Obj(m, "net"), jsonx.Obj(m, "platform")
 	disks, used, total := agentDisks(m)
@@ -50,7 +51,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	hw := jsonx.Obj(m, "hardware")
 	name := cfg.Name
 	if name == "" {
-		name = jsonx.S(m, "hostname")
+		name = ClipText(jsonx.S(m, "hostname"), maxLong)
 	}
 	if name == "" {
 		name = cfg.ID
@@ -59,12 +60,12 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 		CPUPercent: jsonx.Num(cpu, "percent"), Cores: jsonx.IntP(cpu, "logical"),
 		MemUsed: jsonx.Int(mem, "used"), MemTotal: jsonx.Int(mem, "total"),
 		Disks: disks, NetRxBps: rx, NetTxBps: tx, UptimeS: jsonx.Int(m, "uptime_s"),
-		OS: jsonx.Str(plat, "pretty"), Platform: jsonx.Str(plat, "system"), LoadAvg: agentLoadAvg(m),
+		OS: clipP(jsonx.Str(plat, "pretty"), maxLong), Platform: clipP(jsonx.Str(plat, "system"), maxShort), LoadAvg: agentLoadAvg(m),
 		Temps: agentTemps(m), Fans: agentFans(m), Voltages: agentVoltages(m), GPUs: agentGPUs(m),
 		ComponentPower: agentComponentPower(m), Battery: agentBattery(m),
 		ProcessesAvailable: jsonx.Bool(features, "processes", true),
 		FanControl:         cfg.FanControl != nil && jsonx.Truthy(features["fan_control"]),
-		Hardware:           HardwareDisplay(hw), CPUModel: jsonx.Str(hw, "cpu_model"),
+		Hardware:           HardwareDisplay(hw), CPUModel: clipP(jsonx.Str(hw, "cpu_model"), maxLong),
 		PowerPending: pending(jsonx.Obj(m, "power_control")),
 		Group:        cfg.Group, Owner: cfg.Owner, Tags: slices.Clone(cfg.Tags), LastSeen: model.P(now),
 		PollMode: "default"}
@@ -74,7 +75,10 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	if br := jsonx.Obj(m, "bmc_relay"); br != nil {
 		s.BMCRelayTargets = []string{}
 		for _, t := range jsonx.Objs(br["targets"]) {
-			if id := jsonx.S(t, "id"); id != "" {
+			if len(s.BMCRelayTargets) == MaxRelayTargets {
+				break
+			}
+			if id := jsonx.S(t, "id"); id != "" && len(id) <= maxShort {
 				s.BMCRelayTargets = append(s.BMCRelayTargets, id)
 			}
 		}
@@ -83,7 +87,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 		if v, ok := pc["sleep"].(bool); ok {
 			s.Sleep = model.P(v)
 			if !v {
-				s.SleepNote = jsonx.Str(pc, "sleep_note")
+				s.SleepNote = clipP(jsonx.Str(pc, "sleep_note"), maxLong)
 			}
 		}
 	}
@@ -107,7 +111,10 @@ func agentDisks(m jsonx.M) (disks []model.Disk, used, total int64) {
 		if !ok || u == nil || t == nil {
 			continue
 		}
-		disks = append(disks, model.Disk{Mount: mount, FSType: jsonx.Str(d, "fstype"), Used: *u, Total: *t})
+		if len(disks) == MaxDisks {
+			break
+		}
+		disks = append(disks, model.Disk{Mount: ClipText(mount, maxMount), FSType: clipP(jsonx.Str(d, "fstype"), maxShort), Used: *u, Total: *t})
 		used += *u
 		total += *t
 	}
@@ -121,7 +128,10 @@ func agentTemps(m jsonx.M) []model.Temperature {
 		if cur == nil {
 			continue
 		}
-		temps = append(temps, model.Temperature{Sensor: strOr(t, "sensor", "?"), Label: jsonx.Str(t, "label"),
+		if len(temps) == MaxTemps {
+			break
+		}
+		temps = append(temps, model.Temperature{Sensor: strOr(t, "sensor", "?"), Label: clipP(jsonx.Str(t, "label"), maxName),
 			CurrentC: *cur, HighC: jsonx.Num(t, "high"), CriticalC: jsonx.Num(t, "critical")})
 	}
 	return temps
@@ -140,11 +150,14 @@ func gpuSource(s string) string {
 func agentGPUs(m jsonx.M) []model.Gpu {
 	gpus := []model.Gpu{}
 	for _, g := range jsonx.Objs(m["gpus"]) {
+		if len(gpus) == MaxGPUs {
+			break
+		}
 		vendor := jsonx.S(g, "vendor")
 		if vendor != "nvidia" && vendor != "amd" && vendor != "intel" {
 			vendor = "other"
 		}
-		name := jsonx.S(g, "name")
+		name := ClipText(jsonx.S(g, "name"), maxName)
 		if name == "" {
 			name = "GPU"
 		}
@@ -192,16 +205,22 @@ func agentComponentPower(m jsonx.M) *model.ComponentPower {
 		return nil
 	}
 	power := &model.ComponentPower{CPUPackageW: jsonx.Num(p, "cpu_package_w"), GPUW: jsonx.Num(p, "gpu_w"),
-		BatteryW: jsonx.Num(p, "battery_w"), BatteryState: jsonx.Str(p, "battery_state"),
-		BMCW: jsonx.Num(p, "bmc_w"), BMCNote: jsonx.Str(p, "bmc_note")}
+		BatteryW: jsonx.Num(p, "battery_w"), BatteryState: clipP(jsonx.Str(p, "battery_state"), maxShort),
+		BMCW: jsonx.Num(p, "bmc_w"), BMCNote: clipP(jsonx.Str(p, "bmc_note"), maxLong)}
 	for _, s := range jsonx.Objs(p["sensors"]) {
+		if len(power.Sensors) == MaxPowerSensors {
+			break
+		}
 		if w := jsonx.Num(s, "watts"); w != nil {
 			power.Sensors = append(power.Sensors, model.PowerSensor{Name: strOr(s, "name", "?"), Watts: *w})
 		}
 	}
 	for _, s := range jsonx.List(p, "source") {
+		if len(power.Source) == maxSourceNames {
+			break
+		}
 		if str, ok := s.(string); ok {
-			power.Source = append(power.Source, str)
+			power.Source = append(power.Source, ClipText(str, maxShort))
 		}
 	}
 	return power
@@ -210,6 +229,9 @@ func agentComponentPower(m jsonx.M) *model.ComponentPower {
 func agentFans(m jsonx.M) []model.Fan {
 	fans := []model.Fan{}
 	for _, f := range jsonx.Objs(m["fans"]) {
+		if len(fans) == MaxFans {
+			break
+		}
 		if r := jsonx.Num(f, "rpm"); r != nil {
 			fans = append(fans, model.Fan{Name: strOr(f, "name", "?"), RPM: *r})
 		}
@@ -220,6 +242,9 @@ func agentFans(m jsonx.M) []model.Fan {
 func agentVoltages(m jsonx.M) []model.Voltage {
 	volts := []model.Voltage{}
 	for _, v := range jsonx.Objs(m["voltages"]) {
+		if len(volts) == MaxVoltages {
+			break
+		}
 		if x := jsonx.Num(v, "volts"); x != nil {
 			volts = append(volts, model.Voltage{Name: strOr(v, "name", "?"), Volts: *x})
 		}
@@ -235,6 +260,9 @@ func agentLoadAvg(m jsonx.M) []float64 {
 	}
 	load := []float64{}
 	for _, v := range l {
+		if len(load) == MaxLoadAvg {
+			break
+		}
 		if f := jsonx.NumV(v); f != nil {
 			load = append(load, *f)
 		}

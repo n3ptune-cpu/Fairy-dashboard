@@ -28,6 +28,15 @@ ConfigurationDirectoryMode=0750
 UMask=0077
 Restart=on-failure
 RestartSec=5
+# Memory ceiling. The panel bounds what it keeps from every machine it reads; should that ever fail (a monitored
+# machine sending absurd answers), the kernel stops the panel at this limit and systemd starts it again (Restart=
+# above), instead of the panel taking the memory of everything else on this host.
+# `fairy update` replaces only the binary, never this file. On an install made before this line existed, add it
+# once by hand:
+#   sudo systemctl edit fairy        (write the two lines "[Service]" and "MemoryMax=512M", save)
+#   sudo systemctl restart fairy
+# and check it with: systemctl show fairy -p MemoryMax    (536870912 = 512M)
+MemoryMax=512M
 
 # Hardening. The panel only talks HTTP(S)/TCP to Proxmox, agents, plugs, BMCs and NUT; it needs NO capabilities
 # (power control goes through agents or the Proxmox API, never local commands).

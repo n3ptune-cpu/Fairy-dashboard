@@ -43,7 +43,7 @@ func trimmed(m jsonx.M, k string) *string {
 	default:
 		s = fmt.Sprint(x)
 	}
-	s = strings.TrimSpace(s)
+	s = ClipText(strings.TrimSpace(s), maxLong)
 	return &s
 }
 

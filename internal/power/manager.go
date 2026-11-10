@@ -26,6 +26,8 @@ type Manager struct {
 	maxHistory int
 	remote     map[string]model.PowerSourceState // reported by agents for devices on their LAN
 	remoteKeys []string
+	// remoteWarned: agents whose dropped rows were already logged (see UpdateRemote).
+	remoteWarned map[string]bool
 }
 
 // NewManager builds a Runner per config entry. interval is the history sample interval (s), historyS the

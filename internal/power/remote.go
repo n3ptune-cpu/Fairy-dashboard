@@ -2,15 +2,38 @@ package power
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
+// Limits for the devices one agent relays. An agent is a machine the panel does not control, and every source
+// it reports is kept in memory and copied into each history sample, so the list is bounded: at most
+// MaxRemoteSources rows per agent, ids as in a config file (configutil.ValidID), names and types cut to a length
+// the page can show.
+const (
+	MaxRemoteSources = 16
+	maxRemoteName    = 80
+	maxRemoteType    = 32
+	maxRemoteError   = 120
+)
+
+// clipText cuts s to at most n bytes on a character boundary.
+func clipText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "")
+}
+
 // UpdateRemote merges agent-reported devices (`power_sources` in the agent's /metrics). rows=nil means the agent
-// itself was unreachable this cycle. Device credentials never leave the agent.
+// itself was unreachable this cycle. Device credentials never leave the agent. Rows over the limits above are
+// dropped (the first MaxRemoteSources valid ones are kept) and logged once per agent while it lasts.
 func (m *Manager) UpdateRemote(agentID string, rows []map[string]any, unreachable bool, links map[string]string, exclude []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -20,12 +43,17 @@ func (m *Manager) UpdateRemote(agentID string, rows []map[string]any, unreachabl
 		return
 	}
 	seen := map[string]bool{}
+	dropped := 0
 	for _, row := range rows {
 		rid := jsonString(row["id"])
 		if rid == "" {
 			continue
 		}
 		key := agentID + "/" + rid
+		if !configutil.ValidID(rid) || (len(seen) >= MaxRemoteSources && !seen[key]) {
+			dropped++
+			continue
+		}
 		seen[key] = true
 		prev, hasPrev := m.remote[key]
 		if !hasPrev {
@@ -34,6 +62,17 @@ func (m *Manager) UpdateRemote(agentID string, rows []map[string]any, unreachabl
 		m.remote[key] = m.remoteState(agentID, key, rid, row, prev, hasPrev, now, links, exclude)
 	}
 	m.dropUnreported(agentID, seen)
+	switch {
+	case dropped > 0 && !m.remoteWarned[agentID]:
+		if m.remoteWarned == nil {
+			m.remoteWarned = map[string]bool{}
+		}
+		m.remoteWarned[agentID] = true
+		slog.Warn("power sources relayed by an agent were dropped (too many, or ids that are not lowercase letters, digits and dashes)",
+			"agent", agentID, "kept", len(seen), "dropped", dropped, "limit", MaxRemoteSources)
+	case dropped == 0:
+		delete(m.remoteWarned, agentID)
+	}
 }
 
 // agedStatus is "stale" while the last good reading is younger than offline_after, then "unreachable".
@@ -68,7 +107,7 @@ func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev
 	} else if h := jsonString(row["system_hint"]); h == "self" || h == agentID {
 		link = model.P(agentID)
 	}
-	name := jsonString(row["name"])
+	name := clipText(jsonString(row["name"]), maxRemoteName)
 	if name == "" {
 		name = rid
 	}
@@ -89,16 +128,13 @@ func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev
 		if hasPrev && status == "stale" {
 			readings = prev.Readings
 		}
-		e := jsonString(row["error"])
+		e := clipText(jsonString(row["error"]), maxRemoteError)
 		if e == "" {
 			e = "error"
 		}
-		if len(e) > 120 {
-			e = e[:120]
-		}
 		errp = &e
 	}
-	typ := jsonString(row["type"])
+	typ := clipText(jsonString(row["type"]), maxRemoteType)
 	if typ == "" {
 		typ = "unknown"
 	}

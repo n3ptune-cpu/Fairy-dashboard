@@ -27,6 +27,7 @@ type Manager struct {
 	offlineAfter float64
 	eventsFile   string
 	maxlen       int
+	window       time.Duration // the history length
 
 	mu      sync.Mutex
 	states  map[string]*model.UpsState
@@ -44,7 +45,8 @@ type Manager struct {
 func NewManager(configs []map[string]any, interval float64, timeout time.Duration, offlineAfter float64,
 	historyS int, eventsFile string) (*Manager, error) {
 	m := &Manager{timeout: timeout, offlineAfter: offlineAfter, eventsFile: eventsFile,
-		maxlen: max(1, int(float64(historyS)/interval)), states: map[string]*model.UpsState{},
+		maxlen: max(1, int(float64(historyS)/interval)), window: time.Duration(historyS) * time.Second,
+		states:  map[string]*model.UpsState{},
 		history: map[string][]model.UpsPoint{}}
 	for _, raw := range configs {
 		c, err := upssrc.Build(raw)
@@ -251,6 +253,41 @@ func (m *Manager) SampleHistory() {
 			h = h[len(h)-m.maxlen:]
 		}
 		m.history[k] = h
+	}
+	m.pruneHistory(now)
+}
+
+// maxOrphanHistories is how many histories of UPSes that are no longer reported are kept (a UPS that comes back,
+// for example after its agent restarted, continues its chart).
+const maxOrphanHistories = 32
+
+// pruneHistory forgets the history of UPSes that are gone: once its newest sample is older than the history
+// length, and beyond maxOrphanHistories the ones that went first. Without it an agent that keeps renaming its
+// UPSes would leave one history behind per name, for ever. Caller holds m.mu.
+func (m *Manager) pruneHistory(now time.Time) {
+	var orphans []string
+	for k, h := range m.history {
+		if m.states[k] != nil {
+			continue
+		}
+		if len(h) == 0 || now.Sub(h[len(h)-1].T) > m.window {
+			delete(m.history, k)
+			continue
+		}
+		orphans = append(orphans, k)
+	}
+	if len(orphans) <= maxOrphanHistories {
+		return
+	}
+	last := func(k string) time.Time { h := m.history[k]; return h[len(h)-1].T }
+	slices.SortFunc(orphans, func(a, b string) int {
+		if c := last(a).Compare(last(b)); c != 0 {
+			return c
+		}
+		return strings.Compare(a, b)
+	})
+	for _, k := range orphans[:len(orphans)-maxOrphanHistories] {
+		delete(m.history, k)
 	}
 }
 
