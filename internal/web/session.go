@@ -58,9 +58,14 @@ type sessionData struct {
 	Nonce    string `json:"nonce,omitempty"`
 	Verifier string `json:"verifier,omitempty"`
 	Started  int64  `json:"started,omitempty"`
-	// PendingID names the kept control action this step-up round trip was started for (see pending.go: the
-	// action itself is on the server, never in the cookie). PendingResult is its outcome, shown once by /api/me.
-	PendingID     string               `json:"pending_id,omitempty"`
+	// Client marks the client this session was established for: the address and browser its sign-in, or its
+	// last "Confirm it's you", came back to (clientMark: a keyed hash, so the cookie does not show them). Only
+	// that client's refused control request is kept for a step-up (pending.go). The mark is in the cookie so
+	// that it survives a restart; the cookie is signed, and a copy of it used from another address or browser
+	// carries the mark of the client it was copied from, which that client does not match.
+	Client string `json:"client,omitempty"`
+	// PendingResult is the outcome of the kept control action the panel ran after a step-up, shown once by
+	// /api/me. The action itself, and which round trip it is armed for, are on the server only (pending.go).
 	PendingResult *model.PendingResult `json:"pending_result,omitempty"`
 
 	// expiredSID is set by decode instead of everything else when the cookie is genuine but older than maxAge:
@@ -90,6 +95,25 @@ func (s *Server) now() time.Time { return s.codec.now() }
 
 // nowSec is now as Unix seconds with a fraction, the unit of auth_time.
 func (s *Server) nowSec() float64 { return float64(s.now().UnixNano()) / 1e9 }
+
+// clientMark is the session cookie's mark for a client (sessionData.Client): a keyed hash of its address and
+// browser, so the cookie tells neither.
+func (c *sessionCodec) clientMark(cl client) string {
+	m := hmac.New(sha256.New, c.key)
+	m.Write([]byte("client\x00" + cl.ip + "\x00"))
+	m.Write(cl.ua[:])
+	return base64.RawURLEncoding.EncodeToString(m.Sum(nil)[:16])
+}
+
+// established reports whether this request comes from the client its session was established for (see
+// sessionData.Client). Demo mode has one simulated user and no sessions.
+func (c *reqCtx) established() bool {
+	if c.s.DemoUser != nil {
+		return true
+	}
+	m := c.session().Client
+	return m != "" && hmac.Equal([]byte(m), []byte(c.s.codec.clientMark(c.client())))
+}
 
 func (c *sessionCodec) sign(payload string) string {
 	m := hmac.New(sha256.New, c.key)
@@ -149,5 +173,5 @@ func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
 
 func (s *sessionData) empty() bool {
 	return s.SID == "" && s.User == nil && s.IAT == 0 && s.Seen == 0 && s.Next == "" && !s.StepUp &&
-		s.State == "" && s.Nonce == "" && s.Verifier == "" && s.Started == 0 && s.PendingID == "" && s.PendingResult == nil
+		s.State == "" && s.Nonce == "" && s.Verifier == "" && s.Started == 0 && s.PendingResult == nil
 }

@@ -147,7 +147,7 @@ func TestStepUpPerAction(t *testing.T) {
 	if id == "" || a.powerCalls() != 0 {
 		t.Fatal("every action is asked for")
 	}
-	if r := a.stepUp("&pending="+id+"&next=/", false); r.code != 303 || a.powerCalls() != 1 {
+	if r := a.confirm(id, false); r.code != 303 || a.powerCalls() != 1 {
 		t.Fatal("the confirmed action runs once", r.code, a.powerCalls())
 	}
 	me := a.e.do("GET", "/api/me", nil, "Cookie", a.sess)

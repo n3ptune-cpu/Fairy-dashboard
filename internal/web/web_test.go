@@ -83,7 +83,8 @@ func (e *env) staleCookie(u model.User, authAge time.Duration) string {
 	}
 	now := e.s.now()
 	rec := httptest.NewRecorder()
-	e.s.codec.write(rec, &sessionData{SID: sid, User: &u, IAT: now.Unix(), Seen: now.Unix()})
+	e.s.codec.write(rec, &sessionData{SID: sid, User: &u, IAT: now.Unix(), Seen: now.Unix(),
+		Client: e.s.codec.clientMark(client{ip: testIP, ua: sha256.Sum256([]byte(testUA))})})
 	e.s.codec.live.confirm(sid, float64(now.Add(-authAge).Unix()), testIP, sha256.Sum256([]byte(testUA)), now)
 	return strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]
 }

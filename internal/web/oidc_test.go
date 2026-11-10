@@ -462,7 +462,7 @@ func TestPendingActionRunsOnceAfterStepUp(t *testing.T) {
 	if len(r.hdr.Values("Set-Cookie")) != 0 || strings.Contains(sess, "shutdown") {
 		t.Fatal("the kept action stays on the server: the cookie must not change", r.hdr.Values("Set-Cookie"))
 	}
-	q, rt = idp.login(e, "/auth/login?step_up=1&pending="+pendingID(r)+"&next=/%23/system/laptop", sess)
+	q, rt = idp.confirmStart(e, pendingID(r), "/#/system/laptop", sess)
 	idp.claims["auth_time"] = time.Now().Unix()
 	r = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
 	if r.code != 303 || r.hdr.Get("Location") != "/#/system/laptop" {
@@ -519,7 +519,7 @@ func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
 	if r.code != 401 || !strings.Contains(string(r.raw), `"pending":true`) || len(e.s.Enroll.List()) != 0 {
 		t.Fatal("first try must ask for a step-up and make nothing", r.code, string(r.raw))
 	}
-	q, rt = idp.login(e, "/auth/login?step_up=1&pending="+pendingID(r)+"&next=/%23/", sess)
+	q, rt = idp.confirmStart(e, pendingID(r), "/#/", sess)
 	idp.claims["auth_time"] = time.Now().Unix()
 	r = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
 	if r.code != 303 || len(e.s.Enroll.List()) != 1 {
@@ -565,17 +565,20 @@ func TestCancelledPendingActionDoesNotRun(t *testing.T) {
 	if d := e.do("DELETE", "/api/me/pending", nil, "Cookie", sess); d.code != 403 {
 		t.Fatal("CSRF header required", d.code)
 	}
-	if got := e.s.codec.live.pendingID(sidOf(e, sess), e.s.now()); got != id {
+	if got := keptID(e, sess); got != id {
 		t.Fatal("a refused cancel must not disarm", got)
 	}
 	d := e.do("DELETE", "/api/me/pending", nil, "Cookie", sess, "X-Requested-With", "fairy")
 	if d.code != 200 {
 		t.Fatal(d.code, string(d.raw))
 	}
-	if got := e.s.codec.live.pendingID(sidOf(e, sess), e.s.now()); got != "" {
+	if got := keptID(e, sess); got != "" {
 		t.Fatal("cancel left the action armed", got)
 	}
-	q, rt = idp.login(e, "/auth/login?step_up=1&pending="+id+"&next=/", sess)
+	if _, _, r := idp.tryConfirmStart(e, id, "/", sess); r.code != 409 {
+		t.Fatal("a cancelled action can still be confirmed", r.code, string(r.raw))
+	}
+	q, rt = idp.login(e, "/auth/login?step_up=1&next=/", sess)
 	idp.claims["auth_time"] = time.Now().Unix()
 	_ = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
 	if n := len(e.s.Enroll.List()); n != 0 {

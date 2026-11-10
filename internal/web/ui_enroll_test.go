@@ -59,7 +59,7 @@ func TestUIPageThatIsLeavingDoesNotTakeThePendingResult(t *testing.T) {
 	js := appJS(t)
 	for _, want := range []string{
 		`window.addEventListener("pagehide", () => { leaving = true; if (stepUpOpen && !stepUpOpen.going) cancelStepUp(); });`,
-		`window.addEventListener("pageshow", (e) => { leaving = false; if (e.persisted && stepUpOpen) stepUpOpen.going = false; });`,
+		"  leaving = false;\n  if (e.persisted && stepUpOpen) { stepUpOpen.going = false;",
 		"async function streamLost() {\n  if (leaving || stepUpOpen?.going) return;",
 		"async function checkAccess() {\n  if (leaving || stepUpOpen?.going) return;",
 		`try { showPendingResult((await api("/api/me")).pending_result); reachable = true; }`,
@@ -67,6 +67,29 @@ func TestUIPageThatIsLeavingDoesNotTakeThePendingResult(t *testing.T) {
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %q", want)
+		}
+	}
+}
+
+// NEW-1 in the page: "Continue" for a kept action is a button that posts the confirmation (the id goes in the
+// body), never a link that carries the id; the dialog shows what the panel says it will run; and a refusal for
+// a browser or address the session has not confirmed from is explained and goes the plain way.
+func TestUIConfirmIsAPostAndShowsWhatWillRun(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`api("/api/me/step-up", { method: "POST", body: JSON.stringify({ pending_id: String(id || ""), next: nextPath }) })`,
+		`<button class="btn primary" id="su-go">Continue to Pocket ID</button>`,
+		"<span class=\"note\">Fairy will run</span><b id=\"su-runs\">${esc(detail.action)}</b>",
+		`const newClient = !kept && detail?.not_kept === "new_client";`,
+		`if (e.status === 409) {`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	for _, bad := range []string{"pending=${", "&amp;pending=", "?pending="} {
+		if strings.Contains(js, bad) {
+			t.Errorf("app.js still builds a link that names a kept action (%q)", bad)
 		}
 	}
 }

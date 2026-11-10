@@ -120,7 +120,7 @@ func (c *reqCtx) stepUpWithin(u *model.User, what string, window int) error {
 		return nil
 	}
 	c.audit(u, "auth.step_up", c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, "required")
-	id := c.keepPending(u)
+	kept, why := c.keepPending(u)
 	msg := fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d min.", what, max(1, window/60))
 	if window < 60 || window%60 != 0 {
 		msg = fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d seconds.", what, window)
@@ -130,10 +130,14 @@ func (c *reqCtx) stepUpWithin(u *model.User, what string, window int) error {
 	}
 	// auth_age_s: how old the sign-in is right now, as this check sees it (for the dialog's "last sign-in" line;
 	// /api/me's copy in the page is from when the page loaded). Very large = unknown for this client.
-	detail := map[string]any{"code": "step_up_required", "window_s": window, "pending": id != "", "message": msg,
+	detail := map[string]any{"code": "step_up_required", "window_s": window, "pending": kept != nil, "message": msg,
 		"auth_age_s": math.Round(*age)}
-	if id != "" {
-		detail["pending_id"] = id // names the kept action in /auth/login?step_up=1&pending=<id>
+	if kept != nil {
+		// pending_id names the kept action when the dialog asks to confirm it (POST /api/me/step-up, in the body);
+		// action is the panel's own description of what that confirmation will run.
+		detail["pending_id"], detail["action"] = kept.ID, kept.Action
+	} else if why != "" {
+		detail["not_kept"] = why
 	}
 	if perAction {
 		detail["per_action"] = true

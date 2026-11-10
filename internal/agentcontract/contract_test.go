@@ -638,8 +638,9 @@ func (b browser) do(method, path string, body any) (int, map[string]any) {
 		return st, out
 	}
 	id, _ := d["pending_id"].(string)
-	if st, _ := b.call("GET", "/auth/login?step_up=1&pending="+id+"&next=/", nil); st != 303 {
-		b.t.Fatal("step-up", st)
+	// "Continue" in the "Confirm it's you" dialog (demo mode: the sign-in is simulated and the action runs)
+	if st, out := b.call("POST", "/api/me/step-up", map[string]any{"pending_id": id, "next": "/"}); st != 200 {
+		b.t.Fatal("step-up", st, out)
 	}
 	_, me := b.call("GET", "/api/me", nil)
 	res, _ := me["pending_result"].(map[string]any)

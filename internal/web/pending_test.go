@@ -1,6 +1,8 @@
 package web
 
 import (
+	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -79,10 +81,71 @@ func (a *armed) stepUp(query string, stale bool) resp {
 	return r
 }
 
-// confirm runs the step-up round trip that names the kept action id, as the "Confirm it's you" dialog starts it.
-func (a *armed) confirm(id string, stale bool) resp {
+// confirm is "Continue" in the "Confirm it's you" dialog for the kept action id, and the sign-in after it: POST
+// /api/me/step-up, then the callback. It returns the callback's answer, or the POST's when that was refused
+// (409: nothing is waiting under that id for this client). hdr: more request headers (another address, browser).
+func (a *armed) confirm(id string, stale bool, hdr ...string) resp {
 	a.e.t.Helper()
-	return a.stepUp("&pending="+id+"&next=/", stale)
+	return a.confirmNext(id, "/", stale, hdr...)
+}
+
+func (a *armed) confirmNext(id, next string, stale bool, hdr ...string) resp {
+	a.e.t.Helper()
+	q, rt, r := a.idp.tryConfirmStart(a.e, id, next, a.sess, hdr...)
+	if r.code != 200 {
+		return r
+	}
+	at := a.clk.now()
+	if stale {
+		at = at.Add(-10 * time.Minute)
+	}
+	a.idp.claims["auth_time"] = at.Unix()
+	r = a.e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, append([]string{"Cookie", rt}, hdr...)...)
+	if r.code == 303 {
+		a.sess = sessionCookie(a.e, r.hdr)
+	}
+	return r
+}
+
+// tryConfirmStart sends the dialog's "Continue" (POST /api/me/step-up with the kept action's id in the body) and
+// returns the query of the sign-in address it answers with, the round-trip cookie, and the answer itself.
+func (f *fakeIDP) tryConfirmStart(e *env, id, next, cookie string, hdr ...string) (url.Values, string, resp) {
+	e.t.Helper()
+	r := e.do("POST", stepUpPath, map[string]any{"pending_id": id, "next": next},
+		append([]string{"Cookie", cookie, "X-Requested-With", "fairy", "Content-Type", "application/json"}, hdr...)...)
+	if r.code != 200 {
+		return nil, "", r
+	}
+	loc, err := url.Parse(fmt.Sprint(r.body["url"]))
+	if err != nil || !strings.HasPrefix(loc.String(), f.srv.URL+"/authorize?") {
+		e.t.Fatalf("step-up address: %q", r.body["url"])
+	}
+	q := loc.Query()
+	f.mu.Lock()
+	f.challenge, f.nonce = q.Get("code_challenge"), q.Get("nonce")
+	f.mu.Unlock()
+	return q, sessionCookie(e, r.hdr), r
+}
+
+// confirmStart is tryConfirmStart for a confirmation that must be accepted.
+func (f *fakeIDP) confirmStart(e *env, id, next, cookie string, hdr ...string) (url.Values, string) {
+	e.t.Helper()
+	q, rt, r := f.tryConfirmStart(e, id, next, cookie, hdr...)
+	if r.code != 200 {
+		e.t.Fatalf("step-up for the kept action refused: %d %s", r.code, r.raw)
+	}
+	return q, rt
+}
+
+// keptID is the id of the action the panel keeps for the session of this cookie ("" when none).
+func keptID(e *env, cookie string) string {
+	l := e.s.codec.live
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if s := l.m[sidOf(e, cookie)]; s != nil && s.pending != nil && !s.pending.expired(e.s.now()) {
+		return s.pending.ID
+	}
+	return ""
 }
 
 // L1: the kept action runs only for the step-up that names it. A step-up started any other way (a link on
@@ -95,23 +158,29 @@ func TestForeignStepUpLinkRunsNothing(t *testing.T) {
 	if me := a.e.do("GET", "/api/me", nil, "Cookie", a.sess); me.body["pending_result"] != nil {
 		t.Fatal("nothing ran, so there is no result", string(me.raw))
 	}
-	if r := a.stepUp("&pending="+a.id+"&next=/", false); r.code != 303 || a.powerCalls() != 0 {
+	if r := a.confirm(a.id, false); r.code != 409 || a.powerCalls() != 0 {
 		t.Fatal("the foreign step-up must have disarmed the action", r.code, a.powerCalls())
+	}
+
+	// a link that carries the id (the form an older page used) is a link like any other: nothing runs, disarmed
+	a = arm(t)
+	if r := a.stepUp("&pending="+a.id+"&next=/", false); r.code != 303 || a.powerCalls() != 0 || keptID(a.e, a.sess) != "" {
+		t.Fatal("a link that names the kept action ran or kept it", r.code, a.powerCalls())
 	}
 
 	// a wrong id is the same: nothing runs, and the action is gone
 	a = arm(t)
-	if r := a.stepUp("&pending=AAAAAAAAAAAAAAAAAAAAAAAA&next=/", false); r.code != 303 || a.powerCalls() != 0 {
+	if r := a.confirm("AAAAAAAAAAAAAAAAAAAAAAAA", false); r.code != 409 || a.powerCalls() != 0 {
 		t.Fatal("wrong pending id", r.code, a.powerCalls())
 	}
-	if got := a.e.s.codec.live.pendingID(sidOf(a.e, a.sess), a.e.s.now()); got != "" {
+	if got := keptID(a.e, a.sess); got != "" {
 		t.Fatal("still armed after a step-up for another id")
 	}
 
 	// a plain re-login started from the armed session (not a step-up at all) disarms too
 	a = arm(t)
 	_, _ = a.idp.login(a.e, "/auth/login?next=/", a.sess)
-	if got := a.e.s.codec.live.pendingID(sidOf(a.e, a.sess), a.e.s.now()); got != "" {
+	if got := keptID(a.e, a.sess); got != "" {
 		t.Fatal("still armed after another sign-in started")
 	}
 }
@@ -120,7 +189,7 @@ func TestForeignStepUpLinkRunsNothing(t *testing.T) {
 // callback) cannot run it again.
 func TestKeptActionRunsOnceEvenWithACookieCopy(t *testing.T) {
 	a := arm(t)
-	q, rt := a.idp.login(a.e, "/auth/login?step_up=1&pending="+a.id+"&next=/", a.sess)
+	q, rt := a.idp.confirmStart(a.e, a.id, "/", a.sess)
 	a.idp.claims["auth_time"] = a.clk.now().Unix()
 	cb := "/auth/callback?code=c&state=" + q.Get("state")
 	if r := a.e.do("GET", cb, nil, "Cookie", rt); r.code != 303 || a.powerCalls() != 1 {
@@ -135,20 +204,20 @@ func TestKeptActionRunsOnceEvenWithACookieCopy(t *testing.T) {
 // L1: a confirmation that fails leaves nothing armed.
 func TestFailedConfirmationDisarms(t *testing.T) {
 	a := arm(t)
-	if r := a.stepUp("&pending="+a.id+"&next=/", true); r.code != 400 || a.powerCalls() != 0 {
+	if r := a.confirm(a.id, true); r.code != 400 || a.powerCalls() != 0 {
 		t.Fatal("a stale auth_time must fail the step-up", r.code)
 	}
-	if r := a.stepUp("&pending="+a.id+"&next=/", false); r.code != 303 || a.powerCalls() != 0 {
+	if r := a.confirm(a.id, false); r.code != 409 || a.powerCalls() != 0 {
 		t.Fatal("the failed confirmation must have disarmed the action", r.code, a.powerCalls())
 	}
 
 	// a callback that fails before any check of the sign-in (wrong state) disarms too
 	a = arm(t)
-	_, rt := a.idp.login(a.e, "/auth/login?step_up=1&pending="+a.id+"&next=/", a.sess)
+	_, rt := a.idp.confirmStart(a.e, a.id, "/", a.sess)
 	if r := a.e.do("GET", "/auth/callback?code=c&state=wrong", nil, "Cookie", rt); r.code != 400 {
 		t.Fatal(r.code)
 	}
-	if got := a.e.s.codec.live.pendingID(sidOf(a.e, a.sess), a.e.s.now()); got != "" {
+	if got := keptID(a.e, a.sess); got != "" {
 		t.Fatal("still armed after a failed callback")
 	}
 }
@@ -157,12 +226,12 @@ func TestFailedConfirmationDisarms(t *testing.T) {
 func TestKeptActionExpires(t *testing.T) {
 	a := arm(t)
 	a.clk.advance(pendingMaxAge - 10*time.Second)
-	if r := a.stepUp("&pending="+a.id+"&next=/", false); r.code != 303 || a.powerCalls() != 1 {
+	if r := a.confirm(a.id, false); r.code != 303 || a.powerCalls() != 1 {
 		t.Fatal("inside three minutes the action runs", r.code, a.powerCalls())
 	}
 	a = arm(t)
 	a.clk.advance(pendingMaxAge + time.Second)
-	if r := a.stepUp("&pending="+a.id+"&next=/", false); r.code != 303 || a.powerCalls() != 0 {
+	if r := a.confirm(a.id, false); r.code != 409 || a.powerCalls() != 0 {
 		t.Fatal("after three minutes nothing may run", r.code, a.powerCalls())
 	}
 }
@@ -192,7 +261,7 @@ func TestKeptActionIsNotInTheCookie(t *testing.T) {
 		t.Fatal("cookie carries the pending id")
 	}
 	a.e.s.codec.live = newLiveSessions() // what a restart leaves
-	if r := a.stepUp("&pending="+a.id+"&next=/", false); r.code != 303 || a.powerCalls() != 0 {
+	if r := a.confirm(a.id, false); r.code != 409 || a.powerCalls() != 0 {
 		t.Fatal("after a restart nothing may run", r.code, a.powerCalls())
 	}
 }
@@ -232,7 +301,7 @@ func TestActionLabelHeader(t *testing.T) {
 	if !stepUpRequired(r) {
 		t.Fatal(r.code, string(r.raw))
 	}
-	if r := a.stepUp("&pending="+pendingID(r)+"&next=/", false); r.code != 303 {
+	if r := a.confirm(pendingID(r), false); r.code != 303 {
 		t.Fatal(r.code)
 	}
 	me := a.e.do("GET", "/api/me", nil, "Cookie", a.sess)

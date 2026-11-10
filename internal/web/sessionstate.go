@@ -2,6 +2,7 @@ package web
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"net/http"
 	"sync"
 	"time"
@@ -83,19 +84,11 @@ func (l *liveSessions) keepPending(sid string, p *pendingAction, now time.Time) 
 	l.entry(sid, now).pending = p
 }
 
-// pendingID returns the id of the action waiting for sid ("" when none, or when it is too old).
-func (l *liveSessions) pendingID(sid string, now time.Time) string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if e := l.m[sid]; e != nil && e.pending != nil && !e.pending.expired(now) {
-		return e.pending.ID
-	}
-	return ""
-}
-
-// takePending removes the action waiting for sid, whatever it is, and returns it only when id names it and it
-// is not too old. So a kept action can be handed out at most once, and asking for the wrong one disarms it.
-func (l *liveSessions) takePending(sid, id string, now time.Time) *pendingAction {
+// armPending is "Continue" in the "Confirm it's you" dialog: it ties the action waiting for sid to the step-up
+// round trip that is about to start (round, that round trip's state), and returns the action. It does so only
+// when id names the action, the request comes from the client the action was kept for, and the action is not
+// too old. Anything else forgets the action and returns nil: asking for the wrong one disarms it.
+func (l *liveSessions) armPending(sid, id string, cl client, round string, now time.Time) *pendingAction {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e := l.m[sid]
@@ -103,11 +96,35 @@ func (l *liveSessions) takePending(sid, id string, now time.Time) *pendingAction
 		return nil
 	}
 	p := e.pending
-	e.pending = nil
-	if id == "" || p.ID != id || p.expired(now) {
+	if id == "" || round == "" || subtle.ConstantTimeCompare([]byte(p.ID), []byte(id)) != 1 || p.Client != cl || p.expired(now) {
+		e.pending = nil
 		return nil
 	}
+	p.Round = round
 	return p
+}
+
+// takePending removes the action waiting for sid, whatever it is, and returns it only when it was armed for
+// this very round trip (round), the request comes from the client it was kept for, and it is not too old. So a
+// kept action can be handed out at most once, and a round trip that was not started for it (a link, a second
+// tab, another browser or address) runs nothing and leaves nothing armed. foreign reports that an action was
+// armed for this round trip but another client came back with it (for the audit log).
+func (l *liveSessions) takePending(sid, round string, cl client, now time.Time) (p *pendingAction, foreign bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e := l.m[sid]
+	if e == nil || e.pending == nil {
+		return nil, false
+	}
+	p = e.pending
+	e.pending = nil
+	if round == "" || p.Round == "" || subtle.ConstantTimeCompare([]byte(p.Round), []byte(round)) != 1 || p.expired(now) {
+		return nil, false
+	}
+	if p.Client != cl {
+		return nil, true
+	}
+	return p, false
 }
 
 // dropPending forgets the action waiting for sid.
@@ -118,6 +135,18 @@ func (l *liveSessions) dropPending(sid string) {
 		e.pending = nil
 	}
 }
+
+// client is what the panel can tell about who sent a request: the address it came from (as the trusted proxies
+// report it) and the browser (the User-Agent header, hashed). It is the binding of the step-up window, of a
+// kept action and of everything a confirmation hands out: the same cookie presented by another client gets
+// none of it. Two clients with the same address and the same User-Agent cannot be told apart.
+type client struct {
+	ip string
+	ua [sha256.Size]byte
+}
+
+// client returns the client of this request.
+func (c *reqCtx) client() client { return client{ip: c.ip(), ua: uaHash(c.r)} }
 
 // stepUpRec is a confirmed Pocket ID sign-in (a sign-in or a step-up that completed): when the identity provider
 // says the user authenticated, and which client the confirmation came back to. Only that client is inside the

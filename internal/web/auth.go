@@ -226,7 +226,11 @@ func (s *Server) authRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /auth/callback", s.h(s.authCallback))
 	m.HandleFunc("POST /auth/logout", s.h(s.authLogout))
 	m.HandleFunc("POST "+activePath, s.h(s.meActive))
+	m.HandleFunc("POST "+stepUpPath, s.h(s.confirmStepUp))
 }
+
+// stepUpPath is "Continue" in the "Confirm it's you" dialog: the only way to arm a kept action (confirmStepUp).
+const stepUpPath = "/api/me/step-up"
 
 // meActive is the UI's "someone is using this page" signal (see active): a write with the CSRF header, sent at
 // most once a minute while there is input. Being a write is what makes it count; it does nothing else.
@@ -257,17 +261,13 @@ func (s *Server) authLogin(c *reqCtx) error {
 	if stepUp {
 		target = stepUpNext(target)
 	}
-	pendID := q.Get("pending") // the kept action this step-up is for (see pending.go); anything else disarms it
-	if len(pendID) > 64 {
-		pendID = ""
-	}
 	if s.DemoUser != nil { // demo: simulate the Pocket ID round trip for the step-up screen
 		s.demoMu.Lock()
 		s.demoAuthTime = s.now()
 		s.demoMu.Unlock()
 		d := s.DemoUser
 		c.auditAnon("auth.step_up", "ok (demo: simulated Pocket ID re-authentication)", model.Deref(d.Email), &d.Sub, nil)
-		s.resumePending(c, s.codec.live.takePending(demoKey, pendID, s.now()))
+		s.codec.live.dropPending(demoKey) // a link never runs a kept action: see below
 		c.redirect(target)
 		return nil
 	}
@@ -279,32 +279,96 @@ func (s *Server) authLogin(c *reqCtx) error {
 		c.clearSession() // fresh session: avoids fixation of a pre-login session
 	}
 	sess := c.session()
-	// Only a step-up that names the session's kept action may run it. Every other sign-in that starts for this
-	// session (a link on another site, a second tab, a plain re-login) forgets it, before anything can fail.
-	sess.PendingID = ""
-	if stepUp && current != nil && pendID != "" && s.codec.live.pendingID(sid, s.now()) == pendID {
-		sess.PendingID = pendID
-	} else {
-		s.codec.live.dropPending(sid)
-	}
+	// A sign-in that starts here never runs a kept action, and forgets the one the session has: this is a plain
+	// link (GET), which another site can make a browser follow. Only the dialog's own "Continue" arms a kept
+	// action (confirmStepUp: a POST with the CSRF header, from the client the action was kept for).
+	s.codec.live.dropPending(sid)
 	p, err := s.oidc.provider(c.r.Context())
 	if err != nil {
 		slog.Error("OIDC discovery failed", "error", err)
-		s.codec.live.dropPending(sid)
 		return apierr.New(502, "identity provider unreachable")
 	}
-	sess.Next, sess.StepUp = target, stepUp && current != nil
-	sess.State, sess.Nonce, sess.Verifier, sess.Started = randToken(24), randToken(24), oauth2.GenerateVerifier(), s.now().Unix()
+	loc := s.startRoundTrip(c, p, sess, target, stepUp && current != nil, randToken(24))
+	if sess.StepUp {
+		c.auditAnon("auth.step_up", "redirected to Pocket ID", actorOf(current), &current.Sub, nil)
+	}
+	c.redirect(loc)
+	return nil
+}
+
+// startRoundTrip prepares a sign-in at Pocket ID in the session cookie (state, nonce, PKCE verifier, where to
+// return to) and returns the address to send the browser to. A step-up asks for a fresh authentication.
+func (s *Server) startRoundTrip(c *reqCtx, p *oidc.Provider, sess *sessionData, target string, stepUp bool, state string) string {
+	sess.Next, sess.StepUp = target, stepUp
+	sess.State, sess.Nonce, sess.Verifier, sess.Started = state, randToken(24), oauth2.GenerateVerifier(), s.now().Unix()
 	c.dirty = true
 	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(sess.Verifier), oidc.Nonce(sess.Nonce)}
-	if sess.StepUp { // step-up: force a fresh authentication at Pocket ID
+	if stepUp { // step-up: force a fresh authentication at Pocket ID
 		opts = append(opts, oauth2.SetAuthURLParam("max_age", "0"))
 		if s.Cfg.StepUpPromptLogin {
 			opts = append(opts, oauth2.SetAuthURLParam("prompt", "login"))
 		}
-		c.auditAnon("auth.step_up", "redirected to Pocket ID", actorOf(current), &current.Sub, nil)
 	}
-	c.redirect(s.oidc.oauth(p).AuthCodeURL(sess.State, opts...))
+	return s.oidc.oauth(p).AuthCodeURL(sess.State, opts...)
+}
+
+// confirmStepUp is "Continue" in the "Confirm it's you" dialog (POST /api/me/step-up, body {"pending_id",
+// "next"}): it arms the session's kept action for one sign-in round trip and answers with the address of that
+// sign-in ({"url": ..., "action": what will run}). The page then goes there.
+//
+// This is the only way a kept action gets armed, and it cannot be done by a link or from somewhere else: it
+// is a write (CSRF header, same origin), it needs the session, the id comes in the body from the page that was
+// refused, and it must come from the client the action was kept for (armPending). The callback runs the
+// action only for this round trip and only when the same client comes back (authCallback).
+func (s *Server) confirmStepUp(c *reqCtx) error {
+	u, err := c.requireSession()
+	if err != nil {
+		return err
+	}
+	if err := c.checkCSRF(u); err != nil {
+		return err
+	}
+	if !s.login.allow(c.loginKey()) {
+		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
+		return apierr.New(429, "too many login attempts; try again in a minute")
+	}
+	var b struct {
+		PendingID string `json:"pending_id"`
+		Next      string `json:"next"`
+	}
+	key := c.pendingKey()
+	if err := c.decodeBody(&b); err != nil || len(b.PendingID) > 64 {
+		s.codec.live.dropPending(key)
+		return apierr.New(422, "invalid request body")
+	}
+	target := stepUpNext(safeNext(b.Next))
+	round := randToken(24)
+	kept := s.codec.live.armPending(key, b.PendingID, c.client(), round, s.now())
+	if kept == nil {
+		return apierr.New(409, map[string]any{"code": "nothing_kept", "message": "The action is no longer waiting: it was " +
+			"cancelled, it is more than 3 minutes old, or it was asked for from another browser or address. Nothing was " +
+			"done. Press the button again."})
+	}
+	params := map[string]any{"for": kept.Action}
+	if s.DemoUser != nil { // demo: simulate the Pocket ID round trip
+		s.demoMu.Lock()
+		s.demoAuthTime = s.now()
+		s.demoMu.Unlock()
+		c.auditAnon("auth.step_up", "ok (demo: simulated Pocket ID re-authentication)", actorOf(u), &u.Sub, params)
+		run, _ := s.codec.live.takePending(key, round, c.client(), s.now())
+		s.resumePending(c, run)
+		c.json(200, map[string]any{"url": target, "action": kept.Action})
+		return nil
+	}
+	p, err := s.oidc.provider(c.r.Context())
+	if err != nil {
+		slog.Error("OIDC discovery failed", "error", err)
+		s.codec.live.dropPending(key)
+		return apierr.New(502, "identity provider unreachable")
+	}
+	loc := s.startRoundTrip(c, p, c.session(), target, true, round)
+	c.auditAnon("auth.step_up", "redirected to Pocket ID", actorOf(u), &u.Sub, params)
+	c.json(200, map[string]any{"url": loc, "action": kept.Action})
 	return nil
 }
 
@@ -316,9 +380,12 @@ func (s *Server) authCallback(c *reqCtx) error {
 	// The kept action leaves the store before anything is checked: whatever happens below, it can run at most
 	// once, and a confirmation that fails (or is rate limited, or belongs to another round trip) leaves nothing
 	// armed. Only a successful step-up for the same session runs it.
+	// It is handed out only when it was armed for this very round trip (confirmStepUp put the round trip's state
+	// on it) and the client that comes back is the one it was kept for.
 	var kept *pendingAction
+	var foreign bool
 	if sess.SID != "" {
-		kept = s.codec.live.takePending(sess.SID, sess.PendingID, s.now())
+		kept, foreign = s.codec.live.takePending(sess.SID, sess.State, c.client(), s.now())
 	}
 	if !s.login.allow(c.loginKey()) {
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
@@ -399,9 +466,17 @@ func (s *Server) authCallback(c *reqCtx) error {
 		s.codec.live.confirm(sid, authTime, c.ip(), uaHash(c.r), s.now())
 		s.codec.live.touch(sid, s.now()) // confirming at Pocket ID is real use
 		sess.Seen = int64(now)
-		sess.StepUp, sess.Next, sess.State, sess.Nonce, sess.Verifier, sess.Started, sess.PendingID = false, "", "", "", "", 0, ""
+		sess.StepUp, sess.Next, sess.State, sess.Nonce, sess.Verifier, sess.Started = false, "", "", "", "", 0
 		c.dirty = true
-		c.auditAnon("auth.step_up", "ok", actorOf(&u), &u.Sub, nil)
+		switch {
+		case kept != nil:
+			c.auditAnon("auth.step_up", "ok", actorOf(&u), &u.Sub, map[string]any{"runs": kept.Action})
+		case foreign:
+			c.auditAnon("auth.step_up", "ok; the action that waited was not run: the confirmation came back from "+
+				"another browser or address than the one that asked for it", actorOf(&u), &u.Sub, nil)
+		default:
+			c.auditAnon("auth.step_up", "ok", actorOf(&u), &u.Sub, nil)
+		}
 		s.resumePending(c, kept)
 		c.redirect(target)
 		return nil
@@ -498,7 +573,7 @@ func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authT
 		c.auditAnon("auth.login", "failed: users.json not writable", actorOf(&u), &u.Sub, nil)
 		return apierr.New(503, "sign-in could not be recorded (the panel cannot write its users file); see the server log")
 	}
-	c.sess = &sessionData{SID: sid, User: &u, IAT: int64(now), Seen: int64(now)}
+	c.sess = &sessionData{SID: sid, User: &u, IAT: int64(now), Seen: int64(now), Client: s.codec.clientMark(c.client())}
 	c.dirty = true
 	s.codec.live.confirm(sid, authTime, c.ip(), uaHash(c.r), s.now())
 	s.codec.live.touch(sid, s.now())
@@ -520,6 +595,7 @@ func (s *Server) rotateSession(c *reqCtx, sess *sessionData, u model.User) (stri
 	_ = admin.RemoveSession(sess.SID)
 	s.codec.live.forget(sess.SID)
 	sess.SID = sid
+	sess.Client = s.codec.clientMark(c.client()) // the session now belongs to the client that just confirmed
 	return sid, nil
 }
 

@@ -156,15 +156,18 @@ async function api(path, opts = {}) {
 // ---- step-up re-authentication: control actions need a recent Pocket ID sign-in
 const PENDING_KEY = "fairy-pending-action";
 // When the server kept the refused request (detail.pending), it runs it by itself right after the sign-in and
-// /api/me reports the result: the browser re-sends nothing (no dialog shown again). Otherwise (rare: a large
-// request) the old "Resume" offer is used.
-// The kept action belongs to this dialog: the link names it (pending=<id>), and every way of leaving the dialog
-// without "Continue" (Cancel, Escape, a click outside, reload, closing the tab) tells the server to forget it.
+// /api/me reports the result: the browser re-sends nothing (no dialog shown again). Otherwise (a large request,
+// or a browser or address this session has not confirmed from yet) the "Resume" offer is used.
+// The kept action belongs to this dialog and this browser: "Continue" asks the panel to confirm exactly it
+// (POST /api/me/step-up with its id; no link carries the id, and a link to the sign-in never runs anything), and
+// every way of leaving the dialog without "Continue" (Cancel, Escape, a click outside, reload, closing the tab)
+// tells the server to forget it. The dialog shows what the panel itself says it will run (detail.action).
 let stepUpOpen = null;  // the open dialog: { kept, going } (going: "Continue to Pocket ID" was pressed)
 function showStepUp(pending, detail) {
   state.menu = null; render();
   const kept = !!detail?.pending, perAction = !!detail?.per_action;  // per_action: step_up_per_action is on
-  if (perAction && !kept) { flash(`${pending.label}: cannot be confirmed (the request is too large to keep for the sign-in)`, true); return; }
+  const newClient = !kept && detail?.not_kept === "new_client";  // this browser / address has not confirmed for the session yet
+  if (perAction && !kept && !newClient) { flash(`${pending.label}: cannot be confirmed (the request is too large to keep for the sign-in)`, true); return; }
   if (!kept) { try { sessionStorage.setItem(PENDING_KEY, JSON.stringify({ ...pending, ts: Date.now(), hash: location.hash })); } catch { /* ignore */ } }
   // The window is the server's: the refused request names it (window_s), /api/me carries the configured
   // step_up_window_s. A different window for this one request (the panel's own update: 2 minutes) is worded so.
@@ -174,24 +177,47 @@ function showStepUp(pending, detail) {
   const age = typeof detail?.auth_age_s === "number" ? detail.auth_age_s : meAge;
   const cfgWin = state.me?.step_up_window_s || 180, win = detail?.window_s || cfgWin;
   const winText = win % 60 ? `${win} seconds` : `${win / 60} minute${win === 60 ? "" : "s"}`;
-  const next = encodeURIComponent("/" + (location.hash || "#/"));
-  const pid = kept && typeof detail.pending_id === "string" ? `&amp;pending=${enc(detail.pending_id)}` : "";
+  const nextPath = "/" + (location.hash || "#/");
+  const runs = kept && typeof detail.action === "string" && detail.action ? `<span class="note">Fairy will run</span><b id="su-runs">${esc(detail.action)}</b>` : "";
   const m = $("#modal");
   m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle">
     <div class="stepup-ico">${I.shield}</div>
     <h3 id="stitle">Confirm it's you</h3>
     <p>${perAction ? "Every control action needs its own Pocket ID sign-in. This one confirms only the action below."
       : `${win !== cfgWin ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${winText}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}`}</p>
-    <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b></div>
-    <p class="note">${kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
+    <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}</div>
+    <p class="note" id="su-note">${kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
+      : newClient ? `This browser, or the address it now has, has not confirmed a sign-in for this session yet, so nothing was kept. Sign in again at Pocket ID (passkey) and you come straight back here to finish it${perAction ? "; it then asks once more, for this action alone" : ""}. Nothing has been sent yet.`
       : "You'll sign in again at Pocket ID (passkey) and come straight back here to finish it. Nothing has been sent yet."}</p>
     <div class="row-gap end"><button class="btn" id="su-cancel">Cancel</button>
-      <a class="btn primary" id="su-go" href="/auth/login?step_up=1${pid}&amp;next=${next}">Continue to Pocket ID</a></div></div>`;
+      ${kept ? `<button class="btn primary" id="su-go">Continue to Pocket ID</button>`
+        : `<a class="btn primary" id="su-go" href="/auth/login?step_up=1&amp;next=${encodeURIComponent(nextPath)}">Continue to Pocket ID</a>`}</div></div>`;
   m.hidden = false;
   stepUpOpen = { kept, going: false };
   $("#su-cancel").onclick = cancelStepUp;
-  $("#su-go").onclick = () => { if (stepUpOpen) stepUpOpen.going = true; };
+  $("#su-go").onclick = kept ? () => confirmStepUp(detail.pending_id, nextPath) : () => { if (stepUpOpen) stepUpOpen.going = true; };
   m.onclick = (e) => { if (e.target === m) cancelStepUp(); };
+}
+// "Continue" for a kept action: ask the panel to confirm exactly this action. It answers with the address of
+// the sign-in at Pocket ID (or, in the demo, with the page to show after it has run the action).
+async function confirmStepUp(id, nextPath) {
+  const su = stepUpOpen;
+  if (!su || su.going) return;
+  su.going = true;
+  const go = $("#su-go"); if (go) go.disabled = true;
+  let r;
+  try { r = await api("/api/me/step-up", { method: "POST", body: JSON.stringify({ pending_id: String(id || ""), next: nextPath }) }); }
+  catch (e) {
+    if (stepUpOpen !== su) return;
+    su.going = false;
+    if (e.status === 409) { stepUpOpen = null; const m = $("#modal"); m.hidden = true; m.innerHTML = ""; m.onclick = null; flash(e.message, true); return; }
+    if (go) go.disabled = false;
+    flash(e.message, true);
+    return;
+  }
+  if (stepUpOpen !== su || typeof r?.url !== "string") return;
+  if (/^https?:\/\//.test(r.url)) { location.assign(r.url); return; }
+  location.href = r.url; location.reload();  // demo: the same page again, loaded anew like after a real sign-in
 }
 // Leave "Confirm it's you" without confirming: close it and make the server forget the kept action, so a later
 // sign-in runs nothing. keepalive lets the request finish while the page is going away.
@@ -208,7 +234,10 @@ function cancelStepUp() {
 // handed out once, to the first /api/me that asks, and it belongs to the page that comes next.
 let leaving = false;
 window.addEventListener("pagehide", () => { leaving = true; if (stepUpOpen && !stepUpOpen.going) cancelStepUp(); });
-window.addEventListener("pageshow", (e) => { leaving = false; if (e.persisted && stepUpOpen) stepUpOpen.going = false; });  // Back from Pocket ID
+window.addEventListener("pageshow", (e) => {  // Back from Pocket ID: the dialog is as it was, "Continue" works again
+  leaving = false;
+  if (e.persisted && stepUpOpen) { stepUpOpen.going = false; const go = $("#su-go"); if (go) go.disabled = false; }
+});
 // After a step-up sign-in: the result of the action the panel ran by itself (shown once).
 function showPendingResult(pr) {
   if (!pr) return;

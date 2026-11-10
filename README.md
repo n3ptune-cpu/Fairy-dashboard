@@ -465,7 +465,9 @@ memory limit. Add it once:
 2. **Your first control action asks "Confirm it's you"**, also right after every panel restart. One
    confirmation covers the next 3 minutes (`step_up_window_s: 180`). A config.yaml that sets
    `step_up_window_s` keeps its value. The confirmation counts only for the browser and the address it was
-   made from: if your address changes (mobile data, a VPN), the next action asks again.
+   made from: if your address changes (mobile data, a VPN), the next action asks again, and after that one
+   sign-in the page offers the action as "Resume" instead of running it by itself. The dialog now also shows,
+   under "Fairy will run", what the panel itself is about to do.
 3. **A tab nobody touches signs out** after 12 hours (`session_idle_timeout`).
 4. **The Users page** shows "unverified" next to an e-mail address that Pocket ID has not marked as
    verified, and an "id ..." line per person. Signing in and roles do not depend on it. But
@@ -524,6 +526,14 @@ session settings as whole seconds).
   step-up gives the session a new id (an older copy of the cookie is signed out), and after a panel restart the
   first control action asks again. `step_up_per_action: true` removes the window: every control action needs
   its own sign-in, which confirms exactly that one action.
+* The action that waits for "Confirm it's you" is kept on the server (memory only, 3 minutes) and belongs to
+  the browser and address that asked for it. It is kept only for the client the session was signed in or last
+  confirmed from: the same cookie used from anywhere else is refused and nothing of it is kept. Only "Continue"
+  in the dialog (a write with the CSRF header, from that same client) can have it run, for the one sign-in that
+  follows, and only when that same client comes back from Pocket ID. No link can do that: opening
+  `/auth/login` in any form runs nothing and throws the waiting action away. The dialog and the audit log
+  (`auth.step_up`, fields `for` and `runs`) name the action in the panel's own words. What runs is the request
+  as it was first routed (same route, same parameters, same body).
 * Sessions: HMAC-signed `__Host-fairy_session` cookie (HttpOnly, Secure, SameSite=Lax, host-only; the plain name
   `fairy_session` only with `FAIRY_INSECURE_COOKIES`) that is valid only while its id is
   in `sessions.json`, within the idle timeout and absolute lifetime; revocable with `fairy admin sessions`.
@@ -544,7 +554,8 @@ session settings as whole seconds).
   up in one `audit.suppressed` entry a minute. An audit write failure never blocks a sign-in but is logged loudly.
   Changes to users and sites: admin browser session only, CSRF checks, step-up (same window), audited + notified;
   the kill switch does not block them.
-* `trusted_proxies` is used only to find the client IP for rate limits and the audit log. The login limiter
+* `trusted_proxies` is used to find the client IP: for rate limits, the audit log, and as the address a
+  "Confirm it's you" is bound to (a wrong list makes every client look like the proxy). The login limiter
   (`login_rate_per_min`) counts per client IP, and per user for a signed-in step-up, so nobody else's attempts
   can block an admin from confirming a control action.
 * Strict CSP, HSTS (https), frame/referrer/permissions policies, generic 500s, no secrets in logs or errors.
@@ -616,7 +627,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/managed` | Hosts added with Add host: `managed-hosts.yaml` and `secrets/`, merged with config.yaml. |
 | `internal/enrollment` | Add host: join codes, the command per OS, the pairing loop (waiting -> paired -> online), pairing v2 (panel side), Tailscale-only pairing. |
 | `internal/panelupdate` | Update panel: starting `fairy-panel-update.service` and reading its status file. |
-| `internal/security` | Finds the real client IP behind nginx (only for rate limits and the audit log). |
+| `internal/security` | Finds the real client IP behind nginx (rate limits, the audit log, and the address a "Confirm it's you" belongs to). |
 | `internal/model` | The JSON shapes of the API (field names match the Python prototype). |
 | `internal/jsonx` | Helpers for reading loosely-typed JSON from Proxmox, agents and devices. |
 | `internal/apierr` | The error type that becomes an HTTP status + `{"detail": ...}`. |

@@ -49,6 +49,7 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"POST", "/api/admin/updates", "Update every agent that can update itself (admins; step-up + CSRF header)"},
 	{"POST", "/api/admin/update-check", "Check GitHub for new agent and panel releases now, answer with the Updates page (admins, browser session; CSRF header; once per 30 s per panel)"},
 	{"DELETE", "/api/me/pending", "Forget the action that waits for a step-up sign-in (CSRF header)"},
+	{"POST", "/api/me/step-up", "Confirm the kept action: {pending_id, next}. Answers {url, action}: the sign-in address to go to, and what the panel will run after it. Browser session only, CSRF header, and only from the browser and address the action was kept for; 409 when nothing is waiting under that id"},
 	{"POST", "/api/me/active", "Tell the panel that someone is using this page: keeps the session from idling out (CSRF header; answers 204). The UI sends it at most once a minute while there is input"},
 	{"GET", "/api/admin/panel-update", "The panel's own update: ready or why not, running version, newer release known, last run's progress (admins)"},
 	{"POST", "/api/admin/panel-update", "Start the panel's update unit (admins, browser session; sign-in from the last 2 minutes + CSRF header; never older)"},
@@ -69,7 +70,8 @@ var apiDoc = []struct{ method, path, summary string }{
 const apiDescription = "Homelab resource panel API. All `/api/*` routes need a session cookie (log in at `/auth/login`) or `Authorization: Bearer fy_...`; unauthenticated calls get `401` JSON.\n\n" +
 	"**401.** `{\"detail\": ...}`. A session that ended (signed out, revoked, older than `session_max_age`, or not really used for `session_idle_timeout`) gets a plain 401 and its cookie is cleared: sign in again. " +
 	"A control action or admin change that needs a fresh sign-in gets `detail.code` = `step_up_required` with `message`, `window_s` (how long one confirmation lasts), `auth_age_s` (age of the last sign-in as this check sees it), " +
-	"`pending` (the request was kept) and, when it was kept, `pending_id`: open `/auth/login?step_up=1&pending=<pending_id>` and the panel runs the kept request once after that sign-in. " +
+	"`pending` (the request was kept) and, when it was kept, `pending_id` and `action` (the panel's own description of what would run): `POST /api/me/step-up` with `{\"pending_id\": ...}` answers with the sign-in address, and the panel runs the kept request once after that sign-in. " +
+	"A request is kept only for the browser and address the session was signed in or last confirmed from; otherwise `not_kept` says why (`new_client`: sign in again with `/auth/login?step_up=1`, then repeat the request; `too_large`). A link never runs a kept request. " +
 	"`per_action: true` is present when `step_up_per_action` is on: every such request needs its own sign-in. API tokens never get a step-up.\n\n" +
 	"**Headers.** Writes need `X-Requested-With: fairy`. `X-Fairy-Active: 1` marks a request as made while someone is using the page: only such requests, writes and `POST /api/me/active` move the idle timeout. " +
 	"`X-Fairy-Action` (optional) is the action's label for the step-up dialog, percent-encoded UTF-8.\n\n" +

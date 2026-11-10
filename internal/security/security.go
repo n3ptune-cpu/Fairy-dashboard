@@ -55,8 +55,9 @@ func hopAddr(h string) (netip.Addr, bool) {
 // ClientIP returns the client's address. X-Forwarded-For is only believed when the peer is a configured trusted
 // proxy (nginx), and then the right-most address that is not itself a trusted proxy wins (entries a client
 // sent itself are further left and never chosen while nginx appends or, as recommended, overwrites the
-// header). An entry that cannot be parsed stops the walk: the trusted peer is used. Never used for
-// authorisation.
+// header). An entry that cannot be parsed stops the walk: the trusted peer is used. The address never
+// authorises anything by itself. It is used for rate limits, the audit log, and as one half of what a
+// "Confirm it's you" is bound to (the session cookie is the other; see internal/web/sessionstate.go).
 //
 // Recommended nginx (behind Cloudflare): real_ip_header CF-Connecting-IP with set_real_ip_from <Cloudflare
 // ranges>, then proxy_set_header X-Forwarded-For $remote_addr (overwrite, do not append); trusted_proxies

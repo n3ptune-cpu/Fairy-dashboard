@@ -257,7 +257,7 @@ func TestOpenAPIListsEveryRoute(t *testing.T) {
 	}
 	// not part of the described API: the description itself and the demo preview's switch
 	exempt := map[string]bool{"GET /api/openapi.json": true, "POST /api/demo/view": true}
-	consts := map[string]string{"activePath": activePath}
+	consts := map[string]string{"activePath": activePath, "stepUpPath": stepUpPath}
 	routeRe := regexp.MustCompile(`HandleFunc\("([A-Z]+) ([^"]*)"(?:\s*\+\s*(\w+))?`)
 	files, err := os.ReadDir(".")
 	if err != nil {
