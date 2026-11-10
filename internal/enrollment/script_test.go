@@ -24,7 +24,7 @@ import (
 
 var testInstallers = Installers{Repo: "n3ptune-cpu/Fairy-agent", Tag: "build-7", Version: "7-6155fe6",
 	Base: "https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7",
-	SH:   strings.Repeat("a1", 32), PS1: strings.Repeat("b2", 32)}
+	SH:   strings.Repeat("a1", 32), PS1: strings.Repeat("b2", 32), PairV2SH: true, PairV2PS1: true}
 
 // fakeRelease is a GitHub release download folder signed with a fresh key.
 type fakeRelease struct {
@@ -94,7 +94,7 @@ func TestVerifierChecksThePinnedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	if in.Tag != "build-7" || in.Version != "7-6155fe6" || in.SH != hexSum(f.files[InstallSH]) || in.PS1 != hexSum(f.files[InstallPS1]) ||
-		in.Sums != hexSum(f.files[release.SumsFile]) || in.PinSH || in.PinPS1 ||
+		in.Sums != hexSum(f.files[release.SumsFile]) || in.PinSH || in.PinPS1 || in.PairV2SH || in.PairV2PS1 ||
 		in.Base != f.srv.URL+"/n3ptune-cpu/Fairy-agent/releases/download/build-7" {
 		t.Fatalf("%+v", in)
 	}
@@ -194,14 +194,14 @@ func TestCommandsPinTheCheckedRelease(t *testing.T) {
 	want := `$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7'; $f="$env:TEMP\fairy-install.ps1"; ` +
 		`iwr -useb "$u/install.ps1" -OutFile $f; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '` + testInstallers.PS1 + `') ` +
 		`{ throw 'install.ps1 is not the release the panel checked: not run' }; ` +
-		`powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u -Join CODE -PanelAddress 100.88.109.47 -PowerControl -UpsName ups1`
+		`powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u -Join CODE -PanelAddress 100.88.109.47 -PairV2 -PowerControl -UpsName ups1`
 	if win != want {
 		t.Fatalf("\n got %s\nwant %s", win, want)
 	}
 	lin := Command(testInstallers, managed.Host{OS: "linux", Options: managed.Options{SelfUpdate: true}}, "CODE", "100.88.109.47")
 	want = `f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7/install.sh && ` +
 		`echo "` + testInstallers.SH + `  $f" | sha256sum -c - && sudo env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7 ` +
-		`sh "$f" --join CODE --panel 100.88.109.47 --self-update`
+		`sh "$f" --join CODE --panel 100.88.109.47 --pair-v2 --self-update`
 	if lin != want {
 		t.Fatalf("\n got %s\nwant %s", lin, want)
 	}
@@ -263,7 +263,7 @@ func TestLinuxCommandRunsOnlyTheCheckedScript(t *testing.T) {
 		t.Fatal(err, out)
 	}
 	got, _ := os.ReadFile(marker)
-	if string(got) != in.Base+" --sums-sha256 "+in.Sums+" --join ABCD-EFGH --panel 100.88.109.47 --proxmox\n" {
+	if string(got) != in.Base+" --sums-sha256 "+in.Sums+" --join ABCD-EFGH --panel 100.88.109.47 --pair-v2 --proxmox\n" {
 		t.Fatalf("%q", got)
 	}
 }

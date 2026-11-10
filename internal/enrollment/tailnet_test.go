@@ -66,6 +66,8 @@ func TestTailnetOnlyDialControl(t *testing.T) {
 	}
 }
 
+var testKey = []byte(strings.Repeat("k", enroll.KeySize))
+
 // accepts counts the TCP connections a loopback listener gets (the check must stop the connection itself, not
 // just the HTTP request).
 func accepts(t *testing.T) (addr string, n *atomic.Int32) {
@@ -97,7 +99,7 @@ func TestPairingDoesNotConnectOutsideTailscale(t *testing.T) {
 	_, port, _ := net.SplitHostPort(addr)
 	for _, host := range []string{"127.0.0.1", "localhost"} {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		status, resp, code, err := HTTPPair(ctx, "http://"+net.JoinHostPort(host, port), strings.Repeat("ab", 32))
+		status, resp, code, err := HTTPPair(ctx, "http://"+net.JoinHostPort(host, port), testKey)
 		cancel()
 		var nt *NotTailscale
 		if !errors.As(err, &nt) || status != 0 || code != "" || resp.Token != "" {
@@ -118,7 +120,7 @@ func TestPairingDoesNotConnectOutsideTailscale(t *testing.T) {
 		http.Error(w, `{"error":"x","code":"pairing_inactive"}`, 404)
 	}))
 	defer srv.Close()
-	if status, _, code, err := httpPair(context.Background(), pairClientAny, srv.URL, strings.Repeat("ab", 32)); err != nil || status != 404 || code != "pairing_inactive" || hit.Load() != 1 {
+	if status, _, code, err := httpPair(context.Background(), pairClientAny, srv.URL, testKey); err != nil || status != 404 || code != "pairing_inactive" || hit.Load() != 1 {
 		t.Fatal(status, code, err, hit.Load())
 	}
 }
@@ -130,7 +132,7 @@ func TestPairingDoesNotFollowRedirects(t *testing.T) {
 	defer other.Close()
 	for _, st := range []int{301, 302, 307, 308} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, other.URL+"/pair", st) }))
-		status, resp, _, err := httpPair(context.Background(), pairClientAny, srv.URL, strings.Repeat("ab", 32))
+		status, resp, _, err := httpPair(context.Background(), pairClientAny, srv.URL, testKey)
 		srv.Close()
 		if err != nil || status != st || resp.Token != "" {
 			t.Fatal(st, status, err)
@@ -177,7 +179,7 @@ func TestCreateRefusesAddressesOutsideTailscale(t *testing.T) {
 	} {
 		m := addrManager(t)
 		m.AllowNonTailscale = tc.allow
-		m.Pair = func(context.Context, string, string) (int, enroll.Response, string, error) {
+		m.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 			return 0, enroll.Response{}, "", errors.New("nobody there")
 		}
 		cr, err := m.Create(context.Background(), Request{Name: "nsx-furina", Address: tc.addr, OS: "linux"}, nil, "neptune", none)

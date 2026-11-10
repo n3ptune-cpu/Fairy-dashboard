@@ -57,11 +57,11 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"POST", "/api/notifications/read", "Mark events read: {ids} or {all: true} (CSRF header)"},
 	{"POST", "/api/notifications/dismiss", "Hide events from this user's list: {ids} (CSRF header)"},
 	{"GET", "/api/system-sites", "The site of every visible host and guest"},
-	{"GET", "/api/admin/hosts", "Add host: panel address, Proxmox nodes, WoL relays, sites, hosts added with Add host, enrollments (admins)"},
-	{"POST", "/api/admin/hosts", "Add host: make a one-time join code and the command to run on the machine (admins, browser session only: API tokens get 403; step-up + CSRF header)"},
+	{"GET", "/api/admin/hosts", "Add host: panel address, Proxmox nodes, WoL relays, sites, hosts added with Add host (pairing: v2 = the agent's pairing answer was verified; absent = paired by an older panel), enrollments (admins)"},
+	{"POST", "/api/admin/hosts", "Add host: make a one-time join code and the command to run on the machine (admins, browser session only: API tokens get 403; step-up + CSRF header). 400: an address outside Tailscale (unless enroll.allow_non_tailscale). 409: the Fairy-agent release is too old (no pairing v2); the panel never pairs the old way"},
 	{"POST", "/api/admin/hosts/{id}/repair", "Re-pair a host added with Add host: a new join code (admins, browser session only: API tokens get 403; step-up + CSRF header). Body: confirm (the host's name), node_renamed (accept another Proxmox node name than the one it was added as). The answer is checked like a new host's"},
 	{"DELETE", "/api/admin/hosts/{id}", "Remove a host added with Add host from the panel (admins, browser session only: API tokens get 403; step-up + CSRF header)"},
-	{"GET", "/api/admin/enrollments/{id}", "An Add host's progress: waiting, paired, online, failed, expired, cancelled. Query: reveal=1 (the code once, after a step-up)"},
+	{"GET", "/api/admin/enrollments/{id}", "An Add host's progress: waiting, paired, online, failed, expired, cancelled. pairing: v2 once the agent proved it has the join code. hint while waiting: agent_too_old (update the agent first; the same code pairs afterwards), legacy_join_code, unverified_answer (something answered without the code: not added), not_tailscale. warning: the machine runs a newer agent than the command installs. Query: reveal=1 (the code once, after a step-up; browser session only)"},
 	{"DELETE", "/api/admin/enrollments/{id}", "Cancel a waiting Add host (admins; CSRF header)"},
 }
 

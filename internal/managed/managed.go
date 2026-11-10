@@ -65,7 +65,14 @@ type Host struct {
 	Hostname     string `yaml:"hostname,omitempty" json:"hostname"`
 	// ControlPaired: the agent handed over a control token (a control feature is on).
 	ControlPaired bool `yaml:"control_paired,omitempty" json:"control_paired"`
+	// Pairing is how the host's current tokens were handed over: PairingV2 when the agent's answer was
+	// verified with the join code, "" for a host paired by an older panel (the old exchange could not tell
+	// the agent from anything else that answered; Re-pair replaces such a pairing with a verified one).
+	Pairing string `yaml:"pairing,omitempty" json:"pairing,omitempty"`
 }
+
+// PairingV2 marks a host whose pairing answer was verified (pairing v2).
+const PairingV2 = "v2"
 
 // Secret is a managed host's tokens.
 type Secret struct {

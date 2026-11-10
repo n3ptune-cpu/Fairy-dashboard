@@ -27,3 +27,10 @@ func TestUIEnrollDialogShowsTheWarning(t *testing.T) {
 		t.Errorf("app.js lacks %q", want)
 	}
 }
+
+// M3 (UI side): the box of a host added with Add host says whether its pairing was verified.
+func TestUIManagedHostShowsPairing(t *testing.T) {
+	if want := `<span>Pairing</span><span>${h.pairing === "v2" ? "verified: the agent proved it has the join code" : '<span class="note">made by an older panel, not verified: Re-pair to replace it with a verified pairing</span>'}</span>`; !strings.Contains(appJS(t), want) {
+		t.Errorf("app.js lacks %q", want)
+	}
+}

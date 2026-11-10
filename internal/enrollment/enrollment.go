@@ -1,8 +1,14 @@
 // Package enrollment is the panel side of "Add host": an admin's request becomes a pending enrollment with a
 // one-time join code (shown once, inside the install command); a background loop asks the new agent
-// POST /pair with the code's proof every few seconds until it answers, the code expires or the admin cancels.
-// On success the host and its tokens go into the panel's managed store and the poller starts polling it at
-// once. Only the proof is kept, in memory.
+// POST /pair every few seconds until it answers, the code expires or the admin cancels. On success the host
+// and its tokens go into the panel's managed store and the poller starts polling it at once.
+//
+// The panel speaks pairing v2 only (Fairy-agent pkg/enroll, v2.go): every request carries a new random value
+// and a check value made with a key derived from the join code, and the answer is accepted only when it opens
+// under a key bound to that request, which proves it was made by the machine the code was given to and keeps
+// the tokens unreadable for anyone else. There is no fallback to the old exchange (a fixed proof, tokens in
+// clear): an agent or a release that only knows that one is reported as too old and never paired. Only the
+// key is kept, in memory.
 package enrollment
 
 import (
@@ -86,16 +92,36 @@ type Enrollment struct {
 	Done      bool            `json:"done"`
 	// Warning (Re-pair): the machine runs a newer Fairy-agent than the release the command installs.
 	Warning string `json:"warning,omitempty"`
+	// Pairing is "v2" once the agent's answer was verified (it proved it has the join code).
+	Pairing string `json:"pairing,omitempty"`
+	// Hint says why the enrollment is still waiting, when the panel can tell: see the Hint constants.
+	Hint string `json:"hint,omitempty"`
 
-	proof   string
+	key     []byte // the pairing v2 key of the join code (enroll.PairingKey); the code itself is not kept
 	host    managed.Host
 	renamed bool // Re-pair: the admin confirmed that the Proxmox node was renamed
 	// installed is the agent version the machine ran before a Re-pair ("" when the panel never saw one).
 	installed string
-	cancel    context.CancelFunc
-	pairedAt  time.Time
-	held      *Created // the code and command, kept for one Reveal (made by the panel's replay after a step-up)
+	// reported: what was already written to the audit log for this enrollment (once each).
+	reported map[string]bool
+	cancel   context.CancelFunc
+	pairedAt time.Time
+	held     *Created // the code and command, kept for one Reveal (made by the panel's replay after a step-up)
 }
+
+// Why an enrollment is still waiting (Enrollment.Hint).
+const (
+	// HintAgentTooOld: what answers at the address is a Fairy-agent from before pairing v2 (or has no pairing
+	// endpoint at all). It must be updated first; running the command does that, and the same code then pairs.
+	HintAgentTooOld = "agent_too_old"
+	// HintLegacyJoinCode: the agent knows pairing v2, but the join code was stored on the machine for the old
+	// exchange (the command was not the panel's, or an older install script ran it).
+	HintLegacyJoinCode = "legacy_join_code"
+	// HintUnverified: something answered "paired" without proving it has the join code. It was not added.
+	HintUnverified = "unverified_answer"
+	// HintNotTailscale: the address is outside Tailscale's ranges and was not contacted.
+	HintNotTailscale = "not_tailscale"
+)
 
 // Created is what the dialog shows once: the code and the commands.
 type Created struct {
@@ -124,9 +150,11 @@ type Hooks struct {
 
 // Manager holds the enrollments (in memory: a panel restart drops pending ones; make a new code).
 type Manager struct {
-	Store       *managed.Store
-	Hooks       Hooks
-	Pair        func(ctx context.Context, url, proof string) (int, enroll.Response, string, error)
+	Store *managed.Store
+	Hooks Hooks
+	// Pair asks the machine once (pairing v2, see HTTPPair): the status, the agent's answer on 200 (only when
+	// it was verified with key), the agent's error code otherwise. Tests and the demo replace it.
+	Pair        func(ctx context.Context, url string, key []byte) (int, enroll.Response, string, error)
 	Now         func() time.Time
 	Interval    time.Duration // between pairing attempts (default 3 s)
 	OnlineWait  time.Duration // how long "paired" waits for the first good poll (default 90 s)
@@ -149,8 +177,8 @@ type Manager struct {
 func New(store *managed.Store, hooks Hooks, panelAddr string, scripts ScriptSource) *Manager {
 	m := &Manager{Store: store, Hooks: hooks, Now: time.Now, Interval: 3 * time.Second,
 		OnlineWait: 90 * time.Second, PanelAddr: panelAddr, Scripts: scripts, items: map[string]*Enrollment{}}
-	m.Pair = func(ctx context.Context, url, proof string) (int, enroll.Response, string, error) {
-		return httpPair(ctx, m.pairClient(), url, proof)
+	m.Pair = func(ctx context.Context, url string, key []byte) (int, enroll.Response, string, error) {
+		return httpPair(ctx, m.pairClient(), url, key)
 	}
 	return m
 }
@@ -300,18 +328,28 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 	if !inst.valid() {
 		return Created{}, &Unavailable{Msg: "the checked Fairy-agent release has an unusable download address or hash"}
 	}
+	if !inst.PairsV2(h.OS) {
+		// No command is made for a release that could only pair the old way: the panel would never accept
+		// what that agent answers.
+		return Created{}, &TooOld{Msg: fmt.Sprintf("Fairy-agent release %s is too old for this panel: its install script for %s does not know "+
+			"pairing v2 (the agent proves it has the join code and sends its tokens encrypted), and the panel does not pair the old, "+
+			"unverified way. Use a newer release: set enroll: {agent_release: build-N} in config.yaml, or update the panel", releaseName(inst), osName(h.OS))}
+	}
 	code, err := enroll.NewCode()
 	if err != nil {
 		return Created{}, err
 	}
-	proof, _ := enroll.Proof(code)
+	key, err := enroll.PairingKey(code)
+	if err != nil {
+		return Created{}, err
+	}
 	now := m.Now().UTC()
 	idb := make([]byte, 8)
 	_, _ = rand.Read(idb)
 	e := &Enrollment{ID: hex.EncodeToString(idb), HostID: h.ID, Name: h.Name, URL: h.URL, OS: h.OS, Site: h.Site,
 		Node: h.Node, Options: h.Options, Repair: existing != nil, State: Waiting,
 		Message: "waiting for the machine: run the command there", CreatedAt: now, ExpiresAt: now.Add(enroll.TTL),
-		CreatedBy: by, proof: proof, host: h, renamed: existing != nil && req.NodeRenamed}
+		CreatedBy: by, key: key, host: h, renamed: existing != nil && req.NodeRenamed, reported: map[string]bool{}}
 	if existing != nil {
 		e.installed = existing.AgentVersion
 		if m.Hooks.AgentVersion != nil {
@@ -336,7 +374,8 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 
 // Command is the one line to run on the machine. It downloads the install script of the checked release,
 // refuses to run it unless its SHA-256 is the one the panel verified against the signed SHA256SUMS, and runs it
-// against that same release (never "latest").
+// against that same release (never "latest"). It carries the pairing v2 option when the checked script takes
+// it (Create refuses a release whose script does not).
 func Command(in Installers, h managed.Host, code, panel string) string {
 	o := h.Options
 	if h.OS == "windows" {
@@ -344,6 +383,9 @@ func Command(in Installers, h managed.Host, code, panel string) string {
 		fmt.Fprintf(&b, `$u='%s'; $f="$env:TEMP\fairy-install.ps1"; iwr -useb "$u/%s" -OutFile $f; `+
 			`if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '%s') { throw 'install.ps1 is not the release the panel checked: not run' }; `+
 			`powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u%s -Join %s -PanelAddress %s`, in.Base, InstallPS1, in.PS1, pin(in.PinPS1, " -SumsSha256 ", in.Sums), code, panel)
+		if in.PairV2PS1 {
+			b.WriteString(" " + FlagPairV2PS1)
+		}
 		for _, f := range []struct {
 			on   bool
 			flag string
@@ -366,6 +408,9 @@ func Command(in Installers, h managed.Host, code, panel string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" %s/%s && echo "%s  $f" | sha256sum -c - && `+
 		`%senv FAIRY_RELEASE_URL=%s sh "$f"%s --join %s --panel %s`, in.Base, InstallSH, in.SH, sudo, in.Base, pin(in.PinSH, " --sums-sha256 ", in.Sums), code, panel)
+	if in.PairV2SH {
+		b.WriteString(" " + FlagPairV2SH)
+	}
 	for _, f := range []struct {
 		on   bool
 		flag string
@@ -408,8 +453,22 @@ func pin(takes bool, flag, sums string) string {
 
 func (m *Manager) copyOf(e *Enrollment) Enrollment {
 	c := *e
-	c.proof, c.cancel, c.held = "", nil, nil
+	c.key, c.cancel, c.held, c.reported = nil, nil, nil, nil
 	return c
+}
+
+func releaseName(in Installers) string {
+	if in.Version != "" {
+		return in.Tag + " (Fairy-agent " + in.Version + ")"
+	}
+	return in.Tag
+}
+
+func osName(os string) string {
+	if os == "windows" {
+		return "Windows"
+	}
+	return "Linux"
 }
 
 // Hold keeps a new enrollment's code and command for one Reveal by its creator: the panel made it by itself
@@ -577,13 +636,33 @@ func (m *Manager) CancelHost(hostID string) {
 }
 
 func (m *Manager) set(e *Enrollment, state, msg string, done bool) Enrollment {
+	return m.setHint(e, state, msg, "", done)
+}
+
+// setHint is set with the reason the enrollment is still waiting (cleared by every other state change).
+func (m *Manager) setHint(e *Enrollment, state, msg, hint string, done bool) Enrollment {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e.Done && state != Online { // cancelled meanwhile
 		return m.copyOf(e)
 	}
-	e.State, e.Message, e.Done = state, msg, done
+	e.State, e.Message, e.Hint, e.Done = state, msg, hint, done
 	return m.copyOf(e)
+}
+
+// report writes one audit entry of this kind for the enrollment (the first time only: the loop asks every few
+// seconds and would otherwise fill the log).
+func (m *Manager) report(e *Enrollment, kind, detail string) {
+	m.mu.Lock()
+	first := !e.reported[kind] && !e.Done
+	if first {
+		e.reported[kind] = true
+	}
+	cp := m.copyOf(e)
+	m.mu.Unlock()
+	if first {
+		m.Hooks.Event(cp, kind, detail)
+	}
 }
 
 func (m *Manager) run(ctx context.Context, e *Enrollment) {
@@ -599,26 +678,49 @@ func (m *Manager) run(ctx context.Context, e *Enrollment) {
 			return
 		}
 		actx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		status, resp, code, err := m.Pair(actx, e.URL, e.proof)
+		status, resp, code, err := m.Pair(actx, e.URL, e.key)
 		cancel()
 		var elsewhere *NotTailscale
+		var unverified *Unverified
+		// Only a verified answer pairs. Everything else leaves the enrollment waiting with its code intact:
+		// nothing below ends it, and nothing below makes the panel ask in another way.
 		switch {
 		case err == nil && status == 200:
 			m.paired(e, resp)
 			return
 		case errors.As(err, &elsewhere):
-			m.set(e, Waiting, "not contacted: "+hostOf(e.URL)+" leads to "+elsewhere.Addr+", which is not a Tailscale address. The panel pairs over Tailscale only "+
-				"(to pair over another network: enroll: {allow_non_tailscale: true} in config.yaml)", false)
+			m.setHint(e, Waiting, "not contacted: "+hostOf(e.URL)+" leads to "+elsewhere.Addr+", which is not a Tailscale address. The panel pairs over Tailscale only "+
+				"(to pair over another network: enroll: {allow_non_tailscale: true} in config.yaml)", HintNotTailscale, false)
+		case errors.As(err, &unverified):
+			// Something answered "paired" without proving it has the join code: an old agent's answer in
+			// clear, another program on that port, a replayed or altered answer. Never adopted.
+			m.report(e, "unverified", "an answer from "+e.URL+" did not prove the join code ("+unverified.Why+"): not added")
+			m.setHint(e, Waiting, "not added: what answers at "+hostOf(e.URL)+" did not prove it has the join code ("+unverified.Why+"). "+
+				"If the command has not run on the machine yet, something else answers at that address. If it has, make a new code and run the new command", HintUnverified, false)
 		case err != nil:
 			m.set(e, Waiting, "waiting for the machine ("+devices.Describe(err)+")", false)
-		case status == 404:
+		case status == 404 && code == "pairing_inactive":
 			m.set(e, Waiting, "the agent answers but has no join code yet: run the command (or it expired there)", false)
+		case status == 400 && code == "wrong_version":
+			m.setHint(e, Waiting, "the agent on the machine holds a join code for the old pairing (stored by another command or an older install script). "+
+				"The panel does not pair that way: run the command shown here on the machine", HintLegacyJoinCode, false)
+		case status == 400 || status == 404:
+			// An agent from before pairing v2 answers 400 to the request (it expects the old fixed proof); one
+			// from before Add host has no /pair at all. The panel does not fall back to the old exchange. It
+			// keeps asking: the command installs a newer agent, and this same code then pairs.
+			m.report(e, "agent_too_old", fmt.Sprintf("%s answered %d to a pairing v2 request: a Fairy-agent from before pairing v2; not paired the old way", e.URL, status))
+			m.setHint(e, Waiting, tooOldMessage, HintAgentTooOld, false)
 		case code == "wrong_address":
 			m.set(e, Waiting, "the agent refuses: the panel address in the command ("+m.PanelAddr+") is not where the panel connects from; set enroll.panel_address", false)
 		case code == "wrong_code":
 			m.set(e, Waiting, "the agent has a different join code (an older command?): run this one", false)
 		case status == 429:
-			m.set(e, Waiting, "the agent asks to slow down", false)
+			// an old agent answers this from its sixth request a minute on: what was found out before stands
+			if hint, msg := m.hintOf(e); hint == HintAgentTooOld || hint == HintLegacyJoinCode {
+				m.setHint(e, Waiting, msg, hint, false)
+			} else {
+				m.set(e, Waiting, "the agent asks to slow down", false)
+			}
 		default:
 			m.set(e, Waiting, fmt.Sprintf("the agent answered %d", status), false)
 		}
@@ -640,9 +742,23 @@ func (m *Manager) run(ctx context.Context, e *Enrollment) {
 	}
 }
 
+// tooOldMessage is what the dialog shows while an agent from before pairing v2 answers.
+const tooOldMessage = "the Fairy-agent on that machine is too old for this panel: it does not know pairing v2, and the panel does not pair the old, " +
+	"unverified way. Update it first: run the command shown here on the machine. It installs the newer agent, and the panel pairs with " +
+	"this same code as soon as that agent is up"
+
+func (m *Manager) hintOf(e *Enrollment) (hint, msg string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return e.Hint, e.Message
+}
+
+// paired takes a verified answer: only run calls it, and only with what Pair returned for status 200 without
+// an error (HTTPPair returns that only for an answer that opened under the join code's key).
 func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 	h := e.host
 	h.AddedAt = m.Now().UTC()
+	h.Pairing = managed.PairingV2
 	h.AgentVersion, h.Hostname, h.ControlPaired = clip(resp.AgentVersion, 64), clip(resp.Hostname, 64), resp.ControlToken != ""
 	sec := managed.Secret{Token: resp.Token, ControlToken: resp.ControlToken}
 	fail := func(msg string) {
@@ -697,8 +813,9 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 	}
 	m.mu.Lock()
 	e.pairedAt = m.Now()
+	e.Pairing = managed.PairingV2
 	m.mu.Unlock()
-	cp := m.set(e, Paired, "paired: tokens received, waiting for the first reading"+note, false)
+	cp := m.set(e, Paired, "paired: the agent proved it has the join code; tokens received, waiting for the first reading"+note, false)
 	m.Hooks.Event(cp, "paired", detail)
 	deadline := time.NewTimer(m.OnlineWait)
 	defer deadline.Stop()
@@ -793,41 +910,82 @@ func hostOf(hostURL string) string {
 	return hostURL
 }
 
-// HTTPPair is POST <url>/pair {"proof"} to a Tailscale address (see tailnet.go; never through a proxy, like
-// every agent request). It returns the status, the answer on 200, and the agent's error code otherwise.
-func HTTPPair(ctx context.Context, url, proof string) (int, enroll.Response, string, error) {
-	return httpPair(ctx, pairClientTailnet, url, proof)
+// Unverified is a "paired" answer (status 200) that did not prove the join code: it does not open under the
+// key bound to the request that was just sent. Such an answer is never used, and never retried another way.
+type Unverified struct {
+	Why string // for the dialog and the audit log; never part of the answer itself
 }
 
-func httpPair(ctx context.Context, client *http.Client, url, proof string) (int, enroll.Response, string, error) {
-	var resp enroll.Response
-	b, _ := json.Marshal(enroll.Request{Proof: proof})
+func (u *Unverified) Error() string { return "the pairing answer was not verified: " + u.Why }
+
+// HTTPPair is one pairing v2 request to a Tailscale address (see tailnet.go; never through a proxy, like every
+// agent request): POST <url>/pair with a new nonce and its MAC under the join code's key. It returns the status,
+// the agent's answer on 200, and the agent's error code otherwise.
+//
+// A 200 is only ever returned without an error for an answer that enroll.OpenAnswer accepted: encrypted and
+// authenticated under a key made from the join code and this request's nonce. Anything else that arrives with
+// status 200 (the old answer with tokens in clear, an answer to another request, a body that is too large) is
+// an *Unverified error and an empty Response. There is no second attempt with the old exchange.
+func HTTPPair(ctx context.Context, url string, key []byte) (int, enroll.Response, string, error) {
+	return httpPair(ctx, pairClientTailnet, url, key)
+}
+
+// HTTPPairAny is HTTPPair without the Tailscale address check (enroll.allow_non_tailscale, and tests on
+// loopback).
+func HTTPPairAny(ctx context.Context, url string, key []byte) (int, enroll.Response, string, error) {
+	return httpPair(ctx, pairClientAny, url, key)
+}
+
+func httpPair(ctx context.Context, client *http.Client, url string, key []byte) (int, enroll.Response, string, error) {
+	var none enroll.Response
+	ask, err := enroll.NewRequestV2(key) // a new nonce every time: an answer to an earlier request never opens
+	if err != nil {
+		return 0, none, "", err
+	}
+	b, err := json.Marshal(ask)
+	if err != nil {
+		return 0, none, "", err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(url, "/")+enroll.Path, bytes.NewReader(b))
 	if err != nil {
-		return 0, resp, "", err
+		return 0, none, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	r, err := client.Do(req)
 	if err != nil {
-		return 0, resp, "", err
+		return 0, none, "", err
 	}
 	defer r.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	// The largest answer an agent sends is enroll.MaxAnswerBody; one byte more is read to tell "exactly that"
+	// from "more".
+	body, err := io.ReadAll(io.LimitReader(r.Body, enroll.MaxAnswerBody+1))
 	if err != nil {
-		return r.StatusCode, resp, "", err
+		return r.StatusCode, none, "", err
 	}
 	if r.StatusCode != 200 {
 		var e struct {
 			Code string `json:"code"`
 		}
-		_ = json.Unmarshal(body, &e)
-		return r.StatusCode, resp, e.Code, nil
+		if len(body) <= maxPairError {
+			_ = json.Unmarshal(body, &e)
+		}
+		return r.StatusCode, none, clip(e.Code, 40), nil
 	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return r.StatusCode, resp, "", errors.New("invalid answer from the agent")
+	if len(body) > enroll.MaxAnswerBody {
+		return 200, none, "", &Unverified{Why: fmt.Sprintf("the answer is larger than a pairing answer can be (%d KiB)", enroll.MaxAnswerBody>>10)}
+	}
+	resp, err := enroll.OpenAnswer(key, ask, body)
+	switch {
+	case errors.Is(err, enroll.ErrNotV2):
+		return 200, none, "", &Unverified{Why: "it is not a pairing v2 answer"}
+	case err != nil:
+		return 200, none, "", &Unverified{Why: "it was not made with this join code for this request"}
 	}
 	return 200, resp, "", nil
 }
+
+// maxPairError is the largest error answer the panel reads a code from.
+const maxPairError = 4 << 10
 
 // KnownMAC normalises MAC text from the dialog ("aa-bb-..", spaces, commas).
 func KnownMAC(list string) []string {

@@ -1620,6 +1620,7 @@ function managedBox(s) {
   return `<div class="panel glass pad"><h3>Added with Add host</h3>
     <div class="list-row"><span>Added</span><span>${h.added_at ? new Date(h.added_at).toLocaleDateString() : "–"}${h.added_by ? ` · by ${esc(h.added_by)}` : ""}</span></div>
     <div class="list-row"><span>Address</span><span><code>${esc(h.url)}</code></span></div>
+    <div class="list-row"><span>Pairing</span><span>${h.pairing === "v2" ? "verified: the agent proved it has the join code" : '<span class="note">made by an older panel, not verified: Re-pair to replace it with a verified pairing</span>'}</span></div>
     ${h.proxmox ? `<div class="list-row"><span>Proxmox API</span><span><code>${esc(h.proxmox.url)}</code> · read-only token <code>${esc(h.proxmox.token_id)}</code></span></div>`
       : h.proxmox_wanted ? '<div class="list-row"><span>Proxmox API</span><span class="note">no token came with the pairing (a cluster, or the command could not make one)</span></div>' : ""}
     <div class="row-gap"><button class="btn" type="button" data-act="mh-repair" ${why ? "disabled" : ""} title="A new join code, when the panel lost this host's tokens">Re-pair</button>

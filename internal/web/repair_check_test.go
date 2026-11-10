@@ -63,7 +63,7 @@ func newRepairRig(t *testing.T) *repairRig {
 	e.s.control = newRateLimiter(1000)
 	e.s.Enroll.PanelAddr = "100.88.109.47"
 	r := &repairRig{e: e, cookie: e.cookie(controller(), 0)}
-	e.s.Enroll.Pair = func(context.Context, string, string) (int, enroll.Response, string, error) {
+	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		return 200, r.answer, "", nil
@@ -203,7 +203,7 @@ func TestRepairNeedsTheSameNodeNameUnlessRenamed(t *testing.T) {
 // the warning, the dialog's progress keeps it, and the audit entry records that the admin was told.
 func TestRepairWarnsWhenTheMachineRunsANewerAgent(t *testing.T) {
 	r := newRepairRig(t)
-	r.e.s.Enroll.Pair = func(context.Context, string, string) (int, enroll.Response, string, error) {
+	r.e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 		return 404, enroll.Response{}, "pairing_inactive", nil
 	}
 	p := r.e.do("POST", "/api/admin/hosts/beta/repair", map[string]any{"confirm": "beta"}, "Cookie", r.cookie, "X-Requested-With", "fairy")

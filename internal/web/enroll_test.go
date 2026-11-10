@@ -32,10 +32,10 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	e.s.Enroll.Interval = 20 * time.Millisecond
 	e.s.control = newRateLimiter(100)
 	e.s.Enroll.PanelAddr = "100.88.109.47"
-	var proofSeen atomic.Value
+	var keySeen atomic.Value
 	attempts := atomic.Int32{}
-	e.s.Enroll.Pair = func(_ context.Context, url, proof string) (int, enroll.Response, string, error) {
-		proofSeen.Store(proof)
+	e.s.Enroll.Pair = func(_ context.Context, url string, key []byte) (int, enroll.Response, string, error) {
+		keySeen.Store(string(key))
 		if attempts.Add(1) < 3 {
 			return 0, enroll.Response{}, "", errors.New("dial tcp: connection refused")
 		}
@@ -64,7 +64,7 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 		t.Fatal(r.code, string(r.raw))
 	}
 	code, cmd := r.body["code"].(string), r.body["command"].(string)
-	if _, err := enroll.Normalize(code); err != nil || !strings.Contains(cmd, "-Join "+code+" -PanelAddress 100.88.109.47") ||
+	if _, err := enroll.Normalize(code); err != nil || !strings.Contains(cmd, "-Join "+code+" -PanelAddress 100.88.109.47 -PairV2") ||
 		!strings.Contains(cmd, "-PowerControl -SelfUpdate -CoreTemp") || !strings.HasPrefix(cmd, "$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7'; ") ||
 		!strings.Contains(cmd, ".Hash -ne '"+testInstallers.PS1+"')") || !strings.Contains(cmd, "-File $f -ReleaseUrl $u -Join ") ||
 		strings.Contains(cmd, "latest") {
@@ -80,9 +80,10 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	if st != "online" {
 		t.Fatal("state", st)
 	}
-	want, _ := enroll.Proof(code)
-	if proofSeen.Load() != want {
-		t.Fatal("the panel must send the code's proof")
+	// the panel pairs with the pairing v2 key of the code it showed, and with nothing else
+	want, _ := enroll.PairingKey(code)
+	if keySeen.Load() != string(want) {
+		t.Fatal("the panel must pair with the pairing v2 key of the code")
 	}
 	if g := e.do("GET", "/api/systems/nsx-furina", nil, "Cookie", c); g.code != 200 || g.body["status"] != "online" {
 		t.Fatal("host not shown", g.code, string(g.raw))
@@ -117,7 +118,7 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	if r := e.do("DELETE", "/api/admin/hosts/nsx-furina", map[string]any{"confirm": "nsx-fontaine"}, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
 		t.Fatal("remove with a wrong name", r.code)
 	}
-	e.s.Enroll.Pair = func(context.Context, string, string) (int, enroll.Response, string, error) { // nobody ran the new command
+	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) { // nobody ran the new command
 		return 0, enroll.Response{}, "", errors.New("dial tcp: connection refused")
 	}
 	if r := e.do("POST", "/api/admin/hosts/nsx-furina/repair", map[string]any{"confirm": "nsx-furina"}, append([]string{"Cookie", c}, csrf...)...); r.code != 201 ||
@@ -191,7 +192,7 @@ func TestAddHostProxmoxNode(t *testing.T) {
 	e.s.control = newRateLimiter(100)
 	e.s.Enroll.PanelAddr = "100.88.109.47"
 	ca := testCA(t)
-	e.s.Enroll.Pair = func(context.Context, string, string) (int, enroll.Response, string, error) {
+	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 		return 200, enroll.Response{AgentVersion: "43-abc", Platform: "linux", Token: "node-read-token-xxxxxxxxxxxxxxxxxxxx",
 			ControlToken: "node-control-token-yyyyyyyyyyyyyyyyy", Proxmox: &enroll.ProxmoxGrant{TokenID: "fairy@pve!panel-nsx-kachina",
 				TokenSecret: "0b7c4e2a-1111-2222-3333-444455556666", CAPEM: string(ca), Node: "NSX-KACHINA",
@@ -213,7 +214,7 @@ func TestAddHostProxmoxNode(t *testing.T) {
 	}
 	cmd := r.body["command"].(string)
 	if !strings.Contains(cmd, `echo "`+testInstallers.SH+`  $f" | sha256sum -c - && env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7 sh "$f" --join `) ||
-		!strings.HasSuffix(cmd, "--power-control --proxmox") {
+		!strings.HasSuffix(cmd, " --pair-v2 --power-control --proxmox") {
 		t.Fatal(cmd)
 	}
 	id := r.body["id"].(string)

@@ -16,7 +16,7 @@ import (
 // M3, second layer, through the API: Add host for an address outside Tailscale is refused (400, audited, no
 // code made) unless config.yaml has enroll: {allow_non_tailscale: true}.
 func TestAddHostRefusesAddressesOutsideTailscale(t *testing.T) {
-	nobody := func(context.Context, string, string) (int, enroll.Response, string, error) {
+	nobody := func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 		return 0, enroll.Response{}, "", errors.New("dial tcp: connection refused")
 	}
 	e := setup(t)

@@ -182,10 +182,29 @@ panel verified (`--sums-sha256 <hash>` / `-SumsSha256 <hash>`): the installer re
 before it trusts a line of it, so even a first install rests on the panel's key. The installer
 checks every file it downloads against `SHA256SUMS` and its signature, installs the agent like the manual install, makes its tokens on
 the machine and waits for the panel. The panel tries to pair every few seconds; the dialog follows it
-(waiting -> paired -> online) and Cancel stops it. Pairing is `POST /pair` on the agent with a proof of the code,
-accepted once, only from the panel's address, at most 5 tries a minute; then the agent switches pairing off for
-good. Creating a code is a control action (admin, CSRF, kill switch, step-up sign-in, rate limit, audit
-`host.add` / `host.pair`).
+(waiting -> paired -> online) and Cancel stops it. Creating a code is a control action (admin, CSRF, kill switch,
+step-up sign-in, rate limit, audit `host.add` / `host.pair`); API tokens cannot do it.
+
+Pairing is `POST /pair` on the agent, answered once, only to the panel's address, at most 5 tries a minute; then
+the agent switches pairing off for good. The panel speaks **pairing v2** only. The command carries `--pair-v2`
+(`-PairV2` on Windows), so the installer stores a key made from the join code instead of the code's hash. Every
+request of the panel carries a new random value and a check value made with that key; the agent answers only
+such a request, with its tokens encrypted and authenticated under a key bound to both the join code and the
+request. So the panel knows the answer comes from the machine the code was given to (anything else that answers
+at that address is not added, and the audit log says so: `host.pair unverified`), and nobody who reads the
+exchange learns the tokens. Hosts paired this way show "Pairing: verified" on their page; hosts added by an
+older panel show "not verified" until they are re-paired.
+
+There is no fallback to the old exchange, in which the panel sent the same proof every time and the agent
+answered with its tokens in clear:
+- A Fairy-agent **release** whose install script does not know `--pair-v2` (older than Fairy-agent v0.6.0) is
+  refused by Add host and Re-pair (HTTP 409) before any code is made. Choose a newer one with
+  `enroll: {agent_release: build-N}` or update the panel.
+- An **agent** from before pairing v2 that already runs on the machine answers the panel's request with an
+  error. The dialog then says the agent is too old and must be updated first. Nothing is lost: the command
+  shown in the dialog installs the newer agent, and the panel pairs with the same code as soon as that agent
+  is up (the code stays valid for its 15 minutes).
+- Such agents stay monitored and controlled as before; only pairing them again needs the newer agent.
 
 Hosts added this way are kept in `<data_dir>/managed-hosts.yaml` and their tokens in
 `<data_dir>/secrets/agent-<id>.json` (0600), not in config.yaml; both are merged at start (an id in config.yaml
@@ -369,7 +388,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/notify` | Optional ntfy / Discord message on control actions and notifications. |
 | `internal/notifications` | The Notifications page: events and per-user read / dismissed marks (`notifications.go`), made from the poller's snapshots on state changes only (`watcher.go`). |
 | `internal/managed` | Hosts added with Add host: `managed-hosts.yaml` and `secrets/`, merged with config.yaml. |
-| `internal/enrollment` | Add host: join codes, the command per OS, the pairing loop (waiting -> paired -> online). |
+| `internal/enrollment` | Add host: join codes, the command per OS, the pairing loop (waiting -> paired -> online), pairing v2 (panel side), Tailscale-only pairing. |
 | `internal/panelupdate` | Update panel: starting `fairy-panel-update.service` and reading its status file. |
 | `internal/security` | Finds the real client IP behind nginx (only for rate limits and the audit log). |
 | `internal/model` | The JSON shapes of the API (field names match the Python prototype). |
@@ -391,7 +410,7 @@ Shared code imported from [Fairy-agent](https://github.com/n3ptune-cpu/Fairy-age
 | `pkg/tuya` | The Tuya 3.3/3.4/3.5 local protocol (encryption, frames, one persistent connection per plug). |
 | `pkg/redact` | Removes passwords/tokens from process command lines (in the agent, and again in the panel). |
 | `pkg/configutil` | The id rule (`ValidID`) and secrets referenced by environment variable name (`EnvSecret`). |
-| `pkg/enroll` | Add host: join codes, the proof sent to the agent's `/pair`, and its answer. |
+| `pkg/enroll` | Add host: join codes, the pairing v2 request sent to the agent's `/pair`, and its sealed answer. |
 | `pkg/release` | Signed releases: signature checks, the GitHub download, the swap / restart / rollback installer and the `update` command shared with `fairy-agent update`. |
 | `pkg/agent`, `pkg/agent/...` | Only in `internal/agentcontract`'s test: the agent's HTTP handler, fake collector and fake BMC. |
 

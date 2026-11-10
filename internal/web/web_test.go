@@ -858,4 +858,4 @@ func TestSleepFromThePanel(t *testing.T) {
 
 var testInstallers = enrollment.Fixed{Repo: "n3ptune-cpu/Fairy-agent", Tag: "build-7", Version: "7-6155fe6",
 	Base: "https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7",
-	SH:   strings.Repeat("a1", 32), PS1: strings.Repeat("b2", 32)}
+	SH:   strings.Repeat("a1", 32), PS1: strings.Repeat("b2", 32), PairV2SH: true, PairV2PS1: true}

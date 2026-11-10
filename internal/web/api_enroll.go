@@ -17,7 +17,9 @@ import (
 
 // Add host (admins): the dialog's data, creating a pending enrollment (a control action: CSRF, kill switch,
 // step-up, rate limit, audit host.add), its progress, cancel, and for hosts added this way Re-pair (a new code
-// when the panel lost the tokens) and Remove. The machine runs one command; the panel pairs by itself.
+// when the panel lost the tokens) and Remove. The machine runs one command; the panel pairs by itself, with
+// pairing v2 only (internal/enrollment): an answer that does not prove the join code is never stored, and an
+// agent or release from before v2 is reported as too old (409 for the release, a hint while it waits).
 
 func (s *Server) enrollRoutes() {
 	s.mux.HandleFunc("GET /api/admin/hosts", s.h(s.hostsPage))
@@ -109,8 +111,11 @@ func (s *Server) enrollEvent(e enrollment.Enrollment, kind, detail string) {
 	if e.Repair {
 		action = "host.repair"
 	}
-	s.writeAudit(audit.Entry{Actor: e.CreatedBy, Action: action, Target: e.HostID, Source: "fairy",
-		Params: map[string]any{"enrollment": e.ID, "url": e.URL}, Outcome: outcome})
+	params := map[string]any{"enrollment": e.ID, "url": e.URL}
+	if e.Pairing != "" {
+		params["pairing"] = e.Pairing // "v2": the agent's answer was verified with the join code
+	}
+	s.writeAudit(audit.Entry{Actor: e.CreatedBy, Action: action, Target: e.HostID, Source: "fairy", Params: params, Outcome: outcome})
 	n := notifications.Event{Type: "enroll", SystemID: e.HostID, Host: e.Name}
 	switch kind {
 	case "online":
@@ -220,6 +225,10 @@ func enrollErr(err error) error {
 	var u *enrollment.Unavailable
 	if errors.As(err, &u) {
 		return apierr.New(503, u.Msg)
+	}
+	var old *enrollment.TooOld
+	if errors.As(err, &old) {
+		return apierr.New(409, old.Msg)
 	}
 	return err
 }
@@ -346,6 +355,9 @@ func (s *Server) enrollmentGet(c *reqCtx) error {
 		return err
 	}
 	if c.r.URL.Query().Get("reveal") == "1" {
+		if u.Auth == "token" { // the join code goes to the browser that made it, never to an API token
+			return c.deny(u, 403, "the join code is shown to the signed-in admin who made it, not to an API token", "API token asked for a join code")
+		}
 		cr, ok := s.Enroll.Reveal(c.r.PathValue("id"), actorOf(u))
 		if !ok {
 			return apierr.New(404, "the code was already shown, or this Add host is over: make a new code")

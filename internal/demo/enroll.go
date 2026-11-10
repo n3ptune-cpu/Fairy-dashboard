@@ -35,14 +35,14 @@ func token() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// Pair simulates POST /pair on a new machine.
-func Pair(_ context.Context, rawURL, proof string) (int, enroll.Response, string, error) {
+// Pair simulates the pairing request to a new machine.
+func Pair(_ context.Context, rawURL string, key []byte) (int, enroll.Response, string, error) {
 	pairMu.Lock()
 	defer pairMu.Unlock()
-	first, ok := pairFirst[proof]
+	first, ok := pairFirst[string(key)]
 	if !ok {
 		first = time.Now()
-		pairFirst[proof] = first
+		pairFirst[string(key)] = first
 	}
 	if time.Since(first) < PairDelay {
 		return 0, enroll.Response{}, "", errors.New("dial tcp: connect: connection refused")
@@ -110,5 +110,6 @@ func Installers() enrollment.Fixed {
 	sum := func(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 	return enrollment.Fixed{Repo: release.AgentRepo, Tag: enrollment.AgentReleaseTag, Version: enrollment.AgentReleaseVersion,
 		Base: "https://github.com/" + release.AgentRepo + "/releases/download/" + enrollment.AgentReleaseTag,
-		SH:   sum("demo install.sh"), PS1: sum("demo install.ps1"), Sums: sum("demo SHA256SUMS"), PinSH: true, PinPS1: true}
+		SH:   sum("demo install.sh"), PS1: sum("demo install.ps1"), Sums: sum("demo SHA256SUMS"), PinSH: true, PinPS1: true,
+		PairV2SH: true, PairV2PS1: true}
 }

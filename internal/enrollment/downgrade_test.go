@@ -84,7 +84,7 @@ func TestRepairWarnsAboutAnOlderReleaseAndReportsADowngrade(t *testing.T) {
 						return tc.live
 					},
 				},
-				Pair: func(context.Context, string, string) (int, enroll.Response, string, error) {
+				Pair: func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 					return 200, enroll.Response{AgentVersion: tc.answers, Token: "new-read-token-xxxxxxxxxxxxxxxxxx"}, "", nil
 				}}
 			cr, err := m.Create(context.Background(), Request{}, &h, "neptune", nil)
@@ -128,7 +128,7 @@ func TestAddHostHasNoOlderReleaseWarning(t *testing.T) {
 		Scripts: Fixed(testInstallers), items: map[string]*Enrollment{},
 		Hooks: Hooks{Config: func() *config.Panel { return testConfig(t) }, Event: func(Enrollment, string, string) {},
 			AgentVersion: func(string) string { t.Error("asked"); return "99-zzz" }},
-		Pair: func(context.Context, string, string) (int, enroll.Response, string, error) {
+		Pair: func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 			return 404, enroll.Response{}, "pairing_inactive", nil
 		}}
 	cr, err := m.Create(context.Background(), Request{Name: "new-box", OS: "linux"}, nil, "neptune", func(string) string { return "" })

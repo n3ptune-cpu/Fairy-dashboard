@@ -504,7 +504,7 @@ func TestPendingActionRunsOnceAfterStepUp(t *testing.T) {
 func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
 	e := setup(t)
 	e.s.Enroll.PanelAddr = "100.88.109.47"
-	e.s.Enroll.Pair = func(ctx context.Context, _, _ string) (int, enroll.Response, string, error) {
+	e.s.Enroll.Pair = func(ctx context.Context, _ string, _ []byte) (int, enroll.Response, string, error) {
 		<-ctx.Done()
 		return 0, enroll.Response{}, "", ctx.Err()
 	}

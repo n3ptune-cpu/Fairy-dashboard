@@ -58,6 +58,27 @@ type Installers struct {
 	Sums   string `json:"sha256sums_sha256"`
 	PinSH  bool   `json:"install_sh_takes_sums"`
 	PinPS1 bool   `json:"install_ps1_takes_sums"`
+	// PairV2SH / PairV2PS1: the checked script takes the pairing v2 option (FlagPairV2SH / FlagPairV2PS1) and
+	// hands it to `fairy-agent join --pair-v2`. The panel only pairs v2, so a release without it is refused.
+	PairV2SH  bool `json:"install_sh_pair_v2"`
+	PairV2PS1 bool `json:"install_ps1_pair_v2"`
+}
+
+// The pairing v2 option of the install scripts, as the command passes it. The agent then stores a key made
+// from the join code instead of the old verifier (`fairy-agent join --pair-v2`) and answers only a panel that
+// proves it has the code, with its tokens encrypted.
+const (
+	FlagPairV2SH  = "--pair-v2"
+	FlagPairV2PS1 = "-PairV2"
+)
+
+// PairsV2 reports whether the checked install script for this system ("linux", "windows") takes the pairing
+// v2 option.
+func (in Installers) PairsV2(os string) bool {
+	if os == "windows" {
+		return in.PairV2PS1
+	}
+	return in.PairV2SH
 }
 
 // ScriptSource gives the checked installers for the command (the real one fetches and verifies them once).
@@ -77,6 +98,12 @@ type Unavailable struct{ Msg string }
 
 func (u *Unavailable) Error() string { return u.Msg }
 
+// TooOld means the Fairy-agent release the command would install cannot pair with this panel: its install
+// script does not know pairing v2, and the panel never pairs the old, unauthenticated way (409).
+type TooOld struct{ Msg string }
+
+func (o *TooOld) Error() string { return o.Msg }
+
 var (
 	tagRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 	hexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -85,6 +112,10 @@ var (
 	// the checked script takes it.
 	shTakesSums  = regexp.MustCompile(`(?m)^\s*--sums-sha256\)`)
 	ps1TakesSums = regexp.MustCompile(`(?im)^\s*\[string\]\$SumsSha256\b`)
+	// Pairing v2, found the same way: install.sh's `--pair-v2)` case arm and install.ps1's `[switch]$PairV2`
+	// parameter.
+	shTakesPairV2  = regexp.MustCompile(`(?m)^\s*--pair-v2\)`)
+	ps1TakesPairV2 = regexp.MustCompile(`(?im)^\s*\[switch\]\$PairV2\b`)
 )
 
 // Limits for what the panel downloads to check a release.
@@ -176,7 +207,8 @@ func (v *Verifier) check(ctx context.Context) (Installers, error) {
 	}
 	sums := sha256.Sum256(files[release.SumsFile]) // the exact bytes whose signature was just checked
 	in := Installers{Repo: v.Repo, Tag: v.Tag, Version: ch.Version, Base: v.Base(), Sums: hex.EncodeToString(sums[:]),
-		PinSH: shTakesSums.Match(files[InstallSH]), PinPS1: ps1TakesSums.Match(files[InstallPS1])}
+		PinSH: shTakesSums.Match(files[InstallSH]), PinPS1: ps1TakesSums.Match(files[InstallPS1]),
+		PairV2SH: shTakesPairV2.Match(files[InstallSH]), PairV2PS1: ps1TakesPairV2.Match(files[InstallPS1])}
 	for name, dst := range map[string]*string{InstallSH: &in.SH, InstallPS1: &in.PS1} {
 		if err := ch.Sums.Check(name, files[name]); err != nil {
 			return Installers{}, err

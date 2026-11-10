@@ -48,7 +48,7 @@ func TestRepairDropsTheOldTokens(t *testing.T) {
 			Online: func(string) (bool, string) { return true, "" },
 			Event:  func(Enrollment, string, string) {},
 		},
-		Pair: func(context.Context, string, string) (int, enroll.Response, string, error) {
+		Pair: func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 			return 200, enroll.Response{AgentVersion: "8-abcdef0", Token: "new-read-token-xxxxxxxxxxxxxxxxxx",
 				ControlToken: "new-control-token-yyyyyyyyyyyyyyy"}, "", nil
 		}}
@@ -108,7 +108,7 @@ func TestRemoveDuringRepairDoesNotBringTheHostBack(t *testing.T) {
 			Online: func(string) (bool, string) { return true, "" },
 			Event:  func(Enrollment, string, string) {},
 		},
-		Pair: func(context.Context, string, string) (int, enroll.Response, string, error) {
+		Pair: func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 			close(answering) // the machine answers: the pairing is in flight
 			<-release
 			return 200, enroll.Response{Token: "new-read-token-xxxxxxxxxxxxxxxxxx"}, "", nil
@@ -156,7 +156,7 @@ func TestRepairOfAHostThatConfigYAMLShadowsIsRefused(t *testing.T) {
 			Online: func(string) (bool, string) { return true, "" },
 			Event:  func(Enrollment, string, string) {},
 		},
-		Pair: func(context.Context, string, string) (int, enroll.Response, string, error) {
+		Pair: func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 			return 200, enroll.Response{Token: "new-read-token-xxxxxxxxxxxxxxxxxx"}, "", nil
 		}}
 	cr, err := m.Create(context.Background(), Request{}, &h, "neptune", nil)
