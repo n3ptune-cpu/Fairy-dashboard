@@ -68,6 +68,9 @@ func (s *Server) fanStatus(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
+	if len(data) == 0 { // the agent answered `null`, `{}` or nothing: no fan status (and a nil map cannot be written to)
+		return apierr.New(apierr.Upstream, "agent returned an invalid fan status")
+	}
 	data["system_id"] = id
 	b, _ := json.Marshal(data)
 	var fs model.FanStatus
@@ -116,6 +119,9 @@ func (s *Server) fanWrite(c *reqCtx, action string, body any, params map[string]
 		return err
 	}
 	c.audit(u, action, id, params, "ok")
+	if data == nil { // the agent answered `null`: the result stays an object
+		data = map[string]any{}
+	}
 	c.json(200, model.ControlResult{OK: true, Result: data})
 	return nil
 }
