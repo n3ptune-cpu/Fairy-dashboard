@@ -477,7 +477,9 @@ func TestPendingActionRunsOnceAfterStepUp(t *testing.T) {
 	if pr == nil || pr["ok"] != true || pr["label"] != "Shut down "+name {
 		t.Fatal("pending result", string(me.raw))
 	}
-	sess = sessionCookie(e, me.hdr)
+	if len(me.hdr.Values("Set-Cookie")) != 0 || strings.Contains(sess, "pending_result") {
+		t.Fatal("the result is kept on the server: showing it does not touch the cookie", me.hdr.Values("Set-Cookie"))
+	}
 	if me := e.do("GET", "/api/me", nil, "Cookie", sess); me.body["pending_result"] != nil {
 		t.Fatal("the result is shown once")
 	}
@@ -531,7 +533,6 @@ func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
 	if pr == nil || pr["ok"] != true || pr["ref"] == nil || strings.Contains(string(me.raw), `"command":`) || strings.Contains(string(me.raw), `"code":`) {
 		t.Fatal("pending result", string(me.raw))
 	}
-	sess = sessionCookie(e, me.hdr)
 	id := pr["ref"].(string)
 	g := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", sess)
 	if code, _ := g.body["code"].(string); g.code != 200 || code == "" || !strings.Contains(g.body["command"].(string), code) {

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // liveSessions is what the panel keeps in memory about browser sessions, keyed by session id. None of it is in
@@ -24,6 +26,7 @@ type liveSessions struct {
 // liveSession is one session's in-memory state.
 type liveSession struct {
 	pending *pendingAction // the control action waiting for a step-up sign-in (see pending.go)
+	result  *keptResult    // the outcome of the action the panel ran after the step-up, until /api/me shows it
 	stepUp  *stepUpRec     // the last confirmed Pocket ID sign-in (nil: none since the panel started)
 	seen    int64          // Unix seconds of the last real use (0: not known since the panel started)
 	touched int64          // Unix seconds of the last change, for pruning
@@ -125,6 +128,44 @@ func (l *liveSessions) takePending(sid, round string, cl client, now time.Time) 
 		return nil, true
 	}
 	return p, false
+}
+
+// keptResult is the outcome of a confirmed action, waiting to be shown once.
+type keptResult struct {
+	res    *model.PendingResult
+	client client // who confirmed: the result is shown to this client only
+	at     time.Time
+}
+
+// putResult keeps the outcome of the action the panel just ran for sid, for the client that confirmed it.
+func (l *liveSessions) putResult(sid string, res *model.PendingResult, cl client, now time.Time) {
+	if sid == "" || res == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entry(sid, now).result = &keptResult{res: res, client: cl, at: now}
+}
+
+// takeResult hands the outcome kept for sid out, once, to the client that confirmed the action, while it is
+// fresh (pendingMaxAge). Another client (a copy of the cookie elsewhere) gets nothing and takes nothing away.
+func (l *liveSessions) takeResult(sid string, cl client, now time.Time) *model.PendingResult {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e := l.m[sid]
+	if e == nil || e.result == nil {
+		return nil
+	}
+	if now.Sub(e.result.at) > pendingMaxAge {
+		e.result = nil
+		return nil
+	}
+	if e.result.client != cl {
+		return nil
+	}
+	res := e.result.res
+	e.result = nil
+	return res
 }
 
 // dropPending forgets the action waiting for sid.

@@ -65,9 +65,8 @@ type sessionData struct {
 	// that it survives a restart; the cookie is signed, and a copy of it used from another address or browser
 	// carries the mark of the client it was copied from, which that client does not match.
 	Client string `json:"client,omitempty"`
-	// PendingResult is the outcome of the kept control action the panel ran after a step-up, shown once by
-	// /api/me. The action itself, and which round trip it is armed for, are on the server only (pending.go).
-	PendingResult *model.PendingResult `json:"pending_result,omitempty"`
+	// The kept control action, which round trip it is armed for, and its outcome after the step-up are on the
+	// server only (pending.go, sessionstate.go): nothing of them is in the cookie.
 
 	// expiredSID is set by decode instead of everything else when the cookie is genuine but older than maxAge:
 	// the session id it carried, so the session can be removed from sessions.json. Never written.
@@ -181,5 +180,5 @@ func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
 
 func (s *sessionData) empty() bool {
 	return s.SID == "" && s.User == nil && s.IAT == 0 && s.Seen == 0 && s.Next == "" && !s.StepUp &&
-		s.State == "" && s.Nonce == "" && s.Verifier == "" && s.Started == 0 && s.PendingResult == nil
+		s.State == "" && s.Nonce == "" && s.Verifier == "" && s.Started == 0
 }

@@ -31,9 +31,8 @@ func (s *Server) me(c *reqCtx) error {
 		me.DemoView = g.String()
 		me.DemoViews = s.demoViews()
 	}
-	if sess := c.session(); sess.PendingResult != nil && u.Auth != "token" { // shown once
-		me.PendingResult, sess.PendingResult = sess.PendingResult, nil
-		c.dirty = true
+	if u.Auth != "token" { // the outcome of the action this client just confirmed: shown once, to it alone
+		me.PendingResult = s.codec.live.takeResult(c.pendingKey(), c.client(), s.now())
 	}
 	c.json(200, me)
 	return nil

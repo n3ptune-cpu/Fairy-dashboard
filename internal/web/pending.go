@@ -241,14 +241,13 @@ func (r *recorder) Write(b []byte) (int, error) {
 }
 
 // resumePending runs p, the action that waited for the step-up sign-in the caller has just confirmed for this
-// session (callback or demo), and stores its outcome in the session. p was taken out of the store by the caller
+// session (callback or demo), and keeps its outcome for the confirming client's next /api/me. p was taken out of the store by the caller
 // (takePending), so it runs at most once; nil runs nothing.
 func (s *Server) resumePending(c *reqCtx, p *pendingAction) {
 	if p == nil || p.run == nil {
 		return
 	}
 	sess := c.session()
-	c.dirty = true
 	ctx := context.WithValue(context.WithValue(c.r.Context(), resumedKey, true), sessionKey, sess)
 	// The request is put together from what the router made of the original one. Nothing is parsed or routed a
 	// second time: the kept handler is called directly, with the kept path parameters.
@@ -289,7 +288,8 @@ func (s *Server) resumePending(c *reqCtx, p *pendingAction) {
 	if len(res.Message) > 300 {
 		res.Message = res.Message[:300]
 	}
-	sess.PendingResult = res
+	// kept on the server for the client that confirmed, until its page asks /api/me (once; see takeResult)
+	s.codec.live.putResult(c.pendingKey(), res, c.client(), s.now())
 	slog.Info("ran the action that waited for a step-up sign-in", "route", p.Pattern, "status", rec.status)
 }
 

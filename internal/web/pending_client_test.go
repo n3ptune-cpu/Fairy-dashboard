@@ -2,6 +2,7 @@ package web
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -615,5 +616,56 @@ func TestJoinCodeIsRevealedOnlyToTheClientThatConfirmed(t *testing.T) {
 	}
 	if g := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", a.sess); g.code != 200 {
 		t.Fatal("the admin who confirmed:", g.code, string(g.raw))
+	}
+}
+
+// The result of the action the panel ran after "Confirm it's you" is handed out once, by /api/me. It used to
+// travel in the session cookie (readable in it, and "once" per copy of the cookie). It is kept on the server
+// now, for the client that confirmed: a copy of the cookie elsewhere gets nothing and takes nothing away, the
+// cookie does not carry it, and it is gone after three minutes.
+func TestConfirmedResultGoesOnceToTheClientThatConfirmed(t *testing.T) {
+	result := func(a *armed, hdr ...string) map[string]any {
+		me := a.e.do("GET", "/api/me", nil, append([]string{"Cookie", a.sess}, hdr...)...)
+		if me.code != 200 {
+			t.Fatal(me.code, string(me.raw))
+		}
+		if len(me.hdr.Values("Set-Cookie")) != 0 {
+			t.Fatal("asking for the result changed the cookie:", me.hdr.Values("Set-Cookie"))
+		}
+		pr, _ := me.body["pending_result"].(map[string]any)
+		return pr
+	}
+	a := arm(t)
+	if r := a.confirm(a.id, false); r.code != 303 || a.powerCalls() != 1 {
+		t.Fatal(r.code, a.powerCalls())
+	}
+	raw, _ := base64.RawURLEncoding.DecodeString(strings.Split(strings.SplitN(a.sess, "=", 2)[1], ".")[0])
+	if len(raw) == 0 || strings.Contains(string(raw), "pending_result") || strings.Contains(string(raw), "laptop") {
+		t.Fatalf("the cookie carries the result: %s", raw)
+	}
+	for who, hdr := range map[string][]string{"another address and browser": thief, "another address": otherAddr, "another browser": otherBrowser} {
+		if pr := result(a, hdr...); pr != nil {
+			t.Fatalf("%s got the result of the admin's action: %v", who, pr)
+		}
+	}
+	if pr := result(a); pr == nil || pr["ok"] != true || pr["path"] != "/api/systems/laptop/power" {
+		t.Fatal("the confirming client must still get it after the others asked:", pr)
+	}
+	if pr := result(a); pr != nil {
+		t.Fatal("shown twice:", pr)
+	}
+	// an API token of the same user never gets it
+	a = arm(t)
+	if r := a.confirm(a.id, false); r.code != 303 {
+		t.Fatal(r.code)
+	}
+	tok, _, _ := a.e.s.Tokens.Create("ops", "system", "control", "cli:test", 0)
+	if me := a.e.do("GET", "/api/me", nil, "Authorization", "Bearer "+tok); me.body["pending_result"] != nil {
+		t.Fatal("an API token got a result")
+	}
+	// not asked for within three minutes: gone
+	a.clk.advance(pendingMaxAge + time.Second)
+	if pr := result(a); pr != nil {
+		t.Fatal("a result older than three minutes:", pr)
 	}
 }
