@@ -50,3 +50,23 @@ func TestUIEnrollDialogSaysWhenSomethingElseAnswers(t *testing.T) {
 		}
 	}
 }
+
+// The result of an action the panel ran after "Confirm it's you" (for Add host: the id whose code is then
+// shown) is handed out once, by the first /api/me. A page that is going away must not ask for it when its
+// stream breaks, and a page that is handed it anyway shows it. (In demo mode, where the sign-in takes no time,
+// the page being left took the result in about half of the runs, and the Add host dialog never opened.)
+func TestUIPageThatIsLeavingDoesNotTakeThePendingResult(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`window.addEventListener("pagehide", () => { leaving = true; if (stepUpOpen && !stepUpOpen.going) cancelStepUp(); });`,
+		`window.addEventListener("pageshow", (e) => { leaving = false; if (e.persisted && stepUpOpen) stepUpOpen.going = false; });`,
+		"async function streamLost() {\n  if (leaving || stepUpOpen?.going) return;",
+		"async function checkAccess() {\n  if (leaving || stepUpOpen?.going) return;",
+		`try { showPendingResult((await api("/api/me")).pending_result); reachable = true; }`,
+		"const me = await api(\"/api/me\");\n    showPendingResult(me.pending_result);",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+}

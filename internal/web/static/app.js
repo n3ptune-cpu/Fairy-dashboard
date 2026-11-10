@@ -203,8 +203,12 @@ function cancelStepUp() {
   dropPending();
   if (su.kept) api("/api/me/pending", { method: "DELETE", keepalive: true }).catch(() => { /* it expires by itself */ });
 }
-window.addEventListener("pagehide", () => { if (stepUpOpen && !stepUpOpen.going) cancelStepUp(); });
-window.addEventListener("pageshow", (e) => { if (e.persisted && stepUpOpen) stepUpOpen.going = false; });  // Back from Pocket ID
+// leaving: this page is going away (a navigation, a reload, the tab closing). Its stream breaks then, and it
+// must not ask /api/me because of that: the result of an action the panel ran after "Confirm it's you" is
+// handed out once, to the first /api/me that asks, and it belongs to the page that comes next.
+let leaving = false;
+window.addEventListener("pagehide", () => { leaving = true; if (stepUpOpen && !stepUpOpen.going) cancelStepUp(); });
+window.addEventListener("pageshow", (e) => { leaving = false; if (e.persisted && stepUpOpen) stepUpOpen.going = false; });  // Back from Pocket ID
 // After a step-up sign-in: the result of the action the panel ran by itself (shown once).
 function showPendingResult(pr) {
   if (!pr) return;
@@ -1844,8 +1848,10 @@ function pushUpsHistory(ov) {
 // reconnected by the browser itself; if that reconnect is answered 401 it ends up here.
 let streamRetry = null, streamBackoff = 0;
 async function streamLost() {
+  if (leaving || stepUpOpen?.going) return;  // the page is on its way out: see leaving
   let reachable = false;
-  try { await api("/api/me"); reachable = true; } catch { /* 401: sessionEnded() ran; otherwise retry below */ }
+  // should this page be handed the result of an action meant for another tab, it is shown here, not lost
+  try { showPendingResult((await api("/api/me")).pending_result); reachable = true; } catch { /* 401: sessionEnded() ran; otherwise retry below */ }
   if (signedOut) return;
   streamBackoff = Math.min(30000, streamBackoff ? streamBackoff * 2 : 3000);
   // signed in, but the stream is still refused: most likely the limit of 8 live connections per user (L8)
@@ -1902,8 +1908,10 @@ setInterval(() => {
 
 // The stream ends when an admin changes your role or sites; on reconnect, reload if access changed.
 async function checkAccess() {
+  if (leaving || stepUpOpen?.going) return;  // see leaving
   try {
     const me = await api("/api/me");
+    showPendingResult(me.pending_result);  // as in streamLost
     if (me.role !== state.me.role || (me.sites || []).join() !== (state.me.sites || []).join()) location.reload();
   } catch { /* a 401 already showed the sign-in view (api) */ }
 }
