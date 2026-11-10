@@ -78,23 +78,46 @@ func (c *reqCtx) stepUp(u *model.User, what string) error {
 	return c.stepUpWithin(u, what, cfg.StepUpWindowS)
 }
 
+// perActionGrace is how old the confirming sign-in may be when the panel replays the one kept action in
+// step_up_per_action mode (the callback accepts an auth_time of up to two minutes ago).
+const perActionGrace = 150
+
 // stepUpWithin is stepUp with its own window (the panel's own update wants a sign-in from the last 2 minutes).
 // A refused browser request is kept and runs by itself right after the sign-in (pending.go).
+//
+// The sign-in counts only for the client that confirmed it (authAge). With step_up_per_action: true nothing is
+// inherited at all: a confirmation authorises exactly the one kept action, which the panel replays itself right
+// after the sign-in, and every other request (also from the same browser, a second later) is asked again.
 func (c *reqCtx) stepUpWithin(u *model.User, what string, window int) error {
-	if age := c.authAge(u); age != nil && *age > float64(window) {
-		c.audit(u, "auth.step_up", c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, "required")
-		id := c.keepPending(u)
-		msg := fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d min.", what, max(1, window/60))
-		if window < 60 || window%60 != 0 {
-			msg = fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d seconds.", what, window)
-		}
-		detail := map[string]any{"code": "step_up_required", "window_s": window, "pending": id != "", "message": msg}
-		if id != "" {
-			detail["pending_id"] = id // names the kept action in /auth/login?step_up=1&pending=<id>
-		}
-		return apierr.New(401, detail)
+	age := c.authAge(u)
+	if age == nil {
+		return nil
 	}
-	return nil
+	perAction := c.s.Cfg.StepUpPerAction
+	if perAction {
+		if c.resumed() && *age <= float64(max(window, perActionGrace)) {
+			return nil
+		}
+	} else if *age <= float64(window) {
+		return nil
+	}
+	c.audit(u, "auth.step_up", c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, "required")
+	id := c.keepPending(u)
+	msg := fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d min.", what, max(1, window/60))
+	if window < 60 || window%60 != 0 {
+		msg = fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d seconds.", what, window)
+	}
+	if perAction {
+		msg = fmt.Sprintf("Confirm it's you: %s need their own Pocket ID sign-in, every time.", what)
+	}
+	detail := map[string]any{"code": "step_up_required", "window_s": window, "pending": id != "", "message": msg}
+	if id != "" {
+		detail["pending_id"] = id // names the kept action in /auth/login?step_up=1&pending=<id>
+	}
+	if perAction {
+		detail["per_action"] = true
+	}
+	return apierr.New(401, detail)
 }
 
 // adminGuard protects the Users page's changes: browser session only (no API tokens), CSRF, admin role,

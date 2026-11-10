@@ -117,9 +117,12 @@ func (c *reqCtx) requireSession() (*model.User, error) {
 	return u, nil
 }
 
-// authAge: seconds since the user last authenticated at Pocket ID (nil for API tokens). A session without an
-// auth_time from the identity provider counts as authenticated long ago (fail closed): control actions then
-// need a step-up, and the step-up itself must return auth_time.
+// authAge: seconds since the user last authenticated at Pocket ID (nil for API tokens), as far as this request
+// may rely on it. The time is kept on the server per session id and counts only for the client (address and
+// browser) the confirmation came back to: a session without a recorded confirmation (none since the panel
+// started, or an ID token without auth_time), or the same cookie presented from another address or browser,
+// counts as authenticated long ago (fail closed). Control actions then need a step-up, and the step-up itself
+// must return auth_time.
 func (c *reqCtx) authAge(u *model.User) *float64 {
 	switch u.Auth {
 	case "token":
@@ -130,7 +133,8 @@ func (c *reqCtx) authAge(u *model.User) *float64 {
 		v := c.s.now().Sub(c.s.demoAuthTime).Seconds()
 		return &v
 	}
-	v := c.s.nowSec() - c.session().AuthTime // AuthTime 0 = unknown: very old
+	at, _ := c.s.codec.live.confirmedAt(c.session().SID, c.ip(), uaHash(c.r)) // 0 = unknown: very old
+	v := c.s.nowSec() - at
 	return &v
 }
 
@@ -291,9 +295,16 @@ func (s *Server) authCallback(c *reqCtx) error {
 			"Pocket ID did not ask you to sign in again (your last sign-in there is more than two minutes old). "+
 				"Try again; if this keeps happening, an administrator can set step_up_prompt_login: true in Fairy's config.", target)
 	}
-	if sess.StepUp && sess.User != nil && sess.User.Sub == u.Sub && sess.SID != "" {
-		// Step-up for the same user: keep the session, record the fresh authentication time.
-		sess.AuthTime, sess.Seen = authTime, int64(now)
+	if sess.StepUp && sess.User != nil && sess.User.Sub == u.Sub && sess.SID != "" && c.sessionUser() != nil {
+		// Step-up for the same user of a session that is still valid: the session continues (same sign-in time,
+		// so session_max_age is not extended) under a NEW session id, and the fresh authentication is recorded on
+		// the server for this client only. A copy of the cookie taken before this moment stops working.
+		sid, err := s.rotateSession(c, sess, u)
+		if err != nil {
+			return err
+		}
+		s.codec.live.confirm(sid, authTime, c.ip(), uaHash(c.r), s.now())
+		sess.Seen = int64(now)
 		sess.StepUp, sess.Next, sess.State, sess.Nonce, sess.Verifier, sess.Started, sess.PendingID = false, "", "", "", "", 0, ""
 		c.dirty = true
 		c.auditAnon("auth.step_up", "ok", actorOf(&u), &u.Sub, nil)
@@ -393,11 +404,28 @@ func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authT
 		c.auditAnon("auth.login", "failed: users.json not writable", actorOf(&u), &u.Sub, nil)
 		return apierr.New(503, "sign-in could not be recorded (the panel cannot write its users file); see the server log")
 	}
-	c.sess = &sessionData{SID: sid, User: &u, IAT: int64(now), Seen: int64(now), AuthTime: authTime}
+	c.sess = &sessionData{SID: sid, User: &u, IAT: int64(now), Seen: int64(now)}
 	c.dirty = true
+	s.codec.live.confirm(sid, authTime, c.ip(), uaHash(c.r), s.now())
 	slog.Info("login ok", "sub", u.Sub)
 	c.auditAnon("auth.login", "ok", actorOf(&u), &u.Sub, nil)
 	return nil
+}
+
+// rotateSession gives a session that just passed a step-up a new id: the new id is registered in sessions.json,
+// the old one removed (with everything the panel remembered under it). The cookie's other contents stay.
+func (s *Server) rotateSession(c *reqCtx, sess *sessionData, u model.User) (string, error) {
+	admin := s.Poller.Admin
+	sid := randToken(18)
+	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip()}); err != nil {
+		slog.Error("step-up failed: cannot register the session in sessions.json (disk full? wrong owner?)", "error", err)
+		c.auditAnon("auth.step_up", "failed: sessions.json not writable", actorOf(&u), &u.Sub, nil)
+		return "", apierr.New(503, "the sign-in could not be recorded (the panel cannot write its session file); see the server log")
+	}
+	_ = admin.RemoveSession(sess.SID)
+	s.codec.live.forget(sess.SID)
+	sess.SID = sid
+	return sid, nil
 }
 
 // authLogout needs the same CSRF header and same-origin checks as every other write, so another site cannot

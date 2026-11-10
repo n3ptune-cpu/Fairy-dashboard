@@ -277,6 +277,11 @@ The file is read once at start (path from the config only) and served at `/brand
   `max_age=0` (optionally `prompt=login`) and the callback requires a fresh `auth_time` (at most 2 min old).
   A missing `auth_time` never counts as fresh: the identity provider must send it (OIDC Core requires it when
   `max_age` is requested); otherwise step-up fails with a page that says so and control actions stay locked.
+  The sign-in time is kept on the server (memory only, never in the cookie) and counts only for the browser and
+  address that confirmed it: a copy of the session cookie used from anywhere else is asked to confirm, every
+  step-up gives the session a new id (an older copy of the cookie is signed out), and after a panel restart the
+  first control action asks again. `step_up_per_action: true` removes the window: every control action needs
+  its own sign-in, which confirms exactly that one action.
 * Sessions: HMAC-signed `fairy_session` cookie (HttpOnly, Secure, SameSite=Lax) that is valid only while its id is
   in `sessions.json`, within the idle timeout and absolute lifetime; revocable with `fairy admin sessions`.
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never

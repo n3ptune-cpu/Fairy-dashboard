@@ -271,10 +271,13 @@ type Panel struct {
 	TrustedProxies     []string         `yaml:"trusted_proxies"`
 	StepUpWindowS      int              `yaml:"step_up_window_s"`
 	StepUpPromptLogin  bool             `yaml:"step_up_prompt_login"`
-	LoginRatePerMin    int              `yaml:"login_rate_per_min"`
-	Branding           Branding         `yaml:"branding"`
-	Updates            Updates          `yaml:"updates"`
-	Enroll             Enroll           `yaml:"enroll"`
+	// StepUpPerAction (default off): a "Confirm it's you" sign-in authorises exactly the one action it was asked
+	// for and nothing afterwards; step_up_window_s is then not used for control actions.
+	StepUpPerAction bool     `yaml:"step_up_per_action"`
+	LoginRatePerMin int      `yaml:"login_rate_per_min"`
+	Branding        Branding `yaml:"branding"`
+	Updates         Updates  `yaml:"updates"`
+	Enroll          Enroll   `yaml:"enroll"`
 
 	trusted []netip.Prefix
 }

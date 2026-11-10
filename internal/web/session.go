@@ -16,12 +16,15 @@ const cookieName = "fairy_session"
 
 // sessionData is stored client-side in a signed (HMAC-SHA256), HttpOnly cookie. It holds no secrets: the
 // server-side registry (sessions.json) decides whether a sid is still valid, so sessions are revocable.
+//
+// When the user last authenticated at Pocket ID (the step-up window) is deliberately NOT here: it is kept on the
+// server per session id and bound to the client that confirmed it (sessionstate.go), so a copy of the cookie
+// does not inherit the window. An "auth_time" in a cookie from an older version is ignored.
 type sessionData struct {
-	SID      string      `json:"sid,omitempty"`
-	User     *model.User `json:"user,omitempty"`
-	IAT      int64       `json:"iat,omitempty"`
-	Seen     int64       `json:"seen,omitempty"`
-	AuthTime float64     `json:"auth_time,omitempty"`
+	SID  string      `json:"sid,omitempty"`
+	User *model.User `json:"user,omitempty"`
+	IAT  int64       `json:"iat,omitempty"`
+	Seen int64       `json:"seen,omitempty"`
 	// login round trip
 	Next     string `json:"next,omitempty"`
 	StepUp   bool   `json:"step_up,omitempty"`
@@ -107,6 +110,6 @@ func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
 }
 
 func (s *sessionData) empty() bool {
-	return s.SID == "" && s.User == nil && s.IAT == 0 && s.Seen == 0 && s.AuthTime == 0 && s.Next == "" && !s.StepUp &&
+	return s.SID == "" && s.User == nil && s.IAT == 0 && s.Seen == 0 && s.Next == "" && !s.StepUp &&
 		s.State == "" && s.Nonce == "" && s.Verifier == "" && s.Started == 0 && s.PendingID == "" && s.PendingResult == nil
 }

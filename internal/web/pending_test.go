@@ -16,7 +16,9 @@ type armed struct {
 	id   string // the kept action's id
 }
 
-func arm(t *testing.T) *armed {
+// signedIn is an admin who signed in through the fake identity provider an hour ago (on Pocket ID's clock), so
+// the next control action needs a step-up.
+func signedIn(t *testing.T) *armed {
 	t.Helper()
 	e := setup(t)
 	a := &armed{e: e, idp: newFakeIDP(t), clk: e.fakeClock()}
@@ -24,6 +26,12 @@ func arm(t *testing.T) *armed {
 	a.idp.claims = map[string]any{"groups": []string{"viewers", "controllers"}, "auth_time": time.Now().Add(-time.Hour).Unix()}
 	q, rt := a.idp.login(e, "/auth/login?next=/", "")
 	a.sess = sessionCookie(e, e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt).hdr)
+	return a
+}
+
+func arm(t *testing.T) *armed {
+	t.Helper()
+	a := signedIn(t)
 	a.id = a.shutdown()
 	if a.id == "" || a.powerCalls() != 0 {
 		t.Fatal("the shutdown must be refused for a step-up and kept")

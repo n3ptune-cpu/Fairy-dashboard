@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -74,7 +75,7 @@ func (e *env) signIn(u model.User) {
 }
 
 // staleCookie mints a registered session without a sign-in: like a cookie issued days ago, before users.json
-// knew the user.
+// knew the user. Its Pocket ID sign-in (authAge ago) is recorded as confirmed by the test client (testIP, testUA).
 func (e *env) staleCookie(u model.User, authAge time.Duration) string {
 	sid := randToken(18)
 	if err := e.s.Poller.Admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub}); err != nil {
@@ -82,10 +83,16 @@ func (e *env) staleCookie(u model.User, authAge time.Duration) string {
 	}
 	now := e.s.now()
 	rec := httptest.NewRecorder()
-	e.s.codec.write(rec, &sessionData{SID: sid, User: &u, IAT: now.Unix(), Seen: now.Unix(),
-		AuthTime: float64(now.Add(-authAge).Unix())})
+	e.s.codec.write(rec, &sessionData{SID: sid, User: &u, IAT: now.Unix(), Seen: now.Unix()})
+	e.s.codec.live.confirm(sid, float64(now.Add(-authAge).Unix()), testIP, sha256.Sum256([]byte(testUA)), now)
 	return strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]
 }
+
+// The test client as the server sees it: e.do and the other helpers connect from loopback with Go's User-Agent.
+const (
+	testIP = "127.0.0.1"
+	testUA = "Go-http-client/1.1"
+)
 
 type resp struct {
 	code int

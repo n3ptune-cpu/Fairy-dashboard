@@ -483,9 +483,13 @@ func TestPendingActionRunsOnceAfterStepUp(t *testing.T) {
 	}
 	// another step-up runs nothing again
 	q, rt = idp.login(e, "/auth/login?step_up=1&next=/", sess)
-	_ = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	old := sess
+	sess = sessionCookie(e, e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt).hdr)
 	if powerCalls() != 1 {
 		t.Fatal("ran twice")
+	}
+	if r := e.do("GET", "/api/me", nil, "Cookie", old); r.code != 401 {
+		t.Fatal("a step-up gives the session a new id: the cookie from before it must stop working", r.code)
 	}
 	if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), "power.shutdown ok") {
 		t.Fatal("not audited")

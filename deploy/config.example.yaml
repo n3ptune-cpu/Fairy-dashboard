@@ -9,6 +9,11 @@ session_idle_timeout: 43200               # 12 h without activity => sign in aga
 step_up_window_s: 300                     # control actions need a Pocket ID sign-in from the last 5 min
 step_up_prompt_login: true                # also send prompt=login on step-up (max_age=0 is always sent).
                                           # Pocket ID must put auth_time in the ID token, or step-up fails.
+step_up_per_action: false                 # true: EVERY control action needs its own Pocket ID sign-in (one passkey
+                                          # prompt per action). A sign-in then confirms exactly the one action it
+                                          # was asked for; nothing is inherited, step_up_window_s is not used.
+                                          # false (default): one sign-in covers control actions for step_up_window_s,
+                                          # but only from the browser and address that confirmed it.
 enable_docs: false                        # /docs + /api/openapi.json (login required)
 data_dir: /var/lib/fairy                  # state.json, sessions.json, tokens.json, users.json, settings, uploads, health.json
 audit_log: /var/lib/fairy/audit.log       # append-only JSON lines (each line at most 8 KiB)

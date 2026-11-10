@@ -112,7 +112,8 @@ const PENDING_KEY = "fairy-pending-action";
 let stepUpOpen = null;  // the open dialog: { kept, going } (going: "Continue to Pocket ID" was pressed)
 function showStepUp(pending, detail) {
   state.menu = null; render();
-  const kept = !!detail?.pending;
+  const kept = !!detail?.pending, perAction = !!detail?.per_action;  // per_action: step_up_per_action is on
+  if (perAction && !kept) { flash(`${pending.label}: cannot be confirmed (the request is too large to keep for the sign-in)`, true); return; }
   if (!kept) { try { sessionStorage.setItem(PENDING_KEY, JSON.stringify({ ...pending, ts: Date.now(), hash: location.hash })); } catch { /* ignore */ } }
   const age = state.me?.auth_age_s, win = detail?.window_s || state.me?.step_up_window_s || 300;
   const winText = win < 300 ? `${win} seconds` : `${Math.round(win / 60)} minutes`;
@@ -122,7 +123,8 @@ function showStepUp(pending, detail) {
   m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle">
     <div class="stepup-ico">${I.shield}</div>
     <h3 id="stitle">Confirm it's you</h3>
-    <p>${win < 300 ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${winText}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}</p>
+    <p>${perAction ? "Every control action needs its own Pocket ID sign-in. This one confirms only the action below."
+      : `${win < 300 ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${winText}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}`}</p>
     <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b></div>
     <p class="note">${kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
       : "You'll sign in again at Pocket ID (passkey) and come straight back here to finish it. Nothing has been sent yet."}</p>

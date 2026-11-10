@@ -88,3 +88,18 @@ func TestBMCPowerValidation(t *testing.T) {
 		}
 	}
 }
+
+// step_up_per_action is off unless the config turns it on.
+func TestStepUpPerActionKey(t *testing.T) {
+	c, err := Parse([]byte(base))
+	if err != nil || c.StepUpPerAction {
+		t.Fatal("default must be off", err)
+	}
+	c, err = Parse([]byte(base + "step_up_per_action: true\nstep_up_prompt_login: true\n"))
+	if err != nil || !c.StepUpPerAction || !c.StepUpPromptLogin {
+		t.Fatal(err)
+	}
+	if _, err := Parse([]byte(base + "step_up_per_action: sometimes\n")); err == nil {
+		t.Fatal("a non-boolean must be refused")
+	}
+}
