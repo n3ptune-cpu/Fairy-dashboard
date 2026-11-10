@@ -216,3 +216,45 @@ func TestIdleTimeoutSurvivesRestart(t *testing.T) {
 		t.Fatal("idle since before the restart: signed out", r.code)
 	}
 }
+
+// S-d: a session that reaches session_max_age ends like an idle one: 401, the cookie is cleared and the session
+// leaves sessions.json. Both for a cookie that was never refreshed and for one refreshed a moment ago.
+func TestMaxAgeEndsTheSessionCleanly(t *testing.T) {
+	cleared := func(r resp) bool {
+		return r.code == 401 && strings.Contains(strings.Join(r.hdr.Values("Set-Cookie"), ";"), "Max-Age=0")
+	}
+	// never refreshed: the cookie itself is as old as the session
+	e := setup(t)
+	clk := e.fakeClock()
+	e.s.Cfg.SessionIdleTimeout = e.s.Cfg.SessionMaxAge
+	maxAge := time.Duration(e.s.Cfg.SessionMaxAge) * time.Second
+	ck := e.cookie(viewer, 0)
+	clk.advance(maxAge + time.Minute)
+	if r := e.do("GET", "/api/me", nil, "Cookie", ck); !cleared(r) {
+		t.Fatal("max age, old cookie: want 401 and a cleared cookie", r.code, r.hdr.Values("Set-Cookie"))
+	}
+	if n := len(must(e.s.Poller.Admin.ListSessions())); n != 0 {
+		t.Fatal("the session must leave sessions.json, have", n)
+	}
+
+	// used the whole time: the cookie is fresh, the sign-in is not
+	e = setup(t)
+	clk = e.fakeClock()
+	idle := time.Duration(e.s.Cfg.SessionIdleTimeout) * time.Second
+	ck = e.cookie(viewer, 0)
+	for at := time.Duration(0); at+idle/2 < maxAge; at += idle / 2 {
+		clk.advance(idle / 2)
+		r := e.do("GET", "/api/me", nil, "Cookie", ck, "X-Fairy-Active", "1")
+		if r.code != 200 {
+			t.Fatalf("after %v: %d", at+idle/2, r.code)
+		}
+		ck = sessionCookie(e, r.hdr)
+	}
+	clk.advance(idle/2 + time.Minute)
+	if r := e.do("GET", "/api/me", nil, "Cookie", ck, "X-Fairy-Active", "1"); !cleared(r) {
+		t.Fatal("max age, fresh cookie: want 401 and a cleared cookie", r.code, r.hdr.Values("Set-Cookie"))
+	}
+	if n := len(must(e.s.Poller.Admin.ListSessions())); n != 0 {
+		t.Fatal("the session must leave sessions.json, have", n)
+	}
+}

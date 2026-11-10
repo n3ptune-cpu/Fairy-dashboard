@@ -85,8 +85,8 @@ func (c *reqCtx) active() bool {
 	return (c.r.Method != http.MethodGet && c.r.Method != http.MethodHead) || c.r.Header.Get(activeHdr) == "1"
 }
 
-// sessionUser: browser session (cookie) only; see sessionCheck for what makes it valid. An expired or orphaned
-// session is removed from sessions.json and its cookie cleared. Real use (active) moves "last used" on the
+// sessionUser: browser session (cookie) only; see sessionCheck for what makes it valid. A session that reached
+// session_max_age, idled out or lost its user is removed from sessions.json and its cookie cleared. Real use (active) moves "last used" on the
 // server at once and in the cookie at most once a minute.
 func (c *reqCtx) sessionUser() *model.User {
 	if c.s.DemoUser != nil {
@@ -96,12 +96,16 @@ func (c *reqCtx) sessionUser() *model.User {
 	s := c.session()
 	switch c.s.sessionCheck(s) {
 	case "":
-	case sessNone, sessMaxAge:
+	case sessNone:
+		if s.expiredSID != "" { // a genuine cookie older than session_max_age: its session ends like any other
+			c.s.endSession(s.expiredSID)
+			c.clearSession()
+		}
 		return nil
 	case sessRevoked:
 		c.clearSession()
 		return nil
-	default: // idle, or the user is gone
+	default: // too old, idle, or the user is gone
 		c.s.endSession(s.SID)
 		c.clearSession()
 		return nil

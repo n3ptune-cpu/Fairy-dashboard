@@ -36,6 +36,10 @@ type sessionData struct {
 	// action itself is on the server, never in the cookie). PendingResult is its outcome, shown once by /api/me.
 	PendingID     string               `json:"pending_id,omitempty"`
 	PendingResult *model.PendingResult `json:"pending_result,omitempty"`
+
+	// expiredSID is set by decode instead of everything else when the cookie is genuine but older than maxAge:
+	// the session id it carried, so the session can be removed from sessions.json. Never written.
+	expiredSID string
 }
 
 type sessionCodec struct {
@@ -67,7 +71,8 @@ func (c *sessionCodec) sign(payload string) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
-// decode returns the session (empty when missing, tampered or older than maxAge).
+// decode returns the session (empty when missing, tampered or older than maxAge; for a genuine cookie that is
+// too old only expiredSID is set).
 func (c *sessionCodec) decode(r *http.Request) *sessionData {
 	s := &sessionData{}
 	ck, err := r.Cookie(cookieName)
@@ -86,7 +91,11 @@ func (c *sessionCodec) decode(r *http.Request) *sessionData {
 		D sessionData `json:"d"`
 		T int64       `json:"t"`
 	}
-	if json.Unmarshal(raw, &out) != nil || c.now().Sub(time.Unix(out.T, 0)) > time.Duration(c.maxAge)*time.Second {
+	if json.Unmarshal(raw, &out) != nil {
+		return s
+	}
+	if c.now().Sub(time.Unix(out.T, 0)) > time.Duration(c.maxAge)*time.Second {
+		s.expiredSID = out.D.SID
 		return s
 	}
 	return &out.D

@@ -67,7 +67,7 @@ func (s *Server) stream(c *reqCtx) error {
 	for {
 		if isSession { // revoked / expired / idle while streaming (asking changes nothing: no use is recorded)
 			if why := s.sessionCheck(c.session()); why != "" {
-				if why == sessIdle || why == sessRemoved {
+				if why != sessRevoked { // too old, idle or the user is gone: leave sessions.json as well
 					s.endSession(c.session().SID)
 				}
 				return nil
