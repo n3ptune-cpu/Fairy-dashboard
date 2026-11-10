@@ -463,8 +463,10 @@ memory limit. Add it once:
 
 ### 4. What you will notice afterwards
 
-1. **Everyone signs in once.** The session cookie has a new name (`__Host-fairy_session`), so the old
-   sign-ins end with the update. Roles, sites, API tokens, hosts and settings stay as they were.
+1. **Everyone signs in once.** The session cookie has a new name (`__Host-fairy_session`) and a new signing
+   key, so the old sign-ins end with the update: a cookie from before it is not accepted any more, also not
+   as a copy under the new name, and `fairy admin sessions list` shows nothing until someone has signed in
+   again. Roles, sites, API tokens, hosts and settings stay as they were, so you sign in and are admin.
 2. **Your first control action asks "Confirm it's you"**, also right after every panel restart. One
    confirmation covers the next 3 minutes (`step_up_window_s: 180`). A config.yaml that sets
    `step_up_window_s` keeps its value. The confirmation counts only for the browser and the address it was

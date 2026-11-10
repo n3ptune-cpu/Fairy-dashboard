@@ -99,12 +99,23 @@ func (a *State) SessionValid(sid string, iat float64) bool {
 		return false
 	}
 	ss, _ := a.sessions.Get()["sessions"].(map[string]any)
-	_, known := ss[sid]
+	rec, known := ss[sid]
 	if !known { // created a moment ago by another process? (cookies are signed, so this can't be spammed)
 		ss, _ = a.sessions.Refresh()["sessions"].(map[string]any)
-		_, known = ss[sid]
+		rec, known = ss[sid]
 	}
-	return known && iat > num(a.state.Get()["sessions_revoked_before"])
+	return known && currentGen(rec) && iat > num(a.state.Get()["sessions_revoked_before"])
+}
+
+// SessionGen is the generation of the sessions this release makes. An entry of sessions.json without it was
+// made by a release before the session cookie changed (its name, its signing key, what the panel binds a
+// session to): such a session is not valid any more, is not listed, and its entry is dropped with the next
+// sign-in. Everyone signs in once after that upgrade; roles, sites and tokens are in other files.
+const SessionGen = 2
+
+func currentGen(rec any) bool {
+	m, _ := rec.(map[string]any)
+	return num(m["gen"]) == SessionGen
 }
 
 // Session is one registered login, as listed by `fairy admin sessions list`.
@@ -127,6 +138,9 @@ func (a *State) ListSessions() ([]Session, error) {
 	ss, _ := d["sessions"].(map[string]any)
 	out := []Session{}
 	for sid, v := range ss {
+		if !currentGen(v) {
+			continue // left by an older release: not a session any more (SessionGen)
+		}
 		m, _ := v.(map[string]any)
 		s := Session{SID: sid, CreatedTS: num(m["created_ts"])}
 		s.Sub, _ = m["sub"].(string)
@@ -148,7 +162,8 @@ type NewSession struct {
 	IP    string
 }
 
-// AddSession registers a new login (and drops registry entries older than SessionKeepS).
+// AddSession registers a new login (and drops registry entries older than SessionKeepS, and those an older
+// release left: see SessionGen).
 func (a *State) AddSession(sid string, info NewSession) error {
 	_, err := statefile.Update(a.SessionsPath, func(d statefile.Data) error {
 		ss, _ := d["sessions"].(map[string]any)
@@ -159,11 +174,11 @@ func (a *State) AddSession(sid string, info NewSession) error {
 		cutoff := now() - SessionKeepS
 		for k, v := range ss {
 			m, _ := v.(map[string]any)
-			if num(m["created_ts"]) < cutoff {
+			if num(m["created_ts"]) < cutoff || !currentGen(v) {
 				delete(ss, k)
 			}
 		}
-		rec := map[string]any{"sub": info.Sub, "name": info.Name, "email": info.Email, "ip": info.IP}
+		rec := map[string]any{"sub": info.Sub, "name": info.Name, "email": info.Email, "ip": info.IP, "gen": SessionGen}
 		rec["created"] = time.Now().UTC().Format(time.RFC3339Nano)
 		rec["created_ts"] = now()
 		ss[sid] = rec

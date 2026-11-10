@@ -45,7 +45,8 @@ func TestBreakGlassOnTheOldReleasesFiles(t *testing.T) {
 		strings.Contains(out, "there is no admin") {
 		t.Fatalf("users list: %d\n%s", code, out)
 	}
-	if code, out := run("", "sessions", "list"); code != 0 || strings.Count(out, "@example.com") != 3 {
+	// the old release's three sessions ended with the upgrade (NEW-6): they are not listed as sessions
+	if code, out := run("", "sessions", "list"); code != 0 || strings.Contains(out, "@example.com") || !strings.Contains(out, "No active sessions") {
 		t.Fatalf("sessions list: %d\n%s", code, out)
 	}
 	if code, out := run("", "tokens", "list"); code != 0 || !strings.Contains(out, "home-assistant") || !strings.Contains(out, "bob-script") {

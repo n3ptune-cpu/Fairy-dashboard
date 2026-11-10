@@ -17,7 +17,8 @@ import (
 // was set by this very host over HTTPS with Path=/ and no Domain, so a site on a sibling host name cannot plant
 // one for the panel. Browsers refuse a __Host- cookie that is not Secure, so the plain name remains for the
 // FAIRY_INSECURE_COOKIES test mode (local http) only. A cookie under the plain name is never read in normal
-// mode: sessions from before this change sign in once more.
+// mode, and a cookie value from before this change is not valid under any name (cookieKeyLabel): sessions from
+// before this change sign in once more.
 const (
 	hostCookieName  = "__Host-fairy_session"
 	plainCookieName = "fairy_session"
@@ -73,6 +74,13 @@ type sessionData struct {
 	expiredSID string
 }
 
+// cookieKeyLabel derives the cookie's signing key from the session secret. It changed with the cookie's name
+// (NEW-6): the name alone did not end the old sessions, because a cookie value of the old release, sent under
+// the new name, still carried a valid signature and its session was still in sessions.json. With another key
+// no cookie made before the upgrade verifies, whatever name it is sent under; the session registry refuses
+// those sessions as well (adminstate.SessionGen). Everyone signs in once, as the guide says.
+const cookieKeyLabel = "fairy-session-cookie-v2"
+
 type sessionCodec struct {
 	key    []byte
 	maxAge int
@@ -85,7 +93,7 @@ type sessionCodec struct {
 
 func newCodec(secret string, maxAge config.Seconds, secure bool) *sessionCodec {
 	m := hmac.New(sha256.New, []byte(secret))
-	m.Write([]byte("fairy-session-cookie-v1"))
+	m.Write([]byte(cookieKeyLabel))
 	return &sessionCodec{key: m.Sum(nil), maxAge: int(maxAge), secure: secure, live: newLiveSessions(), now: time.Now}
 }
 

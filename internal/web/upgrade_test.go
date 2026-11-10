@@ -2,7 +2,10 @@ package web
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -18,6 +21,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
 
@@ -236,26 +240,17 @@ func TestUpgradeOldFilesLoad(t *testing.T) {
 		t.Fatalf("the old release's config.example.yaml: %v", err)
 	}
 
-	// sessions.json: the three sessions of the old release are read (the CLI can list and revoke them)
-	if list, err := e.s.Poller.Admin.ListSessions(); err != nil || len(list) != 3 {
+	// sessions.json: the file of the old release is read without an error, and its three sessions are over
+	// (NEW-6): none is listed, none is valid, whatever name its cookie is sent under.
+	if list, err := e.s.Poller.Admin.ListSessions(); err != nil || len(list) != 0 {
 		t.Fatal("sessions.json", len(list), err)
 	}
-	// The old cookie name is never read: a browser that still has the old cookie is simply not signed in.
 	if !strings.HasPrefix(v.OwnerCookie, "fairy_session=") || e.s.codec.name() != "__Host-fairy_session" {
 		t.Fatal(v.CookieName, e.s.codec.name())
 	}
-	if r := e.do("GET", "/api/me", nil, "Cookie", v.OwnerCookie); r.code != 401 {
-		t.Fatalf("old cookie under its old name: %d %s", r.code, r.raw)
-	}
-	// Its value under the new name (nobody's browser does this): a genuine session of the old release at most.
-	// It is never an error, and it never counts as a fresh sign-in: a control action asks to confirm.
-	renamed := "__Host-" + v.OwnerCookie
-	if r := e.do("GET", "/api/me", nil, "Cookie", renamed); r.code != 200 && r.code != 401 {
-		t.Fatalf("old cookie value: %d %s", r.code, r.raw)
-	} else if r.code == 200 {
-		w := e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 9}, "Cookie", renamed, "X-Requested-With", "fairy")
-		if d, _ := w.body["detail"].(map[string]any); w.code != 401 || d["code"] != "step_up_required" {
-			t.Fatalf("an old session must confirm before a control action: %d %s", w.code, w.raw)
+	for name, ck := range map[string]string{"its old name": v.OwnerCookie, "the new name": "__Host-" + v.OwnerCookie} {
+		if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 401 {
+			t.Fatalf("the old cookie under %s: %d %s", name, r.code, r.raw)
 		}
 	}
 
@@ -355,4 +350,107 @@ func TestUpgradeOldFilesLoad(t *testing.T) {
 	if g := e.do("GET", "/api/me", nil, "Cookie", sessionCookie(e, gone.hdr)); g.body["role"] != "pending" {
 		t.Fatalf("removed user: %s", g.raw)
 	}
+}
+
+// NEW-6: a session of the old release does not survive the upgrade, also not for someone who kept a copy of
+// its cookie and sends the value under the new name. Before, that copy was a valid admin session of the new
+// release (it read /api/me as admin, the Users page and the audit log), also after the owner had signed in
+// again, and the old sessions stayed in sessions.json. The owner simply signs in again and is admin.
+func TestUpgradeEndsTheOldReleasesSessions(t *testing.T) {
+	e, v, idp := bootVBefore(t)
+	renamed := "__Host-" + v.OwnerCookie
+	raw, _ := os.ReadFile(e.s.Poller.Admin.SessionsPath)
+	if n := strings.Count(string(raw), `"created_ts"`); n != 3 {
+		t.Fatalf("the fixture has %d sessions of the old release, want 3", n)
+	}
+	// status asks for p with the cookie and returns the status alone: a live stream that let the cookie in
+	// would never end, so the body is not read (the test must fail then, not wait).
+	status := func(p, ck string) int {
+		t.Helper()
+		req, _ := http.NewRequest("GET", e.srv.URL+p, nil)
+		req.Header.Set("Cookie", ck)
+		r, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	refusedEverywhere := func(when string) {
+		t.Helper()
+		for _, ck := range []string{renamed, v.OwnerCookie} {
+			for _, p := range []string{"/api/me", "/api/systems", "/api/admin/users", "/api/audit", "/api/stream"} {
+				if code := status(p, ck); code != 401 {
+					t.Errorf("%s: the old cookie value on %s: %d", when, p, code)
+				}
+			}
+			if r := e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 9}, "Cookie", ck, "X-Requested-With", "fairy"); r.code != 401 || stepUpRequired(r) {
+				t.Errorf("%s: a control request with the old cookie value: %d %s", when, r.code, r.raw)
+			}
+		}
+	}
+	refusedEverywhere("before anyone signed in")
+
+	// the owner signs in again with their browser (Pocket ID's default: the address is not marked verified)
+	sr := idp.signInAs(e, map[string]any{"sub": v.OwnerSub, "name": "Owner", "email": "owner@example.com", "email_verified": false})
+	if sr.code != 303 {
+		t.Fatal(sr.code, string(sr.raw))
+	}
+	ck := sessionCookie(e, sr.hdr)
+	me := e.do("GET", "/api/me", nil, "Cookie", ck)
+	if me.code != 200 || me.body["role"] != "admin" || me.body["can_control"] != true {
+		t.Fatalf("the owner must be admin again after one sign-in: %d %s", me.code, me.raw)
+	}
+	if r := e.do("GET", "/api/admin/users", nil, "Cookie", ck); r.code != 200 {
+		t.Fatal("the owner's Users page:", r.code)
+	}
+	// that sign-in also cleared what the old release left in sessions.json
+	raw, _ = os.ReadFile(e.s.Poller.Admin.SessionsPath)
+	if list := must(e.s.Poller.Admin.ListSessions()); len(list) != 1 || strings.Count(string(raw), `"created_ts"`) != 1 {
+		t.Fatalf("sessions after the owner signed in: %d listed, file: %s", len(list), raw)
+	}
+	refusedEverywhere("after the owner signed in again")
+
+	// Each of the two checks holds by itself. (1) The key: a cookie for the owner's NEW, registered session,
+	// signed the way the old release signed (same secret, old key label), is refused.
+	sd := e.s.codec.decode(reqWithCookie(ck))
+	old := newCodecWithLabel(v.Secrets.SessionSecret, "fairy-session-cookie-v1", e.s.codec)
+	rec := httptest.NewRecorder()
+	old.write(rec, sd)
+	if r := e.do("GET", "/api/me", nil, "Cookie", strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]); r.code != 401 {
+		t.Fatalf("a cookie signed with the old release's key is accepted: %d", r.code)
+	}
+	// (2) The registry: an entry as the old release wrote it (no generation), with a cookie that carries today's
+	// signature, is refused.
+	if _, err := statefile.Update(e.s.Poller.Admin.SessionsPath, func(d statefile.Data) error {
+		d["sessions"].(map[string]any)["oldsid"] = map[string]any{"sub": v.OwnerSub, "created_ts": float64(time.Now().Unix())}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	owner := *sd.User
+	rec = httptest.NewRecorder()
+	e.s.codec.write(rec, &sessionData{SID: "oldsid", User: &owner, IAT: time.Now().Unix(), Seen: time.Now().Unix()})
+	if r := e.do("GET", "/api/me", nil, "Cookie", strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]); r.code != 401 {
+		t.Fatalf("a session entry of the old release is accepted: %d", r.code)
+	}
+	if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 200 {
+		t.Fatal("the owner's own session must not be disturbed:", r.code)
+	}
+}
+
+func reqWithCookie(ck string) *http.Request {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Cookie", ck)
+	return r
+}
+
+// newCodecWithLabel is a codec like like's, with the signing key derived the way a release with another key
+// label derived it.
+func newCodecWithLabel(secret, label string, like *sessionCodec) *sessionCodec {
+	m := hmac.New(sha256.New, []byte(secret))
+	m.Write([]byte(label))
+	c := *like
+	c.key = m.Sum(nil)
+	return &c
 }
