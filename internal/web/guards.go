@@ -110,7 +110,10 @@ func (c *reqCtx) stepUpWithin(u *model.User, what string, window int) error {
 	if perAction {
 		msg = fmt.Sprintf("Confirm it's you: %s need their own Pocket ID sign-in, every time.", what)
 	}
-	detail := map[string]any{"code": "step_up_required", "window_s": window, "pending": id != "", "message": msg}
+	// auth_age_s: how old the sign-in is right now, as this check sees it (for the dialog's "last sign-in" line;
+	// /api/me's copy in the page is from when the page loaded). Very large = unknown for this client.
+	detail := map[string]any{"code": "step_up_required", "window_s": window, "pending": id != "", "message": msg,
+		"auth_age_s": math.Round(*age)}
 	if id != "" {
 		detail["pending_id"] = id // names the kept action in /auth/login?step_up=1&pending=<id>
 	}

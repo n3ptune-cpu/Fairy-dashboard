@@ -153,7 +153,11 @@ function showStepUp(pending, detail) {
   if (!kept) { try { sessionStorage.setItem(PENDING_KEY, JSON.stringify({ ...pending, ts: Date.now(), hash: location.hash })); } catch { /* ignore */ } }
   // The window is the server's: the refused request names it (window_s), /api/me carries the configured
   // step_up_window_s. A different window for this one request (the panel's own update: 2 minutes) is worded so.
-  const age = state.me?.auth_age_s, cfgWin = state.me?.step_up_window_s || 180, win = detail?.window_s || cfgWin;
+  // The age of the last sign-in comes with the refusal (the server's view right now); the copy from /api/me is as
+  // old as the page, so it is only a fallback, with the time since then added.
+  const meAge = state.me?.auth_age_s == null ? null : state.me.auth_age_s + (Date.now() - (state.meAt || Date.now())) / 1000;
+  const age = typeof detail?.auth_age_s === "number" ? detail.auth_age_s : meAge;
+  const cfgWin = state.me?.step_up_window_s || 180, win = detail?.window_s || cfgWin;
   const winText = win % 60 ? `${win} seconds` : `${win / 60} minute${win === 60 ? "" : "s"}`;
   const next = encodeURIComponent("/" + (location.hash || "#/"));
   const pid = kept && typeof detail.pending_id === "string" ? `&amp;pending=${enc(detail.pending_id)}` : "";
@@ -1971,7 +1975,7 @@ document.addEventListener("submit", async (e) => {
 });
 
 async function boot() {
-  try { state.me = await api("/api/me"); }
+  try { state.me = await api("/api/me"); state.meAt = Date.now(); }
   catch (e) { if (e.status === 401) return; throw e; }  // not signed in: api() showed the sign-in view
   // A fresh page has no "Confirm it's you" dialog, so no action may be waiting for a sign-in (a reload or the
   // Back button left one behind): the server forgets it. One that just ran is already gone.

@@ -239,6 +239,15 @@ func TestControlNeedsGroupCSRFStepUpAndKillSwitch(t *testing.T) {
 	if r.code != 401 || d["code"] != "step_up_required" || d["window_s"] != 180.0 || !strings.Contains(d["message"].(string), "last 3 min") {
 		t.Fatalf("step-up: %d %s", r.code, r.raw)
 	}
+	// S-g: the refusal says how old the sign-in is now (the dialog shows it), not the page-load snapshot
+	if age, _ := d["auth_age_s"].(float64); age < 595 || age > 660 {
+		t.Fatalf("auth_age_s of a sign-in 10 min ago: %v", d["auth_age_s"])
+	}
+	other := e.do("PUT", "/api/systems/laptop/poll", body, append([]string{"Cookie", c, "X-Forwarded-For", "203.0.113.9"}, csrf...)...)
+	od, _ := other.body["detail"].(map[string]any)
+	if age, _ := od["auth_age_s"].(float64); other.code != 401 || age < 30*86400 {
+		t.Fatalf("auth_age_s for a client that did not confirm must read as unknown (very old): %d %v", other.code, od["auth_age_s"])
+	}
 	if r := e.do("PUT", "/api/systems/laptop/poll", body, append([]string{"Cookie", c}, csrf...)...); r.code != 200 {
 		t.Fatalf("fresh controller: %d %s", r.code, r.raw)
 	}
