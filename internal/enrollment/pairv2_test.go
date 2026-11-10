@@ -809,3 +809,95 @@ func TestRequestUnderMatchesTheAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// slowScripts is a release check that takes a moment (in production: a request to the release host), and can
+// be made to fail.
+type slowScripts struct {
+	in    Installers
+	delay time.Duration
+	fail  atomic.Bool
+}
+
+func (s *slowScripts) Installers(ctx context.Context) (Installers, error) {
+	time.Sleep(s.delay)
+	if s.fail.Load() {
+		return Installers{}, &Unavailable{Msg: "the release cannot be reached"}
+	}
+	return s.in, nil
+}
+
+// N4: two Add host requests for one host at the same moment (two admins, two tabs, a double click). The "is
+// one waiting already?" check and the new entry were two separate steps with the release check between them:
+// up to 6 of 8 simultaneous requests were accepted, each with its own code and its own pairing loop. Now it is
+// exactly one, every time.
+func TestOnlyOneAddHostPerHostAtATime(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	for round := 0; round < 20; round++ {
+		r := newRig(t, srv.URL)
+		scripts := &slowScripts{in: testInstallers, delay: 5 * time.Millisecond}
+		r.m.Scripts = scripts
+		var ok, refused atomic.Int32
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, err := r.m.Create(context.Background(), Request{Name: "box", OS: "linux"}, nil, "alice", func(string) string { return "" })
+				var v *Validation
+				switch {
+				case err == nil:
+					ok.Add(1)
+				case errors.As(err, &v) && strings.Contains(v.Msg, "already waiting"):
+					refused.Add(1)
+				default:
+					t.Errorf("unexpected answer: %v", err)
+				}
+			}()
+		}
+		// another host at the same moment is not held up by it
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := r.m.Create(context.Background(), Request{Name: "other", OS: "linux"}, nil, "alice", func(string) string { return "" }); err != nil {
+				t.Errorf("another host: %v", err)
+			}
+		}()
+		close(start)
+		wg.Wait()
+		if ok.Load() != 1 || refused.Load() != 7 || len(r.m.List()) != 2 {
+			t.Fatalf("round %d: %d of 8 simultaneous Add host requests for one host accepted, %d refused, %d enrollments", round, ok.Load(), refused.Load(), len(r.m.List()))
+		}
+		// once it is cancelled the host can be added again
+		for _, e := range r.m.List() {
+			r.m.Cancel(e.ID)
+		}
+		if _, err := r.m.Create(context.Background(), Request{Name: "box", OS: "linux"}, nil, "alice", func(string) string { return "" }); err != nil {
+			t.Fatalf("after the cancel: %v", err)
+		}
+		for _, e := range r.m.List() {
+			r.m.Cancel(e.ID)
+		}
+		// a request that fails (the release cannot be checked) leaves nothing behind that blocks the next one
+		scripts.fail.Store(true)
+		if _, err := r.m.Create(context.Background(), Request{Name: "box", OS: "linux"}, nil, "alice", func(string) string { return "" }); err == nil {
+			t.Fatal("made a code without a checked release")
+		}
+		scripts.fail.Store(false)
+		if _, err := r.m.Create(context.Background(), Request{Name: "box", OS: "linux"}, nil, "alice", func(string) string { return "" }); err != nil {
+			t.Fatalf("after a failed request: %v", err)
+		}
+		r.m.mu.Lock()
+		left := len(r.m.making)
+		r.m.mu.Unlock()
+		if left != 0 {
+			t.Fatalf("%d hosts still marked as being added", left)
+		}
+		for _, e := range r.m.List() {
+			r.m.Cancel(e.ID)
+		}
+	}
+}

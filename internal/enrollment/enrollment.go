@@ -183,6 +183,7 @@ type Manager struct {
 
 	mu       sync.Mutex
 	items    map[string]*Enrollment
+	making   map[string]bool      // host ids for which Create is between its "already waiting?" check and its entry
 	nextAsk  map[string]time.Time // per host URL: when the next pairing request may go out (turn, holdOff)
 	commitMu sync.Mutex           // a pairing's store + start of polling vs Cancel / CancelHost (taken before mu)
 }
@@ -190,7 +191,7 @@ type Manager struct {
 // New builds a manager with the real HTTP pairing call. scripts checks the install scripts (see Verifier).
 func New(store *managed.Store, hooks Hooks, panelAddr string, scripts ScriptSource) *Manager {
 	m := &Manager{Store: store, Hooks: hooks, Now: time.Now, Interval: PairInterval,
-		OnlineWait: 90 * time.Second, PanelAddr: panelAddr, Scripts: scripts, items: map[string]*Enrollment{}}
+		OnlineWait: 90 * time.Second, PanelAddr: panelAddr, Scripts: scripts, items: map[string]*Enrollment{}, making: map[string]bool{}}
 	m.Pair = func(ctx context.Context, url string, key []byte) (int, enroll.Response, string, error) {
 		return httpPair(ctx, m.pairClient(), url, key)
 	}
@@ -324,14 +325,29 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 			return Created{}, invalid("%s", strings.TrimSpace(strings.ReplaceAll(err.Error(), "config invalid:\n  -", "")))
 		}
 	}
+	// One Add host per host at a time, decided here in one step (N4): the host is either waiting already, or
+	// another request for it is between this check and its own entry in the list (making the code means
+	// asking the release first, which takes time). The mark is taken off when this call returns, by which time
+	// its entry is in the list or it has failed.
 	m.mu.Lock()
+	busy := m.making[h.ID]
 	for _, x := range m.items {
-		if x.HostID == h.ID && !x.Done {
-			m.mu.Unlock()
-			return Created{}, invalid("an Add host for %s is already waiting: cancel it first", h.Name)
-		}
+		busy = busy || (x.HostID == h.ID && !x.Done)
 	}
+	if busy {
+		m.mu.Unlock()
+		return Created{}, invalid("an Add host for %s is already waiting: cancel it first", h.Name)
+	}
+	if m.making == nil {
+		m.making = map[string]bool{}
+	}
+	m.making[h.ID] = true
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.making, h.ID)
+		m.mu.Unlock()
+	}()
 	if m.Scripts == nil {
 		return Created{}, &Unavailable{Msg: "Add host is off: the panel cannot check the Fairy-agent install script"}
 	}
