@@ -551,43 +551,56 @@ func TestImpostorIsNeverAdopted(t *testing.T) {
 	}
 }
 
-// Add host and Re-pair refuse a Fairy-agent release whose install script does not know pairing v2: no code,
-// no command, no enrollment (owner default: refuse, never pair the old way).
-func TestCreateRefusesAReleaseWithoutPairingV2(t *testing.T) {
+// Add host and Re-pair refuse a Fairy-agent release whose install script cannot take the panel's command: one
+// that does not know pairing v2 (owner default: refuse, never pair the old way), one that takes the join code
+// only on its command line, one that cannot check the fingerprint, and on Windows one that cannot run from
+// memory. No code, no command, no enrollment; the refusal names what is missing.
+func TestCreateRefusesAReleaseThatCannotTakeTheCommand(t *testing.T) {
 	none := func(string) string { return "" }
 	for _, tc := range []struct {
-		sh, ps1 bool
-		os      string
-		ok      bool
+		name   string
+		change func(*Installers)
+		linux  string // what the refusal names for Linux ("" = accepted)
+		win    string
 	}{
-		{false, false, "linux", false}, {false, false, "windows", false},
-		{true, false, "linux", true}, {true, false, "windows", false},
-		{false, true, "linux", false}, {false, true, "windows", true},
-		{true, true, "linux", true}, {true, true, "windows", true},
+		{"a current release", func(*Installers) {}, "", ""},
+		{"no pairing v2 at all", func(in *Installers) { in.PairV2SH, in.PairV2PS1 = false, false }, "pairing v2 (--pair-v2)", "pairing v2 (-PairV2)"},
+		{"pairing v2 only in install.sh", func(in *Installers) { in.PairV2PS1 = false }, "", "pairing v2 (-PairV2)"},
+		{"pairing v2 only in install.ps1", func(in *Installers) { in.PairV2SH = false }, "pairing v2 (--pair-v2)", ""},
+		{"the code only on the command line", func(in *Installers) { in.StdinSH, in.EnvPS1 = false, false }, "standard input (--join-stdin)", "FAIRY_JOIN_CODE"},
+		{"no fingerprint check", func(in *Installers) { in.PinSH, in.PinPS1 = false, false }, "fingerprint (--sums-sha256)", "fingerprint (-SumsSha256)"},
+		{"install.ps1 needs to be a file", func(in *Installers) { in.MemoryPS1 = false }, "", "running from memory"},
+		{"the pinned build-13", func(in *Installers) {
+			*in = Installers{Repo: in.Repo, Tag: in.Tag, Version: in.Version, Base: in.Base, SH: in.SH, PS1: in.PS1, Sums: in.Sums, PinSH: true, PinPS1: true, MemoryPS1: true}
+		},
+			"pairing v2 (--pair-v2); taking the join code from standard input", "pairing v2 (-PairV2); taking the join code from FAIRY_JOIN_CODE"},
 	} {
-		in := testInstallers
-		in.PairV2SH, in.PairV2PS1 = tc.sh, tc.ps1
-		m := addrManager(t)
-		m.Scripts = Fixed(in)
-		m.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
-			return 0, enroll.Response{}, "", errors.New("nobody there")
-		}
-		cr, err := m.Create(context.Background(), Request{Name: "box", OS: tc.os}, nil, "neptune", none)
-		var old *TooOld
-		if tc.ok {
-			if err != nil || !strings.Contains(cr.Command, map[string]string{"linux": " --pair-v2", "windows": " -PairV2"}[tc.os]) {
-				t.Errorf("%+v: %v %s", tc, err, cr.Command)
+		for os, missing := range map[string]string{"linux": tc.linux, "windows": tc.win} {
+			in := testInstallers
+			tc.change(&in)
+			m := addrManager(t)
+			m.Scripts = Fixed(in)
+			m.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
+				return 0, enroll.Response{}, "", errors.New("nobody there")
 			}
-			m.Cancel(cr.ID)
-			continue
-		}
-		if !errors.As(err, &old) || len(m.List()) != 0 || cr.Code != "" || cr.Command != "" {
-			t.Errorf("%+v: not refused: %v", tc, err)
-			continue
-		}
-		for _, want := range []string{"build-7 (Fairy-agent 7-6155fe6) is too old for this panel", "does not know pairing v2", "does not pair the old", "agent_release"} {
-			if !strings.Contains(old.Msg, want) {
-				t.Errorf("the refusal lacks %q: %s", want, old.Msg)
+			cr, err := m.Create(context.Background(), Request{Name: "box", OS: os}, nil, "neptune", none)
+			var old *TooOld
+			if missing == "" {
+				if err != nil || cr.Command == "" || strings.Count(cr.Command, cr.Code) != 1 {
+					t.Errorf("%s, %s: %v %s", tc.name, os, err, cr.Command)
+				}
+				m.Cancel(cr.ID)
+				continue
+			}
+			if !errors.As(err, &old) || len(m.List()) != 0 || cr.Code != "" || cr.Command != "" {
+				t.Errorf("%s, %s: not refused: %v", tc.name, os, err)
+				continue
+			}
+			for _, want := range []string{"build-7 (Fairy-agent 7-6155fe6) is too old for this panel", missing, "does not pair the old, unverified way",
+				"does not put the join code on a command line", "agent_release"} {
+				if !strings.Contains(old.Msg, want) {
+					t.Errorf("%s, %s: the refusal lacks %q: %s", tc.name, os, want, old.Msg)
+				}
 			}
 		}
 	}
@@ -603,38 +616,50 @@ func TestCreateRefusesAReleaseWithoutPairingV2(t *testing.T) {
 	}
 }
 
-// The option is found in the signed script itself, like --sums-sha256: the case arm of install.sh, the
-// parameter of install.ps1. A mention in a comment or a help text is not the option.
-func TestVerifierFindsThePairingV2Option(t *testing.T) {
-	const (
-		shV2  = "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --sums-sha256) SUMS_PIN=\"$2\"; shift ;;\n    --join-stdin) CODE_STDIN=1 ;;\n    --pair-v2) PAIRV2=1 ;;\n  esac\n  shift\ndone\n"
-		ps1V2 = "param(\n    [switch]$Ipmi,\n    [string]$SumsSha256 = '',\n    [switch]$PairV2,\n    [string]$ReleaseUrl = 'x'\n)\n"
-	)
+// What a script can do is found in the signed script itself, like --sums-sha256: the case arms of install.sh,
+// the parameters of install.ps1, its use of the environment variable, and the absence of what needs a file.
+// A mention in a comment or a help text is not the option.
+func TestVerifierFindsWhatTheScriptsCanDo(t *testing.T) {
+	type caps struct{ pinSH, v2SH, stdinSH, pinPS1, v2PS1, envPS1, memPS1 bool }
 	for _, tc := range []struct {
 		name    string
 		sh, ps1 string
-		wantSH  bool
-		wantPS1 bool
+		want    caps
 	}{
-		{"both", shV2, ps1V2, true, true},
-		{"neither (the pinned build-13 style)", shWithPin, ps1WithPin, false, false},
-		{"only install.sh", shV2, ps1WithPin, true, false},
-		{"only install.ps1", shWithPin, ps1V2, false, true},
-		{"mentioned in comments and help only", "#!/bin/sh\n# install.sh --pair-v2 is for newer panels\necho 'usage: [--pair-v2]'\nx=\"--pair-v2)\"\n",
-			"# -PairV2: not here\nparam(\n    [string]$Note = '[switch]$PairV2'\n)\n", false, false},
-		{"other spellings", "#!/bin/sh\ncase \"$1\" in\n  --pair-v2x) ;;\n  --pair-v20) ;;\nesac\n", "param(\n    [switch]$PairV2Later,\n    [string]$PairV2\n)\n", false, false},
-		{"PowerShell is not case sensitive", shV2, "Param(\n\t[Switch]$pairv2\n)\n", true, true},
+		{"current scripts", shCurrent, ps1Current, caps{true, true, true, true, true, true, true}},
+		{"v0.4.3 to v0.5.x", shWithPin, ps1WithPin, caps{pinSH: true, pinPS1: true, memPS1: true}},
+		{"only install.sh is current", shCurrent, ps1WithPin, caps{true, true, true, true, false, false, true}},
+		{"only install.ps1 is current", shWithPin, ps1Current, caps{true, false, false, true, true, true, true}},
+		{"mentioned in comments and help only",
+			"#!/bin/sh\n# install.sh --pair-v2 --join-stdin --sums-sha256 X is for newer panels\necho 'usage: [--pair-v2] [--join-stdin]'\nx=\"--pair-v2)\"\ny=\"--join-stdin)\"\n",
+			"# -PairV2: not here; FAIRY_JOIN_CODE neither\nparam(\n    [string]$Note = '[switch]$PairV2'\n)\n", caps{memPS1: true}},
+		{"other spellings", "#!/bin/sh\ncase \"$1\" in\n  --pair-v2x) ;;\n  --pair-v20) ;;\n  --join-stdin2) ;;\n  --join-stdinx) ;;\nesac\n",
+			"param(\n    [switch]$PairV2Later,\n    [string]$PairV2\n)\n$x = $env:FAIRY_JOIN_CODE2\n", caps{memPS1: true}},
+		{"PowerShell is not case sensitive", shCurrent, "Param(\n\t[Switch]$pairv2,\n\t[String]$sumssha256\n)\n$c = $env:FAIRY_JOIN_CODE\n", caps{true, true, true, true, true, true, true}},
+		{"install.ps1 still demands -Join", shCurrent, strings.Replace(ps1Current, "[string]$Join = ''", "[Parameter(Mandatory = $true)][string]$Join", 1),
+			caps{true, true, true, true, true, false, true}},
+		{"install.ps1 with #Requires", shCurrent, "#Requires -RunAsAdministrator\n" + ps1Current, caps{true, true, true, true, true, true, false}},
+		{"install.ps1 with an indented #requires", shCurrent, "  #requires -Version 5\n" + ps1Current, caps{true, true, true, true, true, true, false}},
+		{"install.ps1 uses its own folder", shCurrent, ps1Current + "$d = Join-Path $PSScriptRoot 'x'\n", caps{true, true, true, true, true, true, false}},
+		{"install.ps1 uses its own path", shCurrent, ps1Current + "$p = $psCommandPath\n", caps{true, true, true, true, true, true, false}},
+		{"install.ps1 uses $MyInvocation", shCurrent, ps1Current + "$p = $MyInvocation.MyCommand.Path\n", caps{true, true, true, true, true, true, false}},
 	} {
 		f := newFakeRelease(t, "20-abcdef0", tc.sh, tc.ps1)
 		in, err := f.verifier(t, "20-abcdef0").Installers(context.Background())
 		if err != nil {
 			t.Fatal(tc.name, err)
 		}
-		if in.PairV2SH != tc.wantSH || in.PairV2PS1 != tc.wantPS1 || in.PairsV2("linux") != tc.wantSH || in.PairsV2("windows") != tc.wantPS1 {
-			t.Errorf("%s: sh %v ps1 %v", tc.name, in.PairV2SH, in.PairV2PS1)
+		if got := (caps{in.PinSH, in.PairV2SH, in.StdinSH, in.PinPS1, in.PairV2PS1, in.EnvPS1, in.MemoryPS1}); got != tc.want {
+			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
 		}
-		lin, win := Command(in, managed.Host{OS: "linux"}, "CODE", "100.88.109.47"), Command(in, managed.Host{OS: "windows"}, "CODE", "100.88.109.47")
-		if strings.Contains(lin, "--pair-v2") != tc.wantSH || strings.Contains(win, "-PairV2") != tc.wantPS1 {
+		if in.PairsV2("linux") != tc.want.v2SH || in.PairsV2("windows") != tc.want.v2PS1 {
+			t.Errorf("%s: PairsV2", tc.name)
+		}
+		// a command exists exactly when the script can take all of it
+		lin, win := Command(in, managed.Host{OS: "linux"}, testCode, "100.88.109.47"), Command(in, managed.Host{OS: "windows"}, testCode, "100.88.109.47")
+		linOK := tc.want.pinSH && tc.want.v2SH && tc.want.stdinSH
+		winOK := tc.want.pinPS1 && tc.want.v2PS1 && tc.want.envPS1 && tc.want.memPS1
+		if (lin != "") != linOK || (win != "") != winOK || (len(in.Lacks("linux")) == 0) != linOK || (len(in.Lacks("windows")) == 0) != winOK {
 			t.Errorf("%s: the command and the script disagree:\n%s\n%s", tc.name, lin, win)
 		}
 	}

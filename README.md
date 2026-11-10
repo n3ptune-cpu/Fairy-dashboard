@@ -166,9 +166,9 @@ use, only its hash is kept) and one command:
 
 ```text
 Windows (PowerShell as Administrator):
-$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-13'; $f="$env:TEMP\fairy-install.ps1"; iwr -useb "$u/install.ps1" -OutFile $f; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '<SHA-256>') { throw '...' }; powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u -Join <CODE> -PanelAddress <panel IP> [-PowerControl -SelfUpdate -CoreTemp ...]
+$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-N'; $b=(New-Object Net.WebClient).DownloadData("$u/install.ps1"); if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -ne '<SHA-256 of install.ps1>') { throw '...' }; $env:FAIRY_JOIN_CODE='<CODE>'; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 <SHA-256 of SHA256SUMS> -PanelAddress <panel IP> -PairV2 [-PowerControl -SelfUpdate -CoreTemp ...]
 Linux:
-f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-13/install.sh && echo "<SHA-256>  $f" | sha256sum -c - && sudo env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-13 sh "$f" --join <CODE> --panel <panel IP> [--power-control --self-update ...]
+f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-N/install.sh && echo "<SHA-256 of install.sh>  $f" | sha256sum -c - && printf '%s' '<CODE>' | sudo env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-N sh "$f" --sums-sha256 <SHA-256 of SHA256SUMS> --join-stdin --pair-v2 --panel <panel IP> [--power-control --self-update ...]
 ```
 
 The command never runs "the latest" script. It names one Fairy-agent release: the one this panel was built
@@ -176,10 +176,19 @@ against (`build-13` = Fairy-agent v0.5.2; `enroll: {agent_release: build-N}` pic
 command the panel downloads that release's `SHA256SUMS`, `SHA256SUMS.sig`, `VERSION`, `install.sh` and
 `install.ps1` and checks them with the release key built into the panel (`release/signing.pub`); a panel build
 without the key, an unreachable GitHub or a bad signature refuses Add host (HTTP 503) instead. The command runs
-the script only if its SHA-256 is the one the panel checked, and points it at the same release. When the checked
-installer takes it (Fairy-agent v0.4.3 and later), the command also passes the SHA-256 of the `SHA256SUMS` the
-panel verified (`--sums-sha256 <hash>` / `-SumsSha256 <hash>`): the installer refuses any other `SHA256SUMS`
-before it trusts a line of it, so even a first install rests on the panel's key. The installer
+the script only if its SHA-256 is the one the panel checked, and points it at the same release. It also passes
+the SHA-256 of the `SHA256SUMS` the panel verified (`--sums-sha256 <hash>` / `-SumsSha256 <hash>`): the
+installer refuses any other `SHA256SUMS` before it trusts a line of it, so even a first install rests on the
+panel's key.
+
+The join code is on no program's command line, where every user of the machine could read it while the
+installer runs. On Linux the shell's own `printf` writes it to the installer's standard input
+(`--join-stdin`); on Windows the line sets it as an environment variable of that PowerShell window
+(`FAIRY_JOIN_CODE`), which the installer reads and removes. On Windows the script is never a file before it
+runs: the line downloads it into memory, checks the SHA-256 of exactly those bytes and runs them, so nothing
+can be swapped between the check and the run. (The line stays in the shell's history with the code, which is
+single-use and valid 15 minutes.) There is one form of the command per system; a release whose install script
+cannot take it (anything before Fairy-agent v0.6.0) is refused, see below. The installer
 checks every file it downloads against `SHA256SUMS` and its signature, installs the agent like the manual install, makes its tokens on
 the machine and waits for the panel. The panel tries to pair every few seconds; the dialog follows it
 (waiting -> paired -> online) and Cancel stops it. Creating a code is a control action (admin, CSRF, kill switch,
@@ -197,8 +206,9 @@ older panel show "not verified" until they are re-paired.
 
 There is no fallback to the old exchange, in which the panel sent the same proof every time and the agent
 answered with its tokens in clear:
-- A Fairy-agent **release** whose install script does not know `--pair-v2` (older than Fairy-agent v0.6.0) is
-  refused by Add host and Re-pair (HTTP 409) before any code is made. Choose a newer one with
+- A Fairy-agent **release** whose install script does not know `--pair-v2`, or takes the join code only on
+  its command line (older than Fairy-agent v0.6.0), is refused by Add host and Re-pair (HTTP 409) before any
+  code is made; the message names what the script lacks. Choose a newer one with
   `enroll: {agent_release: build-N}` or update the panel.
 - An **agent** from before pairing v2 that already runs on the machine answers the panel's request with an
   error. The dialog then says the agent is too old and must be updated first. Nothing is lost: the command

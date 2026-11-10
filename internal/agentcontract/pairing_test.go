@@ -139,7 +139,7 @@ func newPanel(t *testing.T) *panel {
 	// the checked release: its install scripts know pairing v2
 	ws.Enroll.Scripts = enrollment.Fixed{Repo: "n3ptune-cpu/Fairy-agent", Tag: "build-20", Version: "20-abcdef0",
 		Base: "https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-20", SH: strings.Repeat("a1", 32), PS1: strings.Repeat("b2", 32),
-		Sums: strings.Repeat("c3", 32), PinSH: true, PinPS1: true, PairV2SH: true, PairV2PS1: true}
+		Sums: strings.Repeat("c3", 32), PinSH: true, PinPS1: true, PairV2SH: true, PairV2PS1: true, StdinSH: true, EnvPS1: true, MemoryPS1: true}
 	ws.Enroll.Interval, ws.Enroll.OnlineWait = 20*time.Millisecond, 3*time.Second
 	pn := &panel{t: t, ws: ws, p: p, permit: make(chan struct{}, 64)}
 	pn.to.Store("")
@@ -162,7 +162,8 @@ func newPanel(t *testing.T) *panel {
 	return pn
 }
 
-var joinRe = regexp.MustCompile(`--join ([A-Z2-7-]{39}) --panel 127\.0\.0\.1`)
+// The Linux line: the code goes to the installer's standard input, never onto a command line.
+var joinRe = regexp.MustCompile(`&& printf '%s' '([A-Z2-7-]{39})' \| (sudo )?env FAIRY_RELEASE_URL=\S+ sh "\$f" --sums-sha256 [0-9a-f]{64} --join-stdin( --pair-v2)? --panel 127\.0\.0\.1`)
 
 // start makes an Add host (id "") or a Re-pair as the signed-in admin, confirms "it's you", and fetches the
 // code and command the way the page does. It returns the enrollment id, the code and whether the command
@@ -185,10 +186,10 @@ func (pn *panel) start(path string, body map[string]any) (id, code string, pairV
 	}
 	cmd, _ := cr["command"].(string)
 	m := joinRe.FindStringSubmatch(cmd)
-	if m == nil || m[1] != cr["code"] {
-		pn.t.Fatal("the command does not carry the code and the panel's address:", cmd)
+	if m == nil || m[1] != cr["code"] || strings.Count(cmd, m[1]) != 1 {
+		pn.t.Fatal("the command does not hand the code to the installer's standard input, with the panel's address:", cmd)
 	}
-	return id, m[1], strings.Contains(cmd, " "+enrollment.FlagPairV2SH)
+	return id, m[1], m[3] == " "+enrollment.FlagPairV2SH
 }
 
 // ask lets n pairing requests through and returns the enrollment afterwards.

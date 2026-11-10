@@ -111,5 +111,5 @@ func Installers() enrollment.Fixed {
 	return enrollment.Fixed{Repo: release.AgentRepo, Tag: enrollment.AgentReleaseTag, Version: enrollment.AgentReleaseVersion,
 		Base: "https://github.com/" + release.AgentRepo + "/releases/download/" + enrollment.AgentReleaseTag,
 		SH:   sum("demo install.sh"), PS1: sum("demo install.ps1"), Sums: sum("demo SHA256SUMS"), PinSH: true, PinPS1: true,
-		PairV2SH: true, PairV2PS1: true}
+		PairV2SH: true, PairV2PS1: true, StdinSH: true, EnvPS1: true, MemoryPS1: true}
 }

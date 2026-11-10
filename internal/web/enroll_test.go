@@ -64,10 +64,13 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 		t.Fatal(r.code, string(r.raw))
 	}
 	code, cmd := r.body["code"].(string), r.body["command"].(string)
-	if _, err := enroll.Normalize(code); err != nil || !strings.Contains(cmd, "-Join "+code+" -PanelAddress 100.88.109.47 -PairV2") ||
-		!strings.Contains(cmd, "-PowerControl -SelfUpdate -CoreTemp") || !strings.HasPrefix(cmd, "$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7'; ") ||
-		!strings.Contains(cmd, ".Hash -ne '"+testInstallers.PS1+"')") || !strings.Contains(cmd, "-File $f -ReleaseUrl $u -Join ") ||
-		strings.Contains(cmd, "latest") {
+	// the Windows line: the script is checked and run from memory, the code is set in the window's environment
+	// (on no command line), the fingerprint and the pairing v2 option are passed
+	if _, err := enroll.Normalize(code); err != nil || !strings.Contains(cmd, "; $env:FAIRY_JOIN_CODE='"+code+"'; & (") ||
+		!strings.HasSuffix(cmd, " -ReleaseUrl $u -SumsSha256 "+testInstallers.Sums+" -PanelAddress 100.88.109.47 -PairV2 -PowerControl -SelfUpdate -CoreTemp") ||
+		!strings.HasPrefix(cmd, "$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7'; ") ||
+		!strings.Contains(cmd, " -ne '"+testInstallers.PS1+"') { throw ") || strings.Count(cmd, code) != 1 ||
+		strings.Contains(cmd, "-Join") || strings.Contains(cmd, "$env:TEMP") || strings.Contains(cmd, "latest") {
 		t.Fatal(code, cmd)
 	}
 	id := r.body["id"].(string)
@@ -122,7 +125,7 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 		return 0, enroll.Response{}, "", errors.New("dial tcp: connection refused")
 	}
 	if r := e.do("POST", "/api/admin/hosts/nsx-furina/repair", map[string]any{"confirm": "nsx-furina"}, append([]string{"Cookie", c}, csrf...)...); r.code != 201 ||
-		!strings.Contains(r.body["command"].(string), "-Join ") || r.body["code"] == code {
+		!strings.Contains(r.body["command"].(string), "$env:FAIRY_JOIN_CODE='"+r.body["code"].(string)+"'") || r.body["code"] == code {
 		t.Fatal("repair", r.code, string(r.raw))
 	} else if !e.s.Enroll.Cancel(r.body["id"].(string)) {
 		t.Fatal("cancel")
@@ -213,8 +216,9 @@ func TestAddHostProxmoxNode(t *testing.T) {
 		t.Fatal(r.code, string(r.raw))
 	}
 	cmd := r.body["command"].(string)
-	if !strings.Contains(cmd, `echo "`+testInstallers.SH+`  $f" | sha256sum -c - && env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7 sh "$f" --join `) ||
-		!strings.HasSuffix(cmd, " --pair-v2 --power-control --proxmox") {
+	if !strings.Contains(cmd, `echo "`+testInstallers.SH+`  $f" | sha256sum -c - && printf '%s' '`+r.body["code"].(string)+
+		`' | env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7 sh "$f" --sums-sha256 `+testInstallers.Sums+` --join-stdin --pair-v2 --panel `) ||
+		!strings.HasSuffix(cmd, " --power-control --proxmox") || strings.Contains(cmd, "--join "+r.body["code"].(string)) {
 		t.Fatal(cmd)
 	}
 	id := r.body["id"].(string)

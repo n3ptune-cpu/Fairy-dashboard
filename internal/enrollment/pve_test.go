@@ -33,7 +33,7 @@ func TestPVEFromGrant(t *testing.T) {
 		}
 	}
 	// the command asks the node for its token, in a root shell
-	cmd := Command(testInstallers, managed.Host{OS: "linux", ProxmoxWanted: true}, "CODE", "100.88.109.47")
+	cmd := Command(testInstallers, managed.Host{OS: "linux", ProxmoxWanted: true}, testCode, "100.88.109.47")
 	if !strings.HasSuffix(cmd, " --proxmox") || strings.Contains(cmd, "sudo") {
 		t.Fatal(cmd)
 	}

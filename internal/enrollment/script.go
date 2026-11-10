@@ -25,10 +25,15 @@ import (
 // SHA256SUMS.sig, VERSION, install.sh and install.ps1 and checks them with the release key built into the panel
 // (release/signing.pub, set with -ldflags) before it shows any command. The command then refuses to run a
 // script whose SHA-256 differs from the one the panel checked, and points the script at that same release
-// (FAIRY_RELEASE_URL / -ReleaseUrl), whose files it checks against SHA256SUMS in turn. Installers from
-// Fairy-agent v0.4.3 on also take the SHA-256 of the SHA256SUMS the panel verified (--sums-sha256 /
-// -SumsSha256) and refuse any other before trusting a line of it, so even a first install rests on the
-// panel's key, not on the downloaded binary's own.
+// (FAIRY_RELEASE_URL / -ReleaseUrl), whose files it checks against SHA256SUMS in turn. The installers take the
+// SHA-256 of the SHA256SUMS the panel verified (--sums-sha256 / -SumsSha256, Fairy-agent v0.4.3 on) and
+// refuse any other before trusting a line of it, so even a first install rests on the panel's key, not on
+// the downloaded binary's own.
+//
+// The command has one form per system (Command), and that form needs an install script that takes the
+// pairing v2 option, takes the join code from standard input (Linux) or the environment (Windows) instead of
+// its command line, and, on Windows, can be run from memory. What a signed script can do is read from the
+// script itself (Installers.Lacks); a release whose script cannot is refused, never served an older form.
 
 // AgentModule is the Fairy-agent version in go.mod; AgentRelease is its GitHub release (tag build-<run>, VERSION
 // "<run>-<short commit>"). Bump both together (a test compares AgentModule with go.mod).
@@ -62,6 +67,14 @@ type Installers struct {
 	// hands it to `fairy-agent join --pair-v2`. The panel only pairs v2, so a release without it is refused.
 	PairV2SH  bool `json:"install_sh_pair_v2"`
 	PairV2PS1 bool `json:"install_ps1_pair_v2"`
+	// StdinSH: install.sh reads the join code from its standard input (FlagJoinStdinSH), so the code is on no
+	// command line. EnvPS1: install.ps1 takes it from the environment variable JoinCodeEnv, set in the
+	// PowerShell window by the command.
+	StdinSH bool `json:"install_sh_join_stdin"`
+	EnvPS1  bool `json:"install_ps1_join_env"`
+	// MemoryPS1: install.ps1 can be run from memory as a script block (no #Requires line, no use of its own
+	// path), so the command needs no file between checking the script's hash and running it.
+	MemoryPS1 bool `json:"install_ps1_from_memory"`
 }
 
 // The pairing v2 option of the install scripts, as the command passes it. The agent then stores a key made
@@ -71,6 +84,36 @@ const (
 	FlagPairV2SH  = "--pair-v2"
 	FlagPairV2PS1 = "-PairV2"
 )
+
+// How the join code reaches the install script without being on a command line, where every local user could
+// read it while the installer runs: install.sh reads one line from standard input, install.ps1 reads an
+// environment variable of the PowerShell window (and removes it).
+const (
+	FlagJoinStdinSH = "--join-stdin"
+	JoinCodeEnv     = "FAIRY_JOIN_CODE"
+)
+
+// Lacks lists what the checked install script for this system ("linux", "windows") cannot do that the
+// panel's command needs; empty when the release can be installed with it.
+func (in Installers) Lacks(os string) []string {
+	var out []string
+	add := func(has bool, what string) {
+		if !has {
+			out = append(out, what)
+		}
+	}
+	if os == "windows" {
+		add(in.PinPS1, "checking the release's fingerprint (-SumsSha256)")
+		add(in.PairV2PS1, "pairing v2 ("+FlagPairV2PS1+")")
+		add(in.EnvPS1, "taking the join code from "+JoinCodeEnv+" instead of the command line")
+		add(in.MemoryPS1, "running from memory, without a file between the check and the run")
+		return out
+	}
+	add(in.PinSH, "checking the release's fingerprint (--sums-sha256)")
+	add(in.PairV2SH, "pairing v2 ("+FlagPairV2SH+")")
+	add(in.StdinSH, "taking the join code from standard input ("+FlagJoinStdinSH+") instead of the command line")
+	return out
+}
 
 // PairsV2 reports whether the checked install script for this system ("linux", "windows") takes the pairing
 // v2 option.
@@ -98,8 +141,9 @@ type Unavailable struct{ Msg string }
 
 func (u *Unavailable) Error() string { return u.Msg }
 
-// TooOld means the Fairy-agent release the command would install cannot pair with this panel: its install
-// script does not know pairing v2, and the panel never pairs the old, unauthenticated way (409).
+// TooOld means the Fairy-agent release the command would install cannot be used by this panel: its install
+// script does not know pairing v2 (the panel never pairs the old, unauthenticated way) or cannot take the join
+// code off the command line (409).
 type TooOld struct{ Msg string }
 
 func (o *TooOld) Error() string { return o.Msg }
@@ -116,6 +160,15 @@ var (
 	// parameter.
 	shTakesPairV2  = regexp.MustCompile(`(?m)^\s*--pair-v2\)`)
 	ps1TakesPairV2 = regexp.MustCompile(`(?im)^\s*\[switch\]\$PairV2\b`)
+	// The join code off the command line: install.sh's `--join-stdin)` case arm; install.ps1 reads
+	// $env:FAIRY_JOIN_CODE and no longer demands -Join.
+	shTakesJoinStdin = regexp.MustCompile(`(?m)^\s*--join-stdin\)`)
+	ps1ReadsJoinEnv  = regexp.MustCompile(`(?m)\$env:FAIRY_JOIN_CODE\b`)
+	ps1JoinMandatory = regexp.MustCompile(`(?i)Mandatory[^\n]*\$Join\b`)
+	// What stops install.ps1 from running as a script block made from the downloaded bytes: a #Requires line
+	// (not checked there) and anything that needs the script's own path.
+	ps1Requires = regexp.MustCompile(`(?im)^\s*#Requires\b`)
+	ps1OwnPath  = regexp.MustCompile(`(?i)\$(PSScriptRoot|PSCommandPath|MyInvocation)\b`)
 )
 
 // Limits for what the panel downloads to check a release.
@@ -208,7 +261,10 @@ func (v *Verifier) check(ctx context.Context) (Installers, error) {
 	sums := sha256.Sum256(files[release.SumsFile]) // the exact bytes whose signature was just checked
 	in := Installers{Repo: v.Repo, Tag: v.Tag, Version: ch.Version, Base: v.Base(), Sums: hex.EncodeToString(sums[:]),
 		PinSH: shTakesSums.Match(files[InstallSH]), PinPS1: ps1TakesSums.Match(files[InstallPS1]),
-		PairV2SH: shTakesPairV2.Match(files[InstallSH]), PairV2PS1: ps1TakesPairV2.Match(files[InstallPS1])}
+		PairV2SH: shTakesPairV2.Match(files[InstallSH]), PairV2PS1: ps1TakesPairV2.Match(files[InstallPS1]),
+		StdinSH:   shTakesJoinStdin.Match(files[InstallSH]),
+		EnvPS1:    ps1ReadsJoinEnv.Match(files[InstallPS1]) && !ps1JoinMandatory.Match(files[InstallPS1]),
+		MemoryPS1: !ps1Requires.Match(files[InstallPS1]) && !ps1OwnPath.Match(files[InstallPS1])}
 	for name, dst := range map[string]*string{InstallSH: &in.SH, InstallPS1: &in.PS1} {
 		if err := ch.Sums.Check(name, files[name]); err != nil {
 			return Installers{}, err

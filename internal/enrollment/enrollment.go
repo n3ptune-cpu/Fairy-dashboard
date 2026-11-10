@@ -328,12 +328,12 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 	if !inst.valid() {
 		return Created{}, &Unavailable{Msg: "the checked Fairy-agent release has an unusable download address or hash"}
 	}
-	if !inst.PairsV2(h.OS) {
-		// No command is made for a release that could only pair the old way: the panel would never accept
-		// what that agent answers.
-		return Created{}, &TooOld{Msg: fmt.Sprintf("Fairy-agent release %s is too old for this panel: its install script for %s does not know "+
-			"pairing v2 (the agent proves it has the join code and sends its tokens encrypted), and the panel does not pair the old, "+
-			"unverified way. Use a newer release: set enroll: {agent_release: build-N} in config.yaml, or update the panel", releaseName(inst), osName(h.OS))}
+	if lacks := inst.Lacks(h.OS); len(lacks) > 0 {
+		// No command is made for a release that could only pair the old way (the panel would never accept
+		// what that agent answers) or only take the join code on its command line.
+		return Created{}, &TooOld{Msg: fmt.Sprintf("Fairy-agent release %s is too old for this panel: its install script for %s lacks %s. "+
+			"The panel does not pair the old, unverified way and does not put the join code on a command line. "+
+			"Use a newer release: set enroll: {agent_release: build-N} in config.yaml, or update the panel", releaseName(inst), osName(h.OS), strings.Join(lacks, "; "))}
 	}
 	code, err := enroll.NewCode()
 	if err != nil {
@@ -363,29 +363,52 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 	e.host = h
 	ctx, cancel := context.WithDeadline(context.Background(), e.ExpiresAt)
 	e.cancel = cancel
+	command := Command(inst, h, code, m.PanelAddr)
+	if command == "" { // cannot happen for a code and an address the panel made itself: no enrollment without a command
+		cancel()
+		return Created{}, errors.New("the install command could not be made")
+	}
 	m.mu.Lock()
 	m.items[e.ID] = e
 	m.prune(now)
 	cp := m.copyOf(e)
 	m.mu.Unlock()
 	go m.run(ctx, e)
-	return Created{Enrollment: cp, Code: code, Command: Command(inst, h, code, m.PanelAddr), Panel: m.PanelAddr, Release: inst}, nil
+	return Created{Enrollment: cp, Code: code, Command: command, Panel: m.PanelAddr, Release: inst}, nil
 }
 
 // Command is the one line to run on the machine. It downloads the install script of the checked release,
 // refuses to run it unless its SHA-256 is the one the panel verified against the signed SHA256SUMS, and runs it
-// against that same release (never "latest"). It carries the pairing v2 option when the checked script takes
-// it (Create refuses a release whose script does not).
+// against that same release (never "latest"), with the fingerprint of the verified SHA256SUMS and the pairing
+// v2 option.
+//
+// The join code is on no program's command line (any local user can read those while the installer runs):
+//   - Linux: `printf '%s' 'CODE' | [sudo ]env ... sh "$f" ... --join-stdin`. printf is a builtin of the shell
+//     the line is pasted into, so the code is an argument of no process; install.sh reads it from standard
+//     input and hands it to `fairy-agent join` the same way.
+//   - Windows: `$env:FAIRY_JOIN_CODE='CODE'` in the PowerShell window; install.ps1 takes it from there,
+//     removes it, and gives it to `fairy-agent join` through that one program's environment.
+//
+// On Windows the script never touches the disk before it runs: the line downloads it into memory, checks
+// the SHA-256 of exactly those bytes and runs them as a script block, so there is no file that another
+// program could swap between the check and the run.
+//
+// There is one form per system. Command returns "" for a release whose script cannot be used this way
+// (Installers.Lacks) and for a code or panel address that is not what the panel itself makes; Create refuses
+// those before it gets here.
 func Command(in Installers, h managed.Host, code, panel string) string {
+	if len(in.Lacks(h.OS)) > 0 || !in.valid() || !codeRe.MatchString(code) || !panelRe.MatchString(panel) ||
+		(h.Options.UPSName != "" && !upsRe.MatchString(h.Options.UPSName)) {
+		return ""
+	}
 	o := h.Options
+	var b strings.Builder
 	if h.OS == "windows" {
-		var b strings.Builder
-		fmt.Fprintf(&b, `$u='%s'; $f="$env:TEMP\fairy-install.ps1"; iwr -useb "$u/%s" -OutFile $f; `+
-			`if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '%s') { throw 'install.ps1 is not the release the panel checked: not run' }; `+
-			`powershell -ExecutionPolicy Bypass -File $f -ReleaseUrl $u%s -Join %s -PanelAddress %s`, in.Base, InstallPS1, in.PS1, pin(in.PinPS1, " -SumsSha256 ", in.Sums), code, panel)
-		if in.PairV2PS1 {
-			b.WriteString(" " + FlagPairV2PS1)
-		}
+		fmt.Fprintf(&b, `$u='%s'; $b=(New-Object Net.WebClient).DownloadData("$u/%s"); `+
+			`if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -ne '%s') `+
+			`{ throw 'install.ps1 is not the release the panel checked: not run' }; `+
+			`$env:%s='%s'; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 %s -PanelAddress %s %s`,
+			in.Base, InstallPS1, in.PS1, JoinCodeEnv, code, in.Sums, panel, FlagPairV2PS1)
 		for _, f := range []struct {
 			on   bool
 			flag string
@@ -405,12 +428,9 @@ func Command(in Installers, h managed.Host, code, panel string) string {
 	if h.Node != "" || h.ProxmoxWanted { // a Proxmox node: a root shell, usually without sudo
 		sudo = ""
 	}
-	var b strings.Builder
 	fmt.Fprintf(&b, `f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" %s/%s && echo "%s  $f" | sha256sum -c - && `+
-		`%senv FAIRY_RELEASE_URL=%s sh "$f"%s --join %s --panel %s`, in.Base, InstallSH, in.SH, sudo, in.Base, pin(in.PinSH, " --sums-sha256 ", in.Sums), code, panel)
-	if in.PairV2SH {
-		b.WriteString(" " + FlagPairV2SH)
-	}
+		`printf '%%s' '%s' | %senv FAIRY_RELEASE_URL=%s sh "$f" --sums-sha256 %s %s %s --panel %s`,
+		in.Base, InstallSH, in.SH, code, sudo, in.Base, in.Sums, FlagJoinStdinSH, FlagPairV2SH, panel)
 	for _, f := range []struct {
 		on   bool
 		flag string
@@ -428,6 +448,13 @@ func Command(in Installers, h managed.Host, code, panel string) string {
 	return b.String()
 }
 
+// What goes into the command between quotes: a join code as enroll.NewCode makes it and the panel's IPv4
+// address, nothing else.
+var (
+	codeRe  = regexp.MustCompile(`^[A-Z2-7]{4}(-[A-Z2-7]{4}){7}$`)
+	panelRe = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}$`)
+)
+
 // olderRelease is the warning for a Re-pair whose command installs an older Fairy-agent than the machine runs
 // ("" when it does not, or when either build number is unknown). The install scripts of older releases replace
 // the program without comparing versions, so fixes could be lost without anyone noticing.
@@ -441,14 +468,6 @@ func olderRelease(installed string, in Installers) string {
 		"An install script that does not compare versions puts the older build over it. Afterwards check the agent's version on the Updates page "+
 		"and update it there, or first set enroll: {agent_release: build-%d} (or newer) in config.yaml and make a new code.",
 		clip(installed, 64), in.Tag, in.Version, have)
-}
-
-// pin is the installer option that passes the verified SHA256SUMS hash, when the script takes it.
-func pin(takes bool, flag, sums string) string {
-	if !takes {
-		return ""
-	}
-	return flag + sums
 }
 
 func (m *Manager) copyOf(e *Enrollment) Enrollment {
