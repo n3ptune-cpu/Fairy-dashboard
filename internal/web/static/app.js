@@ -107,6 +107,9 @@ const PENDING_KEY = "fairy-pending-action";
 // When the server kept the refused request (detail.pending), it runs it by itself right after the sign-in and
 // /api/me reports the result: the browser re-sends nothing (no dialog shown again). Otherwise (rare: a large
 // request) the old "Resume" offer is used.
+// The kept action belongs to this dialog: the link names it (pending=<id>), and every way of leaving the dialog
+// without "Continue" (Cancel, Escape, a click outside, reload, closing the tab) tells the server to forget it.
+let stepUpOpen = null;  // the open dialog: { kept, going } (going: "Continue to Pocket ID" was pressed)
 function showStepUp(pending, detail) {
   state.menu = null; render();
   const kept = !!detail?.pending;
@@ -114,6 +117,7 @@ function showStepUp(pending, detail) {
   const age = state.me?.auth_age_s, win = detail?.window_s || state.me?.step_up_window_s || 300;
   const winText = win < 300 ? `${win} seconds` : `${Math.round(win / 60)} minutes`;
   const next = encodeURIComponent("/" + (location.hash || "#/"));
+  const pid = kept && typeof detail.pending_id === "string" ? `&amp;pending=${enc(detail.pending_id)}` : "";
   const m = $("#modal");
   m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle">
     <div class="stepup-ico">${I.shield}</div>
@@ -123,14 +127,25 @@ function showStepUp(pending, detail) {
     <p class="note">${kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
       : "You'll sign in again at Pocket ID (passkey) and come straight back here to finish it. Nothing has been sent yet."}</p>
     <div class="row-gap end"><button class="btn" id="su-cancel">Cancel</button>
-      <a class="btn primary" id="su-go" href="/auth/login?step_up=1&amp;next=${next}">Continue to Pocket ID</a></div></div>`;
+      <a class="btn primary" id="su-go" href="/auth/login?step_up=1${pid}&amp;next=${next}">Continue to Pocket ID</a></div></div>`;
   m.hidden = false;
-  $("#su-cancel").onclick = async () => {
-    m.hidden = true; m.innerHTML = ""; dropPending();
-    // Cancel: drop the kept action too, so a later sign-in runs nothing (the server forgets it)
-    if (kept) { try { await api("/api/me/pending", { method: "DELETE" }); } catch { /* ignore */ } }
-  };
+  stepUpOpen = { kept, going: false };
+  $("#su-cancel").onclick = cancelStepUp;
+  $("#su-go").onclick = () => { if (stepUpOpen) stepUpOpen.going = true; };
+  m.onclick = (e) => { if (e.target === m) cancelStepUp(); };
 }
+// Leave "Confirm it's you" without confirming: close it and make the server forget the kept action, so a later
+// sign-in runs nothing. keepalive lets the request finish while the page is going away.
+function cancelStepUp() {
+  const su = stepUpOpen;
+  if (!su) return;
+  stepUpOpen = null;
+  const m = $("#modal"); m.hidden = true; m.innerHTML = ""; m.onclick = null;
+  dropPending();
+  if (su.kept) api("/api/me/pending", { method: "DELETE", keepalive: true }).catch(() => { /* it expires by itself */ });
+}
+window.addEventListener("pagehide", () => { if (stepUpOpen && !stepUpOpen.going) cancelStepUp(); });
+window.addEventListener("pageshow", (e) => { if (e.persisted && stepUpOpen) stepUpOpen.going = false; });  // Back from Pocket ID
 // After a step-up sign-in: the result of the action the panel ran by itself (shown once).
 function showPendingResult(pr) {
   if (!pr) return;
@@ -1402,7 +1417,10 @@ const enr = { id: null, timer: null, page: null };
 const OPT_LABEL = [["power_control", "Power control", "shut down / reboot from the panel"], ["self_update", "Self-update", "Update from the Updates page"],
   ["wol_relay", "Wake-on-LAN relay", "always-on machine that wakes others"], ["ups", "Local UPS (NUT)", "a UPS plugged into this machine by USB"],
   ["coretemp", "Core Temp", "Windows: CPU temperatures from Core Temp"], ["ipmi", "IPMI", "Linux: BMC sensors and fans"]];
-function closeModal() { const m = $("#modal"); m.hidden = true; m.innerHTML = ""; clearTimeout(enr.timer); enr.id = null; }
+function closeModal() {
+  if (stepUpOpen) { cancelStepUp(); return; }  // "Confirm it's you": closing it any way cancels the kept action
+  const m = $("#modal"); m.hidden = true; m.innerHTML = ""; clearTimeout(enr.timer); enr.id = null;
+}
 async function openAddHost() {
   let d;
   try { d = await api("/api/admin/hosts"); } catch (e) { flash(e.message, true); return; }
@@ -1902,6 +1920,9 @@ document.addEventListener("submit", async (e) => {
 async function boot() {
   try { state.me = await api("/api/me"); }
   catch (e) { if (e.status === 401) { $("#login").hidden = false; return; } throw e; }
+  // A fresh page has no "Confirm it's you" dialog, so no action may be waiting for a sign-in (a reload or the
+  // Back button left one behind): the server forgets it. One that just ran is already gone.
+  api("/api/me/pending", { method: "DELETE" }).catch(() => { /* it expires by itself */ });
   $("#demo-banner").hidden = !state.me.demo;
   if (state.me.role === "pending") {  // signed in, but no role yet: nothing else to load
     const w = $("#waiting");

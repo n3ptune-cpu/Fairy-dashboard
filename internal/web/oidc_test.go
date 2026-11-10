@@ -459,8 +459,10 @@ func TestPendingActionRunsOnceAfterStepUp(t *testing.T) {
 	if r.code != 401 || !strings.Contains(string(r.raw), `"pending":true`) || powerCalls() != 0 {
 		t.Fatal("first try must ask for a step-up and keep the action", r.code, string(r.raw))
 	}
-	sess = sessionCookie(e, r.hdr) // the cookie now carries the pending action
-	q, rt = idp.login(e, "/auth/login?step_up=1&next=/%23/system/laptop", sess)
+	if len(r.hdr.Values("Set-Cookie")) != 0 || strings.Contains(sess, "shutdown") {
+		t.Fatal("the kept action stays on the server: the cookie must not change", r.hdr.Values("Set-Cookie"))
+	}
+	q, rt = idp.login(e, "/auth/login?step_up=1&pending="+pendingID(r)+"&next=/%23/system/laptop", sess)
 	idp.claims["auth_time"] = time.Now().Unix()
 	r = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
 	if r.code != 303 || r.hdr.Get("Location") != "/#/system/laptop" {
@@ -513,8 +515,7 @@ func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
 	if r.code != 401 || !strings.Contains(string(r.raw), `"pending":true`) || len(e.s.Enroll.List()) != 0 {
 		t.Fatal("first try must ask for a step-up and make nothing", r.code, string(r.raw))
 	}
-	sess = sessionCookie(e, r.hdr)
-	q, rt = idp.login(e, "/auth/login?step_up=1&next=/%23/", sess)
+	q, rt = idp.login(e, "/auth/login?step_up=1&pending="+pendingID(r)+"&next=/%23/", sess)
 	idp.claims["auth_time"] = time.Now().Unix()
 	r = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
 	if r.code != 303 || len(e.s.Enroll.List()) != 1 {
@@ -541,7 +542,8 @@ func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
 	e.s.Enroll.Cancel(id)
 }
 
-// Cancel in "Confirm it's you" forgets the kept action: the next sign-in runs nothing.
+// Cancel, Escape or closing "Confirm it's you" (the UI sends DELETE /api/me/pending for each) forgets the kept
+// action: the next sign-in runs nothing, even one that names it.
 func TestCancelledPendingActionDoesNotRun(t *testing.T) {
 	e := setup(t)
 	e.s.Enroll.PanelAddr = "100.88.109.47"
@@ -552,22 +554,41 @@ func TestCancelledPendingActionDoesNotRun(t *testing.T) {
 	sess := sessionCookie(e, e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt).hdr)
 	r := e.do("POST", "/api/admin/hosts", map[string]any{"name": "NSX-FURINA", "os": "linux"}, "Cookie", sess,
 		"X-Requested-With", "fairy", "Content-Type", "application/json")
-	if r.code != 401 {
-		t.Fatal(r.code)
+	if r.code != 401 || pendingID(r) == "" {
+		t.Fatal(r.code, string(r.raw))
 	}
-	sess = sessionCookie(e, r.hdr)
+	id := pendingID(r)
 	if d := e.do("DELETE", "/api/me/pending", nil, "Cookie", sess); d.code != 403 {
 		t.Fatal("CSRF header required", d.code)
+	}
+	if got := e.s.codec.live.pendingID(sidOf(e, sess), e.s.now()); got != id {
+		t.Fatal("a refused cancel must not disarm", got)
 	}
 	d := e.do("DELETE", "/api/me/pending", nil, "Cookie", sess, "X-Requested-With", "fairy")
 	if d.code != 200 {
 		t.Fatal(d.code, string(d.raw))
 	}
-	sess = sessionCookie(e, d.hdr)
-	q, rt = idp.login(e, "/auth/login?step_up=1&next=/", sess)
+	if got := e.s.codec.live.pendingID(sidOf(e, sess), e.s.now()); got != "" {
+		t.Fatal("cancel left the action armed", got)
+	}
+	q, rt = idp.login(e, "/auth/login?step_up=1&pending="+id+"&next=/", sess)
 	idp.claims["auth_time"] = time.Now().Unix()
 	_ = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
 	if n := len(e.s.Enroll.List()); n != 0 {
 		t.Fatal("a cancelled action ran", n)
 	}
+}
+
+// pendingID is the id of the kept action in a step_up_required answer.
+func pendingID(r resp) string {
+	d, _ := r.body["detail"].(map[string]any)
+	id, _ := d["pending_id"].(string)
+	return id
+}
+
+// sidOf is the session id inside a session cookie ("name=value").
+func sidOf(e *env, cookie string) string {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Cookie", cookie)
+	return e.s.codec.decode(req).SID
 }

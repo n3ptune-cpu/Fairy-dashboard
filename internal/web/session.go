@@ -29,9 +29,9 @@ type sessionData struct {
 	Nonce    string `json:"nonce,omitempty"`
 	Verifier string `json:"verifier,omitempty"`
 	Started  int64  `json:"started,omitempty"`
-	// Pending is the control action that asked for the step-up sign-in; the panel runs it once right after
-	// the sign-in (see pending.go). PendingResult is its outcome, shown once by /api/me.
-	Pending       *pendingAction       `json:"pending,omitempty"`
+	// PendingID names the kept control action this step-up round trip was started for (see pending.go: the
+	// action itself is on the server, never in the cookie). PendingResult is its outcome, shown once by /api/me.
+	PendingID     string               `json:"pending_id,omitempty"`
 	PendingResult *model.PendingResult `json:"pending_result,omitempty"`
 }
 
@@ -39,6 +39,7 @@ type sessionCodec struct {
 	key    []byte
 	maxAge int
 	secure bool
+	live   *liveSessions // per-session state that is not in the cookie (sessionstate.go)
 	// now is the clock of everything that decides how old a session, a sign-in or a kept action is (the cookie,
 	// sessionUser, authAge, the login round trip, the pending action). Tests replace it; see Server.now.
 	now func() time.Time
@@ -47,7 +48,7 @@ type sessionCodec struct {
 func newCodec(secret string, maxAge int, secure bool) *sessionCodec {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write([]byte("fairy-session-cookie-v1"))
-	return &sessionCodec{key: m.Sum(nil), maxAge: maxAge, secure: secure, now: time.Now}
+	return &sessionCodec{key: m.Sum(nil), maxAge: maxAge, secure: secure, live: newLiveSessions(), now: time.Now}
 }
 
 // now is the server's session clock (time.Now, except in tests). It lives on the codec, which every session
@@ -107,5 +108,5 @@ func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
 
 func (s *sessionData) empty() bool {
 	return s.SID == "" && s.User == nil && s.IAT == 0 && s.Seen == 0 && s.AuthTime == 0 && s.Next == "" && !s.StepUp &&
-		s.State == "" && s.Nonce == "" && s.Verifier == "" && s.Started == 0 && s.Pending == nil && s.PendingResult == nil
+		s.State == "" && s.Nonce == "" && s.Verifier == "" && s.Started == 0 && s.PendingID == "" && s.PendingResult == nil
 }

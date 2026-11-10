@@ -163,28 +163,45 @@ func (s *Server) authLogin(c *reqCtx) error {
 	q := c.r.URL.Query()
 	target := safeNext(q.Get("next"))
 	stepUp := q.Get("step_up") == "1"
+	if stepUp {
+		target = stepUpNext(target)
+	}
+	pendID := q.Get("pending") // the kept action this step-up is for (see pending.go); anything else disarms it
+	if len(pendID) > 64 {
+		pendID = ""
+	}
 	if s.DemoUser != nil { // demo: simulate the Pocket ID round trip for the step-up screen
 		s.demoMu.Lock()
 		s.demoAuthTime = s.now()
 		s.demoMu.Unlock()
 		d := s.DemoUser
 		c.auditAnon("auth.step_up", "ok (demo: simulated Pocket ID re-authentication)", model.Deref(d.Email), &d.Sub, nil)
-		s.resumePending(c)
+		s.resumePending(c, s.codec.live.takePending(demoKey, pendID, s.now()))
 		c.redirect(target)
 		return nil
 	}
 	// A valid session is kept until the round trip completes (the callback replaces it with a new session id),
 	// so another site cannot sign someone out by sending them to /auth/login. Anything else is cleared.
+	sid := c.session().SID
 	current := c.sessionUser()
 	if current == nil {
 		c.clearSession() // fresh session: avoids fixation of a pre-login session
 	}
+	sess := c.session()
+	// Only a step-up that names the session's kept action may run it. Every other sign-in that starts for this
+	// session (a link on another site, a second tab, a plain re-login) forgets it, before anything can fail.
+	sess.PendingID = ""
+	if stepUp && current != nil && pendID != "" && s.codec.live.pendingID(sid, s.now()) == pendID {
+		sess.PendingID = pendID
+	} else {
+		s.codec.live.dropPending(sid)
+	}
 	p, err := s.oidc.provider(c.r.Context())
 	if err != nil {
 		slog.Error("OIDC discovery failed", "error", err)
+		s.codec.live.dropPending(sid)
 		return apierr.New(502, "identity provider unreachable")
 	}
-	sess := c.session()
 	sess.Next, sess.StepUp = target, stepUp && current != nil
 	sess.State, sess.Nonce, sess.Verifier, sess.Started = randToken(24), randToken(24), oauth2.GenerateVerifier(), s.now().Unix()
 	c.dirty = true
@@ -204,11 +221,18 @@ func (s *Server) authLogin(c *reqCtx) error {
 // token and nonce, applies the allowed groups / emails and either completes a step-up re-authentication or
 // starts a new, server-registered session. Every failure is audited and answered with a generic 400.
 func (s *Server) authCallback(c *reqCtx) error {
+	sess := c.session()
+	// The kept action leaves the store before anything is checked: whatever happens below, it can run at most
+	// once, and a confirmation that fails (or is rate limited, or belongs to another round trip) leaves nothing
+	// armed. Only a successful step-up for the same session runs it.
+	var kept *pendingAction
+	if sess.SID != "" {
+		kept = s.codec.live.takePending(sess.SID, sess.PendingID, s.now())
+	}
 	if !s.login.allow(c.loginKey()) {
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
 		return apierr.New(429, "too many login attempts; try again in a minute")
 	}
-	sess := c.session()
 	q := c.r.URL.Query()
 	fail := func(f *loginFailure) error {
 		slog.Warn("OIDC callback failed", append([]any{"reason", f.reason}, f.attrs...)...)
@@ -249,6 +273,9 @@ func (s *Server) authCallback(c *reqCtx) error {
 		authTime = v
 	}
 	target := safeNext(sess.Next)
+	if sess.StepUp {
+		target = stepUpNext(target)
+	}
 	if sess.StepUp && authTime == 0 {
 		slog.Error("step-up failed: the identity provider sent no auth_time claim (OIDC Core requires it when " +
 			"max_age is requested); control actions cannot be confirmed until it does")
@@ -267,14 +294,14 @@ func (s *Server) authCallback(c *reqCtx) error {
 	if sess.StepUp && sess.User != nil && sess.User.Sub == u.Sub && sess.SID != "" {
 		// Step-up for the same user: keep the session, record the fresh authentication time.
 		sess.AuthTime, sess.Seen = authTime, int64(now)
-		sess.StepUp, sess.Next, sess.State, sess.Nonce, sess.Verifier, sess.Started = false, "", "", "", "", 0
+		sess.StepUp, sess.Next, sess.State, sess.Nonce, sess.Verifier, sess.Started, sess.PendingID = false, "", "", "", "", 0, ""
 		c.dirty = true
 		c.auditAnon("auth.step_up", "ok", actorOf(&u), &u.Sub, nil)
-		s.resumePending(c)
+		s.resumePending(c, kept)
 		c.redirect(target)
 		return nil
 	}
-	sess.Pending = nil // a new session (another user, or no session before): nothing waits
+	// a new session (another user, or no session before): nothing waits (kept was taken out above and is dropped)
 	if err := s.startSession(c, sess.SID, u, now, authTime); err != nil {
 		return err
 	}
@@ -350,6 +377,7 @@ func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, sub
 func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authTime float64) error {
 	admin := s.Poller.Admin
 	_ = admin.RemoveSession(oldSID)
+	s.codec.live.forget(oldSID)
 	sid := randToken(18)
 	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip()}); err != nil {
 		slog.Error("sign-in failed: cannot register the session in sessions.json (disk full? wrong owner?)", "error", err)
@@ -387,6 +415,7 @@ func (s *Server) authLogout(c *reqCtx) error {
 	u := c.sessionUser()
 	if s.DemoUser == nil {
 		_ = s.Poller.Admin.RemoveSession(c.session().SID)
+		s.codec.live.forget(c.session().SID)
 		c.clearSession()
 	}
 	if u != nil {
@@ -399,6 +428,15 @@ func (s *Server) authLogout(c *reqCtx) error {
 	}
 	c.redirect("/")
 	return nil
+}
+
+// stepUpNext is where a step-up may return to: the panel's start page, with or without a fragment (the page the
+// dialog was opened on). Nothing else, so a step-up link cannot be used to land on another path.
+func stepUpNext(t string) string {
+	if t == "/" || strings.HasPrefix(t, "/#") {
+		return t
+	}
+	return "/"
 }
 
 func truncate(s string, n int) string {

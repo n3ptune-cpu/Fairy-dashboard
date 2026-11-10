@@ -25,6 +25,8 @@ type reqCtx struct {
 	token *tokens.Record // the API token of this request, if any
 	g     *access.Grant  // what the user may see and do (see grant)
 	body  []byte         // a write request's body as received (see readBody)
+	// bodyKept: body is the whole request body (false for a body readBody left alone: an upload)
+	bodyKept bool
 }
 
 func (c *reqCtx) session() *sessionData {

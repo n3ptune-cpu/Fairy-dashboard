@@ -83,12 +83,16 @@ func (c *reqCtx) stepUp(u *model.User, what string) error {
 func (c *reqCtx) stepUpWithin(u *model.User, what string, window int) error {
 	if age := c.authAge(u); age != nil && *age > float64(window) {
 		c.audit(u, "auth.step_up", c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, "required")
-		kept := c.keepPending(u)
+		id := c.keepPending(u)
 		msg := fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d min.", what, max(1, window/60))
 		if window < 60 || window%60 != 0 {
 			msg = fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d seconds.", what, window)
 		}
-		return apierr.New(401, map[string]any{"code": "step_up_required", "window_s": window, "pending": kept, "message": msg})
+		detail := map[string]any{"code": "step_up_required", "window_s": window, "pending": id != "", "message": msg}
+		if id != "" {
+			detail["pending_id"] = id // names the kept action in /auth/login?step_up=1&pending=<id>
+		}
+		return apierr.New(401, detail)
 	}
 	return nil
 }
