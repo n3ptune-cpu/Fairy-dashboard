@@ -97,12 +97,28 @@ function noteInput() {
   api("/api/me/active", { method: "POST" }).catch(() => { /* the next input tries again */ });
 }
 for (const ev of ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"]) window.addEventListener(ev, noteInput, { capture: true, passive: true });
-let signedOut = false;  // the session ended (see sessionEnded): nothing is sent any more
+// ---- the session ended (signed out elsewhere, revoked, too old, idle): any 401 that is not a step-up request.
+// Stop everything that would ask again (the stream, its reconnect, every timer), close what is open and show
+// the sign-in view with a short notice. After this the page sends nothing until the user signs in.
+let signedOut = false;
+function sessionEnded() {
+  if (signedOut) return;
+  signedOut = true;
+  const had = !!state.me;  // false: nobody was signed in on this page (first load), the plain sign-in view
+  if (state.es) { state.es.close(); state.es = null; }
+  for (const t of [state.timer, upd.bgT, enr.timer, streamRetry]) clearTimeout(t);
+  stepUpOpen = null; state.menu = null;
+  const m = $("#modal"); m.hidden = true; m.innerHTML = ""; m.onclick = null;
+  $("#shell").hidden = true; $("#waiting").hidden = true; $("#flash").hidden = true;
+  $("#login-note").hidden = !had;
+  $("#login").hidden = false;
+}
 
 let ctlLabel = null;  // set by controlCall while it starts its request: sent as X-Fairy-Action (the step-up dialog's label)
 async function api(path, opts = {}) {
   const write = opts.method && opts.method !== "GET";
   if (write && !opts.label && ctlLabel) opts = { ...opts, label: ctlLabel };
+  if (signedOut) { const e = new Error("signed out"); e.status = 401; throw e; }  // nothing is sent any more
   const active = userActive();
   if (active) lastActiveSent = Date.now();  // this request tells the server: no extra signal needed for a minute
   const res = await fetch(path, { credentials: "same-origin", ...opts,
@@ -117,6 +133,7 @@ async function api(path, opts = {}) {
     const proxy = d == null && res.status >= 500 ? `HTTP ${res.status} from the proxy in front of the panel: the panel, or the host it had to reach, did not answer` : null;
     const e = new Error(d?.message || d?.[0]?.msg || (typeof d === "string" ? d : null) || proxy || `HTTP ${res.status}`);
     e.status = res.status; e.stepUp = d?.code === "step_up_required"; e.detail = d;
+    if (res.status === 401 && !e.stepUp) sessionEnded();
     throw e;
   }
   return data;
@@ -857,7 +874,7 @@ async function loadUpdates() {  // the Updates page: every 2 s while it is open
 function updTick() {
   clearTimeout(upd.bgT);
   const fast = (upd.data?.agents || []).some(updBusy) || Date.now() < (upd.fastUntil || 0);
-  const next = () => { upd.bgT = setTimeout(updTick, fast ? 2000 : 60000); };
+  const next = () => { if (!signedOut) upd.bgT = setTimeout(updTick, fast ? 2000 : 60000); };
   if (current().page === "updates") { next(); return; }
   fetchUpdates().then(next, next);
 }
@@ -1542,7 +1559,7 @@ async function pollEnroll(id) {
   $("#en-progress").innerHTML = `${enrollSteps(e)}<div class="note" id="en-msg">${esc(e.message)}${e.state === "online" && state.byId[e.host_id]
     ? ` · <a href="#/system/${enc(e.host_id)}">open ${esc(e.name)} →</a>` : ""}</div>`;
   if (e.done) { $("#en-cancel").hidden = true; if (e.state === "online") loadManaged(); return; }
-  enr.timer = setTimeout(() => pollEnroll(id), 2000);
+  if (!signedOut) enr.timer = setTimeout(() => pollEnroll(id), 2000);
 }
 // After a step-up sign-in the panel made the code itself: fetch it once and show it.
 async function revealEnrollment(id) {
@@ -1705,7 +1722,7 @@ document.addEventListener("click", async (e) => {
 });
 
 // ------------------------------------------------------------ routing + rendering
-function schedule(fn, ms = 3000) { clearTimeout(state.timer); state.timer = setTimeout(fn, ms); }
+function schedule(fn, ms = 3000) { clearTimeout(state.timer); if (!signedOut) state.timer = setTimeout(fn, ms); }
 function current() {
   const h = location.hash || "#/";
   const m = h.match(/^#\/system\/([^/]+)(?:\/(\w+))?$/);
@@ -1774,13 +1791,26 @@ function pushUpsHistory(ov) {
     if (h.length > 720) h.shift();
   }
 }
+// When the stream is refused or lost for good (the browser gave up: readyState CLOSED), ask /api/me first: a 401
+// means the session ended (api() shows the sign-in view and nothing reconnects); anything else is the network
+// or the panel restarting, retried after 3 s, then 6, 12 ... up to 30 s. A stream the server merely ended is
+// reconnected by the browser itself; if that reconnect is answered 401 it ends up here.
+let streamRetry = null, streamBackoff = 0;
+async function streamLost() {
+  try { await api("/api/me"); } catch { /* 401: sessionEnded() ran; otherwise retry below */ }
+  if (signedOut) return;
+  streamBackoff = Math.min(30000, streamBackoff ? streamBackoff * 2 : 3000);
+  clearTimeout(streamRetry);
+  streamRetry = setTimeout(() => connect(state.watch), streamBackoff);
+}
 function connect(watch) {
+  if (signedOut) return;
   if (state.es && state.watch === watch) return;
   if (state.es) state.es.close();
   state.watch = watch;
   const es = new EventSource(`/api/stream${watch ? `?watch=${enc(watch)}` : ""}`);
   state.es = es;
-  es.addEventListener("open", () => { if (state.streamed) checkAccess(); state.streamed = true; });
+  es.addEventListener("open", () => { streamBackoff = 0; if (state.streamed) checkAccess(); state.streamed = true; });
   es.addEventListener("systems", (e) => { state.systems = JSON.parse(e.data).systems; indexSystems(); loadSites(); render(); ensurePowerOnCaps(); });
   es.addEventListener("systems_delta", (e) => {
     const d = JSON.parse(e.data), gone = new Set(d.removed);
@@ -1806,7 +1836,7 @@ function connect(watch) {
     if (state.history.length > 720) state.history.shift();
     render();
   });
-  es.onerror = () => { if (es.readyState === EventSource.CLOSED && state.es === es) { state.es = null; setTimeout(() => connect(state.watch), 3000); } };
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED && state.es === es) { state.es = null; streamLost(); } };
 }
 async function loadSites() {  // the site of each host, for the sidebar and Overview groups
   try { state.sites = (await api("/api/system-sites")).sites || {}; render(); } catch { /* keep the last */ }
@@ -1825,7 +1855,7 @@ async function checkAccess() {
   try {
     const me = await api("/api/me");
     if (me.role !== state.me.role || (me.sites || []).join() !== (state.me.sites || []).join()) location.reload();
-  } catch (e) { if (e.status === 401) location.reload(); }
+  } catch { /* a 401 already showed the sign-in view (api) */ }
 }
 const demoSwitcher = () => (state.me.demo ? `<label class="demo-view" title="Demo only: see the panel as this role would">
   <span class="note">Preview as</span><select class="select" id="demo-view">${(state.me.demo_views || []).map((v) =>
@@ -1942,7 +1972,7 @@ document.addEventListener("submit", async (e) => {
 
 async function boot() {
   try { state.me = await api("/api/me"); }
-  catch (e) { if (e.status === 401) { $("#login").hidden = false; return; } throw e; }
+  catch (e) { if (e.status === 401) return; throw e; }  // not signed in: api() showed the sign-in view
   // A fresh page has no "Confirm it's you" dialog, so no action may be waiting for a sign-in (a reload or the
   // Back button left one behind): the server forgets it. One that just ran is already gone.
   api("/api/me/pending", { method: "DELETE" }).catch(() => { /* it expires by itself */ });

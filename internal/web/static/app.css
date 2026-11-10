@@ -222,6 +222,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .input { background: #050505; border: 1px solid var(--line2); color: var(--text); border-radius: var(--radius); padding: 8px 10px; font: inherit; font-size: 13px; flex: 1; min-width: 200px; }
 .preview { height: 120px; border-radius: var(--radius); border: 1px solid var(--line2); background: #050505 center / cover no-repeat; margin-top: 12px; }
 
+.login .signed-out { border: 1px solid #4a3810; background: rgba(245, 184, 75, .05); color: #f3cf86; border-radius: var(--radius); padding: 8px 12px; font-size: 12.5px; }
 .login { max-width: 400px; margin: 14vh auto; text-align: center; background: var(--panel); padding: 40px; border: 1px solid var(--line); border-radius: var(--radius); }
 .foot { text-align: center; color: var(--faint); font-size: 12px; padding: 0 0 24px; margin-top: auto; }
 

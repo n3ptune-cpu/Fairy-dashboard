@@ -137,6 +137,28 @@ func TestBackgroundTrafficDoesNotExtendTheSession(t *testing.T) {
 	}
 }
 
+// S-b: what the UI's sign-out handling relies on. A session that ended gets 401 with a JSON body from the
+// stream and from every read (never a redirect, never an event stream), and that 401 is not the step-up kind,
+// so the page shows the sign-in view instead of "Confirm it's you" or another retry.
+func TestEndedSessionGets401JSONEverywhere(t *testing.T) {
+	e := setup(t)
+	ck := e.cookie(controller(), 0)
+	if _, err := e.s.Poller.Admin.RevokeAllSessions(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	for _, p := range []string{"/api/stream", "/api/stream?watch=laptop", "/api/me", "/api/admin/updates", "/api/systems"} {
+		r := e.do("GET", p, nil, "Cookie", ck, "Accept", "text/event-stream")
+		d, _ := r.body["detail"].(string)
+		if r.code != 401 || !strings.HasPrefix(r.hdr.Get("Content-Type"), "application/json") || d != "not authenticated" {
+			t.Errorf("%s: %d %s %s", p, r.code, r.hdr.Get("Content-Type"), r.raw)
+		}
+	}
+	if r := e.poll(ck); r.code != 401 || stepUpRequired(r) {
+		t.Fatal("a write of an ended session is a plain 401, not a step-up", r.code, string(r.raw))
+	}
+}
+
 // S-a: real use keeps the session: a request the UI marks as caused by input, the explicit activity signal,
 // and any write. API tokens have no idle timeout.
 func TestActivityExtendsTheSession(t *testing.T) {
