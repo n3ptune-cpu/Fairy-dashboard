@@ -165,10 +165,29 @@ func TestUPSThatReportsNaNIsNotShownHealthy(t *testing.T) {
 	if n := strings.Count(logs.String(), "UPS data that cannot be read"); n != want {
 		t.Fatalf("logged %d times, want %d", n, want)
 	}
-	// a UPS that is no longer in the server's answer is not "online with its last values" either
 	m.mu.Lock()
 	src := m.Sources[0]
 	m.mu.Unlock()
+	// The newer shared reader's row for a UPS it still cannot write, {name, ok:false, error}: the UPS fails
+	// with the reason; it is not shown as "unknown" without one. And it comes back.
+	failedRow := &upssrc.Source{ID: src.ID, Name: src.Name, Powers: src.Powers,
+		Read: func(context.Context, time.Duration) ([]map[string]any, error) {
+			return []map[string]any{{"name": "cp", "ok": false, "error": "ups reports impossible values", "flags": []any{}}}, nil
+		}}
+	m.PollSource(ctx, failedRow, time.Second)
+	if st = m.State("rack/cp"); st.Status != "online" || !st.Stale || st.Error == nil || *st.Error != errUnreadable || *st.BatteryCharge != 100 {
+		t.Fatalf("failed row: %+v", st)
+	}
+	time.Sleep(250 * time.Millisecond)
+	m.PollSource(ctx, failedRow, time.Second)
+	if st = m.State("rack/cp"); st.Status != "unreachable" || !st.Stale {
+		t.Fatalf("failed row: %+v", st)
+	}
+	m.PollAll(ctx)
+	if st = m.State("rack/cp"); st.Status != "online" || st.Stale || st.Error != nil {
+		t.Fatalf("failed row: not back: %+v", st)
+	}
+	// a UPS that is no longer in the server's answer is not "online with its last values" either
 	gone := &upssrc.Source{ID: src.ID, Name: src.Name, Powers: src.Powers,
 		Read: func(context.Context, time.Duration) ([]map[string]any, error) { return nil, nil }}
 	m.PollSource(ctx, gone, time.Second)

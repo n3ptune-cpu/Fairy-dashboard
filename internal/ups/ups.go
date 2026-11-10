@@ -265,6 +265,12 @@ func (m *Manager) PollSource(ctx context.Context, c *upssrc.Source, timeout time
 				unreadable++
 				continue
 			}
+			if ok, isBool := row["ok"].(bool); isBool && !ok {
+				// the same from the shared reader after agent v0.5.3: a failed row with the UPS's name. It is
+				// not a state to show ("unknown", no values): the UPS fails like one whose row is missing.
+				unreadable++
+				continue
+			}
 			n, _ := row["name"].(string)
 			if !upsNameRe.MatchString(n) {
 				continue
