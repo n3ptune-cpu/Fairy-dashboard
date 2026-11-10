@@ -467,6 +467,18 @@ func TestPinnedReleaseFollowsGoMod(t *testing.T) {
 	}
 }
 
+// A release is built from the tagged Fairy-agent that go.sum pins. A replace line (left over from building
+// against a local clone of the agent) would build it from somewhere else, and both workflows run this test.
+func TestGoModHasNoReplaceLine(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := regexp.MustCompile(`(?m)^[ \t]*replace\b.*$`).Find(b); m != nil {
+		t.Fatalf("go.mod has a replace line (%q): take it out before this is pushed", m)
+	}
+}
+
 // The command passes the hash of the exact SHA256SUMS bytes the panel verified. A release whose script does
 // not take it (older than Fairy-agent v0.4.3) gets no command.
 func TestCommandsPassTheVerifiedSumsHash(t *testing.T) {
