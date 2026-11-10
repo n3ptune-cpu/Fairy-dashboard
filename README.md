@@ -480,6 +480,9 @@ memory limit. Add it once:
    when the address is verified. Otherwise use the subject from `fairy admin users list`:
    `fairy admin users set-role <subject> admin`. Making an admin asks "Type yes to continue"; in a script add
    `--yes`.
+   The Audit page and `fairy admin audit tail` follow the same rule: an address Pocket ID did not verify
+   reads `you@example.com (unverified)`, and every entry shows the account's id next to it. Entries written
+   before the update show the bare address; the id is there for them too.
 5. **Scripts with an API token** can no longer stop or start the elevated helper, or use Add host, Re-pair,
    Remove, or cancel an Add host that is waiting. They get 403, "this action needs a browser sign-in".
    Everything else a token could do, it still can. In the page, "Cancel Add host" asks "Confirm it's you"

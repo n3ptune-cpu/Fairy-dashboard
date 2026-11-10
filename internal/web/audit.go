@@ -25,17 +25,31 @@ func sourceOf(u *model.User) string {
 	return "ui"
 }
 
+// actorOf is how the audit log (and a notification) names who did something: a token by its name and owner, a
+// person by their e-mail address (marked when it is not verified), else user name, name, subject.
 func actorOf(u *model.User) string {
 	if u.Auth == "token" {
 		return model.Deref(u.TokenName) + " (token, owner " + model.Deref(u.TokenOwner) + ")"
 	}
-	for _, v := range []*string{u.Email, u.PreferredUsername, u.Name} {
+	if e := model.Deref(u.Email); e != "" {
+		if !u.EmailVerified {
+			// L4: an address the identity provider did not verify is only what the account claims to be. The
+			// audit entry says so, and carries the subject (sub), which the Audit page and `audit tail` show.
+			return e + unverifiedMark
+		}
+		return e
+	}
+	for _, v := range []*string{u.PreferredUsername, u.Name} {
 		if v != nil && *v != "" {
 			return *v
 		}
 	}
 	return u.Sub
 }
+
+// unverifiedMark follows an e-mail address the identity provider did not mark as verified, wherever the panel
+// names an account by it (audit entries, notifications, "requested by").
+const unverifiedMark = " (unverified)"
 
 // controlActions are the audited actions that also send the optional ntfy / Discord notification: control
 // actions and every change to users, roles and sites (including a new user waiting for access).

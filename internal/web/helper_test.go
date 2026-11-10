@@ -110,7 +110,7 @@ func TestHelperStopStartThroughTheAgent(t *testing.T) {
 	}
 	for i, want := range []struct{ action, state string }{{"helper_start", "starting"}, {"helper_stop", "stopped"}} {
 		p, _ := a[i]["params"].(map[string]any)
-		if a[i]["action"] != want.action || a[i]["target"] != "laptop" || a[i]["outcome"] != "ok" || a[i]["actor"] != "n@example.com" ||
+		if a[i]["action"] != want.action || a[i]["target"] != "laptop" || a[i]["outcome"] != "ok" || a[i]["actor"] != "n@example.com (unverified)" ||
 			a[i]["source"] != "ui" || p["host"] != "laptop" || p["state"] != want.state {
 			t.Fatalf("audit %d: %v", i, a[i])
 		}

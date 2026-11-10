@@ -26,6 +26,11 @@ func fmtEntry(e map[string]any) string {
 	if ip, ok := e["ip"].(string); ok && ip != "" {
 		s += "  [" + cell(ip) + "]"
 	}
+	// L4: the account id (OIDC subject) of who did it. The actor column is a name or address the account
+	// claims at the identity provider; the id is the part its owner cannot choose.
+	if sub, ok := e["sub"].(string); ok && sub != "" && sub != fmt.Sprint(e["actor"]) {
+		s += "  id " + cell(sub)
+	}
 	return s
 }
 

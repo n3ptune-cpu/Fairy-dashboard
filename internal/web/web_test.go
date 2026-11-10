@@ -321,7 +321,7 @@ func TestAuditLogAndPage(t *testing.T) {
 	}
 	r = e.do("GET", "/api/audit?action=poll", nil, "Cookie", c)
 	got := r.body["entries"].([]any)[0].(map[string]any)
-	if got["action"] != "poll.set" || got["target"] != "laptop" || got["outcome"] != "ok" || got["actor"] != "n@example.com" || got["source"] != "ui" {
+	if got["action"] != "poll.set" || got["target"] != "laptop" || got["outcome"] != "ok" || got["actor"] != "n@example.com (unverified)" || got["sub"] != "u2" || got["source"] != "ui" {
 		t.Fatalf("%v", got)
 	}
 	if r := e.do("GET", "/api/audit?before="+itoa(cursor), nil, "Cookie", c); len(r.body["entries"].([]any)) == 0 {

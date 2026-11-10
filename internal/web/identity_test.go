@@ -74,3 +74,59 @@ func TestSignInRecordsWhetherTheEmailIsVerified(t *testing.T) {
 		t.Fatal(r.code, string(r.raw))
 	}
 }
+
+// L4, the audit part. An account that only claims an address was named by that bare address in every audit
+// entry it caused, and the Audit page and `audit tail` showed nothing else. Now the entry marks the address as
+// unverified, the entry of the verified owner does not carry the mark, and the page shows the account id.
+func TestAuditMarksAnUnverifiedAddressAndShowsTheAccountID(t *testing.T) {
+	e := setup(t)
+	imp := viewer
+	imp.Sub, imp.Email, imp.Name = "impostor-sub", model.P("owner@example.com"), model.P("Owner")
+	own := imp
+	own.Sub, own.EmailVerified = "owner-sub", true
+	for _, u := range []model.User{imp, own} {
+		ck := e.cookie(u, 0)
+		if r := e.do("PUT", "/api/settings", map[string]any{}, "Cookie", ck, "X-Requested-With", "fairy"); r.code != 200 {
+			t.Fatal(r.code, string(r.raw))
+		}
+		if r := e.do("GET", "/api/audit", nil, "Cookie", ck); r.code != 403 { // refused and audited (auth.denied)
+			t.Fatal(r.code)
+		}
+	}
+	page := e.do("GET", "/api/audit?limit=50", nil, "Cookie", e.cookie(controller(), 0))
+	seen := map[string]int{}
+	for _, x := range page.body["entries"].([]any) {
+		m := x.(map[string]any)
+		switch m["sub"] {
+		case "impostor-sub":
+			seen["impostor"]++
+			if m["actor"] != "owner@example.com (unverified)" {
+				t.Errorf("an entry of the account that only claims the address: actor %q", m["actor"])
+			}
+		case "owner-sub":
+			seen["owner"]++
+			if m["actor"] != "owner@example.com" {
+				t.Errorf("an entry of the verified owner: actor %q", m["actor"])
+			}
+		}
+	}
+	if seen["impostor"] < 2 || seen["owner"] < 2 {
+		t.Fatal("entries of the two accounts:", seen)
+	}
+	for u, want := range map[*model.User]string{
+		{Sub: "s", Email: model.P("a@example.com")}:                         "a@example.com (unverified)",
+		{Sub: "s", Email: model.P("a@example.com"), EmailVerified: true}:    "a@example.com",
+		{Sub: "s", Name: model.P("Ann")}:                                    "Ann",
+		{Sub: "s", PreferredUsername: model.P("ann"), Name: model.P("Ann")}: "ann",
+		{Sub: "s"}: "s",
+		{Sub: "token:1", Auth: "token", TokenName: model.P("ha"), TokenOwner: model.P("system"), Email: model.P("x@example.com")}: "ha (token, owner system)",
+	} {
+		if got := actorOf(u); got != want {
+			t.Errorf("actorOf(%+v) = %q, want %q", *u, got, want)
+		}
+	}
+	js := appJS(t)
+	if want := "<td>${esc(e.actor)}${e.sub && e.sub !== e.actor ? `<div class=\"note\" title="; !strings.Contains(js, want) || !strings.Contains(js, ">id ${esc(e.sub)}</div>") {
+		t.Error("the Audit page does not show the account id next to the actor")
+	}
+}

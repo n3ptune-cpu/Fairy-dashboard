@@ -108,9 +108,9 @@ func TestEveryPrintedFieldStaysOnItsLine(t *testing.T) {
 		t.Fatal(code, out)
 	}
 	oneLinePerRow(t, "audit tail", out, 3)
-	for _, field := range []string{"source", "actor", "action", "target", "outcome", "ip"} { // each field alone
+	for _, field := range []string{"source", "actor", "action", "target", "outcome", "ip", "sub"} { // each field alone
 		e := map[string]any{"ts": "2026-11-10T12:00:00.000000+00:00", "source": "ui", "actor": "a", "action": "b", "target": "c",
-			"outcome": "ok", "ip": "1.2.3.4"}
+			"outcome": "ok", "ip": "1.2.3.4", "sub": "s"}
 		e[field] = hostile
 		oneLinePerRow(t, "audit entry, field "+field, fmtEntry(e), 1)
 	}
@@ -221,4 +221,39 @@ func TestEveryPrintedFieldStaysOnItsLine(t *testing.T) {
 		t.Fatal(code, out)
 	}
 	oneLinePerRow(t, "users remove", out, 3)
+}
+
+// L4 (audit part): `audit tail` names the account by its id next to what the account calls itself, so an entry
+// of an account that only claims an address cannot be taken for the owner of that address.
+func TestAuditTailShowsTheAccountID(t *testing.T) {
+	base := map[string]any{"ts": "2026-11-10T12:00:00.000000+00:00", "source": "ui", "action": "settings.update", "target": "",
+		"outcome": "ok", "ip": "203.0.113.9"}
+	with := func(kv ...string) map[string]any {
+		e := map[string]any{}
+		for k, v := range base {
+			e[k] = v
+		}
+		for i := 0; i+1 < len(kv); i += 2 {
+			e[kv[i]] = kv[i+1]
+		}
+		return e
+	}
+	impostor := fmtEntry(with("actor", "owner@example.com (unverified)", "sub", "impostor-sub"))
+	owner := fmtEntry(with("actor", "owner@example.com", "sub", "3f6c1d2e-owner-0001"))
+	if !strings.HasSuffix(impostor, "  id impostor-sub") || !strings.Contains(impostor, "owner@example.com (unve") ||
+		!strings.HasSuffix(owner, "  id 3f6c1d2e-owner-0001") || impostor == owner {
+		t.Fatalf("\n%s\n%s", impostor, owner)
+	}
+	// an entry written before this release has the bare address: the id still tells the two apart
+	old := fmtEntry(with("actor", "owner@example.com", "sub", "impostor-sub"))
+	if !strings.HasSuffix(old, "  id impostor-sub") {
+		t.Fatal(old)
+	}
+	// no id to show: an entry without a subject (a failed sign-in), or one whose actor is the subject itself
+	if s := fmtEntry(with("actor", "?")); strings.Contains(s, "  id ") {
+		t.Fatal(s)
+	}
+	if s := fmtEntry(with("actor", "u-77", "sub", "u-77")); strings.Contains(s, "  id ") {
+		t.Fatal(s)
+	}
 }
