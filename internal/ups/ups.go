@@ -38,6 +38,8 @@ type Manager struct {
 	events  []model.UpsEvent
 	seq     int
 	limiter upssrc.EventLimiter // events per UPS (shared with Fairy-agent: 10 per 10 minutes)
+	// sourceLimiter: events per source (maxSourceEvents per 10 minutes), whatever its UPSes are called.
+	sourceLimiter upssrc.EventLimiter
 	// unreadable: sources (a configured source's id, "agent:<id>") whose unreadable rows were already logged.
 	unreadable map[string]bool
 	// OnEvent is called (outside the lock) for every new event (notifications).
@@ -52,6 +54,7 @@ func NewManager(configs []map[string]any, interval float64, timeout time.Duratio
 		maxlen: max(1, int(float64(historyS)/interval)), window: time.Duration(historyS) * time.Second,
 		states:  map[string]*model.UpsState{},
 		history: map[string][]model.UpsPoint{}}
+	m.sourceLimiter.Burst = maxSourceEvents
 	for _, raw := range configs {
 		c, err := upssrc.Build(raw)
 		if err != nil {

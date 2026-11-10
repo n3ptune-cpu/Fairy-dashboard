@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	upssrc "github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
@@ -19,18 +20,39 @@ func FmtRuntime(s *int) string {
 	return fmt.Sprintf("%d:%02d", *s/60, *s%60)
 }
 
+// maxSourceEvents is how many UPS events one source (a configured UPS server, or an agent that relays UPSes)
+// may cause in the limiter's window (10 minutes). The limit per UPS is 10; a source with several UPSes in a real
+// power cut needs a few events for each of them, and one that gives its UPSes new names on every poll gets no
+// more than this.
+const maxSourceEvents = 40
+
+// sourceOf is the source of a UPS id ("<source or agent id>/<UPS name>").
+func sourceOf(id string) string {
+	src, _, _ := strings.Cut(id, "/")
+	return src
+}
+
 // event records a transition. The shared limiter (Fairy-agent's pkg/ups, at most 10 events per UPS in 10
-// minutes) keeps a flapping or hostile UPS from flooding the list, the notifications and the log; the next
-// event that gets through says how many were dropped.
+// minutes) keeps a flapping or hostile UPS from flooding the list, the notifications and the log, and a second
+// one counts per source (maxSourceEvents), because the limit per UPS alone is avoided by renaming the UPS. The
+// next event that gets through says how many were dropped.
 func (m *Manager) event(st *model.UpsState, kind, severity, msg string) {
 	now := time.Now()
 	ok, dropped := m.limiter.Allow(st.ID, now)
 	if !ok {
 		return
 	}
+	ok, droppedSource := m.sourceLimiter.Allow(sourceOf(st.ID), now)
+	if !ok {
+		return
+	}
 	if dropped > 0 {
 		msg += fmt.Sprintf(" (%d earlier events of this UPS not shown: too many in a short time)", dropped)
 		slog.Warn("UPS events were rate-limited", "ups", st.Name, "dropped", dropped)
+	}
+	if droppedSource > 0 {
+		msg += fmt.Sprintf(" (%d earlier UPS events from the same source not shown: too many in a short time)", droppedSource)
+		slog.Warn("UPS events were rate-limited", "source", sourceOf(st.ID), "dropped", droppedSource)
 	}
 	m.seq++
 	ev := model.UpsEvent{Seq: m.seq, T: now.UTC(), UpsID: st.ID, UpsName: st.Name, Kind: kind,

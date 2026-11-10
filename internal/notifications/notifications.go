@@ -24,11 +24,22 @@ const (
 	Critical = "critical"
 )
 
-// Limits: at most MaxEvents, none older than MaxAge.
+// Limits: at most MaxEvents, none older than MaxAge (except alarms that still hold). One host, or one UPS
+// source, holds at most MaxPerHost of them: a machine that produces events without end uses up its own share,
+// not the list.
 const (
-	MaxEvents = 2000
-	MaxAge    = 30 * 24 * time.Hour
+	MaxEvents  = 2000
+	MaxAge     = 30 * 24 * time.Hour
+	MaxPerHost = MaxEvents / 4
+	// RepeatWindow: a repeat of a merged kind (see merged) within this time of the first one is counted on that
+	// event instead of becoming a new one.
+	RepeatWindow = 10 * time.Minute
 )
+
+// merged are the kinds a monitored machine can cause again on every poll (an agent reporting a new failed update
+// every 2 seconds). Per host there is one such event per RepeatWindow; repeats raise its Count ("x7" in the
+// text), are not pushed and are not new unread notifications.
+var merged = map[string]bool{"update_failed": true}
 
 // Event is one notification.
 type Event struct {
@@ -44,6 +55,34 @@ type Event struct {
 	Key      string     `json:"key,omitempty"` // an alarm's condition (offline:<id>); cleared by the matching "back" event
 	Alarm    bool       `json:"alarm,omitempty"`
 	Resolved *time.Time `json:"resolved,omitempty"`
+	// Count is how often the event happened when repeats were merged into it (2 and up; see merged). The text
+	// ends in " (x<Count>)".
+	Count int `json:"count,omitempty"`
+}
+
+// owner is whose share of the list an event counts towards: its system, or for a UPS event the UPS's source
+// (the part of the UPS id before the slash: a configured UPS source or the agent that relays it). "" for events
+// of the panel itself, which have no limit of their own.
+func (e Event) owner() string {
+	if e.SystemID != "" {
+		return e.SystemID
+	}
+	if i := strings.IndexByte(e.UPSID, '/'); i > 0 {
+		return e.UPSID[:i]
+	}
+	return e.UPSID
+}
+
+// tier says what is given up first when the list is full: 0 info events and alarms that are over, 1 other
+// warnings, 2 alarms that still hold (only when nothing else is left).
+func (e Event) tier() int {
+	switch {
+	case e.Active():
+		return 2
+	case e.Alarm || e.Severity == Info || e.Severity == "":
+		return 0
+	}
+	return 1
 }
 
 // Active reports whether an alarm's condition still holds.
@@ -115,7 +154,8 @@ func (s *Store) Subscribe() (<-chan struct{}, func()) {
 }
 
 // Add records an event (ID and time filled in) and returns it. An event with a Key resolves the open alarms
-// with the same key when it is not an alarm itself (the "back to normal" event).
+// with the same key when it is not an alarm itself (the "back to normal" event). A repeat of a merged kind is
+// counted on the event it repeats, which is returned instead (see merged).
 func (s *Store) Add(e Event) Event {
 	s.mu.Lock()
 	now := s.Now().UTC()
@@ -124,6 +164,27 @@ func (s *Store) Add(e Event) Event {
 	}
 	if e.Severity == "" {
 		e.Severity = Info
+	}
+	if merged[e.Kind] {
+		for i := len(s.d.Events) - 1; i >= 0; i-- {
+			x := &s.d.Events[i]
+			if x.Kind != e.Kind || x.SystemID != e.SystemID || x.UPSID != e.UPSID {
+				continue
+			}
+			if d := now.Sub(x.T); d < 0 || d >= RepeatWindow {
+				break // the latest one is too old: this is a new event
+			}
+			if x.Count >= 2 {
+				x.Text = strings.TrimSuffix(x.Text, fmt.Sprintf(" (x%d)", x.Count))
+			}
+			x.Count = max(x.Count, 1) + 1
+			x.Text += fmt.Sprintf(" (x%d)", x.Count)
+			out := *x
+			s.dirty = true
+			s.signal()
+			s.mu.Unlock()
+			return out // counted, not pushed again
+		}
 	}
 	if e.Key != "" && !e.Alarm {
 		for i := range s.d.Events {
@@ -136,14 +197,9 @@ func (s *Store) Add(e Event) Event {
 	e.ID = s.d.Next
 	s.d.Next++
 	s.d.Events = append(s.d.Events, e)
-	s.trim(now)
+	s.trim(now, e.owner())
 	s.dirty = true
-	for ch := range s.subs {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
-	}
+	s.signal()
 	push := s.Push
 	s.mu.Unlock()
 	if push != nil && (e.Severity == Warning || e.Severity == Critical) {
@@ -156,22 +212,81 @@ func (s *Store) Add(e Event) Event {
 	return e
 }
 
-func (s *Store) trim(now time.Time) {
-	cut := 0
-	for cut < len(s.d.Events) && (len(s.d.Events)-cut > MaxEvents || now.Sub(s.d.Events[cut].T) > MaxAge) {
-		cut++
+// signal tells the subscribers that the list changed. Caller holds s.mu.
+func (s *Store) signal() {
+	for ch := range s.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
-	if cut == 0 {
+}
+
+// trim keeps the list within its limits after an event of owner was added. Caller holds s.mu.
+//
+// Events older than MaxAge go, the host (or UPS source) that just added one gives up its own events beyond
+// MaxPerHost, and beyond MaxEvents the list gives up one event at a time. What goes first is decided by
+// Event.tier: info events and alarms that are over, oldest first, then other warnings; an alarm that still holds
+// ("UPS on battery", "host offline") is only given up when nothing else is left, because it is not raised again
+// while its condition lasts. So a flood of events from one machine cannot push a standing alarm of another one
+// out of the list.
+func (s *Store) trim(now time.Time, owner string) {
+	n := len(s.d.Events)
+	old, aged := 0, 0 // events are in time order: the ones past MaxAge are at the front
+	for ; old < n && now.Sub(s.d.Events[old].T) > MaxAge; old++ {
+		if !s.d.Events[old].Active() {
+			aged++
+		}
+	}
+	if aged > 0 {
+		kept := make([]Event, 0, n-aged)
+		for i, e := range s.d.Events {
+			if i >= old || e.Active() {
+				kept = append(kept, e)
+			}
+		}
+		s.d.Events = kept
+	}
+	if owner != "" {
+		mine := 0
+		for _, e := range s.d.Events {
+			if e.owner() == owner {
+				mine++
+			}
+		}
+		for ; mine > MaxPerHost; mine-- {
+			s.evict(func(e Event) bool { return e.owner() == owner })
+		}
+	}
+	for len(s.d.Events) > MaxEvents {
+		s.evict(func(Event) bool { return true })
+	}
+	if len(s.d.Events) == n {
 		return
 	}
-	s.d.Events = slices.Clone(s.d.Events[cut:])
-	oldest := int64(0)
-	if len(s.d.Events) > 0 {
-		oldest = s.d.Events[0].ID
+	present := make(map[int64]bool, len(s.d.Events))
+	for _, e := range s.d.Events {
+		present[e.ID] = true
 	}
 	for _, u := range s.d.Users { // forget read / dismissed marks of events that are gone
-		u.Read = slices.DeleteFunc(u.Read, func(id int64) bool { return id < oldest })
-		u.Dismissed = slices.DeleteFunc(u.Dismissed, func(id int64) bool { return id < oldest })
+		u.Read = slices.DeleteFunc(u.Read, func(id int64) bool { return !present[id] })
+		u.Dismissed = slices.DeleteFunc(u.Dismissed, func(id int64) bool { return !present[id] })
+	}
+}
+
+// evict removes one of the events that match: the oldest of the lowest tier (see Event.tier). Caller holds s.mu.
+func (s *Store) evict(match func(Event) bool) {
+	at, tier := -1, 3
+	for i, e := range s.d.Events {
+		if t := e.tier(); t < tier && match(e) {
+			at, tier = i, t
+			if t == 0 {
+				break
+			}
+		}
+	}
+	if at >= 0 {
+		s.d.Events = slices.Delete(s.d.Events, at, at+1)
 	}
 }
 
