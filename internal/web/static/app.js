@@ -15,6 +15,12 @@ try { for (const id of JSON.parse(localStorage.getItem(OPEN_KEY) || "[]")) state
 const saveOpen = () => { try { localStorage.setItem(OPEN_KEY, JSON.stringify(Object.keys(state.open).filter((k) => state.open[k]))); } catch { /* ignore */ } };
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const enc = encodeURIComponent;
+// Server values go into the page through esc() (text and attribute values), enc() (URL parts), cssName() (a class
+// name) or safeHref() (a link target), also where the server only ever sends a number or one of a few words:
+// the page does not rely on that.
+const cssName = (v) => (typeof v === "string" && /^[a-z0-9_-]{1,32}$/.test(v) ? v : "");
+// A link target from the server: http(s) addresses only (never javascript:, data:, ...); anything else leads nowhere.
+const safeHref = (u) => { try { const x = new URL(String(u), location.origin); return x.protocol === "https:" || x.protocol === "http:" ? esc(x.href) : "#"; } catch { return "#"; } };
 const controlOff = () => state.summary?.control_disabled || state.me?.control_disabled || null;
 const canControl = () => !!state.me?.can_control && !controlOff();
 const controlWhyNot = () => (controlOff() ? `Control is disabled by an administrator (${controlOff().by}). Re-enable on the server: admin control enable`
@@ -402,7 +408,7 @@ function navLink(href, ico, name, cls = "", extra = "") {
   const active = location.hash === href || (href !== "#/" && location.hash.startsWith(href + "/"));
   return `<a class="nav-link ${cls} ${active ? "active" : ""}" href="${href}" title="${esc(name)}">${ico}<span class="name">${esc(name)}</span>${extra}</a>`;
 }
-const sysLink = (s, cls) => navLink(`#/system/${enc(s.id)}`, `<span class="ico"><span class="dot ${s.status}"></span></span>`, s.name, cls,
+const sysLink = (s, cls) => navLink(`#/system/${enc(s.id)}`, `<span class="ico"><span class="dot ${cssName(s.status)}"></span></span>`, s.name, cls,
   `<span class="cpu">${s.status === "paused" ? "paused" : live(s) && s.cpu_percent != null ? fmtP(s.cpu_percent) : ""}</span>`);
 
 function renderNav() {
@@ -473,7 +479,7 @@ const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.ut
 function hostRow(s) {
   const gpus = s.gpus || [], w = watts(s);
   return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="host-ico">${hostIcon(s)}</span>
-      <span><span class="dot ${s.status}"></span> ${esc(s.name)}</span>${clusterTag(s)}${upsChips(s)}${battChip(s)}${helperChip(s)}</a>${guestCount(s)}<span class="sub">${esc(subLine(s))}${verChip(s.id)}</span></td>
+      <span><span class="dot ${cssName(s.status)}"></span> ${esc(s.name)}</span>${clusterTag(s)}${upsChips(s)}${battChip(s)}${helperChip(s)}</a>${guestCount(s)}<span class="sub">${esc(subLine(s))}${verChip(s.id)}</span></td>
     <td class="col-kind">${s.kind === "node" ? `<span class="chip">Proxmox</span>` : `<span class="note">${esc(s.owner || s.group || "–")}</span>`}</td>
     <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
     <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
@@ -485,8 +491,8 @@ const hostTable = (groups) => `<div class="panel glass scroll"><table class="tab
   (title ? `<tr class="group" data-key="g-${esc(title)}"><td colspan="6">${esc(title)}</td></tr>` : "") + rows.map(hostRow).join("")).join("")}</tbody></table></div>`;
 
 function guestRow(s, showNode = true) {
-  return `<tr class="row guest ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="dot ${s.status}"></span>${esc(s.name)}</a></td>
-    <td><span class="chip ${s.kind}">${esc(kindLabel(s))}</span> <span class="note">#${s.vmid}</span></td>
+  return `<tr class="row guest ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="dot ${cssName(s.status)}"></span>${esc(s.name)}</a></td>
+    <td><span class="chip ${cssName(s.kind)}">${esc(kindLabel(s))}</span> <span class="note">#${esc(s.vmid)}</span></td>
     ${showNode ? `<td class="col-kind"><span class="note">${esc(s.parent)}</span></td>` : ""}
     <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${esc(s.status)}</span>`}</td>
     <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
@@ -502,7 +508,7 @@ const guestTable = (groups, showNode = true) => `<div class="panel glass scroll"
 function alertSummary() {
   const n = state.notes.active_alerts;
   if (!n) return "";
-  return `<a class="alert-sum" href="#/notifications">${I.bell}<b>${n}</b> active alert${n === 1 ? "" : "s"} →</a>`;
+  return `<a class="alert-sum" href="#/notifications">${I.bell}<b>${esc(n)}</b> active alert${n === 1 ? "" : "s"} →</a>`;
 }
 // "5 hosts", or "4 of 5 online" when some are offline (they do not add to the CPU / memory totals).
 const hostsOf = (t) => (t.hosts_online === t.hosts ? `${t.hosts} host${t.hosts === 1 ? "" : "s"}` : `${t.hosts_online} of ${t.hosts} online`);
@@ -513,12 +519,12 @@ function pageOverview() {
   const hostGroups = hostsBySite();
   const ups = state.ups?.ups || [];
   return `<div class="tiles">
-    ${t?.hosts ? `<div class="panel glass tile"><div class="label">CPU <span class="label-sub" title="Offline hosts do not add to the CPU and memory totals">all hosts · ${hostsOf(t)}</span></div><div class="value">${fmtP(t.cpu_percent)}<small> of ${t.cores} cores</small></div>${barEl("cpu", t.cpu_percent)}</div>
-    <div class="panel glass tile"><div class="label">Memory <span class="label-sub">all hosts</span></div><div class="value">${t.mem_total ? `${fmtBytes(t.mem_used)}<small> / ${fmtBytes(t.mem_total)}</small>` : `–<small> ${hostsOf(t)}</small>`}</div>${barEl("mem", pct(t.mem_used, t.mem_total))}</div>` : ""}
-    <div class="panel glass tile"><div class="label">Systems</div><div class="value">${sm.counts.online}<small> / ${sm.counts.total} online</small></div>
-      <div class="counts"><span><span class="dot online"></span><b>${sm.counts.online}</b></span><span><span class="dot"></span><b>${sm.counts.stopped}</b></span>
-      <span><span class="dot stale"></span><b>${sm.counts.stale}</b></span><span><span class="dot offline"></span><b>${sm.counts.offline}</b></span>
-      ${sm.counts.paused ? `<span><span class="dot paused"></span><b>${sm.counts.paused}</b> paused</span>` : ""}</div></div>
+    ${t?.hosts ? `<div class="panel glass tile"><div class="label">CPU <span class="label-sub" title="Offline hosts do not add to the CPU and memory totals">all hosts · ${esc(hostsOf(t))}</span></div><div class="value">${fmtP(t.cpu_percent)}<small> of ${esc(t.cores)} cores</small></div>${barEl("cpu", t.cpu_percent)}</div>
+    <div class="panel glass tile"><div class="label">Memory <span class="label-sub">all hosts</span></div><div class="value">${t.mem_total ? `${fmtBytes(t.mem_used)}<small> / ${fmtBytes(t.mem_total)}</small>` : `–<small> ${esc(hostsOf(t))}</small>`}</div>${barEl("mem", pct(t.mem_used, t.mem_total))}</div>` : ""}
+    <div class="panel glass tile"><div class="label">Systems</div><div class="value">${esc(sm.counts.online)}<small> / ${esc(sm.counts.total)} online</small></div>
+      <div class="counts"><span><span class="dot online"></span><b>${esc(sm.counts.online)}</b></span><span><span class="dot"></span><b>${esc(sm.counts.stopped)}</b></span>
+      <span><span class="dot stale"></span><b>${esc(sm.counts.stale)}</b></span><span><span class="dot offline"></span><b>${esc(sm.counts.offline)}</b></span>
+      ${sm.counts.paused ? `<span><span class="dot paused"></span><b>${esc(sm.counts.paused)}</b> paused</span>` : ""}</div></div>
     <div class="panel glass tile"><div class="label">Wall power${ups.length ? ` · ${ups.length} UPS` : ""}</div><div class="value pwr">${fmtW(state.power?.total_w)}</div>${spark(state.history.map((p) => p.total_w))}</div>
   </div>
   ${alertSummary()}
@@ -540,7 +546,7 @@ function pollMenu(s) {
   return `<div class="menu" role="menu"><div class="menu-title">Polling rate</div>
     ${POLL_CHOICES.map(([v, label]) => `<button class="menu-item ${String(cur) === String(v) ? "on" : ""}" data-act="poll" data-v="${v}" ${why ? "disabled" : ""}>${label}${v === "default" ? '<span class="note">config</span>' : ""}</button>`).join("")}
     ${why ? `<div class="menu-note">${esc(why)}</div>` : ""}
-    ${st ? `<div class="menu-sep"></div>${st.jobs.map((j) => `<div class="menu-row"><span>${esc(j.job)}</span><span>${j.paused ? "paused" : fmtIv(j.effective_s)}${j.clamped ? ` <span class="chip warn" title="this source never polls faster than ${j.floor_s}s">min ${j.floor_s}s</span>` : ""}</span></div>`).join("")}
+    ${st ? `<div class="menu-sep"></div>${st.jobs.map((j) => `<div class="menu-row"><span>${esc(j.job)}</span><span>${j.paused ? "paused" : fmtIv(j.effective_s)}${j.clamped ? ` <span class="chip warn" title="this source never polls faster than ${esc(j.floor_s)}s">min ${esc(j.floor_s)}s</span>` : ""}</span></div>`).join("")}
       ${st.note ? `<div class="menu-note">${esc(st.note)}</div>` : ""}
       <div class="menu-note">${st.boost_enabled ? "Viewing a host boosts it to 1 s (30 s grace)." : "Boost while viewing is off."}</div>` : '<div class="menu-note">loading…</div>'}</div>`;
 }
@@ -567,11 +573,11 @@ function pageSystem(id, tab) {
   const menuOpen = state.menu?.id === id ? state.menu.kind : null;
   const why = controlWhyNot();
   const hasPower = (s.power_actions || []).length > 0;
-  const head = `<div class="detail-head"><div class="dh-title"><span class="dot ${s.status}"></span><h2>${esc(s.name)}</h2>
+  const head = `<div class="detail-head"><div class="dh-title"><span class="dot ${cssName(s.status)}"></span><h2>${esc(s.name)}</h2>
     <span class="chip ${s.status === "online" ? "ok" : s.status === "stale" ? "warn" : s.status === "offline" ? "bad" : ""}">${esc(statusText(s))}</span>
     ${helperBadge(s, menuOpen === "helper")}</div>
     <div class="actions">${liveLabel(s)}
-      ${s.dwservice_url ? `<a class="btn" href="${esc(s.dwservice_url)}" target="_blank" rel="noopener noreferrer">Remote ${I.ext}</a>` : ""}
+      ${s.dwservice_url ? `<a class="btn" href="${safeHref(s.dwservice_url)}" target="_blank" rel="noopener noreferrer">Remote ${I.ext}</a>` : ""}
       <div class="menu-wrap"><button class="btn ${menuOpen === "power" ? "on" : ""}" data-act="menu" data-menu="power" ${hasPower ? "" : "disabled"}
         title="${esc(hasPower ? why || "Power actions" : "No power control configured for this system")}">${I.onoff}Power</button>${menuOpen === "power" ? powerMenu(s) : ""}</div>
       ${state.me?.can_control && upd.bySys[s.id] && (upd.bySys[s.id].behind === true || updBusy(upd.bySys[s.id]))
@@ -615,7 +621,7 @@ function systemOverview(s) {
   }
   const lp = linkedPower(s.id), cp = s.component_power;
   const res = `<div class="panel glass pad"><h3>Resources</h3>
-    ${metric("cpu", "CPU", s.cpu_percent, `${fmtP(s.cpu_percent)}${s.cores ? ` · ${s.cores} cores` : ""}`)}
+    ${metric("cpu", "CPU", s.cpu_percent, `${fmtP(s.cpu_percent)}${s.cores ? ` · ${esc(s.cores)} cores` : ""}`)}
     ${metric("mem", "Memory", pct(s.mem_used, s.mem_total), `${fmtBytes(s.mem_used)} / ${fmtBytes(s.mem_total)}`)}
     ${s.disk_total ? metric("disk", "Disk", pct(s.disk_used, s.disk_total), `${fmtBytes(s.disk_used)} / ${fmtBytes(s.disk_total)}`) : ""}
     ${(s.disks || []).length > 1 ? s.disks.map((d) => metric("disk", esc(d.mount), pct(d.used, d.total), `${fmtBytes(d.used)} / ${fmtBytes(d.total)}`)).join("") : ""}
@@ -623,7 +629,7 @@ function systemOverview(s) {
     ${s.cpu_model ? `<div class="list-row"><span>Processor</span><span>${esc(s.cpu_model)}</span></div>` : ""}
     ${s.hardware?.display ? `<div class="list-row"><span>Model</span><span>${esc(s.hardware.display)}${s.hardware.bios_version ? ` <span class="note">BIOS ${esc(s.hardware.bios_version)}</span>` : ""}</span></div>` : ""}
     <div class="list-row"><span>Uptime</span><span>${fmtUptime(s.uptime_s)}</span></div>
-    ${s.load_avg ? `<div class="list-row"><span>Load</span><span>${s.load_avg.join(" · ")}</span></div>` : ""}
+    ${s.load_avg ? `<div class="list-row"><span>Load</span><span>${esc([].concat(s.load_avg).join(" · "))}</span></div>` : ""}
     <div class="list-row"><span>Last change</span><span data-ago="${esc(s.updated_at || s.last_seen)}">${ago(s.updated_at || s.last_seen)}</span></div></div>`;
   const ups = upsOf(s);
   const power = `<div class="panel glass pad"><h3>Power</h3>
@@ -644,7 +650,7 @@ function systemOverview(s) {
   const paused = helperPausedLine(s);
   const sensors = temps.length || (s.fans || []).length || (s.voltages || []).length || paused ? `<div class="panel glass pad"><h3>Sensors</h3>${paused}
     <div class="sensor-grid ${temps.length > 8 ? "two" : ""}">${temps.map((t) => `<div class="list-row"><span>${esc(t.label || t.sensor)}</span><span>${t.current_c.toFixed(0)}°C</span></div>`).join("")}</div>
-    ${(s.fans || []).map((f) => `<div class="list-row"><span>${esc(f.name)}</span><span>${f.rpm} rpm</span></div>`).join("")}
+    ${(s.fans || []).map((f) => `<div class="list-row"><span>${esc(f.name)}</span><span>${esc(f.rpm)} rpm</span></div>`).join("")}
     ${(s.voltages || []).map((v) => `<div class="list-row"><span>${esc(v.name)}</span><span>${v.volts.toFixed(2)} V</span></div>`).join("")}</div>` : "";
   const gs = s.kind === "node" ? guestsOf(s) : [];
   const guests = s.kind === "node" ? `<div class="section-title">Guests on this node <span class="count">${gs.length}</span></div>
@@ -663,7 +669,7 @@ async function loadProcesses(id) {
     morph(body, `<div class="toolbar">Sort by ${["cpu", "mem", "gpu"].map((k) => `<button class="btn ${k === procSort ? "on" : ""}" data-sort="${k}">${k.toUpperCase()}</button>`).join("")}
       <span class="push">${d.total_processes ?? "?"} processes · CPU % is per core · refreshes every 2 s</span></div>
       <div class="panel glass scroll"><table class="table"><thead><tr><th>PID</th><th>Name</th><th>User</th><th class="num">CPU %</th><th class="num">RSS</th><th class="num">GPU mem</th><th>Command line (redacted)</th></tr></thead>
-      <tbody>${d.processes.map((p) => `<tr class="row" data-key="p${p.pid}"><td>${p.pid}</td><td><b>${esc(p.name)}</b></td><td>${esc(p.username || "–")}</td>
+      <tbody>${d.processes.map((p) => `<tr class="row" data-key="p${esc(p.pid)}"><td>${esc(p.pid)}</td><td><b>${esc(p.name)}</b></td><td>${esc(p.username || "–")}</td>
         <td class="num">${p.cpu_percent?.toFixed(1) ?? "–"}</td><td class="num">${fmtBytes(p.rss)}</td><td class="num">${p.gpu_mem ? fmtBytes(p.gpu_mem) : "–"}${p.gpu_mem_by_gpu ? `<div class="note">${p.gpu_mem_by_gpu.map((b, i) => `GPU${i} ${fmtBytes(b)}`).join(" · ")}</div>` : ""}</td>
         <td class="cmd" title="${esc(p.cmdline || "")}">${esc(p.cmdline || "–")}</td></tr>`).join("")}</tbody></table></div>`);
     body.querySelectorAll("[data-sort]").forEach((b) => (b.onclick = () => { procSort = b.dataset.sort; loadProcesses(id); }));
@@ -694,16 +700,16 @@ async function loadFans(id) {
       const title = no ? "this board's BMC doesn't support this mode" : m === f.auto_mode ? "this board's automatic mode (fan_control.auto_mode)" : "";
       return `<button class="btn ${f.mode === m ? "on" : ""} ${no ? "unsupported" : ""}" data-mode="${m}" ${canCtl && !no ? "" : "disabled"}${title ? ` title="${esc(title)}"` : ""}${no ? ' aria-disabled="true"' : ""}>${m}${m === f.auto_mode ? ' <span class="note">auto</span>' : ""}</button>`;
     };
-    body.innerHTML = `<div class="warnbox">Writes go to the BMC. Manual speeds are never below <b>${floor}%</b> (the agent's minimum; the panel never sends less than 30%).${limits}${canCtl ? "" : ` ${esc(controlWhyNot())}`}</div>
+    body.innerHTML = `<div class="warnbox">Writes go to the BMC. Manual speeds are never below <b>${esc(floor)}%</b> (the agent's minimum; the panel never sends less than 30%).${limits}${canCtl ? "" : ` ${esc(controlWhyNot())}`}</div>
       ${f.error ? `<div class="error">${esc(f.error)}</div>` : ""}
       <div class="grid2"><div class="panel glass pad"><h3>Mode</h3><div class="row-gap">${["optimal", "standard", "heavyio", "full"].map(modeBtn).join("")}</div>
         ${unsupported.size ? `<div class="note">Greyed out: this board's BMC doesn't support ${esc([...unsupported].join(", "))}.</div>` : ""}
         <h3 class="gap">Zone duty (full mode only)</h3>${[0, 1].map((z) => {
           const v = f.duty[z] ?? 50;
-          return `<div class="duty-row"><span>Zone ${z}</span><input type="range" min="${floor}" max="100" step="5" value="${v}" data-zone="${z}" ${canCtl && full ? "" : "disabled"}>
-          <b data-duty-label="${z}">${v}%</b><button class="btn" data-apply="${z}" ${canCtl && full ? "" : "disabled"}>Set</button></div>`; }).join("")}
+          return `<div class="duty-row"><span>Zone ${z}</span><input type="range" min="${esc(floor)}" max="100" step="5" value="${esc(v)}" data-zone="${z}" ${canCtl && full ? "" : "disabled"}>
+          <b data-duty-label="${z}">${esc(v)}%</b><button class="btn" data-apply="${z}" ${canCtl && full ? "" : "disabled"}>Set</button></div>`; }).join("")}
         <div class="note">Zone 0: CPU/system headers (FAN1…), zone 1: peripheral (FANA). Verify on your board.</div><div class="error" id="fan-err" role="alert">${esc(fanMsg[id] || "")}</div></div>
-      <div class="stack"><div class="panel glass pad"><h3>Fans</h3>${f.fans.map((x) => `<div class="list-row"><span>${esc(x.name)}</span><span>${x.rpm} rpm</span></div>`).join("") || '<div class="note">no fan sensors</div>'}</div>
+      <div class="stack"><div class="panel glass pad"><h3>Fans</h3>${f.fans.map((x) => `<div class="list-row"><span>${esc(x.name)}</span><span>${esc(x.rpm)} rpm</span></div>`).join("") || '<div class="note">no fan sensors</div>'}</div>
         <div class="panel glass pad"><h3>Events</h3>${(f.events || []).slice().reverse().map((e) => `<div class="list-row"><span>${new Date(e.t * 1000).toLocaleTimeString()}</span><span>${esc(e.action)} · ${esc(e.detail)}</span></div>`).join("") || '<div class="note">none</div>'}</div></div></div>`;
     const post = async (path, payload) => {
       const url = `/api/systems/${enc(id)}${path}`;
@@ -735,7 +741,7 @@ function pagePower() {
   setTitle("Power", "wall power from plugs, UPS and BMCs");
   const p = state.power;
   if (!p) return '<div class="empty">Waiting for data…</div>';
-  const chip = (st) => `<span class="chip ${st === "ok" ? "ok" : st === "stale" ? "warn" : "bad"}">${st}</span>`;
+  const chip = (st) => `<span class="chip ${st === "ok" ? "ok" : st === "stale" ? "warn" : "bad"}">${esc(st)}</span>`;
   return `<div class="panel glass pad power-hero"><div><div class="tile"><div class="label">Total wall power</div></div><div class="big-w">${fmtW(p.total_w)}</div>
     <div class="note">${p.sources.filter((s) => s.include_in_total).length} sources counted · ${state.history.length} samples</div></div>${spark(state.history.map((h) => h.total_w))}</div>
     <div class="section-title">Sources</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
@@ -760,7 +766,7 @@ function upsWatts(u) {
   if (u.watts_estimated && u.watts === 0 && u.status === "online") {
     return `<span title="${esc(`The UPS reports 0 % load. Small UPSes often report 0 below their resolution, so the real draw is unknown (estimate from ${u.nominal_w} W nominal).`)}">0 W?</span>`;
   }
-  return `${u.watts_estimated ? "≈" : ""}${fmtW(u.watts)}${u.watts_estimated ? ` (est. from ${u.nominal_w} W nominal)` : ""}`;
+  return `${u.watts_estimated ? "≈" : ""}${fmtW(u.watts)}${u.watts_estimated ? ` (est. from ${esc(u.nominal_w)} W nominal)` : ""}`;
 }
 function upsCard(u) {
   const [cls, label] = (Object.hasOwn(UPS_STATUS, u.status) && UPS_STATUS[u.status]) || ["", String(u.status ?? "unknown")];
@@ -796,7 +802,7 @@ function pageUps() {
   return `<div class="ups-cards">${ups.map(upsCard).join("")}</div>
     <div class="section-title">Events <span class="count">${state.upsEvents.length}</span></div>
     <div class="panel glass scroll"><table class="table"><thead><tr><th>When</th><th>UPS</th><th>Event</th><th>Details</th></tr></thead><tbody>
-    ${ev.length ? ev.map((e) => `<tr class="row" data-key="e${e.seq}"><td><span data-ago="${esc(e.t)}">${ago(e.t)}</span> <span class="note">${new Date(e.t).toLocaleTimeString()}</span></td>
+    ${ev.length ? ev.map((e) => `<tr class="row" data-key="e${esc(e.seq)}"><td><span data-ago="${esc(e.t)}">${ago(e.t)}</span> <span class="note">${new Date(e.t).toLocaleTimeString()}</span></td>
       <td>${esc(e.ups_name)}</td><td><span class="chip ${e.severity === "critical" ? "bad" : e.severity === "warning" ? "warn" : "ok"}">${esc(e.kind.replace("_", " "))}</span></td>
       <td>${esc(e.message)}</td></tr>`).join("") : '<tr><td colspan="4" class="note">No transitions since the panel started.</td></tr>'}</tbody></table></div>
     <p class="note">The panel only reads (LIST UPS / LIST VAR): no instant commands, no SET VAR. Shutdown on low battery stays with upsmon on each host.</p>`;
@@ -839,7 +845,7 @@ function pageAudit() {
       <button class="btn" type="submit">Filter</button><span class="push note">append-only · nothing can be deleted from the UI</span></form>
     ${audit.error ? `<div class="error">${esc(audit.error)}</div>` : ""}
     <div class="panel glass scroll"><table class="table audit"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Result</th><th>Source</th><th>IP</th></tr></thead><tbody>
-    ${audit.entries.map((e) => `<tr class="row" data-key="a${e.id}"><td class="nowrap"><span data-ago="${esc(e.ts)}">${ago(e.ts)}</span><div class="note">${new Date(e.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div></td>
+    ${audit.entries.map((e) => `<tr class="row" data-key="a${esc(e.id)}"><td class="nowrap"><span data-ago="${esc(e.ts)}">${ago(e.ts)}</span><div class="note">${new Date(e.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div></td>
       <td>${esc(e.actor)}</td><td><code>${esc(e.action)}</code>${Object.keys(e.params || {}).length ? `<div class="note">${esc(Object.entries(e.params).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ")).slice(0, 64)}</div>` : ""}</td>
       <td>${e.target ? (state.byId[e.target] ? `<a href="#/system/${enc(e.target)}">${esc(state.byId[e.target].name)}</a>` : esc(e.target)) : '<span class="note">–</span>'}</td>
       <td>${auditOutcome(e.outcome)}</td><td><span class="chip ${e.source === "cli" ? "warn" : e.source.startsWith("token:") ? "tok" : ""}" title="${esc(e.source)}">${esc(e.source.length > 16 ? e.source.slice(0, 15) + "…" : e.source)}</span></td>
@@ -904,7 +910,7 @@ function pageUpdates() {
   const ready = d.agents.filter((r) => r.can_update);
   const latest = L.tag ? `<b>${esc(L.version ? buildLabel(L.version) : L.tag)}</b> ${L.verified ? '<span class="chip ok" title="signature checked with this panel\'s release key">signed</span>' : '<span class="chip warn" title="this panel build has no release key, so the signature was not checked here (agents always check it)">unverified</span>'}
       ${L.published_at ? `<span class="note">published <span data-ago="${esc(L.published_at)}">${ago(L.published_at)}</span></span>` : ""}
-      ${L.url ? `<a href="${esc(L.url)}" target="_blank" rel="noopener noreferrer">${esc(L.tag)} ${I.ext}</a>` : ""}` : '<span class="note">unknown</span>';
+      ${L.url ? `<a href="${safeHref(L.url)}" target="_blank" rel="noopener noreferrer">${esc(L.tag)} ${I.ext}</a>` : ""}` : '<span class="note">unknown</span>';
   const row = (r) => {
     const cur = r.version ? buildLabel(r.version) : "–";
     const vcls = r.behind === true ? "warn" : r.behind === false ? "ok" : "";
@@ -1010,7 +1016,7 @@ function updPopHtml(r) {
   else body = `<p class="note">${esc(r.why || "cannot update right now")}. On the machine: <code>fairy-agent update</code>.</p>`;
   return `<div class="menu-title" id="upd-pop-t">${updBusy(r) ? "Updating" : "Update available"}</div>
     <div class="upd-pop-body"><p>Release <b>${esc(rel)}</b> is available.${r.version ? ` ${esc(r.name)} runs ${esc(buildLabel(r.version))}.` : ""}</p>
-      ${L.url ? `<p><a href="${esc(L.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a></p>` : ""}${body}</div>`;
+      ${L.url ? `<p><a href="${safeHref(L.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a></p>` : ""}${body}</div>`;
 }
 function closeUpdPop(refocus) {
   const el = $("#upd-pop");
@@ -1092,7 +1098,7 @@ function pageUsers() {
     return `<tr class="row" data-key="u-${esc(u.sub)}"><td class="namecell"><b>${esc(u.name || "–")}</b>${u.you ? ' <span class="chip ok">you</span>' : ""}
         <span class="sub">${esc(u.email || u.sub)}</span></td>
       <td><select class="select" data-act="u-role" data-sub="${esc(u.sub)}" ${last ? 'disabled title="The last admin cannot be demoted: make someone else admin first"' : ""}>
-        ${d.roles.map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select></td>
+        ${d.roles.map((r) => `<option value="${esc(r)}" ${u.role === r ? "selected" : ""}>${esc(ROLE_LABEL[r] || r)}</option>`).join("")}</select></td>
       <td>${u.role === "admin" ? '<span class="note">every site</span>' : u.role === "pending" ? '<span class="note">nothing</span>'
         : sites.length ? `<div class="site-checks">${sites.map((x) => `<label class="check"><input type="checkbox" data-act="u-site" data-sub="${esc(u.sub)}" value="${esc(x)}" ${u.sites.includes(x) ? "checked" : ""}>${esc(x)}</label>`).join("")}</div>`
         : '<span class="note">create a site first</span>'}</td>
@@ -1100,7 +1106,7 @@ function pageUsers() {
       <td class="num"><button class="btn danger" data-act="u-remove" data-sub="${esc(u.sub)}" data-name="${esc(u.email || u.name || u.sub)}" ${last ? "disabled" : ""}>Remove</button></td></tr>`;
   };
   const siteRow = (x) => `<tr class="row" data-key="s-${esc(x.name)}"><td><b>${esc(x.name)}</b>${x.in_config ? ' <span class="chip" title="named in config.yaml (site:): rename or remove it there">config.yaml</span>' : ""}</td>
-    <td class="num">${x.hosts}</td><td class="num">${x.users}</td>
+    <td class="num">${esc(x.hosts)}</td><td class="num">${esc(x.users)}</td>
     <td class="num"><button class="btn" data-act="s-rename" data-site="${esc(x.name)}" ${x.in_config ? "disabled" : ""}>Rename</button>
       <button class="btn danger" data-act="s-delete" data-site="${esc(x.name)}" ${x.in_config ? "disabled" : ""}>Delete</button></td></tr>`;
   const targetRow = (t) => {
@@ -1297,9 +1303,9 @@ function pageSettings() {
     <div class="row-gap"><input class="input" id="bg-url" type="url" placeholder="https://example.com/wallpaper.jpg" value="${bg.kind === "url" ? esc(bg.url) : ""}"><button class="btn" id="bg-url-apply">Use URL</button></div>
     <div class="preview" id="bg-preview"></div><div class="error" id="set-err"></div></div>
     <div class="panel glass pad"><h3>Readability</h3>
-    <div class="field"><label for="dim">Background dim</label><input type="range" id="dim" min="0" max="90" step="5" value="${s.dim}"><output id="dim-v">${s.dim}%</output></div>
-    <div class="field"><label for="blur">Card blur</label><input type="range" id="blur" min="0" max="40" step="2" value="${s.blur}"><output id="blur-v">${s.blur}px</output></div>
-    <div class="field"><label for="op">Card opacity</label><input type="range" id="op" min="20" max="100" step="2" value="${s.card_opacity}"><output id="op-v">${s.card_opacity}%</output></div>
+    <div class="field"><label for="dim">Background dim</label><input type="range" id="dim" min="0" max="90" step="5" value="${esc(s.dim)}"><output id="dim-v">${esc(s.dim)}%</output></div>
+    <div class="field"><label for="blur">Card blur</label><input type="range" id="blur" min="0" max="40" step="2" value="${esc(s.blur)}"><output id="blur-v">${esc(s.blur)}px</output></div>
+    <div class="field"><label for="op">Card opacity</label><input type="range" id="op" min="20" max="100" step="2" value="${esc(s.card_opacity)}"><output id="op-v">${esc(s.card_opacity)}%</output></div>
     <div class="note" id="saved-note">Saved to your account (per Pocket ID user).</div></div></div>`;
 }
 
@@ -1337,7 +1343,7 @@ function afterSettings() { applySettings(); route(); }
 // ------------------------------------------------------------ settings persistence (server, localStorage fallback)
 const LS_KEY = "fairy-settings";
 const cssUrl = (u) => `url("${String(u).replace(/["\\\n\r]/g, encodeURIComponent)}")`;
-const bgUrl = (s) => (s.background.kind === "upload" ? `/api/settings/background?v=${s.background.version}` : s.background.kind === "url" ? s.background.url : null);
+const bgUrl = (s) => (s.background.kind === "upload" ? `/api/settings/background?v=${enc(s.background.version)}` : s.background.kind === "url" ? s.background.url : null);
 function applySettings() {
   const s = state.settings, root = document.documentElement.style, url = bgUrl(s);
   document.body.classList.toggle("has-bg", !!url);
@@ -1397,15 +1403,15 @@ function noteRow(e) {
   const href = noteLink(e);
   const when = new Date(e.t);
   const host = e.host ? (href ? `<a href="${href}">${esc(e.host)}</a>` : esc(e.host)) : '<span class="note">–</span>';
-  return `<tr class="row ${e.read ? "" : "unread"}" data-key="n${e.id}"><td class="nowrap"><span data-ago="${esc(e.t)}">${ago(e.t)}</span>
+  return `<tr class="row ${e.read ? "" : "unread"}" data-key="n${esc(e.id)}"><td class="nowrap"><span data-ago="${esc(e.t)}">${ago(e.t)}</span>
       <div class="note">${when.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div></td>
     <td class="nowrap"><span class="sev ${esc(e.severity)}" aria-hidden="true"></span>${esc(e.severity)}</td>
     <td>${host}</td>
     <td><span class="ntext">${esc(e.text)}</span>${e.active ? ' <span class="chip active" title="this condition still holds">active</span>'
       : e.resolved ? ` <span class="note">· resolved <span data-ago="${esc(e.resolved)}">${ago(e.resolved)}</span></span>` : ""}</td>
     <td class="note">${esc((NOTE_TYPES.find(([k]) => k === e.type) || [, e.type])[1])}</td>
-    <td class="num nowrap">${e.read ? "" : `<button class="btn" type="button" data-act="n-read" data-id="${e.id}" aria-label="Mark read">Mark read</button>`}
-      <button class="btn" type="button" data-act="n-dismiss" data-id="${e.id}" aria-label="Dismiss" title="Hide it from your list">Dismiss</button></td></tr>`;
+    <td class="num nowrap">${e.read ? "" : `<button class="btn" type="button" data-act="n-read" data-id="${esc(e.id)}" aria-label="Mark read">Mark read</button>`}
+      <button class="btn" type="button" data-act="n-dismiss" data-id="${esc(e.id)}" aria-label="Dismiss" title="Hide it from your list">Dismiss</button></td></tr>`;
 }
 function pageNotifications() {
   setTitle("Notifications", "what changed, newest first");
@@ -1709,7 +1715,7 @@ function panelUpdateBox(d) {
     `<span class="${st.state === "done" || at > i ? "done" : at === i ? (st.finished ? "done" : "now") : ""}">${l}</span>`).join("")}${bad ? `<span class="bad">${esc(st.state.replace("_", " "))}</span>` : ""}</div>
     <div class="note">${pupd.restarting ? "The panel is restarting… this page reconnects by itself." : esc(st.message)}${st.started_at ? ` · started <span data-ago="${esc(st.started_at)}">${ago(st.started_at)}</span>` : ""}</div>` : "";
   return `<div class="row-gap"><span>Panel: fairy <b>${esc(buildLabel(d.panel_version))}</b>${d.panel_latest?.tag ? ` · latest ${esc(d.panel_latest.version ? buildLabel(d.panel_latest.version) : d.panel_latest.tag)}` : ""}
-      ${d.panel_behind === false ? ' <span class="chip ok">up to date</span>' : ""}${d.panel_latest?.url ? ` <a href="${esc(d.panel_latest.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a>` : ""}</span>
+      ${d.panel_behind === false ? ' <span class="chip ok">up to date</span>' : ""}${d.panel_latest?.url ? ` <a href="${safeHref(d.panel_latest.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a>` : ""}</span>
     <button class="btn push" type="button" data-act="panel-upd" ${canGo ? "" : "disabled"} title="${esc(title)}">${I.update} ${running ? "Updating…" : "Update panel"}</button></div>
     ${steps}
     ${p && !p.ready ? `<div class="note warn">${esc(p.why)}</div>` : ""}
