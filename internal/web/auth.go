@@ -354,6 +354,12 @@ func (s *Server) authCallback(c *reqCtx) error {
 	if v, ok := claims["auth_time"].(float64); ok && v > 0 {
 		authTime = v
 	}
+	if authTime > now {
+		// A sign-in time in the future (the identity provider's clock runs ahead, or it is wrong on purpose) would
+		// keep the step-up window open for that much longer. The user cannot have signed in later than now.
+		slog.Warn("identity provider sent an auth_time in the future; counted as now", "ahead_s", int64(authTime-now))
+		authTime = now
+	}
 	target := safeNext(sess.Next)
 	if sess.StepUp {
 		target = stepUpNext(target)

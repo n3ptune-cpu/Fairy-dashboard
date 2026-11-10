@@ -177,3 +177,45 @@ func TestStepUpPerAction(t *testing.T) {
 		t.Fatal("control token", r.code, string(r.raw))
 	}
 }
+
+// I20: a sign-in time in the future (identity provider clock ahead) counts as "now". It must not keep the
+// step-up window open longer than step_up_window_s.
+func TestFutureAuthTimeIsClampedToNow(t *testing.T) {
+	e := setup(t)
+	clk := e.fakeClock()
+	idp := newFakeIDP(t)
+	e.s.Cfg.OIDC.Issuer = idp.srv.URL
+	window := time.Duration(e.s.Cfg.StepUpWindowS) * time.Second
+	idp.claims = map[string]any{"groups": []string{"viewers", "controllers"}, "auth_time": time.Now().Add(6 * time.Hour).Unix()}
+	q, rt := idp.login(e, "/auth/login?next=/", "")
+	r := e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	if r.code != 303 {
+		t.Fatal(r.code, string(r.raw))
+	}
+	sess := sessionCookie(e, r.hdr)
+	if me := e.do("GET", "/api/me", nil, "Cookie", sess); me.body["auth_age_s"].(float64) < 0 {
+		t.Fatal("a negative sign-in age", me.body["auth_age_s"])
+	}
+	if r := e.poll(sess); r.code != 200 {
+		t.Fatal("just signed in", r.code, string(r.raw))
+	}
+	clk.advance(window + time.Second)
+	if r := e.poll(sess); !stepUpRequired(r) {
+		t.Fatal("a future auth_time kept the window open past step_up_window_s", r.code, string(r.raw))
+	}
+	// the same for a step-up
+	q, rt = idp.login(e, "/auth/login?step_up=1&next=/", sess)
+	idp.claims["auth_time"] = clk.now().Add(6 * time.Hour).Unix()
+	r = e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	if r.code != 303 {
+		t.Fatal(r.code, string(r.raw))
+	}
+	sess = sessionCookie(e, r.hdr)
+	if r := e.poll(sess); r.code != 200 {
+		t.Fatal(r.code)
+	}
+	clk.advance(window + time.Second)
+	if r := e.poll(sess); !stepUpRequired(r) {
+		t.Fatal("a future auth_time at a step-up kept the window open", r.code)
+	}
+}
