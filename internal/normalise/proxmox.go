@@ -3,7 +3,6 @@ package normalise
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,12 +22,14 @@ func splitTags(raw string) []string {
 	return out
 }
 
+// pct turns Proxmox's CPU fraction (0 to 1) into a percentage, 0 to 100. It is checked after the
+// multiplication: a huge fraction times 100 is no longer a number, and such a value is dropped.
 func pct(v any) *float64 {
 	f := jsonx.NumV(v)
 	if f == nil {
 		return nil
 	}
-	return model.P(Round(*f*100, 1))
+	return Clamp(model.P(Round(*f*100, 1)), 0, 100)
 }
 
 // ProxmoxOpts are the per-cluster settings for NormaliseProxmox; Prefix keeps ids unique across clusters (e.g.
@@ -70,20 +71,10 @@ func NormaliseProxmox(resources []jsonx.M, now time.Time, ts float64, rates *Rat
 			}
 			sid, name = o.Prefix+"node-"+Slug(node), node
 		} else {
-			vf := jsonx.Num(r, "vmid")
-			if vf == nil {
-				if s := jsonx.S(r, "vmid"); s != "" {
-					if n, err := strconv.Atoi(s); err == nil {
-						f := float64(n)
-						vf = &f
-					}
-				}
-			}
-			if vf == nil {
+			if vmid = VMID(r); vmid == nil { // no id, or one Proxmox itself would not accept
 				continue
 			}
-			v := int(*vf)
-			vmid = &v
+			v := *vmid
 			var ok bool
 			if status, ok = guestStatus[statusRaw]; !ok {
 				status = "offline" // "unknown" when its node is down
@@ -98,18 +89,18 @@ func NormaliseProxmox(resources []jsonx.M, now time.Time, ts float64, rates *Rat
 		live := status == "online"
 		var rx, tx *float64
 		if live {
-			rx, tx = rates.Update(sid, ts, jsonx.Int(r, "netin"), jsonx.Int(r, "netout"), 15)
+			rx, tx = rates.Update(sid, ts, counter(r, "netin"), counter(r, "netout"), 15)
 		}
 		s := model.System{ID: sid, Name: name, Kind: rtype, Source: "proxmox", Parent: parent, VMID: vmid,
 			Status: status, ClusterID: o.ClusterID, Cluster: o.Cluster, Group: o.Group, Owner: o.Owner,
-			MemTotal: jsonx.Int(r, "maxmem"), DiskUsed: jsonx.Int(r, "disk"), DiskTotal: jsonx.Int(r, "maxdisk"),
+			MemTotal: size(r, "maxmem"), DiskUsed: size(r, "disk"), DiskTotal: size(r, "maxdisk"),
 			NetRxBps: rx, NetTxBps: tx, Tags: splitTags(jsonx.S(r, "tags")), PollMode: "default"}
 		if live {
 			s.CPUPercent = pct(r["cpu"])
-			s.MemUsed = jsonx.Int(r, "mem")
-			s.UptimeS = jsonx.Int(r, "uptime")
+			s.MemUsed = size(r, "mem")
+			s.UptimeS = whole(r, "uptime", 0, MaxUnixTime)
 		}
-		if c := jsonx.IntP(r, "maxcpu"); c != nil && *c != 0 {
+		if c := cores(r, "maxcpu"); c != nil && *c != 0 {
 			s.Cores = c
 		}
 		if status == "online" || status == "stopped" {

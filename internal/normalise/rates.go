@@ -2,6 +2,8 @@ package normalise
 
 import (
 	"sync"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // RateTracker turns cumulative byte counters into bytes/s between two successful polls.
@@ -47,8 +49,8 @@ func (r *RateTracker) Update(key string, ts float64, rx, tx *int64, holdS float6
 		if cur == nil || old == nil || *cur < *old {
 			return nil
 		}
-		v := Round(float64(*cur-*old)/dt, 1)
-		return &v
+		// checked after the division: a tiny dt must not turn two possible counters into an impossible rate
+		return Finite(model.P(Round(float64(*cur-*old)/dt, 1)), 0, MaxCounter)
 	}
 	out := [2]*float64{rate(rx, prev.rx), rate(tx, prev.tx)}
 	r.last[key] = out

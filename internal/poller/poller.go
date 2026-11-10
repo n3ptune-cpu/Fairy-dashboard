@@ -82,6 +82,7 @@ type Poller struct {
 	agentFailures map[string]int
 	helperSeen    map[string]map[string]time.Time // agent id -> helper reading group -> last seen while the helper ran ("" = last running poll)
 	agentInfo     map[string]AgentInfo
+	unencodable   map[string]bool // systems shown as error entries, already logged (see encodeSystems)
 	version       int
 	snap          []model.System
 	snapVer       int

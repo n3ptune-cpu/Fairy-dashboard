@@ -115,12 +115,21 @@ func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev
 	var last *time.Time
 	readings := []model.PowerReading{}
 	var errp *string
-	if ok, _ := row["ok"].(bool); ok {
-		status, last = "ok", &now
-		readings = []model.PowerReading{{SourceID: key, Name: name, Watts: jsonNumber(row["watts"]),
+	ok, _ := row["ok"].(bool)
+	rowErr := jsonString(row["error"])
+	if ok {
+		var invalid bool
+		readings, invalid = cleanReadings([]model.PowerReading{{SourceID: key, Name: name, Watts: jsonNumber(row["watts"]),
 			Voltage: jsonNumber(row["voltage"]), Current: jsonNumber(row["current"]), EnergyKWhTotal: jsonNumber(row["energy_kwh_total"]),
-			SystemID: link, Timestamp: now}}
+			SystemID: link, Timestamp: now}})
+		if invalid { // "ok" with watts no device can report (1e308): a failed row, not a reading without watts
+			ok, rowErr = false, "the agent relayed a value that is not a possible reading"
+		}
+	}
+	if ok {
+		status, last = "ok", &now
 	} else {
+		readings = []model.PowerReading{}
 		if hasPrev {
 			last = prev.LastSuccess
 		}
@@ -128,7 +137,7 @@ func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev
 		if hasPrev && status == "stale" {
 			readings = prev.Readings
 		}
-		e := clipText(jsonString(row["error"]), maxRemoteError)
+		e := clipText(rowErr, maxRemoteError)
 		if e == "" {
 			e = "error"
 		}

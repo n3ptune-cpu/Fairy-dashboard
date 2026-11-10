@@ -73,12 +73,8 @@ func clusterTotals(c config.Proxmox, systems []model.System) model.ClusterTotals
 				if s.CPUPercent != nil {
 					busy += *s.CPUPercent * float64(cores)
 				}
-				if s.MemUsed != nil {
-					ct.MemUsed += *s.MemUsed
-				}
-				if s.MemTotal != nil {
-					ct.MemTotal += *s.MemTotal
-				}
+				ct.MemUsed = normalise.AddBytes(ct.MemUsed, model.Deref(s.MemUsed))
+				ct.MemTotal = normalise.AddBytes(ct.MemTotal, model.Deref(s.MemTotal))
 			}
 		case "qemu", "lxc":
 			ct.GuestsTotal++
@@ -88,7 +84,7 @@ func clusterTotals(c config.Proxmox, systems []model.System) model.ClusterTotals
 		}
 	}
 	if ct.Cores > 0 {
-		ct.CPUPercent = model.P(normalise.Round(busy/float64(ct.Cores), 1))
+		ct.CPUPercent = weightedCPU(busy, ct.Cores)
 	}
 	return ct
 }
@@ -113,13 +109,19 @@ func hostTotals(systems []model.System, skip map[string]bool) model.HostTotals {
 		if s.CPUPercent != nil {
 			busy += *s.CPUPercent * float64(cores)
 		}
-		t.MemUsed += model.Deref(s.MemUsed)
-		t.MemTotal += model.Deref(s.MemTotal)
+		t.MemUsed = normalise.AddBytes(t.MemUsed, model.Deref(s.MemUsed))
+		t.MemTotal = normalise.AddBytes(t.MemTotal, model.Deref(s.MemTotal))
 	}
 	if t.Cores > 0 {
-		t.CPUPercent = model.P(normalise.Round(busy/float64(t.Cores), 1))
+		t.CPUPercent = weightedCPU(busy, t.Cores)
 	}
 	return t
+}
+
+// weightedCPU is the core-weighted CPU % of some hosts (busy: the sum of percent x cores). It is checked after
+// the sum, the division and the rounding: whatever the hosts reported, the summary holds a percentage or nothing.
+func weightedCPU(busy float64, cores int) *float64 {
+	return normalise.Clamp(model.P(normalise.Round(busy/float64(cores), 1)), 0, 100)
 }
 
 // guestAgents is the set of agents whose links_to is a VM or container (they stay separate entries but are not

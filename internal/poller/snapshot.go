@@ -2,11 +2,14 @@ package poller
 
 import (
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 )
 
 type pendingNote struct {
@@ -51,52 +54,113 @@ func (p *Poller) asleepLocked(s model.System, now time.Time) bool {
 	return (s.Status == "offline" || s.Status == "stale") && now.After(at.Add(-5*time.Second))
 }
 
-// Snapshot is the merged, sorted system list (cached per version).
+// Snapshot is the merged, sorted system list (cached per version). Every system in it can be written as JSON:
+// see encodeSystems.
 func (p *Poller) Snapshot() []model.System {
-	p.mu.Lock()
-	if p.snapVer == p.version && p.snap != nil {
-		s := p.snap
-		p.mu.Unlock()
-		return s
-	}
-	ver := p.version
-	p.mu.Unlock()
-	out := p.buildSnapshot()
-	p.mu.Lock()
-	if p.version == ver {
-		p.snap, p.snapVer = out, ver
-	}
-	p.mu.Unlock()
-	return out
+	list, _ := p.snapshot()
+	return list
 }
 
 // SnapshotJSON returns each system's JSON by id, cached per version (shared by every SSE client). Also returns the
-// id order.
+// id order. No entry is ever empty or missing: a system that cannot be written is in it as its error entry.
 func (p *Poller) SnapshotJSON() (map[string][]byte, []string) {
-	snap := p.Snapshot()
+	snap, js := p.snapshot()
 	order := make([]string, len(snap))
 	for i, s := range snap {
 		order[i] = s.ID
 	}
+	return js, order
+}
+
+// snapshot returns the system list and each system's JSON, built together and cached per version.
+func (p *Poller) snapshot() ([]model.System, map[string][]byte) {
 	p.mu.Lock()
-	if p.snapJSONVer == p.version && p.snapJSON != nil {
-		m := p.snapJSON
+	if p.snapVer == p.version && p.snap != nil && p.snapJSONVer == p.version && p.snapJSON != nil {
+		s, js := p.snap, p.snapJSON
 		p.mu.Unlock()
-		return m, order
+		return s, js
 	}
 	ver := p.version
 	p.mu.Unlock()
-	out := make(map[string][]byte, len(snap))
-	for _, s := range snap {
-		b, _ := json.Marshal(s)
-		out[s.ID] = b
-	}
+	list, js := p.encodeSystems(p.buildSnapshot())
 	p.mu.Lock()
 	if p.version == ver {
-		p.snapJSON, p.snapJSONVer = out, ver
+		p.snap, p.snapVer, p.snapJSON, p.snapJSONVer = list, ver, js, ver
 	}
 	p.mu.Unlock()
-	return out, order
+	return list, js
+}
+
+// StatusError is the status of a system whose data cannot be shown (see errorEntry).
+const StatusError = "error"
+
+// encodeSystems writes every system as JSON, one at a time. Numbers and dates are checked where they enter the
+// panel, so this should always work; if a system still cannot be written (a value that is not a number, a date
+// outside the years 0 to 9999), that one system is replaced by its error entry. The others are not affected, the
+// list never fails as a whole, and the machine stays visible instead of vanishing. Logged once per system while
+// it lasts.
+func (p *Poller) encodeSystems(list []model.System) ([]model.System, map[string][]byte) {
+	js := make(map[string][]byte, len(list))
+	bad := map[string]string{}
+	for i, s := range list {
+		b, err := json.Marshal(s)
+		if err != nil {
+			bad[s.ID] = err.Error()
+			s = errorEntry(s, err)
+			if b, err = json.Marshal(s); err != nil { // cannot happen: the entry holds texts and config values only
+				s = model.System{ID: s.ID, Name: s.ID, Kind: s.Kind, Source: s.Source, Status: StatusError,
+					Error: model.P("this system's data cannot be shown"), PollMode: "default"}
+				model.Normalize(&s)
+				b, _ = json.Marshal(s)
+			}
+			list[i] = s
+		}
+		js[s.ID] = b
+	}
+	p.mu.Lock()
+	for id, why := range bad {
+		if !p.unencodable[id] {
+			slog.Warn("a system's data cannot be written as JSON; it is shown with status \"error\" until that changes",
+				"system", id, "error", why)
+		}
+	}
+	p.unencodable = map[string]bool{}
+	for id := range bad {
+		p.unencodable[id] = true
+	}
+	p.mu.Unlock()
+	return list, js
+}
+
+// errorEntry is what the API shows for a system whose data cannot be written as JSON: a complete System (every
+// field the page reads is there, lists are empty, values are null) with status "error" and the reason in
+// `error`. It keeps what identifies the system and what comes from the panel's own configuration (name, kind,
+// parent, cluster, site labels, links, polling mode, configured power actions) and drops everything measured.
+func errorEntry(s model.System, err error) model.System {
+	why := "invalid data"
+	var notNumber *json.UnsupportedValueError
+	switch {
+	case errors.As(err, &notNumber):
+		why = "a value that is not a number: " + normalise.ClipText(notNumber.Str, 40)
+	case err != nil && strings.Contains(err.Error(), "year outside of range"):
+		why = "a date outside the years 0 to 9999"
+	case err != nil:
+		why = normalise.ClipText(err.Error(), 160)
+	}
+	e := model.System{ID: s.ID, Name: s.Name, Kind: s.Kind, Source: s.Source, Parent: s.Parent, ClusterID: s.ClusterID,
+		Cluster: s.Cluster, VMID: s.VMID, Status: StatusError,
+		Error: model.P("this system sent data the panel cannot show (" + why + ")"),
+		Group: s.Group, Owner: s.Owner, Tags: s.Tags, DWServiceURL: s.DWServiceURL, UPS: s.UPS,
+		ProcessesAvailable: s.ProcessesAvailable, FanControl: s.FanControl, PowerActions: s.PowerActions,
+		PollIntervalS: normalise.Finite(s.PollIntervalS, 0, normalise.MaxUnixTime), PollMode: s.PollMode, Boosted: s.Boosted,
+		BMCRelayTargets: s.BMCRelayTargets, PowerHelperReason: s.PowerHelperReason}
+	for _, t := range []struct{ from, to **time.Time }{{&s.LastSeen, &e.LastSeen}, {&s.UpdatedAt, &e.UpdatedAt}} {
+		if v := *t.from; v != nil && v.Year() >= 1970 && v.Year() <= 9999 {
+			*t.to = v
+		}
+	}
+	model.Normalize(&e)
+	return e
 }
 
 type pollFields struct {

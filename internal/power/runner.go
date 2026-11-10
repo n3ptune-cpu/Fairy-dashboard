@@ -59,6 +59,12 @@ func (r *Runner) Poll(ctx context.Context, timeout time.Duration) {
 	b := r.Source.Info()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if out.err == nil {
+		var invalid bool
+		if out.rd, invalid = cleanReadings(out.rd); invalid {
+			out.err = devices.Errf("the device answered with a value that is not a possible reading")
+		}
+	}
 	if out.err != nil { // never let a source crash the poller
 		r.failures++
 		msg := devices.Describe(out.err)

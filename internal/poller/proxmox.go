@@ -96,9 +96,8 @@ func (p *Poller) recordPVERefsLocked(clusterID, prefix string, data []jsonx.M) {
 		}
 		if typ == "node" {
 			p.pveRefs[prefix+"node-"+normalise.Slug(node)] = pveRef{clusterID, node, "node", nil}
-		} else if (typ == "qemu" || typ == "lxc") && jsonx.Num(r, "vmid") != nil {
-			v := int(*jsonx.Num(r, "vmid"))
-			p.pveRefs[fmt.Sprintf("%s%s-%d", prefix, typ, v)] = pveRef{clusterID, node, typ, &v}
+		} else if vmid := normalise.VMID(r); (typ == "qemu" || typ == "lxc") && vmid != nil { // the same ids as NormaliseProxmox
+			p.pveRefs[fmt.Sprintf("%s%s-%d", prefix, typ, *vmid)] = pveRef{clusterID, node, typ, vmid}
 		}
 	}
 }

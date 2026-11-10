@@ -5,14 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/power"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
@@ -122,5 +126,217 @@ func TestProcessListIsBounded(t *testing.T) {
 	}
 	if b, _ := json.Marshal(pl); len(b) > 1<<20 {
 		t.Fatal("size", len(b))
+	}
+}
+
+// HostileMetrics is a /metrics answer made of the audit's inputs (M2): numbers that are each possible but add up
+// or scale to impossible ones, a date in the year 33658, negative sizes, 250 %.
+func hostileMetrics() jsonx.M {
+	big := 1e308
+	m := testutil.AgentMetrics()
+	m["uptime_s"] = -5.0
+	m["cpu"] = jsonx.M{"percent": 250.0, "logical": big}
+	m["memory"] = jsonx.M{"total": big, "used": -1.0}
+	m["net"] = jsonx.M{"bytes_recv": big, "bytes_sent": big}
+	m["disks"] = []any{jsonx.M{"mount": "/", "total": big, "used": big}, jsonx.M{"mount": "/b", "total": big, "used": big}}
+	m["temps"] = []any{jsonx.M{"sensor": "x", "current": big, "high": big}}
+	m["load_avg"] = []any{big, big, big}
+	m["gpus"] = []any{jsonx.M{"name": "g", "vendor": "nvidia", "util_percent": big, "vram_used": big, "vram_total": big, "temp_c": big, "power_w": big}}
+	m["power"] = jsonx.M{"cpu_package_w": big, "gpu_w": big, "battery_w": big, "bmc_w": big, "sensors": []any{jsonx.M{"name": "s", "watts": big}}}
+	m["power_control"] = jsonx.M{"pending": jsonx.M{"action": "sleep", "at": 1e12}}
+	m["power_sources"] = []any{jsonx.M{"id": "desk", "ok": true, "watts": big, "system_hint": "self"}, jsonx.M{"id": "tv", "ok": true, "watts": big}}
+	m["ups"] = []any{jsonx.M{"name": "apc", "state": "online", "battery_charge": 250.0, "battery_runtime_s": -5.0, "load_percent": big, "watts": big}}
+	return m
+}
+
+// mustJSON fails the test when v cannot be written as JSON.
+func mustJSON(t *testing.T, what string, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("%s cannot be written as JSON: %v", what, err)
+	}
+	return b
+}
+
+// One hostile agent among three hosts, and one hostile Proxmox row (M2): everything the API serves from the
+// poller can still be written, no host is hidden, and the other hosts are exactly as without it.
+func TestOneHostileAgentAmongThree(t *testing.T) {
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	b := testutil.NewBackend()
+	b.Metrics["cyrene"] = func() (jsonx.M, error) { m := testutil.AgentMetrics(); m["hostname"] = "cyrene"; return m, nil }
+	p, err := New(cfg, config.Secrets{}, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	p.PollOnce(ctx)
+	before := snap(p)
+	wantCyrene := string(mustJSON(t, "cyrene", stable(before["cyrene"])))
+
+	b.Mu.Lock()
+	b.Metrics["laptop"] = func() (jsonx.M, error) { return hostileMetrics(), nil }
+	b.PVE = func() ([]jsonx.M, error) {
+		rows := testutil.PVEResources()
+		rows[2]["cpu"], rows[2]["maxmem"], rows[2]["netin"] = 1.8e307, 1e308, 1e308
+		return append(rows, jsonx.M{"type": "qemu", "vmid": -5.0, "node": "NSX-KACHINA", "status": "running", "cpu": 1e308}), nil
+	}
+	b.Mu.Unlock()
+	for range 3 {
+		p.PollOnce(ctx)
+	}
+	list := p.Snapshot()
+	mustJSON(t, "system list", model.SystemList{Systems: list})
+	js, order := p.SnapshotJSON()
+	if len(order) != len(list) || len(order) != len(before) {
+		t.Fatalf("%d systems, %d before", len(order), len(before))
+	}
+	for _, id := range order {
+		if len(js[id]) == 0 || !json.Valid(js[id]) {
+			t.Fatalf("%s: stream JSON %q", id, js[id])
+		}
+	}
+	mustJSON(t, "summary", p.Summary())
+	mustJSON(t, "power", p.Power.Overview())
+	mustJSON(t, "power history", p.Power.HistoryView(""))
+	mustJSON(t, "ups", p.UPS.Overview(true))
+	mustJSON(t, "health", p.healthReport())
+
+	after := snap(p)
+	lap := after["laptop"]
+	if lap.Status != "online" || *lap.CPUPercent != 100 || lap.Cores != nil || lap.MemTotal != nil || lap.MemUsed != nil ||
+		lap.DiskTotal != nil || lap.UptimeS != nil || len(lap.Temps) != 0 || len(lap.LoadAvg) != 0 || lap.PowerPending != nil ||
+		*lap.PowerW != 80 || lap.NetRxBps != nil { // 80 W: its plug's last good reading, kept while the row is stale
+		t.Fatalf("the hostile host: %+v", lap)
+	}
+	if got := string(mustJSON(t, "cyrene", stable(after["cyrene"]))); got != wantCyrene {
+		t.Fatalf("another host changed:\n%s\n%s", got, wantCyrene)
+	}
+	if vm := after["qemu-100"]; vm.Status != "online" || vm.CPUPercent != nil || vm.MemTotal != nil || vm.NetRxBps != nil {
+		t.Fatalf("the hostile Proxmox row: %+v", vm)
+	}
+	sm := p.Summary()
+	if sm.Totals.Hosts != 4 || sm.Totals.HostsOnline != 3 || sm.Totals.CPUPercent == nil || *sm.Totals.CPUPercent < 0 || *sm.Totals.CPUPercent > 100 ||
+		sm.Totals.MemTotal < 0 || sm.Counts.Total != len(list) {
+		t.Fatalf("%+v", sm.Totals)
+	}
+	ov := p.Power.Overview()
+	for _, st := range ov.Sources {
+		if strings.HasPrefix(st.ID, "laptop/") && (st.Status == "ok" || st.Error == nil) {
+			t.Fatalf("%+v", st)
+		}
+	}
+	if ov.TotalW == nil || *ov.TotalW != 160 { // cyrene's plug (80 W) and the laptop's last good reading (80 W, stale)
+		t.Fatalf("total %v", ov.TotalW)
+	}
+	if u := p.UPS.State("laptop/apc"); u == nil || u.Status != "online" {
+		t.Fatalf("%+v", u)
+	}
+	// the agent is normal again: so is its host
+	b.Mu.Lock()
+	b.Metrics["laptop"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	b.Mu.Unlock()
+	p.PollOnce(ctx)
+	if lap := snap(p)["laptop"]; lap.Status != "online" || *lap.Cores != 8 || *lap.PowerW != 80 {
+		t.Fatalf("%+v", lap)
+	}
+}
+
+// stable is s without the fields that change from poll to poll (the node's CPU model arrives in the background).
+func stable(s model.System) model.System {
+	s.LastSeen, s.UpdatedAt, s.NetRxBps, s.NetTxBps, s.CPUModel = nil, nil, nil, nil, nil
+	return s
+}
+
+// The last line of defence (M2): should a system still hold something JSON cannot carry, that one system shows
+// as an "error" entry with a reason. The list, the stream and the summary keep working, the other systems are
+// untouched, the machine stays visible, and it is back as soon as its data is.
+func TestSystemThatCannotBeWrittenShowsAsError(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	b := testutil.NewBackend()
+	p, err := New(cfg, config.Secrets{}, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	p.PollOnce(ctx)
+	good := snap(p)
+	poison := func(change func(s *model.System)) {
+		p.mu.Lock()
+		s := p.systems["laptop"]
+		change(&s)
+		p.systems["laptop"] = s
+		p.version++
+		p.mu.Unlock()
+	}
+	for name, change := range map[string]func(s *model.System){
+		"NaN":      func(s *model.System) { s.CPUPercent = model.P(math.NaN()) },
+		"infinity": func(s *model.System) { s.Temps = []model.Temperature{{Sensor: "x", CurrentC: math.Inf(1)}} },
+		"date": func(s *model.System) {
+			s.PowerPending = &model.PowerPending{Action: "sleep", At: time.Unix(1e12, 0).UTC()}
+			s.LastSeen = model.P(time.Unix(1e12, 0).UTC())
+		},
+	} {
+		poison(change)
+		list := p.Snapshot()
+		mustJSON(t, name+": system list", model.SystemList{Systems: list})
+		js, order := p.SnapshotJSON()
+		if len(order) != len(good) {
+			t.Fatalf("%s: %d systems instead of %d: a system is hidden", name, len(order), len(good))
+		}
+		for _, id := range order {
+			if len(js[id]) == 0 || !json.Valid(js[id]) {
+				t.Fatalf("%s: %s: stream JSON %q", name, id, js[id])
+			}
+		}
+		mustJSON(t, name+": summary", p.Summary())
+		now := snap(p)
+		e := now["laptop"]
+		if e.Status != StatusError || e.Error == nil || !strings.Contains(*e.Error, "cannot show") || e.Name != "laptop" || e.Kind != "agent" ||
+			e.Source != "agent" || *e.Group != "Neptune" || e.CPUPercent != nil || e.PowerPending != nil || e.PollMode != "default" ||
+			len(e.PowerActions) == 0 || *e.DWServiceURL == "" {
+			t.Fatalf("%s: %+v", name, e)
+		}
+		// a complete System: every list the page reads is a list, every key is there
+		var m map[string]any
+		_ = json.Unmarshal(js["laptop"], &m)
+		for _, k := range []string{"disks", "temps", "fans", "voltages", "gpus", "ups", "tags", "power_actions"} {
+			if _, ok := m[k].([]any); !ok {
+				t.Fatalf("%s: %q is %v in the error entry", name, k, m[k])
+			}
+		}
+		var ok map[string]any
+		_ = json.Unmarshal(js["cyrene"], &ok)
+		for k := range ok {
+			if _, has := m[k]; !has {
+				t.Fatalf("%s: the error entry has no %q", name, k)
+			}
+		}
+		if m["status"] != "error" || m["id"] != "laptop" {
+			t.Fatalf("%s: %s", name, js["laptop"])
+		}
+		for id, s := range now {
+			if id != "laptop" && string(mustJSON(t, id, stable(s))) != string(mustJSON(t, id, stable(good[id]))) {
+				t.Fatalf("%s: %s changed", name, id)
+			}
+		}
+		if sm := p.Summary(); sm.Counts.Total != len(good) || sm.Counts.Online != 2 { // the node, the VM; not the error entry
+			t.Fatalf("%s: %+v", name, sm.Counts)
+		}
+		p.Snapshot() // read again without a change: not logged again
+		p.Bump()
+		p.Snapshot()
+		p.PollOnce(ctx) // the agent's next (good) answer replaces the entry
+		if s := snap(p)["laptop"]; s.Status != "online" || *s.Cores != 8 {
+			t.Fatalf("%s: not back: %+v", name, s)
+		}
+	}
+	if n := strings.Count(logs.String(), "cannot be written as JSON"); n != 3 {
+		t.Fatalf("logged %d times:\n%s", n, logs.String())
 	}
 }

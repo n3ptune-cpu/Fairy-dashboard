@@ -18,11 +18,13 @@ func pending(pc jsonx.M) *model.PowerPending {
 	}
 	a := jsonx.S(p, "action")
 	at := jsonx.Num(p, "at")
-	if (a != "shutdown" && a != "reboot" && a != "sleep") || at == nil {
+	// A time the page cannot show (before 1970, after 2286, not a number) is no pending action: the whole block
+	// is dropped. A time outside the years 0 to 9999 cannot even be written as JSON.
+	if (a != "shutdown" && a != "reboot" && a != "sleep") || at == nil || !(*at > 0 && *at < MaxUnixTime) {
 		return nil
 	}
 	d := 0
-	if v := jsonx.Num(p, "delay_s"); v != nil {
+	if v := num(p, "delay_s", 0, 1e9); v != nil {
 		d = int(*v)
 	}
 	return &model.PowerPending{Action: a, At: EpochTime(*at), DelayS: d,
@@ -46,7 +48,7 @@ func strOr(m jsonx.M, k, def string) string {
 func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rates *RateTracker) model.System {
 	cpu, mem, nett, plat := jsonx.Obj(m, "cpu"), jsonx.Obj(m, "memory"), jsonx.Obj(m, "net"), jsonx.Obj(m, "platform")
 	disks, used, total := agentDisks(m)
-	rx, tx := rates.Update(cfg.ID, ts, jsonx.Int(nett, "bytes_recv"), jsonx.Int(nett, "bytes_sent"), 0)
+	rx, tx := rates.Update(cfg.ID, ts, counter(nett, "bytes_recv"), counter(nett, "bytes_sent"), 0)
 	features := jsonx.Obj(m, "features")
 	hw := jsonx.Obj(m, "hardware")
 	name := cfg.Name
@@ -57,9 +59,9 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 		name = cfg.ID
 	}
 	s := model.System{ID: cfg.ID, Name: name, Kind: "agent", Source: "agent", Status: "online",
-		CPUPercent: jsonx.Num(cpu, "percent"), Cores: jsonx.IntP(cpu, "logical"),
-		MemUsed: jsonx.Int(mem, "used"), MemTotal: jsonx.Int(mem, "total"),
-		Disks: disks, NetRxBps: rx, NetTxBps: tx, UptimeS: jsonx.Int(m, "uptime_s"),
+		CPUPercent: percent(cpu, "percent"), Cores: cores(cpu, "logical"),
+		MemUsed: size(mem, "used"), MemTotal: size(mem, "total"),
+		Disks: disks, NetRxBps: rx, NetTxBps: tx, UptimeS: whole(m, "uptime_s", 0, MaxUnixTime),
 		OS: clipP(jsonx.Str(plat, "pretty"), maxLong), Platform: clipP(jsonx.Str(plat, "system"), maxShort), LoadAvg: agentLoadAvg(m),
 		Temps: agentTemps(m), Fans: agentFans(m), Voltages: agentVoltages(m), GPUs: agentGPUs(m),
 		ComponentPower: agentComponentPower(m), Battery: agentBattery(m),
@@ -102,12 +104,23 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	return s
 }
 
-// agentDisks returns the mounted filesystems and their summed used / total bytes.
+// cores is m[k] as a number of processor cores (0 to MaxCores), or nil.
+func cores(m jsonx.M, k string) *int {
+	c := whole(m, k, 0, MaxCores)
+	if c == nil {
+		return nil
+	}
+	v := int(*c)
+	return &v
+}
+
+// agentDisks returns the mounted filesystems and their summed used / total bytes. A disk with a negative or
+// absurd size is skipped; with at most MaxDisks sizes of at most MaxBytes the sums cannot overflow.
 func agentDisks(m jsonx.M) (disks []model.Disk, used, total int64) {
 	disks = []model.Disk{}
 	for _, d := range jsonx.Objs(m["disks"]) {
 		mount, ok := d["mount"].(string)
-		u, t := jsonx.Int(d, "used"), jsonx.Int(d, "total")
+		u, t := size(d, "used"), size(d, "total")
 		if !ok || u == nil || t == nil {
 			continue
 		}
@@ -115,8 +128,8 @@ func agentDisks(m jsonx.M) (disks []model.Disk, used, total int64) {
 			break
 		}
 		disks = append(disks, model.Disk{Mount: ClipText(mount, maxMount), FSType: clipP(jsonx.Str(d, "fstype"), maxShort), Used: *u, Total: *t})
-		used += *u
-		total += *t
+		used = AddBytes(used, *u)
+		total = AddBytes(total, *t)
 	}
 	return disks, used, total
 }
@@ -124,7 +137,7 @@ func agentDisks(m jsonx.M) (disks []model.Disk, used, total int64) {
 func agentTemps(m jsonx.M) []model.Temperature {
 	temps := []model.Temperature{}
 	for _, t := range jsonx.Objs(m["temps"]) {
-		cur := jsonx.Num(t, "current")
+		cur := reading(t, "current")
 		if cur == nil {
 			continue
 		}
@@ -132,7 +145,7 @@ func agentTemps(m jsonx.M) []model.Temperature {
 			break
 		}
 		temps = append(temps, model.Temperature{Sensor: strOr(t, "sensor", "?"), Label: clipP(jsonx.Str(t, "label"), maxName),
-			CurrentC: *cur, HighC: jsonx.Num(t, "high"), CriticalC: jsonx.Num(t, "critical")})
+			CurrentC: *cur, HighC: reading(t, "high"), CriticalC: reading(t, "critical")})
 	}
 	return temps
 }
@@ -161,9 +174,9 @@ func agentGPUs(m jsonx.M) []model.Gpu {
 		if name == "" {
 			name = "GPU"
 		}
-		gpus = append(gpus, model.Gpu{Name: name, Vendor: vendor, UtilPercent: jsonx.Num(g, "util_percent"),
-			VRAMUsed: jsonx.Int(g, "vram_used"), VRAMTotal: jsonx.Int(g, "vram_total"), TempC: jsonx.Num(g, "temp_c"),
-			PowerW: jsonx.Num(g, "power_w"), Source: gpuSource(jsonx.S(g, "source"))})
+		gpus = append(gpus, model.Gpu{Name: name, Vendor: vendor, UtilPercent: percent(g, "util_percent"),
+			VRAMUsed: size(g, "vram_used"), VRAMTotal: size(g, "vram_total"), TempC: reading(g, "temp_c"),
+			PowerW: reading(g, "power_w"), Source: gpuSource(jsonx.S(g, "source"))})
 	}
 	return gpus
 }
@@ -204,14 +217,14 @@ func agentComponentPower(m jsonx.M) *model.ComponentPower {
 	if len(p) == 0 {
 		return nil
 	}
-	power := &model.ComponentPower{CPUPackageW: jsonx.Num(p, "cpu_package_w"), GPUW: jsonx.Num(p, "gpu_w"),
-		BatteryW: jsonx.Num(p, "battery_w"), BatteryState: clipP(jsonx.Str(p, "battery_state"), maxShort),
-		BMCW: jsonx.Num(p, "bmc_w"), BMCNote: clipP(jsonx.Str(p, "bmc_note"), maxLong)}
+	power := &model.ComponentPower{CPUPackageW: reading(p, "cpu_package_w"), GPUW: reading(p, "gpu_w"),
+		BatteryW: reading(p, "battery_w"), BatteryState: clipP(jsonx.Str(p, "battery_state"), maxShort),
+		BMCW: reading(p, "bmc_w"), BMCNote: clipP(jsonx.Str(p, "bmc_note"), maxLong)}
 	for _, s := range jsonx.Objs(p["sensors"]) {
 		if len(power.Sensors) == MaxPowerSensors {
 			break
 		}
-		if w := jsonx.Num(s, "watts"); w != nil {
+		if w := reading(s, "watts"); w != nil {
 			power.Sensors = append(power.Sensors, model.PowerSensor{Name: strOr(s, "name", "?"), Watts: *w})
 		}
 	}
@@ -232,7 +245,7 @@ func agentFans(m jsonx.M) []model.Fan {
 		if len(fans) == MaxFans {
 			break
 		}
-		if r := jsonx.Num(f, "rpm"); r != nil {
+		if r := reading(f, "rpm"); r != nil {
 			fans = append(fans, model.Fan{Name: strOr(f, "name", "?"), RPM: *r})
 		}
 	}
@@ -245,7 +258,7 @@ func agentVoltages(m jsonx.M) []model.Voltage {
 		if len(volts) == MaxVoltages {
 			break
 		}
-		if x := jsonx.Num(v, "volts"); x != nil {
+		if x := reading(v, "volts"); x != nil {
 			volts = append(volts, model.Voltage{Name: strOr(v, "name", "?"), Volts: *x})
 		}
 	}
@@ -263,15 +276,21 @@ func agentLoadAvg(m jsonx.M) []float64 {
 		if len(load) == MaxLoadAvg {
 			break
 		}
-		if f := jsonx.NumV(v); f != nil {
+		if f := Finite(jsonx.NumV(v), 0, MaxReading); f != nil {
 			load = append(load, *f)
 		}
 	}
 	return load
 }
 
-// EpochTime converts Unix seconds with a fraction (as agents send them) to a UTC time.
+// EpochTime converts Unix seconds with a fraction (as agents send them) to a UTC time. The result can always be
+// written as JSON: seconds outside 0 to MaxUnixTime (the years 1970 to 2286) are moved to the nearer end, and
+// "not a number" is 0. Callers that can drop such a value should do so first (see pending).
 func EpochTime(sec float64) time.Time {
+	sec = math.Min(math.Max(sec, 0), MaxUnixTime) // math.Max(NaN, 0) is NaN
+	if math.IsNaN(sec) {
+		sec = 0
+	}
 	whole, frac := math.Modf(sec)
 	return time.Unix(int64(whole), int64(frac*1e9)).UTC()
 }

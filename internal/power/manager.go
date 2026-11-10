@@ -61,6 +61,34 @@ func (m *Manager) PollAll(ctx context.Context) {
 	m.SampleHistory()
 }
 
+// maxSumW bounds a sum of watts (a source's readings, the total, a system's linked sources). Every reading is
+// within normalise.MaxReading when it enters (cleanReadings, remoteState); the sums are checked again, because
+// two numbers that are each possible can add up to one that is not.
+const maxSumW = 1e12
+
+// finiteW returns w when it is a possible sum of watts, else nil.
+func finiteW(w float64) *float64 { return normalise.Finite(&w, -maxSumW, maxSumW) }
+
+// cleanReadings drops the values of rs that are not real numbers or lie outside what a device can measure (a
+// plug answering 1e308 W, a UPS server answering "NaN"). invalid reports whether a watts value was among them:
+// the reading is then not a measurement of the device's power.
+func cleanReadings(rs []model.PowerReading) (out []model.PowerReading, invalid bool) {
+	out = make([]model.PowerReading, len(rs))
+	for i, r := range rs {
+		if r.Watts != nil && normalise.Reading(r.Watts) == nil {
+			invalid = true
+		}
+		r.Watts, r.Voltage, r.Current = normalise.Reading(r.Watts), normalise.Reading(r.Voltage), normalise.Reading(r.Current)
+		r.EnergyKWhTotal = normalise.Finite(r.EnergyKWhTotal, -normalise.MaxEnergyKWh, normalise.MaxEnergyKWh)
+		if y := r.Timestamp.Year(); y < 1970 || y > 9999 { // a time JSON cannot hold
+			r.Timestamp = time.Now().UTC()
+		}
+		out[i] = r
+	}
+	return out, invalid
+}
+
+// sumW is the watts of one source: nil without readings, and nil when the sum is not a possible number.
 func sumW(rs []model.PowerReading) *float64 {
 	if len(rs) == 0 {
 		return nil
@@ -71,7 +99,7 @@ func sumW(rs []model.PowerReading) *float64 {
 			s += *r.Watts
 		}
 	}
-	return &s
+	return finiteW(s)
 }
 
 // SampleHistory appends one point (total and per-source watts) to the history ring.
@@ -83,6 +111,8 @@ func (m *Manager) SampleHistory() {
 		return
 	}
 	ov := m.Overview()
+	// Only real numbers go into the history (sumW and Total check their sums): one bad sample would otherwise
+	// stay in every answer for the whole history length.
 	p := model.PowerPoint{T: ov.GeneratedAt, TotalW: ov.TotalW, Sources: map[string]*float64{}}
 	for _, s := range ov.Sources {
 		p.Sources[s.ID] = sumW(s.Readings)
@@ -128,7 +158,7 @@ func Total(states []model.PowerSourceState) *float64 {
 	if n == 0 {
 		return nil
 	}
-	return model.P(normalise.Round(total, 1))
+	return finiteW(normalise.Round(total, 1)) // checked after the sum and the rounding
 }
 
 // LinkedWatts returns system id -> watts from the sources linked to that system.
@@ -142,6 +172,11 @@ func (m *Manager) LinkedWatts() map[string]float64 {
 			if rd.SystemID != nil && rd.Watts != nil {
 				out[*rd.SystemID] = normalise.Round(out[*rd.SystemID]+*rd.Watts, 1)
 			}
+		}
+	}
+	for id, w := range out { // checked after the sums: a system gets a possible number or none
+		if finiteW(w) == nil {
+			delete(out, id)
 		}
 	}
 	return out
