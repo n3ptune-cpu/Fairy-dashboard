@@ -12,16 +12,19 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 )
 
+// fmtEntry is one audit entry as one line. Every field is text someone else chose (an agent's error in the
+// outcome, a name from the identity provider, the requested address in the target), so each goes through cell:
+// a line break inside a field is printed as \n and can never look like another entry.
 func fmtEntry(e map[string]any) string {
-	ts := fmt.Sprint(e["ts"])
+	ts := cell(fmt.Sprint(e["ts"]))
 	if len(ts) > 19 {
 		ts = ts[:19]
 	}
 	ts = strings.Replace(ts, "T", " ", 1)
-	s := fmt.Sprintf("%s  %s %s %s %s %v", ts, pad(cut(e["source"], 16), 16), pad(cut(e["actor"], 24), 24),
-		pad(cut(e["action"], 26), 26), pad(cut(e["target"], 28), 28), e["outcome"])
+	s := fmt.Sprintf("%s  %s %s %s %s %s", ts, pad(cut(e["source"], 16), 16), pad(cut(e["actor"], 24), 24),
+		pad(cut(e["action"], 26), 26), pad(cut(e["target"], 28), 28), cell(fmt.Sprint(e["outcome"])))
 	if ip, ok := e["ip"].(string); ok && ip != "" {
-		s += "  [" + ip + "]"
+		s += "  [" + cell(ip) + "]"
 	}
 	return s
 }

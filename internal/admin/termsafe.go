@@ -9,7 +9,8 @@ import (
 // Much of what `fairy admin` prints comes from elsewhere: audit outcomes with agents' error texts, user names
 // from the identity provider, host names and errors in the health file. A terminal would act on escape
 // sequences in them (colours, moving the cursor, rewriting earlier lines, setting the window title, OSC 52
-// clipboard writes on some terminals), so everything the CLI writes goes through termSafe.
+// clipboard writes on some terminals), so everything the CLI writes goes through termSafe. Text that is one
+// field of a line also goes through cell, which makes line breaks and tabs inside it visible instead of real.
 
 // unsafeRune reports runes a terminal may act on or that can disguise text: C0 controls except tab and
 // newline (ESC, CR, BEL, backspace...), DEL, C1 controls (8-bit CSI / OSC), and bidi overrides.
@@ -37,6 +38,62 @@ func clean(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// cell makes one field of one printed row safe. clean alone keeps line breaks and tabs, and inside a field
+// they would start a new row or move the columns: an agent's error text, a name from the identity provider or
+// a requested address could then print lines that look like other entries. So every character that breaks a
+// line or jumps a column is shown as its two-character escape (a line feed becomes a backslash and an n),
+// and the rest goes through clean. Every field the CLI prints in a row or a sentence goes through cell; only
+// the CLI's own line ends are real line ends.
+func cell(s string) string {
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	if strings.IndexFunc(s, lineRune) < 0 {
+		return clean(s)
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		switch r {
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\v':
+			b.WriteString(`\v`)
+		case '\f':
+			b.WriteString(`\f`)
+		case 0x85:
+			b.WriteString(`\u0085`)
+		case 0x2028:
+			b.WriteString(`\u2028`)
+		case 0x2029:
+			b.WriteString(`\u2029`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return clean(b.String())
+}
+
+// lineRune reports the characters cell shows as an escape: line feed, carriage return, tab, vertical tab, form
+// feed, and the Unicode line ends NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR.
+func lineRune(r rune) bool {
+	switch r {
+	case '\n', '\r', '\t', '\v', '\f', 0x85, 0x2028, 0x2029:
+		return true
+	}
+	return false
+}
+
+// cells is cell for every value of a row.
+func cells(row ...string) []string {
+	for i := range row {
+		row[i] = cell(row[i])
+	}
+	return row
 }
 
 // termSafe is an io.Writer that drops unsafe runes and invalid UTF-8 from everything written through it. A

@@ -118,8 +118,8 @@ func (c *cli) users(args []string) (int, error) {
 		toks, terr := tokens.NewStore(c.cfg.DataDir).RevokeOwner(u.Sub)
 		c.log("user.remove", u.Label(), map[string]any{"sub": u.Sub, "was": access.Describe(u), "force": force,
 			"sessions_revoked": sessions, "tokens_revoked": toks})
-		fmt.Fprintf(c.out, "Removed %s (was %s). Revoked %d session(s) and %d API token(s).\n", u.Label(),
-			access.Describe(u), sessions, toks)
+		fmt.Fprintf(c.out, "Removed %s (was %s). Revoked %d session(s) and %d API token(s).\n", cell(u.Label()),
+			cell(access.Describe(u)), sessions, toks)
 		fmt.Fprintln(c.out, "If they sign in again they wait for access (never admin via oidc.control_groups / bootstrap_admins).")
 		if err := errors.Join(serr, terr); err != nil {
 			return 1, err
@@ -170,8 +170,8 @@ func (c *cli) usersSetRole(st *access.Store, ident, role string, sites []string,
 	}
 	c.log("user.set_role", after.Label(), map[string]any{"sub": after.Sub, "role": role, "sites": after.Sites,
 		"before": access.Describe(before), "force": force})
-	fmt.Fprintf(c.out, "%s: %s -> %s. The running panel applies it within a second.\n", after.Label(),
-		access.Describe(before), access.Describe(after))
+	fmt.Fprintf(c.out, "%s: %s -> %s. The running panel applies it within a second.\n", cell(after.Label()),
+		cell(access.Describe(before)), cell(access.Describe(after)))
 	return 0, nil
 }
 
@@ -302,9 +302,9 @@ func (c *cli) sitesAssign(st *access.Store, target, site string) (int, error) {
 	}
 	c.log("site.assign", target, map[string]any{"site": site, "before": prev})
 	if site == "" {
-		fmt.Fprintf(c.out, "%s: back to its default site (config.yaml / node), or admin-only.\n", target)
+		fmt.Fprintf(c.out, "%s: back to its default site (config.yaml / node), or admin-only.\n", cell(target))
 	} else {
-		fmt.Fprintf(c.out, "%s is now in site %q. The running panel applies it within a second.\n", target, site)
+		fmt.Fprintf(c.out, "%s is now in site %q. The running panel applies it within a second.\n", cell(target), site)
 	}
 	return 0, nil
 }

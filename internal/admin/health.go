@@ -31,7 +31,7 @@ func (c *cli) health() (int, error) {
 	if len(started) > 19 {
 		started = started[:19]
 	}
-	fmt.Fprintf(c.out, "panel: %s (health written %.0fs ago, up since %s)\n", state, age, started)
+	fmt.Fprintf(c.out, "panel: %s (health written %.0fs ago, up since %s)\n", state, age, cell(started))
 	c.printControlState()
 	if h.Systems != nil {
 		var parts []string
@@ -58,10 +58,11 @@ func (c *cli) printControlState() {
 	if r == "" {
 		r = "no reason"
 	}
-	fmt.Fprintf(c.out, "control: DISABLED by %s at %s (%s)\n", cs.By, cs.At.Format("2006-01-02T15:04:05"), r)
+	fmt.Fprintf(c.out, "control: DISABLED by %s at %s (%s)\n", cell(cs.By), cs.At.Format("2006-01-02T15:04:05"), cell(r))
 }
 
-// sourceRows is the health table: polled sources (Proxmox, agents), then power sources, then UPSes.
+// sourceRows is the health table: polled sources (Proxmox, agents), then power sources, then UPSes. Names,
+// states and error texts come from agents and devices; table prints each as one field of one row (cell).
 func sourceRows(h health.Report) [][]string {
 	var rows [][]string
 	for _, s := range h.Sources {

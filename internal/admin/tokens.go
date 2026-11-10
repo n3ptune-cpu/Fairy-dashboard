@@ -77,8 +77,8 @@ func (c *cli) tokensCreate(store *tokens.Store, args []string) (int, error) {
 		expStr = r.ExpiresAt.Format("2006-01-02")
 	}
 	c.log("token.create", r.Name, map[string]any{"id": r.ID, "owner": r.Owner, "scope": r.Scope, "expires_at": exp, "sites": r.Sites})
-	fmt.Fprintf(c.out, "Created API token %q (id %s, scope %s, sites %s, owner %s, expires %s)\n\n    %s\n\n", r.Name, r.ID, r.Scope,
-		tokenSites(r), r.Owner, expStr, raw)
+	fmt.Fprintf(c.out, "Created API token %q (id %s, scope %s, sites %s, owner %s, expires %s)\n\n    %s\n\n", r.Name, cell(r.ID), cell(r.Scope),
+		cell(tokenSites(r)), cell(r.Owner), expStr, raw)
 	if r.Owner != "system" {
 		fmt.Fprintln(c.out, "The owner is a panel user: the token never sees or does more than they may (Users page),")
 		fmt.Fprintln(c.out, "and it stops working if they are removed.")
@@ -130,7 +130,7 @@ func (c *cli) tokensRevoke(store *tokens.Store, args []string) (int, error) {
 		return 1, err
 	}
 	c.log("token.revoke", r.Name, map[string]any{"id": r.ID})
-	fmt.Fprintf(c.out, "Revoked API token %q (id %s). It stops working immediately.\n", r.Name, r.ID)
+	fmt.Fprintf(c.out, "Revoked API token %q (id %s). It stops working immediately.\n", r.Name, cell(r.ID))
 	return 0, nil
 }
 

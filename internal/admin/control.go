@@ -58,7 +58,7 @@ func (c *cli) host(args []string) (int, error) {
 	if args[2] == "disable" {
 		state = "disabled"
 	}
-	fmt.Fprintf(c.out, "Power control for %s: %s.\n", args[0], state)
+	fmt.Fprintf(c.out, "Power control for %s: %s.\n", cell(args[0]), state)
 	return 0, nil
 }
 
@@ -94,6 +94,6 @@ func (c *cli) poll(args []string) (int, error) {
 		return 1, err
 	}
 	c.log("poll.set", id, map[string]any{"interval_s": v})
-	fmt.Fprintf(c.out, "Polling for %s: %s. The running panel applies it within a second.\n", id, v)
+	fmt.Fprintf(c.out, "Polling for %s: %s. The running panel applies it within a second.\n", cell(id), cell(v))
 	return 0, nil
 }
