@@ -453,3 +453,48 @@ func TestAgentReadLimitIsOneMiB(t *testing.T) {
 		}
 	}
 }
+
+// N3: the 1 MiB limit is on the body, and the headers of an answer are read before it. The agents' client
+// used the shared LAN transport without a limit of its own, so net/http's 10 MiB applied: an answer with 9 MiB
+// of headers was taken and the host shown online, and ten such answers at once were 90 MiB before a byte of
+// body. Now 64 KiB of headers is the most an agent's answer may have; more is an answer the panel does not
+// read (the host shows offline with the error), for the report, the process list and a control request.
+func TestAgentAnswerHeadersAreBounded(t *testing.T) {
+	var pad atomic.Int64
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := int64(0); i < pad.Load(); i++ {
+			w.Header().Set(fmt.Sprintf("X-Pad-%d", i), strings.Repeat("h", 4096))
+		}
+		_ = json.NewEncoder(w).Encode(testutil.AgentMetrics())
+	}))
+	defer agent.Close()
+	cfg := testutil.Config(t, []string{deadURL(t)}, agent.URL, deadURL(t))
+	p, err := New(cfg, config.Secrets{SessionSecret: "x"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	pad.Store(8) // 32 KiB of headers: far more than an agent sends, and fine
+	p.PollOnce(ctx)
+	if lap := snap(p)["laptop"]; lap.Status != "online" {
+		t.Fatalf("32 KiB of headers: %s %v", lap.Status, lap.Error)
+	}
+	for _, n := range []int64{40, 2300} { // 160 KiB, 9 MiB
+		pad.Store(n)
+		p.PollOnce(ctx)
+		lap := snap(p)["laptop"]
+		_, _, reqErr := p.AgentRequest(ctx, cfg.Agents[0], "GET", "/fan/status", nil)
+		_, procErr := p.FetchProcesses(ctx, cfg.Agents[0], "laptop", 25, "cpu")
+		if lap.Status == "online" || lap.Error == nil || reqErr == nil || procErr == nil {
+			t.Fatalf("%d KiB of headers were taken: %s, request %v, processes %v", n*4, lap.Status, reqErr, procErr)
+		}
+	}
+	pad.Store(0)
+	p.PollOnce(ctx)
+	if lap := snap(p)["laptop"]; lap.Status != "online" {
+		t.Fatalf("a normal answer afterwards: %s %v", lap.Status, lap.Error)
+	}
+	if maxAgentHeader != 65536 {
+		t.Fatalf("maxAgentHeader is %d; the documented limit is 64 KiB", maxAgentHeader)
+	}
+}

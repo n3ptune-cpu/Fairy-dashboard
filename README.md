@@ -604,6 +604,8 @@ session settings as whole seconds).
   you use it.
 * Live updates: at most 8 open Fairy tabs (live-update connections) per user or API token, 200 for the whole
   panel. One more answers "too many live-update connections": close another tab.
+* An agent's answer may be 1 MiB with 64 KiB of headers; a longer one is not read to its end and the host
+  shows offline with "invalid response". At most two answers are unpacked at the same time.
 * What one Proxmox API may put into the panel is limited like an agent's answer, because a node added with Add
   host supplies its own API address, token and CA: 4 MiB for the list of the cluster (256 KiB for every other
   answer, 64 KiB of headers), at most **64 nodes** and **2000 VMs and containers** per `proxmox:` entry or added

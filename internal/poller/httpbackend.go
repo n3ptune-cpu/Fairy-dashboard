@@ -42,7 +42,7 @@ func newHTTPBackend(p *Poller) (*httpBackend, error) {
 	cfg := p.Cfg
 	b := &httpBackend{p: p, pve: map[string]*http.Client{}, pveSecrets: map[string]string{},
 		powerSecrets: map[string]string{}, agentTokens: map[string]string{}, controlTokens: map[string]string{},
-		agents: devices.LANClient(0)} // never via a proxy; per-request timeouts via context
+		agents: agentClient()}
 	// Resolve every agent token at startup: a missing/short token is a config error.
 	for _, a := range cfg.Agents {
 		if err := b.SetAgentTokens(a); err != nil {
@@ -55,6 +55,19 @@ func newHTTPBackend(p *Poller) (*httpBackend, error) {
 		}
 	}
 	return b, nil
+}
+
+// agentClient is the client for every request to an agent: never via a proxy, never following a redirect,
+// timeouts per request through the context. It has a transport of its own (the device code's LAN transport is
+// shared by everything in the process), so the limit on an answer's headers is the panel's: maxAgentHeader
+// instead of the 10 MiB net/http takes by default, which are read before the limit on the body applies.
+func agentClient() *http.Client {
+	cl := devices.TLSClient(0, nil) // a LAN transport of its own, default TLS settings
+	cl.CheckRedirect = noRedirect
+	if tr, ok := cl.Transport.(*http.Transport); ok {
+		tr.MaxResponseHeaderBytes = maxAgentHeader
+	}
+	return cl
 }
 
 // SetProxmox builds a cluster's HTTP client (its CA, verify setting and certificate name) and resolves its
@@ -128,6 +141,7 @@ func (b *httpBackend) pveClient(id string) (*http.Client, string, string) {
 // KiB, and 64 KiB of headers. A longer answer is refused as "invalid response", never read to its end.
 const (
 	maxAgentBody      = 1 << 20
+	maxAgentHeader    = 64 << 10
 	maxProxmoxBody    = 4 << 20
 	maxProxmoxSmall   = 256 << 10
 	maxProxmoxHeader  = 64 << 10
