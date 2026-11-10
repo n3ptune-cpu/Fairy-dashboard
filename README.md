@@ -510,6 +510,15 @@ memory limit. Add it once:
    within 10 minutes. See [Updates](#updates).
 9. **At most 8 open Fairy tabs per person.**
 10. **`/docs`**, if you switched it on, needs a sign-in and a role.
+11. **Fewer notifications that repeat.** A temperature that keeps crossing its limit, or a host that reports
+    a finished update again and again, is one entry per 10 minutes with a count ("x7") and one push message.
+    One host, one Proxmox cluster or one UPS source sends at most 5 push messages a minute; the sixth says
+    that it is over its limit, and everything is on the Notifications page. See
+    [Notifications](#notifications).
+12. **Names are shown without control characters.** A host name, sensor label, guest name or error text
+    from a machine that contains escape sequences, line breaks or direction overrides is shown, logged and
+    sent on without them. Ordinary names, also with accents or non-Latin letters, are unchanged. A Proxmox
+    cluster with more than 64 nodes or 2000 guests is shown up to that number, and the log says so.
 
 Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
 `managed-hosts.yaml`). It does not start when config.yaml has `enroll: {allow_non_tailscale: ...}`,
