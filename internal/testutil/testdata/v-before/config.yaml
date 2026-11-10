@@ -1,0 +1,43 @@
+# config.yaml as written for the release before the security fixes: the two session values are plain
+# numbers of seconds, and none of the keys added later is here.
+public_url: https://panel.example.com
+listen: 127.0.0.1:8080
+request_timeout: 4
+offline_after: 60
+session_max_age: 604800
+session_idle_timeout: 43200
+step_up_window_s: 300
+step_up_prompt_login: true
+enable_docs: false
+data_dir: /var/lib/fairy
+audit_log: /var/lib/fairy/audit.log
+audit_max_mb: 100
+audit_keep: 5
+control_rate_per_min: 6
+login_rate_per_min: 20
+trusted_proxies: ["127.0.0.1/32", "::1/128"]
+panel_hosts: []
+boost_while_viewing: true
+intervals: {agent: 1, proxmox: 2, ups: 2, history: 5, stream: 1}
+oidc:
+  issuer: https://id.example.com
+  client_id: cid
+  scopes: [openid, profile, email, groups]
+  groups_claim: groups
+  allowed_groups: [homelab]
+  allowed_emails: []
+  control_groups: []
+  bootstrap_admins: [owner@example.com]
+proxmox:
+  - id: teyvat
+    cluster_name: NSX-TEYVAT
+    site: Neptune
+    urls: ["https://pve1:8006"]
+    token_id: "fairy@pve!panel"
+    token_secret_env: PVE_SECRET
+    verify_tls: false
+agents:
+  - {id: laptop, url: "http://laptop", token_env: TOK_LAPTOP, group: Neptune, site: Neptune, power_control: true,
+     self_update: true, control_token_env: CTL_CYRENE}
+  - {id: cyrene, url: "http://cyrene", token_env: TOK_CYRENE,
+     fan_control: {vendor: supermicro, control_token_env: CTL_CYRENE}}

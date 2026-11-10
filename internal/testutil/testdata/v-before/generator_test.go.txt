@@ -1,0 +1,210 @@
+package web
+
+// Generator for the "v-before" upgrade fixture. Runs ONLY at the base commit (05b1019) and only when
+// FAIRY_GEN_FIXTURE names an output directory: every file is written by that release's own code, through its
+// real HTTP handler, sign-in round trip and admin CLI. Not part of the repository.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/admin"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
+)
+
+const vBeforeConfig = `# config.yaml as written for the release before the security fixes: the two session values are plain
+# numbers of seconds, and none of the keys added later is here.
+public_url: https://panel.example.com
+listen: 127.0.0.1:8080
+request_timeout: 4
+offline_after: 60
+session_max_age: 604800
+session_idle_timeout: 43200
+step_up_window_s: 300
+step_up_prompt_login: true
+enable_docs: false
+data_dir: /var/lib/fairy
+audit_log: /var/lib/fairy/audit.log
+audit_max_mb: 100
+audit_keep: 5
+control_rate_per_min: 6
+login_rate_per_min: 20
+trusted_proxies: ["127.0.0.1/32", "::1/128"]
+panel_hosts: []
+boost_while_viewing: true
+intervals: {agent: 1, proxmox: 2, ups: 2, history: 5, stream: 1}
+oidc:
+  issuer: https://id.example.com
+  client_id: cid
+  scopes: [openid, profile, email, groups]
+  groups_claim: groups
+  allowed_groups: [homelab]
+  allowed_emails: []
+  control_groups: []
+  bootstrap_admins: [owner@example.com]
+proxmox:
+  - id: teyvat
+    cluster_name: NSX-TEYVAT
+    site: Neptune
+    urls: ["https://pve1:8006"]
+    token_id: "fairy@pve!panel"
+    token_secret_env: PVE_SECRET
+    verify_tls: false
+agents:
+  - {id: laptop, url: "http://laptop", token_env: TOK_LAPTOP, group: Neptune, site: Neptune, power_control: true,
+     self_update: true, control_token_env: CTL_CYRENE}
+  - {id: cyrene, url: "http://cyrene", token_env: TOK_CYRENE,
+     fan_control: {vendor: supermicro, control_token_env: CTL_CYRENE}}
+`
+
+func TestGenVBeforeFixture(t *testing.T) {
+	out := os.Getenv("FAIRY_GEN_FIXTURE")
+	if out == "" {
+		t.Skip("fixture generator: set FAIRY_GEN_FIXTURE=<dir>")
+	}
+	t.Setenv("TOK_LAPTOP", testutil.ReadToken)
+	t.Setenv("TOK_CYRENE", testutil.ReadToken+"x")
+	t.Setenv("CTL_CYRENE", testutil.ControlToken)
+	t.Setenv("PVE_SECRET", "pve-secret-uuid")
+	dataDir := filepath.Join(out, "data")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "config.yaml"), []byte(vBeforeConfig), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse([]byte(vBeforeConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.DataDir, cfg.AuditLog = dataDir, filepath.Join(dataDir, "audit.log")
+	b := testutil.NewBackend()
+	secrets := config.Secrets{SessionSecret: strings.Repeat("s", 48)}
+	p, err := poller.New(cfg, secrets, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.PollOnce(context.Background())
+	s := New(cfg, secrets, p, nil, "0.0.0-before")
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	e := &env{t: t, s: s, srv: srv, b: b}
+	idp := newFakeIDP(t)
+	s.Cfg.OIDC.Issuer = idp.srv.URL
+
+	signIn := func(sub, email, name string, extra map[string]any) string {
+		idp.claims = map[string]any{"sub": sub, "email": email, "name": name, "groups": []string{"homelab"}, "auth_time": time.Now().Unix()}
+		for k, v := range extra {
+			idp.claims[k] = v
+		}
+		q, rt := idp.login(e, "/auth/login", "")
+		r := e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+		if r.code != 303 {
+			t.Fatal("sign-in", sub, r.code, string(r.raw))
+		}
+		return sessionCookie(e, r.hdr)
+	}
+	ok := func(what string, r resp, codes ...int) {
+		for _, c := range codes {
+			if r.code == c {
+				return
+			}
+		}
+		t.Fatal(what, r.code, string(r.raw))
+	}
+
+	// The owner: the first sign-in, admin through oidc.bootstrap_admins (the address was verified then).
+	owner := signIn("3f6c1d2e-owner-0001", "owner@example.com", "Owner", map[string]any{"email_verified": true})
+	oh := []string{"Cookie", owner, "X-Requested-With", "fairy"}
+	if me := e.do("GET", "/api/me", nil, "Cookie", owner); me.code != 200 || me.body["role"] != "admin" {
+		t.Fatal("owner is not admin", string(me.raw))
+	}
+	// a viewer, someone waiting, and someone the owner removed
+	straw := signIn("9a1b77c0-straw-0002", "straw@example.com", "Straw", nil)
+	signIn("5d2e9f10-kaveh-0003", "kaveh@example.com", "Kaveh", nil)
+	signIn("c0ffee00-gone-0004", "gone@example.com", "Gone", nil)
+	ok("site", e.do("POST", "/api/admin/sites", map[string]any{"name": "Straw"}, oh...), 200, 201)
+	ok("role", e.do("PUT", "/api/admin/users/9a1b77c0-straw-0002", map[string]any{"role": "viewer", "sites": []string{"Straw"}}, oh...), 200)
+	ok("remove", e.do("DELETE", "/api/admin/users/c0ffee00-gone-0004", nil, oh...), 200)
+	ok("assign", e.do("PUT", "/api/admin/assign", map[string]any{"target": "cyrene", "site": "Straw"}, oh...), 200)
+	ok("poll", e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, oh...), 200)
+	set := e.do("GET", "/api/settings", nil, "Cookie", owner)
+	ok("settings get", set, 200)
+	ok("settings put", e.do("PUT", "/api/settings", set.body, oh...), 200)
+	ok("viewer reads", e.do("GET", "/api/systems", nil, "Cookie", straw), 200)
+	ok("refused", e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, "Cookie", straw, "X-Requested-With", "fairy"), 403, 404)
+
+	// notifications, as the panel's own watchers add them
+	resolved := time.Now().UTC()
+	s.Notes.Add(notifications.Event{Kind: "host_offline", Type: "host", Severity: "critical", SystemID: "cyrene", Host: "cyrene",
+		Text: "cyrene is offline", Key: "offline:cyrene", Alarm: true})
+	s.Notes.Add(notifications.Event{Kind: "update_failed", Type: "update", Severity: "warning", SystemID: "laptop", Host: "laptop",
+		Text: "laptop: update failed"})
+	s.Notes.Add(notifications.Event{Kind: "temp_high", Type: "temperature", Severity: "warning", SystemID: "laptop", Host: "laptop",
+		Text: "laptop: CPU 91 °C", Key: "temp:laptop", Alarm: true, Resolved: &resolved})
+	ok("read", e.do("POST", "/api/notifications/read", map[string]any{"all": true}, oh...), 200, 204)
+	s.Notes.Add(notifications.Event{Kind: "host_online", Type: "host", Severity: "info", SystemID: "laptop", Host: "laptop", Text: "laptop is back"})
+	if err := s.Notes.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	// UPS transitions (ups-events.jsonl)
+	row := func(status string) map[string]any {
+		return ups.RowMap(devices.UPSFromVars("ups1", map[string]string{"ups.status": status, "battery.charge": "97"}, ""))
+	}
+	for _, st := range []string{"OL", "OB", "OL"} {
+		p.UPS.UpdateFromAgent("laptop", []map[string]any{row(st)}, false, map[string][]string{"ups1": {"laptop"}}, nil)
+	}
+
+	// the admin CLI of that release, on the same data directory
+	cliCfg := filepath.Join(t.TempDir(), "config.yaml")
+	y := strings.NewReplacer("data_dir: /var/lib/fairy", "data_dir: "+dataDir, "audit_log: /var/lib/fairy/audit.log",
+		"audit_log: "+cfg.AuditLog).Replace(vBeforeConfig)
+	if err := os.WriteFile(cliCfg, []byte(y), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cli := func(args ...string) string {
+		var o, eb bytes.Buffer
+		if code := admin.Main(append([]string{"--config", cliCfg, "--env-file", filepath.Join(t.TempDir(), "none.env")}, args...), &o, &eb); code != 0 {
+			t.Fatal(args, code, o.String(), eb.String())
+		}
+		return o.String()
+	}
+	rawToken := func(out string) string {
+		for _, f := range strings.Fields(out) {
+			if strings.HasPrefix(f, "fy_") {
+				return f
+			}
+		}
+		t.Fatal("no token in", out)
+		return ""
+	}
+	tokSystem := rawToken(cli("tokens", "create", "--name", "home-assistant", "--owner", "system", "--scope", "read"))
+	tokStraw := rawToken(cli("tokens", "create", "--name", "straw-script", "--owner", "9a1b77c0-straw-0002", "--sites", "Straw"))
+	cli("control", "disable", "--reason", "maintenance")
+	cli("control", "enable")
+	cli("sites", "assign", "power:desk-plug", "Neptune")
+	usersList := cli("users", "list")
+
+	time.Sleep(1200 * time.Millisecond) // the stores write behind
+	meta, _ := json.MarshalIndent(map[string]any{
+		"generated_at_unix": time.Now().Unix(), "base_commit": "05b1019", "session_secret": strings.Repeat("s", 48),
+		"cookie_name": cookieName, "owner_sub": "3f6c1d2e-owner-0001", "owner_cookie": owner, "viewer_sub": "9a1b77c0-straw-0002",
+		"viewer_cookie": straw, "users_list": usersList, "token_system_read": tokSystem, "token_viewer_read": tokStraw,
+		"note": "Test fixture: every name, address, token and cookie in this directory is made up. The cookies are signed with session_secret."}, "", "  ")
+	if err := os.WriteFile(filepath.Join(out, "generated.json"), append(meta, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

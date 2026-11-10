@@ -1,0 +1,14 @@
+{
+  "base_commit": "05b1019",
+  "cookie_name": "fairy_session",
+  "generated_at_unix": 1794322004,
+  "note": "Test fixture: every name, address, token and cookie in this directory is made up. The cookies are signed with session_secret.",
+  "owner_cookie": "fairy_session=eyJkIjp7InNpZCI6InliR1RsS2YzdUxJeS1WSldwY1NnMThjQiIsInVzZXIiOnsic3ViIjoiM2Y2YzFkMmUtb3duZXItMDAwMSIsIm5hbWUiOiJPd25lciIsInByZWZlcnJlZF91c2VybmFtZSI6bnVsbCwiZW1haWwiOiJvd25lckBleGFtcGxlLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJwaWN0dXJlIjpudWxsLCJncm91cHMiOlsiaG9tZWxhYiJdLCJhdXRoIjoiIiwidG9rZW5fbmFtZSI6bnVsbCwidG9rZW5fc2NvcGUiOm51bGwsInRva2VuX293bmVyIjpudWxsfSwiaWF0IjoxNzk0MzIyMDAzLCJzZWVuIjoxNzk0MzIyMDAzLCJhdXRoX3RpbWUiOjE3OTQzMjIwMDN9LCJ0IjoxNzk0MzIyMDAzfQ.e7oVS5HeonZMLW6xbRZgfNsFYAOor8F4V7df7c363Io",
+  "owner_sub": "3f6c1d2e-owner-0001",
+  "session_secret": "ssssssssssssssssssssssssssssssssssssssssssssssss",
+  "token_system_read": "fy_hL257UjyL64-M6LDLAa-F2z3lROd3OYj6b88_XiyqSg",
+  "token_viewer_read": "fy_XkHIR60zxK2W9U4fsuStufDbwNM01UcnTpeOG9fp_ws",
+  "users_list": "SUBJECT              NAME   EMAIL              ROLE     SITES  LAST SEEN  HOW\n-------------------  -----  -----------------  -------  -----  ---------  --------------------------\n3f6c1d2e-owner-0001  Owner  owner@example.com  admin    -      0s ago     bootstrap_admins\n9a1b77c0-straw-0002  Straw  straw@example.com  viewer   Straw  0s ago     panel by owner@example.com\n5d2e9f10-kaveh-0003  Kaveh  kaveh@example.com  pending  -      0s ago     first sign-in\n",
+  "viewer_cookie": "fairy_session=eyJkIjp7InNpZCI6InlPejQ4SkFBR194YkdsV25VY2ZTdGRXdyIsInVzZXIiOnsic3ViIjoiOWExYjc3YzAtc3RyYXctMDAwMiIsIm5hbWUiOiJTdHJhdyIsInByZWZlcnJlZF91c2VybmFtZSI6bnVsbCwiZW1haWwiOiJzdHJhd0BleGFtcGxlLmNvbSIsInBpY3R1cmUiOm51bGwsImdyb3VwcyI6WyJob21lbGFiIl0sImF1dGgiOiIiLCJ0b2tlbl9uYW1lIjpudWxsLCJ0b2tlbl9zY29wZSI6bnVsbCwidG9rZW5fb3duZXIiOm51bGx9LCJpYXQiOjE3OTQzMjIwMDMsInNlZW4iOjE3OTQzMjIwMDMsImF1dGhfdGltZSI6MTc5NDMyMjAwM30sInQiOjE3OTQzMjIwMDN9.ZiogzMHBms_zQ4tgagvIUXAieMhjACNhByu1tHQo1R0",
+  "viewer_sub": "9a1b77c0-straw-0002"
+}

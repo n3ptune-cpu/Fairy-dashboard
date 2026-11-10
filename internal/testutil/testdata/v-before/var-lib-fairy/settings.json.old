@@ -1,0 +1,13 @@
+{
+ "3f6c1d2e-owner-0001": {
+  "theme": "black",
+  "background": {
+   "kind": "none",
+   "url": null,
+   "version": 0
+  },
+  "dim": 60,
+  "blur": 14,
+  "card_opacity": 72
+ }
+}

@@ -1,0 +1,2 @@
+{"seq":1,"t":"2026-11-10T14:46:43.789075926Z","ups_id":"laptop/ups1","ups_name":"ups1","kind":"on_battery","severity":"warning","message":"power lost: on battery, 97.0% charge, ? runtime","status_raw":"OB"}
+{"seq":2,"t":"2026-11-10T14:46:43.789291381Z","ups_id":"laptop/ups1","ups_name":"ups1","kind":"power_restored","severity":"info","message":"power restored: back on line","status_raw":"OL"}

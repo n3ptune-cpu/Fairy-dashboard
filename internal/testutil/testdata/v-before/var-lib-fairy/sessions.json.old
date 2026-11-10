@@ -1,0 +1,28 @@
+{
+ "sessions": {
+  "VLGlavYlYtdPeHeLqqtfvkkX": {
+   "created": "2026-11-10T14:46:43.776720128Z",
+   "created_ts": 1794322003.7767212,
+   "email": "kaveh@example.com",
+   "ip": "127.0.0.1",
+   "name": "Kaveh",
+   "sub": "5d2e9f10-kaveh-0003"
+  },
+  "yOz48JAAG_xbGlWnUcfStdWw": {
+   "created": "2026-11-10T14:46:43.774179777Z",
+   "created_ts": 1794322003.774181,
+   "email": "straw@example.com",
+   "ip": "127.0.0.1",
+   "name": "Straw",
+   "sub": "9a1b77c0-straw-0002"
+  },
+  "ybGTlKf3uLIy-VJWpcSg18cB": {
+   "created": "2026-11-10T14:46:43.77151752Z",
+   "created_ts": 1794322003.7715194,
+   "email": "owner@example.com",
+   "ip": "127.0.0.1",
+   "name": "Owner",
+   "sub": "3f6c1d2e-owner-0001"
+  }
+ }
+}

@@ -1,0 +1,33 @@
+{
+ "tokens": {
+  "57cb51c8": {
+   "created_at": "2026-11-10T14:46:43.790452414Z",
+   "created_by": "cli:root",
+   "expires_at": null,
+   "hash": "697a2cbb8462c7a6135556a29d5102d33ee39559b82e648fed0040f40a6a2ec3",
+   "hint": "p_ws",
+   "id": "57cb51c8",
+   "last_used": null,
+   "name": "straw-script",
+   "owner": "9a1b77c0-straw-0002",
+   "revoked_at": null,
+   "scope": "read",
+   "sites": [
+    "Straw"
+   ]
+  },
+  "7aa5101b": {
+   "created_at": "2026-11-10T14:46:43.789861839Z",
+   "created_by": "cli:root",
+   "expires_at": null,
+   "hash": "c5cbdda34a670d75b96cea76db82eb185ea3c9e8ae54c71fb66c4905022c7f95",
+   "hint": "yqSg",
+   "id": "7aa5101b",
+   "last_used": null,
+   "name": "home-assistant",
+   "owner": "system",
+   "revoked_at": null,
+   "scope": "read"
+  }
+ }
+}
