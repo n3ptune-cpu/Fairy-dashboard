@@ -1,0 +1,110 @@
+package web
+
+// Generator for the "v-before-managed" upgrade fixture: two hosts added with Add host by the release before
+// the security fixes. Runs ONLY at the base commit (05b1019) and only when FAIRY_GEN_FIXTURE names an output
+// directory: that release's own HTTP handler, enrollment manager (old pairing: a proof, tokens in clear) and
+// managed store wrote every file. Not part of the repository.
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
+	"math/big"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
+)
+
+func TestGenVBeforeManagedFixture(t *testing.T) {
+	out := os.Getenv("FAIRY_GEN_FIXTURE")
+	if out == "" {
+		t.Skip("fixture generator: set FAIRY_GEN_FIXTURE=<dir>")
+	}
+	e := setup(t)
+	e.s.Enroll.Interval = 20 * time.Millisecond
+	e.s.control = newRateLimiter(100)
+	e.s.Enroll.PanelAddr = "100.88.109.47"
+	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Proxmox Virtual Environment"}, IsCA: true,
+		BasicConstraintsValid: true, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(30, 0, 0)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	e.s.Enroll.Pair = func(_ context.Context, url, proof string) (int, enroll.Response, string, error) {
+		if strings.Contains(url, "kachina") {
+			return 200, enroll.Response{AgentVersion: "13-d43fdaf", Hostname: "NSX-KACHINA", Platform: "linux", Token: "old-kachina-read-token-xxxxxxxxxxxxxx",
+				ControlToken: "old-kachina-control-token-yyyyyyyyy", Proxmox: &enroll.ProxmoxGrant{TokenID: "fairy@pve!panel-nsx-kachina",
+					TokenSecret: "0b7c4e2a-1111-2222-3333-444455556666", CAPEM: string(ca), Node: "NSX-KACHINA",
+					URL: "https://nsx-kachina.tailnet.ts.net:8006", ServerName: "NSX-KACHINA"}}, "", nil
+		}
+		return 200, enroll.Response{AgentVersion: "13-d43fdaf", Hostname: "NSX-FURINA", Platform: "windows", Token: "old-furina-read-token-xxxxxxxxxxxxxxx",
+			ControlToken: "old-furina-control-token-yyyyyyyyyy"}, "", nil
+	}
+	e.b.Mu.Lock()
+	for _, id := range []string{"nsx-furina", "nsx-kachina"} {
+		e.b.Metrics[id] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	}
+	e.b.Mu.Unlock()
+	c := e.cookie(controller(), 0)
+	hdr := []string{"Cookie", c, "X-Requested-With", "fairy"}
+	for _, body := range []map[string]any{
+		{"name": "NSX-FURINA", "os": "windows", "site": "Neptune", "options": map[string]any{"power_control": true, "coretemp": true, "self_update": true}},
+		{"name": "nsx-kachina", "os": "linux", "site": "Neptune", "proxmox_new": true, "options": map[string]any{"power_control": true}},
+	} {
+		r := e.do("POST", "/api/admin/hosts", body, hdr...)
+		if r.code != 201 {
+			t.Fatal(r.code, string(r.raw))
+		}
+		id := r.body["id"].(string)
+		st := ""
+		for i := 0; i < 300 && st != "online"; i++ {
+			time.Sleep(20 * time.Millisecond)
+			e.s.Poller.PollOnce(context.Background())
+			st, _ = e.do("GET", "/api/admin/enrollments/"+id, nil, "Cookie", c).body["state"].(string)
+		}
+		if st != "online" {
+			t.Fatal(body["name"], st)
+		}
+	}
+	copyFile := func(rel string) {
+		b, err := os.ReadFile(filepath.Join(e.s.Cfg.DataDir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(out, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFile("managed-hosts.yaml")
+	files, err := os.ReadDir(filepath.Join(e.s.Cfg.DataDir, "secrets"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range files {
+		copyFile(filepath.Join("secrets", f.Name()))
+		names = append(names, f.Name())
+	}
+	meta, _ := json.MarshalIndent(map[string]any{"generated_at_unix": time.Now().Unix(), "base_commit": "05b1019", "secrets": names,
+		"note": "Test fixture: every name, address, token and certificate in this directory is made up."}, "", "  ")
+	if err := os.WriteFile(filepath.Join(out, "generated.json"), append(meta, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

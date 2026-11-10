@@ -1,0 +1,40 @@
+# Hosts added in the Fairy panel (Add host). Written by the panel: change them there (Re-pair, Remove).
+# Their tokens are in secrets/ next to this file. A host with the same id in /etc/fairy/config.yaml wins.
+hosts:
+    - id: nsx-furina
+      name: NSX-FURINA
+      url: http://nsx-furina:9101
+      site: Neptune
+      os: windows
+      options:
+        power_control: true
+        self_update: true
+        coretemp: true
+      added_at: 2026-11-10T16:06:28.192900821Z
+      added_by: n@example.com
+      agent_version: 13-d43fdaf
+      hostname: NSX-FURINA
+      control_paired: true
+    - id: nsx-kachina
+      name: nsx-kachina
+      url: http://nsx-kachina:9101
+      site: Neptune
+      os: linux
+      node: NSX-KACHINA
+      system_id: neptune-nsx-kachina-node-nsx-kachina
+      options:
+        power_control: true
+      proxmox:
+        id: neptune-nsx-kachina
+        id_prefix: neptune-nsx-kachina-
+        node: NSX-KACHINA
+        url: https://nsx-kachina:8006
+        server_name: NSX-KACHINA
+        token_id: fairy@pve!panel-nsx-kachina
+        ca: true
+      proxmox_wanted: true
+      added_at: 2026-11-10T16:06:29.211441615Z
+      added_by: n@example.com
+      agent_version: 13-d43fdaf
+      hostname: NSX-KACHINA
+      control_paired: true

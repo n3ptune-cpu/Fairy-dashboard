@@ -16,6 +16,37 @@ import (
 //go:embed all:testdata/v-before
 var vBeforeFS embed.FS
 
+//go:embed all:testdata/v-before-managed
+var vBeforeManagedFS embed.FS
+
+// AddVBeforeManaged adds the "v-before-managed" fixture to a data directory: managed-hosts.yaml and secrets/ as
+// the release before the security fixes wrote them for two hosts added with Add host (NSX-FURINA, a Windows
+// PC, and nsx-kachina, a standalone Proxmox node). See testdata/v-before-managed/README.md.
+func AddVBeforeManaged(t *testing.T, dataDir string) {
+	t.Helper()
+	const root = "testdata/v-before-managed"
+	err := fs.WalkDir(vBeforeManagedFS, root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, filepath.FromSlash(p))
+		if d.IsDir() {
+			return os.MkdirAll(filepath.Join(dataDir, rel), 0o700)
+		}
+		if rel != "managed-hosts.yaml" && filepath.Dir(rel) != "secrets" {
+			return nil // the fixture's own notes
+		}
+		b, err := vBeforeManagedFS.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dataDir, rel), b, 0o600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // VBefore is a private copy of the "v-before" fixture: a panel's config.yaml and data directory exactly as the
 // release before the security fixes (commit 05b1019) wrote them. See testdata/v-before/README.md.
 type VBefore struct {

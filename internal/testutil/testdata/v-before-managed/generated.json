@@ -1,0 +1,10 @@
+{
+  "base_commit": "05b1019",
+  "generated_at_unix": 1794326790,
+  "note": "Test fixture: every name, address, token and certificate in this directory is made up.",
+  "secrets": [
+    "agent-nsx-furina.json",
+    "agent-nsx-kachina.json",
+    "pve-nsx-kachina-ca.pem"
+  ]
+}
