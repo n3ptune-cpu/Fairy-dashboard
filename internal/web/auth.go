@@ -126,8 +126,17 @@ func (c *reqCtx) sessionUser() *model.User {
 	return &u
 }
 
-// tokenUser: `Authorization: Bearer fy_...` personal API token (CLI-created).
+// tokenUser: `Authorization: Bearer fy_...` personal API token (CLI-created). Checked once per request (the
+// rejection is audited once), however often it is asked.
 func (c *reqCtx) tokenUser() (*model.User, error) {
+	if !c.tokDone {
+		c.tokUser, c.tokErr = c.checkToken()
+		c.tokDone = true
+	}
+	return c.tokUser, c.tokErr
+}
+
+func (c *reqCtx) checkToken() (*model.User, error) {
 	scheme, raw, _ := strings.Cut(c.r.Header.Get("Authorization"), " ")
 	raw = strings.TrimSpace(raw)
 	if !strings.EqualFold(scheme, "bearer") || raw == "" {

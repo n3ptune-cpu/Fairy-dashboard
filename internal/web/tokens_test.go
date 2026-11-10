@@ -86,3 +86,71 @@ func TestSignInOnlyActionsAreRealRoutes(t *testing.T) {
 		}
 	}
 }
+
+// countingBody records how much of a request body the server read.
+type countingBody struct {
+	r    *strings.Reader
+	read int
+}
+
+func (b *countingBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	b.read += n
+	return n, err
+}
+func (b *countingBody) Close() error { return nil }
+
+// I24: a write from someone who is not signed in is answered before any of its body is read or parsed. The
+// four Users-page routes used to parse the body first (422 for a bad one, without a sign-in).
+func TestBodyIsNotReadBeforeSignIn(t *testing.T) {
+	e := setup(t)
+	garbage := strings.Repeat("{", 60<<10) // 60 KiB that is not JSON
+	send := func(method, path string, hdr ...string) (int, int) {
+		body := &countingBody{r: strings.NewReader(garbage)}
+		req := httptest.NewRequest(method, path, body)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Requested-With", "fairy")
+		for i := 0; i+1 < len(hdr); i += 2 {
+			req.Header.Set(hdr[i], hdr[i+1])
+		}
+		rec := httptest.NewRecorder()
+		e.s.Handler().ServeHTTP(rec, req)
+		return rec.Code, body.read
+	}
+	admin4 := [][2]string{{"PUT", "/api/admin/users/u9"}, {"POST", "/api/admin/sites"}, {"PUT", "/api/admin/sites/Straw"}, {"PUT", "/api/admin/assign"}}
+	others := [][2]string{{"POST", "/api/admin/hosts"}, {"PUT", "/api/systems/laptop/poll"}, {"POST", "/api/systems/laptop/power"},
+		{"PUT", "/api/settings"}, {"POST", "/api/notifications/read"}, {"POST", "/api/me/active"}, {"DELETE", "/api/me/pending"}}
+	for _, rt := range append(admin4, others...) {
+		if code, read := send(rt[0], rt[1]); code != 401 || read != 0 {
+			t.Errorf("no sign-in, %s %s: %d, %d bytes of the body read (want 401, 0)", rt[0], rt[1], code, read)
+		}
+		if code, read := send(rt[0], rt[1], "Cookie", "__Host-fairy_session=forged.value"); code != 401 || read != 0 {
+			t.Errorf("forged cookie, %s %s: %d, %d bytes read", rt[0], rt[1], code, read)
+		}
+		// a rejected API token: 401 where tokens are taken, 403 where they are not, and still nothing read
+		if code, read := send(rt[0], rt[1], "Authorization", "Bearer fy_nope"); (code != 401 && code != 403) || read != 0 {
+			t.Errorf("bogus token, %s %s: %d, %d bytes read", rt[0], rt[1], code, read)
+		}
+	}
+	// a valid API token on the Users-page routes: refused (403) before the body is parsed
+	ctl, _, _ := e.s.Tokens.Create("ops", "system", "control", "cli:test", 0)
+	for _, rt := range admin4 {
+		body := &countingBody{r: strings.NewReader(garbage)}
+		req := httptest.NewRequest(rt[0], rt[1], body)
+		req.Header.Set("Authorization", "Bearer "+ctl)
+		rec := httptest.NewRecorder()
+		e.s.Handler().ServeHTTP(rec, req)
+		if rec.Code != 403 {
+			t.Errorf("token on %s %s: %d, want 403 (not a 422 from parsing the body)", rt[0], rt[1], rec.Code)
+		}
+	}
+	// signed in: the body is read and a bad one is still told so
+	c := e.cookie(controller(), 0)
+	if code, read := send("POST", "/api/admin/sites", "Cookie", c); code != 422 || read == 0 {
+		t.Errorf("signed-in admin with a bad body: %d, %d bytes read (want 422)", code, read)
+	}
+	// one rejected token is audited once per request, not once per check
+	if n := strings.Count(auditOutcomes(e.s.Cfg.AuditLog), "auth.token_rejected"); n == 0 || n > len(admin4)+len(others) {
+		t.Errorf("auth.token_rejected entries: %d for %d requests", n, len(admin4)+len(others))
+	}
+}

@@ -166,6 +166,9 @@ type setUserReq struct {
 }
 
 func (s *Server) adminSetUser(c *reqCtx) error {
+	if _, err := c.requireSession(); err != nil { // before the body is read (adminGuard checks the rest after it)
+		return err
+	}
 	var body setUserReq
 	if err := c.decodeBody(&body); err != nil {
 		return err
@@ -230,6 +233,9 @@ type siteReq struct {
 }
 
 func (s *Server) adminCreateSite(c *reqCtx) error {
+	if _, err := c.requireSession(); err != nil { // before the body is read (adminGuard checks the rest after it)
+		return err
+	}
 	var body siteReq
 	if err := c.decodeBody(&body); err != nil {
 		return err
@@ -258,6 +264,9 @@ func (s *Server) configSiteGuard(name string) error {
 }
 
 func (s *Server) adminRenameSite(c *reqCtx) error {
+	if _, err := c.requireSession(); err != nil { // before the body is read (adminGuard checks the rest after it)
+		return err
+	}
 	var body siteReq
 	if err := c.decodeBody(&body); err != nil {
 		return err
@@ -317,6 +326,9 @@ func (s *Server) knownTarget(target string) bool {
 }
 
 func (s *Server) adminAssign(c *reqCtx) error {
+	if _, err := c.requireSession(); err != nil { // before the body is read (adminGuard checks the rest after it)
+		return err
+	}
 	var body assignReq
 	if err := c.decodeBody(&body); err != nil {
 		return err

@@ -7,6 +7,7 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
@@ -27,6 +28,10 @@ type reqCtx struct {
 	body  []byte         // a write request's body as received (see readBody)
 	// bodyKept: body is the whole request body (false for a body readBody left alone: an upload)
 	bodyKept bool
+	// The API token of this request is checked once (tokenUser): the answer, kept for the handler.
+	tokDone bool
+	tokUser *model.User
+	tokErr  error
 }
 
 func (c *reqCtx) session() *sessionData {
@@ -95,10 +100,26 @@ func (c *reqCtx) redirect(target string) {
 
 type handler func(c *reqCtx) error
 
+// mayReadBody decides whether the request body may be read ahead (readBody keeps it for a refused step-up).
+// A write to the API from someone who is not signed in (no valid session, no valid API token) is answered
+// without reading or parsing any of its body: nobody without a sign-in gets the panel to take in 64 KiB.
+func (c *reqCtx) mayReadBody() bool {
+	if c.r.Method == http.MethodGet || c.r.Method == http.MethodHead || !strings.HasPrefix(c.r.URL.Path, "/api/") {
+		return true
+	}
+	_, err := c.requireUser()
+	return err == nil
+}
+
 func (s *Server) h(fn handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c := &reqCtx{s: s, w: w, r: r}
-		c.readBody()
+		if c.mayReadBody() {
+			c.readBody()
+		} else if r.Header.Get("Authorization") == "" {
+			c.fail(apierr.New(401, "not authenticated")) // what every handler would answer, before any of the body is read
+			return
+		} // else: a rejected API token. The handler answers (401, or 403 where tokens are not accepted), without the body.
 		if err := fn(c); err != nil {
 			c.fail(err)
 			return
