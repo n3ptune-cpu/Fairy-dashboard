@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,8 +95,20 @@ func TestAddHostHintsAuditAndVerifiedMark(t *testing.T) {
 	}
 	phase.Store(1)
 	b = get(func(b map[string]any) bool { return b["hint"] == "unverified_answer" })
-	if b["state"] != "waiting" || b["done"] != false || !strings.Contains(b["message"].(string), "did not prove it has the join code") {
+	if b["state"] != "waiting" || b["done"] != false {
 		t.Fatal(b)
+	}
+	// the owner is told plainly, in the answer the dialog shows: what answered is not the agent, where, why,
+	// that nothing was added, and what to do. No code and no key in it.
+	msg := b["message"].(string)
+	for _, want := range []string{"not added: something answers at box, but it is not a Fairy agent that has this join code", "(it is not a pairing v2 answer)",
+		"Nothing it sent was used", "check the name and the address", "make a new code"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the message lacks %q: %s", want, msg)
+		}
+	}
+	if norm, _ := enroll.Normalize(code); strings.Contains(string(must(json.Marshal(b))), code) || strings.Contains(string(must(json.Marshal(b))), norm) {
+		t.Fatal("the join code is in the enrollment's state:", b)
 	}
 	if _, err := os.Stat(filepath.Join(e.s.Cfg.DataDir, "managed-hosts.yaml")); !os.IsNotExist(err) {
 		t.Fatal("something was stored before a verified answer", err)

@@ -482,7 +482,7 @@ func TestAnswersThatKeepTheEnrollmentWaiting(t *testing.T) {
 		}, "", "the agent answered 307", ""},
 		{"tokens in clear, as the old exchange answered", func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(goodAnswer)
-		}, HintUnverified, "did not prove it has the join code", "unverified"},
+		}, HintUnverified, "it is not a Fairy agent that has this join code", "unverified"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(tc.h)

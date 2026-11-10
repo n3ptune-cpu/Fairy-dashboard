@@ -520,7 +520,7 @@ func TestImpostorAtTheMachinesAddress(t *testing.T) {
 	pn.to.Store(m.srv.URL)
 	id, code, pairV2 := pn.start("/api/admin/hosts", map[string]any{"name": "target", "os": "linux", "options": map[string]any{"power_control": true}})
 	e := pn.ask(id, 10)
-	if e["state"] != "waiting" || e["done"] != false || e["hint"] != "unverified_answer" || !strings.Contains(e["message"].(string), "did not prove it has the join code") {
+	if e["state"] != "waiting" || e["done"] != false || e["hint"] != "unverified_answer" || !strings.Contains(e["message"].(string), "it is not a Fairy agent that has this join code") {
 		t.Fatal(e)
 	}
 	if hosts, _ := pn.ws.Managed.Load(); len(hosts) != 0 {

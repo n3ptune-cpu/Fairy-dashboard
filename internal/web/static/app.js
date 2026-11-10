@@ -1563,6 +1563,10 @@ function enrollSteps(e) {
   return `<div class="steps">${ENR_STEPS.map(([k, l], i) => `<span class="${bad && i === Math.max(0, at) ? "bad" : at > i || e.state === "online" ? "done" : at === i ? "now" : ""}">${esc(l)}</span>`).join("")}
     ${bad ? `<span class="bad">${esc(e.state)}</span>` : ""}</div>`;
 }
+// What answered at the machine's address is not the agent the code was given to: said in a box of its own,
+// above the progress text, because the enrollment itself keeps "waiting" (the real agent can still pair).
+const ENR_HINT_BOX = { unverified_answer: "Not a Fairy agent: something answers at this address, but it could not prove it has the join code. It was not added." };
+const enrollHint = (e) => (ENR_HINT_BOX[e.hint] ? `<div class="warnbox" id="en-hint" role="alert">${esc(ENR_HINT_BOX[e.hint])}</div>` : "");
 function openEnrollDialog(cr) {
   const m = $("#modal");
   enr.id = cr.id;
@@ -1575,7 +1579,7 @@ function openEnrollDialog(cr) {
       <span class="note">Join code <span class="code-big">${esc(groupCode(cr.code))}</span> · single use · valid until ${new Date(cr.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
     <p class="note">It installs Fairy-agent ${cr.release?.tag ? `release <code>${esc(cr.release.tag)}</code>${cr.release.version ? ` (${esc(cr.release.version)})` : ""}` : "(signed release)"}: the command runs the install script only if it is exactly the one the panel checked against the signed SHA256SUMS, and the script checks every file it installs. It writes the agent's settings and waits for the panel. Nothing else on the machine changes. The code is shown only now.</p>
     ${cr.warning ? `<div class="note warn" id="en-warn">${esc(cr.warning)}</div>` : ""}
-    <div id="en-progress" aria-live="polite">${enrollSteps(cr)}<div class="note" id="en-msg">${esc(cr.message)}</div></div>
+    <div id="en-progress" aria-live="polite">${enrollSteps(cr)}${enrollHint(cr)}<div class="note" id="en-msg">${esc(cr.message)}</div></div>
     <div class="row-gap end"><button class="btn" type="button" id="en-cancel">Cancel Add host</button><button class="btn primary" type="button" id="en-close">Close</button></div></div>`;
   m.hidden = false;
   $("#en-copy").onclick = async () => {
@@ -1595,7 +1599,7 @@ async function pollEnroll(id) {
   let e;
   try { e = await api(`/api/admin/enrollments/${enc(id)}`); } catch (x) { const msg = $("#en-msg"); if (msg) msg.textContent = x.message; return; }
   if (enr.id !== id || !$("#en-progress")) return;
-  $("#en-progress").innerHTML = `${enrollSteps(e)}<div class="note" id="en-msg">${esc(e.message)}${e.state === "online" && state.byId[e.host_id]
+  $("#en-progress").innerHTML = `${enrollSteps(e)}${enrollHint(e)}<div class="note" id="en-msg">${esc(e.message)}${e.state === "online" && state.byId[e.host_id]
     ? ` · <a href="#/system/${enc(e.host_id)}">open ${esc(e.name)} →</a>` : ""}</div>`;
   if (e.done) { $("#en-cancel").hidden = true; if (e.state === "online") loadManaged(); return; }
   if (!signedOut) enr.timer = setTimeout(() => pollEnroll(id), 2000);

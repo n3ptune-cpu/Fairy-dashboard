@@ -754,8 +754,7 @@ func (m *Manager) run(ctx context.Context, e *Enrollment) {
 			// Something answered "paired" without proving it has the join code: an old agent's answer in
 			// clear, another program on that port, a replayed or altered answer. Never adopted.
 			m.report(e, "unverified", "an answer from "+e.URL+" did not prove the join code ("+unverified.Why+"): not added")
-			m.setHint(e, Waiting, "not added: what answers at "+hostOf(e.URL)+" did not prove it has the join code ("+unverified.Why+"). "+
-				"If the command has not run on the machine yet, something else answers at that address. If it has, make a new code and run the new command", HintUnverified, false)
+			m.setHint(e, Waiting, notAgentMessage(hostOf(e.URL), unverified.Why), HintUnverified, false)
 		case err != nil:
 			m.set(e, Waiting, "waiting for the machine ("+devices.Describe(err)+")", false)
 		case status == 404 && code == "pairing_inactive":
@@ -798,6 +797,9 @@ func (m *Manager) expire(e *Enrollment) {
 	fin := !e.Done
 	if fin {
 		e.State, e.Message, e.Done = Expired, "the code expired before the machine ran the command: make a new one", true
+		if e.Hint == HintUnverified { // the hint stays as it always did; the last message says it too
+			e.Message = notAgentExpired(hostOf(e.URL))
+		}
 	}
 	cp := m.copyOf(e)
 	m.mu.Unlock()
@@ -815,6 +817,24 @@ func shownHostname(h string) string {
 		return ""
 	}
 	return h
+}
+
+// notAgentMessage is what the dialog shows while something answers "paired" at the machine's address without
+// proving it has the join code. The enrollment keeps waiting (the real agent can still pair with the same
+// code), so the text must say plainly that what answered is not the agent, that nothing of it was used, and
+// what to do. It names the address and the reason (Unverified.Why, fixed texts of this package) and nothing
+// of what was sent or received.
+func notAgentMessage(host, why string) string {
+	return "not added: something answers at " + host + ", but it is not a Fairy agent that has this join code (" + why + "). " +
+		"Nothing it sent was used, and the panel keeps waiting. " +
+		"If the command has not run on the machine yet, another program or another machine answers at that address: check the name and the address. " +
+		"If it has run, cancel this, make a new code and run the new command"
+}
+
+// notAgentExpired is the last message of an enrollment that ran out while only such answers came.
+func notAgentExpired(host string) string {
+	return "the code expired and nothing was added: until the end, what answered at " + host + " was not a Fairy agent that has the join code. " +
+		"Check the name and the address, then make a new code"
 }
 
 // tooOldMessage is what the dialog shows while an agent from before pairing v2 answers.

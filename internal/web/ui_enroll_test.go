@@ -34,3 +34,19 @@ func TestUIManagedHostShowsPairing(t *testing.T) {
 		t.Errorf("app.js lacks %q", want)
 	}
 }
+
+// M3 (UI side): while something that is not the agent answers at the machine's address, the dialog says so in
+// a box of its own (the enrollment itself keeps "waiting"), in the first view and in every refresh, escaped.
+func TestUIEnrollDialogSaysWhenSomethingElseAnswers(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`unverified_answer: "Not a Fairy agent: something answers at this address, but it could not prove it has the join code. It was not added."`,
+		"const enrollHint = (e) => (ENR_HINT_BOX[e.hint] ? `<div class=\"warnbox\" id=\"en-hint\" role=\"alert\">${esc(ENR_HINT_BOX[e.hint])}</div>` : \"\");",
+		"${enrollSteps(cr)}${enrollHint(cr)}<div class=\"note\" id=\"en-msg\">${esc(cr.message)}</div>",
+		"${enrollSteps(e)}${enrollHint(e)}<div class=\"note\" id=\"en-msg\">${esc(e.message)}",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+}
