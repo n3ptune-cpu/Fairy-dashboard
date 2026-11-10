@@ -91,7 +91,7 @@ func (c *Panel) applyDefaults() {
 	defi(&c.SessionIdleTimeout, 12*3600)
 	defi(&c.PowerHistoryS, 3600)
 	defi(&c.ControlRatePerMin, 6)
-	defi(&c.StepUpWindowS, 300)
+	defi(&c.StepUpWindowS, 180)
 	defi(&c.LoginRatePerMin, 20)
 	if c.Updates.AgentRepo == "" {
 		c.Updates.AgentRepo = release.AgentRepo

@@ -232,11 +232,11 @@ func TestControlNeedsGroupCSRFStepUpAndKillSwitch(t *testing.T) {
 	if r := e.do("PUT", "/api/systems/laptop/poll", body, "Cookie", c, "X-Requested-With", "fairy", "Sec-Fetch-Site", "cross-site"); r.code != 403 {
 		t.Fatal("cross-site accepted")
 	}
-	// step-up: last Pocket ID sign-in 10 min ago (window 5 min)
+	// step-up: last Pocket ID sign-in 10 min ago (window 3 min, the default)
 	old := e.cookie(controller(), 10*time.Minute)
 	r := e.do("PUT", "/api/systems/laptop/poll", body, append([]string{"Cookie", old}, csrf...)...)
 	d, _ := r.body["detail"].(map[string]any)
-	if r.code != 401 || d["code"] != "step_up_required" || d["window_s"] != 300.0 {
+	if r.code != 401 || d["code"] != "step_up_required" || d["window_s"] != 180.0 || !strings.Contains(d["message"].(string), "last 3 min") {
 		t.Fatalf("step-up: %d %s", r.code, r.raw)
 	}
 	if r := e.do("PUT", "/api/systems/laptop/poll", body, append([]string{"Cookie", c}, csrf...)...); r.code != 200 {

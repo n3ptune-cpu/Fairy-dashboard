@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,7 @@ func TestParseDefaultsAndProxmoxForms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.BaseURL() != "https://panel.example.com" || c.Intervals.Agent != 1 || c.Intervals.Proxmox != 2 || c.StepUpWindowS != 300 ||
+	if c.BaseURL() != "https://panel.example.com" || c.Intervals.Agent != 1 || c.Intervals.Proxmox != 2 || c.StepUpWindowS != 180 ||
 		len(c.Trusted()) != 2 || c.Proxmox[0].Prefix() != "" || !c.Boost() || c.LoginRatePerMin != 20 {
 		t.Fatalf("%+v", c)
 	}
@@ -101,5 +102,23 @@ func TestStepUpPerActionKey(t *testing.T) {
 	}
 	if _, err := Parse([]byte(base + "step_up_per_action: sometimes\n")); err == nil {
 		t.Fatal("a non-boolean must be refused")
+	}
+}
+
+// step_up_window_s: 3 minutes unless the config says otherwise; a value that is set is kept.
+func TestStepUpWindowDefault(t *testing.T) {
+	if c, err := Parse([]byte(base)); err != nil || c.StepUpWindowS != 180 {
+		t.Fatal("default step_up_window_s must be 180", err)
+	}
+	for _, v := range []int{30, 300, 900, 86400} {
+		c, err := Parse([]byte(base + "step_up_window_s: " + strconv.Itoa(v) + "\n"))
+		if err != nil || c.StepUpWindowS != v {
+			t.Fatalf("step_up_window_s: %d was not kept: %v", v, err)
+		}
+	}
+	for _, v := range []string{"29", "86401", "-1"} {
+		if _, err := Parse([]byte(base + "step_up_window_s: " + v + "\n")); err == nil {
+			t.Errorf("step_up_window_s: %s accepted", v)
+		}
 	}
 }

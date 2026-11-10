@@ -273,7 +273,7 @@ The file is read once at start (path from the config only) and served at `/brand
   admin at their first real sign-in (a fresh Pocket ID login; never from the
   groups cached in a session cookie, and never for someone an admin removed). After that the panel decides.
   Removing a user also ends their sessions and revokes their API tokens. The last admin cannot be demoted or removed (server-enforced; the CLI needs `--force`).
-* Step-up: control actions need a sign-in from the last `step_up_window_s` (default 5 min); the re-login sends
+* Step-up: control actions need a sign-in from the last `step_up_window_s` (default 3 min); the re-login sends
   `max_age=0` (optionally `prompt=login`) and the callback requires a fresh `auth_time` (at most 2 min old).
   A missing `auth_time` never counts as fresh: the identity provider must send it (OIDC Core requires it when
   `max_age` is requested); otherwise step-up fails with a page that says so and control actions stay locked.

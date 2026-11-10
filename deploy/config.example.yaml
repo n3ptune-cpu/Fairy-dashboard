@@ -6,7 +6,7 @@ request_timeout: 4                        # seconds per request (each source als
 offline_after: 60                         # failing for longer than this => "offline" (before that: "stale")
 session_max_age: 604800                   # 7 d absolute; group membership is re-checked at each login
 session_idle_timeout: 43200               # 12 h without activity => sign in again
-step_up_window_s: 300                     # control actions need a Pocket ID sign-in from the last 5 min
+step_up_window_s: 180                     # control actions need a Pocket ID sign-in from the last 3 min (default)
 step_up_prompt_login: true                # also send prompt=login on step-up (max_age=0 is always sent).
                                           # Pocket ID must put auth_time in the ID token, or step-up fails.
 step_up_per_action: false                 # true: EVERY control action needs its own Pocket ID sign-in (one passkey
