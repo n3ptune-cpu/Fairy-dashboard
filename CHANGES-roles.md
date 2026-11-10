@@ -77,8 +77,10 @@ Good to know:
 On the server running Fairy, as the service user (`sudo -u fairy fairy admin ...`; commands that change something refuse to run as root, so they cannot leave files the panel can no longer read):
 
 ```sh
-fairy admin users list                                  # who is there, with which role
-fairy admin users set-role you@example.com admin        # make yourself admin again
+fairy admin users list                                  # who is there, with which role (and each SUBJECT)
+fairy admin users set-role you@example.com admin        # make yourself admin again: shows the account and asks
+fairy admin users set-role you@example.com admin --yes  # ...without the question (no terminal: script, cron)
+fairy admin users set-role <subject> admin --yes        # ...for an address the list marks "(unverified)"
 fairy admin users sites straw@example.com Straw         # make Straw a viewer of the Straw site
 fairy admin users set-role straw@example.com pending    # take Straw's access away
 fairy admin users remove someone@example.com            # forget someone (--force even for the last admin)
@@ -87,6 +89,12 @@ fairy admin sites assign straw-pc Straw                 # put a host in a site (
 fairy admin sites assign power:desk-plug Straw          # a power plug (power:<id>) or UPS (ups:<id>)
 fairy admin sites assign straw-pc -                     # back to its default site
 ```
+
+Since the fix for an unverified e-mail address (L4): `set-role`, `sites` and `remove` print the account they found
+first. An e-mail address finds an account only when Pocket ID verified it (`email_verified`); after an upgrade
+that is known from the person's next sign-in on. Until then, and for every address the list marks
+"(unverified)", name the account by its SUBJECT (first column of `fairy admin users list`). Making an account
+admin asks first; `--yes` skips the question and is needed where nobody can answer it.
 
 The running panel picks these changes up within a second. They are written to the Audit log as source "cli".
 Everything is stored in one file, `users.json`, in Fairy's data folder (`/var/lib/fairy` or

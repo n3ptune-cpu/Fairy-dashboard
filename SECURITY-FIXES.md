@@ -144,7 +144,9 @@ rewrote it. All roles and site limits were lost, and anyone in `control_groups` 
 - If you ran it as root before: `chown -R fairy:fairy /var/lib/fairy` (Fairy tells you if this is needed).
 - If Fairy says a file is "corrupt": restore it from a backup, or move it aside (that file then starts over;
   for `users.json`, sign in again: you become admin through `control_groups` / `bootstrap_admins`, or run
-  `sudo -u fairy fairy admin users set-role <your email> admin` after signing in once).
+  `sudo -u fairy fairy admin users set-role <your email> admin` after signing in once; it asks before making
+  an admin, `--yes` skips the question, and an address that `fairy admin users list` marks "(unverified)" needs
+  the SUBJECT from that list instead of the e-mail).
 
 ---
 

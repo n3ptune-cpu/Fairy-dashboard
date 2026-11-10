@@ -57,7 +57,11 @@ fairy serve --demo --demo-as viewer:Straw   # ...as a viewer of the Straw site s
                               # the demo menu (top right) has a "Preview as" switcher too
 fairy admin help              # break-glass CLI: users and sites, tokens, sessions, control kill switch, host
                               # power flags, polling, audit tail, config check, health (all audited as "cli")
-fairy admin users set-role you@example.com admin   # locked out? make yourself admin again
+fairy admin users set-role you@example.com admin   # locked out? make yourself admin again. It shows the account
+                              # it found and asks before making an admin: answer yes, or add --yes (needed
+                              # when there is no terminal: a script, cron, ssh without -t). An address that
+                              # `fairy admin users list` marks "(unverified)" does not find an account: use the
+                              # SUBJECT from that list instead: fairy admin users set-role <subject> admin --yes
 fairy update --check          # installed vs the latest signed Fairy-dashboard release
 fairy update [--yes]          # as root on the panel host: install it, restart fairy.service, roll back on failure
 fairy version
@@ -265,6 +269,12 @@ The file is read once at start (path from the config only) and served at `/brand
   **pending** (first sign-in of anyone else) sees a "waiting for access" page and gets 403 from every data API.
   Filtering is server-side for every endpoint and the SSE stream (`internal/web/view.go`); hidden ids answer the
   same 404 as unknown ones; a viewer's summary counts, cluster totals and the Overview's all-hosts CPU / memory totals (`totals` in `/api/summary`) only add up what they can see.
+* An account is its OIDC subject; the e-mail address is only what the account says about itself. The Users page
+  and `fairy admin users list` mark an address "unverified" unless Pocket ID sent `email_verified: true` at that
+  person's last sign-in (Pocket ID sends `false` until an administrator there marks the address as verified, the
+  person confirms it by e-mail, or Pocket ID is set to treat every address as verified). An unverified address
+  never finds an account (`fairy admin users ...`, the role API), and never matches `allowed_emails` or
+  `bootstrap_admins`. Signing in and the role of an existing account do not depend on it.
 * Sites: a host's site is the Users page's assignment, else `site:` in config.yaml (proxmox / agents / systems),
   else (guests) its node's site. Power sources and UPSes follow the hosts they are attached to unless assigned.
   No site = admins only.
