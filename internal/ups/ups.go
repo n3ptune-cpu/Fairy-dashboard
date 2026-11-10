@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	upssrc "github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 )
 
 // Manager holds every UPS (polled by the panel or relayed by agents), their history and events.
@@ -36,6 +38,8 @@ type Manager struct {
 	events  []model.UpsEvent
 	seq     int
 	limiter upssrc.EventLimiter // events per UPS (shared with Fairy-agent: 10 per 10 minutes)
+	// unreadable: sources (a configured source's id, "agent:<id>") whose unreadable rows were already logged.
+	unreadable map[string]bool
 	// OnEvent is called (outside the lock) for every new event (notifications).
 	OnEvent func(model.UpsEvent)
 }
@@ -103,6 +107,41 @@ func clipP(p **string) {
 	}
 }
 
+// Messages of a UPS the panel knows but cannot read (it shows as stale with this error, then as unreachable).
+const (
+	errUnreadable = "the UPS reported a value that is not a number: its data cannot be read"
+	errMissing    = "the UPS is no longer in the UPS server's answer"
+)
+
+// numericField: the measured values of a UPS row.
+var numericField = map[string]bool{"battery_charge": true, "battery_runtime_s": true, "battery_voltage": true, "load_percent": true,
+	"watts": true, "nominal_w": true, "input_voltage": true, "output_voltage": true, "input_frequency": true}
+
+// sanitizeNumbers drops the values of a UPS state that cannot be right (L11): a charge outside 0-100 %, a
+// negative load or run time, readings that are not real numbers or absurd. It returns the names of the dropped
+// values, as the API calls them. A UPS that lies about its charge must not look healthy with that charge.
+func sanitizeNumbers(st *model.UpsState) (dropped []string) {
+	check := func(name string, p **float64, lo, hi float64) {
+		if *p != nil && normalise.Finite(*p, lo, hi) == nil {
+			*p = nil
+			dropped = append(dropped, name)
+		}
+	}
+	check("battery_charge", &st.BatteryCharge, 0, 100)
+	check("load_percent", &st.LoadPercent, 0, 10_000)
+	check("watts", &st.Watts, 0, normalise.MaxReading)
+	check("nominal_w", &st.NominalW, 0, normalise.MaxReading)
+	check("battery_voltage", &st.BatteryVoltage, -normalise.MaxReading, normalise.MaxReading)
+	check("input_voltage", &st.InputVoltage, -normalise.MaxReading, normalise.MaxReading)
+	check("output_voltage", &st.OutputVoltage, -normalise.MaxReading, normalise.MaxReading)
+	check("input_frequency", &st.InputFrequency, 0, normalise.MaxReading)
+	if r := st.BatteryRuntimeS; r != nil && (*r < 0 || *r > 1_000_000_000) {
+		st.BatteryRuntimeS = nil
+		dropped = append(dropped, "battery_runtime_s")
+	}
+	return dropped
+}
+
 // sanitize keeps a UPS state within what the page expects (see the limits above).
 func sanitize(st *model.UpsState) {
 	if !states[st.Status] {
@@ -125,6 +164,7 @@ func (m *Manager) apply(key string, row map[string]any, name string, via *string
 	now := time.Now().UTC()
 	prev := m.states[key]
 	st := &model.UpsState{}
+	var bad []string        // values that were sent but cannot be right
 	for k, v := range row { // field by field: a value of the wrong type is dropped, not half-set
 		if rowSkip[k] {
 			continue
@@ -140,6 +180,9 @@ func (m *Manager) apply(key string, row map[string]any, name string, via *string
 		}
 		b, err := json.Marshal(map[string]any{k: v})
 		if err != nil || json.Unmarshal(b, &model.UpsState{}) != nil {
+			if numericField[k] && v != nil { // "NaN" as a text, 1e300 seconds: a value was sent, and it is no number
+				bad = append(bad, k)
+			}
 			continue
 		}
 		_ = json.Unmarshal(b, st)
@@ -148,6 +191,11 @@ func (m *Manager) apply(key string, row map[string]any, name string, via *string
 	st.Status, _ = row["state"].(string)
 	sanitize(st)
 	st.Stale = false
+	if bad = append(bad, sanitizeNumbers(st)...); len(bad) > 0 { // visible on the card ("stale") and in the API
+		slices.Sort(bad) // the same text on every poll
+		st.Stale = true
+		st.Error = model.P("the UPS reported values that cannot be right; they are not shown: " + strings.Join(bad, ", "))
+	}
 	if st.Flags == nil {
 		st.Flags = []string{}
 	}
@@ -207,7 +255,13 @@ func (m *Manager) PollSource(ctx context.Context, c *upssrc.Source, timeout time
 		if len(rows) > MaxAgentUPS {
 			rows = rows[:MaxAgentUPS]
 		}
+		seen := map[string]bool{}
+		unreadable := 0
 		for _, row := range rows {
+			if len(row) == 0 { // the shared reader could not encode this UPS: one of its values is NaN or an infinity
+				unreadable++
+				continue
+			}
 			n, _ := row["name"].(string)
 			if !upsNameRe.MatchString(n) {
 				continue
@@ -218,8 +272,24 @@ func (m *Manager) PollSource(ctx context.Context, c *upssrc.Source, timeout time
 			} else if d, _ := row["description"].(string); d != "" {
 				label = d
 			}
+			seen[c.ID+"/"+n] = true
 			m.apply(c.ID+"/"+n, row, label, nil, c.Powers.For(n))
 		}
+		// A UPS the panel knows that is not in the answer (or is in it as a row that cannot be read) is not
+		// "still online with its last values": it fails like a UPS whose server stopped answering.
+		var lost []string
+		for _, k := range m.order {
+			if strings.HasPrefix(k, c.ID+"/") && !seen[k] {
+				lost = append(lost, k)
+			}
+		}
+		if msg := errMissing; len(lost) > 0 {
+			if unreadable > 0 {
+				msg = errUnreadable
+			}
+			m.fail(lost, msg)
+		}
+		m.noteUnreadable(c.ID, unreadable)
 	}
 	evs := m.newEvents(evBefore)
 	m.mu.Unlock()
@@ -308,7 +378,12 @@ func (m *Manager) UpdateFromAgent(agentID string, rows []map[string]any, unreach
 		if len(rows) > MaxAgentUPS {
 			rows = rows[:MaxAgentUPS]
 		}
+		unreadable := 0
 		for _, row := range rows {
+			if len(row) == 0 { // an entry that is not a UPS row: see AgentRows
+				unreadable++
+				continue
+			}
 			n, _ := row["name"].(string)
 			if !upsNameRe.MatchString(n) { // it becomes the UPS's id: plain NUT names only
 				continue
@@ -345,16 +420,54 @@ func (m *Manager) UpdateFromAgent(agentID string, rows []map[string]any, unreach
 			}
 			m.apply(key, row, label, model.P(agentID), p)
 		}
+		var lost []string
 		for _, k := range mine {
-			if !seen[k] { // agent no longer reports it (UPS removed / relay turned off)
+			switch {
+			case seen[k]:
+			case unreadable > 0: // it may be the one the agent could not read: failed and visible, not removed
+				lost = append(lost, k)
+			default: // agent no longer reports it (UPS removed / relay turned off)
 				delete(m.states, k)
 				m.order = slices.DeleteFunc(m.order, func(x string) bool { return x == k })
 			}
 		}
+		m.fail(lost, errUnreadable)
+		m.noteUnreadable("agent:"+agentID, unreadable)
 	}
 	evs := m.newEvents(evBefore)
 	m.mu.Unlock()
 	m.emit(evs)
+}
+
+// AgentRows is the `ups` list of an agent's /metrics as rows for UpdateFromAgent. An entry that is not an
+// object stays in the list as an empty row: an agent up to v0.5.3 answers null for a UPS one of whose values is
+// "NaN" or an infinity, and the panel must be able to tell that from a UPS that was removed.
+func AgentRows(v any) []map[string]any {
+	l, _ := v.([]any)
+	if len(l) > MaxAgentUPS {
+		l = l[:MaxAgentUPS]
+	}
+	out := make([]map[string]any, len(l))
+	for i, x := range l {
+		out[i], _ = x.(map[string]any)
+	}
+	return out
+}
+
+// noteUnreadable logs once per source (while it lasts) that it sends UPS rows that cannot be read. Caller holds
+// m.mu.
+func (m *Manager) noteUnreadable(source string, n int) {
+	switch {
+	case n == 0:
+		delete(m.unreadable, source)
+	case !m.unreadable[source]:
+		if m.unreadable == nil {
+			m.unreadable = map[string]bool{}
+		}
+		m.unreadable[source] = true
+		slog.Warn("UPS data that cannot be read (a value that is not a number); a UPS the panel knows shows as failed, "+
+			"one it has not seen yet cannot be shown", "source", source, "rows", n)
+	}
 }
 
 // Overview is GET /api/ups (with or without history).

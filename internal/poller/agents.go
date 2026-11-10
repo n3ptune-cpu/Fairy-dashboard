@@ -14,6 +14,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/ups"
 )
 
 // AgentByID returns the configured agent with this id.
@@ -138,7 +139,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	p.source(name, true, now, &lat, nil)
 	p.mu.Unlock()
 	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)
-	p.UPS.UpdateFromAgent(a.ID, jsonx.Objs(payload["ups"]), false, a.UPSPowers, a.UPSNames)
+	p.UPS.UpdateFromAgent(a.ID, ups.AgentRows(payload["ups"]), false, a.UPSPowers, a.UPSNames)
 	return 0
 }
 
