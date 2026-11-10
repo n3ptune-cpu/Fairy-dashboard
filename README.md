@@ -46,6 +46,10 @@ dependency. To change shared code, change it in Fairy-agent, tag a new version t
 `go get github.com/n3ptune-cpu/Fairy-agent@vX.Y.Z && go mod tidy`. The agent itself is built in its own
 repository (see its README).
 
+`go.mod` also has the line `godebug multipathtcp=0`: the panel does not use Multipath TCP, which Go otherwise
+switches on for listeners on Linux. `go version -m fairy` shows `DefaultGODEBUG=multipathtcp=0`. Fairy-agent's
+`go.mod` has the same line for the agent's programs; neither reaches the other's.
+
 ## Run
 
 ```sh
