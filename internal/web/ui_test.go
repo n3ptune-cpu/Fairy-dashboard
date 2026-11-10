@@ -69,3 +69,26 @@ func TestUIShowsErrorSystems(t *testing.T) {
 		t.Error("the systems list must not be filtered by status")
 	}
 }
+
+// L4 (UI side): the Users page marks an address Pocket ID did not verify, shows the account id of every row,
+// and names the account (id and mark) where a change is confirmed. Everything inserted goes through esc().
+func TestUIUsersPageShowsAccountIdentity(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const unverified = (u) => !!u?.email && u.email_verified !== true;`, // null ("not known") is not verified
+		`>unverified</span>`,
+		`id ${esc(u.sub)}</span>`,
+		`data-name="${esc(userIdent(u))}"`,
+		`if (t.value === "admin" && !confirm(`,
+		"for ${userIdent(u)}`",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	for _, raw := range []string{"`Role: ${ROLE_LABEL[t.value]}`", "`Sites for a viewer`", `data-name="${esc(u.email || u.name || u.sub)}"`, `${userIdent(u)}</`} {
+		if strings.Contains(js, raw) {
+			t.Errorf("app.js still has %q", raw)
+		}
+	}
+}

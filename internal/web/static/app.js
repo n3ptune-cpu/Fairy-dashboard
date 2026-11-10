@@ -1098,6 +1098,12 @@ async function loadAdmin() {
   if (current().page === "users") $("#page").innerHTML = `<div data-key="users">${pageUsers()}</div>`;
 }
 const ROLE_LABEL = { admin: "Admin", viewer: "Viewer", pending: "No access (waiting)" };
+// Name and e-mail are what the account claims at Pocket ID; only the account id (OIDC subject) is certain.
+// email_verified is true only when Pocket ID vouched for the address at the last sign-in (null = not known yet).
+const unverified = (u) => !!u?.email && u.email_verified !== true;
+const adminUser = (sub) => admin.data?.users.find((x) => x.sub === sub);
+// for confirm() texts and the action label (the label goes percent-encoded in X-Fairy-Action, see headerText)
+const userIdent = (u) => !u ? "this user" : `${u.email || u.name || u.sub}${unverified(u) ? " (unverified e-mail)" : ""}${u.email || u.name ? ` [id ${u.sub}]` : ""}`;
 const FROM_LABEL = { panel: "set here", config: "config.yaml", node: "from its node", link: "follows its hosts" };
 const KIND_TITLE = [["hosts", "Hosts", (t) => t.kind === "node" || t.kind === "agent"], ["guests", "VMs & containers", (t) => t.kind === "qemu" || t.kind === "lxc"],
   ["power", "Power sources", (t) => t.kind === "power"], ["ups", "UPS", (t) => t.kind === "ups"]];
@@ -1111,14 +1117,15 @@ function pageUsers() {
   const userRow = (u) => {
     const last = u.role === "admin" && admins <= 1;
     return `<tr class="row" data-key="u-${esc(u.sub)}"><td class="namecell"><b>${esc(u.name || "–")}</b>${u.you ? ' <span class="chip ok">you</span>' : ""}
-        <span class="sub">${esc(u.email || u.sub)}</span></td>
+        <span class="sub">${esc(u.email || u.sub)}${unverified(u) ? ' <span class="chip warn" title="Pocket ID did not verify this address (or this person last signed in before the panel recorded it). The owner of the account may have typed it in: go by the id below.">unverified</span>' : ""}</span>
+        ${u.email ? `<span class="sub" title="Account id (OIDC subject): the one part of this row the owner of the account cannot change">id ${esc(u.sub)}</span>` : ""}</td>
       <td><select class="select" data-act="u-role" data-sub="${esc(u.sub)}" ${last ? 'disabled title="The last admin cannot be demoted: make someone else admin first"' : ""}>
         ${d.roles.map((r) => `<option value="${esc(r)}" ${u.role === r ? "selected" : ""}>${esc(ROLE_LABEL[r] || r)}</option>`).join("")}</select></td>
       <td>${u.role === "admin" ? '<span class="note">every site</span>' : u.role === "pending" ? '<span class="note">nothing</span>'
         : sites.length ? `<div class="site-checks">${sites.map((x) => `<label class="check"><input type="checkbox" data-act="u-site" data-sub="${esc(u.sub)}" value="${esc(x)}" ${u.sites.includes(x) ? "checked" : ""}>${esc(x)}</label>`).join("")}</div>`
         : '<span class="note">create a site first</span>'}</td>
       <td class="nowrap"><span data-ago="${esc(u.last_seen || "")}">${ago(u.last_seen)}</span><div class="note">${esc(u.via || "")}</div></td>
-      <td class="num"><button class="btn danger" data-act="u-remove" data-sub="${esc(u.sub)}" data-name="${esc(u.email || u.name || u.sub)}" ${last ? "disabled" : ""}>Remove</button></td></tr>`;
+      <td class="num"><button class="btn danger" data-act="u-remove" data-sub="${esc(u.sub)}" data-name="${esc(userIdent(u))}" ${last ? "disabled" : ""}>Remove</button></td></tr>`;
   };
   const siteRow = (x) => `<tr class="row" data-key="s-${esc(x.name)}"><td><b>${esc(x.name)}</b>${x.in_config ? ' <span class="chip" title="named in config.yaml (site:): rename or remove it there">config.yaml</span>' : ""}</td>
     <td class="num">${esc(x.hosts)}</td><td class="num">${esc(x.users)}</td>
@@ -1163,10 +1170,12 @@ const checkedSites = (sub) => [...document.querySelectorAll(`input[data-act="u-s
 document.addEventListener("change", (e) => {
   const t = e.target, a = t.dataset?.act;
   if (a === "u-role") {
+    const u = adminUser(t.dataset.sub);
+    if (t.value === "admin" && !confirm(`Make ${userIdent(u)} an admin? An admin controls every host and manages the users.`)) { if (u) t.value = u.role; return; }
     const sites = t.value === "viewer" ? checkedSites(t.dataset.sub) : [];
-    adminCall(`Role: ${ROLE_LABEL[t.value]}`, "PUT", userPath(t.dataset.sub), { role: t.value, sites });
+    adminCall(`Role ${ROLE_LABEL[t.value] || t.value} for ${userIdent(u)}`, "PUT", userPath(t.dataset.sub), { role: t.value, sites });
   } else if (a === "u-site") {
-    adminCall(`Sites for a viewer`, "PUT", userPath(t.dataset.sub), { role: "viewer", sites: checkedSites(t.dataset.sub) });
+    adminCall(`Sites for ${userIdent(adminUser(t.dataset.sub))}`, "PUT", userPath(t.dataset.sub), { role: "viewer", sites: checkedSites(t.dataset.sub) });
   } else if (a === "a-site") {
     adminCall(t.value ? `Put ${t.dataset.target} in ${t.value}` : `${t.dataset.target}: default site`, "PUT", "/api/admin/assign", { target: t.dataset.target, site: t.value || null });
   }
