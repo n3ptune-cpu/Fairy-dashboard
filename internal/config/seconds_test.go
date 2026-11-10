@@ -27,6 +27,16 @@ func TestSessionTimingsAcceptSecondsAndDurations(t *testing.T) {
 		{"session_max_age: 1h\n", 3600, 3600},                                 // idle defaults to the whole session when that is shorter than 12 h
 		{"session_idle_timeout: 60\nsession_max_age: 300\n", 60, 300},         // the smallest values
 		{"session_idle_timeout: 7d\nsession_max_age: 7d\n", 7 * 86400, 7 * 86400},
+		// Upgrade in place: every way YAML writes a whole number loaded while these keys were integer fields
+		// (the release before S-h), so each must still load, with the same value.
+		{"session_idle_timeout: 43_200\nsession_max_age: 604_800\n", 43200, 604800},
+		{"session_idle_timeout: +43200\nsession_max_age: +604800\n", 43200, 604800},
+		{"session_idle_timeout: 43200.0\nsession_max_age: 604800.0\n", 43200, 604800},
+		{"session_idle_timeout: 4.32e4\nsession_max_age: 6.048e5\n", 43200, 604800},
+		{"session_idle_timeout: 0xA8C0\nsession_max_age: 0x93A80\n", 43200, 604800},
+		{"session_idle_timeout: 0o124300\n", 43200, 7 * 86400},
+		{"session_idle_timeout: 1e3\n", 1000, 7 * 86400},
+		{"session_idle_timeout: 0x3c\n", 60, 7 * 86400},
 	} {
 		p, err := Parse([]byte(base + c.yaml))
 		if err != nil {
@@ -57,8 +67,13 @@ func TestSessionTimingsRefuseNonsense(t *testing.T) {
 		"session_idle_timeout: 1.0000001s\n":                  "whole number of seconds",
 		"session_idle_timeout: true\n":                        "not a length of time",
 		"session_idle_timeout: [1, 2]\n":                      "must be one value",
-		"session_idle_timeout: 1e3\n":                         "not a length of time",
-		"session_idle_timeout: 0x3c\n":                        "not a length of time",
+		"session_idle_timeout: 43200.5\n":                     "not a length of time",
+		"session_idle_timeout: 1e-3\n":                        "not a length of time",
+		"session_idle_timeout: -0x3c\n":                       "must not be negative",
+		"session_idle_timeout: -43200.0\n":                    "must not be negative",
+		"session_idle_timeout: .inf\n":                        "not a length of time",
+		"session_idle_timeout: .nan\n":                        "not a length of time",
+		"session_max_age: 1e12\n":                             "ten years",
 		"session_max_age: 99999999999999999999\n":             "ten years",
 		"session_max_age: 100000d\n":                          "ten years",
 		"session_idle_timeout: 59\n":                          "at least 60 s",

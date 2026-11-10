@@ -9,9 +9,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Seconds is a length of time in whole seconds (the session timings). In config.yaml it is a plain integer, as
-// it always was (session_idle_timeout: 43200), or a text with units: 90s, 30m, 4h, 1d, 1h30m, 1.5h. The rest of
-// the program reads it as a number of seconds.
+// Seconds is a length of time in whole seconds (the session timings). In config.yaml it is a whole number, as
+// it always was (session_idle_timeout: 43200, in any form YAML has for one), or a text with units: 90s, 30m,
+// 4h, 1d, 1h30m, 1.5h. The rest of the program reads it as a number of seconds.
 type Seconds int
 
 // maxSeconds bounds what can be written (ten years), so nothing downstream can overflow.
@@ -80,6 +80,23 @@ func (s *Seconds) UnmarshalYAML(n *yaml.Node) error {
 	}
 	if n.Tag == "!!null" {
 		*s = 0
+		return nil
+	}
+	// Until now these keys were plain integer fields, and a config.yaml written for that must keep loading
+	// after an upgrade: besides 43200 that is every other way YAML writes a whole number (604_800, +604800,
+	// 0x93A80, 604800.0, 6.048e5). Whatever the old field took is taken first, the same way, with two
+	// exceptions that loaded then and are refused now: a negative number, and a fraction (it was cut off).
+	var whole int64
+	var exact float64
+	if n.Decode(&whole) == nil && (n.Decode(&exact) != nil || exact == float64(whole)) {
+		switch {
+		case whole < 0:
+			_, err := ParseSeconds("-")
+			return fmt.Errorf("line %d: %q: %w", n.Line, n.Value, err)
+		case whole > maxSeconds:
+			return fmt.Errorf("line %d: %q is not a length of time (it is longer than ten years)", n.Line, n.Value)
+		}
+		*s = Seconds(whole)
 		return nil
 	}
 	v, err := ParseSeconds(n.Value)
