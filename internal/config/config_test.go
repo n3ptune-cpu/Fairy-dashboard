@@ -25,6 +25,15 @@ func TestParseDefaultsAndProxmoxForms(t *testing.T) {
 	if c, err := Parse([]byte(base + `enroll: {agent_release: build-9}`)); err != nil || c.Enroll.AgentRelease != "build-9" {
 		t.Fatal(err)
 	}
+	if c.Enroll.AllowNonTailscale {
+		t.Fatal("Add host outside Tailscale must be off unless config.yaml says so")
+	}
+	if c, err := Parse([]byte(base + `enroll: {allow_non_tailscale: true}`)); err != nil || !c.Enroll.AllowNonTailscale {
+		t.Fatal(err)
+	}
+	if _, err := Parse([]byte(base + `enroll: {allow_non_tailscale: maybe}`)); err == nil {
+		t.Fatal("allow_non_tailscale takes true or false only")
+	}
 	c, err = Parse([]byte(base + `proxmox: [{id: straw, urls: ["https://a:8006"], token_id: "x@pve!y"}]`))
 	if err != nil || c.Proxmox[0].Prefix() != "straw-" {
 		t.Fatal(err)

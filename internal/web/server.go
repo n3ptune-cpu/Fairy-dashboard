@@ -128,6 +128,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	// No release key here: cmd/fairy sets the real one (a build without it cannot check the install script).
 	s.Enroll = enrollment.New(s.Managed, s.enrollHooks(), addr, enrollment.PinnedVerifier(cfg.Updates.AgentRepo, cfg.Enroll.AgentRelease, nil))
 	s.Enroll.PanelSource, s.Enroll.PanelVia = src, via
+	s.Enroll.AllowNonTailscale = cfg.Enroll.AllowNonTailscale
 	if err := s.Access.EnsureSites(cfg.Sites()); err != nil { // sites named in config.yaml exist on the Users page
 		slog.Error("users.json write failed", "error", err)
 	}

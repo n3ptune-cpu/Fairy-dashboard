@@ -233,6 +233,10 @@ type Enroll struct {
 	// default the release this panel was built against. Either way the panel checks the script with its
 	// release key before it shows a command.
 	AgentRelease string `yaml:"agent_release"`
+	// AllowNonTailscale lets Add host and Re-pair pair with a machine at an address outside Tailscale's ranges
+	// (100.64.0.0/10, fd7a:115c:a1e0::/48). Off by default: over Tailscale nobody outside the machine can listen
+	// to the pairing or answer in its place; on another network the panel cannot know that.
+	AllowNonTailscale bool `yaml:"allow_non_tailscale"`
 }
 
 // Intervals are the default polling intervals in seconds (each 1-300).

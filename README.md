@@ -197,6 +197,14 @@ Re-pair is checked like a new host's, against everything else the panel has: an 
 another host or Proxmox node is refused and the host stays as it was. A host that is its own Proxmox node must
 answer with the node name it was added as, unless **The node was renamed** is ticked in the Re-pair dialog.
 
+Add host and Re-pair only pair over Tailscale. An address outside 100.64.0.0/10 and fd7a:115c:a1e0::/48 is
+refused in the dialog, and a name is checked every time the panel connects to it: when it leads anywhere else
+(the local network, a stale record), no connection is opened and the dialog says where the name leads. Over
+Tailscale the path is encrypted and addresses are authenticated, so nobody outside the machine can listen to
+the pairing or answer in its place. `enroll: {allow_non_tailscale: true}` in config.yaml switches the check
+off for machines that are only reachable over another network. The check covers pairing; after it the panel
+polls the host at the same name, with its tokens, like every agent in config.yaml.
+
 `enroll: {panel_address: 100.x.y.z}` in config.yaml is the address the command gives the agent. It is optional:
 without it the panel finds its own Tailscale address at start (logged once as `Add host: panel address`, and
 shown in the Add host dialog as "Panel address: 100.x.y.z (auto)"): the 100.64.0.0/10 address of an interface

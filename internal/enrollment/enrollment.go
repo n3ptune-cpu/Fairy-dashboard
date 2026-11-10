@@ -128,6 +128,9 @@ type Manager struct {
 	// Scripts checks the pinned Fairy-agent release's install scripts (signed SHA256SUMS) before any command
 	// is shown; nil or a failing check refuses Add host / Re-pair.
 	Scripts ScriptSource
+	// AllowNonTailscale (enroll.allow_non_tailscale in config.yaml) lets Add host and Re-pair pair with a
+	// machine at an address outside Tailscale's ranges. Off by default: see tailnet.go.
+	AllowNonTailscale bool
 
 	mu       sync.Mutex
 	items    map[string]*Enrollment
@@ -136,8 +139,21 @@ type Manager struct {
 
 // New builds a manager with the real HTTP pairing call. scripts checks the install scripts (see Verifier).
 func New(store *managed.Store, hooks Hooks, panelAddr string, scripts ScriptSource) *Manager {
-	return &Manager{Store: store, Hooks: hooks, Pair: HTTPPair, Now: time.Now, Interval: 3 * time.Second,
+	m := &Manager{Store: store, Hooks: hooks, Now: time.Now, Interval: 3 * time.Second,
 		OnlineWait: 90 * time.Second, PanelAddr: panelAddr, Scripts: scripts, items: map[string]*Enrollment{}}
+	m.Pair = func(ctx context.Context, url, proof string) (int, enroll.Response, string, error) {
+		return httpPair(ctx, m.pairClient(), url, proof)
+	}
+	return m
+}
+
+// pairClient is the client of this manager's pairing requests: to Tailscale addresses only, unless the
+// configuration allows others.
+func (m *Manager) pairClient() *http.Client {
+	if m.AllowNonTailscale {
+		return pairClientAny
+	}
+	return pairClientTailnet
 }
 
 var (
@@ -245,6 +261,10 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 	}
 	if a, err := netip.ParseAddr(m.PanelAddr); err != nil || !a.Is4() {
 		return Created{}, invalid("the panel only found a Tailscale IPv6 address (%s), and agents pair over IPv4 only: give this machine a Tailscale IPv4 or set enroll: {panel_address: 100.x.y.z} in config.yaml", m.PanelAddr)
+	}
+	if a := literalOutsideTailscale(h.URL); a != "" && !m.AllowNonTailscale {
+		return Created{}, invalid("%s is not a Tailscale address (100.64.0.0/10 or fd7a:115c:a1e0::/48). The panel pairs over Tailscale only: "+
+			"give the machine's Tailscale name or address, or set enroll: {allow_non_tailscale: true} in config.yaml to pair over another network", a)
 	}
 	cfg := m.Hooks.Config()
 	if existing == nil {
@@ -549,10 +569,14 @@ func (m *Manager) run(ctx context.Context, e *Enrollment) {
 		actx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		status, resp, code, err := m.Pair(actx, e.URL, e.proof)
 		cancel()
+		var elsewhere *NotTailscale
 		switch {
 		case err == nil && status == 200:
 			m.paired(e, resp)
 			return
+		case errors.As(err, &elsewhere):
+			m.set(e, Waiting, "not contacted: "+hostOf(e.URL)+" leads to "+elsewhere.Addr+", which is not a Tailscale address. The panel pairs over Tailscale only "+
+				"(to pair over another network: enroll: {allow_non_tailscale: true} in config.yaml)", false)
 		case err != nil:
 			m.set(e, Waiting, "waiting for the machine ("+devices.Describe(err)+")", false)
 		case status == 404:
@@ -720,9 +744,21 @@ func clip(s string, n int) string {
 	return s
 }
 
-// HTTPPair is POST <url>/pair {"proof"} (never through a proxy, like every agent request). It returns the
-// status, the answer on 200, and the agent's error code otherwise.
+// hostOf is the host part of a host URL, for messages.
+func hostOf(hostURL string) string {
+	if u, err := url.Parse(hostURL); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return hostURL
+}
+
+// HTTPPair is POST <url>/pair {"proof"} to a Tailscale address (see tailnet.go; never through a proxy, like
+// every agent request). It returns the status, the answer on 200, and the agent's error code otherwise.
 func HTTPPair(ctx context.Context, url, proof string) (int, enroll.Response, string, error) {
+	return httpPair(ctx, pairClientTailnet, url, proof)
+}
+
+func httpPair(ctx context.Context, client *http.Client, url, proof string) (int, enroll.Response, string, error) {
 	var resp enroll.Response
 	b, _ := json.Marshal(enroll.Request{Proof: proof})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(url, "/")+enroll.Path, bytes.NewReader(b))
@@ -730,7 +766,7 @@ func HTTPPair(ctx context.Context, url, proof string) (int, enroll.Response, str
 		return 0, resp, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	r, err := pairClient.Do(req)
+	r, err := client.Do(req)
 	if err != nil {
 		return 0, resp, "", err
 	}
@@ -751,8 +787,6 @@ func HTTPPair(ctx context.Context, url, proof string) (int, enroll.Response, str
 	}
 	return 200, resp, "", nil
 }
-
-var pairClient = devices.LANClient(0)
 
 // KnownMAC normalises MAC text from the dialog ("aa-bb-..", spaces, commas).
 func KnownMAC(list string) []string {

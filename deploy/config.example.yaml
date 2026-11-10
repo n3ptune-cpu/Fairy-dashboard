@@ -94,6 +94,9 @@ agents:
 #   agent_release: build-13               # optional: the Fairy-agent release whose install script the command
 #                                         # runs (default: the one this panel was built with); always checked
 #                                         # against the signed SHA256SUMS with the panel's release key first
+#   allow_non_tailscale: false            # Add host / Re-pair only pair with a machine at a Tailscale address
+#                                         # (100.64.0.0/10, fd7a:115c:a1e0::/48): there nobody outside the machine
+#                                         # can listen in or answer in its place. true = also over other networks
 
 systems: []
   # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming], site: Straw}
