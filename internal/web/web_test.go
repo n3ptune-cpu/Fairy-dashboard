@@ -532,12 +532,12 @@ func TestAnonymousAuditEntriesAreThrottled(t *testing.T) {
 	if n := count("auth.token_rejected"); n != anonPerIP+1 {
 		t.Fatal("next minute logs again", n)
 	}
-	// signed-in actions are never throttled
+	// a signed-in user's refused requests have their own budget, per subject (auditthrottle_test.go)
 	c := e.cookie(controller(), 0)
 	for i := 0; i < 30; i++ {
 		e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, "Cookie", c)
 	}
-	if n := count("auth.denied"); n != 30 {
+	if n := count("auth.denied"); n != deniedPerSub {
 		t.Fatal("authenticated entries", n)
 	}
 }
