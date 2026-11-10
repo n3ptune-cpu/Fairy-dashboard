@@ -12,11 +12,81 @@ import (
 
 var tagSplit = regexp.MustCompile(`[;,\s]+`)
 
+// Limits for what one Proxmox API may put into the panel (N1). A Proxmox API is not more trusted than an agent:
+// a machine added with Add host as "a new Proxmox node" hands the panel its own API address, token, CA and
+// certificate name, so whoever controls that machine controls what this API answers. Its answer is kept in
+// memory, copied into every snapshot and sent to every open page, like an agent's, and it lists as many
+// systems as it likes. So one source gets:
+//
+//   - at most MaxProxmoxNodes nodes. Proxmox VE clusters are built on corosync, which Proxmox supports up to
+//     32 nodes; larger ones exist on enterprise hardware. 64 is twice the supported size.
+//   - at most MaxProxmoxGuests VMs and containers. Proxmox sets no limit; a homelab cluster has tens to a few
+//     hundred. 2000 leaves a wide margin and costs the panel about 6 MiB per source.
+//   - the same text limits as an agent's answer (name, node, tags).
+//
+// What is over a limit is left out (the first rows are kept) and the panel logs it once while it lasts.
+const (
+	MaxProxmoxNodes  = 64
+	MaxProxmoxGuests = 2000
+
+	maxPVETags    = 32   // tags of one guest
+	maxPVETagsRaw = 4096 // bytes of the tags text that are looked at
+)
+
+// ProxmoxLimit decides, row by row, which rows of one cluster/resources answer the panel takes. The zero value
+// is ready; IncludeTemplates is the cluster's setting (a template that is not shown does not count).
+type ProxmoxLimit struct {
+	IncludeTemplates            bool
+	nodes, guests               int
+	DroppedNodes, DroppedGuests int // rows left out because their kind's limit was reached
+}
+
+// Take reports whether a row of this type is taken: nodes and guests up to their limits, nothing else
+// (storage, pools and networks are not systems), and no template unless IncludeTemplates.
+func (l *ProxmoxLimit) Take(typ string, template bool) bool {
+	switch typ {
+	case "node":
+		if l.nodes >= MaxProxmoxNodes {
+			l.DroppedNodes++
+			return false
+		}
+		l.nodes++
+		return true
+	case "qemu", "lxc":
+		if template && !l.IncludeTemplates {
+			return false
+		}
+		if l.guests >= MaxProxmoxGuests {
+			l.DroppedGuests++
+			return false
+		}
+		l.guests++
+		return true
+	}
+	return false
+}
+
+// LimitProxmoxRows applies a ProxmoxLimit to rows that are already decoded and returns the rows that are
+// taken, with what was left out.
+func LimitProxmoxRows(rows []jsonx.M, includeTemplates bool) ([]jsonx.M, ProxmoxLimit) {
+	l := ProxmoxLimit{IncludeTemplates: includeTemplates}
+	out := rows[:0:0]
+	for _, r := range rows {
+		if l.Take(jsonx.S(r, "type"), jsonx.Truthy(r["template"])) {
+			out = append(out, r)
+		}
+	}
+	return out, l
+}
+
 func splitTags(raw string) []string {
 	out := []string{}
+	if len(raw) > maxPVETagsRaw {
+		raw = raw[:maxPVETagsRaw]
+	}
 	for _, t := range tagSplit.Split(raw, -1) {
-		if t != "" {
-			out = append(out, t)
+		if t != "" && len(out) < maxPVETags {
+			out = append(out, ClipText(strings.ToValidUTF8(t, ""), maxShort))
 		}
 	}
 	return out
@@ -65,6 +135,7 @@ func NormaliseProxmox(resources []jsonx.M, now time.Time, ts float64, rates *Rat
 			if node == "" {
 				node = strings.TrimPrefix(jsonx.S(r, "id"), "node/")
 			}
+			node = ClipText(node, maxName)
 			status = "offline"
 			if statusRaw == "online" {
 				status = "online"
@@ -80,11 +151,11 @@ func NormaliseProxmox(resources []jsonx.M, now time.Time, ts float64, rates *Rat
 				status = "offline" // "unknown" when its node is down
 			}
 			sid = fmt.Sprintf("%s%s-%d", o.Prefix, rtype, v)
-			name = jsonx.S(r, "name")
+			name = ClipText(jsonx.S(r, "name"), maxLong)
 			if name == "" {
 				name = fmt.Sprintf("%s %d", rtype, v)
 			}
-			parent = jsonx.Str(r, "node")
+			parent = clipP(jsonx.Str(r, "node"), maxName)
 		}
 		live := status == "online"
 		var rx, tx *float64

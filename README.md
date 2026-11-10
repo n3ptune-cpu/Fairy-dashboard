@@ -581,6 +581,13 @@ session settings as whole seconds).
   you use it.
 * Live updates: at most 8 open Fairy tabs (live-update connections) per user or API token, 200 for the whole
   panel. One more answers "too many live-update connections": close another tab.
+* What one Proxmox API may put into the panel is limited like an agent's answer, because a node added with Add
+  host supplies its own API address, token and CA: 4 MiB for the list of the cluster (256 KiB for every other
+  answer, 64 KiB of headers), at most **64 nodes** and **2000 VMs and containers** per `proxmox:` entry or added
+  node (Proxmox supports clusters of up to 32 nodes; a template that is not shown does not count), names and
+  tags cut like an agent's, two CPU-model requests at a time per cluster. A cluster that lists more is shown up
+  to the limit (the first rows) and the panel's log says so once: "the Proxmox API lists more than the panel
+  takes from one source". Nothing is kept for a guest or node that is no longer listed.
 * Memory: `deploy/fairy.service` sets `MemoryMax=512M`. `fairy update` never replaces the unit file, so an
   older install gets this line by hand, once (see [Upgrading to this release](#upgrading-to-this-release)).
 * See `SECURITY-FIXES.md` for the 2026-11 review fixes and what to configure.

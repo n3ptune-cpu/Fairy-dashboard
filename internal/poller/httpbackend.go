@@ -1,6 +1,7 @@
 package poller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -83,6 +84,9 @@ func (b *httpBackend) SetProxmox(c config.Proxmox) error {
 	}
 	cl := devices.TLSClient(0, tc)
 	cl.CheckRedirect = noRedirect
+	if tr, ok := cl.Transport.(*http.Transport); ok {
+		tr.MaxResponseHeaderBytes = maxProxmoxHeader // net/http's default would take 10 MiB of headers
+	}
 	b.pveMu.Lock()
 	defer b.pveMu.Unlock()
 	b.pve[c.ID], b.pveSecrets[c.ID] = cl, secret
@@ -115,13 +119,32 @@ func (b *httpBackend) pveClient(id string) (*http.Client, string, string) {
 }
 
 // How much of an answer the panel reads. An agent is a machine the panel does not control: its answers (a
-// /metrics report is a few KiB, the process list at most 200 rows) get 1 MiB. Proxmox's cluster/resources lists
-// every guest of the cluster and keeps the larger limit. A longer answer is refused as "invalid response", never
-// read to its end.
+// /metrics report is a few KiB, the process list at most 200 rows) get 1 MiB. A Proxmox API is not more
+// trusted than that (N1: a node added in the panel supplies its own API address, token and CA), so it gets
+// limits of the same kind: cluster/resources, which lists every node, guest and storage of the cluster, 4 MiB
+// (a row is 300 to 600 bytes: several thousand rows, far more than the rows the panel takes, see
+// normalise.MaxProxmoxNodes / MaxProxmoxGuests), every other answer (a node's status, a power request) 256
+// KiB, and 64 KiB of headers. A longer answer is refused as "invalid response", never read to its end.
 const (
-	maxAgentBody   = 1 << 20
-	maxProxmoxBody = 32 << 20
+	maxAgentBody      = 1 << 20
+	maxProxmoxBody    = 4 << 20
+	maxProxmoxSmall   = 256 << 10
+	maxProxmoxHeader  = 64 << 10
+	maxErrorBody      = 64 << 10 // how much of an answer with an error status is parsed for its message
+	maxParallelDecode = 2        // answers decoded into generic JSON at the same time (see decodeJSON)
 )
+
+// decodeGate bounds how many answers are decoded into generic JSON at once. Decoding costs many times the
+// size of the answer while it runs (1 MiB of "{},{},{}..." is about 60 MiB of small maps), so several machines
+// answering their largest allowed body in the same second must not add up; they take turns instead, and a turn
+// lasts milliseconds.
+var decodeGate = make(chan struct{}, maxParallelDecode)
+
+func decodeJSON(body []byte, v any) error {
+	decodeGate <- struct{}{}
+	defer func() { <-decodeGate }()
+	return json.Unmarshal(body, v)
+}
 
 // readBody reads at most max bytes of an answer; ok is false when the answer is longer.
 func readBody(r io.Reader, max int64) (body []byte, ok bool, err error) {
@@ -160,18 +183,175 @@ func getJSON(ctx context.Context, c *http.Client, u string, hdr map[string]strin
 		return nil, resp.StatusCode, devices.Errf("invalid response")
 	}
 	if resp.StatusCode >= 400 {
-		_ = json.Unmarshal(body, &out)
+		if len(body) <= maxErrorBody {
+			_ = decodeJSON(body, &out)
+		}
 		return out, resp.StatusCode, &devices.HTTPStatusError{Code: resp.StatusCode}
 	}
 	if resp.StatusCode >= 300 { // a redirect is not followed, and it is not an answer either
 		return nil, resp.StatusCode, &devices.HTTPStatusError{Code: resp.StatusCode}
 	}
 	if len(body) > 0 {
-		if err := json.Unmarshal(body, &out); err != nil {
+		if err := decodeJSON(body, &out); err != nil {
 			return nil, resp.StatusCode, devices.Errf("invalid response")
 		}
 	}
 	return out, resp.StatusCode, nil
+}
+
+// getBody is getJSON without the decoding: the answer's bytes (at most maxBody), for an answer that is decoded
+// row by row.
+func getBody(ctx context.Context, c *http.Client, u string, hdr map[string]string, timeout time.Duration, maxBody int64) ([]byte, error) {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, devices.Errf("invalid url")
+	}
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 { // an error, or a redirect (not followed): its body is not read
+		return nil, &devices.HTTPStatusError{Code: resp.StatusCode}
+	}
+	body, fits, err := readBody(resp.Body, maxBody)
+	if err != nil {
+		return nil, err
+	}
+	if !fits {
+		return nil, devices.Errf("invalid response")
+	}
+	return body, nil
+}
+
+// pveRow is one row of cluster/resources: the fields the panel uses, each as raw JSON. Everything else in a
+// row is skipped by the decoder without being built, and a field that is not a plain value (a list or an
+// object where a name or a number belongs) is dropped: a row costs what its used values cost, whatever else
+// the API puts into it.
+type pveRow struct {
+	Type     json.RawMessage `json:"type"`
+	Node     json.RawMessage `json:"node"`
+	ID       json.RawMessage `json:"id"`
+	Name     json.RawMessage `json:"name"`
+	Status   json.RawMessage `json:"status"`
+	Tags     json.RawMessage `json:"tags"`
+	VMID     json.RawMessage `json:"vmid"`
+	Template json.RawMessage `json:"template"`
+	CPU      json.RawMessage `json:"cpu"`
+	MaxCPU   json.RawMessage `json:"maxcpu"`
+	Mem      json.RawMessage `json:"mem"`
+	MaxMem   json.RawMessage `json:"maxmem"`
+	Disk     json.RawMessage `json:"disk"`
+	MaxDisk  json.RawMessage `json:"maxdisk"`
+	NetIn    json.RawMessage `json:"netin"`
+	NetOut   json.RawMessage `json:"netout"`
+	Uptime   json.RawMessage `json:"uptime"`
+}
+
+// maxPVEText is how much of a text field of a row is kept at this stage (the normaliser cuts each to its own,
+// shorter limit).
+const maxPVEText = 8 << 10
+
+// plain is a raw JSON value as a plain value: a text (cut to maxPVEText), a number, a bool; nil for null, a
+// list, an object or anything that does not parse.
+func plain(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	switch raw[0] {
+	case '"':
+		var v string
+		if json.Unmarshal(raw, &v) != nil {
+			return nil
+		}
+		return normalise.ClipText(v, maxPVEText)
+	case 't', 'f':
+		var v bool
+		if json.Unmarshal(raw, &v) != nil {
+			return nil
+		}
+		return v
+	case '[', '{', 'n':
+		return nil
+	}
+	var v float64
+	if json.Unmarshal(raw, &v) != nil {
+		return nil
+	}
+	return v
+}
+
+func (r pveRow) fields() jsonx.M {
+	m := jsonx.M{}
+	for k, raw := range map[string]json.RawMessage{"type": r.Type, "node": r.Node, "id": r.ID, "name": r.Name, "status": r.Status,
+		"tags": r.Tags, "vmid": r.VMID, "template": r.Template, "cpu": r.CPU, "maxcpu": r.MaxCPU, "mem": r.Mem, "maxmem": r.MaxMem,
+		"disk": r.Disk, "maxdisk": r.MaxDisk, "netin": r.NetIn, "netout": r.NetOut, "uptime": r.Uptime} {
+		if v := plain(raw); v != nil {
+			m[k] = v
+		}
+	}
+	return m
+}
+
+// decodePVEResources reads a cluster/resources answer ({"data": [row, ...]}) row by row and returns the rows
+// the panel takes (limit decides: nodes and guests up to their limits). The answer is never decoded as a
+// whole: what stays in memory is the taken rows with their used fields, and a row that is not taken costs
+// nothing.
+func decodePVEResources(body []byte, limit *normalise.ProxmoxLimit) ([]jsonx.M, error) {
+	bad := devices.Errf("invalid response")
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, bad
+	}
+	var rows []jsonx.M
+	found := false
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return nil, bad
+		}
+		if key != "data" || found {
+			var skip json.RawMessage
+			if dec.Decode(&skip) != nil {
+				return nil, bad
+			}
+			continue
+		}
+		found = true
+		if t, err := dec.Token(); err != nil || t != json.Delim('[') {
+			return nil, bad
+		}
+		for dec.More() {
+			var r pveRow
+			if dec.Decode(&r) != nil {
+				return nil, bad
+			}
+			typ, _ := plain(r.Type).(string)
+			tmpl := jsonx.Truthy(plain(r.Template))
+			if limit.Take(typ, tmpl) {
+				rows = append(rows, r.fields())
+			}
+		}
+		if t, err := dec.Token(); err != nil || t != json.Delim(']') {
+			return nil, bad
+		}
+	}
+	if t, err := dec.Token(); err != nil || t != json.Delim('}') || !found {
+		return nil, bad
+	}
+	if _, err := dec.Token(); err != io.EOF { // one JSON document, nothing after it
+		return nil, bad
+	}
+	return rows, nil
 }
 
 func (b *httpBackend) pveAuth(c config.Proxmox) map[string]string {
@@ -186,17 +366,19 @@ func (b *httpBackend) FetchProxmox(ctx context.Context, pve config.Proxmox, time
 		return nil, errors.New("proxmox " + pve.ID + " is not configured")
 	}
 	for _, base := range pve.URLs { // failover across cluster nodes
-		d, _, err := getJSON(ctx, cl, strings.TrimRight(base, "/")+"/api2/json/cluster/resources", b.pveAuth(pve), timeout, maxProxmoxBody)
+		body, err := getBody(ctx, cl, strings.TrimRight(base, "/")+"/api2/json/cluster/resources", b.pveAuth(pve), timeout, maxProxmoxBody)
 		if err != nil {
 			last = err
 			continue
 		}
-		rows, ok := d["data"].([]any)
-		if !ok {
-			last = devices.Errf("invalid response")
+		limit := normalise.ProxmoxLimit{IncludeTemplates: pve.IncludeTemplates}
+		rows, err := decodePVEResources(body, &limit)
+		if err != nil {
+			last = err
 			continue
 		}
-		return jsonx.Objs(rows), nil
+		b.p.noteProxmoxLimit(pve.ID, limit)
+		return rows, nil
 	}
 	return nil, last
 }
@@ -207,7 +389,7 @@ func (b *httpBackend) FetchNodeStatus(ctx context.Context, pve config.Proxmox, n
 	if cl == nil {
 		return nil, errors.New("proxmox " + pve.ID + " is not configured")
 	}
-	d, _, err := getJSON(ctx, cl, u, b.pveAuth(pve), 0, maxProxmoxBody)
+	d, _, err := getJSON(ctx, cl, u, b.pveAuth(pve), 0, maxProxmoxSmall)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +432,7 @@ func (b *httpBackend) PVEPower(ctx context.Context, clusterID, path string, data
 			last = devices.Describe(err)
 			continue
 		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProxmoxSmall))
 		resp.Body.Close()
 		cancel()
 		if resp.StatusCode == 403 { // Proxmox answered: 424, not 502 (see apierr.Upstream)
@@ -260,7 +442,7 @@ func (b *httpBackend) PVEPower(ctx context.Context, clusterID, path string, data
 			return nil, apierr.Errf(apierr.Upstream, "proxmox: http %d", resp.StatusCode)
 		}
 		var out jsonx.M
-		_ = json.Unmarshal(body, &out)
+		_ = decodeJSON(body, &out)
 		return out["data"], nil
 	}
 	return nil, apierr.New(502, "proxmox: "+last)
@@ -430,7 +612,7 @@ func (b *httpBackend) AgentRequest(ctx context.Context, a config.Agent, method, 
 	}
 	out := jsonx.M{}
 	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &out); err != nil {
+		if err := decodeJSON(raw, &out); err != nil {
 			return resp.StatusCode, nil, devices.Errf("invalid response")
 		}
 	}

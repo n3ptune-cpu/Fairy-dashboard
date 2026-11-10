@@ -56,3 +56,20 @@ func (r *RateTracker) Update(key string, ts float64, rx, tx *int64, holdS float6
 	r.last[key] = out
 	return out[0], out[1]
 }
+
+// Forget drops what the tracker keeps for these keys (systems that no longer exist).
+func (r *RateTracker) Forget(keys ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, k := range keys {
+		delete(r.prev, k)
+		delete(r.last, k)
+	}
+}
+
+// Len is how many keys the tracker holds (for tests).
+func (r *RateTracker) Len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.prev)
+}

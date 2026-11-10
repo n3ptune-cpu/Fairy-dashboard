@@ -74,7 +74,9 @@ type Poller struct {
 	agentPower    map[string]*model.ComponentPower
 	pveRefs       map[string]pveRef
 	nodeCPU       map[string]string
-	nodeInflight  map[string]bool
+	nodeInflight  map[string]string // node system id -> its cluster, while its CPU model is being fetched
+	limitMu       sync.Mutex
+	pveOverLimit  map[string]bool // clusters whose last answer listed more than the panel takes (logged once)
 	pending       map[string]pendingNote
 	asleep        map[string]time.Time // system id -> when the panel's sleep takes effect (see NoteSleep)
 	clusterIDs    map[string][]string
@@ -98,7 +100,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 		overrides: map[string]*config.SystemOverride{}, agents: map[string]config.Agent{},
 		clusters: map[string]config.Proxmox{}, systems: map[string]model.System{},
 		sources: map[string]model.SourceStatus{}, agentPower: map[string]*model.ComponentPower{},
-		pveRefs: map[string]pveRef{}, nodeCPU: map[string]string{}, nodeInflight: map[string]bool{},
+		pveRefs: map[string]pveRef{}, nodeCPU: map[string]string{}, nodeInflight: map[string]string{}, pveOverLimit: map[string]bool{},
 		pending: map[string]pendingNote{}, asleep: map[string]time.Time{}, clusterIDs: map[string][]string{}, fingerprints: map[string]uint64{},
 		agentFailures: map[string]int{}, agentInfo: map[string]AgentInfo{}, helperSeen: map[string]map[string]time.Time{}, snapVer: -1, snapJSONVer: -1,
 		stateVersion: -1, StartedAt: time.Now().UTC(), present: map[string]bool{}}
@@ -320,12 +322,18 @@ func (p *Poller) RemoveProxmox(id string) {
 	p.idsMu.Lock()
 	delete(p.clusterIDs, id)
 	p.idsMu.Unlock()
+	p.limitMu.Lock()
+	delete(p.pveOverLimit, id)
+	p.limitMu.Unlock()
 	p.mu.Lock()
+	var gone []string
 	for sid, s := range p.systems {
 		if s.Source == "proxmox" && model.Deref(s.ClusterID) == id {
 			delete(p.systems, sid)
+			gone = append(gone, sid)
 		}
 	}
+	p.forgetSystemsLocked(gone)
 	for ref, r := range p.pveRefs {
 		if r.Cluster == id {
 			delete(p.pveRefs, ref)
