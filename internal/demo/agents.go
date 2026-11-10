@@ -35,9 +35,9 @@ func agentMetrics(id string) (map[string]any, error) {
 	}
 	feat := m["features"].(map[string]any)
 	switch id {
-	case "nsx-cyrene":
+	case "srv-tower":
 		g := gpuRow("NVIDIA GeForce RTX 2080 SUPER", 3, 85, 8, 18, 210, 38, 72, 0)
-		set(map[string]any{"hostname": "NSX-CYRENE", "uptime_s": int64(86400*6 + t),
+		set(map[string]any{"hostname": "SRV-TOWER", "uptime_s": int64(86400*6 + t),
 			"platform": map[string]any{"system": "Windows", "pretty": "Windows 11 Enterprise 24H2"},
 			"cpu":      map[string]any{"percent": r1(wave(100, 8, 55, 0)), "logical": 16},
 			"memory":   map[string]any{"total": int64(64 * GiB), "used": int64(wave(500, 20, 34, 0) * GiB)},
@@ -59,9 +59,9 @@ func agentMetrics(id string) (map[string]any, error) {
 				"board_vendor": "Supermicro", "board_model": "X11SCA-F", "bios_version": "1.8",
 				"cpu_model": "Intel(R) Xeon(R) E-2278G CPU @ 3.40GHz"}})
 		feat["fan_control"] = true
-	case "neptune-laptop":
+	case "alice-laptop":
 		g := gpuRow("NVIDIA GeForce RTX 3050 Laptop GPU", 0, 35, 4, 4, 38, 40, 63, 1.5)
-		set(map[string]any{"hostname": "NEPTUNE-VIVOBOOK", "uptime_s": int64(3600*5 + t),
+		set(map[string]any{"hostname": "ALICE-LAPTOP", "uptime_s": int64(3600*5 + t),
 			"platform": map[string]any{"system": "Windows", "pretty": "Windows 11 Home 24H2"},
 			"cpu":      map[string]any{"percent": r1(wave(50, 4, 35, 0)), "logical": 12},
 			"memory":   map[string]any{"total": int64(16 * GiB), "used": int64(wave(300, 8, 12, 0) * GiB)},
@@ -103,9 +103,9 @@ func agentMetrics(id string) (map[string]any, error) {
 			"hardware": map[string]any{"system_vendor": "To be filled by O.E.M.", "system_model": "To be filled by O.E.M.",
 				"board_vendor": "Gigabyte Technology Co., Ltd.", "board_model": "X670E AORUS MASTER",
 				"bios_version": "F31", "cpu_model": "AMD Ryzen 9 7950X 16-Core Processor"}})
-	case "asus-i7-agent": // agent on Straw's standalone PVE host, relaying its local upsd
+	case "mini-i7-agent": // agent on Bob's standalone PVE host, relaying its local upsd
 		row := ups.RowMap(devices.UPSFromVars("cyberpower", cyberpowerVars(), "CyberPower CP1500"))
-		set(map[string]any{"hostname": "asus-i7", "uptime_s": int64(86400*2 + t), "platform": map[string]any{"system": "Linux", "pretty": "Proxmox VE 9.0"},
+		set(map[string]any{"hostname": "mini-i7", "uptime_s": int64(86400*2 + t), "platform": map[string]any{"system": "Linux", "pretty": "Proxmox VE 9.0"},
 			"cpu":    map[string]any{"percent": r1(wave(55, 8, 30, 4)), "logical": 8},
 			"memory": map[string]any{"total": int64(32 * GiB), "used": int64(wave(250, 14, 19, 0) * GiB)},
 			"disks":  []any{}, "net": map[string]any{"bytes_recv": 0, "bytes_sent": 0},
@@ -113,9 +113,9 @@ func agentMetrics(id string) (map[string]any, error) {
 			"ups": []any{row},
 			"hardware": map[string]any{"system_vendor": "ASUS", "system_model": "All Series", "board_vendor": "ASUSTeK COMPUTER INC.",
 				"board_model": "Z97-A", "bios_version": "2801", "cpu_model": "Intel(R) Core(TM) i7-4790K CPU @ 4.00GHz"}})
-		feat["processes"], feat["cmdline"] = false, false // Straw keeps processes: {enabled: false}
-	case "kachina-agent": // agent on the NSX-KACHINA Proxmox node
-		set(map[string]any{"hostname": "NSX-KACHINA", "uptime_s": int64(86400*12 + t),
+		feat["processes"], feat["cmdline"] = false, false // Bob keeps processes: {enabled: false}
+	case "pvea-agent": // agent on the SRV-PVEA Proxmox node
+		set(map[string]any{"hostname": "SRV-PVEA", "uptime_s": int64(86400*12 + t),
 			"platform": map[string]any{"system": "Linux", "pretty": "Proxmox VE 9.0"},
 			"cpu":      map[string]any{"percent": r1(wave(80, 5, 20, 1)), "logical": 8},
 			"memory":   map[string]any{"total": int64(32 * GiB), "used": int64(wave(400, 13, 22, 0) * GiB)},
@@ -125,7 +125,7 @@ func agentMetrics(id string) (map[string]any, error) {
 			"gpus":  []any{},
 			"hardware": map[string]any{"system_vendor": "LENOVO", "system_model": "ThinkCentre M720q", "board_vendor": "LENOVO",
 				"board_model": "3136", "bios_version": "M1UKT77A", "cpu_model": "Intel(R) Core(TM) i7-8700T CPU @ 2.40GHz"}})
-	case "straw-pc":
+	case "bob-pc":
 		set(map[string]any{"hostname": nil, "uptime_s": int64(3600*30 + t), // owner set hide_host_details: true
 			"platform": map[string]any{"system": "Windows", "pretty": "Windows"},
 			"cpu":      map[string]any{"percent": r1(wave(45, 6, 70, 2)), "logical": 16},
@@ -136,7 +136,7 @@ func agentMetrics(id string) (map[string]any, error) {
 			"temps": []any{}, "gpus": []any{map[string]any{"name": "AMD Radeon RX 5600 XT", "vendor": "amd", "source": "amd",
 				"util_percent": r1(wave(40, 2, 68, 1)), "vram_used": int64(wave(60, 0.9, 4.2, 0) * GiB), "vram_total": int64(6 * GiB),
 				"temp_c": r1(wave(40, 38, 71, 1)), "power_w": r1(wave(40, 12, 150, 1))}},
-			"power_sources": []any{map[string]any{"id": "desk-plug", "name": "Straw's Tuya desk plug", "type": "tuya", "ok": true,
+			"power_sources": []any{map[string]any{"id": "desk-plug", "name": "Bob's Tuya desk plug", "type": "tuya", "ok": true,
 				"watts": r1(wave(45, 95, 420, 0)), "voltage": 229.8, "current": nil, "energy_kwh_total": nil,
 				"system_hint": "self", "error": nil}}})
 		feat["processes"], feat["cmdline"] = false, false
@@ -175,7 +175,7 @@ func demoProcesses(id string, limit int, sortBy string) jsonx.M {
 		rows = []map[string]any{
 			{"pid": 2417, "name": "llama-server", "username": "llama", "cpu_percent": r1(180 + 220*load), "rss": int64(19.6 * G),
 				"gpu_mem": int64(42.6 * G), "gpu_mem_by_gpu": []any{int64(21.2 * G), int64(21.4 * G)}, "cmdline": redact.Cmdline(llamaCmd, 200)},
-			{"pid": 3120, "name": "python3", "username": "neptune", "cpu_percent": r1(3 + 9*load), "rss": int64(1.1 * G),
+			{"pid": 3120, "name": "python3", "username": "alice", "cpu_percent": r1(3 + 9*load), "rss": int64(1.1 * G),
 				"gpu_mem": nil, "cmdline": "python3 /opt/bench/stream_chat.py --endpoint http://127.0.0.1:8080 --token=***"},
 			{"pid": 1203, "name": "nvidia-persistenced", "username": "nvidia-persistenced", "cpu_percent": 0.0,
 				"rss": int64(6 << 20), "gpu_mem": nil, "cmdline": "/usr/bin/nvidia-persistenced --user nvidia-persistenced"},
@@ -199,19 +199,19 @@ func demoProcesses(id string, limit int, sortBy string) jsonx.M {
 		}
 		var names []p
 		switch id {
-		case "nsx-cyrene":
-			names = []p{{"Plex Media Server.exe", `NSX-CYRENE\plex`, 12, 900, 0}, {"obs64.exe", `NSX-CYRENE\neptune`, 9, 620, 410},
-				{"chrome.exe", `NSX-CYRENE\neptune`, 6, 1400, 120}, {"MsMpEng.exe", `NT AUTHORITY\SYSTEM`, 4, 310, 0},
-				{"Ollama.exe", `NSX-CYRENE\neptune`, 3, 5200, 5600}, {"dwagsvc.exe", `NT AUTHORITY\SYSTEM`, 1.2, 45, 0},
+		case "srv-tower":
+			names = []p{{"Plex Media Server.exe", `SRV-TOWER\plex`, 12, 900, 0}, {"obs64.exe", `SRV-TOWER\alice`, 9, 620, 410},
+				{"chrome.exe", `SRV-TOWER\alice`, 6, 1400, 120}, {"MsMpEng.exe", `NT AUTHORITY\SYSTEM`, 4, 310, 0},
+				{"Ollama.exe", `SRV-TOWER\alice`, 3, 5200, 5600}, {"dwagsvc.exe", `NT AUTHORITY\SYSTEM`, 1.2, 45, 0},
 				{"fairy-agent.exe", `NT AUTHORITY\SYSTEM`, 0.6, 18, 0}, {"svchost.exe", `NT AUTHORITY\SYSTEM`, 0.4, 60, 0},
 				{"System", `NT AUTHORITY\SYSTEM`, 0.9, 2, 0}, {"tailscaled.exe", `NT AUTHORITY\SYSTEM`, 0.3, 40, 0}}
-		case "neptune-laptop": // the agent runs as LocalService here: other accounts' programs are listed by name only
+		case "alice-laptop": // the agent runs as LocalService here: other accounts' programs are listed by name only
 			names = []p{{"Code.exe", "", 7, 900, 0}, {"firefox.exe", "", 11, 1600, 90},
 				{"Discord.exe", "", 2, 420, 60}, {"fairy-agent.exe", `NT AUTHORITY\LOCAL SERVICE`, 0.5, 16, 0}}
 		}
 		// fairy-agent on Windows sends the program's path (never reads another process's memory for its
 		// arguments) and no per-process VRAM (nvidia-smi reports none under WDDM).
-		path := map[string]string{"Ollama.exe": `C:\Users\neptune\AppData\Local\Programs\Ollama\ollama.exe`,
+		path := map[string]string{"Ollama.exe": `C:\Users\alice\AppData\Local\Programs\Ollama\ollama.exe`,
 			"obs64.exe":       `C:\Program Files\obs-studio\bin\64bit\obs64.exe`,
 			"chrome.exe":      `C:\Program Files\Google\Chrome\Application\chrome.exe`,
 			"fairy-agent.exe": `C:\Program Files\Fairy\fairy-agent.exe`, "System": "",

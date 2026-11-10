@@ -167,8 +167,8 @@ ups:
 }
 
 func panelConfig(t *testing.T, agentURL string) *config.Panel {
-	t.Setenv("AGENT_TOKEN_NSX_CYRENE", readTok)
-	t.Setenv("AGENT_CONTROL_TOKEN_NSX_CYRENE", ctlTok)
+	t.Setenv("AGENT_TOKEN_SRV_TOWER", readTok)
+	t.Setenv("AGENT_CONTROL_TOKEN_SRV_TOWER", ctlTok)
 	t.Setenv("AGENT_TOKEN_SLEEPY", readTok)
 	dir := t.TempDir()
 	y := fmt.Sprintf(`
@@ -179,20 +179,20 @@ data_dir: %q
 audit_log: %q
 oidc: {issuer: "https://id.example.com", client_id: cid, allowed_groups: [homelab], control_groups: [admins]}
 agents:
-  - id: nsx-cyrene
-    name: NSX-CYRENE
+  - id: srv-tower
+    name: SRV-TOWER
     url: %q
-    token_env: AGENT_TOKEN_NSX_CYRENE
-    group: Neptune
-    fan_control: {vendor: supermicro, control_token_env: AGENT_CONTROL_TOKEN_NSX_CYRENE}
+    token_env: AGENT_TOKEN_SRV_TOWER
+    group: Alice
+    fan_control: {vendor: supermicro, control_token_env: AGENT_CONTROL_TOKEN_SRV_TOWER}
     power_control: true
     wol_relay: true
     self_update: true
-    ups_powers: {cyberpower: [nsx-cyrene]}
+    ups_powers: {cyberpower: [srv-tower]}
   - {id: sleepy, url: "http://127.0.0.1:1", token_env: AGENT_TOKEN_SLEEPY}
 systems:
-  - {id: sleepy, wol: {mac: "a8:5e:45:12:34:56", macs: ["A8-5E-45-12-34-56", "a8:5e:45:12:34:57"], relay: nsx-cyrene, broadcast: 192.168.1.255},
-     bmc_power: {relay: nsx-cyrene, target: sleepy-bmc}}
+  - {id: sleepy, wol: {mac: "00:00:5e:00:53:04", macs: ["00-00-5E-00-53-04", "00:00:5e:00:53:05"], relay: srv-tower, broadcast: 192.168.1.255},
+     bmc_power: {relay: srv-tower, target: sleepy-bmc}}
 `, filepath.Join(dir, "data"), filepath.Join(dir, "audit.log"), agentURL)
 	cfg, err := config.Parse([]byte(y))
 	if err != nil {
@@ -249,12 +249,12 @@ func TestPanelContract(t *testing.T) {
 
 	var s model.System
 	for _, x := range p.Snapshot() {
-		if x.ID == "nsx-cyrene" {
+		if x.ID == "srv-tower" {
 			s = x
 		}
 	}
 	// --- /metrics through the panel's normaliser
-	if s.Status != "online" || s.Name != "NSX-CYRENE" || s.Kind != "agent" || s.Error != nil {
+	if s.Status != "online" || s.Name != "SRV-TOWER" || s.Kind != "agent" || s.Error != nil {
 		t.Fatalf("%+v", s)
 	}
 	if *s.CPUPercent != 23.5 || *s.Cores != 16 || *s.MemTotal != 64<<30 || *s.MemUsed != 20<<30 || len(s.Disks) != 2 ||
@@ -295,16 +295,16 @@ func TestPanelContract(t *testing.T) {
 	ov := p.Power.Overview()
 	var plug *model.PowerSourceState
 	for i := range ov.Sources {
-		if ov.Sources[i].ID == "nsx-cyrene/desk-plug" {
+		if ov.Sources[i].ID == "srv-tower/desk-plug" {
 			plug = &ov.Sources[i]
 		}
 	}
-	if plug == nil || plug.Status != "ok" || *plug.Readings[0].Watts != 120.5 || model.Deref(plug.Readings[0].SystemID) != "nsx-cyrene" ||
-		model.Deref(plug.Via) != "nsx-cyrene" {
+	if plug == nil || plug.Status != "ok" || *plug.Readings[0].Watts != 120.5 || model.Deref(plug.Readings[0].SystemID) != "srv-tower" ||
+		model.Deref(plug.Via) != "srv-tower" {
 		t.Fatalf("relayed plug %+v", ov.Sources)
 	}
 	upsOv, _ := json.Marshal(p.UPS.Overview(false))
-	if !strings.Contains(string(upsOv), `"nsx-cyrene/cyberpower"`) || !strings.Contains(string(upsOv), `"online"`) {
+	if !strings.Contains(string(upsOv), `"srv-tower/cyberpower"`) || !strings.Contains(string(upsOv), `"online"`) {
 		t.Fatal("relayed UPS", string(upsOv))
 	}
 
@@ -318,7 +318,7 @@ func TestPanelContract(t *testing.T) {
 	}
 	a := api{t, hs, tok}
 
-	st, pl := a.do("GET", "/api/systems/nsx-cyrene/processes?limit=3&sort=cpu", nil)
+	st, pl := a.do("GET", "/api/systems/srv-tower/processes?limit=3&sort=cpu", nil)
 	procs, _ := pl["processes"].([]any)
 	if st != 200 || pl["disabled_by_host"] != false || pl["total_processes"] != 212.0 || len(procs) != 3 {
 		t.Fatal(st, pl)
@@ -330,25 +330,25 @@ func TestPanelContract(t *testing.T) {
 		t.Fatal(third)
 	}
 
-	st, fs := a.do("GET", "/api/systems/nsx-cyrene/fan", nil)
+	st, fs := a.do("GET", "/api/systems/srv-tower/fan", nil)
 	if st != 200 || fs["enabled"] != true || fs["mode"] != "optimal" || fs["vendor"] != "supermicro" || fs["min_duty"] != 30.0 ||
 		fs["max_temp_c"] != 80.0 || len(fs["fans"].([]any)) != 2 {
 		t.Fatal(st, fs)
 	}
-	if st, b := a.do("POST", "/api/systems/nsx-cyrene/fan/duty", map[string]any{"zone": 0, "percent": 50}); st != 409 ||
+	if st, b := a.do("POST", "/api/systems/srv-tower/fan/duty", map[string]any{"zone": 0, "percent": 50}); st != 409 ||
 		!strings.Contains(fmt.Sprint(b["detail"]), "full") {
 		t.Fatal("agent's 409 passes through", st, b)
 	}
-	if st, b := a.do("POST", "/api/systems/nsx-cyrene/fan/mode", map[string]any{"mode": "full"}); st != 200 || b["ok"] != true {
+	if st, b := a.do("POST", "/api/systems/srv-tower/fan/mode", map[string]any{"mode": "full"}); st != 200 || b["ok"] != true {
 		t.Fatal(st, b)
 	}
-	if st, b := a.do("POST", "/api/systems/nsx-cyrene/fan/duty", map[string]any{"zone": 0, "percent": 45}); st != 200 {
+	if st, b := a.do("POST", "/api/systems/srv-tower/fan/duty", map[string]any{"zone": 0, "percent": 45}); st != 200 {
 		t.Fatal(st, b)
 	}
 	if mode, duty := c.bmc.State(); mode != 1 || duty[0] != 45 {
 		t.Fatal(mode, duty)
 	}
-	_, fs = a.do("GET", "/api/systems/nsx-cyrene/fan", nil)
+	_, fs = a.do("GET", "/api/systems/srv-tower/fan", nil)
 	if fs["overridden"] != true || fs["duty"].(map[string]any)["0"] != 45.0 || len(fs["events"].([]any)) != 2 ||
 		fs["auto_mode"] != "optimal" || len(fs["unsupported_modes"].([]any)) != 0 {
 		t.Fatal(fs)
@@ -356,53 +356,53 @@ func TestPanelContract(t *testing.T) {
 	// a board without "optimal" (Enginetech EG320W-G20): the BMC's refusal reaches the user as 422, not as a
 	// 502 that Cloudflare would replace, and the panel learns to grey the mode out
 	c.bmc.RefuseMode(2, 0xCC)
-	if st, b := a.do("POST", "/api/systems/nsx-cyrene/fan/mode", map[string]any{"mode": "optimal"}); st != 422 ||
+	if st, b := a.do("POST", "/api/systems/srv-tower/fan/mode", map[string]any{"mode": "optimal"}); st != 422 ||
 		!strings.Contains(fmt.Sprint(b["detail"]), "BMC completion code 0xCC") {
 		t.Fatal("refused mode", st, b)
 	}
-	_, fs = a.do("GET", "/api/systems/nsx-cyrene/fan", nil)
+	_, fs = a.do("GET", "/api/systems/srv-tower/fan", nil)
 	if um := fs["unsupported_modes"].([]any); len(um) != 1 || um[0] != "optimal" || fs["mode"] != "full" {
 		t.Fatal(fs)
 	}
 	c.bmc.RefuseMode(0, 0xC3) // a BMC failure (not "no such mode"): 424 with the agent's message
-	if st, b := a.do("POST", "/api/systems/nsx-cyrene/fan/mode", map[string]any{"mode": "standard"}); st != 424 ||
+	if st, b := a.do("POST", "/api/systems/srv-tower/fan/mode", map[string]any{"mode": "standard"}); st != 424 ||
 		!strings.Contains(fmt.Sprint(b["detail"]), "0xC3") {
 		t.Fatal("BMC failure", st, b)
 	}
 	c.bmc.RefuseMode(0, 0)
 
-	st, caps := a.do("GET", "/api/systems/nsx-cyrene/power", nil)
+	st, caps := a.do("GET", "/api/systems/srv-tower/power", nil)
 	if st != 200 || !strings.Contains(fmt.Sprint(caps["actions"]), "via:agent") {
 		t.Fatal(st, caps)
 	}
-	st, res := a.do("POST", "/api/systems/nsx-cyrene/power", map[string]any{"action": "shutdown", "delay_s": 300, "confirm": "NSX-CYRENE"})
+	st, res := a.do("POST", "/api/systems/srv-tower/power", map[string]any{"action": "shutdown", "delay_s": 300, "confirm": "SRV-TOWER"})
 	if st != 200 || res["via"] != "agent" || res["pending"].(map[string]any)["action"] != "shutdown" {
 		t.Fatal(st, res)
 	}
 	p.PollOnce(ctx)
 	for _, x := range p.Snapshot() {
-		if x.ID == "nsx-cyrene" && (x.PowerPending == nil || x.PowerPending.Action != "shutdown" || x.PowerPending.DelayS != 300 ||
+		if x.ID == "srv-tower" && (x.PowerPending == nil || x.PowerPending.Action != "shutdown" || x.PowerPending.DelayS != 300 ||
 			model.Deref(x.PowerPending.RequestedBy) == "") {
 			t.Fatalf("pending shutdown in /metrics: %+v", x.PowerPending)
 		}
 	}
-	if st, res := a.do("POST", "/api/systems/nsx-cyrene/power", map[string]any{"action": "cancel"}); st != 200 || res["pending"] != nil {
+	if st, res := a.do("POST", "/api/systems/srv-tower/power", map[string]any{"action": "cancel"}); st != 200 || res["pending"] != nil {
 		t.Fatal(st, res)
 	}
 	if strings.Join(c.power.Scheduled, ",") != "shutdown@5m0s" || c.power.Cancels != 1 {
 		t.Fatal(c.power.Scheduled, c.power.Cancels)
 	}
 	// sleep (agent v0.4.2): reported in /metrics, offered, carried out through the agent, cancelled
-	st, res = a.do("POST", "/api/systems/nsx-cyrene/power", map[string]any{"action": "sleep", "delay_s": 30, "confirm": "nsx-cyrene"})
+	st, res = a.do("POST", "/api/systems/srv-tower/power", map[string]any{"action": "sleep", "delay_s": 30, "confirm": "srv-tower"})
 	if st != 200 || res["via"] != "agent" || res["pending"].(map[string]any)["action"] != "sleep" {
 		t.Fatal(st, res)
 	}
-	if st, _ := a.do("POST", "/api/systems/nsx-cyrene/power", map[string]any{"action": "cancel"}); st != 200 ||
+	if st, _ := a.do("POST", "/api/systems/srv-tower/power", map[string]any{"action": "cancel"}); st != 200 ||
 		strings.Join(c.power.Scheduled, ",") != "shutdown@5m0s,sleep@30s" {
 		t.Fatal(st, c.power.Scheduled)
 	}
 
-	if st, res := a.do("POST", "/api/systems/sleepy/power", map[string]any{"action": "wake"}); st != 200 || res["via"] != "wol:nsx-cyrene" {
+	if st, res := a.do("POST", "/api/systems/sleepy/power", map[string]any{"action": "wake"}); st != 200 || res["via"] != "wol:srv-tower" {
 		t.Fatal(st, res)
 	}
 	c.mu.Lock()
@@ -411,7 +411,7 @@ func TestPanelContract(t *testing.T) {
 	if sent != "192.168.1.255:9 102,192.168.1.255:9 102" { // both network cards; the duplicate MAC once
 		t.Fatal(sent)
 	}
-	// BMC power-on (agent v0.4.2 bmc_relay): offered while sleepy is off, typed name, through nsx-cyrene's relay
+	// BMC power-on (agent v0.4.2 bmc_relay): offered while sleepy is off, typed name, through srv-tower's relay
 	st, caps = a.do("GET", "/api/systems/sleepy/power", nil)
 	var bmcCap map[string]any
 	for _, x := range caps["actions"].([]any) {
@@ -419,13 +419,13 @@ func TestPanelContract(t *testing.T) {
 			bmcCap = m
 		}
 	}
-	if st != 200 || bmcCap == nil || bmcCap["available"] != true || bmcCap["confirm"] != "typed" || bmcCap["via_label"] != "NSX-CYRENE" {
+	if st != 200 || bmcCap == nil || bmcCap["available"] != true || bmcCap["confirm"] != "typed" || bmcCap["via_label"] != "SRV-TOWER" {
 		t.Fatal(st, caps)
 	}
 	if st, _ := a.do("POST", "/api/systems/sleepy/power", map[string]any{"action": "bmc_on"}); st != 400 {
 		t.Fatal("typed name", st)
 	}
-	if st, res := a.do("POST", "/api/systems/sleepy/power", map[string]any{"action": "bmc_on", "confirm": "sleepy"}); st != 200 || res["via"] != "bmc:nsx-cyrene" {
+	if st, res := a.do("POST", "/api/systems/sleepy/power", map[string]any{"action": "bmc_on", "confirm": "sleepy"}); st != 200 || res["via"] != "bmc:srv-tower" {
 		t.Fatal(st, res)
 	}
 	c.mu.Lock()
@@ -440,7 +440,7 @@ func TestPanelContract(t *testing.T) {
 	st, page := a.do("GET", "/api/admin/updates", nil)
 	row := func(page map[string]any) map[string]any {
 		for _, x := range page["agents"].([]any) {
-			if x.(map[string]any)["id"] == "nsx-cyrene" {
+			if x.(map[string]any)["id"] == "srv-tower" {
 				return x.(map[string]any)
 			}
 		}
@@ -450,7 +450,7 @@ func TestPanelContract(t *testing.T) {
 		r["self_update"].(map[string]any)["state"] != "idle" {
 		t.Fatal(st, page)
 	}
-	if st, res := a.do("POST", "/api/admin/updates/nsx-cyrene", map[string]any{}); st != 200 || res["ok"] != true ||
+	if st, res := a.do("POST", "/api/admin/updates/srv-tower", map[string]any{}); st != 200 || res["ok"] != true ||
 		res["result"].(map[string]any)["state"] != "downloading" {
 		t.Fatal(st, res)
 	}
@@ -489,13 +489,13 @@ func TestPanelContractReadOnlyAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.PollOnce(context.Background())
-	ag, _ := p.AgentByID("nsx-cyrene")
-	pl, err := p.FetchProcesses(context.Background(), ag, "nsx-cyrene", 25, "cpu")
+	ag, _ := p.AgentByID("srv-tower")
+	pl, err := p.FetchProcesses(context.Background(), ag, "srv-tower", 25, "cpu")
 	if err != nil || !pl.DisabledByHost {
 		t.Fatal(pl, err)
 	}
 	for _, x := range p.Snapshot() {
-		if x.ID == "nsx-cyrene" && (x.Status != "online" || x.ProcessesAvailable || x.FanControl) {
+		if x.ID == "srv-tower" && (x.Status != "online" || x.ProcessesAvailable || x.FanControl) {
 			t.Fatalf("%+v", x)
 		}
 	}
@@ -529,11 +529,11 @@ func TestPanelContractHelper(t *testing.T) {
 		time.Sleep(300 * time.Millisecond) // the agent computes /metrics at most every 250 ms
 		p.PollOnce(ctx)
 		for _, x := range p.Snapshot() {
-			if x.ID == "nsx-cyrene" {
+			if x.ID == "srv-tower" {
 				return x
 			}
 		}
-		t.Fatal("nsx-cyrene missing")
+		t.Fatal("srv-tower missing")
 		return model.System{}
 	}
 	s := sys()
@@ -550,11 +550,11 @@ func TestPanelContractHelper(t *testing.T) {
 	}
 	a := api{t, hs, tok}
 	// Helper stop / start need a browser sign-in: an API token is refused there (it cannot "confirm it's you").
-	if st, b := a.do("POST", "/api/systems/nsx-cyrene/helper/stop", map[string]any{"confirm": "nsx-cyrene"}); st != 403 || c.helper.Stops != 0 {
+	if st, b := a.do("POST", "/api/systems/srv-tower/helper/stop", map[string]any{"confirm": "srv-tower"}); st != 403 || c.helper.Stops != 0 {
 		t.Fatal("an API token must not stop the helper", st, b)
 	}
 	admin := newBrowser(t, cfg, p)
-	if st, b := admin.do("POST", "/api/systems/nsx-cyrene/helper/stop", map[string]any{"confirm": "nsx-cyrene"}); st != 200 || b["ok"] != true {
+	if st, b := admin.do("POST", "/api/systems/srv-tower/helper/stop", map[string]any{"confirm": "srv-tower"}); st != 200 || b["ok"] != true {
 		t.Fatal("stop", st, b)
 	}
 	if c.helper.Stops != 1 {
@@ -566,16 +566,16 @@ func TestPanelContractHelper(t *testing.T) {
 		!s.FanControl {
 		t.Fatalf("stopped: %+v power %q", s.Helper, s.PowerHelperReason)
 	}
-	st, caps := a.do("GET", "/api/systems/nsx-cyrene/power", nil)
+	st, caps := a.do("GET", "/api/systems/srv-tower/power", nil)
 	for _, x := range caps["actions"].([]any) {
 		if m := x.(map[string]any); m["action"] == "shutdown" && (m["available"] != false || !strings.Contains(fmt.Sprint(m["reason"]), "start the helper first")) {
 			t.Fatal("power while stopped", st, m)
 		}
 	}
-	if st, b := a.do("GET", "/api/systems/nsx-cyrene/fan", nil); st != 200 || b["available"] != false {
+	if st, b := a.do("GET", "/api/systems/srv-tower/fan", nil); st != 200 || b["available"] != false {
 		t.Fatal("fan status while stopped", st, b)
 	}
-	if st, b := admin.do("POST", "/api/systems/nsx-cyrene/helper/start", map[string]any{"confirm": "NSX-CYRENE"}); st != 200 || b["state"] != agentapi.HelperRunning {
+	if st, b := admin.do("POST", "/api/systems/srv-tower/helper/start", map[string]any{"confirm": "SRV-TOWER"}); st != 200 || b["state"] != agentapi.HelperRunning {
 		t.Fatal("start", st, b)
 	}
 	if s := sys(); c.helper.Starts != 1 || s.Helper.State != agentapi.HelperRunning || len(s.Helper.Paused) != 0 || s.PowerHelperReason != "" {

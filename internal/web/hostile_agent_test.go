@@ -39,7 +39,7 @@ func TestAPIAnswersWithOneHostileAgent(t *testing.T) {
 	e := setup(t)
 	c := e.cookie(controller(), 0)
 	e.b.Mu.Lock()
-	e.b.Metrics["cyrene"] = func() (jsonx.M, error) { m := testutil.AgentMetrics(); m["hostname"] = "cyrene"; return m, nil }
+	e.b.Metrics["tower"] = func() (jsonx.M, error) { m := testutil.AgentMetrics(); m["hostname"] = "tower"; return m, nil }
 	e.b.Mu.Unlock()
 	e.s.Poller.PollOnce(context.Background())
 	want := len(e.do("GET", "/api/systems", nil, "Cookie", c).body["systems"].([]any))
@@ -56,7 +56,7 @@ func TestAPIAnswersWithOneHostileAgent(t *testing.T) {
 		e.s.Poller.PollOnce(context.Background())
 	}
 	for _, path := range []string{"/api/systems", "/api/summary", "/api/power", "/api/power/history", "/api/ups", "/api/ups?history=true",
-		"/api/systems/laptop", "/api/systems/cyrene", "/api/systems/qemu-100", "/api/systems/laptop/power"} {
+		"/api/systems/laptop", "/api/systems/tower", "/api/systems/qemu-100", "/api/systems/laptop/power"} {
 		r := e.do("GET", path, nil, "Cookie", c)
 		if r.code != 200 || !json.Valid(r.raw) || r.body == nil {
 			t.Fatalf("%s: %d %s", path, r.code, r.raw)
@@ -71,7 +71,7 @@ func TestAPIAnswersWithOneHostileAgent(t *testing.T) {
 		m := x.(map[string]any)
 		seen[m["id"].(string)], _ = m["status"].(string)
 	}
-	if seen["laptop"] != "online" || seen["cyrene"] != "online" || seen["qemu-100"] != "online" {
+	if seen["laptop"] != "online" || seen["tower"] != "online" || seen["qemu-100"] != "online" {
 		t.Fatalf("%v", seen)
 	}
 	if lap := e.do("GET", "/api/systems/laptop", nil, "Cookie", c).body; lap["cpu_percent"] != 100.0 || lap["mem_total"] != nil || lap["power_pending"] != nil {

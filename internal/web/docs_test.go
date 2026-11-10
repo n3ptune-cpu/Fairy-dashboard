@@ -193,7 +193,7 @@ func TestDocsPageNeedsARole(t *testing.T) {
 
 // enable_docs is off by default: then there is no /docs and no openapi.json at all.
 func TestDocsAreOffByDefault(t *testing.T) {
-	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
 	cfg.EnableDocs = false
 	p, err := poller.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, testutil.NewBackend())
 	if err != nil {

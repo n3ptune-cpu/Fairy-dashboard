@@ -7,11 +7,12 @@ replace such a pairing with a verified one.
 Nothing here was written by hand. `generator_test.go.txt` was copied into `internal/web` of a checkout of commit
 `05b1019` (as a `_test.go` file) and run there with `FAIRY_GEN_FIXTURE=<dir>`: that release's own HTTP handler,
 enrollment manager and managed store wrote every file, with a simulated machine answering the old pairing
-(tokens in clear).
+(tokens in clear). Like `v-before`, it was made a second time with neutral host and site names (see the note
+there); nothing else differs.
 
-- `managed-hosts.yaml`: NSX-FURINA (Windows, power control, self-update, Core Temp) and nsx-kachina (a
+- `managed-hosts.yaml`: SRV-WINPC (Windows, power control, self-update, Core Temp) and srv-pvea (a
   standalone Proxmox node with its own `proxmox:` entry). No `pairing:` field: that came with pairing v2.
-- `secrets/agent-<id>.json`: their tokens; `secrets/pve-nsx-kachina-ca.pem`: the node's CA (valid 30 years).
+- `secrets/agent-<id>.json`: their tokens; `secrets/pve-srv-pvea-ca.pem`: the node's CA (valid 30 years).
 - `generated.json`: when it was made.
 
 It goes on top of the `v-before` fixture (the same panel, one data directory): `testutil.AddVBeforeManaged`.

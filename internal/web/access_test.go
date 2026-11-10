@@ -22,26 +22,26 @@ import (
 
 // The test homelab, by site:
 //
-//	Neptune  the Proxmox cluster (site: in config) with nodes node-nsx-kachina, node-nsx-snezhnaya and guests
+//	Alice  the Proxmox cluster (site: in config) with nodes node-srv-pvea, node-srv-pveb and guests
 //	         qemu-100 (win11), lxc-101 (minecraft); agent laptop (site: in config) with its desk plug
 //	         (laptop/desk) and UPS ups1 (powers laptop and secret-box)
-//	Straw    agent cyrene (assigned on the Users page) and guest qemu-120 "truenas" (assigned on the Users page,
-//	         although its node NSX-SNEZHNAYA is Neptune's)
+//	Bob    agent tower (assigned on the Users page) and guest qemu-120 "truenas" (assigned on the Users page,
+//	         although its node SRV-PVEB is Alice's)
 //	none     agent secret-box, with its own plug (secret-box/desk) and UPS (secret-box/ups2): admins only
 const (
 	subAdmin   = "sub-admin"
-	subNeptune = "sub-neptune"
-	subStraw   = "sub-straw"
+	subAlice   = "sub-alice"
+	subBob     = "sub-bob"
 	subPending = "sub-pending"
 )
 
 var (
 	// What each viewer must never see in any response.
-	hiddenFromNeptune = []string{"cyrene", "qemu-120", "truenas", "secret-box", "ups2"}
-	hiddenFromStraw   = []string{"laptop", "node-nsx-kachina", "NSX-KACHINA", "node-nsx-snezhnaya", "NSX-SNEZHNAYA",
+	hiddenFromAlice = []string{"tower", "qemu-120", "truenas", "secret-box", "ups2"}
+	hiddenFromBob   = []string{"laptop", "node-srv-pvea", "SRV-PVEA", "node-srv-pveb", "SRV-PVEB",
 		"qemu-100", "win11", "lxc-101", "minecraft", "secret-box", "Desk plug", "ups1", "ups2"}
 	// What a pending user and an anonymous client must not see.
-	hiddenFromAll = []string{"cyrene", "laptop", "secret-box", "qemu-", "lxc-", "node-", "NSX-", "truenas", "ups1"}
+	hiddenFromAll = []string{"tower", "laptop", "secret-box", "qemu-", "lxc-", "node-", "SRV-", "truenas", "ups1"}
 )
 
 func upsRow(name, status string) map[string]any {
@@ -50,9 +50,9 @@ func upsRow(name, status string) map[string]any {
 
 func setupSites(t *testing.T) *env {
 	t.Helper()
-	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
-	cfg.Proxmox[0].Site = "Neptune"
-	cfg.Agents[0].Site = "Neptune"
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
+	cfg.Proxmox[0].Site = "Alice"
+	cfg.Agents[0].Site = "Alice"
 	cfg.Agents[0].UPSPowers = map[string][]string{"ups1": {"laptop", "secret-box"}}
 	cfg.Agents = append(cfg.Agents, config.Agent{ID: "secret-box", URL: "http://secret-box", TokenEnv: "TOK_LAPTOP"})
 	b := testutil.NewBackend()
@@ -79,7 +79,7 @@ func setupSites(t *testing.T) *env {
 	p.Bump()
 	s := New(cfg, secrets, p, nil, "test")
 	st := s.Access
-	for _, x := range []string{"Neptune", "Straw"} {
+	for _, x := range []string{"Alice", "Bob"} {
 		if err := st.CreateSite(x); err != nil && !strings.Contains(err.Error(), "exists") {
 			t.Fatal(err)
 		}
@@ -93,10 +93,10 @@ func setupSites(t *testing.T) *env {
 		}
 	}
 	mk(subAdmin, access.RoleAdmin)
-	mk(subNeptune, access.RoleViewer, "Neptune")
-	mk(subStraw, access.RoleViewer, "Straw")
+	mk(subAlice, access.RoleViewer, "Alice")
+	mk(subBob, access.RoleViewer, "Bob")
 	mk(subPending, access.RolePending)
-	for target, site := range map[string]string{"cyrene": "Straw", "qemu-120": "Straw"} {
+	for target, site := range map[string]string{"tower": "Bob", "qemu-120": "Bob"} {
 		if _, err := st.Assign(target, site); err != nil {
 			t.Fatal(err)
 		}
@@ -138,7 +138,7 @@ func readRoutes() []route {
 		"/api/admin/users", "/api/admin/updates"} {
 		out = append(out, route{"GET", p})
 	}
-	for _, id := range []string{"laptop", "cyrene", "secret-box", "node-nsx-kachina", "node-nsx-snezhnaya", "qemu-100",
+	for _, id := range []string{"laptop", "tower", "secret-box", "node-srv-pvea", "node-srv-pveb", "qemu-100",
 		"lxc-101", "qemu-120"} {
 		for _, sub := range []string{"", "/processes", "/fan", "/power", "/poll"} {
 			out = append(out, route{"GET", "/api/systems/" + id + sub})
@@ -157,20 +157,20 @@ func writeRoutes() []struct {
 		body any
 	}{
 		{route{"PUT", "/api/systems/laptop/poll"}, map[string]any{"interval_s": 5}},
-		{route{"PUT", "/api/systems/cyrene/poll"}, map[string]any{"interval_s": 5}},
+		{route{"PUT", "/api/systems/tower/poll"}, map[string]any{"interval_s": 5}},
 		{route{"PUT", "/api/systems/secret-box/poll"}, map[string]any{"interval_s": 5}},
 		{route{"POST", "/api/systems/qemu-120/power"}, map[string]any{"action": "reboot"}},
-		{route{"POST", "/api/systems/cyrene/fan/mode"}, map[string]any{"mode": "full"}},
-		{route{"POST", "/api/systems/cyrene/fan/duty"}, map[string]any{"zone": 0, "percent": 50}},
-		{route{"POST", "/api/systems/cyrene/helper/stop"}, map[string]any{"confirm": "cyrene"}},
+		{route{"POST", "/api/systems/tower/fan/mode"}, map[string]any{"mode": "full"}},
+		{route{"POST", "/api/systems/tower/fan/duty"}, map[string]any{"zone": 0, "percent": 50}},
+		{route{"POST", "/api/systems/tower/helper/stop"}, map[string]any{"confirm": "tower"}},
 		{route{"POST", "/api/systems/laptop/helper/start"}, map[string]any{"confirm": "laptop"}},
 		{route{"POST", "/api/systems/secret-box/helper/stop"}, map[string]any{"confirm": "secret-box"}},
-		{route{"PUT", "/api/admin/users/" + subStraw}, map[string]any{"role": "viewer", "sites": []string{"Neptune"}}},
-		{route{"DELETE", "/api/admin/users/" + subStraw}, nil},
+		{route{"PUT", "/api/admin/users/" + subBob}, map[string]any{"role": "viewer", "sites": []string{"Alice"}}},
+		{route{"DELETE", "/api/admin/users/" + subBob}, nil},
 		{route{"POST", "/api/admin/sites"}, map[string]any{"name": "Elsewhere"}},
-		{route{"PUT", "/api/admin/sites/Straw"}, map[string]any{"name": "Strawberry"}},
-		{route{"DELETE", "/api/admin/sites/Straw"}, nil},
-		{route{"PUT", "/api/admin/assign"}, map[string]any{"target": "secret-box", "site": "Straw"}},
+		{route{"PUT", "/api/admin/sites/Bob"}, map[string]any{"name": "Blueberry"}},
+		{route{"DELETE", "/api/admin/sites/Bob"}, nil},
+		{route{"PUT", "/api/admin/assign"}, map[string]any{"target": "secret-box", "site": "Bob"}},
 		{route{"POST", "/api/admin/updates/laptop"}, map[string]any{}},
 		{route{"POST", "/api/admin/updates"}, map[string]any{}},
 	}
@@ -189,8 +189,8 @@ func TestAuthorizationMatrix(t *testing.T) {
 	e := setupSites(t)
 	csrf := []string{"X-Requested-With", "fairy"}
 	visible := map[string]map[string]bool{
-		subNeptune: {"laptop": true, "node-nsx-kachina": true, "node-nsx-snezhnaya": true, "qemu-100": true, "lxc-101": true},
-		subStraw:   {"cyrene": true, "qemu-120": true},
+		subAlice: {"laptop": true, "node-srv-pvea": true, "node-srv-pveb": true, "qemu-100": true, "lxc-101": true},
+		subBob:   {"tower": true, "qemu-120": true},
 	}
 	cases := []struct {
 		who    string
@@ -199,8 +199,8 @@ func TestAuthorizationMatrix(t *testing.T) {
 	}{
 		{"anonymous", "", hiddenFromAll},
 		{"pending", subPending, hiddenFromAll},
-		{"viewer-Neptune", subNeptune, hiddenFromNeptune},
-		{"viewer-Straw", subStraw, hiddenFromStraw},
+		{"viewer-Alice", subAlice, hiddenFromAlice},
+		{"viewer-Bob", subBob, hiddenFromBob},
 		{"admin", subAdmin, nil},
 	}
 	for _, tc := range cases {
@@ -234,9 +234,9 @@ func TestAuthorizationMatrix(t *testing.T) {
 				switch {
 				case rest == "processes" && !strings.HasPrefix(id, "laptop") && id != "secret-box":
 					want = r.code // 404 / 502 explained elsewhere; only the leak check matters here
-				case rest == "fan" && id != "cyrene":
+				case rest == "fan" && id != "tower":
 					want = 404
-				case rest == "fan" && id == "cyrene":
+				case rest == "fan" && id == "tower":
 					want = r.code
 				}
 			}
@@ -261,7 +261,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 			t.Errorf("%s: stream %d, want %d", tc.who, code, wantStream)
 		}
 		if tc.who == "admin" {
-			for _, s := range []string{"secret-box", "cyrene", "laptop", "qemu-120"} {
+			for _, s := range []string{"secret-box", "tower", "laptop", "qemu-120"} {
 				if !strings.Contains(body, s) {
 					t.Errorf("admin stream misses %s", s)
 				}
@@ -280,30 +280,30 @@ func TestAuthorizationMatrix(t *testing.T) {
 		}
 	}
 	// what the viewers see, positively
-	n := e.cookie(person(subNeptune), 0)
+	n := e.cookie(person(subAlice), 0)
 	r := e.do("GET", "/api/systems", nil, "Cookie", n)
 	var ids []string
 	for _, x := range r.body["systems"].([]any) {
 		ids = append(ids, x.(map[string]any)["id"].(string))
 	}
-	if strings.Join(ids, ",") != "node-nsx-kachina,node-nsx-snezhnaya,laptop,lxc-101,qemu-100" {
-		t.Fatal("Neptune sees", ids)
+	if strings.Join(ids, ",") != "node-srv-pvea,node-srv-pveb,laptop,lxc-101,qemu-100" {
+		t.Fatal("Alice sees", ids)
 	}
 	if u := e.do("GET", "/api/ups", nil, "Cookie", n); !strings.Contains(string(u.raw), `"powers":["laptop"]`) {
 		t.Fatal("UPS powering a hidden host must list only the visible one", string(u.raw))
 	}
 	sm := e.do("GET", "/api/summary", nil, "Cookie", n).body
 	if sm["counts"].(map[string]any)["total"] != 5.0 || len(sm["clusters"].([]any)) != 1 {
-		t.Fatal("Neptune summary", sm)
+		t.Fatal("Alice summary", sm)
 	}
 	if tot := sm["totals"].(map[string]any); tot["hosts"] != 3.0 {
-		t.Fatal("Neptune totals: both visible nodes and the laptop", tot)
+		t.Fatal("Alice totals: both visible nodes and the laptop", tot)
 	}
 	pw := e.do("GET", "/api/power", nil, "Cookie", n).body
 	if pw["total_w"] != 80.0 || len(pw["sources"].([]any)) != 1 {
-		t.Fatal("Neptune power: only the laptop plug counts", pw)
+		t.Fatal("Alice power: only the laptop plug counts", pw)
 	}
-	s := e.cookie(person(subStraw), 0)
+	s := e.cookie(person(subBob), 0)
 	q := e.do("GET", "/api/systems/qemu-120", nil, "Cookie", s)
 	if q.code != 200 || q.body["parent"] != nil {
 		t.Fatal("a visible guest on a hidden node must not name the node", q.code, string(q.raw))
@@ -311,13 +311,13 @@ func TestAuthorizationMatrix(t *testing.T) {
 	sm = e.do("GET", "/api/summary", nil, "Cookie", s).body
 	cl := sm["clusters"].([]any)[0].(map[string]any)
 	if sm["counts"].(map[string]any)["total"] != 2.0 || cl["nodes_total"] != 0.0 || cl["guests_total"] != 1.0 {
-		t.Fatal("Straw summary: cluster totals only over what Straw sees", sm)
+		t.Fatal("Bob summary: cluster totals only over what Bob sees", sm)
 	}
 	if tot := sm["totals"].(map[string]any); fmt.Sprint(tot) != fmt.Sprint(map[string]any{"hosts": 1.0, "hosts_online": 0.0, "cores": 0.0, "cpu_percent": nil, "mem_used": 0.0, "mem_total": 0.0}) {
-		t.Fatal("Straw totals: only his own host, none of the hidden nodes' sums", tot)
+		t.Fatal("Bob totals: only his own host, none of the hidden nodes' sums", tot)
 	}
 	if pw := e.do("GET", "/api/power", nil, "Cookie", s).body; pw["total_w"] != nil {
-		t.Fatal("Straw has no power source", pw)
+		t.Fatal("Bob has no power source", pw)
 	}
 	// admin: everything, exactly as the poller has it
 	a := e.cookie(person(subAdmin), 0)
@@ -330,34 +330,34 @@ func TestTokensFollowSitesAndOwners(t *testing.T) {
 	e := setupSites(t)
 	auth := func(tok string) []string { return []string{"Authorization", "Bearer " + tok} }
 	all, _, _ := e.s.Tokens.Create("all", "system", "read", "cli:test", 0)
-	straw, _, err := e.s.Tokens.CreateForSites("straw", "system", "read", "cli:test", 0, []string{"Straw"})
+	bob, _, err := e.s.Tokens.CreateForSites("bob", "system", "read", "cli:test", 0, []string{"Bob"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.s.Tokens.CreateForSites("bad", "system", "control", "cli:test", 0, []string{"Straw"}); err == nil {
+	if _, _, err := e.s.Tokens.CreateForSites("bad", "system", "control", "cli:test", 0, []string{"Bob"}); err == nil {
 		t.Fatal("a control token cannot be limited to sites")
 	}
-	owned, _, _ := e.s.Tokens.Create("owned", subStraw, "read", "cli:test", 0)
-	ctlOwned, _, _ := e.s.Tokens.Create("ctl-owned", subStraw, "control", "cli:test", 0)
+	owned, _, _ := e.s.Tokens.Create("owned", subBob, "read", "cli:test", 0)
+	ctlOwned, _, _ := e.s.Tokens.Create("ctl-owned", subBob, "control", "cli:test", 0)
 	pend, _, _ := e.s.Tokens.Create("pend", subPending, "read", "cli:test", 0)
 	adminCtl, _, _ := e.s.Tokens.Create("admin-ctl", subAdmin, "control", "cli:test", 0)
 
 	if r := e.do("GET", "/api/systems/secret-box", nil, auth(all)...); r.code != 200 {
 		t.Fatal("a read token without sites sees every site (as before)", r.code)
 	}
-	for _, tok := range []string{straw, owned, ctlOwned} {
+	for _, tok := range []string{bob, owned, ctlOwned} {
 		r := e.do("GET", "/api/systems", nil, auth(tok)...)
-		assertHidden(t, "straw token", "/api/systems", string(r.raw), hiddenFromStraw)
-		if !strings.Contains(string(r.raw), "cyrene") {
-			t.Fatal("straw token sees Straw", string(r.raw))
+		assertHidden(t, "bob token", "/api/systems", string(r.raw), hiddenFromBob)
+		if !strings.Contains(string(r.raw), "tower") {
+			t.Fatal("bob token sees Bob", string(r.raw))
 		}
 		_, body := e.streamBody("/api/stream", auth(tok)...)
-		assertHidden(t, "straw token", "/api/stream", body, hiddenFromStraw)
+		assertHidden(t, "bob token", "/api/stream", body, hiddenFromBob)
 	}
-	if r := e.do("PUT", "/api/systems/cyrene/poll", map[string]any{"interval_s": 5}, auth(ctlOwned)...); r.code != 403 {
+	if r := e.do("PUT", "/api/systems/tower/poll", map[string]any{"interval_s": 5}, auth(ctlOwned)...); r.code != 403 {
 		t.Fatal("a control token of a viewer cannot control", r.code)
 	}
-	if r := e.do("PUT", "/api/systems/cyrene/poll", map[string]any{"interval_s": 5}, auth(adminCtl)...); r.code != 200 {
+	if r := e.do("PUT", "/api/systems/tower/poll", map[string]any{"interval_s": 5}, auth(adminCtl)...); r.code != 200 {
 		t.Fatal("a control token of an admin controls", r.code, string(r.raw))
 	}
 	if r := e.do("GET", "/api/summary", nil, auth(pend)...); r.code != 403 {
@@ -370,7 +370,7 @@ func TestTokensFollowSitesAndOwners(t *testing.T) {
 		t.Fatal("control tokens read the audit log as before", r.code)
 	}
 	// demoting the owner limits their tokens at once
-	if _, _, err := e.s.Access.SetRole(subStraw, access.RolePending, nil, "test", false); err != nil {
+	if _, _, err := e.s.Access.SetRole(subBob, access.RolePending, nil, "test", false); err != nil {
 		t.Fatal(err)
 	}
 	if r := e.do("GET", "/api/systems", nil, auth(owned)...); r.code != 403 {
@@ -383,8 +383,8 @@ func TestUserAndSiteChangesNeedAdminCSRFStepUp(t *testing.T) {
 	csrf := []string{"X-Requested-With", "fairy"}
 	fresh := e.cookie(person(subAdmin), 0)
 	old := e.cookie(person(subAdmin), 10*time.Minute)
-	body := map[string]any{"role": "viewer", "sites": []string{"Neptune", "Straw"}}
-	path := "/api/admin/users/" + subStraw
+	body := map[string]any{"role": "viewer", "sites": []string{"Alice", "Bob"}}
+	path := "/api/admin/users/" + subBob
 	if r := e.do("PUT", path, body, "Cookie", fresh); r.code != 403 {
 		t.Fatal("missing CSRF header", r.code)
 	}
@@ -395,13 +395,13 @@ func TestUserAndSiteChangesNeedAdminCSRFStepUp(t *testing.T) {
 	if d, _ := r.body["detail"].(map[string]any); r.code != 401 || d["code"] != "step_up_required" {
 		t.Fatal("step-up", r.code, string(r.raw))
 	}
-	if g := e.s.Access.Load().Users[subStraw].Grant(); g.String() != "viewer:Straw" {
+	if g := e.s.Access.Load().Users[subBob].Grant(); g.String() != "viewer:Bob" {
 		t.Fatal("refused change was applied", g)
 	}
 	if r := e.do("PUT", path, body, append([]string{"Cookie", fresh}, csrf...)...); r.code != 200 {
 		t.Fatal(r.code, string(r.raw))
 	}
-	if g := e.s.Access.Load().Users[subStraw].Grant(); g.String() != "viewer:Neptune,Straw" {
+	if g := e.s.Access.Load().Users[subBob].Grant(); g.String() != "viewer:Alice,Bob" {
 		t.Fatal(g)
 	}
 	if r := e.do("PUT", path, map[string]any{"role": "viewer", "sites": []string{"Mars"}}, append([]string{"Cookie", fresh}, csrf...)...); r.code != 422 {
@@ -409,7 +409,7 @@ func TestUserAndSiteChangesNeedAdminCSRFStepUp(t *testing.T) {
 	}
 	// last admin: cannot demote or remove themselves
 	self := "/api/admin/users/" + subAdmin
-	if r := e.do("PUT", self, map[string]any{"role": "viewer", "sites": []string{"Neptune"}}, append([]string{"Cookie", fresh}, csrf...)...); r.code != 409 {
+	if r := e.do("PUT", self, map[string]any{"role": "viewer", "sites": []string{"Alice"}}, append([]string{"Cookie", fresh}, csrf...)...); r.code != 409 {
 		t.Fatal("last admin demoted", r.code, string(r.raw))
 	}
 	if r := e.do("DELETE", self, nil, append([]string{"Cookie", fresh}, csrf...)...); r.code != 409 {
@@ -427,18 +427,18 @@ func TestUserAndSiteChangesNeedAdminCSRFStepUp(t *testing.T) {
 		{"PUT", "/api/admin/assign", map[string]any{"target": "power:secret-box/desk", "site": "Lab"}, 200},
 		{"PUT", "/api/admin/assign", map[string]any{"target": "nope", "site": "Lab"}, 404},
 		{"PUT", "/api/admin/sites/Lab", map[string]any{"name": "Lab 2"}, 200},
-		{"PUT", "/api/admin/sites/Neptune", map[string]any{"name": "Nep"}, 409},
-		{"DELETE", "/api/admin/sites/Neptune", nil, 409},
-		{"PUT", "/api/admin/users/" + subNeptune, map[string]any{"role": "viewer", "sites": []string{"Lab 2"}}, 200},
+		{"PUT", "/api/admin/sites/Alice", map[string]any{"name": "Nep"}, 409},
+		{"DELETE", "/api/admin/sites/Alice", nil, 409},
+		{"PUT", "/api/admin/users/" + subAlice, map[string]any{"role": "viewer", "sites": []string{"Lab 2"}}, 200},
 	} {
 		if r := e.do(w.method, w.path, w.body, append([]string{"Cookie", fresh}, csrf...)...); r.code != w.want {
 			t.Fatalf("%s %s: %d %s", w.method, w.path, r.code, r.raw)
 		}
 	}
-	nep := e.cookie(person(subNeptune), 0)
+	nep := e.cookie(person(subAlice), 0)
 	r = e.do("GET", "/api/systems", nil, "Cookie", nep)
 	if !strings.Contains(string(r.raw), "secret-box") || strings.Contains(string(r.raw), `"laptop"`) {
-		t.Fatal("Neptune now sees only the Lab 2 site", string(r.raw))
+		t.Fatal("Alice now sees only the Lab 2 site", string(r.raw))
 	}
 	if p := e.do("GET", "/api/power", nil, "Cookie", nep); !strings.Contains(string(p.raw), "secret-box/desk") {
 		t.Fatal("assigned power source", string(p.raw))
@@ -527,7 +527,7 @@ func TestMigrationViaControlGroupsAndBootstrapAdmins(t *testing.T) {
 
 func TestDemoPreviewAsViewer(t *testing.T) {
 	e := setupSites(t)
-	u := person("demo-neptune")
+	u := person("demo-alice")
 	u.Groups = []string{"controllers"}
 	u.Auth = "demo"
 	e.s.DemoUser = &u
@@ -541,14 +541,14 @@ func TestDemoPreviewAsViewer(t *testing.T) {
 	if r := e.do("GET", "/api/me", nil); r.body["role"] != "admin" || r.body["demo_view"] != "admin" {
 		t.Fatal(string(r.raw))
 	}
-	if r := e.do("POST", "/api/demo/view", map[string]any{"view": "viewer:Straw"}); r.code != 403 {
+	if r := e.do("POST", "/api/demo/view", map[string]any{"view": "viewer:Bob"}); r.code != 403 {
 		t.Fatal("demo switch needs the CSRF header", r.code)
 	}
-	if r := e.do("POST", "/api/demo/view", map[string]any{"view": "viewer:Straw"}, "X-Requested-With", "fairy"); r.code != 200 {
+	if r := e.do("POST", "/api/demo/view", map[string]any{"view": "viewer:Bob"}, "X-Requested-With", "fairy"); r.code != 200 {
 		t.Fatal(r.code, string(r.raw))
 	}
 	r := e.do("GET", "/api/systems", nil)
-	assertHidden(t, "demo as Straw", "/api/systems", string(r.raw), hiddenFromStraw)
+	assertHidden(t, "demo as Bob", "/api/systems", string(r.raw), hiddenFromBob)
 	if me := e.do("GET", "/api/me", nil); me.body["role"] != "viewer" || me.body["can_control"] != false {
 		t.Fatal(string(me.raw))
 	}
@@ -616,8 +616,8 @@ func TestRemovedUserRegainsNothing(t *testing.T) {
 	}
 }
 
-// A laptop's battery reaches the API as part of its system, so it follows the host's site: Neptune's viewer and
-// the admin see it, Straw's viewer sees neither the host nor the battery; hosts without one have battery null.
+// A laptop's battery reaches the API as part of its system, so it follows the host's site: Alice's viewer and
+// the admin see it, Bob's viewer sees neither the host nor the battery; hosts without one have battery null.
 func TestBatteryFollowsTheHost(t *testing.T) {
 	e := setupSites(t)
 	e.b.Mu.Lock()
@@ -643,20 +643,20 @@ func TestBatteryFollowsTheHost(t *testing.T) {
 		}
 		return nil, false
 	}
-	for _, sub := range []string{subAdmin, subNeptune} {
+	for _, sub := range []string{subAdmin, subAlice} {
 		b, found := battery(sub, "laptop")
 		if !found || b == nil || b["percent"] != 64.0 || b["state"] != "discharging" || b["power_w"] != 11.4 ||
 			b["ac_online"] != false || b["time_remaining_s"] != 12600.0 || b["health_pct"] != 88.5 {
 			t.Fatalf("%s: %v", sub, b)
 		}
 	}
-	if _, found := battery(subStraw, "laptop"); found {
-		t.Fatal("Straw's viewer sees Neptune's laptop")
+	if _, found := battery(subBob, "laptop"); found {
+		t.Fatal("Bob's viewer sees Alice's laptop")
 	}
-	if b, found := battery(subStraw, "cyrene"); !found || b != nil {
+	if b, found := battery(subBob, "tower"); !found || b != nil {
 		t.Fatalf("a host without a battery has battery null: %v %v", found, b)
 	}
-	r := e.do("GET", "/api/systems/laptop", nil, "Cookie", e.cookie(person(subStraw), 0))
+	r := e.do("GET", "/api/systems/laptop", nil, "Cookie", e.cookie(person(subBob), 0))
 	if r.code == 200 || strings.Contains(string(r.raw), "12600") {
 		t.Fatalf("hidden host's details: %d %s", r.code, r.raw)
 	}

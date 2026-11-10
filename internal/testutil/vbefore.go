@@ -20,8 +20,8 @@ var vBeforeFS embed.FS
 var vBeforeManagedFS embed.FS
 
 // AddVBeforeManaged adds the "v-before-managed" fixture to a data directory: managed-hosts.yaml and secrets/ as
-// the release before the security fixes wrote them for two hosts added with Add host (NSX-FURINA, a Windows
-// PC, and nsx-kachina, a standalone Proxmox node). See testdata/v-before-managed/README.md.
+// the release before the security fixes wrote them for two hosts added with Add host (SRV-WINPC, a Windows
+// PC, and srv-pvea, a standalone Proxmox node). See testdata/v-before-managed/README.md.
 func AddVBeforeManaged(t *testing.T, dataDir string) {
 	t.Helper()
 	const root = "testdata/v-before-managed"
@@ -61,7 +61,7 @@ type VBefore struct {
 	ViewerSub    string
 	ViewerCookie string
 	TokenSystem  string // a read token owned by "system"
-	TokenViewer  string // a read token owned by the viewer, for the site Straw
+	TokenViewer  string // a read token owned by the viewer, for the site Bob
 }
 
 // NewVBefore copies the fixture into a temporary directory (files 0600, as the panel writes them) and sets the
@@ -69,8 +69,8 @@ type VBefore struct {
 func NewVBefore(t *testing.T) *VBefore {
 	t.Helper()
 	t.Setenv("TOK_LAPTOP", ReadToken)
-	t.Setenv("TOK_CYRENE", ReadToken+"x")
-	t.Setenv("CTL_CYRENE", ControlToken)
+	t.Setenv("TOK_TOWER", ReadToken+"x")
+	t.Setenv("CTL_TOWER", ControlToken)
 	t.Setenv("PVE_SECRET", "pve-secret-uuid")
 	dir := t.TempDir()
 	v := &VBefore{ConfigPath: filepath.Join(dir, "config.yaml"), DataDir: filepath.Join(dir, "data")}

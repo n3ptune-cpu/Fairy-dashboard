@@ -23,7 +23,7 @@ import (
 func TestAddHostRefusesAReleaseWithoutPairingV2(t *testing.T) {
 	e := setup(t)
 	e.s.control = newRateLimiter(100)
-	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.PanelAddr = "100.64.0.10"
 	old := testInstallers
 	old.PairV2SH, old.PairV2PS1 = false, false
 	e.s.Enroll.Scripts = old
@@ -49,7 +49,7 @@ func TestAddHostHintsAuditAndVerifiedMark(t *testing.T) {
 	e := setup(t)
 	e.s.Enroll.Interval = 10 * time.Millisecond
 	e.s.control = newRateLimiter(100)
-	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.PanelAddr = "100.64.0.10"
 	var phase atomic.Int32 // 0: an agent from before v2, 1: an impostor, 2: the real agent
 	var keys atomic.Value
 	e.s.Enroll.Pair = func(_ context.Context, _ string, key []byte) (int, enroll.Response, string, error) {
@@ -145,7 +145,7 @@ func TestAddHostHintsAuditAndVerifiedMark(t *testing.T) {
 // refused before anything is looked up.
 func TestJoinCodeIsNotRevealedToAPITokens(t *testing.T) {
 	e := setup(t)
-	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.PanelAddr = "100.64.0.10"
 	e.s.control = newRateLimiter(100)
 	e.s.Enroll.Pair = func(ctx context.Context, _ string, _ []byte) (int, enroll.Response, string, error) {
 		<-ctx.Done()

@@ -509,7 +509,7 @@ func (s *Store) Assign(target, site string) (previous string, err error) {
 	return previous, err
 }
 
-// Describe is a one-line summary of a user's access ("viewer of Neptune, Straw").
+// Describe is a one-line summary of a user's access ("viewer of Alice, Bob").
 func Describe(u User) string {
 	if u.Role == RoleViewer {
 		if len(u.Sites) == 0 {

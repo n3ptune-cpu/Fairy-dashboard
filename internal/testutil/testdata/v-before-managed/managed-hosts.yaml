@@ -1,40 +1,40 @@
 # Hosts added in the Fairy panel (Add host). Written by the panel: change them there (Re-pair, Remove).
 # Their tokens are in secrets/ next to this file. A host with the same id in /etc/fairy/config.yaml wins.
 hosts:
-    - id: nsx-furina
-      name: NSX-FURINA
-      url: http://nsx-furina:9101
-      site: Neptune
+    - id: srv-winpc
+      name: SRV-WINPC
+      url: http://srv-winpc:9101
+      site: Alice
       os: windows
       options:
         power_control: true
         self_update: true
         coretemp: true
-      added_at: 2026-11-10T16:06:28.192900821Z
+      added_at: 2026-11-10T17:08:48.4405783Z
       added_by: n@example.com
       agent_version: 13-d43fdaf
-      hostname: NSX-FURINA
+      hostname: SRV-WINPC
       control_paired: true
-    - id: nsx-kachina
-      name: nsx-kachina
-      url: http://nsx-kachina:9101
-      site: Neptune
+    - id: srv-pvea
+      name: srv-pvea
+      url: http://srv-pvea:9101
+      site: Alice
       os: linux
-      node: NSX-KACHINA
-      system_id: neptune-nsx-kachina-node-nsx-kachina
+      node: SRV-PVEA
+      system_id: alice-srv-pvea-node-srv-pvea
       options:
         power_control: true
       proxmox:
-        id: neptune-nsx-kachina
-        id_prefix: neptune-nsx-kachina-
-        node: NSX-KACHINA
-        url: https://nsx-kachina:8006
-        server_name: NSX-KACHINA
-        token_id: fairy@pve!panel-nsx-kachina
+        id: alice-srv-pvea
+        id_prefix: alice-srv-pvea-
+        node: SRV-PVEA
+        url: https://srv-pvea:8006
+        server_name: SRV-PVEA
+        token_id: fairy@pve!panel-srv-pvea
         ca: true
       proxmox_wanted: true
-      added_at: 2026-11-10T16:06:29.211441615Z
+      added_at: 2026-11-10T17:08:49.459707526Z
       added_by: n@example.com
       agent_version: 13-d43fdaf
-      hostname: NSX-KACHINA
+      hostname: SRV-PVEA
       control_paired: true

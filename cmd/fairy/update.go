@@ -20,7 +20,7 @@ import (
 )
 
 // `fairy update`: the panel host's manual update (release.CLI, the same as `fairy-agent update`), as root on
-// the panel's machine (CT 124):
+// the panel's machine:
 //
 //	fairy update --check   current version vs the latest Fairy-dashboard release
 //	fairy update           download the latest release, verify its signature (key built into this binary) and

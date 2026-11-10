@@ -46,7 +46,7 @@ const (
 	pendingMaxAge  = 3 * time.Minute
 	pendingMaxBody = 32 << 10         // kept on the server (not in the cookie), so only bounded for memory
 	bodySniffMax   = 2048             // a body that is not JSON is read ahead only when it is at most this long
-	labelHeader    = "X-Fairy-Action" // optional: what the UI calls the action ("Shut down PROJECT REBUILD")
+	labelHeader    = "X-Fairy-Action" // optional: what the UI calls the action ("Shut down OFFICE PC")
 )
 
 type ctxKey int

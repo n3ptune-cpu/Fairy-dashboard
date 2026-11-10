@@ -162,9 +162,9 @@ func mustJSON(t *testing.T, what string, v any) []byte {
 // One hostile agent among three hosts, and one hostile Proxmox row (M2): everything the API serves from the
 // poller can still be written, no host is hidden, and the other hosts are exactly as without it.
 func TestOneHostileAgentAmongThree(t *testing.T) {
-	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
 	b := testutil.NewBackend()
-	b.Metrics["cyrene"] = func() (jsonx.M, error) { m := testutil.AgentMetrics(); m["hostname"] = "cyrene"; return m, nil }
+	b.Metrics["tower"] = func() (jsonx.M, error) { m := testutil.AgentMetrics(); m["hostname"] = "tower"; return m, nil }
 	p, err := New(cfg, config.Secrets{}, b)
 	if err != nil {
 		t.Fatal(err)
@@ -172,14 +172,14 @@ func TestOneHostileAgentAmongThree(t *testing.T) {
 	ctx := context.Background()
 	p.PollOnce(ctx)
 	before := snap(p)
-	wantCyrene := string(mustJSON(t, "cyrene", stable(before["cyrene"])))
+	wantTower := string(mustJSON(t, "tower", stable(before["tower"])))
 
 	b.Mu.Lock()
 	b.Metrics["laptop"] = func() (jsonx.M, error) { return hostileMetrics(), nil }
 	b.PVE = func() ([]jsonx.M, error) {
 		rows := testutil.PVEResources()
 		rows[2]["cpu"], rows[2]["maxmem"], rows[2]["netin"] = 1.8e307, 1e308, 1e308
-		return append(rows, jsonx.M{"type": "qemu", "vmid": -5.0, "node": "NSX-KACHINA", "status": "running", "cpu": 1e308}), nil
+		return append(rows, jsonx.M{"type": "qemu", "vmid": -5.0, "node": "SRV-PVEA", "status": "running", "cpu": 1e308}), nil
 	}
 	b.Mu.Unlock()
 	for range 3 {
@@ -209,8 +209,8 @@ func TestOneHostileAgentAmongThree(t *testing.T) {
 		*lap.PowerW != 80 || lap.NetRxBps != nil { // 80 W: its plug's last good reading, kept while the row is stale
 		t.Fatalf("the hostile host: %+v", lap)
 	}
-	if got := string(mustJSON(t, "cyrene", stable(after["cyrene"]))); got != wantCyrene {
-		t.Fatalf("another host changed:\n%s\n%s", got, wantCyrene)
+	if got := string(mustJSON(t, "tower", stable(after["tower"]))); got != wantTower {
+		t.Fatalf("another host changed:\n%s\n%s", got, wantTower)
 	}
 	if vm := after["qemu-100"]; vm.Status != "online" || vm.CPUPercent != nil || vm.MemTotal != nil || vm.NetRxBps != nil {
 		t.Fatalf("the hostile Proxmox row: %+v", vm)
@@ -226,7 +226,7 @@ func TestOneHostileAgentAmongThree(t *testing.T) {
 			t.Fatalf("%+v", st)
 		}
 	}
-	if ov.TotalW == nil || *ov.TotalW != 160 { // cyrene's plug (80 W) and the laptop's last good reading (80 W, stale)
+	if ov.TotalW == nil || *ov.TotalW != 160 { // tower's plug (80 W) and the laptop's last good reading (80 W, stale)
 		t.Fatalf("total %v", ov.TotalW)
 	}
 	if u := p.UPS.State("laptop/apc"); u == nil || u.Status != "online" {
@@ -257,7 +257,7 @@ func TestSystemThatCannotBeWrittenShowsAsError(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	defer slog.SetDefault(old)
 
-	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
 	b := testutil.NewBackend()
 	p, err := New(cfg, config.Secrets{}, b)
 	if err != nil {
@@ -298,7 +298,7 @@ func TestSystemThatCannotBeWrittenShowsAsError(t *testing.T) {
 		now := snap(p)
 		e := now["laptop"]
 		if e.Status != StatusError || e.Error == nil || !strings.Contains(*e.Error, "cannot show") || e.Name != "laptop" || e.Kind != "agent" ||
-			e.Source != "agent" || *e.Group != "Neptune" || e.CPUPercent != nil || e.PowerPending != nil || e.PollMode != "default" ||
+			e.Source != "agent" || *e.Group != "Alice" || e.CPUPercent != nil || e.PowerPending != nil || e.PollMode != "default" ||
 			len(e.PowerActions) == 0 || *e.DWServiceURL == "" {
 			t.Fatalf("%s: %+v", name, e)
 		}
@@ -311,7 +311,7 @@ func TestSystemThatCannotBeWrittenShowsAsError(t *testing.T) {
 			}
 		}
 		var ok map[string]any
-		_ = json.Unmarshal(js["cyrene"], &ok)
+		_ = json.Unmarshal(js["tower"], &ok)
 		for k := range ok {
 			if _, has := m[k]; !has {
 				t.Fatalf("%s: the error entry has no %q", name, k)

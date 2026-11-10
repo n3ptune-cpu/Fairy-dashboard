@@ -62,18 +62,18 @@ func TestShellyGen2AndGen1Fallback(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	defer gen1.Close()
-	pm := manager(t, []map[string]any{{"id": "p2", "type": "shelly", "url": gen2.URL, "system": "cyrene"},
+	pm := manager(t, []map[string]any{{"id": "p2", "type": "shelly", "url": gen2.URL, "system": "tower"},
 		{"id": "p1", "type": "shelly", "url": gen1.URL, "include_in_total": false}}, nil, nil)
 	pm.PollAll(context.Background())
 	ov := byID(pm.Overview())
 	r2, r1 := ov["p2"].Readings[0], ov["p1"].Readings[0]
-	if *r2.Watts != 42.5 || *r2.Voltage != 231.2 || *r2.Current != 0.21 || math.Abs(*r2.EnergyKWhTotal-12.3456) > 1e-9 || *r2.SystemID != "cyrene" {
+	if *r2.Watts != 42.5 || *r2.Voltage != 231.2 || *r2.Current != 0.21 || math.Abs(*r2.EnergyKWhTotal-12.3456) > 1e-9 || *r2.SystemID != "tower" {
 		t.Fatalf("%+v", r2)
 	}
 	if *r1.Watts != 17 || *r1.EnergyKWhTotal != 10 { // watt-minutes -> kWh
 		t.Fatalf("%+v", r1)
 	}
-	if *pm.Overview().TotalW != 42.5 || pm.LinkedWatts()["cyrene"] != 42.5 { // p1 excluded from total
+	if *pm.Overview().TotalW != 42.5 || pm.LinkedWatts()["tower"] != 42.5 { // p1 excluded from total
 		t.Fatal("total / linked")
 	}
 	h := pm.HistoryView("")

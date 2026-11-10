@@ -1,50 +1,50 @@
 {
  "assign": {
-  "cyrene": "Straw",
-  "power:desk-plug": "Neptune"
+  "power:desk-plug": "Alice",
+  "tower": "Bob"
  },
  "removed": {
   "c0ffee00-gone-0004": {
-   "at": "2026-11-10T14:46:43.783682557Z",
+   "at": "2026-11-10T17:08:46.184920541Z",
    "by": "panel by owner@example.com",
    "label": "gone@example.com"
   }
  },
  "sites": [
-  "Neptune",
-  "Straw"
+  "Alice",
+  "Bob"
  ],
  "users": {
   "3f6c1d2e-owner-0001": {
-   "created_at": "2026-11-10T14:46:43.771658811Z",
+   "created_at": "2026-11-10T17:08:46.169362452Z",
    "email": "owner@example.com",
-   "last_seen": "2026-11-10T14:46:43.771658811Z",
+   "last_seen": "2026-11-10T17:08:46.169362452Z",
    "name": "Owner",
    "role": "admin",
    "sites": [],
    "sub": "3f6c1d2e-owner-0001",
    "via": "bootstrap_admins"
   },
-  "5d2e9f10-kaveh-0003": {
-   "created_at": "2026-11-10T14:46:43.777081662Z",
-   "email": "kaveh@example.com",
-   "last_seen": "2026-11-10T14:46:43.777081662Z",
-   "name": "Kaveh",
+  "5d2e9f10-carol-0003": {
+   "created_at": "2026-11-10T17:08:46.176954766Z",
+   "email": "carol@example.com",
+   "last_seen": "2026-11-10T17:08:46.176954766Z",
+   "name": "Carol",
    "role": "pending",
    "sites": [],
-   "sub": "5d2e9f10-kaveh-0003",
+   "sub": "5d2e9f10-carol-0003",
    "via": "first sign-in"
   },
-  "9a1b77c0-straw-0002": {
-   "created_at": "2026-11-10T14:46:43.774364737Z",
-   "email": "straw@example.com",
-   "last_seen": "2026-11-10T14:46:43.774364737Z",
-   "name": "Straw",
+  "9a1b77c0-bob-0002": {
+   "created_at": "2026-11-10T17:08:46.173313826Z",
+   "email": "bob@example.com",
+   "last_seen": "2026-11-10T17:08:46.173313826Z",
+   "name": "Bob",
    "role": "viewer",
    "sites": [
-    "Straw"
+    "Bob"
    ],
-   "sub": "9a1b77c0-straw-0002",
+   "sub": "9a1b77c0-bob-0002",
    "via": "panel by owner@example.com"
   }
  }

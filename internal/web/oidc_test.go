@@ -503,7 +503,7 @@ func TestPendingActionRunsOnceAfterStepUp(t *testing.T) {
 // Add host after a step-up: the panel makes the code by itself, and the browser gets it once (reveal=1).
 func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
 	e := setup(t)
-	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.PanelAddr = "100.64.0.10"
 	e.s.Enroll.Pair = func(ctx context.Context, _ string, _ []byte) (int, enroll.Response, string, error) {
 		<-ctx.Done()
 		return 0, enroll.Response{}, "", ctx.Err()
@@ -513,9 +513,9 @@ func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
 	idp.claims = map[string]any{"groups": []string{"viewers", "controllers"}, "auth_time": time.Now().Add(-time.Hour).Unix()}
 	q, rt := idp.login(e, "/auth/login?next=/", "")
 	sess := sessionCookie(e, e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt).hdr)
-	body := map[string]any{"name": "NSX-FURINA", "os": "linux", "options": map[string]any{"power_control": true}}
+	body := map[string]any{"name": "SRV-WINPC", "os": "linux", "options": map[string]any{"power_control": true}}
 	r := e.do("POST", "/api/admin/hosts", body, "Cookie", sess, "X-Requested-With", "fairy", "Content-Type", "application/json",
-		"X-Fairy-Action", "Add host NSX-FURINA")
+		"X-Fairy-Action", "Add host SRV-WINPC")
 	if r.code != 401 || !strings.Contains(string(r.raw), `"pending":true`) || len(e.s.Enroll.List()) != 0 {
 		t.Fatal("first try must ask for a step-up and make nothing", r.code, string(r.raw))
 	}
@@ -550,13 +550,13 @@ func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
 // action: the next sign-in runs nothing, even one that names it.
 func TestCancelledPendingActionDoesNotRun(t *testing.T) {
 	e := setup(t)
-	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.PanelAddr = "100.64.0.10"
 	idp := newFakeIDP(t)
 	e.s.Cfg.OIDC.Issuer = idp.srv.URL
 	idp.claims = map[string]any{"groups": []string{"viewers", "controllers"}, "auth_time": time.Now().Add(-time.Hour).Unix()}
 	q, rt := idp.login(e, "/auth/login?next=/", "")
 	sess := sessionCookie(e, e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt).hdr)
-	r := e.do("POST", "/api/admin/hosts", map[string]any{"name": "NSX-FURINA", "os": "linux"}, "Cookie", sess,
+	r := e.do("POST", "/api/admin/hosts", map[string]any{"name": "SRV-WINPC", "os": "linux"}, "Cookie", sess,
 		"X-Requested-With", "fairy", "Content-Type", "application/json")
 	if r.code != 401 || pendingID(r) == "" {
 		t.Fatal(r.code, string(r.raw))

@@ -46,7 +46,7 @@ func TestBreakGlassCLI(t *testing.T) {
 	if cs := st.ControlDisabled(); cs == nil || cs.Reason != "psu swap" {
 		t.Fatal("kill switch not set")
 	}
-	if code, _ = run("host", "nsx-cyrene", "power-control", "disable"); code != 0 || len(must(st.PowerDisabledList())) != 1 {
+	if code, _ = run("host", "srv-tower", "power-control", "disable"); code != 0 || len(must(st.PowerDisabledList())) != 1 {
 		t.Fatal("host flag")
 	}
 	if code, _ = run("poll", "llm-box", "2s"); code != 0 {
@@ -100,8 +100,8 @@ func TestHealthReportsTheLastHealthFile(t *testing.T) {
 	err := health.Write(dir+"/data", health.Report{
 		StartedAt: now.Add(-time.Hour).Format(time.RFC3339Nano), WrittenAt: now.Format(time.RFC3339Nano),
 		Systems:      map[string]int{"online": 3, "stale": 0, "offline": 1, "stopped": 0, "paused": 0},
-		SystemIDs:    []string{"nsx-cyrene"},
-		Sources:      []model.SourceStatus{{Name: "agent:nsx-cyrene", OK: true, LatencyMS: model.P(1.5), LastSuccess: &now}},
+		SystemIDs:    []string{"srv-tower"},
+		Sources:      []model.SourceStatus{{Name: "agent:srv-tower", OK: true, LatencyMS: model.P(1.5), LastSuccess: &now}},
 		PowerSources: []health.Source{{ID: "plug", Status: "unreachable", Error: model.P("timeout")}},
 		UPS:          []health.Source{{ID: "rack/ups", Status: "ok"}},
 	})
@@ -111,7 +111,7 @@ func TestHealthReportsTheLastHealthFile(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "health"}, &out, &errb)
 	want := []string{"panel: RUNNING", "control: enabled", "systems: online 3, stale 0, offline 1, stopped 0, paused 0",
-		"agent:nsx-cyrene", "1.5 ms", "power:plug", "unreachable", "timeout", "ups:rack/ups"}
+		"agent:srv-tower", "1.5 ms", "power:plug", "unreachable", "timeout", "ups:rack/ups"}
 	for _, w := range want {
 		if !strings.Contains(out.String(), w) {
 			t.Fatalf("missing %q in\n%s", w, out.String())

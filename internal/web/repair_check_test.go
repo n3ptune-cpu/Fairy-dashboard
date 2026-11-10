@@ -61,7 +61,7 @@ func newRepairRig(t *testing.T) *repairRig {
 	e := setup(t)
 	e.s.Enroll.Interval = 10 * time.Millisecond
 	e.s.control = newRateLimiter(1000)
-	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.PanelAddr = "100.64.0.10"
 	r := &repairRig{e: e, cookie: e.cookie(controller(), 0)}
 	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 		r.mu.Lock()
@@ -75,7 +75,7 @@ func newRepairRig(t *testing.T) *repairRig {
 	e.b.Mu.Unlock()
 	for _, n := range []string{"alpha", "beta"} {
 		r.set(nodeAnswer("PVE-"+strings.ToUpper(n), n))
-		if st, msg := r.run(t, "/api/admin/hosts", map[string]any{"name": n, "os": "linux", "site": "Neptune", "proxmox_new": true}); st != "online" {
+		if st, msg := r.run(t, "/api/admin/hosts", map[string]any{"name": n, "os": "linux", "site": "Alice", "proxmox_new": true}); st != "online" {
 			t.Fatal(n, st, msg)
 		}
 	}
@@ -107,7 +107,7 @@ func (r *repairRig) secretFile(t *testing.T, id string) string {
 // list never holds two entries with the same Proxmox id. Nothing the panel had is changed.
 func TestRepairRefusesAnAnswerThatCollidesWithAnotherNode(t *testing.T) {
 	r := newRepairRig(t)
-	if got := strings.Join(r.managedClusters(), ","); got != "neptune-pve-alpha,neptune-pve-beta" {
+	if got := strings.Join(r.managedClusters(), ","); got != "alice-pve-alpha,alice-pve-beta" {
 		t.Fatal(got)
 	}
 	before, _ := os.ReadFile(filepath.Join(r.e.s.Cfg.DataDir, "managed-hosts.yaml"))
@@ -119,13 +119,13 @@ func TestRepairRefusesAnAnswerThatCollidesWithAnotherNode(t *testing.T) {
 		if st != "failed" || !strings.Contains(msg, "Nothing was changed") {
 			t.Fatal("renamed:", renamed, st, msg)
 		}
-		if renamed && !strings.Contains(msg, "neptune-pve-beta") {
+		if renamed && !strings.Contains(msg, "alice-pve-beta") {
 			t.Fatal("the refusal must name the entry it collides with:", msg)
 		}
 		if !renamed && !strings.Contains(msg, `added as "PVE-ALPHA"`) {
 			t.Fatal(msg)
 		}
-		if got := strings.Join(r.managedClusters(), ","); got != "neptune-pve-alpha,neptune-pve-beta" {
+		if got := strings.Join(r.managedClusters(), ","); got != "alice-pve-alpha,alice-pve-beta" {
 			t.Fatal("clusters after a refused Re-pair:", got)
 		}
 		after, _ := os.ReadFile(filepath.Join(r.e.s.Cfg.DataDir, "managed-hosts.yaml"))
@@ -172,7 +172,7 @@ func TestRepairNeedsTheSameNodeNameUnlessRenamed(t *testing.T) {
 	if s := r.secretFile(t, "alpha"); !strings.Contains(s, "second-read-token") {
 		t.Fatal("tokens replaced by a refused answer:", s)
 	}
-	if got := strings.Join(r.managedClusters(), ","); got != "neptune-pve-beta,neptune-pve-alpha" {
+	if got := strings.Join(r.managedClusters(), ","); got != "alice-pve-beta,alice-pve-alpha" {
 		t.Fatal(got)
 	}
 	// with the tick: accepted, the node entry follows the new name, still two different entries
@@ -180,7 +180,7 @@ func TestRepairNeedsTheSameNodeNameUnlessRenamed(t *testing.T) {
 	if st != "online" {
 		t.Fatal(st, msg)
 	}
-	if got := strings.Join(r.managedClusters(), ","); got != "neptune-pve-beta,neptune-pve-gamma" {
+	if got := strings.Join(r.managedClusters(), ","); got != "alice-pve-beta,alice-pve-gamma" {
 		t.Fatal(got)
 	}
 	if s := r.secretFile(t, "alpha"); !strings.Contains(s, "third-read-token") {

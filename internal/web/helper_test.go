@@ -192,20 +192,20 @@ func TestHelperAgentAnswers(t *testing.T) {
 func TestHelperPermissionsFollowPowerActions(t *testing.T) {
 	e := setupSites(t)
 	csrf := []string{"X-Requested-With", "fairy"}
-	e.helperPoll("cyrene", "running", helperAll...)     // Straw's
+	e.helperPoll("tower", "running", helperAll...)      // Bob's
 	e.helperPoll("secret-box", "running", helperAll...) // admins only, and no control token
-	for _, sub := range []string{subStraw, subNeptune, subPending} {
+	for _, sub := range []string{subBob, subAlice, subPending} {
 		c := e.cookie(person(sub), 0)
-		for _, id := range []string{"cyrene", "secret-box", "laptop"} {
+		for _, id := range []string{"tower", "secret-box", "laptop"} {
 			r := e.do("POST", "/api/systems/"+id+"/helper/stop", map[string]any{"confirm": id}, append([]string{"Cookie", c}, csrf...)...)
 			if r.code != 403 {
 				t.Errorf("%s stopping %s: %d %s", sub, id, r.code, r.raw)
 			}
-			assertHidden(t, sub, "helper stop", r.raw2(), map[string][]string{subStraw: hiddenFromStraw, subNeptune: hiddenFromNeptune, subPending: hiddenFromAll}[sub])
+			assertHidden(t, sub, "helper stop", r.raw2(), map[string][]string{subBob: hiddenFromBob, subAlice: hiddenFromAlice, subPending: hiddenFromAll}[sub])
 		}
 	}
 	a := e.cookie(person(subAdmin), 0)
-	if r := e.do("POST", "/api/systems/cyrene/helper/stop", map[string]any{"confirm": "cyrene"}, append([]string{"Cookie", a}, csrf...)...); r.code != 200 {
+	if r := e.do("POST", "/api/systems/tower/helper/stop", map[string]any{"confirm": "tower"}, append([]string{"Cookie", a}, csrf...)...); r.code != 200 {
 		t.Fatalf("admin: %d %s", r.code, r.raw)
 	}
 	if r := e.do("POST", "/api/systems/secret-box/helper/stop", map[string]any{"confirm": "secret-box"}, append([]string{"Cookie", a}, csrf...)...); r.code != 409 ||
@@ -219,9 +219,9 @@ func TestHelperPermissionsFollowPowerActions(t *testing.T) {
 		t.Fatalf("a guest: %d %s", r.code, r.raw)
 	}
 	// viewers see the helper's state of their own hosts (the badge), never the other sites'
-	s := e.cookie(person(subStraw), 0)
-	if r := e.do("GET", "/api/systems/cyrene", nil, "Cookie", s); r.code != 200 || r.body["helper"] == nil {
-		t.Fatalf("Straw's own host: %d %s", r.code, r.raw)
+	s := e.cookie(person(subBob), 0)
+	if r := e.do("GET", "/api/systems/tower", nil, "Cookie", s); r.code != 200 || r.body["helper"] == nil {
+		t.Fatalf("Bob's own host: %d %s", r.code, r.raw)
 	}
 }
 
@@ -231,12 +231,12 @@ func TestFansPausedWhileHelperStopped(t *testing.T) {
 	e := setup(t)
 	csrf := []string{"X-Requested-With", "fairy"}
 	c := e.cookie(controller(), 0)
-	e.helperPoll("cyrene", "running", helperAll...)
-	if r := e.do("POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, append([]string{"Cookie", c}, csrf...)...); r.code != 200 {
+	e.helperPoll("tower", "running", helperAll...)
+	if r := e.do("POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, append([]string{"Cookie", c}, csrf...)...); r.code != 200 {
 		t.Fatalf("running: %d %s", r.code, r.raw)
 	}
-	e.helperPoll("cyrene", "stopped", helperAll...)
-	sys := e.do("GET", "/api/systems/cyrene", nil, "Cookie", c)
+	e.helperPoll("tower", "stopped", helperAll...)
+	sys := e.do("GET", "/api/systems/tower", nil, "Cookie", c)
 	h, _ := sys.body["helper"].(map[string]any)
 	if sys.body["fan_control"] != true || fmt.Sprint(h["paused"]) != "[coretemp ipmi fans]" {
 		t.Fatalf("stopped: %s", sys.raw)
@@ -244,11 +244,11 @@ func TestFansPausedWhileHelperStopped(t *testing.T) {
 	e.b.Mu.Lock()
 	e.b.Requests = nil
 	e.b.Mu.Unlock()
-	if r := e.do("POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, append([]string{"Cookie", c}, csrf...)...); r.code != 409 ||
+	if r := e.do("POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, append([]string{"Cookie", c}, csrf...)...); r.code != 409 ||
 		!strings.Contains(r.raw2(), "helper is stopped") {
 		t.Fatalf("fan write: %d %s", r.code, r.raw)
 	}
-	if r := e.do("GET", "/api/systems/cyrene/fan", nil, "Cookie", c); r.code != 200 || !strings.Contains(fmt.Sprint(r.body["error"]), "helper is stopped") {
+	if r := e.do("GET", "/api/systems/tower/fan", nil, "Cookie", c); r.code != 200 || !strings.Contains(fmt.Sprint(r.body["error"]), "helper is stopped") {
 		t.Fatalf("fan status: %d %s", r.code, r.raw)
 	}
 	if strings.Contains(e.agentRequests(), "/fan/") {
@@ -296,7 +296,7 @@ func TestPowerAndFansWaitForTheHelper(t *testing.T) {
 	}
 	// the helper stops between the poll and the click: the agent answers 503 helper_stopped
 	e.helperPoll("laptop", "running", helperAll...)
-	e.helperPoll("cyrene", "running", helperAll...)
+	e.helperPoll("tower", "running", helperAll...)
 	e.b.Reply = func(_, path string) (int, jsonx.M, error) {
 		if path == "/power" || strings.HasPrefix(path, "/fan/") && path != "/fan/status" {
 			return 503, jsonx.M{"error": "helper stopped: start fairy-agent-helper", "code": "helper_stopped"}, nil
@@ -311,10 +311,10 @@ func TestPowerAndFansWaitForTheHelper(t *testing.T) {
 		!strings.Contains(r.raw2(), "start the helper first") {
 		t.Fatalf("power 503: %d %s", r.code, r.raw)
 	}
-	if r := e.do("POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, hdr...); r.code != 409 || !strings.Contains(r.raw2(), "helper is stopped") {
+	if r := e.do("POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, hdr...); r.code != 409 || !strings.Contains(r.raw2(), "helper is stopped") {
 		t.Fatalf("fan 503: %d %s", r.code, r.raw)
 	}
-	if r := e.do("GET", "/api/systems/cyrene/fan", nil, hdr...); r.code != 200 || r.body["available"] != false || r.body["reason"] != "helper_stopped" {
+	if r := e.do("GET", "/api/systems/tower/fan", nil, hdr...); r.code != 200 || r.body["available"] != false || r.body["reason"] != "helper_stopped" {
 		t.Fatalf("fan status: %d %s", r.code, r.raw)
 	}
 }

@@ -34,8 +34,8 @@ func TestParseDefaultsAndProxmoxForms(t *testing.T) {
 	if _, err := Parse([]byte(base + `enroll: {allow_non_tailscale: maybe}`)); err == nil {
 		t.Fatal("allow_non_tailscale takes true or false only")
 	}
-	c, err = Parse([]byte(base + `proxmox: [{id: straw, urls: ["https://a:8006"], token_id: "x@pve!y"}]`))
-	if err != nil || c.Proxmox[0].Prefix() != "straw-" {
+	c, err = Parse([]byte(base + `proxmox: [{id: bob, urls: ["https://a:8006"], token_id: "x@pve!y"}]`))
+	if err != nil || c.Proxmox[0].Prefix() != "bob-" {
 		t.Fatal(err)
 	}
 }
@@ -80,18 +80,18 @@ func TestEnvFileNeverOverrides(t *testing.T) {
 func TestBMCPowerValidation(t *testing.T) {
 	t.Setenv("T", strings.Repeat("t", 32))
 	t.Setenv("C", strings.Repeat("c", 32))
-	agents := `agents: [{id: furina, url: "http://100.64.0.11:9101", token_env: T, control_token_env: C}, {id: ro, url: "http://100.64.0.12:9101", token_env: T}]
+	agents := `agents: [{id: winpc, url: "http://100.64.0.11:9101", token_env: T, control_token_env: C}, {id: ro, url: "http://100.64.0.12:9101", token_env: T}]
 `
-	ok := base + agents + `systems: [{id: nsx-cyrene, bmc_power: {relay: furina, target: cyrene-bmc}}]`
+	ok := base + agents + `systems: [{id: srv-tower, bmc_power: {relay: winpc, target: tower-bmc}}]`
 	c, err := Parse([]byte(ok))
-	if err != nil || c.Systems[0].BMCPower.Relay != "furina" || c.Systems[0].BMCPower.Target != "cyrene-bmc" {
+	if err != nil || c.Systems[0].BMCPower.Relay != "winpc" || c.Systems[0].BMCPower.Target != "tower-bmc" {
 		t.Fatal(err)
 	}
 	for y, want := range map[string]string{
-		base + agents + `systems: [{id: nsx-cyrene, bmc_power: {relay: ro, target: cyrene-bmc}}]`:       "control_token_env",
-		base + agents + `systems: [{id: nsx-cyrene, bmc_power: {relay: nope, target: cyrene-bmc}}]`:     "control_token_env",
-		base + agents + `systems: [{id: nsx-cyrene, bmc_power: {relay: furina, target: "Cyrene BMC"}}]`: "bmc_power.target",
-		base + agents + `systems: [{id: furina, bmc_power: {relay: furina, target: x}}]`:                "itself",
+		base + agents + `systems: [{id: srv-tower, bmc_power: {relay: ro, target: tower-bmc}}]`:      "control_token_env",
+		base + agents + `systems: [{id: srv-tower, bmc_power: {relay: nope, target: tower-bmc}}]`:    "control_token_env",
+		base + agents + `systems: [{id: srv-tower, bmc_power: {relay: winpc, target: "Tower BMC"}}]`: "bmc_power.target",
+		base + agents + `systems: [{id: winpc, bmc_power: {relay: winpc, target: x}}]`:               "itself",
 	} {
 		if _, err := Parse([]byte(y)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", y, err)

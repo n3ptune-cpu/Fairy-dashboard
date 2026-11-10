@@ -30,7 +30,7 @@ type Iface struct {
 
 // Detected is the panel's own Tailscale address and where it was found ("" Addr: not found).
 type Detected struct {
-	Addr string // e.g. 100.88.109.47
+	Addr string // e.g. 100.64.0.10
 	Via  string // "interface tailscale0", "Tailscale LocalAPI"
 }
 

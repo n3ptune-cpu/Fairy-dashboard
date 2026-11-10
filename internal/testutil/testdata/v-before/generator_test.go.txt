@@ -55,18 +55,18 @@ oidc:
   control_groups: []
   bootstrap_admins: [owner@example.com]
 proxmox:
-  - id: teyvat
-    cluster_name: NSX-TEYVAT
-    site: Neptune
+  - id: dc1
+    cluster_name: SRV-DC1
+    site: Alice
     urls: ["https://pve1:8006"]
     token_id: "fairy@pve!panel"
     token_secret_env: PVE_SECRET
     verify_tls: false
 agents:
-  - {id: laptop, url: "http://laptop", token_env: TOK_LAPTOP, group: Neptune, site: Neptune, power_control: true,
-     self_update: true, control_token_env: CTL_CYRENE}
-  - {id: cyrene, url: "http://cyrene", token_env: TOK_CYRENE,
-     fan_control: {vendor: supermicro, control_token_env: CTL_CYRENE}}
+  - {id: laptop, url: "http://laptop", token_env: TOK_LAPTOP, group: Alice, site: Alice, power_control: true,
+     self_update: true, control_token_env: CTL_TOWER}
+  - {id: tower, url: "http://tower", token_env: TOK_TOWER,
+     fan_control: {vendor: supermicro, control_token_env: CTL_TOWER}}
 `
 
 func TestGenVBeforeFixture(t *testing.T) {
@@ -75,8 +75,8 @@ func TestGenVBeforeFixture(t *testing.T) {
 		t.Skip("fixture generator: set FAIRY_GEN_FIXTURE=<dir>")
 	}
 	t.Setenv("TOK_LAPTOP", testutil.ReadToken)
-	t.Setenv("TOK_CYRENE", testutil.ReadToken+"x")
-	t.Setenv("CTL_CYRENE", testutil.ControlToken)
+	t.Setenv("TOK_TOWER", testutil.ReadToken+"x")
+	t.Setenv("CTL_TOWER", testutil.ControlToken)
 	t.Setenv("PVE_SECRET", "pve-secret-uuid")
 	dataDir := filepath.Join(out, "data")
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
@@ -132,24 +132,24 @@ func TestGenVBeforeFixture(t *testing.T) {
 		t.Fatal("owner is not admin", string(me.raw))
 	}
 	// a viewer, someone waiting, and someone the owner removed
-	straw := signIn("9a1b77c0-straw-0002", "straw@example.com", "Straw", nil)
-	signIn("5d2e9f10-kaveh-0003", "kaveh@example.com", "Kaveh", nil)
+	bob := signIn("9a1b77c0-bob-0002", "bob@example.com", "Bob", nil)
+	signIn("5d2e9f10-carol-0003", "carol@example.com", "Carol", nil)
 	signIn("c0ffee00-gone-0004", "gone@example.com", "Gone", nil)
-	ok("site", e.do("POST", "/api/admin/sites", map[string]any{"name": "Straw"}, oh...), 200, 201)
-	ok("role", e.do("PUT", "/api/admin/users/9a1b77c0-straw-0002", map[string]any{"role": "viewer", "sites": []string{"Straw"}}, oh...), 200)
+	ok("site", e.do("POST", "/api/admin/sites", map[string]any{"name": "Bob"}, oh...), 200, 201)
+	ok("role", e.do("PUT", "/api/admin/users/9a1b77c0-bob-0002", map[string]any{"role": "viewer", "sites": []string{"Bob"}}, oh...), 200)
 	ok("remove", e.do("DELETE", "/api/admin/users/c0ffee00-gone-0004", nil, oh...), 200)
-	ok("assign", e.do("PUT", "/api/admin/assign", map[string]any{"target": "cyrene", "site": "Straw"}, oh...), 200)
+	ok("assign", e.do("PUT", "/api/admin/assign", map[string]any{"target": "tower", "site": "Bob"}, oh...), 200)
 	ok("poll", e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, oh...), 200)
 	set := e.do("GET", "/api/settings", nil, "Cookie", owner)
 	ok("settings get", set, 200)
 	ok("settings put", e.do("PUT", "/api/settings", set.body, oh...), 200)
-	ok("viewer reads", e.do("GET", "/api/systems", nil, "Cookie", straw), 200)
-	ok("refused", e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, "Cookie", straw, "X-Requested-With", "fairy"), 403, 404)
+	ok("viewer reads", e.do("GET", "/api/systems", nil, "Cookie", bob), 200)
+	ok("refused", e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, "Cookie", bob, "X-Requested-With", "fairy"), 403, 404)
 
 	// notifications, as the panel's own watchers add them
 	resolved := time.Now().UTC()
-	s.Notes.Add(notifications.Event{Kind: "host_offline", Type: "host", Severity: "critical", SystemID: "cyrene", Host: "cyrene",
-		Text: "cyrene is offline", Key: "offline:cyrene", Alarm: true})
+	s.Notes.Add(notifications.Event{Kind: "host_offline", Type: "host", Severity: "critical", SystemID: "tower", Host: "tower",
+		Text: "tower is offline", Key: "offline:tower", Alarm: true})
 	s.Notes.Add(notifications.Event{Kind: "update_failed", Type: "update", Severity: "warning", SystemID: "laptop", Host: "laptop",
 		Text: "laptop: update failed"})
 	s.Notes.Add(notifications.Event{Kind: "temp_high", Type: "temperature", Severity: "warning", SystemID: "laptop", Host: "laptop",
@@ -192,17 +192,17 @@ func TestGenVBeforeFixture(t *testing.T) {
 		return ""
 	}
 	tokSystem := rawToken(cli("tokens", "create", "--name", "home-assistant", "--owner", "system", "--scope", "read"))
-	tokStraw := rawToken(cli("tokens", "create", "--name", "straw-script", "--owner", "9a1b77c0-straw-0002", "--sites", "Straw"))
+	tokBob := rawToken(cli("tokens", "create", "--name", "bob-script", "--owner", "9a1b77c0-bob-0002", "--sites", "Bob"))
 	cli("control", "disable", "--reason", "maintenance")
 	cli("control", "enable")
-	cli("sites", "assign", "power:desk-plug", "Neptune")
+	cli("sites", "assign", "power:desk-plug", "Alice")
 	usersList := cli("users", "list")
 
 	time.Sleep(1200 * time.Millisecond) // the stores write behind
 	meta, _ := json.MarshalIndent(map[string]any{
 		"generated_at_unix": time.Now().Unix(), "base_commit": "05b1019", "session_secret": strings.Repeat("s", 48),
-		"cookie_name": cookieName, "owner_sub": "3f6c1d2e-owner-0001", "owner_cookie": owner, "viewer_sub": "9a1b77c0-straw-0002",
-		"viewer_cookie": straw, "users_list": usersList, "token_system_read": tokSystem, "token_viewer_read": tokStraw,
+		"cookie_name": cookieName, "owner_sub": "3f6c1d2e-owner-0001", "owner_cookie": owner, "viewer_sub": "9a1b77c0-bob-0002",
+		"viewer_cookie": bob, "users_list": usersList, "token_system_read": tokSystem, "token_viewer_read": tokBob,
 		"note": "Test fixture: every name, address, token and cookie in this directory is made up. The cookies are signed with session_secret."}, "", "  ")
 	if err := os.WriteFile(filepath.Join(out, "generated.json"), append(meta, '\n'), 0o600); err != nil {
 		t.Fatal(err)

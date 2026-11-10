@@ -81,10 +81,10 @@ func TestEveryPrintedFieldStaysOnItsLine(t *testing.T) {
 	// audit tail: the outcome is an agent's error text; actor and target come from the identity provider and
 	// the requested address. Three complete fake entries inside one outcome stay one row.
 	fake := "error 502: agent said\n" +
-		"2026-11-10 12:00:00  ui               neptune@example.com      user.set_role              straw@example.com            ok\n" +
-		"2026-11-10 12:00:01  ui               neptune@example.com      power.shutdown             nsx-furina                   ok\n" +
+		"2026-11-10 12:00:00  ui               alice@example.com      user.set_role              bob@example.com            ok\n" +
+		"2026-11-10 12:00:01  ui               alice@example.com      power.shutdown             srv-winpc                   ok\n" +
 		"2026-11-10 12:00:02  cli              root                     control.enable             -                            ok"
-	if _, err := audit.Write(logPath, audit.Entry{Actor: "neptune", Action: "fan.mode", Target: "nsx-furina", Outcome: fake}); err != nil {
+	if _, err := audit.Write(logPath, audit.Entry{Actor: "alice", Action: "fan.mode", Target: "srv-winpc", Outcome: fake}); err != nil {
 		t.Fatal(err)
 	}
 	code, out := run("audit", "tail", "-n", "5")

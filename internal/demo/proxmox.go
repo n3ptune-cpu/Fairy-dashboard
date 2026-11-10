@@ -34,7 +34,7 @@ type nodeSpec struct {
 	lo, hi float64
 }
 
-var mainNodes = []nodeSpec{{"NSX-FONTAINE", 16, 64, 0.18, 0.55}, {"NSX-KACHINA", 8, 32, 0.05, 0.2}, {"NSX-SNEZHNAYA", 12, 64, 0.1, 0.35}}
+var mainNodes = []nodeSpec{{"SRV-PVEC", 16, 64, 0.18, 0.55}, {"SRV-PVEA", 8, 32, 0.05, 0.2}, {"SRV-PVEB", 12, 64, 0.1, 0.35}}
 
 func proxmoxResources() []jsonx.M {
 	t := since()
@@ -46,15 +46,15 @@ func proxmoxResources() []jsonx.M {
 			"disk": float64(38 * GiB), "maxdisk": float64(100 * GiB), "uptime": float64(int64(86400*12 + t))})
 	}
 	out = append(out,
-		guest(100, "qemu", "win11-gaming", "NSX-FONTAINE", 8, 16, 256, 0.05, 0.6, "running", "windows;vm"),
-		guest(101, "lxc", "minecraft", "NSX-FONTAINE", 4, 8, 32, 0.25, 0.85, "running", "games"),
-		guest(102, "lxc", "jellyfin", "NSX-FONTAINE", 4, 4, 16, 0.02, 0.4, "running", "media"),
-		guest(110, "lxc", "fairy", "NSX-KACHINA", 1, 0.5, 4, 0.01, 0.04, "running", "infra"),
-		guest(111, "lxc", "pocket-id", "NSX-KACHINA", 1, 0.5, 4, 0.0, 0.02, "running", "infra;auth"),
-		guest(120, "qemu", "truenas", "NSX-SNEZHNAYA", 4, 16, 32, 0.03, 0.15, "running", "storage"),
-		guest(121, "qemu", "home-assistant", "NSX-SNEZHNAYA", 2, 4, 32, 0.02, 0.1, "running", "iot"),
-		guest(122, "lxc", "backup-runner", "NSX-SNEZHNAYA", 2, 2, 8, 0, 0, "stopped", "backup"),
-		jsonx.M{"id": "storage/NSX-KACHINA/local", "type": "storage", "node": "NSX-KACHINA", "status": "available"})
+		guest(100, "qemu", "win11-gaming", "SRV-PVEC", 8, 16, 256, 0.05, 0.6, "running", "windows;vm"),
+		guest(101, "lxc", "minecraft", "SRV-PVEC", 4, 8, 32, 0.25, 0.85, "running", "games"),
+		guest(102, "lxc", "jellyfin", "SRV-PVEC", 4, 4, 16, 0.02, 0.4, "running", "media"),
+		guest(110, "lxc", "fairy", "SRV-PVEA", 1, 0.5, 4, 0.01, 0.04, "running", "infra"),
+		guest(111, "lxc", "pocket-id", "SRV-PVEA", 1, 0.5, 4, 0.0, 0.02, "running", "infra;auth"),
+		guest(120, "qemu", "truenas", "SRV-PVEB", 4, 16, 32, 0.03, 0.15, "running", "storage"),
+		guest(121, "qemu", "home-assistant", "SRV-PVEB", 2, 4, 32, 0.02, 0.1, "running", "iot"),
+		guest(122, "lxc", "backup-runner", "SRV-PVEB", 2, 2, 8, 0, 0, "stopped", "backup"),
+		jsonx.M{"id": "storage/SRV-PVEA/local", "type": "storage", "node": "SRV-PVEA", "status": "available"})
 	names := []string{"nginx", "postgres", "redis", "grafana", "loki", "gitea", "vaultwarden", "immich", "paperless", "adguard",
 		"uptime-kuma", "nextcloud", "syncthing", "frigate", "mqtt", "zigbee2mqtt", "minio", "authelia", "ntfy", "n8n"}
 	extra, _ := strconv.Atoi(os.Getenv("FAIRY_DEMO_EXTRA")) // stress the UI with many guests
@@ -69,15 +69,15 @@ func proxmoxResources() []jsonx.M {
 	return out
 }
 
-func strawResources() []jsonx.M {
+func bobResources() []jsonx.M {
 	t := since()
 	return []jsonx.M{
-		{"id": "node/ASUS-i7", "type": "node", "node": "ASUS-i7", "status": "online", "cpu": wave(55, 0.08, 0.3, 4),
+		{"id": "node/MINI-i7", "type": "node", "node": "MINI-i7", "status": "online", "cpu": wave(55, 0.08, 0.3, 4),
 			"maxcpu": 8.0, "mem": float64(int64(wave(250, 14, 19, 0) * GiB)), "maxmem": float64(32 * GiB),
 			"disk": float64(61 * GiB), "maxdisk": float64(220 * GiB), "uptime": float64(int64(86400*2 + t))},
-		guest(100, "lxc", "pihole", "ASUS-i7", 1, 1, 8, 0.01, 0.06, "running", "dns"),
-		guest(101, "lxc", "plex", "ASUS-i7", 4, 4, 32, 0.05, 0.35, "running", "media"),
-		guest(102, "qemu", "win10-steam", "ASUS-i7", 4, 8, 128, 0, 0, "stopped", "games"),
+		guest(100, "lxc", "pihole", "MINI-i7", 1, 1, 8, 0.01, 0.06, "running", "dns"),
+		guest(101, "lxc", "plex", "MINI-i7", 4, 4, 32, 0.05, 0.35, "running", "media"),
+		guest(102, "qemu", "win10-steam", "MINI-i7", 4, 8, 128, 0, 0, "stopped", "games"),
 	}
 }
 
@@ -93,6 +93,6 @@ func newNodeResources(node string) []jsonx.M {
 	}
 }
 
-var nodeCPU = map[string]string{"NSX-FONTAINE": "AMD Ryzen 9 5950X 16-Core Processor",
-	"NSX-KACHINA": "Intel(R) Core(TM) i7-8700T CPU @ 2.40GHz", "NSX-SNEZHNAYA": "AMD Ryzen 7 5700G with Radeon Graphics",
-	"ASUS-i7": "Intel(R) Core(TM) i7-4790K CPU @ 4.00GHz"}
+var nodeCPU = map[string]string{"SRV-PVEC": "AMD Ryzen 9 5950X 16-Core Processor",
+	"SRV-PVEA": "Intel(R) Core(TM) i7-8700T CPU @ 2.40GHz", "SRV-PVEB": "AMD Ryzen 7 5700G with Radeon Graphics",
+	"MINI-i7": "Intel(R) Core(TM) i7-4790K CPU @ 4.00GHz"}

@@ -166,7 +166,7 @@ func TestDeniedThrottleBudgets(t *testing.T) {
 func TestAuditTargetIsEscapedAndClipped(t *testing.T) {
 	for in, want := range map[string]string{
 		"/api/systems/laptop/poll":       "/api/systems/laptop/poll",
-		"nsx-cyrene":                     "nsx-cyrene",
+		"srv-tower":                      "srv-tower",
 		"pve1/qemu/100":                  "pve1/qemu/100",
 		"/api/x\nFORGED line\r\t\x1b[2J": "/api/x%0AFORGED line%0D%09%1B[2J",
 		"a\u2028b\u202ec\u0085d\x7f":     "a%E2%80%A8b%E2%80%AEc%C2%85d%7F",

@@ -18,8 +18,8 @@ import (
 
 // User is the fake signed-in user of demo mode (in the control group, so admin; `--demo-as` or the switcher in
 // the sidebar previews the panel as a viewer or a pending user instead).
-var User = model.User{Sub: "demo-neptune", Name: model.P("Neptune"), PreferredUsername: model.P("neptune"),
-	Email: model.P("neptune@example.invalid"), EmailVerified: true, Groups: []string{"viewers", "controllers"}, Auth: "demo"}
+var User = model.User{Sub: "demo-alice", Name: model.P("Alice"), PreferredUsername: model.P("alice"),
+	Email: model.P("alice@example.invalid"), EmailVerified: true, Groups: []string{"viewers", "controllers"}, Auth: "demo"}
 
 // Build returns the demo config, secrets and a poller wired to the simulator.
 func Build(dir, publicURL string) (*config.Panel, config.Secrets, *poller.Poller, error) {
@@ -53,9 +53,9 @@ func Build(dir, publicURL string) (*config.Panel, config.Secrets, *poller.Poller
 	return cfg, secrets, p, nil
 }
 
-// SeedUsers fills the demo's users.json: sites Neptune and Straw (named in the demo config), Neptune as admin,
-// Straw as a viewer of his site, someone waiting for access, and the rack UPS's power meter (no host link)
-// assigned to Neptune's site on the "Users page".
+// SeedUsers fills the demo's users.json: sites Alice and Bob (named in the demo config), Alice as admin,
+// Bob as a viewer of his site, someone waiting for access, and the rack UPS's power meter (no host link)
+// assigned to Alice's site on the "Users page".
 func SeedUsers(cfg *config.Panel) error {
 	st := access.NewStore(cfg.DataDir)
 	if err := st.EnsureSites(cfg.Sites()); err != nil {
@@ -65,12 +65,12 @@ func SeedUsers(cfg *config.Panel) error {
 		sub, email, name, role string
 		sites                  []string
 	}{
-		{User.Sub, model.Deref(User.Email), "Neptune", access.RoleAdmin, nil},
-		{"demo-straw", "straw@example.invalid", "Straw", access.RoleViewer, []string{"Straw"}},
-		{"demo-kaveh", "kaveh@example.invalid", "Kaveh", access.RolePending, nil},
+		{User.Sub, model.Deref(User.Email), "Alice", access.RoleAdmin, nil},
+		{"demo-bob", "bob@example.invalid", "Bob", access.RoleViewer, []string{"Bob"}},
+		{"demo-carol", "carol@example.invalid", "Carol", access.RolePending, nil},
 	} {
-		id := access.Identity{Sub: u.sub, Email: u.email, EmailVerified: u.sub != "demo-kaveh", Name: u.name}
-		if _, _, err := st.SeenIdentity(id, u.role, "demo"); err != nil { // Kaveh's address is only claimed: shown as unverified
+		id := access.Identity{Sub: u.sub, Email: u.email, EmailVerified: u.sub != "demo-carol", Name: u.name}
+		if _, _, err := st.SeenIdentity(id, u.role, "demo"); err != nil { // Carol's address is only claimed: shown as unverified
 			return err
 		}
 		if _, _, err := st.SetRole(u.sub, u.role, u.sites, "demo", true); err != nil {
@@ -78,7 +78,7 @@ func SeedUsers(cfg *config.Panel) error {
 		}
 	}
 	if st.Load().Assign[access.PowerPrefix+"ups-rack"] == "" {
-		if _, err := st.Assign(access.PowerPrefix+"ups-rack", "Neptune"); err != nil {
+		if _, err := st.Assign(access.PowerPrefix+"ups-rack", "Alice"); err != nil {
 			return err
 		}
 	}

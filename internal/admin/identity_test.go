@@ -11,7 +11,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 )
 
-// oldUsersJSON is a users.json as the release before the email_verified field wrote it: Neptune is the admin.
+// oldUsersJSON is a users.json as the release before the email_verified field wrote it: Alice is the admin.
 const oldUsersJSON = `{
  "assign": {},
  "removed": {},
@@ -19,9 +19,9 @@ const oldUsersJSON = `{
  "users": {
   "sub-n": {
    "created_at": "2026-11-10T13:42:32.605339371Z",
-   "email": "neptune@example.com",
+   "email": "alice@example.com",
    "last_seen": "2026-11-10T13:42:32.605339371Z",
-   "name": "Neptune",
+   "name": "Alice",
    "role": "admin",
    "sites": [],
    "sub": "sub-n",
@@ -29,9 +29,9 @@ const oldUsersJSON = `{
   },
   "sub-s": {
    "created_at": "2026-11-10T13:42:32.605660873Z",
-   "email": "straw@example.com",
+   "email": "bob@example.com",
    "last_seen": "2026-11-10T13:42:32.605660873Z",
-   "name": "Straw",
+   "name": "Bob",
    "role": "pending",
    "sites": [],
    "sub": "sub-s",
@@ -194,14 +194,14 @@ func TestOldUsersFileAndTheCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out := e.run("", "users", "list")
-	if code != 0 || !strings.Contains(out, "neptune@example.com (unverified)") || !strings.Contains(out, "admin") ||
+	if code != 0 || !strings.Contains(out, "alice@example.com (unverified)") || !strings.Contains(out, "admin") ||
 		strings.Contains(out, "there is no admin") {
 		t.Fatal(code, out)
 	}
 	if e.role("sub-n") != access.RoleAdmin {
 		t.Fatal("the admin of an old file must stay admin")
 	}
-	code, out = e.run("yes\n", "users", "set-role", "straw@example.com", "admin")
+	code, out = e.run("yes\n", "users", "set-role", "bob@example.com", "admin")
 	if code != 1 || !strings.Contains(out, "subject sub-s") || !strings.Contains(out, "users set-role <subject> admin") {
 		t.Fatal(code, out)
 	}
@@ -209,8 +209,8 @@ func TestOldUsersFileAndTheCLI(t *testing.T) {
 		t.Fatal("recovery by subject", code, out)
 	}
 	// after the next sign-in the address is verified and works again
-	e.seen("sub-n", "neptune@example.com", true, "Neptune")
-	if code, out = e.run("", "users", "set-role", "neptune@example.com", "viewer"); code != 0 || e.role("sub-n") != access.RoleViewer {
+	e.seen("sub-n", "alice@example.com", true, "Alice")
+	if code, out = e.run("", "users", "set-role", "alice@example.com", "viewer"); code != 0 || e.role("sub-n") != access.RoleViewer {
 		t.Fatal(code, out)
 	}
 	if code, out = e.run("", "users", "remove", "sub-s"); code != 1 || !strings.Contains(out, "last admin") {

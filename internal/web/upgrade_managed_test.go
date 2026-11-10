@@ -44,7 +44,7 @@ func TestUpgradeOldManagedHostsLoadAndCanBeRepaired(t *testing.T) {
 	}
 	b := testutil.NewBackend()
 	b.Mu.Lock()
-	for _, id := range []string{"nsx-furina", "nsx-kachina"} {
+	for _, id := range []string{"srv-winpc", "srv-pvea"} {
 		b.Metrics[id] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
 	}
 	b.Mu.Unlock()
@@ -56,7 +56,7 @@ func TestUpgradeOldManagedHostsLoadAndCanBeRepaired(t *testing.T) {
 	s := New(cfg, v.Secrets, p, nil, "test")
 	rel := testInstallers // the release the new panel installs: newer than the hosts' agent 13
 	rel.Tag, rel.Version, rel.Base = "build-20", "20-abcdef0", strings.Replace(rel.Base, "build-7", "build-20", 1)
-	s.Enroll.Scripts, s.Enroll.PanelAddr, s.Enroll.Interval = rel, "100.88.109.47", 10*time.Millisecond
+	s.Enroll.Scripts, s.Enroll.PanelAddr, s.Enroll.Interval = rel, "100.64.0.10", 10*time.Millisecond
 	s.control = newRateLimiter(100)
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
@@ -65,17 +65,17 @@ func TestUpgradeOldManagedHostsLoadAndCanBeRepaired(t *testing.T) {
 	s.Cfg.OIDC.Issuer = idp.srv.URL
 
 	// polled with the tokens the old release stored, the node with its Proxmox entry and CA
-	fur, ok := p.AgentByID("nsx-furina")
-	if !ok || !fur.Managed || fur.Token != "old-furina-read-token-xxxxxxxxxxxxxxx" || fur.ControlToken != "old-furina-control-token-yyyyyyyyyy" || !fur.PowerControl || !fur.SelfUpdate {
+	fur, ok := p.AgentByID("srv-winpc")
+	if !ok || !fur.Managed || fur.Token != "old-winpc-read-token-xxxxxxxxxxxxxxx" || fur.ControlToken != "old-winpc-control-token-yyyyyyyyyy" || !fur.PowerControl || !fur.SelfUpdate {
 		t.Fatalf("%+v", fur)
 	}
-	kach, ok := p.AgentByID("nsx-kachina")
-	if !ok || kach.Token != "old-kachina-read-token-xxxxxxxxxxxxxx" || kach.LinksTo != "neptune-nsx-kachina-node-nsx-kachina" {
+	kach, ok := p.AgentByID("srv-pvea")
+	if !ok || kach.Token != "old-pvea-read-token-xxxxxxxxxxxxxx" || kach.LinksTo != "alice-srv-pvea-node-srv-pvea" {
 		t.Fatalf("%+v", kach)
 	}
 	var node bool
 	for _, c := range p.Clusters() {
-		if c.Managed && c.ID == "neptune-nsx-kachina" && c.TokenSecret == "0b7c4e2a-1111-2222-3333-444455556666" && c.TLSServerName == "NSX-KACHINA" {
+		if c.Managed && c.ID == "alice-srv-pvea" && c.TokenSecret == "0b7c4e2a-1111-2222-3333-444455556666" && c.TLSServerName == "SRV-PVEA" {
 			ca, err := os.ReadFile(c.CAFile)
 			node = err == nil && strings.Contains(string(ca), "BEGIN CERTIFICATE")
 		}
@@ -90,7 +90,7 @@ func TestUpgradeOldManagedHostsLoadAndCanBeRepaired(t *testing.T) {
 	}
 	ck := sessionCookie(e, r.hdr)
 	wr := []string{"Cookie", ck, "X-Requested-With", "fairy"}
-	if g := e.do("GET", "/api/systems/nsx-furina", nil, "Cookie", ck); g.code != 200 || g.body["status"] != "online" {
+	if g := e.do("GET", "/api/systems/srv-winpc", nil, "Cookie", ck); g.code != 200 || g.body["status"] != "online" {
 		t.Fatal("the old host is not shown online:", g.code, string(g.raw))
 	}
 	page := e.do("GET", "/api/admin/hosts", nil, "Cookie", ck)
@@ -108,15 +108,15 @@ func TestUpgradeOldManagedHostsLoadAndCanBeRepaired(t *testing.T) {
 		t.Fatalf("starting the new panel changed managed-hosts.yaml:\n%s", got)
 	}
 
-	// Re-pair NSX-FURINA: the machine answers a verified pairing (the exchange itself: internal/agentcontract)
+	// Re-pair SRV-WINPC: the machine answers a verified pairing (the exchange itself: internal/agentcontract)
 	s.Enroll.Pair = func(_ context.Context, url string, key []byte) (int, enroll.Response, string, error) {
-		if url != "http://nsx-furina:9101" || len(key) != enroll.KeySize {
+		if url != "http://srv-winpc:9101" || len(key) != enroll.KeySize {
 			t.Error("pairing request for", url)
 		}
-		return 200, enroll.Response{AgentVersion: "20-abcdef0", Hostname: "NSX-FURINA", Platform: "windows", Token: "new-furina-read-token-xxxxxxxxxxxxxxx",
-			ControlToken: "new-furina-control-token-yyyyyyyyyy"}, "", nil
+		return 200, enroll.Response{AgentVersion: "20-abcdef0", Hostname: "SRV-WINPC", Platform: "windows", Token: "new-winpc-read-token-xxxxxxxxxxxxxxx",
+			ControlToken: "new-winpc-control-token-yyyyyyyyyy"}, "", nil
 	}
-	rp := e.do("POST", "/api/admin/hosts/nsx-furina/repair", map[string]any{"confirm": "NSX-FURINA"}, wr...)
+	rp := e.do("POST", "/api/admin/hosts/srv-winpc/repair", map[string]any{"confirm": "SRV-WINPC"}, wr...)
 	if rp.code != 201 || !strings.Contains(rp.body["command"].(string), "$env:FAIRY_JOIN_CODE='"+rp.body["code"].(string)+"'") ||
 		!strings.Contains(rp.body["command"].(string), " -PairV2 -PowerControl -SelfUpdate -CoreTemp") || rp.body["warning"] != nil {
 		t.Fatal(rp.code, string(rp.raw))
@@ -138,28 +138,28 @@ func TestUpgradeOldManagedHostsLoadAndCanBeRepaired(t *testing.T) {
 	}
 	for _, h := range hosts {
 		switch h.ID {
-		case "nsx-furina":
-			if h.Pairing != managed.PairingV2 || h.AgentVersion != "20-abcdef0" || !h.Options.PowerControl || !h.Options.CoreTemp || h.Site != "Neptune" || h.OS != "windows" {
+		case "srv-winpc":
+			if h.Pairing != managed.PairingV2 || h.AgentVersion != "20-abcdef0" || !h.Options.PowerControl || !h.Options.CoreTemp || h.Site != "Alice" || h.OS != "windows" {
 				t.Fatalf("%+v", h)
 			}
-		case "nsx-kachina": // not touched
-			if h.Pairing != "" || h.AgentVersion != "13-d43fdaf" || h.Proxmox == nil || h.Proxmox.ID != "neptune-nsx-kachina" {
+		case "srv-pvea": // not touched
+			if h.Pairing != "" || h.AgentVersion != "13-d43fdaf" || h.Proxmox == nil || h.Proxmox.ID != "alice-srv-pvea" {
 				t.Fatalf("%+v", h)
 			}
 		default:
 			t.Fatal(h.ID)
 		}
 	}
-	if sec, err := s.Managed.Secret("nsx-furina"); err != nil || sec.Token != "new-furina-read-token-xxxxxxxxxxxxxxx" {
+	if sec, err := s.Managed.Secret("srv-winpc"); err != nil || sec.Token != "new-winpc-read-token-xxxxxxxxxxxxxxx" {
 		t.Fatal(sec, err)
 	}
-	if b := string(must(os.ReadFile(filepath.Join(v.DataDir, "secrets", "agent-nsx-furina.json")))); strings.Contains(b, "old-furina") {
+	if b := string(must(os.ReadFile(filepath.Join(v.DataDir, "secrets", "agent-srv-winpc.json")))); strings.Contains(b, "old-winpc") {
 		t.Fatal("the old tokens are still on disk")
 	}
-	if sec, err := s.Managed.Secret("nsx-kachina"); err != nil || sec.Token != "old-kachina-read-token-xxxxxxxxxxxxxx" || sec.PVETokenSecret == "" {
+	if sec, err := s.Managed.Secret("srv-pvea"); err != nil || sec.Token != "old-pvea-read-token-xxxxxxxxxxxxxx" || sec.PVETokenSecret == "" {
 		t.Fatal(sec, err)
 	}
-	if a, _ := p.AgentByID("nsx-furina"); a.Token != "new-furina-read-token-xxxxxxxxxxxxxxx" {
+	if a, _ := p.AgentByID("srv-winpc"); a.Token != "new-winpc-read-token-xxxxxxxxxxxxxxx" {
 		t.Fatalf("the poller still uses the old token: %+v", a)
 	}
 	// the file the new panel wrote: one host marked, the other as before; and a second start reads it

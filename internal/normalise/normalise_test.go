@@ -44,17 +44,17 @@ func TestRateTrackerHoldsUnchangedProxmoxCounters(t *testing.T) {
 }
 
 var pveResources = []jsonx.M{
-	{"id": "node/NSX-KACHINA", "type": "node", "node": "NSX-KACHINA", "status": "online", "cpu": 0.125,
+	{"id": "node/SRV-PVEA", "type": "node", "node": "SRV-PVEA", "status": "online", "cpu": 0.125,
 		"maxcpu": 8.0, "mem": float64(8 << 30), "maxmem": float64(32 << 30), "disk": float64(10 << 30), "maxdisk": float64(100 << 30), "uptime": 1000.0},
-	{"id": "node/NSX-SNEZHNAYA", "type": "node", "node": "NSX-SNEZHNAYA", "status": "offline", "maxcpu": 12.0, "maxmem": float64(64 << 30)},
-	{"id": "qemu/100", "type": "qemu", "vmid": 100.0, "name": "win11", "node": "NSX-KACHINA", "status": "running",
+	{"id": "node/SRV-PVEB", "type": "node", "node": "SRV-PVEB", "status": "offline", "maxcpu": 12.0, "maxmem": float64(64 << 30)},
+	{"id": "qemu/100", "type": "qemu", "vmid": 100.0, "name": "win11", "node": "SRV-PVEA", "status": "running",
 		"cpu": 0.5, "maxcpu": 4.0, "mem": float64(4 << 30), "maxmem": float64(8 << 30), "disk": 0.0, "maxdisk": float64(64 << 30),
 		"netin": 1000.0, "netout": 500.0, "uptime": 50.0, "tags": "windows;gaming", "template": 0.0},
-	{"id": "lxc/101", "type": "lxc", "vmid": 101.0, "name": "minecraft", "node": "NSX-KACHINA", "status": "stopped",
+	{"id": "lxc/101", "type": "lxc", "vmid": 101.0, "name": "minecraft", "node": "SRV-PVEA", "status": "stopped",
 		"cpu": 0.0, "maxcpu": 2.0, "mem": 0.0, "maxmem": float64(1 << 31), "netin": 0.0, "netout": 0.0},
-	{"id": "qemu/9000", "type": "qemu", "vmid": 9000.0, "name": "tmpl", "node": "NSX-KACHINA", "status": "stopped", "template": 1.0},
-	{"id": "qemu/120", "type": "qemu", "vmid": 120.0, "name": "truenas", "node": "NSX-SNEZHNAYA", "status": "unknown"},
-	{"id": "storage/NSX-KACHINA/local", "type": "storage", "node": "NSX-KACHINA", "status": "available"},
+	{"id": "qemu/9000", "type": "qemu", "vmid": 9000.0, "name": "tmpl", "node": "SRV-PVEA", "status": "stopped", "template": 1.0},
+	{"id": "qemu/120", "type": "qemu", "vmid": 120.0, "name": "truenas", "node": "SRV-PVEB", "status": "unknown"},
+	{"id": "storage/SRV-PVEA/local", "type": "storage", "node": "SRV-PVEA", "status": "available"},
 }
 
 func TestNormaliseProxmox(t *testing.T) {
@@ -66,23 +66,23 @@ func TestNormaliseProxmox(t *testing.T) {
 	if len(s) != 5 || s["qemu-9000"].ID != "" {
 		t.Fatalf("templates/storage must be skipped: %v", len(s))
 	}
-	n := s["node-nsx-kachina"]
+	n := s["node-srv-pvea"]
 	if n.Kind != "node" || n.Status != "online" || *n.CPUPercent != 12.5 || *n.Cores != 8 || n.Parent != nil {
 		t.Fatalf("node %+v", n)
 	}
 	vm := s["qemu-100"]
-	if *vm.Parent != "NSX-KACHINA" || *vm.VMID != 100 || *vm.CPUPercent != 50 || *vm.MemUsed != 4<<30 ||
+	if *vm.Parent != "SRV-PVEA" || *vm.VMID != 100 || *vm.CPUPercent != 50 || *vm.MemUsed != 4<<30 ||
 		len(vm.Tags) != 2 || vm.Tags[0] != "windows" || vm.Tags[1] != "gaming" {
 		t.Fatalf("vm %+v", vm)
 	}
 	if s["lxc-101"].Status != "stopped" || s["lxc-101"].CPUPercent != nil {
 		t.Fatal("stopped guest")
 	}
-	if s["qemu-120"].Status != "offline" || s["node-nsx-snezhnaya"].Status != "offline" {
+	if s["qemu-120"].Status != "offline" || s["node-srv-pveb"].Status != "offline" {
 		t.Fatal("offline node / unknown guest")
 	}
-	pre := NormaliseProxmox(pveResources[:1], time.Now(), 0, NewRateTracker(), ProxmoxOpts{Prefix: "straw-"})
-	if pre[0].ID != "straw-node-nsx-kachina" {
+	pre := NormaliseProxmox(pveResources[:1], time.Now(), 0, NewRateTracker(), ProxmoxOpts{Prefix: "bob-"})
+	if pre[0].ID != "bob-node-srv-pvea" {
 		t.Fatal(pre[0].ID)
 	}
 }
@@ -134,7 +134,7 @@ func TestNormaliseAgentAndOverride(t *testing.T) {
 		"gpus": []any{jsonx.M{"name": "", "vendor": "weird", "source": "elsewhere"},
 			jsonx.M{"name": "AMD Radeon RX 5600 XT", "vendor": "amd", "source": "windows", "util_percent": 12.0}},
 		"fans":          []any{jsonx.M{"name": "fan1", "rpm": 2400.0}, jsonx.M{"name": "bad", "rpm": true}},
-		"power_control": jsonx.M{"pending": jsonx.M{"action": "shutdown", "at": 1.7e9, "delay_s": 120.0, "requested_by": "Neptune"}},
+		"power_control": jsonx.M{"pending": jsonx.M{"action": "shutdown", "at": 1.7e9, "delay_s": 120.0, "requested_by": "Alice"}},
 		"features":      jsonx.M{"processes": false, "fan_control": true}, "hardware": hw("system_vendor", "LENOVO", "system_model", "T14", "cpu_model", "i7")}
 	a := config.Agent{ID: "laptop", FanControl: &config.FanControl{Vendor: "supermicro"}}
 	s := NormaliseAgent(a, m, time.Now(), 0, NewRateTracker())
@@ -156,13 +156,13 @@ func TestNormaliseAgentAndOverride(t *testing.T) {
 }
 
 func TestSlug(t *testing.T) {
-	if Slug("NSX-KACHINA") != "nsx-kachina" || Slug(" ASUS i7 ") != "asus-i7" {
+	if Slug("SRV-PVEA") != "srv-pvea" || Slug(" MINI i7 ") != "mini-i7" {
 		t.Fatal("slug")
 	}
 }
 
 func TestNormaliseAgentBattery(t *testing.T) {
-	a := config.Agent{ID: "perlica"}
+	a := config.Agent{ID: "fedora"}
 	// older agents (and machines without a battery) send no block
 	if s := NormaliseAgent(a, jsonx.M{"hostname": "x"}, time.Now(), 0, NewRateTracker()); s.Battery != nil {
 		t.Fatalf("%+v", s.Battery)

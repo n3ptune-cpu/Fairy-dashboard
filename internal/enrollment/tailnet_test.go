@@ -21,7 +21,7 @@ import (
 func TestIsTailscale(t *testing.T) {
 	for addr, want := range map[string]bool{
 		"100.64.0.0":            true,
-		"100.88.109.47":         true,
+		"100.64.0.10":           true,
 		"100.127.255.255":       true,
 		"::ffff:100.64.0.1":     true, // IPv4 written as IPv6
 		"fd7a:115c:a1e0::1":     true,
@@ -53,12 +53,12 @@ func TestIsTailscale(t *testing.T) {
 }
 
 func TestTailnetOnlyDialControl(t *testing.T) {
-	for _, ok := range []string{"100.88.109.47:9101", "[fd7a:115c:a1e0::5]:9101", "[::ffff:100.64.0.1]:9101"} {
+	for _, ok := range []string{"100.64.0.10:9101", "[fd7a:115c:a1e0::5]:9101", "[::ffff:100.64.0.1]:9101"} {
 		if err := tailnetOnly("tcp", ok, nil); err != nil {
 			t.Errorf("%s: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"192.168.1.50:9101", "127.0.0.1:9101", "[::1]:9101", "[fe80::1%eth0]:9101", "100.128.0.1:9101", "nsx-furina:9101", "", "100.88.109.47"} {
+	for _, bad := range []string{"192.168.1.50:9101", "127.0.0.1:9101", "[::1]:9101", "[fe80::1%eth0]:9101", "100.128.0.1:9101", "srv-winpc:9101", "", "100.64.0.10"} {
 		var nt *NotTailscale
 		if err := tailnetOnly("tcp", bad, nil); !errors.As(err, &nt) {
 			t.Errorf("%q was not refused: %v", bad, err)
@@ -149,7 +149,7 @@ func addrManager(t *testing.T) *Manager {
 		Config: func() *config.Panel { return testConfig(t) },
 		Remove: func(string) {}, Add: func(managed.Entry) error { return nil },
 		Online: func(string) (bool, string) { return true, "" }, Event: func(Enrollment, string, string) {},
-	}, "100.88.109.47", Fixed(testInstallers))
+	}, "100.64.0.10", Fixed(testInstallers))
 	m.Interval = 5 * time.Millisecond
 	return m
 }
@@ -172,7 +172,7 @@ func TestCreateRefusesAddressesOutsideTailscale(t *testing.T) {
 		{"fd7a:115c:a1e1::1", false, false},
 		{"100.88.1.2", false, true},
 		{"fd7a:115c:a1e0::5", false, true},
-		{"nsx-furina.tailnet.ts.net", false, true},
+		{"srv-winpc.example.ts.net", false, true},
 		{"", false, true}, // the name itself
 		{"192.168.1.50", true, true},
 		{"::1", true, true},
@@ -182,7 +182,7 @@ func TestCreateRefusesAddressesOutsideTailscale(t *testing.T) {
 		m.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 			return 0, enroll.Response{}, "", errors.New("nobody there")
 		}
-		cr, err := m.Create(context.Background(), Request{Name: "nsx-furina", Address: tc.addr, OS: "linux"}, nil, "neptune", none)
+		cr, err := m.Create(context.Background(), Request{Name: "srv-winpc", Address: tc.addr, OS: "linux"}, nil, "alice", none)
 		var v *Validation
 		switch {
 		case tc.ok && err != nil:
@@ -200,7 +200,7 @@ func TestCreateRefusesAddressesOutsideTailscale(t *testing.T) {
 	m := addrManager(t)
 	old := managed.Host{ID: "old-lan", Name: "old-lan", URL: "http://192.168.1.50:9101", OS: "linux"}
 	var v *Validation
-	if _, err := m.Create(context.Background(), Request{}, &old, "neptune", none); !errors.As(err, &v) || !strings.Contains(v.Msg, "192.168.1.50 is not a Tailscale address") {
+	if _, err := m.Create(context.Background(), Request{}, &old, "alice", none); !errors.As(err, &v) || !strings.Contains(v.Msg, "192.168.1.50 is not a Tailscale address") {
 		t.Fatal(err)
 	}
 }
@@ -212,7 +212,7 @@ func TestPairingLoopSaysWhyItDoesNotConnect(t *testing.T) {
 	_, port, _ := net.SplitHostPort(addr)
 	m := addrManager(t)
 	old := managed.Host{ID: "box", Name: "box", URL: "http://localhost:" + port, OS: "linux"}
-	cr, err := m.Create(context.Background(), Request{}, &old, "neptune", nil)
+	cr, err := m.Create(context.Background(), Request{}, &old, "alice", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

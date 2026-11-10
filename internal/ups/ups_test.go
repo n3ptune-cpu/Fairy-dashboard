@@ -23,10 +23,10 @@ func TestTransitionsAndEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	powers := map[string][]string{"cyberpower": {"node-a", "pc"}}
-	names := map[string]string{"cyberpower": "Straw's CyberPower"}
+	names := map[string]string{"cyberpower": "Bob's CyberPower"}
 	m.UpdateFromAgent("asus", rows("OL", "100"), false, powers, names)
 	st := m.State("asus/cyberpower")
-	if st.Name != "Straw's CyberPower" || st.Status != "online" || *st.Via != "asus" || len(m.SystemsMap()["pc"]) != 1 {
+	if st.Name != "Bob's CyberPower" || st.Status != "online" || *st.Via != "asus" || len(m.SystemsMap()["pc"]) != 1 {
 		t.Fatalf("%+v", st)
 	}
 	m.UpdateFromAgent("asus", rows("OB DISCHRG", "87"), false, powers, names)

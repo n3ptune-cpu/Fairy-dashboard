@@ -11,8 +11,8 @@ import (
 )
 
 // simHelper is a Windows agent's elevated helper (Fairy-agent v0.5.0, the shapes of its pkg/agent/api):
-// NSX-CYRENE's runs (Core Temp, its BMC's sensors, fan control, power), Neptune's laptop's is stopped (Core Temp
-// readings paused, power actions wait for it), Straw's PC has none installed and needs none. Stop / Start from
+// SRV-TOWER's runs (Core Temp, its BMC's sensors, fan control, power), Alice's laptop's is stopped (Core Temp
+// readings paused, power actions wait for it), Bob's PC has none installed and needs none. Stop / Start from
 // the panel change it; a start takes a few seconds.
 type simHelper struct {
 	state     string // running | stopped | starting | not_installed
@@ -28,16 +28,16 @@ const helperStartS = 4
 func newSimHelpers() map[string]*simHelper {
 	t0 := time.Now().Add(-26 * time.Hour)
 	return map[string]*simHelper{
-		"nsx-cyrene": {state: api.HelperRunning, since: t0, needed: true,
+		"srv-tower": {state: api.HelperRunning, since: t0, needed: true,
 			sources: []string{api.FeatureCoreTemp, api.FeatureIPMI, api.FeatureFans, api.FeaturePower},
 			coreTemps: func() []any {
 				p := r1(wave(100, 40, 71, 0.3))
 				return []any{temp("coretemp", "CPU Package", p), temp("coretemp", "Core 0", r1(p-2)), temp("coretemp", "Core 1", r1(p-4))}
 			}},
-		"neptune-laptop": {state: api.HelperStopped, since: time.Now().Add(-40 * time.Minute), needed: true,
+		"alice-laptop": {state: api.HelperStopped, since: time.Now().Add(-40 * time.Minute), needed: true,
 			sources:   []string{api.FeatureCoreTemp, api.FeaturePower},
 			coreTemps: func() []any { return []any{temp("coretemp", "CPU Package", r1(wave(60, 52, 79, 0.8)))} }},
-		"straw-pc": {state: api.HelperNotInstalled, since: t0},
+		"bob-pc": {state: api.HelperNotInstalled, since: t0},
 	}
 }
 

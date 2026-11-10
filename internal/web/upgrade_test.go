@@ -113,7 +113,7 @@ func TestUpgradeExistingAdminStaysAdmin(t *testing.T) {
 			// before anyone signs in: the file loads, and the roles are what they were
 			d := e.s.Access.Load()
 			if err := e.s.Access.Err(); err != nil || d.Admins() != 1 || d.Users[v.OwnerSub].Role != access.RoleAdmin ||
-				d.Users[v.ViewerSub].Role != access.RoleViewer || strings.Join(d.Users[v.ViewerSub].Sites, ",") != "Straw" {
+				d.Users[v.ViewerSub].Role != access.RoleViewer || strings.Join(d.Users[v.ViewerSub].Sites, ",") != "Bob" {
 				t.Fatal(err, d)
 			}
 
@@ -139,7 +139,7 @@ func TestUpgradeExistingAdminStaysAdmin(t *testing.T) {
 			if r := e.do("GET", "/api/audit", nil, "Cookie", ck); r.code != 200 {
 				t.Fatalf("Audit page: %d %s", r.code, r.raw)
 			}
-			if r := e.do("PUT", "/api/admin/users/"+v.ViewerSub, map[string]any{"role": "viewer", "sites": []string{"Straw", "Neptune"}}, wr...); r.code != 200 {
+			if r := e.do("PUT", "/api/admin/users/"+v.ViewerSub, map[string]any{"role": "viewer", "sites": []string{"Bob", "Alice"}}, wr...); r.code != 200 {
 				t.Fatalf("admin change: %d %s", r.code, r.raw)
 			}
 			if r := e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 7}, wr...); r.code != 200 {
@@ -152,11 +152,11 @@ func TestUpgradeExistingAdminStaysAdmin(t *testing.T) {
 				own["email"] != tc.email || own["email_verified"] != tc.verified {
 				t.Fatalf("owner in users.json: %v", own)
 			}
-			if len(after) != 3 || after["5d2e9f10-kaveh-0003"]["role"] != "pending" || after[v.ViewerSub]["role"] != "viewer" {
+			if len(after) != 3 || after["5d2e9f10-carol-0003"]["role"] != "pending" || after[v.ViewerSub]["role"] != "viewer" {
 				t.Fatalf("the other users changed: %v", after)
 			}
-			if d := e.s.Access.Load(); d.Admins() != 1 || d.Assign["cyrene"] != "Straw" || d.Assign["power:desk-plug"] != "Neptune" ||
-				len(d.Removed) != 1 || !d.HasSite("Straw") || !d.HasSite("Neptune") {
+			if d := e.s.Access.Load(); d.Admins() != 1 || d.Assign["tower"] != "Bob" || d.Assign["power:desk-plug"] != "Alice" ||
+				len(d.Removed) != 1 || !d.HasSite("Bob") || !d.HasSite("Alice") {
 				t.Fatalf("users.json lost something: %+v", d)
 			}
 		})
@@ -264,8 +264,8 @@ func TestUpgradeOldFilesLoad(t *testing.T) {
 		t.Fatalf("system token: %d %s", r.code, r.raw)
 	}
 	r := e.do("GET", "/api/systems", nil, "Authorization", "Bearer "+v.TokenViewer)
-	if r.code != 200 || !strings.Contains(string(r.raw), `"id":"cyrene"`) || strings.Contains(string(r.raw), `"id":"laptop"`) {
-		t.Fatalf("viewer token (site Straw: cyrene only): %d %s", r.code, r.raw)
+	if r.code != 200 || !strings.Contains(string(r.raw), `"id":"tower"`) || strings.Contains(string(r.raw), `"id":"laptop"`) {
+		t.Fatalf("viewer token (site Bob: tower only): %d %s", r.code, r.raw)
 	}
 
 	// the owner signs in (Pocket ID's default: address not verified) and looks at what the old release left
@@ -305,12 +305,12 @@ func TestUpgradeOldFilesLoad(t *testing.T) {
 	}
 	// the new release adds to the old list (and merges repeats, L7) without losing it
 	for range 3 {
-		e.s.Notes.Add(notifications.Event{Kind: "update_failed", Type: "update", Severity: "warning", SystemID: "cyrene", Host: "cyrene", Text: "cyrene: update failed"})
+		e.s.Notes.Add(notifications.Event{Kind: "update_failed", Type: "update", Severity: "warning", SystemID: "tower", Host: "tower", Text: "tower: update failed"})
 	}
 	if err := e.s.Notes.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if raw := v.ReadData(t, "notifications.json"); !strings.Contains(raw, "cyrene is offline") || !strings.Contains(raw, `"count":3`) {
+	if raw := v.ReadData(t, "notifications.json"); !strings.Contains(raw, "tower is offline") || !strings.Contains(raw, `"count":3`) {
 		t.Fatalf("notifications.json after a write: %s", raw)
 	}
 	// ups-events.jsonl is a log the panel only appends to (the page's list starts empty after every restart, as

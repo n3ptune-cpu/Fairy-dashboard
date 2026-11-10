@@ -14,7 +14,7 @@ func (s *Server) demoViews() []string {
 	return append(out, access.RolePending)
 }
 
-// demoRoutes: demo mode only (loopback, no login). POST /api/demo/view {"view": "viewer:Straw"} switches what
+// demoRoutes: demo mode only (loopback, no login). POST /api/demo/view {"view": "viewer:Bob"} switches what
 // the demo shows, so the owner can check what a viewer of one site sees.
 func (s *Server) demoRoutes() {
 	s.mux.HandleFunc("POST /api/demo/view", s.h(func(c *reqCtx) error {

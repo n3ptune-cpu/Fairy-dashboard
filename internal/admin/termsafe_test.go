@@ -33,14 +33,14 @@ func TestAuditTailIsTerminalSafeAndBounded(t *testing.T) {
 	cfg := filepath.Join(dir, "config.yaml")
 	_ = os.WriteFile(cfg, []byte("public_url: https://p.example\ndata_dir: "+dir+"/data\naudit_log: "+dir+"/audit.log\noidc: {issuer: https://id.example, client_id: c}\n"), 0o600)
 	log := filepath.Join(dir, "audit.log")
-	if _, err := audit.Write(log, audit.Entry{Actor: "neptune", Action: "power.shutdown", Target: "nsx-furina", Outcome: "first"}); err != nil {
+	if _, err := audit.Write(log, audit.Entry{Actor: "alice", Action: "power.shutdown", Target: "srv-winpc", Outcome: "first"}); err != nil {
 		t.Fatal(err)
 	}
 	f, _ := os.OpenFile(log, os.O_WRONLY|os.O_APPEND, 0o600)
 	_, _ = f.Write(bytes.Repeat([]byte("x"), 3<<20)) // 3 MiB without a newline
 	_, _ = f.Write([]byte("\n"))
 	f.Close()
-	if _, err := audit.Write(log, audit.Entry{Actor: "neptune\x1b[31m", Action: "power.shutdown", Target: "nsx-furina",
+	if _, err := audit.Write(log, audit.Entry{Actor: "alice\x1b[31m", Action: "power.shutdown", Target: "srv-winpc",
 		Outcome: "error: agent said \x1b]0;owned\x07\x1b[2Jbye"}); err != nil {
 		t.Fatal(err)
 	}

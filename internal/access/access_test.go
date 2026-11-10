@@ -18,31 +18,31 @@ func status(err error) int {
 }
 
 func TestGrantSeesAndCap(t *testing.T) {
-	straw := Grant{Role: RoleViewer, Sites: []string{"Straw"}}
-	if !AdminGrant().Sees("") || straw.Sees("") || straw.Sees("Neptune") || !straw.Sees("Straw") {
+	bob := Grant{Role: RoleViewer, Sites: []string{"Bob"}}
+	if !AdminGrant().Sees("") || bob.Sees("") || bob.Sees("Alice") || !bob.Sees("Bob") {
 		t.Fatal("Sees")
 	}
-	if (Grant{Role: RolePending}).Sees("Straw") || !(Grant{Role: RoleViewer, All: true}).Sees("") {
+	if (Grant{Role: RolePending}).Sees("Bob") || !(Grant{Role: RoleViewer, All: true}).Sees("") {
 		t.Fatal("pending / all-sites")
 	}
-	both := Grant{Role: RoleViewer, Sites: []string{"Neptune", "Straw"}}
-	if c := both.Cap(straw); c.String() != "viewer:Straw" {
+	both := Grant{Role: RoleViewer, Sites: []string{"Alice", "Bob"}}
+	if c := both.Cap(bob); c.String() != "viewer:Bob" {
 		t.Fatal(c)
 	}
-	if c := AdminGrant().Cap(straw); c.String() != "viewer:Straw" || c.Admin() {
+	if c := AdminGrant().Cap(bob); c.String() != "viewer:Bob" || c.Admin() {
 		t.Fatal("a token of a viewer is never admin", c)
 	}
-	if c := (Grant{Role: RoleViewer, All: true}).Cap(straw); c.String() != "viewer:Straw" {
+	if c := (Grant{Role: RoleViewer, All: true}).Cap(bob); c.String() != "viewer:Bob" {
 		t.Fatal(c)
 	}
 	if c := AdminGrant().Cap(Grant{Role: RolePending}); !c.Pending() {
 		t.Fatal(c)
 	}
-	if c := straw.Cap(AdminGrant()); !c.Same(straw) {
+	if c := bob.Cap(AdminGrant()); !c.Same(bob) {
 		t.Fatal(c)
 	}
-	for in, want := range map[string]string{"admin": "admin", "pending": "pending", "viewer:Straw": "viewer:Straw",
-		"viewer: Straw , Neptune": "viewer:Neptune,Straw"} {
+	for in, want := range map[string]string{"admin": "admin", "pending": "pending", "viewer:Bob": "viewer:Bob",
+		"viewer: Bob , Alice": "viewer:Alice,Bob"} {
 		g, err := ParseView(in)
 		if err != nil || g.String() != want {
 			t.Errorf("%q -> %v %v", in, g, err)
@@ -58,62 +58,62 @@ func TestGrantSeesAndCap(t *testing.T) {
 func TestStoreRolesSitesAndLastAdmin(t *testing.T) {
 	s := NewStore(t.TempDir())
 	// the identity provider verified both addresses: the tests below find the users by them
-	if u, created, err := s.SeenIdentity(Identity{Sub: "sub-n", Email: "N@example.com", EmailVerified: true, Name: "Neptune"}, RoleAdmin, "control_groups"); err != nil || !created || u.Role != RoleAdmin {
+	if u, created, err := s.SeenIdentity(Identity{Sub: "sub-n", Email: "N@example.com", EmailVerified: true, Name: "Alice"}, RoleAdmin, "control_groups"); err != nil || !created || u.Role != RoleAdmin {
 		t.Fatal(u, err)
 	}
-	if u, created, _ := s.Seen("sub-n", "", "Neptune 2", RolePending, "first sign-in"); created || u.Role != RoleAdmin || u.Email != "N@example.com" || u.Name != "Neptune 2" {
+	if u, created, _ := s.Seen("sub-n", "", "Alice 2", RolePending, "first sign-in"); created || u.Role != RoleAdmin || u.Email != "N@example.com" || u.Name != "Alice 2" {
 		t.Fatal("an existing user keeps their role", u)
 	}
-	_, _, _ = s.SeenIdentity(Identity{Sub: "sub-s", Email: "straw@example.com", EmailVerified: true, Name: "Straw"}, RolePending, "first sign-in")
+	_, _, _ = s.SeenIdentity(Identity{Sub: "sub-s", Email: "bob@example.com", EmailVerified: true, Name: "Bob"}, RolePending, "first sign-in")
 	if _, _, err := s.SetRole("n@example.com", RoleViewer, nil, "test", false); status(err) != 409 {
 		t.Fatal("last admin demoted", err)
 	}
 	if _, err := s.Remove("sub-n", false, "test"); status(err) != 409 {
 		t.Fatal("last admin removed", err)
 	}
-	if _, _, err := s.SetRole("straw@example.com", RoleViewer, []string{"Straw"}, "test", false); status(err) != 422 {
+	if _, _, err := s.SetRole("bob@example.com", RoleViewer, []string{"Bob"}, "test", false); status(err) != 422 {
 		t.Fatal("unknown site accepted", err)
 	}
-	for _, n := range []string{"Straw", "Neptune"} {
+	for _, n := range []string{"Bob", "Alice"} {
 		if err := s.CreateSite(n); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := s.CreateSite("Straw"); status(err) != 409 {
+	if err := s.CreateSite("Bob"); status(err) != 409 {
 		t.Fatal("duplicate site")
 	}
 	if err := s.CreateSite(" bad"); status(err) != 422 {
 		t.Fatal("invalid site name")
 	}
-	if _, after, err := s.SetRole("straw@example.com", RoleViewer, []string{"Straw"}, "panel by n", false); err != nil || after.Grant().String() != "viewer:Straw" {
+	if _, after, err := s.SetRole("bob@example.com", RoleViewer, []string{"Bob"}, "panel by n", false); err != nil || after.Grant().String() != "viewer:Bob" {
 		t.Fatal(after, err)
 	}
-	if _, err := s.Assign("straw-pc", "Straw"); err != nil {
+	if _, err := s.Assign("bob-pc", "Bob"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Assign("power:desk", "Nope"); status(err) != 422 {
 		t.Fatal("assign to unknown site")
 	}
-	if err := s.RenameSite("Straw", "Straw's place"); err != nil {
+	if err := s.RenameSite("Bob", "Bob's place"); err != nil {
 		t.Fatal(err)
 	}
 	d := s.Load()
-	if d.Assign["straw-pc"] != "Straw's place" || d.Users["sub-s"].Sites[0] != "Straw's place" || d.HasSite("Straw") {
+	if d.Assign["bob-pc"] != "Bob's place" || d.Users["sub-s"].Sites[0] != "Bob's place" || d.HasSite("Bob") {
 		t.Fatalf("rename: %+v", d)
 	}
 	if _, _, err := s.SetRole("sub-s", RoleAdmin, nil, "test", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.SetRole("sub-n", RoleViewer, []string{"Neptune"}, "test", false); err != nil {
+	if _, _, err := s.SetRole("sub-n", RoleViewer, []string{"Alice"}, "test", false); err != nil {
 		t.Fatal("two admins: demoting one is fine", err)
 	}
 	if u := s.Load().Users["sub-s"]; len(u.Sites) != 0 {
 		t.Fatal("admins keep no site list")
 	}
-	if err := s.DeleteSite("Straw's place"); err != nil {
+	if err := s.DeleteSite("Bob's place"); err != nil {
 		t.Fatal(err)
 	}
-	if d := s.Load(); len(d.Assign) != 0 || d.HasSite("Straw's place") {
+	if d := s.Load(); len(d.Assign) != 0 || d.HasSite("Bob's place") {
 		t.Fatal("delete site", d)
 	}
 	if _, err := s.Remove("nobody", false, "test"); status(err) != 404 {
@@ -128,7 +128,7 @@ func TestStoreRolesSitesAndLastAdmin(t *testing.T) {
 func TestStoreConcurrentWritesAreNotLost(t *testing.T) {
 	dir := t.TempDir()
 	a, b := NewStore(dir), NewStore(dir) // two processes' views of the same file
-	if err := a.CreateSite("Neptune"); err != nil {
+	if err := a.CreateSite("Alice"); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -142,7 +142,7 @@ func TestStoreConcurrentWritesAreNotLost(t *testing.T) {
 		}(i)
 		go func(i int) {
 			defer wg.Done()
-			if _, err := b.Assign(fmt.Sprintf("host-%d", i), "Neptune"); err != nil {
+			if _, err := b.Assign(fmt.Sprintf("host-%d", i), "Alice"); err != nil {
 				t.Error(err)
 			}
 		}(i)

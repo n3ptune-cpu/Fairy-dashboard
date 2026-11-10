@@ -97,7 +97,7 @@ func (g Grant) Cap(o Grant) Grant {
 	return out
 }
 
-// String describes the grant for logs and the demo switcher: "admin", "viewer:Neptune,Straw", "pending".
+// String describes the grant for logs and the demo switcher: "admin", "viewer:Alice,Bob", "pending".
 func (g Grant) String() string {
 	switch {
 	case g.Admin():
@@ -110,7 +110,7 @@ func (g Grant) String() string {
 	return RolePending
 }
 
-// ParseView parses a demo preview ("admin", "pending", "viewer:Straw" or "viewer:Neptune,Straw").
+// ParseView parses a demo preview ("admin", "pending", "viewer:Bob" or "viewer:Alice,Bob").
 func ParseView(v string) (Grant, error) {
 	role, sites, _ := strings.Cut(strings.TrimSpace(v), ":")
 	switch role {
@@ -128,7 +128,7 @@ func ParseView(v string) (Grant, error) {
 			return Grant{}, err
 		}
 		if len(list) == 0 {
-			return Grant{}, errors.New("viewer needs at least one site, e.g. viewer:Straw")
+			return Grant{}, errors.New("viewer needs at least one site, e.g. viewer:Bob")
 		}
 		return Grant{Role: RoleViewer, Sites: list}, nil
 	}

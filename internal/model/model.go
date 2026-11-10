@@ -355,7 +355,7 @@ type Me struct {
 	Sites          []string `json:"sites"`
 	AllSites       bool     `json:"all_sites"`
 	CanManageUsers bool     `json:"can_manage_users"`
-	// Demo mode only: the role being previewed ("admin", "viewer:Straw", ...) and the choices.
+	// Demo mode only: the role being previewed ("admin", "viewer:Bob", ...) and the choices.
 	DemoView  string   `json:"demo_view,omitempty"`
 	DemoViews []string `json:"demo_views,omitempty"`
 	// PendingResult is the outcome of an action the panel ran right after a step-up sign-in (shown once).

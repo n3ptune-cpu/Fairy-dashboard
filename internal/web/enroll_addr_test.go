@@ -21,7 +21,7 @@ func TestAddHostRefusesAddressesOutsideTailscale(t *testing.T) {
 	}
 	e := setup(t)
 	e.s.control = newRateLimiter(100)
-	e.s.Enroll.PanelAddr, e.s.Enroll.Pair = "100.88.109.47", nobody
+	e.s.Enroll.PanelAddr, e.s.Enroll.Pair = "100.64.0.10", nobody
 	if e.s.Enroll.AllowNonTailscale {
 		t.Fatal("other networks must be off by default")
 	}
@@ -43,14 +43,14 @@ func TestAddHostRefusesAddressesOutsideTailscale(t *testing.T) {
 	}
 
 	// the switch in config.yaml
-	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
 	cfg.Enroll.AllowNonTailscale = true
 	p, err := poller.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, testutil.NewBackend())
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, p, nil, "test")
-	s.Enroll.Scripts, s.Enroll.PanelAddr, s.Enroll.Pair = testInstallers, "100.88.109.47", nobody
+	s.Enroll.Scripts, s.Enroll.PanelAddr, s.Enroll.Pair = testInstallers, "100.64.0.10", nobody
 	s.control = newRateLimiter(100)
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()

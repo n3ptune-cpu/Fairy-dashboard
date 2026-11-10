@@ -29,15 +29,15 @@ oidc:
   control_groups: []
   bootstrap_admins: [owner@example.com]
 proxmox:
-  - id: teyvat
-    cluster_name: NSX-TEYVAT
-    site: Neptune
+  - id: dc1
+    cluster_name: SRV-DC1
+    site: Alice
     urls: ["https://pve1:8006"]
     token_id: "fairy@pve!panel"
     token_secret_env: PVE_SECRET
     verify_tls: false
 agents:
-  - {id: laptop, url: "http://laptop", token_env: TOK_LAPTOP, group: Neptune, site: Neptune, power_control: true,
-     self_update: true, control_token_env: CTL_CYRENE}
-  - {id: cyrene, url: "http://cyrene", token_env: TOK_CYRENE,
-     fan_control: {vendor: supermicro, control_token_env: CTL_CYRENE}}
+  - {id: laptop, url: "http://laptop", token_env: TOK_LAPTOP, group: Alice, site: Alice, power_control: true,
+     self_update: true, control_token_env: CTL_TOWER}
+  - {id: tower, url: "http://tower", token_env: TOK_TOWER,
+     fan_control: {vendor: supermicro, control_token_env: CTL_TOWER}}

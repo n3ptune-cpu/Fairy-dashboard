@@ -20,9 +20,9 @@ func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 	}{
 		{"POST", "/api/systems/laptop/helper/stop", map[string]any{"confirm": name}},
 		{"POST", "/api/systems/laptop/helper/start", map[string]any{"confirm": name}},
-		{"POST", "/api/admin/hosts", map[string]any{"name": "NSX-FURINA", "os": "linux"}},
-		{"POST", "/api/admin/hosts/nsx-furina/repair", map[string]any{"confirm": "NSX-FURINA"}},
-		{"DELETE", "/api/admin/hosts/nsx-furina", map[string]any{"confirm": "NSX-FURINA"}},
+		{"POST", "/api/admin/hosts", map[string]any{"name": "SRV-WINPC", "os": "linux"}},
+		{"POST", "/api/admin/hosts/srv-winpc/repair", map[string]any{"confirm": "SRV-WINPC"}},
+		{"DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "SRV-WINPC"}},
 	}
 	before := e.agentRequests()
 	for _, rt := range refused {
@@ -47,7 +47,7 @@ func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 	}{
 		{"PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}},
 		{"POST", "/api/systems/laptop/power", map[string]any{"action": "shutdown", "delay_s": 10, "confirm": name}},
-		{"POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}},
+		{"POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}},
 		{"POST", "/api/admin/updates/laptop", map[string]any{}},
 		{"POST", "/api/admin/updates", map[string]any{}},
 		{"DELETE", "/api/me/pending", nil},
@@ -117,7 +117,7 @@ func TestBodyIsNotReadBeforeSignIn(t *testing.T) {
 		e.s.Handler().ServeHTTP(rec, req)
 		return rec.Code, body.read
 	}
-	admin4 := [][2]string{{"PUT", "/api/admin/users/u9"}, {"POST", "/api/admin/sites"}, {"PUT", "/api/admin/sites/Straw"}, {"PUT", "/api/admin/assign"}}
+	admin4 := [][2]string{{"PUT", "/api/admin/users/u9"}, {"POST", "/api/admin/sites"}, {"PUT", "/api/admin/sites/Bob"}, {"PUT", "/api/admin/assign"}}
 	others := [][2]string{{"POST", "/api/admin/hosts"}, {"PUT", "/api/systems/laptop/poll"}, {"POST", "/api/systems/laptop/power"},
 		{"PUT", "/api/settings"}, {"POST", "/api/notifications/read"}, {"POST", "/api/me/active"}, {"DELETE", "/api/me/pending"}}
 	for _, rt := range append(admin4, others...) {

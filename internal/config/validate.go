@@ -52,7 +52,7 @@ func (c *Panel) Validate() error {
 		}
 	}
 	if a := c.Enroll.PanelAddress; a != "" && (net.ParseIP(a) == nil || net.ParseIP(a).To4() == nil) {
-		errs.add("enroll.panel_address must be the panel's Tailscale IPv4 address, e.g. 100.88.109.47")
+		errs.add("enroll.panel_address must be the panel's Tailscale IPv4 address, e.g. 100.64.0.10")
 	}
 	if t := c.Enroll.AgentRelease; t != "" && !releaseTagRe.MatchString(t) {
 		errs.add("enroll.agent_release must be a Fairy-agent release tag like build-7")

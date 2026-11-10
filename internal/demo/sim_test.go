@@ -29,7 +29,7 @@ func TestCounterNeverDecreases(t *testing.T) {
 // cumulative network counters must never go down (otherwise the rate tracker sees a reset and the UI's
 // Network row flickers).
 func TestDemoNetworkCountersMonotonic(t *testing.T) {
-	agents := []string{"nsx-cyrene", "neptune-laptop", "llm-box", "straw-pc"}
+	agents := []string{"srv-tower", "alice-laptop", "llm-box", "bob-pc"}
 	last := map[string]int64{}
 	check := func(key string, v int64) {
 		if p, ok := last[key]; ok && v < p {
@@ -47,7 +47,7 @@ func TestDemoNetworkCountersMonotonic(t *testing.T) {
 			check(id+" rx", net["bytes_recv"].(int64))
 			check(id+" tx", net["bytes_sent"].(int64))
 		}
-		for _, r := range append(proxmoxResources(), strawResources()...) {
+		for _, r := range append(proxmoxResources(), bobResources()...) {
 			if jsonx.S(r, "status") != "running" || (jsonx.S(r, "type") != "qemu" && jsonx.S(r, "type") != "lxc") {
 				continue
 			}
@@ -59,7 +59,7 @@ func TestDemoNetworkCountersMonotonic(t *testing.T) {
 	}
 }
 
-// The demo's NSX-CYRENE has no "optimal" fan mode, like the real board: refused with the agent's 422, listed.
+// The demo's SRV-TOWER has no "optimal" fan mode, like the real board: refused with the agent's 422, listed.
 func TestDemoBMCRefusesOptimal(t *testing.T) {
 	b := newSimBMC()
 	if st, out := b.handle("/fan/mode", map[string]any{"mode": "optimal"}); st != 422 || out["code"] != "fan_mode_unsupported" {
@@ -74,7 +74,7 @@ func TestDemoBMCRefusesOptimal(t *testing.T) {
 	}
 }
 
-// The demo's Windows agents: NSX-CYRENE's elevated helper runs, the laptop's is stopped; Stop / Start work.
+// The demo's Windows agents: SRV-TOWER's elevated helper runs, the laptop's is stopped; Stop / Start work.
 func TestDemoHelperStopStart(t *testing.T) {
 	b := NewBackend(nil)
 	metrics := func(id string) jsonx.M {
@@ -93,42 +93,42 @@ func TestDemoHelperStopStart(t *testing.T) {
 		}
 		return false
 	}
-	if m := metrics("nsx-cyrene"); state(m) != "running" || !hasIPMI(m) || m["unavailable"] != nil {
-		t.Fatal("cyrene", m["helper"])
+	if m := metrics("srv-tower"); state(m) != "running" || !hasIPMI(m) || m["unavailable"] != nil {
+		t.Fatal("tower", m["helper"])
 	}
-	if m := metrics("neptune-laptop"); state(m) != "stopped" || hasIPMI(m) || fmt.Sprint(m["unavailable"]) != "[map[reason:helper_stopped source:coretemp] map[reason:helper_stopped source:power]]" ||
+	if m := metrics("alice-laptop"); state(m) != "stopped" || hasIPMI(m) || fmt.Sprint(m["unavailable"]) != "[map[reason:helper_stopped source:coretemp] map[reason:helper_stopped source:power]]" ||
 		jsonx.Obj(m, "power_control")["available"] != false {
 		t.Fatal("laptop", m["helper"], m["unavailable"])
 	}
-	if m := metrics("straw-pc"); state(m) != "not_installed" || m["unavailable"] != nil {
-		t.Fatal("straw-pc", m["helper"])
+	if m := metrics("bob-pc"); state(m) != "not_installed" || m["unavailable"] != nil {
+		t.Fatal("bob-pc", m["helper"])
 	}
-	if st, out := b.simHelperControl("nsx-cyrene", api.PathHelperStop); st != 200 || out["state"] != "stopped" {
+	if st, out := b.simHelperControl("srv-tower", api.PathHelperStop); st != 200 || out["state"] != "stopped" {
 		t.Fatal(st, out)
 	}
-	m := metrics("nsx-cyrene")
+	m := metrics("srv-tower")
 	if state(m) != "stopped" || hasIPMI(m) || len(jsonx.Objs(m["fans"])) != 0 || jsonx.Obj(m, "features")["fan_control"] != true {
-		t.Fatal("stopped cyrene still reads the BMC", m["temps"], m["fans"])
+		t.Fatal("stopped tower still reads the BMC", m["temps"], m["fans"])
 	}
-	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "nsx-cyrene"}, "POST", "/fan/mode", map[string]any{"mode": "full"}); st != 503 || out["code"] != "helper_stopped" {
+	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "srv-tower"}, "POST", "/fan/mode", map[string]any{"mode": "full"}); st != 503 || out["code"] != "helper_stopped" {
 		t.Fatal("fan write while stopped", st, out)
 	}
-	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "nsx-cyrene", PowerControl: true}, "POST", "/power", map[string]any{"action": "reboot"}); st != 503 || out["code"] != "helper_stopped" {
+	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "srv-tower", PowerControl: true}, "POST", "/power", map[string]any{"action": "reboot"}); st != 503 || out["code"] != "helper_stopped" {
 		t.Fatal("power while stopped", st, out)
 	}
-	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "nsx-cyrene"}, "GET", "/fan/status", nil); st != 200 || out["available"] != false {
+	if st, out, _ := b.AgentRequest(t.Context(), config.Agent{ID: "srv-tower"}, "GET", "/fan/status", nil); st != 200 || out["available"] != false {
 		t.Fatal("fan status while stopped", st, out)
 	}
-	if st, out := b.simHelperControl("nsx-cyrene", api.PathHelperStart); st != 200 || out["state"] != "starting" {
+	if st, out := b.simHelperControl("srv-tower", api.PathHelperStart); st != 200 || out["state"] != "starting" {
 		t.Fatal(st, out)
 	}
 	b.mu.Lock()
-	b.helpers["nsx-cyrene"].readyAt = time.Now()
+	b.helpers["srv-tower"].readyAt = time.Now()
 	b.mu.Unlock()
-	if m := metrics("nsx-cyrene"); state(m) != "running" || !hasIPMI(m) {
+	if m := metrics("srv-tower"); state(m) != "running" || !hasIPMI(m) {
 		t.Fatal("restarted", m["helper"])
 	}
-	if st, out := b.simHelperControl("straw-pc", api.PathHelperStart); st != 409 || out["error"] != "not_installed" {
+	if st, out := b.simHelperControl("bob-pc", api.PathHelperStart); st != 409 || out["error"] != "not_installed" {
 		t.Fatal(st, out)
 	}
 }

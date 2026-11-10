@@ -168,7 +168,7 @@ func (h Host) ProxmoxEntry(sec Secret, caFile string) *config.Proxmox {
 
 var idRe = regexp.MustCompile(`[^a-z0-9]+`)
 
-// IDFor makes a system id from a host name ("NSX-FURINA" -> "nsx-furina").
+// IDFor makes a system id from a host name ("SRV-WINPC" -> "srv-winpc").
 func IDFor(name string) string {
 	id := strings.Trim(idRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
 	if len(id) > 60 {

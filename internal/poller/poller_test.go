@@ -87,11 +87,11 @@ func TestPollRatesAuthFailoverAndOffline(t *testing.T) {
 	lap := s["laptop"]
 	if lap.Status != "online" || *lap.OS != "Ubuntu 24.04.1 LTS" || *lap.Cores != 8 || *lap.DiskTotal != 1500<<30 ||
 		lap.Temps[0].CurrentC != 55 || *lap.GPUs[0].VRAMTotal != 4<<30 || lap.Fans[0].RPM != 2400 ||
-		*lap.ComponentPower.BatteryState != "discharging" || lap.NetRxBps != nil || *lap.Group != "Neptune" {
+		*lap.ComponentPower.BatteryState != "discharging" || lap.NetRxBps != nil || *lap.Group != "Alice" {
 		t.Fatalf("%+v", lap)
 	}
-	if s["cyrene"].Status != "offline" || *s["cyrene"].Error != "connection failed" { // never seen -> offline placeholder
-		t.Fatalf("%+v", s["cyrene"])
+	if s["tower"].Status != "offline" || *s["tower"].Error != "connection failed" { // never seen -> offline placeholder
+		t.Fatalf("%+v", s["tower"])
 	}
 	// second poll 5 s later: counters grew -> rates; deleted guests disappear
 	now = now.Add(5 * time.Second)
@@ -137,8 +137,8 @@ func TestPollRatesAuthFailoverAndOffline(t *testing.T) {
 }
 
 func TestAgentPowerMergeNodeEnrichmentAndPause(t *testing.T) {
-	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
-	cfg.Agents[0].Node = "NSX-KACHINA" // the laptop agent "runs on" the node: it enriches it
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
+	cfg.Agents[0].Node = "SRV-PVEA" // the laptop agent "runs on" the node: it enriches it
 	b := testutil.NewBackend()
 	p, err := New(cfg, config.Secrets{}, b)
 	if err != nil {
@@ -153,7 +153,7 @@ func TestAgentPowerMergeNodeEnrichmentAndPause(t *testing.T) {
 	if _, ok := s["laptop"]; ok {
 		t.Fatal("agent should be merged into its node")
 	}
-	n := s["node-nsx-kachina"]
+	n := s["node-srv-pvea"]
 	if len(n.Temps) != 1 || n.ComponentPower == nil || !n.ProcessesAvailable ||
 		*n.CPUModel != "Intel(R) Core(TM) i7-8700T CPU @ 2.40GHz" {
 		t.Fatalf("%+v", n)
@@ -169,7 +169,7 @@ func TestAgentPowerMergeNodeEnrichmentAndPause(t *testing.T) {
 	if err := p.SetPoll("qemu-100", nil); err != nil {
 		t.Fatal(err)
 	}
-	ps := p.PollStatus("node-nsx-kachina")
+	ps := p.PollStatus("node-srv-pvea")
 	if ps.Mode != "default" || len(ps.Jobs) != 2 {
 		t.Fatalf("%+v", ps)
 	}
@@ -180,7 +180,7 @@ func TestAgentPowerMergeNodeEnrichmentAndPause(t *testing.T) {
 	}
 	sm := p.Summary()
 	if sm.Cluster == nil || sm.Cluster.NodesOnline != 1 || sm.Cluster.GuestsTotal != 3 || sm.Counts.Total != len(p.Snapshot()) ||
-		// both nodes (the laptop agent merged into one) and cyrene; only the online node adds usage
+		// both nodes (the laptop agent merged into one) and tower; only the online node adds usage
 		sm.Totals.Hosts != 3 || sm.Totals.HostsOnline != 1 || sm.Totals.Cores != sm.Cluster.Cores || sm.Totals.MemTotal != sm.Cluster.MemTotal {
 		t.Fatalf("%+v", sm)
 	}
@@ -191,7 +191,7 @@ func TestProcessCmdlinesAreRedacted(t *testing.T) {
 	pl, err := DecodeProcessList(jsonx.M{"processes": []any{
 		jsonx.M{"pid": 1.0, "cmdline": "backup --password=hunter2 --host db"},
 		jsonx.M{"pid": 2.0, "cmdline": nil},
-	}}, "straw-pc")
+	}}, "bob-pc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,9 +245,9 @@ func TestAddAndRemoveAgentAtRunTime(t *testing.T) {
 	}
 	ctx := context.Background()
 	p.PollOnce(ctx)
-	a := config.Agent{ID: "nsx-furina", Name: "NSX-FURINA", URL: agent.URL, Managed: true,
+	a := config.Agent{ID: "srv-winpc", Name: "SRV-WINPC", URL: agent.URL, Managed: true,
 		Token: "managed-read-token-xxxxxxxxxxxxxxxx", ControlToken: "managed-control-token-yyyyyyyyyyyy", PowerControl: true}
-	o := &config.SystemOverride{ID: "nsx-furina", Wol: &config.Wol{MACs: []string{"aa:bb:cc:dd:ee:ff"}, Relay: "laptop"}}
+	o := &config.SystemOverride{ID: "srv-winpc", Wol: &config.Wol{MACs: []string{"aa:bb:cc:dd:ee:ff"}, Relay: "laptop"}}
 	if err := p.AddAgent(a, o); err != nil {
 		t.Fatal(err)
 	}
@@ -255,22 +255,22 @@ func TestAddAndRemoveAgentAtRunTime(t *testing.T) {
 		t.Fatal("duplicate accepted")
 	}
 	p.PollOnce(ctx)
-	if s, ok := snap(p)["nsx-furina"]; !ok || s.Status != "online" {
+	if s, ok := snap(p)["srv-winpc"]; !ok || s.Status != "online" {
 		t.Fatalf("managed agent not polled: %+v", s)
 	}
 	if auth.Load() != "Bearer managed-read-token-xxxxxxxxxxxxxxxx" {
 		t.Fatal("wrong token sent")
 	}
-	if got, ok := p.AgentByID("nsx-furina"); !ok || !got.Managed || p.Override("nsx-furina") == nil {
+	if got, ok := p.AgentByID("srv-winpc"); !ok || !got.Managed || p.Override("srv-winpc") == nil {
 		t.Fatal("agent / override not registered")
 	}
-	p.RemoveAgent("nsx-furina")
+	p.RemoveAgent("srv-winpc")
 	p.PollOnce(ctx)
-	if _, ok := snap(p)["nsx-furina"]; ok || p.Override("nsx-furina") != nil {
+	if _, ok := snap(p)["srv-winpc"]; ok || p.Override("srv-winpc") != nil {
 		t.Fatal("removed agent still shown")
 	}
 	for _, x := range p.Agents() {
-		if x.ID == "nsx-furina" {
+		if x.ID == "srv-winpc" {
 			t.Fatal("still in Agents()")
 		}
 	}
@@ -331,7 +331,7 @@ func TestHostTotals(t *testing.T) {
 // -race this used to report a data race on p.overrides (and could crash with "concurrent map read and map
 // write").
 func TestOverridesRaceWithAddRepairRemove(t *testing.T) {
-	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
 	p, err := New(cfg, config.Secrets{}, testutil.NewBackend())
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +396,7 @@ func TestSelfUpdateBlockFromAHostileAgent(t *testing.T) {
 // The elevated helper (Fairy-agent v0.5.0): what was seen while it ran decides what is announced as paused once
 // it stops, so a host whose helper provides nothing visible gets no "paused" line.
 func TestHelperPausedFollowsWhatRan(t *testing.T) {
-	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
 	b := testutil.NewBackend()
 	all := []string{"coretemp", "ipmi", "fans", "power", "update"}
 	set := func(id string, m jsonx.M) {
@@ -409,35 +409,35 @@ func TestHelperPausedFollowsWhatRan(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	// cyrene (fan control configured): running with Core Temp, BMC sensors and fans, then stopped
-	set("cyrene", testutil.HelperMetrics("running", all...))
+	// tower (fan control configured): running with Core Temp, BMC sensors and fans, then stopped
+	set("tower", testutil.HelperMetrics("running", all...))
 	// laptop: running, but this board has no BMC and Core Temp is not installed: nothing of the helper's shows
 	lap := testutil.HelperMetrics("running", all...)
 	lap["temps"] = []any{jsonx.M{"sensor": "acpi", "label": "TZ00", "current": 50.0}}
 	lap["fans"], lap["voltages"] = []any{}, []any{}
 	set("laptop", lap)
 	p.PollOnce(ctx)
-	if s := snap(p)["cyrene"]; s.Helper == nil || s.Helper.State != "running" || len(s.Helper.Paused) != 0 || !s.FanControl {
+	if s := snap(p)["tower"]; s.Helper == nil || s.Helper.State != "running" || len(s.Helper.Paused) != 0 || !s.FanControl {
 		t.Fatalf("running: %+v", s.Helper)
 	}
-	set("cyrene", testutil.HelperMetrics("stopped", all...))
+	set("tower", testutil.HelperMetrics("stopped", all...))
 	set("laptop", testutil.HelperMetrics("stopped", all...))
 	p.PollOnce(ctx)
 	got := snap(p)
-	if c := got["cyrene"]; fmt.Sprint(c.Helper.Paused) != "[coretemp ipmi fans]" || !c.FanControl {
-		t.Fatalf("cyrene stopped: %v fan tab %v", c.Helper.Paused, c.FanControl)
+	if c := got["tower"]; fmt.Sprint(c.Helper.Paused) != "[coretemp ipmi fans]" || !c.FanControl {
+		t.Fatalf("tower stopped: %v fan tab %v", c.Helper.Paused, c.FanControl)
 	}
 	if l := got["laptop"]; len(l.Helper.Paused) != 0 {
 		t.Fatalf("laptop had none of the helper's readings while it ran: %v", l.Helper.Paused)
 	}
 	// an agent that no longer sends a helper (downgraded): forgotten
-	set("cyrene", testutil.AgentMetrics())
+	set("tower", testutil.AgentMetrics())
 	p.PollOnce(ctx)
-	if c := snap(p)["cyrene"]; c.Helper != nil {
+	if c := snap(p)["tower"]; c.Helper != nil {
 		t.Fatal(c.Helper)
 	}
 	p.mu.Lock()
-	_, kept := p.helperSeen["cyrene"]
+	_, kept := p.helperSeen["tower"]
 	p.mu.Unlock()
 	if kept {
 		t.Fatal("helper history kept for an agent without a helper")

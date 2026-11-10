@@ -34,7 +34,7 @@ func TestGenVBeforeManagedFixture(t *testing.T) {
 	e := setup(t)
 	e.s.Enroll.Interval = 20 * time.Millisecond
 	e.s.control = newRateLimiter(100)
-	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.PanelAddr = "100.64.0.10"
 	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Proxmox Virtual Environment"}, IsCA: true,
 		BasicConstraintsValid: true, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(30, 0, 0)}
@@ -44,25 +44,25 @@ func TestGenVBeforeManagedFixture(t *testing.T) {
 	}
 	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	e.s.Enroll.Pair = func(_ context.Context, url, proof string) (int, enroll.Response, string, error) {
-		if strings.Contains(url, "kachina") {
-			return 200, enroll.Response{AgentVersion: "13-d43fdaf", Hostname: "NSX-KACHINA", Platform: "linux", Token: "old-kachina-read-token-xxxxxxxxxxxxxx",
-				ControlToken: "old-kachina-control-token-yyyyyyyyy", Proxmox: &enroll.ProxmoxGrant{TokenID: "fairy@pve!panel-nsx-kachina",
-					TokenSecret: "0b7c4e2a-1111-2222-3333-444455556666", CAPEM: string(ca), Node: "NSX-KACHINA",
-					URL: "https://nsx-kachina.tailnet.ts.net:8006", ServerName: "NSX-KACHINA"}}, "", nil
+		if strings.Contains(url, "pvea") {
+			return 200, enroll.Response{AgentVersion: "13-d43fdaf", Hostname: "SRV-PVEA", Platform: "linux", Token: "old-pvea-read-token-xxxxxxxxxxxxxx",
+				ControlToken: "old-pvea-control-token-yyyyyyyyy", Proxmox: &enroll.ProxmoxGrant{TokenID: "fairy@pve!panel-srv-pvea",
+					TokenSecret: "0b7c4e2a-1111-2222-3333-444455556666", CAPEM: string(ca), Node: "SRV-PVEA",
+					URL: "https://srv-pvea.example.ts.net:8006", ServerName: "SRV-PVEA"}}, "", nil
 		}
-		return 200, enroll.Response{AgentVersion: "13-d43fdaf", Hostname: "NSX-FURINA", Platform: "windows", Token: "old-furina-read-token-xxxxxxxxxxxxxxx",
-			ControlToken: "old-furina-control-token-yyyyyyyyyy"}, "", nil
+		return 200, enroll.Response{AgentVersion: "13-d43fdaf", Hostname: "SRV-WINPC", Platform: "windows", Token: "old-winpc-read-token-xxxxxxxxxxxxxxx",
+			ControlToken: "old-winpc-control-token-yyyyyyyyyy"}, "", nil
 	}
 	e.b.Mu.Lock()
-	for _, id := range []string{"nsx-furina", "nsx-kachina"} {
+	for _, id := range []string{"srv-winpc", "srv-pvea"} {
 		e.b.Metrics[id] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
 	}
 	e.b.Mu.Unlock()
 	c := e.cookie(controller(), 0)
 	hdr := []string{"Cookie", c, "X-Requested-With", "fairy"}
 	for _, body := range []map[string]any{
-		{"name": "NSX-FURINA", "os": "windows", "site": "Neptune", "options": map[string]any{"power_control": true, "coretemp": true, "self_update": true}},
-		{"name": "nsx-kachina", "os": "linux", "site": "Neptune", "proxmox_new": true, "options": map[string]any{"power_control": true}},
+		{"name": "SRV-WINPC", "os": "windows", "site": "Alice", "options": map[string]any{"power_control": true, "coretemp": true, "self_update": true}},
+		{"name": "srv-pvea", "os": "linux", "site": "Alice", "proxmox_new": true, "options": map[string]any{"power_control": true}},
 	} {
 		r := e.do("POST", "/api/admin/hosts", body, hdr...)
 		if r.code != 201 {

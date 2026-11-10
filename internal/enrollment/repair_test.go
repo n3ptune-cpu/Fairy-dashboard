@@ -29,7 +29,7 @@ func testConfig(t *testing.T) *config.Panel {
 // time loses its old CA file.
 func TestRepairDropsTheOldTokens(t *testing.T) {
 	store := managed.NewStore(t.TempDir())
-	h := managed.Host{ID: "nsx-kachina", Name: "nsx-kachina", URL: "http://nsx-kachina:9101", OS: "linux", ProxmoxWanted: true,
+	h := managed.Host{ID: "srv-pvea", Name: "srv-pvea", URL: "http://srv-pvea:9101", OS: "linux", ProxmoxWanted: true,
 		Options: managed.Options{PowerControl: true}}
 	old := managed.Secret{Token: "old-read-token-xxxxxxxxxxxxxxxxxx", ControlToken: "old-control-token-yyyyyyyyyyyyyyy", PVETokenSecret: "old-pve-secret-0000-1111"}
 	if err := store.Put(h, old); err != nil {
@@ -39,7 +39,7 @@ func TestRepairDropsTheOldTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls []string
-	m := &Manager{Store: store, Now: time.Now, Interval: time.Millisecond, OnlineWait: time.Second, PanelAddr: "100.88.109.47",
+	m := &Manager{Store: store, Now: time.Now, Interval: time.Millisecond, OnlineWait: time.Second, PanelAddr: "100.64.0.10",
 		Scripts: Fixed(testInstallers), items: map[string]*Enrollment{},
 		Hooks: Hooks{
 			Config: func() *config.Panel { return testConfig(t) },
@@ -52,7 +52,7 @@ func TestRepairDropsTheOldTokens(t *testing.T) {
 			return 200, enroll.Response{AgentVersion: "8-abcdef0", Token: "new-read-token-xxxxxxxxxxxxxxxxxx",
 				ControlToken: "new-control-token-yyyyyyyyyyyyyyy"}, "", nil
 		}}
-	cr, err := m.Create(context.Background(), Request{}, &h, "neptune", nil)
+	cr, err := m.Create(context.Background(), Request{}, &h, "alice", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestRepairDropsTheOldTokens(t *testing.T) {
 	if _, err := os.Stat(store.CAPath(h.ID)); !os.IsNotExist(err) {
 		t.Fatal("old CA kept", err)
 	}
-	if strings.Join(calls, ", ") != "remove nsx-kachina, add new-read-token-xxxxxxxxxxxxxxxxxx" {
+	if strings.Join(calls, ", ") != "remove srv-pvea, add new-read-token-xxxxxxxxxxxxxxxxxx" {
 		t.Fatal(calls)
 	}
 }
@@ -92,14 +92,14 @@ func TestRepairDropsTheOldTokens(t *testing.T) {
 // stores anything or waits until it has (and the caller then removes it).
 func TestRemoveDuringRepairDoesNotBringTheHostBack(t *testing.T) {
 	store := managed.NewStore(t.TempDir())
-	h := managed.Host{ID: "nsx-furina", Name: "nsx-furina", URL: "http://nsx-furina:9101", OS: "linux"}
+	h := managed.Host{ID: "srv-winpc", Name: "srv-winpc", URL: "http://srv-winpc:9101", OS: "linux"}
 	if err := store.Put(h, managed.Secret{Token: "old-read-token-xxxxxxxxxxxxxxxxxx"}); err != nil {
 		t.Fatal(err)
 	}
 	answering := make(chan struct{})
 	release := make(chan struct{})
 	var adds atomic.Int32
-	m := &Manager{Store: store, Now: time.Now, Interval: time.Millisecond, OnlineWait: time.Second, PanelAddr: "100.88.109.47",
+	m := &Manager{Store: store, Now: time.Now, Interval: time.Millisecond, OnlineWait: time.Second, PanelAddr: "100.64.0.10",
 		Scripts: Fixed(testInstallers), items: map[string]*Enrollment{},
 		Hooks: Hooks{
 			Config: func() *config.Panel { return &config.Panel{} },
@@ -113,7 +113,7 @@ func TestRemoveDuringRepairDoesNotBringTheHostBack(t *testing.T) {
 			<-release
 			return 200, enroll.Response{Token: "new-read-token-xxxxxxxxxxxxxxxxxx"}, "", nil
 		}}
-	cr, err := m.Create(context.Background(), Request{}, &h, "neptune", nil)
+	cr, err := m.Create(context.Background(), Request{}, &h, "alice", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,17 +137,17 @@ func TestRemoveDuringRepairDoesNotBringTheHostBack(t *testing.T) {
 // managed one is skipped at start) is refused before anything is stored or forgotten, like a new host would be.
 func TestRepairOfAHostThatConfigYAMLShadowsIsRefused(t *testing.T) {
 	store := managed.NewStore(t.TempDir())
-	h := managed.Host{ID: "nsx-furina", Name: "nsx-furina", URL: "http://nsx-furina:9101", OS: "linux"}
+	h := managed.Host{ID: "srv-winpc", Name: "srv-winpc", URL: "http://srv-winpc:9101", OS: "linux"}
 	if err := store.Put(h, managed.Secret{Token: "old-read-token-xxxxxxxxxxxxxxxxxx"}); err != nil {
 		t.Fatal(err)
 	}
 	var removed, added atomic.Int32
-	m := &Manager{Store: store, Now: time.Now, Interval: time.Millisecond, OnlineWait: time.Second, PanelAddr: "100.88.109.47",
+	m := &Manager{Store: store, Now: time.Now, Interval: time.Millisecond, OnlineWait: time.Second, PanelAddr: "100.64.0.10",
 		Scripts: Fixed(testInstallers), items: map[string]*Enrollment{},
 		Hooks: Hooks{
 			Config: func() *config.Panel {
 				c := testConfig(t)
-				c.Agents = append(c.Agents, config.Agent{ID: "nsx-furina", URL: "http://10.0.0.5:9101", TokenEnv: "TOK"}, // config.yaml's
+				c.Agents = append(c.Agents, config.Agent{ID: "srv-winpc", URL: "http://10.0.0.5:9101", TokenEnv: "TOK"}, // config.yaml's
 					config.Agent{ID: "other", URL: "http://other:9101", Managed: true, Token: "other-read-token-xxxxxxxxxxxxxxxx"})
 				return c
 			},
@@ -159,7 +159,7 @@ func TestRepairOfAHostThatConfigYAMLShadowsIsRefused(t *testing.T) {
 		Pair: func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 			return 200, enroll.Response{Token: "new-read-token-xxxxxxxxxxxxxxxxxx"}, "", nil
 		}}
-	cr, err := m.Create(context.Background(), Request{}, &h, "neptune", nil)
+	cr, err := m.Create(context.Background(), Request{}, &h, "alice", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestRepairOfAHostThatConfigYAMLShadowsIsRefused(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 		e, _ = m.Get(cr.ID)
 	}
-	if e.State != Failed || !strings.Contains(e.Message, "an agent with id nsx-furina is already configured") || removed.Load() != 0 || added.Load() != 0 {
+	if e.State != Failed || !strings.Contains(e.Message, "an agent with id srv-winpc is already configured") || removed.Load() != 0 || added.Load() != 0 {
 		t.Fatalf("%+v removed=%d added=%d", e, removed.Load(), added.Load())
 	}
 	if sec, err := store.Secret(h.ID); err != nil || sec.Token != "old-read-token-xxxxxxxxxxxxxxxxxx" {

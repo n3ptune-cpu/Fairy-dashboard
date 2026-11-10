@@ -33,7 +33,7 @@ func TestBreakGlassOnTheOldReleasesFiles(t *testing.T) {
 		}
 		return access.NewStore(v.DataDir).Load().Users[sub].Role
 	}
-	const owner, viewer, waiting = "3f6c1d2e-owner-0001", "9a1b77c0-straw-0002", "5d2e9f10-kaveh-0003"
+	const owner, viewer, waiting = "3f6c1d2e-owner-0001", "9a1b77c0-bob-0002", "5d2e9f10-carol-0003"
 	if v.OwnerSub != owner || v.ViewerSub != viewer {
 		t.Fatal("fixture changed")
 	}
@@ -48,10 +48,10 @@ func TestBreakGlassOnTheOldReleasesFiles(t *testing.T) {
 	if code, out := run("", "sessions", "list"); code != 0 || strings.Count(out, "@example.com") != 3 {
 		t.Fatalf("sessions list: %d\n%s", code, out)
 	}
-	if code, out := run("", "tokens", "list"); code != 0 || !strings.Contains(out, "home-assistant") || !strings.Contains(out, "straw-script") {
+	if code, out := run("", "tokens", "list"); code != 0 || !strings.Contains(out, "home-assistant") || !strings.Contains(out, "bob-script") {
 		t.Fatalf("tokens list: %d\n%s", code, out)
 	}
-	if code, out := run("", "sites", "list"); code != 0 || !strings.Contains(out, "Straw") || !strings.Contains(out, "power:desk-plug") {
+	if code, out := run("", "sites", "list"); code != 0 || !strings.Contains(out, "Bob") || !strings.Contains(out, "power:desk-plug") {
 		t.Fatalf("sites list: %d\n%s", code, out)
 	}
 	if code, out := run("", "audit", "tail"); code != 0 || !strings.Contains(out, "user.first_sign_in") || !strings.Contains(out, "control.enable") {
@@ -104,7 +104,7 @@ func TestBreakGlassOnTheOldReleasesFiles(t *testing.T) {
 	}
 
 	// the other commands that change the old files
-	if code, out := run("", "users", "sites", waiting, "Straw"); code != 0 || role(waiting) != access.RoleViewer {
+	if code, out := run("", "users", "sites", waiting, "Bob"); code != 0 || role(waiting) != access.RoleViewer {
 		t.Fatal(code, out)
 	}
 	code, out = run("", "users", "remove", viewer)
@@ -126,7 +126,7 @@ func TestBreakGlassOnTheOldReleasesFiles(t *testing.T) {
 
 	// users.json is still a whole file: sites, assignments and the removed list of the old release are there
 	d := access.NewStore(v.DataDir).Load()
-	if err := access.NewStore(v.DataDir).Err(); err != nil || d.Admins() != 1 || len(d.Removed) != 2 || d.Assign["cyrene"] != "Straw" || !d.HasSite("Neptune") {
+	if err := access.NewStore(v.DataDir).Err(); err != nil || d.Admins() != 1 || len(d.Removed) != 2 || d.Assign["tower"] != "Bob" || !d.HasSite("Alice") {
 		t.Fatalf("%v %+v", err, d)
 	}
 }

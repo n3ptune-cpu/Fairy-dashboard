@@ -35,7 +35,7 @@ type env struct {
 
 func setup(t *testing.T) *env {
 	t.Helper()
-	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://cyrene")
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
 	b := testutil.NewBackend()
 	p, err := poller.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, b)
 	if err != nil {
@@ -49,7 +49,7 @@ func setup(t *testing.T) *env {
 	return &env{t: t, s: s, srv: srv, b: b}
 }
 
-var viewer = model.User{Sub: "u1", Name: model.P("Neptune"), Email: model.P("n@example.com"), Groups: []string{"viewers"}}
+var viewer = model.User{Sub: "u1", Name: model.P("Alice"), Email: model.P("n@example.com"), Groups: []string{"viewers"}}
 
 // controller is in a control group: admin on first sign-in. A different subject from viewer, because roles
 // now belong to the user (users.json), not to the groups in one session.
@@ -286,7 +286,7 @@ func TestControlNeedsGroupCSRFStepUpAndKillSwitch(t *testing.T) {
 	}
 	// guest power goes to Proxmox with the power token path
 	r = e.do("POST", "/api/systems/qemu-100/power", map[string]any{"action": "reboot"}, append([]string{"Cookie", c}, csrf...)...)
-	if r.code != 200 || len(e.b.PVECalls) != 1 || e.b.PVECalls[0] != "pve /nodes/NSX-KACHINA/qemu/100/status/reboot " {
+	if r.code != 200 || len(e.b.PVECalls) != 1 || e.b.PVECalls[0] != "pve /nodes/SRV-PVEA/qemu/100/status/reboot " {
 		t.Fatalf("guest power: %d %s %v", r.code, r.raw, e.b.PVECalls)
 	}
 	// rate limit (control_rate_per_min default)
@@ -548,11 +548,11 @@ func TestFanDutyFloor(t *testing.T) {
 	c := e.cookie(controller(), 0)
 	hdr := []string{"Cookie", c, "X-Requested-With", "fairy"}
 	for _, pct := range []int{0, 10, FanDutyFloor - 1} {
-		if r := e.do("POST", "/api/systems/cyrene/fan/duty", map[string]any{"zone": 0, "percent": pct}, hdr...); r.code != 422 {
+		if r := e.do("POST", "/api/systems/tower/fan/duty", map[string]any{"zone": 0, "percent": pct}, hdr...); r.code != 422 {
 			t.Fatal("duty below the floor accepted", pct, r.code)
 		}
 	}
-	if r := e.do("POST", "/api/systems/cyrene/fan/duty", map[string]any{"zone": 0, "percent": FanDutyFloor}, hdr...); r.code != 200 {
+	if r := e.do("POST", "/api/systems/tower/fan/duty", map[string]any{"zone": 0, "percent": FanDutyFloor}, hdr...); r.code != 200 {
 		t.Fatal("duty at the floor", r.code, string(r.raw))
 	}
 	if strings.Contains(strings.Join(e.b.Requests, "\n"), "percent:0") {
@@ -666,8 +666,8 @@ func TestUpdatesPageAndButton(t *testing.T) {
 	if l := rows["laptop"]; l["version"] != "41-aaaaaaa" || l["behind"] != true || l["can_update"] != true || l["configured"] != true {
 		t.Fatalf("laptop row %v", l)
 	}
-	if cy := rows["cyrene"]; cy["can_update"] != false || cy["configured"] != false {
-		t.Fatalf("cyrene row %v", cy)
+	if cy := rows["tower"]; cy["can_update"] != false || cy["configured"] != false {
+		t.Fatalf("tower row %v", cy)
 	}
 	if r.body["latest"].(map[string]any)["version"] != "42-bbbbbbb" || r.body["panel_behind"] != nil || r.body["behind"] != 1.0 {
 		t.Fatal(r.body)
@@ -698,7 +698,7 @@ func TestUpdatesPageAndButton(t *testing.T) {
 	if strings.Contains(strings.Join(e.b.Requests, "\n"), "/update") {
 		t.Fatal("an agent was asked to update without step-up")
 	}
-	if r := e.do("POST", "/api/admin/updates/cyrene", map[string]any{}, append([]string{"Cookie", c}, csrf...)...); r.code != 404 {
+	if r := e.do("POST", "/api/admin/updates/tower", map[string]any{}, append([]string{"Cookie", c}, csrf...)...); r.code != 404 {
 		t.Fatalf("not configured: %d %s", r.code, r.raw)
 	}
 	_ = e.s.Poller.Admin.SetControlDisabled(true, "root (cli)", "maintenance")
@@ -707,7 +707,7 @@ func TestUpdatesPageAndButton(t *testing.T) {
 	}
 	_ = e.s.Poller.Admin.SetControlDisabled(false, "root", "")
 	r = e.do("POST", "/api/admin/updates/laptop", map[string]any{}, append([]string{"Cookie", c}, csrf...)...)
-	if r.code != 200 || r.body["ok"] != true || !strings.Contains(strings.Join(e.b.Requests, "\n"), "laptop POST /update map[requested_by:Neptune]") {
+	if r.code != 200 || r.body["ok"] != true || !strings.Contains(strings.Join(e.b.Requests, "\n"), "laptop POST /update map[requested_by:Alice]") {
 		t.Fatalf("update: %d %s %v", r.code, r.raw, e.b.Requests)
 	}
 	r = e.do("POST", "/api/admin/updates", map[string]any{}, append([]string{"Cookie", c}, csrf...)...)
@@ -751,18 +751,18 @@ func TestAgentErrorsAreNot502(t *testing.T) {
 		want               int
 		detail             string
 	}{
-		{"unsupported mode", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "optimal"}, 422,
+		{"unsupported mode", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "optimal"}, 422,
 			jsonx.M{"error": refused, "code": "fan_mode_unsupported"}, nil, 422, "0xCC"},
-		{"BMC failure", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "standard"}, 502,
+		{"BMC failure", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "standard"}, 502,
 			jsonx.M{"error": "BMC refused the fan mode: BMC completion code 0xC3 (timeout)"}, nil, 424, "0xC3"},
-		{"duty conflict", "POST", "/api/systems/cyrene/fan/duty", map[string]any{"zone": 0, "percent": 50}, 409,
+		{"duty conflict", "POST", "/api/systems/tower/fan/duty", map[string]any{"zone": 0, "percent": 50}, 409,
 			jsonx.M{"error": "fan mode is standard; set mode 'full' first"}, nil, 409, "full"},
-		{"wrong control token", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, 401, nil, nil, 424, "control token"},
-		{"agent 500 without a body", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, 500, nil, nil, 424, "agent error"},
-		{"agent rate limit", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, 429, jsonx.M{"error": "slow down"}, nil, 429, "slow down"},
-		{"unreachable", "POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, 0, nil, devices.Errf("connection refused"), 502, "agent unreachable"},
-		{"fan status error", "GET", "/api/systems/cyrene/fan", nil, 503, jsonx.M{"error": "BMC busy"}, nil, 424, "BMC busy"},
-		{"invalid fan status", "GET", "/api/systems/cyrene/fan", nil, 200, jsonx.M{"mode": 5}, nil, 424, "invalid fan status"},
+		{"wrong control token", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 401, nil, nil, 424, "control token"},
+		{"agent 500 without a body", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 500, nil, nil, 424, "agent error"},
+		{"agent rate limit", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 429, jsonx.M{"error": "slow down"}, nil, 429, "slow down"},
+		{"unreachable", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 0, nil, devices.Errf("connection refused"), 502, "agent unreachable"},
+		{"fan status error", "GET", "/api/systems/tower/fan", nil, 503, jsonx.M{"error": "BMC busy"}, nil, 424, "BMC busy"},
+		{"invalid fan status", "GET", "/api/systems/tower/fan", nil, 200, jsonx.M{"mode": 5}, nil, 424, "invalid fan status"},
 		{"update failed", "POST", "/api/admin/updates/laptop", map[string]any{}, 500, jsonx.M{"error": "cannot download the release"}, nil, 424, "cannot download"},
 		{"power: agent error", "POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "LAPTOP"}, 500,
 			jsonx.M{"error": "shutdown.exe failed"}, nil, 424, "shutdown.exe failed"},
@@ -824,7 +824,7 @@ func TestSleepFromThePanel(t *testing.T) {
 		t.Fatal(s)
 	}
 	// Proxmox nodes are not offered sleep
-	for _, a := range e.do("GET", "/api/systems/node-nsx-kachina/power", nil, "Cookie", c).body["actions"].([]any) {
+	for _, a := range e.do("GET", "/api/systems/node-srv-pvea/power", nil, "Cookie", c).body["actions"].([]any) {
 		if a.(map[string]any)["action"] == "sleep" {
 			t.Fatal("sleep offered for a node")
 		}

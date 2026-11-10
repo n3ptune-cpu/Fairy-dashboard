@@ -45,7 +45,7 @@ func sseEvents(t *testing.T, raw []byte) map[string]map[string]any {
 // and the entry does not bring back what was removed for this viewer.
 func TestViewerCopyThatCannotBeWrittenBecomesAnErrorEntry(t *testing.T) {
 	e := setupSites(t)
-	u := person(subStraw)
+	u := person(subBob)
 	u.Auth = "session"
 	c := &reqCtx{s: e.s, w: httptest.NewRecorder(), r: httptest.NewRequest("GET", "/api/stream", nil), user: &u}
 	g := e.s.grantOf(c, &u)
@@ -54,7 +54,7 @@ func TestViewerCopyThatCannotBeWrittenBecomesAnErrorEntry(t *testing.T) {
 	}
 	v := e.s.newView(g)
 	good, order := v.SystemsJSON()
-	if !slices.Contains(order, "qemu-120") || !slices.Contains(order, "cyrene") {
+	if !slices.Contains(order, "qemu-120") || !slices.Contains(order, "tower") {
 		t.Fatalf("visible: %v", order)
 	}
 
@@ -91,7 +91,7 @@ func TestViewerCopyThatCannotBeWrittenBecomesAnErrorEntry(t *testing.T) {
 	if entry["parent"] != nil { // the hidden node was removed for this viewer and must stay removed
 		t.Fatalf("the error entry names the hidden node: %v", entry["parent"])
 	}
-	assertHidden(t, "straw", "error entry", string(got["qemu-120"]), hiddenFromStraw)
+	assertHidden(t, "bob", "error entry", string(got["qemu-120"]), hiddenFromBob)
 
 	// the live stream with that view: first frame and a delta, both valid JSON with every visible system
 	st := &streamState{s: e.s, v: v, last: map[string][]byte{}, quiet: time.Now()}
@@ -102,7 +102,7 @@ func TestViewerCopyThatCannotBeWrittenBecomesAnErrorEntry(t *testing.T) {
 	if len(list) != len(order) {
 		t.Fatalf("stream: %d systems instead of %d: %s", len(list), len(order), out.Bytes())
 	}
-	assertHidden(t, "straw", "stream", out.String(), hiddenFromStraw)
+	assertHidden(t, "bob", "stream", out.String(), hiddenFromBob)
 	st.sent = good // as if the good state had been sent before: the next tick sends the changed system
 	out.Reset()
 	st.writeSystems(&out)

@@ -23,11 +23,11 @@ const (
 )
 
 // Config returns the test panel config (like the prototype's conftest); proxmox/agent URLs may be overridden.
-func Config(t *testing.T, pveURLs []string, laptopURL, cyreneURL string) *config.Panel {
+func Config(t *testing.T, pveURLs []string, laptopURL, towerURL string) *config.Panel {
 	t.Helper()
 	t.Setenv("TOK_LAPTOP", ReadToken)
-	t.Setenv("TOK_CYRENE", ReadToken+"x")
-	t.Setenv("CTL_CYRENE", ControlToken)
+	t.Setenv("TOK_TOWER", ReadToken+"x")
+	t.Setenv("CTL_TOWER", ControlToken)
 	t.Setenv("PVE_SECRET", "pve-secret-uuid")
 	dir := t.TempDir()
 	q := func(s string) string { return fmt.Sprintf("%q", s) }
@@ -49,10 +49,10 @@ oidc: {issuer: "https://id.example.com", client_id: cid, allowed_groups: [viewer
 proxmox: {urls: [` + urls + `], token_id: "fairy@pve!panel", token_secret_env: PVE_SECRET, verify_tls: false,
           power_token_id: "fairy@pve!power", power_token_secret_env: PVE_SECRET}
 agents:
-  - {id: laptop, url: ` + q(laptopURL) + `, token_env: TOK_LAPTOP, group: Neptune, power_control: true, self_update: true,
-     control_token_env: CTL_CYRENE, dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=abc"}
-  - {id: cyrene, url: ` + q(cyreneURL) + `, token_env: TOK_CYRENE,
-     fan_control: {vendor: supermicro, control_token_env: CTL_CYRENE}}
+  - {id: laptop, url: ` + q(laptopURL) + `, token_env: TOK_LAPTOP, group: Alice, power_control: true, self_update: true,
+     control_token_env: CTL_TOWER, dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=abc"}
+  - {id: tower, url: ` + q(towerURL) + `, token_env: TOK_TOWER,
+     fan_control: {vendor: supermicro, control_token_env: CTL_TOWER}}
 systems:
   - {id: qemu-100, dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=vm"}
 `
@@ -66,15 +66,15 @@ systems:
 // PVEResources is a cluster/resources fixture.
 func PVEResources() []jsonx.M {
 	return []jsonx.M{
-		{"id": "node/NSX-KACHINA", "type": "node", "node": "NSX-KACHINA", "status": "online", "cpu": 0.125,
+		{"id": "node/SRV-PVEA", "type": "node", "node": "SRV-PVEA", "status": "online", "cpu": 0.125,
 			"maxcpu": 8.0, "mem": float64(8 << 30), "maxmem": float64(32 << 30), "disk": float64(10 << 30), "maxdisk": float64(100 << 30), "uptime": 1000.0},
-		{"id": "node/NSX-SNEZHNAYA", "type": "node", "node": "NSX-SNEZHNAYA", "status": "offline", "maxcpu": 12.0, "maxmem": float64(64 << 30)},
-		{"id": "qemu/100", "type": "qemu", "vmid": 100.0, "name": "win11", "node": "NSX-KACHINA", "status": "running",
+		{"id": "node/SRV-PVEB", "type": "node", "node": "SRV-PVEB", "status": "offline", "maxcpu": 12.0, "maxmem": float64(64 << 30)},
+		{"id": "qemu/100", "type": "qemu", "vmid": 100.0, "name": "win11", "node": "SRV-PVEA", "status": "running",
 			"cpu": 0.5, "maxcpu": 4.0, "mem": float64(4 << 30), "maxmem": float64(8 << 30), "disk": 0.0, "maxdisk": float64(64 << 30),
 			"netin": 1000.0, "netout": 500.0, "uptime": 50.0, "tags": "windows;gaming", "template": 0.0},
-		{"id": "lxc/101", "type": "lxc", "vmid": 101.0, "name": "minecraft", "node": "NSX-KACHINA", "status": "stopped",
+		{"id": "lxc/101", "type": "lxc", "vmid": 101.0, "name": "minecraft", "node": "SRV-PVEA", "status": "stopped",
 			"cpu": 0.0, "maxcpu": 2.0, "mem": 0.0, "maxmem": float64(1 << 31), "netin": 0.0, "netout": 0.0},
-		{"id": "qemu/120", "type": "qemu", "vmid": 120.0, "name": "truenas", "node": "NSX-SNEZHNAYA", "status": "unknown"},
+		{"id": "qemu/120", "type": "qemu", "vmid": 120.0, "name": "truenas", "node": "SRV-PVEB", "status": "unknown"},
 	}
 }
 
@@ -115,7 +115,7 @@ func NewBackend() *Backend {
 	return &Backend{PVE: func() ([]jsonx.M, error) { return PVEResources(), nil },
 		Metrics: map[string]func() (jsonx.M, error){
 			"laptop": func() (jsonx.M, error) { return AgentMetrics(), nil },
-			"cyrene": func() (jsonx.M, error) { return nil, context.DeadlineExceeded },
+			"tower":  func() (jsonx.M, error) { return nil, context.DeadlineExceeded },
 		},
 		FanStatus: jsonx.M{"enabled": true, "vendor": "supermicro", "mode": "optimal", "duty": jsonx.M{}, "fans": []any{}, "events": []any{}}}
 }
@@ -174,7 +174,7 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, method, path s
 	case "/update":
 		return 202, jsonx.M{"state": "downloading", "current": "41-aaaaaaa"}, nil
 	case "/power":
-		return 200, jsonx.M{"action": "shutdown", "pending": jsonx.M{"action": "shutdown", "at": 1.9e9, "delay_s": 120.0, "requested_by": "Neptune"}}, nil
+		return 200, jsonx.M{"action": "shutdown", "pending": jsonx.M{"action": "shutdown", "at": 1.9e9, "delay_s": 120.0, "requested_by": "Alice"}}, nil
 	}
 	return 200, jsonx.M{"ok": true}, nil
 }

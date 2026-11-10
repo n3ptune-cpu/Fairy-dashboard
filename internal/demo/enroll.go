@@ -57,7 +57,7 @@ func Pair(_ context.Context, rawURL string, key []byte) (int, enroll.Response, s
 	}
 	id := managed.IDFor(u.Hostname())
 	platform := "linux"
-	if strings.Contains(strings.ToLower(u.Hostname()), "win") || strings.Contains(strings.ToLower(u.Hostname()), "furina") {
+	if strings.Contains(strings.ToLower(u.Hostname()), "win") || strings.Contains(strings.ToLower(u.Hostname()), "winpc") {
 		platform = "windows"
 	}
 	paired[id] = platform

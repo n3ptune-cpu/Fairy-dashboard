@@ -136,7 +136,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	return s
 }
 
-// SetDemoView makes demo mode show the panel as another role would see it ("viewer:Straw", "pending", "admin").
+// SetDemoView makes demo mode show the panel as another role would see it ("viewer:Bob", "pending", "admin").
 func (s *Server) SetDemoView(v string) error {
 	g, err := access.ParseView(v)
 	if err != nil {

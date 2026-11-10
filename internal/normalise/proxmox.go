@@ -33,7 +33,7 @@ func pct(v any) *float64 {
 }
 
 // ProxmoxOpts are the per-cluster settings for NormaliseProxmox; Prefix keeps ids unique across clusters (e.g.
-// straw-qemu-100 vs qemu-100).
+// bob-qemu-100 vs qemu-100).
 type ProxmoxOpts struct {
 	IncludeTemplates bool
 	Prefix           string

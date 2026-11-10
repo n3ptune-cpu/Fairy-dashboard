@@ -227,7 +227,7 @@ func (m *Manager) hostEntry(req Request, existing *managed.Host, nodeSystemID fu
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if !nameRe.MatchString(req.Name) {
-		return managed.Host{}, invalid("name: the machine's Tailscale name (letters, digits and -), e.g. nsx-furina")
+		return managed.Host{}, invalid("name: the machine's Tailscale name (letters, digits and -), e.g. agent-1")
 	}
 	addr := strings.ToLower(req.Name)
 	if a := strings.TrimSpace(req.Address); a != "" {

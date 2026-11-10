@@ -10,16 +10,16 @@ import (
 func TestAddHostWithBMCPower(t *testing.T) {
 	m := &Manager{}
 	none := func(string) string { return "" }
-	h, err := m.hostEntry(Request{Name: "NSX-CYRENE", OS: "windows", BMCRelay: "nsx-furina-agent", BMCTarget: "cyrene-bmc"}, nil, none)
+	h, err := m.hostEntry(Request{Name: "SRV-TOWER", OS: "windows", BMCRelay: "srv-winpc-agent", BMCTarget: "tower-bmc"}, nil, none)
 	if err != nil {
 		t.Fatal(err)
 	}
 	o := h.Override()
-	if o == nil || o.ID != "nsx-cyrene" || o.Wol != nil || o.BMCPower == nil || o.BMCPower.Relay != "nsx-furina-agent" || o.BMCPower.Target != "cyrene-bmc" {
+	if o == nil || o.ID != "srv-tower" || o.Wol != nil || o.BMCPower == nil || o.BMCPower.Relay != "srv-winpc-agent" || o.BMCPower.Target != "tower-bmc" {
 		t.Fatalf("%+v", o)
 	}
-	for _, r := range []Request{{BMCRelay: "x"}, {BMCTarget: "cyrene-bmc"}, {BMCRelay: "x", BMCTarget: "Bad Target"}} {
-		r.Name, r.OS = "NSX-CYRENE", "windows"
+	for _, r := range []Request{{BMCRelay: "x"}, {BMCTarget: "tower-bmc"}, {BMCRelay: "x", BMCTarget: "Bad Target"}} {
+		r.Name, r.OS = "SRV-TOWER", "windows"
 		if _, err := m.hostEntry(r, nil, none); err == nil || !strings.Contains(err.Error(), "BMC") {
 			t.Errorf("%+v: %v", r, err)
 		}

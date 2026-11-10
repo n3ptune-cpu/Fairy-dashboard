@@ -614,7 +614,7 @@ function pageSystem(id, tab) {
 function wakeBlock(s) {
   return wolBlock(s) + bmcBlock(s);
 }
-// "Power on (via BMC, through NSX-FURINA)": a relay agent powers the machine on through its BMC (typed name).
+// "Power on (via BMC, through AGENT-2)": a relay agent powers the machine on through its BMC (typed name).
 function bmcBlock(s) {
   if (!(s.power_actions || []).includes("bmc_on") || !(s.status === "offline" || s.status === "stale")) return "";
   const cap = state.caps[s.id]?.actions.find((a) => a.action === "bmc_on"), why = controlWhyNot();
@@ -1146,7 +1146,7 @@ function pageUsers() {
     <div class="panel glass scroll"><table class="table users"><thead><tr><th>User</th><th>Role</th><th>Sites they see</th><th>Last seen</th><th class="num"></th></tr></thead>
       <tbody>${d.users.map(userRow).join("") || '<tr><td colspan="5" class="note">Nobody has signed in yet.</td></tr>'}</tbody></table></div>
     <div class="section-title">Sites <span class="count">${d.sites.length}</span></div>
-    <form class="toolbar" id="site-form"><input class="input" id="site-name" maxlength="40" placeholder="New site name, e.g. Straw" autocomplete="off"><button class="btn" type="submit">Create site</button></form>
+    <form class="toolbar" id="site-form"><input class="input" id="site-name" maxlength="40" placeholder="New site name, e.g. Home" autocomplete="off"><button class="btn" type="submit">Create site</button></form>
     <div class="panel glass scroll"><table class="table sites"><thead><tr><th>Site</th><th class="num">Hosts</th><th class="num">Viewers</th><th class="num"></th></tr></thead>
       <tbody>${d.sites.map(siteRow).join("") || '<tr><td colspan="4" class="note">No sites yet.</td></tr>'}</tbody></table></div>
     ${KIND_TITLE.map(([k, title, f]) => {
@@ -1508,7 +1508,7 @@ async function openAddHost() {
     <h3 id="ah-t">Add host</h3>
     <p>Fairy makes a one-time code and one command. Run it on the machine; the panel pairs with it by itself. The machine must be in your Tailscale network.</p>
     <div class="form-grid">
-      <label class="mfield"><span>Name in Tailscale <b>*</b></span><input class="input" id="ah-name" required maxlength="63" autocomplete="off" spellcheck="false" placeholder="e.g. straw-pc"></label>
+      <label class="mfield"><span>Name in Tailscale <b>*</b></span><input class="input" id="ah-name" required maxlength="63" autocomplete="off" spellcheck="false" placeholder="e.g. agent-1"></label>
       <label class="mfield"><span>System</span><select class="select" id="ah-os"><option value="windows">Windows</option><option value="linux">Linux</option></select></label>
       <label class="mfield"><span>Site</span><select class="select" id="ah-site"><option value="">No site (admins only)</option>${d.sites.map((x) => `<option>${esc(x)}</option>`).join("")}</select></label>
       <label class="mfield"><span>Is it a Proxmox node?</span><select class="select" id="ah-node"><option value="">No</option><option value="__new__" title="The command makes the panel a read-only Proxmox API token on the node (standalone nodes)">Yes: a new node</option>${d.nodes.map((n) => `<option value="${esc(n.name)}">Yes: ${esc(n.name)}${n.cluster ? ` (${esc(n.cluster)})` : ""}, already in the panel</option>`).join("")}</select></label>
@@ -1520,7 +1520,7 @@ async function openAddHost() {
       <label class="mfield"><span>Wake-on-LAN MAC(s) <span class="note">optional</span></span><input class="input" id="ah-macs" autocomplete="off" spellcheck="false" placeholder="aa:bb:cc:dd:ee:ff"></label>
       <label class="mfield"><span>Woken by</span><select class="select" id="ah-relay"><option value="">–</option>${d.relays.map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}</select></label>
       <label class="mfield"><span title="An agent with bmc_relay (Fairy-agent v0.4.2) that can reach this machine's BMC">Or powered on via BMC by <span class="note">optional</span></span><select class="select" id="ah-bmc-relay"><option value="">–</option>${(d.bmc_relays || []).map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}</select></label>
-      <label class="mfield"><span>BMC target id <span class="note">its bmc_relay id</span></span><input class="input" id="ah-bmc-target" maxlength="40" autocomplete="off" spellcheck="false" placeholder="cyrene-bmc"></label>
+      <label class="mfield"><span>BMC target id <span class="note">its bmc_relay id</span></span><input class="input" id="ah-bmc-target" maxlength="40" autocomplete="off" spellcheck="false" placeholder="server-bmc"></label>
     </div>
     ${d.panel_address ? `<p class="note" id="ah-panel">Panel address: <code>${esc(d.panel_address)}</code> (${esc(d.panel_address_source || "config")})${d.panel_address_via ? ` <span title="how the panel found its own Tailscale address">· ${esc(d.panel_address_via)}</span>` : ""}${d.panel_address.includes(":") ? ' <b>IPv6 only: agents need the panel\'s Tailscale IPv4; set <code>enroll: {panel_address: 100.x.y.z}</code></b>' : ""}</p>`
       : '<div class="warnbox">The panel does not know its own Tailscale address (no Tailscale interface or tailscaled status found): set <code>enroll: {panel_address: 100.x.y.z}</code> in config.yaml.</div>'}

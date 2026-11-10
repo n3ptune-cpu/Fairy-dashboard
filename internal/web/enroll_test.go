@@ -31,7 +31,7 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	e := setup(t)
 	e.s.Enroll.Interval = 20 * time.Millisecond
 	e.s.control = newRateLimiter(100)
-	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.PanelAddr = "100.64.0.10"
 	var keySeen atomic.Value
 	attempts := atomic.Int32{}
 	e.s.Enroll.Pair = func(_ context.Context, url string, key []byte) (int, enroll.Response, string, error) {
@@ -39,14 +39,14 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 		if attempts.Add(1) < 3 {
 			return 0, enroll.Response{}, "", errors.New("dial tcp: connection refused")
 		}
-		return 200, enroll.Response{AgentVersion: "42-abc", Platform: "linux", Token: "furina-read-token-xxxxxxxxxxxxxxxx",
-			ControlToken: "furina-control-token-yyyyyyyyyyyyyy"}, "", nil
+		return 200, enroll.Response{AgentVersion: "42-abc", Platform: "linux", Token: "winpc-read-token-xxxxxxxxxxxxxxxx",
+			ControlToken: "winpc-control-token-yyyyyyyyyyyyyy"}, "", nil
 	}
 	e.b.Mu.Lock()
-	e.b.Metrics["nsx-furina"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	e.b.Metrics["srv-winpc"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
 	e.b.Mu.Unlock()
 	csrf := []string{"X-Requested-With", "fairy"}
-	body := map[string]any{"name": "NSX-FURINA", "os": "windows", "site": "Neptune",
+	body := map[string]any{"name": "SRV-WINPC", "os": "windows", "site": "Alice",
 		"options": map[string]any{"power_control": true, "coretemp": true, "self_update": true}}
 	if r := e.do("POST", "/api/admin/hosts", body, append([]string{"Cookie", e.cookie(viewer, 0)}, csrf...)...); r.code != 403 {
 		t.Fatal("viewer", r.code)
@@ -67,7 +67,7 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	// the Windows line: the script is checked and run from memory, the code is set in the window's environment
 	// (on no command line), the fingerprint and the pairing v2 option are passed
 	if _, err := enroll.Normalize(code); err != nil || !strings.Contains(cmd, "; $env:FAIRY_JOIN_CODE='"+code+"'; & (") ||
-		!strings.HasSuffix(cmd, " -ReleaseUrl $u -SumsSha256 "+testInstallers.Sums+" -PanelAddress 100.88.109.47 -PairV2 -PowerControl -SelfUpdate -CoreTemp") ||
+		!strings.HasSuffix(cmd, " -ReleaseUrl $u -SumsSha256 "+testInstallers.Sums+" -PanelAddress 100.64.0.10 -PairV2 -PowerControl -SelfUpdate -CoreTemp") ||
 		!strings.HasPrefix(cmd, "$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-7'; ") ||
 		!strings.Contains(cmd, " -ne '"+testInstallers.PS1+"') { throw ") || strings.Count(cmd, code) != 1 ||
 		strings.Contains(cmd, "-Join") || strings.Contains(cmd, "$env:TEMP") || strings.Contains(cmd, "latest") {
@@ -88,18 +88,18 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	if keySeen.Load() != string(want) {
 		t.Fatal("the panel must pair with the pairing v2 key of the code")
 	}
-	if g := e.do("GET", "/api/systems/nsx-furina", nil, "Cookie", c); g.code != 200 || g.body["status"] != "online" {
+	if g := e.do("GET", "/api/systems/srv-winpc", nil, "Cookie", c); g.code != 200 || g.body["status"] != "online" {
 		t.Fatal("host not shown", g.code, string(g.raw))
 	}
-	a, ok := e.s.Poller.AgentByID("nsx-furina")
-	if !ok || !a.Managed || !a.PowerControl || !a.SelfUpdate || a.Site != "Neptune" {
+	a, ok := e.s.Poller.AgentByID("srv-winpc")
+	if !ok || !a.Managed || !a.PowerControl || !a.SelfUpdate || a.Site != "Alice" {
 		t.Fatalf("%+v", a)
 	}
 	y, _ := os.ReadFile(filepath.Join(e.s.Cfg.DataDir, "managed-hosts.yaml"))
-	if !strings.Contains(string(y), "nsx-furina") || strings.Contains(string(y), "furina-read-token") || strings.Contains(string(y), code) {
+	if !strings.Contains(string(y), "srv-winpc") || strings.Contains(string(y), "winpc-read-token") || strings.Contains(string(y), code) {
 		t.Fatal("managed-hosts.yaml", string(y))
 	}
-	if strings.Contains(string(must(os.ReadFile(e.s.Cfg.AuditLog))), "furina-read-token") || strings.Contains(string(must(os.ReadFile(e.s.Cfg.AuditLog))), code) {
+	if strings.Contains(string(must(os.ReadFile(e.s.Cfg.AuditLog))), "winpc-read-token") || strings.Contains(string(must(os.ReadFile(e.s.Cfg.AuditLog))), code) {
 		t.Fatal("secret in the audit log")
 	}
 	page := e.do("GET", "/api/admin/hosts", nil, "Cookie", c)
@@ -115,29 +115,29 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 		t.Fatal("remove config host", r.code)
 	}
 	// Re-pair and Remove need the host's name typed (checked by the panel)
-	if r := e.do("POST", "/api/admin/hosts/nsx-furina/repair", map[string]any{}, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
+	if r := e.do("POST", "/api/admin/hosts/srv-winpc/repair", map[string]any{}, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
 		t.Fatal("repair without the typed name", r.code)
 	}
-	if r := e.do("DELETE", "/api/admin/hosts/nsx-furina", map[string]any{"confirm": "nsx-fontaine"}, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
+	if r := e.do("DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "srv-pvec"}, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
 		t.Fatal("remove with a wrong name", r.code)
 	}
 	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) { // nobody ran the new command
 		return 0, enroll.Response{}, "", errors.New("dial tcp: connection refused")
 	}
-	if r := e.do("POST", "/api/admin/hosts/nsx-furina/repair", map[string]any{"confirm": "nsx-furina"}, append([]string{"Cookie", c}, csrf...)...); r.code != 201 ||
+	if r := e.do("POST", "/api/admin/hosts/srv-winpc/repair", map[string]any{"confirm": "srv-winpc"}, append([]string{"Cookie", c}, csrf...)...); r.code != 201 ||
 		!strings.Contains(r.body["command"].(string), "$env:FAIRY_JOIN_CODE='"+r.body["code"].(string)+"'") || r.body["code"] == code {
 		t.Fatal("repair", r.code, string(r.raw))
 	} else if !e.s.Enroll.Cancel(r.body["id"].(string)) {
 		t.Fatal("cancel")
 	}
-	if r := e.do("DELETE", "/api/admin/hosts/nsx-furina", map[string]any{"confirm": " NSX-FURINA "}, append([]string{"Cookie", c}, csrf...)...); r.code != 200 {
+	if r := e.do("DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": " SRV-WINPC "}, append([]string{"Cookie", c}, csrf...)...); r.code != 200 {
 		t.Fatal("remove", r.code, string(r.raw))
 	}
 	e.s.Poller.PollOnce(context.Background())
-	if g := e.do("GET", "/api/systems/nsx-furina", nil, "Cookie", c); g.code != 404 {
+	if g := e.do("GET", "/api/systems/srv-winpc", nil, "Cookie", c); g.code != 404 {
 		t.Fatal("still shown after Remove", g.code)
 	}
-	if _, err := os.Stat(filepath.Join(e.s.Cfg.DataDir, "secrets", "agent-nsx-furina.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(e.s.Cfg.DataDir, "secrets", "agent-srv-winpc.json")); !os.IsNotExist(err) {
 		t.Fatal("tokens kept after Remove", err)
 	}
 	for _, want := range []string{"host.add join code made", "host.pair online", "host.remove refused: 400: type the host", "host.repair refused", "host.remove ok"} {
@@ -159,14 +159,14 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 func TestAddHostPanelAddressSource(t *testing.T) {
 	e := setup(t)
 	e.s.control = newRateLimiter(100)
-	e.s.Enroll.PanelAddr, e.s.Enroll.PanelSource, e.s.Enroll.PanelVia = "100.88.109.47", "auto", "Tailscale LocalAPI"
+	e.s.Enroll.PanelAddr, e.s.Enroll.PanelSource, e.s.Enroll.PanelVia = "100.64.0.10", "auto", "Tailscale LocalAPI"
 	c := e.cookie(controller(), 0)
 	pg := e.do("GET", "/api/admin/hosts", nil, "Cookie", c).body
-	if pg["panel_address"] != "100.88.109.47" || pg["panel_address_source"] != "auto" || pg["panel_address_via"] != "Tailscale LocalAPI" {
+	if pg["panel_address"] != "100.64.0.10" || pg["panel_address_source"] != "auto" || pg["panel_address_via"] != "Tailscale LocalAPI" {
 		t.Fatal(pg)
 	}
 	e.s.Enroll.PanelAddr = "fd7a:115c:a1e0::5"
-	body := map[string]any{"name": "NSX-FURINA", "os": "linux"}
+	body := map[string]any{"name": "SRV-WINPC", "os": "linux"}
 	r := e.do("POST", "/api/admin/hosts", body, "Cookie", c, "X-Requested-With", "fairy")
 	if r.code != 400 || !strings.Contains(string(r.raw), "IPv4") {
 		t.Fatal(r.code, string(r.raw))
@@ -175,7 +175,7 @@ func TestAddHostPanelAddressSource(t *testing.T) {
 		t.Fatal("release shown in the dialog:", pg["agent_release"])
 	}
 	// a panel build without the release key cannot check the install script: no code, no command (503)
-	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.PanelAddr = "100.64.0.10"
 	e.s.Enroll.Scripts = enrollment.PinnedVerifier("n3ptune-cpu/Fairy-agent", "", nil)
 	r = e.do("POST", "/api/admin/hosts", body, "Cookie", c, "X-Requested-With", "fairy")
 	if r.code != 503 || !strings.Contains(string(r.raw), "release signing key") || r.body["command"] != nil || len(e.s.Enroll.List()) != 0 {
@@ -193,24 +193,24 @@ func TestAddHostProxmoxNode(t *testing.T) {
 	e := setup(t)
 	e.s.Enroll.Interval = 20 * time.Millisecond
 	e.s.control = newRateLimiter(100)
-	e.s.Enroll.PanelAddr = "100.88.109.47"
+	e.s.Enroll.PanelAddr = "100.64.0.10"
 	ca := testCA(t)
 	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 		return 200, enroll.Response{AgentVersion: "43-abc", Platform: "linux", Token: "node-read-token-xxxxxxxxxxxxxxxxxxxx",
-			ControlToken: "node-control-token-yyyyyyyyyyyyyyyyy", Proxmox: &enroll.ProxmoxGrant{TokenID: "fairy@pve!panel-nsx-kachina",
-				TokenSecret: "0b7c4e2a-1111-2222-3333-444455556666", CAPEM: string(ca), Node: "NSX-KACHINA",
-				URL: "https://nsx-kachina.tailnet.ts.net:8006", ServerName: "NSX-KACHINA"}}, "", nil
+			ControlToken: "node-control-token-yyyyyyyyyyyyyyyyy", Proxmox: &enroll.ProxmoxGrant{TokenID: "fairy@pve!panel-srv-pvea",
+				TokenSecret: "0b7c4e2a-1111-2222-3333-444455556666", CAPEM: string(ca), Node: "SRV-PVEA",
+				URL: "https://srv-pvea.example.ts.net:8006", ServerName: "SRV-PVEA"}}, "", nil
 	}
 	e.b.Mu.Lock()
-	e.b.Metrics["nsx-kachina-2"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	e.b.Metrics["srv-pvea-2"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
 	e.b.Mu.Unlock()
 	c := e.cookie(controller(), 0)
 	csrf := []string{"X-Requested-With", "fairy"}
-	bad := map[string]any{"name": "nsx-kachina-2", "os": "windows", "proxmox_new": true}
+	bad := map[string]any{"name": "srv-pvea-2", "os": "windows", "proxmox_new": true}
 	if r := e.do("POST", "/api/admin/hosts", bad, append([]string{"Cookie", c}, csrf...)...); r.code != 400 {
 		t.Fatal("a Proxmox node is Linux", r.code)
 	}
-	body := map[string]any{"name": "nsx-kachina-2", "os": "linux", "site": "Neptune", "proxmox_new": true, "options": map[string]any{"power_control": true}}
+	body := map[string]any{"name": "srv-pvea-2", "os": "linux", "site": "Alice", "proxmox_new": true, "options": map[string]any{"power_control": true}}
 	r := e.do("POST", "/api/admin/hosts", body, append([]string{"Cookie", c}, csrf...)...)
 	if r.code != 201 {
 		t.Fatal(r.code, string(r.raw))
@@ -238,32 +238,32 @@ func TestAddHostProxmoxNode(t *testing.T) {
 			pc = &x
 		}
 	}
-	if pc == nil || pc.ID != "neptune-nsx-kachina" || pc.Prefix() != "neptune-nsx-kachina-" || pc.TokenID != "fairy@pve!panel-nsx-kachina" ||
-		pc.URLs[0] != "https://nsx-kachina-2:8006" || pc.TLSServerName != "NSX-KACHINA" || !pc.Standalone || pc.Site != "Neptune" {
+	if pc == nil || pc.ID != "alice-srv-pvea" || pc.Prefix() != "alice-srv-pvea-" || pc.TokenID != "fairy@pve!panel-srv-pvea" ||
+		pc.URLs[0] != "https://srv-pvea-2:8006" || pc.TLSServerName != "SRV-PVEA" || !pc.Standalone || pc.Site != "Alice" {
 		t.Fatalf("%+v", pc)
 	}
 	if b, _ := os.ReadFile(pc.CAFile); string(b) != string(ca) {
 		t.Fatal("CA not kept", pc.CAFile)
 	}
-	a, _ := e.s.Poller.AgentByID("nsx-kachina-2")
-	if a.LinksTo != "neptune-nsx-kachina-node-nsx-kachina" {
+	a, _ := e.s.Poller.AgentByID("srv-pvea-2")
+	if a.LinksTo != "alice-srv-pvea-node-srv-pvea" {
 		t.Fatalf("agent not attached to its node: %+v", a)
 	}
-	if g := e.do("GET", "/api/systems/neptune-nsx-kachina-node-nsx-kachina", nil, "Cookie", c); g.code != 200 || g.body["kind"] != "node" {
+	if g := e.do("GET", "/api/systems/alice-srv-pvea-node-srv-pvea", nil, "Cookie", c); g.code != 200 || g.body["kind"] != "node" {
 		t.Fatal("node not polled", g.code, string(g.raw))
 	}
-	sec := filepath.Join(e.s.Cfg.DataDir, "secrets", "agent-nsx-kachina-2.json")
+	sec := filepath.Join(e.s.Cfg.DataDir, "secrets", "agent-srv-pvea-2.json")
 	sb, _ := os.ReadFile(sec)
 	if fi, _ := os.Stat(sec); !strings.Contains(string(sb), "0b7c4e2a-1111-2222-3333-444455556666") || fi.Mode().Perm() != 0o600 {
 		t.Fatal("token secret", string(sb))
 	}
 	y, _ := os.ReadFile(filepath.Join(e.s.Cfg.DataDir, "managed-hosts.yaml"))
-	if strings.Contains(string(y), "0b7c4e2a") || !strings.Contains(string(y), "fairy@pve!panel-nsx-kachina") {
+	if strings.Contains(string(y), "0b7c4e2a") || !strings.Contains(string(y), "fairy@pve!panel-srv-pvea") {
 		t.Fatal("managed-hosts.yaml", string(y))
 	}
 	// Remove: node and agent gone, CA and secret deleted, the token command shown
-	rm := e.do("DELETE", "/api/admin/hosts/nsx-kachina-2", map[string]any{"confirm": "nsx-kachina-2"}, append([]string{"Cookie", c}, csrf...)...)
-	if rm.code != 200 || !strings.Contains(rm.body["message"].(string), "pveum user token remove fairy@pve panel-nsx-kachina") {
+	rm := e.do("DELETE", "/api/admin/hosts/srv-pvea-2", map[string]any{"confirm": "srv-pvea-2"}, append([]string{"Cookie", c}, csrf...)...)
+	if rm.code != 200 || !strings.Contains(rm.body["message"].(string), "pveum user token remove fairy@pve panel-srv-pvea") {
 		t.Fatal(rm.code, string(rm.raw))
 	}
 	for _, x := range e.s.Poller.Clusters() {
@@ -274,7 +274,7 @@ func TestAddHostProxmoxNode(t *testing.T) {
 	if _, err := os.Stat(pc.CAFile); !os.IsNotExist(err) {
 		t.Fatal("CA kept", err)
 	}
-	if g := e.do("GET", "/api/systems/neptune-nsx-kachina-node-nsx-kachina", nil, "Cookie", c); g.code != 404 {
+	if g := e.do("GET", "/api/systems/alice-srv-pvea-node-srv-pvea", nil, "Cookie", c); g.code != 404 {
 		t.Fatal("node still shown", g.code)
 	}
 }

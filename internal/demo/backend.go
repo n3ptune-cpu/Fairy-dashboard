@@ -54,8 +54,8 @@ func NewBackend(cfg *config.Panel) *Backend {
 func (b *Backend) FetchProxmox(_ context.Context, pve config.Proxmox, _ time.Duration) ([]jsonx.M, error) {
 	rows := proxmoxResources()
 	switch {
-	case pve.ID == "straw":
-		rows = strawResources()
+	case pve.ID == "bob":
+		rows = bobResources()
 	case pve.Managed: // added in the demo with Add host
 		rows = newNodeResources(pve.ClusterName)
 	}
@@ -126,12 +126,12 @@ func (b *Backend) FetchAgentMetrics(_ context.Context, a config.Agent, _ time.Du
 			p = pend
 		}
 		pc := map[string]any{"enabled": true, "pending": p, "min_delay_s": 10.0, "sleep": true}
-		if a.ID == "neptune-laptop" { // a Modern Standby laptop: the agent says why it cannot sleep
+		if a.ID == "alice-laptop" { // a Modern Standby laptop: the agent says why it cannot sleep
 			pc["sleep"], pc["sleep_note"] = false, "only Modern Standby (S0 low power idle), which a service cannot start; sleep (S3) is not available"
 		}
 		m["power_control"] = pc
-		if a.ID == "neptune-laptop" {
-			m["bmc_relay"] = map[string]any{"enabled": true, "targets": []any{map[string]any{"id": "cyrene-bmc", "backend": "ipmitool"}}}
+		if a.ID == "alice-laptop" {
+			m["bmc_relay"] = map[string]any{"enabled": true, "targets": []any{map[string]any{"id": "tower-bmc", "backend": "ipmitool"}}}
 			feat["bmc_relay"] = true
 		}
 	}
@@ -178,9 +178,9 @@ func (b *Backend) PVEPower(_ context.Context, clusterID, path string, _ url.Valu
 // FetchProcesses returns a simulated process list for the agent's host.
 func (b *Backend) FetchProcesses(_ context.Context, a config.Agent, sid string, limit int, sortBy string) (model.ProcessList, error) {
 	switch a.ID {
-	case "straw-pc":
+	case "bob-pc":
 		return model.ProcessList{SystemID: sid, DisabledByHost: true, Sort: sortBy, Processes: []model.Process{}}, nil
-	case "straw-laptop":
+	case "bob-laptop":
 		return model.ProcessList{}, fmt.Errorf("simulated: %w", context.DeadlineExceeded)
 	}
 	return poller.DecodeProcessList(demoProcesses(a.ID, limit, sortBy), sid)
@@ -214,14 +214,14 @@ func (b *Backend) AgentRequest(_ context.Context, a config.Agent, _ string, path
 	switch path {
 	case "/power":
 		return b.simPower(a, bm)
-	case "/bmc/power": // Neptune's laptop powers NSX-CYRENE on through its BMC (ipmitool, shared LAN port)
-		if a.ID != "neptune-laptop" {
+	case "/bmc/power": // Alice's laptop powers SRV-TOWER on through its BMC (ipmitool, shared LAN port)
+		if a.ID != "alice-laptop" {
 			return 404, jsonx.M{"error": "bmc_relay is not enabled on this agent", "code": "bmc_relay_disabled"}, nil
 		}
-		if bm["target"] != "cyrene-bmc" {
+		if bm["target"] != "tower-bmc" {
 			return 404, jsonx.M{"error": fmt.Sprintf("no bmc_relay target %q on this agent", bm["target"]), "code": "unknown_target"}, nil
 		}
-		return 200, jsonx.M{"target": "cyrene-bmc", "action": bm["action"], "power": "on", "backend": "ipmitool"}, nil
+		return 200, jsonx.M{"target": "tower-bmc", "action": bm["action"], "power": "on", "backend": "ipmitool"}, nil
 	case "/update":
 		return b.simUpdate(a)
 	case api.PathHelperStop, api.PathHelperStart:
@@ -266,7 +266,7 @@ func (b *Backend) simPower(a config.Agent, body map[string]any) (int, jsonx.M, e
 		delay = 60
 	}
 	used := delay
-	if a.ID != "nsx-cyrene" && a.ID != "neptune-laptop" { // Windows vs Linux (whole minutes)
+	if a.ID != "srv-tower" && a.ID != "alice-laptop" { // Windows vs Linux (whole minutes)
 		used = (delay + 59) / 60 * 60
 	}
 	who := fmt.Sprint(body["requested_by"])

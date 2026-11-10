@@ -12,7 +12,7 @@ import (
 // that code): an admin, a viewer, a removed user, a site and an assignment.
 const oldUsersJSON = `{
  "assign": {
-  "power:rack": "Straw"
+  "power:rack": "Bob"
  },
  "removed": {
   "sub-x": {
@@ -22,14 +22,14 @@ const oldUsersJSON = `{
   }
  },
  "sites": [
-  "Straw"
+  "Bob"
  ],
  "users": {
   "sub-n": {
    "created_at": "2026-11-10T13:42:32.605339371Z",
-   "email": "neptune@example.com",
+   "email": "alice@example.com",
    "last_seen": "2026-11-10T13:42:32.605339371Z",
-   "name": "Neptune",
+   "name": "Alice",
    "role": "admin",
    "sites": [],
    "sub": "sub-n",
@@ -37,15 +37,15 @@ const oldUsersJSON = `{
   },
   "sub-s": {
    "created_at": "2026-11-10T13:42:32.605660873Z",
-   "email": "straw@example.com",
+   "email": "bob@example.com",
    "last_seen": "2026-11-10T13:42:32.605660873Z",
-   "name": "Straw",
+   "name": "Bob",
    "role": "viewer",
    "sites": [
-    "Straw"
+    "Bob"
    ],
    "sub": "sub-s",
-   "via": "panel by neptune@example.com"
+   "via": "panel by alice@example.com"
   }
  }
 }
@@ -190,15 +190,15 @@ func TestOldUsersFileStillLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	n, st := d.Users["sub-n"], d.Users["sub-s"]
-	if len(d.Users) != 2 || n.Role != RoleAdmin || d.Admins() != 1 || st.Grant().String() != "viewer:Straw" ||
-		d.Assign["power:rack"] != "Straw" || d.Removed["sub-x"].Label != "x@example.com" || !d.HasSite("Straw") {
+	if len(d.Users) != 2 || n.Role != RoleAdmin || d.Admins() != 1 || st.Grant().String() != "viewer:Bob" ||
+		d.Assign["power:rack"] != "Bob" || d.Removed["sub-x"].Label != "x@example.com" || !d.HasSite("Bob") {
 		t.Fatalf("%+v", d)
 	}
-	if n.EmailVerified != nil || n.Verified() || n.Email != "neptune@example.com" {
+	if n.EmailVerified != nil || n.Verified() || n.Email != "alice@example.com" {
 		t.Fatal("an old entry's address is not known to be verified", n)
 	}
 	// by address: refused with the reason; by subject: works. Nobody is locked out.
-	if _, err := d.Find("neptune@example.com"); !IsEmailNotVerified(err) {
+	if _, err := d.Find("alice@example.com"); !IsEmailNotVerified(err) {
 		t.Fatal(err)
 	}
 	if _, _, err := s.SetRole("sub-s", RoleAdmin, nil, "cli by fairy", false); err != nil {
@@ -211,14 +211,14 @@ func TestOldUsersFileStillLoads(t *testing.T) {
 		t.Fatal("the last admin can still not be demoted", err)
 	}
 	// the write keeps everything and adds the field; the next sign-in fills it in
-	if _, _, err := s.SeenIdentity(verified("sub-n", "neptune@example.com", "Neptune"), RoleAdmin, "control_groups"); err != nil {
+	if _, _, err := s.SeenIdentity(verified("sub-n", "alice@example.com", "Alice"), RoleAdmin, "control_groups"); err != nil {
 		t.Fatal(err)
 	}
 	d = NewStore(dir).Load()
-	if u, err := d.Find("neptune@example.com"); err != nil || u.Sub != "sub-n" || u.Role != RolePending || u.Via != "cli by fairy" {
+	if u, err := d.Find("alice@example.com"); err != nil || u.Sub != "sub-n" || u.Role != RolePending || u.Via != "cli by fairy" {
 		t.Fatal(u, err)
 	}
-	if d.Users["sub-s"].EmailVerified != nil || d.Removed["sub-x"].By != "cli by fairy" || d.Assign["power:rack"] != "Straw" {
+	if d.Users["sub-s"].EmailVerified != nil || d.Removed["sub-x"].By != "cli by fairy" || d.Assign["power:rack"] != "Bob" {
 		t.Fatalf("%+v", d)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "users.json"))

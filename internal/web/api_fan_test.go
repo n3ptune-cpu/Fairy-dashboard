@@ -34,20 +34,20 @@ func TestEmptyFanStatusAnswer(t *testing.T) {
 	}
 	for name, a := range map[string]jsonx.M{"null": nil, "empty object": {}} {
 		set(a)
-		r := e.do("GET", "/api/systems/cyrene/fan", nil, "Cookie", c)
+		r := e.do("GET", "/api/systems/tower/fan", nil, "Cookie", c)
 		if r.code != 424 || !strings.Contains(r.raw2(), "invalid fan status") {
 			t.Fatalf("%s: %d %s", name, r.code, r.raw)
 		}
 	}
 	// a fan write answered with null: still a result object, as for {}
 	set(nil)
-	r := e.do("POST", "/api/systems/cyrene/fan/mode", map[string]any{"mode": "full"}, "Cookie", c, "X-Requested-With", "fairy")
+	r := e.do("POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, "Cookie", c, "X-Requested-With", "fairy")
 	if res, ok := r.body["result"].(map[string]any); r.code != 200 || !ok || len(res) != 0 {
 		t.Fatalf("fan write: %d %s", r.code, r.raw)
 	}
 	// a real fan status still comes through
 	set(jsonx.M{"enabled": true, "vendor": "supermicro", "mode": "optimal", "duty": jsonx.M{}, "fans": []any{}, "events": []any{}})
-	if r := e.do("GET", "/api/systems/cyrene/fan", nil, "Cookie", c); r.code != 200 || r.body["system_id"] != "cyrene" || r.body["mode"] != "optimal" {
+	if r := e.do("GET", "/api/systems/tower/fan", nil, "Cookie", c); r.code != 200 || r.body["system_id"] != "tower" || r.body["mode"] != "optimal" {
 		t.Fatalf("%d %s", r.code, r.raw)
 	}
 }
@@ -80,13 +80,13 @@ func TestEmptyFanStatusAnswerOverHTTP(t *testing.T) {
 	c := e.cookie(controller(), 0)
 	for _, b := range []string{"null", "{}", "", "[]", "nope", " null \n"} {
 		body.Store(b)
-		r := e.do("GET", "/api/systems/cyrene/fan", nil, "Cookie", c)
+		r := e.do("GET", "/api/systems/tower/fan", nil, "Cookie", c)
 		if r.code/100 == 5 && r.code != 502 || r.code == 200 || !strings.Contains(r.raw2(), "detail") {
 			t.Fatalf("%q: %d %s", b, r.code, r.raw)
 		}
 	}
 	body.Store(`{"enabled":true,"mode":"full","fans":[{"name":"FAN1","rpm":900}]}`)
-	if r := e.do("GET", "/api/systems/cyrene/fan", nil, "Cookie", c); r.code != 200 || r.body["mode"] != "full" {
+	if r := e.do("GET", "/api/systems/tower/fan", nil, "Cookie", c); r.code != 200 || r.body["mode"] != "full" {
 		t.Fatalf("%d %s", r.code, r.raw)
 	}
 }

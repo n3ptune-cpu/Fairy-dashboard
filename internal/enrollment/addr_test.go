@@ -44,13 +44,13 @@ func TestDetectPanelAddress(t *testing.T) {
 		want    Detected
 		wantAPI bool // the LocalAPI was asked
 	}{
-		{"tailscale0 IPv4", []Iface{lan, ifc("tailscale0", true, "100.88.109.47", "fd7a:115c:a1e0::1")}, nil, nil,
-			Detected{"100.88.109.47", "interface tailscale0"}, false},
-		{"the tailscale interface wins over another CGNAT address", []Iface{ifc("wg0", true, "100.100.1.1"), ifc("tailscale0", true, "100.88.109.47")}, nil, nil,
-			Detected{"100.88.109.47", "interface tailscale0"}, false},
+		{"tailscale0 IPv4", []Iface{lan, ifc("tailscale0", true, "100.64.0.10", "fd7a:115c:a1e0::1")}, nil, nil,
+			Detected{"100.64.0.10", "interface tailscale0"}, false},
+		{"the tailscale interface wins over another CGNAT address", []Iface{ifc("wg0", true, "100.100.1.1"), ifc("tailscale0", true, "100.64.0.10")}, nil, nil,
+			Detected{"100.64.0.10", "interface tailscale0"}, false},
 		{"one CGNAT address on another name", []Iface{lan, ifc("ts-custom", true, "100.70.0.3")}, nil, nil,
 			Detected{"100.70.0.3", "interface ts-custom"}, false},
-		{"interface down is ignored", []Iface{ifc("tailscale0", false, "100.88.109.47")}, nil, errors.New("no socket"),
+		{"interface down is ignored", []Iface{ifc("tailscale0", false, "100.64.0.10")}, nil, errors.New("no socket"),
 			Detected{}, true},
 		{"several, none named tailscale: ask tailscaled", []Iface{ifc("a", true, "100.64.0.1"), ifc("b", true, "100.64.0.2")}, []string{"100.64.0.2", "fd7a:115c:a1e0::2"}, nil,
 			Detected{"100.64.0.2", "Tailscale LocalAPI"}, true},
@@ -84,14 +84,14 @@ func TestLocalAPIAddrsOverUnixSocket(t *testing.T) {
 	var gotHost, gotPath string
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHost, gotPath = r.Host, r.URL.String()
-		_, _ = w.Write([]byte(`{"Version":"1.80.0","BackendState":"Running","Self":{"HostName":"fairy","TailscaleIPs":["100.88.109.47","fd7a:115c:a1e0::1"]},"Peer":null}`))
+		_, _ = w.Write([]byte(`{"Version":"1.80.0","BackendState":"Running","Self":{"HostName":"fairy","TailscaleIPs":["100.64.0.10","fd7a:115c:a1e0::1"]},"Peer":null}`))
 	})}
 	go func() { _ = srv.Serve(l) }()
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	addrs, err := LocalAPIAddrs(ctx, sock)
-	if err != nil || len(addrs) != 2 || addrs[0].String() != "100.88.109.47" {
+	if err != nil || len(addrs) != 2 || addrs[0].String() != "100.64.0.10" {
 		t.Fatal(addrs, err)
 	}
 	if gotHost != "local-tailscaled.sock" || gotPath != "/localapi/v0/status?peers=false" {

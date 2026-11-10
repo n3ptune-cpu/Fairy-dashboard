@@ -1,28 +1,28 @@
 {
  "tokens": {
-  "57cb51c8": {
-   "created_at": "2026-11-10T14:46:43.790452414Z",
+  "c021396a": {
+   "created_at": "2026-11-10T17:08:46.194089469Z",
    "created_by": "cli:root",
    "expires_at": null,
-   "hash": "697a2cbb8462c7a6135556a29d5102d33ee39559b82e648fed0040f40a6a2ec3",
-   "hint": "p_ws",
-   "id": "57cb51c8",
+   "hash": "a3c4299573b5547e61d8315c4401096f5029e79e11da884fe67fcfc2edd510e0",
+   "hint": "qJz0",
+   "id": "c021396a",
    "last_used": null,
-   "name": "straw-script",
-   "owner": "9a1b77c0-straw-0002",
+   "name": "bob-script",
+   "owner": "9a1b77c0-bob-0002",
    "revoked_at": null,
    "scope": "read",
    "sites": [
-    "Straw"
+    "Bob"
    ]
   },
-  "7aa5101b": {
-   "created_at": "2026-11-10T14:46:43.789861839Z",
+  "d3913658": {
+   "created_at": "2026-11-10T17:08:46.192648148Z",
    "created_by": "cli:root",
    "expires_at": null,
-   "hash": "c5cbdda34a670d75b96cea76db82eb185ea3c9e8ae54c71fb66c4905022c7f95",
-   "hint": "yqSg",
-   "id": "7aa5101b",
+   "hash": "2ce078089ba53f742f4ccc89b47787a6115395a6dcd84e3f5affa07b7f6f7df1",
+   "hint": "X5X4",
+   "id": "d3913658",
    "last_used": null,
    "name": "home-assistant",
    "owner": "system",

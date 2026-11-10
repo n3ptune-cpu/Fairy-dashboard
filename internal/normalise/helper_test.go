@@ -14,7 +14,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
 
-var fanCfg = config.Agent{ID: "cyrene", FanControl: &config.FanControl{Vendor: "supermicro", ControlTokenEnv: "CTL"}}
+var fanCfg = config.Agent{ID: "tower", FanControl: &config.FanControl{Vendor: "supermicro", ControlTokenEnv: "CTL"}}
 
 func norm(cfg config.Agent, m jsonx.M) model.System {
 	raw, _ := json.Marshal(m) // as from the wire

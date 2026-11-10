@@ -143,7 +143,7 @@ func newRig(t *testing.T, url string) *rig {
 			r.events = append(r.events, kind+": "+detail)
 			r.mu.Unlock()
 		},
-	}, "100.88.109.47", Fixed(testInstallers))
+	}, "100.64.0.10", Fixed(testInstallers))
 	r.m.Interval, r.m.OnlineWait = 10*time.Millisecond, 2*time.Second
 	r.m.Pair = func(ctx context.Context, _ string, key []byte) (int, enroll.Response, string, error) {
 		return HTTPPairAny(ctx, url, key) // the host's own address is a name:9101 that does not exist here
@@ -165,7 +165,7 @@ func (r *rig) count(kind string) int {
 
 func (r *rig) add(t *testing.T, name string) Created {
 	t.Helper()
-	cr, err := r.m.Create(context.Background(), Request{Name: name, OS: "linux", Options: managed.Options{PowerControl: true}}, nil, "neptune",
+	cr, err := r.m.Create(context.Background(), Request{Name: name, OS: "linux", Options: managed.Options{PowerControl: true}}, nil, "alice",
 		func(string) string { return "" })
 	if err != nil {
 		t.Fatal(err)
@@ -583,7 +583,7 @@ func TestCreateRefusesAReleaseThatCannotTakeTheCommand(t *testing.T) {
 			m.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
 				return 0, enroll.Response{}, "", errors.New("nobody there")
 			}
-			cr, err := m.Create(context.Background(), Request{Name: "box", OS: os}, nil, "neptune", none)
+			cr, err := m.Create(context.Background(), Request{Name: "box", OS: os}, nil, "alice", none)
 			var old *TooOld
 			if missing == "" {
 				if err != nil || cr.Command == "" || strings.Count(cr.Command, cr.Code) != 1 {
@@ -611,7 +611,7 @@ func TestCreateRefusesAReleaseThatCannotTakeTheCommand(t *testing.T) {
 	m.Scripts = Fixed(in)
 	h := managed.Host{ID: "box", Name: "box", URL: "http://box:9101", OS: "linux"}
 	var old *TooOld
-	if _, err := m.Create(context.Background(), Request{}, &h, "neptune", none); !errors.As(err, &old) {
+	if _, err := m.Create(context.Background(), Request{}, &h, "alice", none); !errors.As(err, &old) {
 		t.Fatal(err)
 	}
 }
@@ -656,7 +656,7 @@ func TestVerifierFindsWhatTheScriptsCanDo(t *testing.T) {
 			t.Errorf("%s: PairsV2", tc.name)
 		}
 		// a command exists exactly when the script can take all of it
-		lin, win := Command(in, managed.Host{OS: "linux"}, testCode, "100.88.109.47"), Command(in, managed.Host{OS: "windows"}, testCode, "100.88.109.47")
+		lin, win := Command(in, managed.Host{OS: "linux"}, testCode, "100.64.0.10"), Command(in, managed.Host{OS: "windows"}, testCode, "100.64.0.10")
 		linOK := tc.want.pinSH && tc.want.v2SH && tc.want.stdinSH
 		winOK := tc.want.pinPS1 && tc.want.v2PS1 && tc.want.envPS1 && tc.want.memPS1
 		if (lin != "") != linOK || (win != "") != winOK || (len(in.Lacks("linux")) == 0) != linOK || (len(in.Lacks("windows")) == 0) != winOK {
@@ -691,8 +691,8 @@ func TestEnrollmentCopiesHoldNoKey(t *testing.T) {
 // that is not a computer name is not shown.
 func TestPairedEnrollmentNamesTheMachineThatAnswered(t *testing.T) {
 	for hostname, shown := range map[string]string{
-		"NSX-FURINA":             "NSX-FURINA",
-		"nas.tailnet.ts.net":     "nas.tailnet.ts.net",
+		"SRV-WINPC":              "SRV-WINPC",
+		"nas.example.ts.net":     "nas.example.ts.net",
 		"WIN_PC-01":              "WIN_PC-01",
 		"":                       "", // hide_host_details on the agent
 		"<img src=x onerror=1>":  "",
@@ -750,7 +750,7 @@ func TestFinishedEnrollmentForgetsItsKey(t *testing.T) {
 	}
 	r.m.Cancel(cr.ID)
 	gone(r, cr.ID, "cancelled")
-	if _, ok := r.m.Reveal(cr.ID, "neptune"); ok {
+	if _, ok := r.m.Reveal(cr.ID, "alice"); ok {
 		t.Fatal("a cancelled enrollment revealed its code")
 	}
 	// paired

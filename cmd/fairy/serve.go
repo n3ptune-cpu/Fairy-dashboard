@@ -36,7 +36,7 @@ type serveFlags struct {
 	cfgPath, envFile, listen, logLevel string
 	envFileSet                         bool // --env-file given explicitly (then an unreadable file is an error)
 	demo                               bool
-	demoAs                             string // demo only: preview as "viewer:Straw", "pending", ...
+	demoAs                             string // demo only: preview as "viewer:Bob", "pending", ...
 	logo                               string // --logo: overrides branding.logo (handy to try a logo in the demo)
 }
 
@@ -144,7 +144,7 @@ func serve(args []string) int {
 		srv.Enroll.Interval = demo.PairEvery
 		srv.Enroll.Scripts = demo.Installers()
 		if srv.Enroll.PanelAddr == "" {
-			srv.Enroll.PanelAddr = "100.88.109.47" // the demo has no Tailscale; any address shows the command
+			srv.Enroll.PanelAddr = "100.64.0.10" // the demo has no Tailscale; any address shows the command
 			srv.Enroll.PanelSource, srv.Enroll.PanelVia = "demo", ""
 		}
 		to := srv.PanelUpdates.Latest().Version
@@ -197,7 +197,7 @@ func parseServeFlags(args []string) (serveFlags, bool) {
 	demoMode := fs.Bool("demo", false, "simulated data, NO authentication (loopback preview only)")
 	logLevel := fs.String("log-level", "", "debug|info|warn|error (default $FAIRY_LOG_LEVEL or info)")
 	logo := fs.String("logo", "", "logo image (PNG, JPEG, WebP or GIF, at most 1 MiB): overrides branding.logo; works with --demo")
-	demoAs := fs.String("demo-as", "", `demo only: preview as "viewer:Straw", "viewer:Neptune", "pending" or "admin"`)
+	demoAs := fs.String("demo-as", "", `demo only: preview as "viewer:Bob", "viewer:Alice", "pending" or "admin"`)
 	if err := fs.Parse(args); err != nil {
 		return serveFlags{}, false
 	}

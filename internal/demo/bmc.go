@@ -10,7 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
 
-// simBMC is NSX-CYRENE's BMC as it really behaves: a Supermicro OEM board without "optimal" (the BMC answers
+// simBMC is SRV-TOWER's BMC as it really behaves: a Supermicro OEM board without "optimal" (the BMC answers
 // completion code 0xCC), so the agent runs with auto_mode: standard and reports optimal as unsupported.
 type simBMC struct {
 	mu          sync.Mutex
