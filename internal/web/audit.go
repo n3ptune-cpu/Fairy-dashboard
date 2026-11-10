@@ -42,7 +42,12 @@ func actorOf(u *model.User) string {
 var controlActions = []string{"fan.", "power.", "helper_", "poll.", "user.", "site.", "update.", "panel.", "host."}
 
 // deniedAction is the entry every refused request of a signed-in user or API token writes (reqCtx.deny).
-const deniedAction = "auth.denied"
+// stepUpAction with the outcome stepUpAsked is the entry of a request that was asked to confirm first.
+const (
+	deniedAction = "auth.denied"
+	stepUpAction = "auth.step_up"
+	stepUpAsked  = "required"
+)
 
 // maxTarget is the longest target written to the audit log (bytes). Host ids, site names and the panel's own
 // paths are far shorter; the target of a refused request is whatever address the client asked for.
@@ -75,7 +80,10 @@ func safeTarget(s string) string {
 func (c *reqCtx) audit(u *model.User, action, target string, params map[string]any, outcome string) {
 	ip := c.ip()
 	sub := u.Sub
-	if action == deniedAction { // refusals can be produced without limit: throttled per subject (auditthrottle.go)
+	// Refusals can be produced without limit: throttled per subject (auditthrottle.go). A control request that
+	// is asked to confirm ("auth.step_up", "required") is one too: an admin session with an old sign-in writes
+	// one per request, before any rate limit.
+	if action == deniedAction || (action == stepUpAction && outcome == stepUpAsked) {
 		ok, dropped, ips := c.s.anonAudit.allowDenied(sub, actorOf(u), time.Now())
 		c.s.auditSuppressed(dropped, ips)
 		if !ok {
@@ -130,7 +138,8 @@ func (s *Server) auditSuppressed(dropped, ips int) {
 		e := audit.Entry{Actor: "fairy", Action: "audit.suppressed", Source: "fairy",
 			Params: map[string]any{"dropped": d.Dropped, "action": deniedAction, "sub": d.Sub, "actor": d.Actor,
 				"per_subject_per_min": deniedPerSub},
-			Outcome: fmt.Sprintf("%d refused requests (%s) by %s not written", d.Dropped, deniedAction, d.Actor)}
+			Outcome: fmt.Sprintf("%d refused requests (%s, or %s %s) by %s not written", d.Dropped, deniedAction,
+				stepUpAction, stepUpAsked, d.Actor)}
 		if d.Sub != "" {
 			sub := d.Sub
 			e.Sub = &sub

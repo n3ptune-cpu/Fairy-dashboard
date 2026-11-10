@@ -115,6 +115,9 @@ func (s *Server) deleteBackground(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
+	if !s.settingsRL.allow(u.Sub) { // audited below, and open to every signed-in user: limited like the other settings changes
+		return apierr.New(429, "too many settings changes; slow down")
+	}
 	c.audit(u, "settings.background_delete", "", map[string]any{}, "ok")
 	out, err := s.Settings.DeleteBackground(u.Sub)
 	if err != nil {

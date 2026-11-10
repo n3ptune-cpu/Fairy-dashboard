@@ -132,7 +132,7 @@ func (c *reqCtx) stepUpWithin(u *model.User, what string, window int) error {
 	} else if *age <= float64(window) {
 		return nil
 	}
-	c.audit(u, "auth.step_up", c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, "required")
+	c.audit(u, stepUpAction, c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, stepUpAsked)
 	kept, why := c.keepPending(u)
 	msg := fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d min.", what, max(1, window/60))
 	if window < 60 || window%60 != 0 {

@@ -20,8 +20,10 @@ const (
 // (wrong role, missing CSRF header, kill switch) is one "auth.denied" line. Left alone, one account could push
 // the earlier history out of the rotated log in minutes. So these are throttled per subject: the first
 // deniedPerSub per minute are written, the rest are counted and written as one "audit.suppressed" entry per
-// subject and minute, which names the subject. Entries about things a user did (control actions, changes to
-// users and sites, sign-ins) are never throttled.
+// subject and minute, which names the subject. A control request that is asked to confirm first ("auth.step_up",
+// outcome "required") counts as a refusal here and shares the budget. Entries about things a user did (control
+// actions, changes to users and sites, sign-ins) are never throttled; the handlers that write them have a rate
+// limit each (TestNoRouteWritesAuditEntriesWithoutALimit).
 const (
 	deniedPerSub = 10
 	deniedKeys   = 1000 // subjects tracked per minute; any further ones share one budget (subject "")

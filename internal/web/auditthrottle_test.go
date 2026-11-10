@@ -2,11 +2,13 @@ package web
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // nextMinute ends the throttle's current minute and writes its summaries, as the panel's one-minute ticker does.
@@ -201,5 +203,106 @@ func TestAuditTargetIsEscapedAndClipped(t *testing.T) {
 	if !strings.HasPrefix(target, "/api/systems/x%0AFORGED entry%0D%09%1B[2Jyyy") || len(target) > maxTarget+len("…") ||
 		strings.ContainsAny(target, "\n\r\t\x1b") {
 		t.Fatalf("%q", target)
+	}
+}
+
+// NEW-4: two entries were outside the throttle. A user who is still waiting for access wrote one audit line
+// per DELETE /api/settings/background (no rate limit), and an admin session with an old sign-in wrote one
+// "auth.step_up required" line per refused control request (written before the rate limit).
+func TestBackgroundDeleteAndStepUpRequiredAreLimited(t *testing.T) {
+	e := setup(t)
+	pend := e.cookie(viewer, 0) // role: pending
+	const n = 300
+	limited := 0
+	for i := 0; i < n; i++ {
+		switch r := e.do("DELETE", "/api/settings/background", nil, "Cookie", pend, "X-Requested-With", "fairy"); r.code {
+		case 200:
+		case 429:
+			limited++
+		default:
+			t.Fatal(r.code, string(r.raw))
+		}
+	}
+	if got := len(e.auditEntries("u1", "settings.background_delete")); got != 30 || limited != n-30 {
+		t.Fatalf("%d of %d settings.background_delete entries written, %d requests limited (want 30 and %d)", got, n, limited, n-30)
+	}
+	stale := e.staleCookie(controller(), time.Hour)
+	e.signIn(controller())
+	for i := 0; i < n; i++ {
+		if r := e.poll(stale); !stepUpRequired(r) {
+			t.Fatal(r.code, string(r.raw))
+		}
+	}
+	if got := len(e.auditEntries("u2", "auth.step_up")); got != deniedPerSub {
+		t.Fatalf("%d of %d auth.step_up entries written, want %d", got, n, deniedPerSub)
+	}
+	e.nextMinute()
+	sum := e.auditEntries("u2", "audit.suppressed")
+	if len(sum) != 1 || !strings.Contains(sum[0]["outcome"].(string), fmt.Sprintf("%d refused requests", n-deniedPerSub)) {
+		t.Fatal("the dropped entries must be summed up for the subject:", sum)
+	}
+	// the confirmation itself is always on record: what was asked for, and that it ran
+	a := arm(t)
+	for i := 0; i < 40; i++ {
+		a.e.poll(a.sess) // 40 more refusals in the same minute
+	}
+	id := a.shutdown()
+	if r := a.confirm(id, false); r.code != 303 || a.powerCalls() != 1 {
+		t.Fatal(r.code, a.powerCalls())
+	}
+	out := auditOutcomes(a.e.s.Cfg.AuditLog)
+	for _, want := range []string{"auth.step_up redirected to Pocket ID", "auth.step_up ok", "power.shutdown ok"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a flood of refusals hid %q", want)
+		}
+	}
+}
+
+// The class behind NEW-4: no write route may let one account write audit entries without a limit. Every write
+// of the route matrix is sent 150 times by a user waiting for access, by a viewer and by an admin whose
+// sign-in is old; none may add more lines than a rate limit or the refusal throttle allows in a minute.
+func TestNoRouteWritesAuditEntriesWithoutALimit(t *testing.T) {
+	const tries, most = 150, 45 // the widest limit on an audited write is 30 a minute, plus the refusals' 10
+	lines := func(e *env) int {
+		b, _ := os.ReadFile(e.s.Cfg.AuditLog)
+		return strings.Count(string(b), "\n")
+	}
+	for _, wr := range matrixRoutes {
+		method, _, _ := strings.Cut(wr.pattern, " ")
+		for _, who := range []string{"a user waiting for access", "a viewer", "an admin whose sign-in is old"} {
+			e := setup(t)
+			e.helperPoll("laptop", "running", helperAll...)
+			_ = e.s.Access.EnsureSites([]string{"Home"})
+			admin := e.cookie(controller(), 0)
+			name, _ := e.do("GET", "/api/systems/laptop", nil, "Cookie", admin).body["name"].(string)
+			q := probe{method: method, path: wr.path, body: wr.body, ctype: wr.ctype}
+			switch wr.body {
+			case "POWER":
+				q.body = map[string]any{"action": "shutdown", "delay_s": 10, "confirm": name}
+			case "CONFIRM":
+				q.body = map[string]any{"confirm": name}
+			case "SETTINGS":
+				q.body = map[string]any{}
+			}
+			var ck string
+			switch who {
+			case "a user waiting for access":
+				ck = e.cookie(model.User{Sub: "u8", Name: model.P("Pat"), Groups: []string{"viewers"}}, 0)
+			case "a viewer":
+				ck = e.cookie(model.User{Sub: "u7", Name: model.P("Vee"), Groups: []string{"viewers"}}, 0)
+				if _, _, err := e.s.Access.SetRole("u7", "viewer", []string{"Home"}, "test", false); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				ck = e.staleCookie(controller(), time.Hour)
+			}
+			before := lines(e)
+			for i := 0; i < tries; i++ {
+				e.raw(q, "Cookie", ck, "X-Requested-With", "fairy")
+			}
+			if got := lines(e) - before; got > most {
+				t.Errorf("%s, %s: %d requests wrote %d audit lines (at most %d)", wr.pattern, who, tries, got, most)
+			}
+		}
 	}
 }
