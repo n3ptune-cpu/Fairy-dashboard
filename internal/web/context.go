@@ -20,6 +20,7 @@ type reqCtx struct {
 	s     *Server
 	w     http.ResponseWriter
 	r     *http.Request
+	fn    handler // the route's handler this request was matched to (kept with a pending action, see pending.go)
 	sess  *sessionData
 	dirty bool
 	user  *model.User
@@ -118,7 +119,7 @@ func (c *reqCtx) mayReadBody() bool {
 
 func (s *Server) h(fn handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c := &reqCtx{s: s, w: w, r: r}
+		c := &reqCtx{s: s, w: w, r: r, fn: fn}
 		if c.mayReadBody() {
 			c.readBody()
 		} else if r.Header.Get("Authorization") == "" {

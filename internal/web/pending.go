@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -18,8 +19,8 @@ import (
 
 // A control action that needs a step-up sign-in is not lost and not asked for twice: when the step-up check
 // refuses a browser's POST / PUT / DELETE, the request (method, path, body: already checked for CSRF, with the
-// typed confirmation as the user sent it) is kept on the server, for that session only, under a random id that
-// only the refused request's answer carries ("pending_id"). The "Confirm it's you" link names that id
+// typed confirmation as the user sent it, with the route and the path parameters the router matched) is kept on
+// the server, for that session only, under a random id that only the refused request's answer carries ("pending_id"). The "Confirm it's you" link names that id
 // (/auth/login?step_up=1&pending=<id>), the login round trip remembers it, and right after the sign-in at
 // Pocket ID succeeds for the same session the panel runs that one action once, server-side, through the same
 // handler and every check (admin role, kill switch, fresh sign-in, rate limit, typed confirmation, audit), and
@@ -30,14 +31,31 @@ import (
 // dialog (DELETE /api/me/pending), after pendingMaxAge, when the session ends, and at a restart (it is only in
 // memory, never in the cookie, so a copy of the cookie cannot run it either).
 
-// pendingAction is a stored request.
+// pendingAction is a stored request: the request as the router matched it, not a text to route again. What runs
+// after the sign-in is that route's handler with those path parameters and that body, so the action the admin
+// confirmed is the action that runs (a path segment that held an encoded "?", "#" or "/" stays one segment).
 type pendingAction struct {
-	ID     string // random, single-use: names this action in the step-up link
-	Method string
-	Path   string
-	Body   string
-	Label  string
-	At     time.Time
+	ID      string            // random, single-use: names this action in the step-up link
+	Method  string            // the request's method
+	Pattern string            // the route it was matched to ("DELETE /api/admin/users/{sub}")
+	Vals    map[string]string // that route's path parameters, as the router decoded them
+	URL     url.URL           // the request's URL as it was parsed once (path, query)
+	run     handler           // that route's handler
+	Body    string
+	Label   string
+	At      time.Time
+}
+
+// wildcardRe finds the path parameters of a route pattern ("{id}", "{path...}").
+var wildcardRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)(?:\.\.\.)?\}`)
+
+// pathValues returns the path parameters the router set on r for the route it matched.
+func pathValues(r *http.Request) map[string]string {
+	vals := map[string]string{}
+	for _, m := range wildcardRe.FindAllStringSubmatch(r.Pattern, -1) {
+		vals[m[1]] = r.PathValue(m[1])
+	}
+	return vals
 }
 
 func (p *pendingAction) expired(now time.Time) bool { return now.Sub(p.At) > pendingMaxAge }
@@ -71,7 +89,8 @@ func (c *reqCtx) pendingKey() string {
 // its id ("" when the request cannot be kept).
 func (c *reqCtx) keepPending(u *model.User) string {
 	if c.resumed() || (u.Auth != "session" && u.Auth != "demo") || c.r.Method == http.MethodGet ||
-		c.r.Method == http.MethodHead || !c.bodyKept || len(c.body) > pendingMaxBody {
+		c.r.Method == http.MethodHead || !c.bodyKept || len(c.body) > pendingMaxBody ||
+		c.fn == nil || c.r.Pattern == "" || !strings.HasPrefix(c.r.URL.Path, "/api/") {
 		return ""
 	}
 	key := c.pendingKey()
@@ -83,7 +102,8 @@ func (c *reqCtx) keepPending(u *model.User) string {
 		label = c.r.Method + " " + c.r.URL.Path
 	}
 	now := c.s.now()
-	p := &pendingAction{ID: randToken(18), Method: c.r.Method, Path: c.r.URL.Path, Body: string(c.body), Label: label, At: now}
+	p := &pendingAction{ID: randToken(18), Method: c.r.Method, Pattern: c.r.Pattern, Vals: pathValues(c.r), URL: *c.r.URL,
+		run: c.fn, Body: string(c.body), Label: label, At: now}
 	c.s.codec.live.keepPending(key, p, now)
 	return p.ID
 }
@@ -136,17 +156,21 @@ func (r *recorder) Write(b []byte) (int, error) {
 // session (callback or demo), and stores its outcome in the session. p was taken out of the store by the caller
 // (takePending), so it runs at most once; nil runs nothing.
 func (s *Server) resumePending(c *reqCtx, p *pendingAction) {
-	if p == nil || !strings.HasPrefix(p.Path, "/api/") {
+	if p == nil || p.run == nil {
 		return
 	}
 	sess := c.session()
 	c.dirty = true
 	ctx := context.WithValue(context.WithValue(c.r.Context(), resumedKey, true), sessionKey, sess)
-	req, err := http.NewRequestWithContext(ctx, p.Method, p.Path, strings.NewReader(p.Body))
-	if err != nil {
-		return
+	// The request is put together from what the router made of the original one. Nothing is parsed or routed a
+	// second time: the kept handler is called directly, with the kept path parameters.
+	u := p.URL
+	req := (&http.Request{Method: p.Method, URL: &u, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{},
+		Body: io.NopCloser(strings.NewReader(p.Body)), ContentLength: int64(len(p.Body)), Host: c.r.Host,
+		RemoteAddr: c.r.RemoteAddr, Pattern: p.Pattern}).WithContext(ctx)
+	for k, v := range p.Vals {
+		req.SetPathValue(k, v)
 	}
-	req.RemoteAddr = c.r.RemoteAddr
 	for _, h := range []string{"X-Forwarded-For", "X-Real-IP", "User-Agent"} {
 		if v := c.r.Header.Get(h); v != "" {
 			req.Header.Set(h, v)
@@ -155,8 +179,8 @@ func (s *Server) resumePending(c *reqCtx, p *pendingAction) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(CSRFHeader, CSRFValue)
 	rec := &recorder{h: http.Header{}}
-	s.mux.ServeHTTP(rec, req)
-	res := &model.PendingResult{Label: p.Label, Status: rec.status, OK: rec.status >= 200 && rec.status < 300, Path: p.Path}
+	s.h(p.run)(rec, req)
+	res := &model.PendingResult{Label: p.Label, Status: rec.status, OK: rec.status >= 200 && rec.status < 300, Path: p.URL.Path}
 	var body map[string]any
 	_ = json.Unmarshal(rec.body.Bytes(), &body)
 	switch d := body["detail"].(type) {
@@ -178,7 +202,7 @@ func (s *Server) resumePending(c *reqCtx, p *pendingAction) {
 		res.Message = res.Message[:300]
 	}
 	sess.PendingResult = res
-	slog.Info("ran the action that waited for a step-up sign-in", "path", p.Path, "status", rec.status)
+	slog.Info("ran the action that waited for a step-up sign-in", "route", p.Pattern, "status", rec.status)
 }
 
 // readBody keeps a write request's body (at most 64 KiB) so a refused step-up can store it.

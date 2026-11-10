@@ -79,6 +79,12 @@ func (a *armed) stepUp(query string, stale bool) resp {
 	return r
 }
 
+// confirm runs the step-up round trip that names the kept action id, as the "Confirm it's you" dialog starts it.
+func (a *armed) confirm(id string, stale bool) resp {
+	a.e.t.Helper()
+	return a.stepUp("&pending="+id+"&next=/", stale)
+}
+
 // L1: the kept action runs only for the step-up that names it. A step-up started any other way (a link on
 // another site: /auth/login?step_up=1) runs nothing and disarms it, so it cannot run later either.
 func TestForeignStepUpLinkRunsNothing(t *testing.T) {
@@ -242,4 +248,62 @@ func url120(s string) string {
 		b.WriteString("%" + strings.ToUpper(string("0123456789abcdef"[s[i]>>4])+string("0123456789abcdef"[s[i]&15])))
 	}
 	return b.String()
+}
+
+// NEW-2: the kept action is replayed as the request the router matched (route, path parameters, body), never
+// as a text that is parsed and routed a second time. A path segment with an encoded "?", "#" or "/" used to
+// become another request after the round trip: the admin confirmed "remove user u9?x" and the panel removed "u9".
+func TestKeptActionIsReplayedAsItWasRouted(t *testing.T) {
+	for _, tc := range []struct{ target, encoded, bystander string }{
+		{"u9?x", "u9%3Fx", "u9"},
+		{"u9#x", "u9%23x", "u9"},
+		{"u9/x", "u9%2Fx", "u9"},
+		{"u9%2Fx", "u9%252Fx", "u9/x"},
+	} {
+		a := signedIn(t)
+		for _, sub := range []string{tc.target, tc.bystander} {
+			if _, _, err := a.e.s.Access.Seen(sub, sub+"@example.com", sub, "pending", "test"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r := a.e.do("DELETE", "/api/admin/users/"+tc.encoded, nil, "Cookie", a.sess, "X-Requested-With", "fairy")
+		id := pendingID(r)
+		if !stepUpRequired(r) || id == "" {
+			t.Fatal(tc.target, r.code, string(r.raw))
+		}
+		if cb := a.confirm(id, false); cb.code != 303 {
+			t.Fatal(tc.target, cb.code, string(cb.raw))
+		}
+		users := a.e.s.Access.Load().Users
+		if _, there := users[tc.target]; there {
+			t.Errorf("asked to remove %q: it is still there", tc.target)
+		}
+		if _, there := users[tc.bystander]; !there {
+			t.Errorf("asked to remove %q: %q was removed", tc.target, tc.bystander)
+		}
+		res, _ := a.e.do("GET", "/api/me", nil, "Cookie", a.sess).body["pending_result"].(map[string]any)
+		if res == nil || res["ok"] != true || res["path"] != "/api/admin/users/"+tc.target {
+			t.Errorf("%q: result %v", tc.target, res)
+		}
+	}
+}
+
+// The replay carries the original query and body unchanged, and what was kept names the route, not a path text.
+func TestKeptActionKeepsRouteParametersAndBody(t *testing.T) {
+	a := arm(t)
+	a.e.s.codec.live.mu.Lock()
+	var p *pendingAction
+	for _, e := range a.e.s.codec.live.m {
+		if e.pending != nil {
+			p = e.pending
+		}
+	}
+	a.e.s.codec.live.mu.Unlock()
+	if p == nil || p.Pattern != "POST /api/systems/{id}/power" || p.Vals["id"] != "laptop" || p.run == nil ||
+		!strings.Contains(p.Body, `"shutdown"`) || p.URL.Path != "/api/systems/laptop/power" {
+		t.Fatalf("kept: %+v", p)
+	}
+	if r := a.confirm(a.id, false); r.code != 303 || a.powerCalls() != 1 {
+		t.Fatal(r.code, a.powerCalls())
+	}
 }
