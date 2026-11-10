@@ -340,3 +340,80 @@ func TestSystemThatCannotBeWrittenShowsAsError(t *testing.T) {
 		t.Fatalf("logged %d times:\n%s", n, logs.String())
 	}
 }
+
+// L10: a Proxmox API (or whatever answers in its place) that answers with a redirect. The panel used to follow
+// it, up to 10 steps, also to plain http, and sent the API token along when the host name stayed the same. Now
+// the redirect is not followed: no second request, no token anywhere else, the cluster shows the error, and a
+// power action answered with a redirect is an error, not "sent".
+func TestProxmoxRedirectsAreNotFollowed(t *testing.T) {
+	var elsewhere atomic.Int32
+	var leaked atomic.Value
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { // plain http, same host name
+		elsewhere.Add(1)
+		leaked.Store(r.Header.Get("Authorization"))
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": testutil.PVEResources()})
+	}))
+	defer other.Close()
+	var code, asked atomic.Int32
+	code.Store(302)
+	pve := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		http.Redirect(w, r, other.URL+r.URL.Path, int(code.Load()))
+	}))
+	defer pve.Close()
+	cfg := testutil.Config(t, []string{pve.URL}, deadURL(t), deadURL(t))
+	p, err := New(cfg, config.Secrets{SessionSecret: "x"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, c := range []int32{301, 302, 303, 307, 308} {
+		code.Store(c)
+		p.PollOnce(ctx)
+		var src *model.SourceStatus
+		for _, s := range p.Summary().Sources {
+			if s.Name == "proxmox:pve" {
+				src = &s
+			}
+		}
+		if src == nil || src.OK || src.LastError == nil || *src.LastError != fmt.Sprintf("http %d", c) {
+			t.Fatalf("%d: %+v", c, src)
+		}
+		if _, err := p.PVEPower(ctx, "pve", "/nodes/n1/qemu/100/status/shutdown", nil); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("http %d", c)) {
+			t.Fatalf("%d: a power action answered with a redirect: %v", c, err)
+		}
+	}
+	if _, ok := snap(p)["qemu-100"]; ok {
+		t.Fatal("the data behind the redirect was used")
+	}
+	if elsewhere.Load() != 0 {
+		t.Fatalf("%d requests followed a redirect, with Authorization %q", elsewhere.Load(), leaked.Load())
+	}
+	if asked.Load() != 10 {
+		t.Fatalf("%d requests to Proxmox", asked.Load())
+	}
+}
+
+// An agent that answers /metrics with a redirect is not followed either (that was already so). The host shows
+// as failing with the status ("http 302"), whatever the redirect's body holds.
+func TestAgentRedirectIsAnError(t *testing.T) {
+	var elsewhere atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere.Add(1)
+		_ = json.NewEncoder(w).Encode(testutil.AgentMetrics())
+	}))
+	defer other.Close()
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer agent.Close()
+	cfg := testutil.Config(t, []string{deadURL(t)}, agent.URL, deadURL(t))
+	p, err := New(cfg, config.Secrets{SessionSecret: "x"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.PollOnce(context.Background())
+	if lap := snap(p)["laptop"]; lap.Status != "offline" || lap.Error == nil || *lap.Error != "http 302" || elsewhere.Load() != 0 {
+		t.Fatalf("%+v, %d requests followed the redirect", lap, elsewhere.Load())
+	}
+}

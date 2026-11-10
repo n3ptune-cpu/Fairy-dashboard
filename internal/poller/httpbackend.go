@@ -81,14 +81,22 @@ func (b *httpBackend) SetProxmox(c config.Proxmox) error {
 			return err
 		}
 	}
+	cl := devices.TLSClient(0, tc)
+	cl.CheckRedirect = noRedirect
 	b.pveMu.Lock()
 	defer b.pveMu.Unlock()
-	b.pve[c.ID], b.pveSecrets[c.ID] = devices.TLSClient(0, tc), secret
+	b.pve[c.ID], b.pveSecrets[c.ID] = cl, secret
 	if powerSecret != "" {
 		b.powerSecrets[c.ID] = powerSecret
 	}
 	return nil
 }
+
+// noRedirect makes a client hand a redirect back as the answer instead of following it. The Proxmox API never
+// redirects; whatever answers in its place with a 3xx could otherwise send the panel (up to 10 steps, also to
+// plain http, and with the API token when the host name stays the same) wherever it likes. The client for
+// agents (devices.LANClient) has the same setting.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // ForgetProxmox drops a cluster's client and tokens (a node removed in the panel).
 func (b *httpBackend) ForgetProxmox(id string) {
@@ -154,6 +162,9 @@ func getJSON(ctx context.Context, c *http.Client, u string, hdr map[string]strin
 	if resp.StatusCode >= 400 {
 		_ = json.Unmarshal(body, &out)
 		return out, resp.StatusCode, &devices.HTTPStatusError{Code: resp.StatusCode}
+	}
+	if resp.StatusCode >= 300 { // a redirect is not followed, and it is not an answer either
+		return nil, resp.StatusCode, &devices.HTTPStatusError{Code: resp.StatusCode}
 	}
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &out); err != nil {
@@ -245,7 +256,7 @@ func (b *httpBackend) PVEPower(ctx context.Context, clusterID, path string, data
 		if resp.StatusCode == 403 { // Proxmox answered: 424, not 502 (see apierr.Upstream)
 			return nil, apierr.New(apierr.Upstream, "proxmox refused the power token (needs VM.PowerMgmt / Sys.PowerMgmt)")
 		}
-		if resp.StatusCode >= 400 {
+		if resp.StatusCode >= 300 { // also a redirect (not followed): the action was not carried out
 			return nil, apierr.Errf(apierr.Upstream, "proxmox: http %d", resp.StatusCode)
 		}
 		var out jsonx.M
