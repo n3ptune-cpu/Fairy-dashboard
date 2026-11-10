@@ -1,7 +1,8 @@
 // Package enrollment is the panel side of "Add host": an admin's request becomes a pending enrollment with a
 // one-time join code (shown once, inside the install command); a background loop asks the new agent
-// POST /pair every few seconds until it answers, the code expires or the admin cancels. On success the host
-// and its tokens go into the panel's managed store and the poller starts polling it at once.
+// POST /pair four times a minute (inside the agent's budget, see pace.go) until it answers, the code expires
+// or the admin cancels. On success the host and its tokens go into the panel's managed store and the poller
+// starts polling it at once.
 //
 // The panel speaks pairing v2 only (Fairy-agent pkg/enroll, v2.go): every request carries a new random value
 // and a check value made with a key derived from the join code, and the answer is accepted only when it opens
@@ -21,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -126,6 +128,9 @@ const (
 	HintUnverified = "unverified_answer"
 	// HintNotTailscale: the address is outside Tailscale's ranges and was not contacted.
 	HintNotTailscale = "not_tailscale"
+	// HintRateLimited: the agent answered that its budget of pairing requests for this minute is used up
+	// (429). The panel asks less often for a while; the enrollment and its code are not affected.
+	HintRateLimited = "rate_limited"
 )
 
 // Created is what the dialog shows once: the code and the commands.
@@ -159,9 +164,10 @@ type Manager struct {
 	Hooks Hooks
 	// Pair asks the machine once (pairing v2, see HTTPPair): the status, the agent's answer on 200 (only when
 	// it was verified with key), the agent's error code otherwise. Tests and the demo replace it.
-	Pair        func(ctx context.Context, url string, key []byte) (int, enroll.Response, string, error)
-	Now         func() time.Time
-	Interval    time.Duration // between pairing attempts (default 3 s)
+	Pair func(ctx context.Context, url string, key []byte) (int, enroll.Response, string, error)
+	Now  func() time.Time
+	// Interval is the time between two pairing requests to one machine (default PairInterval, 15 s; pace.go).
+	Interval    time.Duration
 	OnlineWait  time.Duration // how long "paired" waits for the first good poll (default 90 s)
 	PanelAddr   string        // the panel's Tailscale IPv4 address, for the command
 	PanelSource string        // where PanelAddr came from: "config", "auto" (detected) or "demo"
@@ -175,12 +181,13 @@ type Manager struct {
 
 	mu       sync.Mutex
 	items    map[string]*Enrollment
-	commitMu sync.Mutex // a pairing's store + start of polling vs Cancel / CancelHost (taken before mu)
+	nextAsk  map[string]time.Time // per host URL: when the next pairing request may go out (turn, holdOff)
+	commitMu sync.Mutex           // a pairing's store + start of polling vs Cancel / CancelHost (taken before mu)
 }
 
 // New builds a manager with the real HTTP pairing call. scripts checks the install scripts (see Verifier).
 func New(store *managed.Store, hooks Hooks, panelAddr string, scripts ScriptSource) *Manager {
-	m := &Manager{Store: store, Hooks: hooks, Now: time.Now, Interval: 3 * time.Second,
+	m := &Manager{Store: store, Hooks: hooks, Now: time.Now, Interval: PairInterval,
 		OnlineWait: 90 * time.Second, PanelAddr: panelAddr, Scripts: scripts, items: map[string]*Enrollment{}}
 	m.Pair = func(ctx context.Context, url string, key []byte) (int, enroll.Response, string, error) {
 		return httpPair(ctx, m.pairClient(), url, key)
@@ -702,9 +709,23 @@ func (m *Manager) run(ctx context.Context, e *Enrollment) {
 		e.key, e.held = nil, nil
 		m.mu.Unlock()
 	}()
-	t := time.NewTicker(m.Interval)
-	defer t.Stop()
+	limited := 0 // answers in a row that said the agent's pairing budget is used up
 	for {
+		// This address's turn (pace.go): at once for the first request, then inside the agent's budget.
+		for wait := m.turn(e.URL); wait > 0; wait = m.turn(e.URL) {
+			tm := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				tm.Stop()
+				m.expire(e)
+				return
+			case <-tm.C:
+			}
+		}
+		if ctx.Err() != nil {
+			m.expire(e)
+			return
+		}
 		m.mu.Lock()
 		done := e.Done
 		e.Attempts++
@@ -717,6 +738,9 @@ func (m *Manager) run(ctx context.Context, e *Enrollment) {
 		cancel()
 		var elsewhere *NotTailscale
 		var unverified *Unverified
+		if err != nil || status != 429 {
+			limited = 0
+		}
 		// Only a verified answer pairs. Everything else leaves the enrollment waiting with its code intact:
 		// nothing below ends it, and nothing below makes the panel ask in another way.
 		switch {
@@ -750,30 +774,35 @@ func (m *Manager) run(ctx context.Context, e *Enrollment) {
 		case code == "wrong_code":
 			m.set(e, Waiting, "the agent has a different join code (an older command?): run this one", false)
 		case status == 429:
-			// an old agent answers this from its sixth request a minute on: what was found out before stands
+			// The agent's budget of pairing requests for this minute is used up. The panel's own pace stays
+			// under it, so something else is asking that agent too (another panel, a second enrollment under
+			// another name for the same machine). The panel asks less often until the agent answers again;
+			// the enrollment and its code stay as they are. What was found out before stands.
+			limited++
+			again := m.holdOff(e.URL, limited)
 			if hint, msg := m.hintOf(e); hint == HintAgentTooOld || hint == HintLegacyJoinCode {
 				m.setHint(e, Waiting, msg, hint, false)
 			} else {
-				m.set(e, Waiting, "the agent asks to slow down", false)
+				m.setHint(e, Waiting, fmt.Sprintf("the agent has answered all the pairing requests it takes in one minute (something else may be asking it too): "+
+					"the panel asks again in about %d s. Nothing is lost: the code stays valid", int(math.Ceil(again.Seconds()))), HintRateLimited, false)
 			}
 		default:
 			m.set(e, Waiting, fmt.Sprintf("the agent answered %d", status), false)
 		}
-		select {
-		case <-ctx.Done():
-			m.mu.Lock()
-			fin := !e.Done
-			if fin {
-				e.State, e.Message, e.Done = Expired, "the code expired before the machine ran the command: make a new one", true
-			}
-			cp := m.copyOf(e)
-			m.mu.Unlock()
-			if fin {
-				m.Hooks.Event(cp, "expired", "")
-			}
-			return
-		case <-t.C:
-		}
+	}
+}
+
+// expire ends an enrollment whose time is up (or that was cancelled meanwhile: then nothing changes).
+func (m *Manager) expire(e *Enrollment) {
+	m.mu.Lock()
+	fin := !e.Done
+	if fin {
+		e.State, e.Message, e.Done = Expired, "the code expired before the machine ran the command: make a new one", true
+	}
+	cp := m.copyOf(e)
+	m.mu.Unlock()
+	if fin {
+		m.Hooks.Event(cp, "expired", "")
 	}
 }
 
@@ -985,6 +1014,13 @@ func HTTPPair(ctx context.Context, url string, key []byte) (int, enroll.Response
 // loopback).
 func HTTPPairAny(ctx context.Context, url string, key []byte) (int, enroll.Response, string, error) {
 	return httpPair(ctx, pairClientAny, url, key)
+}
+
+// HTTPPairVia is HTTPPair through a transport of the caller's, without the Tailscale address check: for tests
+// that hand the request to an agent's handler inside the test process (so that the agent's clock is the
+// test's). The panel itself never calls it. Redirects are not followed, as everywhere.
+func HTTPPairVia(ctx context.Context, rt http.RoundTripper, url string, key []byte) (int, enroll.Response, string, error) {
+	return httpPair(ctx, &http.Client{Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, url, key)
 }
 
 func httpPair(ctx context.Context, client *http.Client, url string, key []byte) (int, enroll.Response, string, error) {

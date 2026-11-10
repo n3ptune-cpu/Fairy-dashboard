@@ -141,6 +141,7 @@ func serve(args []string) int {
 	switch {
 	case f.demo:
 		srv.Enroll.Pair = demo.Pair
+		srv.Enroll.Interval = demo.PairEvery
 		srv.Enroll.Scripts = demo.Installers()
 		if srv.Enroll.PanelAddr == "" {
 			srv.Enroll.PanelAddr = "100.88.109.47" // the demo has no Tailscale; any address shows the command

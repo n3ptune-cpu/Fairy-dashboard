@@ -474,7 +474,7 @@ func TestAnswersThatKeepTheEnrollmentWaiting(t *testing.T) {
 		{"no code yet", jsonAnswer(404, `{"error":"pairing is not active on this agent","code":"pairing_inactive"}`), "", "has no join code yet", ""},
 		{"another code", jsonAnswer(403, `{"error":"wrong join code","code":"wrong_code"}`), "", "different join code", ""},
 		{"the wrong panel address", jsonAnswer(403, `{"error":"x","code":"wrong_address"}`), "", "is not where the panel connects from", ""},
-		{"slow down", jsonAnswer(429, `{"error":"x","code":"rate_limited"}`), "", "asks to slow down", ""},
+		{"slow down", jsonAnswer(429, `{"error":"x","code":"rate_limited"}`), HintRateLimited, "the panel asks again in about", ""},
 		{"not JSON content", jsonAnswer(415, `{"error":"x","code":"unsupported_media_type"}`), "", "the agent answered 415", ""},
 		{"an agent-side fault", jsonAnswer(500, `{"error":"x","code":"tokens_unreadable"}`), "", "the agent answered 500", ""},
 		{"a redirect", func(w http.ResponseWriter, r *http.Request) {

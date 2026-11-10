@@ -29,6 +29,10 @@ var (
 // PairDelay is how long the simulated machine takes to "run the command".
 var PairDelay = 6 * time.Second
 
+// PairEvery is how often the demo's panel asks its simulated machine. That machine has no pairing budget, so
+// the demo does not wait the 15 s a real agent needs between two requests (enrollment.PairInterval).
+const PairEvery = 3 * time.Second
+
 func token() string {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)

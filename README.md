@@ -190,7 +190,10 @@ can be swapped between the check and the run. (The line stays in the shell's his
 single-use and valid 15 minutes.) There is one form of the command per system; a release whose install script
 cannot take it (anything before Fairy-agent v0.6.0) is refused, see below. The installer
 checks every file it downloads against `SHA256SUMS` and its signature, installs the agent like the manual install, makes its tokens on
-the machine and waits for the panel. The panel tries to pair every few seconds; the dialog follows it
+the machine and waits for the panel. The panel asks the machine about every 15 seconds (13 to 17), which stays
+inside the agent's limit of 5 pairing requests a minute, so pairing follows the command within about 17 seconds.
+If the agent still answers that its limit is reached (something else is asking it too), the panel waits 30 and
+then 60 seconds between requests and says so in the dialog; the code stays valid. The dialog follows the pairing
 (waiting -> paired -> online) and Cancel stops it. Creating a code is a control action (admin, CSRF, kill switch,
 step-up sign-in, rate limit, audit `host.add` / `host.pair`); API tokens cannot do it.
 
