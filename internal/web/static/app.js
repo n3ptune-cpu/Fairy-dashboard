@@ -114,6 +114,10 @@ function sessionEnded() {
   $("#login").hidden = false;
 }
 
+// A header value may only hold Latin-1: fetch() throws for anything else, so a host or user with a Cyrillic or
+// Chinese name, or an emoji, could not be controlled at all. The label goes percent-encoded (the server decodes
+// it): at most 120 characters, line breaks and broken surrogate halves replaced first.
+const headerText = (v) => encodeURIComponent([...String(v).replace(/[\r\n]+/g, " ")].slice(0, 120).join("").replace(/[\uD800-\uDFFF]/gu, "\uFFFD"));
 let ctlLabel = null;  // set by controlCall while it starts its request: sent as X-Fairy-Action (the step-up dialog's label)
 async function api(path, opts = {}) {
   const write = opts.method && opts.method !== "GET";
@@ -124,7 +128,7 @@ async function api(path, opts = {}) {
   const res = await fetch(path, { credentials: "same-origin", ...opts,
     headers: { Accept: "application/json", ...(write ? { "X-Requested-With": "fairy" } : {}), ...(active ? { "X-Fairy-Active": "1" } : {}),
       ...(opts.body && typeof opts.body === "string" ? { "Content-Type": "application/json" } : {}),
-      ...(opts.label ? { "X-Fairy-Action": String(opts.label).replace(/[\r\n]/g, " ").slice(0, 120) } : {}), ...(opts.headers || {}) } });
+      ...(opts.label ? { "X-Fairy-Action": headerText(opts.label) } : {}), ...(opts.headers || {}) } });
   const data = res.status === 204 ? null : await res.json().catch(() => ({}));
   if (!res.ok) {
     const d = data?.detail;

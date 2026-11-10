@@ -7,8 +7,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
@@ -75,10 +78,7 @@ func (c *reqCtx) keepPending(u *model.User) string {
 	if key == "" {
 		return ""
 	}
-	label := strings.TrimSpace(c.r.Header.Get(labelHeader))
-	if len(label) > 120 || strings.ContainsAny(label, "\r\n") {
-		label = ""
-	}
+	label := actionLabel(c.r.Header.Get(labelHeader))
 	if label == "" {
 		label = c.r.Method + " " + c.r.URL.Path
 	}
@@ -86,6 +86,27 @@ func (c *reqCtx) keepPending(u *model.User) string {
 	p := &pendingAction{ID: randToken(18), Method: c.r.Method, Path: c.r.URL.Path, Body: string(c.body), Label: label, At: now}
 	c.s.codec.live.keepPending(key, p, now)
 	return p.ID
+}
+
+// actionLabel reads the X-Fairy-Action header: what the UI calls the action, shown in "Confirm it's you" and in
+// the result. The UI sends it percent-encoded (encodeURIComponent), because a browser refuses to put a character
+// outside Latin-1 (a Cyrillic or Chinese host name, an emoji) into a header at all; a plain value, as an older
+// cached page sends it, is still taken. After decoding it must be valid text of at most 120 characters with no
+// line break or other control character, else "" (the caller then uses method and path).
+func actionLabel(h string) string {
+	h = strings.TrimSpace(h)
+	if d, err := url.PathUnescape(h); err == nil {
+		h = strings.TrimSpace(d)
+	}
+	if h == "" || len(h) > 480 || !utf8.ValidString(h) || utf8.RuneCountInString(h) > 120 {
+		return ""
+	}
+	for _, r := range h {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' || r == utf8.RuneError {
+			return ""
+		}
+	}
+	return h
 }
 
 // recorder is a minimal ResponseWriter for the replay.

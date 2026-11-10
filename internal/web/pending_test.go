@@ -190,3 +190,56 @@ func TestKeptActionIsNotInTheCookie(t *testing.T) {
 		t.Fatal("after a restart nothing may run", r.code, a.powerCalls())
 	}
 }
+
+// L13: the action's label arrives percent-encoded (a browser cannot send a name outside Latin-1 in a header);
+// the server decodes it, still takes a plain one, and falls back to method and path for anything unusable.
+func TestActionLabelHeader(t *testing.T) {
+	long := strings.Repeat("я", 121)
+	for in, want := range map[string]string{
+		"Shut down laptop": "Shut down laptop", // plain, as an older cached page sends it
+		"Shut%20down%20%D0%BD%D0%BE%D1%83%D1%82%D0%B1%D1%83%D0%BA%20%E6%9C%8D%E5%8A%A1%E5%99%A8%20%F0%9F%96%A5": "Shut down ноутбук 服务器 🖥",
+		"Remove%20%D0%98%D0%B2%D0%B0%D0%BD": "Remove Иван",
+		"100% fans":                         "100% fans", // not an escape: taken as it is
+		"  Reboot%20x  ":                    "Reboot x",
+		"":                                  "",
+		"line%0Abreak":                      "",
+		"carriage%0Dreturn":                 "",
+		"tab%09inside":                      "",
+		"nul%00":                            "",
+		"bad%FFutf8":                        "",
+		"sep%E2%80%A8arator":                "",
+		url120(long):                        "",
+		url120(strings.Repeat("я", 120)):    strings.Repeat("я", 120),
+		strings.Repeat("a", 481):            "",
+	} {
+		if got := actionLabel(in); got != want {
+			t.Errorf("actionLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	// end to end: the encoded label of a kept action comes back decoded in its result
+	a := signedIn(t)
+	name := a.e.do("GET", "/api/systems/laptop", nil, "Cookie", a.sess).body["name"].(string)
+	r := a.e.do("POST", "/api/systems/laptop/power", map[string]any{"action": "shutdown", "delay_s": 10, "confirm": name},
+		"Cookie", a.sess, "X-Requested-With", "fairy", "Content-Type", "application/json",
+		"X-Fairy-Action", "%D0%92%D1%8B%D0%BA%D0%BB%D1%8E%D1%87%D0%B8%D1%82%D1%8C%20"+name)
+	if !stepUpRequired(r) {
+		t.Fatal(r.code, string(r.raw))
+	}
+	if r := a.stepUp("&pending="+pendingID(r)+"&next=/", false); r.code != 303 {
+		t.Fatal(r.code)
+	}
+	me := a.e.do("GET", "/api/me", nil, "Cookie", a.sess)
+	if pr, _ := me.body["pending_result"].(map[string]any); pr == nil || pr["label"] != "Выключить "+name || pr["ok"] != true {
+		t.Fatal("decoded label in the result:", string(me.raw))
+	}
+}
+
+// url120 percent-encodes every byte of s.
+func url120(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		b.WriteString("%" + strings.ToUpper(string("0123456789abcdef"[s[i]>>4])+string("0123456789abcdef"[s[i]&15])))
+	}
+	return b.String()
+}
