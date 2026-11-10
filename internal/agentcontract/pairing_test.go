@@ -301,6 +301,10 @@ func TestPairingV2WithTheRealAgent(t *testing.T) {
 	if e["state"] != "online" || e["pairing"] != "v2" {
 		t.Fatal(e)
 	}
+	// the machine's own name comes out of the sealed answer and is shown next to the address
+	if name, _ := e["agent_hostname"].(string); name == "" || !strings.Contains(e["message"].(string), "(it calls itself "+name+", at 127.0.0.1)") {
+		t.Fatal(e)
+	}
 	// the panel holds the agent's real tokens, and uses them: /metrics and a control request work
 	if sec := pn.secret("pairbox"); sec.Token != readTok || sec.ControlToken != ctlTok {
 		t.Fatalf("%+v", sec)

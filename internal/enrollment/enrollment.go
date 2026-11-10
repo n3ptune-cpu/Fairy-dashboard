@@ -94,6 +94,11 @@ type Enrollment struct {
 	Warning string `json:"warning,omitempty"`
 	// Pairing is "v2" once the agent's answer was verified (it proved it has the join code).
 	Pairing string `json:"pairing,omitempty"`
+	// AgentHostname is what the machine that answered calls itself (from the verified answer; "" when the
+	// agent hides it or sent something that is not a host name). The join code proves the answer comes from
+	// a machine the command was run on; it does not prove that machine is the one at the address the admin
+	// had in mind, so the dialog shows the name next to the address.
+	AgentHostname string `json:"agent_hostname,omitempty"`
 	// Hint says why the enrollment is still waiting, when the panel can tell: see the Hint constants.
 	Hint string `json:"hint,omitempty"`
 
@@ -772,6 +777,17 @@ func (m *Manager) run(ctx context.Context, e *Enrollment) {
 	}
 }
 
+// shownNameRe is a computer name the panel shows as the machine's own word: DNS and Windows names.
+var shownNameRe = regexp.MustCompile(`^[A-Za-z0-9_]([A-Za-z0-9._-]{0,62}[A-Za-z0-9_])?$`)
+
+// shownHostname is the agent's hostname when it looks like one, "" otherwise (it is shown and logged).
+func shownHostname(h string) string {
+	if !shownNameRe.MatchString(h) {
+		return ""
+	}
+	return h
+}
+
 // tooOldMessage is what the dialog shows while an agent from before pairing v2 answers.
 const tooOldMessage = "the Fairy-agent on that machine is too old for this panel: it does not know pairing v2, and the panel does not pair the old, " +
 	"unverified way. Update it first: run the command shown here on the machine. It installs the newer agent, and the panel pairs with " +
@@ -841,10 +857,15 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 			detail += " (was " + clip(e.installed, 64) + ": an older build was installed)"
 		}
 	}
+	who := ""
+	if name := shownHostname(resp.Hostname); name != "" {
+		who = " (it calls itself " + name + ", at " + hostOf(e.URL) + ")"
+	}
 	m.mu.Lock()
 	e.pairedAt = m.Now()
-	e.Pairing = managed.PairingV2
+	e.Pairing, e.AgentHostname = managed.PairingV2, shownHostname(resp.Hostname)
 	m.mu.Unlock()
+	note = who + note
 	cp := m.set(e, Paired, "paired: the agent proved it has the join code; tokens received, waiting for the first reading"+note, false)
 	m.Hooks.Event(cp, "paired", detail)
 	deadline := time.NewTimer(m.OnlineWait)

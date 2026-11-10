@@ -686,6 +686,40 @@ func TestEnrollmentCopiesHoldNoKey(t *testing.T) {
 	r.m.Cancel(cr.ID)
 }
 
+// The dialog and the audit entry name the machine that answered, in its own words, next to the address: the
+// join code proves the answer comes from a machine the command ran on, not which machine that is. A name
+// that is not a computer name is not shown.
+func TestPairedEnrollmentNamesTheMachineThatAnswered(t *testing.T) {
+	for hostname, shown := range map[string]string{
+		"NSX-FURINA":             "NSX-FURINA",
+		"nas.tailnet.ts.net":     "nas.tailnet.ts.net",
+		"WIN_PC-01":              "WIN_PC-01",
+		"":                       "", // hide_host_details on the agent
+		"<img src=x onerror=1>":  "",
+		"box\nonline (verified)": "",
+		"a b":                    "",
+		strings.Repeat("x", 70):  "",
+		"-box":                   "",
+	} {
+		machine := newSwap(t, http.NotFoundHandler())
+		r := newRig(t, machine.srv.URL)
+		cr := r.add(t, "typed-name")
+		answer := goodAnswer
+		answer.Hostname = hostname
+		machine.set(v2Agent(keyOf(t, cr.Code), answer))
+		e := r.wait(t, cr.ID, "online", func(e Enrollment) bool { return e.Done })
+		if e.State != Online || e.AgentHostname != shown {
+			t.Fatalf("%q: %+v", hostname, e)
+		}
+		if has := strings.Contains(e.Message, "(it calls itself "+shown+", at typed-name)"); has != (shown != "") {
+			t.Errorf("%q: message %q", hostname, e.Message)
+		}
+		if shown == "" && (strings.Contains(e.Message, "calls itself") || (hostname != "" && strings.Contains(e.Message, hostname))) {
+			t.Errorf("%q is shown: %q", hostname, e.Message)
+		}
+	}
+}
+
 // When an enrollment is over, however it ended, the panel no longer holds its pairing key or a code kept for
 // the browser.
 func TestFinishedEnrollmentForgetsItsKey(t *testing.T) {

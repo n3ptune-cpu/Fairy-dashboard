@@ -202,7 +202,10 @@ such a request, with its tokens encrypted and authenticated under a key bound to
 request. So the panel knows the answer comes from the machine the code was given to (anything else that answers
 at that address is not added, and the audit log says so: `host.pair unverified`), and nobody who reads the
 exchange learns the tokens. Hosts paired this way show "Pairing: verified" on their page; hosts added by an
-older panel show "not verified" until they are re-paired.
+older panel show "not verified" until they are re-paired. The join code proves that the answer comes from a
+machine the command was run on; which machine that is, the panel cannot know. The dialog and the audit entry
+therefore show what the machine calls itself next to the address you typed ("it calls itself NSX-FURINA, at
+nsx-furina"): look at it when you add a host.
 
 There is no fallback to the old exchange, in which the panel sent the same proof every time and the agent
 answered with its tokens in clear:

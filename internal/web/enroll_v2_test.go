@@ -62,7 +62,7 @@ func TestAddHostHintsAuditAndVerifiedMark(t *testing.T) {
 		case 1:
 			return 200, enroll.Response{}, "", &enrollment.Unverified{Why: "it is not a pairing v2 answer"}
 		}
-		return 200, enroll.Response{AgentVersion: "20-abcdef0", Platform: "linux", Token: "real-read-token-xxxxxxxxxxxxxxxxxxxx",
+		return 200, enroll.Response{AgentVersion: "20-abcdef0", Hostname: "BOX-REAL", Platform: "linux", Token: "real-read-token-xxxxxxxxxxxxxxxxxxxx",
 			ControlToken: "real-control-token-yyyyyyyyyyyyyyyyy"}, "", nil
 	}
 	e.b.Mu.Lock()
@@ -105,7 +105,8 @@ func TestAddHostHintsAuditAndVerifiedMark(t *testing.T) {
 	}
 	phase.Store(2)
 	b = get(func(b map[string]any) bool { return b["done"] == true })
-	if b["state"] != "online" || b["pairing"] != "v2" || b["hint"] != nil {
+	if b["state"] != "online" || b["pairing"] != "v2" || b["hint"] != nil || b["agent_hostname"] != "BOX-REAL" ||
+		!strings.Contains(b["message"].(string), "(it calls itself BOX-REAL, at box)") {
 		t.Fatal(b)
 	}
 	page := e.do("GET", "/api/admin/hosts", nil, "Cookie", c)
@@ -121,7 +122,7 @@ func TestAddHostHintsAuditAndVerifiedMark(t *testing.T) {
 	}
 	raw := string(must(os.ReadFile(e.s.Cfg.AuditLog)))
 	norm, _ := enroll.Normalize(code)
-	if !strings.Contains(raw, `"pairing":"v2"`) || strings.Contains(raw, code) || strings.Contains(raw, norm) || strings.Contains(raw, "real-read-token") ||
+	if !strings.Contains(raw, `"pairing":"v2"`) || !strings.Contains(raw, `"agent_hostname":"BOX-REAL"`) || strings.Contains(raw, code) || strings.Contains(raw, norm) || strings.Contains(raw, "real-read-token") ||
 		strings.Contains(raw, keys.Load().(string)) {
 		t.Fatal("the audit log lacks the verified mark, or holds a secret")
 	}

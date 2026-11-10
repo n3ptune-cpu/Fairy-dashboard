@@ -115,6 +115,9 @@ func (s *Server) enrollEvent(e enrollment.Enrollment, kind, detail string) {
 	if e.Pairing != "" {
 		params["pairing"] = e.Pairing // "v2": the agent's answer was verified with the join code
 	}
+	if e.AgentHostname != "" {
+		params["agent_hostname"] = e.AgentHostname // what the machine that answered calls itself
+	}
 	s.writeAudit(audit.Entry{Actor: e.CreatedBy, Action: action, Target: e.HostID, Source: "fairy", Params: params, Outcome: outcome})
 	n := notifications.Event{Type: "enroll", SystemID: e.HostID, Host: e.Name}
 	switch kind {
