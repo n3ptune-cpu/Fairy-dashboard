@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -548,8 +549,12 @@ func TestPanelContractHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := api{t, hs, tok}
-	if st, b := a.do("POST", "/api/systems/nsx-cyrene/helper/stop", map[string]any{"confirm": "nsx-cyrene"}); st != 200 ||
-		b["state"] != agentapi.HelperStopped || b["action"] != "stop" {
+	// Helper stop / start need a browser sign-in: an API token is refused there (it cannot "confirm it's you").
+	if st, b := a.do("POST", "/api/systems/nsx-cyrene/helper/stop", map[string]any{"confirm": "nsx-cyrene"}); st != 403 || c.helper.Stops != 0 {
+		t.Fatal("an API token must not stop the helper", st, b)
+	}
+	admin := newBrowser(t, cfg, p)
+	if st, b := admin.do("POST", "/api/systems/nsx-cyrene/helper/stop", map[string]any{"confirm": "nsx-cyrene"}); st != 200 || b["ok"] != true {
 		t.Fatal("stop", st, b)
 	}
 	if c.helper.Stops != 1 {
@@ -570,12 +575,79 @@ func TestPanelContractHelper(t *testing.T) {
 	if st, b := a.do("GET", "/api/systems/nsx-cyrene/fan", nil); st != 200 || b["available"] != false {
 		t.Fatal("fan status while stopped", st, b)
 	}
-	if st, b := a.do("POST", "/api/systems/nsx-cyrene/helper/start", map[string]any{"confirm": "NSX-CYRENE"}); st != 200 || b["state"] != agentapi.HelperRunning {
+	if st, b := admin.do("POST", "/api/systems/nsx-cyrene/helper/start", map[string]any{"confirm": "NSX-CYRENE"}); st != 200 || b["state"] != agentapi.HelperRunning {
 		t.Fatal("start", st, b)
 	}
 	if s := sys(); c.helper.Starts != 1 || s.Helper.State != agentapi.HelperRunning || len(s.Helper.Paused) != 0 || s.PowerHelperReason != "" {
 		t.Fatalf("restarted: %+v", s.Helper)
 	}
+}
+
+// browser is a signed-in admin in a browser, for the control actions an API token may not run (helper stop and
+// start): a demo-mode panel on the same poller, whose simulated Pocket ID sign-in confirms the action the panel
+// kept. do answers with the action's own status and body when it ran at once; when the panel first asked to
+// "confirm it's you", it confirms and answers with the kept action's result ({"ok", "message"} and its status).
+type browser struct {
+	t   *testing.T
+	srv *httptest.Server
+	c   *http.Client
+}
+
+func newBrowser(t *testing.T, cfg *config.Panel, p *poller.Poller) browser {
+	u := demo.User
+	ws := web.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48), InsecureCookies: true}, p, &u, "test")
+	if _, _, err := ws.Access.Seen(u.Sub, model.Deref(u.Email), model.Deref(u.Name), "admin", "contract test"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(ws.Handler())
+	t.Cleanup(srv.Close)
+	jar, _ := cookiejar.New(nil)
+	return browser{t, srv, &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+}
+
+func (b browser) call(method, path string, body any) (int, map[string]any) {
+	b.t.Helper()
+	var rd io.Reader
+	if body != nil {
+		raw, _ := json.Marshal(body)
+		rd = bytes.NewReader(raw)
+	}
+	req, _ := http.NewRequest(method, b.srv.URL+path, rd)
+	req.Header.Set("X-Requested-With", "fairy")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := b.c.Do(req)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	out := map[string]any{}
+	if len(raw) > 0 && raw[0] == '{' {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return resp.StatusCode, out
+}
+
+func (b browser) do(method, path string, body any) (int, map[string]any) {
+	b.t.Helper()
+	st, out := b.call(method, path, body)
+	d, _ := out["detail"].(map[string]any)
+	if st != 401 || d["code"] != "step_up_required" {
+		return st, out
+	}
+	id, _ := d["pending_id"].(string)
+	if st, _ := b.call("GET", "/auth/login?step_up=1&pending="+id+"&next=/", nil); st != 303 {
+		b.t.Fatal("step-up", st)
+	}
+	_, me := b.call("GET", "/api/me", nil)
+	res, _ := me["pending_result"].(map[string]any)
+	if res == nil {
+		b.t.Fatal("the confirmed action did not run: no pending_result in /api/me", me)
+	}
+	code, _ := res["status"].(float64)
+	return int(code), res
 }
 
 // keys returns the key set of a JSON object.

@@ -288,7 +288,8 @@ The file is read once at start (path from the config only) and served at `/brand
   was pointer / key / touch input in the last minute (`POST /api/me/active` is its explicit signal). The live
   stream and the page's timers never count, so a tab nobody touches signs out, and its stream ends.
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never
-  accepted on `/auth/*`, the settings endpoints or the Users page. `control` acts as an admin; `read` sees every
+  accepted on `/auth/*`, the settings endpoints or the Users page, nor (they cannot "confirm it's you") for
+  stopping / starting the elevated helper, Add host, Re-pair and Remove, which need a browser sign-in. Otherwise `control` acts as an admin; `read` sees every
   site, or only `--sites A,B`. A token owned by a panel user is capped to that user's current role and sites; a token whose owner is not
   (or no longer) in `users.json` has no access. Only `--owner system` tokens keep their own scope.
 * Writes: admin role (or control-scope token), CSRF header `X-Requested-With: fairy` + Origin /

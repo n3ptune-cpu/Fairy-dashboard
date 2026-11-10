@@ -36,11 +36,29 @@ func (c *reqCtx) checkCSRF(u *model.User) error {
 	return nil
 }
 
-// controlGuard: CSRF, control group / control-scope token, admin kill switch, step-up, rate limit.
+// sessionOnlyControl lists the control actions (by the route pattern they are registered under) that an API
+// token may not run at all. A token cannot "confirm it's you": it skips the step-up, so for a token every other
+// control action is one request away. These are the ones that change what the panel trusts or switch off a
+// machine's protection: stop / start of the elevated helper (its fan watchdog), Add host, Re-pair and Remove.
+// They need a browser session, which then goes through the step-up like everything else.
+var sessionOnlyControl = map[string]bool{
+	"POST /api/systems/{id}/helper/stop":  true,
+	"POST /api/systems/{id}/helper/start": true,
+	"POST /api/admin/hosts":               true,
+	"POST /api/admin/hosts/{id}/repair":   true,
+	"DELETE /api/admin/hosts/{id}":        true,
+}
+
+// controlGuard: CSRF, control group / control-scope token, admin kill switch, step-up, rate limit. API tokens
+// are refused outright on the routes in sessionOnlyControl.
 func (c *reqCtx) controlGuard(bucket *rateLimiter) (*model.User, error) {
 	u, err := c.requireUser()
 	if err != nil {
 		return nil, err
+	}
+	if u.Auth == "token" && sessionOnlyControl[c.r.Pattern] {
+		return nil, c.deny(u, 403, "this action needs a browser sign-in: API tokens cannot confirm it's you",
+			"API token on an action that needs a browser sign-in")
 	}
 	if err := c.checkCSRF(u); err != nil {
 		return nil, err
