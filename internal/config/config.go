@@ -252,8 +252,8 @@ type Panel struct {
 	BoostWhileViewing  *bool            `yaml:"boost_while_viewing"`
 	RequestTimeout     float64          `yaml:"request_timeout"`
 	OfflineAfter       float64          `yaml:"offline_after"`
-	SessionMaxAge      int              `yaml:"session_max_age"`
-	SessionIdleTimeout int              `yaml:"session_idle_timeout"`
+	SessionMaxAge      Seconds          `yaml:"session_max_age"`      // seconds, or "7d", "36h" (default 7d)
+	SessionIdleTimeout Seconds          `yaml:"session_idle_timeout"` // seconds, or "12h", "30m" (default 12h)
 	EnableDocs         bool             `yaml:"enable_docs"`
 	OIDC               OIDC             `yaml:"oidc"`
 	Proxmox            ProxmoxList      `yaml:"proxmox"`

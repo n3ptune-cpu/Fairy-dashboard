@@ -87,8 +87,12 @@ func (c *Panel) applyDefaults() {
 	def(&c.Intervals.Stream, 1)
 	def(&c.RequestTimeout, 4)
 	def(&c.OfflineAfter, 60)
-	defi(&c.SessionMaxAge, 7*86400)
-	defi(&c.SessionIdleTimeout, 12*3600)
+	if c.SessionMaxAge == 0 {
+		c.SessionMaxAge = 7 * 86400
+	}
+	if c.SessionIdleTimeout == 0 { // 12 h, or the whole session when that is shorter
+		c.SessionIdleTimeout = min(12*3600, c.SessionMaxAge)
+	}
 	defi(&c.PowerHistoryS, 3600)
 	defi(&c.ControlRatePerMin, 6)
 	defi(&c.StepUpWindowS, 180)
@@ -144,10 +148,14 @@ func (c *Panel) validateGeneral(errs *problems) {
 		errs.add("oidc.client_id is required")
 	}
 	if c.SessionMaxAge < 300 {
-		errs.add("session_max_age must be >= 300")
+		errs.add("session_max_age must be at least 300 s (5m), got %s", c.SessionMaxAge)
+	}
+	// 0 was replaced by the default above. A negative or tiny idle timeout would sign everyone out at once.
+	if c.SessionIdleTimeout < 60 {
+		errs.add("session_idle_timeout must be at least 60 s (1m), got %s", c.SessionIdleTimeout)
 	}
 	if c.SessionIdleTimeout > c.SessionMaxAge {
-		errs.add("session_idle_timeout must not exceed session_max_age")
+		errs.add("session_idle_timeout (%s) must not be longer than session_max_age (%s)", c.SessionIdleTimeout, c.SessionMaxAge)
 	}
 	if c.StepUpWindowS < 30 || c.StepUpWindowS > 86400 {
 		errs.add("step_up_window_s must be 30-86400")

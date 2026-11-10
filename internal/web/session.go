@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
@@ -52,10 +53,10 @@ type sessionCodec struct {
 	now func() time.Time
 }
 
-func newCodec(secret string, maxAge int, secure bool) *sessionCodec {
+func newCodec(secret string, maxAge config.Seconds, secure bool) *sessionCodec {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write([]byte("fairy-session-cookie-v1"))
-	return &sessionCodec{key: m.Sum(nil), maxAge: maxAge, secure: secure, live: newLiveSessions(), now: time.Now}
+	return &sessionCodec{key: m.Sum(nil), maxAge: int(maxAge), secure: secure, live: newLiveSessions(), now: time.Now}
 }
 
 // now is the server's session clock (time.Now, except in tests). It lives on the codec, which every session

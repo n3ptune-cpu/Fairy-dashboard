@@ -4,8 +4,10 @@ listen: 127.0.0.1:8080                    # nginx in another container: this LXC
                                           # firewalled so only nginx can reach it (--listen / FAIRY_LISTEN override)
 request_timeout: 4                        # seconds per request (each source also gets a timeout below its interval)
 offline_after: 60                         # failing for longer than this => "offline" (before that: "stale")
-session_max_age: 604800                   # 7 d absolute; group membership is re-checked at each login
-session_idle_timeout: 43200               # 12 h without anyone using the page => sign in again. Only real use
+session_max_age: 604800                   # 7 d absolute; group membership is re-checked at each login.
+                                          # Both session settings take seconds, or a text like 7d, 36h, 30m, 1h30m.
+session_idle_timeout: 43200               # 12 h (also: 12h) without anyone using the page => sign in again;
+                                          # at least 1 minute, at most session_max_age. Only real use
                                           # counts (mouse, keys, touch, any change); an open tab's own refreshing
                                           # (live stream, update check) does not keep the session alive.
 step_up_window_s: 180                     # control actions need a Pocket ID sign-in from the last 3 min (default)
