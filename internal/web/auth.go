@@ -25,7 +25,7 @@ func (c *reqCtx) sessionUser() *model.User {
 		return &u
 	}
 	s := c.session()
-	now := time.Now().Unix()
+	now := c.s.now().Unix()
 	if s.User == nil || s.IAT == 0 || now-s.IAT > int64(c.s.Cfg.SessionMaxAge) {
 		return nil
 	}
@@ -127,10 +127,10 @@ func (c *reqCtx) authAge(u *model.User) *float64 {
 	case "demo":
 		c.s.demoMu.Lock()
 		defer c.s.demoMu.Unlock()
-		v := time.Since(c.s.demoAuthTime).Seconds()
+		v := c.s.now().Sub(c.s.demoAuthTime).Seconds()
 		return &v
 	}
-	v := float64(time.Now().UnixNano())/1e9 - c.session().AuthTime // AuthTime 0 = unknown: very old
+	v := c.s.nowSec() - c.session().AuthTime // AuthTime 0 = unknown: very old
 	return &v
 }
 
@@ -140,7 +140,7 @@ func (c *reqCtx) authAge(u *model.User) *float64 {
 func (c *reqCtx) loginKey() string {
 	s := c.session()
 	if s.User != nil && s.SID != "" && c.s.Poller.Admin.SessionValid(s.SID, float64(s.IAT)) &&
-		time.Now().Unix()-s.IAT <= int64(c.s.Cfg.SessionMaxAge) {
+		c.s.now().Unix()-s.IAT <= int64(c.s.Cfg.SessionMaxAge) {
 		return "sub:" + s.User.Sub
 	}
 	return "ip:" + c.ip()
@@ -165,7 +165,7 @@ func (s *Server) authLogin(c *reqCtx) error {
 	stepUp := q.Get("step_up") == "1"
 	if s.DemoUser != nil { // demo: simulate the Pocket ID round trip for the step-up screen
 		s.demoMu.Lock()
-		s.demoAuthTime = time.Now()
+		s.demoAuthTime = s.now()
 		s.demoMu.Unlock()
 		d := s.DemoUser
 		c.auditAnon("auth.step_up", "ok (demo: simulated Pocket ID re-authentication)", model.Deref(d.Email), &d.Sub, nil)
@@ -186,7 +186,7 @@ func (s *Server) authLogin(c *reqCtx) error {
 	}
 	sess := c.session()
 	sess.Next, sess.StepUp = target, stepUp && current != nil
-	sess.State, sess.Nonce, sess.Verifier, sess.Started = randToken(24), randToken(24), oauth2.GenerateVerifier(), time.Now().Unix()
+	sess.State, sess.Nonce, sess.Verifier, sess.Started = randToken(24), randToken(24), oauth2.GenerateVerifier(), s.now().Unix()
 	c.dirty = true
 	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(sess.Verifier), oidc.Nonce(sess.Nonce)}
 	if sess.StepUp { // step-up: force a fresh authentication at Pocket ID
@@ -222,7 +222,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 		}
 		return fail(f)
 	}
-	if sess.State == "" || q.Get("state") != sess.State || time.Now().Unix()-sess.Started > 600 {
+	if sess.State == "" || q.Get("state") != sess.State || s.now().Unix()-sess.Started > 600 {
 		return fail(&loginFailure{reason: "mismatching_state"})
 	}
 	p, err := s.oidc.provider(c.r.Context())
@@ -243,7 +243,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 		c.clearSession()
 		return apierr.New(403, "not allowed")
 	}
-	now := float64(time.Now().UnixNano()) / 1e9
+	now := s.nowSec()
 	authTime := 0.0 // unknown: counts as long ago (never as "just now")
 	if v, ok := claims["auth_time"].(float64); ok && v > 0 {
 		authTime = v

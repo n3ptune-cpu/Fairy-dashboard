@@ -80,7 +80,7 @@ func (e *env) staleCookie(u model.User, authAge time.Duration) string {
 	if err := e.s.Poller.Admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub}); err != nil {
 		e.t.Fatal(err)
 	}
-	now := time.Now()
+	now := e.s.now()
 	rec := httptest.NewRecorder()
 	e.s.codec.write(rec, &sessionData{SID: sid, User: &u, IAT: now.Unix(), Seen: now.Unix(),
 		AuthTime: float64(now.Add(-authAge).Unix())})

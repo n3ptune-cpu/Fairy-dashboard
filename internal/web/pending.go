@@ -60,7 +60,7 @@ func (c *reqCtx) keepPending(u *model.User) bool {
 	}
 	s := c.session()
 	s.Pending = &pendingAction{Method: c.r.Method, Path: c.r.URL.Path, Body: string(c.body), Label: label,
-		At: time.Now().Unix(), SID: s.SID}
+		At: c.s.now().Unix(), SID: s.SID}
 	c.dirty = true
 	return true
 }
@@ -98,7 +98,7 @@ func (s *Server) resumePending(c *reqCtx) {
 	}
 	sess.Pending = nil
 	c.dirty = true
-	if time.Since(time.Unix(p.At, 0)) > pendingMaxAge || p.SID != sess.SID || !strings.HasPrefix(p.Path, "/api/") {
+	if s.now().Sub(time.Unix(p.At, 0)) > pendingMaxAge || p.SID != sess.SID || !strings.HasPrefix(p.Path, "/api/") {
 		return
 	}
 	ctx := context.WithValue(context.WithValue(c.r.Context(), resumedKey, true), sessionKey, sess)

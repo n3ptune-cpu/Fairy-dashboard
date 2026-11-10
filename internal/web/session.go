@@ -39,13 +39,23 @@ type sessionCodec struct {
 	key    []byte
 	maxAge int
 	secure bool
+	// now is the clock of everything that decides how old a session, a sign-in or a kept action is (the cookie,
+	// sessionUser, authAge, the login round trip, the pending action). Tests replace it; see Server.now.
+	now func() time.Time
 }
 
 func newCodec(secret string, maxAge int, secure bool) *sessionCodec {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write([]byte("fairy-session-cookie-v1"))
-	return &sessionCodec{key: m.Sum(nil), maxAge: maxAge, secure: secure}
+	return &sessionCodec{key: m.Sum(nil), maxAge: maxAge, secure: secure, now: time.Now}
 }
+
+// now is the server's session clock (time.Now, except in tests). It lives on the codec, which every session
+// decision already goes through.
+func (s *Server) now() time.Time { return s.codec.now() }
+
+// nowSec is now as Unix seconds with a fraction, the unit of auth_time.
+func (s *Server) nowSec() float64 { return float64(s.now().UnixNano()) / 1e9 }
 
 func (c *sessionCodec) sign(payload string) string {
 	m := hmac.New(sha256.New, c.key)
@@ -72,7 +82,7 @@ func (c *sessionCodec) decode(r *http.Request) *sessionData {
 		D sessionData `json:"d"`
 		T int64       `json:"t"`
 	}
-	if json.Unmarshal(raw, &out) != nil || time.Since(time.Unix(out.T, 0)) > time.Duration(c.maxAge)*time.Second {
+	if json.Unmarshal(raw, &out) != nil || c.now().Sub(time.Unix(out.T, 0)) > time.Duration(c.maxAge)*time.Second {
 		return s
 	}
 	return &out.D
@@ -87,7 +97,7 @@ func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
 	raw, _ := json.Marshal(struct {
 		D *sessionData `json:"d"`
 		T int64        `json:"t"`
-	}{s, time.Now().Unix()})
+	}{s, c.now().Unix()})
 	payload := base64.RawURLEncoding.EncodeToString(raw)
 	// SameSite=Lax (not Strict): the OIDC callback is a top-level navigation from Pocket ID and must carry the
 	// cookie with state/nonce/PKCE verifier. Writes are protected by the CSRF header + Origin checks.
