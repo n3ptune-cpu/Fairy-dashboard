@@ -13,6 +13,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 )
 
 func (s *Server) me(c *reqCtx) error {
@@ -72,7 +73,7 @@ func (s *Server) auditPage(c *reqCtx) error {
 
 var kinds = map[string]bool{"node": true, "qemu": true, "lxc": true, "agent": true}
 
-var statuses = map[string]bool{"online": true, "offline": true, "stopped": true, "stale": true, "paused": true}
+var statuses = map[string]bool{"online": true, "offline": true, "stopped": true, "stale": true, "paused": true, poller.StatusError: true}
 
 func (s *Server) systems(c *reqCtx) error {
 	v, err := c.view()

@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"slices"
 	"strings"
 
@@ -255,7 +254,7 @@ func (v *view) SystemsJSON() (map[string][]byte, []string) {
 			continue
 		}
 		if cx, changed := v.clean(x); changed {
-			b, _ = json.Marshal(cx)
+			b = systemJSON(cx) // never empty: a copy that cannot be written is its error entry
 		}
 		out[x.ID] = b
 		ids = append(ids, x.ID)

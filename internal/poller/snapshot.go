@@ -103,17 +103,10 @@ func (p *Poller) encodeSystems(list []model.System) ([]model.System, map[string]
 	js := make(map[string][]byte, len(list))
 	bad := map[string]string{}
 	for i, s := range list {
-		b, err := json.Marshal(s)
+		e, b, err := EncodeSystem(s)
 		if err != nil {
 			bad[s.ID] = err.Error()
-			s = errorEntry(s, err)
-			if b, err = json.Marshal(s); err != nil { // cannot happen: the entry holds texts and config values only
-				s = model.System{ID: s.ID, Name: s.ID, Kind: s.Kind, Source: s.Source, Status: StatusError,
-					Error: model.P("this system's data cannot be shown"), PollMode: "default"}
-				model.Normalize(&s)
-				b, _ = json.Marshal(s)
-			}
-			list[i] = s
+			list[i] = e
 		}
 		js[s.ID] = b
 	}
@@ -130,6 +123,26 @@ func (p *Poller) encodeSystems(list []model.System) ([]model.System, map[string]
 	}
 	p.mu.Unlock()
 	return list, js
+}
+
+// EncodeSystem writes one system as JSON. A system that cannot be written is replaced by its error entry (see
+// errorEntry): the entry and its JSON are returned together with the reason, so the caller can log it. The JSON
+// is never empty. The web layer uses this for the copies it changes per viewer; encodeSystems for the snapshot.
+func EncodeSystem(s model.System) (model.System, []byte, error) {
+	b, err := json.Marshal(s)
+	if err == nil {
+		return s, b, nil
+	}
+	e := errorEntry(s, err)
+	if b, err2 := json.Marshal(e); err2 == nil {
+		return e, b, err
+	}
+	// cannot happen: the entry holds texts and config values only
+	e = model.System{ID: s.ID, Name: s.ID, Kind: s.Kind, Source: s.Source, Status: StatusError,
+		Error: model.P("this system's data cannot be shown"), PollMode: "default"}
+	model.Normalize(&e)
+	b, _ = json.Marshal(e)
+	return e, b, err
 }
 
 // errorEntry is what the API shows for a system whose data cannot be written as JSON: a complete System (every

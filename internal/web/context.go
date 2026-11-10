@@ -59,6 +59,11 @@ func (c *reqCtx) ip() string { return security.ClientIP(c.r, c.s.Cfg.Trusted()) 
 func (c *reqCtx) json(status int, v any) {
 	c.flush()
 	b, err := json.Marshal(v)
+	if err != nil { // one system, power source or UPS that cannot be written must not take the whole answer down
+		if rb, _, ok := safeJSON("response "+c.r.Pattern, v); ok {
+			b, err = rb, nil
+		}
+	}
 	if err != nil {
 		slog.Error("encoding response", "path", c.r.URL.Path, "error", err)
 		status, b = 500, []byte(`{"detail":"internal error"}`)

@@ -202,7 +202,7 @@ func (st *streamState) writeSystems(out *bytes.Buffer) {
 			}
 		}
 		if len(changed) > 0 || len(removed) > 0 {
-			rb, _ := json.Marshal(removed)
+			rb, _ := json.Marshal(removed) // a list of texts: cannot fail
 			out.WriteString(`event: systems_delta` + "\n" + `data: {"generated_at":"` + now + `","changed":[`)
 			out.Write(bytes.Join(changed, []byte(",")))
 			out.WriteString(`],"removed":`)
@@ -219,28 +219,53 @@ func (st *streamState) writeChanged(out *bytes.Buffer) {
 	sum := st.v.Summary()
 	upsOv := st.v.UPS(false)
 	pow := st.v.Power()
-	for _, ev := range []struct {
-		name string
-		full any
-		key  any
-	}{
-		{"summary", sum, withoutTime(sum)},
-		{"ups", upsOv, struct {
-			U []model.UpsState            `json:"ups"`
-			H map[string][]model.UpsPoint `json:"history"`
-		}{upsOv.UPS, upsOv.History}},
-		{"power", pow, struct {
-			T *float64                 `json:"total_w"`
-			S []model.PowerSourceState `json:"sources"`
-		}{pow.TotalW, pow.Sources}},
-	} {
-		key, _ := json.Marshal(ev.key)
-		if !bytes.Equal(st.last[ev.name], key) {
-			st.last[ev.name] = key
-			full, _ := json.Marshal(ev.full)
-			fmt.Fprintf(out, "event: %s\ndata: %s\n\n", ev.name, full)
+	st.writeEvent(out, "summary", sum)
+	st.writeEvent(out, "ups", upsOv)
+	st.writeEvent(out, "power", pow)
+}
+
+// writeEvent sends one of those events unless its content is what was sent last.
+func (st *streamState) writeEvent(out *bytes.Buffer, name string, payload any) {
+	key, err := json.Marshal(eventKey(payload))
+	if err == nil && bytes.Equal(st.last[name], key) {
+		return // unchanged: nothing else is encoded
+	}
+	// A payload that cannot be written as JSON is sent with the failing parts replaced (see reduced); an event
+	// is never sent with empty or broken data.
+	full, written, ok := safeJSON(name, payload)
+	if !ok {
+		return
+	}
+	if err != nil { // the comparison key of what is really sent
+		if key, err = json.Marshal(eventKey(written)); err != nil {
+			key = full
+		}
+		if bytes.Equal(st.last[name], key) {
+			return
 		}
 	}
+	st.last[name] = key
+	fmt.Fprintf(out, "event: %s\ndata: %s\n\n", name, full)
+}
+
+// eventKey is what decides whether a `summary`, `ups` or `power` event is sent again: the payload without the
+// fields that change on every read.
+func eventKey(v any) any {
+	switch x := v.(type) {
+	case model.Summary:
+		return withoutTime(x)
+	case model.UpsOverview:
+		return struct {
+			U []model.UpsState            `json:"ups"`
+			H map[string][]model.UpsPoint `json:"history"`
+		}{x.UPS, x.History}
+	case model.PowerOverview:
+		return struct {
+			T *float64                 `json:"total_w"`
+			S []model.PowerSourceState `json:"sources"`
+		}{x.TotalW, x.Sources}
+	}
+	return v
 }
 
 // writeUPSEvents sends every UPS transition since the last one sent, as `ups_event` with id `ups-<seq>`.
@@ -250,7 +275,10 @@ func (st *streamState) writeUPSEvents(out *bytes.Buffer) {
 		if !st.v.all && !st.v.upsVis[e.UpsID] {
 			continue
 		}
-		b, _ := json.Marshal(e)
+		b, _, ok := safeJSON("ups_event", e)
+		if !ok {
+			continue
+		}
 		fmt.Fprintf(out, "event: ups_event\nid: ups-%d\ndata: %s\n\n", e.Seq, b)
 	}
 }
