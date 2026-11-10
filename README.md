@@ -380,6 +380,14 @@ Kept in `<data_dir>/notifications.json` for 30 days (at most 2000). The Overview
 alerts", for alerts whose condition still holds. Warnings and critical events also go to `FAIRY_NOTIFY_URL`
 (ntfy or Discord) when it is set.
 
+What one machine reports again and again is counted, not repeated: a temperature that goes over the limit and
+back, an agent that reports another version, a failed update. Per host there is one such event in 10 minutes,
+its text ends in "(x7)", and it is pushed once. The list still ends in the state the host is in: a temperature
+alarm that came back holds again. One source (a host, a Proxmox API with all its nodes, a UPS source) holds at
+most a quarter of the list and gets at most 5 push messages a minute; the sixth is one line that says so, and
+the next message of that source says how many were left out. Everything is on the page either way. When the
+list is full, the source with the most entries gives up its own, so a standing alarm of another host stays.
+
 ### Custom logo
 
 Copy your image to `/etc/fairy/logo.png` (PNG, JPEG, WebP or GIF, at most 1 MiB; SVG is refused because it can

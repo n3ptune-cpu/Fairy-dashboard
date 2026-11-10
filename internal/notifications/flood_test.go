@@ -69,7 +69,7 @@ func TestRepeatedUpdateFailuresAreMerged(t *testing.T) {
 	}
 	// other kinds are never merged: two real events stay two
 	for range 2 {
-		s.Add(Event{Kind: "update_done", Type: "update", Severity: Info, SystemID: "evil", Text: "agent now runs 2 (was 1)"})
+		s.Add(Event{Kind: "update_started", Type: "update", Severity: Info, SystemID: "evil", Text: "update requested"})
 		s.Add(Event{Kind: "host_offline", Type: "host", Severity: Warning, SystemID: "evil", Text: "offline", Key: "offline:evil", Alarm: true})
 	}
 	if got := len(events(s)); got != 7+1+4 {
@@ -105,7 +105,7 @@ func TestStandingAlarmsSurviveAFlood(t *testing.T) {
 	for i := range 2500 { // the flood, 5000 events: one agent, a new UPS name every time (the audit's second flood), plus host events
 		s.Add(Event{Kind: "ups_on_battery", Type: "ups", Severity: Warning, UPSID: fmt.Sprintf("evil/u%d", i), Host: "x", Text: "on battery",
 			Key: fmt.Sprintf("ups:evil/u%d", i), Alarm: true})
-		s.Add(Event{Kind: "update_done", Type: "update", Severity: Info, SystemID: "evil", Host: "EVIL", Text: "agent now runs 2 (was 1)"})
+		s.Add(Event{Kind: "update_started", Type: "update", Severity: Info, SystemID: "evil", Host: "EVIL", Text: "update requested"})
 	}
 	evs := events(s)
 	byOwner := map[string]int{}
@@ -147,7 +147,7 @@ func TestFullListGivesUpTheLeastImportantFirst(t *testing.T) {
 	host := func(i int) string { return fmt.Sprintf("h%d", i%20) } // 20 hosts: none reaches its own share
 	var alarms, warnings, over []int64
 	for i := range 40 {
-		alarms = append(alarms, s.Add(Event{Kind: "temp_high", Severity: Warning, SystemID: host(i), Text: "hot", Key: fmt.Sprintf("temp:%d", i), Alarm: true}).ID)
+		alarms = append(alarms, s.Add(Event{Kind: "disk_failing", Severity: Warning, SystemID: host(i), Text: "failing", Key: fmt.Sprintf("disk:%d", i), Alarm: true}).ID)
 	}
 	for i := range 40 {
 		warnings = append(warnings, s.Add(Event{Kind: "host_unstable", Severity: Warning, SystemID: host(i), Text: "unstable"}).ID)

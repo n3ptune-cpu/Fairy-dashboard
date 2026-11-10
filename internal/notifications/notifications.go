@@ -36,10 +36,22 @@ const (
 	RepeatWindow = 10 * time.Minute
 )
 
-// merged are the kinds a monitored machine can cause again on every poll (an agent reporting a new failed update
-// every 2 seconds). Per host there is one such event per RepeatWindow; repeats raise its Count ("x7" in the
-// text), are not pushed and are not new unread notifications.
-var merged = map[string]bool{"update_failed": true}
+// merged are the kinds a monitored machine can cause again and again by what it reports: a new failed update
+// on every poll, another version on every poll (N2: 500 "agent now runs X" in 17 minutes), a temperature that
+// goes over the limit and back every few seconds (N2: 150 pushed warnings an hour). Per host there is one such
+// event per RepeatWindow; repeats raise its Count ("x7" in the text), are not pushed and are not new unread
+// notifications. A repeated alarm (temp_high) holds again when it repeats, and the event that ends it (temp_ok)
+// ends it again, so the list always shows the state the host is in now.
+var merged = map[string]bool{"update_failed": true, "update_done": true, "temp_high": true, "temp_ok": true}
+
+// Push limits: one source (a machine, a Proxmox API with all its nodes and guests, a UPS source) gets at most
+// MaxPushPerSource push messages per PushWindow. The first event over the limit is pushed as one line that says
+// so; the rest are counted and named with the source's next pushed event. Every event is still on the
+// Notifications page. Events of the panel itself are not limited.
+const (
+	MaxPushPerSource = 5
+	PushWindow       = time.Minute
+)
 
 // Event is one notification.
 type Event struct {
@@ -58,12 +70,20 @@ type Event struct {
 	// Count is how often the event happened when repeats were merged into it (2 and up; see merged). The text
 	// ends in " (x<Count>)".
 	Count int `json:"count,omitempty"`
+	// Source is whose events this one counts with when that is more than the one system: "proxmox:<cluster>"
+	// for a node or guest the panel knows from a Proxmox API. All of them share one share of the list and one
+	// push limit, however many systems that API lists.
+	Source string `json:"source,omitempty"`
 }
 
-// owner is whose share of the list an event counts towards: its system, or for a UPS event the UPS's source
-// (the part of the UPS id before the slash: a configured UPS source or the agent that relays it). "" for events
-// of the panel itself, which have no limit of their own.
+// owner is whose share of the list (and whose push limit) an event counts towards: its Source when it has one
+// (a Proxmox API), else its system, or for a UPS event the UPS's source (the part of the UPS id before the
+// slash: a configured UPS source or the agent that relays it). "" for events of the panel itself, which have
+// no limit of their own.
 func (e Event) owner() string {
+	if e.Source != "" {
+		return e.Source
+	}
 	if e.SystemID != "" {
 		return e.SystemID
 	}
@@ -107,10 +127,58 @@ type Store struct {
 	Push func(title, message string)
 	Now  func() time.Time
 
-	mu    sync.Mutex
-	d     fileData
-	dirty bool
-	subs  map[chan struct{}]bool
+	mu     sync.Mutex
+	d      fileData
+	dirty  bool
+	subs   map[chan struct{}]bool
+	pushes map[string]*pushCount // push messages per source in the current window (see MaxPushPerSource)
+}
+
+// pushCount is one source's push messages in its current window.
+type pushCount struct {
+	start time.Time
+	sent  int // pushed in this window
+	held  int // not pushed in this window (over the limit)
+}
+
+// pushFor decides what is pushed for an event of owner: the event itself (ok), with a note about the events of
+// this source that were not pushed before; or, for the first event over the limit, one line that says that
+// this source is over it (notice); or nothing. Caller holds s.mu.
+func (s *Store) pushFor(owner string, now time.Time) (ok bool, note, notice string) {
+	if owner == "" {
+		return true, "", ""
+	}
+	if s.pushes == nil {
+		s.pushes = map[string]*pushCount{}
+	}
+	if len(s.pushes) > 4096 { // sources that were quiet for a window: forget them
+		for k, c := range s.pushes {
+			if now.Sub(c.start) >= PushWindow && c.held == 0 {
+				delete(s.pushes, k)
+			}
+		}
+	}
+	c := s.pushes[owner]
+	if c == nil {
+		c = &pushCount{start: now}
+		s.pushes[owner] = c
+	}
+	if now.Sub(c.start) >= PushWindow {
+		if c.held > 0 {
+			note = fmt.Sprintf(" (and %d more from this source that were not pushed: see the Notifications page)", c.held)
+		}
+		c.start, c.sent, c.held = now, 0, 0
+	}
+	if c.sent < MaxPushPerSource {
+		c.sent++
+		return true, note, ""
+	}
+	c.held++
+	if c.held == 1 {
+		notice = fmt.Sprintf("more than %d events in a minute from %s: the next ones are not pushed, they are on the Notifications page",
+			MaxPushPerSource, owner)
+	}
+	return false, "", notice
 }
 
 // Open loads path (a missing file is empty). A corrupt file is moved aside (notifications are not security
@@ -165,6 +233,17 @@ func (s *Store) Add(e Event) Event {
 	if e.Severity == "" {
 		e.Severity = Info
 	}
+	resolve := func() { // an event with a Key that is not an alarm ends the alarms that hold under that key
+		if e.Key == "" || e.Alarm {
+			return
+		}
+		for i := range s.d.Events {
+			if x := &s.d.Events[i]; x.Key == e.Key && x.Active() {
+				t := e.T
+				x.Resolved = &t
+			}
+		}
+	}
 	if merged[e.Kind] {
 		for i := len(s.d.Events) - 1; i >= 0; i-- {
 			x := &s.d.Events[i]
@@ -179,6 +258,10 @@ func (s *Store) Add(e Event) Event {
 			}
 			x.Count = max(x.Count, 1) + 1
 			x.Text += fmt.Sprintf(" (x%d)", x.Count)
+			if x.Alarm {
+				x.Resolved = nil // the condition is back: the alarm holds again
+			}
+			resolve()
 			out := *x
 			s.dirty = true
 			s.signal()
@@ -186,14 +269,7 @@ func (s *Store) Add(e Event) Event {
 			return out // counted, not pushed again
 		}
 	}
-	if e.Key != "" && !e.Alarm {
-		for i := range s.d.Events {
-			if x := &s.d.Events[i]; x.Key == e.Key && x.Active() {
-				t := e.T
-				x.Resolved = &t
-			}
-		}
-	}
+	resolve()
 	e.ID = s.d.Next
 	s.d.Next++
 	s.d.Events = append(s.d.Events, e)
@@ -201,13 +277,20 @@ func (s *Store) Add(e Event) Event {
 	s.dirty = true
 	s.signal()
 	push := s.Push
-	s.mu.Unlock()
+	var ok bool
+	var note, notice string
 	if push != nil && (e.Severity == Warning || e.Severity == Critical) {
+		ok, note, notice = s.pushFor(e.owner(), now)
+	}
+	s.mu.Unlock()
+	if ok {
 		title := "Fairy: " + e.Text
 		if e.Host != "" {
 			title = "Fairy: " + e.Host + ": " + e.Text
 		}
-		push(title, fmt.Sprintf("%s (%s) at %s", e.Text, e.Severity, e.T.Format(time.RFC3339)))
+		push(title, fmt.Sprintf("%s (%s) at %s%s", e.Text, e.Severity, e.T.Format(time.RFC3339), note))
+	} else if notice != "" {
+		push("Fairy: "+notice, fmt.Sprintf("%s (%s) at %s", notice, Warning, e.T.Format(time.RFC3339)))
 	}
 	return e
 }
@@ -224,12 +307,12 @@ func (s *Store) signal() {
 
 // trim keeps the list within its limits after an event of owner was added. Caller holds s.mu.
 //
-// Events older than MaxAge go, the host (or UPS source) that just added one gives up its own events beyond
-// MaxPerHost, and beyond MaxEvents the list gives up one event at a time. What goes first is decided by
-// Event.tier: info events and alarms that are over, oldest first, then other warnings; an alarm that still holds
+// Events older than MaxAge go, the source (a host, a Proxmox API, a UPS source) that just added one gives up
+// its own events beyond MaxPerHost, and beyond MaxEvents the list gives up one event at a time. What goes first
+// is decided by Event.tier: info events and alarms that are over, then other warnings; an alarm that still holds
 // ("UPS on battery", "host offline") is only given up when nothing else is left, because it is not raised again
-// while its condition lasts. So a flood of events from one machine cannot push a standing alarm of another one
-// out of the list.
+// while its condition lasts. Within a tier the source with the most events gives up its oldest (evictFair). So a
+// flood of events from one source, or from several, cannot push a standing alarm of another one out of the list.
 func (s *Store) trim(now time.Time, owner string) {
 	n := len(s.d.Events)
 	old, aged := 0, 0 // events are in time order: the ones past MaxAge are at the front
@@ -259,7 +342,7 @@ func (s *Store) trim(now time.Time, owner string) {
 		}
 	}
 	for len(s.d.Events) > MaxEvents {
-		s.evict(func(Event) bool { return true })
+		s.evictFair()
 	}
 	if len(s.d.Events) == n {
 		return
@@ -283,6 +366,40 @@ func (s *Store) evict(match func(Event) bool) {
 			if t == 0 {
 				break
 			}
+		}
+	}
+	if at >= 0 {
+		s.d.Events = slices.Delete(s.d.Events, at, at+1)
+	}
+}
+
+// evictFair removes one event from a full list: of the lowest tier that is there, the oldest event of the
+// source that holds the most events of that tier. So when the list is full of alarms that still hold, a
+// source with many of them gives up its own, and one alarm of another source is not what goes. (Events of
+// the panel itself count as one source.) Caller holds s.mu.
+func (s *Store) evictFair() {
+	tier := 3
+	for _, e := range s.d.Events {
+		if t := e.tier(); t < tier {
+			tier = t
+		}
+	}
+	count := map[string]int{}
+	first := map[string]int{}
+	for i, e := range s.d.Events {
+		if e.tier() != tier {
+			continue
+		}
+		o := e.owner()
+		if _, ok := first[o]; !ok {
+			first[o] = i
+		}
+		count[o]++
+	}
+	at, most := -1, 0
+	for o, n := range count {
+		if n > most || (n == most && first[o] < at) {
+			at, most = first[o], n
 		}
 	}
 	if at >= 0 {

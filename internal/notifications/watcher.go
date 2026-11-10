@@ -79,6 +79,15 @@ func (w *Watcher) NotePanelPower(systemID, action string, now time.Time) {
 
 func isHost(s model.System) bool { return s.Kind == "node" || s.Kind == "agent" }
 
+// sourceOf is the Event.Source of a system's events: its Proxmox API for a system the panel knows from one
+// (all of that API's nodes count together), "" for an agent (it counts by itself).
+func sourceOf(s model.System) string {
+	if s.Source == "proxmox" {
+		return "proxmox:" + model.Deref(s.ClusterID)
+	}
+	return ""
+}
+
 func hottest(s model.System) (float64, string) {
 	best, what := -1.0, ""
 	for _, t := range s.Temps {
@@ -164,7 +173,7 @@ func (w *Watcher) observeStatus(now time.Time, s model.System, st *hostState, up
 	}
 	if len(st.flips) >= w.FlapCount {
 		st.quietUntil = now.Add(w.FlapWindow)
-		w.Store.Add(Event{Kind: "host_unstable", Type: "host", Severity: Warning, SystemID: s.ID, Host: s.Name,
+		w.Store.Add(Event{Kind: "host_unstable", Type: "host", Severity: Warning, SystemID: s.ID, Host: s.Name, Source: sourceOf(s),
 			Text: fmt.Sprintf("unstable: went offline and online %d times in %s (quiet for %s)", len(st.flips), w.FlapWindow, w.FlapWindow)})
 		return
 	}
@@ -172,11 +181,11 @@ func (w *Watcher) observeStatus(now time.Time, s model.System, st *hostState, up
 		if until, ok := w.panelOff[s.ID]; ok && now.Before(until) {
 			st.offByPanel = true
 			if w.asleep[s.ID] {
-				w.Store.Add(Event{Kind: "host_asleep", Type: "host", Severity: Info, SystemID: s.ID, Host: s.Name,
+				w.Store.Add(Event{Kind: "host_asleep", Type: "host", Severity: Info, SystemID: s.ID, Host: s.Name, Source: sourceOf(s),
 					Text: "asleep (sent to sleep from the panel)"})
 				return
 			}
-			w.Store.Add(Event{Kind: "host_off", Type: "host", Severity: Info, SystemID: s.ID, Host: s.Name,
+			w.Store.Add(Event{Kind: "host_off", Type: "host", Severity: Info, SystemID: s.ID, Host: s.Name, Source: sourceOf(s),
 				Text: "off (shut down from the panel)"})
 			return
 		}
@@ -184,7 +193,7 @@ func (w *Watcher) observeStatus(now time.Time, s model.System, st *hostState, up
 		if s.Error != nil && *s.Error != "" {
 			why += " · " + clip(*s.Error, 80)
 		}
-		w.Store.Add(Event{Kind: "host_offline", Type: "host", Severity: Warning, SystemID: s.ID, Host: s.Name,
+		w.Store.Add(Event{Kind: "host_offline", Type: "host", Severity: Warning, SystemID: s.ID, Host: s.Name, Source: sourceOf(s),
 			Text: why, Key: key, Alarm: true})
 		return
 	}
@@ -198,7 +207,7 @@ func (w *Watcher) observeStatus(now time.Time, s model.System, st *hostState, up
 	st.offByPanel = false
 	delete(w.panelOff, s.ID)
 	delete(w.asleep, s.ID)
-	w.Store.Add(Event{Kind: "host_online", Type: "host", Severity: Info, SystemID: s.ID, Host: s.Name, Text: text, Key: key})
+	w.Store.Add(Event{Kind: "host_online", Type: "host", Severity: Info, SystemID: s.ID, Host: s.Name, Source: sourceOf(s), Text: text, Key: key})
 }
 
 func (w *Watcher) observeTemp(now time.Time, s model.System, st *hostState, temp float64, what string) {
@@ -223,11 +232,11 @@ func (w *Watcher) observeTemp(now time.Time, s model.System, st *hostState, temp
 	st.hot, st.pendHot = hot, nil
 	key := "temp:" + s.ID
 	if hot {
-		w.Store.Add(Event{Kind: "temp_high", Type: "temperature", Severity: Warning, SystemID: s.ID, Host: s.Name,
+		w.Store.Add(Event{Kind: "temp_high", Type: "temperature", Severity: Warning, SystemID: s.ID, Host: s.Name, Source: sourceOf(s),
 			Text: fmt.Sprintf("%s %.0f °C (limit %.0f °C)", what, temp, HotC), Key: key, Alarm: true})
 		return
 	}
-	w.Store.Add(Event{Kind: "temp_ok", Type: "temperature", Severity: Info, SystemID: s.ID, Host: s.Name,
+	w.Store.Add(Event{Kind: "temp_ok", Type: "temperature", Severity: Info, SystemID: s.ID, Host: s.Name, Source: sourceOf(s),
 		Text: fmt.Sprintf("temperature back to normal (%.0f °C)", temp), Key: key})
 }
 
