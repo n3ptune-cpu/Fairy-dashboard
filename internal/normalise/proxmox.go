@@ -85,8 +85,8 @@ func splitTags(raw string) []string {
 		raw = raw[:maxPVETagsRaw]
 	}
 	for _, t := range tagSplit.Split(raw, -1) {
-		if t != "" && len(out) < maxPVETags {
-			out = append(out, ClipText(strings.ToValidUTF8(t, ""), maxShort))
+		if t = ClipText(t, maxShort); t != "" && len(out) < maxPVETags {
+			out = append(out, t)
 		}
 	}
 	return out

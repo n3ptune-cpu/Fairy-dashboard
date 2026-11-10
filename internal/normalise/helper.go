@@ -10,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 // The Windows agent's elevated helper (Fairy-agent v0.5.0+; contract types in Fairy-agent's pkg/agent/api).
@@ -35,21 +36,6 @@ var (
 	helperReasons = map[string]bool{api.ReasonHelperStopped: true, api.ReasonHelperError: true}
 	versionRe     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$`)
 )
-
-// cleanText drops control characters and bounds the length of a string an agent sent for display.
-func cleanText(s string, n int) string {
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || (r >= 0x7f && r < 0xa0) || r == 0x2028 || r == 0x2029 || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) {
-			return -1
-		}
-		return r
-	}, s)
-	s = strings.TrimSpace(s)
-	if len(s) > n {
-		s = strings.ToValidUTF8(s[:n], "") + "…"
-	}
-	return s
-}
 
 // agentHelper reads the optional `helper` block; nil when the agent sends none. Unknown states read as
 // "unknown", unknown features are dropped, text is bounded: an odd payload cannot break the page. Features are
@@ -92,7 +78,7 @@ func agentHelper(m jsonx.M) *model.Helper {
 		}
 	}
 	if out.State != api.HelperRunning && out.State != api.HelperStarting {
-		out.Error = cleanText(jsonx.S(h, "error"), 300)
+		out.Error = textsafe.Clip(jsonx.S(h, "error"), 300)
 	}
 	return out
 }

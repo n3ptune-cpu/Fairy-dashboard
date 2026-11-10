@@ -5,11 +5,11 @@ import (
 	"log/slog"
 	"math"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 // Limits for the devices one agent relays. An agent is a machine the panel does not control, and every source
@@ -23,13 +23,9 @@ const (
 	maxRemoteError   = 120
 )
 
-// clipText cuts s to at most n bytes on a character boundary.
-func clipText(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return strings.ToValidUTF8(s[:n], "")
-}
+// clipText is a text of a relayed device as the panel keeps it: cleaned (textsafe.Clean) and cut to at most n
+// bytes on a character boundary.
+func clipText(s string, n int) string { return textsafe.Cut(s, n) }
 
 // UpdateRemote merges agent-reported devices (`power_sources` in the agent's /metrics). rows=nil means the agent
 // itself was unreachable this cycle. Device credentials never leave the agent. Rows over the limits above are

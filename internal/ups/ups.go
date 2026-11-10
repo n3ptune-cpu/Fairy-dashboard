@@ -20,6 +20,7 @@ import (
 	upssrc "github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 // Manager holds every UPS (polled by the panel or relayed by agents), their history and events.
@@ -89,19 +90,9 @@ var (
 	}()
 )
 
-// clip cuts s to n bytes (valid UTF-8) and drops control characters.
-func clip(s string, n int) string {
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || (r >= 0x7f && r < 0xa0) {
-			return -1
-		}
-		return r
-	}, s)
-	if len(s) > n {
-		s = strings.ToValidUTF8(s[:n], "")
-	}
-	return s
-}
+// clip is a text of a UPS as the panel keeps it: cleaned (textsafe.Clean: no control characters, escape
+// sequences or direction overrides) and cut to n bytes on a character boundary.
+func clip(s string, n int) string { return textsafe.Cut(s, n) }
 
 func clipP(p **string) {
 	if *p != nil {

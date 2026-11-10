@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"math"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
@@ -210,16 +209,7 @@ func SelfUpdateBlock(su map[string]any) map[string]any {
 		if !ok {
 			return "", false
 		}
-		v = strings.Map(func(r rune) rune {
-			if r < 0x20 || (r >= 0x7f && r < 0xa0) {
-				return -1
-			}
-			return r
-		}, v)
-		if len(v) > n {
-			v = strings.ToValidUTF8(v[:n], "") + "…"
-		}
-		return v, true
+		return normalise.ClipText(v, n), true
 	}
 	when := func(m map[string]any, k string) (float64, bool) {
 		f := jsonx.Num(m, k)

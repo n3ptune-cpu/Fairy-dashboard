@@ -13,6 +13,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/health"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/tokens"
 )
 
@@ -255,5 +256,33 @@ func TestAuditTailShowsTheAccountID(t *testing.T) {
 	}
 	if s := fmtEntry(with("actor", "u-77", "sub", "u-77")); strings.Contains(s, "  id ") {
 		t.Fatal(s)
+	}
+}
+
+// N6: the CLI and the panel agree on what does not belong in a text. Every character textsafe.Clean removes
+// from a machine's text (or turns into a space) is one the CLI does not print raw either, in a field (cell)
+// or anywhere else (the termSafe writer; a line feed and a tab are its own to print).
+func TestCLIRemovesWhatThePanelCleans(t *testing.T) {
+	check := func(r rune) {
+		s := string(r)
+		if textsafe.Clean("a"+s+"b") == "a"+s+"b" {
+			return
+		}
+		if got := cell("a" + s + "b"); strings.ContainsRune(got, r) {
+			t.Errorf("cell prints U+%04X raw: %q", r, got)
+		}
+		var out bytes.Buffer
+		_, _ = newTermSafe(&out).Write([]byte("a" + s + "b"))
+		if r != '\n' && r != '\t' && strings.ContainsRune(out.String(), r) {
+			t.Errorf("the CLI prints U+%04X raw: %q", r, out.String())
+		}
+	}
+	for r := rune(0); r < 0x3000; r++ {
+		check(r)
+	}
+	check(0xfeff)
+	// a whole escape sequence in a field: nothing of it acts on the terminal
+	if got := cell("name\x1b[31m\x1b]0;title\x07" + string(rune(0x202e)) + "\r\n"); strings.ContainsAny(got, "\x1b\x07\r\n") || strings.ContainsRune(got, 0x202e) {
+		t.Fatalf("%q", got)
 	}
 }

@@ -13,14 +13,19 @@ import (
 // field of a line also goes through cell, which makes line breaks and tabs inside it visible instead of real.
 
 // unsafeRune reports runes a terminal may act on or that can disguise text: C0 controls except tab and
-// newline (ESC, CR, BEL, backspace...), DEL, C1 controls (8-bit CSI / OSC), and bidi overrides.
+// newline (ESC, CR, BEL, backspace...), DEL, C1 controls (8-bit CSI / OSC), bidi overrides and marks, and the
+// byte order mark. Together with lineRune it is the set textsafe.Clean takes out of a machine's text before
+// the panel keeps it (a test holds the two together); the CLI applies it again to everything it prints,
+// because not everything it prints came through there (an older audit log, names from the identity provider).
 func unsafeRune(r rune) bool {
 	switch {
 	case r == '\n' || r == '\t':
 		return false
 	case r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0):
 		return true
-	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0x200e || r == 0x200f || r == 0x061c:
+	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0x200e || r == 0x200f || r == 0x061c, r == 0xfeff:
+		return true
+	case r == 0x2028 || r == 0x2029: // Unicode line ends (cell shows them as escapes before this is asked)
 		return true
 	}
 	return false

@@ -10,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 func (c *reqCtx) fanAgent(id string) (config.Agent, error) {
@@ -22,6 +23,9 @@ func (c *reqCtx) fanAgent(id string) (config.Agent, error) {
 	}
 	return a, nil
 }
+
+// maxAgentError is how much of an agent's own error text reaches the page and the audit log.
+const maxAgentError = 300
 
 func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[string]any, error) {
 	status, data, err := c.s.Poller.AgentRequest(c.r.Context(), a, method, path, body)
@@ -42,7 +46,9 @@ func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[s
 		}
 		msg := "agent error"
 		if e, ok := data["error"]; ok {
-			msg = fmt.Sprint(e)
+			if e := textsafe.Clip(fmt.Sprint(e), maxAgentError); e != "" {
+				msg = e
+			}
 		}
 		return nil, apierr.New(st, msg)
 	}

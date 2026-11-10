@@ -596,6 +596,14 @@ session settings as whole seconds).
   tags cut like an agent's, two CPU-model requests at a time per cluster. A cluster that lists more is shown up
   to the limit (the first rows) and the panel's log says so once: "the Proxmox API lists more than the panel
   takes from one source". Nothing is kept for a guest or node that is no longer listed.
+* Texts from machines: every text an agent or a Proxmox API sends (host name, OS, sensor and disk names, a
+  version, an error message, a guest's name and tags) is cleaned where the answer comes in, before the panel
+  keeps, shows, logs or sends it on: escape sequences (colours, cursor moves, window titles), control
+  characters and direction overrides (the character that makes `gpj.exe` read `exe.jpg`) are removed, a line
+  break becomes a space, and every text has a longest length. From the answer of a newly paired machine the
+  panel keeps `agent_version` only when it is a version and `hostname` only when it is a computer name
+  (letters, digits, `.`, `-`, `_`, at most 64). `fairy admin` applies the same rule to everything it prints.
+  The page escapes HTML wherever it inserts a text; that has not changed.
 * Memory: `deploy/fairy.service` sets `MemoryMax=512M`. `fairy update` never replaces the unit file, so an
   older install gets this line by hand, once (see [Upgrading to this release](#upgrading-to-this-release)).
 * See `SECURITY-FIXES.md` for the 2026-11 review fixes and what to configure.

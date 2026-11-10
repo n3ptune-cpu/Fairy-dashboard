@@ -10,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 // Stop / Start of a Windows agent's elevated helper (Fairy-agent v0.5.0+): POST /api/systems/{id}/helper/stop and
@@ -83,7 +84,7 @@ func (s *Server) helperAction(c *reqCtx, action string) error {
 		if status == 400 || status == 409 || status == 422 || status == 429 {
 			st = status
 		}
-		msg := jsonx.S(data, "error")
+		msg := textsafe.Clip(jsonx.S(data, "error"), maxAgentError)
 		if msg == "" {
 			msg = fmt.Sprintf("agent error %d", status)
 		}

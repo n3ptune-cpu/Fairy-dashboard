@@ -28,6 +28,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 // Actions are the power actions the API accepts.
@@ -406,7 +407,7 @@ func executeViaAgent(ctx context.Context, p *poller.Poller, s model.System, req 
 	if err != nil {
 		return res, err
 	}
-	pending := parsePending(jsonx.Obj(data, "pending"))
+	pending := normalise.Pending(data) // the same checks as for the block in the agent's report
 	p.NotePending(s.ID, pending)
 	res.Pending = pending
 	if req.Action == "cancel" {
@@ -441,21 +442,8 @@ func executeViaProxmox(ctx context.Context, p *poller.Poller, s model.System, re
 	return res, nil
 }
 
-func parsePending(m jsonx.M) *model.PowerPending {
-	if m == nil {
-		return nil
-	}
-	at := jsonx.Num(m, "at")
-	if at == nil {
-		return nil
-	}
-	pp := &model.PowerPending{Action: jsonx.S(m, "action"), At: normalise.EpochTime(*at),
-		RequestedBy: jsonx.Str(m, "requested_by")}
-	if d := jsonx.Num(m, "delay_s"); d != nil {
-		pp.DelayS = int(*d)
-	}
-	return pp
-}
+// maxAgentError is how much of an agent's own error text reaches the page, the audit log and a notification.
+const maxAgentError = 300
 
 func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path string, body any) (jsonx.M, error) {
 	status, data, err := p.AgentRequest(ctx, a, "POST", path, body)
@@ -463,7 +451,7 @@ func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path strin
 		return nil, apierr.New(502, "agent unreachable: "+devices.Describe(err))
 	}
 	errMsg := func(def string) string {
-		if e := jsonx.S(data, "error"); e != "" {
+		if e := textsafe.Clip(jsonx.S(data, "error"), maxAgentError); e != "" {
 			return e
 		}
 		return def

@@ -11,7 +11,9 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
-func pending(pc jsonx.M) *model.PowerPending {
+// Pending reads the `pending` block of an agent's power_control report, or of its answer to a power request: a
+// delayed shutdown, reboot or sleep and when it is due. Anything else is no pending action.
+func Pending(pc jsonx.M) *model.PowerPending {
 	p := jsonx.Obj(pc, "pending")
 	if p == nil {
 		return nil
@@ -68,7 +70,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 		ProcessesAvailable: jsonx.Bool(features, "processes", true),
 		FanControl:         cfg.FanControl != nil && jsonx.Truthy(features["fan_control"]),
 		Hardware:           HardwareDisplay(hw), CPUModel: clipP(jsonx.Str(hw, "cpu_model"), maxLong),
-		PowerPending: pending(jsonx.Obj(m, "power_control")),
+		PowerPending: Pending(jsonx.Obj(m, "power_control")),
 		Group:        cfg.Group, Owner: cfg.Owner, Tags: slices.Clone(cfg.Tags), LastSeen: model.P(now),
 		PollMode: "default"}
 	if len(disks) > 0 {
@@ -80,7 +82,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 			if len(s.BMCRelayTargets) == MaxRelayTargets {
 				break
 			}
-			if id := jsonx.S(t, "id"); id != "" && len(id) <= maxShort {
+			if id := jsonx.S(t, "id"); id != "" && len(id) <= maxShort && ClipText(id, maxShort) == id { // an id, not a text
 				s.BMCRelayTargets = append(s.BMCRelayTargets, id)
 			}
 		}

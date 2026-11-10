@@ -20,6 +20,7 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 // FileName is the list of managed hosts in the data folder.
@@ -246,6 +247,10 @@ func (s *Store) load() ([]Host, error) {
 	var d fileData
 	if err := yaml.Unmarshal(b, &d); err != nil {
 		return nil, fmt.Errorf("%s: %w", s.Path(), err)
+	}
+	for i := range d.Hosts { // the two texts a machine supplied (a file of an earlier release kept them as sent)
+		h := &d.Hosts[i]
+		h.AgentVersion, h.Hostname = textsafe.Cut(h.AgentVersion, 64), textsafe.Cut(h.Hostname, 64)
 	}
 	return d.Hosts, nil
 }

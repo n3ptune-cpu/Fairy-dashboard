@@ -23,6 +23,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 type httpBackend struct {
@@ -140,10 +141,19 @@ const (
 // lasts milliseconds.
 var decodeGate = make(chan struct{}, maxParallelDecode)
 
-func decodeJSON(body []byte, v any) error {
+// decodeJSON is where the answer of an agent (and every answer of a Proxmox API that is not its resource list,
+// see decodePVEResources) becomes a value the panel works with. Every text in it is cleaned here, once, for
+// everything that follows (textsafe.CleanJSON: no control characters, escape sequences or direction overrides,
+// line breaks as spaces): the normaliser, the pass-through answers of the fan and helper routes, the error
+// texts that reach the page, the audit log and a notification.
+func decodeJSON(body []byte, v *jsonx.M) error {
 	decodeGate <- struct{}{}
 	defer func() { <-decodeGate }()
-	return json.Unmarshal(body, v)
+	if err := json.Unmarshal(body, v); err != nil {
+		return err
+	}
+	textsafe.CleanJSON(*v)
+	return nil
 }
 
 // readBody reads at most max bytes of an answer; ok is false when the answer is longer.
@@ -261,7 +271,7 @@ type pveRow struct {
 // shorter limit).
 const maxPVEText = 8 << 10
 
-// plain is a raw JSON value as a plain value: a text (cut to maxPVEText), a number, a bool; nil for null, a
+// plain is a raw JSON value as a plain value: a text (cleaned and cut to maxPVEText), a number, a bool; nil for null, a
 // list, an object or anything that does not parse.
 func plain(raw json.RawMessage) any {
 	if len(raw) == 0 {
@@ -555,9 +565,10 @@ func DecodeProcessList(d jsonx.M, sid string) (model.ProcessList, error) {
 	}
 	pl.Sort = normalise.ClipText(pl.Sort, 16)
 	clip := func(p **string, n int) {
-		if *p != nil && len(**p) > n {
-			v := normalise.ClipText(**p, n)
-			*p = &v
+		if *p != nil {
+			if v := normalise.ClipText(**p, n); v != **p {
+				*p = &v
+			}
 		}
 	}
 	for i := range pl.Processes { // defence in depth: agents redact too, but some are not ours to trust
@@ -567,7 +578,7 @@ func DecodeProcessList(d jsonx.M, sid string) (model.ProcessList, error) {
 			if len(in) > maxProcCmdlineIn { // the redaction's patterns are not run over megabytes of text
 				in = strings.ToValidUTF8(in[:maxProcCmdlineIn], "")
 			}
-			v := redact.Cmdline(in, maxProcCmdline)
+			v := redact.Cmdline(textsafe.Clean(in), maxProcCmdline)
 			pr.Cmdline = &v
 		}
 		clip(&pr.Name, maxProcName)

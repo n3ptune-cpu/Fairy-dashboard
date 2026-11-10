@@ -42,6 +42,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 // States of an enrollment.
@@ -884,7 +885,14 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 	h := e.host
 	h.AddedAt = m.Now().UTC()
 	h.Pairing = managed.PairingV2
-	h.AgentVersion, h.Hostname, h.ControlPaired = clip(resp.AgentVersion, 64), clip(resp.Hostname, 64), resp.ControlToken != ""
+	// The answer is verified (it was made with the join code), but its texts are still a machine's word: the
+	// version is kept only when it is a version and the name only when it is a computer name. Anything else is
+	// left empty, never cut or cleaned into something the machine did not say.
+	version := ""
+	if release.ValidVersion(resp.AgentVersion) {
+		version = resp.AgentVersion
+	}
+	h.AgentVersion, h.Hostname, h.ControlPaired = version, shownHostname(resp.Hostname), resp.ControlToken != ""
 	sec := managed.Secret{Token: resp.Token, ControlToken: resp.ControlToken}
 	fail := func(msg string) {
 		cp := m.set(e, Failed, msg, true)
@@ -927,9 +935,9 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 	if wanted := e.Options.Control(); wanted && sec.ControlToken == "" {
 		note += " (the agent sent no control token: power / update / Wake-on-LAN stay off)"
 	}
-	detail := clip(resp.AgentVersion, 64)
+	detail := version
 	if was, ok1 := release.BuildNumber(e.installed); ok1 && e.Repair {
-		if now, ok2 := release.BuildNumber(resp.AgentVersion); ok2 && now < was {
+		if now, ok2 := release.BuildNumber(version); ok2 && now < was {
 			// the command put an older build over the one that ran before: say so, here and in the audit log
 			note += fmt.Sprintf(" (the agent is now %s; before the Re-pair it was %s: an older build was installed, update it on the Updates page)",
 				detail, clip(e.installed, 64))
@@ -1025,12 +1033,9 @@ func pveFromGrant(h managed.Host, g *enroll.ProxmoxGrant) (*managed.PVE, []byte,
 		TokenID: g.TokenID, CA: ca != nil}, ca, nil
 }
 
-func clip(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
-	}
-	return s
-}
+// clip is a text from a machine as the panel repeats it in a message: cleaned (textsafe.Clean) and cut to n
+// bytes on a character boundary.
+func clip(s string, n int) string { return textsafe.Cut(s, n) }
 
 // hostOf is the host part of a host URL, for messages.
 func hostOf(hostURL string) string {
