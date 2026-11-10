@@ -22,6 +22,7 @@ type liveSessions struct {
 type liveSession struct {
 	pending *pendingAction // the control action waiting for a step-up sign-in (see pending.go)
 	stepUp  *stepUpRec     // the last confirmed Pocket ID sign-in (nil: none since the panel started)
+	seen    int64          // Unix seconds of the last real use (0: not known since the panel started)
 	touched int64          // Unix seconds of the last change, for pruning
 }
 
@@ -148,4 +149,28 @@ func (l *liveSessions) confirmedAt(sid, ip string, ua [sha256.Size]byte) (at flo
 		return 0, false
 	}
 	return e.stepUp.at, true
+}
+
+// lastSeen returns when sid was last really used (see reqCtx.active). The first question after a restart is
+// answered from the cookie's own copy (fromCookie), which is then remembered; after that the cookie is not asked.
+func (l *liveSessions) lastSeen(sid string, fromCookie int64, now time.Time) int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e := l.m[sid]; e != nil && e.seen != 0 {
+		return e.seen
+	}
+	if sid != "" {
+		l.entry(sid, now).seen = fromCookie
+	}
+	return fromCookie
+}
+
+// touch records real use of sid now.
+func (l *liveSessions) touch(sid string, now time.Time) {
+	if sid == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entry(sid, now).seen = now.Unix()
 }

@@ -1,9 +1,16 @@
 package web
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 )
 
 // testClock moves the server's session clock (Server.now) without waiting: now = real time + skew.
@@ -19,8 +26,9 @@ func (e *env) fakeClock() *testClock {
 	return c
 }
 
-// A session that is not used for session_idle_timeout is refused; one that is older than session_max_age is
-// refused however much it was used.
+// A session that is not used for session_idle_timeout is refused (an unmarked read is not use: see
+// TestBackgroundTrafficDoesNotExtendTheSession); one that is older than session_max_age is refused however much
+// it was used.
 func TestSessionIdleAndMaxAgeExpiry(t *testing.T) {
 	e := setup(t)
 	clk := e.fakeClock()
@@ -52,5 +60,159 @@ func TestSessionIdleAndMaxAgeExpiry(t *testing.T) {
 	clk.advance(2 * time.Minute)
 	if c := me(ck); c != 401 {
 		t.Fatal("older than session_max_age must be refused", c)
+	}
+}
+
+// openStream opens /api/stream with the given headers and returns its status and a channel that is closed when
+// the server ends the stream.
+func (e *env) openStream(hdr ...string) (int, <-chan struct{}) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	e.t.Cleanup(cancel)
+	req, _ := http.NewRequestWithContext(ctx, "GET", e.srv.URL+"/api/stream", nil)
+	for i := 0; i+1 < len(hdr); i += 2 {
+		req.Header.Set(hdr[i], hdr[i+1])
+	}
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer r.Body.Close()
+		_, _ = io.Copy(io.Discard, r.Body)
+	}()
+	return r.StatusCode, done
+}
+
+func ended(done <-chan struct{}, within time.Duration) bool {
+	select {
+	case <-done:
+		return true
+	case <-time.After(within):
+		return false
+	}
+}
+
+// S-a: the idle timeout measures real use. The page's background traffic (the once-a-minute updates poll, other
+// unmarked reads, an open live stream) does not keep a session alive, however often it comes.
+func TestBackgroundTrafficDoesNotExtendTheSession(t *testing.T) {
+	e := setup(t)
+	clk := e.fakeClock()
+	idle := time.Duration(e.s.Cfg.SessionIdleTimeout) * time.Second
+	ck := e.cookie(controller(), 0)
+	code, done := e.openStream("Cookie", ck)
+	if code != 200 {
+		t.Fatal("stream", code)
+	}
+	for i := 0; i < 5; i++ { // an unattended tab: polls for 10/12 of the timeout
+		clk.advance(idle / 6)
+		for _, p := range []string{"/api/admin/updates", "/api/me", "/api/systems"} {
+			r := e.do("GET", p, nil, "Cookie", ck)
+			if r.code != 200 {
+				t.Fatalf("poll %d %s: %d", i, p, r.code)
+			}
+			if len(r.hdr.Values("Set-Cookie")) != 0 {
+				t.Fatalf("a background read must not refresh the cookie (%s)", p)
+			}
+		}
+	}
+	if ended(done, 1500*time.Millisecond) {
+		t.Fatal("the stream ended before the idle timeout")
+	}
+	clk.advance(idle/6 + time.Minute) // nobody touched the page for the whole timeout
+	if !ended(done, 5*time.Second) {
+		t.Fatal("the live stream must end when the session idles out")
+	}
+	if n := len(must(e.s.Poller.Admin.ListSessions())); n != 0 {
+		t.Fatal("the idle session must leave sessions.json, have", n)
+	}
+	r := e.do("GET", "/api/admin/updates", nil, "Cookie", ck)
+	if r.code != 401 || !strings.Contains(strings.Join(r.hdr.Values("Set-Cookie"), ";"), "Max-Age=0") {
+		t.Fatal("after the idle timeout the poll is refused and the cookie cleared", r.code, r.hdr.Values("Set-Cookie"))
+	}
+	if code, _ := e.openStream("Cookie", ck); code != 401 {
+		t.Fatal("the stream's reconnect must be answered 401", code)
+	}
+}
+
+// S-a: real use keeps the session: a request the UI marks as caused by input, the explicit activity signal,
+// and any write. API tokens have no idle timeout.
+func TestActivityExtendsTheSession(t *testing.T) {
+	for name, use := range map[string]func(e *env, ck string) resp{
+		"marked read": func(e *env, ck string) resp { return e.do("GET", "/api/me", nil, "Cookie", ck, "X-Fairy-Active", "1") },
+		"activity signal": func(e *env, ck string) resp {
+			return e.do("POST", "/api/me/active", nil, "Cookie", ck, "X-Requested-With", "fairy")
+		},
+		"write": func(e *env, ck string) resp { return e.poll(ck) },
+	} {
+		e := setup(t)
+		clk := e.fakeClock()
+		idle := time.Duration(e.s.Cfg.SessionIdleTimeout) * time.Second
+		ck := e.cookie(controller(), 0)
+		for i := 0; i < 4; i++ { // twice the timeout in all, used every half timeout
+			clk.advance(idle / 2)
+			r := use(e, ck)
+			if r.code != 200 && r.code != 204 && !stepUpRequired(r) {
+				t.Fatalf("%s, round %d: %d %s", name, i, r.code, r.raw)
+			}
+			if i == 0 && !strings.Contains(strings.Join(r.hdr.Values("Set-Cookie"), ";"), "=") {
+				t.Fatalf("%s: the cookie's copy of last-used must be refreshed", name)
+			}
+		}
+		clk.advance(idle - time.Minute)
+		if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 200 {
+			t.Fatalf("%s: session lost although it was used: %d", name, r.code)
+		}
+		clk.advance(2 * time.Minute)
+		if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 401 {
+			t.Fatalf("%s: the timeout counts from the last real use: %d", name, r.code)
+		}
+	}
+
+	e := setup(t)
+	clk := e.fakeClock()
+	ck := e.cookie(viewer, 0)
+	if r := e.do("POST", "/api/me/active", nil, "Cookie", ck); r.code != 403 {
+		t.Fatal("the activity signal needs the CSRF header", r.code)
+	}
+	if r := e.do("POST", "/api/me/active", nil); r.code != 401 {
+		t.Fatal("the activity signal needs a sign-in", r.code)
+	}
+	raw, _, _ := e.s.Tokens.Create("ha", "system", "read", "cli:test", 0)
+	clk.advance(3 * time.Duration(e.s.Cfg.SessionIdleTimeout) * time.Second)
+	if r := e.do("GET", "/api/systems", nil, "Authorization", "Bearer "+raw); r.code != 200 {
+		t.Fatal("API tokens are not affected by the idle timeout", r.code)
+	}
+}
+
+// S-a: "last used" lives on the server. After a restart it is seeded from the cookie's own copy, so a session
+// that was idle before the restart is still idle after it.
+func TestIdleTimeoutSurvivesRestart(t *testing.T) {
+	e := setup(t)
+	clk := e.fakeClock()
+	idle := time.Duration(e.s.Cfg.SessionIdleTimeout) * time.Second
+	restart := func() *env {
+		s2 := New(e.s.Cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, e.s.Poller, nil, "test")
+		s2.codec.now = clk.now
+		srv := httptest.NewServer(s2.Handler())
+		t.Cleanup(srv.Close)
+		return &env{t: t, s: s2, srv: srv, b: e.b}
+	}
+	used, unused := e.cookie(viewer, 0), e.cookie(controller(), 0)
+	clk.advance(idle - time.Hour)
+	r := e.do("GET", "/api/me", nil, "Cookie", used, "X-Fairy-Active", "1")
+	if r.code != 200 {
+		t.Fatal(r.code)
+	}
+	used = sessionCookie(e, r.hdr) // the browser keeps the refreshed cookie
+	clk.advance(2 * time.Hour)
+	e2 := restart()
+	if r := e2.do("GET", "/api/me", nil, "Cookie", used); r.code != 200 {
+		t.Fatal("used an hour before the restart: still signed in", r.code)
+	}
+	if r := e2.do("GET", "/api/me", nil, "Cookie", unused); r.code != 401 {
+		t.Fatal("idle since before the restart: signed out", r.code)
 	}
 }

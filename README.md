@@ -284,6 +284,9 @@ The file is read once at start (path from the config only) and served at `/brand
   its own sign-in, which confirms exactly that one action.
 * Sessions: HMAC-signed `fairy_session` cookie (HttpOnly, Secure, SameSite=Lax) that is valid only while its id is
   in `sessions.json`, within the idle timeout and absolute lifetime; revocable with `fairy admin sessions`.
+  The idle timeout counts real use only: writes, and requests the page marks `X-Fairy-Active: 1` because there
+  was pointer / key / touch input in the last minute (`POST /api/me/active` is its explicit signal). The live
+  stream and the page's timers never count, so a tab nobody touches signs out, and its stream ends.
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never
   accepted on `/auth/*`, the settings endpoints or the Users page. `control` acts as an admin; `read` sees every
   site, or only `--sites A,B`. A token owned by a panel user is capped to that user's current role and sites; a token whose owner is not

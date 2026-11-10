@@ -24,6 +24,10 @@ const keepaliveEvery = 15 * time.Second
 //
 // Everything sent is filtered to what the user may see (see view); access is re-checked every tick and the
 // stream ends when it changes (the browser reconnects and gets a fresh, re-filtered `systems` list).
+//
+// The stream is background traffic: it never counts as use of the session (see reqCtx.active). It asks every
+// tick whether the session is still valid and ends when it was revoked, reached session_max_age or idled out;
+// the reconnect is answered 401, which the UI turns into the sign-in view.
 func (s *Server) stream(c *reqCtx) error {
 	v, err := c.view()
 	if err != nil {
@@ -61,8 +65,13 @@ func (s *Server) stream(c *reqCtx) error {
 	defer tick.Stop()
 	isSession := c.user != nil && c.user.Auth == "session"
 	for {
-		if isSession && c.sessionUser() == nil { // revoked / expired while streaming
-			return nil
+		if isSession { // revoked / expired / idle while streaming (asking changes nothing: no use is recorded)
+			if why := s.sessionCheck(c.session()); why != "" {
+				if why == sessIdle || why == sessRemoved {
+					s.endSession(c.session().SID)
+				}
+				return nil
+			}
 		}
 		if c.token != nil && !s.Tokens.ActiveID(c.token.ID) { // API token revoked / expired while streaming
 			return nil

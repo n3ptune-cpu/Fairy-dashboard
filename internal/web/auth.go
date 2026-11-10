@@ -17,44 +17,102 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
-// sessionUser: browser session (cookie) only. Valid while listed in sessions.json (not revoked by the CLI),
-// younger than session_max_age, and used within session_idle_timeout (activity recorded at most once a minute).
+// Why a cookie's session is not valid (sessionCheck); "" while it is.
+const (
+	sessNone    = "none"    // no session in the cookie
+	sessMaxAge  = "max_age" // older than session_max_age
+	sessRevoked = "revoked" // not (or no longer) in sessions.json
+	sessIdle    = "idle"    // not really used for session_idle_timeout
+	sessRemoved = "no_user" // the user is not in users.json (removed, or a cookie from before users.json)
+	activeHdr   = "X-Fairy-Active"
+	activePath  = "/api/me/active"
+	seenPersist = 60 // seconds: the cookie's copy of "last used" is refreshed at most this often
+)
+
+// sessionCheck reports why sd is not a valid session right now ("" = valid). It changes nothing, so the live
+// stream can ask it every second.
+//
+// A session is valid while it is listed in sessions.json (not revoked by the CLI), younger than
+// session_max_age, and really used within session_idle_timeout. "Used" is kept on the server per session id
+// (the cookie's copy only seeds it after a restart) and moves only on real use, see active.
+func (s *Server) sessionCheck(sd *sessionData) string {
+	now := s.now()
+	if sd.User == nil || sd.IAT == 0 {
+		return sessNone
+	}
+	if now.Unix()-sd.IAT > int64(s.Cfg.SessionMaxAge) {
+		return sessMaxAge
+	}
+	if !s.Poller.Admin.SessionValid(sd.SID, float64(sd.IAT)) {
+		return sessRevoked
+	}
+	seen := sd.Seen
+	if seen == 0 {
+		seen = sd.IAT
+	}
+	if now.Unix()-s.codec.live.lastSeen(sd.SID, seen, now) > int64(s.Cfg.SessionIdleTimeout) {
+		return sessIdle
+	}
+	if s.Access.Err() == nil {
+		if _, known := s.Access.Load().Users[sd.User.Sub]; !known {
+			// Removed from users.json, or a cookie from before users.json existed: sign in again. Roles are only
+			// ever bootstrapped at a fresh sign-in, never from the groups cached in a (possibly days old) cookie.
+			return sessRemoved
+		}
+	}
+	return ""
+}
+
+// endSession removes a session that sessionCheck found expired or orphaned from sessions.json, with everything
+// the panel remembers under its id.
+func (s *Server) endSession(sid string) {
+	_ = s.Poller.Admin.RemoveSession(sid)
+	s.codec.live.forget(sid)
+}
+
+// active reports whether this request shows a person using the panel, which is what keeps a session from idling
+// out. Only these do: a write (the UI makes none on a timer), and a request the UI marks with X-Fairy-Active: 1
+// because there was pointer, key, touch or wheel input in the last minute (POST /api/me/active is the UI's
+// explicit signal for a user who only reads the live page). The page's background traffic (the live stream and
+// its reconnects, the once-a-minute updates poll, every other timer) is unmarked and never counts.
+//
+// This tells an attended browser from an unattended one. It is not a defence against someone who holds the
+// cookie: they can send the header.
+func (c *reqCtx) active() bool {
+	if c.resumed() {
+		return false // the panel's own replay; the sign-in that started it already counted
+	}
+	return (c.r.Method != http.MethodGet && c.r.Method != http.MethodHead) || c.r.Header.Get(activeHdr) == "1"
+}
+
+// sessionUser: browser session (cookie) only; see sessionCheck for what makes it valid. An expired or orphaned
+// session is removed from sessions.json and its cookie cleared. Real use (active) moves "last used" on the
+// server at once and in the cookie at most once a minute.
 func (c *reqCtx) sessionUser() *model.User {
 	if c.s.DemoUser != nil {
 		u := *c.s.DemoUser
 		return &u
 	}
 	s := c.session()
-	now := c.s.now().Unix()
-	if s.User == nil || s.IAT == 0 || now-s.IAT > int64(c.s.Cfg.SessionMaxAge) {
+	switch c.s.sessionCheck(s) {
+	case "":
+	case sessNone, sessMaxAge:
 		return nil
-	}
-	admin := c.s.Poller.Admin
-	if !admin.SessionValid(s.SID, float64(s.IAT)) {
+	case sessRevoked:
+		c.clearSession()
+		return nil
+	default: // idle, or the user is gone
+		c.s.endSession(s.SID)
 		c.clearSession()
 		return nil
 	}
-	seen := s.Seen
-	if seen == 0 {
-		seen = s.IAT
-	}
-	if now-seen > int64(c.s.Cfg.SessionIdleTimeout) {
-		_ = admin.RemoveSession(s.SID)
-		c.clearSession()
-		return nil
-	}
-	if c.s.Access.Err() == nil {
-		if _, known := c.s.Access.Load().Users[s.User.Sub]; !known {
-			// Removed from users.json, or a cookie from before users.json existed: sign in again. Roles are only
-			// ever bootstrapped at a fresh sign-in, never from the groups cached in a (possibly days old) cookie.
-			_ = admin.RemoveSession(s.SID)
-			c.clearSession()
-			return nil
+	if c.active() {
+		now := c.s.now()
+		c.s.codec.live.touch(s.SID, now)
+		if now.Unix()-s.Seen > seenPersist {
+			s.Seen = now.Unix()
+			c.dirty = true
 		}
-	}
-	if now-seen > 60 {
-		s.Seen = now
-		c.dirty = true
 	}
 	u := *s.User
 	u.Auth = "session"
@@ -154,6 +212,22 @@ func (s *Server) authRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /auth/login", s.h(s.authLogin))
 	m.HandleFunc("GET /auth/callback", s.h(s.authCallback))
 	m.HandleFunc("POST /auth/logout", s.h(s.authLogout))
+	m.HandleFunc("POST "+activePath, s.h(s.meActive))
+}
+
+// meActive is the UI's "someone is using this page" signal (see active): a write with the CSRF header, sent at
+// most once a minute while there is input. Being a write is what makes it count; it does nothing else.
+func (s *Server) meActive(c *reqCtx) error {
+	u, err := c.requireUser()
+	if err != nil {
+		return err
+	}
+	if err := c.checkCSRF(u); err != nil {
+		return err
+	}
+	c.flush()
+	c.w.WriteHeader(204)
+	return nil
 }
 
 func (s *Server) authLogin(c *reqCtx) error {
@@ -304,6 +378,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 			return err
 		}
 		s.codec.live.confirm(sid, authTime, c.ip(), uaHash(c.r), s.now())
+		s.codec.live.touch(sid, s.now()) // confirming at Pocket ID is real use
 		sess.Seen = int64(now)
 		sess.StepUp, sess.Next, sess.State, sess.Nonce, sess.Verifier, sess.Started, sess.PendingID = false, "", "", "", "", 0, ""
 		c.dirty = true
@@ -407,6 +482,7 @@ func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authT
 	c.sess = &sessionData{SID: sid, User: &u, IAT: int64(now), Seen: int64(now)}
 	c.dirty = true
 	s.codec.live.confirm(sid, authTime, c.ip(), uaHash(c.r), s.now())
+	s.codec.live.touch(sid, s.now())
 	slog.Info("login ok", "sub", u.Sub)
 	c.auditAnon("auth.login", "ok", actorOf(&u), &u.Sub, nil)
 	return nil

@@ -5,7 +5,9 @@ listen: 127.0.0.1:8080                    # nginx in another container: this LXC
 request_timeout: 4                        # seconds per request (each source also gets a timeout below its interval)
 offline_after: 60                         # failing for longer than this => "offline" (before that: "stale")
 session_max_age: 604800                   # 7 d absolute; group membership is re-checked at each login
-session_idle_timeout: 43200               # 12 h without activity => sign in again
+session_idle_timeout: 43200               # 12 h without anyone using the page => sign in again. Only real use
+                                          # counts (mouse, keys, touch, any change); an open tab's own refreshing
+                                          # (live stream, update check) does not keep the session alive.
 step_up_window_s: 180                     # control actions need a Pocket ID sign-in from the last 3 min (default)
 step_up_prompt_login: true                # also send prompt=login on step-up (max_age=0 is always sent).
                                           # Pocket ID must put auth_time in the ID token, or step-up fails.

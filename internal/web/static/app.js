@@ -82,12 +82,31 @@ const fmtIv = (v) => (v == null ? "–" : `${+v.toFixed(1)}s`);
 const secsSince = (iso) => (iso ? Math.max(0, (Date.now() - new Date(iso)) / 1000) : null);
 
 // ------------------------------------------------------------ helpers
+// ---- activity: the idle sign-out (session_idle_timeout) counts a person using this page, not the page's own
+// traffic. The server only counts writes and requests marked X-Fairy-Active: 1. api() marks a request when
+// there was pointer, key, touch or wheel input in the last minute (loading the page counts as input); the live
+// stream and every timer-driven fetch of an untouched page stay unmarked. Someone who only reads the live page
+// sends nothing by themselves, so input also posts /api/me/active, at most once a minute.
+const ACTIVE_MS = 60000;
+let lastInput = Date.now(), lastActiveSent = 0;
+const userActive = () => Date.now() - lastInput < ACTIVE_MS;
+function noteInput() {
+  lastInput = Date.now();
+  if (!state.me || state.me.demo || signedOut || lastInput - lastActiveSent < ACTIVE_MS) return;
+  lastActiveSent = lastInput;
+  api("/api/me/active", { method: "POST" }).catch(() => { /* the next input tries again */ });
+}
+for (const ev of ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"]) window.addEventListener(ev, noteInput, { capture: true, passive: true });
+let signedOut = false;  // the session ended (see sessionEnded): nothing is sent any more
+
 let ctlLabel = null;  // set by controlCall while it starts its request: sent as X-Fairy-Action (the step-up dialog's label)
 async function api(path, opts = {}) {
   const write = opts.method && opts.method !== "GET";
   if (write && !opts.label && ctlLabel) opts = { ...opts, label: ctlLabel };
+  const active = userActive();
+  if (active) lastActiveSent = Date.now();  // this request tells the server: no extra signal needed for a minute
   const res = await fetch(path, { credentials: "same-origin", ...opts,
-    headers: { Accept: "application/json", ...(write ? { "X-Requested-With": "fairy" } : {}),
+    headers: { Accept: "application/json", ...(write ? { "X-Requested-With": "fairy" } : {}), ...(active ? { "X-Fairy-Active": "1" } : {}),
       ...(opts.body && typeof opts.body === "string" ? { "Content-Type": "application/json" } : {}),
       ...(opts.label ? { "X-Fairy-Action": String(opts.label).replace(/[\r\n]/g, " ").slice(0, 120) } : {}), ...(opts.headers || {}) } });
   const data = res.status === 204 ? null : await res.json().catch(() => ({}));
