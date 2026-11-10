@@ -9,7 +9,6 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
-	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/enrollment"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -32,11 +31,9 @@ func (s *Server) enrollRoutes() {
 // enrollHooks connects the enrollment manager to the poller, the managed store, the audit log and notifications.
 func (s *Server) enrollHooks() enrollment.Hooks {
 	return enrollment.Hooks{
-		Config: func() *config.Panel {
-			c := *s.Cfg
-			c.Agents, c.Systems, c.Proxmox = s.Poller.Agents(), s.Poller.SystemsConfig(), s.Poller.Clusters()
-			return &c
-		},
+		// One consistent copy, read under the poller's locks: the poller replaces the agents, systems and
+		// proxmox lists of the shared configuration whenever a host is added, re-paired or removed.
+		Config: s.Poller.ConfigSnapshot,
 		Add: func(e managed.Entry) error {
 			if e.Host.Site != "" {
 				_ = s.Access.EnsureSites([]string{e.Host.Site})

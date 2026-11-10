@@ -368,6 +368,19 @@ func (p *Poller) SystemsConfig() []config.SystemOverride {
 	return p.Cfg.Systems
 }
 
+// ConfigSnapshot is a copy of the configuration as it is now: config.yaml plus the hosts and Proxmox nodes
+// added in the panel, read under the locks that guard the three lists Add host / Re-pair / Remove replace
+// (agents, systems, proxmox). The lists themselves are shared (they are replaced, never changed in place): do
+// not modify them.
+func (p *Poller) ConfigSnapshot() *config.Panel {
+	p.cfgMu.RLock()
+	defer p.cfgMu.RUnlock()
+	p.clustersMu.RLock()
+	defer p.clustersMu.RUnlock()
+	c := *p.Cfg
+	return &c
+}
+
 // TokenSetter is a Backend that learns tokens of agents added at run time (the real HTTP backend).
 type TokenSetter interface {
 	SetAgentTokens(a config.Agent) error
