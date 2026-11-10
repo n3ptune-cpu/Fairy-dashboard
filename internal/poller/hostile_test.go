@@ -417,3 +417,39 @@ func TestAgentRedirectIsAnError(t *testing.T) {
 		t.Fatalf("%+v, %d requests followed the redirect", lap, elsewhere.Load())
 	}
 }
+
+// N9: the number itself. TestAgentAnswersAreSizeLimited pads to the constant, so it would pass with any
+// value of it; this one writes the sizes out. An agent's answer may be 1,048,576 bytes (1 MiB) and not one
+// more, for the report, the process list and the answer to a control request.
+func TestAgentReadLimitIsOneMiB(t *testing.T) {
+	if maxAgentBody != 1048576 {
+		t.Fatalf("maxAgentBody is %d bytes; the documented limit of an agent's answer is 1 MiB (1048576)", maxAgentBody)
+	}
+	var body atomic.Value
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body.Load().([]byte))
+	}))
+	defer agent.Close()
+	cfg := testutil.Config(t, []string{deadURL(t)}, agent.URL, deadURL(t))
+	p, err := New(cfg, config.Secrets{SessionSecret: "x"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		size int
+		ok   bool
+	}{{1048576, true}, {1048577, false}, {2 << 20, false}, {32 << 20, false}, {4096, true}} {
+		body.Store(padded(t, testutil.AgentMetrics(), tc.size))
+		p.PollOnce(ctx)
+		lap := snap(p)["laptop"]
+		_, _, reqErr := p.AgentRequest(ctx, cfg.Agents[0], "GET", "/fan/status", nil)
+		_, procErr := p.FetchProcesses(ctx, cfg.Agents[0], "laptop", 25, "cpu")
+		if tc.ok && (lap.Status != "online" || reqErr != nil || procErr != nil) {
+			t.Errorf("%d bytes: %s (%v), request %v, processes %v", tc.size, lap.Status, lap.Error, reqErr, procErr)
+		}
+		if !tc.ok && (lap.Status == "online" || lap.Error == nil || *lap.Error != "invalid response" || reqErr == nil || procErr == nil) {
+			t.Errorf("%d bytes were accepted: %s, request %v, processes %v", tc.size, lap.Status, reqErr, procErr)
+		}
+	}
+}
