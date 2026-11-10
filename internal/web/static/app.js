@@ -1801,9 +1801,12 @@ function pushUpsHistory(ov) {
 // reconnected by the browser itself; if that reconnect is answered 401 it ends up here.
 let streamRetry = null, streamBackoff = 0;
 async function streamLost() {
-  try { await api("/api/me"); } catch { /* 401: sessionEnded() ran; otherwise retry below */ }
+  let reachable = false;
+  try { await api("/api/me"); reachable = true; } catch { /* 401: sessionEnded() ran; otherwise retry below */ }
   if (signedOut) return;
   streamBackoff = Math.min(30000, streamBackoff ? streamBackoff * 2 : 3000);
+  // signed in, but the stream is still refused: most likely the limit of 8 live connections per user (L8)
+  if (reachable && streamBackoff >= 12000) flash("Live updates are not connecting. Too many Fairy tabs open? (at most 8 per user) Retrying…", true);
   clearTimeout(streamRetry);
   streamRetry = setTimeout(() => connect(state.watch), streamBackoff);
 }

@@ -280,3 +280,81 @@ func TestMaxAgeEndsTheSessionCleanly(t *testing.T) {
 		t.Fatal("the session must leave sessions.json, have", n)
 	}
 }
+
+// L8: live-update streams are limited per user (or API token) and for the whole panel. One more is answered 429
+// with Retry-After, and a closed stream frees its slot.
+func TestStreamLimits(t *testing.T) {
+	e := setup(t)
+	admin := controller()
+	ck := e.cookie(admin, 0)
+	var cancels []context.CancelFunc
+	for i := 0; i < maxStreamsPerUser; i++ {
+		code, _, cancel := e.holdStream("Cookie", ck)
+		if code != 200 {
+			t.Fatalf("stream %d: %d", i+1, code)
+		}
+		cancels = append(cancels, cancel)
+	}
+	code, hdr, _ := e.holdStream("Cookie", ck)
+	if code != 429 || hdr.Get("Retry-After") == "" || !strings.HasPrefix(hdr.Get("Content-Type"), "application/json") {
+		t.Fatal("the ninth stream of one user must be refused with 429 and Retry-After:", code, hdr.Get("Retry-After"))
+	}
+	if code, _, _ := e.holdStream("Cookie", e.staleCookie(admin, 0)); code != 429 {
+		t.Fatal("the limit is per user, not per session: another session of the same user", code)
+	}
+	// an API token has its own slots
+	raw, _, _ := e.s.Tokens.Create("ha", "system", "read", "cli:test", 0)
+	for i := 0; i < maxStreamsPerUser; i++ {
+		if code, _, _ := e.holdStream("Authorization", "Bearer "+raw); code != 200 {
+			t.Fatalf("token stream %d: %d", i+1, code)
+		}
+	}
+	if code, _, _ := e.holdStream("Authorization", "Bearer "+raw); code != 429 {
+		t.Fatal("the ninth stream of one token", code)
+	}
+	// ordinary requests are not affected
+	if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 200 {
+		t.Fatal(r.code)
+	}
+	// closing one frees its slot
+	cancels[0]()
+	freed := false
+	for i := 0; i < 50 && !freed; i++ {
+		time.Sleep(100 * time.Millisecond)
+		code, _, cancel := e.holdStream("Cookie", ck)
+		freed = code == 200
+		if !freed {
+			cancel()
+		}
+	}
+	if !freed {
+		t.Fatal("a closed stream did not free its slot")
+	}
+
+	// the cap for the whole panel
+	e = setup(t)
+	e.s.codec.live.streams.total = 3
+	for i, name := range []string{"a", "b", "c", "d"} {
+		raw, _, _ := e.s.Tokens.Create(name, "system", "read", "cli:test", 0)
+		code, hdr, _ := e.holdStream("Authorization", "Bearer "+raw)
+		if want := map[bool]int{true: 200, false: 429}[i < 3]; code != want || (want == 429 && hdr.Get("Retry-After") == "") {
+			t.Fatalf("stream %d of the whole panel: %d, want %d", i+1, code, want)
+		}
+	}
+}
+
+// holdStream opens a stream and keeps it open until cancel is called or the test ends.
+func (e *env) holdStream(hdr ...string) (int, http.Header, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	e.t.Cleanup(cancel)
+	req, _ := http.NewRequestWithContext(ctx, "GET", e.srv.URL+"/api/stream", nil)
+	for i := 0; i+1 < len(hdr); i += 2 {
+		req.Header.Set(hdr[i], hdr[i+1])
+	}
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	go func() { defer r.Body.Close(); _, _ = io.Copy(io.Discard, r.Body) }()
+	return r.StatusCode, r.Header, cancel
+}

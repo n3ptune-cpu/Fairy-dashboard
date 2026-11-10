@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
@@ -13,6 +15,45 @@ import (
 )
 
 var watchRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// A live-update stream holds a connection, a ticker and a copy of what it sent for as long as it is open, so
+// their number is bounded: per user (all their browser tabs together) or per API token, and for the whole panel.
+// The next one is answered 429 with Retry-After until one closes.
+const (
+	maxStreamsPerUser = 8
+	maxStreamsTotal   = 200
+	streamRetryAfterS = "10"
+)
+
+// streamSlots counts the open streams.
+type streamSlots struct {
+	mu             sync.Mutex
+	perUser, total int            // the limits
+	open           map[string]int // user subject or "token:<id>" -> open streams
+	all            int
+}
+
+// acquire takes a slot for key; ok is false when key or the panel is at its limit. release gives it back (once).
+func (s *streamSlots) acquire(key string) (release func(), ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.all >= s.total || s.open[key] >= s.perUser {
+		return nil, false
+	}
+	s.all++
+	s.open[key]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			s.all--
+			if s.open[key]--; s.open[key] <= 0 {
+				delete(s.open, key)
+			}
+		})
+	}, true
+}
 
 // keepaliveEvery is how often a `: keepalive` comment is sent, even while data flows (proxy idle timers).
 const keepaliveEvery = 15 * time.Second
@@ -42,6 +83,13 @@ func (s *Server) stream(c *reqCtx) error {
 	if watch != "" && s.Poller.HasSystem(watch) && v.Has(watch) {
 		boost = watch
 	}
+	release, ok := s.codec.live.streams.acquire(c.user.Sub) // the user, or "token:<id>"
+	if !ok {
+		c.w.Header().Set("Retry-After", streamRetryAfterS)
+		return apierr.New(429, "too many live-update connections (at most "+strconv.Itoa(maxStreamsPerUser)+
+			" per user or API token): close another Fairy tab")
+	}
+	defer release()
 	c.flush()
 	h := c.w.Header()
 	h.Set("Content-Type", "text/event-stream")

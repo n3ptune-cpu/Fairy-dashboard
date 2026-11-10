@@ -16,6 +16,8 @@ import (
 type liveSessions struct {
 	mu sync.Mutex
 	m  map[string]*liveSession
+
+	streams streamSlots // how many live-update streams are open (stream.go)
 }
 
 // liveSession is one session's in-memory state.
@@ -30,7 +32,10 @@ type liveSession struct {
 // filled from outside; the bound is a backstop.
 const maxLiveSessions = 4096
 
-func newLiveSessions() *liveSessions { return &liveSessions{m: map[string]*liveSession{}} }
+func newLiveSessions() *liveSessions {
+	return &liveSessions{m: map[string]*liveSession{},
+		streams: streamSlots{perUser: maxStreamsPerUser, total: maxStreamsTotal, open: map[string]int{}}}
+}
 
 // demoKey is the key of demo mode's single, cookie-less "session".
 const demoKey = "demo"
