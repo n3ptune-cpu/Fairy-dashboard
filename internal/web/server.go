@@ -44,7 +44,7 @@ const (
 	CSRFValue  = "fairy"
 )
 
-// CSP is the Content-Security-Policy of every page except /docs. img-src allows https: so a user-chosen background
+// CSP is the Content-Security-Policy of every answer except the /docs page itself (docsCSP). img-src allows https: so a user-chosen background
 // URL can load (the backend never fetches it: no SSRF).
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; " +
 	"form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
@@ -205,9 +205,7 @@ func (s *Server) Handler() http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Permissions-Policy", permissionsPolicy)
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
-		if !strings.HasPrefix(r.URL.Path, "/docs") { // Swagger UI loads its assets from a CDN
-			h.Set("Content-Security-Policy", CSP)
-		}
+		h.Set("Content-Security-Policy", CSP) // every answer; the /docs page replaces it with its own (docsCSP)
 		if strings.HasPrefix(r.URL.Path, "/api") || strings.HasPrefix(r.URL.Path, "/auth") {
 			h.Set("Cache-Control", "no-store")
 		}

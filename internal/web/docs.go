@@ -159,8 +159,8 @@ func (s *Server) docsRoutes(m *http.ServeMux) {
 		return nil
 	}))
 	m.HandleFunc("GET /docs", s.h(func(c *reqCtx) error {
-		// The middleware sets no policy for /docs (the page needs its own), so every answer here sets one.
-		c.w.Header().Set("Content-Security-Policy", CSP)
+		// Redirects and refusals keep the panel's policy (set for every answer); only the page itself, below,
+		// replaces it with docsCSP.
 		if c.r.Header.Get("Authorization") == "" && c.sessionUser() == nil {
 			c.redirect("/auth/login?next=/docs")
 			return nil

@@ -136,10 +136,15 @@ func TestDocsPageIsPinnedAndHasItsOwnPolicy(t *testing.T) {
 		t.Fatal(r.hdr)
 	}
 
-	// every other page keeps the panel's own policy: nothing from other hosts
-	for _, p := range []string{"/", "/api/openapi.json", "/api/me"} {
-		if got := e.do("GET", p, nil, "Cookie", admin).hdr.Get("Content-Security-Policy"); got != CSP {
+	// every other page keeps the panel's own policy: nothing from other hosts. That includes every other path
+	// that starts with /docs (the middleware used to leave all of them without any policy).
+	for _, p := range []string{"/", "/api/openapi.json", "/api/me", "/docs/", "/docs/x", "/docsx", "/docs.html"} {
+		r := e.do("GET", p, nil, "Cookie", admin)
+		if got := r.hdr.Values("Content-Security-Policy"); len(got) != 1 || got[0] != CSP {
 			t.Errorf("%s: policy %q", p, got)
+		}
+		if strings.HasPrefix(p, "/docs") && (r.code != 404 || strings.Contains(string(r.raw), "jsdelivr")) {
+			t.Errorf("%s: %d %s", p, r.code, r.raw)
 		}
 	}
 	if strings.Contains(CSP, "jsdelivr") {
@@ -201,8 +206,9 @@ func TestDocsAreOffByDefault(t *testing.T) {
 	e := &env{t: t, s: s, srv: srv}
 	c := e.cookie(controller(), 0)
 	for _, path := range []string{"/docs", "/api/openapi.json"} {
-		if r := e.do("GET", path, nil, "Cookie", c); r.code != 404 || strings.Contains(string(r.raw), "jsdelivr") {
-			t.Fatal(path, r.code, string(r.raw))
+		if r := e.do("GET", path, nil, "Cookie", c); r.code != 404 || strings.Contains(string(r.raw), "jsdelivr") ||
+			r.hdr.Get("Content-Security-Policy") != CSP {
+			t.Fatal(path, r.code, string(r.raw), r.hdr.Get("Content-Security-Policy"))
 		}
 	}
 	def, err := config.Parse([]byte("public_url: https://p.example\noidc: {issuer: https://id.example, client_id: c}\n"))

@@ -18,7 +18,7 @@ step_up_per_action: false                 # true: EVERY control action needs its
                                           # was asked for; nothing is inherited, step_up_window_s is not used.
                                           # false (default): one sign-in covers control actions for step_up_window_s,
                                           # but only from the browser and address that confirmed it.
-enable_docs: false                        # /docs + /api/openapi.json (login required)
+enable_docs: false                        # /docs + /api/openapi.json (sign-in and a role required)
 data_dir: /var/lib/fairy                  # state.json, sessions.json, tokens.json, users.json, settings, uploads, health.json
 audit_log: /var/lib/fairy/audit.log       # append-only JSON lines (each line at most 8 KiB)
 audit_max_mb: 100                         # rotate audit.log -> audit.log.1 ... at this size; -1 = never (use logrotate)
