@@ -4,6 +4,11 @@ This file explains, in plain words, what the security review of Fairy found, wha
 was changed, and what **you** need to do on the server, in Pocket ID and in nginx. Each fix is its own commit
 with a test that proves it.
 
+A later review led to a second set of fixes (sign-in and sessions, pairing with agents, limits on what one
+agent can send). What that release changes for you, and the order to install it in, is in `README.md`,
+"Upgrading to this release". Three points of the list "Not changed" below were changed by it; they are marked
+there.
+
 **Short version of your to-do list** (details further down):
 
 1. In `/etc/fairy/config.yaml`: set `listen:` to the panel LXC's LAN address, set `trusted_proxies` to nginx's
@@ -168,9 +173,15 @@ rewrote it. All roles and site limits were lost, and anyone in `control_groups` 
 
 - **L4 - limits on live streams per user.** Bigger change to the streaming code; the nginx example limits
   connections per visitor (`limit_conn`) in the meantime.
+  *Changed since:* at most 8 live-update connections per user or API token, 200 for the whole panel.
 - **L6 - API docs page loads Swagger from a CDN.** It is off by default (`enable_docs: false`); keep it off.
+  *Changed since:* the page loads the two Swagger files only when they match the hashes built into the panel,
+  and it needs a sign-in and a role. It is still off by default; keep it off unless you use it.
 - **I3 - cookie name prefix `__Host-` / shorter session.** Would sign everyone out and breaks local http
   testing; consider `session_max_age: 172800` (2 days) yourself.
+  *Changed since:* the cookie is `__Host-fairy_session` (the plain name only with `FAIRY_INSECURE_COOKIES`).
+  Everyone signs in once after that update. A tab nobody touches signs out after `session_idle_timeout`
+  (12 hours by default).
 - **I4 - HSTS for subdomains.** Better set at Cloudflare for the whole domain.
 - **I5 - demo mode.** Already loopback-only; never run `--demo` on the panel LXC.
 - **I6 / I8 - userinfo claims, multi-audience tokens.** Depend on Pocket ID; run its latest version.

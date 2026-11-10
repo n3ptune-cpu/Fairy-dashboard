@@ -70,6 +70,9 @@ fairy version
 See `deploy/config.example.yaml`, `deploy/fairy.env.example` and `deploy/fairy.service` (hardened systemd unit,
 no capabilities needed: the panel never runs local power or IPMI commands).
 
+**Updating a panel that already runs?** Read [Upgrading to this release](#upgrading-to-this-release) first.
+It is short, and it names three settings in `config.yaml` that the new panel refuses.
+
 ### Agents
 
 Each watched machine runs `fairy-agent` (Windows service or systemd unit), reachable only over Tailscale on port
@@ -106,14 +109,42 @@ shows why; older agents show "needs v0.4.2". Proxmox nodes are not offered Sleep
 "Wake on Magic Packet".
 
 **Power on via BMC** (Fairy-agent v0.4.2 `bmc_relay`): for a machine Wake-on-LAN cannot wake (e.g. its BMC
-shares the LAN port), `systems: [{id: srv-tower, bmc_power: {relay: srv-winpc-agent, target: tower-bmc}}]`
+shares the LAN port), `systems: [{id: agent-1, bmc_power: {relay: agent-2, target: server-bmc}}]`
 (or "Or powered on via BMC by" in Add host) names an always-on agent that can reach the BMC and its
 `bmc_relay` target (see AGENT.md for the agent side: `fairy-agent bmc-relay add`, `fairy-agent secret set`). The
 relay agent's entry needs `control_token_env`. While the machine is offline and the relay is online and reports
-the target, the host page and Power menu offer "Power on (via BMC, through SRV-WINPC)", with typed name,
+the target, the host page and Power menu offer "Power on (via BMC, through AGENT-2)", with typed name,
 step-up sign-in and audit like the other power actions; if the relay cannot reach the BMC (laptop not cabled)
-the error says so. Radeon cards on Windows whose agent reads AMD's ADL (v0.4.2) show their temperature and
-watts "via AMD".
+the error says so. (`agent-1`, `agent-2` and `server-bmc` are example names.) Radeon cards on Windows whose
+agent reads AMD's ADL (v0.4.2) show their temperature and watts "via AMD".
+
+**What a newer agent refuses, and what the panel shows then** (Fairy-agent 0.6.0). The agent's side of each
+point is in AGENT.md. Its Windows parts are listed there under "Not yet tested on a real Windows PC".
+
+* **Fans.** The agent answers a fan speed below 100 % with HTTP 409 and a sentence when it is not safe. The
+  panel shows that sentence as it is. The answer also carries one of three codes:
+
+  | Code | When |
+  | --- | --- |
+  | `fan_too_hot` | the processor is at or over the agent's temperature limit |
+  | `fan_watchdog_hold` | the agent's watchdog set the fans to 100 % less than 5 minutes ago |
+  | `fan_no_temperature` | the agent has no temperature reading yet (normal right after it started) |
+
+  In all three cases only 100 % is accepted. On Linux the fans go back to the BMC's automatic mode whenever
+  the agent stops (restart, update, reboot). So after an agent restart or update the Fans tab shows the
+  automatic mode, and a fixed speed has to be set again.
+* **Shut down / reboot on Windows.** The agent remembers a shutdown that was started from the panel, so it
+  is still shown as pending after the agent restarted, and Cancel still works. While the elevated helper is
+  stopped the agent refuses Cancel ("helper stopped: cannot cancel"): start the helper first. Cancel only
+  stops a shutdown that Fairy started, never one that Windows or somebody at the PC started.
+* **`only_from_panel: true`** in an agent's own config.yaml (off by default): that agent answers only the
+  address of the panel that paired with it. If the panel's Tailscale address changes, the agent refuses the
+  panel until you run **Re-pair** for that host.
+* **Processes tab.** A Linux agent installed with this release sends no command lines (`processes: {cmdline:
+  false}` in its config.yaml). Agents installed earlier keep what their config.yaml says. Set it to `true` on
+  the machine to see command lines again.
+* **Plugs and UPSes that report nonsense.** A value that cannot be a reading (not a number, a charge of
+  250 %) is left out. The device stays in the list with its other values.
 
 ### Updates
 
@@ -148,12 +179,24 @@ manual install per machine) is in Fairy-agent's
   a control action: admin, CSRF header, kill switch, step-up sign-in, rate limit, audit (`update.agent`), and only
   for agents with `self_update: true` (needs `control_token_env`) whose own config enables it; the agent then
   downloads, verifies and installs the release itself (see Fairy-agent's AGENT.md). Viewers see none of it.
+  The panel only asks; it sends no "force". What an agent of Fairy-agent 0.6.0 answers, and how to read it:
+  * "an update was installed on this machine less than 10 minutes ago; refused": the agent takes one update
+    from the panel in 10 minutes. The Updates page shows the host as "failed" with this reason. Wait, then
+    press Update again.
+  * A release whose version does not start with a build number (a local build) is refused.
+  * "rolled back to the previous version": the new version did not come up, and the old one runs again. The
+    machine is fine.
+  * "rolling back FAILED too": the agent may be down. Look at the machine.
 * The latest releases are looked up on GitHub at most every 10 minutes, in the background and only while an
   admin uses the panel; `updates: {check_latest: false}` switches that off on a panel without internet access.
   **Check for updates** on the Updates page asks GitHub now (both the agent and the panel release) and shows
   "Up to date", "N updates available" or the error, and when GitHub was last checked. It is read-only (no
   step-up, works with the kill switch on) but admins only, browser session, CSRF header, at most once every
   30 seconds for the whole panel, and audited as `update_check`.
+* **One agent release per panel.** Add host and Re-pair install the Fairy-agent release this panel was built
+  against (the Add host dialog names it), not the newest one. A panel older than its agents would put the
+  older agent back on a machine at Re-pair; the Re-pair dialog warns when the machine runs a newer agent than
+  the command installs. So: update the agents, then the panel, then Re-pair.
 
 ### Add host
 
@@ -162,17 +205,37 @@ Admins: **Add host** on the Overview. Give the machine's Tailscale name (the pan
 control, self-update, Wake-on-LAN relay, a local UPS through NUT, Core Temp on Windows, IPMI on Linux), whether
 it is a Proxmox node (`node:`), and optionally its Wake-on-LAN MAC(s) and the relay that wakes it. The panel
 makes a one-time join code (160 random bits, shown once, grouped as `ABCD-EFGH-...`, valid 15 minutes, single
-use, only its hash is kept) and one command:
+use; the panel keeps only a key made from it, in memory) and one command:
 
-```text
-Windows (PowerShell as Administrator):
-$u='https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-N'; $b=(New-Object Net.WebClient).DownloadData("$u/install.ps1"); if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -ne '<SHA-256 of install.ps1>') { throw '...' }; $env:FAIRY_JOIN_CODE='<CODE>'; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 <SHA-256 of SHA256SUMS> -PanelAddress <panel IP> -PairV2 [-PowerControl -SelfUpdate -CoreTemp ...]
 Linux:
-f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-N/install.sh && echo "<SHA-256 of install.sh>  $f" | sha256sum -c - && printf '%s' '<CODE>' | sudo env FAIRY_RELEASE_URL=https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-N sh "$f" --sums-sha256 <SHA-256 of SHA256SUMS> --join-stdin --pair-v2 --panel <panel IP> [--power-control --self-update ...]
+
+```
+f=$(mktemp) && curl -fsSL --proto '=https' -o "$f" BASE/install.sh && echo "SH_HASH  $f" | sha256sum -c - && printf '%s' 'CODE' | sudo env FAIRY_RELEASE_URL=BASE sh "$f" --sums-sha256 SUMS --join-stdin --pair-v2 --panel PANEL [options]
 ```
 
+Windows (PowerShell as Administrator, one line):
+
+```
+$u='BASE'; $b=(New-Object Net.WebClient).DownloadData("$u/install.ps1"); if ((([Security.Cryptography.SHA256]::Create().ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) -join '') -ne 'PS1_HASH') { throw 'install.ps1 is not the release the panel checked: not run' }; $env:FAIRY_JOIN_CODE='CODE'; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) -ReleaseUrl $u -SumsSha256 SUMS -PanelAddress PANEL -PairV2 [options]
+```
+
+The panel fills in every value. The words in capitals only show where its values are (the two lines are the
+same as in Fairy-agent's AGENT.md, "Add a host from the panel"):
+
+| In the line | What the panel puts there |
+| --- | --- |
+| `BASE` | the address of one release, `https://github.com/n3ptune-cpu/Fairy-agent/releases/download/build-<number>`. Never `latest`. |
+| `SH_HASH`, `PS1_HASH` | the SHA-256 of that release's `install.sh` / `install.ps1`. A script with any other content is not run. |
+| `SUMS` | the SHA-256 of that release's `SHA256SUMS` file, which the panel checked with its own release key. |
+| `CODE` | the one-time join code. |
+| `PANEL` | the panel's Tailscale address (an IPv4 address such as `100.64.0.10`, an example value). Only this address may pair. |
+| `[options]` | what you ticked. Linux: `--power-control`, `--self-update`, `--wol`, `--ipmi`, `--proxmox`, `--ups` or `--ups-name NAME`. Windows: `-PowerControl`, `-SelfUpdate`, `-Wol`, `-CoreTemp`, `-Ipmi`, `-Ups` or `-UpsName NAME`. |
+
+On a Proxmox node the Linux line has no `sudo` (run it as root).
+
 The command never runs "the latest" script. It names one Fairy-agent release: the one this panel was built
-against (`build-13` = Fairy-agent v0.5.2; `enroll: {agent_release: build-N}` picks another). Before it shows a
+against (the Add host dialog shows it: "Installs Fairy-agent release build-N"; `enroll: {agent_release:
+build-N}` in config.yaml picks another). Before it shows a
 command the panel downloads that release's `SHA256SUMS`, `SHA256SUMS.sig`, `VERSION`, `install.sh` and
 `install.ps1` and checks them with the release key built into the panel (`release/signing.pub`); a panel build
 without the key, an unreachable GitHub or a bad signature refuses Add host (HTTP 503) instead. The command runs
@@ -207,8 +270,8 @@ at that address is not added, and the audit log says so: `host.pair unverified`)
 exchange learns the tokens. Hosts paired this way show "Pairing: verified" on their page; hosts added by an
 older panel show "not verified" until they are re-paired. The join code proves that the answer comes from a
 machine the command was run on; which machine that is, the panel cannot know. The dialog and the audit entry
-therefore show what the machine calls itself next to the address you typed ("it calls itself SRV-WINPC, at
-srv-winpc"): look at it when you add a host.
+therefore show what the machine calls itself next to the address you typed ("it calls itself AGENT-2, at
+agent-2", example names): look at it when you add a host.
 
 There is no fallback to the old exchange, in which the panel sent the same proof every time and the agent
 answered with its tokens in clear:
@@ -221,6 +284,29 @@ answered with its tokens in clear:
   shown in the dialog installs the newer agent, and the panel pairs with the same code as soon as that agent
   is up (the code stays valid for its 15 minutes).
 - Such agents stay monitored and controlled as before; only pairing them again needs the newer agent.
+
+**What the dialog says while it waits.** The panel asks the machine until it pairs, the code runs out (15
+minutes) or you press Cancel. None of the answers below ends the Add host or uses up the code. The dialog
+shows a sentence; the API (`GET /api/admin/enrollments/{id}`) also has a `hint` for some of them.
+
+| What answers at the address | The dialog says (start of the sentence) | `hint` |
+| --- | --- | --- |
+| nothing, or the machine is off | "waiting for the machine (...)" | |
+| a new agent that has no join code yet (404 `pairing_inactive`) | "the agent answers but has no join code yet: run the command" | |
+| an agent from before pairing v2 (400 `bad_request`, or no `/pair` at all) | "the Fairy-agent on that machine is too old for this panel" | `agent_too_old` |
+| a new agent that holds a code for the old pairing (400 `wrong_version`) | "the agent on the machine holds a join code for the old pairing" | `legacy_join_code` |
+| an agent that holds another code (403 `wrong_code`) | "the agent has a different join code (an older command?): run this one" | |
+| an agent that was given another panel address (403 `wrong_address`) | "the agent refuses: the panel address in the command (...) is not where the panel connects from" | |
+| an agent whose limit of 5 pairing requests a minute is reached (429) | "the agent has answered all the pairing requests it takes in one minute" | `rate_limited` |
+| something that says "paired" but cannot prove it has the code | "not added: something answers at ..., but it is not a Fairy agent that has this join code" | `unverified_answer` |
+| a name that leads to an address outside Tailscale | "not contacted: ... is not a Tailscale address" | `not_tailscale` |
+| any other answer (for example 415 or 500) | "the agent answered 415" | |
+
+For `agent_too_old` and `legacy_join_code`: run the command shown in the dialog on the machine. For
+`unverified_answer` the dialog also shows a yellow box, "Not a Fairy agent". Nothing that such an answer
+contained is used or stored. If the command has not run on the machine yet, another program or another machine
+answers at that address: check the name and the address. If it has run: Cancel, make a new code, run the new
+command. When the code runs out in that state, the Add host ends as "expired" and still says what answered.
 
 Hosts added this way are kept in `<data_dir>/managed-hosts.yaml` and their tokens in
 `<data_dir>/secrets/agent-<id>.json` (0600), not in config.yaml; both are merged at start (an id in config.yaml
@@ -240,8 +326,15 @@ refused in the dialog, and a name is checked every time the panel connects to it
 (the local network, a stale record), no connection is opened and the dialog says where the name leads. Over
 Tailscale the path is encrypted and addresses are authenticated, so nobody outside the machine can listen to
 the pairing or answer in its place. `enroll: {allow_non_tailscale: true}` in config.yaml switches the check
-off for machines that are only reachable over another network. The check covers pairing; after it the panel
-polls the host at the same name, with its tokens, like every agent in config.yaml.
+off for machines that are only reachable over another network (default: `false`). The check covers pairing;
+after it the panel polls the host at the same name, with its tokens, like every agent in config.yaml.
+
+The two refusals that are on by default, and how each is changed:
+
+| The panel refuses | Why | To change it |
+| --- | --- | --- |
+| a Fairy-agent release or agent that is too old for pairing v2 | the old pairing cannot prove which machine answered | no setting: there is no way back to the old pairing. Use a newer release (`enroll: {agent_release: build-N}`) |
+| an address outside Tailscale | only there the path is encrypted and the addresses are authenticated | `enroll: {allow_non_tailscale: true}` in config.yaml, then restart the panel |
 
 `enroll: {panel_address: 100.x.y.z}` in config.yaml is the address the command gives the agent. It is optional:
 without it the panel finds its own Tailscale address at start (logged once as `Add host: panel address`, and
@@ -308,6 +401,96 @@ The file is read once at start (path from the config only) and served at `/brand
 * The secrets file stays `0600 root:root`: systemd loads it (`EnvironmentFile=`), the unit passes
   `--env-file ""`. `/etc/fairy` itself is `0750 root:fairy` and `config.yaml` `0640 root:fairy`. Run the CLI as the service user: `sudo -u fairy fairy admin ...`.
 
+## Upgrading to this release
+
+This release changes how people stay signed in, how the panel pairs with agents and which values it accepts
+in `config.yaml`. Nothing has to be converted and no file has to be deleted.
+
+### 1. The order
+
+1. **Agents first, one at a time.** Press **Update** for one host on the Updates page of the panel you run
+   today. Wait until it is online again. Then the next one. The new agent works with the old panel.
+2. **Then the panel.** On the panel host, as root: `fairy update`.
+3. **Then Re-pair, once per machine, where you want it.** The Update button replaces the agent program only.
+   The new service file, the separate polkit rules (Linux) and the folder checks (Windows) come with the
+   installer, which Re-pair runs.
+4. **Then the check on each Linux agent**: Fairy-agent's AGENT.md, "Check your Linux agents". It only reads.
+
+Between steps 1 and 2, do not use Add host or Re-pair for a machine you already updated. The old panel's
+command installs the older agent again. If it happened: press Update for that machine once more.
+
+If you publish the releases yourself: publish the Fairy-agent release first. The panel is built against one
+agent release, and its Add host and Re-pair commands install that release. A panel whose agent release is
+not on GitHub yet refuses Add host and Re-pair until it is.
+
+### 2. Before `fairy update`: three settings
+
+Open `/etc/fairy/config.yaml` and look at these three keys. A value in the middle column was accepted before
+and is refused now. A key that is not in the file is fine.
+
+| Key | Refused now | Accepted |
+| --- | --- | --- |
+| `session_idle_timeout` | 1 to 59, and any negative number | 60 or more (seconds), or a text such as `30m`, `4h`, `1d`; not longer than `session_max_age` |
+| `request_timeout` | less than 0.1, more than 300 | 0.1 to 300 (seconds) |
+| `offline_after` | less than 1, more than 604800 | 1 to 604800 (seconds) |
+
+For all three, `0` means "use the default" (12 hours, 4 seconds, 60 seconds), as before.
+
+Also refused: a fraction of a second in `session_max_age` or `session_idle_timeout` (`43200.5`).
+
+If one of them is wrong, the new panel does not start. `fairy update` waits for the panel to answer after
+the restart. When it does not, it puts the old program back (it keeps it as `/usr/local/bin/fairy.old`) and
+reports "rolled back to the previous version". Nothing is lost. Correct the value and run `fairy update`
+again. After the update you can check the file at any time with `sudo -u fairy fairy admin config check`.
+
+### 3. One step by hand: the memory limit
+
+`fairy update` replaces the program, never `fairy.service`. An install made before this release has no
+memory limit. Add it once:
+
+1. `sudo systemctl edit fairy`
+2. Write these two lines, then save:
+
+   ```
+   [Service]
+   MemoryMax=512M
+   ```
+3. `sudo systemctl restart fairy`
+4. Check: `systemctl show fairy -p MemoryMax` (536870912 means 512M).
+
+### 4. What you will notice afterwards
+
+1. **Everyone signs in once.** The session cookie has a new name (`__Host-fairy_session`), so the old
+   sign-ins end with the update. Roles, sites, API tokens, hosts and settings stay as they were.
+2. **Your first control action asks "Confirm it's you"**, also right after every panel restart. One
+   confirmation covers the next 3 minutes (`step_up_window_s: 180`). A config.yaml that sets
+   `step_up_window_s` keeps its value. The confirmation counts only for the browser and the address it was
+   made from: if your address changes (mobile data, a VPN), the next action asks again.
+3. **A tab nobody touches signs out** after 12 hours (`session_idle_timeout`).
+4. **The Users page** shows "unverified" next to an e-mail address that Pocket ID has not marked as
+   verified, and an "id ..." line per person. Signing in and roles do not depend on it. But
+   `fairy admin users set-role you@example.com admin` (example address) finds an account by its address only
+   when the address is verified. Otherwise use the subject from `fairy admin users list`:
+   `fairy admin users set-role <subject> admin`. Making an admin asks "Type yes to continue"; in a script add
+   `--yes`.
+5. **Scripts with an API token** can no longer stop or start the elevated helper, or use Add host, Re-pair
+   and Remove. They get 403, "this action needs a browser sign-in". Everything else a token could do, it
+   still can.
+6. **Add host shows a new command**, and the panel pairs about 15 seconds after the command has run. Hosts
+   you added before the update keep working. Their page says "Pairing: made by an older panel, not
+   verified" until you Re-pair them.
+7. **Add host and Re-pair refuse** a machine at an address outside Tailscale, and an agent release that is
+   too old for the new pairing. See [Add host](#add-host).
+8. **The Updates page** can show a host as "failed" with a reason when its agent refuses a second update
+   within 10 minutes. See [Updates](#updates).
+9. **At most 8 open Fairy tabs per person.**
+10. **`/docs`**, if you switched it on, needs a sign-in and a role.
+
+Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
+`managed-hosts.yaml`). It does not start when config.yaml has `enroll: {allow_non_tailscale: ...}`,
+`step_up_per_action`, or a text such as `4h` in the two session settings. Take those out first (write the
+session settings as whole seconds).
+
 ## Security model
 
 * Pocket ID only (OIDC code flow + PKCE S256, nonce, state). No passwords anywhere. Pocket ID (allowed_groups /
@@ -373,7 +556,34 @@ The file is read once at start (path from the config only) and served at `/brand
   commands that change something refuse to run as another user (use `sudo -u fairy fairy admin ...`).
 * Defence in depth: process command lines are redacted by the panel too; fan duty is never set below 30 %;
   background uploads need a role and are rate limited; revoking a token ends its live streams.
+* The API docs page (`/docs`, `enable_docs`, default `false`) needs a sign-in and a role. Keep it off unless
+  you use it.
+* Live updates: at most 8 open Fairy tabs (live-update connections) per user or API token, 200 for the whole
+  panel. One more answers "too many live-update connections": close another tab.
+* Memory: `deploy/fairy.service` sets `MemoryMax=512M`. `fairy update` never replaces the unit file, so an
+  older install gets this line by hand, once (see [Upgrading to this release](#upgrading-to-this-release)).
 * See `SECURITY-FIXES.md` for the 2026-11 review fixes and what to configure.
+
+Three rules for the people who use the panel:
+
+1. **"Confirm it's you" that you did not ask for: do not approve it.** A passkey prompt belongs to the action
+   you just started. If one appears on its own, close it. Closing the dialog (Cancel, Escape or clicking
+   outside) also throws the waiting action away.
+2. **Take people out on the Users page**, not only in Pocket ID. Leaving the allowed group in Pocket ID does
+   not end a panel session that is already open. **Remove** on the Users page signs the person out everywhere
+   and revokes their API tokens.
+3. **A tab nobody touches signs out** after `session_idle_timeout` (12 hours unless you set it). That is
+   meant. Sign in again.
+
+Session and "Confirm it's you" settings in config.yaml (all optional):
+
+| Key | Default | What it takes |
+| --- | --- | --- |
+| `session_max_age` | `7d` | whole seconds (`604800`) or a text such as `36h`, `7d`; at least 5 minutes |
+| `session_idle_timeout` | `12h` (or `session_max_age`, when that is shorter) | whole seconds or a text such as `30m`, `4h`, `1d`; at least 1 minute, at most `session_max_age` |
+| `step_up_window_s` | `180` | seconds, 30 to 86400: how long one "Confirm it's you" covers further control actions |
+| `step_up_per_action` | `false` | `true`: every control action needs its own "Confirm it's you"; the window is not used |
+| `step_up_prompt_login` | `false` (`true` in the example file) | `true`: Pocket ID is also asked to show its sign-in every time |
 
 ## Map of the code
 
