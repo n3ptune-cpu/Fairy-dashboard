@@ -1751,8 +1751,11 @@ function pageSettings() {
   setTitle("Settings", "appearance");
   const s = state.settings;
   const bg = s.background;
-  return `<div class="settings stack"><div class="panel glass pad"><h3>Background</h3>
-    <div class="note">Theme: true black. Optional background image: upload (PNG, JPEG, WebP, GIF, AVIF, max 8 MiB, no SVG) or paste an https URL.</div>
+  return `<div class="settings stack"><div class="panel glass pad"><h3>Background${infoBtn("set-bg", "Background", infoList([
+      "The theme is true black. A picture is optional.",
+      "Upload: PNG, JPEG, WebP, GIF or AVIF, at most 8 MiB. No SVG.",
+      "Or paste the https URL of a picture."]))}</h3>
+    <div class="note">A picture behind your own pages: upload one or paste an https URL.</div>
     <div class="row-gap section-title"><label class="btn" for="bg-file">Upload image…</label><input id="bg-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" hidden>
       <button class="btn danger" id="bg-clear" ${bg.kind === "none" ? "disabled" : ""}>Remove background</button></div>
     <div class="row-gap"><input class="input" id="bg-url" type="url" placeholder="https://example.com/wallpaper.jpg" value="${bg.kind === "url" ? esc(bg.url) : ""}"><button class="btn" id="bg-url-apply">Use URL</button></div>
@@ -1801,8 +1804,10 @@ function afterSettings() { applySettings(); route(); }
 let signInWall = null;  // { set, type, bytes, version, max_bytes } as the panel last said; null: not asked yet
 function signInPanel() {
   if (state.me?.role !== "admin") return "";
-  return `<div class="panel glass pad" id="siw"><h3>Sign-in page</h3>
-    <div class="note">Picture behind the sign-in page, the same for everyone. Anyone who can open this panel's address sees it before signing in, so pick one that may be public. Upload only (PNG, JPEG or WebP, max 8 MiB); it does not change your own background above.</div>
+  return `<div class="panel glass pad" id="siw"><h3>Sign-in page${infoBtn("set-siw", "Sign-in page", infoList([
+      "Upload only: PNG, JPEG or WebP, at most 8 MiB.",
+      "It does not change your own background above."]))}</h3>
+    <div class="note info-keep">Picture behind the sign-in page, the same for everyone. Anyone who can open this panel's address sees it before signing in, so pick one that may be public.</div>
     <div class="row-gap section-title"><label class="btn" for="siw-file">Upload picture…</label><input id="siw-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
       <button class="btn danger" id="siw-clear" disabled>Remove picture</button></div>
     <div class="preview" id="siw-preview"></div><div class="note" id="siw-state">Loading…</div><div class="error" id="siw-err"></div></div>`;
