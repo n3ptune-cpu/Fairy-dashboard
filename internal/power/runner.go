@@ -10,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	powersrc "github.com/n3ptune-cpu/Fairy-agent/pkg/power"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 // Runner polls one configured source with exponential backoff while it fails.
@@ -67,7 +68,9 @@ func (r *Runner) Poll(ctx context.Context, timeout time.Duration) {
 	}
 	if out.err != nil { // never let a source crash the poller
 		r.failures++
-		msg := devices.Describe(out.err)
+		// The module's device readers answer with fixed words (devices.Describe); the shared helper keeps it
+		// that way for whatever text a source may ever return: short and clean, like every error text (T-06).
+		msg := textsafe.ErrorText(devices.Describe(out.err))
 		r.err = &msg
 		r.nextAttempt = mono + math.Min(r.Source.MaxBackoff(), r.Interval*math.Pow(2, float64(r.failures-1)))
 		if r.failures == 1 {
