@@ -140,7 +140,7 @@ func approvalCheck(cfg *config.Panel, problems, notes []string) ([]string, []str
 	notes = append(notes, fmt.Sprintf("approval.users: %d more than the panel's admins and a host's owner; approval.owners: %d owner labels "+
 		"with a Pocket ID user (they may approve on a machine that is switched on for the check from now on; a machine that already has "+
 		"its list is changed only on the machine)", len(cfg.Approval.Users), len(cfg.Approval.Owners)),
-		fmt.Sprintf("approval.run_approval_wait_s: %d (how long \"Update unpowered hosts\" waits for the approval after the wake)",
+		fmt.Sprintf("approval.run_approval_wait_s: %d (kept for later: \"Update unpowered hosts\" does not ask for approvals yet, a machine that checks them is in no run)",
 			cfg.Approval.RunApprovalWaitS))
 	return problems, notes
 }

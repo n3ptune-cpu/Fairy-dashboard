@@ -11,7 +11,8 @@ Because it has no sign-in, a test build refuses to start unless everything says 
 
 * it listens on `127.0.0.1` (or `::1`, `localhost`) only, and answers no request for another host name or with
   one of the headers a reverse proxy usually adds;
-* its config has no `oidc:` block, and neither `FAIRY_SESSION_SECRET` nor `FAIRY_OIDC_CLIENT_SECRET` is set;
+* its config has no `oidc:` block, and neither `FAIRY_SESSION_SECRET` nor `FAIRY_OIDC_CLIENT_SECRET` is set
+  (an `approval:` block is allowed: part I);
 * its data folder is new, empty, or one a test build made, with nobody in it but `test-admin`;
 * none of its files is in an installed panel's folders (`/etc/fairy`, `/var/lib/fairy`, `C:\ProgramData\Fairy`).
 
@@ -427,12 +428,175 @@ reports. **Clear** in the same dialog brings the reported model back. Menu, **Au
    one more. (Shut down from the panel it is "off",
    not an alert, and shows no pop-up.)
 
+## I. Trying the check on the machine itself
+
+With the check on, the test VM itself verifies your passkey approval before a shutdown, a fan change or an
+update (README, "The check on the machine itself"). The sign-in of the test build stays off, but **this part
+is real**: the approval is asked at your real Pocket ID, with your real passkey, and the helper on the test VM
+verifies it. Only one check is left out in a test build: the panel does not compare the approver with the
+signed-in person (nobody is signed in), and says so in its window every time. The machine's own list of
+who may approve is checked as always.
+
+Not run by us: no step of this part was tried against a real Pocket ID or a real Windows helper. On Linux
+the same build was run in a browser against a stand-in Pocket ID and the real agent (the report says what
+was simulated). If a step goes differently, stop there and send what I8 lists.
+
+You need: the dev VM with this zip and agent zip 2 (`Fairy-agent-part1-r2`) unpacked **next to each other**,
+the test VM `NSX-TEST-VM`, and your Pocket ID, reachable over https from the dev VM.
+
+### I1. Pocket ID: one new client
+
+In Pocket ID, as administrator: OIDC Clients, add a client.
+
+| Field | Value |
+| --- | --- |
+| Name | `Fairy PC actions` |
+| Callback URL | `http://127.0.0.1:8080/auth/approval/callback` (exactly this, for the test build) |
+| Public Client | on |
+| PKCE | on |
+| Requires Re-Authentication | **on** |
+
+Save, and copy its **Client ID**. Later, for the live panel, add a second Callback URL to the same client:
+`https://<your panel>/auth/approval/callback`.
+
+Your **user id**: Pocket ID, Users, open your own user; the id is the last part of the address in the
+browser's address bar. (If that is not how your Pocket ID shows it: I4, step 4 shows the id.)
+
+### I2. Dev VM: build and start
+
+Both folders must be in `E:\Projects\Fairy-agent-TEST`: `Fairy-agent-part1-r2` (agent zip 2, as in its
+README-TEST-2.txt) and `Fairy-dashboard-passkey-r1` (this zip). This panel is built against that agent
+folder. In `cmd.exe`:
+
+```
+cd /d E:\Projects\Fairy-agent-TEST
+tar -xf fairy-dashboard-passkey-testpanel-src-1.zip
+cd Fairy-dashboard-passkey-r1
+set GOOS=
+set GOARCH=
+go build -tags fairytest -o fairy-test.exe .\cmd\fairy
+fairy-test.exe version
+fairy-test.exe serve
+```
+
+`version` must say `TEST BUILD`. Stop it again (`Ctrl+C`), open `fairy-test\config.yaml` in Notepad and add
+these lines at the end (your three values in place of the words in capitals), save, start it again:
+
+```
+approval:
+  issuer: https://YOUR-POCKET-ID
+  client_id: THE-CLIENT-ID-FROM-I1
+  users: [YOUR-USER-ID]
+```
+
+The window must now show a line with `TEST BUILD: approvals for the machines are asked at
+https://YOUR-POCKET-ID` and `callback http://127.0.0.1:8080/auth/approval/callback`. If it refuses to start,
+the line says which of the three values it does not accept.
+
+### I3. The test VM
+
+1. Add `NSX-TEST-VM` to this panel as in part B, with **power control** and **self-update** ticked.
+   (Add host installs the released agent, build 16. It does not know the check yet: its page has no
+   Approval box.)
+2. Put the self-built agent of agent zip 2 on the VM over it: README-TEST-2.txt, parts (b) and (c). The
+   script there installs it and leaves the check **off**.
+3. On the VM, PowerShell as Administrator:
+
+   ```
+   & "C:\Program Files\Fairy\fairy-agent.exe" version
+   & "C:\Program Files\Fairy\fairy-agent.exe" helper-status
+   ```
+
+   `version` must say `16-selfbuilt`. `helper-status` must have the line
+   `approval:        off (checked by the helper): no trust file, nothing needs an approval; the panel can set the trust once`.
+4. In the panel, the VM's page now has an **Approval** box: "off", "Would be checked by: the elevated helper
+   (LocalSystem)", and a **Turn on…** button.
+
+From here on do **not** press Re-pair for the VM, and do not press Update: both can put build 16 back.
+
+### I4. Turn on, with your passkey
+
+1. On the VM's page, Approval box: **Turn on…**. (The same is on the Updates page: "1 machine is ready for
+   the check on the machine itself".)
+2. The dialog "Turn on the check on the machine itself" lists what the VM will trust: your Pocket ID's
+   address, the client id, the signing key with its thumbprint, and "may approve:" with the user id from
+   I2. Read the user id. Press **Turn on for 1 machine (passkey)**. "Confirm it's you" then shows the same
+   once more, line by line; press **Continue to Pocket ID**.
+3. The browser goes to your Pocket ID. It shows **Fairy PC actions** and asks for your passkey. Use it.
+4. You are back in the panel. The `fairy-test.exe serve` window has a new line that starts with
+   `TEST BUILD: an approval was accepted without checking` and ends with `approver=<an id>`: that is your
+   user id as Pocket ID sends it.
+5. The result line for the VM says **switched on · locked**, and the Approval box says **required**, with
+   Pocket ID's address, the client, the pinned key and "Allowed users: 1".
+
+   If it says **proof refused**: nothing was written on the VM and you can try again. The text in brackets
+   says why. `user`: the id in `users:` is not the one from step 4; correct it in `fairy-test\config.yaml`,
+   restart the panel, do I4 again. `clock` or `auth_time`: compare the VM's clock with the real time.
+6. On the VM: `helper-status` again. It must now say `approval:        required (checked by the helper)`,
+   then `issuer:`, `client id:`, `pinned key:`, `allowed users:   1`.
+
+### I5. Shutdown with a delay, and cancel
+
+1. VM's page, Power menu: **Shut down**, delay 60 seconds, type the name, confirm.
+2. The dialog says that NSX-TEST-VM will check this itself. **Continue to Pocket ID**, passkey at "Fairy PC
+   actions".
+3. Back in the panel: the page shows the countdown. Windows on the VM shows its shutdown notice.
+4. Press **Cancel** on the page within the minute. It needs no passkey (the test build may show its own
+   **Confirm (test build)** button). The VM stays on.
+5. Once more, to see that every action needs its own passkey: **Shut down** again asks again, also seconds
+   after the last one. Cancel again.
+
+### I6. Fans, and what not to try
+
+A VMware VM has no fans Fairy can set, so there is no Fans box and nothing to try here. Fan changes with the
+30-second window need a real PC with fan control. Do not press **Update** for the VM (see I3).
+
+### I7. What the VM must show
+
+On the VM, PowerShell as Administrator:
+
+```
+& "C:\Program Files\Fairy\fairy-agent.exe" helper-status
+Get-Content C:\ProgramData\fairy-agent\helper\helper.log -Tail 20
+```
+
+`helper.log` must have one line per request with `msg=request`: for I5 two with `verb=power`,
+`args="action=shutdown delay_s=60"` and `status=200`, and two with `action=cancel`. A request the helper
+refused has another status and an `error=` text that starts with `approval`. No line holds a token.
+
+In the panel: Menu, **Audit**. For each approved action there is `auth.approval` twice ("redirected to
+Pocket ID", then "ok" with the machine and the approver's id) and the action itself (`power.shutdown`,
+`approval.turn_on`).
+
+### I8. What to send back
+
+* the last 40 lines of the `fairy-test.exe serve` window (it never prints a token or a secret);
+* the output of the two commands in I7;
+* what the Approval box and the Turn on result say (a screenshot is fine);
+* at which numbered step it went differently, if it did.
+
+### I9. Afterwards
+
+The check stays on until it is removed **on the VM** (the panel cannot):
+
+```
+& "C:\Program Files\Fairy\fairy-agent.exe" helper-trust clear
+```
+
+Then put the VM back as README-TEST-2.txt, part (e) says, or back to its snapshot. In Pocket ID the client
+can stay: the live panel will use it with its own Callback URL.
+
+
 ## What the test build does NOT prove
 
 * **Real sign-in.** Nothing goes to Pocket ID: not the sign-in, not the groups and allowed addresses, not a
   first sign-in that waits for access, not what happens when Pocket ID is down.
 * **"Confirm it's you" at Pocket ID.** The dialog appears and the action runs after it, but the passkey check
   and what Pocket ID answers are not part of it.
+* **Who approves.** Part I asks for a real passkey at your real Pocket ID and the machine checks it. But a
+  test build has no signed-in person, so the panel's own check "the approver is the person who pressed the
+  button" is off (the window says so each time). That check, the default list of approvers (the panel's
+  admins and a host's owner) and the approval behind nginx and Cloudflare belong to the real panel.
 * **The Tailscale-only rule.** The test config switches it off (`allow_non_tailscale: true`), and the panel's
   own Tailscale address is not what the test VM pairs with.
 * **The panel's release.** Its signature, `fairy update`, the Update panel button and its roll-back are off in a

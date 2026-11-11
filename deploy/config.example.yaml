@@ -127,8 +127,8 @@ agents:
 #   # users: ["<Pocket ID user id>"]      # may approve too, besides the panel's admins and a host's owner
 #   # owners: {Straw: "<Pocket ID user id>"}  # who the owner label "Straw" (owner: Straw on a host) is in Pocket ID:
 #                                         # that user may approve on the hosts with that label
-#   # run_approval_wait_s: 900            # "Update unpowered hosts": how long a run waits for the approval
-#                                         # it asks for once the woken machines are online (60-3600)
+#   # run_approval_wait_s: 900            # kept for later (60-3600). "Update unpowered hosts" does not ask for
+#                                         # approvals yet: a machine that has the check switched on is in no run
 
 systems: []
   # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming], site: Office}
@@ -142,7 +142,6 @@ systems: []
 # Power sources and UPSes follow the hosts they are attached to (system: / powers:); one without a host gets
 # its site on the Users page. Anything without a site is visible to admins only.
 power_sources: []
-  # - {id: plug-agent-1, type: tuya, device_id: bf0123456789abcdef, ip: 192.168.1.60, local_key_env: TUYA_KEY_PLUG, version: "3.4", system: agent-1}
   # - {id: plug-desk, type: shelly, url: "http://192.168.1.61", password_env: SHELLY_PW}
   # - {id: tasmota-1, type: tasmota, url: "http://192.168.1.62", password_env: TASMOTA_PW}
   # BMCs: keep verify_tls (the default, true) and give the BMC's certificate or CA in ca_file; use a read-only

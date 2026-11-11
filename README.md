@@ -12,14 +12,13 @@
 > it runs as SYSTEM. Only connect to the agents over Tailscale, never
 > straight from the internet, and only install from our Releases page.
 
-The Fairy panel: a homelab panel for Proxmox clusters, agent-monitored hosts, wall power (Shelly, Tasmota, Tuya 3.3/3.4/3.5, NUT,
-Redfish) and UPSes, behind Pocket ID. Go rewrite of the Python prototype with the same JSON API; the web UI is
+The Fairy panel: a homelab panel for Proxmox clusters, agent-monitored hosts, wall power (Shelly, Tasmota, NUT, Redfish) and UPSes, behind Pocket ID. Go rewrite of the Python prototype with the same JSON API; the web UI is
 embedded in the binary.
 
 > Status: the `fairy` panel is complete (feature parity with the prototype). `fairy-agent`, the metrics agent
 > for the machines it watches (Windows and Linux), lives in its own repository,
 > [github.com/n3ptune-cpu/Fairy-agent](https://github.com/n3ptune-cpu/Fairy-agent), together with the device code
-> both programs share (plugs, UPSes, BMCs, Tuya). The panel imports that code from there instead of keeping a
+> both programs share (plugs, UPSes, BMCs). The panel imports that code from there instead of keeping a
 > copy, and `internal/agentcontract` runs the panel's real poller and web API against the real agent handler.
 
 Two repositories:
@@ -476,6 +475,101 @@ What to know before the first real run:
   wait for a machine (default 300 s), the pause before the shutdown (60 s), the countdown (120 s) and the
   pacing. A value outside its range stops the panel at start with the key and the line; that includes 0,
   which does not mean "the default" here. For the default leave the key out.
+
+### The check on the machine itself
+
+Normally the panel decides: you confirm an action in the panel ("Confirm it's you"), and the panel sends it
+to the machine with its control token. Whoever has that token, or the panel itself, can then do the same
+without you. With **the check on the machine itself** the machine decides: before it changes its fans, shuts
+down, restarts, sleeps or updates its agent, it verifies a Pocket ID approval (your passkey) that was made
+for exactly that action. It checks offline, with Pocket ID's signing key that it has pinned. The panel only
+carries the approval; it cannot make one and cannot skip the check.
+
+It is off for every machine until you turn it on, and machines with an older agent work as before.
+
+**1. Create a second client in Pocket ID**, next to the one the panel signs in with:
+
+| Field in Pocket ID | Value |
+| --- | --- |
+| Name | `Fairy PC actions` (this is the name Pocket ID shows when it asks for the passkey) |
+| Callback URL | `<public_url>/auth/approval/callback`, for example `https://panel.example.com/auth/approval/callback` |
+| Public Client | on (nothing more to store), or off and the client secret as `FAIRY_APPROVAL_CLIENT_SECRET` in `fairy.env` |
+| PKCE | on |
+| Requires Re-Authentication | **on**. This is what makes Pocket ID ask for the passkey every time. Without it Pocket ID answers from its own session, and the machine refuses the approval as too old (after Pocket ID's 60 seconds of grace). |
+
+Do not reuse the sign-in client: the panel refuses the same client id for both, and the machines accept only
+approvals made for this one.
+
+**2. Tell the panel** (config.yaml), then restart it:
+
+```yaml
+approval:
+  client_id: "<the client id Pocket ID shows for Fairy PC actions>"
+  # issuer: https://id.example.org     # only if it is another Pocket ID than oidc.issuer
+  # users: ["<Pocket ID user id>"]     # may approve too, besides the panel's admins and a host's owner
+  # owners: {Straw: "<Pocket ID user id>"}   # who the owner label "Straw" is in Pocket ID
+```
+
+`sudo fairy admin config check` shows the client, the callback address to enter in Pocket ID and whether the
+secret is set (present / not set, never its value). nginx needs no change: the callback is under `/auth/`
+like the sign-in's. With `deploy/nginx.example.conf` that is at most 10 round trips a minute per address
+(burst 10), sign-ins included.
+
+**3. Turn it on.** The Updates page (admins) gets a box, **The check on the machine itself**: "N machines are
+ready for the check on the machine itself", with **Turn on…**; a machine's own page has an **Approval** box
+with the same button for that machine. Turn on is deliberate and proven:
+
+* The dialog shows exactly what each machine will trust: the Pocket ID address, the client id, the signing
+  key(s) Pocket ID publishes right now (key id and thumbprint) and the list of people who may approve there,
+  by name and user id. By default these are the panel's admins and the host's owner, if `approval.owners`
+  says who that is in Pocket ID; `approval.users` adds people. The list is never empty.
+* You confirm **once**, with your passkey at "Fairy PC actions", for all chosen machines (at most 64).
+* Each machine accepts its new trust only together with that approval, and only if the approval verifies
+  with the very values it is asked to trust. So a wrong address, client id, key or user id is found now, not
+  at the first shutdown. Nothing is written otherwise.
+* The result is shown per machine and written to the Audit log: accepted, the proof was refused, already
+  set, or offline.
+
+**Afterwards it is locked.** The panel cannot change or remove a machine's trust, and neither can anybody
+with the panel's tokens. It is changed only on the machine, as root / Administrator:
+
+```
+fairy-agent helper-trust show                  # what this machine trusts, and whether it can be used
+fairy-agent helper-trust set --fetch-keys      # after a key rotation at Pocket ID: pin the new key(s)
+fairy-agent helper-trust set --user <id> ...   # another list of people (the users given replace the list)
+fairy-agent helper-trust clear                 # off again: nothing needs an approval; the panel can Turn on once more
+```
+
+**What you see afterwards.** A fan, power or update action on such a machine opens the usual dialog, which
+now says that the machine checks this itself, and then Pocket ID asks for your passkey under the name "Fairy
+PC actions". One passkey per action: the panel's own 3-minute window does not count for these machines.
+Two exceptions, both decided by the machine and shown in its Approval box:
+
+* **Fan window** (default 30 s, at most 60): after one approved fan change, further fan changes on that
+  machine need no new approval for that long, so a slider can be moved.
+* **Shutdown after boot** (default off): one shutdown without approval shortly after the machine started.
+  It is set on the machine (`helper-trust set --boot-shutdown N`).
+
+**Update all** asks for one approval that covers every machine with the check on; each machine verifies its
+own entry. Cancelling a pending shutdown needs no approval.
+
+**Update unpowered hosts** does not ask for approvals yet. A machine with the check on is not taken
+into a run: the page says "needs approval: not supported in runs yet". Update it and switch it off on its
+own page.
+
+**When something is wrong** the page says which thing, not "failed":
+
+* **broken**: the machine has a trust file it cannot use and refuses fan, power and update requests until it
+  is repaired on the machine (`fairy-agent helper-trust show` names the reason). The Overview and the Updates
+  page flag such a machine.
+* "approval refused (…)": the machine did not accept the approval; the reason is in brackets (`user`: you
+  are not on its list; `token_key`: Pocket ID has a new signing key, run `helper-trust set --fetch-keys` on
+  the machine; `clock` / `auth_time`: the machine's clock or the age of the passkey use).
+* API tokens cannot give an approval: a control token gets 403 for these actions on such a machine.
+
+**Windows and Linux** are treated the same by the panel. On Windows the elevated helper
+(`fairy-agent-helper`) checks what goes through it and the agent checks the rest with the same trust file;
+on Linux the agent checks everything. The Approval box says who checks ("Checked by").
 
 ### Add host
 
@@ -966,6 +1060,15 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   reverse proxy's usual headers, but those checks cannot see every proxy or port forward: a test build must
   never be put behind one, and the start key is the last line of defence if it is. (`fairy serve --demo`,
   simulated data on loopback only and only under the names 127.0.0.1, ::1 or localhost, is in every build.)
+* The check on the machine itself (optional, per machine; "The check on the machine itself" above): a machine
+  that has it on verifies a Pocket ID ID token itself before a fan, power or update action: signature against
+  the key(s) it pinned, issuer, audience (the client "Fairy PC actions"), a user on its own list, a passkey
+  use that is seconds old, and a nonce that is a hash of its own one-time challenge and the exact request.
+  The panel asks for that token in a round trip of its own (`/auth/approval/callback`, PKCE, the kept
+  action's id as state) and checks it too, for the audit log and to fail early; the token is kept in memory
+  with the one kept action, passed to the machines it was asked for, and never logged, stored or sent to the
+  browser. An approval is not a sign-in: it opens no window and changes no session. The trust is set from
+  the panel once, with a proof, and after that only on the machine.
 * Roles, managed in the panel (`users.json`, Users page or `fairy admin users|sites`), keyed by the OIDC subject:
   **admin** sees everything, may use control actions, the Audit and Users pages; **viewer** is read-only and sees
   only the systems, guests, power sources, UPSes (and their processes, sensors, history) of their sites;
@@ -1202,7 +1305,8 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/apierr` | The error type that becomes an HTTP status + `{"detail": ...}`. |
 | `internal/demo` | `fairy serve --demo`: a simulated homelab (fake Proxmox, agents, plugs, UPS, BMC). |
 | test build | Only with `go build -tags fairytest`, never in a release ([TESTING-LOCAL.md](TESTING-LOCAL.md)): `cmd/fairy/testmode.go` (what it refuses to start with, its own folder), `internal/web/testmode.go` (sign-in and "Confirm it's you" without Pocket ID, the banner), `release/key.go` (the release key, for Add host). `cmd/fairy/testmode_off.go` is what every other build has instead. |
-| `internal/agentcontract` | The panel <-> agent contract test: the panel's real poller, normaliser, power/UPS managers and web API against the real `fairy-agent` handler (fake collectors, fake BMC, fake devices). |
+| `internal/approval` | The check on the machine itself, the panel's part without HTTP: the list of requests an approval covers and its nonce (`approval.go`), the panel's own checks of the ID token, the proposal a Turn on sends (`trust.go`). `internal/web/approval.go` is the round trip, `approval_control.go` asks the machines and attaches the approval, `api_approval.go` is Turn on. |
+| `internal/agentcontract` | The panel <-> agent contract test: the panel's real poller, normaliser, power/UPS managers and web API against the real `fairy-agent` handler (fake collectors, fake BMC, fake devices). `approval_test.go`: the check on the machine itself, with the agent's real gate and a fake Pocket ID. |
 | `internal/testutil` | Shared test fixtures. |
 | `deploy/` | Example `config.yaml`, `fairy.env`, the systemd unit `fairy.service`, nginx, the `fairy-update` wrapper, the Update panel unit and its polkit rule. (The agent's install files are in Fairy-agent.) |
 | `.github/workflows` | `release.yml` (signed release on every push to main), `ci.yml` (tests on pull requests). |
@@ -1211,21 +1315,23 @@ Shared code imported from [Fairy-agent](https://github.com/n3ptune-cpu/Fairy-age
 
 | Package | What the panel uses it for |
 | --- | --- |
-| `pkg/devices` | Device protocols: Shelly/Tasmota/Redfish/Tuya parsing, NUT client, HTTP helpers, digest auth, and `Describe`, which turns errors into short safe messages. |
-| `pkg/power` | One power source per device type (`shelly`, `tasmota`, `tuya`, `nut`, `redfish`/`ipmi`, `agent`), built from a `power_sources:` entry. |
+| `pkg/devices` | Device protocols: Shelly/Tasmota/Redfish parsing, NUT client, HTTP helpers, digest auth, and `Describe`, which turns errors into short safe messages. |
+| `pkg/power` | One power source per device type (`shelly`, `tasmota`, `nut`, `redfish`/`ipmi`, `agent`), built from a `power_sources:` entry. `DropRemoved` takes out entries of a type that is no longer read (`tuya`). |
 | `pkg/ups` | NUT UPS sources built from an `ups:` entry, and which systems each UPS powers. |
-| `pkg/tuya` | The Tuya 3.3/3.4/3.5 local protocol (encryption, frames, one persistent connection per plug). |
 | `pkg/redact` | Removes passwords/tokens from process command lines (in the agent, and again in the panel). |
 | `pkg/configutil` | The id rule (`ValidID`) and secrets referenced by environment variable name (`EnvSecret`). |
 | `pkg/enroll` | Add host: join codes, the pairing v2 request sent to the agent's `/pair`, and its sealed answer. |
 | `pkg/release` | Signed releases: signature checks, the GitHub download, the swap / restart / rollback installer and the `update` command shared with `fairy-agent update`. |
+| `pkg/agent/api` | The contract types of the check on the machine itself: the canonical request text, the nonce, the hash of a proposed trust, codes and limits. |
+| `pkg/approval` | The machine's own check. The panel uses it to validate what a Turn on proposes exactly as the machine will; the tests use its gate as the machine. |
 | `pkg/agent`, `pkg/agent/...` | Only in `internal/agentcontract`'s test: the agent's HTTP handler, fake collector and fake BMC. |
 
 ## Notes
 
 * Frontend changes vs. the prototype: CSRF header value `fairy`, localStorage keys `fairy-*`, CLI hint text.
-* Tuya 3.3/3.4/3.5 framing, encryption and session-key derivation are implemented from tinytuya's source and
-  checked against vectors generated with tinytuya; 3.4/3.5 have not been tested against real devices yet.
+* Tuya plugs (the local protocol) are no longer read. An old `type: tuya` entry in `power_sources:` is
+  ignored: `fairy serve` says so once at start (a warning), `fairy admin config check` prints a `note` line
+  for it, and the panel starts as before. Remove the entry when you see the line.
 
 ## Licence
 
