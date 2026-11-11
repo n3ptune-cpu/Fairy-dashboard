@@ -140,6 +140,8 @@ func TestUIMarksAVersionThatIsOnlyLastSeen(t *testing.T) {
 		`const arrow = (r.behind === true && !stale) || updBusy(r);`,
 		"${esc(r.version ? `${buildLabel(r.version)}${stale ? \" (last seen)\" : \"\"}` : \"agent ?\")}",
 		`${r.version_last_seen ? "last reported" : "runs"} ${esc(buildLabel(r.version))}.`,
+		// the Overview's row has no version chip: its tooltip names the version, and says "last seen" too
+		"ver && `fairy-agent ${ver}${upd.bySys[s.id].version_last_seen ? \" (last seen)\" : \"\"}`",
 		// the Update button and "Update all" still go by can_update, which is false for a host that does not answer
 		`${r.can_update && !why && !busy ? "" : "disabled"}`,
 		`const ready = d.agents.filter((r) => r.can_update);`,
