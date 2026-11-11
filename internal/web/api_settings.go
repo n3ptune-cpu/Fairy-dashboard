@@ -2,7 +2,9 @@ package web
 
 import (
 	"io"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/settings"
@@ -87,6 +89,17 @@ func (s *Server) uploadBackground(c *reqCtx) error {
 	return nil
 }
 
+// The background image is a file of up to 8 MiB that every signed-in user may upload and fetch (T-09). It is
+// sent from the open file, never read into memory as a whole. One user has at most maxBackgroundsPerUser
+// downloads in flight (a page fetches it once and the browser keeps it for a day), the panel
+// maxBackgroundsTotal; one more is answered 429. A download has backgroundWriteTimeout to be taken, instead of
+// the general answerWriteTimeout: it is the one large answer, and a phone on a slow link may need longer.
+const (
+	maxBackgroundsPerUser  = 4
+	maxBackgroundsTotal    = 64
+	backgroundWriteTimeout = 3 * time.Minute
+)
+
 func (s *Server) getBackground(c *reqCtx) error {
 	u, err := c.requireSession()
 	if err != nil {
@@ -96,8 +109,19 @@ func (s *Server) getBackground(c *reqCtx) error {
 	if p == "" {
 		return apierr.New(404, "no background uploaded")
 	}
-	b, err := os.ReadFile(p)
+	release, ok := s.backgrounds.acquire(u.Sub)
+	if !ok {
+		c.w.Header().Set("Retry-After", "2")
+		return apierr.New(429, "too many downloads of the background image at the same time; try again in a moment")
+	}
+	defer release()
+	f, err := os.Open(p)
 	if err != nil {
+		return apierr.New(404, "no background uploaded")
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
 		return apierr.New(404, "no background uploaded")
 	}
 	c.used(200)
@@ -107,7 +131,12 @@ func (s *Server) getBackground(c *reqCtx) error {
 	h.Set("Cache-Control", "private, max-age=86400")
 	h.Set("Content-Security-Policy", "default-src 'none'")
 	h.Set("Content-Disposition", "inline")
-	_, _ = c.w.Write(b)
+	timeout := backgroundWriteTimeout
+	if s.answerTimeout < answerWriteTimeout { // a test shortened the deadlines
+		timeout = s.answerTimeout
+	}
+	_ = http.NewResponseController(c.w).SetWriteDeadline(time.Now().Add(timeout))
+	http.ServeContent(c.w, c.r, "", st.ModTime(), f) // streams; answers Range and If-Modified-Since
 	return nil
 }
 

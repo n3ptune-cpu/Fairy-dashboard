@@ -102,6 +102,8 @@ type Server struct {
 	control, pollCtl, login, adminRL *rateLimiter
 	settingsRL, uploadRL             *rateLimiter // per user: settings changes, background uploads
 	mux                              *http.ServeMux
+	answerTimeout                    time.Duration // how long a client may take over one answer (answerWriteTimeout; tests shorten it)
+	backgrounds                      streamSlots   // background downloads in flight (api_settings.go)
 }
 
 // New builds the server. demoUser != nil enables demo mode (caller guarantees a loopback listener).
@@ -113,7 +115,8 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 		DemoUser: demoUser, demoAuthTime: time.Now().Add(-time.Hour), // first control action shows step-up
 		control: newRateLimiter(cfg.ControlRatePerMin), pollCtl: newRateLimiter(cfg.ControlRatePerMin * 2),
 		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60), anonAudit: newAuditThrottle(),
-		settingsRL: newRateLimiter(30), uploadRL: newRateLimiter(uploadsPerMin)}
+		settingsRL: newRateLimiter(30), uploadRL: newRateLimiter(uploadsPerMin), answerTimeout: answerWriteTimeout,
+		backgrounds: streamSlots{perUser: maxBackgroundsPerUser, total: maxBackgroundsTotal, open: map[string]int{}}}
 	s.oidc = newOIDC(cfg, secrets)
 	s.logo = loadLogo(cfg.Branding.Logo)
 	s.Managed = managed.NewStore(cfg.DataDir)
@@ -168,17 +171,52 @@ func DeploymentWarnings(cfg *config.Panel, secrets config.Secrets) []string {
 	return out
 }
 
+// answerWriteTimeout is how long a client may take over one answer, counted from the answer's first byte
+// (T-33). The server has no WriteTimeout: that one counts from the request, so it would cut a handler that
+// waits for an agent, and the live stream. Instead every answer gets a write deadline when it starts
+// (statusWriter); an answer that is not taken by then ends its connection, so a client that does not read
+// cannot hold a connection, its goroutine and its buffers for as long as it likes.
+//
+// Two handlers set their own deadline and are left alone by this one: the live stream, before every write
+// (stream.go), and the background download, which may be 8 MiB (api_settings.go).
+const answerWriteTimeout = 60 * time.Second
+
+// statusWriter is the ResponseWriter every handler gets: it knows whether an answer was started, and it sets
+// the answer's write deadline.
 type statusWriter struct {
 	http.ResponseWriter
-	wrote bool
+	wrote    bool
+	timeout  time.Duration // answerWriteTimeout
+	deadline bool          // this answer has its write deadline (set at its first byte, or by the handler itself)
 }
 
-func (w *statusWriter) WriteHeader(code int) { w.wrote = true; w.ResponseWriter.WriteHeader(code) }
+// arm sets the write deadline of this answer, once. A deadline stays on the connection, so each answer sets
+// its own, also one that comes after a quiet minute on the same connection.
+func (w *statusWriter) arm() {
+	if !w.deadline && w.timeout > 0 {
+		w.deadline = true
+		_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(w.timeout))
+	}
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.wrote = true
+	w.arm()
+	w.ResponseWriter.WriteHeader(code)
+}
 func (w *statusWriter) Write(b []byte) (int, error) {
 	w.wrote = true
+	w.arm()
 	return w.ResponseWriter.Write(b)
 }
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// SetWriteDeadline is what http.ResponseController calls for a handler that sets its own deadline (the live
+// stream, a download). The answer's general deadline then does not replace it.
+func (w *statusWriter) SetWriteDeadline(t time.Time) error {
+	w.deadline = true
+	return http.NewResponseController(w.ResponseWriter).SetWriteDeadline(t)
+}
 
 func isLoopback(addr net.Addr) bool {
 	if addr == nil {
@@ -191,7 +229,11 @@ func isLoopback(addr net.Addr) bool {
 // Handler returns the full middleware chain.
 func (s *Server) Handler() http.Handler {
 	https := strings.HasPrefix(s.Cfg.PublicURL, "https://")
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		sw := &statusWriter{ResponseWriter: rw, timeout: s.answerTimeout}
+		// A handler that returns without writing is answered by net/http after it: that write has a deadline too.
+		defer sw.arm()
+		var w http.ResponseWriter = sw
 		if s.DemoUser != nil { // demo serves only requests that arrived on a loopback socket
 			if la, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr); !isLoopback(la) {
 				w.Header().Set("Content-Type", "application/json")
@@ -213,7 +255,6 @@ func (s *Server) Handler() http.Handler {
 		if https {
 			h.Set("Strict-Transport-Security", "max-age=63072000")
 		}
-		sw := &statusWriter{ResponseWriter: w}
 		defer func() {
 			if rec := recover(); rec != nil {
 				if rec == http.ErrAbortHandler {
@@ -266,6 +307,7 @@ func (s *Server) routes() {
 
 // Run serves on addr until ctx ends.
 func (s *Server) Run(ctx context.Context, ln net.Listener) error {
+	// No WriteTimeout here: every answer gets its write deadline in Handler (answerWriteTimeout).
 	srv := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second,
 		IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10}
 	go func() {
