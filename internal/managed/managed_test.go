@@ -139,3 +139,28 @@ func TestManagedProxmoxNode(t *testing.T) {
 		t.Fatal("CA kept", err)
 	}
 }
+
+// T-48: what an older release left in managed-hosts.yaml after a Re-pair that was answered without a Proxmox
+// token: proxmox_wanted, no proxmox entry, and still the node name the machine gave itself and the id of the
+// node it was. Such a host is a plain host: its agent is linked to no node, not by id and not by name.
+func TestAHostThatLostItsNodeIsLinkedToNothing(t *testing.T) {
+	stale := Host{ID: "friend-box", Name: "friend-box", URL: "http://friend-box:9101", OS: "linux", Site: "Friend",
+		ProxmoxWanted: true, Node: "pve", SystemID: "friend-pve-node-pve"}
+	a := stale.Agent(Secret{Token: "read-token-xxxxxxxxxxxxxxxxxxxxxxxx"})
+	if a.Node != "" || a.LinksTo != "" {
+		t.Fatalf("the agent of a host without a node entry is linked: node=%q links_to=%q", a.Node, a.LinksTo)
+	}
+	if stale.Shown() != "friend-box" {
+		t.Fatalf("it shows as %q", stale.Shown())
+	}
+	// unchanged: a node of its own is linked by id; an agent the admin put on an existing node, by name
+	own := stale
+	own.Proxmox = &PVE{ID: "friend-pve", IDPrefix: "friend-pve-", Node: "pve"}
+	if a := own.Agent(Secret{}); a.Node != "" || a.LinksTo != "friend-pve-node-pve" || own.Shown() != "friend-pve-node-pve" {
+		t.Fatalf("a host that is its own node: node=%q links_to=%q shown=%q", a.Node, a.LinksTo, own.Shown())
+	}
+	chosen := Host{ID: "box", Name: "box", URL: "http://box:9101", OS: "linux", Node: "pve", SystemID: "node-pve"}
+	if a := chosen.Agent(Secret{}); a.Node != "pve" || a.LinksTo != "" || chosen.Shown() != "node-pve" {
+		t.Fatalf("an agent on a node the admin chose: node=%q links_to=%q shown=%q", a.Node, a.LinksTo, chosen.Shown())
+	}
+}

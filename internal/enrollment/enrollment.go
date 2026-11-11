@@ -915,7 +915,10 @@ func (m *Manager) paired(e *Enrollment, resp enroll.Response) {
 			return
 		case pve == nil:
 			pveNote = " (the node sent no Proxmox API token: a cluster, or the command could not make one; it was added as a plain host)"
-			h.Proxmox = nil
+			// A plain host has no node. On a Re-pair the host still carries the node name the machine gave
+			// itself at its first pairing and the id of the node it was then; kept, the name would link its
+			// agent BY NAME to whatever node of any cluster is called the same (T-48).
+			h.Proxmox, h.Node, h.SystemID = nil, "", ""
 		case e.Repair && e.host.Proxmox != nil && !strings.EqualFold(pve.Node, e.host.Proxmox.Node) && !e.renamed:
 			// Re-pair: the machine was added as one Proxmox node and now names another. It may have been
 			// renamed, or something else answers in its place; either way it is the admin's call.

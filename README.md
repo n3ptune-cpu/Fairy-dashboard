@@ -330,6 +330,11 @@ step-up sign-in, and are audited. Hosts in config.yaml are not changed by the pa
 Re-pair is checked like a new host's, against everything else the panel has: an answer that would collide with
 another host or Proxmox node is refused and the host stays as it was. A host that is its own Proxmox node must
 answer with the node name it was added as, unless **The node was renamed** is ticked in the Re-pair dialog.
+If it answers without a Proxmox API token (the node has joined a cluster, or the command could not make a
+token), it is kept as a plain host and the dialog says so: its own node and guests are no longer shown, and
+its agent is not attached to any node, also not to a node of another cluster that has the same name. To show
+it as a node again, Re-pair once more when the node can make its token, or add its cluster under `proxmox:`
+in config.yaml.
 When the machine runs a newer Fairy-agent than the release the command installs, the Re-pair dialog says so
 before the command is run; when the agent that answers afterwards is an older build than before, the dialog
 and the audit entry (`host.repair`) say that an older build was installed.

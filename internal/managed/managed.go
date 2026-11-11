@@ -115,12 +115,22 @@ func (h Host) Agent(sec Secret) config.Agent {
 	if h.Proxmox != nil && h.SystemID != "" { // its own node: linked by id, not by name (names repeat across sites)
 		a.Node, a.LinksTo = "", h.SystemID
 	}
+	if h.lostNode() {
+		a.Node = ""
+	}
 	return a
 }
 
+// lostNode reports a host that was added as "a new Proxmox node" and has no node entry of its own (any more):
+// a Re-pair was answered without a Proxmox token. Its node name is the machine's own word from its first
+// pairing (Add host never lets an admin choose a node for such a host), so it is never used to link the host
+// to a node by name: the node of that name may belong to another cluster (T-48). An older release left
+// the name and the old node id in managed-hosts.yaml for such a host; this is how they are read.
+func (h Host) lostNode() bool { return h.ProxmoxWanted && h.Proxmox == nil }
+
 // Shown is the id the host shows as in the panel.
 func (h Host) Shown() string {
-	if h.SystemID != "" {
+	if h.SystemID != "" && !h.lostNode() {
 		return h.SystemID
 	}
 	return h.ID
