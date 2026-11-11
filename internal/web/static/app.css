@@ -300,6 +300,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .section-title .count { color: var(--faint); font-weight: 600; margin-left: 6px; }
 .table.hosts td { padding-top: 12px; padding-bottom: 12px; }
 .table.hosts .namecell a { font-size: 14px; gap: 12px; }
+/* The mark of the system a host runs (osIcon): the colour of the text around it, never the status colour (the dot says that). */
+.os-ico { display: block; flex: none; }
+.detail-head .dh-title .os-ico { color: var(--muted); }
 .host-ico { width: 32px; height: 32px; border-radius: var(--radius); display: grid; place-items: center; background: var(--raise); border: 1px solid var(--line2); color: var(--muted); flex: none; }
 .table.guests { font-size: 12px; }
 .table.guests td { padding-top: 6px; padding-bottom: 6px; }

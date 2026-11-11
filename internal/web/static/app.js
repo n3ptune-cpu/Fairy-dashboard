@@ -445,7 +445,16 @@ const guestCount = (s) => {
   const gs = s.kind === "node" ? guestsOf(s) : [];
   return gs.length ? `<span class="guest-count"><b>${gs.length}</b> guest${gs.length === 1 ? "" : "s"} · ${gs.filter((g) => g.status === "online").length} running</span>` : "";
 };
-const hostIcon = (s) => (s.kind === "node" ? I.cluster : I.machine);
+// The mark of the system a host runs (s.os_icon from the panel: { key, name }; the paths are in osicons.js), drawn
+// in the text colour like every other glyph, with the system's name as its name and tooltip. "" when the system
+// is not known (or the mark is not in this page's osicons.js): the caller keeps what it showed before.
+const osIcon = (s, size = 16) => {
+  const o = s.os_icon, marks = window.FAIRY_OS_ICONS;
+  const d = o && marks && typeof o.key === "string" && Object.hasOwn(marks, o.key) ? marks[o.key] : "";
+  return d ? `<svg class="os-ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="${esc(o.name)}"><title>${esc(o.name)}</title><path d="${esc(d)}"/></svg>` : "";
+};
+// A host's glyph: its system's mark, else the plain device glyph (two rack units for a Proxmox node, a screen for a host with an agent).
+const hostIcon = (s) => osIcon(s, 18) || (s.kind === "node" ? I.cluster : I.machine);
 const upsById = (id) => (state.ups?.ups || []).find((u) => u.id === id);
 const upsOf = (s) => (s.ups || []).map(upsById).filter(Boolean);
 const onBattery = (u) => u.status === "on_battery" || u.status === "low_battery";
@@ -770,7 +779,7 @@ function pageSystem(id, tab) {
   const menuOpen = state.menu?.id === id ? state.menu.kind : null;
   const why = controlWhyNot();
   const hasPower = (s.power_actions || []).length > 0;
-  const head = `<div class="detail-head"><div class="dh-title"><span class="dot ${cssName(s.status)}"></span><h2>${esc(s.name)}</h2>
+  const head = `<div class="detail-head"><div class="dh-title"><span class="dot ${cssName(s.status)}"></span>${osIcon(s, 22)}<h2>${esc(s.name)}</h2>
     <span class="chip ${s.status === "online" ? "ok" : s.status === "stale" ? "warn" : s.status === "offline" ? "bad" : ""}">${esc(statusText(s))}</span>
     ${helperBadge(s, menuOpen === "helper")}</div>
     <div class="actions">${liveLabel(s)}

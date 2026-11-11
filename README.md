@@ -991,3 +991,7 @@ Shared code imported from [Fairy-agent](https://github.com/n3ptune-cpu/Fairy-age
 ## Licence
 
 MIT, see [LICENSE](LICENSE). Fairy-agent is MIT-licensed too.
+
+The marks the panel shows for a host's system (Windows, Proxmox VE, the Linux distributions) are listed with
+their sources and licences in [THIRD-PARTY-ICONS.md](THIRD-PARTY-ICONS.md). They are trademarks of their
+owners and are used only to show which system a host runs.
