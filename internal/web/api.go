@@ -36,6 +36,7 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	s.adminRoutes()
 	s.updateRoutes()
 	s.wakeUpdateRoutes()
+	s.approvalRoutes()
 	s.enrollRoutes()
 	s.notificationRoutes()
 }

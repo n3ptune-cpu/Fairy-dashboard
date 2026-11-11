@@ -497,6 +497,8 @@ func TestApprovalBlock(t *testing.T) {
 		`approval: {client_id: pc, users: ["two words"]}`,
 		`approval: {client_id: pc, users: [a, a]}`,
 		`approval: {client_id: pc, users: [""]}`,
+		`approval: {client_id: pc, owners: {Straw: "two words"}}`,
+		`approval: {owners: {Straw: user-s}}`,
 		`approval: {client_id: pc, run_approval_wait_s: 30}`,
 		`approval: {client_id: pc, run_approval_wait_s: 7200}`,
 		`approval: {client_id: pc, client_secret: in-the-file}`, // a secret never goes into config.yaml
@@ -505,6 +507,9 @@ func TestApprovalBlock(t *testing.T) {
 		if _, err := Parse([]byte(base + bad)); err == nil {
 			t.Errorf("accepted: %s", bad)
 		}
+	}
+	if c, err := Parse([]byte(base + `approval: {client_id: pc, owners: {Straw: user-s}}`)); err != nil || c.Approval.Owners["Straw"] != "user-s" {
+		t.Error("owners:", err)
 	}
 	// the same client id at another Pocket ID is a different client
 	if _, err := Parse([]byte(base + `approval: {client_id: fairy, issuer: "https://other.example.org"}`)); err != nil {

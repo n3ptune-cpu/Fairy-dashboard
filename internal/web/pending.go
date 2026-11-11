@@ -148,7 +148,14 @@ func (c *reqCtx) keepPending(u *model.User, plan *approvalPlan) (p *pendingActio
 	}
 	p = &pendingAction{ID: randToken(18), Method: c.r.Method, Pattern: c.r.Pattern, Vals: vals, URL: *c.r.URL,
 		run: c.fn, Body: string(c.body), Label: label, Action: action, At: now, Client: c.client(), Approval: plan}
-	if list := actionList[c.r.Pattern]; list != nil {
+	if plan != nil && len(plan.items) > 0 { // the plan's own lines: what each machine would be told to trust
+		for _, line := range plan.items {
+			if len(p.Items) == maxPlanItems {
+				break
+			}
+			p.Items = append(p.Items, truncate(safeTarget(line), maxActionText))
+		}
+	} else if list := actionList[c.r.Pattern]; list != nil {
 		for _, line := range list(c, u) {
 			if len(p.Items) == maxActionItems {
 				break
@@ -187,6 +194,7 @@ var actionText = map[string]string{
 	"POST /api/admin/signin-wallpaper":    "change the sign-in picture",
 	"DELETE /api/admin/signin-wallpaper":  "remove the sign-in picture",
 	"POST /api/admin/wake-update":         "Update unpowered hosts",
+	"POST /api/admin/approval/turn-on":    "switch on the check of approvals on the machine itself",
 	"DELETE /api/admin/wake-update/{id}":  "cancel the run of \"Update unpowered hosts\"",
 	"PUT /api/systems/{id}/wake-update":   "\"Update unpowered hosts\" for {id}",
 }
@@ -210,8 +218,12 @@ var actionList = map[string]func(c *reqCtx, u *model.User) []string{
 	"POST /api/admin/wake-update": (*reqCtx).wakeUpdateItems,
 }
 
-// maxActionItems is more than a run has machines (wakerun.MaxHosts).
-const maxActionItems = 32
+// maxActionItems is more than a run has machines (wakerun.MaxHosts). maxPlanItems is more than a Turn on has
+// lines (MaxTurnOn machines, the keys and the two lines around them).
+const (
+	maxActionItems = 32
+	maxPlanItems   = 80
+)
 
 // decodeStrictly decodes a kept request's body the way its handler will: one reading only (strictBody), no
 // unknown fields.

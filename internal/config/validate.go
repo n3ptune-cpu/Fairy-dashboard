@@ -220,7 +220,7 @@ func (c *Panel) validateApproval(errs *problems) {
 		errs.add("approval.run_approval_wait_s must be 60-3600")
 	}
 	if a.ClientID == "" {
-		if a.Issuer != "" || len(a.Users) > 0 {
+		if a.Issuer != "" || len(a.Users) > 0 || len(a.Owners) > 0 {
 			errs.add("approval: client_id is missing (the client id of \"Fairy PC actions\" in Pocket ID); without it the block does nothing")
 		}
 		return
@@ -236,6 +236,11 @@ func (c *Panel) validateApproval(errs *problems) {
 	}
 	if len(a.Users) > MaxApprovalUsers {
 		errs.add("approval.users: at most %d", MaxApprovalUsers)
+	}
+	for label, sub := range a.Owners {
+		if label == "" || len(label) > 80 || !ValidApprovalUser(sub) {
+			errs.add("approval.owners: %q: %q is not an owner label with a Pocket ID user id (1-255 characters, no spaces)", label, sub)
+		}
 	}
 	seen := map[string]bool{}
 	for _, u := range a.Users {

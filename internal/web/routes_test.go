@@ -88,6 +88,10 @@ var matrixRoutes = []writeRoute{
 	{pattern: "POST /api/admin/wake-update", path: "/api/admin/wake-update", body: "WAKERUN", adminOnly: true, stepUp: true, each: true, killSwitch: true},
 	{pattern: "DELETE /api/admin/wake-update/{id}", path: "/api/admin/wake-update/nope", adminOnly: true, stepUp: true},
 	{pattern: "PUT /api/systems/{id}/wake-update", path: "/api/systems/laptop/wake-update", body: map[string]any{"enabled": true}, adminOnly: true, stepUp: true, killSwitch: true},
+	// Switching on a machine's own check of approvals: browser sessions only. It asks for the machines'
+	// approval, not for the panel's confirmation (TestTurnOn...); this panel has no approval: block, so an admin
+	// is told so (409).
+	{pattern: "POST /api/admin/approval/turn-on", path: "/api/admin/approval/turn-on", body: map[string]any{"hosts": []string{"laptop"}}, adminOnly: true, killSwitch: true},
 }
 
 // Writes outside /api/, and the GET routes that change something. They are not rows of the table (they are not

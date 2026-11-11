@@ -125,6 +125,8 @@ agents:
 #   client_id: 00000000-0000-4000-8000-000000000000  # the client id Pocket ID shows for "Fairy PC actions"
 #   # issuer: https://id.example.org      # only if it is another Pocket ID than oidc.issuer
 #   # users: ["<Pocket ID user id>"]      # may approve too, besides the panel's admins and a host's owner
+#   # owners: {Straw: "<Pocket ID user id>"}  # who the owner label "Straw" (owner: Straw on a host) is in Pocket ID:
+#                                         # that user may approve on the hosts with that label
 #   # run_approval_wait_s: 900            # "Update unpowered hosts": how long a run waits for the approval
 #                                         # it asks for once the woken machines are online (60-3600)
 

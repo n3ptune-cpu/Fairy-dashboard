@@ -55,6 +55,8 @@ var sessionOnlyControl = map[string]bool{
 	"POST /api/admin/wake-update":        true,
 	"DELETE /api/admin/wake-update/{id}": true,
 	"PUT /api/systems/{id}/wake-update":  true,
+	// Switching on a machine's own check of approvals needs a passkey: a token has none.
+	"POST /api/admin/approval/turn-on": true,
 }
 
 // controlGuard: CSRF, control group / control-scope token, admin kill switch, step-up, rate limit. API tokens

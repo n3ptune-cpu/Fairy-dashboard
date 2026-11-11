@@ -101,9 +101,12 @@ type Server struct {
 	// build sets it (EnableTestMode, internal/web/testmode.go): it has no signed-in person. A release has no
 	// code that sets it.
 	approvalAnyPerson bool
-	logo              *brandLogo // branding.logo, read once at startup (nil = built-in logo)
-	assetV            string     // ?v= of the /static/* URLs (assetVersion)
-	index             []byte     // index.html with assetV filled in
+	approvalKeys      issuerKeys // Pocket ID's signing keys as last fetched (api_approval.go)
+	turnOnMu          sync.Mutex
+	turnOnLast        *turnOnReport // how the last "Turn on" went, for the page (in memory)
+	logo              *brandLogo    // branding.logo, read once at startup (nil = built-in logo)
+	assetV            string        // ?v= of the /static/* URLs (assetVersion)
+	index             []byte        // index.html with assetV filled in
 
 	wall *streamSlots // downloads of the sign-in wallpaper in flight (signin_wallpaper.go)
 

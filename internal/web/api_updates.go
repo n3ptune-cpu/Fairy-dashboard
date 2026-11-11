@@ -224,7 +224,7 @@ func (s *Server) updateOne(c *reqCtx) error {
 	// A machine that checks approvals itself is asked first (approval_control.go); any other is confirmed and
 	// sent to as before.
 	var target *approvalTarget
-	if a, ok := s.Poller.AgentByID(id); ok && a.SelfUpdate && s.approvalWanted(a.ID) {
+	if a, ok := s.Poller.AgentByID(id); ok && a.SelfUpdate && c.wantsTarget(a.ID) {
 		t := s.updateTarget(a)
 		target = &t
 	}
@@ -249,6 +249,12 @@ func (s *Server) updateOne(c *reqCtx) error {
 	}
 	data, err := c.callUpdate(u, a, ap)
 	if err != nil {
+		if ap == nil && refusalCode(err) == api.CodeApprovalRequired {
+			// the machine wants an approval the panel did not know about (its state changed since the last poll)
+			if ask := c.askAfterRefusal(u, s.updateTarget(a)); ask != nil {
+				return ask
+			}
+		}
 		c.audit(u, "update.agent", id, params, errorOutcome(err))
 		return err
 	}

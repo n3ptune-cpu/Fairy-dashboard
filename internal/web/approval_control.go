@@ -55,6 +55,13 @@ func (s *Server) approvalWanted(agentID string) bool {
 	return ap != nil && ap.State != api.ApprovalOff
 }
 
+// wantsTarget reports whether a control route builds the approval target for the agent: the machine must be
+// asked, or this is the replay after an approval (which then decides by its plan, not by the panel's view of
+// the machine, which can be a poll behind).
+func (c *reqCtx) wantsTarget(agentID string) bool {
+	return c.approved() != nil || c.s.approvalWanted(agentID)
+}
+
 // confirmControl confirms a control request that is about to be sent to targets (see the top of this file)
 // and returns, per target, the approval to send with it or why that target cannot be sent. An error means
 // the whole request is refused for now: asked to confirm (401, kept), or not allowed.
@@ -66,15 +73,16 @@ func (c *reqCtx) confirmControl(u *model.User, what string, targets []approvalTa
 		// The panel's own replay, right after the approval for this kept request was verified. Each request
 		// gets the approval only if it is exactly one the approval was given for.
 		for i, t := range targets {
-			if !c.s.approvalWanted(t.agent.ID) {
-				continue // nothing checks there (any more): sent as before, on the strength of this confirmation
-			}
 			ap, err := g.For(t.agent.ID, t.req)
-			if err != nil {
+			switch {
+			case err == nil:
+				out[i].approval = ap
+			case !c.s.approvalWanted(t.agent.ID):
+				// nothing checks there, and no approval was asked for it: sent as before, on the strength of
+				// this confirmation (a batch that also goes to machines without the check)
+			default:
 				out[i].err = apierr.New(409, "This is not the request that was approved for "+t.name+", so it was not sent. Nothing was done: press the button again.")
-				continue
 			}
-			out[i].approval = ap
 		}
 		return out, nil
 	}
@@ -137,6 +145,9 @@ func (c *reqCtx) confirmControl(u *model.User, what string, targets []approvalTa
 // one is confirmControl for a request with at most one target: the approval to send (nil: none).
 func (c *reqCtx) confirmOne(u *model.User, what string, target *approvalTarget) (*api.Approval, error) {
 	if target == nil {
+		if c.approved() != nil { // the replay after an approval, for a request that no machine is asked about any more
+			return nil, nil
+		}
 		return nil, c.stepUp(u, what)
 	}
 	out, err := c.confirmControl(u, what, []approvalTarget{*target})
@@ -240,4 +251,52 @@ func approvalRefusal(name string, err error) error {
 		return apierr.New(ref.Err.Status, msg)
 	}
 	return err
+}
+
+// agentRefusal is a machine's refusal with one of the approval protocol's codes, as agentCall returns it: the
+// error the page gets, and the code for a caller that acts on it.
+type agentRefusal struct {
+	err  *apierr.Error
+	code string
+}
+
+func (e *agentRefusal) Error() string { return e.err.Error() }
+func (e *agentRefusal) Unwrap() error { return e.err }
+
+// refusalCode is the code a machine gave with its refusal ("" when err is none, or has none).
+func refusalCode(err error) string {
+	var a *agentRefusal
+	if errors.As(err, &a) {
+		return a.code
+	}
+	var p *powerctl.AgentRefusal
+	if errors.As(err, &p) {
+		return p.Code
+	}
+	return ""
+}
+
+// askAfterRefusal is for a request the panel sent without asking the machine first, because the machine's last
+// answer said that it checks nothing, and which the machine then refused with "approval_required" (the check
+// was switched on a moment ago, on the machine or from the panel). Instead of an error, the machine is asked
+// now and the dialog for its approval is shown, as if the panel had known. It returns that answer (401, the
+// request is kept), the machine's refusal of the question, or nil when this request cannot be asked for (a
+// replay, an API token) or the machine says no approval is needed after all.
+func (c *reqCtx) askAfterRefusal(u *model.User, t approvalTarget) error {
+	if c.resumed() || u.Auth == "token" || !c.s.approvalRL.allow(u.Sub) {
+		return nil
+	}
+	ch, _, err := c.challenge(t)
+	if err != nil {
+		return err
+	}
+	if ch == nil {
+		return nil
+	}
+	plan, err := approval.NewPlan([]approval.Bound{*ch})
+	if err != nil {
+		return nil
+	}
+	c.s.Poller.Scheduler.Kick("agent:" + t.agent.ID) // the page's view of the machine catches up
+	return c.askApproval(u, newApprovalPlan(plan))
 }

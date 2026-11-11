@@ -169,6 +169,8 @@ type GatedBackend struct {
 	mu       sync.Mutex
 	machines map[string]*Machine
 	lies     map[string]func(path string) (int, jsonx.M)
+	fails    map[string]error
+	stale    map[string]jsonx.M
 }
 
 // NewGatedBackend wraps b.
@@ -197,13 +199,42 @@ func (g *GatedBackend) Lie(id string, fn func(path string) (int, jsonx.M)) {
 	g.lies[id] = fn
 }
 
+// Stale makes the agent id's /metrics carry this approval block instead of the machine's real one (the answer of
+// a poll from before the machine changed); nil: the real one again.
+func (g *GatedBackend) Stale(id string, block jsonx.M) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.stale == nil {
+		g.stale = map[string]jsonx.M{}
+	}
+	if block == nil {
+		delete(g.stale, id)
+	} else {
+		g.stale[id] = block
+	}
+}
+
+// Fail makes every POST to the agent id fail with err (a machine that does not answer control requests).
+func (g *GatedBackend) Fail(id string, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.fails == nil {
+		g.fails = map[string]error{}
+	}
+	g.fails[id] = err
+}
+
 // FetchAgentMetrics adds a machine's approval block to the scripted answer.
 func (g *GatedBackend) FetchAgentMetrics(ctx context.Context, a config.Agent, timeout time.Duration) (jsonx.M, error) {
 	out, err := g.Backend.FetchAgentMetrics(ctx, a, timeout)
 	g.mu.Lock()
-	m := g.machines[a.ID]
+	m, old := g.machines[a.ID], g.stale[a.ID]
 	g.mu.Unlock()
-	if err == nil && m != nil {
+	switch {
+	case err != nil || m == nil:
+	case old != nil:
+		out["approval"] = old
+	default:
 		out["approval"] = m.Block()
 	}
 	return out, err
@@ -212,8 +243,11 @@ func (g *GatedBackend) FetchAgentMetrics(ctx context.Context, a config.Agent, ti
 // AgentRequest sends a machine's control requests through its gate first.
 func (g *GatedBackend) AgentRequest(ctx context.Context, a config.Agent, method, path string, body any) (int, jsonx.M, error) {
 	g.mu.Lock()
-	m, lie := g.machines[a.ID], g.lies[a.ID]
+	m, lie, fail := g.machines[a.ID], g.lies[a.ID], g.fails[a.ID]
 	g.mu.Unlock()
+	if fail != nil && method == http.MethodPost {
+		return 0, nil, fail
+	}
 	if lie != nil && method == http.MethodPost {
 		if status, data := lie(path); status != 0 {
 			return status, data, nil

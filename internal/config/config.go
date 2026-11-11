@@ -308,6 +308,10 @@ type Approval struct {
 	// Users are Pocket ID user ids ("sub") that may approve on the machines, in addition to the panel's admins
 	// and a host's owner: they go into the list a machine is given when the check is switched on for it.
 	Users []string `yaml:"users"`
+	// Owners says which Pocket ID user a host's owner is, by the owner label of config.yaml (`owner: Straw` on an
+	// agents: or systems: entry): owners: {Straw: "<Pocket ID user id>"}. That user may then approve on the
+	// machines with that owner label, in addition to the admins. The panel does not guess it from names.
+	Owners map[string]string `yaml:"owners"`
 	// RunApprovalWaitS is how long a run of "Update unpowered hosts" waits for the approval it asks for
 	// once the woken machines are online (default 900, 60-3600).
 	RunApprovalWaitS int `yaml:"run_approval_wait_s"`

@@ -788,3 +788,8 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .approval code { font-size: 12px; }
 .approval .note { margin: 6px 0; }
 .approval .chip code { color: inherit; }
+.approval .ap-on { margin-top: 10px; align-items: center; }
+.ap-users { display: block; margin-top: 2px; }
+.ap-res span:last-child { max-width: 62%; }
+/* the shield in the Turn on button is drawn 16 px, like every icon in a button, so the button is as high as the others (34 px) */
+.approval .btn svg { width: 16px; height: 16px; }

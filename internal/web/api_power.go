@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
@@ -67,7 +68,7 @@ func (s *Server) powerAction(c *reqCtx) error {
 	// other machine: "Confirm it's you" and then the checks, as before.
 	var target *approvalTarget
 	if x, err := c.find(id); err == nil {
-		if a, ar, ok := powerctl.ApprovalRequest(s.Poller, x, req); ok && s.approvalWanted(a.ID) {
+		if a, ar, ok := powerctl.ApprovalRequest(s.Poller, x, req); ok && c.wantsTarget(a.ID) {
 			if _, err := powerctl.Check(s.Poller, x, req); err != nil {
 				c.audit(u, "power."+req.Action, id, map[string]any{"action": req.Action, "delay_s": *req.DelayS}, errorOutcome(err))
 				return err
@@ -105,6 +106,14 @@ func (s *Server) powerAction(c *reqCtx) error {
 	}
 	res, err := powerctl.ExecuteApproved(c.r.Context(), s.Poller, x, req, who, ap)
 	if err != nil {
+		if ap == nil && refusalCode(err) == api.CodeApprovalRequired {
+			// the machine wants an approval the panel did not know about (its state changed since the last poll)
+			if a, ar, ok := powerctl.ApprovalRequest(s.Poller, x, req); ok {
+				if ask := c.askAfterRefusal(u, approvalTarget{agent: a, name: x.Name, req: ar}); ask != nil {
+					return ask
+				}
+			}
+		}
 		err = approvalRefusal(x.Name, err)
 		c.audit(u, "power."+req.Action, id, params, errorOutcome(err))
 		return err

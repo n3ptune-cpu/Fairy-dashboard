@@ -46,6 +46,12 @@ type approvalPlan struct {
 	// trust is set for "Turn on" only: what each machine of the plan is proposed, by agent id. The hash in a
 	// machine's entry is the hash of exactly this value.
 	trust map[string]api.TrustInit
+	// items, when set, are the dialog's lines for this plan (what each machine would trust); message is the
+	// dialog's own sentence instead of the usual one; skipped are the chosen machines that are not part of the
+	// plan, with the reason (Turn on: a machine that did not answer the question).
+	items   []string
+	message string
+	skipped map[string]turnOnResult
 }
 
 // newApprovalPlan makes the kept form of plan.
@@ -123,9 +129,12 @@ func (c *reqCtx) askApproval(u *model.User, plan *approvalPlan) error {
 	names := plan.machines()
 	c.audit(u, stepUpAction, c.r.URL.Path, map[string]any{"approval": names}, stepUpAsked)
 	kept, why := c.keepPending(u, plan)
+	msg := "Confirm it's you: " + andNames(names) + " checks this approval itself, so it needs its own passkey, every time."
+	if plan.message != "" {
+		msg = plan.message
+	}
 	detail := map[string]any{"code": "step_up_required", "window_s": c.s.Cfg.StepUpWindowS, "pending": kept != nil, "per_action": true,
-		"message":  "Confirm it's you: " + andNames(names) + " checks this approval itself, so it needs its own passkey, every time.",
-		"approval": map[string]any{"client": approvalClientName, "machines": names}}
+		"message": msg, "approval": map[string]any{"client": approvalClientName, "machines": names}}
 	if !math.IsInf(age, 1) {
 		detail["auth_age_s"] = math.Round(age)
 	}

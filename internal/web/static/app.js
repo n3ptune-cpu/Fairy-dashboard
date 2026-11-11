@@ -333,6 +333,7 @@ function showPendingResult(pr) {
   if (pr.ok && pr.ref && /^\/api\/admin\/hosts(\/[^/]+\/repair)?$/.test(pr.path)) revealEnrollment(pr.ref);
   if (pr.path?.startsWith("/api/admin/updates")) upd.fastUntil = Date.now() + 30000;
   if (pr.path?.startsWith("/api/admin/wake-update") || pr.path?.endsWith("/wake-update")) fetchWakeUpdate();
+  if (pr.path?.startsWith("/api/admin/approval")) fetchApproval(true);
 }
 // The action waiting for a step-up sign-in (sessionStorage: this tab only), offered as "Resume" once back.
 function readPending() {
@@ -731,12 +732,126 @@ function approvalBox(s) {
     ${row("Allowed users", esc(a.users ?? "–"), "How many Pocket ID users may approve on this machine")}
     ${row("Fan window", a.fan_window_s == null ? "–" : a.fan_window_s === 0 ? "off" : `${esc(a.fan_window_s)} s`, "After one approved fan change, more fan changes need no approval for this long")}
     ${row("Shutdown after boot", a.boot_shutdown_s == null ? "–" : a.boot_shutdown_s === 0 ? "off" : `one within ${esc(a.boot_shutdown_s)} s`, "One shutdown without approval shortly after the machine started (for \"Update unpowered hosts\")")}
-    ${proto}${agentErr}${approvalPinNote(a)}
+    ${proto}${agentErr}${approvalPinNote(a, s)}
     <div class="note" id="ap-locked">Locked: all of this is changed only on the machine, as administrator, with <code>fairy-agent helper-trust</code> (show, set, clear). The panel cannot change or remove it.</div></div>`;
 }
-// Filled in by the Turn on commit: the button for admins on a machine whose check is off.
-function approvalTurnOn() { return ""; }
-function approvalPinNote() { return ""; }
+// ---- Turn on (admins): switching a machine's own check on, with one passkey for all chosen machines.
+// apv.data is GET /api/admin/approval: the client, the keys Pocket ID publishes now, every agent's state, who
+// would be allowed to approve on each machine, and how the last Turn on went.
+const apv = { data: null, error: null, at: 0 };
+async function fetchApproval(force) {
+  if (!state.me?.can_control || (!force && Date.now() - apv.at < 30000)) return;
+  apv.at = Date.now();
+  try { apv.data = await api("/api/admin/approval"); apv.error = null; }
+  catch (e) { apv.error = e.message; if (e.status === 403) apv.data = null; }
+  render();
+}
+const apvMachine = (s) => (apv.data?.machines || []).find((m) => m.system_id === s.id || m.id === s.id);
+const apvUsers = (m) => (m.users || []).map((u) => `${esc(u.name || "not a user of this panel")} <code title="${esc(u.sub)}">${esc(shortKey(u.sub))}</code> <span class="note">${esc(u.why)}</span>`).join("; ");
+// The button on the page of a machine whose check is off (admins), or why it cannot be switched on from here.
+function approvalTurnOn(s) {
+  if (!state.me?.can_control) return "";
+  if (!state.me.approval_client) return '<div class="note">It cannot be switched on from this panel: config.yaml has no <code>approval:</code> block (the Pocket ID client "Fairy PC actions").</div>';
+  const m = apvMachine(s), why = controlWhyNot();
+  if (!m) { fetchApproval(); return '<div class="note">Checking whether it can be switched on…</div>'; }
+  return `<div class="row-gap ap-on"><button class="btn primary" type="button" data-act="ap-open" data-id="${esc(m.id)}" ${m.ready && !why ? "" : "disabled"}
+      title="${esc(why || (m.ready ? "Switch the check on for this machine: one passkey, then it is locked" : m.why))}">${I.shield}Turn on…</button>
+    <span class="note">${m.ready ? "Ready. After it is switched on, it is changed only on the machine itself." : esc(m.why || "")}</span></div>`;
+}
+// A machine that requires approvals and has none of the keys Pocket ID publishes now (admins: needs the page's data).
+function approvalPinNote(a, s) {
+  const m = s && state.me?.can_control ? apvMachine(s) : null;
+  if (state.me?.can_control && state.me.approval_client && !apv.data) fetchApproval();
+  return m?.stale_keys ? `<div class="warnbox" id="ap-stale">This machine pins a key that Pocket ID no longer publishes: it will refuse every approval. On the machine, as administrator: <code>fairy-agent helper-trust set --fetch-keys</code></div>` : "";
+}
+const TURN_ON_RESULT = table({ accepted: ["ok", "switched on · locked"], proof_refused: ["bad", "proof refused"], already_set: ["warn", "already on"], offline: ["bad", "no answer"],
+  refused: ["bad", "not switched on"], not_asked: ["", "not asked"] });
+function turnOnResults(rep) {
+  if (!rep || !(rep.results || []).length) return "";
+  return `<div class="wu-sub">Last Turn on · by ${esc(rep.by)} <span data-ago="${esc(rep.at)}">${ago(rep.at)}</span></div>
+    ${rep.results.map((r) => { const [cls, label] = TURN_ON_RESULT[r.outcome] || ["", r.outcome];
+      return `<div class="list-row ap-res" data-key="apr-${esc(r.id)}"><span><b>${esc(r.name)}</b> <span class="chip ${cls}">${esc(label)}</span></span><span class="note">${esc(r.text)}</span></div>`; }).join("")}`;
+}
+// Updates page: "N machines are ready for the check on the machine itself", with Turn on for all of them.
+function approvalBanner() {
+  if (!state.me?.can_control) return "";
+  const d = apv.data;
+  if (!d) return apv.error ? `<div class="panel glass pad approval"><h3>The check on the machine itself</h3><div class="error">${esc(apv.error)}</div></div>` : "";
+  const why = controlWhyNot(), known = d.machines.filter((m) => m.state);
+  if (!known.length && !d.configured) return "";
+  const row = (m) => { const [cls, label] = APPROVAL_STATE[m.state] || ["", "–"];
+    return `<tr class="row" data-key="apm-${esc(m.id)}"><td class="namecell"><b>${state.byId[m.system_id] ? `<a href="#/system/${enc(m.system_id)}">${esc(m.name)}</a>` : esc(m.name)}</b></td>
+      <td><span class="chip ${cls}">${esc(label)}</span>${m.stale_keys ? ' <span class="chip bad" title="It pins a key Pocket ID no longer publishes: fairy-agent helper-trust set --fetch-keys on the machine">old key</span>' : ""}</td>
+      <td>${esc(m.enforced_by || "–")}</td><td class="note">${m.ready ? "ready" : esc(m.why || "")}</td></tr>`; };
+  return `<div class="panel glass pad approval" data-key="apv">
+    <div class="wu-top"><h3>The check on the machine itself</h3>
+      <button class="btn primary" type="button" data-act="ap-open" ${d.ready && !why ? "" : "disabled"}
+        title="${esc(why || (d.ready ? "Choose the machines and switch the check on: one passkey for all of them" : "No machine is ready to be switched on"))}">${I.shield}Turn on… (${esc(d.ready)})</button></div>
+    <p class="note" id="ap-ready"><b>${esc(d.ready)} machine${d.ready === 1 ? " is" : "s are"} ready for the check on the machine itself.</b>
+      A machine with the check on verifies a Pocket ID approval (passkey, client "${esc(d.client)}") itself before it changes its fans, shuts down, restarts, sleeps or updates its agent:
+      the panel, or someone with the panel's control token, cannot do these without you. ${esc(d.required)} already check${d.required === 1 ? "s" : ""}${d.broken ? `, <b class="bad-t">${esc(d.broken)} broken</b>` : ""}.
+      Nothing is switched on by itself. Once it is on, a machine is changed only on the machine (fairy-agent helper-trust).</p>
+    ${d.configured ? "" : '<div class="warnbox">This panel has no <code>approval:</code> block in config.yaml (the Pocket ID client "Fairy PC actions"), so it cannot switch the check on or get approvals.</div>'}
+    ${d.keys_error ? `<div class="warnbox">${esc(d.keys_error)}</div>` : ""}
+    ${d.any_person ? '<div class="warnbox">Test build: this panel does not check that the person who approves is the person signed in (nobody is). The machines still check the approver against their own list, which comes from <code>approval.users</code>.</div>' : ""}
+    ${turnOnResults(d.last)}
+    ${known.length ? `<div class="scroll"><table class="table ap-machines"><thead><tr><th>Machine</th><th>Check</th><th>Checked by</th><th></th></tr></thead><tbody>${known.map(row).join("")}</tbody></table></div>` : ""}</div>`;
+}
+// The dialog: which machines, what each would trust from then on (shown before the passkey), and that it locks.
+async function openTurnOn(only) {
+  let d;
+  try { d = await api("/api/admin/approval"); } catch (e) { flash(e.message, true); return; }
+  apv.data = d; apv.at = Date.now();
+  const ready = d.machines.filter((m) => m.ready && (!only || m.id === only));
+  if (!ready.length) { flash(only ? (d.machines.find((m) => m.id === only)?.why || "This machine cannot be switched on right now") : "No machine is ready to be switched on", true); render(); return; }
+  const m = $("#modal");
+  m.innerHTML = `<form class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="ap-t" id="ap-form">
+    <h3 id="ap-t">Turn on the check on the machine itself</h3>
+    <p>From then on each ticked machine verifies a Pocket ID approval <b>itself</b> before it changes its fans, shuts down, restarts, sleeps or updates its agent.
+      Every such action asks for your passkey, every time. This is what each machine will trust:</p>
+    <div class="list-row"><span>Pocket ID</span><span>${esc(d.issuer)}</span></div>
+    <div class="list-row"><span>Client</span><span>${esc(d.client)} · <code>${esc(d.client_id)}</code></span></div>
+    ${(d.keys || []).map((k) => `<div class="list-row"><span>Signing key</span><span>${esc(k.kid)} · <code title="${esc(k.thumbprint)}">${esc(shortKey(k.thumbprint))}</code></span></div>`).join("")}
+    <div class="wu-sub">Machines, and who may approve on each</div>
+    <div class="opts wu-list" id="ap-list">${ready.map((x) => `<label class="check opt"><input type="checkbox" data-ap value="${esc(x.id)}" checked><span>${esc(x.name)} <span class="note">checked by its ${esc(x.enforced_by || "agent")}</span>
+      <span class="note ap-users">may approve: ${apvUsers(x)}</span></span></label>`).join("")}</div>
+    <div class="warnbox" id="ap-lock"><b>After this a machine is locked.</b> What it trusts (Pocket ID, the key, the users) can then only be changed or removed <b>on the machine itself</b>, as administrator, with
+      <code>fairy-agent helper-trust</code>. The panel has no way to undo it. If you are not on a machine's list above, do not switch it on.</div>
+    <p class="note">One passkey confirms all ticked machines. Each machine checks that approval against exactly the values above before it writes anything: with a wrong client, key, user or clock it refuses and stays open.</p>
+    ${d.any_person ? '<div class="warnbox">Test build: the list comes from <code>approval.users</code> in config.yaml only. Put your own Pocket ID user id there, or the machine will refuse you.</div>' : ""}
+    <div class="error" id="ap-err" role="alert"></div>
+    <div class="row-gap end"><button class="btn" type="button" id="ap-x">Cancel</button><button class="btn primary" type="submit" id="ap-go">Turn on</button></div></form>`;
+  m.hidden = false;
+  const picked = () => [...m.querySelectorAll("input[data-ap]")].filter((x) => x.checked).map((x) => x.value);
+  const most = +d.max || 64;
+  const sync = () => {
+    const n = picked().length;
+    $("#ap-go").disabled = !n || n > most;
+    $("#ap-go").textContent = n ? `Turn on for ${n} machine${n === 1 ? "" : "s"} (passkey)` : "Turn on";
+    $("#ap-err").textContent = n > most ? `At most ${most} machines with one passkey.` : "";
+  };
+  m.querySelectorAll("input[data-ap]").forEach((x) => (x.onchange = sync));
+  sync();
+  $("#ap-x").onclick = closeModal;
+  m.onclick = (e) => { if (e.target === m) closeModal(); };
+  $("#ap-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { hosts: picked() }, n = body.hosts.length, path = "/api/admin/approval/turn-on";
+    $("#ap-go").disabled = true;
+    try {
+      const r = await controlCall({ kind: "request", label: `Turn on the check on the machine itself: ${n} machine${n === 1 ? "" : "s"}`, method: "POST", path, body },
+        () => api(path, { method: "POST", body: JSON.stringify(body) }));
+      if (r === null) return;  // the passkey dialog took this one's place
+      closeModal(); flash(r.message || "Done");
+      fetchApproval(true);
+    } catch (x) { fetchApproval(true); if ($("#ap-err")) { $("#ap-err").textContent = x.message; $("#ap-go").disabled = false; } else flash(x.message, true); }
+  };
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="ap-open"]');
+  if (!t || t.disabled) return;
+  openTurnOn(t.dataset.id || "");
+});
 const statusText = (s) => (s.status === "paused" ? "paused" : s.asleep ? "asleep (from panel)" : s.status);
 // A host that is "offline" (or stale) while its machine took part in the panel's latest poll (s.machine_on says how: it
 // refused the connection, answered with an error, ...). The status word stays; this is its tooltip and its info box.
@@ -1288,6 +1403,7 @@ function updIndex() {  // after upd.data changed: the per-host lookup and the me
 }
 async function loadUpdates() {  // the Updates page: every 2 s while it is open
   await Promise.all([fetchPanelUpdate(), fetchUpdates(), fetchWakeUpdate()]);
+  fetchApproval();  // the machines' own check of approvals (at most every 30 s)
   if (current().page === "updates") schedule(loadUpdates, 2000);
 }
 // In the background (admins only): every minute, every 2 s while an agent is updating; feeds the banner, the
@@ -1343,6 +1459,7 @@ function pageUpdates() {
       ${d.panel_latest?.error && !d.panel_latest.disabled ? `<div class="note warn">Panel release: ${esc(d.panel_latest.error)}</div>` : ""}</div>
     <div class="panel glass pad">${panelUpdateBox(d)}</div>
     ${wakeUpdateBox()}
+    ${approvalBanner()}
     ${why ? `<div class="note warn">${esc(why)}</div>` : ""}
     <div class="panel glass scroll"><table class="table updates"><thead><tr><th>Host</th><th>Version</th><th>Status</th><th>Self-update</th><th class="num"></th></tr></thead>
       <tbody>${d.agents.map(row).join("") || '<tr><td colspan="5" class="note">No agents in config.yaml.</td></tr>'}</tbody></table></div>

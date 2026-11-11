@@ -96,7 +96,7 @@ func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[s
 		}
 		// the machine's own check of approvals said no: what that means and what to do, around its own words
 		if m, ok := approval.ErrorText(a.DisplayName(), jsonx.S(data, "code"), textsafe.Clip(jsonx.S(data, "error"), maxAgentError)); ok {
-			msg = m
+			return nil, &agentRefusal{err: apierr.New(st, m), code: jsonx.S(data, "code")}
 		}
 		return nil, apierr.New(st, msg)
 	}
@@ -229,7 +229,7 @@ func (s *Server) fanWrite(c *reqCtx, action string, body any, ar api.ApprovalReq
 	// sent to as before. While its helper is stopped nothing is asked: the request is refused below.
 	var target *approvalTarget
 	if x, err := c.find(id); err == nil && !helperPaused(x, "fans") {
-		if a, ok := s.Poller.AgentFor(id); ok && a.FanControl != nil && s.approvalWanted(a.ID) {
+		if a, ok := s.Poller.AgentFor(id); ok && a.FanControl != nil && c.wantsTarget(a.ID) {
 			target = &approvalTarget{agent: a, name: x.Name, req: ar}
 		}
 	}
@@ -266,6 +266,12 @@ func (s *Server) fanWrite(c *reqCtx, action string, body any, ar api.ApprovalReq
 	}
 	data, err := c.agentCall(a, "POST", path, body)
 	if err != nil {
+		if x, _ := c.find(id); ap == nil && refusalCode(err) == api.CodeApprovalRequired {
+			// the machine wants an approval the panel did not know about (its state changed since the last poll)
+			if ask := c.askAfterRefusal(u, approvalTarget{agent: a, name: x.Name, req: ar}); ask != nil {
+				return ask
+			}
+		}
 		c.audit(u, action, id, params, errorOutcome(err))
 		return err
 	}

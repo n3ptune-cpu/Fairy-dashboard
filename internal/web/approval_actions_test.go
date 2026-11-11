@@ -525,3 +525,48 @@ func TestApprovalStateIsVisible(t *testing.T) {
 		t.Error("the allowed users' ids are not part of the block")
 	}
 }
+
+// The panel's view of a machine can be a poll behind: a machine whose check was switched on a moment ago still
+// reads "off". The panel then sends the request as before, the machine refuses it ("approval_required"), and
+// instead of an error the panel asks the machine and shows the dialog for its approval.
+func TestCheckSwitchedOnSinceTheLastPoll(t *testing.T) {
+	for name, c := range map[string]struct {
+		path string
+		body func(a *approvalEnv) any
+		m    func(a *approvalEnv) *testutil.Machine
+		sent string
+	}{
+		"shutdown": {"/api/systems/laptop/power", func(a *approvalEnv) any { return a.shutdownBody() }, func(a *approvalEnv) *testutil.Machine { return a.laptop }, "/power"},
+		"update":   {"/api/admin/updates/laptop", func(*approvalEnv) any { return map[string]any{} }, func(a *approvalEnv) *testutil.Machine { return a.laptop }, "/update"},
+		"fan mode": {"/api/systems/tower/fan/mode", func(*approvalEnv) any { return map[string]any{"mode": "full"} }, func(a *approvalEnv) *testutil.Machine { return a.tower }, "/fan/mode"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newApprovalEnv(t)
+			m := c.m(a)
+			a.require(t, m)
+			// the panel still believes "off": put the old answer back without polling
+			a.gb.Stale(m.ID, jsonx.M{"state": "off", "enforced_by": "agent", "proto": 1.0})
+			a.poll()
+			if ap := a.s.Poller.ApprovalOf(m.ID); ap == nil || ap.State != api.ApprovalOff {
+				t.Fatalf("the panel's view: %+v", ap)
+			}
+			fresh := a.cookie(controller(), 0) // inside the panel's own window: nothing is asked by the panel itself
+			hdr := []string{"Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+			r := a.do("POST", c.path, c.body(a), hdr...)
+			id, _, ok := approvalAsked(r)
+			if !ok {
+				t.Fatalf("the machine's refusal must turn into the dialog: %d %s", r.code, r.raw)
+			}
+			if len(m.Passed()) != 0 {
+				t.Fatalf("something passed the gate: %+v", m.Passed())
+			}
+			a.admin, a.csrf[1] = fresh, fresh
+			if cb := a.approve(t, id); cb.code != 303 || a.result(t)["ok"] != true {
+				t.Fatalf("approving it: %d", cb.code)
+			}
+			if p := m.Passed(); len(p) != 1 || p[0].Path != c.sent || !p[0].Approved {
+				t.Fatalf("passed: %+v", p)
+			}
+		})
+	}
+}

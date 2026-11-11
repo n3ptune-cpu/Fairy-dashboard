@@ -27,7 +27,7 @@ func TestUIApproval(t *testing.T) {
 		}
 	}
 	// nothing of the block is put into the page without esc(): every ${a.…} in the approval code is wrapped
-	box := js[strings.Index(js, "function approvalBox(s) {"):strings.Index(js, "// Filled in by the Turn on commit")]
+	box := js[strings.Index(js, "function approvalBox(s) {"):strings.Index(js, "// ---- Turn on (admins)")]
 	for _, m := range regexp.MustCompile(`\$\{a\.[a-z_]+[^}]*\}`).FindAllString(box, -1) {
 		if !strings.Contains(m, "?") && !strings.Contains(m, "esc(") { // a ?: that picks between fixed texts is fine
 			t.Errorf("the approval box inserts a value of the machine without esc(): %s", m)
