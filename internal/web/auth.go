@@ -252,7 +252,10 @@ func (c *reqCtx) authAge(u *model.User) *float64 {
 
 // loginKey is the login rate limiter's bucket: the signed-in user for a request that carries a valid session
 // (a step-up or re-login), else the client IP. So clients sharing an address with someone (or flooding
-// /auth/login) can never stop a signed-in admin from confirming a control action.
+// /auth/login from elsewhere) do not use up a signed-in admin's budget for confirming a control action.
+// What still does (T-17, known, not changed): requests that carry the admin's own session, that is a copy of
+// the cookie, or the admin's own browser sent to GET /auth/login by a link on another site (SameSite=Lax).
+// README and SECURITY-FIXES.md say so.
 func (c *reqCtx) loginKey() string {
 	s := c.session()
 	if s.User != nil && s.SID != "" && c.s.Poller.Admin.SessionValid(s.SID, s.User.Sub, float64(s.IAT)) &&

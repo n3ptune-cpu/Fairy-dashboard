@@ -177,9 +177,13 @@ manual install per machine) is in Fairy-agent's
   needs a Pocket ID sign-in from the last **2 minutes** (always, also within the usual step-up window), the
   CSRF header and the kill switch off; it is audited as `panel.update`.
   **One-time setup**: every `fairy update` run by hand as root installs (or refreshes) the unit and the polkit
-  rule (`apt install polkitd` if it is missing). The release running today predates this, so the first time run
-  `fairy update` twice on the panel host: the first run installs the new panel, the second (now the new
-  `fairy`) sets up the button. Until then the button says what is missing.
+  rule (`apt install polkitd` if it is missing). If the button says what is missing, run `fairy update` once
+  more.
+  **What an update does not touch**: `fairy update` and the button replace the program only, never
+  `/etc/systemd/system/fairy.service`. What `deploy/fairy.service` has gained since your install (the memory
+  limit, the sandbox lines) is added once by hand: the memory limit as in
+  [Upgrading to this release](#upgrading-to-this-release), step 3; the whole unit as in SECURITY-FIXES.md,
+  to-do list, item 2.
 * **Agents**: admins see, in the panel, a banner when a newer Fairy-agent or Fairy-dashboard release exists
   (dismissed per release), an arrow next to each host's agent version when it is behind (click: release notes
   and **Start update**), a dot on the menu's **Updates** entry, and the **Updates** page (every agent's version
@@ -431,7 +435,7 @@ The file is read once at start (path from the config only) and served at `/brand
 * `limit_req` on `/auth/` and `/api/`, buffering off for `/api/stream` (SSE), `client_max_body_size 128k`
   (9m for `/api/settings/background`). Security headers are Fairy's: do not add them in nginx.
 * The secrets file stays `0600 root:root`: systemd loads it (`EnvironmentFile=`), the unit passes
-  `--env-file ""`. `/etc/fairy` itself is `0750 root:fairy` and `config.yaml` `0640 root:fairy`. Run the CLI as the service user: `sudo -u fairy fairy admin ...`.
+  `--env-file ""`. `/etc/fairy` itself is `0750 root:fairy` and `config.yaml` `0640 root:fairy`. Run the CLI as the service user: `sudo -u fairy fairy admin ...`. One exception: `sudo fairy admin config check` (as root; it only reads, and user `fairy` cannot read `fairy.env`).
 
 ## Upgrading to this release
 
@@ -480,7 +484,9 @@ line and `fairy admin config check` of the new panel name the same command.
 If one of them is wrong, the new panel does not start. `fairy update` waits for the panel to answer after
 the restart. When it does not, it puts the old program back (it keeps it as `/usr/local/bin/fairy.old`) and
 reports "rolled back to the previous version". Nothing is lost. Correct the value and run `fairy update`
-again. After the update you can check the file at any time with `sudo -u fairy fairy admin config check`.
+again. After the update you can check both files at any time with `sudo fairy admin config check` (as root:
+it only reads, and root can read `fairy.env`). As user `fairy` the same command shows every secret as
+missing, and a client secret as "not set"; that is expected and says nothing about the install.
 
 ### 3. One step by hand: the memory limit
 
@@ -612,8 +618,11 @@ session settings as whole seconds).
   the kill switch does not block them.
 * `trusted_proxies` is used to find the client IP: for rate limits, the audit log, and as the address a
   "Confirm it's you" is bound to (a wrong list makes every client look like the proxy). The login limiter
-  (`login_rate_per_min`) counts per client IP, and per user for a signed-in step-up, so nobody else's attempts
-  can block an admin from confirming a control action.
+  (`login_rate_per_min`) counts per client IP, and per user for a signed-in step-up, so attempts from other
+  addresses do not use up an admin's budget for confirming a control action. A copy of the admin's own cookie,
+  or another site that makes the admin's browser open `/auth/login` about 20 times a minute, still does, and
+  each such request makes a waiting "Confirm it's you" forget its action: "Continue" then answers "too many
+  login attempts" or "no longer waiting" until the minute is over. Nothing runs because of it.
 * Strict CSP, HSTS (https), frame/referrer/permissions policies, generic 500s, no secrets in logs or errors.
 * Sign-out is a POST with the CSRF header (no cross-site sign-out); visiting `/auth/login` keeps a valid session
   until a new sign-in completes.

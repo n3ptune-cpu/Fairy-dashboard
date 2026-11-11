@@ -13,9 +13,15 @@ there.
 
 1. In `/etc/fairy/config.yaml`: set `listen:` to the panel LXC's LAN address, set `trusted_proxies` to nginx's
    address, set `step_up_prompt_login: true`, and empty `bootstrap_admins` once you are admin.
-2. Replace `/etc/fairy/fairy.service` with the new `deploy/fairy.service` (then `systemctl daemon-reload`).
+2. Replace `/etc/systemd/system/fairy.service` with the new `deploy/fairy.service` (keep a copy of yours
+   first), then `sudo systemctl daemon-reload && sudo systemctl restart fairy`. Check:
+   `systemctl show fairy -p MemoryMax -p NoNewPrivileges` must show `MemoryMax=536870912` and
+   `NoNewPrivileges=yes`. `fairy update` never does this step for you: it replaces the program, not the unit
+   file. If you only want the memory limit, use the four steps in README.md, "One step by hand: the memory
+   limit".
 3. Use `deploy/nginx.example.conf` for nginx (real visitor IP from Cloudflare, rate limits, streaming).
-4. Run the admin tool only as `sudo -u fairy fairy admin ...`, never as root.
+4. Run the admin tool only as `sudo -u fairy fairy admin ...`, never as root. One exception:
+   `sudo fairy admin config check` (as root). It only reads, and only root can read `fairy.env`.
 5. In Pocket ID: run the latest version, turn off "users can edit their own account", and check that a fresh
    sign-in works for control actions (see M3).
 6. If you ever ran `fairy admin` as root: `chown -R fairy:fairy /var/lib/fairy` before starting the new version.
@@ -111,7 +117,12 @@ also listened on 127.0.0.1 only, which nginx in another container cannot reach.
 - Fairy reads the real visitor address from `X-Forwarded-For` (only when the request comes from a trusted
   proxy), including forms with port numbers and IPv6.
 - The login rate limit is counted per visitor address, and for a signed-in user doing a step-up per user, so
-  other people can never block you from confirming a control action.
+  attempts from other addresses do not use up your budget for confirming a control action. Two things still
+  can (found in the fourth review, not changed in code): someone who holds a copy of your session cookie,
+  and a page on another site that makes your own browser open `/auth/login` again and again. About 20 such
+  requests a minute use up your budget, and each one makes a waiting "Confirm it's you" forget its action.
+  "Continue" then answers "too many login attempts" or "The action is no longer waiting". Nothing runs
+  because of it: wait a minute and press the button again.
 - New setting `listen:` in config.yaml (the service file no longer hardcodes an address). Fairy warns at
   start if it listens on the LAN but only trusts 127.0.0.1 as proxy.
 - New `deploy/nginx.example.conf`: takes the real visitor address from Cloudflare (`CF-Connecting-IP`, only
