@@ -40,7 +40,7 @@ go test ./... && go vet ./...
 
 Static binary, no runtime dependencies besides `/etc/fairy/config.yaml` and `/etc/fairy/fairy.env`.
 
-The build needs Go 1.27.3 or newer. `go build` downloads the shared packages from
+The build needs Go 1.27.4 or newer. `go build` downloads the shared packages from
 `github.com/n3ptune-cpu/Fairy-agent` (the version pinned in `go.mod`, checked against `go.sum`) like any other
 dependency. To change shared code, change it in Fairy-agent, tag a new version there, then here run
 `go get github.com/n3ptune-cpu/Fairy-agent@vX.Y.Z && go mod tidy`. The agent itself is built in its own
