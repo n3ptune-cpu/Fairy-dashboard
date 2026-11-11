@@ -203,7 +203,7 @@ func TestUIWakeUpdate(t *testing.T) {
 		`await Promise.all([fetchPanelUpdate(), fetchUpdates(), fetchWakeUpdate()]);`, // loaded with the Updates page, every 2 s
 		`${wakeUpdateBox()}`,
 		`wu.data = await api("/api/admin/wake-update")`,
-		`data-act="wu-open"`, `>${I.onoff}Update unpowered hosts…</button>`,
+		`data-act="wu-open"`, `>${I.onoff}Update unpowered hosts</button>`,
 		// the two promises and the limit stay on the page itself (a sentence of the section's paragraphs), not behind the info button
 		`<b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.</p>`,
 		`<p class="note wu-rule info-keep">A machine takes part only after you switch it on here, one machine at a time.`,

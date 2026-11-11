@@ -177,7 +177,7 @@ The test VM is added as in part B, with **self-update** ticked.
 2. Press **Switch on** in its line. The browser asks whether you mean it; then "Confirm it's you" names the
    action; press **Confirm (test build)**. The line now says "switched on". (The same switch is in the ⋯
    menu on the test VM's page.)
-3. Press **Update unpowered hosts…**. The dialog says what a run does, and lists the test VM under
+3. Press **Update unpowered hosts**. The dialog says what a run does, and lists the test VM under
    "On now: update only, never switched off", unticked. Tick it. The button reads "Start for 1 machine".
 4. Press it. "Confirm it's you" shows the list: one machine, "update only; it is on and is never switched
    off", and a short number for the list. Press **Confirm (test build)**.
@@ -210,7 +210,7 @@ untick "Turn on fast startup"), or the run will take B for a machine that was on
    answer (a PC that restarts is also silent for a few minutes). Until then the "Machines" table says "Now:
    unclear" for B and how long it has had no answer; after 15 minutes it says "Now: off". The panel must
    have been running all that time: if you start it again, the 15 minutes start again.
-2. **Update unpowered hosts…**: B is listed under "Off (no answer for 15 minutes or more): wake,
+2. **Update unpowered hosts**: B is listed under "Off (no answer for 15 minutes or more): wake,
    update, switch off again", ticked. Start, **Confirm (test build)**.
 3. The run shows B as "waking". **Now power B on in VMware.** You have 5 minutes.
 4. When B's agent answers, the run goes on by itself: "updating", then "pause before shutdown" (a minute),
@@ -220,14 +220,14 @@ untick "Turn on fast startup"), or the run will take B for a machine that was on
    report says "LEFT ON" and that its shutdown was cancelled.
 7. Third time: press **Cancel run** while B is "waking" or "updating". The dialog asks what happens to the
    machines the run has woken; leave "stay on". B stays on and the report lists it as ON. While a run is
-   going, the **Update unpowered hosts…** button is grey ("one run at a time").
+   going, the **Update unpowered hosts** button is grey ("one run at a time").
 8. To see the rule "a machine that is already on is never switched off": shut B down, wait until the table
    says "Now: off" (15 minutes), power B on in VMware **before** you start the run, and start the run for it
    within the first seconds (the panel still shows it as off). The run asks B directly before any wake. If
    B answers, or refuses the connection (Windows runs, the agent has not started yet), the report says that
    it is on and that nothing was sent to it. If B does not answer yet, the run sends its wake, and when B
    answers it has been up for longer than since the wake: "It was already on". Either way B stays on.
-9. To see "not sure": shut B down and open **Update unpowered hosts…** two or three minutes later. B
+9. To see "not sure": shut B down and open **Update unpowered hosts** two or three minutes later. B
    is listed under "Not sure that they are off: left alone", with how long it has had no answer, and has
    no tick box. Nothing can be sent to it until the 15 minutes are over.
 

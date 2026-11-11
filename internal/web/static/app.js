@@ -1314,7 +1314,7 @@ function wakeUpdateBox() {
         "API tokens cannot start a run.",
         "After a restart of the panel a run is not continued: this page then says which machines it had woken."]))}</h3>
       <button class="btn primary" type="button" data-act="wu-open" ${!why && !d.active && !d.problem ? "" : "disabled"}
-        title="${esc(why || (d.active ? "A run is going: one run at a time" : d.problem || "Choose the machines and start a run"))}">${I.onoff}Update unpowered hosts…</button></div>
+        title="${esc(why || (d.active ? "A run is going: one run at a time" : d.problem || "Choose the machines and start a run"))}">${I.onoff}Update unpowered hosts</button></div>
     <p class="note info-keep">Wakes the machines you choose, updates their agent and switches them off again.
       <b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.</p>
     ${d.problem ? `<div class="warnbox">${esc(d.problem)}</div>` : ""}

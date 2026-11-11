@@ -225,7 +225,7 @@ manual install per machine) is in Fairy-agent's
 ### Update unpowered hosts
 
 For machines that are normally switched off: a PC that is only on while someone uses it, a Proxmox node
-whose guests do not start by themselves. **Update unpowered hosts…** on the Updates page (admins)
+whose guests do not start by themselves. **Update unpowered hosts** on the Updates page (admins)
 starts a **run**: you tick the machines, confirm once, and the panel does by itself what you would do by hand.
 For each ticked machine that is off:
 
