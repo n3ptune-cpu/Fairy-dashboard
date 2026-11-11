@@ -21,17 +21,17 @@ does not start, and says why.
 Every page has a red bar at the top: **TEST BUILD: sign-in is off. Never expose this.** `fairy version`, the
 Updates page and the start-up log say "TEST BUILD" too.
 
-## What to click in zip 4
+## What to click in zip 5
 
-Unpack the zip (folder `Fairy-dashboard-part1-r4`), open `cmd.exe` in it, then:
+Unpack the zip (folder `Fairy-dashboard-part1-r5`), open `cmd.exe` in it, then:
 
 ```
 go build -tags fairytest -o fairy-test.exe .\cmd\fairy
 fairy-test.exe serve
 ```
 
-Open `http://127.0.0.1:8080`. To keep the test VM you added before, copy the folder `fairy-test` from the r3
-folder into the r4 folder **before** the first start.
+Open `http://127.0.0.1:8080`. To keep the test VM you added before, copy the folder `fairy-test` from the r4
+folder into the r5 folder **before** the first start.
 
 1. **Overview**: one row per host. Under the name, small: the PC model. In the tile in front: the mark of its
    system (Windows, Debian, ...). Behind the name: small signs for the helper, the battery and the UPS, where
@@ -43,13 +43,16 @@ folder into the r4 folder **before** the first start.
    again at every start of the panel, so right after a start no machine is offered as off. It also starts
    again each time the host answers or refuses the connection (it runs, only its agent is stopped).
 5. **Sessions**: make the window narrower and wider. Nothing scrolls sideways.
-6. **Settings**: the ⓘ buttons; the sign-in picture you set in r3 is still there (with the copied folder).
+6. **Settings**: the ⓘ buttons; the sign-in picture you set before is still there (with the copied folder).
 7. If the VM has fans: change a fan. "Confirm it's you" names the change in words, not in braces. Else skip.
 8. The VM's page, **⋯**, **Set model name**: type a name, **Save**. It is under the host's name on the
    Overview; the ⓘ in the "Model" line of its page says what the host reports. **Clear** brings that back.
 9. **Settings**, "Pop-ups": press **Show a test pop-up**. It shows in the lower right corner for 5 seconds.
    A real one comes when you shut the VM down **inside Windows** (Start, Shut down) and about two minutes
    pass: "offline", with the VM's name. Shut down from the panel it is "off" and shows no pop-up.
+10. **Buttons**: buttons in one row are the same height. Look at the foot of a dialog (**Cancel** beside
+    **Save** in "Set model name", the run's dialog, "Confirm it's you"), the row at the top of the VM's page,
+    and the rows of buttons on the Updates page. This is new in zip 5, like the last sentence of step 4.
 
 Every page with made-up data, without any machine: build the plain program and start its demo.
 
