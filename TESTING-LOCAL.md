@@ -104,8 +104,9 @@ Fairy-agent from GitHub and checks its signature, exactly like the real panel).
    Overview. Now try its page, the Updates page, power actions (use a delay and Cancel first).
 9. When you are done: remove the host on its page (**Remove**), and put the test VM back to its snapshot.
 
-Steps 6 and 7 have not been run on Windows yet. What they should do is taken from the installer
-(`install.ps1`) and the agent's code. If step 6 ends differently, send what the window shows.
+These steps were run on 2026-11-11 with a Windows 10 dev VM and a Windows 11 test VM without Tailscale, and
+work as written: step 6 ended with `not paired yet`, and after step 7 the host was paired and online within
+seconds. If step 6 ends differently for you, send what the window shows.
 
 ## C. Start again from nothing
 
@@ -120,6 +121,36 @@ To remove the config as well: `rmdir /s /q fairy-test`. Test machines that were 
 put them back to their snapshot.
 
 A new zip goes into a new folder; build and start there. The old folder can be deleted whole.
+
+## D. Trying the Sessions page
+
+Every browser that opens the panel is its own sign-in, a **session**. To have two, use two browsers on the dev
+VM (Edge and Firefox, say), or one browser with a normal window and a private (InPrivate, incognito) window.
+
+1. Start the panel (part A). Open `http://127.0.0.1:8080` in the first window.
+2. Open `http://127.0.0.1:8080` in the second window too.
+3. In the first window: the menu button at the top right (three lines), then **Sessions**.
+4. Under "Your sessions" there are two lines. The one marked **This session** is the window you are looking
+   at; the other one is the second window. Both show `127.0.0.1`, because both are on this PC. The times
+   ("12s ago") count by themselves. Below, "Everyone's sessions" shows the same two with the user's name:
+   that table is for admins.
+5. Press **Sign out** on the other line. "Confirm it's you" opens and says what will happen: "Fairy will run:
+   sign out another session of yours (...)". Press **Cancel** once: nothing happens, both lines stay.
+6. Press **Sign out** again, then **Confirm (test build)**. The page loads again, says "that session is signed
+   out", and one line is left.
+7. Look at the second window. Within a few seconds it shows "You were signed out." by itself.
+8. In the second window press **Continue as test-admin**. It is signed in again, as a new session.
+9. First window: wait up to 15 seconds (or reload). Two lines again. Press **Sign out everywhere else**, then
+   **Confirm (test build)**. One line is left, and the second window is signed out again.
+10. With one line left, **Sign out everywhere else** is grey: there is nowhere else.
+11. Menu, **Audit**, choose "Sessions" in the filter: the sign-outs are listed, with who did it and from which
+    address.
+12. Make the window narrow (or press F12 and choose a phone): each session becomes a block of its own.
+
+The line marked **This session** has no button. To end it, use **Sign out** in the menu, as before.
+
+Stop the panel and start it again: the list starts empty and your open window signs in anew. (A test build
+forgets its sessions at every start, see below.)
 
 ## What the test build does NOT prove
 
@@ -138,5 +169,9 @@ A new zip goes into a new folder; build and start there. The old folder can be d
   build: it works on an installed panel's files.
 * **Several people.** There is one admin. What a viewer or a waiting user sees: `fairy serve --demo` of a
   normal build.
-* **Sessions across a restart.** Every start of a test build makes a new session secret, so a restart signs
-  the page out; "Continue as test-admin" or a reload signs it in again.
+* **Sessions across a restart.** Every start of a test build makes a new session secret and empties its
+  session list, so a restart signs the page out; "Continue as test-admin" or a reload signs it in again.
+* **The Sessions page with real addresses and a real confirmation.** Here every session is `127.0.0.1` and
+  "Confirm it's you" is the test build's own button. That the address is the visitor's own behind nginx and
+  Cloudflare, that Pocket ID asks for the passkey before a session is signed out, and what a second person
+  (a viewer) sees are not part of it.

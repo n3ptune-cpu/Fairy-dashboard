@@ -421,6 +421,30 @@ most a quarter of the list and gets at most 5 push messages a minute; the sixth 
 the next message of that source says how many were left out. Everything is on the page either way. When the
 list is full, the source with the most entries gives up its own, so a standing alarm of another host stays.
 
+### Sessions
+
+**Sessions** in the menu (top right) shows where you are signed in: one line per browser, with the browser
+and system ("Firefox on Windows"), the address, when it signed in and when it was last used. The line marked
+**This session** is the window you are looking at. **Sign out** ends one of the other sessions, **Sign out
+everywhere else** all of them; the browser that was signed out shows the sign-in page within a few seconds.
+Admins also see "Everyone's sessions" and can sign any of them out. Viewers have the page for their own
+sessions. A person who is waiting for access does not have it.
+
+* Signing another session out asks "Confirm it's you" every time, also seconds after an earlier
+  confirmation. So somebody who got hold of a copy of your session cookie cannot sign you out and stay in.
+  The session you are using is ended with **Sign out** in the menu.
+* A copy of your cookie is not a line of its own: it is the same session as the browser it was taken from.
+  It shows under the address of that line as "also used from ...". A phone or laptop that changes networks
+  shows the same. If such an address is not yours: confirm any action (that gives your session a new id, and
+  every older copy stops working), or sign out and in again.
+* Sessions end by themselves: 4 hours after the last use and 1 day after the sign-in, unless config.yaml
+  says otherwise (`session_idle_timeout`, `session_max_age`).
+* The address is the one in the audit log: the visitor's own when nginx is set up as below
+  (`trusted_proxies`), nginx's otherwise. No location is looked up. "Unknown browser" and "unknown" stand for
+  what was not recorded: a session from before this page, until it is used again.
+* Every sign-out from this page is in the audit log (`sessions.revoke`, `sessions.revoke_others`).
+  `fairy admin sessions list | revoke | revoke-all` on the panel host work as before.
+
 ### Custom logo
 
 Copy your image to `/etc/fairy/logo.png` (PNG, JPEG, WebP or GIF, at most 1 MiB; SVG is refused because it can
@@ -589,9 +613,12 @@ memory limit. Add it once:
     from a machine that contains escape sequences, line breaks or direction overrides is shown, logged and
     sent on without them. Ordinary names, also with accents or non-Latin letters, are unchanged. A Proxmox
     cluster with more than 64 nodes or 2000 guests is shown up to that number, and the log says so.
+13. **Sessions** is new in the menu: where you are signed in, and Sign out for the other places. Signing
+    another session out asks "Confirm it's you" every time. Sessions that were open before the update are
+    listed with "Unknown browser" until they are used again. See [Sessions](#sessions).
 
 Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
-`managed-hosts.yaml`). It does not start when config.yaml has `enroll: {allow_non_tailscale: ...}`,
+`managed-hosts.yaml`, and `sessions.json`, where it ignores what this one adds). It does not start when config.yaml has `enroll: {allow_non_tailscale: ...}`,
 `step_up_per_action`, or a text such as `4h` in the two session settings. Take those out first (write the
 session settings as whole seconds).
 
@@ -650,6 +677,15 @@ session settings as whole seconds).
   post from another site, never counts), and requests the page marks `X-Fairy-Active: 1` because there
   was pointer / key / touch input in the last minute (`POST /api/me/active` is its explicit signal). The live
   stream and the page's timers never count, so a tab nobody touches signs out, and its stream ends.
+* The Sessions page (`/api/me/sessions`, `/api/admin/sessions`): a person sees and ends their own sessions, an
+  admin everyone's. The browser never gets a session id: a session is named by a keyed hash of its id (not a
+  cookie, not guessable, looked up only among the sessions the caller may end). Ending a session other than
+  one's own current one always needs its own "Confirm it's you": a confirmation made for another action does
+  not count, also not inside `step_up_window_s`. Reading the list needs the session only, like every other
+  read, so whoever holds a copy of a cookie can see that person's sessions; they cannot end them. What the
+  page shows of a browser is the client's own text (User-Agent, cut to 256 bytes, control characters removed)
+  and is escaped; the address is taken as everywhere else (`trusted_proxies`). The audit log has every
+  sign-out with who, whose session and from which address, and never a session id or cookie.
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never
   accepted on `/auth/*`, the settings endpoints or the Users page, nor (they cannot "confirm it's you") for
   stopping / starting the elevated helper, Add host, Re-pair, Remove and cancelling a waiting Add host, which need a browser sign-in. Otherwise `control` acts as an admin; `read` sees every
@@ -743,7 +779,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | Folder | What it does |
 | --- | --- |
 | `cmd/fairy` | The `fairy` program: `main.go` picks the sub-command, `serve.go` starts the panel (or demo mode), `update.go` is `fairy update`. |
-| `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
+| `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`, the Sessions page's in `api_sessions.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
 | `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster and all-hosts totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |
 | `internal/scheduler` | Runs each source as a job at its own interval: overrides, pause, boost while viewing, never overlapping. |
 | `internal/normalise` | Turns raw Proxmox and agent data into the one "system" shape the UI uses. |
