@@ -142,6 +142,16 @@ func Clip(s string, n int) string {
 	return strings.ToValidUTF8(s[:n], "") + "…"
 }
 
+// MaxError is how many bytes of an error text the panel keeps for a system or a source (ErrorText).
+const MaxError = 256
+
+// ErrorText is the one way an error text gets into what the panel keeps and hands out about a system or a
+// source (the snapshot, the stream, health.json, a notification, the log): cleaned and cut to MaxError bytes
+// (Clip). An error text can repeat what the other side said (T-06: the names in a certificate), and one text
+// is kept for every node and guest of a cluster, so it must be short wherever it comes from. A text that is
+// short and clean already is returned as it is.
+func ErrorText(s string) string { return Clip(s, MaxError) }
+
 // Cut is Clip without the "…": for a text that is compared or shown inside a sentence of the panel's own.
 func Cut(s string, n int) string {
 	s = strings.TrimSpace(Clean(s))

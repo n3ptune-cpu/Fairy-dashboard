@@ -10,6 +10,7 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 type pendingNote struct {
@@ -283,6 +284,11 @@ func (p *Poller) buildSnapshot() []model.System {
 		}
 		if p.Scheduler.IsPaused(s.ID) {
 			s.Status, s.Error = "paused", nil
+		}
+		if s.Error != nil { // the boundary: no snapshot hands out a long or uncleaned error text (T-06)
+			if c := textsafe.ErrorText(*s.Error); c != *s.Error {
+				s.Error = &c
+			}
 		}
 		list[i] = s
 	}

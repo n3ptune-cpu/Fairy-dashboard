@@ -147,3 +147,18 @@ func TestCleanJSON(t *testing.T) {
 		t.Fatal("scalars")
 	}
 }
+
+// T-06: an error text the panel keeps is short and clean, and one that is both already is not copied.
+func TestErrorText(t *testing.T) {
+	if got := ErrorText("timeout"); got != "timeout" {
+		t.Fatalf("%q", got)
+	}
+	long := "x\x1b[2J\r\n\u202e" + strings.Repeat("é", 200_000)
+	got := ErrorText(long)
+	if len(got) > MaxError+len("…") || Clean(got) != got || !strings.HasPrefix(got, "x  é") || !strings.HasSuffix(got, "…") || !utf8.ValidString(got) {
+		t.Fatalf("%d bytes: %.40q", len(got), got)
+	}
+	if ErrorText(got) != got {
+		t.Fatal("a clipped text is clipped again")
+	}
+}

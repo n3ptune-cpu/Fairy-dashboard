@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 type pveRef struct {
@@ -124,6 +126,7 @@ func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout ti
 // logs the first failure of a run of failures. Caller holds p.mu.
 func (p *Poller) proxmoxFailedLocked(pve config.Proxmox, src, msg string) {
 	now, _ := p.now()
+	msg = textsafe.ErrorText(msg) // once: the log line, the source and every node and guest get this one short text
 	if prev, ok := p.sources[src]; !ok || prev.OK {
 		slog.Warn("proxmox poll failed", "cluster", pve.ID, "error", msg)
 	}
@@ -250,12 +253,46 @@ func (p *Poller) PVEPower(ctx context.Context, clusterID, path string, data url.
 }
 
 // proxmoxErr describes a Proxmox poll error; a certificate issued for another name says how to fix it.
+//
+// The certificate is whatever answered the handshake at that address, trusted or not, and its names are as
+// many and as long as it likes (T-06). So the text repeats at most maxCertNames of them, and only names that
+// are host names (certName); what to do comes first, so that it is never what gets cut.
 func proxmoxErr(err error) string {
 	var he x509.HostnameError
 	if errors.As(err, &he) && he.Certificate != nil {
-		names := strings.Join(he.Certificate.DNSNames, ", ")
-		return fmt.Sprintf("the node's certificate is not issued for %q (it lists %s): run `pvecm updatecerts --force` and "+
-			"`systemctl restart pveproxy` on the node, or set tls_server_name to one of those names", he.Host, names)
+		return textsafe.ErrorText(fmt.Sprintf("the node's certificate is not issued for %q: run `pvecm updatecerts --force` and "+
+			"`systemctl restart pveproxy` on the node, or set tls_server_name to a name the certificate lists (%s)",
+			textsafe.Cut(he.Host, maxCertName), certNames(he.Certificate.DNSNames)))
 	}
-	return devices.Describe(err)
+	return textsafe.ErrorText(devices.Describe(err))
+}
+
+const (
+	maxCertNames = 3  // names of a certificate that an error text repeats
+	maxCertName  = 64 // bytes of one such name (a DNS label is at most 63)
+)
+
+// certNameRe is a host name as a certificate lists it: letters, digits, dots and hyphens, "*." in front for a
+// wildcard.
+var certNameRe = regexp.MustCompile(`^(\*\.)?[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
+
+// certNames lists the first maxCertNames of a certificate's names that are host names of at most maxCertName
+// bytes, and says how many names it left out. Nothing else of a name is ever repeated.
+func certNames(names []string) string {
+	var show []string
+	for _, n := range names {
+		if len(show) < maxCertNames && len(n) <= maxCertName && certNameRe.MatchString(n) {
+			show = append(show, n)
+		}
+	}
+	rest := len(names) - len(show)
+	switch {
+	case len(show) == 0 && rest == 0:
+		return "it lists none"
+	case len(show) == 0:
+		return fmt.Sprintf("none of its %d is a host name", rest)
+	case rest > 0:
+		return fmt.Sprintf("%s and %d more", strings.Join(show, ", "), rest)
+	}
+	return strings.Join(show, ", ")
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/ups"
 )
 
@@ -90,7 +91,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	cancel()
 	defer p.Bump()
 	if err != nil {
-		msg := devices.Describe(err)
+		msg := textsafe.ErrorText(devices.Describe(err))
 		p.mu.Lock()
 		now, _ := p.now()
 		if prev, ok := p.sources[name]; !ok || prev.OK {

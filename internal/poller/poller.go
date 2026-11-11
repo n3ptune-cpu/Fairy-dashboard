@@ -24,6 +24,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/power"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/scheduler"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/ups"
 )
 
@@ -211,7 +212,7 @@ func (p *Poller) degrade(s model.System, now time.Time, err string) model.System
 		s.Status = "offline"
 		s.CPUPercent = nil
 	}
-	s.Error = model.P(err)
+	s.Error = model.P(textsafe.ErrorText(err)) // short and clean, whatever failed (T-06)
 	s.NetRxBps, s.NetTxBps = nil, nil
 	// A shutdown / reboot the agent had scheduled is over once the host stops answering after its time (or
 	// once it is offline): no more "shutdown in 0:00" and no Cancel for a machine that is already off.
@@ -242,6 +243,11 @@ func (p *Poller) stamp(s model.System, now time.Time) model.System {
 // caller holds p.mu
 func (p *Poller) source(name string, ok bool, now time.Time, latency *time.Duration, err *string) {
 	prev, had := p.sources[name]
+	if err != nil { // health.json, the Add host dialog and `fairy admin health` show it: short and clean (T-06)
+		if c := textsafe.ErrorText(*err); c != *err {
+			err = &c
+		}
+	}
 	st := model.SourceStatus{Name: name, OK: ok, LastError: err}
 	if latency != nil {
 		st.LatencyMS = model.P(math.Round(latency.Seconds()*10000) / 10)
