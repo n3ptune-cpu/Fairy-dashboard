@@ -950,6 +950,7 @@ function updTick() {
   if (current().page === "updates") { next(); return; }
   fetchUpdates().then(next, next);
 }
+const LAST_SEEN_TIP = "What its agent reported when the panel last reached it. It does not answer now, so this may no longer be true.";
 const buildLabel = (v) => { const m = /^(\d+)-([0-9a-f]{7,})$/.exec(v || ""); return m ? `build ${m[1]} (${m[2].slice(0, 7)})` : v || "–"; };
 function updState(r) {
   const su = r.self_update;
@@ -971,10 +972,13 @@ function pageUpdates() {
       ${L.url ? `<a href="${safeHref(L.url)}" target="_blank" rel="noopener noreferrer">${esc(L.tag)} ${I.ext}</a>` : ""}` : '<span class="note">unknown</span>';
   const row = (r) => {
     const cur = r.version ? buildLabel(r.version) : "–";
-    const vcls = r.behind === true ? "warn" : r.behind === false ? "ok" : "";
+    // version_last_seen: the agent does not answer; this is what it reported when the panel last reached it
+    const vcls = r.version_last_seen ? "" : r.behind === true ? "warn" : r.behind === false ? "ok" : "";
+    const vnote = r.version_last_seen ? `<div class="note" title="${esc(LAST_SEEN_TIP)}">last seen${r.behind === true ? " · older than the latest release" : ""}</div>`
+      : r.behind === true ? '<div class="note">update available</div>' : "";
     const busy = upd.busy[r.id];
     return `<tr class="row" data-key="up-${esc(r.id)}"><td class="namecell"><b>${state.byId[r.id] ? `<a href="#/system/${enc(r.id)}">${esc(r.name)}</a>` : esc(r.name)}</b><span class="sub">${esc(r.id)}</span></td>
-      <td><span class="chip ${vcls}" title="${esc(r.version || "")}">${esc(cur)}</span>${r.behind === true ? '<div class="note">update available</div>' : ""}</td>
+      <td><span class="chip ${vcls}" title="${esc(r.version || "")}">${esc(cur)}</span>${vnote}</td>
       <td><span class="chip ${r.status === "online" ? "ok" : r.status === "offline" ? "bad" : ""}">${esc(r.status)}</span></td>
       <td>${r.configured ? updState(r) : '<span class="note">off</span>'}</td>
       <td class="num"><button class="btn" data-act="upd-one" data-id="${esc(r.id)}" data-name="${esc(r.name)}" ${r.can_update && !why && !busy ? "" : "disabled"}
@@ -1058,8 +1062,9 @@ document.addEventListener("click", (e) => {
 function verChip(sysId) {
   const r = upd.bySys[sysId];
   if (!r || !state.me?.can_control) return "";
-  const arrow = r.behind === true || updBusy(r);
-  return `<span class="ver"><span class="chip ${r.behind === true ? "warn" : ""}" title="fairy-agent ${esc(r.version || "?")}">${esc(r.version ? buildLabel(r.version) : "agent ?")}</span>${arrow
+  const stale = !!r.version_last_seen;  // the agent does not answer: no "update available" arrow for what it once reported
+  const arrow = (r.behind === true && !stale) || updBusy(r);
+  return `<span class="ver"><span class="chip ${r.behind === true && !stale ? "warn" : ""}" title="${esc(stale ? `fairy-agent ${r.version}, last seen. ${LAST_SEEN_TIP}` : `fairy-agent ${r.version || "?"}`)}">${esc(r.version ? `${buildLabel(r.version)}${stale ? " (last seen)" : ""}` : "agent ?")}</span>${arrow
     ? `<button class="upd-arrow ${updBusy(r) ? "busy" : ""}" type="button" data-act="upd-pop" data-sys="${esc(sysId)}" aria-haspopup="dialog" aria-expanded="${upd.popSys === sysId}"
       aria-label="${esc(updBusy(r) ? `Update in progress on ${r.name}` : `Update available for ${r.name}`)}" title="${updBusy(r) ? "Update in progress" : "Update available"}">${I.uparrow}</button>` : ""}</span>`;
 }
@@ -1074,7 +1079,7 @@ function updPopHtml(r) {
   else if (!r.agent_enabled) body = `<p class="note">Self-update is off on the agent: set <code>self_update: enabled: true</code> in its config.yaml (or the agent is older than self-update: install this release by hand once, or run <code>fairy-agent update</code> on the machine).</p>`;
   else body = `<p class="note">${esc(r.why || "cannot update right now")}. On the machine: <code>fairy-agent update</code>.</p>`;
   return `<div class="menu-title" id="upd-pop-t">${updBusy(r) ? "Updating" : "Update available"}</div>
-    <div class="upd-pop-body"><p>Release <b>${esc(rel)}</b> is available.${r.version ? ` ${esc(r.name)} runs ${esc(buildLabel(r.version))}.` : ""}</p>
+    <div class="upd-pop-body"><p>Release <b>${esc(rel)}</b> is available.${r.version ? ` ${esc(r.name)} ${r.version_last_seen ? "last reported" : "runs"} ${esc(buildLabel(r.version))}.` : ""}</p>
       ${L.url ? `<p><a href="${safeHref(L.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a></p>` : ""}${body}</div>`;
 }
 function closeUpdPop(refocus) {

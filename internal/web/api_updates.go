@@ -32,6 +32,10 @@ type updateRow struct {
 	Behind       *bool          `json:"behind"`        // older than the latest release (nil: unknown)
 	CanUpdate    bool           `json:"can_update"`
 	Why          string         `json:"why,omitempty"`
+	// VersionLastSeen: Version and Build are what the agent reported when the panel last heard from it, not a
+	// reading of now: the agent does not answer (it is off, or unreachable). After a restart of the panel that
+	// version is the one kept in state.json (poller.LastAgentVersion).
+	VersionLastSeen bool `json:"version_last_seen,omitempty"`
 }
 
 type updatesPage struct {
@@ -91,14 +95,17 @@ func (s *Server) updateRow(c *reqCtx, a config.Agent, latest updates.Latest) upd
 	if info.Online {
 		r.Status = "online"
 	}
-	if seen {
-		if info.Version != "" {
-			v := info.Version
-			r.Version = &v
-			if n, ok := release.BuildNumber(v); ok {
-				r.Build = &n
-			}
+	v := info.Version
+	if !seen { // no answer since the panel started: what it said before that, if anything
+		v = s.Poller.LastAgentVersion(a.ID)
+	}
+	if v != "" {
+		r.Version, r.VersionLastSeen = &v, !info.Online
+		if n, ok := release.BuildNumber(v); ok {
+			r.Build = &n
 		}
+	}
+	if seen {
 		r.AgentEnabled, r.SelfUpdate = info.Enabled, info.SelfUpdate
 	}
 	if r.Build != nil && latest.Build != nil {
