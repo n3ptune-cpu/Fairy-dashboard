@@ -140,6 +140,19 @@ func TestReadRequestsPassedToAnAgentAreLimited(t *testing.T) {
 	if now, _ := sb.atAgent("tower"); now != 1 {
 		t.Fatalf("the admin's fan status request is not at the agent (%d there)", now)
 	}
+	// An admin is not held back by the limit of a host that others keep busy. (Found in review: two viewers at
+	// their own limit used up the host's 8, and then every Processes and Fans request for that host was
+	// answered 429, the admin's too, so the Fans tab lost its mode buttons.) The admin's own limit still
+	// holds: one request is at tower, so maxAgentReadsPerUser-1 more are passed on and the rest refused.
+	flood(maxAgentReadsPerUser+2, "/api/systems/laptop/processes", "Cookie", admin)
+	settle(int64(60 + more - maxAgentReadsPerAgent + 3))
+	if now, peak := sb.atAgent("laptop"); now != maxAgentReadsPerAgent+maxAgentReadsPerUser-1 || peak != now {
+		t.Fatalf("with the admin's requests: %d at the agent (peak %d), want %d", now, peak, maxAgentReadsPerAgent+maxAgentReadsPerUser-1)
+	}
+	// and what an admin has there takes no room from the others: the host's limit counts them alone
+	if r := e.do("GET", "/api/systems/laptop/processes", nil, tok...); r.code != 429 {
+		t.Fatalf("a user at the limit, with the host at its limit: %d", r.code)
+	}
 
 	// while all of that is in flight, the admin's control request goes straight through
 	before := sb.control.Load()
@@ -159,8 +172,8 @@ func TestReadRequestsPassedToAnAgentAreLimited(t *testing.T) {
 
 	letGo()
 	wg.Wait()
-	if got := ok.Load(); got != int64(maxAgentReadsPerAgent+1) || other.Load() != 0 {
-		t.Fatalf("%d requests were answered 200, want %d", got, maxAgentReadsPerAgent+1)
+	if got := ok.Load(); got != int64(maxAgentReadsPerAgent+maxAgentReadsPerUser) || other.Load() != 0 {
+		t.Fatalf("%d requests were answered 200, want %d", got, maxAgentReadsPerAgent+maxAgentReadsPerUser)
 	}
 	// the slots are free again
 	if r := e.do("GET", "/api/systems/laptop/processes", nil, tok...); r.code != 200 {

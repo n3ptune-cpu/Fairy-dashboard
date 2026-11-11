@@ -19,6 +19,11 @@ import (
 // maxAgentReadsPerAgent to one agent at the same time, and answers one more 429 at once, without asking the
 // agent. The page asks for each of the two once per refresh, so several open tabs fit; and 8 of the agent's
 // 32 leave room for the polls and for every control request, which are not counted here.
+//
+// The limit per agent is for those who may only look. Two of them at their own limit fill it, and it must
+// not be their choice whether an admin sees a host's processes and fan controls: an admin (a session of an
+// admin, a control token) is held to the limit per user only and takes no place in the agent's 8. The agent
+// then has at most 8 plus 4 for each admin at work, still far from its 32.
 const (
 	maxAgentReadsPerUser  = 4
 	maxAgentReadsPerAgent = 8
@@ -35,16 +40,18 @@ func newAgentReads() *agentReads {
 	return &agentReads{byUser: map[string]int{}, byAgent: map[string]int{}}
 }
 
-// acquire takes a slot for this user and this agent; ok is false when either is at its limit. release gives it
-// back (once).
-func (a *agentReads) acquire(user, agent string) (release func(), ok bool) {
+// acquire takes a slot for this user and, unless the user is an admin, for this agent; ok is false when one
+// of them is at its limit. release gives it back (once).
+func (a *agentReads) acquire(user, agent string, admin bool) (release func(), ok bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.byUser[user] >= maxAgentReadsPerUser || a.byAgent[agent] >= maxAgentReadsPerAgent {
+	if a.byUser[user] >= maxAgentReadsPerUser || (!admin && a.byAgent[agent] >= maxAgentReadsPerAgent) {
 		return nil, false
 	}
 	a.byUser[user]++
-	a.byAgent[agent]++
+	if !admin {
+		a.byAgent[agent]++
+	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -52,6 +59,9 @@ func (a *agentReads) acquire(user, agent string) (release func(), ok bool) {
 			defer a.mu.Unlock()
 			if a.byUser[user]--; a.byUser[user] <= 0 {
 				delete(a.byUser, user)
+			}
+			if admin {
+				return
 			}
 			if a.byAgent[agent]--; a.byAgent[agent] <= 0 {
 				delete(a.byAgent, agent)
@@ -67,7 +77,8 @@ func (c *reqCtx) agentRead(agentID string) (release func(), err error) {
 	if c.user != nil {
 		who = c.user.Sub // the user, or "token:<id>"
 	}
-	release, ok := c.s.agentReads.acquire(who, agentID)
+	_, g, gerr := c.grant()
+	release, ok := c.s.agentReads.acquire(who, agentID, gerr == nil && g.Admin())
 	if !ok {
 		c.w.Header().Set("Retry-After", "1")
 		return nil, apierr.New(429, "too many requests for this host's processes or fan status at the same time; try again in a moment")
