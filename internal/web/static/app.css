@@ -553,6 +553,40 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .host-line > a { flex: none; white-space: nowrap; }
 .host-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .host-tags .tag, .host-tags .chip, .host-tags .guest-count, .host-tags .ver { margin-left: 0; }
+/* The hosts table needs about 930 px for its six columns. In a narrower panel (a window under about 1260 px with the
+   sidebar open, a phone) a host is two lines: name and chips, then its values with their names in front. Nothing is
+   cut off and nothing scrolls sideways. A browser without container queries keeps the table. */
+.hosts-panel { container: hosts / inline-size; }
+.table.hosts td.col-gpu { white-space: nowrap; }
+.table.hosts td.col-gpu .mini { display: inline-grid; vertical-align: middle; }
+.table.hosts .gpu-n { margin-left: 6px; }
+@container hosts (max-width: 940px) {
+  .table.hosts, .table.hosts tbody, .table.hosts tr.group, .table.hosts tr.group td { display: block; }
+  .table.hosts thead { display: none; }
+  .table.hosts tr.group td { padding: 12px 14px 8px; }
+  .table.hosts tr.row { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr); align-items: center; gap: 8px 22px; padding: 11px 14px; border-bottom: 1px solid #121212; }
+  .table.hosts tbody tr.row:last-child { border-bottom: 0; }
+  .table.hosts tr.row:hover { background: rgba(255, 255, 255, .025); }
+  .table.hosts tr.row td { display: block; padding: 0; border: 0; background: none; }
+  .table.hosts tr.row td.namecell { grid-column: 1 / 4; min-width: 0; }
+  .table.hosts tr.row td.col-kind { grid-column: 4; justify-self: end; }
+  .table.hosts tr.row td.col-cpu { grid-column: 1; margin-left: 44px; }
+  .table.hosts tr.row td.col-ram { grid-column: 2; }
+  .table.hosts tr.row td.col-gpu { grid-column: 3; }
+  .table.hosts tr.row td.num { grid-column: 4; justify-self: end; }
+  .table.hosts tr.row td[data-l]:has(.mini) { display: flex; align-items: center; gap: 8px; }
+  .table.hosts tr.row td[data-l]:has(.mini)::before { content: attr(data-l); color: var(--faint); font-size: 11.5px; font-weight: 700; }
+  .host-line { flex-wrap: wrap; }
+  .host-line > a { flex: 0 1 auto; white-space: normal; min-width: 0; }
+}
+@container hosts (max-width: 600px) {  /* a phone: as before, without the owner and the GPU */
+  .table.hosts tr.row { grid-template-columns: auto auto minmax(0, 1fr); column-gap: 14px; }
+  .table.hosts tr.row td.namecell { grid-column: 1 / -1; }
+  .table.hosts tr.row td.col-kind, .table.hosts tr.row td.col-gpu, .table.hosts tr.row td.col-gpu[data-l]:has(.mini) { display: none; }
+  .table.hosts tr.row td.col-cpu { margin-left: 0; }
+  .table.hosts tr.row td.num { grid-column: 3; }
+  .table.hosts tr.row td[data-l]:has(.mini) { gap: 6px; }
+}
 .overview-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .overview-head .push { margin-left: auto; }
 .alert-sum { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; padding: 8px 12px; font-size: 12.5px;

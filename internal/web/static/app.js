@@ -600,12 +600,14 @@ function hostRow(s) {
   return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><div class="host-line"><a href="#/system/${enc(s.id)}" title="${esc(about)}"><span class="host-ico">${hostIcon(s)}</span>
       <span><span class="dot ${cssName(s.status)}"></span> ${esc(s.name)}</span></a><span class="host-tags">${upsChips(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span></div></td>
     <td class="col-kind"><span class="note">${esc(s.kind === "node" ? "Proxmox" : s.owner || s.group || "–")}</span></td>
-    <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
-    <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
-    <td class="col-gpu">${live(s) && s.status !== "paused" && gpus.length ? mini("gpu", gpuAvg(s)) + (gpus.length > 1 ? `<span class="note">${gpus.length} GPUs · avg</span>` : "") : ""}</td>
+    <td class="col-cpu" data-l="CPU">${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
+    <td class="col-ram" data-l="RAM">${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
+    <td class="col-gpu" data-l="GPU">${live(s) && s.status !== "paused" && gpus.length ? mini("gpu", gpuAvg(s)) + (gpus.length > 1 ? `<span class="note gpu-n" title="${gpus.length} GPUs: the bar is their average">×${gpus.length}</span>` : "") : ""}</td>
     <td class="num">${w != null ? `<b class="value pwr">${fmtW(w)}</b>` : '<span class="note">–</span>'}</td></tr>`;
 }
-const hostTable = (groups) => `<div class="panel glass scroll"><table class="table hosts"><thead><tr><th>Host</th><th class="col-kind">Owner</th>
+// In a panel narrower than the six columns need (a narrow window, a phone) every host is two lines instead: name
+// and chips, then its values with their names in front (app.css, @container hosts).
+const hostTable = (groups) => `<div class="panel glass scroll hosts-panel"><table class="table hosts"><thead><tr><th>Host</th><th class="col-kind">Owner</th>
   <th>CPU</th><th>RAM</th><th class="col-gpu">GPU</th><th class="num">Wall power</th></tr></thead><tbody>${groups.map(([title, rows]) =>
   (title ? `<tr class="group" data-key="g-${esc(title)}"><td colspan="6">${esc(title)}</td></tr>` : "") + rows.map(hostRow).join("")).join("")}</tbody></table></div>`;
 
