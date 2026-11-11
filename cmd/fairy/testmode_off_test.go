@@ -5,7 +5,9 @@ package main
 import (
 	"bytes"
 	"os"
+	"regexp"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +42,30 @@ func TestNoTestModeInThisBuild(t *testing.T) {
 		slices.Reverse(needle)
 		if bytes.Contains(prog, needle) {
 			t.Errorf("this build contains %q: test-build code is compiled in without the tag", needle)
+		}
+	}
+}
+
+// The release workflow builds without build tags, and stops if a built program is a test build anyway.
+func TestReleaseWorkflowNeverBuildsATestPanel(t *testing.T) {
+	b, err := os.ReadFile("../../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	y := string(b)
+	goCmd := regexp.MustCompile(`\bgo (build|run|test|vet|install)\b`)
+	for _, line := range strings.Split(y, "\n") {
+		if strings.Contains(line, "GOFLAGS") || (goCmd.MatchString(line) && strings.Contains(line, "-tags")) {
+			t.Errorf("release.yml passes build tags or GOFLAGS: %s", strings.TrimSpace(line))
+		}
+	}
+	build, guard, sign := strings.Index(y, "- name: Build"), strings.Index(y, "- name: Refuse a test build"), strings.Index(y, "- name: Sign")
+	if build < 0 || guard < build || sign < guard {
+		t.Fatal("release.yml: the step \"Refuse a test build\" must come after Build and before Sign")
+	}
+	for _, want := range []string{`go version -m "$f" | grep -q fairytest`, `"$f" version | grep -qi 'test build'`} {
+		if !strings.Contains(y[guard:sign], want) {
+			t.Errorf("release.yml: the guard step no longer has: %s", want)
 		}
 	}
 }

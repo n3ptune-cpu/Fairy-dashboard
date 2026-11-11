@@ -71,6 +71,23 @@ jobs:
           (cd dist && sha256sum fairy-linux-* VERSION > SHA256SUMS)
           cat dist/SHA256SUMS
 
+      - name: Refuse a test build
+        run: |
+          # A panel built with the Go build tag "fairytest" has no sign-in (TESTING-LOCAL.md). No step of this
+          # workflow passes a build tag. If a build ever got one anyway, nothing is signed or published.
+          set -eu
+          for f in dist/fairy-linux-*; do
+            if go version -m "$f" | grep -q fairytest; then
+              echo "::error::$f was built with the fairytest tag: it is a test build without sign-in. Not released."
+              exit 1
+            fi
+          done
+          f=dist/fairy-linux-amd64
+          if "$f" version | grep -qi 'test build'; then
+            echo "::error::$f says it is a test build. Not released."
+            exit 1
+          fi
+
       - name: Sign
         env:
           FAIRY_RELEASE_KEY: ${{ secrets.FAIRY_RELEASE_KEY }}
