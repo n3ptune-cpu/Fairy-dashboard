@@ -116,6 +116,18 @@ agents:
 #   agent_requests_per_min: 8             # control requests a run sends to one agent per minute (1-30); an agent
 #                                         # accepts 12 a minute for everything, the rest stays free for the page
 
+# The check on the machine itself (README: "The check on the machine itself"). With this block, a fan, power or
+# update action on a machine that has the check switched on asks for a passkey at Pocket ID under the name of
+# a second client, "Fairy PC actions", and the MACHINE verifies that approval before it does anything. Create
+# that client in Pocket ID first: Callback URL <public_url>/auth/approval/callback, Requires Re-Authentication
+# ON, PKCE ON, Public Client ON (or a secret as FAIRY_APPROVAL_CLIENT_SECRET in fairy.env).
+# approval:
+#   client_id: 00000000-0000-4000-8000-000000000000  # the client id Pocket ID shows for "Fairy PC actions"
+#   # issuer: https://id.example.org      # only if it is another Pocket ID than oidc.issuer
+#   # users: ["<Pocket ID user id>"]      # may approve too, besides the panel's admins and a host's owner
+#   # run_approval_wait_s: 900            # "Update unpowered hosts": how long a run waits for the approval
+#                                         # it asks for once the woken machines are online (60-3600)
+
 systems: []
   # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming], site: Office}
   # - {id: agent-1, wol: {mac: "00:00:5e:00:53:01", relay: pve1-agent, broadcast: 192.168.10.255}}

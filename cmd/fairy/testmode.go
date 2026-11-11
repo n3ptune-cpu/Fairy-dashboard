@@ -34,7 +34,8 @@ import (
 //
 // Because it has no sign-in, it refuses to start unless everything says "a test, on this PC":
 //   - it listens on 127.0.0.1, ::1 or localhost only, and public_url is such an address too;
-//   - config.yaml has no oidc: block, and neither FAIRY_SESSION_SECRET nor FAIRY_OIDC_CLIENT_SECRET is set;
+//   - config.yaml has no oidc: block, and neither FAIRY_SESSION_SECRET nor FAIRY_OIDC_CLIENT_SECRET is set
+//     (an approval: block is allowed, see below);
 //   - its data folder is new, empty or one a test build made, with nobody in it but the test admin;
 //   - no file it uses is in the real panel's folders (/etc/fairy, /var/lib/fairy, C:\ProgramData\Fairy), also
 //     not through a symbolic link.
@@ -45,6 +46,12 @@ import (
 // And it signs in only a browser that opens the address it prints at start, which carries the start key
 // (testKey here, the check in internal/web/testmode.go). It must never be put behind a proxy or a port
 // forward; the key is the last line of defence if it is.
+//
+// The one thing of Pocket ID a test build can use is the approval a machine verifies itself (an approval:
+// block with its own issuer and the client "Fairy PC actions"): the passkey, the token and the machine's check
+// are then the real ones, so the check can be tried against a test VM. The sign-in stays off. What the panel
+// cannot check in a test build is that the person who approves is the person signed in (nobody is): it says so
+// in its log, and the machine's own list of users still decides.
 const (
 	testBuild = true
 	testNote  = "\nTEST BUILD (-tags fairytest): sign-in is off. It listens on 127.0.0.1 only. Never expose this."
@@ -157,6 +164,10 @@ func testSetup(f serveFlags, real []string) (*config.Panel, config.Secrets, erro
 	if err != nil {
 		return nil, none, fmt.Errorf("%s: %w", f.cfgPath, err)
 	}
+	if cfg.ApprovalOn() && cfg.Approval.Issuer == "" {
+		return nil, none, fmt.Errorf("%s: approval: needs issuer: (the address of your Pocket ID) in a test build: there is no oidc: block "+
+			"to take it from", f.cfgPath)
+	}
 	addr := f.listenAddr(cfg)
 	if !loopback(addr) {
 		return nil, none, fmt.Errorf("the listen address %s is not 127.0.0.1, ::1 or localhost: a panel without sign-in listens on this PC only", addr)
@@ -184,7 +195,7 @@ func testSetup(f serveFlags, real []string) (*config.Panel, config.Secrets, erro
 		return nil, none, err
 	}
 	return cfg, config.Secrets{SessionSecret: hex.EncodeToString(secret), InsecureCookies: true,
-		ProxmoxTokenSecret: os.Getenv("FAIRY_PROXMOX_TOKEN_SECRET")}, nil
+		ProxmoxTokenSecret: os.Getenv("FAIRY_PROXMOX_TOKEN_SECRET"), ApprovalClientSecret: os.Getenv(config.ApprovalSecretEnv)}, nil
 }
 
 // inside reports whether path is dir or below it (Windows: whatever the case of the letters), by where the two
@@ -361,6 +372,11 @@ func testServer(srv *web.Server, p *panel) func() {
 	}
 	for i := 0; i < 3; i++ {
 		slog.Warn("!!! " + web.TestBanner + " User " + web.TestUser.Sub + ", files in " + testDir() + " !!!")
+	}
+	if p.cfg.ApprovalOn() {
+		slog.Warn("!!! TEST BUILD: approvals for the machines are asked at " + p.cfg.ApprovalIssuer() + " (client " + p.cfg.Approval.ClientID +
+			", callback " + p.cfg.ApprovalCallback() + "). This panel does NOT check that the person who approves is the person signed " +
+			"in here: nobody is. Each machine still checks the approver against its own list. !!!")
 	}
 	address := strings.TrimRight(p.cfg.BaseURL(), "/") + "/?key=" + key
 	return func() {

@@ -4,7 +4,7 @@
 # At its first start the test build writes this file to fairy-test/config.yaml next to the program and reads
 # it from there. Change that copy, then start the program again. Everything config.yaml of the real panel
 # knows works here too (deploy/config.example.yaml), except what a test build refuses to start with:
-#   - an `oidc:` block (there is no sign-in to configure),
+#   - an `oidc:` block (there is no sign-in to configure; an `approval:` block is fine, see below),
 #   - a `listen:` or `public_url:` that is not 127.0.0.1, ::1 or localhost,
 #   - a `data_dir:` that holds files a test build did not make.
 
@@ -14,3 +14,11 @@ enroll:
   allow_non_tailscale: true     # Add host may pair with a test VM on the same VMware network, without Tailscale
   # panel_address: 192.168.50.10  # this PC's address as the test VM sees it. Left out, the test build takes this
   #                               # PC's only private IPv4 address and says which one when it starts.
+
+# The check on the machine itself (TESTING-LOCAL.md, part G): with this block a fan, power or update action on a
+# machine that checks approvals asks for your passkey at your real Pocket ID, and the machine verifies it.
+# Sign-in to this panel stays off. Take the three values from Pocket ID (the client "Fairy PC actions").
+# approval:
+#   issuer: https://id.example.org      # your Pocket ID, as its own address bar shows it
+#   client_id: PASTE-THE-CLIENT-ID      # of "Fairy PC actions" (a public client: there is nothing more to store)
+#   users: [PASTE-YOUR-USER-ID]         # who may approve on a machine you switch the check on for

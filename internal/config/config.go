@@ -295,6 +295,24 @@ func (w *WakeUpdate) UnmarshalYAML(n *yaml.Node) error {
 	return n.Decode((*plain)(w))
 }
 
+// Approval is the `approval:` block: the Pocket ID client "Fairy PC actions", with which a person approves a fan,
+// power or update action (or the switching on of that check) for the machine itself to verify. It is a client
+// of its own, not the sign-in client of `oidc:`: a machine accepts only tokens made for this one. Left out
+// (no client_id): the panel asks no machine for an approval, and machines that require one refuse.
+type Approval struct {
+	// ClientID is the client id Pocket ID shows for "Fairy PC actions" (1-128 characters of A-Z a-z 0-9 . _ ~ -).
+	// Its secret, if it is not a public client, is FAIRY_APPROVAL_CLIENT_SECRET in the environment.
+	ClientID string `yaml:"client_id"`
+	// Issuer is the Pocket ID the client belongs to. Left out: oidc.issuer.
+	Issuer string `yaml:"issuer"`
+	// Users are Pocket ID user ids ("sub") that may approve on the machines, in addition to the panel's admins
+	// and a host's owner: they go into the list a machine is given when the check is switched on for it.
+	Users []string `yaml:"users"`
+	// RunApprovalWaitS is how long a run of "Update unpowered hosts" waits for the approval it asks for
+	// once the woken machines are online (default 900, 60-3600).
+	RunApprovalWaitS int `yaml:"run_approval_wait_s"`
+}
+
 // Intervals are the default polling intervals in seconds (each 1-300).
 type Intervals struct {
 	Agent   float64 `yaml:"agent"`
@@ -350,6 +368,8 @@ type Panel struct {
 	Enroll          Enroll   `yaml:"enroll"`
 	// WakeUpdate: the timings of "Update unpowered hosts" (all optional).
 	WakeUpdate WakeUpdate `yaml:"wake_update"`
+	// Approval: the Pocket ID client for approvals the machines verify themselves (optional).
+	Approval Approval `yaml:"approval"`
 
 	trusted []netip.Prefix
 }
@@ -389,6 +409,24 @@ func (c *Panel) AuditRotation() (int64, int) {
 
 // BaseURL is public_url without a trailing slash.
 func (c *Panel) BaseURL() string { return strings.TrimRight(c.PublicURL, "/") }
+
+// ApprovalOn reports whether the panel has the Pocket ID client for approvals (approval.client_id).
+func (c *Panel) ApprovalOn() bool { return c.Approval.ClientID != "" }
+
+// ApprovalIssuer is the Pocket ID of the approval client: approval.issuer, else oidc.issuer; without a trailing
+// slash, as the sign-in uses it.
+func (c *Panel) ApprovalIssuer() string {
+	if c.Approval.Issuer != "" {
+		return strings.TrimRight(c.Approval.Issuer, "/")
+	}
+	return strings.TrimRight(c.OIDC.Issuer, "/")
+}
+
+// ApprovalCallback is the callback address to register for the client "Fairy PC actions" in Pocket ID.
+func (c *Panel) ApprovalCallback() string { return c.BaseURL() + ApprovalCallbackPath }
+
+// ApprovalCallbackPath is where Pocket ID sends the browser back to after an approval.
+const ApprovalCallbackPath = "/auth/approval/callback"
 
 // Boost reports whether boost-while-viewing is on (the default).
 func (c *Panel) Boost() bool { return c.BoostWhileViewing == nil || *c.BoostWhileViewing }

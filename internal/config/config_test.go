@@ -468,3 +468,51 @@ func TestEnvProblemsNameACommentBehindAValue(t *testing.T) {
 		}
 	}
 }
+
+// The approval: block (the Pocket ID client "Fairy PC actions"). Left out, the feature is off; with it, the
+// issuer defaults to the sign-in's, and the values the machines would refuse are refused here.
+func TestApprovalBlock(t *testing.T) {
+	c, err := Parse([]byte(base))
+	if err != nil || c.ApprovalOn() || c.Approval.RunApprovalWaitS != 900 {
+		t.Fatalf("no approval block: on=%v wait=%d err=%v", c.ApprovalOn(), c.Approval.RunApprovalWaitS, err)
+	}
+	c, err = Parse([]byte(base + `approval: {client_id: "3f6c0c0e-0000-4000-8000-000000000000", users: [user-b], run_approval_wait_s: 120}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.ApprovalOn() || c.ApprovalIssuer() != "https://id.example.com" || c.Approval.RunApprovalWaitS != 120 ||
+		c.ApprovalCallback() != "https://panel.example.com/auth/approval/callback" {
+		t.Fatalf("%+v issuer %s callback %s", c.Approval, c.ApprovalIssuer(), c.ApprovalCallback())
+	}
+	c, err = Parse([]byte(base + `approval: {client_id: pc-actions, issuer: "https://other.example.org/"}`))
+	if err != nil || c.ApprovalIssuer() != "https://other.example.org" {
+		t.Fatal("an issuer of its own, without the trailing slash:", err)
+	}
+	for _, bad := range []string{
+		`approval: {client_id: "has space"}`,
+		`approval: {client_id: fairy}`, // the sign-in client itself
+		`approval: {issuer: "https://id.example.com"}`,
+		`approval: {users: [a]}`,
+		`approval: {client_id: pc, issuer: "ftp://id.example.com"}`,
+		`approval: {client_id: pc, users: ["two words"]}`,
+		`approval: {client_id: pc, users: [a, a]}`,
+		`approval: {client_id: pc, users: [""]}`,
+		`approval: {client_id: pc, run_approval_wait_s: 30}`,
+		`approval: {client_id: pc, run_approval_wait_s: 7200}`,
+		`approval: {client_id: pc, client_secret: in-the-file}`, // a secret never goes into config.yaml
+		`approval: {client_id: pc, users: [` + strings.Repeat("u,", 33) + `]}`,
+	} {
+		if _, err := Parse([]byte(base + bad)); err == nil {
+			t.Errorf("accepted: %s", bad)
+		}
+	}
+	// the same client id at another Pocket ID is a different client
+	if _, err := Parse([]byte(base + `approval: {client_id: fairy, issuer: "https://other.example.org"}`)); err != nil {
+		t.Error(err)
+	}
+	t.Setenv("FAIRY_SESSION_SECRET", "b0pV3m2x9QmJt8sYw1Zr5uKc7NfHd4Ea6LgTi0Oq2WsXy3Rv")
+	t.Setenv(ApprovalSecretEnv, "the-approval-client-secret")
+	if s, err := LoadSecrets(); err != nil || s.ApprovalClientSecret != "the-approval-client-secret" || s.OIDCClientSecret != "" {
+		t.Fatal("the approval client's secret comes from its own variable:", err)
+	}
+}

@@ -436,3 +436,32 @@ func TestTestBuildSaysWhomItTrusts(t *testing.T) {
 		}
 	}
 }
+
+// A test build may have an approval: block (the passkey approval the machines verify is the one real thing of
+// Pocket ID it can use), with an issuer of its own; an oidc: block is still refused next to it, and so is the
+// sign-in client's secret.
+func TestTestBuildApprovalBlock(t *testing.T) {
+	ok := "approval: {issuer: \"https://id.example.org\", client_id: pc-actions, users: [user-a]}\n"
+	c := newCase(t, ok)
+	t.Setenv("FAIRY_APPROVAL_CLIENT_SECRET", "")
+	cfg, secrets, err := testSetup(c.f, c.real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ApprovalOn() || cfg.ApprovalIssuer() != "https://id.example.org" || cfg.ApprovalCallback() != "http://127.0.0.1:8080/auth/approval/callback" ||
+		len(cfg.Approval.Users) != 1 || secrets.ApprovalClientSecret != "" {
+		t.Fatalf("approval: %+v issuer %s callback %s", cfg.Approval, cfg.ApprovalIssuer(), cfg.ApprovalCallback())
+	}
+	if !strings.HasSuffix(cfg.OIDC.Issuer, ".invalid") {
+		t.Fatal("the sign-in stays off:", cfg.OIDC.Issuer)
+	}
+	t.Setenv("FAIRY_APPROVAL_CLIENT_SECRET", "a-secret-for-the-approval-client")
+	if _, secrets, err = testSetup(c.f, c.real); err != nil || secrets.ApprovalClientSecret != "a-secret-for-the-approval-client" || secrets.OIDCClientSecret != "" {
+		t.Fatal("the approval client's secret is the one secret a test build takes:", err)
+	}
+	newCase(t, "approval: {client_id: pc-actions}\n").refused("approval: needs issuer:")
+	newCase(t, ok+"oidc: {issuer: \"https://id.example.org\", client_id: fairy}\n").refused("has an oidc: block")
+	c = newCase(t, ok)
+	t.Setenv("FAIRY_OIDC_CLIENT_SECRET", "x")
+	c.refused("FAIRY_OIDC_CLIENT_SECRET is set")
+}

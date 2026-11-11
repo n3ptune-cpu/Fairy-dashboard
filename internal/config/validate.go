@@ -24,6 +24,7 @@ var (
 	macRe        = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{12}$`)
 	bmcTargetRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
 	hostnameRe   = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
+	clientIDRe   = regexp.MustCompile(`^[A-Za-z0-9._~-]{1,128}$`)
 	siteRe       = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._'&-]{0,39}$`)
 )
 
@@ -41,6 +42,7 @@ func (c *Panel) Validate() error {
 	c.applyDefaults()
 	var errs problems
 	c.validateGeneral(&errs)
+	c.validateApproval(&errs)
 	c.parseTrustedProxies(&errs)
 	c.validateProxmox(&errs)
 	agents := c.validateAgents(&errs)
@@ -114,6 +116,7 @@ func (c *Panel) applyDefaults() {
 	defi(&c.WakeUpdate.SettleS, 60)
 	defi(&c.WakeUpdate.ShutdownDelayS, 120)
 	defi(&c.WakeUpdate.AgentRequestsPerMin, 8)
+	defi(&c.Approval.RunApprovalWaitS, 900)
 	defi(&c.AuditMaxMB, 100)
 	defi(&c.AuditKeep, 5)
 	if c.DataDir == "" {
@@ -190,6 +193,59 @@ func (c *Panel) validateGeneral(errs *problems) {
 		if f.v < f.lo || f.v > f.hi {
 			errs.add("wake_update.%s must be %d-%d", f.name, f.lo, f.hi)
 		}
+	}
+}
+
+// MaxApprovalUsers is how many users a machine's list of approvers takes (Fairy-agent: api.MaxTrustUsers).
+const MaxApprovalUsers = 32
+
+// ValidApprovalUser reports whether s can be a Pocket ID user id in a machine's list: 1-255 printable ASCII
+// characters without a space (the machines refuse anything else).
+func ValidApprovalUser(s string) bool {
+	if len(s) == 0 || len(s) > 255 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] <= 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// validateApproval checks the approval: block. An empty block is fine: the feature is then off.
+func (c *Panel) validateApproval(errs *problems) {
+	a := c.Approval
+	if a.RunApprovalWaitS < 60 || a.RunApprovalWaitS > 3600 { // 0 was replaced by the default
+		errs.add("approval.run_approval_wait_s must be 60-3600")
+	}
+	if a.ClientID == "" {
+		if a.Issuer != "" || len(a.Users) > 0 {
+			errs.add("approval: client_id is missing (the client id of \"Fairy PC actions\" in Pocket ID); without it the block does nothing")
+		}
+		return
+	}
+	if !clientIDRe.MatchString(a.ClientID) {
+		errs.add("approval.client_id must be 1-128 characters of A-Z a-z 0-9 . _ ~ - (copy it from Pocket ID)")
+	}
+	if a.ClientID == c.OIDC.ClientID && c.ApprovalIssuer() == strings.TrimRight(c.OIDC.Issuer, "/") {
+		errs.add("approval.client_id is the sign-in client (oidc.client_id): approvals need a client of their own in Pocket ID (\"Fairy PC actions\")")
+	}
+	if a.Issuer != "" && !isHTTPURL(a.Issuer) {
+		errs.add("approval.issuer must be an http(s) URL (leave it out to use oidc.issuer)")
+	}
+	if len(a.Users) > MaxApprovalUsers {
+		errs.add("approval.users: at most %d", MaxApprovalUsers)
+	}
+	seen := map[string]bool{}
+	for _, u := range a.Users {
+		switch {
+		case !ValidApprovalUser(u):
+			errs.add("approval.users: %q is not a Pocket ID user id (1-255 characters, no spaces)", u)
+		case seen[u]:
+			errs.add("approval.users: %q is listed twice", u)
+		}
+		seen[u] = true
 	}
 }
 

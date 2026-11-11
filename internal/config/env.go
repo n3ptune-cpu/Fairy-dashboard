@@ -47,7 +47,13 @@ type Secrets struct {
 	OIDCClientSecret   string
 	ProxmoxTokenSecret string
 	InsecureCookies    bool
+	// ApprovalClientSecret is the secret of the Pocket ID client "Fairy PC actions" (approval.client_id);
+	// empty for a public client (PKCE only).
+	ApprovalClientSecret string
 }
+
+// ApprovalSecretEnv is the environment variable of the approval client's secret.
+const ApprovalSecretEnv = "FAIRY_APPROVAL_CLIENT_SECRET"
 
 // LoadSecrets reads the FAIRY_* secrets from the environment; FAIRY_SESSION_SECRET (32+ characters, not the
 // example value: SessionSecretProblem) is required.
@@ -57,6 +63,8 @@ func LoadSecrets() (Secrets, error) {
 		OIDCClientSecret:   os.Getenv("FAIRY_OIDC_CLIENT_SECRET"),
 		ProxmoxTokenSecret: os.Getenv("FAIRY_PROXMOX_TOKEN_SECRET"),
 		InsecureCookies:    truthy(os.Getenv("FAIRY_INSECURE_COOKIES")),
+
+		ApprovalClientSecret: os.Getenv(ApprovalSecretEnv),
 	}
 	if p := SessionSecretProblem(s.SessionSecret); p != "" {
 		return s, errors.New("FAIRY_SESSION_SECRET is " + p)

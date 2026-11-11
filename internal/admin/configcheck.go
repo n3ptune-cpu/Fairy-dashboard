@@ -82,6 +82,7 @@ func (c *cli) configCheck() int {
 		limit += fmt.Sprintf(" (set in config.yaml; without the line it is %d)", config.DefaultControlRatePerMin)
 	}
 	notes = append(notes, limit)
+	problems, notes = approvalCheck(cfg, problems, notes)
 	problems, notes = adminCheck(cfg, problems, notes)
 	problems, notes = managedCheck(cfg, problems, notes)
 	for _, e := range secretEnvs(cfg) {
@@ -107,6 +108,37 @@ func (c *cli) configCheck() int {
 		return 1
 	}
 	return 0
+}
+
+// approvalCheck explains the approval: block: the Pocket ID client "Fairy PC actions", with which a person
+// approves a fan, power or update action for the machine itself to verify (README: "The check on the machine
+// itself"). The block is optional. Its secret is reported as present / not set only.
+func approvalCheck(cfg *config.Panel, problems, notes []string) ([]string, []string) {
+	if !cfg.ApprovalOn() {
+		return problems, append(notes, "approval: not set. Machines that check a passkey approval themselves cannot be switched on "+
+			"for that check or controlled from this panel (approval: {client_id: ...}, the Pocket ID client \"Fairy PC actions\")")
+	}
+	iss := cfg.ApprovalIssuer()
+	from := "approval.issuer"
+	if cfg.Approval.Issuer == "" {
+		from = "oidc.issuer"
+	}
+	notes = append(notes, fmt.Sprintf("approval.client_id: %s  (Pocket ID client \"Fairy PC actions\" at %s, from %s)", cfg.Approval.ClientID, iss, from),
+		fmt.Sprintf("approval callback to register in Pocket ID for that client: %s  (Requires Re-Authentication: ON, PKCE: ON)", cfg.ApprovalCallback()))
+	if !strings.HasPrefix(iss, "https://") {
+		problems = append(problems, "approval: the issuer "+iss+" is not https. The machines only accept an https issuer, so the check "+
+			"cannot be switched on for any of them")
+	}
+	if os.Getenv(config.ApprovalSecretEnv) != "" {
+		notes = append(notes, config.ApprovalSecretEnv+": present")
+	} else {
+		notes = append(notes, config.ApprovalSecretEnv+": not set (public client: PKCE only)")
+	}
+	notes = append(notes, fmt.Sprintf("approval.users: %d more than the panel's admins and a host's owner (they may approve on a machine "+
+		"that is switched on for the check from now on; a machine that already has its list is changed only on the machine)", len(cfg.Approval.Users)),
+		fmt.Sprintf("approval.run_approval_wait_s: %d (how long \"Update unpowered hosts\" waits for the approval after the wake)",
+			cfg.Approval.RunApprovalWaitS))
+	return problems, notes
 }
 
 // managedCheck reports the hosts added in the panel (Add host): managed-hosts.yaml and their tokens in the data

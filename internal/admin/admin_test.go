@@ -253,3 +253,44 @@ oidc: {issuer: "https://id.example.com", client_id: cid, allowed_groups: [homela
 		t.Fatal(out)
 	}
 }
+
+// config check explains the approval: block: off, or the client, the callback to register and what Pocket ID
+// must be set to; the secret as present / not set only; an issuer the machines would refuse is a warning.
+func TestConfigCheckExplainsApproval(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	check := func(approval string) string {
+		t.Helper()
+		_ = os.WriteFile(cfg, []byte("public_url: https://p.example\ndata_dir: "+dir+"/data\noidc: {issuer: \"https://id.example\", client_id: c}\n"+approval), 0o600)
+		var out, errb bytes.Buffer
+		Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb)
+		return out.String() + errb.String()
+	}
+	t.Setenv(config.ApprovalSecretEnv, "")
+	if out := check(""); !strings.Contains(out, "ok    approval: not set.") || strings.Contains(out, "approval.client_id") {
+		t.Fatalf("no approval block:\n%s", out)
+	}
+	out := check("approval: {client_id: pc-actions, users: [user-b]}\n")
+	for _, want := range []string{
+		"ok    approval.client_id: pc-actions  (Pocket ID client \"Fairy PC actions\" at https://id.example, from oidc.issuer)",
+		"https://p.example/auth/approval/callback  (Requires Re-Authentication: ON, PKCE: ON)",
+		"ok    FAIRY_APPROVAL_CLIENT_SECRET: not set (public client: PKCE only)",
+		"ok    approval.users: 1 more than the panel's admins",
+		"ok    approval.run_approval_wait_s: 900",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("config check lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "WARN  approval") {
+		t.Errorf("an https issuer is no warning:\n%s", out)
+	}
+	t.Setenv(config.ApprovalSecretEnv, "not-printed-approval-secret")
+	out = check("approval: {client_id: pc-actions, issuer: \"http://id.lan:1411\"}\n")
+	if !strings.Contains(out, "ok    FAIRY_APPROVAL_CLIENT_SECRET: present") || strings.Contains(out, "not-printed-approval-secret") {
+		t.Errorf("the secret is reported as present only:\n%s", out)
+	}
+	if !strings.Contains(out, "WARN  approval: the issuer http://id.lan:1411 is not https") || !strings.Contains(out, "from approval.issuer") {
+		t.Errorf("an issuer the machines refuse must be a warning:\n%s", out)
+	}
+}
