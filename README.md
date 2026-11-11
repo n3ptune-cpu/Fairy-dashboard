@@ -540,6 +540,27 @@ pages, and becomes the favicon. A missing or invalid file only logs a warning. T
 `fairy serve --demo --logo C:\path\to\logo.png` (Windows) or `fairy serve --demo --logo ./logo.png`.
 The file is read once at start (path from the config only) and served at `/branding/logo` without sign-in.
 
+### Sign-in wallpaper
+
+An admin can put a picture behind the sign-in page: **Settings**, "Sign-in page", **Upload picture…** (PNG,
+JPEG or WebP, at most 8 MiB) and **Remove picture**. The sign-in page and "Waiting for access" show it over the
+whole window, with the name, the message and the button in a strip along the bottom; without a picture the
+page is black, with the same strip.
+
+* The picture is **public**. The sign-in page comes before any sign-in, so everyone who can open the panel's
+  address can load it (`GET /branding/wallpaper`, like the logo). Use one that may be seen.
+* It is always a file the panel keeps (`<data_dir>/backgrounds/signin-wallpaper`, mode `0600`), never an
+  address on another site: the sign-in page loads nothing from elsewhere. What the file is called does not
+  matter; its content decides, and SVG, GIF, HTML and everything else is refused.
+* Your own background (the block above it in Settings) is separate: per account, shown only to you after
+  the sign-in.
+* Only admins can change it, from a browser session; it asks for no "Confirm it's you", like the other
+  settings. Setting and removing it are in the audit log (`settings.signin_wallpaper_upload`,
+  `settings.signin_wallpaper_delete`; the Audit page's "Settings" filter).
+* Behind nginx the upload needs the exception the background upload has: `client_max_body_size 9m` for
+  `/api/admin/signin-wallpaper` (`deploy/nginx.example.conf`). Without it nginx refuses a file over 128 KiB,
+  and the Settings page says so.
+
 ### Behind nginx in another container (and Cloudflare)
 
 `deploy/nginx.example.conf` is a complete server block. In short:
@@ -551,7 +572,8 @@ The file is read once at start (path from the config only) and served at `/brand
   `proxy_set_header X-Forwarded-For $remote_addr;` (overwrite, not `$proxy_add_x_forwarded_for`). Fairy then
   takes the right-most X-Forwarded-For entry that is not a trusted proxy: the real visitor.
 * `limit_req` on `/auth/` and `/api/`, buffering off for `/api/stream` (SSE), `client_max_body_size 128k`
-  (9m for `/api/settings/background`). Security headers are Fairy's: do not add them in nginx.
+  (9m for `/api/settings/background` and `/api/admin/signin-wallpaper`). Security headers are Fairy's: do not
+  add them in nginx.
 * The secrets file stays `0600 root:root`: systemd loads it (`EnvironmentFile=`), the unit passes
   `--env-file ""`. `/etc/fairy` itself is `0750 root:fairy` and `config.yaml` `0640 root:fairy`. Run the CLI as the service user: `sudo -u fairy fairy admin ...`. One exception: `sudo fairy admin config check` (as root; it only reads, and user `fairy` cannot read `fairy.env`).
 
@@ -812,6 +834,11 @@ session settings as whole seconds).
   each such request makes a waiting "Confirm it's you" forget its action: "Continue" then answers "too many
   login attempts" or "no longer waiting" until the minute is over. Nothing runs because of it.
 * Strict CSP, HSTS (https), frame/referrer/permissions policies, generic 500s, no secrets in logs or errors.
+* The sign-in wallpaper is, like the logo, handed out without a sign-in. Its route (`/branding/wallpaper`)
+  reads no file name or other parameter from the request: it sends the one stored picture or 404, as
+  `image/png`, `image/jpeg` or `image/webp` (what the content was found to be at the upload, checked again at
+  every start), with `nosniff` and its own `Content-Security-Policy: default-src 'none'`, at most 4 downloads
+  at a time per address. The page's Content-Security-Policy did not change for it.
 * Sign-out is a POST with the CSRF header (no cross-site sign-out); visiting `/auth/login` keeps a valid session
   until a new sign-in completes (a sign-in that fails because `users.json` cannot be written ends it too).
 * A sign-out that cannot be written to `sessions.json` (disk full, read-only folder, wrong owner) answers 503
@@ -899,7 +926,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/tokens` | Personal API tokens (`fy_...`), stored only as hashes in `tokens.json`. |
 | `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |
 | `internal/health` | `health.json`, the status file the panel writes for `fairy admin health`. |
-| `internal/settings` | Per-user UI settings and uploaded background images. |
+| `internal/settings` | Per-user UI settings and uploaded background images; the sign-in wallpaper (`signin.go`). |
 | `internal/updates` | The latest Fairy-agent / Fairy-dashboard release for the Updates page (GitHub, cached, never blocking). |
 | `internal/notify` | Optional ntfy / Discord message on control actions and notifications. |
 | `internal/notifications` | The Notifications page: events and per-user read / dismissed marks (`notifications.go`), made from the poller's snapshots on state changes only (`watcher.go`). |
