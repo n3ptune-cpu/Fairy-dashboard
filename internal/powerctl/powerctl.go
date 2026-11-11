@@ -353,12 +353,12 @@ func CheckConfirmation(s model.System, c model.PowerActionCap, confirm *string) 
 // Execute carries out one action after re-checking that it is available and, for typed actions, that the
 // system's name was typed. The route (agent, Proxmox API or Wake-on-LAN relay) comes from Capabilities.
 func Execute(ctx context.Context, p *poller.Poller, s model.System, req Request, requestedBy string) (model.PowerResult, error) {
-	if req.Action == "cancel" && req.PendingUnseen && s.PowerPending == nil {
-		// Only for the look at the routes below (s is this call's own copy): a cancel is on offer when something
-		// is pending, and the caller knows of a request of its own that may be. Everything else that decides
-		// about the cancel stays: it goes to the system's own agent with power control, or nowhere.
-		s.PowerPending = &model.PowerPending{Action: "shutdown"}
-	}
+	return ExecuteApproved(ctx, p, s, req, requestedBy, nil)
+}
+
+// Check is everything Execute checks before it sends anything: the action applies to the system, it is
+// available, and the system's name was typed where that is asked. It returns the action's entry (its route).
+func Check(p *poller.Poller, s model.System, req Request) (*model.PowerActionCap, error) {
 	caps := Capabilities(p, s)
 	var c *model.PowerActionCap
 	for i := range caps.Actions {
@@ -367,16 +367,51 @@ func Execute(ctx context.Context, p *poller.Poller, s model.System, req Request,
 		}
 	}
 	if c == nil {
-		return model.PowerResult{}, apierr.Errf(400, "%s does not apply to a %s", req.Action, s.Kind)
+		return nil, apierr.Errf(400, "%s does not apply to a %s", req.Action, s.Kind)
 	}
 	if !c.Available {
 		r := req.Action + " is not available"
 		if c.Reason != nil {
 			r = *c.Reason
 		}
-		return model.PowerResult{}, apierr.New(409, r)
+		return nil, apierr.New(409, r)
 	}
 	if err := CheckConfirmation(s, *c, req.Confirm); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// ApprovalRequest is the request a machine that checks approvals itself is asked to approve for req, and the
+// agent it goes to: only shutdown, reboot and sleep through the system's own agent are such requests (cancel
+// and waking need none; the Proxmox API is not an agent). ok is false for everything else.
+func ApprovalRequest(p *poller.Poller, s model.System, req Request) (a config.Agent, ar api.ApprovalRequest, ok bool) {
+	if req.Action != "shutdown" && req.Action != "reboot" && req.Action != "sleep" || req.DelayS == nil {
+		return a, ar, false
+	}
+	for _, c := range Capabilities(p, s).Actions {
+		if c.Action == req.Action && model.Deref(c.Via) == "agent" {
+			if a, ok = p.AgentFor(s.ID); ok {
+				action, delay := req.Action, *req.DelayS
+				return a, api.ApprovalRequest{Verb: api.ApprovePower, Action: &action, DelayS: &delay}, true
+			}
+		}
+	}
+	return a, ar, false
+}
+
+// ExecuteApproved is Execute with the approval the system's own agent is handed together with a shutdown,
+// reboot or sleep (nil: none; a machine that checks approvals then refuses). The approval was made for
+// exactly this action and delay; no other route gets it.
+func ExecuteApproved(ctx context.Context, p *poller.Poller, s model.System, req Request, requestedBy string, ap *api.Approval) (model.PowerResult, error) {
+	if req.Action == "cancel" && req.PendingUnseen && s.PowerPending == nil {
+		// Only for the look at the routes below (s is this call's own copy): a cancel is on offer when something
+		// is pending, and the caller knows of a request of its own that may be. Everything else that decides
+		// about the cancel stays: it goes to the system's own agent with power control, or nowhere.
+		s.PowerPending = &model.PowerPending{Action: "shutdown"}
+	}
+	c, err := Check(p, s, req)
+	if err != nil {
 		return model.PowerResult{}, err
 	}
 	if req.OnlyVia != "" && model.Deref(c.Via) != req.OnlyVia { // the same look at the routes that picks the one below
@@ -389,7 +424,7 @@ func Execute(ctx context.Context, p *poller.Poller, s model.System, req Request,
 	case req.Action == "bmc_on":
 		return executeBMC(ctx, p, s, requestedBy, res)
 	case res.Via == "agent":
-		return executeViaAgent(ctx, p, s, req, requestedBy, res)
+		return executeViaAgent(ctx, p, s, req, requestedBy, res, ap)
 	}
 	return executeViaProxmox(ctx, p, s, req, res)
 }
@@ -456,10 +491,13 @@ func executeBMC(ctx context.Context, p *poller.Poller, s model.System, requested
 // executeViaAgent schedules (or cancels) a delayed shutdown / reboot on the host's own agent and shows the
 // pending action at once, before the agent's next report.
 func executeViaAgent(ctx context.Context, p *poller.Poller, s model.System, req Request, requestedBy string,
-	res model.PowerResult) (model.PowerResult, error) {
+	res model.PowerResult, ap *api.Approval) (model.PowerResult, error) {
 	agent, _ := p.AgentFor(s.ID)
-	data, err := agentCall(ctx, p, agent, "/power", map[string]any{"action": req.Action, "delay_s": *req.DelayS,
-		"requested_by": requestedBy})
+	body := map[string]any{"action": req.Action, "delay_s": *req.DelayS, "requested_by": requestedBy}
+	if ap != nil && req.Action != "cancel" {
+		body["approval"] = ap
+	}
+	data, err := agentCall(ctx, p, agent, "/power", body)
 	if err != nil {
 		return res, err
 	}
@@ -586,13 +624,23 @@ func agentCode(data jsonx.M) string {
 // UpdateAgent asks one agent to update itself (POST /update with the control token), for a caller without a
 // request of its own. Like every control action it is refused while control is disabled.
 func UpdateAgent(ctx context.Context, p *poller.Poller, a config.Agent, requestedBy string) (jsonx.M, error) {
+	return UpdateAgentApproved(ctx, p, a, requestedBy, nil)
+}
+
+// UpdateAgentApproved is UpdateAgent with the approval a machine that checks approvals itself is handed with
+// the request (nil: none).
+func UpdateAgentApproved(ctx context.Context, p *poller.Poller, a config.Agent, requestedBy string, ap *api.Approval) (jsonx.M, error) {
 	if p.Admin.ControlDisabled() != nil {
 		return nil, apierr.New(409, "control is disabled by an administrator (fairy admin control enable)")
 	}
 	if !a.SelfUpdate {
 		return nil, apierr.New(409, "self-update is not configured for this agent (self_update: true in its agents: entry)")
 	}
-	return agentCall(ctx, p, a, "/update", map[string]any{"requested_by": requestedBy})
+	body := map[string]any{"requested_by": requestedBy}
+	if ap != nil {
+		body["approval"] = ap
+	}
+	return agentCall(ctx, p, a, "/update", body)
 }
 
 // NoAnswer is the first half of agentCall, for the panel's other requests that change something on a machine

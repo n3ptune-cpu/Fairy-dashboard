@@ -334,6 +334,9 @@ func mergeAgentIntoNode(node, agent model.System) model.System {
 	if agent.PowerPending != nil {
 		node.PowerPending = agent.PowerPending
 	}
+	if agent.Approval != nil { // the machine's own check of approvals: the agent's requests are the node's
+		node.Approval = agent.Approval
+	}
 	node.ProcessesAvailable, node.FanControl = agent.ProcessesAvailable, agent.FanControl
 	if node.DWServiceURL == nil {
 		node.DWServiceURL = agent.DWServiceURL

@@ -10,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -92,6 +93,10 @@ func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[s
 			if e := textsafe.Clip(fmt.Sprint(e), maxAgentError); e != "" {
 				msg = e
 			}
+		}
+		// the machine's own check of approvals said no: what that means and what to do, around its own words
+		if m, ok := approval.ErrorText(a.DisplayName(), jsonx.S(data, "code"), textsafe.Clip(jsonx.S(data, "error"), maxAgentError)); ok {
+			msg = m
 		}
 		return nil, apierr.New(st, msg)
 	}
@@ -212,12 +217,40 @@ type fanDutyReq struct {
 	Percent *int `json:"percent"`
 }
 
-func (s *Server) fanWrite(c *reqCtx, action string, body any, params map[string]any) error {
-	u, err := c.controlGuard(s.control)
+// fanWrite sends a fan mode or duty. body is the request for the agent, ar the same request as a machine that
+// checks approvals itself is asked to approve it.
+func (s *Server) fanWrite(c *reqCtx, action string, body any, ar api.ApprovalRequest, params map[string]any) error {
+	u, err := c.controlAllowed(true)
 	if err != nil {
 		return err
 	}
 	id := c.r.PathValue("id")
+	// A machine that checks approvals itself is asked first (approval_control.go); any other is confirmed and
+	// sent to as before. While its helper is stopped nothing is asked: the request is refused below.
+	var target *approvalTarget
+	if x, err := c.find(id); err == nil && !helperPaused(x, "fans") {
+		if a, ok := s.Poller.AgentFor(id); ok && a.FanControl != nil && s.approvalWanted(a.ID) {
+			target = &approvalTarget{agent: a, name: x.Name, req: ar}
+		}
+	}
+	ap, err := c.confirmOne(u, "control actions", target)
+	if err != nil {
+		if target != nil && !isStepUp(err) {
+			c.audit(u, action, id, params, errorOutcome(err))
+		}
+		return err
+	}
+	if !s.control.allow(u.Sub) {
+		return c.limited(u, s.control, "too many control requests")
+	}
+	if ap != nil { // the same request, with the approval made for exactly it
+		if ar.Verb == api.ApproveFanMode {
+			body = map[string]any{"mode": *ar.Mode, "approval": ap}
+		} else {
+			body = map[string]any{"zone": *ar.Zone, "percent": *ar.Percent, "approval": ap}
+		}
+		params["approval"] = "sent" // the machine checks it; the token itself is never written anywhere
+	}
 	a, err := c.fanAgent(id)
 	if err != nil {
 		return err
@@ -237,6 +270,9 @@ func (s *Server) fanWrite(c *reqCtx, action string, body any, params map[string]
 		return err
 	}
 	c.audit(u, action, id, params, "ok")
+	if ap != nil { // the machine accepted it with an approval: its fan window is open for this session's next steps
+		s.codec.live.noteFan(c.session().SID, a.ID, c.client(), s.now())
+	}
 	c.json(200, model.ControlResult{OK: true, Result: data})
 	return nil
 }
@@ -254,7 +290,8 @@ func (s *Server) fanMode(c *reqCtx) error {
 	default:
 		return apierr.New(422, "mode must be standard, full, optimal or heavyio")
 	}
-	return s.fanWrite(c, "fan.mode", b, map[string]any{"mode": b.Mode})
+	return s.fanWrite(c, "fan.mode", b, api.ApprovalRequest{Verb: api.ApproveFanMode, Mode: &b.Mode},
+		map[string]any{"mode": b.Mode})
 }
 
 // FanDutyFloor is the lowest fan duty (%) the panel sends, whatever the agent's own minimum: a wrong click
@@ -274,5 +311,5 @@ func (s *Server) fanDuty(c *reqCtx) error {
 			FanDutyFloor, FanDutyFloor))
 	}
 	return s.fanWrite(c, "fan.duty", map[string]any{"zone": *b.Zone, "percent": *b.Percent},
-		map[string]any{"zone": *b.Zone, "percent": *b.Percent})
+		api.ApprovalRequest{Verb: api.ApproveFanSet, Zone: b.Zone, Percent: b.Percent}, map[string]any{"zone": *b.Zone, "percent": *b.Percent})
 }

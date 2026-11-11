@@ -98,6 +98,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	if cfg.DWServiceURL != "" {
 		s.DWServiceURL = model.P(cfg.DWServiceURL)
 	}
+	s.Approval = agentApproval(m)
 	s.Helper = agentHelper(m) // Helper.Paused: the poller, ApplyHelperPause
 	if s.Helper != nil {
 		s.PowerHelperReason = powerHelperReason(m)

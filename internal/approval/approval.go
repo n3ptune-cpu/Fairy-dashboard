@@ -181,3 +181,28 @@ func For(p *Plan, token, agentID string, req api.ApprovalRequest) (*api.Approval
 	}
 	return &api.Approval{Token: token, Entries: p.entries}, nil
 }
+
+// ErrorText is what the page says when a machine refuses with one of the approval protocol's codes: what it
+// means and what to do. name is the machine, text the machine's own words. ok is false for any other code.
+func ErrorText(name, code, text string) (msg string, ok bool) {
+	said := ""
+	if text != "" {
+		said = " (" + name + " says: " + text + ")"
+	}
+	switch code {
+	case api.CodeApprovalRequired:
+		return name + " asks for a passkey approval for this now, and none was sent" + said + ". Nothing was done: press the button again.", true
+	case api.CodeApprovalRefused:
+		return name + " did not accept the approval" + said + ". Nothing was done. A new approval is needed: press the button again. " +
+			"If it says \"user\", you are not on that machine's list; \"clock\" or \"auth_time\": its clock is more than a minute off; " +
+			"\"token_key\" or \"token_signature\": Pocket ID's key changed (on the machine: fairy-agent helper-trust set --fetch-keys).", true
+	case api.CodeApprovalUnavailable:
+		return name + " cannot check approvals right now" + said + ". Until that is repaired on the machine it refuses fan, power and update " +
+			"requests (on the machine: fairy-agent helper-trust show; on Windows also: is the helper running?).", true
+	case api.CodeApprovalDisabled:
+		return name + " has nothing that checks approvals (a Windows agent without its helper)" + said + ".", true
+	case api.CodeHelperTooOld:
+		return "the helper on " + name + " is older than its agent (an update that has not finished): restart the helper, then try again" + said + ".", true
+	}
+	return "", false
+}

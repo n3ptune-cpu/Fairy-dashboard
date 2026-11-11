@@ -44,7 +44,19 @@ type liveSession struct {
 	touched int64          // Unix seconds of the last change, for pruning
 	saved   int64          // Unix seconds of the last time seen went to sessions.json (dueSave)
 	addrs   []seenAddr     // the addresses the session's requests came from, latest first (noteAddr)
+	fan     *fanRec        // the last fan change of this session a machine accepted with an approval (noteFan)
 }
+
+// fanRec is an approved fan change: on which machine's agent, when, and from which client.
+type fanRec struct {
+	agent  string
+	at     time.Time
+	client client
+}
+
+// fanWindowMax is the longest fan window a machine can have (Fairy-agent: at most 60 s). The machine decides
+// whether its window is open; this only bounds for how long the panel takes the machine's word for it.
+const fanWindowMax = 60 * time.Second
 
 // seenAddr is an address a session was used from, and when last (Unix seconds).
 type seenAddr struct {
@@ -239,6 +251,26 @@ func (l *liveSessions) takePending(sid, round string, cl client, now time.Time) 
 		return nil, true
 	}
 	return p, false
+}
+
+// noteFan records that a fan change of sid on agent was accepted by the machine with an approval just now.
+func (l *liveSessions) noteFan(sid, agent string, cl client, now time.Time) {
+	if sid == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entry(sid, now).fan = &fanRec{agent: agent, at: now, client: cl}
+}
+
+// fanNoted reports whether this client of sid had a fan change on agent accepted with an approval within the
+// last fanWindowMax. Then, and only when the machine itself says its fan window is open, a further fan change
+// on that machine is not asked to confirm again (confirmControl).
+func (l *liveSessions) fanNoted(sid, agent string, cl client, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e := l.m[sid]
+	return e != nil && e.fan != nil && e.fan.agent == agent && e.fan.client == cl && !now.Before(e.fan.at) && now.Sub(e.fan.at) <= fanWindowMax
 }
 
 // keptResult is the outcome of a confirmed action, waiting to be shown once.

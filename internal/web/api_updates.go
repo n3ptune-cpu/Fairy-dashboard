@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -187,26 +188,59 @@ func updateParams(row updateRow, latest updates.Latest, all bool) map[string]any
 
 // callUpdate asks one agent to update itself (POST /update with the control token). Safe to run concurrently:
 // it only reads the request context.
-func (c *reqCtx) callUpdate(u *model.User, a config.Agent) (map[string]any, error) {
-	return c.agentCall(a, "POST", "/update", map[string]any{"requested_by": displayName(u)})
+func (c *reqCtx) callUpdate(u *model.User, a config.Agent, ap *api.Approval) (map[string]any, error) {
+	body := map[string]any{"requested_by": displayName(u)}
+	if ap != nil { // a machine that checks approvals itself: the approval made for its update
+		body["approval"] = ap
+	}
+	return c.agentCall(a, "POST", "/update", body)
+}
+
+// updateTarget is the update of a's agent as a machine that checks approvals itself is asked to approve it.
+func (s *Server) updateTarget(a config.Agent) approvalTarget {
+	name := a.DisplayName()
+	if x := s.Poller.RelaySystem(a.ID); x != nil {
+		name = x.Name
+	}
+	return approvalTarget{agent: a, name: name, req: api.ApprovalRequest{Verb: api.ApproveApplyUpdate}}
 }
 
 func (s *Server) updateOne(c *reqCtx) error {
 	if _, err := c.requireUser(); err != nil {
 		return err
 	}
-	u, err := c.controlGuard(s.control)
+	u, err := c.controlAllowed(true)
 	if err != nil {
 		return err
 	}
 	id := c.r.PathValue("id")
+	// A machine that checks approvals itself is asked first (approval_control.go); any other is confirmed and
+	// sent to as before.
+	var target *approvalTarget
+	if a, ok := s.Poller.AgentByID(id); ok && a.SelfUpdate && s.approvalWanted(a.ID) {
+		t := s.updateTarget(a)
+		target = &t
+	}
+	ap, err := c.confirmOne(u, "control actions", target)
+	if err != nil {
+		if target != nil && !isStepUp(err) {
+			c.audit(u, "update.agent", id, nil, errorOutcome(err))
+		}
+		return err
+	}
+	if !s.control.allow(u.Sub) {
+		return c.limited(u, s.control, "too many control requests")
+	}
 	a, ok := s.Poller.AgentByID(id)
 	if !ok || !a.SelfUpdate {
 		return apierr.New(404, "self-update is not configured for this agent (self_update: true in its agents: entry)")
 	}
 	latest := s.latest()
 	params := updateParams(s.updateRow(c, a, latest), latest, false)
-	data, err := c.callUpdate(u, a)
+	if ap != nil {
+		params["approval"] = "sent" // the machine checks it; the token itself is never written anywhere
+	}
+	data, err := c.callUpdate(u, a, ap)
 	if err != nil {
 		c.audit(u, "update.agent", id, params, errorOutcome(err))
 		return err
@@ -266,7 +300,7 @@ func (s *Server) updateAll(c *reqCtx) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			data, err := c.callUpdate(u, j.a)
+			data, err := c.callUpdate(u, j.a, nil)
 			j.res, j.err = updateResult{ID: j.a.ID, OK: err == nil, Result: data}, err
 		}()
 	}

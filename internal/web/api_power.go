@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/powerctl"
@@ -41,29 +42,49 @@ func (s *Server) powerAction(c *reqCtx) error {
 	}
 	// Calling a countdown off (the page's Cancel, the Power menu's "Cancel pending") is never refused because
 	// of other control requests: it has the request budget of the cancels (stopRL). And it is not refused by
-	// the kill switch or by the host's power switch either (stopGuard here, powerctl.Capabilities for both
-	// switches): a cancel only ever stops a power action, and a countdown that was running when an admin
-	// flipped the switch could otherwise not be called off from the panel at all (audit 5, r3-p2-06). It is
-	// still an admin's action with the CSRF header and "Confirm it's you", and the audit entry says that
-	// control was off (control_off). Every other action is refused by the kill switch here, as before.
+	// the kill switch or by the host's power switch either (controlAllowed without the kill switch here, as in
+	// stopGuard; powerctl.Capabilities for both switches): a cancel only ever stops a power action, and a
+	// countdown that was running when an admin flipped the switch could otherwise not be called off from the
+	// panel at all (audit 5, r3-p2-06). It is still an admin's action with the CSRF header and "Confirm it's
+	// you", and the audit entry says that control was off (control_off). Every other action is refused by the
+	// kill switch here, as before.
 	//
 	// Past the kill switch only for a browser session: an API token cannot "confirm it's you", and the kill
 	// switch has always stopped tokens entirely. A token's cancel is refused by it like its every other write
 	// (423; second review of fix7a, R7A-10: for one batch a control token could cancel with the kill switch on).
 	// With the kill switch off a token's cancel is what it was.
-	var u *model.User
-	switch {
-	case req.Action == "cancel" && asking.Auth != "token":
-		u, err = c.stopGuard(s.stopRL)
-	case req.Action == "cancel":
-		u, err = c.controlGuard(s.stopRL)
-	default:
-		u, err = c.controlGuard(s.control)
+	bucket, killSwitch := s.control, true
+	if req.Action == "cancel" {
+		bucket, killSwitch = s.stopRL, asking.Auth == "token"
 	}
+	u, err := c.controlAllowed(killSwitch)
 	if err != nil {
 		return err
 	}
 	id := c.r.PathValue("id")
+	// A machine that checks approvals itself is asked first (approval_control.go). Everything the action
+	// would be refused for anyway is checked before that, so nobody is sent to Pocket ID for nothing. Any
+	// other machine: "Confirm it's you" and then the checks, as before.
+	var target *approvalTarget
+	if x, err := c.find(id); err == nil {
+		if a, ar, ok := powerctl.ApprovalRequest(s.Poller, x, req); ok && s.approvalWanted(a.ID) {
+			if _, err := powerctl.Check(s.Poller, x, req); err != nil {
+				c.audit(u, "power."+req.Action, id, map[string]any{"action": req.Action, "delay_s": *req.DelayS}, errorOutcome(err))
+				return err
+			}
+			target = &approvalTarget{agent: a, name: x.Name, req: ar}
+		}
+	}
+	ap, err := c.confirmOne(u, "control actions", target)
+	if err != nil {
+		if target != nil && !isStepUp(err) {
+			c.audit(u, "power."+req.Action, id, map[string]any{"action": req.Action, "delay_s": *req.DelayS}, errorOutcome(err))
+		}
+		return err
+	}
+	if !bucket.allow(u.Sub) {
+		return apierr.New(429, "too many control requests; slow down")
+	}
 	x, err := c.find(id)
 	if err != nil {
 		return err
@@ -72,6 +93,9 @@ func (s *Server) powerAction(c *reqCtx) error {
 	if off := powerctl.ControlOff(s.Poller, x.ID); off != "" && req.Action == "cancel" {
 		params["control_off"] = off // the cancel went through although control is off: that is said
 	}
+	if ap != nil {
+		params["approval"] = "sent" // the machine checks it; the token itself is never written anywhere
+	}
 	who := model.Deref(u.Name)
 	if who == "" {
 		who = model.Deref(u.Email)
@@ -79,8 +103,9 @@ func (s *Server) powerAction(c *reqCtx) error {
 	if who == "" {
 		who = u.Sub
 	}
-	res, err := powerctl.Execute(c.r.Context(), s.Poller, x, req, who)
+	res, err := powerctl.ExecuteApproved(c.r.Context(), s.Poller, x, req, who, ap)
 	if err != nil {
+		err = approvalRefusal(x.Name, err)
 		c.audit(u, "power."+req.Action, id, params, errorOutcome(err))
 		return err
 	}

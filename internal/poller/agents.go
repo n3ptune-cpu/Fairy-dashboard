@@ -571,6 +571,19 @@ func (p *Poller) AnsweredSinceUp(source, agentID string) bool {
 	return ok && seen && at > i.upMono
 }
 
+// ApprovalOf is what the agent last said about its own check of passkey approvals (the "approval" block of its
+// /metrics): nil for an agent that sends none, or that the panel has not heard from. It is the agent's own
+// entry, also for an agent that runs on a Proxmox node. While the agent does not answer, the last answer stays.
+func (p *Poller) ApprovalOf(agentID string) *model.Approval {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if s, ok := p.systems[agentID]; ok && s.Approval != nil {
+		a := *s.Approval
+		return &a
+	}
+	return nil
+}
+
 // ProbeRefused is what ProbeAgent says when the machine itself turned the connection down.
 const ProbeRefused = "connection refused"
 

@@ -128,6 +128,35 @@ type Helper struct {
 	Paused []string `json:"paused"`
 }
 
+// Approval is a machine's own check of passkey approvals (Fairy-agent's "approval" block of /metrics; release
+// item 1.1). While State is "required" the machine runs a fan change, a shutdown / restart / sleep or an
+// update of its agent only together with an approval it verifies itself, offline, against the Pocket ID key
+// it has pinned. Agents from before this feature send no block (System.Approval is nil), and for those, and
+// for "off", control works as it always did. Nothing in it is a secret.
+type Approval struct {
+	State      string `json:"state"`       // off | required | broken | unknown
+	EnforcedBy string `json:"enforced_by"` // helper (Windows: the LocalSystem helper) | agent | ""
+	Proto      int    `json:"proto"`       // the scheme's version (this panel knows 1)
+	// The rest is what the machine trusts, set while State is required.
+	Issuer        string        `json:"issuer"`
+	ClientID      string        `json:"client_id"`
+	Keys          []ApprovalKey `json:"keys"`
+	Users         int           `json:"users"`           // how many users may approve (their ids are not sent)
+	FanWindowS    *int          `json:"fan_window_s"`    // after an approved fan change, more fan changes need none for this long
+	BootShutdownS *int          `json:"boot_shutdown_s"` // one shutdown without approval this soon after boot (0: off)
+	Error         string        `json:"error"`           // why the trust file cannot be used (broken), or the state is unknown
+	// AgentChecks: on a machine whose helper enforces, the requests the agent carries out and checks itself.
+	AgentChecks []string `json:"agent_checks"`
+	AgentError  string   `json:"agent_error"` // why that check of the agent's cannot be used
+}
+
+// ApprovalKey is one Pocket ID signing key a machine has pinned.
+type ApprovalKey struct {
+	Kid        string `json:"kid"`
+	Alg        string `json:"alg"`
+	Thumbprint string `json:"thumbprint"` // RFC 7638 SHA-256 thumbprint, 43 characters
+}
+
 // PowerPending is a scheduled (cancellable) shutdown or reboot.
 type PowerPending struct {
 	Action      string    `json:"action"` // shutdown | reboot
@@ -194,6 +223,8 @@ type System struct {
 	SleepNote *string `json:"sleep_note,omitempty"`
 	// Helper is the Windows agent's elevated helper (nil: Linux, or an agent older than v0.5.0).
 	Helper *Helper `json:"helper,omitempty"`
+	// Approval is the machine's own check of passkey approvals (nil: an agent from before it, or none).
+	Approval *Approval `json:"approval,omitempty"`
 	// PowerHelperReason: the agent's power actions are unavailable because its helper is not running
 	// ("helper_stopped" / "helper_error"; power_control.available false). Internal: decides the power menu.
 	PowerHelperReason string `json:"-"`

@@ -119,6 +119,7 @@ type Server struct {
 	auditLost  int
 
 	control, pollCtl, login, adminRL *rateLimiter
+	approvalRL                       *rateLimiter // per user: control requests that ask machines for a challenge first
 	settingsRL, uploadRL             *rateLimiter // per user: settings changes, background uploads
 	stopRL                           *rateLimiter // per user: "Cancel run" and the cancel of a countdown (stopsPerMin)
 	mux                              *http.ServeMux
@@ -143,6 +144,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 		DemoUser: demoUser, demoAuthTime: time.Now().Add(-time.Hour), // first control action shows step-up
 		control: newRateLimiter(cfg.ControlRatePerMin), pollCtl: newRateLimiter(cfg.ControlRatePerMin * 2),
 		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60), anonAudit: newAuditThrottle(),
+		approvalRL: newRateLimiter(cfg.ControlRatePerMin * 2),
 		settingsRL: newRateLimiter(30), uploadRL: newRateLimiter(uploadsPerMin), answerTimeout: answerWriteTimeout,
 		stopRL:      newRateLimiter(stopsPerMin),
 		agentReads:  newAgentReads(),
