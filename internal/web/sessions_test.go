@@ -223,7 +223,7 @@ func TestEndingAnotherSessionNeedsItsOwnConfirmation(t *testing.T) {
 	}
 	me := e.do("GET", "/api/me", nil, "Cookie", a.sess)
 	pr, _ := me.body["pending_result"].(map[string]any)
-	if me.code != 200 || pr["ok"] != true || pr["message"] != "Signed out: Firefox on Windows, 127.0.0.1" || pr["label"] != "Sign out a browser" {
+	if me.code != 200 || pr["ok"] != true || pr["message"] != "that session is signed out" || pr["label"] != "Sign out a browser" {
 		t.Fatalf("the result for the page: %s", me.raw)
 	}
 	if s := sessionsOf(e, "u1"); len(s) != 1 || s[0].SID != sidOf(e, a.sess) {
@@ -296,7 +296,7 @@ func TestSignOutEverywhereElse(t *testing.T) {
 		t.Fatal(cb.code, string(cb.raw))
 	}
 	me := e.do("GET", "/api/me", nil, "Cookie", a.sess) // the result is handed out once
-	if pr, _ := me.body["pending_result"].(map[string]any); pr["ok"] != true || pr["message"] != "Signed out everywhere else (2 sessions)." {
+	if pr, _ := me.body["pending_result"].(map[string]any); pr["ok"] != true || pr["message"] != "2 other sessions signed out" {
 		t.Fatalf("the result: %s", me.raw)
 	}
 	if works(e, b) || works(e, c) {

@@ -270,7 +270,7 @@ func TestTestModeSessionsPage(t *testing.T) {
 		t.Fatal("the other window is still signed in")
 	}
 	me := e.do("GET", "/api/me", nil, "Cookie", a)
-	if pr, _ := me.body["pending_result"].(map[string]any); pr["ok"] != true || pr["message"] != "Signed out: Go program, 127.0.0.1" {
+	if pr, _ := me.body["pending_result"].(map[string]any); pr["ok"] != true || pr["message"] != "that session is signed out" {
 		t.Fatalf("the result: %s", me.raw)
 	}
 	// the window that was signed out, loaded again: a new session, as after Sign out

@@ -388,7 +388,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .table.sessions td { vertical-align: top; }
 .table.sessions .namecell .sub { margin-left: 0; }
 .table.sessions th { white-space: nowrap; }
-.table.sessions .namecell .sub.ua { max-width: 64ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.table.sessions .namecell .sub.ua { max-width: min(64ch, 30vw); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.table.sessions.all .namecell .sub.ua { max-width: min(48ch, 20vw); }
+.table.sessions.all td:first-child { min-width: 130px; }
+.table.sessions td.act .note { display: inline-block; max-width: 13ch; white-space: normal; text-align: right; }
 .table.sessions tr.cur td:first-child { box-shadow: inset 2px 0 0 var(--ok); }
 .table.sessions td .note { margin-top: 2px; }
 @media (max-width: 760px) {  /* a phone: every session is a block, each value with its heading in front */
@@ -402,7 +405,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   .table.sessions td[data-l]:not(.namecell)::before { content: attr(data-l); display: inline-block; min-width: 92px; color: var(--faint);
     font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
   .table.sessions td[data-l]:not(.namecell) > .note, .table.sessions td.nowrap > .note { display: inline; margin-left: 8px; }
-  .table.sessions .namecell .sub.ua { max-width: 100%; }
+  .table.sessions .namecell .sub.ua, .table.sessions.all .namecell .sub.ua { max-width: 100%; }
+  .table.sessions td.act .note { max-width: none; text-align: left; }
   .table.sessions td.act { padding-top: 8px; }
   .table.sessions td.act .btn { width: 100%; justify-content: center; }
 }

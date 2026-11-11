@@ -353,7 +353,7 @@ func (s *Server) revokeSession(c *reqCtx, u *model.User, handle, sub string) err
 	if !s.adminRL.allow(u.Sub) {
 		return apierr.New(429, "too many changes; slow down")
 	}
-	what, target := sessionText(t), ownerLabel(t.Session)
+	target := ownerLabel(t.Session)
 	params := map[string]any{"sub": t.Sub, "own": t.Sub == u.Sub, "browser": browserOf(t.UA), "ip": t.lastAddr()}
 	if err := s.dropSession(t.SID, "a session signed out on the Sessions page"); err != nil {
 		c.audit(u, "sessions.revoke", target, params, sessionsNotWritable)
@@ -361,11 +361,8 @@ func (s *Server) revokeSession(c *reqCtx, u *model.User, handle, sub string) err
 			"sessions.json. It stays out until the panel restarts; an administrator should look at the server log.")
 	}
 	c.audit(u, "sessions.revoke", target, params, "ok")
-	msg := "Signed out: " + what
-	if t.Sub != u.Sub {
-		msg = "Signed out " + target + ": " + what
-	}
-	c.json(200, map[string]any{"ok": true, "message": msg})
+	// the page shows it after what it called the action ("Sign out Firefox on Windows (203.0.113.7): ...")
+	c.json(200, map[string]any{"ok": true, "message": "that session is signed out"})
 	return nil
 }
 
@@ -415,7 +412,7 @@ func (s *Server) revokeMyOtherSessions(c *reqCtx) error {
 			"sessions.json. They stay out until the panel restarts; an administrator should look at the server log.")
 	}
 	c.audit(u, "sessions.revoke_others", "", params, "ok")
-	c.json(200, map[string]any{"ok": true, "count": n, "message": fmt.Sprintf("Signed out everywhere else (%d %s).", n, plural(n, "session"))})
+	c.json(200, map[string]any{"ok": true, "count": n, "message": fmt.Sprintf("%d other %s signed out", n, plural(n, "session"))})
 	return nil
 }
 
