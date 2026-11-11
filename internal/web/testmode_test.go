@@ -288,3 +288,74 @@ func TestTestModeSessionsPage(t *testing.T) {
 		t.Fatalf("audit: %s", got)
 	}
 }
+
+// A page opened under another loopback name than the one in public_url (localhost for 127.0.0.1, or the other
+// way round) would load, get a session and then fail at its first write ("cross-origin request refused"). The
+// test build sends such a page to the one address before any session is made, and refuses everything else
+// with that address in the answer. The write check itself is what it is in every build.
+func TestTestModeSendsOtherLoopbackNamesToTheOneAddress(t *testing.T) {
+	for _, tc := range []struct{ public, other string }{
+		{"127.0.0.1", "localhost"}, {"127.0.0.1", "[::1]"}, {"localhost", "127.0.0.1"}, {"[::1]", "localhost"},
+	} {
+		e := setup(t)
+		e.s.Cfg.OIDC.ControlGroups = []string{TestGroup}
+		port := e.srv.URL[strings.LastIndex(e.srv.URL, ":"):]
+		base := "http://" + tc.public + port
+		e.s.Cfg.PublicURL = base
+		e.s.EnableTestMode()
+		ask := func(method, host, path string, hdr ...string) *http.Response {
+			t.Helper()
+			req, _ := http.NewRequest(method, e.srv.URL+path, nil)
+			req.Host = host + port
+			for i := 0; i+1 < len(hdr); i += 2 {
+				req.Header.Set(hdr[i], hdr[i+1])
+			}
+			res, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { res.Body.Close() })
+			return res
+		}
+		for _, p := range [][2]string{{"GET", "/"}, {"HEAD", "/"}, {"GET", "/?x=1&y=%2F"}, {"GET", "/docs"}, {"GET", "/auth/login?next=/%23/users"}, {"GET", "/static/app.js"}} {
+			res := ask(p[0], tc.other, p[1])
+			if res.StatusCode != 307 || res.Header.Get("Location") != base+p[1] || res.Header.Get("Set-Cookie") != "" {
+				t.Errorf("%s as %s, %s %s: %d to %q (cookie %q)", tc.public, tc.other, p[0], p[1], res.StatusCode, res.Header.Get("Location"), res.Header.Get("Set-Cookie"))
+			}
+		}
+		csrf := []string{"X-Requested-With", "fairy", "Content-Type", "application/json", "Origin", "http://" + tc.other + port}
+		for _, p := range [][2]string{{"GET", "/api/me"}, {"GET", "/api/stream"}, {"POST", "/api/admin/hosts"}, {"POST", "/api/me/step-up"},
+			{"POST", "/auth/logout"}, {"DELETE", "/api/me/pending"}} {
+			res := ask(p[0], tc.other, p[1], csrf...)
+			body := make([]byte, 600)
+			n, _ := res.Body.Read(body)
+			if res.StatusCode != 403 || !strings.Contains(string(body[:n]), "open "+base+" instead") || res.Header.Get("Set-Cookie") != "" {
+				t.Errorf("%s as %s, %s %s: %d %s", tc.public, tc.other, p[0], p[1], res.StatusCode, body[:n])
+			}
+			if strings.HasPrefix(p[1], "/api/") && (!strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") || !strings.HasPrefix(string(body[:n]), `{"detail":"`)) {
+				t.Errorf("%s %s must be refused in the API's own form: %s", p[0], p[1], body[:n])
+			}
+		}
+		if n := len(must(e.s.Poller.Admin.ListSessions())); n != 0 {
+			t.Fatalf("%d sessions were made under the other name", n)
+		}
+		// under the one address everything is as before, and a write from its page passes the origin check
+		res := ask("GET", tc.public, "/")
+		ck := strings.Split(res.Header.Get("Set-Cookie"), ";")[0]
+		if res.StatusCode != 200 || !strings.Contains(ck, "fairy_session=") {
+			t.Fatalf("%s: the page under its own address: %d", base, res.StatusCode)
+		}
+		if res := ask("POST", tc.public, "/api/me/active", "Cookie", ck, "X-Requested-With", "fairy", "Origin", base); res.StatusCode != 204 {
+			t.Fatalf("%s: a write from its own page: %d", base, res.StatusCode)
+		}
+		// the write check is not loosened: a write that names the other origin is refused as in every build
+		if res := ask("POST", tc.public, "/api/me/active", "Cookie", ck, "X-Requested-With", "fairy", "Origin", "http://"+tc.other+port); res.StatusCode != 403 {
+			t.Fatalf("%s: a write from %s: %d", base, tc.other, res.StatusCode)
+		}
+	}
+	// a public_url that is no loopback address (not what cmd/fairy sets up): no such rule, as before
+	e := testPanel(t)
+	if r := e.do("GET", "/", nil); r.code != 200 {
+		t.Fatal(r.code)
+	}
+}

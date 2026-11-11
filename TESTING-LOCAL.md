@@ -53,13 +53,18 @@ Updates page and the start-up log say "TEST BUILD" too.
    The first start makes the folder `fairy-test` next to `fairy-test.exe`: `fairy-test\config.yaml` (a copy of
    `cmd\fairy\fairytest-config.yaml`, no secrets in it) and `fairy-test\data` (its state). The window shows
    three lines with `TEST BUILD: sign-in is off` and then `fairy listening ... addr=127.0.0.1:8080`.
-6. In the browser **on the dev VM**, open exactly this address (not `localhost`):
+6. In the browser **on the dev VM**, open this address:
 
    ```
    http://127.0.0.1:8080
    ```
 
    You see the panel with the red bar, signed in as `test-admin`. No sign-in page.
+
+   `http://localhost:8080` works too: the test build sends the browser on to `http://127.0.0.1:8080`, and
+   the address bar shows that. (The page and its requests have to use one address. Under the other name the
+   page used to load and then refuse the first change, for example Add host, with "cross-origin request
+   refused".)
 7. To stop it: `Ctrl+C` in the `cmd.exe` window.
 
 If it prints `Refusing to start: ...`, the line says what is in the way (see the list above).

@@ -4,9 +4,11 @@ package web
 
 import (
 	"bytes"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -91,8 +93,47 @@ func (s *Server) EnableTestMode() {
 			http.Error(w, "Fairy test build: "+why+". It has no sign-in and answers only http://127.0.0.1 on this PC.", http.StatusForbidden)
 			return
 		}
+		if s.testOtherName(w, r) {
+			return
+		}
 		m.ServeHTTP(w, r)
 	})
+}
+
+// testOtherName answers a request that came for another loopback name of this panel than the one in public_url
+// (http://localhost:8080 or http://[::1]:8080 when public_url is http://127.0.0.1:8080, and the other way
+// round), and reports whether it did. A page opened under the other name looks fine and then fails at its
+// first write with "cross-origin request refused": the write check compares the page's origin with public_url
+// (checkCSRF), and that check is not loosened here. Instead the page is sent to the one address: a GET or HEAD
+// outside /api/ is redirected to the same path there, before any session is made; everything else (the API,
+// every write) is refused and told the address. cmd/fairy makes public_url a loopback address in a test build;
+// with any other public_url there is no such rule.
+func (s *Server) testOtherName(w http.ResponseWriter, r *http.Request) bool {
+	u, err := url.Parse(s.Cfg.BaseURL())
+	if err != nil || u.Host == "" || strings.EqualFold(r.Host, u.Host) {
+		return false
+	}
+	if a, err := netip.ParseAddr(strings.Trim(u.Hostname(), "[]")); u.Hostname() != "localhost" && (err != nil || !a.IsLoopback()) {
+		return false
+	}
+	base := u.Scheme + "://" + u.Host
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && !strings.HasPrefix(r.URL.Path, "/api/") {
+		w.Header().Set("Cache-Control", "no-store")
+		http.Redirect(w, r, base+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+		return true
+	}
+	msg := "Fairy test build: open " + base + " instead of http://" + safeText(r.Host, 80) + ". The page and its requests " +
+		"must use the one address in public_url; nothing was done."
+	if strings.HasPrefix(r.URL.Path, "/api/") || strings.Contains(r.Header.Get("Accept"), "application/json") {
+		b, _ := json.Marshal(map[string]any{"detail": msg})
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write(b)
+		return true
+	}
+	http.Error(w, msg, http.StatusForbidden)
+	return true
 }
 
 // testRefusal says why a request is not answered ("" when it is): the listen address is checked at start, this
