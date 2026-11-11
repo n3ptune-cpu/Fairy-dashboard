@@ -1938,7 +1938,9 @@ function pageNotifications() {
     <div class="panel glass scroll"><table class="table notes"><thead><tr><th>When</th><th>Severity</th><th>Host</th><th>What happened</th><th>Type</th><th class="num"></th></tr></thead><tbody>
     ${notes.list.map(noteRow).join("") || `<tr><td colspan="6" class="note">${notes.loading ? "Loading…" : "Nothing here."}</td></tr>`}</tbody></table></div>
     ${notes.next != null ? `<div class="row-gap center"><button class="btn" type="button" data-act="n-more">${notes.loading ? "Loading…" : "Older"}</button></div>` : ""}
-    <p class="note">Kept for 30 days. A host shut down from the panel shows as “off”, not as an alert; a host that keeps going offline and online gets one “unstable” warning.</p>`;
+    <p class="note info-keep">Kept for 30 days.${infoBtn("notes", "Notifications", infoList([
+      "A host shut down from the panel shows as “off”, not as an alert.",
+      "A host that keeps going offline and online gets one “unstable” warning."]))}</p>`;
 }
 function updateBell() {
   const b = $("#bell");
