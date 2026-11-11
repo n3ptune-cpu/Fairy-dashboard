@@ -74,6 +74,7 @@ type machine struct {
 type world struct {
 	t       *testing.T
 	now     time.Time
+	mono    time.Duration // the steady clock: it goes on a second per tick, whatever a test does to now
 	m       *Manager
 	ms      map[string]*machine
 	order   []string
@@ -94,6 +95,7 @@ func newWorld(t *testing.T) *world {
 	w := &world{t: t, now: t0, ms: map[string]*machine{}, agentHits: map[string][]time.Time{}}
 	w.m = New(filepath.Join(t.TempDir(), "wake-update.json"), NewSettings(300, 60, 120, 8), w)
 	w.m.Now = func() time.Time { return w.now }
+	w.m.Mono = func() time.Duration { return w.mono }
 	w.m.Event = func(e Event) { w.events = append(w.events, e) }
 	if err := w.m.Load(); err != nil {
 		t.Fatal(err)
@@ -381,6 +383,7 @@ func (w *world) poll() {
 // tick is one second of the world.
 func (w *world) tick() {
 	w.now = w.now.Add(time.Second)
+	w.mono += time.Second
 	w.sim()
 	w.poll()
 	w.m.Tick(context.Background())

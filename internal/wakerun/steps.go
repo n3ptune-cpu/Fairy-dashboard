@@ -190,7 +190,7 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 	}
 	m.emit(EvStep, r, h, "wake", nil, "ok")
 	t := m.now() // after the relay's answer: the machine cannot have booted because of this run before now
-	h.WakeSentAt, h.lastWake, h.Wakes = &t, t, 1
+	h.WakeSentAt, h.lastWake, h.Wakes, h.wakeMono = &t, t, 1, m.mono()
 	m.enter(h, StWaking, t, "wake sent: waiting for it to come online, up to "+span(r.Settings.OnlineTimeout)+" (the run goes on as soon as its agent answers)")
 }
 
@@ -199,7 +199,15 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 	if o.Online && o.SeenAt.After(*h.WakeSentAt) {
 		at := o.SeenAt
 		h.OnlineAt, h.BootUptimeS = &at, o.UptimeS
+		// How long after the wake: by the two times, and by the steady clock, which a clock that was set
+		// forward meanwhile does not stretch. The shorter one counts (the steady one is read now, a moment
+		// after the answer, so it is the longer one unless the clock was set).
 		since := at.Sub(*h.WakeSentAt)
+		if steady := m.mono() - h.wakeMono; steady < since {
+			since = steady
+		}
+		secs := since.Seconds()
+		h.OnlineAfterS = &secs
 		switch {
 		case o.UptimeS == nil:
 			m.enter(h, StOnline, now, "its agent answers, but reports no uptime: Fairy cannot tell that it started after the wake, so it will not switch it off")

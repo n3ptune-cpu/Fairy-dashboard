@@ -225,3 +225,86 @@ func TestSentencesForOnOffAndNotSure(t *testing.T) {
 }
 
 const refusedSentence = "It is on (the machine refused the connection), and its agent does not answer. Nothing was sent to it and it stays on."
+
+// The reviewer's test for finding W3, as written. All of the run's timing was by the time of day; a clock that
+// jumps forward between the wake and the machine's first answer made "the time since the wake" longer than it
+// was. (With the 15 minutes of W1 this machine is no longer woken at all; the next test is the same mistake
+// for a machine that the 15 minutes do not stop.)
+func TestReviewClockStepForwardMakesAnOldUptimeLookFresh(t *testing.T) {
+	w := newWorld(t)
+	pc := w.running("pc-a")
+	pc.bootedAt, pc.agentReadyAt = w.now.Add(-30*time.Minute), w.now.Add(-29*time.Minute) // on for 30 minutes
+	pc.unreachable = true
+	w.advance(90 * time.Second)
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	w.advance(10 * time.Second)
+	w.now = w.now.Add(45 * time.Minute)             // the panel's wall clock jumps
+	pc.bootedAt = pc.bootedAt.Add(45 * time.Minute) // the machine's own uptime does not jump with it
+	pc.unreachable = false
+	r := w.finish()
+	h := host(r, "pc-a")
+	t.Logf("state %s: %s; requests: %s; shutdowns %d", h.State, h.Text, w.callsFor("pc-a"), pc.shutdowns)
+	if pc.shutdowns != 0 {
+		t.Fatalf("a machine that was ON all along was switched off after a clock step")
+	}
+}
+
+// A machine that is on and has been out of reach for longer than MinOff: the panel takes it for off, the run
+// asks it (no answer) and sends its wake. Then the panel's clock is set forward by 55 minutes, and the machine
+// is reachable again. It has been up for 50 minutes, which is less than the 55 minutes and ten seconds the two
+// times of day now say have passed since the wake. By the steady clock ten seconds have passed: it was on.
+// (A jump of more than about an hour ends the run before that: "the run took longer than it ever should".)
+func TestClockSetForwardDuringTheWaitDoesNotMakeAMachineWoken(t *testing.T) {
+	for _, updateIfOn := range []bool{false, true} {
+		w := newWorld(t)
+		pc := w.running("pc-a")
+		pc.bootedAt, pc.agentReadyAt = w.now.Add(-30*time.Minute), w.now.Add(-29*time.Minute)
+		pc.unreachable = true
+		w.advance(MinOff + 5*time.Minute)
+		w.start(StartRequest{Hosts: []string{"pc-a"}, UpdateIfOn: updateIfOn})
+		w.advance(10 * time.Second)
+		if h := host(w.m.active, "pc-a"); h.State != StWaking || !h.ProbedOff {
+			t.Fatalf("before the jump the run waits for it: %s: %s", h.State, h.Text)
+		}
+		w.now = w.now.Add(55 * time.Minute)             // the clock is set forward (a time server, a host that slept)
+		pc.bootedAt = pc.bootedAt.Add(55 * time.Minute) // the machine's uptime is its own: it did not jump
+		pc.unreachable = false
+		r := w.finish()
+		h := host(r, "pc-a")
+		if pc.shutdowns != 0 || !pc.on || !h.AlreadyOn || h.State != StStayedOn {
+			t.Fatalf("update_if_on=%v: shutdowns %d: %s: %s", updateIfOn, pc.shutdowns, h.State, h.Text)
+		}
+		if h.OnlineAfterS == nil || *h.OnlineAfterS > 30 || h.OnlineAt.Sub(*h.WakeSentAt) < 55*time.Minute || *h.BootUptimeS >= 55*60 {
+			t.Fatalf("the two measurements: steady %v, by the times %v", h.OnlineAfterS, h.OnlineAt.Sub(*h.WakeSentAt))
+		}
+		found := false
+		for _, l := range h.Log {
+			found = found || strings.Contains(l.Text, "longer than the") || strings.Contains(l.Text, "It was already on (it has been up for")
+		}
+		if !found {
+			t.Fatalf("the reason is not in its history: %+v", h.Log)
+		}
+	}
+	// and without any jump the steady clock changes nothing: a machine the run woke is switched off as before
+	w := newWorld(t)
+	w.off("pc-a")
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	h := host(w.finish(), "pc-a")
+	has(t, h, StOff)
+	if got := h.OnlineAt.Sub(*h.WakeSentAt).Seconds(); h.OnlineAfterS == nil || *h.OnlineAfterS != got {
+		t.Fatalf("no jump: steady %v, by the times %v", h.OnlineAfterS, got)
+	}
+}
+
+// The manager's own steady clock, when none is given: it goes forward, and a time of day that jumps does not
+// move it.
+func TestSteadyClockIsNotTheTimeOfDay(t *testing.T) {
+	m := New("", NewSettings(300, 60, 120, 8), nil)
+	jump := time.Duration(0)
+	m.Now = func() time.Time { return time.Now().Add(jump) }
+	a := m.mono()
+	jump = 3 * time.Hour
+	if b := m.mono(); a < 0 || b < a || b-a > time.Minute || m.now().Sub(time.Now()) < 2*time.Hour {
+		t.Fatalf("steady clock: %v then %v", a, b)
+	}
+}

@@ -52,6 +52,8 @@ func newFarm(t *testing.T, e *env) *farm {
 	p := e.s.Poller
 	p.Clock = func() time.Time { return f.now }
 	e.s.WakeRuns.Now = p.Clock
+	began := f.now
+	e.s.WakeRuns.Mono = func() time.Duration { return f.now.Sub(began) } // the run's steady clock goes with the farm's
 	add := func(a config.Agent, o *config.SystemOverride) {
 		a.Managed, a.Token, a.ControlToken, a.URL = true, "read-word", "control-word", "http://"+a.ID
 		if err := p.AddAgent(a, o); err != nil {

@@ -26,6 +26,8 @@ import (
 //	BootUptimeS  the uptime it reported in that poll: shorter than the time since the wake, so the machine
 //	             started after the wake. A machine that was on all along and only unreachable, or that
 //	             someone switched on just before the run, has been up for longer.
+//	OnlineAfterS the time since the wake, measured so that a clock that was set forward between the wake
+//	             and the answer cannot make it longer than it was
 //	AlreadyOn    set as soon as anything says it was on before the run acted: then never
 
 // mayShutDown reports whether the run may ask this machine to shut down, and if not, why (a sentence for the
@@ -49,6 +51,8 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 	case h.BootUptimeS == nil:
 		return false, "its agent reports no uptime, so Fairy cannot tell that it started after the wake"
 	case *h.BootUptimeS < 0 || time.Duration(*h.BootUptimeS)*time.Second >= h.OnlineAt.Sub(*h.WakeSentAt):
+		return false, "it had been running for longer than since the wake: it was already on"
+	case h.OnlineAfterS == nil || float64(*h.BootUptimeS) >= *h.OnlineAfterS: // the same by the steady clock
 		return false, "it had been running for longer than since the wake: it was already on"
 	case !info.OptedIn:
 		return false, "it is no longer switched on for \"Update machines that are off\""

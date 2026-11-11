@@ -15,8 +15,8 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 	online := wake.Add(50 * time.Second)
 	up := int64(30) // it reported 30 s of uptime 50 s after the wake: it started after the wake
 	proven := func() (*Host, HostInfo, Observation) {
-		w, o, u, q := wake, online, up, int64(MinOff/time.Second)
-		return &Host{ID: "pc-a", Mode: ModeWake, StartStatus: "offline", QuietForS: &q, ProbedOff: true, WakeSentAt: &w, Wakes: 1, OnlineAt: &o, BootUptimeS: &u},
+		w, o, u, q, after := wake, online, up, int64(MinOff/time.Second), 50.0
+		return &Host{ID: "pc-a", Mode: ModeWake, StartStatus: "offline", QuietForS: &q, ProbedOff: true, WakeSentAt: &w, Wakes: 1, OnlineAt: &o, BootUptimeS: &u, OnlineAfterS: &after},
 			HostInfo{ID: "pc-a", OptedIn: true}, Observation{Online: true, Status: "online"}
 	}
 	noGuests := func() (int, bool, string) { return 0, true, "" }
@@ -27,6 +27,7 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 	early, late, zero := wake.Add(-time.Second), wake, int64(0)
 	long, exact, negative := int64(3*86400), int64(50), int64(-5)
 	almost, minute, none := int64(MinOff/time.Second)-1, int64(90), int64(0)
+	steady10, steady30 := 10.0, 30.0 // the steady clock says 10 s (30 s) since the wake, the two times say 50 s: the clock was set forward
 	for name, c := range map[string]struct {
 		change func(h *Host, info *HostInfo, o *Observation)
 		guests func() (int, bool, string)
@@ -51,6 +52,9 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 		"no uptime reported":                    {change: func(h *Host, _ *HostInfo, _ *Observation) { h.BootUptimeS = nil }, why: "reports no uptime"},
 		"up for three days":                     {change: func(h *Host, _ *HostInfo, _ *Observation) { h.BootUptimeS = &long }, why: "running for longer than since the wake: it was already on"},
 		"up exactly as long as since the wake":  {change: func(h *Host, _ *HostInfo, _ *Observation) { h.BootUptimeS = &exact }, why: "running for longer than since the wake"},
+		"up longer than the steady clock says":  {change: func(h *Host, _ *HostInfo, _ *Observation) { h.OnlineAfterS = &steady10 }, why: "running for longer than since the wake: it was already on"},
+		"up exactly as long as it says":         {change: func(h *Host, _ *HostInfo, _ *Observation) { h.OnlineAfterS = &steady30 }, why: "running for longer than since the wake"},
+		"no steady clock reading":               {change: func(h *Host, _ *HostInfo, _ *Observation) { h.OnlineAfterS = nil }, why: "running for longer than since the wake"},
 		"a negative uptime":                     {change: func(h *Host, _ *HostInfo, _ *Observation) { h.BootUptimeS = &negative }, why: "running for longer than since the wake"},
 		"no longer switched on for it":          {change: func(_ *Host, i *HostInfo, _ *Observation) { i.OptedIn = false }, why: "no longer switched on for"},
 		"its agent does not answer":             {change: func(_ *Host, _ *HostInfo, o *Observation) { o.Online = false }, why: "its agent is not answering right now"},

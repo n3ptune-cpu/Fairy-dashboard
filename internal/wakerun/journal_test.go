@@ -16,6 +16,7 @@ func restart(t *testing.T, old *world) *world {
 	w := &world{t: t, now: old.now.Add(30 * time.Second), ms: old.ms, order: old.order, agentHits: map[string][]time.Time{}}
 	w.m = New(old.m.path, old.m.Settings, w)
 	w.m.Now = func() time.Time { return w.now }
+	w.m.Mono = func() time.Duration { return w.mono }
 	w.m.Event = func(e Event) { w.events = append(w.events, e) }
 	return w
 }

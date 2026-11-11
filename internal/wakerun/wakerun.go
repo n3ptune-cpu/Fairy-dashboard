@@ -277,7 +277,11 @@ type Host struct {
 	Wakes       int        `json:"wakes,omitempty"`         // wake requests the relay accepted
 	OnlineAt    *time.Time `json:"online_at,omitempty"`     // its first answered poll after that wake
 	BootUptimeS *int64     `json:"boot_uptime_s,omitempty"` // the uptime it reported in that poll
-	AlreadyOn   bool       `json:"already_on,omitempty"`    // it was on before the run did anything
+	// OnlineAfterS: how long after the wake that answer came, in seconds. It is the shorter of two
+	// measurements: the difference of the two times above, and the panel's steady clock (Manager.Mono), which
+	// does not move when someone, or a time server, sets the clock. An uptime is compared with this.
+	OnlineAfterS *float64 `json:"online_after_s,omitempty"`
+	AlreadyOn    bool     `json:"already_on,omitempty"` // it was on before the run did anything
 
 	VersionBefore string     `json:"version_before,omitempty"`
 	VersionAfter  string     `json:"version_after,omitempty"`
@@ -289,6 +293,7 @@ type Host struct {
 	Log           []LogLine  `json:"log"`
 
 	// Working values of the run in memory. A run is never continued after a restart, so they are not kept.
+	wakeMono      time.Duration // the steady clock when the run's first wake was accepted
 	lastWake      time.Time
 	lastKick      time.Time
 	goodSince     time.Time // the agent has answered without a gap since
@@ -409,12 +414,19 @@ type Manager struct {
 	Ops      Ops
 	Settings Settings
 	Now      func() time.Time
+	// Mono is a clock that only ever goes forward at the speed of time: it is not the time of day, and setting
+	// the system's clock does not move it. nil: Go's own (the time since the manager was made). "How long
+	// after the wake did the machine answer" is measured with it as well as with Now: if the time of day jumps
+	// forward between the wake and the answer, the difference of the two times is too long, and a machine
+	// that had been on for less than the jump would look like one that started after the wake.
+	Mono func() time.Duration
 	// Event is called for every Event, outside the manager's lock (nil: nobody listens).
 	Event func(Event)
 	// Approval is the hook for item 1.1 (nil: no machine needs an approval after the wake).
 	Approval Approver
 
-	path string // the journal ("" keeps nothing)
+	path string    // the journal ("" keeps nothing)
+	born time.Time // for Mono: it holds Go's steady clock reading
 
 	tickMu sync.Mutex // one Tick at a time
 	mu     sync.Mutex
@@ -428,10 +440,18 @@ type Manager struct {
 
 // New returns a manager that keeps its journal at path. Call Load before the first Start.
 func New(path string, settings Settings, ops Ops) *Manager {
-	return &Manager{Ops: ops, Settings: settings, Now: time.Now, path: path, pace: newPacer(settings.PerAgentMin)}
+	return &Manager{Ops: ops, Settings: settings, Now: time.Now, path: path, born: time.Now(), pace: newPacer(settings.PerAgentMin)}
 }
 
 func (m *Manager) now() time.Time { return m.Now().UTC() }
+
+// mono is the steady clock (see Manager.Mono).
+func (m *Manager) mono() time.Duration {
+	if m.Mono != nil {
+		return m.Mono()
+	}
+	return time.Since(m.born) // both hold a steady clock reading, so this is not the difference of two times of day
+}
 
 func newID() string {
 	b := make([]byte, 8)

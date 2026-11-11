@@ -255,7 +255,9 @@ The rules, in plain words:
   that, all of this must be true: the panel had asked the machine for 15 minutes without an answer when the
   run started; right before the wake the run asked the machine directly and got no answer; the relay
   accepted the wake; the machine first answered after it; and the uptime it then reported is shorter than
-  the time since the wake, so it started after it. If one of these is missing, the machine is left on.
+  the time since the wake, so it started after it. (That time is measured with a clock that does not move
+  when the panel's clock is set, so a clock that jumps forward during the wait cannot make an old uptime
+  look fresh.) If one of these is missing, the machine is left on.
 * **Off, on, or not sure.** For a run a machine is one of three things, and the dialog lists them apart:
   * **Off**: no answer for 15 minutes or more. It is listed under "Off (no answer for 15 minutes or
     more)", ticked. The run wakes it, updates it and switches it off again.
