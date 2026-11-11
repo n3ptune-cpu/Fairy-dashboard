@@ -152,6 +152,99 @@ The line marked **This session** has no button. To end it, use **Sign out** in t
 Stop the panel and start it again: the list starts empty and your open window signs in anew. (A test build
 forgets its sessions at every start, see below.)
 
+## F. Trying wake, update, shut down
+
+"Update machines that are off" (README, the part with that name) wakes machines that are off, updates their
+agent and switches them off again. A dev VM and one test VM that is already on cannot show all of that: a
+VMware test VM cannot be woken with Wake-on-LAN the way a real PC is. So this part has three steps: what you
+can try now, what you can try with a second test VM, and what only the real machines can show.
+
+### F1. With one test VM that is on (about five minutes)
+
+The test VM is added as in part B, with **self-update** ticked.
+
+1. Menu, **Updates**. Below the panel's own box there is **Update machines that are off**, and in it a
+   table "Machines" with the test VM: "Now: on", "In these runs: off".
+2. Press **Switch on** in its line. The browser asks whether you mean it; then "Confirm it's you" names the
+   action; press **Confirm (test build)**. The line now says "switched on". (The same switch is in the ⋯
+   menu on the test VM's page.)
+3. Press **Update machines that are off…**. The dialog says what a run does, and lists the test VM under
+   "On now: update only, never switched off", unticked. Tick it. The button reads "Start for 1 machine".
+4. Press it. "Confirm it's you" shows the list: one machine, "update only; it is on and is never switched
+   off", and a short number for the list. Press **Confirm (test build)**.
+5. The page shows the run: **Is on**, **Update**, **Stays on**. The test VM's agent really asks GitHub for
+   the newest release and installs it if it is newer, exactly as the Update button does. If the agent is
+   already on the newest release, the report says "already runs the newest release". Either way the test VM
+   **stays on**: look at it.
+6. Reload the page: the report is still there under "Last run". "Show its steps" lists what was sent and
+   when. Menu, **Notifications**: one entry for the finished run. Menu, **Audit**, filter "Update machines
+   that are off": who started it, the machine, each step.
+7. Press **Switch off** in the "Machines" table when you are done: the test VM no longer takes part.
+
+A run with one machine that is on is over in seconds, so **Cancel run** and "one run at a time" are hard to
+see here. They are in F2.
+
+### F2. With a second test VM (optional, about fifteen minutes)
+
+This shows the countdown, Cancel, and a real Windows shutdown at the end of a run, without real
+Wake-on-LAN: **you** start the VM by hand at the moment the run sends the wake. The run cannot tell the
+difference, and that is the point of trying it.
+
+You need test VM **A** (stays on) and test VM **B** (the one that is switched off and on), both added as in
+part B. In Add host, tick **Wake-on-LAN relay** for A. For B tick **power control** and **self-update**, put
+B's network card address (`ipconfig /all`, "Physical Address") in **Wake-on-LAN MAC(s)** and choose A as
+the relay. In B, switch Fast Startup off (Control Panel, Power Options, "Choose what the power buttons do",
+untick "Turn on fast startup"), or the run will take B for a machine that was on all along (see below).
+
+1. Switch B on for these runs (F1, step 2). Shut B down in Windows. Wait until the panel shows B as offline
+   (about a minute).
+2. **Update machines that are off…**: B is listed under "Off now: wake, update, switch off again", ticked.
+   Start, **Confirm (test build)**.
+3. The run shows B as "waking". **Now power B on in VMware.** You have 5 minutes.
+4. When B's agent answers, the run goes on by itself: "updating", then "pause before shutdown" (a minute),
+   then "switching off" with a countdown of 2 minutes. B's page shows the same countdown with **Cancel**.
+5. First time: let it run out. B shuts down. The report says "done · off again".
+6. Second time (steps 1 to 4 again): press **Cancel** on B's page during the countdown. B stays on, and the
+   report says "LEFT ON" and that its shutdown was cancelled.
+7. Third time: press **Cancel run** while B is "waking" or "updating". The dialog asks what happens to the
+   machines the run has woken; leave "stay on". B stays on and the report lists it as ON. While a run is
+   going, the **Update machines that are off…** button is grey ("one run at a time").
+8. To see the rule "a machine that is already on is never switched off": shut B down, wait for "offline",
+   power B on in VMware **before** you start the run, and start the run for it within the first seconds
+   (the panel may still show it as offline). The run asks B directly before any wake, finds it on, and
+   reports "skipped: it was already on". B stays on.
+
+The times a run shows come from `wake_update:` in config.yaml. With the defaults it waits up to **5 minutes**
+for a machine to come online (and goes on as soon as its agent answers), **1 minute** between the update's
+result and the shutdown request, and counts down **2 minutes**. A page or a screenshot that shows other
+numbers (60 s, 10 s, 20 s, say) runs with a shortened test config. To make a try shorter yourself, put this in
+`fairy-test\config.yaml` and start the panel again (a shorter wait and pause; the countdown stays long enough
+to press Cancel):
+
+```
+wake_update: {online_timeout_s: 60, settle_s: 10, shutdown_delay_s: 30}
+```
+
+F2 was not run by us on real Windows VMs. The same steps were run in a browser against stand-in agents on
+one PC (machines that are "off" do not answer, "boot" after the wake, "update" and "shut down"), with the
+waits shortened to 60 s, 10 s and 20 s; screenshots of that run are labelled so. If a step
+goes differently for you, send what the page shows and the lines of the `fairy-test.exe serve` window.
+
+### F3. What needs the real machines
+
+* **That Wake-on-LAN really starts the PC** from "shut down": firmware and network card settings, the relay
+  in the same network. Try **Power on** in the machine's Power menu first; a run sends the same request.
+* **That a PC the run woke counts as woken.** The run compares the uptime the PC reports with the time since
+  the wake. Windows with Fast Startup keeps counting its uptime through "Shut down"; such a PC is taken for
+  "already on" and left on. Switch Fast Startup off on the PCs that take part, then look at the first
+  report: it must say "Woken, updated ..., and switched off again".
+* **A PC that signs in by itself after the start**: the run asks nobody and shows nothing on the screen
+  before the agent's shutdown notice. That the update and the shutdown go through while Windows is still
+  signing in is to be seen on the real PC.
+* **A Proxmox node.** A node that the panel reads through the Proxmox API is switched off only when the
+  panel sees no guest that is not stopped; one that the panel knows only through its agent is always left
+  on. Neither was tried against a real Proxmox.
+
 ## What the test build does NOT prove
 
 * **Real sign-in.** Nothing goes to Pocket ID: not the sign-in, not the groups and allowed addresses, not a
@@ -171,6 +264,8 @@ forgets its sessions at every start, see below.)
   normal build.
 * **Sessions across a restart.** Every start of a test build makes a new session secret and empties its
   session list, so a restart signs the page out; "Continue as test-admin" or a reload signs it in again.
+* **Update machines that are off, on real machines.** Part F says what a test VM can show. Real
+  Wake-on-LAN, the shutdown of a PC the run really woke, and a Proxmox node are not part of it.
 * **The Sessions page with real addresses and a real confirmation.** Here every session is `127.0.0.1` and
   "Confirm it's you" is the test build's own button. That the address is the visitor's own behind nginx and
   Cloudflare, that Pocket ID asks for the passkey before a session is signed out, and what a second person

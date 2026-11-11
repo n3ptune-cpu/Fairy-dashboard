@@ -209,6 +209,8 @@ manual install per machine) is in Fairy-agent's
   * "the previous version was put back and started again, but ...": the old program was put back and started,
     but its check could not be completed. Look at the machine; it is very likely running the old version.
   * "rolling back FAILED too": the agent may be down. Look at the machine.
+* Machines that are normally off: [Update machines that are off](#update-machines-that-are-off) wakes them,
+  updates their agent and switches them off again.
 * The latest releases are looked up on GitHub at most every 10 minutes, in the background and only while an
   admin uses the panel; `updates: {check_latest: false}` switches that off on a panel without internet access.
   **Check for updates** on the Updates page asks GitHub now (both the agent and the panel release) and shows
@@ -219,6 +221,90 @@ manual install per machine) is in Fairy-agent's
   against (the Add host dialog names it), not the newest one. A panel older than its agents would put the
   older agent back on a machine at Re-pair; the Re-pair dialog warns when the machine runs a newer agent than
   the command installs. So: update the agents, then the panel, then Re-pair.
+
+### Update machines that are off
+
+For machines that are normally switched off: a PC that is only on while someone uses it, a Proxmox node
+whose guests do not start by themselves. **Update machines that are off…** on the Updates page (admins)
+starts a **run**: you tick the machines, confirm once, and the panel does by itself what you would do by hand.
+For each ticked machine that is off:
+
+1. It sends Wake-on-LAN through the machine's relay (the same request as **Power on** in the Power menu).
+2. It waits for the machine to come online: up to 5 minutes, and it goes on as soon as the machine's agent
+   answers. (The machine has to start, get its network and bring Tailscale up first.) A machine that does
+   not come online in that time is given up on and reported; nothing more is sent to it. It may then still
+   be starting, or be on without its network: look at it.
+3. It asks the agent to update itself, exactly as the **Update** button does: the agent downloads the newest
+   signed release, checks it and installs it. The panel sends no version and no "force".
+4. It waits for the result of the update, and then one minute more.
+5. It asks the agent for the usual delayed shutdown with a countdown of 2 minutes. The machine's page shows
+   the countdown with **Cancel**, as for every shutdown from the panel.
+
+The page shows each machine's step while the run works, and which wait it is in ("waiting for it to come
+online, up to 5 min"). The report stays there afterwards (the last 10 runs). A finished run also makes one notification with a line per machine.
+
+The rules, in plain words:
+
+* **Off by default, per machine.** A machine takes part only after an admin switched it on for this: in the
+  "Machines" table on the Updates page, or in the ⋯ menu on the machine's page. Switching it on asks "Confirm
+  it's you". It is kept in the panel (`state.json`, `wake_update_hosts`), not in config.yaml. The machine
+  needs an agent with `self_update: true`; to be woken and switched off again it also needs
+  `power_control: true` and `wol` with a relay ([Agents](#agents)). The machine the panel runs on cannot take
+  part.
+* **A run only switches off machines it woke itself.** For that, all of this must be true: the panel showed
+  the machine as offline when the run started; right before the wake the run asked the machine directly and
+  got no answer; the relay accepted the wake; the machine first answered after it; and the uptime it then
+  reported is shorter than the time since the wake, so it really started because of it. If one of these is
+  missing, the machine counts as "already on".
+* **A machine that is already on is never switched off.** When you open the dialog it is offered as "update
+  only" (unticked). A machine you ticked as off that turns out to be on when the run gets to it is skipped
+  and nothing is sent to it, unless you ticked "If one of these turns out to be on after all: update it
+  too"; then it is updated and stays on.
+* **A woken machine is switched off again also when its update failed** or was rolled back. The report says
+  that the update did not work, and why (the agent's own words). The one exception: an update that never
+  reports a result (15 minutes). That machine is left on and reported, because a shutdown in the middle of an
+  install could leave it without a working agent.
+* **A woken machine that could not be switched off is reported as ON**: its agent did not answer again after
+  the update, the agent refused the shutdown, someone cancelled the countdown, or the machine is still on 5
+  minutes after the countdown ended. The run never tries another way to switch a machine off.
+* **Nobody is asked.** The run does not look whether someone is signed in or working on a machine it woke,
+  and shows nothing on its screen before the agent's own shutdown notice. Use it for machines that are off
+  because nobody is using them.
+* **A Proxmox node with running guests is left on.** For a node the panel reads through the Proxmox API it
+  counts the guests that are not stopped; one is enough. If the panel cannot know (the API has not answered
+  since the node came online, or the machine is a Proxmox host that the panel knows only through its agent),
+  the node is left on, and the report says which of the two it was.
+* **One run at a time**, at most 16 machines in it. A second start is refused with a message. **Update
+  panel** is refused while a run is going.
+* **Cancel run** starts nothing new: no further wake, no further update. The dialog asks what happens to
+  the machines the run has already woken: they stay on (the default; the report lists them as ON), or they
+  are still switched off again (an update that is running is waited for first).
+* **A restart of the panel ends a run.** It is never continued. After the restart the page and a notification
+  say which machines the interrupted run had woken and how far each one was; look at those machines and
+  switch them off yourself. (The run keeps a small journal for this, `wake-update.json` in the data folder:
+  machine ids, steps and times, no secrets. If that file cannot be read, no run can be started until you have
+  looked at it and moved it away.)
+* **The kill switch stops a run**: no further request is sent, and what was woken stays on and is reported.
+* Everything is in the audit log: who started the run, with which machines, and every wake, update,
+  shutdown and result (`wakeupdate.*`, `power.wake`, `update.agent`, `power.shutdown`, each with the run's
+  id).
+
+What to know before the first real run:
+
+* **Windows: switch Fast Startup off** on the PCs that take part (Control Panel, Power Options, "Choose what
+  the power buttons do", untick "Turn on fast startup"; or `powercfg /h off`). With Fast Startup, "Shut
+  down" is a kind of hibernate and Windows keeps counting its uptime, as it does through sleep and
+  hibernate. The run then cannot tell such a PC from one that was on all along, treats it as "already on"
+  and leaves it on. That is the safe side (a PC that was asleep may have someone's open work), but it is
+  not what you want for a PC that was shut down.
+* The wake needs what **Power on** needs: Wake-on-LAN enabled in the firmware and on the network card, and
+  a relay agent in the same network that is on.
+* The run paces itself: at most 8 control requests a minute to one agent (an agent accepts 12 a minute; the
+  rest stays free for what you do in the page). With many machines behind one relay the wakes follow each
+  other more slowly; nothing is lost.
+* The timings can be changed in config.yaml (`wake_update:`, see `deploy/config.example.yaml`): how long to
+  wait for a machine (default 300 s), the pause before the shutdown (60 s), the countdown (120 s) and the
+  pacing.
 
 ### Add host
 
@@ -616,6 +702,10 @@ memory limit. Add it once:
 13. **Sessions** is new in the menu: where you are signed in, and Sign out for the other places. Signing
     another session out asks "Confirm it's you" every time. Sessions that were open before the update are
     listed with "Unknown browser" until they are used again. See [Sessions](#sessions).
+14. **Update machines that are off** is new on the Updates page: it wakes machines that are normally off,
+    updates their agent and switches them off again. Nothing happens until an admin switches a machine on
+    for it and starts a run; a script with an API token can do neither. See
+    [Update machines that are off](#update-machines-that-are-off).
 
 Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
 `managed-hosts.yaml`, and `sessions.json`, where it ignores what this one adds). It does not start when config.yaml has `enroll: {allow_non_tailscale: ...}`,
@@ -686,9 +776,23 @@ session settings as whole seconds).
   page shows of a browser is the client's own text (User-Agent, cut to 256 bytes, control characters removed)
   and is escaped; the address is taken as everywhere else (`trusted_proxies`). The audit log has every
   sign-out with who, whose session and from which address, and never a session id or cookie.
+* "Update machines that are off" (`/api/admin/wake-update`, `internal/wakerun`): a run sends only what an
+  admin can already send by hand, through the same code and the same checks (wake through a relay, the
+  agent's own update, the delayed shutdown, its cancel); there is no new agent request and nothing is run on
+  a machine. Starting a run always needs its own "Confirm it's you", also inside `step_up_window_s`, and the
+  confirmation is for exactly the machines and options in the request: the dialog and the audit log show the
+  list and a short number made from it, and what runs after the sign-in is that same request. Admins only,
+  browser session only (no API token), CSRF header, kill switch. A machine takes part only after an admin
+  switched it on for this (a control action of its own). One place in the code decides whether a machine
+  may be switched off (`mayShutDown` in `internal/wakerun/shutdown.go`), from what the run itself saw; a
+  machine that was on is never switched off. The run's requests go through the per-host power switch, the
+  kill switch and the audit log like every control action, and are paced below the agents' own limit. Text
+  from an agent (an update's error) is shown as text. The journal has no secrets and is never read as an
+  instruction: after a restart the panel reports and does nothing.
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never
   accepted on `/auth/*`, the settings endpoints or the Users page, nor (they cannot "confirm it's you") for
-  stopping / starting the elevated helper, Add host, Re-pair, Remove and cancelling a waiting Add host, which need a browser sign-in. Otherwise `control` acts as an admin; `read` sees every
+  stopping / starting the elevated helper, Add host, Re-pair, Remove, cancelling a waiting Add host, and for
+  "Update machines that are off" (starting a run, cancelling it, switching a machine on or off for it), which need a browser sign-in. Otherwise `control` acts as an admin; `read` sees every
   site, or only `--sites A,B`. A token owned by a panel user is capped to that user's current role and sites; a token whose owner is not
   (or no longer) in `users.json` has no access. Only `--owner system` tokens keep their own scope.
 * Writes: admin role (or control-scope token), CSRF header `X-Requested-With: fairy` + Origin /
@@ -779,17 +883,18 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | Folder | What it does |
 | --- | --- |
 | `cmd/fairy` | The `fairy` program: `main.go` picks the sub-command, `serve.go` starts the panel (or demo mode), `update.go` is `fairy update`. |
-| `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`, the Sessions page's in `api_sessions.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
+| `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`, the Sessions page's in `api_sessions.go`, "Update machines that are off" in `api_wakeupdate.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
 | `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster and all-hosts totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |
 | `internal/scheduler` | Runs each source as a job at its own interval: overrides, pause, boost while viewing, never overlapping. |
 | `internal/normalise` | Turns raw Proxmox and agent data into the one "system" shape the UI uses. |
 | `internal/power` | Wall power on the panel: retry/backoff per source (`runner.go`), totals and history (`manager.go`), devices reported by agents (`remote.go`), and the `type: agent` component-power metrics (`agentpower.go`). The device types themselves are Fairy-agent's `pkg/power`. |
 | `internal/ups` | UPSes on the panel: state and history (`ups.go`), on-battery / restored events (`events.go`). The NUT sources are Fairy-agent's `pkg/ups`. |
 | `internal/powerctl` | Which power actions a system offers (and why not) and carrying them out: agent, Proxmox API or Wake-on-LAN. |
+| `internal/wakerun` | "Update machines that are off": the run as a state machine per machine (`wakerun.go`, `steps.go`), the one place that decides a shutdown (`shutdown.go`), pacing below the agents' limit (`pacer.go`) and the journal `wake-update.json` (`journal.go`). It knows no HTTP: the web package gives it the panel's wake, update and power calls. |
 | `internal/config` | Reads and checks `config.yaml` (`config.go`, `validate.go`) and secrets from `fairy.env` / the environment (`env.go`). |
 | `internal/admin` | The break-glass CLI `fairy admin`: one file per command (users and sites, tokens, sessions, control, audit, config check, health). |
 | `internal/access` | `users.json`: users (by OIDC subject) with a role and sites, the list of sites, and which site each host / power source / UPS is assigned to. |
-| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the session list. |
+| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update machines that are off", the session list. |
 | `internal/statefile` | Safe shared JSON files (state, sessions, tokens, users): lock, re-read, write to a temp file, rename (so CLI and server never lose changes). |
 | `internal/tokens` | Personal API tokens (`fy_...`), stored only as hashes in `tokens.json`. |
 | `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |
