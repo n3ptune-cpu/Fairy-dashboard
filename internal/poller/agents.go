@@ -260,6 +260,38 @@ func (p *Poller) AgentInfo(id string) (AgentInfo, bool) {
 	return i, ok
 }
 
+// AgentSeen is AgentInfo together with the agent's own entry (before it is merged into a Proxmox node), both
+// read in one step: the entry's uptime and pending power action then belong to the poll that SeenAt names.
+// While the agent does not answer, the entry keeps the values of its last good poll.
+func (p *Poller) AgentSeen(id string) (AgentInfo, model.System, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	i, ok := p.agentInfo[id]
+	_, failing := p.agentFailures[id]
+	i.Online = ok && !failing
+	s, known := p.systems[id]
+	return i, s, known
+}
+
+// ProbeAgent asks an agent for its metrics now and says how that went, in the words of devices.Describe: ""
+// when it answered, "timeout" or "connection failed" when nothing did, anything else ("http 401", "invalid
+// response", "tls verification failed") when something answered that the panel could not use. It does not
+// change what the poller knows. Unlike the poller's view, which can be up to offline_after old or the result
+// of a poll that is being retried more slowly, the answer is about this moment.
+func (p *Poller) ProbeAgent(ctx context.Context, id string) string {
+	a, ok := p.AgentByID(id)
+	if !ok {
+		return "error"
+	}
+	timeout := time.Duration(p.Cfg.RequestTimeout * float64(time.Second))
+	cctx, cancel := context.WithTimeout(ctx, timeout+500*time.Millisecond)
+	defer cancel()
+	if _, err := p.Backend.FetchAgentMetrics(cctx, a, timeout); err != nil {
+		return devices.Describe(err)
+	}
+	return ""
+}
+
 // FetchProcesses asks an agent for its top processes.
 func (p *Poller) FetchProcesses(ctx context.Context, a config.Agent, sid string, limit int, sortBy string) (model.ProcessList, error) {
 	return p.Backend.FetchProcesses(ctx, a, sid, limit, sortBy)

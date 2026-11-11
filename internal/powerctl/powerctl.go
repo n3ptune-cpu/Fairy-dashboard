@@ -445,6 +445,45 @@ func executeViaProxmox(ctx context.Context, p *poller.Poller, s model.System, re
 // maxAgentError is how much of an agent's own error text reaches the page, the audit log and a notification.
 const maxAgentError = 300
 
+// AgentRefusal is an agent's own "no" to a control request, with the code it gave ("approval_required",
+// "helper_stopped", ...; "" when it gave none) and its HTTP status. It wraps the error the page gets, so
+// everything that handles an *apierr.Error handles it unchanged; a caller that must tell the refusals apart
+// (the wake / update / shut down run) reads the code.
+type AgentRefusal struct {
+	Err    *apierr.Error
+	Code   string
+	Status int // the agent's status (429: its control rate limit)
+}
+
+func (e *AgentRefusal) Error() string { return e.Err.Error() }
+func (e *AgentRefusal) Unwrap() error { return e.Err }
+
+// agentCode is an agent's error code as far as the panel repeats it: a short word of a-z, 0-9 and "_".
+func agentCode(data jsonx.M) string {
+	c := jsonx.S(data, "code")
+	if c == "" || len(c) > 40 {
+		return ""
+	}
+	for _, r := range c {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '_' {
+			return ""
+		}
+	}
+	return c
+}
+
+// UpdateAgent asks one agent to update itself (POST /update with the control token), for a caller without a
+// request of its own. Like every control action it is refused while control is disabled.
+func UpdateAgent(ctx context.Context, p *poller.Poller, a config.Agent, requestedBy string) (jsonx.M, error) {
+	if p.Admin.ControlDisabled() != nil {
+		return nil, apierr.New(409, "control is disabled by an administrator (fairy admin control enable)")
+	}
+	if !a.SelfUpdate {
+		return nil, apierr.New(409, "self-update is not configured for this agent (self_update: true in its agents: entry)")
+	}
+	return agentCall(ctx, p, a, "/update", map[string]any{"requested_by": requestedBy})
+}
+
 func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path string, body any) (jsonx.M, error) {
 	status, data, err := p.AgentRequest(ctx, a, "POST", path, body)
 	if err != nil {
@@ -456,17 +495,18 @@ func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path strin
 		}
 		return def
 	}
+	refusal := func(e *apierr.Error) error { return &AgentRefusal{Err: e, Code: agentCode(data), Status: status} }
 	switch {
 	case status == 503 && (jsonx.S(data, "code") == api.ReasonHelperStopped || jsonx.S(data, "code") == api.ReasonHelperError):
-		return nil, apierr.New(409, HelperStoppedWhy) // the helper stopped since the last poll: not an agent failure
+		return nil, refusal(apierr.New(409, HelperStoppedWhy)) // the helper stopped since the last poll: not an agent failure
 	case status == 401: // the agent answered: 424, never 502 (see apierr.Upstream)
 		return nil, apierr.New(apierr.Upstream, "agent refused the control token (check control_token_env)")
 	case status == 404:
-		return nil, apierr.New(409, errMsg("disabled on that agent"))
+		return nil, refusal(apierr.New(409, errMsg("disabled on that agent")))
 	case status >= 500:
-		return nil, apierr.New(apierr.Upstream, errMsg(fmt.Sprintf("agent error %d", status)))
+		return nil, refusal(apierr.New(apierr.Upstream, errMsg(fmt.Sprintf("agent error %d", status))))
 	case status >= 400:
-		return nil, apierr.New(400, errMsg(fmt.Sprintf("agent error %d", status)))
+		return nil, refusal(apierr.New(400, errMsg(fmt.Sprintf("agent error %d", status))))
 	}
 	return data, nil
 }
