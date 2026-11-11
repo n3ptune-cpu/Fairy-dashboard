@@ -361,15 +361,23 @@ const infoBtnOf = (key) => [...document.querySelectorAll(".info-btn")].find((b) 
 function placeInfo() {
   const el = $("#info-pop"), btn = infoBtnOf(info.key);
   if (!btn) { closeInfo(false); return; }
+  el.style.maxHeight = "";
   const b = btn.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight, edge = 8;
   if (b.bottom < 0 || b.top > innerHeight) { closeInfo(false); return; }  // its button was scrolled out of sight
   const keep = [...(btn.closest(".panel, .modal-box, .stack, #page")?.querySelectorAll(".info-keep") || [])].map((k) => k.getBoundingClientRect())
     .filter((r) => r.height && r.bottom > b.top - 4 && r.top < innerHeight);
-  const under = keep.length ? Math.max(b.bottom, ...keep.map((r) => r.bottom)) + 6 : 0, fits = (top) => top >= edge && top + h <= innerHeight - edge;
+  const fits = (top) => top >= edge && top + h <= innerHeight - edge;
   const below = b.bottom + 6, above = b.top - h - 6;
-  const left = under && fits(under) ? Math.min(b.left - 12, ...keep.map((r) => r.left)) : b.left - 12;
+  let left = b.left - 12, top = null;
+  if (keep.length) {  // under the marked sentences (a little lower than it is high: it scrolls inside), else above them
+    const under = Math.max(b.bottom, ...keep.map((r) => r.bottom)) + 6, room = innerHeight - edge - under;
+    const over = Math.min(b.top, ...keep.map((r) => r.top)) - h - 6;
+    if (room >= Math.min(h, 240)) { top = under; left = Math.min(left, ...keep.map((r) => r.left)); if (room < h) el.style.maxHeight = `${room}px`; }
+    else if (fits(over)) top = over;
+  }
+  if (top === null) top = fits(below) ? below : fits(above) ? above : Math.max(edge, innerHeight - h - edge);
   el.style.left = `${Math.max(edge, Math.min(left, innerWidth - w - edge))}px`;
-  el.style.top = `${under && fits(under) ? under : keep.length && fits(above) ? above : fits(below) ? below : fits(above) ? above : Math.max(edge, innerHeight - h - edge)}px`;
+  el.style.top = `${top}px`;
 }
 function closeInfo(refocus) {
   clearTimeout(info.timer);
