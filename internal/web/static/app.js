@@ -457,12 +457,28 @@ const upsChips = (s) => upsOf(s).map((u) => `<span class="chip ups ${u.status ==
 // Laptop battery (agent's `battery` block): a chip in host rows and a box on the detail page.
 const BATT_STATE = { charging: "charging", discharging: "on battery", full: "full", idle: "plugged in, not charging", unknown: "unknown" };
 const battLow = (b) => b.state === "discharging" && b.percent != null && b.percent < 20;
+// Host list: the battery as a small sign in the family of the helper's and the update arrow, no box and no number.
+// The fill is the charge in four steps. On mains (charging, full, plugged in) it is quiet and has a bolt beside it;
+// on battery it is amber; on battery under 20 % it is red with "!" inside: the same states and the same 20 % the
+// chip used for its colours (battLow), and each differs by shape as well. Its name and tooltip are the chip's
+// ("Battery 78% · on battery · 2h 10m left"); a click, Enter or a tap opens the same in the info panel.
+const battMains = (b) => ["charging", "full", "idle"].includes(b.state);
+function battIcon(b) {
+  const steps = b.percent == null ? 0 : Math.max(1, Math.min(4, Math.ceil(b.percent / 25))), mains = battMains(b);
+  return `<svg width="${mains ? 23 : 18}" height="18" viewBox="0 0 ${mains ? 31 : 24} 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/>${steps && !battLow(b)
+    ? `<rect x="4.7" y="9.7" width="${(steps * 2.9).toFixed(1)}" height="4.6" rx=".5" fill="currentColor" stroke="none"/>` : ""}${battLow(b)
+    ? '<rect x="4.7" y="9.7" width="2.4" height="4.6" rx=".5" fill="currentColor" stroke="none"/><path d="M12.5 9.9v2.4M12.5 14.3v.01"/>' : mains ? '<path d="M28 5.5 24.6 12.5h4L27 18.5"/>' : ""}</svg>`;
+}
 const battChip = (s) => {
   const b = s.battery;
   if (!b || !live(s)) return "";
-  const cls = battLow(b) ? "bad" : b.state === "discharging" ? "warn" : "";
-  const title = [`Battery ${fmtP(b.percent)}`, BATT_STATE[b.state] || b.state, b.time_remaining_s != null ? `${fmtUptime(b.time_remaining_s)} ${b.state === "charging" ? "to full" : "left"}` : ""].filter(Boolean).join(" · ");
-  return `<span class="chip batt ${cls}" title="${esc(title)}">${I.battery}${fmtP(b.percent)}${b.state === "charging" ? " ⚡" : ""}</span>`;
+  const cls = battLow(b) ? "bad" : b.state === "discharging" ? "warn" : "ok";
+  const left = b.time_remaining_s != null ? `${fmtUptime(b.time_remaining_s)} ${b.state === "charging" ? "to full" : "left"}` : "";
+  const title = [`Battery ${fmtP(b.percent)}`, BATT_STATE[b.state] || b.state, left].filter(Boolean).join(" · ");
+  return infoBtn(`batt-${s.id}`, "Battery", `<div class="list-row"><span>Charge</span><span>${fmtP(b.percent)}</span></div>
+    <div class="list-row"><span>State</span><span>${esc(BATT_STATE[b.state] || b.state)}</span></div>
+    ${left ? `<div class="list-row"><span>${b.state === "charging" ? "Time to full" : "Time left"}</span><span>${fmtUptime(b.time_remaining_s)}</span></div>` : ""}
+    <p>Health and draw are on <a href="#/system/${enc(s.id)}">its page</a>.</p>`, { cls: `hflag ${cls}`, icon: battIcon(b), label: title });
 };
 function batteryBox(s) {
   const b = s.battery;

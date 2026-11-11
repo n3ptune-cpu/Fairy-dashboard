@@ -158,6 +158,11 @@ func TestUIInfoButton(t *testing.T) {
 		"{ cls: `hflag ${err ? \"bad\" : down ? \"warn\" : \"ok\"}`, icon: down ? I.helperDown : I.helperOk, label: what ? `${name}: ${what}` : name }",
 		`if (!h || !live(s) || !["running", "starting", "stopped", "error"].includes(h.state)) return "";`, // no helper, not installed, not known: no sign
 		`const name = err ? "Helper error" : down ? "Helper stopped" : h.state === "starting" ? "Helper starting" : "Helper running";`,
+		// the host list's battery: the same kind of sign, with the chip's states (red only on battery under 20 %) and the chip's words
+		`const battLow = (b) => b.state === "discharging" && b.percent != null && b.percent < 20;`,
+		`const cls = battLow(b) ? "bad" : b.state === "discharging" ? "warn" : "ok";`,
+		"const title = [`Battery ${fmtP(b.percent)}`, BATT_STATE[b.state] || b.state, left].filter(Boolean).join(\" · \");",
+		"{ cls: `hflag ${cls}`, icon: battIcon(b), label: title }",
 		`<div class="info-t">${esc(about)}</div>${html}`,
 		`<button class="info-x" type="button" aria-label="Close">${I.close}</button>`,
 		`if (info.key !== b.dataset.info) openInfo(b, true);` + "\n" + `  else if (info.pinned) closeInfo(false);`, // a click opens, a second click closes

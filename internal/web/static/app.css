@@ -354,7 +354,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
 .info-btn:hover, .info-btn[aria-expanded="true"] { color: var(--text); background: #1c1c1c; }
 .info-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; color: var(--text); }
-/* the same button as the helper's sign in a host row: a shield with a tick (running, quiet) or with "!" (stopped amber, error red) */
+/* the same button as a sign in a host row. The helper: a shield with a tick (running, quiet) or with "!" (stopped amber, error red).
+   The battery: its fill in four steps, a bolt beside it on mains (quiet), amber on battery, red with "!" when low. */
 .info-btn.hflag { margin: -4px 0; border-radius: 0; }
 .info-btn.hflag.ok { color: var(--faint); }
 .info-btn.hflag.ok:hover, .info-btn.hflag.ok[aria-expanded="true"] { color: var(--ok); }
@@ -362,6 +363,8 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
 .info-btn.hflag.warn:hover, .info-btn.hflag.warn[aria-expanded="true"] { background: rgba(245, 184, 75, .14); }
 .info-btn.hflag.bad:hover, .info-btn.hflag.bad[aria-expanded="true"] { background: rgba(255, 93, 108, .14); }
 .info-pop a { color: var(--accent); }
+.info-pop .list-row { padding: 4px 0; }
+.info-pop .list-row + p { margin: 8px 0 2px; }
 .menu.info-pop { position: fixed; left: 0; top: 0; right: auto; z-index: 55; width: 400px; min-width: 0; max-width: calc(100vw - 16px); max-height: min(70vh, 520px);
   overflow-y: auto; overscroll-behavior: contain; padding: 12px 14px 10px; font-size: 12.5px; line-height: 1.5; color: #d6d6d6; }
 .info-pop .info-t { color: var(--text); font-weight: 700; font-size: 13px; margin: 0 30px 6px 0; }
@@ -511,9 +514,7 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
 
 /* laptop battery */
 .bar.batt > i { background: var(--ok); } .bar.batt.low > i { background: var(--bad); }
-.chip.batt { display: inline-flex; align-items: center; gap: 3px; margin-left: 4px; }
 .bad-t { color: var(--bad); }
-.chip.batt svg { width: 13px; height: 13px; }
 .panel h3 svg { vertical-align: -2px; }
 
 /* update available: version chip + arrow (admins), popover, menu dot */
