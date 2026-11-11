@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -86,6 +87,9 @@ type world struct {
 	limited   int // requests an agent refused for that reason
 	maxInMin  int // the most requests any one agent got in a minute
 	started   bool
+	// clock guards now and mono between tick, which moves them, and the Manager, which reads them through
+	// Now and Mono, also from another goroutine (TestReadingAndCancellingWhileARunWorks cancels from one).
+	clock sync.Mutex
 }
 
 var t0 = time.Date(2026, 11, 11, 3, 0, 0, 0, time.UTC)
@@ -94,8 +98,16 @@ func newWorld(t *testing.T) *world {
 	t.Helper()
 	w := &world{t: t, now: t0, ms: map[string]*machine{}, agentHits: map[string][]time.Time{}}
 	w.m = New(filepath.Join(t.TempDir(), "wake-update.json"), NewSettings(300, 60, 120, 8), w)
-	w.m.Now = func() time.Time { return w.now }
-	w.m.Mono = func() time.Duration { return w.mono }
+	w.m.Now = func() time.Time {
+		w.clock.Lock()
+		defer w.clock.Unlock()
+		return w.now
+	}
+	w.m.Mono = func() time.Duration {
+		w.clock.Lock()
+		defer w.clock.Unlock()
+		return w.mono
+	}
 	w.m.Event = func(e Event) { w.events = append(w.events, e) }
 	if err := w.m.Load(); err != nil {
 		t.Fatal(err)
@@ -382,8 +394,10 @@ func (w *world) poll() {
 
 // tick is one second of the world.
 func (w *world) tick() {
+	w.clock.Lock()
 	w.now = w.now.Add(time.Second)
 	w.mono += time.Second
+	w.clock.Unlock()
 	w.sim()
 	w.poll()
 	w.m.Tick(context.Background())
