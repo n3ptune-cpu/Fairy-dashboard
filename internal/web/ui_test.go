@@ -211,7 +211,11 @@ func TestUIInfoButton(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{".info-btn:focus-visible { outline: 2px solid var(--accent);", ".menu.info-pop { position: fixed;", "max-width: calc(100vw - 16px);"} {
+	for _, want := range []string{".info-btn:focus-visible { outline: 2px solid var(--accent);", ".menu.info-pop { position: fixed;", "max-width: calc(100vw - 16px);",
+		// the signs of a host row are a close group, and each stays 24 px wide to click (the arrow: 17 px drawn, 25 to click)
+		".host-tags .info-btn.hflag { --ink: 12px; width: 24px; margin-left: calc((var(--ink) - 24px) / 2); margin-right: calc((var(--ink) - 24px) / 2); }",
+		`.host-tags .upd-arrow::after { content: ""; position: absolute; inset: -4px; }`,
+		".host-tags .info-btn.hflag:focus-visible { outline-offset: max(-4px, calc((var(--ink) - 24px) / 2 + 1px)); }"} {
 		if !strings.Contains(string(css), want) {
 			t.Errorf("app.css lacks %q", want)
 		}

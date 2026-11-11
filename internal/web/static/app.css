@@ -569,13 +569,28 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
 /* a host is one line: icon, state, name, then its chips; the chips wrap beside the name when the window is narrow */
 .host-line { display: flex; align-items: center; gap: 12px; }
 .host-main { flex: 1; min-width: 0; }
-.host-l1 { display: flex; align-items: center; gap: 4px 12px; }
+.host-l1 { display: flex; align-items: center; gap: 4px 8px; }
 .table.hosts .host-l1 > a { flex: none; white-space: nowrap; gap: 7px; }
 /* the machine's model: one quiet line under the name, cut with … when it is longer than the cell (it never widens the table) */
 .host-model { width: 0; min-width: 100%; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint);
   font-size: 11.5px; line-height: 1.2; }
-.host-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.host-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; min-width: 0; }
 .host-tags .tag, .host-tags .chip, .host-tags .guest-count, .host-tags .ver { margin-left: 0; }
+/* The signs are one close group: 7 px of air between two glyphs, 8 px after the name, 14 px to the guests. A sign's button
+   stays 24 px wide (and 32 px high on a phone), but its glyph is narrower (--ink, the drawn width), so the empty edges of
+   two buttons overlap; no button reaches over a neighbour's glyph. The focus ring is drawn inside the button, around its
+   own glyph only. */
+.host-tags .info-btn.hflag { --ink: 12px; width: 24px; margin-left: calc((var(--ink) - 24px) / 2); margin-right: calc((var(--ink) - 24px) / 2); }
+.host-tags .info-btn.hflag.ups { --ink: 10px; }
+.host-tags .info-btn.hflag[data-info^="batt-"] { --ink: 16px; }
+.host-tags .info-btn.hflag:has(svg[width="23"]) { --ink: 21px; }  /* the battery with the bolt beside it (on mains) */
+.host-tags .info-btn.hflag:focus-visible { outline-offset: max(-4px, calc((var(--ink) - 24px) / 2 + 1px)); }
+.host-tags .ver { margin-left: -2px; }  /* the arrow's circle is 2 px inside its button */
+.host-tags .upd-arrow { position: relative; }
+.host-tags .upd-arrow::after { content: ""; position: absolute; inset: -4px; }  /* 25 px to click or tap, drawn 17 */
+.host-tags .hflag + .guest-count { margin-left: 7px; }
+.host-tags .guest-count + .ver { margin-left: 5px; }
+.host-tags > .guest-count:first-child { margin-left: 4px; }
 /* The hosts table needs about 930 px for its six columns. In a narrower panel (a window under about 1260 px with the
    sidebar open, a phone) a host is two lines: name and chips, then its values with their names in front. Nothing is
    cut off and nothing scrolls sideways. A browser without container queries keeps the table. */
