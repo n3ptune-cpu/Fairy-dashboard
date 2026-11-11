@@ -226,7 +226,31 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .preview { height: 120px; border-radius: var(--radius); border: 1px solid var(--line2); background: #050505 center / cover no-repeat; margin-top: 12px; }
 
 .login .signed-out { border: 1px solid #4a3810; background: rgba(245, 184, 75, .05); color: #f3cf86; border-radius: var(--radius); padding: 8px 12px; font-size: 12.5px; }
-.login { max-width: 400px; margin: 14vh auto; text-align: center; background: var(--panel); padding: 40px; border: 1px solid var(--line); border-radius: var(--radius); }
+/* The sign-in and the waiting view. The sign-in wallpaper fills the page (GET /branding/wallpaper; with none set
+   that is a 404 and the page stays black); the controls are a strip along the bottom, dark enough to read on
+   any picture. A view that is hidden loads no picture. The demo's and a test build's banner stay above it. */
+.login { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; overflow-y: auto;
+  background: var(--bg) url("/branding/wallpaper") center / cover no-repeat; }
+.login-strip { margin-top: auto; display: grid; grid-template: 1fr / auto auto minmax(0, 1fr) auto; align-items: center; column-gap: 16px;
+  padding: 18px max(24px, calc(50vw - 600px)) max(18px, env(safe-area-inset-bottom)); border-top: 1px solid rgba(255, 255, 255, .12);
+  background: rgba(0, 0, 0, .78); backdrop-filter: blur(14px) saturate(1.1); -webkit-backdrop-filter: blur(14px) saturate(1.1); }
+.login-strip > .logo.big { grid-column: 1; grid-row: 1 / span 4; width: 36px; height: 36px; margin: 0; }
+.login-strip > h1 { grid-column: 2; grid-row: 1 / span 4; margin: 0; font-size: 20px; line-height: 1.2; }
+.login-strip > p, .login-strip > #waiting-demo { grid-column: 3; justify-self: start; margin: 2px 0; font-size: 13px; }
+.login-strip > p, #waiting .login-strip > p { color: #d6d6d6; }
+.login-strip > p.note, #waiting .login-strip > p.note { color: #b4b4b4; font-size: 12.5px; }
+.login-strip > #waiting-demo:empty { display: none; }
+#waiting .login-strip .demo-view { margin: 4px 0 0; }
+#waiting .login-strip .demo-view .note { color: #b4b4b4; }
+.login-strip > .btn, .login-strip > form { grid-column: 4; grid-row: 1 / span 4; margin: 0; }
+.login-strip .btn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+@media (max-width: 720px) {
+  .login-strip { grid-template: auto / auto minmax(0, 1fr); column-gap: 12px; padding: 16px 16px max(16px, env(safe-area-inset-bottom)); }
+  .login-strip > .logo.big, .login-strip > h1 { grid-row: 1; }
+  .login-strip > p, .login-strip > #waiting-demo { grid-column: 1 / -1; margin: 10px 0 0; }
+  .login-strip > .btn, .login-strip > form { grid-column: 1 / -1; grid-row: auto; margin-top: 14px; }
+  .login-strip > .btn, .login-strip > form .btn { width: 100%; justify-content: center; padding: 13px 18px; font-size: 14px; }
+}
 .foot { text-align: center; color: var(--faint); font-size: 12px; padding: 0 0 24px; margin-top: auto; }
 
 @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } }
