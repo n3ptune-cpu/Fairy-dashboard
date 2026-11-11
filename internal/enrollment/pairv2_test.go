@@ -570,7 +570,7 @@ func TestCreateRefusesAReleaseThatCannotTakeTheCommand(t *testing.T) {
 		{"the code only on the command line", func(in *Installers) { in.StdinSH, in.EnvPS1 = false, false }, "standard input (--join-stdin)", "FAIRY_JOIN_CODE"},
 		{"no fingerprint check", func(in *Installers) { in.PinSH, in.PinPS1 = false, false }, "fingerprint (--sums-sha256)", "fingerprint (-SumsSha256)"},
 		{"install.ps1 needs to be a file", func(in *Installers) { in.MemoryPS1 = false }, "", "running from memory"},
-		{"the pinned build-13", func(in *Installers) {
+		{"build-13, the release pinned before", func(in *Installers) {
 			*in = Installers{Repo: in.Repo, Tag: in.Tag, Version: in.Version, Base: in.Base, SH: in.SH, PS1: in.PS1, Sums: in.Sums, PinSH: true, PinPS1: true, MemoryPS1: true}
 		},
 			"pairing v2 (--pair-v2); taking the join code from standard input", "pairing v2 (-PairV2); taking the join code from FAIRY_JOIN_CODE"},

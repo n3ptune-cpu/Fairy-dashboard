@@ -91,7 +91,7 @@ agents:
 # enroll:                                 # Add host
 #   panel_address: 100.64.0.10            # optional: the panel's Tailscale IPv4 as the agents see it (default: found
 #                                         # at start on the tailscale* interface, else from tailscaled's LocalAPI)
-#   agent_release: build-13               # optional: the Fairy-agent release whose install script the command
+#   agent_release: build-16               # optional: the Fairy-agent release whose install script the command
 #                                         # runs (default: the one this panel was built with); always checked
 #                                         # against the signed SHA256SUMS with the panel's release key first
 #   allow_non_tailscale: false            # Add host / Re-pair only pair with a machine at a Tailscale address
