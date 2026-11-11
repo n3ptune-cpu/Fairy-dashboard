@@ -39,3 +39,16 @@ func TestSignInPageHasTheStripAndTheSamePolicy(t *testing.T) {
 		t.Errorf("app.css loads %d addresses; the only one is the panel's own /branding/wallpaper", n)
 	}
 }
+
+// The Settings page offers the sign-in picture to admins only, takes the three types, and shows the stored
+// picture through the public route under its version.
+func TestSettingsPageOffersTheSignInPictureToAdmins(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{`if (state.me?.role !== "admin") return "";`, "cssUrl(`/branding/wallpaper?v=${enc(w.version)}`)",
+		`accept="image/png,image/jpeg,image/webp"`, `api("/api/admin/signin-wallpaper", { method: "DELETE" })`,
+		`</div>${signInPanel()}`, `bindSignIn();`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %s", want)
+		}
+	}
+}

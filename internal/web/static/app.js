@@ -1647,7 +1647,7 @@ function pageSettings() {
     <div class="row-gap section-title"><label class="btn" for="bg-file">Upload image…</label><input id="bg-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" hidden>
       <button class="btn danger" id="bg-clear" ${bg.kind === "none" ? "disabled" : ""}>Remove background</button></div>
     <div class="row-gap"><input class="input" id="bg-url" type="url" placeholder="https://example.com/wallpaper.jpg" value="${bg.kind === "url" ? esc(bg.url) : ""}"><button class="btn" id="bg-url-apply">Use URL</button></div>
-    <div class="preview" id="bg-preview"></div><div class="error" id="set-err"></div></div>
+    <div class="preview" id="bg-preview"></div><div class="error" id="set-err"></div></div>${signInPanel()}
     <div class="panel glass pad"><h3>Readability</h3>
     <div class="field"><label for="dim">Background dim</label><input type="range" id="dim" min="0" max="90" step="5" value="${esc(s.dim)}"><output id="dim-v">${esc(s.dim)}%</output></div>
     <div class="field"><label for="blur">Card blur</label><input type="range" id="blur" min="0" max="40" step="2" value="${esc(s.blur)}"><output id="blur-v">${esc(s.blur)}px</output></div>
@@ -1683,8 +1683,51 @@ function bindSettings() {
     el.oninput = () => { state.settings[key] = +el.value; $(`#${id}-v`).textContent = `${el.value}${unit}`; applySettings(); };
     el.onchange = () => saveSettings();
   }
+  bindSignIn();
 }
 function afterSettings() { applySettings(); route(); }
+
+// ---- the sign-in wallpaper (admins): the picture behind the sign-in page, one for the whole panel. The panel
+// keeps a copy and shows it to everyone who can open this address, before they sign in (GET /branding/wallpaper).
+let signInWall = null;  // { set, type, bytes, version, max_bytes } as the panel last said; null: not asked yet
+function signInPanel() {
+  if (state.me?.role !== "admin") return "";
+  return `<div class="panel glass pad" id="siw"><h3>Sign-in page</h3>
+    <div class="note">Picture behind the sign-in page, the same for everyone. Anyone who can open this panel's address sees it before signing in, so pick one that may be public. Upload only (PNG, JPEG or WebP, max 8 MiB); it does not change your own background above.</div>
+    <div class="row-gap section-title"><label class="btn" for="siw-file">Upload picture…</label><input id="siw-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+      <button class="btn danger" id="siw-clear" disabled>Remove picture</button></div>
+    <div class="preview" id="siw-preview"></div><div class="note" id="siw-state">Loading…</div><div class="error" id="siw-err"></div></div>`;
+}
+function bindSignIn() {
+  if (!$("#siw")) return;
+  const err = (e) => { if ($("#siw-err")) $("#siw-err").textContent = e ? e.message || String(e) : ""; };
+  const show = (w) => {
+    signInWall = w;
+    if (!$("#siw")) return;  // another page by now
+    $("#siw-clear").disabled = !w.set;
+    $("#siw-preview").style.backgroundImage = w.set ? cssUrl(`/branding/wallpaper?v=${enc(w.version)}`) : "none";
+    $("#siw-state").textContent = w.set ? `${{ "image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WebP" }[w.type] || "Picture"}, ${fmtBytes(w.bytes)}. Shown on the sign-in page.`
+      : "No picture: the sign-in page has the plain black background.";
+  };
+  if (signInWall) show(signInWall);
+  api("/api/admin/signin-wallpaper").then(show).catch(err);
+  $("#siw-file").onchange = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";  // the same file can be chosen again
+    if (!file) return;
+    err(null);
+    if (signInWall?.max_bytes && file.size > signInWall.max_bytes) return err(new Error(`That file is larger than the limit of ${fmtBytes(signInWall.max_bytes)}.`));
+    try { show(await api("/api/admin/signin-wallpaper", { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } })); flash("Sign-in picture saved"); }
+    catch (x) {  // 413 without the panel's own words: the proxy in front of it refused the upload (README, "Sign-in wallpaper")
+      err(x.status === 413 && !x.detail ? new Error("The upload was refused as too large before it reached the panel. nginx needs client_max_body_size 9m for /api/admin/signin-wallpaper, as for the background upload.") : x);
+    }
+  };
+  $("#siw-clear").onclick = async () => {
+    err(null);
+    try { show(await api("/api/admin/signin-wallpaper", { method: "DELETE" })); flash("Sign-in picture removed"); }
+    catch (x) { err(x); }
+  };
+}
 
 // ------------------------------------------------------------ settings persistence (server, localStorage fallback)
 const LS_KEY = "fairy-settings";

@@ -244,6 +244,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 #waiting .login-strip .demo-view .note { color: #b4b4b4; }
 .login-strip > .btn, .login-strip > form { grid-column: 4; grid-row: 1 / span 4; margin: 0; }
 .login-strip .btn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+#siw-state { margin-top: 8px; }
 @media (max-width: 720px) {
   .login-strip { grid-template: auto / auto minmax(0, 1fr); column-gap: 12px; padding: 16px 16px max(16px, env(safe-area-inset-bottom)); }
   .login-strip > .logo.big, .login-strip > h1 { grid-row: 1; }
