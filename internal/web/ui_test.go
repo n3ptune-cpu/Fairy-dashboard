@@ -320,3 +320,28 @@ func TestUIWakeUpdate(t *testing.T) {
 		}
 	}
 }
+
+// Buttons that sit in one row have one height: the main button (.btn.primary) differs by its colour, not by its
+// padding, font size or border; a link or a label styled as a button gets the line height of a <button>; the host
+// page's "live" control is as high as the buttons beside it. Larger only where a button stands alone.
+func TestUIButtonsOneHeight(t *testing.T) {
+	b, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(b)
+	for _, want := range []string{
+		"font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; line-height: 1.28; }",
+		".btn.primary { background: #e9e9e9; border-color: #e9e9e9; color: #000; }",
+		".login-strip > .primary, .wake > .primary { padding: 10px 18px; font-size: 14px; }",
+		"padding: 8px 10px; line-height: 1.3333; border: 1px solid rgba(61, 220, 151, .25);",
+		".btn.icon { padding: 8px; }",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css lacks %q", want)
+		}
+	}
+	if i := strings.Index(css, ".btn.primary {"); i < 0 || strings.Contains(css[i:i+strings.Index(css[i:], "}")], "padding") || strings.Contains(css[i:i+strings.Index(css[i:], "}")], "font-size") {
+		t.Error("app.css: .btn.primary sets a size of its own again")
+	}
+}
