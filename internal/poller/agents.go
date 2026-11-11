@@ -2,9 +2,13 @@ package poller
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"math"
+	"runtime"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
@@ -13,6 +17,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/scheduler"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/ups"
 )
@@ -112,6 +117,12 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		p.agentPower[a.ID] = nil
 		p.source(name, false, now, nil, &msg)
 		p.agentFailures[a.ID]++
+		q, row := p.agentQuiet[a.ID]
+		if !row || now.Before(q.last) || now.Sub(q.last) > QuietGap { // the first failed poll, or the panel was not watching in between
+			q.since = now
+		}
+		q.last = now
+		p.agentQuiet[a.ID] = q
 		n := p.agentFailures[a.ID]
 		p.mu.Unlock()
 		p.Power.UpdateRemote(a.ID, nil, true, a.PowerLinks, a.PowerExcludeFromTotal)
@@ -132,6 +143,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	}
 	p.agentInfo[a.ID] = info
 	delete(p.agentFailures, a.ID)
+	delete(p.agentQuiet, a.ID)
 	p.systems[a.ID] = p.stamp(sys, now)
 	p.syncPresent()
 	p.agentPower[a.ID] = sys.ComponentPower
@@ -180,6 +192,27 @@ type AgentInfo struct {
 	Enabled    bool           // features.self_update
 	SeenAt     time.Time
 	Online     bool // the latest poll succeeded
+	// QuietSince: since when the panel has asked the agent, poll after poll, and got no answer. Zero while it
+	// answers, while it was never polled, and when the panel stopped asking (see QuietGap).
+	QuietSince time.Time
+}
+
+// QuietGap is the longest time between two failed polls of an agent that still counts as one row of them.
+// It is a little longer than the slowest interval a machine can be polled at. A longer gap means the panel was
+// not watching (polling was paused, the panel's host slept, the clock was set): what the machine did meanwhile
+// is not known, so the row starts again. "No answer for 15 minutes" is then never 14 of them unwatched.
+const QuietGap = (scheduler.MaxInterval + 60) * time.Second
+
+// quietRow is an agent's unbroken row of failed polls: when it began, and its latest one.
+type quietRow struct{ since, last time.Time }
+
+// quietSinceLocked is AgentInfo.QuietSince for an agent. Caller holds p.mu.
+func (p *Poller) quietSinceLocked(id string) time.Time {
+	q, ok := p.agentQuiet[id]
+	if now, _ := p.now(); !ok || now.Before(q.last) || now.Sub(q.last) > QuietGap {
+		return time.Time{}
+	}
+	return q.since
 }
 
 func agentInfoOf(payload jsonx.M, now time.Time) AgentInfo {
@@ -257,6 +290,7 @@ func (p *Poller) AgentInfo(id string) (AgentInfo, bool) {
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
+	i.QuietSince = p.quietSinceLocked(id)
 	return i, ok
 }
 
@@ -269,15 +303,21 @@ func (p *Poller) AgentSeen(id string) (AgentInfo, model.System, bool) {
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
+	i.QuietSince = p.quietSinceLocked(id)
 	s, known := p.systems[id]
 	return i, s, known
 }
 
-// ProbeAgent asks an agent for its metrics now and says how that went, in the words of devices.Describe: ""
-// when it answered, "timeout" or "connection failed" when nothing did, anything else ("http 401", "invalid
-// response", "tls verification failed") when something answered that the panel could not use. It does not
-// change what the poller knows. Unlike the poller's view, which can be up to offline_after old or the result
-// of a poll that is being retried more slowly, the answer is about this moment.
+// ProbeRefused is what ProbeAgent says when the machine itself turned the connection down.
+const ProbeRefused = "connection refused"
+
+// ProbeAgent asks an agent for its metrics now and says how that went: "" when it answered; "timeout" or
+// "connection failed" when nothing did (the words of devices.Describe); ProbeRefused when the connection was
+// refused, reset or closed without an answer; anything else ("http 401", "invalid response", "tls verification
+// failed") when something answered that the panel could not use. A refused connection is not "nothing
+// answered": the machine's own network stack sent the refusal, so the machine is on and only its agent is not
+// listening. It does not change what the poller knows. Unlike the poller's view, which can be up to
+// offline_after old or the result of a poll that is being retried more slowly, the answer is about this moment.
 func (p *Poller) ProbeAgent(ctx context.Context, id string) string {
 	a, ok := p.AgentByID(id)
 	if !ok {
@@ -287,9 +327,30 @@ func (p *Poller) ProbeAgent(ctx context.Context, id string) string {
 	cctx, cancel := context.WithTimeout(ctx, timeout+500*time.Millisecond)
 	defer cancel()
 	if _, err := p.Backend.FetchAgentMetrics(cctx, a, timeout); err != nil {
-		return devices.Describe(err)
+		d := devices.Describe(err)
+		if d != "timeout" && refused(err) {
+			return ProbeRefused
+		}
+		return d
 	}
 	return ""
+}
+
+// Windows has numbers of its own for a refused and a reset connection, and Go does not map them to the names
+// below.
+const (
+	wsaECONNRESET   = syscall.Errno(10054)
+	wsaECONNREFUSED = syscall.Errno(10061)
+)
+
+// refused reports whether a request failed because the other side turned it down: it refused the connection,
+// reset it, or closed it before an answer. Each of these is sent by a machine that is running.
+func refused(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var en syscall.Errno
+	return runtime.GOOS == "windows" && errors.As(err, &en) && (en == wsaECONNREFUSED || en == wsaECONNRESET)
 }
 
 // FetchProcesses asks an agent for its top processes.

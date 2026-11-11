@@ -83,6 +83,7 @@ type Poller struct {
 	clusterIDs    map[string][]string
 	fingerprints  map[string]uint64
 	agentFailures map[string]int
+	agentQuiet    map[string]quietRow             // agent id -> the row of failed polls it is in (see QuietGap)
 	helperSeen    map[string]map[string]time.Time // agent id -> helper reading group -> last seen while the helper ran ("" = last running poll)
 	agentInfo     map[string]AgentInfo
 	unencodable   map[string]bool // systems shown as error entries, already logged (see encodeSystems)
@@ -103,7 +104,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 		sources: map[string]model.SourceStatus{}, agentPower: map[string]*model.ComponentPower{},
 		pveRefs: map[string]pveRef{}, nodeCPU: map[string]string{}, nodeInflight: map[string]string{}, pveOverLimit: map[string]bool{},
 		pending: map[string]pendingNote{}, asleep: map[string]time.Time{}, clusterIDs: map[string][]string{}, fingerprints: map[string]uint64{},
-		agentFailures: map[string]int{}, agentInfo: map[string]AgentInfo{}, helperSeen: map[string]map[string]time.Time{}, snapVer: -1, snapJSONVer: -1,
+		agentFailures: map[string]int{}, agentQuiet: map[string]quietRow{}, agentInfo: map[string]AgentInfo{}, helperSeen: map[string]map[string]time.Time{}, snapVer: -1, snapJSONVer: -1,
 		stateVersion: -1, StartedAt: time.Now().UTC(), present: map[string]bool{}}
 	for i := range cfg.Systems {
 		p.overrides[cfg.Systems[i].ID] = &cfg.Systems[i]
@@ -453,6 +454,7 @@ func (p *Poller) RemoveAgent(id string) {
 	delete(p.systems, id)
 	delete(p.agentInfo, id)
 	delete(p.agentFailures, id)
+	delete(p.agentQuiet, id)
 	delete(p.helperSeen, id)
 	delete(p.agentPower, id)
 	delete(p.sources, "agent:"+id)
