@@ -44,6 +44,8 @@ folder into the r4 folder **before** the first start.
 5. **Sessions**: make the window narrower and wider. Nothing scrolls sideways.
 6. **Settings**: the ⓘ buttons; the sign-in picture you set in r3 is still there (with the copied folder).
 7. If the VM has fans: change a fan. "Confirm it's you" names the change in words, not in braces. Else skip.
+8. The VM's page, **⋯**, **Set model name**: type a name, **Save**. It is under the host's name on the
+   Overview; the ⓘ in the "Model" line of its page says what the host reports. **Clear** brings that back.
 
 Every page with made-up data, without any machine: build the plain program and start its demo.
 
