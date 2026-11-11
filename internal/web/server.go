@@ -93,6 +93,8 @@ type Server struct {
 	assetV string     // ?v= of the /static/* URLs (assetVersion)
 	index  []byte     // index.html with assetV filled in
 
+	wall *streamSlots // downloads of the sign-in wallpaper in flight (signin_wallpaper.go)
+
 	// demo: set ONLY by demo mode (loopback-bound); authentication is bypassed with this user.
 	DemoUser     *model.User
 	demoMu       sync.Mutex
@@ -302,6 +304,7 @@ func (s *Server) routes() {
 	s.index = renderIndex(sub, s.assetV)
 	m.Handle("GET /static/", s.serveStatic(sub))
 	m.HandleFunc("GET /branding/logo", s.serveLogo)
+	s.wallpaperRoutes(m)
 	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", cacheNoCache)
