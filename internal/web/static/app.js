@@ -88,6 +88,8 @@ I.plus = svg('<path d="M12 5v14M5 12h14"/>', 15);
 I.copy = svg('<rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>', 14);
 I.onoff = svg('<path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>', 15);
 I.sessions = svg('<rect x="2.5" y="4" width="13" height="10" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="16.5" y="9" width="5" height="11" rx="1.2"/>');
+I.close = svg('<path d="M6 6l12 12M18 6 6 18"/>', 14);
+I.info = svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.01"/>', 16);
 
 const fmtRuntime = (s) => (s == null ? "–" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
 const fmtIv = (v) => (v == null ? "–" : `${+v.toFixed(1)}s`);
@@ -119,7 +121,7 @@ function sessionEnded() {
   const had = !!state.me;  // false: nobody was signed in on this page (first load), the plain sign-in view
   if (state.es) { state.es.close(); state.es = null; }
   for (const t of [state.timer, upd.bgT, enr.timer, streamRetry]) clearTimeout(t);
-  stepUpOpen = null; state.menu = null;
+  stepUpOpen = null; state.menu = null; closeInfo(false);
   const m = $("#modal"); m.hidden = true; m.innerHTML = ""; m.onclick = null;
   $("#shell").hidden = true; $("#waiting").hidden = true; $("#flash").hidden = true;
   $("#login-note").hidden = !had;
@@ -336,6 +338,72 @@ function patchChildren(a, b) {
   });
   for (let i = an.length - 1; i >= bn.length; i--) an[i].remove();
 }
+
+// ------------------------------------------------------------ the info button (ⓘ)
+// A section keeps one short sentence on the page; the longer explanation is behind a small button next to it:
+// infoBtn(key, about, html). A click (or Enter / Space) opens a panel with `html`, laid over the page next to the
+// button, so nothing on the page moves; a second click, Escape, its × or a click anywhere else closes it. With a mouse,
+// pointing at the button shows the panel as well. `html` is the caller's own markup: server values in it go
+// through esc() like everywhere. The panel is #info-pop in the page (role="status": a screen reader reads it when
+// it opens); it is placed with CSSOM, because the page's CSP allows no inline styles. Sentences that carry a
+// safety promise or a limit stay on the page itself, never only in here.
+const info = { html: {}, key: null, pinned: false, timer: null };
+function infoBtn(key, about, html) {
+  info.html[key] = `<button class="info-x" type="button" aria-label="Close">${I.close}</button><div class="info-t">${esc(about)}</div>${html}`;
+  return `<button class="info-btn" type="button" data-info="${esc(key)}" aria-label="${esc(`More about ${about}`)}" aria-expanded="${info.key === key}">${I.info}</button>`;
+}
+const infoList = (items) => `<ul>${items.map((x) => `<li>${x}</li>`).join("")}</ul>`;
+const infoBtnOf = (key) => [...document.querySelectorAll(".info-btn")].find((b) => b.dataset.info === key) || null;
+function placeInfo() {
+  const el = $("#info-pop"), btn = infoBtnOf(info.key);
+  if (!btn) { closeInfo(false); return; }
+  const b = btn.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight, edge = 8;
+  if (b.bottom < 0 || b.top > innerHeight) { closeInfo(false); return; }  // its button was scrolled out of sight
+  const below = b.bottom + 6, above = b.top - h - 6;
+  el.style.left = `${Math.max(edge, Math.min(b.left - 12, innerWidth - w - edge))}px`;
+  el.style.top = `${below + h <= innerHeight - edge ? below : above >= edge ? above : Math.max(edge, innerHeight - h - edge)}px`;
+}
+function closeInfo(refocus) {
+  clearTimeout(info.timer);
+  if (!info.key) return;
+  const el = $("#info-pop"), btn = infoBtnOf(info.key);
+  el.hidden = true; el.innerHTML = "";
+  info.key = null; info.pinned = false;
+  if (btn) { btn.setAttribute("aria-expanded", "false"); if (refocus) btn.focus(); }
+}
+function openInfo(btn, pinned) {
+  const key = btn.dataset.info;
+  if (!(key in info.html)) return;
+  closeInfo(false);
+  const el = $("#info-pop");
+  el.innerHTML = info.html[key]; el.hidden = false; el.scrollTop = 0;
+  info.key = key; info.pinned = pinned; btn.setAttribute("aria-expanded", "true");
+  placeInfo();
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".info-btn");
+  if (!b) { if (info.key && (!e.target.closest("#info-pop") || e.target.closest(".info-x"))) closeInfo(false); return; }
+  e.preventDefault(); e.stopPropagation();  // never also a click on the row or label it sits in
+  clearTimeout(info.timer);
+  if (info.key !== b.dataset.info) openInfo(b, true);
+  else if (info.pinned) closeInfo(false);
+  else info.pinned = true;  // the mouse pointer was showing it: the click keeps it open
+}, true);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && info.key) { e.stopPropagation(); closeInfo(true); } }, true);
+// Mouse only: pointing at the button shows the panel, moving away from both hides it again (unless a click opened it).
+const canHover = matchMedia("(hover: hover)");
+document.addEventListener("mouseover", (e) => {
+  if (!canHover.matches || !e.target.closest) return;
+  clearTimeout(info.timer);
+  const b = e.target.closest(".info-btn");
+  if (b) {
+    const key = b.dataset.info;
+    if (info.key !== key && !info.pinned) info.timer = setTimeout(() => { const x = infoBtnOf(key); if (x) openInfo(x, false); }, 250);
+  } else if (info.key && !info.pinned && !e.target.closest("#info-pop")) info.timer = setTimeout(() => closeInfo(false), 300);
+});
+window.addEventListener("scroll", () => { if (info.key) placeInfo(); }, true);
+window.addEventListener("resize", () => { if (info.key) placeInfo(); });
+window.addEventListener("hashchange", () => closeInfo(false));
 
 const linkedPower = (id) => {
   const srcs = (state.power?.sources || []).filter((s) => s.readings.some((r) => r.system_id === id));

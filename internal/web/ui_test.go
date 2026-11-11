@@ -145,6 +145,46 @@ func TestUISessionsPage(t *testing.T) {
 	}
 }
 
+// The info button (one helper for every page): a section keeps one short sentence, the rest opens in a panel
+// over the page. It is a real button with a name and aria-expanded, so a click, Enter and Space open it; Escape,
+// a second click, its × and a click elsewhere close it. The panel is an element of the page (a status region)
+// and is placed with CSSOM: the page's CSP has no inline styles, and nothing here uses one.
+func TestUIInfoButton(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`function infoBtn(key, about, html) {`,
+		`<button class="info-btn" type="button" data-info="${esc(key)}" aria-label="${esc(` + "`More about ${about}`" + `)}" aria-expanded="${info.key === key}">${I.info}</button>`,
+		`<div class="info-t">${esc(about)}</div>${html}`,
+		`<button class="info-x" type="button" aria-label="Close">${I.close}</button>`,
+		`if (info.key !== b.dataset.info) openInfo(b, true);` + "\n" + `  else if (info.pinned) closeInfo(false);`, // a click opens, a second click closes
+		`if (info.key && (!e.target.closest("#info-pop") || e.target.closest(".info-x"))) closeInfo(false);`,       // a click elsewhere, or on its ×
+		`if (e.key === "Escape" && info.key) { e.stopPropagation(); closeInfo(true); }`,                            // Escape, and the button has the focus again
+		`const canHover = matchMedia("(hover: hover)");`,                                                           // pointing at it is for a mouse only
+		`el.style.left = `, `el.style.top = `, // placed over the page: nothing moves
+		`window.addEventListener("hashchange", () => closeInfo(false));`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	if regexp.MustCompile(`style="|onclick=|onmouseover=`).MatchString(js) {
+		t.Error("app.js has an inline style or an inline event handler: the page's CSP refuses both")
+	}
+	index, err := staticFS.ReadFile("static/index.html")
+	if err != nil || !strings.Contains(string(index), `<div id="info-pop" class="menu info-pop" role="status" hidden></div>`) {
+		t.Error("index.html lacks the info panel", err)
+	}
+	css, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{".info-btn:focus-visible { outline: 2px solid var(--accent);", ".menu.info-pop { position: fixed;", "max-width: calc(100vw - 16px);"} {
+		if !strings.Contains(string(css), want) {
+			t.Errorf("app.css lacks %q", want)
+		}
+	}
+}
+
 // "Update machines that are off" on the Updates page: the entry point, the dialog that says in plain words
 // what happens and lists the machines with tick boxes, the request it sends (through the "Confirm it's you"
 // path), the live rows, the report, the cancel dialog and the per-host switch. Everything it shows of a run or
