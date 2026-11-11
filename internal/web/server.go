@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
@@ -79,8 +80,9 @@ type Server struct {
 	Notes *notifications.Store
 	Watch *notifications.Watcher
 
-	seenMu sync.Mutex
-	seen   map[string]time.Time // subject -> last "last seen" write
+	seenMu  sync.Mutex
+	seen    map[string]time.Time // subject -> last "last seen" write
+	seenErr atomic.Bool          // the last write of a session's last use to sessions.json failed (saveSeen)
 
 	codec  *sessionCodec
 	oidc   *oidcClient

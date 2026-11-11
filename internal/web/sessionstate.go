@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -38,7 +39,18 @@ type liveSession struct {
 	stepUp  *stepUpRec     // the last confirmed Pocket ID sign-in (nil: none since the panel started)
 	seen    int64          // Unix seconds of the last real use (0: not known since the panel started)
 	touched int64          // Unix seconds of the last change, for pruning
+	saved   int64          // Unix seconds of the last time seen went to sessions.json (dueSave)
+	addrs   []seenAddr     // the addresses the session's requests came from, latest first (noteAddr)
 }
+
+// seenAddr is an address a session was used from, and when last (Unix seconds).
+type seenAddr struct {
+	ip string
+	at int64
+}
+
+// maxAddrs is how many addresses are remembered per session: the latest one and three before it.
+const maxAddrs = 4
 
 // maxLiveSessions bounds the map. Keys come from signed cookies of registered sessions only, and the registry
 // has its own limits (adminstate.MaxSessionsTotal is below this), so it cannot be filled from outside; the
@@ -335,4 +347,62 @@ func (l *liveSessions) touch(sid string, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entry(sid, now).seen = now.Unix()
+}
+
+// dueSave reports whether sid's last use should go to sessions.json now: it was not written for seenPersist
+// seconds. It counts the write as done, so a write that fails is tried again a minute later, not at once.
+func (l *liveSessions) dueSave(sid string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e := l.m[sid]
+	if e == nil || now.Unix()-e.saved < seenPersist {
+		return false
+	}
+	e.saved = now.Unix()
+	return true
+}
+
+// savedNow notes that sid's entry in sessions.json was written just now with its last use (a sign-in, a renewed id).
+func (l *liveSessions) savedNow(sid string, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e := l.m[sid]; e != nil {
+		e.saved = now.Unix()
+	}
+}
+
+// noteAddr remembers that a request the panel accepted for sid came from ip (the client address as the
+// trusted proxies report it, reqCtx.ip). The Sessions page shows the latest address and the ones before it:
+// a copy of a session cookie that is used elsewhere has the same session id, so it is not another line on
+// that page, but it is another address on this list. Only in memory, for sessions the panel knows.
+func (l *liveSessions) noteAddr(sid, ip string, now time.Time) {
+	if sid == "" || ip == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e := l.entry(sid, now)
+	if len(e.addrs) > 0 && e.addrs[0].ip == ip {
+		e.addrs[0].at = now.Unix()
+		return
+	}
+	next := make([]seenAddr, 0, maxAddrs)
+	next = append(next, seenAddr{ip, now.Unix()})
+	for _, a := range e.addrs {
+		if a.ip != ip && len(next) < maxAddrs {
+			next = append(next, a)
+		}
+	}
+	e.addrs = next
+}
+
+// usage returns what is known in memory about the use of sid: when it was last really used (0: not since the
+// panel started) and the addresses its requests came from, latest first.
+func (l *liveSessions) usage(sid string) (seen int64, addrs []seenAddr) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e := l.m[sid]; e != nil {
+		return e.seen, slices.Clone(e.addrs)
+	}
+	return 0, nil
 }

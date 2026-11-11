@@ -146,9 +146,26 @@ func (c *reqCtx) used(status int) {
 	c.use = false
 	now := c.s.now()
 	c.s.codec.live.touch(c.sess.SID, now)
+	c.s.saveSeen(c.sess.SID, c.ip(), now)
 	if now.Unix()-c.sess.Seen > seenPersist {
 		c.sess.Seen = now.Unix()
 		c.dirty = true
+	}
+}
+
+// saveSeen writes a session's last use, and the address it came from, to sessions.json, at most once a minute
+// per session (seenPersist). It is what the Sessions page shows as "last active" for a session the panel has
+// not seen since it started; nothing is decided by it (the idle timeout goes by the panel's memory and the
+// cookie). A write that fails is logged once, until one succeeds again.
+func (s *Server) saveSeen(sid, ip string, now time.Time) {
+	if !s.codec.live.dueSave(sid, now) {
+		return
+	}
+	if err := s.Poller.Admin.TouchSession(sid, float64(now.Unix()), ip); err == nil {
+		s.seenErr.Store(false)
+	} else if s.seenErr.CompareAndSwap(false, true) {
+		slog.Warn("cannot record in sessions.json when sessions were last used (disk full? wrong owner?): the "+
+			"Sessions page shows older times after a restart; nothing else depends on it", "error", err)
 	}
 }
 
@@ -179,6 +196,7 @@ func (c *reqCtx) sessionUser() *model.User {
 	if c.markedRead() {
 		c.use = true
 	}
+	c.s.codec.live.noteAddr(s.SID, c.ip(), c.s.now()) // for the Sessions page: where this session is used from
 	u := *s.User
 	u.Auth = "session"
 	if u.Groups == nil {
@@ -624,7 +642,8 @@ func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, sub
 func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authTime float64) error {
 	admin := s.Poller.Admin
 	sid := randToken(18)
-	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip()}); err != nil {
+	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip(),
+		UA: c.r.Header.Get("User-Agent")}); err != nil {
 		slog.Error("sign-in failed: cannot register the session in sessions.json (disk full? wrong owner?)", "error", err)
 		c.auditAnon("auth.login", "failed: sessions.json not writable", actorOf(&u), &u.Sub, nil)
 		return apierr.New(503, "sign-in could not be recorded (the panel cannot write its session file); see the server log")
@@ -644,17 +663,21 @@ func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authT
 	c.dirty = true
 	s.codec.live.confirm(sid, authTime, c.ip(), uaHash(c.r), s.now())
 	s.codec.live.touch(sid, s.now())
+	s.codec.live.savedNow(sid, s.now()) // AddSession wrote the entry with this use
 	slog.Info("login ok", "sub", u.Sub)
 	c.auditAnon("auth.login", "ok", actorOf(&u), &u.Sub, nil)
 	return nil
 }
 
 // rotateSession gives a session that just passed a step-up a new id: the new id is registered in sessions.json,
-// the old one removed (with everything the panel remembered under it). The cookie's other contents stay.
+// the old one removed (with everything the panel remembered under it). The cookie's other contents stay. The
+// new entry keeps when and from where the person signed in (adminstate.NewSession.Replaces); its browser and
+// address are those of the client that just confirmed.
 func (s *Server) rotateSession(c *reqCtx, sess *sessionData, u model.User) (string, error) {
 	admin := s.Poller.Admin
 	sid := randToken(18)
-	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip()}); err != nil {
+	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip(),
+		UA: c.r.Header.Get("User-Agent"), Replaces: sess.SID}); err != nil {
 		slog.Error("step-up failed: cannot register the session in sessions.json (disk full? wrong owner?)", "error", err)
 		c.auditAnon("auth.step_up", "failed: sessions.json not writable", actorOf(&u), &u.Sub, nil)
 		return "", apierr.New(503, "the sign-in could not be recorded (the panel cannot write its session file); see the server log")

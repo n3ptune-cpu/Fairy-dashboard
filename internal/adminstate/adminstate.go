@@ -3,8 +3,10 @@
 //
 //	state.json     poll_overrides, control_disabled {by, at, reason}, power_control_disabled [system ids],
 //	               sessions_revoked_before (epoch)
-//	sessions.json  sessions {sid: {sub, name, email, ip, created, created_ts}}: a signed cookie is only valid while
-//	               its sid is here, for the account (sub) it names
+//	sessions.json  sessions {sid: {sub, name, email, ip, created, created_ts, gen}}: a signed cookie is only valid
+//	               while its sid is here, for the account (sub) it names. For the Sessions page an entry also
+//	               has ua, login_ts, login_ip, seen_ts and seen_ip (see Session); an entry written before
+//	               they existed lacks them and is read as "not known".
 package adminstate
 
 import (
@@ -12,7 +14,10 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
@@ -147,7 +152,12 @@ func currentGen(rec any) bool {
 	return num(m["gen"]) == SessionGen
 }
 
-// Session is one registered login, as listed by `fairy admin sessions list`.
+// Session is one registered login, as listed by `fairy admin sessions list` and on the Sessions page.
+//
+// IP, Created and CreatedTS are of the entry: the address and time this session id was registered, which is the
+// sign-in, or the last "Confirm it's you" (a confirmation gives the session a new id and a new entry). The
+// fields after them are what the Sessions page needs besides. An entry written before the panel recorded them
+// has none of them: "" and 0 mean "not known", and the page says so.
 type Session struct {
 	SID       string
 	Sub       string
@@ -156,14 +166,33 @@ type Session struct {
 	IP        string
 	Created   string
 	CreatedTS float64
+
+	UA      string  // the browser's User-Agent header at the sign-in, cleaned and cut (CleanUA)
+	LoginTS float64 // when the person signed in (Unix seconds); it stays when a confirmation renews the id
+	LoginIP string  // the address they signed in from; stays likewise
+	SeenTS  float64 // when the session was last really used, written at most once a minute (TouchSession)
+	SeenIP  string  // the address of that use
 }
 
-// ListSessions returns the registered sessions, oldest first.
-func (a *State) ListSessions() ([]Session, error) {
-	d, err := statefile.Read(a.SessionsPath)
-	if err != nil {
-		return nil, err
+// SignedIn is when the person signed in for this session: LoginTS, or for an entry from before LoginTS was
+// recorded the time the entry was made (which is the sign-in, or a later confirmation). 0: not known.
+func (s Session) SignedIn() float64 {
+	if s.LoginTS > 0 {
+		return s.LoginTS
 	}
+	return s.CreatedTS
+}
+
+// SignedInIP is the address of that sign-in, with the same fallback.
+func (s Session) SignedInIP() string {
+	if s.LoginIP != "" {
+		return s.LoginIP
+	}
+	return s.IP
+}
+
+// sessionsOf reads the sessions out of a sessions.json object, oldest entry first.
+func sessionsOf(d statefile.Data) []Session {
 	ss, _ := d["sessions"].(map[string]any)
 	out := []Session{}
 	for sid, v := range ss {
@@ -171,16 +200,78 @@ func (a *State) ListSessions() ([]Session, error) {
 			continue // left by an older release: not a session any more (SessionGen)
 		}
 		m, _ := v.(map[string]any)
-		s := Session{SID: sid, CreatedTS: num(m["created_ts"])}
+		s := Session{SID: sid, CreatedTS: num(m["created_ts"]), LoginTS: num(m["login_ts"]), SeenTS: num(m["seen_ts"])}
 		s.Sub, _ = m["sub"].(string)
 		s.Name, _ = m["name"].(string)
 		s.Email, _ = m["email"].(string)
 		s.IP, _ = m["ip"].(string)
 		s.Created, _ = m["created"].(string)
+		s.UA, _ = m["ua"].(string)
+		s.LoginIP, _ = m["login_ip"].(string)
+		s.SeenIP, _ = m["seen_ip"].(string)
 		out = append(out, s)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedTS < out[j].CreatedTS })
-	return out, nil
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedTS != out[j].CreatedTS {
+			return out[i].CreatedTS < out[j].CreatedTS
+		}
+		return out[i].SID < out[j].SID
+	})
+	return out
+}
+
+// ListSessions returns the registered sessions, oldest first (read from the file: the admin CLI).
+func (a *State) ListSessions() ([]Session, error) {
+	d, err := statefile.Read(a.SessionsPath)
+	if err != nil {
+		return nil, err
+	}
+	return sessionsOf(d), nil
+}
+
+// Sessions returns the registered sessions, oldest first, from the running panel's view of the file (the one
+// SessionValid decides by). While sessions.json cannot be read there are none, and the error says why.
+func (a *State) Sessions() ([]Session, error) {
+	if err := a.sessions.Err(); err != nil {
+		return nil, err
+	}
+	return sessionsOf(a.sessions.Get()), nil
+}
+
+// MaxUA is how many bytes of a User-Agent header are kept (CleanUA), and maxAddr how many of an address. With
+// them an entry of sessions.json has a fixed largest size, whatever a browser sends: the file is bounded by
+// that and by the number of entries (MaxSessionsPerAccount, MaxSessionsTotal).
+const (
+	MaxUA   = 256
+	maxAddr = 64
+)
+
+// CleanUA makes a User-Agent header storable and showable: bytes that are not UTF-8 become U+FFFD, control
+// characters and the characters that change the direction or the line of a text are dropped, and the result
+// is cut to MaxUA bytes at a character boundary. The header is whatever the client sent; nothing is decided
+// by it, it is only shown.
+func CleanUA(ua string) string {
+	var b strings.Builder
+	for _, r := range strings.ToValidUTF8(ua, "\uFFFD") {
+		if unicode.IsControl(r) || r == 0x2028 || r == 0x2029 || (r >= 0x202a && r <= 0x202e) ||
+			(r >= 0x2066 && r <= 0x2069) || r == 0x200e || r == 0x200f || r == 0x061c || r == 0xfeff {
+			continue
+		}
+		if b.Len()+utf8.RuneLen(r) > MaxUA {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// cleanAddr bounds an address for sessions.json. The panel passes what security.ClientIP made of the request:
+// a parsed address, or the peer as the listener named it.
+func cleanAddr(ip string) string {
+	if len(ip) > maxAddr {
+		ip = ip[:maxAddr]
+	}
+	return CleanUA(ip)
 }
 
 // NewSession is what the panel records about a fresh login in sessions.json.
@@ -189,6 +280,11 @@ type NewSession struct {
 	Name  *string
 	Email *string
 	IP    string
+	UA    string // the request's User-Agent header, as sent (AddSession cleans and cuts it)
+	// Replaces is the session id this one continues: a "Confirm it's you" gives a session a new id. The new
+	// entry then keeps when and from where the person signed in (login_ts, login_ip) from that entry, when it
+	// is one of the same account. "" for a sign-in.
+	Replaces string
 }
 
 // AddSession registers a new login (and drops registry entries older than SessionKeepS, those an older
@@ -207,9 +303,26 @@ func (a *State) AddSession(sid string, info NewSession) error {
 				delete(ss, k)
 			}
 		}
-		rec := map[string]any{"sub": info.Sub, "name": info.Name, "email": info.Email, "ip": info.IP, "gen": SessionGen}
+		ip, at := cleanAddr(info.IP), now()
+		rec := map[string]any{"sub": info.Sub, "name": info.Name, "email": info.Email, "ip": ip, "gen": SessionGen}
 		rec["created"] = time.Now().UTC().Format(time.RFC3339Nano)
-		rec["created_ts"] = now()
+		rec["created_ts"] = at
+		// for the Sessions page: the browser, the sign-in (kept across a renewed id) and the last use
+		rec["ua"] = CleanUA(info.UA)
+		rec["login_ts"], rec["login_ip"] = at, ip
+		if old, ok := ss[info.Replaces].(map[string]any); ok && info.Replaces != "" && subjectOf(old) == info.Sub {
+			for _, k := range []string{"created_ts", "login_ts"} { // an entry from before login_ts: when it was made
+				if v := num(old[k]); v > 0 {
+					rec["login_ts"] = v
+				}
+			}
+			for _, k := range []string{"ip", "login_ip"} {
+				if v, _ := old[k].(string); v != "" {
+					rec["login_ip"] = cleanAddr(v)
+				}
+			}
+		}
+		rec["seen_ts"], rec["seen_ip"] = at, ip
 		ss[sid] = rec
 		trimSessions(ss, sid)
 		return nil
@@ -306,6 +419,56 @@ func (a *State) RemoveSession(sid string) error {
 	})
 	a.sessions.Refresh()
 	return err
+}
+
+// errNoChange ends a statefile.Update that has nothing to write.
+var errNoChange = errors.New("nothing to change")
+
+// TouchSession records that sid was really used at ts (Unix seconds) from ip. The panel calls it at most once
+// a minute per session. A session that is not registered (any more) is left alone, and nothing is written.
+func (a *State) TouchSession(sid string, ts float64, ip string) error {
+	if sid == "" {
+		return nil
+	}
+	_, err := statefile.Update(a.SessionsPath, func(d statefile.Data) error {
+		ss, _ := d["sessions"].(map[string]any)
+		rec, ok := ss[sid].(map[string]any)
+		if !ok || !currentGen(rec) {
+			return errNoChange
+		}
+		rec["seen_ts"], rec["seen_ip"] = ts, cleanAddr(ip)
+		return nil
+	})
+	if errors.Is(err, errNoChange) {
+		return nil
+	}
+	a.sessions.Refresh()
+	return err
+}
+
+// RemoveSessions forgets several sessions in one write (the Sessions page's "Sign out everywhere else") and
+// returns how many of them the file listed.
+func (a *State) RemoveSessions(sids []string) (int, error) {
+	n := 0
+	if len(sids) == 0 {
+		return 0, nil
+	}
+	_, err := statefile.Update(a.SessionsPath, func(d statefile.Data) error {
+		n = 0
+		ss, _ := d["sessions"].(map[string]any)
+		for _, sid := range sids {
+			if _, ok := ss[sid]; ok && sid != "" {
+				delete(ss, sid)
+				n++
+			}
+		}
+		return nil
+	})
+	a.sessions.Refresh()
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // RevokeSession removes one session by sid prefix (CLI). Returns the number removed.
