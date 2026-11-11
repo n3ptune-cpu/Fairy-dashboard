@@ -50,8 +50,8 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .side-head { flex-shrink: 0; }
 #nav { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 8px 16px; scrollbar-width: thin; scrollbar-color: #222 transparent; }
 .nav-sec { margin-top: 14px; }
-.nav-title { display: flex; align-items: center; gap: 8px; padding: 6px 10px; color: var(--faint); font-size: 11px;
-  font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.nav-title { display: flex; align-items: center; gap: 8px; padding: 6px 10px; color: var(--faint); font-size: 12px;
+  font-weight: 700; }
 .nav-link { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: var(--radius); color: var(--muted);
   font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer; }
 .nav-link:hover { background: var(--hover); color: var(--text); }
@@ -101,7 +101,7 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .btn.unsupported { text-decoration: line-through; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
 .pad { padding: 16px 18px; }
-.section-title { margin: 26px 0 10px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+.section-title { margin: 26px 0 10px; font-size: 12px; color: var(--muted); font-weight: 700; }
 .chip { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: var(--radius); background: #121212; color: var(--muted);
   text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; border: 1px solid var(--line); }
 .chip.ok { color: var(--ok); border-color: rgba(61, 220, 151, .25); }
@@ -134,7 +134,7 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 /* ------------------------------------------------ overview */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .tile { padding: 16px 18px; }
-.tile .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+.tile .label { color: var(--muted); font-size: 12px; font-weight: 700; }
 .tile .label-sub { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--faint); margin-left: 4px; }
 .tile .value { font-size: 26px; font-weight: 700; margin: 6px 0 10px; font-variant-numeric: tabular-nums; }
 .tile .value small { font-size: 13px; color: var(--muted); font-weight: 500; }
@@ -144,12 +144,12 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .counts b { color: var(--text); }
 
 .table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.table th { text-align: left; color: var(--faint); font-weight: 700; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+.table th { text-align: left; color: var(--faint); font-weight: 700; font-size: 12px;
   padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .table td { padding: 8px 12px; border-bottom: 1px solid #121212; vertical-align: middle; }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table tr.row:hover td { background: rgba(255, 255, 255, .025); }
-.table tr.group td { color: var(--muted); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+.table tr.group td { color: var(--muted); font-size: 12px; font-weight: 700;
   padding-top: 14px; background: rgba(255, 255, 255, .012); }
 .table td.num, .table th.num { text-align: right; white-space: nowrap; }
 .table .namecell a { color: var(--text); font-weight: 600; display: inline-flex; align-items: center; gap: 9px; }
@@ -205,7 +205,7 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .metric .k { color: var(--muted); font-weight: 600; }
 .metric .v { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .metric .bar { height: 8px; }
-.panel h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.panel h3 { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 .big-w { font-size: 34px; font-weight: 800; color: var(--pwr); font-variant-numeric: tabular-nums; }
 .big-w small { font-size: 14px; color: var(--muted); font-weight: 600; }
 .list-row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid #121212; font-size: 12.5px; font-variant-numeric: tabular-nums; }
@@ -291,7 +291,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .gpu-facts span:nth-child(2) { color: var(--pwr); }
 
 /* hosts vs guests */
-.nav-sub { padding: 8px 10px 3px 22px; color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav-sub { padding: 8px 10px 3px 22px; color: var(--faint); font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .shell.collapsed .nav-sub, .shell.collapsed .node-toggle { display: none; }
 .nav-link.node-toggle { color: var(--muted); font-weight: 600; }
 .nav-link.node-toggle .ico { color: var(--faint); }
@@ -322,7 +322,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 25; min-width: 250px; max-width: 340px; background: #0b0b0b;
   border: 1px solid var(--line2); box-shadow: 0 12px 40px rgba(0, 0, 0, .7); padding: 6px; }
 .menu.power { min-width: 300px; }
-.menu-title { color: var(--faint); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 6px 8px; }
+.menu-title { color: var(--faint); font-size: 12px; font-weight: 700; padding: 6px 8px; }
 .menu-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; background: none; border: 0;
   color: var(--text); padding: 7px 8px; font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
 .menu-item:hover:not(:disabled) { background: var(--hover); }
@@ -376,7 +376,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .ups-head > svg { width: 28px; height: 28px; color: var(--muted); flex: none; }
 .ups-head b { font-size: 15px; }
 .ups-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 12px; }
-.ups-grid .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+.ups-grid .k { color: var(--muted); font-size: 12px; font-weight: 700; }
 .ups-grid .big { font-size: 26px; font-weight: 700; margin: 4px 0 6px; font-variant-numeric: tabular-nums; }
 .bar.ok > i { background: var(--ok); }
 .ups-card .spark { height: 46px; margin-top: 6px; }
@@ -437,7 +437,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   .table.sessions tr.cur td:first-child { box-shadow: none; }
   .table.sessions td { display: block; padding: 3px 0; border: 0; text-align: left; white-space: normal; }
   .table.sessions td[data-l]:not(.namecell)::before { content: attr(data-l); display: inline-block; min-width: 92px; color: var(--faint);
-    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
+    font-size: 12px; font-weight: 700; }
   .table.sessions td[data-l]:not(.namecell) > .note, .table.sessions td.nowrap > .note { display: inline-block; margin-left: 8px; }
   .table.sessions .namecell .sub.ua, .table.sessions.all .namecell .sub.ua { max-width: 100%; }
   .table.sessions td.act .note { width: auto; text-align: left; }
@@ -568,7 +568,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .wu-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .wu > p.note { margin: 0 0 12px; max-width: 100ch; }
 .wu > p.note b { color: var(--text); font-weight: 600; }
-.wu-sub { margin: 16px 0 8px; font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+.wu-sub { margin: 16px 0 8px; font-size: 12px; color: var(--faint); font-weight: 700; }
 .wu-run { border: 1px solid var(--line2); margin: 10px 0; background: #070707; }
 .wu-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
 .wu-head b { color: var(--text); }
