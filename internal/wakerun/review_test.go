@@ -309,7 +309,7 @@ func TestSteadyClockIsNotTheTimeOfDay(t *testing.T) {
 	m.Now = func() time.Time { return time.Now().Add(jump) }
 	a := m.mono()
 	jump = 3 * time.Hour
-	if b := m.mono(); a < 0 || b < a || b-a > time.Minute || m.now().Sub(time.Now()) < 2*time.Hour {
+	if b := m.mono(); a < 0 || b < a || b-a > time.Minute || time.Until(m.now()) < 2*time.Hour {
 		t.Fatalf("steady clock: %v then %v", a, b)
 	}
 }
