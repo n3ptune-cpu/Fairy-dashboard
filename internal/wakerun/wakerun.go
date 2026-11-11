@@ -279,7 +279,8 @@ type Host struct {
 	BootUptimeS *int64     `json:"boot_uptime_s,omitempty"` // the uptime it reported in that poll
 	// OnlineAfterS: how long after the wake that answer came, in seconds. It is the shorter of two
 	// measurements: the difference of the two times above, and the panel's steady clock (Manager.Mono), which
-	// does not move when someone, or a time server, sets the clock. An uptime is compared with this.
+	// does not move when someone, or a time server, sets the clock. The uptime was compared with this. It is
+	// here for the record; mayShutDown measures again from the run's own readings.
 	OnlineAfterS *float64 `json:"online_after_s,omitempty"`
 	AlreadyOn    bool     `json:"already_on,omitempty"` // it was on before the run did anything
 
@@ -294,6 +295,7 @@ type Host struct {
 
 	// Working values of the run in memory. A run is never continued after a restart, so they are not kept.
 	wakeMono      time.Duration // the steady clock when the run's first wake was accepted
+	onlineMono    time.Duration // the steady clock when the run saw its first answer after that wake
 	lastWake      time.Time
 	lastKick      time.Time
 	goodSince     time.Time // the agent has answered without a gap since

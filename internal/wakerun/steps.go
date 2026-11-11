@@ -202,8 +202,9 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 		// How long after the wake: by the two times, and by the steady clock, which a clock that was set
 		// forward meanwhile does not stretch. The shorter one counts (the steady one is read now, a moment
 		// after the answer, so it is the longer one unless the clock was set).
+		h.onlineMono = m.mono()
 		since := at.Sub(*h.WakeSentAt)
-		if steady := m.mono() - h.wakeMono; steady < since {
+		if steady := h.onlineMono - h.wakeMono; steady < since {
 			since = steady
 		}
 		secs := since.Seconds()
