@@ -310,6 +310,18 @@ A host's page, **⋯**, **Set model name**: type a name, **Save**. It is under t
 and in the "Model" line of its page; the ⓘ there (or pointing at it on the Overview) says what the host
 reports. **Clear** in the same dialog brings the reported model back. Menu, **Audit**, "Host admin" lists both.
 
+## H. Trying the pop-ups
+
+1. Menu, **Settings**, "Pop-ups": press **Show a test pop-up**. A pop-up shows in the lower right corner for
+   5 seconds. Press the button ten times quickly: three show, the rest become "N more critical events".
+2. Move "Stays for" to 3 s and press the button again: it stays 3 seconds. Untick "Show pop-ups": the button
+   is off. Tick it again.
+3. A real one: with the test VM added (part B) and online, shut the test VM down **in the VM itself** (Start,
+   Shut down), not from the panel. Keep any page of the panel open. Within about two minutes (the panel
+   waits before it calls a host offline) a pop-up "offline" with the VM's name shows, and the bell counts
+   one more. (Shut down from the panel it is "off",
+   not an alert, and shows no pop-up.)
+
 ## What the test build does NOT prove
 
 * **Real sign-in.** Nothing goes to Pocket ID: not the sign-in, not the groups and allowed addresses, not a

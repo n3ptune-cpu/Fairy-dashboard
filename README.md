@@ -528,6 +528,17 @@ Kept in `<data_dir>/notifications.json` for 30 days (at most 2000). The Overview
 alerts", for alerts whose condition still holds. Warnings and critical events also go to `FAIRY_NOTIFY_URL`
 (ntfy or Discord) when it is set.
 
+**Pop-ups.** A critical event that is made while a page of the panel is open also shows in the lower right
+corner (a strip at the bottom on a phone) for 5 seconds and then goes away. It stays in the list and the bell;
+nothing is marked as read. "Critical" here is: a host goes offline, a temperature passes its limit, a UPS goes
+on battery, runs low or cannot be reached (the events the Overview counts as active alerts, and severity
+"critical"). Nothing from before the page was opened is shown. At most three show at a time; more wait, and
+more than five waiting become one "N more" pop-up that leads to Notifications. Pointing at a pop-up or having
+the keyboard focus in it stops its time, × closes it, Escape closes the newest, a click opens the host's page.
+Per user, in **Settings**, "Pop-ups": on or off, 3 to 30 seconds, "Critical only" or "Critical and warnings"
+(also a failed update, an unstable host, a failed Add host, a UPS overload), and **Show a test pop-up**, which
+shows a sample in that browser and makes no notification. The stream carries them as `notes_new`.
+
 What one machine reports again and again is counted, not repeated: a temperature that goes over the limit and
 back, an agent that reports another version, a failed update. Per host there is one such event in 10 minutes,
 its text ends in "(x7)", and it is pushed once. The list still ends in the state the host is in: a temperature

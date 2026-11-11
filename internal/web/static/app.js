@@ -123,7 +123,7 @@ function sessionEnded() {
   const had = !!state.me;  // false: nobody was signed in on this page (first load), the plain sign-in view
   if (state.es) { state.es.close(); state.es = null; }
   for (const t of [state.timer, upd.bgT, enr.timer, streamRetry]) clearTimeout(t);
-  stepUpOpen = null; state.menu = null; closeInfo(false);
+  stepUpOpen = null; state.menu = null; closeInfo(false); popClear();
   const m = $("#modal"); m.hidden = true; m.innerHTML = ""; m.onclick = null;
   $("#shell").hidden = true; $("#waiting").hidden = true; $("#flash").hidden = true;
   $("#login-note").hidden = !had;
@@ -1862,7 +1862,7 @@ function pageSettings() {
     <div class="field"><label for="dim">Background dim</label><input type="range" id="dim" min="0" max="90" step="5" value="${esc(s.dim)}"><output id="dim-v">${esc(s.dim)}%</output></div>
     <div class="field"><label for="blur">Card blur</label><input type="range" id="blur" min="0" max="40" step="2" value="${esc(s.blur)}"><output id="blur-v">${esc(s.blur)}px</output></div>
     <div class="field"><label for="op">Card opacity</label><input type="range" id="op" min="20" max="100" step="2" value="${esc(s.card_opacity)}"><output id="op-v">${esc(s.card_opacity)}%</output></div>
-    <div class="note" id="saved-note">Saved to your account (per Pocket ID user).</div></div></div>`;
+    <div class="note" id="saved-note">Saved to your account (per Pocket ID user).</div></div>${popupsPanel()}</div>`;
 }
 
 function bindSettings() {
@@ -1894,6 +1894,7 @@ function bindSettings() {
     el.onchange = () => saveSettings();
   }
   bindSignIn();
+  bindPopups();
 }
 function afterSettings() { applySettings(); route(); }
 
@@ -1957,6 +1958,7 @@ async function loadSettings() {
   try { state.settings = await api("/api/settings"); }
   catch { try { state.settings = JSON.parse(localStorage.getItem(LS_KEY)); } catch { state.settings = null; } }
   state.settings ||= { theme: "black", background: { kind: "none", url: null, version: 0 }, dim: 60, blur: 14, card_opacity: 72 };
+  state.settings.popups = popPrefs();  // settings kept in this browser before pop-ups existed have none: the defaults
   applySettings();
 }
 async function saveSettings() {
@@ -2066,6 +2068,193 @@ document.addEventListener("click", (e) => {
   else if (t.dataset.act === "n-all-read") notesWrite("/api/notifications/read", { all: true });
   else if (t.dataset.act === "n-more") loadNotes(false);
 });
+
+// ------------------------------------------------------------ pop-ups for new notifications
+// A critical event that is made while this page is open shows for a few seconds in the lower right corner (a
+// strip at the bottom on a phone) and goes away by itself. It stays on the Notifications page and in the bell,
+// and showing it marks nothing as read. The stream's `notes_new` carries the events: only ones made after this
+// page was opened. `last` of the first one is where the page starts, and an id at or below the highest one seen
+// is ignored, so a reconnect shows nothing twice and nothing old.
+// At most POP_MAX at a time; up to POP_WAIT more wait for a free place, and when more than that wait they become
+// one "N more" pop-up that leads to Notifications. The time (Settings, 3-30 s) stops while the pointer is over
+// a pop-up, while the keyboard focus is in one and while the tab is hidden. × closes one; Escape closes the
+// newest, unless a dialog, menu or info panel is open (Escape is theirs). A pop-up never takes the focus.
+// Host names and texts are an agent's words: they go in with textContent, never as HTML.
+const POP_MAX = 3, POP_WAIT = 5, POP_STALE_MS = 60000;
+const pop = { after: null, items: [], wait: [], more: null, hover: false, focus: false, x: 0, y: 0 };
+function popPrefs() {  // this user's settings; anything missing or out of range is the default
+  const p = state.settings?.popups || {};
+  return { enabled: p.enabled !== false, seconds: Number.isInteger(p.seconds) && p.seconds >= 3 && p.seconds <= 30 ? p.seconds : 5,
+    level: p.level === "warning" ? "warning" : "critical" };
+}
+// "Critical only": severity critical, and events that start an alert (`urgent`, decided by the panel). "Critical
+// and warnings": every warning too.
+const popWanted = (e, p) => p.enabled && (e.urgent === true || e.severity === "critical" || (p.level === "warning" && e.severity === "warning"));
+const popOpen = () => !!state.me && state.me.role !== "pending" && !signedOut;  // never on the sign-in or waiting view
+const popAll = () => (pop.more ? [...pop.items, pop.more] : pop.items);  // oldest first; the "N more" one is the newest
+function onNewNotes(d) {
+  if (!Number.isSafeInteger(d?.last)) return;
+  // the first one says where this page starts; a lower number than before: the panel's list started over
+  if (pop.after === null || d.last < pop.after) { pop.after = d.last; return; }
+  const fresh = (Array.isArray(d.events) ? d.events : []).filter((e) => Number.isSafeInteger(e?.id) && e.id > pop.after);
+  pop.after = Math.max(d.last, ...fresh.map((e) => e.id));
+  const p = popPrefs();
+  if (!popOpen() || !p.enabled) return;
+  for (const e of fresh) {
+    if (popWanted(e, p)) popAdd({ sev: e.severity, urgent: e.urgent === true || e.severity === "critical", host: e.host, text: e.text, href: noteLink(e) || "#/notifications" });
+  }
+  const n = p.level === "warning" ? d.more : d.more_urgent;  // a flood: what did not fit into the event
+  if (Number.isSafeInteger(n) && n > 0) popCount(n, p.level !== "warning");
+}
+function popAdd(n) {
+  n.at = Date.now();
+  if (pop.items.length < POP_MAX && !pop.wait.length) { popShow(n); return; }
+  if (pop.more) { popCount(1, n.urgent); return; }  // a flood is being counted already
+  pop.wait.push(n);
+  if (pop.wait.length > POP_WAIT) { const w = pop.wait; pop.wait = []; popCount(w.length, w.every((x) => x.urgent)); }
+}
+const popSpan = (cls, text) => { const s = document.createElement("span"); s.className = cls; s.textContent = text; return s; };
+// One pop-up: a sign, the host's name and one line of text (the whole text is its tooltip), and ×. The body is
+// a link: a click or Enter opens what the notification's row links to.
+function popEl(it, sev, sign, name, text, href) {
+  const el = document.createElement("div"), a = document.createElement("a"), x = document.createElement("button"), main = popSpan("toast-main", "");
+  el.className = `toast ${sev}`;
+  a.className = "toast-body"; a.href = href; a.title = text;
+  const s = popSpan("toast-sign", sign); s.setAttribute("aria-hidden", "true");
+  main.append(popSpan("sr", sev === "more" ? "" : `${sev}: `));
+  if (name) main.append(popSpan("toast-host", name));
+  main.append(popSpan("toast-text", text));
+  a.append(s, main);
+  x.className = "toast-x"; x.type = "button"; x.textContent = "×"; x.setAttribute("aria-label", "Close");
+  a.addEventListener("click", (e) => popClose(it, e.detail === 0));  // the link is followed, the pop-up goes (detail 0: Enter, not the mouse)
+  x.addEventListener("click", (e) => popClose(it, e.detail === 0));
+  el.append(a, x);
+  return el;
+}
+function popShow(n) {
+  const box = $("#toasts"), it = { at: n.at, left: popPrefs().seconds * 1000, timer: null, started: 0 };
+  it.el = popEl(it, n.sev === "critical" ? "critical" : "warning", "!", String(n.host || ""), String(n.text || ""), n.href);
+  pop.items.push(it);
+  box.insertBefore(it.el, pop.more?.el || null);  // the "N more" one stays the last (shown on top)
+  box.hidden = false;
+  popRun(it); placePops();
+}
+// popCount adds n events to the "N more" pop-up (made when there is none) and starts its time again.
+function popCount(n, urgent) {
+  const box = $("#toasts");
+  let it = pop.more;
+  if (!it) {
+    it = pop.more = { n: 0, urgent: true, timer: null, started: 0 };
+    it.el = popEl(it, "more", "+", "", "", "#/notifications");
+    box.append(it.el); box.hidden = false;
+  }
+  it.n += n; it.urgent = it.urgent && urgent; it.at = Date.now();
+  const text = `${it.n} more ${it.urgent ? "critical events" : "notifications"}`;
+  it.el.querySelector(".toast-text").textContent = text; it.el.querySelector(".toast-body").title = text;
+  clearTimeout(it.timer); it.timer = null; it.left = popPrefs().seconds * 1000;
+  popRun(it); placePops();
+}
+const popPaused = () => pop.hover || pop.focus || document.hidden;
+function popRun(it) {
+  if (it.timer || popPaused()) return;
+  it.started = Date.now();
+  it.timer = setTimeout(() => { it.timer = null; popClose(it); }, it.left);
+}
+function popHold(it) {
+  if (!it.timer) return;
+  clearTimeout(it.timer); it.timer = null;
+  it.left = Math.max(1000, it.left - (Date.now() - it.started));  // what is left goes on later, at least a second
+}
+function popSync() { for (const it of popAll()) (popPaused() ? popHold : popRun)(it); }
+function popClose(it, byKey = false) {
+  const box = $("#toasts"), focused = byKey && it.el.contains(document.activeElement);
+  clearTimeout(it.timer); it.timer = null;
+  it.el.remove();
+  if (it === pop.more) pop.more = null; else pop.items = pop.items.filter((x) => x !== it);
+  while (pop.items.length < POP_MAX && pop.wait.length) popShow(pop.wait.shift());
+  const all = popAll();
+  if (focused && all.length) all[all.length - 1].el.querySelector(".toast-x").focus();  // closed with the keyboard: the focus goes on to the next one
+  pop.focus = box.contains(document.activeElement);
+  // the one under the pointer went (no "pointer left" is sent for that): is another one there now?
+  if (pop.hover) pop.hover = box.contains(document.elementFromPoint(pop.x, pop.y));
+  if (!all.length) { box.hidden = true; pop.hover = false; }
+  popSync(); placePops();
+}
+function popClear() {  // signed out, or switched off
+  for (const it of popAll()) { clearTimeout(it.timer); it.el.remove(); }
+  pop.items = []; pop.wait = []; pop.more = null; pop.hover = pop.focus = false;
+  const box = $("#toasts"); if (box) box.hidden = true;
+}
+// Where the pop-ups are: above the flash message when one shows, and under an open dialog (.behind) whenever
+// they would lie over it, so a dialog's buttons are never covered. Placed with CSSOM (the CSP allows no inline styles).
+function placePops() {
+  const box = $("#toasts"), f = $("#flash");
+  if (!box || box.hidden) return;
+  box.style.bottom = f.hidden ? "" : `${Math.round(innerHeight - f.getBoundingClientRect().top + 8)}px`;
+  const r = box.getBoundingClientRect(), d = $("#modal").hidden ? null : $("#modal .modal-box")?.getBoundingClientRect();
+  box.classList.toggle("behind", !!d && r.left < d.right && r.right > d.left && r.top < d.bottom && r.bottom > d.top);
+}
+(() => {
+  const box = $("#toasts");
+  const over = (e) => { pop.hover = true; pop.x = e.clientX; pop.y = e.clientY; };
+  box.addEventListener("pointerenter", (e) => { over(e); popSync(); });
+  box.addEventListener("pointermove", over);
+  box.addEventListener("pointerleave", () => { pop.hover = false; popSync(); });
+  box.addEventListener("focusin", () => { pop.focus = true; popSync(); });
+  box.addEventListener("focusout", (e) => { pop.focus = box.contains(e.relatedTarget); popSync(); });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {  // back on this tab: what waited here for more than a minute is old news (it is in the bell)
+      const old = Date.now() - POP_STALE_MS;
+      pop.wait = pop.wait.filter((n) => n.at >= old);
+      for (const it of popAll()) if (it.at < old) popClose(it);
+    }
+    popSync();
+  });
+  window.addEventListener("resize", placePops);
+  const moved = new MutationObserver(() => { if (popAll().length) placePops(); });
+  moved.observe($("#modal"), { attributes: true, attributeFilter: ["hidden"], childList: true, subtree: true });
+  moved.observe($("#flash"), { attributes: true, attributeFilter: ["hidden"], childList: true, characterData: true, subtree: true });
+})();
+// Escape closes the pop-up the focus is in, else the newest. Not when something else took this Escape (the info
+// panel and the update panel, whose listeners come first and stop the event), nor while the account menu, a
+// dialog or a row's menu is open: their own listeners close those.
+document.addEventListener("keydown", (e) => {
+  const all = popAll();
+  if (e.key !== "Escape" || !all.length || e.cancelBubble) return;
+  const mine = all.find((it) => it.el.contains(document.activeElement));
+  if (!mine && (state.menu || acctOpen() || !$("#modal").hidden)) return;
+  e.preventDefault(); e.stopPropagation();
+  popClose(mine || all[all.length - 1], true);
+}, true);
+// Settings, "Pop-ups": on / off, how long one stays, which events; saved with the other settings of the account.
+function popupsPanel() {
+  const p = popPrefs(), off = p.enabled ? "" : "disabled";
+  return `<div class="panel glass pad" id="popset"><h3>Pop-ups${infoBtn("set-pop", "Pop-ups", infoList([
+      "A new critical event shows in the corner for a few seconds. It stays in Notifications; nothing is marked as read.",
+      "Critical: a host goes offline, a temperature passes its limit, a UPS goes on battery, runs low or cannot be reached.",
+      "Warnings: also a failed update, an unstable host, a failed Add host, a UPS overload or “replace battery”.",
+      "A host shut down from the panel is “off”, not an alert: no pop-up.",
+      "At most three at a time; many at once become one “N more”. Pointing at one keeps it open. Escape closes the newest.",
+      "The test pop-up makes no notification."]))}</h3>
+    <div class="field"><label for="pop-on">Show pop-ups</label><span class="check"><input type="checkbox" id="pop-on" ${p.enabled ? "checked" : ""}></span></div>
+    <div class="field"><label for="pop-secs">Stays for</label><input type="range" id="pop-secs" min="3" max="30" step="1" value="${esc(p.seconds)}" ${off}><output id="pop-secs-v">${esc(p.seconds)} s</output></div>
+    <div class="field"><label for="pop-level">Events</label><select class="select" id="pop-level" ${off}>
+      <option value="critical" ${p.level === "critical" ? "selected" : ""}>Critical only</option><option value="warning" ${p.level === "warning" ? "selected" : ""}>Critical and warnings</option></select></div>
+    <div class="row-gap"><button class="btn" type="button" id="pop-test" ${off}>Show a test pop-up</button></div></div>`;
+}
+function bindPopups() {
+  const on = $("#pop-on"), secs = $("#pop-secs"), level = $("#pop-level"), test = $("#pop-test");
+  const save = async () => {
+    state.settings.popups = { enabled: on.checked, seconds: +secs.value, level: level.value };
+    for (const el of [secs, level, test]) el.disabled = !on.checked;
+    if (!on.checked) popClear();
+    await saveSettings();
+  };
+  on.onchange = save; level.onchange = save; secs.onchange = save;
+  secs.oninput = () => { $("#pop-secs-v").textContent = `${secs.value} s`; };
+  // shown in this browser only: no notification is made, nothing is sent
+  test.onclick = () => popAdd({ sev: "critical", urgent: true, host: "Test pop-up", text: "This is how a critical event looks.", href: "#/notifications" });
+}
 
 // ------------------------------------------------------------ Add host (admins)
 // A form makes a one-time join code (15 min) and the one line to run on the machine; the panel then pairs by
@@ -2509,7 +2698,9 @@ function connect(watch) {
   if (state.es && state.watch === watch) return;
   if (state.es) state.es.close();
   state.watch = watch;
-  const es = new EventSource(`/api/stream${watch ? `?watch=${enc(watch)}` : ""}`);
+  // notes_after: a new stream (another host's page) goes on after the last notification this page was sent
+  const q = [watch ? `watch=${enc(watch)}` : "", pop.after !== null ? `notes_after=${enc(pop.after)}` : ""].filter(Boolean).join("&");
+  const es = new EventSource(`/api/stream${q ? `?${q}` : ""}`);
   state.es = es;
   es.addEventListener("open", () => { streamBackoff = 0; if (state.streamed) checkAccess(); state.streamed = true; });
   es.addEventListener("systems", (e) => { state.systems = JSON.parse(e.data).systems; indexSystems(); loadSites(); render(); ensurePowerOnCaps(); });
@@ -2528,6 +2719,7 @@ function connect(watch) {
   es.addEventListener("summary", (e) => { state.summary = JSON.parse(e.data); render(); });
   es.addEventListener("ups", (e) => { state.ups = JSON.parse(e.data); pushUpsHistory(state.ups); render(); });
   es.addEventListener("notes", (e) => onNotesCounts(JSON.parse(e.data)));
+  es.addEventListener("notes_new", (e) => onNewNotes(JSON.parse(e.data)));
   es.addEventListener("ups_event", (e) => { state.upsEvents.unshift(JSON.parse(e.data)); render(); });
   es.addEventListener("power", (e) => {
     state.power = JSON.parse(e.data);
