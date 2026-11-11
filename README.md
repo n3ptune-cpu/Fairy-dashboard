@@ -478,9 +478,9 @@ and is refused now. A key that is not in the file is fine.
 | `request_timeout` | less than 0.1, more than 300 | 0.1 to 300 (seconds) |
 | `offline_after` | less than 1, more than 604800 | 1 to 604800 (seconds) |
 
-For all three, `0` means "use the default" (12 hours, 4 seconds, 60 seconds), as before.
+For all three, `0` means "use the default" (4 hours, 4 seconds, 60 seconds), as before.
 
-Also refused: a fraction of a second in `session_max_age` or `session_idle_timeout` (`43200.5`).
+Also refused: a fraction of a second in `session_max_age` or `session_idle_timeout` (`14400.5`).
 
 Then look at one line in `/etc/fairy/fairy.env` (as root): `FAIRY_SESSION_SECRET=...`. The new panel does
 not start when the value is still the example, `REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS`, or one
@@ -549,7 +549,14 @@ memory limit. Add it once:
    made from: if your address changes (mobile data, a VPN), the next action asks again, and after that one
    sign-in the page offers the action as "Resume" instead of running it by itself. The dialog now also shows,
    under "Fairy will run", what the panel itself is about to do.
-3. **A tab nobody touches signs out** after 12 hours (`session_idle_timeout`).
+3. **A tab nobody touches signs out** after 4 hours (`session_idle_timeout`), and every sign-in ends after one
+   day (`session_max_age`). These are the defaults since the release with the Sessions page; before it they
+   were 12 hours and 7 days. A config.yaml that sets the two keys keeps its values: the example file used to
+   set `session_max_age: 604800` and `session_idle_timeout: 43200`, so a config.yaml copied from it still has
+   the old, long values until you change or remove those two lines. One case does not start any more: a
+   config.yaml that sets only `session_idle_timeout`, to more than one day. The idle timeout may not be
+   longer than the session, which is now one day unless `session_max_age` says otherwise;
+   `fairy admin config check` names it.
 4. **The Users page** shows "unverified" next to an e-mail address that Pocket ID has not marked as
    verified, and an "id ..." line per person. Signing in and roles do not depend on it. But
    `fairy admin users set-role you@example.com admin` (example address) finds an account by its address only
@@ -714,15 +721,15 @@ Three rules for the people who use the panel:
 2. **Take people out on the Users page**, not only in Pocket ID. Leaving the allowed group in Pocket ID does
    not end a panel session that is already open. **Remove** on the Users page signs the person out everywhere
    and revokes their API tokens.
-3. **A tab nobody touches signs out** after `session_idle_timeout` (12 hours unless you set it). That is
-   meant. Sign in again.
+3. **A tab nobody touches signs out** after `session_idle_timeout` (4 hours unless you set it), and every
+   sign-in ends after `session_max_age` (1 day unless you set it). That is meant. Sign in again.
 
 Session and "Confirm it's you" settings in config.yaml (all optional):
 
 | Key | Default | What it takes |
 | --- | --- | --- |
-| `session_max_age` | `7d` | whole seconds (`604800`) or a text such as `36h`, `7d`; at least 5 minutes |
-| `session_idle_timeout` | `12h` (or `session_max_age`, when that is shorter) | whole seconds or a text such as `30m`, `4h`, `1d`; at least 1 minute, at most `session_max_age` |
+| `session_max_age` | `86400` (1 day) | whole seconds (`86400`) or a text such as `36h`, `1d`; at least 5 minutes |
+| `session_idle_timeout` | `14400` (4 hours; or `session_max_age`, when that is shorter) | whole seconds or a text such as `30m`, `4h`, `1d`; at least 1 minute, at most `session_max_age` |
 | `step_up_window_s` | `180` | seconds, 30 to 86400: how long one "Confirm it's you" covers further control actions |
 | `step_up_per_action` | `false` | `true`: every control action needs its own "Confirm it's you"; the window is not used |
 | `step_up_prompt_login` | `false` (`true` in the example file) | `true`: Pocket ID is also asked to show its sign-in every time |

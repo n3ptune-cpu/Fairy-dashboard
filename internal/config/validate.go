@@ -88,10 +88,10 @@ func (c *Panel) applyDefaults() {
 	def(&c.RequestTimeout, 4)
 	def(&c.OfflineAfter, 60)
 	if c.SessionMaxAge == 0 {
-		c.SessionMaxAge = 7 * 86400
+		c.SessionMaxAge = DefaultSessionMaxAge
 	}
-	if c.SessionIdleTimeout == 0 { // 12 h, or the whole session when that is shorter
-		c.SessionIdleTimeout = min(12*3600, c.SessionMaxAge)
+	if c.SessionIdleTimeout == 0 { // 4 h, or the whole session when that is shorter
+		c.SessionIdleTimeout = min(DefaultSessionIdleTimeout, c.SessionMaxAge)
 	}
 	defi(&c.PowerHistoryS, 3600)
 	defi(&c.ControlRatePerMin, 6)

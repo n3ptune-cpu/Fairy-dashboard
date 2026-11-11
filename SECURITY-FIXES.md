@@ -192,7 +192,8 @@ rewrote it. All roles and site limits were lost, and anyone in `control_groups` 
   testing; consider `session_max_age: 172800` (2 days) yourself.
   *Changed since:* the cookie is `__Host-fairy_session` (the plain name only with `FAIRY_INSECURE_COOKIES`).
   Everyone signs in once after that update. A tab nobody touches signs out after `session_idle_timeout`
-  (12 hours by default).
+  (4 hours by default), and a sign-in ends after `session_max_age` (1 day by default; these were 12 hours and
+  7 days until the release with the Sessions page).
 - **I4 - HSTS for subdomains.** Better set at Cloudflare for the whole domain.
 - **I5 - demo mode.** Already loopback-only; never run `--demo` on the panel LXC.
 - **I6 / I8 - userinfo claims, multi-audience tokens.** Depend on Pocket ID; run its latest version.

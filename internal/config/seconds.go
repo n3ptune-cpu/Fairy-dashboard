@@ -10,7 +10,7 @@ import (
 )
 
 // Seconds is a length of time in whole seconds (the session timings). In config.yaml it is a whole number, as
-// it always was (session_idle_timeout: 43200, in any form YAML has for one), or a text with units: 90s, 30m,
+// it always was (session_idle_timeout: 14400, in any form YAML has for one), or a text with units: 90s, 30m,
 // 4h, 1d, 1h30m, 1.5h. The rest of the program reads it as a number of seconds.
 type Seconds int
 
@@ -25,11 +25,11 @@ var (
 	unitsRe = regexp.MustCompile(`^(?:[0-9]+(?:\.[0-9]+)?h)?(?:[0-9]+(?:\.[0-9]+)?m)?(?:[0-9]+(?:\.[0-9]+)?s)?$`)
 )
 
-// ParseSeconds reads "43200", "12h", "30m", "1d", "1h30m" or "1.5h". It refuses anything negative, anything
+// ParseSeconds reads "14400", "4h", "30m", "1d", "1h30m" or "1.5h". It refuses anything negative, anything
 // that is not a whole number of seconds, units other than d / h / m / s, and more than ten years.
 func ParseSeconds(text string) (Seconds, error) {
 	bad := func(why string) (Seconds, error) {
-		return 0, fmt.Errorf("%q is not a length of time (%s): write whole seconds, like 43200, or a text like 30m, 4h, 1d", text, why)
+		return 0, fmt.Errorf("%q is not a length of time (%s): write whole seconds, like 14400, or a text like 30m, 4h, 1d", text, why)
 	}
 	if text == "" {
 		return bad("it is empty")
@@ -76,14 +76,14 @@ func ParseSeconds(text string) (Seconds, error) {
 // default in place.
 func (s *Seconds) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.ScalarNode {
-		return fmt.Errorf("line %d: a length of time must be one value: whole seconds, like 43200, or a text like 30m, 4h, 1d", n.Line)
+		return fmt.Errorf("line %d: a length of time must be one value: whole seconds, like 14400, or a text like 30m, 4h, 1d", n.Line)
 	}
 	if n.Tag == "!!null" {
 		*s = 0
 		return nil
 	}
 	// Until now these keys were plain integer fields, and a config.yaml written for that must keep loading
-	// after an upgrade: besides 43200 that is every other way YAML writes a whole number (604_800, +604800,
+	// after an upgrade: besides 604800 that is every other way YAML writes a whole number (604_800, +604800,
 	// 0x93A80, 604800.0, 6.048e5). Whatever the old field took is taken first, the same way, with two
 	// exceptions that loaded then and are refused now: a negative number, and a fraction (it was cut off).
 	var whole int64

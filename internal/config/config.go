@@ -248,6 +248,16 @@ type Intervals struct {
 	Stream  float64 `yaml:"stream"`
 }
 
+// The session timings a config.yaml gets when it does not set them: a session ends one day after its sign-in,
+// and after four hours in which nobody used the page. (Until the release with the Sessions page they were 7 days
+// and 12 hours.) A sign-in that is copied, a session cookie taken from a browser, is good for that long at
+// most. When only session_max_age is set and it is shorter than four hours, the idle timeout is the whole
+// session.
+const (
+	DefaultSessionMaxAge      Seconds = 86400
+	DefaultSessionIdleTimeout Seconds = 14400
+)
+
 // Panel is the whole config.yaml. Parse fills in defaults and validates it.
 type Panel struct {
 	PublicURL          string           `yaml:"public_url"`
@@ -256,8 +266,8 @@ type Panel struct {
 	BoostWhileViewing  *bool            `yaml:"boost_while_viewing"`
 	RequestTimeout     float64          `yaml:"request_timeout"`
 	OfflineAfter       float64          `yaml:"offline_after"`
-	SessionMaxAge      Seconds          `yaml:"session_max_age"`      // seconds, or "7d", "36h" (default 7d)
-	SessionIdleTimeout Seconds          `yaml:"session_idle_timeout"` // seconds, or "12h", "30m" (default 12h)
+	SessionMaxAge      Seconds          `yaml:"session_max_age"`      // seconds, or "1d", "36h" (DefaultSessionMaxAge)
+	SessionIdleTimeout Seconds          `yaml:"session_idle_timeout"` // seconds, or "4h", "30m" (DefaultSessionIdleTimeout)
 	EnableDocs         bool             `yaml:"enable_docs"`
 	OIDC               OIDC             `yaml:"oidc"`
 	Proxmox            ProxmoxList      `yaml:"proxmox"`
