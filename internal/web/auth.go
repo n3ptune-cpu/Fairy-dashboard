@@ -598,10 +598,11 @@ func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, sub
 }
 
 // startSession replaces the previous session (oldSID) with a fresh one: a new random id registered in
-// sessions.json (so the CLI can revoke it) and a signed cookie holding the user.
+// sessions.json (so the CLI can revoke it) and a signed cookie holding the user. The previous session is ended
+// only after the new one is registered (as in rotateSession): a sign-in that fails because sessions.json
+// cannot be written leaves the session that worked alone.
 func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authTime float64) error {
 	admin := s.Poller.Admin
-	_ = s.dropSession(oldSID, "the session a new sign-in replaces")
 	sid := randToken(18)
 	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip()}); err != nil {
 		slog.Error("sign-in failed: cannot register the session in sessions.json (disk full? wrong owner?)", "error", err)
@@ -613,10 +614,12 @@ func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authT
 	// a real sign-in: a new user may be bootstrapped (control_groups / bootstrap_admins)
 	if _, err := s.recordUser(c, &su, true); err != nil {
 		_ = admin.RemoveSession(sid)
+		_ = s.dropSession(oldSID, "the session of a sign-in that failed") // this browser's cookie is cleared below
 		c.clearSession()
 		c.auditAnon("auth.login", "failed: users.json not writable", actorOf(&u), &u.Sub, nil)
 		return apierr.New(503, "sign-in could not be recorded (the panel cannot write its users file); see the server log")
 	}
+	_ = s.dropSession(oldSID, "the session a new sign-in replaces")
 	c.sess = &sessionData{SID: sid, User: &u, IAT: int64(now), Seen: int64(now), Client: s.codec.clientMark(c.client())}
 	c.dirty = true
 	s.codec.live.confirm(sid, authTime, c.ip(), uaHash(c.r), s.now())

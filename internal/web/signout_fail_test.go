@@ -5,12 +5,14 @@ package web
 import (
 	"bytes"
 	"log/slog"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
 // lockSessionsFile makes sessions.json unwritable for the panel while it stays readable (a full disk, a
@@ -18,10 +20,15 @@ import (
 // the state files refuse to write over; otherwise by taking the write permission off its folder.
 func lockSessionsFile(t *testing.T, e *env) {
 	t.Helper()
-	p := e.s.Poller.Admin.SessionsPath
+	lockStateFile(t, e.s.Poller.Admin.SessionsPath)
+}
+
+// lockStateFile is lockSessionsFile for any state file. Without root the whole data folder is locked.
+func lockStateFile(t *testing.T, p string) {
+	t.Helper()
 	if os.Geteuid() == 0 {
 		if err := os.Chown(p, 65534, 65534); err != nil {
-			t.Skip("cannot change the owner of sessions.json:", err)
+			t.Skip("cannot change the owner of the file:", err)
 		}
 		t.Cleanup(func() { _ = os.Chown(p, 0, 0) })
 		return
@@ -99,5 +106,71 @@ func TestSignOutAnswersAsBefore(t *testing.T) {
 	ck = e.cookie(controller(), 0)
 	if r := e.do("POST", "/auth/logout", nil, "Cookie", ck, "X-Requested-With", "fairy"); r.code != 303 {
 		t.Fatal("navigation:", r.code)
+	}
+}
+
+// signInAgain is what the OIDC callback does for a browser that already holds the session sid: a new session
+// replaces it.
+func (e *env) signInAgain(sid string, u model.User) error {
+	c := &reqCtx{s: e.s, w: httptest.NewRecorder(), r: httptest.NewRequest("GET", "/auth/callback", nil)}
+	return e.s.startSession(c, sid, u, e.s.nowSec(), e.s.nowSec())
+}
+
+// T-29, found in review: a new sign-in ended the session it replaces BEFORE it registered the new one. With
+// sessions.json unwritable the old session was ended in memory and the new one could not be registered: a
+// signed-in person who went through /auth/login again (own click, or a link on another site) was signed out
+// and could not sign in again until the file was fixed. The old session is ended only after the new one is
+// recorded: a sign-in that fails leaves the working session alone.
+func TestASignInThatCannotBeRecordedLeavesTheWorkingSessionAlone(t *testing.T) {
+	e := setup(t)
+	u := controller()
+	ck := e.cookie(u, 0)
+	sid := must(e.s.Poller.Admin.ListSessions())[0].SID
+	lockSessionsFile(t, e)
+	if err := e.signInAgain(sid, u); err == nil {
+		t.Fatal("the sign-in worked although sessions.json cannot be written")
+	}
+	if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 200 {
+		t.Fatalf("the sign-in failed and the session that worked is gone too: %d", r.code)
+	}
+}
+
+// A sign-in that is recorded still ends the session it replaces, as before.
+func TestASignInThatIsRecordedEndsTheSessionItReplaces(t *testing.T) {
+	e := setup(t)
+	u := controller()
+	ck := e.cookie(u, 0)
+	sid := must(e.s.Poller.Admin.ListSessions())[0].SID
+	if err := e.signInAgain(sid, u); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 401 {
+		t.Fatalf("the replaced session still works: %d", r.code)
+	}
+	if ss := must(e.s.Poller.Admin.ListSessions()); len(ss) != 1 || ss[0].SID == sid {
+		t.Fatalf("sessions.json after the new sign-in: %+v", ss)
+	}
+}
+
+// When users.json cannot be written the sign-in fails after the new session was registered. As before, the
+// new session is taken back, the browser's cookie is cleared and the session it had is ended: nothing stays
+// registered that no browser holds.
+func TestASignInThatFailsAtTheUsersFileLeavesNoSessionBehind(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to lock users.json alone, without sessions.json")
+	}
+	e := setup(t)
+	u := controller()
+	ck := e.cookie(u, 0)
+	sid := must(e.s.Poller.Admin.ListSessions())[0].SID
+	lockStateFile(t, e.s.Access.Path)
+	if err := e.signInAgain(sid, u); err == nil {
+		t.Fatal("the sign-in worked although users.json cannot be written")
+	}
+	if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 401 {
+		t.Fatalf("the old session after the failed sign-in: %d", r.code)
+	}
+	if ss := must(e.s.Poller.Admin.ListSessions()); len(ss) != 0 {
+		t.Fatalf("sessions.json after the failed sign-in: %+v", ss)
 	}
 }
