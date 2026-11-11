@@ -121,7 +121,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		if !row || now.Before(q.last) || now.Sub(q.last) > QuietGap { // the first failed poll, or the panel was not watching in between
 			q.since = now
 		}
-		q.last = now
+		q.last, q.refused = now, refused(err)
 		p.agentQuiet[a.ID] = q
 		n := p.agentFailures[a.ID]
 		p.mu.Unlock()
@@ -195,6 +195,9 @@ type AgentInfo struct {
 	// QuietSince: since when the panel has asked the agent, poll after poll, and got no answer. Zero while it
 	// answers, while it was never polled, and when the panel stopped asking (see QuietGap).
 	QuietSince time.Time
+	// Refused: the latest poll was refused by the machine itself (see ProbeRefused): it runs, and only its agent
+	// is not listening.
+	Refused bool
 }
 
 // QuietGap is the longest time between two failed polls of an agent that still counts as one row of them.
@@ -203,16 +206,20 @@ type AgentInfo struct {
 // is not known, so the row starts again. "No answer for 15 minutes" is then never 14 of them unwatched.
 const QuietGap = (scheduler.MaxInterval + 60) * time.Second
 
-// quietRow is an agent's unbroken row of failed polls: when it began, and its latest one.
-type quietRow struct{ since, last time.Time }
+// quietRow is an agent's unbroken row of failed polls: when it began, its latest one, and whether that one was
+// refused by the machine.
+type quietRow struct {
+	since, last time.Time
+	refused     bool
+}
 
-// quietSinceLocked is AgentInfo.QuietSince for an agent. Caller holds p.mu.
-func (p *Poller) quietSinceLocked(id string) time.Time {
+// quietLocked is AgentInfo.QuietSince and AgentInfo.Refused for an agent. Caller holds p.mu.
+func (p *Poller) quietLocked(id string) (time.Time, bool) {
 	q, ok := p.agentQuiet[id]
 	if now, _ := p.now(); !ok || now.Before(q.last) || now.Sub(q.last) > QuietGap {
-		return time.Time{}
+		return time.Time{}, false
 	}
-	return q.since
+	return q.since, q.refused
 }
 
 func agentInfoOf(payload jsonx.M, now time.Time) AgentInfo {
@@ -290,7 +297,7 @@ func (p *Poller) AgentInfo(id string) (AgentInfo, bool) {
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
-	i.QuietSince = p.quietSinceLocked(id)
+	i.QuietSince, i.Refused = p.quietLocked(id)
 	return i, ok
 }
 
@@ -303,7 +310,7 @@ func (p *Poller) AgentSeen(id string) (AgentInfo, model.System, bool) {
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
-	i.QuietSince = p.quietSinceLocked(id)
+	i.QuietSince, i.Refused = p.quietLocked(id)
 	s, known := p.systems[id]
 	return i, s, known
 }

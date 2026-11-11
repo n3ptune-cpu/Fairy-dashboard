@@ -148,10 +148,20 @@ func (f *farm) tick() {
 	f.e.s.WakeRuns.Tick(context.Background())
 }
 
-// offline lets a minute and a half pass, so the poller shows the machines that are off as "offline".
+// offline lets a good quarter of an hour pass: the poller shows the machines that are off as "offline" after a
+// minute, and after wakerun.MinOff without an answer they are off for a run too.
 func (f *farm) offline() {
 	for i := 0; i < 90; i++ {
 		f.tick()
+	}
+	f.wait(wakerun.MinOff)
+}
+
+// wait lets time pass in which nothing happens but a poll a minute.
+func (f *farm) wait(d time.Duration) {
+	for end := f.now.Add(d); f.now.Before(end); {
+		f.now = f.now.Add(time.Minute)
+		f.e.s.Poller.PollOnce(context.Background())
 	}
 }
 
@@ -275,8 +285,24 @@ func TestWakeUpdatePageListsWhatCanTakePart(t *testing.T) {
 	e.b.Metrics["laptop"] = func() (jsonx.M, error) { return nil, devices.Errf("connection failed") }
 	e.b.Mu.Unlock()
 	f.tick()
-	if h := wuHostRow(t, get(), "laptop"); h["power"] != "unclear" || h["choice"] != "" || !strings.Contains(h["why"].(string), "stopped answering less than a minute ago") {
+	if h := wuHostRow(t, get(), "laptop"); h["power"] != "unclear" || h["choice"] != "" ||
+		h["why"] != "not sure that it is off: no answer for 1 second so far, and Fairy takes a machine for off only after 15 minutes (it may be restarting)" {
 		t.Fatalf("stale: %v", h)
+	}
+	// shown as offline after a minute, and still neither on nor off: it may be restarting
+	f.wait(5 * time.Minute)
+	_, laptop, _ := e.s.Poller.AgentSeen("laptop")
+	if h := wuHostRow(t, get(), "laptop"); h["power"] != "unclear" || h["choice"] != "" || laptop.Status != "offline" ||
+		h["why"] != "not sure that it is off: no answer for 5 minutes so far, and Fairy takes a machine for off only after 15 minutes (it may be restarting)" {
+		t.Fatalf("offline for five minutes: %v (%s)", h, laptop.Status)
+	}
+	// after a quarter of an hour without an answer it is off
+	f.wait(10 * time.Minute)
+	if h := wuHostRow(t, get(), "laptop"); h["power"] != "off" || h["choice"] != "" || h["why"] != "it is off, and Fairy cannot wake it: no Wake-on-LAN is set up for it" {
+		t.Fatalf("offline for a quarter of an hour: %v", h)
+	}
+	if got := get().body["off_after_s"]; got != 900.0 {
+		t.Fatalf("off_after_s: %v", got)
 	}
 	// who may read the page
 	if r := e.do("GET", "/api/admin/wake-update", nil, "Cookie", e.cookie(viewer, 0)); r.code != 403 {
@@ -798,7 +824,7 @@ func TestWakeUpdateRestartIsReportedNotContinued(t *testing.T) {
 			warn = n.Severity + ": " + n.Text
 		}
 	}
-	if !strings.HasPrefix(warn, "warning: the panel restarted during the run Alice started at 03:01 UTC; it is not continued.") || !strings.Contains(warn, "PC-A: The panel restarted during the run. The run had woken it and it was ON") {
+	if !strings.HasPrefix(warn, "warning: the panel restarted during the run Alice started at 03:16 UTC; it is not continued.") || !strings.Contains(warn, "PC-A: The panel restarted during the run. The run had woken it and it was ON") {
 		t.Fatalf("the warning: %q", warn)
 	}
 	page := e2.do("GET", "/api/admin/wake-update", nil, "Cookie", e2.cookie(controller(), 0))

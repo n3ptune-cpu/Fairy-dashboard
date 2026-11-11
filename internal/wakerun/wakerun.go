@@ -5,9 +5,11 @@
 //
 // The rules it keeps (README, "Wake, update, shut down"):
 //
-//   - It only ever switches off a machine that this run woke: off when the run started, online only after the
-//     run's own wake. That is decided in one function, mayShutDown (shutdown.go), which is the only way to the
-//     shutdown request. A machine that was on is never switched off; it is updated only if the admin asked.
+//   - It only ever switches off a machine that was off before the run and that this run woke: no answer from it
+//     for MinOff (15 minutes) when the run started, online only after the run's own wake. That is decided in
+//     one function, mayShutDown (shutdown.go), which is the only way to the shutdown request. A machine that was
+//     on is never switched off; it is updated only if the admin asked. A machine the run is not sure about (it
+//     stopped answering a few minutes ago: it may be restarting) is left alone: nothing is sent to it.
 //   - A Proxmox node with running guests, or whose guests the panel cannot see, stays on.
 //   - One run at a time. A run that the panel's restart interrupted is never continued: the journal
 //     (journal.go) is only read to report which machines the run had woken.
@@ -87,6 +89,24 @@ const (
 // MaxHosts is how many machines one run takes.
 const MaxHosts = 16
 
+// MinOff is how long the panel must have asked a machine's agent, poll after poll, without an answer before a
+// run takes the machine for off. One minute without an answer (offline_after) is also what a machine looks like
+// while it restarts, for Windows Update or because its owner restarted it, and such a machine comes back by
+// itself with a fresh uptime: a run would take it for a machine it woke, and switch it off. Fifteen minutes is
+// longer than a restart takes. It is not a setting: a shorter time would bring that mistake back.
+const MinOff = 15 * time.Minute
+
+// NotSure is the one sentence for a machine of which the run cannot say that it is off. Nothing is sent to it.
+var NotSure = "Not sure that it is off, so nothing was sent to it: Fairy takes a machine for off only after " + span(MinOff) +
+	" without an answer (it may be restarting, or be on and out of reach)."
+
+// The sentence for a machine that is on although its agent does not answer, with what shows that it is on.
+const onByText = "It is on (%s), and its agent does not answer. Nothing was sent to it and it stays on."
+
+// OnByRefused is what shows that a machine is on when it refused the connection: its own network stack sent
+// the refusal, so it runs, and only its agent is not listening.
+const OnByRefused = "the machine refused the connection"
+
 // Timings that are not settings.
 const (
 	wakeResend      = 60 * time.Second // the wake is sent again this often while the machine does not answer
@@ -146,8 +166,14 @@ type Observation struct {
 	SeenAt time.Time // when the last answered poll was
 	// Status is the agent's state as the panel keeps it: "online", "stale" (no answer for less than
 	// offline_after), "offline", or "" when the panel never polled it.
-	Status  string
-	Paused  bool   // polling is paused for it: the panel would never see it come online
+	Status string
+	Paused bool // polling is paused for it: the panel would never see it come online
+	// QuietSince: since when the panel has asked its agent, poll after poll, without an answer. Zero while it
+	// answers, when it was never polled, and when the panel stopped asking in between (poller.QuietGap).
+	QuietSince time.Time
+	// OnBy: what else than its agent shows the machine as on right now ("the Proxmox API shows it as online",
+	// OnByRefused); "": nothing does.
+	OnBy    string
 	UptimeS *int64 // from the last answered poll (nil: the agent did not say)
 	Version string
 	// the agent's self-update
@@ -159,6 +185,25 @@ type Observation struct {
 	LastMessage   string
 	Behind        *bool // older than the newest release the panel knows (nil: unknown)
 	Pending       *Pending
+}
+
+// ProbeRefused is Ops.Probe's answer for a connection the machine itself refused, reset or closed.
+const ProbeRefused = "connection refused"
+
+// QuietFor is how long the machine has gone without an answer, as far as the panel watched it (0: it answers,
+// polling is paused, or the panel does not know).
+func QuietFor(o Observation, now time.Time) time.Duration {
+	if o.Online || o.Paused || o.QuietSince.IsZero() || now.Before(o.QuietSince) {
+		return 0
+	}
+	return now.Sub(o.QuietSince)
+}
+
+// OffNow reports whether the panel's own view is "off": shown as offline, and no answer for MinOff. It is the
+// first of the things a run asks for (the direct question right before the wake is the next), and what the
+// page offers as "off".
+func OffNow(o Observation, now time.Time) bool {
+	return o.Status == "offline" && o.OnBy == "" && QuietFor(o, now) >= MinOff
 }
 
 // OpError is why a request to a machine was not carried out.
@@ -183,7 +228,8 @@ type Ops interface {
 	// Observe returns the poller's latest view of the machine's agent.
 	Observe(id string) Observation
 	// Probe asks the machine's agent itself, now: "" when it answered, "timeout" or "connection failed" when
-	// nothing did, anything else when something answered that is not usable.
+	// nothing did, ProbeRefused when the machine refused the connection (it is on, its agent is not listening),
+	// anything else when something answered that is not usable.
 	Probe(ctx context.Context, id string) string
 	// Kick asks the poller to poll the machine's agent at once.
 	Kick(id string)
@@ -225,6 +271,7 @@ type Host struct {
 
 	// What the run knows about "this run woke it" (mayShutDown reads these).
 	StartStatus string     `json:"start_status"`            // the agent's state when the run started
+	QuietForS   *int64     `json:"quiet_for_s,omitempty"`   // how long it had gone without an answer then (nil: not known)
 	ProbedOff   bool       `json:"probed_off,omitempty"`    // asked directly right before the wake, nothing answered
 	WakeSentAt  *time.Time `json:"wake_sent_at,omitempty"`  // the run's first wake for it
 	Wakes       int        `json:"wakes,omitempty"`         // wake requests the relay accepted
@@ -432,8 +479,12 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 				return &StartError{Msg: info.Name + " is not switched on for \"Update machines that are off\""}
 			}
 			o := m.Ops.Observe(id)
-			hosts = append(hosts, &Host{ID: id, Name: info.Name, Mode: mode, State: StQueued, Since: now, Text: "waiting for its turn",
-				StartStatus: o.Status, Log: []LogLine{}})
+			h := &Host{ID: id, Name: info.Name, Mode: mode, State: StQueued, Since: now, Text: "waiting for its turn", StartStatus: o.Status, Log: []LogLine{}}
+			if q := QuietFor(o, now); q > 0 && o.OnBy == "" {
+				s := int64(q / time.Second)
+				h.QuietForS = &s
+			}
+			hosts = append(hosts, h)
 		}
 		return nil
 	}

@@ -220,13 +220,13 @@ func TestMachineThatOnlyLookedOff(t *testing.T) {
 		w := newWorld(t)
 		pc := w.running("pc-a")
 		pc.unreachable = true
-		w.advance(90 * time.Second) // the panel now shows it as offline
-		if o := w.Observe("pc-a"); o.Online || o.Status != "offline" {
+		w.advance(20 * time.Minute) // the panel shows it as offline, and has had no answer for longer than MinOff
+		if o := w.Observe("pc-a"); o.Online || o.Status != "offline" || !OffNow(o, w.now) {
 			t.Fatalf("the panel's view: %+v", o)
 		}
 		w.start(StartRequest{Hosts: []string{"pc-a"}})
 		pc.unreachable = false // reachable again, before the poller has noticed
-		pc.obs = Observation{Status: "offline"}
+		pc.obs = Observation{Status: "offline", QuietSince: pc.quietSince}
 		w.m.Tick(context.Background())
 		a, hist := w.m.Snapshot()
 		if a != nil || len(hist) != 1 {
@@ -241,7 +241,7 @@ func TestMachineThatOnlyLookedOff(t *testing.T) {
 		w := newWorld(t)
 		pc := w.running("pc-a")
 		pc.unreachable = true
-		w.advance(90 * time.Second)
+		w.advance(20 * time.Minute) // out of reach for longer than MinOff: the panel's view is "off"
 		w.start(StartRequest{Hosts: []string{"pc-a"}, UpdateIfOn: true})
 		w.advance(30 * time.Second)
 		pc.unreachable = false
@@ -269,7 +269,9 @@ func TestMachineThatOnlyLookedOff(t *testing.T) {
 		w.advance(20 * time.Second) // no answer for 20 s: the panel shows "stale", not "offline"
 		w.start(StartRequest{Hosts: []string{"pc-a"}, UpdateIfOn: true})
 		r := w.finish()
-		has(t, host(r, "pc-a"), StSkipped, "The panel did not show it as off, only as not answering (stale when the run started", "Nothing was sent to it.")
+		if h := host(r, "pc-a"); h.State != StSkipped || h.Text != NotSure || h.On != OnUntouched {
+			t.Fatalf("%s: %s", h.State, h.Text)
+		}
 		if len(w.calls) != 0 {
 			t.Fatalf("requests: %v", w.calls)
 		}

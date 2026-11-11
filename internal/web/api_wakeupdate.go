@@ -14,6 +14,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/powerctl"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
 )
@@ -59,10 +60,15 @@ type wuHost struct {
 	CanWake bool   `json:"can_wake"`
 	NoWake  string `json:"no_wake,omitempty"`
 	Relay   string `json:"relay,omitempty"` // the name of the machine that sends its wake packets
-	Power   string `json:"power"`           // off | on | unclear
+	// Power is what the panel can say now: "on" (its agent answers, or the machine shows as on another way),
+	// "off" (no answer for wakerun.MinOff), "unclear" (anything between: it may be restarting). The run decides
+	// again by itself, with the same rule; this is only what the page offers.
+	Power string `json:"power"`
 	// Choice is how it can be in a run right now: "wake" (it is off), "update_only" (it is on), or "" with Why.
-	Choice  string `json:"choice"`
-	Why     string `json:"why,omitempty"`
+	Choice string `json:"choice"`
+	Why    string `json:"why,omitempty"`
+	// NotSure: it does not answer, and not for long enough to be taken for off. The dialog lists it apart.
+	NotSure bool   `json:"not_sure,omitempty"`
 	Version string `json:"version,omitempty"`
 	Behind  *bool  `json:"behind"`
 }
@@ -75,7 +81,9 @@ type wakeUpdatePage struct {
 	Last     []*wakerun.Run   `json:"last"`
 	Now      time.Time        `json:"now"`
 	Problem  string           `json:"problem,omitempty"` // why no run can start at all
-	MaxHosts int              `json:"max_hosts"`
+	// OffAfterS: a machine counts as off after this long without an answer (wakerun.MinOff; not a setting).
+	OffAfterS int `json:"off_after_s"`
+	MaxHosts  int `json:"max_hosts"`
 }
 
 // runOps is the run's view of the panel (wakerun.Ops): the poller, the configuration, and the existing four
@@ -113,10 +121,17 @@ func (o runOps) Observe(id string) wakerun.Observation {
 		return wakerun.Observation{}
 	}
 	info, sys, known := o.s.Poller.AgentSeen(a.ID)
-	obs := wakerun.Observation{Online: info.Online, SeenAt: info.SeenAt, Version: info.Version, UpdateEnabled: info.Enabled,
+	obs := wakerun.Observation{Online: info.Online, SeenAt: info.SeenAt, QuietSince: info.QuietSince, Version: info.Version, UpdateEnabled: info.Enabled,
 		Paused: o.s.Poller.Scheduler.IsPaused(id) || o.s.Poller.Scheduler.IsPaused(a.ID)}
 	if known {
 		obs.Status = sys.Status
+	}
+	// On without an answer from its agent: the machine itself refused the panel's latest poll, or it is a
+	// Proxmox node that the cluster shows as online.
+	if x, ok := o.system(id); info.Refused {
+		obs.OnBy = wakerun.OnByRefused
+	} else if ok && x.Kind == "node" && x.Status == "online" && !info.Online {
+		obs.OnBy = "the Proxmox API shows it as online"
 	}
 	if info.Online {
 		obs.UptimeS = sys.UptimeS
@@ -147,7 +162,10 @@ func (o runOps) Probe(ctx context.Context, id string) string {
 	if !ok {
 		return "error"
 	}
-	return o.s.Poller.ProbeAgent(ctx, a.ID)
+	if got := o.s.Poller.ProbeAgent(ctx, a.ID); got != poller.ProbeRefused {
+		return got
+	}
+	return wakerun.ProbeRefused
 }
 
 func (o runOps) Kick(id string) {
@@ -319,10 +337,11 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 			h.Relay = r.Name
 		}
 	}
+	now := s.Poller.Clock().UTC()
 	switch {
-	case o.Online:
+	case o.Online || o.OnBy != "":
 		h.Power = "on"
-	case o.Status == "offline":
+	case wakerun.OffNow(o, now):
 		h.Power = "off"
 	}
 	switch {
@@ -334,10 +353,12 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 		h.Why = "power control for this host is disabled by an administrator"
 	case o.Paused:
 		h.Why = "polling is paused for it"
-	case h.Power == "on":
+	case o.Online:
 		h.Choice = wakerun.ModeUpdateOnly
+	case h.Power == "on":
+		h.Why = "it is on (" + o.OnBy + "), and its agent does not answer"
 	case h.Power == "unclear":
-		h.Why = "it stopped answering less than a minute ago: wait until the panel shows it as offline"
+		h.Why, h.NotSure = notSureWhy(o, now), true
 	case !h.CanWake:
 		h.Why = "it is off, and Fairy cannot wake it: " + h.NoWake
 	default:
@@ -350,8 +371,34 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	return h, true
 }
 
+// notSureWhy says, on the page, why a machine that does not answer is not offered as "off".
+func notSureWhy(o wakerun.Observation, now time.Time) string {
+	need := spanWords(wakerun.MinOff)
+	if !o.QuietSince.IsZero() && !o.Paused {
+		q := max(wakerun.QuietFor(o, now), time.Second)
+		return fmt.Sprintf("not sure that it is off: no answer for %s so far, and Fairy takes a machine for off only after %s (it may be restarting)", spanWords(q), need)
+	}
+	return "not sure that it is off: the panel has not watched it long enough; Fairy takes a machine for off only after " + need + " without an answer"
+}
+
+// spanWords is a duration for a sentence: "40 seconds", "1 minute", "15 minutes", "3 hours".
+func spanWords(d time.Duration) string {
+	n, unit := int64(d/time.Second), "second"
+	switch {
+	case d >= 2*time.Hour:
+		n, unit = int64(d/time.Hour), "hour"
+	case d >= time.Minute:
+		n, unit = int64(d/time.Minute), "minute"
+	}
+	if n != 1 {
+		unit += "s"
+	}
+	return fmt.Sprintf("%d %s", n, unit)
+}
+
 func (s *Server) wakeUpdatePageData() wakeUpdatePage {
-	p := wakeUpdatePage{Hosts: []wuHost{}, Settings: s.WakeRuns.Settings, Last: []*wakerun.Run{}, Now: time.Now().UTC(), MaxHosts: wakerun.MaxHosts}
+	p := wakeUpdatePage{Hosts: []wuHost{}, Settings: s.WakeRuns.Settings, Last: []*wakerun.Run{}, Now: time.Now().UTC(), MaxHosts: wakerun.MaxHosts,
+		OffAfterS: int(wakerun.MinOff / time.Second)}
 	if l := s.latest(); l.Version != "" {
 		p.Latest = l.Version
 	} else {

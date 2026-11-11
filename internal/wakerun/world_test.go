@@ -27,6 +27,8 @@ type machine struct {
 	bootedAt     time.Time     // since when it runs
 	agentReadyAt time.Time     // its agent answers from then on (while it runs)
 	unreachable  bool          // it runs, but the panel cannot reach it: polls and the direct question time out
+	agentDown    bool          // it runs, but its agent does not listen: polls fail, the direct question is refused
+	onBy         string        // what else shows it as on while it runs (a Proxmox node: the Proxmox API)
 	wakeBoots    bool          // a wake packet starts it when it is off
 	post         time.Duration // from the packet to the system running
 	bootTakes    time.Duration // from the packet to the agent answering
@@ -57,6 +59,7 @@ type machine struct {
 	// the poller's view
 	everAnswered bool
 	lastAnswer   time.Time
+	quietSince   time.Time // the first of the row of polls without an answer it is in (zero: it answers)
 	obs          Observation
 
 	// for the judge
@@ -98,11 +101,11 @@ func newWorld(t *testing.T) *world {
 	return w
 }
 
-// off adds a machine that is switched off and has been for a long time: a wake starts it, its agent answers
-// 40 s later, an update takes 30 s and works, a shutdown works.
+// off adds a machine that is switched off and has been for a day, with the panel asking it all that time: a
+// wake starts it, its agent answers 40 s later, an update takes 30 s and works, a shutdown works.
 func (w *world) off(id string) *machine {
 	yes := true
-	mc := &machine{info: HostInfo{ID: id, Name: strings.ToUpper(id), AgentID: id, RelayID: "relay", MACs: 1, OptedIn: true},
+	mc := &machine{info: HostInfo{ID: id, Name: strings.ToUpper(id), AgentID: id, RelayID: "relay", MACs: 1, OptedIn: true}, quietSince: w.now.Add(-24 * time.Hour),
 		wakeBoots: true, post: 10 * time.Second, bootTakes: 40 * time.Second, version: "16-aaaaaaa", newVersion: "17-bbbbbbb", behind: &yes,
 		updMode: "ok", updTakes: 30 * time.Second, updState: "idle", shutMode: "ok", busyDone: map[string]bool{}}
 	w.ms[id] = mc
@@ -117,6 +120,13 @@ func (w *world) running(id string) *machine {
 	mc.on, mc.bootedAt, mc.agentReadyAt = true, w.now.Add(-72*time.Hour), w.now.Add(-72*time.Hour+time.Minute)
 	w.poll()
 	return mc
+}
+
+// silentFor makes the panel's view of a machine that does not answer now: it has asked it for d without an
+// answer.
+func (w *world) silentFor(mc *machine, d time.Duration) {
+	mc.quietSince, mc.lastAnswer = w.now.Add(-d), w.now.Add(-d)
+	w.poll()
 }
 
 // ---- the world as Ops
@@ -137,7 +147,7 @@ func (w *world) Observe(id string) Observation {
 }
 
 func (w *world) answers(mc *machine) bool {
-	return mc.on && !w.now.Before(mc.agentReadyAt) && !mc.unreachable
+	return mc.on && !w.now.Before(mc.agentReadyAt) && !mc.unreachable && !mc.agentDown
 }
 
 func (w *world) Probe(_ context.Context, id string) string {
@@ -149,6 +159,8 @@ func (w *world) Probe(_ context.Context, id string) string {
 		return ""
 	case mc.unreachable:
 		return "timeout"
+	case mc.on && mc.agentDown:
+		return ProbeRefused
 	}
 	return "connection failed"
 }
@@ -320,7 +332,8 @@ func (w *world) sim() {
 }
 
 // poll is the panel's poller: every machine is asked once a second; one that does not answer is "stale" for a
-// minute and "offline" after that, and keeps the values of its last answer.
+// minute and "offline" after that, keeps the values of its last answer, and is "quiet since" the first of
+// these polls.
 func (w *world) poll() {
 	for _, id := range w.order {
 		mc := w.ms[id]
@@ -328,8 +341,15 @@ func (w *world) poll() {
 		if mc.paused {
 			continue
 		}
+		mc.obs.OnBy = ""
+		if mc.on {
+			mc.obs.OnBy = mc.onBy
+		}
 		if !w.answers(mc) {
-			mc.obs.Online = false
+			if mc.quietSince.IsZero() {
+				mc.quietSince = w.now
+			}
+			mc.obs.Online, mc.obs.QuietSince = false, mc.quietSince
 			if mc.everAnswered && w.now.Sub(mc.lastAnswer) < time.Minute {
 				mc.obs.Status = "stale"
 			} else {
@@ -337,8 +357,8 @@ func (w *world) poll() {
 			}
 			continue
 		}
-		mc.everAnswered, mc.lastAnswer = true, w.now
-		o := Observation{Online: true, SeenAt: w.now, Status: "online", Version: mc.version, UpdateEnabled: mc.updMode != "disabled",
+		mc.everAnswered, mc.lastAnswer, mc.quietSince = true, w.now, time.Time{}
+		o := Observation{Online: true, SeenAt: w.now, Status: "online", OnBy: mc.obs.OnBy, Version: mc.version, UpdateEnabled: mc.updMode != "disabled",
 			UpdateState: mc.updState, UpdateMessage: mc.updMsg, LastAt: mc.lastAt, LastOK: mc.lastOK, LastMessage: mc.lastMsg, Behind: mc.behind}
 		if float64(w.now.Unix()) < mc.lastAt { // the installer has not written its result yet
 			o.LastAt, o.LastOK, o.LastMessage = 0, false, ""

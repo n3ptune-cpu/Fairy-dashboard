@@ -205,10 +205,13 @@ B's network card address (`ipconfig /all`, "Physical Address") in **Wake-on-LAN 
 the relay. In B, switch Fast Startup off (Control Panel, Power Options, "Choose what the power buttons do",
 untick "Turn on fast startup"), or the run will take B for a machine that was on all along (see below).
 
-1. Switch B on for these runs (F1, step 2). Shut B down in Windows. Wait until the panel shows B as offline
-   (about a minute).
-2. **Update machines that are off…**: B is listed under "Off now: wake, update, switch off again", ticked.
-   Start, **Confirm (test build)**.
+1. Switch B on for these runs (F1, step 2). Shut B down in Windows. **Wait 15 minutes.** The panel shows B
+   as offline after about a minute, but a run takes a machine for off only after 15 minutes without an
+   answer (a PC that restarts is also silent for a few minutes). Until then the "Machines" table says "Now:
+   unclear" for B and how long it has had no answer; after 15 minutes it says "Now: off". The panel must
+   have been running all that time: if you start it again, the 15 minutes start again.
+2. **Update machines that are off…**: B is listed under "Off (no answer for 15 minutes or more): wake,
+   update, switch off again", ticked. Start, **Confirm (test build)**.
 3. The run shows B as "waking". **Now power B on in VMware.** You have 5 minutes.
 4. When B's agent answers, the run goes on by itself: "updating", then "pause before shutdown" (a minute),
    then "switching off" with a countdown of 2 minutes. B's page shows the same countdown with **Cancel**.
@@ -218,10 +221,15 @@ untick "Turn on fast startup"), or the run will take B for a machine that was on
 7. Third time: press **Cancel run** while B is "waking" or "updating". The dialog asks what happens to the
    machines the run has woken; leave "stay on". B stays on and the report lists it as ON. While a run is
    going, the **Update machines that are off…** button is grey ("one run at a time").
-8. To see the rule "a machine that is already on is never switched off": shut B down, wait for "offline",
-   power B on in VMware **before** you start the run, and start the run for it within the first seconds
-   (the panel may still show it as offline). The run asks B directly before any wake, finds it on, and
-   reports "skipped: it was already on". B stays on.
+8. To see the rule "a machine that is already on is never switched off": shut B down, wait until the table
+   says "Now: off" (15 minutes), power B on in VMware **before** you start the run, and start the run for it
+   within the first seconds (the panel still shows it as off). The run asks B directly before any wake. If
+   B answers, or refuses the connection (Windows runs, the agent has not started yet), the report says that
+   it is on and that nothing was sent to it. If B does not answer yet, the run sends its wake, and when B
+   answers it has been up for longer than since the wake: "It was already on". Either way B stays on.
+9. To see "not sure": shut B down and open **Update machines that are off…** two or three minutes later. B
+   is listed under "Not sure that they are off: left alone", with how long it has had no answer, and has
+   no tick box. Nothing can be sent to it until the 15 minutes are over.
 
 The times a run shows come from `wake_update:` in config.yaml. With the defaults it waits up to **5 minutes**
 for a machine to come online (and goes on as soon as its agent answers), **1 minute** between the update's
@@ -234,15 +242,21 @@ to press Cancel):
 wake_update: {online_timeout_s: 60, settle_s: 10, shutdown_delay_s: 30}
 ```
 
+The 15 minutes in step 1 are not one of these settings and cannot be shortened.
+
 F2 was not run by us on real Windows VMs. The same steps were run in a browser against stand-in agents on
 one PC (machines that are "off" do not answer, "boot" after the wake, "update" and "shut down"), with the
-waits shortened to 60 s, 10 s and 20 s; screenshots of that run are labelled so. If a step
+waits shortened to 60 s, 10 s and 20 s; screenshots of that run are labelled so. That run was made before
+the 15-minute rule; the rule itself is covered by the panel's own tests, with a clock. If a step
 goes differently for you, send what the page shows and the lines of the `fairy-test.exe serve` window.
 
 ### F3. What needs the real machines
 
 * **That Wake-on-LAN really starts the PC** from "shut down": firmware and network card settings, the relay
   in the same network. Try **Power on** in the machine's Power menu first; a run sends the same request.
+* **That a PC that is off counts as off.** The panel must get no answer at all from it for 15 minutes. A PC
+  that is shut down gives none. If the report says "It is on (the machine refused the connection)" for a PC
+  that is off, something else answers at its address (a router, a firewall): tell us.
 * **That a PC the run woke counts as woken.** The run compares the uptime the PC reports with the time since
   the wake. Windows with Fast Startup keeps counting its uptime through "Shut down"; such a PC is taken for
   "already on" and left on. Switch Fast Startup off on the PCs that take part, then look at the first

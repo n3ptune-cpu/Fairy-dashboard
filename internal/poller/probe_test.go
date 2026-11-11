@@ -170,8 +170,32 @@ func TestQuietSinceIsAnUnbrokenRowOfFailedPolls(t *testing.T) {
 	if !quiet().Equal(start) {
 		t.Fatalf("a row of failed polls keeps its beginning: %v, want %v", quiet(), start)
 	}
-	if i, ok := p.AgentInfo("laptop"); ok || !i.QuietSince.Equal(start) {
+	if i, ok := p.AgentInfo("laptop"); ok || !i.QuietSince.Equal(start) || i.Refused {
 		t.Fatalf("AgentInfo: %+v %v", i, ok)
+	}
+	// a poll the machine itself refuses: it runs, its agent does not listen. The row goes on.
+	b.Mu.Lock()
+	b.Metrics["laptop"] = func() (jsonx.M, error) {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+	}
+	b.Mu.Unlock()
+	now = now.Add(time.Minute)
+	p.PollOnce(ctx)
+	if i, _, _ := p.AgentSeen("laptop"); !i.Refused || !i.QuietSince.Equal(start) || i.Online {
+		t.Fatalf("a refused poll: %+v", i)
+	}
+	b.Mu.Lock()
+	b.Metrics["laptop"] = func() (jsonx.M, error) {
+		if down {
+			return nil, devices.Errf("connection failed")
+		}
+		return testutil.AgentMetrics(), nil
+	}
+	b.Mu.Unlock()
+	now = now.Add(time.Minute)
+	p.PollOnce(ctx)
+	if i, _, _ := p.AgentSeen("laptop"); i.Refused || !i.QuietSince.Equal(start) {
+		t.Fatalf("the next poll got no answer at all: %+v", i)
 	}
 	// the slowest poll interval is inside the gap
 	now = now.Add(QuietGap)

@@ -1210,6 +1210,7 @@ function wakeUpdateBox() {
     <p class="note">For machines that are normally switched off. You choose them and confirm once; Fairy then wakes each one (Wake-on-LAN), waits up to ${esc(fmtSpan(d.settings.online_timeout_s))} for it to come online,
       updates its agent like the Update button does, and about ${esc(fmtSpan(d.settings.settle_s))} after the result asks for a shutdown with a countdown of ${esc(fmtSpan(d.settings.shutdown_delay_s))} that you can cancel.
       <b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.
+      A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer: one that stopped answering more recently may be restarting, and is left alone.
       ${joined.length ? `${esc(joined.length)} machine${joined.length === 1 ? " is" : "s are"} switched on for this${can.length !== joined.length ? `, ${esc(can.length)} can be chosen right now` : ""}.` : "No machine is switched on for this yet: use the table below."}</p>
     ${d.problem ? `<div class="warnbox">${esc(d.problem)}</div>` : ""}
     ${d.active ? wuRunBox(d.active, true) : d.last[0] ? `<div class="wu-sub">Last run</div>${wuRunBox(d.last[0], false)}` : ""}
@@ -1239,7 +1240,9 @@ async function openWakeUpdate() {
   wu.data = d;
   if (d.active) { flash("A run is going: one run at a time", true); render(); return; }
   const joined = d.hosts.filter((h) => h.opted_in);
-  const off = joined.filter((h) => h.choice === "wake"), on = joined.filter((h) => h.choice === "update_only"), rest = joined.filter((h) => !h.choice);
+  const off = joined.filter((h) => h.choice === "wake"), on = joined.filter((h) => h.choice === "update_only");
+  const unsure = joined.filter((h) => !h.choice && h.not_sure), rest = joined.filter((h) => !h.choice && !h.not_sure);
+  const cannot = (l) => l.map((h) => `<div class="list-row"><span>${esc(h.name)}</span><span class="note">${esc(h.why)}</span></div>`).join("");
   const tick = (h, kind, checked) => `<label class="check opt"><input type="checkbox" data-wu="${kind}" value="${esc(h.id)}" ${checked ? "checked" : ""}><span>${esc(h.name)}
     <span class="note">${kind === "wake" ? `woken by ${esc(h.relay)}` : "is on"}${h.version ? ` · runs ${esc(buildLabel(h.version))}` : ""}${h.behind === false ? " · already on the newest release" : ""}</span></span></label>`;
   const m = $("#modal");
@@ -1255,13 +1258,15 @@ async function openWakeUpdate() {
         You can cancel the countdown on the machine's page.</li>
     </ol>
     <div class="warnbox">Fairy only switches off machines <b>this run woke</b>. A machine that is already on is never switched off; a Proxmox node with running guests is left on.
+      A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer. If Fairy is not sure that a machine is off, it leaves it alone and the report says so.
       Nobody is asked whether someone is using a machine the run woke: after its update it is switched off again.</div>
     ${joined.length ? "" : '<div class="warnbox">No machine is switched on for this yet. Close this, and switch machines on in the table on the Updates page (or in the ⋯ menu on a machine\'s page).</div>'}
-    ${off.length ? `<div class="wu-sub">Off now: wake, update, switch off again</div><div class="opts wu-list">${off.map((h) => tick(h, "wake", true)).join("")}</div>
+    ${off.length ? `<div class="wu-sub">Off (no answer for ${esc(fmtSpan(d.off_after_s))} or more): wake, update, switch off again</div><div class="opts wu-list">${off.map((h) => tick(h, "wake", true)).join("")}</div>
       <label class="check opt wu-ifon"><input type="checkbox" id="wu-ifon"><span>If one of these turns out to be on after all: update it too
         <span class="note">it stays on. Without this tick nothing is sent to it.</span></span></label>` : ""}
     ${on.length ? `<div class="wu-sub">On now: update only, never switched off</div><div class="opts wu-list">${on.map((h) => tick(h, "update_only", false)).join("")}</div>` : ""}
-    ${rest.length ? `<div class="wu-sub">Cannot take part right now</div>${rest.map((h) => `<div class="list-row"><span>${esc(h.name)}</span><span class="note">${esc(h.why)}</span></div>`).join("")}` : ""}
+    ${unsure.length ? `<div class="wu-sub">Not sure that they are off: left alone</div>${cannot(unsure)}` : ""}
+    ${rest.length ? `<div class="wu-sub">Cannot take part right now</div>${cannot(rest)}` : ""}
     <div class="error" id="wu-err" role="alert"></div>
     <div class="row-gap end"><button class="btn" type="button" id="wu-x">Cancel</button><button class="btn primary" type="submit" id="wu-go">Start</button></div></form>`;
   m.hidden = false;

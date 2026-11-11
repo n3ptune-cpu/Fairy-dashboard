@@ -251,11 +251,29 @@ The rules, in plain words:
   needs an agent with `self_update: true`; to be woken and switched off again it also needs
   `power_control: true` and `wol` with a relay ([Agents](#agents)). The machine the panel runs on cannot take
   part.
-* **A run only switches off machines it woke itself.** For that, all of this must be true: the panel showed
-  the machine as offline when the run started; right before the wake the run asked the machine directly and
-  got no answer; the relay accepted the wake; the machine first answered after it; and the uptime it then
-  reported is shorter than the time since the wake, so it really started because of it. If one of these is
-  missing, the machine counts as "already on".
+* **A run only switches off a machine that was off before the run and that the run woke itself.** For
+  that, all of this must be true: the panel had asked the machine for 15 minutes without an answer when the
+  run started; right before the wake the run asked the machine directly and got no answer; the relay
+  accepted the wake; the machine first answered after it; and the uptime it then reported is shorter than
+  the time since the wake, so it started after it. If one of these is missing, the machine is left on.
+* **Off, on, or not sure.** For a run a machine is one of three things, and the dialog lists them apart:
+  * **Off**: no answer for 15 minutes or more. It is listed under "Off (no answer for 15 minutes or
+    more)", ticked. The run wakes it, updates it and switches it off again.
+  * **On**: its agent answers. It is listed under "On now: update only", unticked. The report says "It was
+    on and stays on." A machine also counts as on when it refuses the connection (the machine runs, only
+    its agent does not answer), and a Proxmox node when the Proxmox API shows it as online. Nothing is
+    sent to those; the report says "It is on (...), and its agent does not answer."
+  * **Not sure**: it stopped answering less than 15 minutes ago. It may be restarting (a Windows Update
+    restart looks like this for some minutes) or be on and out of reach. It is listed under "Not sure that
+    they are off: left alone" and cannot be ticked. If a run meets such a machine, it sends it nothing, and
+    the report says: "Not sure that it is off, so nothing was sent to it: Fairy takes a machine for off
+    only after 15 min without an answer (it may be restarting, or be on and out of reach)."
+
+  The 15 minutes are fixed; they are not a setting. The panel counts them itself, poll after poll: after a
+  restart of the panel, after polling was paused for a machine, and for a machine that was just added,
+  the count starts again. So for the first 15 minutes after a restart of the panel no machine counts as off.
+  What this cannot see: a machine that was on and out of reach for more than 15 minutes and then restarts
+  by itself during the run's wait looks like a machine the run woke.
 * **A machine that is already on is never switched off.** When you open the dialog it is offered as "update
   only" (unticked). A machine you ticked as off that turns out to be on when the run gets to it is skipped
   and nothing is sent to it, unless you ticked "If one of these turns out to be on after all: update it

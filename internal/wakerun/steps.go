@@ -130,7 +130,9 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		m.enter(h, StOnline, now, "is on: it is only updated and stays on")
 		return
 	}
-	// The panel's own view first: anything but "offline since before the run started" is not a machine that is off.
+	// The panel's own view first. Off is: shown as offline, and no answer for MinOff, when the run started and
+	// now. On is: its agent answers, or something else shows it as on. Everything between is "not sure", and a
+	// machine the run is not sure about is left alone: it may be restarting.
 	switch {
 	case o.Paused:
 		m.end(r, h, StSkipped, OnUntouched, now, "Polling is paused for it, so Fairy could not see it come online. Nothing was sent to it.")
@@ -138,10 +140,12 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 	case o.Online:
 		m.alreadyOn(r, h, now, "its agent answers")
 		return
-	case o.Status != "offline" || h.StartStatus != "offline":
-		// "online" / "stale": it answered less than offline_after ago and does not now; "": the panel never polled it
-		m.end(r, h, StSkipped, OnUntouched, now, fmt.Sprintf("The panel did not show it as off, only as not answering (%s when the run started, %s now): "+
-			"Fairy does not take that for \"off\". Nothing was sent to it.", orText(h.StartStatus, "not polled yet"), orText(o.Status, "not polled yet")))
+	case o.OnBy != "":
+		h.AlreadyOn = true
+		m.end(r, h, StSkipped, OnYes, now, fmt.Sprintf(onByText, o.OnBy))
+		return
+	case h.StartStatus != "offline" || !offAtStart(h) || !OffNow(o, now):
+		m.end(r, h, StSkipped, OnUntouched, now, NotSure)
 		return
 	}
 	if !m.pace.fits(info.RelayID, info.MACs, now) {
@@ -158,6 +162,10 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		return
 	case "timeout", "connection failed":
 		h.ProbedOff = true
+	case ProbeRefused: // the machine itself turned the connection down: it runs
+		h.AlreadyOn = true
+		m.end(r, h, StSkipped, OnYes, now, fmt.Sprintf(onByText, OnByRefused))
+		return
 	default:
 		m.end(r, h, StSkipped, OnUntouched, now, "Fairy could not tell that it is off: something at its address answered ("+answer+"). Nothing was sent to it.")
 		return

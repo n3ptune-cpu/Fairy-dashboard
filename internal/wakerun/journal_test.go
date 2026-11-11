@@ -101,7 +101,7 @@ func TestRestartReportsTheInterruptedRunAndNeverContinuesIt(t *testing.T) {
 	}
 	// and a new run can be started; the interrupted one is history
 	w3.ms["pc-upd"].on = false
-	w3.advance(2 * time.Minute)
+	w3.advance(MinOff + time.Minute) // it counts as off only after that long without an answer
 	w3.start(StartRequest{Hosts: []string{"pc-upd"}})
 	done := w3.finish()
 	has(t, host(done, "pc-upd"), StOff)

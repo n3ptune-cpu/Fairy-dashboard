@@ -164,7 +164,11 @@ func TestUIWakeUpdate(t *testing.T) {
 		`It may then still be starting, or be on without its network (Tailscale).`,
 		`Fairy only switches off machines <b>this run woke</b>. A machine that is already on is never switched off; a Proxmox node with running guests is left on.`,
 		`Nobody is asked whether someone is using a machine the run woke: after its update it is switched off again.`,
-		`Off now: wake, update, switch off again`, `On now: update only, never switched off`, `Cannot take part right now`,
+		`Off (no answer for ${esc(fmtSpan(d.off_after_s))} or more): wake, update, switch off again`, `On now: update only, never switched off`, `Cannot take part right now`,
+		// a machine that stopped answering less than that long ago is not offered: it may be restarting
+		`A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer. If Fairy is not sure that a machine is off, it leaves it alone and the report says so.`,
+		`const unsure = joined.filter((h) => !h.choice && h.not_sure), rest = joined.filter((h) => !h.choice && !h.not_sure);`,
+		`${unsure.length ? ` + "`" + `<div class="wu-sub">Not sure that they are off: left alone</div>${cannot(unsure)}` + "`" + ` : ""}`,
 		`${off.map((h) => tick(h, "wake", true)).join("")}`,        // machines that are off: ticked
 		`${on.map((h) => tick(h, "update_only", false)).join("")}`, // machines that are on: not ticked
 		`const body = { hosts: picked("wake"), update_only: picked("update_only"), update_if_on: !!$("#wu-ifon")?.checked };`,

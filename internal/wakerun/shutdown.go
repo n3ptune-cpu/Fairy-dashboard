@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// The rule of this package: a run only ever switches off a machine that this run woke. It is kept here, in
-// one function, and nowhere else. shutDown below is the only code that calls Ops.Shutdown; it calls
+// The rule of this package: a run only ever switches off a machine that was off before the run and that this
+// run woke. It is kept here, in one function, and nowhere else. shutDown below is the only code that calls Ops.Shutdown; it calls
 // mayShutDown first and sends nothing unless that says yes; and shutDown has one caller, the end of the pause
 // after the update (stepSettling). A machine that was on never gets that far (updateDone ends it), but
 // mayShutDown does not rely on that: it reads the evidence itself, every time.
@@ -17,6 +17,9 @@ import (
 //
 //	Mode         the admin chose it as a machine that is off
 //	StartStatus  "offline" when the run started: its agent had not answered for at least offline_after
+//	QuietForS    how long the panel had asked it without an answer when the run started: at least MinOff
+//	             (15 minutes). A machine that restarts is quiet for a few minutes and then comes back by
+//	             itself with a fresh uptime; without this it would look like a machine the run woke.
 //	ProbedOff    asked directly right before the wake, and nothing answered (the panel's view can be stale)
 //	WakeSentAt   this run sent a wake for it, and the relay accepted it
 //	OnlineAt     its first answered poll after that wake
@@ -35,6 +38,8 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 		return false, "it was already on before this run did anything"
 	case h.StartStatus != "offline":
 		return false, "the panel did not show it as off when the run started"
+	case !offAtStart(h):
+		return false, "Fairy is not sure that it was off before the run: it had not gone " + span(MinOff) + " without an answer"
 	case !h.ProbedOff:
 		return false, "the run did not confirm that it was off right before the wake"
 	case h.WakeSentAt == nil || h.Wakes < 1:
@@ -62,6 +67,11 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 		return false, fmt.Sprintf("%d guests are running on it", running) + guestNames(why)
 	}
 	return true, ""
+}
+
+// offAtStart: the panel had asked the machine without an answer for at least MinOff when the run started.
+func offAtStart(h *Host) bool {
+	return h.QuietForS != nil && time.Duration(*h.QuietForS)*time.Second >= MinOff
 }
 
 func guestNames(names string) string {

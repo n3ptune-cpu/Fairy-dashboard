@@ -15,8 +15,8 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 	online := wake.Add(50 * time.Second)
 	up := int64(30) // it reported 30 s of uptime 50 s after the wake: it started after the wake
 	proven := func() (*Host, HostInfo, Observation) {
-		w, o, u := wake, online, up
-		return &Host{ID: "pc-a", Mode: ModeWake, StartStatus: "offline", ProbedOff: true, WakeSentAt: &w, Wakes: 1, OnlineAt: &o, BootUptimeS: &u},
+		w, o, u, q := wake, online, up, int64(MinOff/time.Second)
+		return &Host{ID: "pc-a", Mode: ModeWake, StartStatus: "offline", QuietForS: &q, ProbedOff: true, WakeSentAt: &w, Wakes: 1, OnlineAt: &o, BootUptimeS: &u},
 			HostInfo{ID: "pc-a", OptedIn: true}, Observation{Online: true, Status: "online"}
 	}
 	noGuests := func() (int, bool, string) { return 0, true, "" }
@@ -26,6 +26,7 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 	}
 	early, late, zero := wake.Add(-time.Second), wake, int64(0)
 	long, exact, negative := int64(3*86400), int64(50), int64(-5)
+	almost, minute, none := int64(MinOff/time.Second)-1, int64(90), int64(0)
 	for name, c := range map[string]struct {
 		change func(h *Host, info *HostInfo, o *Observation)
 		guests func() (int, bool, string)
@@ -37,6 +38,10 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 		"online at the start":                   {change: func(h *Host, _ *HostInfo, _ *Observation) { h.StartStatus = "online" }, why: "did not show it as off when the run started"},
 		"stale at the start":                    {change: func(h *Host, _ *HostInfo, _ *Observation) { h.StartStatus = "stale" }, why: "did not show it as off"},
 		"never polled at the start":             {change: func(h *Host, _ *HostInfo, _ *Observation) { h.StartStatus = "" }, why: "did not show it as off"},
+		"quiet for a second less than it takes": {change: func(h *Host, _ *HostInfo, _ *Observation) { h.QuietForS = &almost }, why: "not sure that it was off before the run: it had not gone 15 min without an answer"},
+		"quiet for 90 s: it may be restarting":  {change: func(h *Host, _ *HostInfo, _ *Observation) { h.QuietForS = &minute }, why: "not sure that it was off before the run"},
+		"quiet for no time at all":              {change: func(h *Host, _ *HostInfo, _ *Observation) { h.QuietForS = &none }, why: "not sure that it was off before the run"},
+		"how long it was quiet is not known":    {change: func(h *Host, _ *HostInfo, _ *Observation) { h.QuietForS = nil }, why: "not sure that it was off before the run"},
 		"not asked directly before the wake":    {change: func(h *Host, _ *HostInfo, _ *Observation) { h.ProbedOff = false }, why: "did not confirm that it was off right before the wake"},
 		"no wake by this run":                   {change: func(h *Host, _ *HostInfo, _ *Observation) { h.WakeSentAt = nil }, why: "sent no wake for it"},
 		"no wake accepted":                      {change: func(h *Host, _ *HostInfo, _ *Observation) { h.Wakes = 0 }, why: "sent no wake for it"},
@@ -85,7 +90,8 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 }
 
 // The rule against whatever happens. Many runs over machines that are made up at random: off for long, on
-// for days, on but unreachable, just gone quiet; a wake that works or does not; a person who switches a
+// for days, on but unreachable (for a moment, or for longer than MinOff), restarting, on with an agent that
+// does not listen, just gone quiet; a wake that works or does not; a person who switches a
 // machine on at some moment before or during the run; an agent without uptime; updates and shutdowns that
 // work, fail, hang or are refused; guests; a cancel of either kind, the kill switch, a machine taken out, all
 // at random moments. The world is the judge (world.Shutdown): a shutdown request for a machine that was
@@ -113,7 +119,7 @@ func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 		for i := 0; i < n; i++ {
 			id := fmt.Sprintf("m%d", i)
 			var mc *machine
-			switch pick("off", "off", "off", "on", "unreachable", "quiet") {
+			switch pick("off", "off", "off", "off", "on", "unreachable", "unreachable for long", "restarting", "agent down", "quiet") {
 			case "off":
 				mc = w.off(id)
 			case "on":
@@ -124,9 +130,29 @@ func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 				mc.unreachable = true
 				back := secs(0, 500)
 				plan = append(plan, later{back, func() { mc.unreachable = false }})
-			case "quiet": // it went off a moment ago: the panel still shows "stale"
+			case "unreachable for long": // on, and out of reach for longer than MinOff: the panel takes it for off
+				mc = w.running(id)
+				mc.bootedAt = w.now.Add(-secs(7000, 400000))
+				mc.unreachable = true
+				w.silentFor(mc, secs(900, 5000))
+				back := secs(0, 500)
+				plan = append(plan, later{back, func() { mc.unreachable = false }})
+			case "restarting": // on, restarting: no answer for less than MinOff, then it is back with a fresh uptime
+				mc = w.running(id)
+				mc.unreachable = true
+				w.silentFor(mc, secs(0, 780))
+				back, up := secs(0, 500), secs(0, 120)
+				plan = append(plan, later{back, func() { mc.unreachable, mc.bootedAt, mc.agentReadyAt = false, w.now.Add(-up), w.now }})
+			case "agent down": // on, and its agent does not listen: the machine refuses the connection
+				mc = w.running(id)
+				mc.agentDown = true
+				w.silentFor(mc, secs(0, 5000))
+				back := secs(0, 500)
+				plan = append(plan, later{back, func() { mc.agentDown = false }})
+			case "quiet": // it went off a moment ago, or some minutes ago: the panel shows "stale" or "offline"
 				mc = w.running(id)
 				mc.on = false
+				w.silentFor(mc, secs(0, 1500))
 			}
 			mc.wakeBoots = rng.Intn(5) > 0
 			mc.bootTakes = secs(5, 420)
