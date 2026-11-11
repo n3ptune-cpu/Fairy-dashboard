@@ -131,8 +131,14 @@ func (c *reqCtx) keepPending(u *model.User) (p *pendingAction, why string) {
 	}
 	now := c.s.now()
 	vals := pathValues(c.r)
+	action := describeAction(c.r, vals, c.body)
+	if detail := actionDetail[c.r.Pattern]; detail != nil {
+		if d := detail(c, u); d != "" {
+			action = truncate(safeTarget(action+" ("+d+")"), maxActionText)
+		}
+	}
 	p = &pendingAction{ID: randToken(18), Method: c.r.Method, Pattern: c.r.Pattern, Vals: vals, URL: *c.r.URL,
-		run: c.fn, Body: string(c.body), Label: label, Action: describeAction(c.r, vals, c.body), At: now, Client: c.client()}
+		run: c.fn, Body: string(c.body), Label: label, Action: action, At: now, Client: c.client()}
 	c.s.codec.live.keepPending(key, p, now)
 	return p, ""
 }
@@ -158,6 +164,16 @@ var actionText = map[string]string{
 	"PUT /api/admin/sites/{name}":         "change site {name}",
 	"DELETE /api/admin/sites/{name}":      "delete site {name}",
 	"PUT /api/admin/assign":               "move a system to a site",
+	"POST /api/me/sessions/revoke":        "sign out another session of yours",
+	"POST /api/me/sessions/revoke-others": "sign out all your other sessions",
+	"POST /api/admin/sessions/revoke":     "sign out a session",
+}
+
+// actionDetail is, per route, what the panel adds to the description of a kept request when the request's own
+// text does not say which thing it is about: a sign-out names its session by a handle the page cannot read.
+var actionDetail = map[string]func(c *reqCtx, u *model.User) string{
+	"POST /api/me/sessions/revoke":    (*reqCtx).sessionDetail,
+	"POST /api/admin/sessions/revoke": (*reqCtx).sessionDetail,
 }
 
 // actionFields are the body fields describeAction adds: the ones that say which action, role or object it is.

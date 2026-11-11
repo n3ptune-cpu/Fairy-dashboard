@@ -81,10 +81,11 @@ type sessionData struct {
 const cookieKeyLabel = "fairy-session-cookie-v2"
 
 type sessionCodec struct {
-	key    []byte
-	maxAge int
-	secure bool
-	live   *liveSessions // per-session state that is not in the cookie (sessionstate.go)
+	key       []byte
+	handleKey []byte // names sessions on the Sessions page (handle, api_sessions.go)
+	maxAge    int
+	secure    bool
+	live      *liveSessions // per-session state that is not in the cookie (sessionstate.go)
 	// now is the clock of everything that decides how old a session, a sign-in or a kept action is (the cookie,
 	// sessionUser, authAge, the login round trip, the pending action). Tests replace it; see Server.now.
 	now func() time.Time
@@ -93,7 +94,9 @@ type sessionCodec struct {
 func newCodec(secret string, maxAge config.Seconds, secure bool) *sessionCodec {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write([]byte(cookieKeyLabel))
-	return &sessionCodec{key: m.Sum(nil), maxAge: int(maxAge), secure: secure, live: newLiveSessions(), now: time.Now}
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(handleKeyLabel))
+	return &sessionCodec{key: m.Sum(nil), handleKey: h.Sum(nil), maxAge: int(maxAge), secure: secure, live: newLiveSessions(), now: time.Now}
 }
 
 // now is the server's session clock (time.Now, except in tests). It lives on the codec, which every session

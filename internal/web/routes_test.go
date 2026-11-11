@@ -25,7 +25,7 @@ import (
 type writeRoute struct {
 	pattern string // as registered
 	path    string // the request's path
-	body    any    // "POWER" / "CONFIRM" / "SETTINGS": filled in from the panel under test
+	body    any    // "POWER" / "CONFIRM" / "SETTINGS" / "SESSION": filled in from the panel under test
 	ctype   string
 	// adminOnly: a viewer (role viewer, CSRF header, fresh sign-in) gets 403. Otherwise a viewer reaches it.
 	adminOnly bool
@@ -33,6 +33,9 @@ type writeRoute struct {
 	pendingOK bool
 	// stepUp: an admin whose sign-in is an hour old gets 401 step_up_required.
 	stepUp bool
+	// each: also an admin who signed in this second is asked to confirm; the action never rides on an earlier
+	// confirmation (stepUpEach). The admin of these rows has a second session: the one the request is about.
+	each bool
 	// readToken / controlToken: an API token of that scope reaches the handler (false: 403).
 	readToken, controlToken bool
 	// killSwitch: with control disabled an admin gets 423.
@@ -43,6 +46,11 @@ var matrixRoutes = []writeRoute{
 	{pattern: "POST /api/me/active", path: "/api/me/active", pendingOK: true, readToken: true, controlToken: true},
 	{pattern: "DELETE /api/me/pending", path: "/api/me/pending", pendingOK: true, readToken: true, controlToken: true},
 	{pattern: "POST /api/me/step-up", path: "/api/me/step-up", body: map[string]any{"pending_id": "x", "next": "/"}, pendingOK: true},
+	// the Sessions page: a viewer may end their own other sessions (the row's request names an admin's session,
+	// which is none of a viewer's: 404, not 403); everyone's sessions are for admins
+	{pattern: "POST /api/me/sessions/revoke", path: "/api/me/sessions/revoke", body: "SESSION", stepUp: true, each: true},
+	{pattern: "POST /api/me/sessions/revoke-others", path: "/api/me/sessions/revoke-others", stepUp: true, each: true},
+	{pattern: "POST /api/admin/sessions/revoke", path: "/api/admin/sessions/revoke", body: "SESSION", adminOnly: true, stepUp: true, each: true},
 	{pattern: "PUT /api/settings", path: "/api/settings", body: "SETTINGS", pendingOK: true},
 	{pattern: "POST /api/settings/background", path: "/api/settings/background", body: tinyPNG, ctype: "image/png"},
 	{pattern: "DELETE /api/settings/background", path: "/api/settings/background", pendingOK: true},
@@ -218,6 +226,12 @@ func TestRouteAuthMatrix(t *testing.T) {
 			case "SETTINGS":
 				q.body = map[string]any{}
 			}
+			if wr.each { // the admin is signed in a second time; a "SESSION" request is about that session
+				other := e.s.codec.handle(sidOf(e, e.cookie(controller(), 0)))
+				if wr.body == "SESSION" {
+					q.body = map[string]any{"session": other}
+				}
+			}
 			if _, got := e.s.mux.Handler(httptest.NewRequest(method, wr.path, nil)); got != wr.pattern {
 				t.Fatalf("%s: the probe %s matches %q", wr.pattern, wr.path, got)
 			}
@@ -286,8 +300,8 @@ func TestRouteAuthMatrix(t *testing.T) {
 			}
 		}
 		e, q, admin = fresh()
-		if r := e.raw(q, append([]string{"Cookie", admin}, csrf...)...); refused(r) {
-			t.Errorf("%s, an admin who just signed in: %d %s", wr.pattern, r.code, r.raw)
+		if r := e.raw(q, append([]string{"Cookie", admin}, csrf...)...); wr.each != stepUpRequired(r) || (!wr.each && refused(r)) {
+			t.Errorf("%s, an admin who just signed in: %d %s (asked to confirm every time: %v)", wr.pattern, r.code, r.raw, wr.each)
 		}
 	}
 }

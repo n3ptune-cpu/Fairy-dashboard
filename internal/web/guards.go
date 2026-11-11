@@ -124,11 +124,25 @@ const perActionGrace = 150
 // inherited at all: a confirmation authorises exactly the one kept action, which the panel replays itself right
 // after the sign-in, and every other request (also from the same browser, a second later) is asked again.
 func (c *reqCtx) stepUpWithin(u *model.User, what string, window int) error {
+	return c.stepUpCheck(u, what, window, c.s.Cfg.StepUpPerAction)
+}
+
+// stepUpEach is stepUp for an action that needs its own confirmation every time, whatever step_up_per_action
+// says: the request is refused, kept, and runs only as the panel's own replay right after the sign-in that was
+// made for it. A confirmation made for another action does not count, also not inside its window. Used for
+// ending other sessions (api_sessions.go): what a copied cookie would do first, and the one thing that must
+// not ride on a confirmation the owner gave for something else a minute ago.
+func (c *reqCtx) stepUpEach(u *model.User, what string) error {
+	return c.stepUpCheck(u, what, c.s.Cfg.StepUpWindowS, true)
+}
+
+// stepUpCheck is the check behind stepUp, stepUpWithin and stepUpEach. perAction: nothing is inherited from an
+// earlier confirmation (see stepUpWithin).
+func (c *reqCtx) stepUpCheck(u *model.User, what string, window int, perAction bool) error {
 	age := c.authAge(u)
 	if age == nil {
 		return nil
 	}
-	perAction := c.s.Cfg.StepUpPerAction
 	if perAction {
 		if c.resumed() && *age <= float64(max(window, perActionGrace)) {
 			return nil
