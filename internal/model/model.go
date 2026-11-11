@@ -102,6 +102,14 @@ type Hardware struct {
 	Display      *string `json:"display"`
 }
 
+// OSIcon is the mark the page draws for a host's operating system (normalise.OSIcon): Key names one of the marks
+// in static/osicons.js ("windows11", "windows10", "windows", "proxmox", "ubuntu", "debian", ..., "linux" for any
+// other distribution, "macos"), Name is the system's short name ("Windows 11", "Ubuntu", "Proxmox VE").
+type OSIcon struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
 // Helper is the Windows agent's elevated helper (Fairy-agent v0.5.0+): a separate LocalSystem service,
 // "fairy-agent-helper", with no network access, that reads Core Temp and the BMC's sensors, drives the fans (with
 // the agent's temperature watchdog), runs power actions and installs updates, while the agent itself runs as an
@@ -151,6 +159,7 @@ type System struct {
 	UptimeS            *int64          `json:"uptime_s"`
 	OS                 *string         `json:"os"`
 	Platform           *string         `json:"platform"`
+	OSIcon             *OSIcon         `json:"os_icon"`  // from kind, platform and os; null: not known
 	LoadAvg            []float64       `json:"load_avg"` // may be null
 	Temps              []Temperature   `json:"temps"`
 	Fans               []Fan           `json:"fans"`

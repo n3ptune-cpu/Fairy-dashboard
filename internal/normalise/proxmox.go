@@ -177,6 +177,7 @@ func NormaliseProxmox(resources []jsonx.M, now time.Time, ts float64, rates *Rat
 		if status == "online" || status == "stopped" {
 			s.LastSeen = model.P(now)
 		}
+		s.OSIcon = OSIcon(s.Kind, "", "") // a node: Proxmox VE; a guest's system is not known
 		model.Normalize(&s)
 		out = append(out, s)
 	}

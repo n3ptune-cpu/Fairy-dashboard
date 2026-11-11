@@ -102,6 +102,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 	if s.Helper != nil {
 		s.PowerHelperReason = powerHelperReason(m)
 	}
+	s.OSIcon = OSIcon(s.Kind, model.Deref(s.Platform), model.Deref(s.OS))
 	model.Normalize(&s)
 	return s
 }
