@@ -247,13 +247,17 @@ func TestWakeUpdateSilenceCountsFromTheLastSignOfLife(t *testing.T) {
 	}
 
 	// then both go silent (a restart begins like this). The silence counts from the first poll that gets
-	// nothing: for pc-a the poll a minute after its last refusal, for the node one poll later (the poll that
-	// learns from the cluster that the node is offline). Three minutes later:
+	// nothing: for pc-a the poll a minute after its last refusal. For the node it is that poll too, or the one
+	// after it: the agent's poll and the cluster's run side by side, and the agent's may still see the node as
+	// online. Three minutes later:
 	e.b.Mu.Lock()
 	mode, nodeUp = "silent", false
 	e.b.Mu.Unlock()
 	f.wait(3 * time.Minute)
-	quiet := map[string]time.Duration{"pc-a": 2 * time.Minute, "node-srv-pvea": time.Minute}
+	quiet := map[string]time.Duration{"pc-a": 2 * time.Minute, "node-srv-pvea": wakerun.QuietFor(ops.Observe("node-srv-pvea"), f.now)}
+	if q := quiet["node-srv-pvea"]; q != time.Minute && q != 2*time.Minute {
+		t.Fatalf("the node's silence began with one of the two polls after the cluster showed it as offline, not %v ago", q)
+	}
 	for _, id := range both {
 		h := wuHostRow(t, page(), id)
 		why := "not sure that it is off: no answer for " + spanWords(quiet[id]) + " so far, and Fairy takes a machine for off only after 15 minutes (it may be restarting)"
@@ -279,7 +283,7 @@ func TestWakeUpdateSilenceCountsFromTheLastSignOfLife(t *testing.T) {
 	}
 
 	// still not sure just before 15 minutes of silence, and off from 15 minutes after the last sign of life
-	f.wait(12 * time.Minute) // fourteen and thirteen minutes of silence (the run above waited for nothing)
+	f.wait(12 * time.Minute) // fourteen minutes of silence, or thirteen (the run above waited for nothing)
 	for _, id := range both {
 		if o := ops.Observe(id); wakerun.OffNow(o, f.now) || wakerun.QuietFor(o, f.now) >= wakerun.MinOff {
 			t.Fatalf("%s after %v of silence must not be off yet", id, wakerun.QuietFor(o, f.now))
@@ -292,8 +296,8 @@ func TestWakeUpdateSilenceCountsFromTheLastSignOfLife(t *testing.T) {
 	if o := ops.Observe("pc-a"); !wakerun.OffNow(o, f.now) {
 		t.Fatalf("pc-a after %v of silence is off: %+v", wakerun.QuietFor(o, f.now), o)
 	}
-	if o := ops.Observe("node-srv-pvea"); wakerun.OffNow(o, f.now) {
-		t.Fatalf("the node after %v of silence is not off yet: %+v", wakerun.QuietFor(o, f.now), o)
+	if o := ops.Observe("node-srv-pvea"); wakerun.OffNow(o, f.now) != (quiet["node-srv-pvea"] == 2*time.Minute) {
+		t.Fatalf("the node after %v of silence: off is %v: %+v", wakerun.QuietFor(o, f.now), wakerun.OffNow(o, f.now), o)
 	}
 	f.wait(time.Minute)
 	for _, id := range both {
