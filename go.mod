@@ -13,3 +13,5 @@ require (
 require github.com/go-jose/go-jose/v4 v4.1.9 // indirect
 
 godebug multipathtcp=0
+
+replace github.com/n3ptune-cpu/Fairy-agent => ../Fairy-agent-part1-r3
