@@ -21,6 +21,40 @@ does not start, and says why.
 Every page has a red bar at the top: **TEST BUILD: sign-in is off. Never expose this.** `fairy version`, the
 Updates page and the start-up log say "TEST BUILD" too.
 
+## What to click in zip 4
+
+Unpack the zip (folder `Fairy-dashboard-part1-r4`), open `cmd.exe` in it, then:
+
+```
+go build -tags fairytest -o fairy-test.exe .\cmd\fairy
+fairy-test.exe serve
+```
+
+Open `http://127.0.0.1:8080`. To keep the test VM you added before, copy the folder `fairy-test` from the r3
+folder into the r4 folder **before** the first start.
+
+1. **Overview**: one row per host. Under the name, small: the PC model. In the tile in front: the mark of its
+   system (Windows, Debian, ...). Behind the name: small signs for the helper, the battery and the UPS, where
+   the host has one. Point at a sign, then click it: a small box opens with the same words.
+2. **Updates**: each ⓘ opens the longer explanation. The button is named **Update unpowered hosts** (no "…").
+   Its dialog lists the test VM under "On now: update only, never switched off".
+3. Tick the VM and start the run: it still ends with "It was on and stays on.", and the VM stays on.
+4. A host that does not answer is "not sure" for 15 minutes before it can count as off. The count starts
+   again at every start of the panel, so right after a start no machine is offered as off.
+5. **Sessions**: make the window narrower and wider. Nothing scrolls sideways.
+6. **Settings**: the ⓘ buttons; the sign-in picture you set in r3 is still there (with the copied folder).
+7. If the VM has fans: change a fan. "Confirm it's you" names the change in words, not in braces. Else skip.
+
+Every page with made-up data, without any machine: build the plain program and start its demo.
+
+```
+go build -o fairy-demo.exe .\cmd\fairy
+fairy-demo.exe serve --demo
+```
+
+It needs no config, listens on `http://127.0.0.1:8090` (this PC only, no sign-in, a yellow bar says DEMO) and
+keeps its files in a folder `.fairy-demo` where you started it. Stop either program with `Ctrl+C`.
+
 ## A. Build and start (dev VM, `cmd.exe`, Go installed)
 
 1. Unpack the zip into your test folder. You get a folder like `Fairy-dashboard-part1-r1`.
