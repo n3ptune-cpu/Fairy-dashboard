@@ -570,3 +570,154 @@ func TestCheckSwitchedOnSinceTheLastPoll(t *testing.T) {
 		})
 	}
 }
+
+// selfUpdating makes "tower" a second machine with self-update, as config.yaml would have it.
+func (a *approvalEnv) selfUpdating(t *testing.T) {
+	t.Helper()
+	ag, _ := a.s.Poller.AgentByID("tower")
+	ag.SelfUpdate, ag.ControlTokenEnv = true, "CTL_TOWER"
+	a.s.Poller.RemoveAgent("tower")
+	if err := a.s.Poller.AddAgent(ag, nil); err != nil {
+		t.Fatal(err)
+	}
+	a.b.Mu.Lock()
+	a.b.Metrics["tower"] = func() (jsonx.M, error) {
+		m := testutil.AgentMetrics()
+		m["hostname"], m["agent_version"] = "tower", "41-aaaaaaa"
+		m["features"].(jsonx.M)["fan_control"], m["features"].(jsonx.M)["self_update"] = true, true
+		m["self_update"] = jsonx.M{"state": "idle", "since": 1.0}
+		return m, nil
+	}
+	a.b.Mu.Unlock()
+	a.poll()
+}
+
+func updateResults(r map[string]any) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	list, _ := r["results"].([]any)
+	for _, x := range list {
+		out[x.(map[string]any)["id"].(string)] = x.(map[string]any)
+	}
+	return out
+}
+
+// "Update all": one approval covers the updates of all machines that check approvals themselves. Each machine
+// gets the same list in the same order and finds its own entry in it.
+func TestUpdateAllWithOneApproval(t *testing.T) {
+	a := newApprovalEnv(t)
+	a.selfUpdating(t)
+	a.require(t, a.laptop, a.tower)
+	r := a.post("/api/admin/updates", map[string]any{})
+	id, machines, ok := approvalAsked(r)
+	if !ok || len(machines) != 2 {
+		t.Fatalf("the dialog: %d %s", r.code, r.raw)
+	}
+	items := fmt.Sprint(r.body["detail"].(map[string]any)["items"])
+	if !strings.Contains(items, "laptop: update of its agent (checked on the machine)") || !strings.Contains(items, "tower: update of its agent (checked on the machine)") {
+		t.Fatalf("the dialog's lines: %s", items)
+	}
+	if cb := a.approve(t, id); cb.code != 303 {
+		t.Fatalf("callback: %d %s", cb.code, cb.raw)
+	}
+	if pr := a.result(t); pr["ok"] != true {
+		t.Fatalf("result: %v", pr)
+	}
+	if len(a.iss.Tokens()) != 1 {
+		t.Fatalf("%d approvals for one batch", len(a.iss.Tokens()))
+	}
+	var lists []string
+	for _, m := range []*testutil.Machine{a.laptop, a.tower} {
+		p := m.Passed()
+		if len(p) != 1 || p[0].Path != "/update" || !p[0].Approved {
+			t.Fatalf("%s: %+v", m.ID, p)
+		}
+		lists = append(lists, fmt.Sprint(p[0].Body["approval"].(map[string]any)["entries"]))
+	}
+	if lists[0] != lists[1] || strings.Count(lists[0], "apply_update") != 2 {
+		t.Fatalf("the machines got different lists:\n%s\n%s", lists[0], lists[1])
+	}
+	if got := auditOutcomes(a.s.Cfg.AuditLog); strings.Count(got, "update.agent ok") != 2 {
+		t.Errorf("audit:\n%s", got)
+	}
+}
+
+// A mixed batch: one machine checks approvals, one does not. Still one confirmation: the approval for the
+// first is the confirmation for both, and only the first gets it.
+func TestUpdateAllMixed(t *testing.T) {
+	a := newApprovalEnv(t)
+	a.selfUpdating(t)
+	a.require(t, a.laptop)
+	id, machines, ok := approvalAsked(a.post("/api/admin/updates", map[string]any{}))
+	if !ok || len(machines) != 1 || machines[0] != "laptop" {
+		t.Fatal("the dialog names the machine that checks")
+	}
+	if len(a.tower.Asked()) != 0 {
+		t.Fatalf("a machine without the check was asked: %+v", a.tower.Asked())
+	}
+	if cb := a.approve(t, id); cb.code != 303 || a.result(t)["ok"] != true {
+		t.Fatal("approving the batch")
+	}
+	if p := a.laptop.Passed(); len(p) != 1 || !p[0].Approved {
+		t.Fatalf("laptop: %+v", p)
+	}
+	if p := a.tower.Passed(); len(p) != 1 || p[0].Path != "/update" || p[0].Body["approval"] != nil {
+		t.Fatalf("tower: %+v", p)
+	}
+	if len(a.iss.Asked()) != 1 {
+		t.Fatalf("Pocket ID was asked %d times", len(a.iss.Asked()))
+	}
+}
+
+// A batch with a machine whose trust file is broken: that one is reported and not sent to, the other is
+// updated with its approval. With nothing but the broken one, nobody is asked for a passkey.
+func TestUpdateAllWithABrokenMachine(t *testing.T) {
+	a := newApprovalEnv(t)
+	a.selfUpdating(t)
+	a.require(t, a.laptop)
+	if err := os.WriteFile(a.tower.TrustPath, []byte("not a trust file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.poll()
+	r := a.post("/api/admin/updates", map[string]any{})
+	id, machines, ok := approvalAsked(r)
+	if !ok || len(machines) != 1 || !strings.Contains(fmt.Sprint(r.body["detail"].(map[string]any)["items"]), "tower: NOT sent (tower cannot check approvals right now") {
+		t.Fatalf("%d %s", r.code, r.raw)
+	}
+	if cb := a.approve(t, id); cb.code != 303 {
+		t.Fatal(cb.code)
+	}
+	a.result(t)
+	if p := a.laptop.Passed(); len(p) != 1 || !p[0].Approved {
+		t.Fatalf("laptop: %+v", p)
+	}
+	if len(a.tower.Passed()) != 0 {
+		t.Fatalf("the broken machine was sent: %+v", a.tower.Passed())
+	}
+	if got := auditOutcomes(a.s.Cfg.AuditLog); !strings.Contains(got, "update.agent ok") || !strings.Contains(got, "update.agent error 409") {
+		t.Errorf("audit:\n%s", got)
+	}
+	// a broken machine next to one that is not asked at all: the panel's own confirmation still stands for
+	// the other one (the broken machine's refusal is no confirmation)
+	c := newApprovalEnv(t)
+	c.selfUpdating(t)
+	if err := os.WriteFile(c.laptop.TrustPath, []byte("not a trust file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c.poll()
+	r = c.post("/api/admin/updates", map[string]any{}) // the admin's sign-in is an hour old
+	if d, _ := r.body["detail"].(map[string]any); r.code != 401 || d["code"] != "step_up_required" || d["approval"] != nil || len(c.tower.Passed()) != 0 {
+		t.Fatalf("a batch with a broken machine and one without the check: %d %s (tower was sent %d)", r.code, r.raw, len(c.tower.Passed()))
+	}
+	// only the broken machine can be updated: said in the results, without a passkey
+	b := newApprovalEnv(t)
+	if err := os.WriteFile(b.laptop.TrustPath, []byte("not a trust file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b.poll()
+	fresh := b.cookie(controller(), 0)
+	r = b.do("POST", "/api/admin/updates", map[string]any{}, "Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json")
+	res := updateResults(r.body)
+	if r.code != 200 || res["laptop"]["ok"] != false || !strings.Contains(fmt.Sprint(res["laptop"]["error"]), "cannot check approvals right now") || len(b.iss.Asked()) != 0 {
+		t.Fatalf("%d %s", r.code, r.raw)
+	}
+}

@@ -68,6 +68,13 @@ func (c *reqCtx) wantsTarget(agentID string) bool {
 //
 // The caller has checked who is asking (controlAllowed); the rate limit comes after this, as before.
 func (c *reqCtx) confirmControl(u *model.User, what string, targets []approvalTarget) ([]approvalOutcome, error) {
+	return c.confirmTargets(u, what, targets, false)
+}
+
+// confirmTargets is confirmControl. only: targets is everything this request sends (a single action, not a
+// batch that may also go to machines that are not asked): when its one machine refuses the question, that
+// refusal is the answer and nobody is asked to confirm a request that cannot be sent.
+func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTarget, only bool) ([]approvalOutcome, error) {
 	out := make([]approvalOutcome, len(targets))
 	if g := c.approved(); g != nil {
 		// The panel's own replay, right after the approval for this kept request was verified. Each request
@@ -124,10 +131,10 @@ func (c *reqCtx) confirmControl(u *model.User, what string, targets []approvalTa
 	}
 	if len(bound) == 0 {
 		// nothing needs an approval right now: every asked machine said so, or cannot be sent to at all
-		if len(targets) == 1 && out[0].err != nil {
+		if only && len(targets) == 1 && out[0].err != nil {
 			return out, nil // the one machine's refusal is the answer; nobody is asked to confirm for nothing
 		}
-		if inWindow == len(targets) {
+		if only && inWindow == len(targets) {
 			// The machine's fan window: this session's approval of a fan change on it was accepted seconds
 			// ago, and the machine itself says further fan changes need none for now. The panel's own
 			// confirmation would send the person to Pocket ID again for every step of the slider.
@@ -139,7 +146,33 @@ func (c *reqCtx) confirmControl(u *model.User, what string, targets []approvalTa
 	if err != nil {
 		return nil, apierr.New(apierr.Upstream, "the machines' challenges cannot be used: "+textsafe.Clip(err.Error(), 200))
 	}
-	return nil, c.askApproval(u, newApprovalPlan(plan))
+	ap := newApprovalPlan(plan)
+	if len(targets) > 1 { // a batch: the dialog lists what the one approval covers, and what it does not
+		for _, b := range bound {
+			ap.items = append(ap.items, b.Name+": "+requestWords(b.Request)+" (checked on the machine)")
+		}
+		for i, t := range targets {
+			if out[i].err != nil {
+				ap.items = append(ap.items, t.name+": NOT sent ("+errText(out[i].err, "it cannot be sent to")+")")
+			}
+		}
+	}
+	return nil, c.askApproval(u, ap)
+}
+
+// requestWords says a request a machine is asked to approve in words for the dialog.
+func requestWords(r api.ApprovalRequest) string {
+	switch r.Verb {
+	case api.ApproveApplyUpdate:
+		return "update of its agent"
+	case api.ApprovePower:
+		return fmt.Sprintf("%s in %d s", *r.Action, *r.DelayS)
+	case api.ApproveFanMode:
+		return "fan mode " + *r.Mode
+	case api.ApproveFanSet:
+		return fmt.Sprintf("fan zone %d to %d%%", *r.Zone, *r.Percent)
+	}
+	return r.Verb
 }
 
 // one is confirmControl for a request with at most one target: the approval to send (nil: none).
@@ -150,7 +183,7 @@ func (c *reqCtx) confirmOne(u *model.User, what string, target *approvalTarget) 
 		}
 		return nil, c.stepUp(u, what)
 	}
-	out, err := c.confirmControl(u, what, []approvalTarget{*target})
+	out, err := c.confirmTargets(u, what, []approvalTarget{*target}, true)
 	if err != nil {
 		return nil, err
 	}

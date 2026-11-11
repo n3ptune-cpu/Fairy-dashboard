@@ -281,7 +281,7 @@ func (s *Server) updateAll(c *reqCtx) error {
 	if _, err := c.requireUser(); err != nil {
 		return err
 	}
-	u, err := c.controlGuard(s.control)
+	u, err := c.controlAllowed(true)
 	if err != nil {
 		return err
 	}
@@ -291,9 +291,15 @@ func (s *Server) updateAll(c *reqCtx) error {
 		params map[string]any
 		res    updateResult
 		err    error
+		target int           // its place in targets (-1: its machine is not asked about approvals)
+		ap     *api.Approval // the approval made for its update (nil: none)
 	}
 	var jobs []*job
 	out := []updateResult{}
+	// The machines that check approvals themselves are asked first, all of them, and ONE approval covers their
+	// updates (approval_control.go). The others are confirmed and sent to as before; in a mixed batch the one
+	// approval is also the confirmation for them.
+	var targets []approvalTarget
 	for _, a := range s.Poller.Agents() {
 		if !a.SelfUpdate {
 			continue
@@ -303,17 +309,38 @@ func (s *Server) updateAll(c *reqCtx) error {
 			out = append(out, updateResult{ID: a.ID, Error: "skipped: " + row.Why})
 			continue
 		}
-		jobs = append(jobs, &job{a: a, params: updateParams(row, latest, true)})
+		j := &job{a: a, params: updateParams(row, latest, true), target: -1}
+		if c.wantsTarget(a.ID) {
+			j.target = len(targets)
+			targets = append(targets, s.updateTarget(a))
+		}
+		jobs = append(jobs, j)
+	}
+	confirmed, err := c.confirmControl(u, "control actions", targets)
+	if err != nil {
+		return err
+	}
+	if !s.control.allow(u.Sub) {
+		return c.limited(u, s.control, "too many control requests")
 	}
 	if len(jobs) == 0 && len(out) == 0 {
 		return apierr.New(404, "no agent has self_update: true in config.yaml")
 	}
 	var wg sync.WaitGroup
 	for _, j := range jobs {
+		if j.target >= 0 {
+			if oc := confirmed[j.target]; oc.err != nil { // its machine cannot be sent to (a broken trust file, no approval for it)
+				j.res, j.err = updateResult{ID: j.a.ID}, oc.err
+				continue
+			} else if oc.approval != nil {
+				j.ap = oc.approval
+				j.params["approval"] = "sent" // the machine checks it; the token itself is never written anywhere
+			}
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			data, err := c.callUpdate(u, j.a, nil)
+			data, err := c.callUpdate(u, j.a, j.ap)
 			j.res, j.err = updateResult{ID: j.a.ID, OK: err == nil, Result: data}, err
 		}()
 	}
