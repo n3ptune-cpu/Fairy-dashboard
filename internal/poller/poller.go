@@ -94,6 +94,8 @@ type Poller struct {
 	snapJSONVer   int
 	stateVersion  int
 	healthAt      time.Time
+	// agent id -> the version of its last good answer, kept over a restart (lastversion.go)
+	lastVersion map[string]string
 }
 
 // New builds the poller; backend nil = the real HTTP backend.
@@ -142,6 +144,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 		return nil, err
 	}
 	p.Admin = adminstate.New(cfg.DataDir)
+	p.loadLastVersions()
 	p.Scheduler = scheduler.New(filepath.Join(cfg.DataDir, "state.json"), cfg.Boost(), nil)
 	p.buildJobs()
 	return p, nil
@@ -453,6 +456,8 @@ func (p *Poller) RemoveAgent(id string) {
 	p.mu.Lock()
 	delete(p.systems, id)
 	delete(p.agentInfo, id)
+	_, kept := p.lastVersion[id]
+	delete(p.lastVersion, id)
 	delete(p.agentFailures, id)
 	delete(p.agentQuiet, id)
 	delete(p.helperSeen, id)
@@ -463,6 +468,9 @@ func (p *Poller) RemoveAgent(id string) {
 	p.snapVer, p.snapJSONVer = -1, -1
 	p.version++
 	p.mu.Unlock()
+	if kept { // a host added later under the same id starts without a version
+		p.saveVersion(id, "", time.Time{})
+	}
 	p.Power.UpdateRemote(id, nil, false, nil, nil)
 	p.UPS.UpdateFromAgent(id, nil, false, nil, nil)
 }

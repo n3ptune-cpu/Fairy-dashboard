@@ -2,7 +2,8 @@
 // login):
 //
 //	state.json     poll_overrides, control_disabled {by, at, reason}, power_control_disabled [system ids],
-//	               sessions_revoked_before (epoch), wake_update_hosts [system ids] (set in the panel only)
+//	               sessions_revoked_before (epoch), wake_update_hosts [system ids] (set in the panel only),
+//	               agent_versions {agent id: {version, recorded}} (written by the poller, see AgentVersions)
 //	sessions.json  sessions {sid: {sub, name, email, ip, created, created_ts, gen}}: a signed cookie is only valid
 //	               while its sid is here, for the account (sub) it names. For the Sessions page an entry also
 //	               has ua, login_ts, login_ip, seen_ts and seen_ip (see Session); an entry written before
@@ -600,6 +601,52 @@ func (a *State) SetWakeUpdate(id string, enabled bool) error {
 		d["wake_update_hosts"] = out
 		return nil
 	})
+	a.state.Refresh()
+	return err
+}
+
+// AgentVersions returns the version each agent reported when the panel last heard one from it (state.json
+// agent_versions: {agent id: {"version": "16-a791c55", "recorded": RFC 3339}}), so that a host that is off
+// when the panel starts still has one to show. "recorded" is when the panel wrote the entry: the first poll in
+// which the agent reported that version, not the last time the agent answered. The key is absent in a file
+// written before it existed; an entry that is not of this form is skipped; a panel that does not know the key
+// leaves it alone (it rewrites the file as the object it read). Empty while state.json is unreadable.
+func (a *State) AgentVersions() map[string]string {
+	out := map[string]string{}
+	m, _ := a.state.Get()["agent_versions"].(map[string]any)
+	for id, v := range m {
+		e, _ := v.(map[string]any)
+		if ver, _ := e["version"].(string); id != "" && ver != "" && len(ver) <= 64 {
+			out[id] = ver
+		}
+	}
+	return out
+}
+
+// SetAgentVersion records the version an agent reported; version "" forgets the agent (it was removed).
+func (a *State) SetAgentVersion(id, version string, at time.Time) error {
+	_, err := statefile.Update(a.StatePath, func(d statefile.Data) error {
+		m, _ := d["agent_versions"].(map[string]any)
+		if version == "" {
+			if _, ok := m[id]; !ok {
+				return errNoChange
+			}
+			delete(m, id)
+			if len(m) == 0 {
+				delete(d, "agent_versions")
+			}
+			return nil
+		}
+		if m == nil {
+			m = map[string]any{}
+			d["agent_versions"] = m
+		}
+		m[id] = map[string]any{"version": version, "recorded": at.UTC().Format(time.RFC3339)}
+		return nil
+	})
+	if errors.Is(err, errNoChange) {
+		return nil
+	}
 	a.state.Refresh()
 	return err
 }

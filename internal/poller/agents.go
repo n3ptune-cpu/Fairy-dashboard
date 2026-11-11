@@ -142,6 +142,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		delete(p.helperSeen, a.ID)
 	}
 	p.agentInfo[a.ID] = info
+	newVersion := p.noteVersionLocked(a.ID, info.Version)
 	delete(p.agentFailures, a.ID)
 	delete(p.agentQuiet, a.ID)
 	p.systems[a.ID] = p.stamp(sys, now)
@@ -150,6 +151,9 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	lat := time.Since(start)
 	p.source(name, true, now, &lat, nil)
 	p.mu.Unlock()
+	if newVersion {
+		p.saveVersion(a.ID, info.Version, now)
+	}
 	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)
 	p.UPS.UpdateFromAgent(a.ID, ups.AgentRows(payload["ups"]), false, a.UPSPowers, a.UPSNames)
 	return 0
