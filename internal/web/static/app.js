@@ -720,7 +720,7 @@ function approvalBox(s) {
         : `The machine cannot say whether it checks approvals${a.error ? `: ${esc(a.error)}` : " (its elevated helper is not answering)"}. Start the helper (Elevated helper, next to the host name).`}</div>
       ${row("Checked by", esc(approvalBy(a)))}${proto}${agentErr}</div>`;
   }
-  const keys = (a.keys || []).map((k) => `<span class="chip" title="${esc(`${k.alg} · thumbprint ${k.thumbprint}`)}">${esc(k.kid)} · <code>${esc(shortKey(k.thumbprint))}</code></span>`).join(" ") || "–";
+  const keys = (a.keys || []).map((k) => `<span class="chip key" title="${esc(`${k.alg} · thumbprint ${k.thumbprint}`)}">${esc(k.kid)} · <code>${esc(shortKey(k.thumbprint))}</code></span>`).join(" ") || "–";
   const checks = (a.agent_checks || []).map((v) => APPROVAL_VERB[v]).filter(Boolean);
   return `<div class="panel glass pad approval" data-key="approval">${head}
     <div class="note">Before this machine changes its fans, shuts down, restarts, sleeps or updates its agent, <b>${esc(approvalBy(a))}</b> verifies a Pocket ID approval (passkey) made for exactly that action. The panel cannot skip it.</div>

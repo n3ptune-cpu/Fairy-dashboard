@@ -197,3 +197,31 @@ func TestCheckSize(t *testing.T) {
 		}
 	}
 }
+
+// What the page says when a machine refuses an approval: the machine's own words, and one short sentence for
+// the reason it gave. Short enough for the result line of a kept action (300 characters), with the longest
+// reason the protocol has.
+func TestErrorTextFitsTheResultLine(t *testing.T) {
+	for reason, want := range map[string]string{
+		"user":            "not on that machine's list",
+		"clock":           "machine's clock",
+		"auth_time":       "machine's clock",
+		"token_key":       "helper-trust set --fetch-keys",
+		"token_signature": "helper-trust set --fetch-keys",
+		"audience":        "another client",
+		"nonce":           "press the button again",
+		"no_challenge":    "press the button again",
+	} {
+		said := "approval refused (" + reason + "): this user may not approve actions on this machine"
+		msg, ok := ErrorText("NSX-TEST-VM", api.CodeApprovalRefused, said)
+		if !ok || !strings.Contains(msg, want) || !strings.Contains(msg, said) || !strings.Contains(msg, "Nothing was done.") {
+			t.Errorf("%s: %q", reason, msg)
+		}
+		if len(msg) > 300 {
+			t.Errorf("%s: %d characters, the result line holds 300: %q", reason, len(msg), msg)
+		}
+	}
+	if _, ok := ErrorText("x", "something_else", "text"); ok {
+		t.Error("a code that is not the approval protocol's has no text here")
+	}
+}

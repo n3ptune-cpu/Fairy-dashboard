@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
@@ -182,6 +183,27 @@ func For(p *Plan, token, agentID string, req api.ApprovalRequest) (*api.Approval
 	return &api.Approval{Token: token, Entries: p.entries}, nil
 }
 
+// refusedHint is one short sentence on what to do about the reason a machine gave for "approval refused
+// (<reason>)" (the protocol's reasons). Short on purpose: the page shows the result of a kept action in a
+// few lines.
+func refusedHint(text string) string {
+	reason := ""
+	if rest, ok := strings.CutPrefix(text, "approval refused ("); ok {
+		reason, _, _ = strings.Cut(rest, ")")
+	}
+	switch reason {
+	case "user":
+		return " You are not on that machine's list of people who may approve (it is changed on the machine: fairy-agent helper-trust)."
+	case "clock", "auth_time", "expired":
+		return " Compare the machine's clock with the real time (more than a minute off is refused), then press the button again."
+	case "token_key", "token_signature":
+		return " Pocket ID's signing key is not the one the machine has pinned (on the machine: fairy-agent helper-trust set --fetch-keys)."
+	case "issuer", "audience":
+		return " The machine trusts another Pocket ID or another client than this panel asks (on the machine: fairy-agent helper-trust show)."
+	}
+	return " A new approval is needed: press the button again."
+}
+
 // ErrorText is what the page says when a machine refuses with one of the approval protocol's codes: what it
 // means and what to do. name is the machine, text the machine's own words. ok is false for any other code.
 func ErrorText(name, code, text string) (msg string, ok bool) {
@@ -193,9 +215,7 @@ func ErrorText(name, code, text string) (msg string, ok bool) {
 	case api.CodeApprovalRequired:
 		return name + " asks for a passkey approval for this now, and none was sent" + said + ". Nothing was done: press the button again.", true
 	case api.CodeApprovalRefused:
-		return name + " did not accept the approval" + said + ". Nothing was done. A new approval is needed: press the button again. " +
-			"If it says \"user\", you are not on that machine's list; \"clock\" or \"auth_time\": its clock is more than a minute off; " +
-			"\"token_key\" or \"token_signature\": Pocket ID's key changed (on the machine: fairy-agent helper-trust set --fetch-keys).", true
+		return name + " did not accept the approval" + said + ". Nothing was done." + refusedHint(text), true
 	case api.CodeApprovalUnavailable:
 		return name + " cannot check approvals right now" + said + ". Until that is repaired on the machine it refuses fan, power and update " +
 			"requests (on the machine: fairy-agent helper-trust show; on Windows also: is the helper running?).", true
