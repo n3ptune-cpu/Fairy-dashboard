@@ -40,9 +40,9 @@ var confirmLabels = map[string][]string{
 	"POST /api/admin/hosts/{id}/repair":   {"label: `Re-pair ${h.name}${renamed ? \" (node renamed)\" : \"\"}` }, () => api(`${path}/repair`"},
 	"DELETE /api/admin/hosts/{id}":        {"label: `Remove ${h.name}` }, () => api(path, { method: \"DELETE\""},
 	"DELETE /api/admin/enrollments/{id}":  {"label: `Cancel Add host ${cr.name}`, method: \"DELETE\""},
-	"POST /api/admin/wake-update":         {"label: `Update machines that are off: ${n} machine${n === 1 ? \"\" : \"s\"}`, method: \"POST\""},
+	"POST /api/admin/wake-update":         {"label: `Update unpowered hosts: ${n} machine${n === 1 ? \"\" : \"s\"}`, method: \"POST\""},
 	"DELETE /api/admin/wake-update/{id}":  {"label: `Cancel the run (woken machines ${off ? \"are switched off again\" : \"stay on\"})`, method: \"DELETE\""},
-	"PUT /api/systems/{id}/wake-update":   {"const label = `${on ? \"Switch on\" : \"Switch off\"} \"Update machines that are off\" for ${name}`;"},
+	"PUT /api/systems/{id}/wake-update":   {"const label = `${on ? \"Switch on\" : \"Switch off\"} \"Update unpowered hosts\" for ${name}`;"},
 }
 
 // jsonInText finds a value turned into JSON inside a text the page builds (a template literal).
