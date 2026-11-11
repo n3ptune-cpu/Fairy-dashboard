@@ -454,7 +454,8 @@ const subLine = (s) => s.kind === "node"
   ? ["Proxmox node", model(s) || s.cpu_model, s.cores && `${s.cores} cores`, s.mem_total && fmtBytes(s.mem_total)].filter(Boolean).join(" · ")
   : [model(s), s.os, s.cores && `${s.cores} threads`].filter(Boolean).join(" · ");
 // Host list: the UPS that feeds a host as a small sign in the family of the battery's and the helper's: an upright
-// unit (not the laptop battery's lying shape). On mains: quiet, a bolt inside. Running on its battery: amber, its
+// unit (not the laptop battery's lying shape). On mains ("online"): quiet, a bolt inside. Unreachable, off or not
+// known: quiet with "?" inside, never the bolt, which would say "on mains, fine". Running on its battery: amber, its
 // charge as a fill inside and the words "on battery" beside it. Low battery: red, "!" inside and "low battery". These
 // are the chip's states (onBattery, low_battery); the words stay in the alert states so that a host on a UPS that
 // runs on battery is as easy to spot as it was. Name and tooltip: "Powered by UPS <name> · <state> · <charge> ·
@@ -463,18 +464,19 @@ function upsIcon(u) {
   const low = u.status === "low_battery", ch = Number.isFinite(u.battery_charge) ? u.battery_charge : null;
   const h = (ch == null ? 2 : Math.max(1, Math.min(4, Math.ceil(ch / 25)))) * 3;
   return svg(`<rect x="6" y="3" width="12" height="18" rx="1.5"/>${low ? '<path d="M12 8v5M12 16.4v.01"/>'
-    : onBattery(u) ? `<rect x="8.6" y="${18.4 - h}" width="6.8" height="${h}" rx=".5" fill="currentColor" stroke="none"/>` : '<path d="M12.6 7.5 10 12.4h4l-2.6 4.9"/>'}`, 18);
+    : onBattery(u) ? `<rect x="8.6" y="${18.4 - h}" width="6.8" height="${h}" rx=".5" fill="currentColor" stroke="none"/>`
+    : u.status === "online" ? '<path d="M12.6 7.5 10 12.4h4l-2.6 4.9"/>' : '<path d="M10 9.6a2.1 2.1 0 1 1 3.1 1.8c-.7.4-1.1.9-1.1 1.8M12 16.6v.01"/>'}`, 18);
 }
 const upsSigns = (s) => upsOf(s).map((u) => {
   const low = u.status === "low_battery", batt = onBattery(u), state = (Object.hasOwn(UPS_STATUS, u.status) && UPS_STATUS[u.status][1]) || String(u.status ?? "unknown");
   const ch = Number.isFinite(u.battery_charge) ? `${u.battery_charge.toFixed(0)}%` : "", left = u.battery_runtime_s != null ? fmtRuntime(u.battery_runtime_s) : "";
-  const title = [`Powered by UPS ${u.name}`, `${state}${u.stale ? " (stale)" : ""}`, ch, batt && left ? `~${left} left` : ""].filter(Boolean).join(" · ");
+  const title = [`Powered by UPS ${u.name}`, `${state === "unknown" ? "state unknown" : state}${u.stale ? " (stale)" : ""}`, ch, batt && left ? `~${left} left` : ""].filter(Boolean).join(" · ");
   return infoBtn(`ups-${s.id}-${u.id}`, `UPS ${u.name}`, `<div class="list-row"><span>State</span><span>${esc(state)}${u.stale ? " · stale" : ""}</span></div>
     ${ch ? `<div class="list-row"><span>Charge</span><span>${ch}</span></div>` : ""}
     ${left ? `<div class="list-row"><span>Runtime${batt ? " left" : ""}</span><span>${left} <span class="note">mm:ss at current load</span></span></div>` : ""}
     ${u.load_percent != null ? `<div class="list-row"><span>Load</span><span>${u.load_percent.toFixed(0)}%${u.watts != null ? ` · ${upsWatts(u)}` : ""}</span></div>` : ""}
     <p>It powers ${esc(s.name)}. More on the <a href="#/ups">UPS page</a>.</p>`,
-    { cls: `hflag ups ${low ? "bad" : batt ? "warn" : "ok"}`, icon: `${upsIcon(u)}${batt ? `<span>${low ? "low battery" : "on battery"}</span>` : ""}`, label: title });
+    { cls: `hflag ups ${low ? "bad" : batt ? "warn" : u.status === "online" ? "ok" : "na"}`, icon: `${upsIcon(u)}${batt ? `<span>${low ? "low battery" : "on battery"}</span>` : ""}`, label: title });
 }).join("");
 const upsChips = (s) => upsOf(s).map((u) => `<span class="chip ups ${u.status === "low_battery" ? "bad" : onBattery(u) ? "warn" : ""}" title="Powered by ${esc(u.name)}${onBattery(u) ? " · ON BATTERY" : ""}">${I.ups}UPS${onBattery(u) ? " · battery" : ""}</span>`).join("");
 // Laptop battery (agent's `battery` block): a chip in host rows and a box on the detail page.

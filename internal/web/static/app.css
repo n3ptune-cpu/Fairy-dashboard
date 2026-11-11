@@ -358,6 +358,7 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
    The battery: its fill in four steps, a bolt beside it on mains (quiet), amber on battery, red with "!" when low. */
 .info-btn.hflag { margin: -4px 0; border-radius: 0; }
 .info-btn.hflag.ok { color: var(--faint); }
+.info-btn.hflag.na { color: var(--faint); }
 .info-btn.hflag.ok:hover, .info-btn.hflag.ok[aria-expanded="true"] { color: var(--ok); }
 .info-btn.hflag.warn { color: var(--warn); } .info-btn.hflag.bad { color: var(--bad); }
 .info-btn.hflag.warn:hover, .info-btn.hflag.warn[aria-expanded="true"] { background: rgba(245, 184, 75, .14); }

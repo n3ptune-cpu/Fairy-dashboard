@@ -165,7 +165,10 @@ func TestUIInfoButton(t *testing.T) {
 		"{ cls: `hflag ${cls}`, icon: battIcon(b), label: title }",
 		// the host list's UPS: the chip's states (on battery amber, low battery red), with the words in those two states
 		`const low = u.status === "low_battery", batt = onBattery(u), state = (Object.hasOwn(UPS_STATUS, u.status) && UPS_STATUS[u.status][1]) || String(u.status ?? "unknown");`,
-		"{ cls: `hflag ups ${low ? \"bad\" : batt ? \"warn\" : \"ok\"}`, icon: `${upsIcon(u)}${batt ? `<span>${low ? \"low battery\" : \"on battery\"}</span>` : \"\"}`, label: title }",
+		"{ cls: `hflag ups ${low ? \"bad\" : batt ? \"warn\" : u.status === \"online\" ? \"ok\" : \"na\"}`, icon: `${upsIcon(u)}${batt ? `<span>${low ? \"low battery\" : \"on battery\"}</span>` : \"\"}`, label: title }",
+		// the bolt only for "online": unreachable, off and unknown get "?" and say so
+		`: u.status === "online" ? '<path d="M12.6 7.5 10 12.4h4l-2.6 4.9"/>' : '<path d="M10 9.6a2.1 2.1 0 1 1 3.1 1.8c-.7.4-1.1.9-1.1 1.8M12 16.6v.01"/>'`,
+		"`${state === \"unknown\" ? \"state unknown\" : state}${u.stale ? \" (stale)\" : \"\"}`",
 		`<span class="host-tags">${upsSigns(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span>`,
 		`${upsChips(s)}${(s.tags || []).map(`, // the host's own page keeps the chip
 		`<div class="info-t">${esc(about)}</div>${html}`,
