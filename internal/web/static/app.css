@@ -408,6 +408,18 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .stepup-action { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--line2); background: var(--well); margin: 0 0 12px; font-size: 13px; }
 .alert-strip.static { animation: none; }
 .alert-strip code { color: inherit; }
+/* one slim line: something to know, not an alarm (update available) */
+.alert-strip.slim { position: relative; padding: 4px 4px 4px 12px; gap: 2px 10px; font-size: 12.5px; }
+.alert-strip.slim a.push { padding: 2px 4px; opacity: 1; font-weight: 600; }
+.alert-strip.slim a.push:hover { color: #fff; }
+.alert-strip .strip-x { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; background: none; border: 0; color: inherit; opacity: .75; cursor: pointer; }
+.alert-strip .strip-x:hover { opacity: 1; background: rgba(255, 255, 255, .08); }
+.alert-strip.slim a.push:focus-visible, .alert-strip .strip-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; opacity: 1; }
+@media (max-width: 760px) {  /* a phone: the release's name is on the Updates page; the × keeps its corner if the line wraps */
+  .alert-strip.slim { padding-right: 34px; gap: 2px 8px; }
+  .alert-strip.slim .note { display: none; }
+  .alert-strip.slim .strip-x { position: absolute; top: 2px; right: 2px; width: 30px; height: 30px; }
+}
 .alert-strip .btn { padding: 4px 10px; }
 .chip.tok { color: #b8a3ff; border-color: rgba(155, 123, 255, .3); }
 .select { background: var(--well); border: 1px solid var(--line2); color: var(--text); padding: 8px 10px; font: inherit; font-size: 13px; }

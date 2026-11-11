@@ -1210,9 +1210,9 @@ function updBanner() {
   let dismissed = null; try { dismissed = localStorage.getItem(UPD_DISMISS); } catch { /* ignore */ }
   if (dismissed === updKey()) return "";
   const what = [agents ? `${agents} agent${agents === 1 ? "" : "s"}` : "", d.panel_behind ? "panel" : ""].filter(Boolean).join(", ");
-  return `<div class="alert-strip info static" data-key="upd-banner">${I.uparrow}<b>Update available</b><span>${esc(what)}</span>
+  return `<div class="alert-strip info static slim" data-key="upd-banner">${I.uparrow}<b>Update available</b><span>${esc(what)}</span>
     <span class="note">${d.latest?.version ? `Fairy-agent ${esc(buildLabel(d.latest.version))}` : ""}${d.panel_behind ? " · panel: Update panel on the Updates page" : ""}</span>
-    <a class="btn push" href="#/updates">Open Updates</a><button class="btn" type="button" data-act="upd-dismiss">Dismiss</button></div>`;
+    <a class="push" href="#/updates">Open Updates →</a><button class="strip-x" type="button" data-act="upd-dismiss" aria-label="Dismiss" title="Dismiss until the next release">${I.close}</button></div>`;
 }
 
 // ------------------------------------------------------------ Update unpowered hosts (admins, Updates page)
