@@ -360,7 +360,7 @@ function placeInfo() {
   if (!btn) { closeInfo(false); return; }
   const b = btn.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight, edge = 8;
   if (b.bottom < 0 || b.top > innerHeight) { closeInfo(false); return; }  // its button was scrolled out of sight
-  const keep = [...(btn.closest(".panel, .modal-box, .stack")?.querySelectorAll(".info-keep") || [])].map((k) => k.getBoundingClientRect())
+  const keep = [...(btn.closest(".panel, .modal-box, .stack, #page")?.querySelectorAll(".info-keep") || [])].map((k) => k.getBoundingClientRect())
     .filter((r) => r.height && r.bottom > b.top - 4 && r.top < innerHeight);
   const under = keep.length ? Math.max(b.bottom, ...keep.map((r) => r.bottom)) + 6 : 0, fits = (top) => top >= edge && top + h <= innerHeight - edge;
   const below = b.bottom + 6, above = b.top - h - 6;
