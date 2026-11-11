@@ -1995,7 +1995,10 @@ async function openAddHost() {
   const m = $("#modal");
   m.innerHTML = `<form class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="ah-t" id="ah-form">
     <h3 id="ah-t">Add host</h3>
-    <p>Fairy makes a one-time code and one command. Run it on the machine; the panel pairs with it by itself. The machine must be in your Tailscale network.</p>
+    <p class="info-keep">Fairy makes a one-time code and one command to run on the machine. The machine must be in your Tailscale network.${infoBtn("addhost", "Add host", infoList([
+      "Run the command on the machine; the panel then pairs with it by itself.",
+      ...(d.agent_release ? [`It installs Fairy-agent release <code>${esc(d.agent_release)}</code>.`,
+        "The panel checks its install script against the release's signed SHA256SUMS before it shows the command."] : [])]))}</p>
     <div class="form-grid">
       <label class="mfield"><span>Name in Tailscale <b>*</b></span><input class="input" id="ah-name" required maxlength="63" autocomplete="off" spellcheck="false" placeholder="e.g. agent-1"></label>
       <label class="mfield"><span>System</span><select class="select" id="ah-os"><option value="windows">Windows</option><option value="linux">Linux</option></select></label>
@@ -2013,7 +2016,6 @@ async function openAddHost() {
     </div>
     ${d.panel_address ? `<p class="note" id="ah-panel">Panel address: <code>${esc(d.panel_address)}</code> (${esc(d.panel_address_source || "config")})${d.panel_address_via ? ` <span title="how the panel found its own Tailscale address">· ${esc(d.panel_address_via)}</span>` : ""}${d.panel_address.includes(":") ? ' <b>IPv6 only: agents need the panel\'s Tailscale IPv4; set <code>enroll: {panel_address: 100.x.y.z}</code></b>' : ""}</p>`
       : '<div class="warnbox">The panel does not know its own Tailscale address (no Tailscale interface or tailscaled status found): set <code>enroll: {panel_address: 100.x.y.z}</code> in config.yaml.</div>'}
-    ${d.agent_release ? `<p class="note">Installs Fairy-agent release <code>${esc(d.agent_release)}</code>. The panel checks its install script against the release's signed SHA256SUMS before it shows the command.</p>` : ""}
     <div class="error" id="ah-err" role="alert"></div>
     <div class="row-gap end"><button class="btn" type="button" id="ah-cancel">Cancel</button><button class="btn primary" type="submit" id="ah-go">Make the code</button></div></form>`;
   m.hidden = false;
@@ -2066,7 +2068,9 @@ function openEnrollDialog(cr) {
     <div class="cmd-box" id="en-cmd">${esc(cr.command)}</div>
     <div class="row-gap"><button class="btn" type="button" id="en-copy">${I.copy}Copy command</button>
       <span class="note">Join code <span class="code-big">${esc(groupCode(cr.code))}</span> · single use · valid until ${new Date(cr.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
-    <p class="note">It installs Fairy-agent ${cr.release?.tag ? `release <code>${esc(cr.release.tag)}</code>${cr.release.version ? ` (${esc(cr.release.version)})` : ""}` : "(signed release)"}: the command runs the install script only if it is exactly the one the panel checked against the signed SHA256SUMS, and the script checks every file it installs. It writes the agent's settings and waits for the panel. Nothing else on the machine changes. The code is shown only now.</p>
+    <p class="note info-keep">It installs Fairy-agent ${cr.release?.tag ? `release <code>${esc(cr.release.tag)}</code>${cr.release.version ? ` (${esc(cr.release.version)})` : ""}` : "(signed release)"}, writes the agent's settings and waits for the panel. Nothing else on the machine changes. The code is shown only now.${infoBtn("enroll", "The command", infoList([
+      "It runs the install script only if it is exactly the one the panel checked against the signed SHA256SUMS.",
+      "The script checks every file it installs."]))}</p>
     ${cr.warning ? `<div class="note warn" id="en-warn">${esc(cr.warning)}</div>` : ""}
     <div id="en-progress" aria-live="polite">${enrollSteps(cr)}${enrollHint(cr)}<div class="note" id="en-msg">${esc(cr.message)}</div></div>
     <div class="row-gap end"><button class="btn" type="button" id="en-cancel">Cancel Add host</button><button class="btn primary" type="button" id="en-close">Close</button></div></div>`;
