@@ -93,6 +93,7 @@ func AgentMetrics() jsonx.M {
 			"vram_used": float64(300 << 20), "vram_total": float64(4 << 30), "temp_c": 45.0, "power_w": 6.5}},
 		"power": jsonx.M{"cpu_package_w": 9.5, "gpu_w": 6.5, "battery_w": 15.2, "battery_state": "discharging",
 			"bmc_w": nil, "sensors": []any{jsonx.M{"name": "rapl package-0", "watts": 9.5}}, "source": []any{"rapl", "battery"}},
+		// "tuya" on purpose: an agent up to v0.6.0 can still relay such a row, and to the panel the type is text
 		"power_sources": []any{jsonx.M{"id": "desk", "name": "Desk plug", "type": "tuya", "ok": true, "watts": 80.0,
 			"voltage": 230.0, "current": nil, "energy_kwh_total": nil, "system_hint": "self"}},
 		"features": jsonx.M{"processes": true, "cmdline": true, "fan_control": false}}

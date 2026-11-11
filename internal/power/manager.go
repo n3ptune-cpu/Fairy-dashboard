@@ -196,7 +196,7 @@ func (m *Manager) HistoryView(source string) model.PowerHistory {
 	return model.PowerHistory{IntervalS: m.IntervalS, Points: pts}
 }
 
-// Close releases the sources' connections (Tuya keeps one open).
+// Close releases the sources' connections.
 func (m *Manager) Close() {
 	for _, r := range m.Runners {
 		r.Source.Close()

@@ -29,13 +29,13 @@ func TestEffectiveIntervalsOverridesFloorsPause(t *testing.T) {
 	dir := t.TempDir()
 	s := New(filepath.Join(dir, "state.json"), true, c.now)
 	cluster := job("proxmox:a", 2, 1, "node-a", "qemu-1")
-	plug := job("power:tuya", 5, 3, "llm-box")
+	plug := job("power:plug", 5, 3, "llm-box")
 	s.Add(cluster)
 	s.Add(plug)
 	if *s.Effective(cluster) != 2 || *s.Effective(plug) != 5 {
 		t.Fatal("defaults")
 	}
-	_ = s.SetOverride("llm-box", &Override{Seconds: 1}) // below the Tuya floor -> clamped to 3
+	_ = s.SetOverride("llm-box", &Override{Seconds: 1}) // below the plug's floor -> clamped to 3
 	if *s.Effective(plug) != 3 {
 		t.Fatal(*s.Effective(plug))
 	}

@@ -136,7 +136,7 @@ func agentMetrics(id string) (map[string]any, error) {
 			"temps": []any{}, "gpus": []any{map[string]any{"name": "AMD Radeon RX 5600 XT", "vendor": "amd", "source": "amd",
 				"util_percent": r1(wave(40, 2, 68, 1)), "vram_used": int64(wave(60, 0.9, 4.2, 0) * GiB), "vram_total": int64(6 * GiB),
 				"temp_c": r1(wave(40, 38, 71, 1)), "power_w": r1(wave(40, 12, 150, 1))}},
-			"power_sources": []any{map[string]any{"id": "desk-plug", "name": "Bob's Tuya desk plug", "type": "tuya", "ok": true,
+			"power_sources": []any{map[string]any{"id": "desk-plug", "name": "Bob's desk plug", "type": "shelly", "ok": true,
 				"watts": r1(wave(45, 95, 420, 0)), "voltage": 229.8, "current": nil, "energy_kwh_total": nil,
 				"system_hint": "self", "error": nil}}})
 		feat["processes"], feat["cmdline"] = false, false

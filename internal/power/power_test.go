@@ -255,8 +255,16 @@ func TestAgentPowerSourceAndUnknownType(t *testing.T) {
 	if err := powersrc.ValidateConfigs([]map[string]any{{"id": "x", "type": "shelly", "url": "http://a", "bogus": 1}}); err == nil {
 		t.Fatal("unknown keys must be rejected")
 	}
-	if err := powersrc.ValidateConfigs([]map[string]any{{"id": "x", "type": "tuya", "device_id": "d", "ip": "1.2.3.4", "local_key_env": "K", "version": "3.6"}}); err == nil {
-		t.Fatal("bad tuya version accepted")
+	// tuya is no longer a type: a list that was not filtered is refused in those words, and the filtered list
+	// (config.Parse does it for config.yaml) is valid
+	old := []map[string]any{{"id": "x", "type": "tuya", "device_id": "d", "ip": "1.2.3.4", "local_key_env": "K", "version": "3.4"},
+		{"id": "y", "type": "shelly", "url": "http://a"}}
+	if err := powersrc.ValidateConfigs(old); err == nil || !strings.Contains(err.Error(), "type tuya is no longer supported") {
+		t.Fatal("an unfiltered tuya entry:", err)
+	}
+	kept, notes := powersrc.DropRemoved(old)
+	if err := powersrc.ValidateConfigs(kept); err != nil || len(kept) != 1 || len(notes) != 1 {
+		t.Fatal("the filtered list:", err, kept, notes)
 	}
 }
 

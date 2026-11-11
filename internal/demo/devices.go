@@ -24,7 +24,7 @@ func (d *demoPower) Info() power.Base { return d.b }
 
 func (d *demoPower) DefaultInterval() float64 { return 5 }
 
-// behaves like a Tuya plug
+// a plug that should not be asked more often than every 3 s
 func (d *demoPower) FloorInterval() float64 { return 3 }
 
 func (d *demoPower) Read(context.Context, time.Duration) ([]model.PowerReading, error) {

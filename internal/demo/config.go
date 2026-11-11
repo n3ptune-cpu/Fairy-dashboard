@@ -56,8 +56,8 @@ panel_hosts: [node-srv-pvea, lxc-110]
 ups:
   - {id: rack, type: demo, name: "Rack UPS · APC Smart-UPS 1500", powers: [node-srv-pvec, node-srv-pvea, node-srv-pveb]}
 power_sources:
-  - {id: plug-tower, type: demo, name: "Tuya plug · SRV-TOWER", system: srv-tower, base_w: 95, swing_w: 140, period_s: 120}
-  - {id: plug-llm-box, type: demo, name: "Tuya plug · llm-box", system: llm-box, base_w: 190, swing_w: 665, profile: llm}
+  - {id: plug-tower, type: demo, name: "Smart plug · SRV-TOWER", system: srv-tower, base_w: 95, swing_w: 140, period_s: 120}
+  - {id: plug-llm-box, type: demo, name: "Smart plug · llm-box", system: llm-box, base_w: 190, swing_w: 665, profile: llm}
   - {id: ups-rack, type: demo, name: "Rack UPS (NUT)", base_w: 210, swing_w: 60, period_s: 200}
 `
 

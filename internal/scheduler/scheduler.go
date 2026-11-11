@@ -4,7 +4,7 @@
 //   - A job never overlaps itself: if the previous run is still going when it is due, that slot is skipped.
 //   - Per-host overrides (1-300 s or "paused") come from the API and persist in <data_dir>/state.json.
 //   - "Boost while viewing": while someone has a host's page open, its jobs run at 1 s (30 s grace afterwards).
-//   - Each job has a floor (e.g. Redfish/BMC 10 s, Tuya 5 s) that clamps overrides and boosts.
+//   - Each job has a floor (e.g. Redfish/BMC 10 s) that clamps overrides and boosts.
 package scheduler
 
 import (
