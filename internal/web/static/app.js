@@ -413,7 +413,7 @@ const linkedPower = (id) => {
 
 // ------------------------------------------------------------ grouping: hosts by site
 // Every host (Proxmox node or agent) is listed under its site (site: in config.yaml, or set on the Users page);
-// without one, under its owner group, else "Other". A cluster name is only a small tag, for real multi-node clusters.
+// without one, under its owner group, else "Other". A cluster name (real multi-node clusters only) is in the tooltip.
 const nodesOf = () => state.systems.filter((s) => s.kind === "node");
 const isHost = (s) => s.kind === "node" || s.kind === "agent";
 const siteOf = (s) => state.sites[s.id] || s.group || s.owner || "Other";
@@ -422,8 +422,7 @@ const hostsBySite = () => {  // [[site, hosts]], sites A-Z, "Other" last
   state.systems.filter(isHost).forEach((s) => (groups[siteOf(s)] ||= []).push(s));
   return Object.entries(groups).sort(([a], [b]) => (a === "Other") - (b === "Other") || a.localeCompare(b));
 };
-const clusterTag = (s) => (s.kind === "node" && s.cluster && nodesOf().filter((n) => n.cluster_id === s.cluster_id).length > 1
-  ? `<span class="tag" title="Proxmox cluster">${esc(s.cluster)}</span>` : "");
+const clusterName = (s) => (s.kind === "node" && s.cluster && nodesOf().filter((n) => n.cluster_id === s.cluster_id).length > 1 ? s.cluster : "");
 const guestsOf = (node) => state.systems.filter((g) => (g.kind === "qemu" || g.kind === "lxc") && g.parent === node.name && g.cluster_id === node.cluster_id);
 const parentOf = (g) => (g.parent ? nodesOf().find((n) => n.name === g.parent && n.cluster_id === g.cluster_id) : null);
 const guestCount = (s) => {
@@ -593,11 +592,14 @@ const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.ut
 
 // One line per host: what it is made of (model, cores, memory) is on its own page, and here in the name's tooltip.
 // The name never wraps; in a narrow window its chips wrap next to it instead of pushing the table out of its panel.
+// Only chips that say something about now are in the row (UPS, battery, helper stopped, update available); the
+// cluster's name and the agent's version are on the host's page, and in the tooltip.
 function hostRow(s) {
-  const gpus = s.gpus || [], w = watts(s);
-  return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><div class="host-line"><a href="#/system/${enc(s.id)}" title="${esc(subLine(s))}"><span class="host-ico">${hostIcon(s)}</span>
-      <span><span class="dot ${cssName(s.status)}"></span> ${esc(s.name)}</span></a><span class="host-tags">${clusterTag(s)}${upsChips(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id)}</span></div></td>
-    <td class="col-kind">${s.kind === "node" ? `<span class="chip">Proxmox</span>` : `<span class="note">${esc(s.owner || s.group || "–")}</span>`}</td>
+  const gpus = s.gpus || [], w = watts(s), ver = state.me?.can_control && upd.bySys[s.id]?.version;
+  const about = [subLine(s), clusterName(s) && `cluster ${clusterName(s)}`, ver && `fairy-agent ${ver}`].filter(Boolean).join(" · ");
+  return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><div class="host-line"><a href="#/system/${enc(s.id)}" title="${esc(about)}"><span class="host-ico">${hostIcon(s)}</span>
+      <span><span class="dot ${cssName(s.status)}"></span> ${esc(s.name)}</span></a><span class="host-tags">${upsChips(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span></div></td>
+    <td class="col-kind"><span class="note">${esc(s.kind === "node" ? "Proxmox" : s.owner || s.group || "–")}</span></td>
     <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
     <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
     <td class="col-gpu">${live(s) && s.status !== "paused" && gpus.length ? mini("gpu", gpuAvg(s)) + (gpus.length > 1 ? `<span class="note">${gpus.length} GPUs · avg</span>` : "") : ""}</td>
@@ -1132,12 +1134,13 @@ document.addEventListener("click", (e) => {
 });
 
 // ---- version + "update available" arrow (admins only), like Tailscale's machine list
-function verChip(sysId) {
+function verChip(sysId, arrowOnly) {  // arrowOnly (the host list): nothing unless there is an update, then only the arrow
   const r = upd.bySys[sysId];
   if (!r || !state.me?.can_control) return "";
   const stale = !!r.version_last_seen;  // the agent does not answer: no "update available" arrow for what it once reported
   const arrow = (r.behind === true && !stale) || updBusy(r);
-  return `<span class="ver"><span class="chip ${r.behind === true && !stale ? "warn" : ""}" title="${esc(stale ? `fairy-agent ${r.version}, last seen. ${LAST_SEEN_TIP}` : `fairy-agent ${r.version || "?"}`)}">${esc(r.version ? `${buildLabel(r.version)}${stale ? " (last seen)" : ""}` : "agent ?")}</span>${arrow
+  if (arrowOnly && !arrow) return "";
+  return `<span class="ver">${arrowOnly ? "" : `<span class="chip ${r.behind === true && !stale ? "warn" : ""}" title="${esc(stale ? `fairy-agent ${r.version}, last seen. ${LAST_SEEN_TIP}` : `fairy-agent ${r.version || "?"}`)}">${esc(r.version ? `${buildLabel(r.version)}${stale ? " (last seen)" : ""}` : "agent ?")}</span>`}${arrow
     ? `<button class="upd-arrow ${updBusy(r) ? "busy" : ""}" type="button" data-act="upd-pop" data-sys="${esc(sysId)}" aria-haspopup="dialog" aria-expanded="${upd.popSys === sysId}"
       aria-label="${esc(updBusy(r) ? `Update in progress on ${r.name}` : `Update available for ${r.name}`)}" title="${updBusy(r) ? "Update in progress" : "Update available"}">${I.uparrow}</button>` : ""}</span>`;
 }
