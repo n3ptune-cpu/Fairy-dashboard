@@ -884,7 +884,9 @@ function pagePower() {
   const chip = (st) => `<span class="chip ${st === "ok" ? "ok" : st === "stale" ? "warn" : "bad"}">${esc(st)}</span>`;
   return `<div class="panel glass pad power-hero"><div><div class="tile"><div class="label">Total wall power</div></div><div class="big-w">${fmtW(p.total_w)}</div>
     <div class="note">${p.sources.filter((s) => s.include_in_total).length} sources counted · ${state.history.length} samples</div></div>${spark(state.history.map((h) => h.total_w))}</div>
-    <div class="section-title">Sources</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
+    <div class="section-title">Sources${infoBtn("power", "Sources", infoList([
+      "Wall power: what plugs, UPSes and BMCs measure.",
+      "CPU, GPU and battery readings on a system's page are component power reported by its agent, not wall power."]))}</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
     <th class="num">Volts</th><th class="num">Amps</th><th class="num">kWh</th><th>Linked</th><th>Last hour</th></tr></thead><tbody>${p.sources.map((s) => {
       const r = s.readings[0] || {};
       const linked = state.systems.find((x) => x.id === r.system_id);
@@ -892,8 +894,7 @@ function pagePower() {
         <td>${chip(s.status)}${s.error ? `<div class="error">${esc(s.error)}</div>` : ""}</td><td class="num"><b class="value pwr">${fmtW(r.watts)}</b></td>
         <td class="num">${r.voltage?.toFixed(1) ?? "–"}</td><td class="num">${r.current?.toFixed(2) ?? "–"}</td><td class="num">${r.energy_kwh_total?.toFixed(2) ?? "–"}</td>
         <td>${linked ? `<a href="#/system/${enc(linked.id)}">${esc(linked.name)}</a>` : "–"}${s.include_in_total ? "" : ' <span class="chip">not in total</span>'}</td>
-        <td>${spark(state.history.map((h) => h.sources[s.id] ?? null))}</td></tr>`; }).join("")}</tbody></table></div>
-    <p class="note">CPU/GPU/battery readings on system pages are component power reported by the agent, not wall power.</p>`;
+        <td>${spark(state.history.map((h) => h.sources[s.id] ?? null))}</td></tr>`; }).join("")}</tbody></table></div>`;
 }
 
 // ------------------------------------------------------------ UPS page
