@@ -37,6 +37,10 @@ type updateRow struct {
 	// reading of now: the agent does not answer (it is off, or unreachable). After a restart of the panel that
 	// version is the one kept in state.json (poller.LastAgentVersion).
 	VersionLastSeen bool `json:"version_last_seen,omitempty"`
+	// Approval is the state of the machine's own check of approvals (off | required | broken | unknown; ""
+	// for an agent without it): "required" means the Update button asks for a passkey, "broken" that the
+	// machine refuses the update until its trust file is repaired on the machine.
+	Approval string `json:"approval,omitempty"`
 }
 
 type updatesPage struct {
@@ -95,6 +99,9 @@ func (s *Server) updateRow(c *reqCtx, a config.Agent, latest updates.Latest) upd
 	info, seen := s.Poller.AgentInfo(a.ID)
 	if info.Online {
 		r.Status = "online"
+	}
+	if ap := s.Poller.ApprovalOf(a.ID); ap != nil {
+		r.Approval = ap.State
 	}
 	v := info.Version
 	if !seen { // no answer since the panel started: what it said before that, if anything

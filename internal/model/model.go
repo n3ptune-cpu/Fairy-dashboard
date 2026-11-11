@@ -414,6 +414,9 @@ type Me struct {
 	PendingResult *PendingResult `json:"pending_result,omitempty"`
 	// Docs: the panel serves /docs (enable_docs: true). The page shows its "API docs" link only then.
 	Docs bool `json:"docs"`
+	// ApprovalClient: the panel has the Pocket ID client for approvals a machine verifies itself (approval: in
+	// config.yaml). Without it, a machine that requires them cannot be controlled from here.
+	ApprovalClient bool `json:"approval_client"`
 }
 
 // PendingResult is what happened to the action that waited for a step-up sign-in.

@@ -27,6 +27,7 @@ func (s *Server) me(c *reqCtx) error {
 	if me.Sites == nil {
 		me.Sites = []string{}
 	}
+	me.ApprovalClient = s.Cfg.ApprovalOn()
 	if s.DemoUser != nil {
 		me.DemoView = g.String()
 		me.DemoViews = s.demoViews()

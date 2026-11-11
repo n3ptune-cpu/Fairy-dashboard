@@ -781,3 +781,10 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .list-row > span:first-child { max-width: calc(100% - 11ch); }
 .ups-head > div { min-width: 0; }
 .toolbar .select { max-width: min(100%, 260px); text-overflow: ellipsis; }
+
+/* the machine's own check of approvals (host page) */
+.approval h3 { display: flex; align-items: center; gap: 10px; }
+.approval .list-row span:last-child { text-align: right; overflow-wrap: anywhere; }
+.approval code { font-size: 12px; }
+.approval .note { margin: 6px 0; }
+.approval .chip code { color: inherit; }

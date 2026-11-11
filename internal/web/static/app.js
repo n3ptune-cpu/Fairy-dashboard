@@ -240,6 +240,9 @@ let stepUpOpen = null;  // the open dialog: { kept, going } (going: "Continue to
 function showStepUp(pending, detail) {
   state.menu = null; render();
   const kept = !!detail?.pending, perAction = !!detail?.per_action;  // per_action: step_up_per_action is on
+  // approval: a machine this action goes to checks the approval itself (the Pocket ID client "Fairy PC actions")
+  const appr = detail?.approval && typeof detail.approval === "object" ? detail.approval : null;
+  const apprWho = appr ? andList((Array.isArray(appr.machines) ? appr.machines : []).map(String)) || "The machine" : "";
   const newClient = !kept && detail?.not_kept === "new_client";  // this browser / address has not confirmed for the session yet
   if (perAction && !kept && !newClient) { flash(`${pending.label}: cannot be confirmed (the request is too large to keep for the sign-in)`, true); return; }
   if (!kept) { try { sessionStorage.setItem(PENDING_KEY, JSON.stringify({ ...pending, ts: Date.now(), hash: location.hash })); } catch { /* ignore */ } }
@@ -256,13 +259,15 @@ function showStepUp(pending, detail) {
   // An action about a list (the machines of "Update unpowered hosts"): the panel's own line for each one.
   const items = kept && Array.isArray(detail.items) && detail.items.length ? `<ul class="su-items" id="su-items">${detail.items.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
   const m = $("#modal");
-  m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle">
+  m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle"${appr ? " data-approval" : ""}>
     <div class="stepup-ico">${I.shield}</div>
     <h3 id="stitle">Confirm it's you</h3>
-    <p>${perAction ? "This action needs its own Pocket ID sign-in. It confirms only the action below."
+    <p>${appr ? `<b id="su-machine">${esc(apprWho)}</b> will check this itself before it does anything. Pocket ID will ask you to sign in to <b id="su-client">${esc(appr.client || "Fairy PC actions")}</b>. Your passkey confirms only the action below.`
+      : perAction ? "This action needs its own Pocket ID sign-in. It confirms only the action below."
       : `${win !== cfgWin ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${esc(winText)}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtSince(age)}</b> ago.` : ""}`}</p>
     <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}${items}</div>
-    <p class="note" id="su-note">${kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
+    <p class="note" id="su-note">${kept && appr ? "You'll confirm with your passkey at Pocket ID. Right after that, Fairy sends this action with your approval to the machine, once, and shows you the result here. Nothing has been done yet."
+      : kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
       : newClient ? `This browser, or the address it now has, has not confirmed a sign-in for this session yet, so nothing was kept. Sign in again at Pocket ID (passkey) and you come straight back here to finish it${perAction ? "; it then asks once more, for this action alone" : ""}. Nothing has been sent yet.`
       : "You'll sign in again at Pocket ID (passkey) and come straight back here to finish it. Nothing has been sent yet."}</p>
     <div class="row-gap end"><button class="btn" id="su-cancel">Cancel</button>
@@ -681,6 +686,57 @@ function helperPausedLine(s) {
   const btn = h.state === "starting" ? "" : `<button class="btn sm" type="button" data-act="helper" data-action="start" ${canControl() ? "" : `disabled title="${esc(controlWhyNot() || "only admins can start it")}"`}>Start</button>`;
   return `<div class="paused-line"><span>${esc(text)}</span>${btn}</div>`;
 }
+// ---- the machine's own check of approvals (s.approval; absent for agents from before it)
+const APPROVAL_STATE = table({ off: ["", "off"], required: ["ok", "required"], broken: ["bad", "broken"], unknown: ["warn", "unknown"] });
+const APPROVAL_VERB = table({ fan_set: "fan speed", fan_mode: "fan mode", power: "shutdown / restart / sleep", apply_update: "agent update" });
+const approvalOf = (s) => (s?.approval && typeof s.approval === "object" ? s.approval : null);
+const approvalBy = (a) => (a.enforced_by === "helper" ? "the elevated helper (LocalSystem)" : a.enforced_by === "agent" ? "the agent itself" : "–");
+const shortKey = (t) => (typeof t === "string" && t.length > 16 ? `${t.slice(0, 8)}…${t.slice(-6)}` : String(t ?? ""));
+// Host list and Updates page: a small flag only when the check is broken (the machine then refuses control).
+function approvalChip(s) {
+  const a = approvalOf(s);
+  if (!a || a.state !== "broken") return "";
+  return `<span class="chip hchip bad" title="${esc(`This machine's own check of approvals is broken: ${a.error || "no details"}. It refuses fan, power and update requests until that is repaired on the machine.`)}">approval broken</span>`;
+}
+// Host page: what the machine checks itself, who checks, and what it trusts. Everyone who sees the host sees it.
+function approvalBox(s) {
+  const a = approvalOf(s);
+  if (!a) return "";
+  const [cls, label] = APPROVAL_STATE[a.state] || APPROVAL_STATE.unknown;
+  const row = (k, v, title = "") => `<div class="list-row"><span>${k}</span><span${title ? ` title="${esc(title)}"` : ""}>${v}</span></div>`;
+  const head = `<h3>Approval <span class="chip ${cls}" id="ap-state">${esc(label)}</span></h3>`;
+  const proto = a.proto && a.proto !== 1 ? `<div class="note warn">This machine uses version ${esc(a.proto)} of the approval scheme; this panel knows version 1. Update the panel.</div>` : "";
+  const agentErr = a.agent_error ? `<div class="note warn">The agent's own check cannot be used: ${esc(a.agent_error)}</div>` : "";
+  if (a.state === "off") {
+    return `<div class="panel glass pad approval" data-key="approval">${head}
+      <div class="note">This machine does not check approvals itself. Fan, power and update requests are confirmed in the panel only (Confirm it's you) and sent with the panel's control token.</div>
+      ${row("Would be checked by", esc(approvalBy(a)))}${proto}${agentErr}${approvalTurnOn(s, a)}</div>`;
+  }
+  if (a.state === "broken" || a.state === "unknown") {
+    return `<div class="panel glass pad approval ${a.state === "broken" ? "errcard" : ""}" data-key="approval">${head}
+      <div class="${a.state === "broken" ? "warnbox" : "note warn"}" id="ap-error">${a.state === "broken"
+        ? `This machine has a trust file it cannot use${a.error ? `: <b>${esc(a.error)}</b>` : ""}. Until it is repaired <b>on the machine</b> it refuses fan, power and update requests. On the machine, as administrator: <code>fairy-agent helper-trust show</code>`
+        : `The machine cannot say whether it checks approvals${a.error ? `: ${esc(a.error)}` : " (its elevated helper is not answering)"}. Start the helper (Elevated helper, next to the host name).`}</div>
+      ${row("Checked by", esc(approvalBy(a)))}${proto}${agentErr}</div>`;
+  }
+  const keys = (a.keys || []).map((k) => `<span class="chip" title="${esc(`${k.alg} · thumbprint ${k.thumbprint}`)}">${esc(k.kid)} · <code>${esc(shortKey(k.thumbprint))}</code></span>`).join(" ") || "–";
+  const checks = (a.agent_checks || []).map((v) => APPROVAL_VERB[v]).filter(Boolean);
+  return `<div class="panel glass pad approval" data-key="approval">${head}
+    <div class="note">Before this machine changes its fans, shuts down, restarts, sleeps or updates its agent, <b>${esc(approvalBy(a))}</b> verifies a Pocket ID approval (passkey) made for exactly that action. The panel cannot skip it.</div>
+    ${row("Checked by", esc(approvalBy(a)))}
+    ${checks.length ? row("Checked by the agent", esc(andList(checks)), "These requests do not go through the helper on this machine; its agent checks them with the same trust file") : ""}
+    ${row("Pocket ID", esc(a.issuer || "–"))}
+    ${row("Client", `<code>${esc(a.client_id || "–")}</code>`, "The Pocket ID client \"Fairy PC actions\"")}
+    ${row(`Pinned key${(a.keys || []).length === 1 ? "" : "s"}`, keys, "The Pocket ID signing key(s) this machine accepts, by key id and thumbprint")}
+    ${row("Allowed users", esc(a.users ?? "–"), "How many Pocket ID users may approve on this machine")}
+    ${row("Fan window", a.fan_window_s == null ? "–" : a.fan_window_s === 0 ? "off" : `${esc(a.fan_window_s)} s`, "After one approved fan change, more fan changes need no approval for this long")}
+    ${row("Shutdown after boot", a.boot_shutdown_s == null ? "–" : a.boot_shutdown_s === 0 ? "off" : `one within ${esc(a.boot_shutdown_s)} s`, "One shutdown without approval shortly after the machine started (for \"Update unpowered hosts\")")}
+    ${proto}${agentErr}${approvalPinNote(a)}
+    <div class="note" id="ap-locked">Locked: all of this is changed only on the machine, as administrator, with <code>fairy-agent helper-trust</code> (show, set, clear). The panel cannot change or remove it.</div></div>`;
+}
+// Filled in by the Turn on commit: the button for admins on a machine whose check is off.
+function approvalTurnOn() { return ""; }
+function approvalPinNote() { return ""; }
 const statusText = (s) => (s.status === "paused" ? "paused" : s.asleep ? "asleep (from panel)" : s.status);
 // A host that is "offline" (or stale) while its machine took part in the panel's latest poll (s.machine_on says how: it
 // refused the connection, answered with an error, ...). The status word stays; this is its tooltip and its info box.
@@ -806,7 +862,7 @@ function hostRow(s) {
   const gpus = s.gpus || [], w = watts(s), ver = state.me?.can_control && upd.bySys[s.id]?.version;
   const about = [subLine(s), clusterName(s) && `cluster ${clusterName(s)}`, ver && `fairy-agent ${ver}${upd.bySys[s.id].version_last_seen ? " (last seen)" : ""}`].filter(Boolean).join(" · ");
   return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><div class="host-line"><span class="host-ico">${hostIcon(s)}</span><div class="host-main">
-      <div class="host-l1"><a href="#/system/${enc(s.id)}" title="${esc(about)}"><span class="dot ${cssName(s.status)}"></span>${esc(s.name)}</a><span class="host-tags">${upsSigns(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span></div>
+      <div class="host-l1"><a href="#/system/${enc(s.id)}" title="${esc(about)}"><span class="dot ${cssName(s.status)}"></span>${esc(s.name)}</a><span class="host-tags">${upsSigns(s)}${battChip(s)}${helperChip(s)}${approvalChip(s)}${guestCount(s)}${verChip(s.id, true)}</span></div>
       ${model(s) ? `<div class="host-model" title="${esc(modelTitle(s))}">${esc(model(s))}</div>` : ""}</div></div></td>
     <td class="col-kind"><span class="note">${esc(s.kind === "node" ? "Proxmox" : s.owner || s.group || "–")}</span></td>
     <td class="col-cpu" data-l="CPU">${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
@@ -918,7 +974,7 @@ function pageSystem(id, tab) {
   const head = `<div class="detail-head"><div class="dh-title"><span class="dot ${cssName(s.status)}"></span>${osIcon(s, 22)}<h2>${esc(s.name)}</h2>
     <span class="chip ${s.status === "online" ? "ok" : s.status === "stale" ? "warn" : s.status === "offline" ? "bad" : ""}"${s.machine_on ? ` title="${esc(MACHINE_ON)}"` : ""}>${esc(statusText(s))}</span>${s.machine_on
       ? infoBtn("machine-on", "Agent not answering", `<p>${esc(MACHINE_ON)}.</p><p>What shows it: ${esc(s.machine_on)}. Look at the agent on the machine; there is nothing to power on.</p>`, { label: MACHINE_ON }) : ""}
-    ${helperBadge(s, menuOpen === "helper")}</div>
+    ${helperBadge(s, menuOpen === "helper")}${approvalChip(s)}</div>
     <div class="actions">${liveLabel(s)}
       ${s.dwservice_url ? `<a class="btn" href="${safeHref(s.dwservice_url)}" target="_blank" rel="noopener noreferrer">Remote ${I.ext}</a>` : ""}
       <div class="menu-wrap"><button class="btn ${menuOpen === "power" ? "on" : ""}" data-act="menu" data-menu="power" ${hasPower ? "" : "disabled"}
@@ -959,7 +1015,7 @@ function wolBlock(s) {
 
 function systemOverview(s) {
   if (!live(s)) {
-    return `<div class="empty">${s.status === "stopped" ? "Stopped." : s.asleep ? `Asleep (sent to sleep from the panel) · last seen ${ago(s.last_seen)}` : `No data · ${esc(s.error || s.status)} · last seen ${ago(s.last_seen)}`}${wakeBlock(s)}</div>${managedBox(s)}`;
+    return `<div class="empty">${s.status === "stopped" ? "Stopped." : s.asleep ? `Asleep (sent to sleep from the panel) · last seen ${ago(s.last_seen)}` : `No data · ${esc(s.error || s.status)} · last seen ${ago(s.last_seen)}`}${wakeBlock(s)}</div>${approvalBox(s)}${managedBox(s)}`;
   }
   const lp = linkedPower(s.id), cp = s.component_power;
   const res = `<div class="panel glass pad"><h3>Resources</h3>
@@ -997,7 +1053,7 @@ function systemOverview(s) {
   const gs = s.kind === "node" ? guestsOf(s) : [];
   const guests = s.kind === "node" ? `<div class="section-title">Guests on this node <span class="count">${gs.length}</span></div>
     ${gs.length ? guestTable([[null, gs]], false) : '<div class="empty">No VMs or containers on this node.</div>'}` : "";
-  return `<div class="grid2"><div class="stack">${res}${gpuPanel}</div><div class="stack">${batteryBox(s)}${power}${sensors}${managedBox(s)}</div></div>${guests}`;
+  return `<div class="grid2"><div class="stack">${res}${gpuPanel}</div><div class="stack">${batteryBox(s)}${power}${sensors}${approvalBox(s)}${managedBox(s)}</div></div>${guests}`;
 }
 
 let procSort = "cpu";
@@ -1273,7 +1329,8 @@ function pageUpdates() {
     return `<tr class="row" data-key="up-${esc(r.id)}"><td class="namecell"><b title="${esc(r.name)}">${state.byId[r.id] ? `<a href="#/system/${enc(r.id)}">${esc(r.name)}</a>` : esc(r.name)}</b><span class="sub" title="${esc(r.id)}">${esc(r.id)}</span></td>
       <td><span class="chip ${vcls}" title="${esc(r.version || "")}">${esc(cur)}</span>${vnote}</td>
       <td><span class="chip ${r.status === "online" ? "ok" : r.status === "offline" ? "bad" : ""}">${esc(r.status)}</span></td>
-      <td>${r.configured ? updState(r) : '<span class="note">off</span>'}</td>
+      <td>${r.configured ? updState(r) : '<span class="note">off</span>'}${r.approval === "broken" ? '<div><span class="chip bad" title="This machine\'s own check of approvals is broken: it refuses the update until its trust file is repaired on the machine (fairy-agent helper-trust show)">approval broken</span></div>'
+        : r.approval === "required" ? '<div class="note" title="This machine verifies a Pocket ID approval itself: Update asks for your passkey, every time">passkey on the machine</div>' : ""}</td>
       <td class="num"><button class="btn" data-act="upd-one" data-id="${esc(r.id)}" data-name="${esc(r.name)}" ${r.can_update && !why && !busy ? "" : "disabled"}
         title="${esc(why || r.why || `Install the latest release on ${r.name}`)}">${I.update} ${busy ? "Sending…" : "Update"}</button></td></tr>`;
   };

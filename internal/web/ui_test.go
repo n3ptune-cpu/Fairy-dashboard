@@ -169,7 +169,7 @@ func TestUIInfoButton(t *testing.T) {
 		// the bolt only for "online": unreachable, off and unknown get "?" and say so
 		`: u.status === "online" ? '<path d="M12.6 7.5 10 12.4h4l-2.6 4.9"/>' : '<path d="M10 9.6a2.1 2.1 0 1 1 3.1 1.8c-.7.4-1.1.9-1.1 1.8M12 16.6v.01"/>'`,
 		"`${state === \"unknown\" ? \"state unknown\" : state}${u.stale ? \" (stale)\" : \"\"}`",
-		`<span class="host-tags">${upsSigns(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span>`,
+		`<span class="host-tags">${upsSigns(s)}${battChip(s)}${helperChip(s)}${approvalChip(s)}${guestCount(s)}${verChip(s.id, true)}</span>`,
 		`${upsChips(s)}${(s.tags || []).map(`, // the host's own page keeps the chip
 		`<div class="info-t">${esc(about)}</div>${html}`,
 		`<button class="info-x" type="button" aria-label="Close">${I.close}</button>`,
