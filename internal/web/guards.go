@@ -136,6 +136,13 @@ func (c *reqCtx) stepUpWithin(u *model.User, what string, window int) error {
 	} else if *age <= float64(window) {
 		return nil
 	}
+	if c.bodyKept {
+		// A body with more than one reading is refused here, before the request is described, kept and offered
+		// for "Confirm it's you" (T-30, strictStepUpBody). Inside the window decodeBody refuses it.
+		if err := c.strictStepUpBody(c.body); err != nil {
+			return err
+		}
+	}
 	c.audit(u, stepUpAction, c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, stepUpAsked)
 	kept, why := c.keepPending(u)
 	msg := fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d min.", what, max(1, window/60))
