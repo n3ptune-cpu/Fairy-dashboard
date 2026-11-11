@@ -65,8 +65,18 @@ func (s *Server) sessionCheck(sd *sessionData) string {
 }
 
 // endSession removes a session that sessionCheck found expired or orphaned from sessions.json, with everything
-// the panel remembers under its id.
-func (s *Server) endSession(sid string) {
+// the panel remembers under its id; why is what sessionCheck said.
+//
+// A cookie older than session_max_age (sessMaxAge) can never be accepted again: its issue time is signed. So
+// when its session cannot leave sessions.json there is nothing to remember and nothing to log, and there must
+// not be: anybody who kept such a cookie can send it as often as they like, also for an id the panel can not
+// look up because the file is unreadable.
+func (s *Server) endSession(sid, why string) {
+	if why == sessMaxAge {
+		_ = s.Poller.Admin.RemoveSession(sid)
+		s.codec.live.forget(sid)
+		return
+	}
 	_ = s.dropSession(sid, "a session that expired")
 }
 
@@ -76,6 +86,11 @@ func (s *Server) endSession(sid string) {
 // stops working at once, and the error is logged and returned (T-29: it was dropped, and the session stayed
 // valid). What memory cannot do: after a restart the file is read again and such a session is back until it
 // expires, which is why the log line says to look at the file. what names the occasion for the log.
+//
+// Only a session the file lists is ended in memory, and it is logged once. An id that a readable file does
+// not list has nothing to end (its cookie is refused anyway), so it takes no place on the list and writes no
+// log line: the list then holds registered sessions only and cannot be filled with other ids to push an
+// entry out. While the file cannot be read the id is ended, because the panel cannot know.
 func (s *Server) dropSession(sid, what string) error {
 	if sid == "" {
 		return nil
@@ -85,10 +100,15 @@ func (s *Server) dropSession(sid, what string) error {
 		s.codec.live.forget(sid)
 		return nil
 	}
-	s.codec.live.end(sid, s.now())
-	slog.Error("cannot remove "+what+" from sessions.json (disk full? read-only? wrong owner?): it is ended in "+
-		"memory and stays out until the panel restarts. Make the file writable, then run `fairy admin sessions "+
-		"revoke-all` if a cookie may have been copied", "error", err)
+	if listed, ok := s.Poller.Admin.SessionListed(sid); ok && !listed {
+		s.codec.live.forget(sid)
+		return nil
+	}
+	if s.codec.live.end(sid, s.now()) {
+		slog.Error("cannot remove "+what+" from sessions.json (disk full? read-only? wrong owner?): it is ended in "+
+			"memory and stays out until the panel restarts. Make the file writable, then run `fairy admin sessions "+
+			"revoke-all` if a cookie may have been copied", "error", err)
+	}
 	return err
 }
 
@@ -140,11 +160,11 @@ func (c *reqCtx) sessionUser() *model.User {
 		return &u
 	}
 	s := c.session()
-	switch c.s.sessionCheck(s) {
+	switch why := c.s.sessionCheck(s); why {
 	case "":
 	case sessNone:
 		if s.expiredSID != "" { // a genuine cookie older than session_max_age: its session ends like any other
-			c.s.endSession(s.expiredSID)
+			c.s.endSession(s.expiredSID, sessMaxAge)
 			c.clearSession()
 		}
 		return nil
@@ -152,7 +172,7 @@ func (c *reqCtx) sessionUser() *model.User {
 		c.clearSession()
 		return nil
 	default: // too old, idle, or the user is gone
-		c.s.endSession(s.SID)
+		c.s.endSession(s.SID, why)
 		c.clearSession()
 		return nil
 	}

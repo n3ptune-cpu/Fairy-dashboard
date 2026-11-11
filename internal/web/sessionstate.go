@@ -120,17 +120,20 @@ func (l *liveSessions) prune(now time.Time) {
 }
 
 // maxEnded bounds the list of sessions ended in memory only. It grows only while sessions.json cannot be
-// written, by one entry for every sign-out, expiry or step-up in that time.
+// written, by one entry for every sign-out, idle expiry or step-up of a session the file lists (dropSession),
+// and the file lists at most adminstate.MaxSessionsTotal: the bound is a backstop.
 const maxEnded = 4096
 
-// end marks sid as ended although sessions.json still lists it. When the list is full the oldest entry goes.
-func (l *liveSessions) end(sid string, now time.Time) {
+// end marks sid as ended although sessions.json still lists it, and reports whether it was not marked before.
+// When the list is full the oldest entry goes.
+func (l *liveSessions) end(sid string, now time.Time) (first bool) {
 	if sid == "" {
-		return
+		return false
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if _, known := l.ended[sid]; !known && len(l.ended) >= maxEnded {
+	_, known := l.ended[sid]
+	if !known && len(l.ended) >= maxEnded {
 		oldest, at := "", int64(0)
 		for k, t := range l.ended {
 			if oldest == "" || t < at {
@@ -141,6 +144,7 @@ func (l *liveSessions) end(sid string, now time.Time) {
 	}
 	l.ended[sid] = now.Unix()
 	delete(l.m, sid)
+	return !known
 }
 
 // isEnded reports whether sid was ended in memory (end).
@@ -151,11 +155,13 @@ func (l *liveSessions) isEnded(sid string) bool {
 	return ended
 }
 
-// forget drops everything about sid (sign-out, expiry, a new session id).
+// forget drops everything about sid (sign-out, expiry, a new session id), also its place on the list of
+// ended sessions: it is called when sid has left sessions.json or can never be accepted again.
 func (l *liveSessions) forget(sid string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.m, sid)
+	delete(l.ended, sid)
 }
 
 // keepPending makes p the one action waiting for sid's step-up sign-in (an older one is replaced).

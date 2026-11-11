@@ -282,6 +282,17 @@ func (a *State) SessionAccount(sid string) string {
 	return subjectOf(rec)
 }
 
+// SessionListed reports whether sessions.json has an entry for sid, of any generation; ok is false while the
+// file cannot be read, when nothing can be said about sid.
+func (a *State) SessionListed(sid string) (listed, ok bool) {
+	if a.sessions.Err() != nil {
+		return false, false
+	}
+	ss, _ := a.sessions.Get()["sessions"].(map[string]any)
+	_, listed = ss[sid]
+	return listed, true
+}
+
 // RemoveSession forgets one session (logout, idle timeout); its cookie stops working.
 func (a *State) RemoveSession(sid string) error {
 	if sid == "" {

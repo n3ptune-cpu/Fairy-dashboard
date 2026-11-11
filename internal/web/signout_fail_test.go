@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
@@ -172,5 +174,141 @@ func TestASignInThatFailsAtTheUsersFileLeavesNoSessionBehind(t *testing.T) {
 	}
 	if ss := must(e.s.Poller.Admin.ListSessions()); len(ss) != 0 {
 		t.Fatalf("sessions.json after the failed sign-in: %+v", ss)
+	}
+}
+
+// endedCount is how many sessions the panel holds as ended in memory only.
+func (e *env) endedCount() int {
+	l := e.s.codec.live
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.ended)
+}
+
+// T-29, found in review: the list of sessions ended in memory took the id of ANY genuinely signed cookie that
+// was too old, also ids sessions.json does not list, with one ERROR line each. Someone without a role who had
+// kept 4097 old cookies of their own could push a signed-out admin session off the list (4096 entries), and a
+// copy of the admin's cookie worked again. Now an id the file does not list is not put on the list, and a
+// cookie that is too old is not either (it can never be accepted again: its issue time is signed), so only
+// sessions the file still lists get there, and nothing is logged for the rest.
+func TestOldCookiesOfAnotherAccountDoNotBringASignedOutSessionBack(t *testing.T) {
+	e := setup(t)
+	base := time.Now()
+	e.s.codec.now = func() time.Time { return base }
+	bob := model.User{Sub: "u9", Name: model.P("Bob"), Groups: []string{"viewers"}}
+	e.signIn(bob)
+	var old []string // genuinely signed cookies of sessions that are not registered (any more)
+	for range maxEnded + 1 {
+		rec := httptest.NewRecorder()
+		e.s.codec.write(rec, &sessionData{SID: randToken(18), User: &bob, IAT: base.Unix(), Seen: base.Unix()})
+		old = append(old, strings.Split(rec.Header().Get("Set-Cookie"), ";")[0])
+	}
+	// one of bob's too old sessions is still registered, as a real one is for up to 30 days
+	listedOld := e.staleCookie(bob, 0)
+	late := base.Add(time.Duration(e.s.Cfg.SessionMaxAge+3600) * time.Second)
+	e.s.codec.now = func() time.Time { return late } // bob's cookies are too old now
+
+	victim := e.cookie(controller(), 0)
+	if r := e.do("GET", "/api/me", nil, "Cookie", victim); r.code != 200 {
+		t.Fatal(r.code, string(r.raw))
+	}
+	lockSessionsFile(t, e)
+	logged := captureLog(t)
+	if r := e.do("POST", "/auth/logout", nil, "Cookie", victim, "X-Requested-With", "fairy", "Accept", "application/json"); r.code != 503 {
+		t.Fatalf("sign-out: %d", r.code)
+	}
+	e.s.codec.now = func() time.Time { return late.Add(2 * time.Second) } // the other account comes after the sign-out
+	for i, ck := range append(old, listedOld, listedOld, listedOld) {
+		if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 401 {
+			t.Fatalf("old cookie %d: %d", i, r.code)
+		}
+	}
+	log := logged.take()
+	if r := e.do("GET", "/api/me", nil, "Cookie", victim); r.code != 401 {
+		t.Fatalf("the signed-out session works again after %d requests with old cookies of another account: %d", len(old), r.code)
+	}
+	if n := e.endedCount(); n != 1 {
+		t.Fatalf("the list of ended sessions holds %d entries, want only the signed-out one", n)
+	}
+	if n := strings.Count(log, "level=ERROR"); n != 1 {
+		t.Fatalf("%d ERROR lines, want one (the sign-out)", n)
+	}
+}
+
+// What dropSession does with an id while sessions.json cannot be written: an id the file does not list is
+// forgotten without a word; a listed one is ended and logged once, however often it is asked for; and while
+// the file cannot even be read, an id is ended (the panel cannot know that it is not listed).
+func TestDropSessionWhileTheFileCannotBeWritten(t *testing.T) {
+	e := setup(t)
+	a := e.s.Poller.Admin
+	if err := a.AddSession("listed-session-0001", adminstate.NewSession{Sub: "u2"}); err != nil {
+		t.Fatal(err)
+	}
+	lockSessionsFile(t, e)
+	logged := captureLog(t)
+	if err := e.s.dropSession("not-listed-session-1", "a test session"); err != nil || e.endedCount() != 0 {
+		t.Fatalf("an id the file does not list: err %v, %d ended", err, e.endedCount())
+	}
+	for range 3 {
+		if err := e.s.dropSession("listed-session-0001", "a test session"); err == nil {
+			t.Fatal("no error for a listed session that could not be removed")
+		}
+	}
+	log := logged.take()
+	if !e.s.codec.live.isEnded("listed-session-0001") || e.endedCount() != 1 {
+		t.Fatalf("the listed session is not ended in memory (%d ended)", e.endedCount())
+	}
+	if n := strings.Count(log, "level=ERROR"); n != 1 {
+		t.Fatalf("%d ERROR lines for one session, want 1", n)
+	}
+
+	// unreadable: the file is not JSON any more
+	if os.Geteuid() == 0 {
+		_ = os.Chown(a.SessionsPath, 0, 0)
+	} else {
+		_ = os.Chmod(filepath.Dir(a.SessionsPath), 0o700)
+	}
+	if err := os.WriteFile(a.SessionsPath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.s.dropSession("cannot-be-checked-01", "a test session"); err == nil || !e.s.codec.live.isEnded("cannot-be-checked-01") {
+		t.Fatalf("with an unreadable file the id must be ended in memory: err %v", err)
+	}
+}
+
+// A session that was ended in memory leaves the list when it can leave the file after all.
+func TestAnEndedSessionLeavesTheListOnceTheFileIsWritable(t *testing.T) {
+	e := setup(t)
+	a := e.s.Poller.Admin
+	if err := a.AddSession("listed-session-0001", adminstate.NewSession{Sub: "u2"}); err != nil {
+		t.Fatal(err)
+	}
+	p := a.SessionsPath
+	if os.Geteuid() == 0 {
+		if err := os.Chown(p, 65534, 65534); err != nil {
+			t.Skip(err)
+		}
+	} else if err := os.Chmod(filepath.Dir(p), 0o500); err != nil {
+		t.Skip(err)
+	}
+	logged := captureLog(t)
+	err := e.s.dropSession("listed-session-0001", "a test session")
+	_ = logged.take()
+	if os.Geteuid() == 0 {
+		_ = os.Chown(p, 0, 0)
+	} else {
+		_ = os.Chmod(filepath.Dir(p), 0o700)
+	}
+	if err == nil || e.endedCount() != 1 {
+		t.Fatalf("not ended in memory: err %v, %d ended", err, e.endedCount())
+	}
+	if err := e.s.dropSession("listed-session-0001", "a test session"); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.endedCount(); n != 0 {
+		t.Fatalf("%d entries left on the list", n)
+	}
+	if n := len(must(a.ListSessions())); n != 0 {
+		t.Fatalf("sessions.json still lists %d", n)
 	}
 }

@@ -2,6 +2,7 @@ package adminstate
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -26,6 +27,28 @@ func TestSessionValidChecksTheSubject(t *testing.T) {
 	}
 	if a.SessionValid("sid-unknown", "alice", iat) {
 		t.Fatal("an unknown session id is valid")
+	}
+}
+
+// SessionListed says whether the file has an entry for an id, and says "cannot tell" while the file is
+// unreadable (the caller must not take that for "not listed").
+func TestSessionListed(t *testing.T) {
+	a := New(t.TempDir())
+	if err := a.AddSession("sid-of-alice-0001", NewSession{Sub: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if listed, ok := a.SessionListed("sid-of-alice-0001"); !listed || !ok {
+		t.Fatalf("a registered id: listed %v, ok %v", listed, ok)
+	}
+	if listed, ok := a.SessionListed("sid-unknown"); listed || !ok {
+		t.Fatalf("an unknown id: listed %v, ok %v", listed, ok)
+	}
+	if err := os.WriteFile(a.SessionsPath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = a.RemoveSession("sid-unknown") // fails, and reads the file again
+	if listed, ok := a.SessionListed("sid-of-alice-0001"); listed || ok {
+		t.Fatalf("an unreadable file: listed %v, ok %v", listed, ok)
 	}
 }
 
