@@ -163,9 +163,9 @@ func TestUIInfoButton(t *testing.T) {
 		`const cls = battLow(b) ? "bad" : b.state === "discharging" ? "warn" : "ok";`,
 		"const title = [`Battery ${fmtP(b.percent)}`, BATT_STATE[b.state] || b.state, left].filter(Boolean).join(\" · \");",
 		"{ cls: `hflag ${cls}`, icon: battIcon(b), label: title }",
-		// the host list's UPS: the chip's states (on battery amber, low battery red), with the words in those two states
+		// the host list's UPS: the chip's states (on battery amber, low battery red), the glyph alone
 		`const low = u.status === "low_battery", batt = onBattery(u), state = (Object.hasOwn(UPS_STATUS, u.status) && UPS_STATUS[u.status][1]) || String(u.status ?? "unknown");`,
-		"{ cls: `hflag ups ${low ? \"bad\" : batt ? \"warn\" : u.status === \"online\" ? \"ok\" : \"na\"}`, icon: `${upsIcon(u)}${batt ? `<span>${low ? \"low battery\" : \"on battery\"}</span>` : \"\"}`, label: title }",
+		"{ cls: `hflag ups ${low ? \"bad\" : batt ? \"warn\" : u.status === \"online\" ? \"ok\" : \"na\"}`, icon: upsIcon(u), label: title }",
 		// the bolt only for "online": unreachable, off and unknown get "?" and say so
 		`: u.status === "online" ? '<path d="M12.6 7.5 10 12.4h4l-2.6 4.9"/>' : '<path d="M10 9.6a2.1 2.1 0 1 1 3.1 1.8c-.7.4-1.1.9-1.1 1.8M12 16.6v.01"/>'`,
 		"`${state === \"unknown\" ? \"state unknown\" : state}${u.stale ? \" (stale)\" : \"\"}`",

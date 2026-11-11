@@ -454,12 +454,12 @@ const subLine = (s) => s.kind === "node"
   ? ["Proxmox node", model(s) || s.cpu_model, s.cores && `${s.cores} cores`, s.mem_total && fmtBytes(s.mem_total)].filter(Boolean).join(" · ")
   : [model(s), s.os, s.cores && `${s.cores} threads`].filter(Boolean).join(" · ");
 // Host list: the UPS that feeds a host as a small sign in the family of the battery's and the helper's: an upright
-// unit (not the laptop battery's lying shape). On mains ("online"): quiet, a bolt inside. Unreachable, off or not
-// known: quiet with "?" inside, never the bolt, which would say "on mains, fine". Running on its battery: amber, its
-// charge as a fill inside and the words "on battery" beside it. Low battery: red, "!" inside and "low battery". These
-// are the chip's states (onBattery, low_battery); the words stay in the alert states so that a host on a UPS that
-// runs on battery is as easy to spot as it was. Name and tooltip: "Powered by UPS <name> · <state> · <charge> ·
-// <time left>"; a click, Enter or a tap opens the same in the info panel. The host's own page keeps the chip below.
+// unit (not the laptop battery's lying shape), no box and no words. On mains ("online"): quiet, a bolt inside.
+// Unreachable, off or not known: quiet with "?" inside, never the bolt, which would say "on mains, fine". Running on
+// its battery: amber, its charge as a fill inside. Low battery: red, "!" inside. These are the chip's states
+// (onBattery, low_battery). That a UPS runs on battery is also the strip at the top of every page and a
+// notification. Name and tooltip: "Powered by UPS <name> · <state> · <charge> · <time left>"; a click, Enter or a
+// tap opens the same in the info panel. The host's own page keeps the chip below.
 function upsIcon(u) {
   const low = u.status === "low_battery", ch = Number.isFinite(u.battery_charge) ? u.battery_charge : null;
   const h = (ch == null ? 2 : Math.max(1, Math.min(4, Math.ceil(ch / 25)))) * 3;
@@ -476,7 +476,7 @@ const upsSigns = (s) => upsOf(s).map((u) => {
     ${left ? `<div class="list-row"><span>Runtime${batt ? " left" : ""}</span><span>${left} <span class="note">mm:ss at current load</span></span></div>` : ""}
     ${u.load_percent != null ? `<div class="list-row"><span>Load</span><span>${u.load_percent.toFixed(0)}%${u.watts != null ? ` · ${upsWatts(u)}` : ""}</span></div>` : ""}
     <p>It powers ${esc(s.name)}. More on the <a href="#/ups">UPS page</a>.</p>`,
-    { cls: `hflag ups ${low ? "bad" : batt ? "warn" : u.status === "online" ? "ok" : "na"}`, icon: `${upsIcon(u)}${batt ? `<span>${low ? "low battery" : "on battery"}</span>` : ""}`, label: title });
+    { cls: `hflag ups ${low ? "bad" : batt ? "warn" : u.status === "online" ? "ok" : "na"}`, icon: upsIcon(u), label: title });
 }).join("");
 const upsChips = (s) => upsOf(s).map((u) => `<span class="chip ups ${u.status === "low_battery" ? "bad" : onBattery(u) ? "warn" : ""}" title="Powered by ${esc(u.name)}${onBattery(u) ? " · ON BATTERY" : ""}">${I.ups}UPS${onBattery(u) ? " · battery" : ""}</span>`).join("");
 // Laptop battery (agent's `battery` block): a chip in host rows and a box on the detail page.
