@@ -62,7 +62,7 @@ func agentMetrics(id string) (map[string]any, error) {
 	case "alice-laptop":
 		g := gpuRow("NVIDIA GeForce RTX 3050 Laptop GPU", 0, 35, 4, 4, 38, 40, 63, 1.5)
 		set(map[string]any{"hostname": "ALICE-LAPTOP", "uptime_s": int64(3600*5 + t),
-			"platform": map[string]any{"system": "Windows", "pretty": "Windows 11 Home 24H2"},
+			"platform": map[string]any{"system": "Windows", "pretty": "Windows 10 Home 22H2"},
 			"cpu":      map[string]any{"percent": r1(wave(50, 4, 35, 0)), "logical": 12},
 			"memory":   map[string]any{"total": int64(16 * GiB), "used": int64(wave(300, 8, 12, 0) * GiB)},
 			"disks":    []any{map[string]any{"mount": `C:\`, "fstype": "NTFS", "total": int64(512 * GiB), "used": int64(301 * GiB)}},
@@ -140,6 +140,20 @@ func agentMetrics(id string) (map[string]any, error) {
 				"watts": r1(wave(45, 95, 420, 0)), "voltage": 229.8, "current": nil, "energy_kwh_total": nil,
 				"system_hint": "self", "error": nil}}})
 		feat["processes"], feat["cmdline"] = false, false
+	case "backup-box", "bob-htpc": // two small Linux machines: Debian, and a distribution the panel has no mark for
+		pretty, vendor, mdl, cpu, threads, ram, phase := "Debian GNU/Linux 13 (trixie)", "HP", "ProDesk 400 G4 DM", "Intel(R) Core(TM) i5-8500T CPU @ 2.10GHz", 6, 16.0, 2.0
+		if id == "bob-htpc" {
+			pretty, vendor, mdl, cpu, threads, ram, phase = "Pop!_OS 24.04 LTS", "Intel(R) Client Systems", "NUC11PAHi5", "11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz", 8, 32.0, 3.5
+		}
+		set(map[string]any{"hostname": id, "uptime_s": int64(86400*4 + t), "load_avg": []any{r2(wave(120, 0.1, 0.9, phase)), 0.4, 0.3},
+			"platform": map[string]any{"system": "Linux", "pretty": pretty},
+			"cpu":      map[string]any{"percent": r1(wave(65, 2, 18, phase)), "logical": threads},
+			"memory":   map[string]any{"total": int64(ram * GiB), "used": int64(wave(400, 0.2, 0.35, phase) * ram * GiB)},
+			"disks":    []any{map[string]any{"mount": "/", "fstype": "ext4", "total": int64(500 * GiB), "used": int64(143 * GiB)}},
+			"net":      map[string]any{"bytes_recv": counter(id+"/rx", 2e9, wave(50, 1e4, 1e6, phase)), "bytes_sent": counter(id+"/tx", 6e8, wave(50, 1e4, 3e5, phase))},
+			"temps":    []any{temp("coretemp", "Package id 0", r1(wave(60, 36, 52, phase)))}, "gpus": []any{},
+			"hardware": map[string]any{"system_vendor": vendor, "system_model": mdl, "board_vendor": vendor, "board_model": mdl,
+				"bios_version": "1.0", "cpu_model": cpu}})
 	default:
 		if platform, ok := pairedPlatform(id); ok {
 			return pairedMetrics(id, platform), nil

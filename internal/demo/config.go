@@ -31,6 +31,7 @@ agents:
      group: Alice, owner: alice, site: Alice, tags: [laptop], power_control: true, control_token_env: DEMO_CONTROL_TOKEN, self_update: true,
      dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=demo-laptop"}
   - {id: llm-box, name: llm-box, url: "http://100.64.0.12:9101", token_env: DEMO_TOKEN, group: Alice, owner: alice, site: Alice, tags: [llm]}
+  - {id: backup-box, name: backup-box, url: "http://100.64.0.13:9101", token_env: DEMO_TOKEN, group: Alice, owner: alice, site: Alice, tags: [backup]}
   # agent on the SRV-PVEA node itself (matched by node name): adds board model, temps, power control
   - {id: pvea-agent, name: "SRV-PVEA agent", url: "http://100.64.0.5:9101", token_env: DEMO_TOKEN,
      node: SRV-PVEA, power_control: true, wol_relay: true, control_token_env: DEMO_CONTROL_TOKEN, self_update: true}
@@ -42,6 +43,8 @@ agents:
      wol_relay: true, control_token_env: DEMO_CONTROL_TOKEN}
   - {id: bob-laptop, name: "Bob's laptop", url: "http://100.64.0.21:9101", token_env: DEMO_TOKEN,
      group: Bob, owner: bob, site: Bob, tags: [friend, laptop]}
+  - {id: bob-htpc, name: "Bob's HTPC", url: "http://100.64.0.23:9101", token_env: DEMO_TOKEN,
+     group: Bob, owner: bob, site: Bob, tags: [friend]}
 systems:
   - {id: qemu-100, dwservice_url: "https://www.dwservice.net/en/login.html?loginUser=demo-win11"}
   - {id: lxc-101, tags: [games]}
