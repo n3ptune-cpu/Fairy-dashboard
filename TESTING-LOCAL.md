@@ -152,6 +152,15 @@ The line marked **This session** has no button. To end it, use **Sign out** in t
 Stop the panel and start it again: the list starts empty and your open window signs in anew. (A test build
 forgets its sessions at every start, see below.)
 
+## E. Trying the sign-in wallpaper
+
+1. Menu, **Settings**, "Sign-in page": **Upload picture…**, a PNG, JPEG or WebP of at most 8 MiB. The preview shows it.
+2. Menu, **Sign out**: the sign-in page shows the picture over the whole window, the button in a strip at the bottom.
+3. Narrow the window, then make it very wide: the strip stays at the bottom. The page stays until you press the button.
+4. Press **Continue as test-admin (test build)**: you are back in the panel.
+5. Rename `notes.txt` to `notes.png` and upload it: refused ("not a PNG, JPEG or WebP picture"), the old picture stays.
+6. **Remove picture**, Sign out again: the same page on black. Menu, **Audit**, "Settings": both changes are listed.
+
 ## F. Trying wake, update, shut down
 
 "Update machines that are off" (README, the part with that name) wakes machines that are off, updates their
@@ -244,6 +253,7 @@ goes differently for you, send what the page shows and the lines of the `fairy-t
 * **A Proxmox node.** A node that the panel reads through the Proxmox API is switched off only when the
   panel sees no guest that is not stopped; one that the panel knows only through its agent is always left
   on. Neither was tried against a real Proxmox.
+
 
 ## What the test build does NOT prove
 
