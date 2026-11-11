@@ -46,6 +46,9 @@ folder into the r4 folder **before** the first start.
 7. If the VM has fans: change a fan. "Confirm it's you" names the change in words, not in braces. Else skip.
 8. The VM's page, **⋯**, **Set model name**: type a name, **Save**. It is under the host's name on the
    Overview; the ⓘ in the "Model" line of its page says what the host reports. **Clear** brings that back.
+9. **Settings**, "Pop-ups": press **Show a test pop-up**. It shows in the lower right corner for 5 seconds.
+   A real one comes when you shut the VM down **inside Windows** (Start, Shut down) and about two minutes
+   pass: "offline", with the VM's name. Shut down from the panel it is "off" and shows no pop-up.
 
 Every page with made-up data, without any machine: build the plain program and start its demo.
 
