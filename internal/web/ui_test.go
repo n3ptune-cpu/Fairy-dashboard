@@ -163,7 +163,7 @@ func TestUIInfoButton(t *testing.T) {
 		`el.style.left = `, `el.style.top = `, // placed over the page: nothing moves
 		`window.addEventListener("hashchange", () => closeInfo(false));`,
 		// the Updates page uses it three times
-		`infoBtn("upd-agents", "Update", infoList([`, `infoBtn("upd-panel", "Update panel", infoList([`, `infoBtn("wu", "Update machines that are off", infoList([`,
+		`infoBtn("upd-agents", "Update", infoList([`, `infoBtn("upd-panel", "Update panel", infoList([`, `infoBtn("wu", "Update unpowered hosts", infoList([`,
 		// and keeps one sentence for each button on the page
 		`Nothing updates by itself: <b>Update</b> installs the latest signed release on that agent.`,
 		`Update panel installs the latest signed release and restarts the panel.`,
@@ -191,7 +191,7 @@ func TestUIInfoButton(t *testing.T) {
 	}
 }
 
-// "Update machines that are off" on the Updates page: the entry point, the dialog that says in plain words
+// "Update unpowered hosts" on the Updates page: the entry point, the dialog that says in plain words
 // what happens and lists the machines with tick boxes, the request it sends (through the "Confirm it's you"
 // path), the live rows, the report, the cancel dialog and the per-host switch. Everything it shows of a run or
 // a machine (names, the run's sentences, which can quote an agent's own error text) goes through esc().
@@ -201,13 +201,13 @@ func TestUIWakeUpdate(t *testing.T) {
 		`await Promise.all([fetchPanelUpdate(), fetchUpdates(), fetchWakeUpdate()]);`, // loaded with the Updates page, every 2 s
 		`${wakeUpdateBox()}`,
 		`wu.data = await api("/api/admin/wake-update")`,
-		`data-act="wu-open"`, `>${I.onoff}Update machines that are off…</button>`,
+		`data-act="wu-open"`, `>${I.onoff}Update unpowered hosts…</button>`,
 		// the two promises and the limit stay on the page itself (a sentence of the section's paragraphs), not behind the info button
 		`<b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.</p>`,
 		`<p class="note wu-rule">A machine takes part only after you switch it on here, one machine at a time.`,
-		`<h3>Update machines that are off${infoBtn("wu", "Update machines that are off", infoList([`,
+		`<h3>Update unpowered hosts${infoBtn("wu", "Update unpowered hosts", infoList([`,
 		// the dialog
-		`<h3 id="wu-t">Update machines that are off</h3>`,
+		`<h3 id="wu-t">Update unpowered hosts</h3>`,
 		`<li>It sends Wake-on-LAN through the machine named next to it.</li>`,
 		`and it goes on as soon as the machine's agent answers.`, `A machine that does not come online in that time is given up on and reported.`,
 		`It may then still be starting, or be on without its network (Tailscale).`,
@@ -239,13 +239,13 @@ func TestUIWakeUpdate(t *testing.T) {
 		`data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"`,
 		`${wakeUpdateMenu(s)}</div>` + "`;",
 		`api(path, { method: "PUT", body: JSON.stringify(body) }));`,
-		`["wakeupdate", "Update machines that are off"]`, // the Audit page's filter
+		`["wakeupdate", "Update unpowered hosts"]`, // the Audit page's filter
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %q", want)
 		}
 	}
-	start := strings.Index(js, "// ------------------------------------------------------------ Update machines that are off")
+	start := strings.Index(js, "// ------------------------------------------------------------ Update unpowered hosts")
 	end := strings.Index(js, "// ------------------------------------------------------------ users, roles and sites")
 	if start < 0 || end < start {
 		t.Fatal("the section is not where this test looks for it")

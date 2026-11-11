@@ -56,7 +56,7 @@ type pendingAction struct {
 	Body    string
 	Label   string // what the page calls the action (the X-Fairy-Action header of the request)
 	Action  string // what the panel itself says will run (describeAction): shown in the dialog and the audit log
-	// Items: for an action about a list (the machines of an "Update machines that are off" run), the panel's
+	// Items: for an action about a list (the machines of an "Update unpowered hosts" run), the panel's
 	// own line for each entry. Action is cut at maxActionText; the dialog shows these in full.
 	Items  []string
 	At     time.Time
@@ -178,9 +178,9 @@ var actionText = map[string]string{
 	"POST /api/me/sessions/revoke":        "sign out another session of yours",
 	"POST /api/me/sessions/revoke-others": "sign out all your other sessions",
 	"POST /api/admin/sessions/revoke":     "sign out a session",
-	"POST /api/admin/wake-update":         "Update machines that are off",
-	"DELETE /api/admin/wake-update/{id}":  "cancel the run of \"Update machines that are off\"",
-	"PUT /api/systems/{id}/wake-update":   "\"Update machines that are off\" for {id}",
+	"POST /api/admin/wake-update":         "Update unpowered hosts",
+	"DELETE /api/admin/wake-update/{id}":  "cancel the run of \"Update unpowered hosts\"",
+	"PUT /api/systems/{id}/wake-update":   "\"Update unpowered hosts\" for {id}",
 }
 
 // actionDetail is, per route, what the panel adds to the description of a kept request when the request's own

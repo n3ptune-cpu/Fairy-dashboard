@@ -568,7 +568,7 @@ func (a *State) SetPowerDisabled(id string, disabled bool) error {
 	return err
 }
 
-// WakeUpdateEnabled reports whether an admin switched this system on for "Update machines that are off" (off
+// WakeUpdateEnabled reports whether an admin switched this system on for "Update unpowered hosts" (off
 // unless it is listed; always false while state.json is unreadable).
 func (a *State) WakeUpdateEnabled(id string) bool {
 	if a.state.Err() != nil {
@@ -578,7 +578,7 @@ func (a *State) WakeUpdateEnabled(id string) bool {
 	return slices.Contains(l, any(id))
 }
 
-// SetWakeUpdate switches "Update machines that are off" on or off for one system.
+// SetWakeUpdate switches "Update unpowered hosts" on or off for one system.
 func (a *State) SetWakeUpdate(id string, enabled bool) error {
 	_, err := statefile.Update(a.StatePath, func(d statefile.Data) error {
 		cur := map[string]bool{}

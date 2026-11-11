@@ -205,7 +205,7 @@ func TestLoadSecretsRefusesTheExampleAndRepeatedCharacters(t *testing.T) {
 	}
 }
 
-// wake_update: the timings of "Update machines that are off". Left out, the defaults; a value outside its
+// wake_update: the timings of "Update unpowered hosts". Left out, the defaults; a value outside its
 // range stops the panel at start instead of making a run wait for a day or hammer an agent.
 func TestWakeUpdateTimings(t *testing.T) {
 	c, err := Parse([]byte(base))

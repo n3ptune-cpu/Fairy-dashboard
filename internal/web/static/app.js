@@ -182,7 +182,7 @@ function showStepUp(pending, detail) {
   const winText = win % 60 ? `${win} seconds` : `${win / 60} minute${win === 60 ? "" : "s"}`;
   const nextPath = "/" + (location.hash || "#/");
   const runs = kept && typeof detail.action === "string" && detail.action ? `<span class="note">Fairy will run</span><b id="su-runs">${esc(detail.action)}</b>` : "";
-  // An action about a list (the machines of "Update machines that are off"): the panel's own line for each one.
+  // An action about a list (the machines of "Update unpowered hosts"): the panel's own line for each one.
   const items = kept && Array.isArray(detail.items) && detail.items.length ? `<ul class="su-items" id="su-items">${detail.items.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
   const m = $("#modal");
   m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle">
@@ -938,7 +938,7 @@ function pageUps() {
 const audit = { entries: [], next: null, q: "", action: "", host: "", loading: false, error: null };
 const AUDIT_ACTIONS = [["", "All actions"], ["auth", "Sign-in / step-up / denied"], ["power", "Power"], ["helper", "Elevated helper"], ["fan", "Fans"], ["poll", "Polling"],
   ["settings", "Settings"], ["token", "API tokens"], ["control", "Kill switch"], ["host", "Host admin"], ["sessions", "Sessions"],
-  ["user", "Users / roles"], ["site", "Sites"], ["update", "Updates"], ["wakeupdate", "Update machines that are off"]];
+  ["user", "Users / roles"], ["site", "Sites"], ["update", "Updates"], ["wakeupdate", "Update unpowered hosts"]];
 async function loadAudit(reset) {
   if (audit.loading) return;
   audit.loading = true;
@@ -1210,7 +1210,7 @@ function updBanner() {
     <a class="btn push" href="#/updates">Open Updates</a><button class="btn" type="button" data-act="upd-dismiss">Dismiss</button></div>`;
 }
 
-// ------------------------------------------------------------ Update machines that are off (admins, Updates page)
+// ------------------------------------------------------------ Update unpowered hosts (admins, Updates page)
 // For machines that are normally switched off: Fairy wakes the ticked ones, asks their agent to update itself and
 // switches off again the ones this run woke. The run works in the panel (internal/wakerun); this is its
 // dialog, its live progress and its report. Everything shown here that comes from the panel (machine names,
@@ -1273,7 +1273,7 @@ function wuRunBox(r, live) {
 }
 function wakeUpdateBox() {
   const d = wu.data;
-  if (!d) return wu.error ? `<div class="panel glass pad wu"><h3>Update machines that are off</h3><div class="error">${esc(wu.error)}</div></div>` : "";
+  if (!d) return wu.error ? `<div class="panel glass pad wu"><h3>Update unpowered hosts</h3><div class="error">${esc(wu.error)}</div></div>` : "";
   const why = controlWhyNot(), joined = d.hosts.filter((h) => h.opted_in), can = joined.filter((h) => h.choice);
   const able = d.hosts.filter((h) => h.can_join || h.opted_in);
   const row = (h) => `<tr class="row" data-key="wum-${esc(h.id)}"><td class="namecell"><b>${state.byId[h.id] ? `<a href="#/system/${enc(h.id)}">${esc(h.name)}</a>` : esc(h.name)}</b></td>
@@ -1284,7 +1284,7 @@ function wakeUpdateBox() {
       ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
   const earlier = d.active ? d.last : d.last.slice(1), showEarlier = !!wu.open.earlier;
   return `<div class="panel glass pad wu" data-key="wu">
-    <div class="wu-top"><h3>Update machines that are off${infoBtn("wu", "Update machines that are off", infoList([
+    <div class="wu-top"><h3>Update unpowered hosts${infoBtn("wu", "Update unpowered hosts", infoList([
         "For machines that are normally switched off. You choose them and confirm once.",
         `Fairy wakes each one (Wake-on-LAN) and waits up to ${esc(fmtSpan(d.settings.online_timeout_s))} for it to come online.`,
         "It updates the machine's agent, like the Update button does.",
@@ -1295,7 +1295,7 @@ function wakeUpdateBox() {
         "API tokens cannot start a run.",
         "After a restart of the panel a run is not continued: this page then says which machines it had woken."]))}</h3>
       <button class="btn primary" type="button" data-act="wu-open" ${!why && !d.active && !d.problem ? "" : "disabled"}
-        title="${esc(why || (d.active ? "A run is going: one run at a time" : d.problem || "Choose the machines and start a run"))}">${I.onoff}Update machines that are off…</button></div>
+        title="${esc(why || (d.active ? "A run is going: one run at a time" : d.problem || "Choose the machines and start a run"))}">${I.onoff}Update unpowered hosts…</button></div>
     <p class="note">Wakes the machines you choose, updates their agent and switches them off again.
       <b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.</p>
     ${d.problem ? `<div class="warnbox">${esc(d.problem)}</div>` : ""}
@@ -1313,7 +1313,7 @@ function wakeUpdateMenu(s) {
   const h = (wu.data?.hosts || []).find((x) => x.id === s.id);
   if (!h || !state.me?.can_control) return "";
   const why = controlWhyNot();
-  return `<div class="menu-sep"></div><div class="menu-title">Update machines that are off</div>
+  return `<div class="menu-sep"></div><div class="menu-title">Update unpowered hosts</div>
     <button class="menu-item ${h.opted_in ? "on" : ""}" type="button" data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"
       ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""}>${h.opted_in ? "Switched on for this machine" : "Switch on for this machine"}<span class="note">${h.opted_in ? "click: off" : "off"}</span></button>
     <div class="menu-note">${!h.can_join ? `Not possible: ${esc(h.why_not)}.` : h.can_wake ? `In a run you start on the Updates page, Fairy may wake it (via ${esc(h.relay)}), update its agent and switch it off again.`
@@ -1333,7 +1333,7 @@ async function openWakeUpdate() {
     <span class="note">${kind === "wake" ? `woken by ${esc(h.relay)}` : "is on"}${h.version ? ` · runs ${esc(buildLabel(h.version))}` : ""}${h.behind === false ? " · already on the newest release" : ""}</span></span></label>`;
   const m = $("#modal");
   m.innerHTML = `<form class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="wu-t" id="wu-form">
-    <h3 id="wu-t">Update machines that are off</h3>
+    <h3 id="wu-t">Update unpowered hosts</h3>
     <p>What Fairy does with each ticked machine that is off, by itself, one step after the other:</p>
     <ol class="dlg-list" id="wu-what">
       <li>It sends Wake-on-LAN through the machine named next to it.</li>
@@ -1374,7 +1374,7 @@ async function openWakeUpdate() {
     const n = body.hosts.length + body.update_only.length, path = "/api/admin/wake-update";
     $("#wu-go").disabled = true;
     try {
-      const r = await controlCall({ kind: "request", label: `Update machines that are off: ${n} machine${n === 1 ? "" : "s"}`, method: "POST", path, body },
+      const r = await controlCall({ kind: "request", label: `Update unpowered hosts: ${n} machine${n === 1 ? "" : "s"}`, method: "POST", path, body },
         () => api(path, { method: "POST", body: JSON.stringify(body) }));
       if (r === null) return;  // "Confirm it's you" took the dialog's place: the run starts after the sign-in
       closeModal(); flash(r.message || "Run started");
@@ -1414,8 +1414,8 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.act === "wu-cancel") { openWakeCancel(t.dataset.id); return; }
   if (t.dataset.act === "wu-log") { const k = t.dataset.k; if (wu.open[k]) delete wu.open[k]; else wu.open[k] = true; render(); return; }
   const on = t.dataset.on === "1", name = t.dataset.name, path = `/api/systems/${enc(t.dataset.id)}/wake-update`, body = { enabled: on };
-  if (on && !confirm(`Switch "Update machines that are off" on for ${name}? In a run that you start on the Updates page, Fairy may then wake this machine, update its agent and switch it off again.`)) return;
-  const label = `${on ? "Switch on" : "Switch off"} "Update machines that are off" for ${name}`;
+  if (on && !confirm(`Switch "Update unpowered hosts" on for ${name}? In a run that you start on the Updates page, Fairy may then wake this machine, update its agent and switch it off again.`)) return;
+  const label = `${on ? "Switch on" : "Switch off"} "Update unpowered hosts" for ${name}`;
   try {
     const r = await controlCall({ kind: "request", label, method: "PUT", path, body }, () => api(path, { method: "PUT", body: JSON.stringify(body) }));
     if (r) flash(r.message || `${label}: done`);
@@ -1708,7 +1708,7 @@ document.addEventListener("click", async (e) => {
     state.menu = state.menu?.kind === kind && state.menu.id === s.id ? null : { id: s.id, kind };
     render();
     if (state.menu && kind !== "helper") (kind === "poll" ? refreshPoll : refreshCaps)(s.id);
-    if (state.menu && kind === "poll") fetchWakeUpdate();  // the menu also holds the "Update machines that are off" switch
+    if (state.menu && kind === "poll") fetchWakeUpdate();  // the menu also holds the "Update unpowered hosts" switch
   } else if (act === "poll" && s) {
     const v = t.dataset.v, body = { interval_s: v === "paused" || v === "default" ? v : +v };
     const label = `Polling for ${s.name}: ${v === "default" ? "back to default" : v === "paused" ? "paused" : `${v}s`}`;

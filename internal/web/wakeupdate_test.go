@@ -21,7 +21,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
 )
 
-// "Update machines that are off" through the real routes, the real poller and powerctl, against the test
+// "Update unpowered hosts" through the real routes, the real poller and powerctl, against the test
 // backend. The run's own logic is tested in internal/wakerun; here: who may start one, what "Confirm it's you"
 // is bound to, what reaches the agents, the audit log and the notifications, and the restart.
 
@@ -326,7 +326,7 @@ func TestWakeUpdateSwitch(t *testing.T) {
 	}
 	r := put("pc-a", true)
 	d, _ := r.body["detail"].(map[string]any)
-	if !stepUpRequired(r) || d["action"] != `"Update machines that are off" for pc-a (switch it on: a run you start may then wake, update and switch off this machine)` {
+	if !stepUpRequired(r) || d["action"] != `"Update unpowered hosts" for pc-a (switch it on: a run you start may then wake, update and switch off this machine)` {
 		t.Fatalf("an old sign-in: %d %s", r.code, r.raw)
 	}
 	if e.s.Poller.Admin.WakeUpdateEnabled("pc-a") {
@@ -494,7 +494,7 @@ func TestWakeUpdateStartAlwaysAsksAndIsBoundToItsList(t *testing.T) {
 	r := e.wuStart(a.sess, bodyA, "X-Fairy-Action", "Update%20everything%20everywhere")
 	d, _ := r.body["detail"].(map[string]any)
 	hashA := wakerun.ListHash([]string{"pc-a"}, []string{"laptop"}, true)
-	wantAction := "Update machines that are off (2 machines, list " + hashA + ": wake, update and switch off again: PC-A; update only: laptop)"
+	wantAction := "Update unpowered hosts (2 machines, list " + hashA + ": wake, update and switch off again: PC-A; update only: laptop)"
 	if !stepUpRequired(r) || d["per_action"] != true || d["pending"] != true || d["action"] != wantAction {
 		t.Fatalf("inside the window it must still ask, with the panel's description: %d %s", r.code, r.raw)
 	}
@@ -736,7 +736,7 @@ func TestWakeUpdateCancelRoute(t *testing.T) {
 	stale := e.staleCookie(controller(), time.Hour)
 	r := del(run.ID, stale, map[string]any{"switch_off": true})
 	d, _ := r.body["detail"].(map[string]any)
-	if !stepUpRequired(r) || d["action"] != `cancel the run of "Update machines that are off" (the machines it has woken are switched off again)` {
+	if !stepUpRequired(r) || d["action"] != `cancel the run of "Update unpowered hosts" (the machines it has woken are switched off again)` {
 		t.Fatalf("an old sign-in: %d %s", r.code, r.raw)
 	}
 	if a, _ := e.s.WakeRuns.Snapshot(); a == nil || a.Cancel != nil {
@@ -949,7 +949,7 @@ func TestPanelUpdateWaitsForARun(t *testing.T) {
 	post := func() resp {
 		return e.do("POST", "/api/admin/panel-update", map[string]any{}, "Cookie", admin, "X-Requested-With", "fairy")
 	}
-	if r := post(); r.code != 409 || runner.starts != 0 || !strings.Contains(fmt.Sprint(r.body["detail"]), `"Update machines that are off" is running (started by Alice)`) {
+	if r := post(); r.code != 409 || runner.starts != 0 || !strings.Contains(fmt.Sprint(r.body["detail"]), `"Update unpowered hosts" is running (started by Alice)`) {
 		t.Fatalf("while a run is going: %d %s", r.code, r.raw)
 	}
 	if _, err := e.s.WakeRuns.CancelRun(run.ID, "Alice", false); err != nil {

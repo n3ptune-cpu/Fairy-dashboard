@@ -80,7 +80,7 @@ type Server struct {
 	// Notifications page: the events and the watcher that makes them from the poller's snapshots.
 	Notes *notifications.Store
 	Watch *notifications.Watcher
-	// WakeRuns runs "Update machines that are off" (Updates page): one run at a time, in the background.
+	// WakeRuns runs "Update unpowered hosts" (Updates page): one run at a time, in the background.
 	WakeRuns *wakerun.Manager
 
 	seenMu  sync.Mutex

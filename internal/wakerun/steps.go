@@ -40,7 +40,7 @@ func (m *Manager) stepHost(ctx context.Context, r *Run, h *Host, now time.Time) 
 		return
 	}
 	if !info.OptedIn {
-		m.endAsIs(r, h, now, "It was switched off for \"Update machines that are off\" during the run, so the run let go of it")
+		m.endAsIs(r, h, now, "It was switched off for \"Update unpowered hosts\" during the run, so the run let go of it")
 		return
 	}
 	if r.Cancel != nil && !m.cancelled(ctx, r, h, now) {

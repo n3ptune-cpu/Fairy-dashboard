@@ -209,7 +209,7 @@ manual install per machine) is in Fairy-agent's
   * "the previous version was put back and started again, but ...": the old program was put back and started,
     but its check could not be completed. Look at the machine; it is very likely running the old version.
   * "rolling back FAILED too": the agent may be down. Look at the machine.
-* Machines that are normally off: [Update machines that are off](#update-machines-that-are-off) wakes them,
+* Machines that are normally off: [Update unpowered hosts](#update-unpowered-hosts) wakes them,
   updates their agent and switches them off again.
 * The latest releases are looked up on GitHub at most every 10 minutes, in the background and only while an
   admin uses the panel; `updates: {check_latest: false}` switches that off on a panel without internet access.
@@ -222,10 +222,10 @@ manual install per machine) is in Fairy-agent's
   older agent back on a machine at Re-pair; the Re-pair dialog warns when the machine runs a newer agent than
   the command installs. So: update the agents, then the panel, then Re-pair.
 
-### Update machines that are off
+### Update unpowered hosts
 
 For machines that are normally switched off: a PC that is only on while someone uses it, a Proxmox node
-whose guests do not start by themselves. **Update machines that are off…** on the Updates page (admins)
+whose guests do not start by themselves. **Update unpowered hosts…** on the Updates page (admins)
 starts a **run**: you tick the machines, confirm once, and the panel does by itself what you would do by hand.
 For each ticked machine that is off:
 
@@ -746,12 +746,12 @@ memory limit. Add it once:
 13. **Sessions** is new in the menu: where you are signed in, and Sign out for the other places. Signing
     another session out asks "Confirm it's you" every time. Sessions that were open before the update are
     listed with "Unknown browser" until they are used again. See [Sessions](#sessions).
-14. **Update machines that are off** is new on the Updates page: it wakes machines that are normally off,
+14. **Update unpowered hosts** is new on the Updates page: it wakes machines that are normally off,
     updates their agent and switches them off again. Nothing happens until an admin switches a machine on
     for it and starts a run; a script with an API token can do neither. A machine counts as off for a run
     only after 15 minutes without an answer, counted by the panel since its own start: for the first 15
     minutes after this update's restart no machine is offered as off. See
-    [Update machines that are off](#update-machines-that-are-off).
+    [Update unpowered hosts](#update-unpowered-hosts).
 
 Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
 `managed-hosts.yaml`, and `sessions.json`, where it ignores what this one adds). It does not start when config.yaml has `enroll: {allow_non_tailscale: ...}`,
@@ -822,7 +822,7 @@ session settings as whole seconds).
   page shows of a browser is the client's own text (User-Agent, cut to 256 bytes, control characters removed)
   and is escaped; the address is taken as everywhere else (`trusted_proxies`). The audit log has every
   sign-out with who, whose session and from which address, and never a session id or cookie.
-* "Update machines that are off" (`/api/admin/wake-update`, `internal/wakerun`): a run sends only what an
+* "Update unpowered hosts" (`/api/admin/wake-update`, `internal/wakerun`): a run sends only what an
   admin can already send by hand, through the same code and the same checks (wake through a relay, the
   agent's own update, the delayed shutdown, its cancel); there is no new agent request and nothing is run on
   a machine. Starting a run always needs its own "Confirm it's you", also inside `step_up_window_s`, and the
@@ -838,7 +838,7 @@ session settings as whole seconds).
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never
   accepted on `/auth/*`, the settings endpoints or the Users page, nor (they cannot "confirm it's you") for
   stopping / starting the elevated helper, Add host, Re-pair, Remove, cancelling a waiting Add host, and for
-  "Update machines that are off" (starting a run, cancelling it, switching a machine on or off for it), which need a browser sign-in. Otherwise `control` acts as an admin; `read` sees every
+  "Update unpowered hosts" (starting a run, cancelling it, switching a machine on or off for it), which need a browser sign-in. Otherwise `control` acts as an admin; `read` sees every
   site, or only `--sites A,B`. A token owned by a panel user is capped to that user's current role and sites; a token whose owner is not
   (or no longer) in `users.json` has no access. Only `--owner system` tokens keep their own scope.
 * Writes: admin role (or control-scope token), CSRF header `X-Requested-With: fairy` + Origin /
@@ -934,18 +934,18 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | Folder | What it does |
 | --- | --- |
 | `cmd/fairy` | The `fairy` program: `main.go` picks the sub-command, `serve.go` starts the panel (or demo mode), `update.go` is `fairy update`. |
-| `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`, the Sessions page's in `api_sessions.go`, "Update machines that are off" in `api_wakeupdate.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
+| `internal/web` | HTTP server: security headers, Pocket ID login (`auth.go`, `oidc.go`, `policy.go`), signed session cookies (`session.go`), who may see and do what (`grant.go`), what each user sees (`view.go`: every response and the stream are filtered here), API endpoints (`api_*.go`, the Users page's in `api_users.go`, the Sessions page's in `api_sessions.go`, "Update unpowered hosts" in `api_wakeupdate.go`), the checks in front of every control action and admin change (`guards.go`), live updates (`stream.go`), API docs (`docs.go`), demo preview (`demo.go`) and the embedded UI (`static/`). |
 | `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster and all-hosts totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |
 | `internal/scheduler` | Runs each source as a job at its own interval: overrides, pause, boost while viewing, never overlapping. |
 | `internal/normalise` | Turns raw Proxmox and agent data into the one "system" shape the UI uses. |
 | `internal/power` | Wall power on the panel: retry/backoff per source (`runner.go`), totals and history (`manager.go`), devices reported by agents (`remote.go`), and the `type: agent` component-power metrics (`agentpower.go`). The device types themselves are Fairy-agent's `pkg/power`. |
 | `internal/ups` | UPSes on the panel: state and history (`ups.go`), on-battery / restored events (`events.go`). The NUT sources are Fairy-agent's `pkg/ups`. |
 | `internal/powerctl` | Which power actions a system offers (and why not) and carrying them out: agent, Proxmox API or Wake-on-LAN. |
-| `internal/wakerun` | "Update machines that are off": the run as a state machine per machine (`wakerun.go`, `steps.go`), the one place that decides a shutdown (`shutdown.go`), pacing below the agents' limit (`pacer.go`) and the journal `wake-update.json` (`journal.go`). It knows no HTTP: the web package gives it the panel's wake, update and power calls. |
+| `internal/wakerun` | "Update unpowered hosts": the run as a state machine per machine (`wakerun.go`, `steps.go`), the one place that decides a shutdown (`shutdown.go`), pacing below the agents' limit (`pacer.go`) and the journal `wake-update.json` (`journal.go`). It knows no HTTP: the web package gives it the panel's wake, update and power calls. |
 | `internal/config` | Reads and checks `config.yaml` (`config.go`, `validate.go`) and secrets from `fairy.env` / the environment (`env.go`). |
 | `internal/admin` | The break-glass CLI `fairy admin`: one file per command (users and sites, tokens, sessions, control, audit, config check, health). |
 | `internal/access` | `users.json`: users (by OIDC subject) with a role and sites, the list of sites, and which site each host / power source / UPS is assigned to. |
-| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update machines that are off", the session list. |
+| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the session list. |
 | `internal/statefile` | Safe shared JSON files (state, sessions, tokens, users): lock, re-read, write to a temp file, rename (so CLI and server never lose changes). |
 | `internal/tokens` | Personal API tokens (`fy_...`), stored only as hashes in `tokens.json`. |
 | `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |

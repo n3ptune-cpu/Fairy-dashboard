@@ -98,7 +98,7 @@ agents:
 #                                         # (100.64.0.0/10, fd7a:115c:a1e0::/48): there nobody outside the machine
 #                                         # can listen in or answer in its place. true = also over other networks
 
-# "Update machines that are off" (Updates page): Fairy wakes the ticked machines, updates their agent and
+# "Update unpowered hosts" (Updates page): Fairy wakes the ticked machines, updates their agent and
 # switches off again the ones this run woke. A machine takes part only after an admin switched it on for this in
 # the panel (the Updates page, or the "..." menu on its page); that is not set in this file. A machine counts as
 # off only after 15 minutes without an answer (one that restarts is silent for less); that time is fixed, not a

@@ -132,7 +132,7 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	} else if !e.s.Enroll.Cancel(r.body["id"].(string)) {
 		t.Fatal("cancel")
 	}
-	// the machine is switched on for "Update machines that are off": Remove takes that away with it
+	// the machine is switched on for "Update unpowered hosts": Remove takes that away with it
 	if err := e.s.Poller.Admin.SetWakeUpdate("srv-winpc", true); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	}
 }
 
-// Remove host and "Update machines that are off" (review finding W5). A host's id is made from its name. The
+// Remove host and "Update unpowered hosts" (review finding W5). A host's id is made from its name. The
 // per-machine switch stayed on in state.json when the host was removed, so another machine added later under
 // the same name took part in runs without anybody having switched it on. Now Remove switches it off, the
 // audit log says so, and a host added again under that name starts off.

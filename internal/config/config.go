@@ -239,8 +239,8 @@ type Enroll struct {
 	AllowNonTailscale bool `yaml:"allow_non_tailscale"`
 }
 
-// WakeUpdate is the `wake_update:` block: the timings of "Update machines that are off" (Updates page; README:
-// "Update machines that are off"). Which machines take part is not set here: each one is switched on for it in the
+// WakeUpdate is the `wake_update:` block: the timings of "Update unpowered hosts" (Updates page; README:
+// "Update unpowered hosts"). Which machines take part is not set here: each one is switched on for it in the
 // panel (state.json), by an admin, behind "Confirm it's you".
 type WakeUpdate struct {
 	// OnlineTimeoutS: a machine the run woke is given up on when its agent has not answered by then (default
@@ -311,7 +311,7 @@ type Panel struct {
 	Branding        Branding `yaml:"branding"`
 	Updates         Updates  `yaml:"updates"`
 	Enroll          Enroll   `yaml:"enroll"`
-	// WakeUpdate: the timings of "Update machines that are off" (all optional).
+	// WakeUpdate: the timings of "Update unpowered hosts" (all optional).
 	WakeUpdate WakeUpdate `yaml:"wake_update"`
 
 	trusted []netip.Prefix

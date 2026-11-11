@@ -19,7 +19,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
 )
 
-// "Update machines that are off" (Updates page; README: "Wake, update, shut down"). The run itself is
+// "Update unpowered hosts" (Updates page; README: "Wake, update, shut down"). The run itself is
 // internal/wakerun; this file is its doors and its eyes:
 //
 //   - GET    /api/admin/wake-update          admins: which machines can take part and why not, the run that is
@@ -423,7 +423,7 @@ func (s *Server) wakeUpdatePageData() wakeUpdatePage {
 }
 
 func (s *Server) wakeUpdateGet(c *reqCtx) error {
-	if _, err := c.requireAdmin("\"Update machines that are off\""); err != nil {
+	if _, err := c.requireAdmin("\"Update unpowered hosts\""); err != nil {
 		return err
 	}
 	c.json(200, s.wakeUpdatePageData())
@@ -464,7 +464,7 @@ func (s *Server) wuCheck(b wuStartBody) (map[string]wuHost, error) {
 		case !h.CanJoin:
 			return nil, apierr.New(400, h.Name+" cannot take part: "+h.WhyNot)
 		case !h.OptedIn:
-			return nil, apierr.New(400, h.Name+" is not switched on for \"Update machines that are off\"")
+			return nil, apierr.New(400, h.Name+" is not switched on for \"Update unpowered hosts\"")
 		case i < len(b.Hosts) && !h.CanWake:
 			return nil, apierr.New(400, h.Name+" cannot be woken and switched off again: "+h.NoWake)
 		}
@@ -585,7 +585,7 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 }
 
 // wuNoteHost is what the run's notifications are filed under.
-const wuNoteHost = "Update machines that are off"
+const wuNoteHost = "Update unpowered hosts"
 
 func (s *Server) wakeUpdateCancel(c *reqCtx) error {
 	if _, err := c.requireUser(); err != nil {
@@ -669,9 +669,9 @@ func (s *Server) wakeUpdateSwitch(c *reqCtx) error {
 	}
 	c.audit(u, "wakeupdate.switch", id, map[string]any{"enabled": *b.Enabled}, "ok")
 	h, _ = s.wuHostOf(x)
-	msg := x.Name + " is no longer part of \"Update machines that are off\""
+	msg := x.Name + " is no longer part of \"Update unpowered hosts\""
 	if *b.Enabled {
-		msg = x.Name + " can now be chosen for \"Update machines that are off\""
+		msg = x.Name + " can now be chosen for \"Update unpowered hosts\""
 		if !h.CanWake {
 			msg += " (only to be updated while it is on: " + h.NoWake + ")"
 		}

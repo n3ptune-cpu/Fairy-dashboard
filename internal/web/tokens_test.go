@@ -8,8 +8,8 @@ import (
 )
 
 // L3: an API token skips the step-up prompt, so the most sensitive control actions refuse tokens altogether:
-// helper stop / start, Add host, Re-pair, Remove, cancelling a waiting Add host (NEW-3), and "Update machines
-// that are off" (starting a run, cancelling it, the per-host switch). Everything else a control token could
+// helper stop / start, Add host, Re-pair, Remove, cancelling a waiting Add host (NEW-3), and "Update unpowered
+// hosts" (starting a run, cancelling it, the per-host switch). Everything else a control token could
 // do, it still can.
 func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 	e := setup(t)
@@ -36,7 +36,7 @@ func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 		{"POST", "/api/admin/hosts/srv-winpc/repair", map[string]any{"confirm": "SRV-WINPC"}},
 		{"DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "SRV-WINPC"}},
 		{"DELETE", "/api/admin/enrollments/" + enrollID, nil},
-		// "Update machines that are off": starting a run, calling one off, and the per-host switch
+		// "Update unpowered hosts": starting a run, calling one off, and the per-host switch
 		{"POST", "/api/admin/wake-update", map[string]any{"update_only": []string{"laptop"}}},
 		{"DELETE", "/api/admin/wake-update/0000000000000000", nil},
 		{"PUT", "/api/systems/laptop/wake-update", map[string]any{"enabled": true}},

@@ -332,7 +332,7 @@ func (s *Server) hostRemove(c *reqCtx) error {
 		c.audit(u, "host.remove", h.ID, nil, "refused: "+err.Error())
 		return err
 	}
-	// A machine that is removed is no longer switched on for "Update machines that are off". A host's id is
+	// A machine that is removed is no longer switched on for "Update unpowered hosts". A host's id is
 	// made from its name, so without this the next machine added under the same name would take part in
 	// runs without anybody having switched it on. First, so that a host is never gone with the switch left on.
 	wasOn := false

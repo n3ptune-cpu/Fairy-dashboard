@@ -56,7 +56,7 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 	case time.Duration(*h.BootUptimeS)*time.Second >= h.onlineMono-h.wakeMono: // the same by the steady clock
 		return false, "it had been running for longer than since the wake: it was already on"
 	case !info.OptedIn:
-		return false, "it is no longer switched on for \"Update machines that are off\""
+		return false, "it is no longer switched on for \"Update unpowered hosts\""
 	case !o.Online:
 		return false, "its agent is not answering right now"
 	case o.Pending != nil:

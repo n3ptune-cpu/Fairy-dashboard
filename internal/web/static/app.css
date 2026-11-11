@@ -582,7 +582,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .steps span.bad { color: var(--bad); border-color: rgba(255, 93, 108, .45); }
 @media (max-width: 760px) { .form-grid, .opts { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .steps span.now { animation: none; } }
-/* ------------------------------------------------ Update machines that are off (Updates page) */
+/* ------------------------------------------------ Update unpowered hosts (Updates page) */
 .wu h3 { margin: 0; font-size: 16px; }
 .wu-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .wu > p.note { margin: 0 0 12px; max-width: 100ch; }

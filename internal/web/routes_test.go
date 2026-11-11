@@ -80,7 +80,7 @@ var matrixRoutes = []writeRoute{
 	{pattern: "DELETE /api/admin/hosts/{id}", path: "/api/admin/hosts/srv-winpc", body: map[string]any{"confirm": "SRV-WINPC"}, adminOnly: true, stepUp: true, killSwitch: true},
 	// NEW-3: was open to a control token and needed no step-up
 	{pattern: "DELETE /api/admin/enrollments/{id}", path: "/api/admin/enrollments/nope", adminOnly: true, stepUp: true},
-	// "Update machines that are off": browser sessions only. Starting a run asks to confirm every time; calling
+	// "Update unpowered hosts": browser sessions only. Starting a run asks to confirm every time; calling
 	// one off is not kept back by the kill switch
 	{pattern: "POST /api/admin/wake-update", path: "/api/admin/wake-update", body: "WAKERUN", adminOnly: true, stepUp: true, each: true, killSwitch: true},
 	{pattern: "DELETE /api/admin/wake-update/{id}", path: "/api/admin/wake-update/nope", adminOnly: true, stepUp: true},

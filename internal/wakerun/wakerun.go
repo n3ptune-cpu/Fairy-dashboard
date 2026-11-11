@@ -1,4 +1,4 @@
-// Package wakerun runs "Update machines that are off": for machines that are normally switched off it sends
+// Package wakerun runs "Update unpowered hosts": for machines that are normally switched off it sends
 // Wake-on-LAN, waits for the agent, asks the agent to update itself, waits for the result and switches the
 // machine off again. It does by itself what an admin would do by hand with the existing Wake, Update and Shut
 // down buttons, in that order, and it sends nothing else: no new agent request exists for it.
@@ -498,7 +498,7 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 				return &StartError{Msg: "unknown machine: " + id}
 			}
 			if !info.OptedIn {
-				return &StartError{Msg: info.Name + " is not switched on for \"Update machines that are off\""}
+				return &StartError{Msg: info.Name + " is not switched on for \"Update unpowered hosts\""}
 			}
 			o := m.Ops.Observe(id)
 			h := &Host{ID: id, Name: info.Name, Mode: mode, State: StQueued, Since: now, Text: "waiting for its turn", StartStatus: o.Status, Log: []LogLine{}}

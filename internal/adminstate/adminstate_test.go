@@ -158,7 +158,7 @@ func TestAddSessionCapsAnOldRegistryAndTheTotal(t *testing.T) {
 	}
 }
 
-// The per-host switch of "Update machines that are off": off unless the system is listed, kept sorted in
+// The per-host switch of "Update unpowered hosts": off unless the system is listed, kept sorted in
 // state.json next to the other per-host switches, and off for everybody while the file cannot be read.
 func TestWakeUpdateSwitch(t *testing.T) {
 	dir := t.TempDir()

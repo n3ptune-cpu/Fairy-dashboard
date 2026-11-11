@@ -53,7 +53,7 @@ var sessionOnlyControl = map[string]bool{
 	"POST /api/admin/hosts/{id}/repair":   true,
 	"DELETE /api/admin/hosts/{id}":        true,
 	"DELETE /api/admin/enrollments/{id}":  true,
-	// "Update machines that are off": a run works for many minutes after the one request that starts it, and
+	// "Update unpowered hosts": a run works for many minutes after the one request that starts it, and
 	// which machines it may touch is decided by the per-host switch. Starting, cancelling and that switch need
 	// a person who can confirm.
 	"POST /api/admin/wake-update":        true,
@@ -91,7 +91,7 @@ func (c *reqCtx) guardControl(bucket *rateLimiter, killSwitch bool) (*model.User
 // controlAllowed is the part of guardControl that comes before "Confirm it's you": who is asking (no API token
 // on a sign-in-only route), CSRF, the admin role, and the kill switch. A handler that has something to check
 // between this and the confirmation calls it by itself and then stepUp or stepUpEach (the start of an "Update
-// machines that are off" run: the list is checked before anybody is asked for a passkey).
+// unpowered hosts" run: the list is checked before anybody is asked for a passkey).
 func (c *reqCtx) controlAllowed(killSwitch bool) (*model.User, error) {
 	u, err := c.requireUser()
 	if err != nil {
