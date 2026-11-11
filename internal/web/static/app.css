@@ -1,7 +1,7 @@
 /* Fairy theme: true black. Accent colours are only used for data. */
 :root {
   --bg: #000; --panel: #0a0a0a; --panel2: #0d0d0d; --hover: #141414; --line: #1a1a1a; --line2: #262626;
-  --text: #ededed; --muted: #8a8a8a; --faint: #555;
+  --text: #ededed; --muted: #8a8a8a; --faint: #808080;
   --accent: #7aa2ff; --accent2: #9b7bff;
   --ok: #3ddc97; --warn: #f5b84b; --bad: #ff5d6c; --off: #4a4a4a;
   --cpu: #7aa2ff; --mem: #9b7bff; --disk: #49c6e5; --gpu: #3ddc97; --pwr: #f5b84b;
@@ -113,6 +113,8 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .errcard { border-color: rgba(255, 93, 108, .6); }
 .errcard h3 { display: flex; align-items: center; gap: 10px; }
 .note { color: var(--faint); font-size: 12px; }
+.btn.on .note { color: var(--muted); }
+::placeholder { color: var(--faint); opacity: 1; }
 .note.warn { color: var(--warn); }
 .table.updates td .note { margin-top: 3px; max-width: 360px; }
 .error { color: var(--bad); font-size: 12px; }
@@ -131,7 +133,7 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .tile { padding: 16px 18px; }
 .tile .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
-.tile .label-sub { text-transform: none; letter-spacing: 0; font-weight: 500; opacity: .75; margin-left: 4px; }
+.tile .label-sub { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--faint); margin-left: 4px; }
 .tile .value { font-size: 26px; font-weight: 700; margin: 6px 0 10px; font-variant-numeric: tabular-nums; }
 .tile .value small { font-size: 13px; color: var(--muted); font-weight: 500; }
 .value.pwr { color: var(--pwr); }
