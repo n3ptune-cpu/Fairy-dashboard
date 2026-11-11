@@ -42,7 +42,7 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
   height: calc(100vh - var(--banner-h)); height: calc(100dvh - var(--banner-h)); }
 .side-head { display: flex; align-items: center; gap: 8px; padding: 14px 12px 14px 16px; border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 16px; letter-spacing: .02em; }
-.logo { width: 24px; height: 24px; flex: none; border-radius: var(--radius); background: conic-gradient(from 200deg, var(--accent), var(--accent2), #49c6e5, var(--accent)); }
+.logo { width: 24px; height: 24px; flex: none; border-radius: var(--radius); background: var(--accent); }
 .logo.big { width: 44px; height: 44px; border-radius: var(--radius); margin: 0 auto 10px; }
 .logo.has-img { background: none; border-radius: 0; }
 .logo.has-img img { display: block; width: 100%; height: 100%; object-fit: contain; }
@@ -65,7 +65,7 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .nav-link .caret { width: 16px; height: 16px; flex: none; display: grid; place-items: center; color: var(--faint); transition: transform .15s; }
 .nav-link .caret.open { transform: rotate(90deg); }
 .avatar { width: 28px; height: 28px; flex: none; border-radius: var(--radius); display: grid; place-items: center; font-weight: 700;
-  background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; font-size: 13px; }
+  background: var(--accent); color: #000; font-size: 13px; }
 .shell.collapsed .label, .shell.collapsed .nav-link .name, .shell.collapsed .nav-link .cpu, .shell.collapsed .nav-title span,
 .shell.collapsed .nav-link.sub, .shell.collapsed .nav-link.sub2,
 .shell.collapsed .nav-link .caret { display: none; }
