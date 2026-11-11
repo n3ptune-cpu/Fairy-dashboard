@@ -179,8 +179,11 @@ type System struct {
 	Error              *string         `json:"error"`
 	UpdatedAt          *time.Time      `json:"updated_at"`
 	Hardware           *Hardware       `json:"hardware"`
-	CPUModel           *string         `json:"cpu_model"`
-	PowerPending       *PowerPending   `json:"power_pending"`
+	// CustomModel is the model name an admin set for this host in the panel (null: none). The page shows it
+	// in place of Hardware.Display, which stays what the machine reports.
+	CustomModel  *string       `json:"custom_model"`
+	CPUModel     *string       `json:"cpu_model"`
+	PowerPending *PowerPending `json:"power_pending"`
 	// Sleep is what the host's agent says about sleep (nil: the agent does not say, older than v0.4.2):
 	// true, or false with SleepNote saying why. Not copied onto a Proxmox node an agent runs on.
 	Sleep     *bool   `json:"sleep,omitempty"`

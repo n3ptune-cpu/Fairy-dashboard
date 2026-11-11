@@ -164,7 +164,7 @@ func errorEntry(s model.System, err error) model.System {
 	e := model.System{ID: s.ID, Name: s.Name, Kind: s.Kind, Source: s.Source, Parent: s.Parent, ClusterID: s.ClusterID,
 		Cluster: s.Cluster, VMID: s.VMID, Status: StatusError,
 		Error: model.P("this system sent data the panel cannot show (" + why + ")"),
-		Group: s.Group, Owner: s.Owner, Tags: s.Tags, DWServiceURL: s.DWServiceURL, UPS: s.UPS,
+		Group: s.Group, Owner: s.Owner, Tags: s.Tags, DWServiceURL: s.DWServiceURL, UPS: s.UPS, CustomModel: s.CustomModel,
 		ProcessesAvailable: s.ProcessesAvailable, FanControl: s.FanControl, PowerActions: s.PowerActions,
 		PollIntervalS: normalise.Finite(s.PollIntervalS, 0, normalise.MaxUnixTime), PollMode: s.PollMode, Boosted: s.Boosted,
 		BMCRelayTargets: s.BMCRelayTargets, PowerHelperReason: s.PowerHelperReason}
@@ -237,6 +237,7 @@ func laterOf(a, b *time.Time) *time.Time {
 func (p *Poller) buildSnapshot() []model.System {
 	watts, upsMap := p.Power.LinkedWatts(), p.UPS.SystemsMap()
 	poll := p.pollFields()
+	models := p.Admin.HostModels() // the model names set in the panel (state.json), by system id
 	p.mu.Lock()
 	systems := make(map[string]model.System, len(p.systems))
 	for k, v := range p.systems {
@@ -278,6 +279,9 @@ func (p *Poller) buildSnapshot() []model.System {
 		}
 		if n, ok := pend[s.ID]; ok {
 			s.PowerPending = n.pending
+		}
+		if m, ok := models[s.ID]; ok && (s.Kind == "node" || s.Kind == "agent") {
+			s.CustomModel = &m
 		}
 		if acts := p.powerActions(s); len(acts) > 0 {
 			s.PowerActions = acts
