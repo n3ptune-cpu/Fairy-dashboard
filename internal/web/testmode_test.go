@@ -273,7 +273,7 @@ func TestTestModeSessionsPage(t *testing.T) {
 	if pr, _ := me.body["pending_result"].(map[string]any); pr["ok"] != true || pr["message"] != "that session is signed out" {
 		t.Fatalf("the result: %s", me.raw)
 	}
-	// the window that was signed out, loaded again: a new session, as after Sign out
+	// the window that was signed out from elsewhere, loaded again: a new session
 	again := e.do("GET", "/", nil, "Cookie", b)
 	if again.code != 200 || !strings.Contains(again.hdr.Get("Set-Cookie"), "fairy_session=") || len(sessionsOf(e, "test-admin")) != 2 {
 		t.Fatalf("reloading the signed-out window: %d %q", again.code, again.hdr.Get("Set-Cookie"))

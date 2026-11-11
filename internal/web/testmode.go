@@ -67,7 +67,7 @@ func (s *Server) EnableTestMode() {
 	m := http.NewServeMux()
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { inner.ServeHTTP(&bannerWriter{ResponseWriter: w}, r) })
 	m.HandleFunc("GET /{$}", s.h(func(c *reqCtx) error { // the page itself: no sign-in view, a session is made
-		if c.sessionUser() == nil {
+		if c.sessionUser() == nil && !testSignedOut(c.r) {
 			if err := s.testSignIn(c); err != nil {
 				return err
 			}
@@ -77,6 +77,7 @@ func (s *Server) EnableTestMode() {
 		return nil
 	}))
 	m.HandleFunc("GET /auth/login", s.h(s.testLogin))
+	m.HandleFunc("POST /auth/logout", func(w http.ResponseWriter, r *http.Request) { inner.ServeHTTP(signedOutWriter{w}, r) })
 	m.HandleFunc("POST "+stepUpPath, s.h(s.testStepUp))
 	asset := func(ctype, body string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -135,6 +136,30 @@ func (s *Server) testOtherName(w http.ResponseWriter, r *http.Request) bool {
 	http.Error(w, msg, http.StatusForbidden)
 	return true
 }
+
+// After "Sign out" a test build shows the sign-in page, like a real panel, instead of signing the browser in
+// again at once: that page is otherwise only seen when a session is ended from somewhere else, and it is where
+// the sign-in wallpaper shows. The sign-out leaves a mark in the browser (a cookie that says nothing but
+// "signed out here"); with it the page is served without making a session, until "Continue as test-admin"
+// (GET /auth/login) is pressed, which takes the mark away. It protects nothing: a test build has no sign-in.
+const testSignedOutCookie = "fairytest_signed_out"
+
+func testSignedOut(r *http.Request) bool {
+	c, err := r.Cookie(testSignedOutCookie)
+	return err == nil && c.Value == "1"
+}
+
+// signedOutWriter sets the mark when the sign-out succeeded (204 for the page's request, 303 for a form).
+type signedOutWriter struct{ http.ResponseWriter }
+
+func (w signedOutWriter) WriteHeader(code int) {
+	if code == http.StatusNoContent || code == http.StatusSeeOther {
+		http.SetCookie(w.ResponseWriter, &http.Cookie{Name: testSignedOutCookie, Value: "1", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w signedOutWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // testRefusal says why a request is not answered ("" when it is): the listen address is checked at start, this
 // is the same rule for every request, plus the two ways a loopback port still gets exposed (a reverse proxy in
@@ -206,6 +231,9 @@ func (s *Server) testLogin(c *reqCtx) error {
 	q := c.r.URL.Query()
 	target := safeNext(q.Get("next"))
 	s.codec.live.dropPending(c.session().SID)
+	if testSignedOut(c.r) { // "Continue as test-admin" after a sign-out: the page signs in by itself again
+		http.SetCookie(c.w, &http.Cookie{Name: testSignedOutCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	}
 	switch u := c.sessionUser(); {
 	case u == nil:
 		if err := s.testSignIn(c); err != nil {
