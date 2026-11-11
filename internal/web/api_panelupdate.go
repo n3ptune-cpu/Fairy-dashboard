@@ -80,6 +80,10 @@ func (s *Server) panelUpdatePost(c *reqCtx) error {
 	case p.Behind == nil || !*p.Behind:
 		return apierr.New(409, "no newer signed panel release is known (the panel never installs an older or the same one)")
 	}
+	if a, _ := s.WakeRuns.Snapshot(); a != nil { // the update restarts the panel, and a run is never continued after a restart
+		return apierr.Errf(409, "\"Update machines that are off\" is running (started by %s): the panel's update would interrupt it. "+
+			"Wait for it, or cancel it on the Updates page.", a.By)
+	}
 	if err := s.PanelRunner.Start(c.r.Context()); err != nil {
 		c.audit(u, "panel.update", "panel", params, "error: "+err.Error())
 		return apierr.New(502, err.Error())

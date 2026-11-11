@@ -53,7 +53,7 @@ const unverifiedMark = " (unverified)"
 
 // controlActions are the audited actions that also send the optional ntfy / Discord notification: control
 // actions and every change to users, roles and sites (including a new user waiting for access).
-var controlActions = []string{"fan.", "power.", "helper_", "poll.", "user.", "site.", "update.", "panel.", "host."}
+var controlActions = []string{"fan.", "power.", "helper_", "poll.", "user.", "site.", "update.", "panel.", "host.", "wakeupdate."}
 
 // deniedAction is the entry every refused request of a signed-in user or API token writes (reqCtx.deny).
 // stepUpAction with the outcome stepUpAsked is the entry of a request that was asked to confirm first.

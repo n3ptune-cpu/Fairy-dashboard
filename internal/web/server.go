@@ -33,6 +33,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/settings"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/tokens"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/updates"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
 )
 
 //go:embed static
@@ -79,6 +80,8 @@ type Server struct {
 	// Notifications page: the events and the watcher that makes them from the poller's snapshots.
 	Notes *notifications.Store
 	Watch *notifications.Watcher
+	// WakeRuns runs "Update machines that are off" (Updates page): one run at a time, in the background.
+	WakeRuns *wakerun.Manager
 
 	seenMu  sync.Mutex
 	seen    map[string]time.Time // subject -> last "last seen" write
@@ -137,6 +140,16 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	s.Enroll = enrollment.New(s.Managed, s.enrollHooks(), addr, enrollment.PinnedVerifier(cfg.Updates.AgentRepo, cfg.Enroll.AgentRelease, nil))
 	s.Enroll.PanelSource, s.Enroll.PanelVia = src, via
 	s.Enroll.AllowNonTailscale = cfg.Enroll.AllowNonTailscale
+	wu := cfg.WakeUpdate
+	if wu.OnlineTimeoutS == 0 { // a configuration that was not made by config.Parse: the defaults
+		wu = config.WakeUpdate{OnlineTimeoutS: 300, SettleS: 60, ShutdownDelayS: 120, AgentRequestsPerMin: 8}
+	}
+	s.WakeRuns = wakerun.New(filepath.Join(cfg.DataDir, "wake-update.json"),
+		wakerun.NewSettings(wu.OnlineTimeoutS, wu.SettleS, wu.ShutdownDelayS, wu.AgentRequestsPerMin), runOps{s})
+	s.WakeRuns.Event = s.wakeRunEvent
+	// A run that was going when the panel stopped is reported here, once (audit log and a notification), and
+	// never continued. A journal that cannot be read is logged; no run starts until it is fixed.
+	_ = s.WakeRuns.Load()
 	if err := s.Access.EnsureSites(cfg.Sites()); err != nil { // sites named in config.yaml exist on the Users page
 		slog.Error("users.json write failed", "error", err)
 	}
@@ -322,6 +335,7 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		_ = srv.Shutdown(sctx)
 	}()
 	go s.watch(ctx)
+	go s.WakeRuns.Loop(ctx)
 	go func() { // write the throttled-entries summary even when the flood stops
 		t := time.NewTicker(time.Minute)
 		defer t.Stop()

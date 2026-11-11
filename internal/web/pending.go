@@ -56,9 +56,12 @@ type pendingAction struct {
 	Body    string
 	Label   string // what the page calls the action (the X-Fairy-Action header of the request)
 	Action  string // what the panel itself says will run (describeAction): shown in the dialog and the audit log
-	At      time.Time
-	Client  client // who asked for it: only this client can arm it, and only this client's confirmation runs it
-	Round   string // the state of the step-up round trip it is armed for ("": not armed)
+	// Items: for an action about a list (the machines of an "Update machines that are off" run), the panel's
+	// own line for each entry. Action is cut at maxActionText; the dialog shows these in full.
+	Items  []string
+	At     time.Time
+	Client client // who asked for it: only this client can arm it, and only this client's confirmation runs it
+	Round  string // the state of the step-up round trip it is armed for ("": not armed)
 }
 
 // wildcardRe finds the path parameters of a route pattern ("{id}", "{path...}").
@@ -139,6 +142,14 @@ func (c *reqCtx) keepPending(u *model.User) (p *pendingAction, why string) {
 	}
 	p = &pendingAction{ID: randToken(18), Method: c.r.Method, Pattern: c.r.Pattern, Vals: vals, URL: *c.r.URL,
 		run: c.fn, Body: string(c.body), Label: label, Action: action, At: now, Client: c.client()}
+	if list := actionList[c.r.Pattern]; list != nil {
+		for _, line := range list(c, u) {
+			if len(p.Items) == maxActionItems {
+				break
+			}
+			p.Items = append(p.Items, truncate(safeTarget(line), maxActionText))
+		}
+	}
 	c.s.codec.live.keepPending(key, p, now)
 	return p, ""
 }
@@ -167,6 +178,9 @@ var actionText = map[string]string{
 	"POST /api/me/sessions/revoke":        "sign out another session of yours",
 	"POST /api/me/sessions/revoke-others": "sign out all your other sessions",
 	"POST /api/admin/sessions/revoke":     "sign out a session",
+	"POST /api/admin/wake-update":         "Update machines that are off",
+	"DELETE /api/admin/wake-update/{id}":  "cancel the run of \"Update machines that are off\"",
+	"PUT /api/systems/{id}/wake-update":   "\"Update machines that are off\" for {id}",
 }
 
 // actionDetail is, per route, what the panel adds to the description of a kept request when the request's own
@@ -174,6 +188,27 @@ var actionText = map[string]string{
 var actionDetail = map[string]func(c *reqCtx, u *model.User) string{
 	"POST /api/me/sessions/revoke":    (*reqCtx).sessionDetail,
 	"POST /api/admin/sessions/revoke": (*reqCtx).sessionDetail,
+	// which machines, by the panel's names for them, and the value that names the list (api_wakeupdate.go)
+	"POST /api/admin/wake-update":        (*reqCtx).wakeUpdateDetail,
+	"DELETE /api/admin/wake-update/{id}": (*reqCtx).wakeUpdateCancelDetail,
+	"PUT /api/systems/{id}/wake-update":  (*reqCtx).wakeUpdateSwitchDetail,
+}
+
+// actionList is, per route, the panel's own line for each thing a kept request is about, when it is about a
+// list: the dialog shows every line, however long the list is (the one-line description is cut).
+var actionList = map[string]func(c *reqCtx, u *model.User) []string{
+	"POST /api/admin/wake-update": (*reqCtx).wakeUpdateItems,
+}
+
+// maxActionItems is more than a run has machines (wakerun.MaxHosts).
+const maxActionItems = 32
+
+// decodeStrictly decodes a kept request's body the way its handler will: one reading only (strictBody), no
+// unknown fields.
+func decodeStrictly(b []byte, v any) bool {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	return strictBody(b) && dec.Decode(v) == nil
 }
 
 // actionFields are the body fields describeAction adds: the ones that say which action, role or object it is.

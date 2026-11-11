@@ -53,6 +53,12 @@ var sessionOnlyControl = map[string]bool{
 	"POST /api/admin/hosts/{id}/repair":   true,
 	"DELETE /api/admin/hosts/{id}":        true,
 	"DELETE /api/admin/enrollments/{id}":  true,
+	// "Update machines that are off": a run works for many minutes after the one request that starts it, and
+	// which machines it may touch is decided by the per-host switch. Starting, cancelling and that switch need
+	// a person who can confirm.
+	"POST /api/admin/wake-update":        true,
+	"DELETE /api/admin/wake-update/{id}": true,
+	"PUT /api/systems/{id}/wake-update":  true,
 }
 
 // controlGuard: CSRF, control group / control-scope token, admin kill switch, step-up, rate limit. API tokens
@@ -69,6 +75,24 @@ func (c *reqCtx) stopGuard(bucket *rateLimiter) (*model.User, error) {
 }
 
 func (c *reqCtx) guardControl(bucket *rateLimiter, killSwitch bool) (*model.User, error) {
+	u, err := c.controlAllowed(killSwitch)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.stepUp(u, "control actions"); err != nil {
+		return nil, err
+	}
+	if !bucket.allow(u.Sub) {
+		return nil, apierr.New(429, "too many control requests; slow down")
+	}
+	return u, nil
+}
+
+// controlAllowed is the part of guardControl that comes before "Confirm it's you": who is asking (no API token
+// on a sign-in-only route), CSRF, the admin role, and the kill switch. A handler that has something to check
+// between this and the confirmation calls it by itself and then stepUp or stepUpEach (the start of an "Update
+// machines that are off" run: the list is checked before anybody is asked for a passkey).
+func (c *reqCtx) controlAllowed(killSwitch bool) (*model.User, error) {
 	u, err := c.requireUser()
 	if err != nil {
 		return nil, err
@@ -97,12 +121,6 @@ func (c *reqCtx) guardControl(bucket *rateLimiter, killSwitch bool) (*model.User
 		}
 		return nil, c.deny(u, 423, fmt.Sprintf("control is disabled by an administrator (%s): %s", off.By, reason),
 			"control disabled (kill switch)")
-	}
-	if err := c.stepUp(u, "control actions"); err != nil {
-		return nil, err
-	}
-	if !bucket.allow(u.Sub) {
-		return nil, apierr.New(429, "too many control requests; slow down")
 	}
 	return u, nil
 }
@@ -174,6 +192,9 @@ func (c *reqCtx) stepUpCheck(u *model.User, what string, window int, perAction b
 		// pending_id names the kept action when the dialog asks to confirm it (POST /api/me/step-up, in the body);
 		// action is the panel's own description of what that confirmation will run.
 		detail["pending_id"], detail["action"] = kept.ID, kept.Action
+		if len(kept.Items) > 0 { // what it will do, line by line (the machines of a run)
+			detail["items"] = kept.Items
+		}
 	} else if why != "" {
 		detail["not_kept"] = why
 	}

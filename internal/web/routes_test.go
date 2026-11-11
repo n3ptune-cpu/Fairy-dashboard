@@ -25,7 +25,7 @@ import (
 type writeRoute struct {
 	pattern string // as registered
 	path    string // the request's path
-	body    any    // "POWER" / "CONFIRM" / "SETTINGS" / "SESSION": filled in from the panel under test
+	body    any    // "POWER" / "CONFIRM" / "SETTINGS" / "SESSION" / "WAKERUN": filled in from the panel under test
 	ctype   string
 	// adminOnly: a viewer (role viewer, CSRF header, fresh sign-in) gets 403. Otherwise a viewer reaches it.
 	adminOnly bool
@@ -77,6 +77,11 @@ var matrixRoutes = []writeRoute{
 	{pattern: "DELETE /api/admin/hosts/{id}", path: "/api/admin/hosts/srv-winpc", body: map[string]any{"confirm": "SRV-WINPC"}, adminOnly: true, stepUp: true, killSwitch: true},
 	// NEW-3: was open to a control token and needed no step-up
 	{pattern: "DELETE /api/admin/enrollments/{id}", path: "/api/admin/enrollments/nope", adminOnly: true, stepUp: true},
+	// "Update machines that are off": browser sessions only. Starting a run asks to confirm every time; calling
+	// one off is not kept back by the kill switch
+	{pattern: "POST /api/admin/wake-update", path: "/api/admin/wake-update", body: "WAKERUN", adminOnly: true, stepUp: true, each: true, killSwitch: true},
+	{pattern: "DELETE /api/admin/wake-update/{id}", path: "/api/admin/wake-update/nope", adminOnly: true, stepUp: true},
+	{pattern: "PUT /api/systems/{id}/wake-update", path: "/api/systems/laptop/wake-update", body: map[string]any{"enabled": true}, adminOnly: true, stepUp: true, killSwitch: true},
 }
 
 // Writes outside /api/, and the GET routes that change something. They are not rows of the table (they are not
@@ -225,6 +230,11 @@ func TestRouteAuthMatrix(t *testing.T) {
 				q.body = map[string]any{"confirm": name}
 			case "SETTINGS":
 				q.body = map[string]any{}
+			case "WAKERUN": // laptop is on and switched on for these runs: a list the panel accepts
+				if err := e.s.Poller.Admin.SetWakeUpdate("laptop", true); err != nil {
+					t.Fatal(err)
+				}
+				q.body = map[string]any{"update_only": []string{"laptop"}}
 			}
 			if wr.each { // the admin is signed in a second time; a "SESSION" request is about that session
 				other := e.s.codec.handle(sidOf(e, e.cookie(controller(), 0)))
