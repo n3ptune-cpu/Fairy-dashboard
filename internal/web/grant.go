@@ -41,7 +41,8 @@ func identityOf(u *model.User) access.Identity {
 	return access.Identity{Sub: u.Sub, Email: model.Deref(u.Email), EmailVerified: u.EmailVerified, Name: model.Deref(u.Name)}
 }
 
-// recordUser adds a user to users.json the first time they are seen and refreshes email, name and last seen.
+// recordUser adds a user to users.json the first time they are seen and records email, name and last seen
+// (only here; userGrant's "seen again" moves last seen alone).
 // signIn is true only for a fresh Pocket ID login (the OIDC callback): only then may control_groups /
 // bootstrap_admins make a new user admin. A user first seen through an existing session cookie (whose groups
 // may be days old) always starts as pending. A new user is audited.
@@ -84,7 +85,10 @@ func (s *Server) userGrant(c *reqCtx, u *model.User) access.Grant {
 	}
 	s.seenMu.Unlock()
 	if stale {
-		_, _, _ = s.Access.SeenIdentity(identityOf(u), access.RolePending, "")
+		// Only "last seen" moves here. What the cookie says about the person (address, whether the provider
+		// verified it, name) is as old as the session's sign-in; written back, an older session would undo
+		// what a later sign-in recorded (T-69). Identity is recorded at a sign-in only (recordUser).
+		_, _, _ = s.Access.Seen(u.Sub, "", "", access.RolePending, "")
 	}
 	return rec.Grant()
 }
