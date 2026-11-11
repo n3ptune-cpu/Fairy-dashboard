@@ -946,7 +946,9 @@ function pageUps() {
     ${ev.length ? ev.map((e) => `<tr class="row" data-key="e${esc(e.seq)}"><td><span data-ago="${esc(e.t)}">${ago(e.t)}</span> <span class="note">${new Date(e.t).toLocaleTimeString()}</span></td>
       <td>${esc(e.ups_name)}</td><td><span class="chip ${e.severity === "critical" ? "bad" : e.severity === "warning" ? "warn" : "ok"}">${esc(e.kind.replace("_", " "))}</span></td>
       <td>${esc(e.message)}</td></tr>`).join("") : '<tr><td colspan="4" class="note">No transitions since the panel started.</td></tr>'}</tbody></table></div>
-    <p class="note">The panel only reads (LIST UPS / LIST VAR): no instant commands, no SET VAR. Shutdown on low battery stays with upsmon on each host.</p>`;
+    <p class="note info-keep">The panel only reads the UPS: it sends it no commands and changes none of its settings. Shutdown on low battery stays with upsmon on each host.${infoBtn("ups", "UPS", infoList([
+      "The panel asks NUT with LIST UPS and LIST VAR only.",
+      "No instant commands, no SET VAR."]))}</p>`;
 }
 
 // ------------------------------------------------------------ audit page (control group only)
