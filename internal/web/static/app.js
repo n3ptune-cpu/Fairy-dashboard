@@ -768,7 +768,7 @@ async function loadFans(id) {
     const post = async (path, payload) => {
       const url = `/api/systems/${enc(id)}${path}`;
       try {
-        const r = await controlCall({ kind: "request", label: `Fan ${path.split("/").pop()} ${JSON.stringify(payload)} on ${state.byId[id]?.name || id}`, system: id, method: "POST", path: url, body: payload },
+        const r = await controlCall({ kind: "request", label: fanLabel(path, payload, state.byId[id]?.name || id), system: id, method: "POST", path: url, body: payload },
           () => api(url, { method: "POST", body: JSON.stringify(payload) }));
         if (r) delete fanMsg[id];
       } catch (e) { fanMsg[id] = e.message; }
@@ -780,6 +780,10 @@ async function loadFans(id) {
   } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   schedule(() => loadFans(id));
 }
+
+// What a fan write is called in "Confirm it's you", in "Resume" and in its result: plain words with the values
+// it sets, never the request's JSON.
+const fanLabel = (path, p, name) => `${path === "/fan/mode" ? `Set fan mode to ${p.mode}` : `Set fan zone ${p.zone} to ${p.percent}%`} on ${name}`;
 
 // The Fans tab while the helper is not running: the explanation and the mode buttons, disabled.
 function fansPaused(s, f) {
@@ -1554,14 +1558,16 @@ function openPowerDialog(s, action) {
   m.onclick = (e) => { if (e.target === m) close(); };
   go.onclick = async () => {
     go.disabled = true;
+    const body = { action, confirm: input ? input.value : null };
+    if ($("#m-delay")) body.delay_s = +$("#m-delay").value;
+    // a kept request runs with this countdown, so "Confirm it's you" names it; "Resume" opens this dialog again
+    const what = `${label} ${s.name}`, timed = body.delay_s ? `${what} in ${fmtSpan(body.delay_s)}` : what;
     try {
-      const body = { action, confirm: input ? input.value : null };
-      if ($("#m-delay")) body.delay_s = +$("#m-delay").value;
-      const r = await api(`/api/systems/${enc(s.id)}/power`, { method: "POST", body: JSON.stringify(body), label: `${label} ${s.name}` });
+      const r = await api(`/api/systems/${enc(s.id)}/power`, { method: "POST", body: JSON.stringify(body), label: timed });
       close(); state.menu = null; flash(r.message); refreshCaps(s.id);
       actionDone({ kind: "power", system: s.id, action });
     } catch (e) {
-      if (e.stepUp) { close(); showStepUp({ kind: "power", action, system: s.id, label: `${label} ${s.name}` }, e.detail); return; }
+      if (e.stepUp) { close(); showStepUp({ kind: "power", action, system: s.id, label: e.detail?.pending ? timed : what }, e.detail); return; }
       $("#m-err").textContent = e.message; go.disabled = false;
     }
   };
