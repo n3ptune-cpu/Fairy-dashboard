@@ -1604,9 +1604,9 @@ function pageSessions() {
       ${sess.all.sessions.length ? sessTable(sess.all.sessions, true) : '<div class="empty">Nobody is signed in.</div>'}`
     : sess.allError ? `<div class="error">${esc(sess.allError)}</div>` : "") : "";
   return `<div class="stack">
-    <div class="note users-help">Every browser you signed in with is a session. <b>Sign out</b> ends one of the others; it asks you to confirm it's you first, every time,
-      so that nobody who got hold of one sign-in can end yours. A session also ends by itself ${esc(fmtSpan(d.idle_timeout_s))} after it was last used,
-      and ${esc(fmtSpan(d.max_age_s))} after its sign-in.</div>
+    <div class="note users-help">Every browser you signed in with is a session; <b>Sign out</b> ends one of the others.${infoBtn("sess", "Sessions", infoList([
+      "Sign out asks you to confirm it's you first, every time, so that nobody who got hold of one sign-in can end yours.",
+      `A session also ends by itself ${esc(fmtSpan(d.idle_timeout_s))} after it was last used, and ${esc(fmtSpan(d.max_age_s))} after its sign-in.`]))}</div>
     ${sess.error ? `<div class="error">${esc(sess.error)}</div>` : ""}
     <div class="sess-head"><div class="section-title">Your sessions <span class="count">${esc(mine.length)}</span></div>
       <button class="btn danger" data-act="sess-others" ${others ? "" : 'disabled title="You are signed in nowhere else"'}>Sign out everywhere else</button></div>
