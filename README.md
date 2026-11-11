@@ -491,7 +491,7 @@ This command answers "will the new panel refuse my session secret?". It only rea
 `yes` or `no`, never the value. Run it on the panel host:
 
 ```
-sudo env LC_ALL=C awk -v q="'" '/^[ \t]*(export[ \t]+)?FAIRY_SESSION_SECRET[ \t]*=/{v=$0;sub(/^[^=]*=[ \t]*/,"",v);sub(/[ \t\r]+$/,"",v);n=length(v);a=substr(v,1,1);b=substr(v,n,1);if(n>1&&a==b&&(a=="\""||a==q))v=substr(v,2,n-2);f=1} END{s=1;for(i=2;i<=length(v);i++)if(substr(v,i,1)!=substr(v,1,1)){s=0;break};print((!f||length(v)<32||index(v,"REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS")||s)?"yes":"no")}' /etc/fairy/fairy.env
+sudo env LC_ALL=C awk -v q="'" '/^[ \t]*FAIRY_SESSION_SECRET[ \t]*=/{v=$0;sub(/^[^=]*=[ \t]*/,"",v);sub(/[ \t\r]+$/,"",v);n=length(v);a=substr(v,1,1);b=substr(v,n,1);if(n>1&&a==b&&(a=="\""||a==q))v=substr(v,2,n-2);f=1} END{s=1;for(i=2;i<=length(v);i++)if(substr(v,i,1)!=substr(v,1,1)){s=0;break};print((!f||length(v)<32||index(v,"REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS")||s)?"yes":"no")}' /etc/fairy/fairy.env
 ```
 
 `no`: update as usual. `yes`: do this before the update, as root:
@@ -501,7 +501,8 @@ sudo env LC_ALL=C awk -v q="'" '/^[ \t]*(export[ \t]+)?FAIRY_SESSION_SECRET[ \t]
 3. `systemctl restart fairy`. Everyone signs in once more. Then update.
 
 The command reads `/etc/fairy/fairy.env` only. If you set the secret somewhere else (a systemd drop-in with
-`Environment=`), look at the value there.
+`Environment=`), look at the value there. systemd does not read a line that starts with `export`, and
+neither does this command.
 
 If you update with the example value all the same: the new program is put in place and exits at once, again
 at every start that systemd tries. After about 45 seconds `fairy update` puts the old program back and ends
@@ -654,7 +655,7 @@ session settings as whole seconds).
   login attempts" or "no longer waiting" until the minute is over. Nothing runs because of it.
 * Strict CSP, HSTS (https), frame/referrer/permissions policies, generic 500s, no secrets in logs or errors.
 * Sign-out is a POST with the CSRF header (no cross-site sign-out); visiting `/auth/login` keeps a valid session
-  until a new sign-in completes.
+  until a new sign-in completes (a sign-in that fails because `users.json` cannot be written ends it too).
 * A sign-out that cannot be written to `sessions.json` (disk full, read-only folder, wrong owner) answers 503
   and says so. The session is then ended in the panel's memory only: a copy of its cookie is refused until
   the panel restarts, and **after a restart that session is valid again** until it idles out or reaches
