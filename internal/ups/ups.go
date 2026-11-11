@@ -210,7 +210,11 @@ func (m *Manager) apply(key string, row map[string]any, name string, via *string
 	m.states[key] = st
 }
 
+// fail marks the UPSes keys as failed with errMsg. The text can be one the other side chose (a NUT server's
+// "ERR ..." line, up to 4096 bytes), and it goes into the state, the event and the notification: it is kept
+// like every other error text, cleaned and short (textsafe.ErrorText).
 func (m *Manager) fail(keys []string, errMsg string) {
+	errMsg = textsafe.ErrorText(errMsg)
 	now := time.Now()
 	for _, key := range keys {
 		st := m.states[key]
