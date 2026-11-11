@@ -44,8 +44,8 @@ func (s *Server) sessionCheck(sd *sessionData) string {
 	if now.Unix()-sd.IAT > int64(s.Cfg.SessionMaxAge) {
 		return sessMaxAge
 	}
-	if !s.Poller.Admin.SessionValid(sd.SID, sd.User.Sub, float64(sd.IAT)) {
-		return sessRevoked
+	if !s.Poller.Admin.SessionValid(sd.SID, sd.User.Sub, float64(sd.IAT)) || s.codec.live.isEnded(sd.SID) {
+		return sessRevoked // not in sessions.json, or ended while that file could not be written (dropSession)
 	}
 	seen := sd.Seen
 	if seen == 0 {
@@ -67,8 +67,29 @@ func (s *Server) sessionCheck(sd *sessionData) string {
 // endSession removes a session that sessionCheck found expired or orphaned from sessions.json, with everything
 // the panel remembers under its id.
 func (s *Server) endSession(sid string) {
-	_ = s.Poller.Admin.RemoveSession(sid)
-	s.codec.live.forget(sid)
+	_ = s.dropSession(sid, "a session that expired")
+}
+
+// dropSession ends a session: it leaves sessions.json and everything the panel remembers under its id. When
+// the file cannot be written (a full disk, a read-only folder, a wrong owner), the session cannot leave it;
+// then it is ended in the panel's memory instead (liveSessions.end), so its cookie, and every copy of it,
+// stops working at once, and the error is logged and returned (T-29: it was dropped, and the session stayed
+// valid). What memory cannot do: after a restart the file is read again and such a session is back until it
+// expires, which is why the log line says to look at the file. what names the occasion for the log.
+func (s *Server) dropSession(sid, what string) error {
+	if sid == "" {
+		return nil
+	}
+	err := s.Poller.Admin.RemoveSession(sid)
+	if err == nil {
+		s.codec.live.forget(sid)
+		return nil
+	}
+	s.codec.live.end(sid, s.now())
+	slog.Error("cannot remove "+what+" from sessions.json (disk full? read-only? wrong owner?): it is ended in "+
+		"memory and stays out until the panel restarts. Make the file writable, then run `fairy admin sessions "+
+		"revoke-all` if a cookie may have been copied", "error", err)
+	return err
 }
 
 // What keeps a session from idling out is a person using the panel, and only a request the panel accepted
@@ -577,8 +598,7 @@ func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, sub
 // sessions.json (so the CLI can revoke it) and a signed cookie holding the user.
 func (s *Server) startSession(c *reqCtx, oldSID string, u model.User, now, authTime float64) error {
 	admin := s.Poller.Admin
-	_ = admin.RemoveSession(oldSID)
-	s.codec.live.forget(oldSID)
+	_ = s.dropSession(oldSID, "the session a new sign-in replaces")
 	sid := randToken(18)
 	if err := admin.AddSession(sid, adminstate.NewSession{Sub: u.Sub, Name: u.Name, Email: u.Email, IP: c.ip()}); err != nil {
 		slog.Error("sign-in failed: cannot register the session in sessions.json (disk full? wrong owner?)", "error", err)
@@ -613,8 +633,7 @@ func (s *Server) rotateSession(c *reqCtx, sess *sessionData, u model.User) (stri
 		c.auditAnon("auth.step_up", "failed: sessions.json not writable", actorOf(&u), &u.Sub, nil)
 		return "", apierr.New(503, "the sign-in could not be recorded (the panel cannot write its session file); see the server log")
 	}
-	_ = admin.RemoveSession(sess.SID)
-	s.codec.live.forget(sess.SID)
+	_ = s.dropSession(sess.SID, "the session id a step-up replaces")
 	sess.SID = sid
 	sess.Client = s.codec.clientMark(c.client()) // the session now belongs to the client that just confirmed
 	return sid, nil
@@ -633,10 +652,19 @@ func (s *Server) authLogout(c *reqCtx) error {
 		return apierr.New(403, "cross-origin request refused")
 	}
 	u := c.sessionUser()
+	var failed error
 	if s.DemoUser == nil {
-		_ = s.Poller.Admin.RemoveSession(c.session().SID)
-		s.codec.live.forget(c.session().SID)
+		failed = s.dropSession(c.session().SID, "a signed-out session")
 		c.clearSession()
+	}
+	if failed != nil {
+		// Not "done": the session could not leave sessions.json. This browser's cookie is cleared and the
+		// session is ended in memory (dropSession); the answer, the log and the audit entry say what is left.
+		if u != nil {
+			c.auditAnon("auth.logout", "failed: sessions.json not writable; the session is ended in memory only", actorOf(u), &u.Sub, nil)
+		}
+		return apierr.New(503, "You are signed out in this browser, but the sign-out could not be recorded: the panel cannot "+
+			"write sessions.json. The session is ended until the panel restarts; an administrator should look at the server log.")
 	}
 	if u != nil {
 		c.auditAnon("auth.logout", "ok", actorOf(u), &u.Sub, nil)

@@ -24,6 +24,9 @@ type liveSessions struct {
 	// from an account that is not the one filling the map.
 	max     int
 	account func(sid string) string
+	// ended holds the ids of sessions that were ended while sessions.json could not be written (T-29): the
+	// file still lists them, the panel does not take them any more (end, isEnded). Session id -> when.
+	ended map[string]int64
 
 	streams streamSlots // how many live-update streams are open (stream.go)
 }
@@ -43,7 +46,7 @@ type liveSession struct {
 const maxLiveSessions = 4096
 
 func newLiveSessions() *liveSessions {
-	return &liveSessions{m: map[string]*liveSession{}, max: maxLiveSessions,
+	return &liveSessions{m: map[string]*liveSession{}, max: maxLiveSessions, ended: map[string]int64{},
 		streams: streamSlots{perUser: maxStreamsPerUser, total: maxStreamsTotal, open: map[string]int{}}}
 }
 
@@ -114,6 +117,38 @@ func (l *liveSessions) prune(now time.Time) {
 		delete(l.m, ids[oldest])
 		by[most] = append(ids[:oldest], ids[oldest+1:]...)
 	}
+}
+
+// maxEnded bounds the list of sessions ended in memory only. It grows only while sessions.json cannot be
+// written, by one entry for every sign-out, expiry or step-up in that time.
+const maxEnded = 4096
+
+// end marks sid as ended although sessions.json still lists it. When the list is full the oldest entry goes.
+func (l *liveSessions) end(sid string, now time.Time) {
+	if sid == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, known := l.ended[sid]; !known && len(l.ended) >= maxEnded {
+		oldest, at := "", int64(0)
+		for k, t := range l.ended {
+			if oldest == "" || t < at {
+				oldest, at = k, t
+			}
+		}
+		delete(l.ended, oldest)
+	}
+	l.ended[sid] = now.Unix()
+	delete(l.m, sid)
+}
+
+// isEnded reports whether sid was ended in memory (end).
+func (l *liveSessions) isEnded(sid string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ended := l.ended[sid]
+	return ended
 }
 
 // forget drops everything about sid (sign-out, expiry, a new session id).
