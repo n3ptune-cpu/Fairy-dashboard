@@ -204,3 +204,22 @@ func TestLoadSecretsRefusesTheExampleAndRepeatedCharacters(t *testing.T) {
 		t.Fatalf("the message for a short secret changed: %v", err)
 	}
 }
+
+// wake_update: the timings of "Update machines that are off". Left out, the defaults; a value outside its
+// range stops the panel at start instead of making a run wait for a day or hammer an agent.
+func TestWakeUpdateTimings(t *testing.T) {
+	c, err := Parse([]byte(base))
+	if err != nil || c.WakeUpdate != (WakeUpdate{OnlineTimeoutS: 300, SettleS: 60, ShutdownDelayS: 120, AgentRequestsPerMin: 8}) {
+		t.Fatal("defaults:", c.WakeUpdate, err)
+	}
+	c, err = Parse([]byte(base + "wake_update: {online_timeout_s: 60, settle_s: 10, shutdown_delay_s: 10, agent_requests_per_min: 1}\n"))
+	if err != nil || c.WakeUpdate != (WakeUpdate{OnlineTimeoutS: 60, SettleS: 10, ShutdownDelayS: 10, AgentRequestsPerMin: 1}) {
+		t.Fatal("the smallest values:", c.WakeUpdate, err)
+	}
+	for _, bad := range []string{"online_timeout_s: 59", "online_timeout_s: 1801", "settle_s: 9", "settle_s: 601", "shutdown_delay_s: 9",
+		"shutdown_delay_s: 3601", "agent_requests_per_min: 31", "agent_requests_per_min: -1", "online_timeout_s: soon", "hosts: [a]"} {
+		if _, err := Parse([]byte(base + "wake_update: {" + bad + "}\n")); err == nil {
+			t.Errorf("wake_update: {%s} accepted", bad)
+		}
+	}
+}

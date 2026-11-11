@@ -157,3 +157,38 @@ func TestAddSessionCapsAnOldRegistryAndTheTotal(t *testing.T) {
 		}
 	}
 }
+
+// The per-host switch of "Update machines that are off": off unless the system is listed, kept sorted in
+// state.json next to the other per-host switches, and off for everybody while the file cannot be read.
+func TestWakeUpdateSwitch(t *testing.T) {
+	dir := t.TempDir()
+	a := New(dir)
+	if a.WakeUpdateEnabled("pc-a") {
+		t.Fatal("on without being switched on")
+	}
+	for _, id := range []string{"pc-b", "pc-a", "pc-b"} {
+		if err := a.SetWakeUpdate(id, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !a.WakeUpdateEnabled("pc-a") || !a.WakeUpdateEnabled("pc-b") || a.WakeUpdateEnabled("pc-c") {
+		t.Fatal("after switching two on")
+	}
+	d, err := statefile.Read(a.StatePath)
+	if err != nil || fmt.Sprint(d["wake_update_hosts"]) != "[pc-a pc-b]" {
+		t.Fatal("state.json:", d["wake_update_hosts"], err)
+	}
+	if err := a.SetWakeUpdate("pc-a", false); err != nil || a.WakeUpdateEnabled("pc-a") || !a.WakeUpdateEnabled("pc-b") {
+		t.Fatal("after switching one off", err)
+	}
+	// the other switches of the file are left alone
+	if err := a.SetPowerDisabled("pc-b", true); err != nil || !a.WakeUpdateEnabled("pc-b") || !a.PowerDisabled("pc-b") {
+		t.Fatal("power switch next to it", err)
+	}
+	if err := os.WriteFile(a.StatePath, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if New(dir).WakeUpdateEnabled("pc-b") {
+		t.Fatal("an unreadable state.json must switch it off for every host")
+	}
+}

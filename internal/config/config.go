@@ -239,6 +239,24 @@ type Enroll struct {
 	AllowNonTailscale bool `yaml:"allow_non_tailscale"`
 }
 
+// WakeUpdate is the `wake_update:` block: the timings of "Update machines that are off" (Updates page; README:
+// "Wake, update, shut down"). Which machines take part is not set here: each one is switched on for it in the
+// panel (state.json), by an admin, behind "Confirm it's you".
+type WakeUpdate struct {
+	// OnlineTimeoutS: a machine the run woke is given up on when its agent has not answered by then (default
+	// 300, 60-1800).
+	OnlineTimeoutS int `yaml:"online_timeout_s"`
+	// SettleS is the pause between the result of the update and the shutdown request (default 60, 10-600).
+	SettleS int `yaml:"settle_s"`
+	// ShutdownDelayS is the countdown of that shutdown; it can be cancelled in the panel while it runs
+	// (default 120, 10-3600).
+	ShutdownDelayS int `yaml:"shutdown_delay_s"`
+	// AgentRequestsPerMin is how many control requests a run sends to one agent per minute (default 8, 1-30).
+	// An agent accepts 12 a minute for everything (its control_rate_per_min); the rest stays free for the
+	// buttons of the page.
+	AgentRequestsPerMin int `yaml:"agent_requests_per_min"`
+}
+
 // Intervals are the default polling intervals in seconds (each 1-300).
 type Intervals struct {
 	Agent   float64 `yaml:"agent"`
@@ -292,6 +310,8 @@ type Panel struct {
 	Branding        Branding `yaml:"branding"`
 	Updates         Updates  `yaml:"updates"`
 	Enroll          Enroll   `yaml:"enroll"`
+	// WakeUpdate: the timings of "Update machines that are off" (all optional).
+	WakeUpdate WakeUpdate `yaml:"wake_update"`
 
 	trusted []netip.Prefix
 }

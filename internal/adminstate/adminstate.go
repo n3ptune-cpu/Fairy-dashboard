@@ -2,7 +2,7 @@
 // login):
 //
 //	state.json     poll_overrides, control_disabled {by, at, reason}, power_control_disabled [system ids],
-//	               sessions_revoked_before (epoch)
+//	               sessions_revoked_before (epoch), wake_update_hosts [system ids] (set in the panel only)
 //	sessions.json  sessions {sid: {sub, name, email, ip, created, created_ts, gen}}: a signed cookie is only valid
 //	               while its sid is here, for the account (sub) it names. For the Sessions page an entry also
 //	               has ua, login_ts, login_ip, seen_ts and seen_ip (see Session); an entry written before
@@ -561,6 +561,43 @@ func (a *State) SetPowerDisabled(id string, disabled bool) error {
 		}
 		sort.Strings(out)
 		d["power_control_disabled"] = out
+		return nil
+	})
+	a.state.Refresh()
+	return err
+}
+
+// WakeUpdateEnabled reports whether an admin switched this system on for "Update machines that are off" (off
+// unless it is listed; always false while state.json is unreadable).
+func (a *State) WakeUpdateEnabled(id string) bool {
+	if a.state.Err() != nil {
+		return false
+	}
+	l, _ := a.state.Get()["wake_update_hosts"].([]any)
+	return slices.Contains(l, any(id))
+}
+
+// SetWakeUpdate switches "Update machines that are off" on or off for one system.
+func (a *State) SetWakeUpdate(id string, enabled bool) error {
+	_, err := statefile.Update(a.StatePath, func(d statefile.Data) error {
+		cur := map[string]bool{}
+		l, _ := d["wake_update_hosts"].([]any)
+		for _, v := range l {
+			if s, ok := v.(string); ok {
+				cur[s] = true
+			}
+		}
+		if enabled {
+			cur[id] = true
+		} else {
+			delete(cur, id)
+		}
+		out := make([]string, 0, len(cur))
+		for k := range cur {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		d["wake_update_hosts"] = out
 		return nil
 	})
 	a.state.Refresh()

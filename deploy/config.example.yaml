@@ -98,6 +98,16 @@ agents:
 #                                         # (100.64.0.0/10, fd7a:115c:a1e0::/48): there nobody outside the machine
 #                                         # can listen in or answer in its place. true = also over other networks
 
+# "Update machines that are off" (Updates page): Fairy wakes the ticked machines, updates their agent and
+# switches off again the ones this run woke. A machine takes part only after an admin switched it on for this in
+# the panel (its page, the "..." menu); that is not set in this file. These are the timings (the defaults):
+# wake_update:
+#   online_timeout_s: 300                 # give up on a woken machine whose agent has not answered by then (60-1800)
+#   settle_s: 60                          # pause between the update's result and the shutdown request (10-600)
+#   shutdown_delay_s: 120                 # the countdown of that shutdown; Cancel in the panel stops it (10-3600)
+#   agent_requests_per_min: 8             # control requests a run sends to one agent per minute (1-30); an agent
+#                                         # accepts 12 a minute for everything, the rest stays free for the page
+
 systems: []
   # - {id: qemu-100, dwservice_url: "https://www.dwservice.net/...", tags: [gaming], site: Office}
   # - {id: agent-1, wol: {mac: "00:00:5e:00:53:01", relay: pve1-agent, broadcast: 192.168.10.255}}

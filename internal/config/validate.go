@@ -103,6 +103,10 @@ func (c *Panel) applyDefaults() {
 	if c.Updates.PanelRepo == "" {
 		c.Updates.PanelRepo = release.PanelRepo
 	}
+	defi(&c.WakeUpdate.OnlineTimeoutS, 300)
+	defi(&c.WakeUpdate.SettleS, 60)
+	defi(&c.WakeUpdate.ShutdownDelayS, 120)
+	defi(&c.WakeUpdate.AgentRequestsPerMin, 8)
 	defi(&c.AuditMaxMB, 100)
 	defi(&c.AuditKeep, 5)
 	if c.DataDir == "" {
@@ -168,6 +172,17 @@ func (c *Panel) validateGeneral(errs *problems) {
 	}
 	if c.AuditMaxMB < -1 || c.AuditKeep < 1 || c.AuditKeep > 100 {
 		errs.add("audit_max_mb must be -1 (no rotation) or a size in MiB, audit_keep 1-100")
+	}
+	w := c.WakeUpdate // 0 was replaced by the default above
+	for _, f := range []struct {
+		name   string
+		v      int
+		lo, hi int
+	}{{"online_timeout_s", w.OnlineTimeoutS, 60, 1800}, {"settle_s", w.SettleS, 10, 600},
+		{"shutdown_delay_s", w.ShutdownDelayS, 10, 3600}, {"agent_requests_per_min", w.AgentRequestsPerMin, 1, 30}} {
+		if f.v < f.lo || f.v > f.hi {
+			errs.add("wake_update.%s must be %d-%d", f.name, f.lo, f.hi)
+		}
 	}
 }
 
