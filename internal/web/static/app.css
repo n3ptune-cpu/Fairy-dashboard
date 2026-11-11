@@ -301,7 +301,6 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .section-title .count { color: var(--faint); font-weight: 600; margin-left: 6px; }
 .table.hosts td { padding-top: 12px; padding-bottom: 12px; }
 .table.hosts .namecell a { font-size: 14px; gap: 12px; }
-.table.hosts .namecell .sub { margin-left: 44px; }
 .host-ico { width: 32px; height: 32px; border-radius: var(--radius); display: grid; place-items: center; background: var(--raise); border: 1px solid var(--line2); color: var(--muted); flex: none; }
 .table.guests { font-size: 12px; }
 .table.guests td { padding-top: 6px; padding-bottom: 6px; }
@@ -537,7 +536,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .table tr.row[data-href]:focus-within td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 .guest-count { color: var(--muted); font-size: 12px; margin-left: 8px; white-space: nowrap; }
 .guest-count b { color: var(--text); font-weight: 600; }
-.table.hosts .namecell .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70ch; }
+/* a host is one line: icon, state, name, then its chips; the chips wrap beside the name when the window is narrow */
+.host-line { display: flex; align-items: center; gap: 4px 12px; }
+.host-line > a { flex: none; white-space: nowrap; }
+.host-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.host-tags .tag, .host-tags .chip, .host-tags .guest-count, .host-tags .ver { margin-left: 0; }
 .overview-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .overview-head .push { margin-left: auto; }
 .alert-sum { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; padding: 8px 12px; font-size: 12.5px;
@@ -546,7 +549,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .alert-sum:hover { border-color: var(--warn); }
 .sensor-grid { display: grid; grid-template-columns: 1fr; column-gap: 22px; }
 .sensor-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-@media (max-width: 760px) { .sensor-grid.two { grid-template-columns: 1fr; } .table.hosts .namecell .sub { max-width: 32ch; } }
+@media (max-width: 760px) { .sensor-grid.two { grid-template-columns: 1fr; } }
 
 /* ------------------------------------------------ notifications */
 .topbar .bell { position: relative; margin-left: auto; }

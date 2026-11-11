@@ -591,10 +591,12 @@ function setTitle(t, sub = "") { $("#page-title").textContent = t; $("#page-sub"
 const watts = (s) => s.power_w ?? linkedPower(s.id).watts;
 const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.util_percent || 0), 0) / s.gpus.length : null);
 
+// One line per host: what it is made of (model, cores, memory) is on its own page, and here in the name's tooltip.
+// The name never wraps; in a narrow window its chips wrap next to it instead of pushing the table out of its panel.
 function hostRow(s) {
   const gpus = s.gpus || [], w = watts(s);
-  return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><a href="#/system/${enc(s.id)}"><span class="host-ico">${hostIcon(s)}</span>
-      <span><span class="dot ${cssName(s.status)}"></span> ${esc(s.name)}</span>${clusterTag(s)}${upsChips(s)}${battChip(s)}${helperChip(s)}</a>${guestCount(s)}<span class="sub">${esc(subLine(s))}${verChip(s.id)}</span></td>
+  return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><div class="host-line"><a href="#/system/${enc(s.id)}" title="${esc(subLine(s))}"><span class="host-ico">${hostIcon(s)}</span>
+      <span><span class="dot ${cssName(s.status)}"></span> ${esc(s.name)}</span></a><span class="host-tags">${clusterTag(s)}${upsChips(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id)}</span></div></td>
     <td class="col-kind">${s.kind === "node" ? `<span class="chip">Proxmox</span>` : `<span class="note">${esc(s.owner || s.group || "–")}</span>`}</td>
     <td>${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
     <td>${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
