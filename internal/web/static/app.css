@@ -184,7 +184,6 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .chip.hbadge:hover, .chip.hbadge.on { background: var(--press); }
 .chip.hbadge:not(.ok):not(.warn):not(.bad):hover, .chip.hbadge.on:not(.ok):not(.warn):not(.bad) { border-color: var(--line2); color: var(--text); }
 .chip.hbadge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.chip.hchip { margin-left: 4px; }
 .menu.helper { left: 0; right: auto; min-width: 290px; }
 .menu.helper .menu-row span:last-child { text-align: right; overflow-wrap: anywhere; color: var(--text); }
 .menu-note.bad { color: var(--bad); }
@@ -355,6 +354,14 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
 .info-btn:hover, .info-btn[aria-expanded="true"] { color: var(--text); background: #1c1c1c; }
 .info-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; color: var(--text); }
+/* the same button as the helper's sign in a host row: a shield with a tick (running, quiet) or with "!" (stopped amber, error red) */
+.info-btn.hflag { margin: -4px 0; border-radius: 0; }
+.info-btn.hflag.ok { color: var(--faint); }
+.info-btn.hflag.ok:hover, .info-btn.hflag.ok[aria-expanded="true"] { color: var(--ok); }
+.info-btn.hflag.warn { color: var(--warn); } .info-btn.hflag.bad { color: var(--bad); }
+.info-btn.hflag.warn:hover, .info-btn.hflag.warn[aria-expanded="true"] { background: rgba(245, 184, 75, .14); }
+.info-btn.hflag.bad:hover, .info-btn.hflag.bad[aria-expanded="true"] { background: rgba(255, 93, 108, .14); }
+.info-pop a { color: var(--accent); }
 .menu.info-pop { position: fixed; left: 0; top: 0; right: auto; z-index: 55; width: 400px; min-width: 0; max-width: calc(100vw - 16px); max-height: min(70vh, 520px);
   overflow-y: auto; overscroll-behavior: contain; padding: 12px 14px 10px; font-size: 12.5px; line-height: 1.5; color: #d6d6d6; }
 .info-pop .info-t { color: var(--text); font-weight: 700; font-size: 13px; margin: 0 30px 6px 0; }

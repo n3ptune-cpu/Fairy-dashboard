@@ -152,8 +152,12 @@ func TestUISessionsPage(t *testing.T) {
 func TestUIInfoButton(t *testing.T) {
 	js := appJS(t)
 	for _, want := range []string{
-		`function infoBtn(key, about, html) {`,
-		`<button class="info-btn" type="button" data-info="${esc(key)}" aria-label="${esc(` + "`More about ${about}`" + `)}" aria-expanded="${info.key === key}">${I.info}</button>`,
+		`function infoBtn(key, about, html, o = {}) {`,
+		`type="button" data-info="${esc(key)}" aria-label="${esc(o.label || ` + "`More about ${about}`" + `)}"`, `aria-expanded="${info.key === key}">${o.icon || I.info}</button>`,
+		// the host list's warning sign: a named button, not a chip of text
+		"{ cls: `hflag ${err ? \"bad\" : down ? \"warn\" : \"ok\"}`, icon: down ? I.helperDown : I.helperOk, label: what ? `${name}: ${what}` : name }",
+		`if (!h || !live(s) || !["running", "starting", "stopped", "error"].includes(h.state)) return "";`, // no helper, not installed, not known: no sign
+		`const name = err ? "Helper error" : down ? "Helper stopped" : h.state === "starting" ? "Helper starting" : "Helper running";`,
 		`<div class="info-t">${esc(about)}</div>${html}`,
 		`<button class="info-x" type="button" aria-label="Close">${I.close}</button>`,
 		`if (info.key !== b.dataset.info) openInfo(b, true);` + "\n" + `  else if (info.pinned) closeInfo(false);`, // a click opens, a second click closes

@@ -89,6 +89,8 @@ I.copy = svg('<rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15V
 I.onoff = svg('<path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>', 15);
 I.sessions = svg('<rect x="2.5" y="4" width="13" height="10" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="16.5" y="9" width="5" height="11" rx="1.2"/>');
 I.close = svg('<path d="M6 6l12 12M18 6 6 18"/>', 14);
+I.helperOk = svg('<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/>', 16);
+I.helperDown = svg('<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="M12 8v4.6M12 15.6v.01"/>', 16);
 I.info = svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.01"/>', 16);
 
 const fmtRuntime = (s) => (s == null ? "–" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
@@ -349,9 +351,10 @@ function patchChildren(a, b) {
 // safety promise or a limit stay on the page itself, never only in here; they are marked .info-keep, and with
 // room for it the panel opens under the ones of its own section (at their left edge), not on top of them.
 const info = { html: {}, key: null, pinned: false, timer: null };
-function infoBtn(key, about, html) {
+// o (optional): another icon, class, name and tooltip for a button that flags a state, such as "Helper stopped".
+function infoBtn(key, about, html, o = {}) {
   info.html[key] = `<button class="info-x" type="button" aria-label="Close">${I.close}</button><div class="info-t">${esc(about)}</div>${html}`;
-  return `<button class="info-btn" type="button" data-info="${esc(key)}" aria-label="${esc(`More about ${about}`)}" aria-expanded="${info.key === key}">${I.info}</button>`;
+  return `<button class="info-btn${o.cls ? ` ${o.cls}` : ""}" type="button" data-info="${esc(key)}" aria-label="${esc(o.label || `More about ${about}`)}"${o.label ? ` title="${esc(o.label)}"` : ""} aria-expanded="${info.key === key}">${o.icon || I.info}</button>`;
 }
 const infoList = (items) => `<ul>${items.map((x) => `<li>${x}</li>`).join("")}</ul>`;
 const infoBtnOf = (key) => [...document.querySelectorAll(".info-btn")].find((b) => b.dataset.info === key) || null;
@@ -476,12 +479,19 @@ const HELPER_FEATURE = { coretemp: "Core Temp", ipmi: "BMC sensors", fans: "fans
 const helperOf = (s) => (s?.helper?.needed ? s.helper : null);
 const helperPaused = (s, g) => (s?.helper?.paused || []).includes(g);
 const andList = (xs) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
-// Host list: a small flag only when the helper needs attention (stopped, or an error).
+// Host list: one small sign for the elevated helper, on hosts that have one. Running (or starting): a quiet shield
+// with a tick. Stopped or an error: the shield with "!", amber or red, so the shape differs as well as the colour.
+// Not installed or not known: nothing. It is a button like the update arrow, so its name and tooltip can be reached
+// with the keyboard, and a click or tap opens the same words in the info panel. The host's own page has the state
+// in words (helperBadge).
 function helperChip(s) {
   const h = helperOf(s);
-  if (!h || !live(s) || (h.state !== "stopped" && h.state !== "error")) return "";
-  const tip = h.state === "error" ? `Elevated helper error: ${h.error || "no details"}` : "Elevated helper stopped: its readings are paused and the fans are on the BMC's automatic control";
-  return `<span class="chip hchip ${h.state === "error" ? "bad" : "warn"}" title="${esc(tip)}">helper ${h.state === "error" ? "error" : "stopped"}</span>`;
+  if (!h || !live(s) || !["running", "starting", "stopped", "error"].includes(h.state)) return "";
+  const err = h.state === "error", down = err || h.state === "stopped";
+  const name = err ? "Helper error" : down ? "Helper stopped" : h.state === "starting" ? "Helper starting" : "Helper running";
+  const what = err ? h.error || "no details" : down ? "its readings are paused and the fans are on the BMC's automatic control" : "";
+  return infoBtn(`helper-${s.id}`, name, `<p>The elevated helper of ${esc(s.name)} ${err ? "reports an error" : down ? "is stopped" : h.state === "starting" ? "is starting" : "is running"}${what ? `: ${esc(what)}` : ""}.</p>
+    <p>Details and Stop / Start are on <a href="#/system/${enc(s.id)}">its page</a>.</p>`, { cls: `hflag ${err ? "bad" : down ? "warn" : "ok"}`, icon: down ? I.helperDown : I.helperOk, label: what ? `${name}: ${what}` : name });
 }
 // Host page, next to the name: the state, opening a small menu with the details and Stop / Start.
 function helperBadge(s, open) {
