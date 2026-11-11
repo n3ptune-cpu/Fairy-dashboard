@@ -525,7 +525,8 @@ memory limit. Add it once:
    too old for the new pairing. See [Add host](#add-host).
 8. **The Updates page** can show a host as "failed" with a reason when its agent refuses a second update
    within 10 minutes. See [Updates](#updates).
-9. **At most 8 open Fairy tabs per person.**
+9. **At most 8 open Fairy tabs per person**, and at most 50 sign-ins per person at a time (2000 for the
+   whole panel): one more signs out that person's oldest. `fairy admin sessions list` shows them.
 10. **`/docs`**, if you switched it on, needs a sign-in and a role.
 11. **Fewer notifications that repeat.** A temperature that keeps crossing its limit, or a host that reports
     a finished update again and again, is one entry per 10 minutes with a count ("x7") and one push message.

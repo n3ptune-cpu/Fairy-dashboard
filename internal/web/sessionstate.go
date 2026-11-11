@@ -19,6 +19,11 @@ import (
 type liveSessions struct {
 	mu sync.Mutex
 	m  map[string]*liveSession
+	// max bounds the map (maxLiveSessions), and account says whose session an id is, "" when it is not
+	// registered any more (adminstate.SessionAccount): what prune needs to make room without taking anything
+	// from an account that is not the one filling the map.
+	max     int
+	account func(sid string) string
 
 	streams streamSlots // how many live-update streams are open (stream.go)
 }
@@ -32,12 +37,13 @@ type liveSession struct {
 	touched int64          // Unix seconds of the last change, for pruning
 }
 
-// maxLiveSessions bounds the map. Keys come from signed cookies of registered sessions only, so it cannot be
-// filled from outside; the bound is a backstop.
+// maxLiveSessions bounds the map. Keys come from signed cookies of registered sessions only, and the registry
+// has its own limits (adminstate.MaxSessionsTotal is below this), so it cannot be filled from outside; the
+// bound is a backstop. What happens when it is reached: prune.
 const maxLiveSessions = 4096
 
 func newLiveSessions() *liveSessions {
-	return &liveSessions{m: map[string]*liveSession{},
+	return &liveSessions{m: map[string]*liveSession{}, max: maxLiveSessions,
 		streams: streamSlots{perUser: maxStreamsPerUser, total: maxStreamsTotal, open: map[string]int{}}}
 }
 
@@ -48,7 +54,7 @@ const demoKey = "demo"
 func (l *liveSessions) entry(sid string, now time.Time) *liveSession {
 	e := l.m[sid]
 	if e == nil {
-		if len(l.m) >= maxLiveSessions {
+		if len(l.m) >= l.max {
 			l.prune(now)
 		}
 		e = &liveSession{}
@@ -58,15 +64,55 @@ func (l *liveSessions) entry(sid string, now time.Time) *liveSession {
 	return e
 }
 
-// prune drops entries not touched for a day, and everything when that is not enough. Call with l.mu held.
+// prune makes room when the map is full. It never empties the map (T-04: that took every admin's confirmation
+// window and every kept action away because one account signed in often). In this order, until there is room:
+//
+//  1. entries not touched for a day;
+//  2. entries of sessions that are not registered any more (signed out elsewhere, revoked by the CLI, or
+//     dropped by the registry's own limits): nothing can use them;
+//  3. the least recently used entries of the account that has the most. So the account that fills the map
+//     pays for the room, and an account with one or two sessions keeps what it has.
+//
+// Call with l.mu held.
 func (l *liveSessions) prune(now time.Time) {
 	for k, e := range l.m {
 		if now.Unix()-e.touched > 86400 {
 			delete(l.m, k)
 		}
 	}
-	if len(l.m) >= maxLiveSessions {
-		l.m = map[string]*liveSession{}
+	if len(l.m) < l.max {
+		return
+	}
+	by := map[string][]string{} // account -> the ids of its entries
+	for k := range l.m {
+		acct := ""
+		if l.account != nil && k != demoKey {
+			if acct = l.account(k); acct == "" {
+				delete(l.m, k)
+				continue
+			}
+		}
+		by[acct] = append(by[acct], k)
+	}
+	for len(l.m) >= l.max {
+		most := ""
+		for acct, ids := range by {
+			if len(ids) > len(by[most]) || (len(ids) == len(by[most]) && acct < most) {
+				most = acct
+			}
+		}
+		ids := by[most]
+		if len(ids) == 0 {
+			return
+		}
+		oldest := 0
+		for i, id := range ids {
+			if l.m[id].touched < l.m[ids[oldest]].touched {
+				oldest = i
+			}
+		}
+		delete(l.m, ids[oldest])
+		by[most] = append(ids[:oldest], ids[oldest+1:]...)
 	}
 }
 

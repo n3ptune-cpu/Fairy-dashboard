@@ -21,6 +21,23 @@ import (
 // SessionKeepS is how long (s) a session stays in sessions.json before it is pruned.
 const SessionKeepS = 30 * 86400
 
+// The limits of the session registry (T-04). Every sign-in with an empty cookie jar registers a session, any
+// account the identity provider lets in can do that as often as it likes, and an entry stays for
+// SessionKeepS. Without a limit the file, the time every sign-in takes to rewrite it and the memory to hold
+// it grew with the number of sign-ins.
+//
+//   - MaxSessionsPerAccount: one account's sessions. A person has a session per browser and device, and one
+//     more for every sign-in after the cookies were cleared; 50 is a new one every day of a month and then
+//     some, far more than anyone uses at a time. The sign-in that goes over it drops that account's oldest.
+//   - MaxSessionsTotal: all accounts together (40 accounts at their own limit). When it is reached, the
+//     account with the most sessions gives up its oldest, so an account with a few keeps them.
+//
+// A session that is dropped is signed out: its cookie is answered 401 and the page shows the sign-in.
+const (
+	MaxSessionsPerAccount = 50
+	MaxSessionsTotal      = 2000
+)
+
 // State gives typed access to state.json and sessions.json in the data directory.
 type State struct {
 	StatePath, SessionsPath string
@@ -174,8 +191,8 @@ type NewSession struct {
 	IP    string
 }
 
-// AddSession registers a new login (and drops registry entries older than SessionKeepS, and those an older
-// release left: see SessionGen).
+// AddSession registers a new login (and drops registry entries older than SessionKeepS, those an older
+// release left: see SessionGen, and what is over the registry's limits: see MaxSessionsPerAccount).
 func (a *State) AddSession(sid string, info NewSession) error {
 	_, err := statefile.Update(a.SessionsPath, func(d statefile.Data) error {
 		ss, _ := d["sessions"].(map[string]any)
@@ -194,10 +211,75 @@ func (a *State) AddSession(sid string, info NewSession) error {
 		rec["created"] = time.Now().UTC().Format(time.RFC3339Nano)
 		rec["created_ts"] = now()
 		ss[sid] = rec
+		trimSessions(ss, sid)
 		return nil
 	})
 	a.sessions.Refresh()
 	return err
+}
+
+// trimSessions drops what is over the registry's limits from ss: of every account its oldest sessions beyond
+// MaxSessionsPerAccount, then, while there are more than MaxSessionsTotal, the oldest session of the account
+// that has the most. keep, the session that is being added, is never dropped.
+func trimSessions(ss map[string]any, keep string) {
+	type entry struct {
+		sid string
+		ts  float64
+	}
+	by := map[string][]entry{} // account -> its sessions, oldest first
+	for sid, v := range ss {
+		if sid == keep {
+			continue
+		}
+		m, _ := v.(map[string]any)
+		sub := subjectOf(v)
+		by[sub] = append(by[sub], entry{sid, num(m["created_ts"])})
+	}
+	room := MaxSessionsPerAccount
+	for sub, l := range by {
+		sort.Slice(l, func(i, j int) bool {
+			if l[i].ts != l[j].ts {
+				return l[i].ts < l[j].ts
+			}
+			return l[i].sid < l[j].sid
+		})
+		limit := room
+		if sub == subjectOf(ss[keep]) {
+			limit-- // the new session is one of this account's
+		}
+		for len(l) > limit {
+			delete(ss, l[0].sid)
+			l = l[1:]
+		}
+		by[sub] = l
+	}
+	for len(ss) > MaxSessionsTotal {
+		most := ""
+		for sub, l := range by {
+			if len(l) > len(by[most]) || (len(l) == len(by[most]) && len(l) > 0 && sub < most) {
+				most = sub
+			}
+		}
+		if len(by[most]) == 0 {
+			return
+		}
+		delete(ss, by[most][0].sid)
+		by[most] = by[most][1:]
+	}
+}
+
+// SessionAccount returns the account (subject) a session id is registered for, "" when it is not registered
+// (any more) or the registry cannot be read.
+func (a *State) SessionAccount(sid string) string {
+	if sid == "" || a.sessions.Err() != nil {
+		return ""
+	}
+	ss, _ := a.sessions.Get()["sessions"].(map[string]any)
+	rec, known := ss[sid]
+	if !known || !currentGen(rec) {
+		return ""
+	}
+	return subjectOf(rec)
 }
 
 // RemoveSession forgets one session (logout, idle timeout); its cookie stops working.

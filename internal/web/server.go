@@ -117,6 +117,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60), anonAudit: newAuditThrottle(),
 		settingsRL: newRateLimiter(30), uploadRL: newRateLimiter(uploadsPerMin), answerTimeout: answerWriteTimeout,
 		backgrounds: streamSlots{perUser: maxBackgroundsPerUser, total: maxBackgroundsTotal, open: map[string]int{}}}
+	s.codec.live.account = p.Admin.SessionAccount // whose session an id is, for making room (liveSessions.prune)
 	s.oidc = newOIDC(cfg, secrets)
 	s.logo = loadLogo(cfg.Branding.Logo)
 	s.Managed = managed.NewStore(cfg.DataDir)
