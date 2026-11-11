@@ -77,6 +77,10 @@ no capabilities needed: the panel never runs local power or IPMI commands).
 `FAIRY_SESSION_SECRET` in `fairy.env` signs the session cookies. Make it with `openssl rand -base64 48`. The
 panel does not start with the example value from `deploy/fairy.env.example` or with one character repeated.
 
+**Trying changes on your own PC, without Pocket ID?** That is a separate *test build*
+(`go build -tags fairytest`), see [TESTING-LOCAL.md](TESTING-LOCAL.md). It has no sign-in, so it only runs on
+`127.0.0.1` with its own empty state, and no release contains it.
+
 **Updating a panel that already runs?** Read [Upgrading to this release](#upgrading-to-this-release) first.
 It is short, and it names three settings in `config.yaml` and one line in `fairy.env` that the new panel
 refuses.
@@ -588,6 +592,13 @@ session settings as whole seconds).
 
 * Pocket ID only (OIDC code flow + PKCE S256, nonce, state). No passwords anywhere. Pocket ID (allowed_groups /
   allowed_emails, matched only for a verified email) decides who may sign in; nothing else.
+* No release has a way around that sign-in. The test build (`go build -tags fairytest`,
+  [TESTING-LOCAL.md](TESTING-LOCAL.md)) has no sign-in, and so it is separate code that a build without the tag
+  does not contain: a test of the normal build checks that, and the release workflow stops before signing if a
+  built program says it is a test build. A test build refuses to start unless it listens on loopback only, has
+  no `oidc:` block and no session or OIDC secret, and its data folder is new or its own; it answers no request
+  that came through a proxy or for another host name. (`fairy serve --demo`, simulated data on loopback only,
+  is in every build, as before.)
 * Roles, managed in the panel (`users.json`, Users page or `fairy admin users|sites`), keyed by the OIDC subject:
   **admin** sees everything, may use control actions, the Audit and Users pages; **viewer** is read-only and sees
   only the systems, guests, power sources, UPSes (and their processes, sensors, history) of their sites;
@@ -752,6 +763,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/jsonx` | Helpers for reading loosely-typed JSON from Proxmox, agents and devices. |
 | `internal/apierr` | The error type that becomes an HTTP status + `{"detail": ...}`. |
 | `internal/demo` | `fairy serve --demo`: a simulated homelab (fake Proxmox, agents, plugs, UPS, BMC). |
+| test build | Only with `go build -tags fairytest`, never in a release ([TESTING-LOCAL.md](TESTING-LOCAL.md)): `cmd/fairy/testmode.go` (what it refuses to start with, its own folder), `internal/web/testmode.go` (sign-in and "Confirm it's you" without Pocket ID, the banner), `release/key.go` (the release key, for Add host). `cmd/fairy/testmode_off.go` is what every other build has instead. |
 | `internal/agentcontract` | The panel <-> agent contract test: the panel's real poller, normaliser, power/UPS managers and web API against the real `fairy-agent` handler (fake collectors, fake BMC, fake devices). |
 | `internal/testutil` | Shared test fixtures. |
 | `deploy/` | Example `config.yaml`, `fairy.env`, the systemd unit `fairy.service`, nginx, the `fairy-update` wrapper, the Update panel unit and its polkit rule. (The agent's install files are in Fairy-agent.) |
