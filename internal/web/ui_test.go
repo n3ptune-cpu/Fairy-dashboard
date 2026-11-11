@@ -174,7 +174,9 @@ func TestUIInfoButton(t *testing.T) {
 		`<div class="info-t">${esc(about)}</div>${html}`,
 		`<button class="info-x" type="button" aria-label="Close">${I.close}</button>`,
 		`if (info.key !== b.dataset.info) openInfo(b, true);` + "\n" + `  else if (info.pinned) closeInfo(false);`, // a click opens, a second click closes
-		`if (info.key && (!e.target.closest("#info-pop") || e.target.closest(".info-x"))) closeInfo(false);`,       // a click elsewhere, or on its ×
+		`if (info.key && (x || !e.target.closest("#info-pop"))) closeInfo(false);`,                                 // a click elsewhere, or on its ×
+		`if (x) e.stopPropagation();`,                                                                              // …and the × closes the panel only, not a menu its button sits in
+		`<div class="menu poll" role="menu">`,                                                                      // the host menu: headings and one-line items
 		`if (e.key === "Escape" && info.key) { e.stopPropagation(); closeInfo(true); }`,                            // Escape, and the button has the focus again
 		`const canHover = matchMedia("(hover: hover)");`,                                                           // pointing at it is for a mouse only
 		`el.style.left = `, `el.style.top = `, // placed over the page: nothing moves
@@ -183,6 +185,12 @@ func TestUIInfoButton(t *testing.T) {
 		// the Updates page uses it three times
 		`infoBtn("upd-agents", "Update", infoList([`, `infoBtn("upd-panel", "Update panel", infoList([`, `infoBtn("wu", "Update unpowered hosts", infoList([`,
 		`infoBtn("ov-hosts", "Hosts", infoList([`, // the Overview: where the guests are
+		// a host's ⋯ menu: headings and items; the notes are behind the two info buttons, the reason word for word
+		`<div class="menu-title">Polling rate${infoBtn("poll-menu", "Polling rate", infoList(more))}</div>`,
+		`st.boost_enabled ? "Viewing a host boosts it to 1 s (30 s grace)." : "Boost while viewing is off."`,
+		`<div class="menu-title">Update unpowered hosts${infoBtn("wu-menu", "Update unpowered hosts", infoList([about, ...(why ? [esc(why)] : [])]))}</div>`,
+		"const about = !h.can_join ? `Not possible: ${esc(h.why_not)}.` : h.can_wake ? `In a run you start on the Updates page, Fairy may wake it (via ${esc(h.relay)}), update its agent and switch it off again.`",
+		`<span class="note">${h.opted_in ? "click: off" : h.can_join ? "off" : "Not available"}</span></button>`,
 		// and keeps one sentence for each button on the page
 		`Nothing updates by itself: <b>Update</b> installs the latest signed release on that agent.`,
 		`Update panel installs the latest signed release and restarts the panel.`,

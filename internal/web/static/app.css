@@ -177,7 +177,10 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .detail-head .actions { grid-column: 2; grid-row: 1 / span 2; align-self: start; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 @media (max-width: 1000px) {
   .detail-head { grid-template-columns: minmax(0, 1fr); }
-  .detail-head .actions { grid-column: 1; grid-row: auto; justify-content: flex-start; }
+  .detail-head .actions { grid-column: 1; grid-row: auto; justify-content: flex-start; position: relative; }
+  /* the buttons now start at the left edge: their menus open from the row's left edge, not off the screen to the left of a button */
+  .detail-head .actions .menu-wrap { position: static; }
+  .detail-head .actions .menu { left: 0; right: auto; max-width: min(340px, 100%); }
 }
 /* the elevated helper: badge (opens its menu), host-list flag, the paused line, the Fans tab notice */
 .chip.hbadge { display: inline-flex; align-items: center; cursor: pointer; font-family: inherit; line-height: 1.4; }
@@ -333,6 +336,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .menu-item.danger:not(:disabled) { color: #ff8a95; }
 .menu-item:disabled { color: var(--faint); cursor: not-allowed; }
 .menu-item .note { font-size: 12px; }
+.menu-title .info-btn { margin: -5px 0 -5px 4px; }
+.menu.poll { white-space: nowrap; }  /* headings and one-line items only: as wide as its longest item */
 .menu-why { color: var(--faint); font-size: 12px; padding: 0 8px 6px; }
 .menu-sep { border-top: 1px solid var(--line); margin: 6px 0; }
 .menu-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); padding: 4px 8px; font-variant-numeric: tabular-nums; }

@@ -398,7 +398,12 @@ function openInfo(btn, pinned) {
 }
 document.addEventListener("click", (e) => {
   const b = e.target.closest(".info-btn");
-  if (!b) { if (info.key && (!e.target.closest("#info-pop") || e.target.closest(".info-x"))) closeInfo(false); return; }
+  if (!b) {
+    const x = e.target.closest(".info-x");
+    if (x) e.stopPropagation();  // closing the panel is all its × does: a menu the button sits in stays open
+    if (info.key && (x || !e.target.closest("#info-pop"))) closeInfo(false);
+    return;
+  }
   e.preventDefault(); e.stopPropagation();  // never also a click on the row or label it sits in
   clearTimeout(info.timer);
   if (info.key !== b.dataset.info) openInfo(b, true);
@@ -751,15 +756,17 @@ function liveLabel(s) {
   if (!live(s)) return "";
   return `<span class="live" title="${s.boosted ? "Boosted to 1 s while this page is open" : `Polled every ${fmtIv(s.poll_interval_s)}`}"><span class="pulse"></span>live · ${fmtIv(s.poll_interval_s)}${s.boosted ? " ⇡" : ""}</span>`;
 }
+// The ⋯ menu of a host: headings and items only. What used to be lines and notes in it (each source's own rate, the
+// boost while viewing, why control is off) is behind the info button next to "Polling rate", and on the items' tooltips.
 function pollMenu(s) {
   const st = state.poll[s.id], why = controlWhyNot();
   const cur = s.poll_mode === "paused" ? "paused" : s.poll_mode === "default" ? "default" : st?.requested_s;
-  return `<div class="menu" role="menu"><div class="menu-title">Polling rate</div>
-    ${POLL_CHOICES.map(([v, label]) => `<button class="menu-item ${String(cur) === String(v) ? "on" : ""}" data-act="poll" data-v="${v}" ${why ? "disabled" : ""}>${label}${v === "default" ? '<span class="note">config</span>' : ""}</button>`).join("")}
-    ${why ? `<div class="menu-note">${esc(why)}</div>` : ""}
-    ${st ? `<div class="menu-sep"></div>${st.jobs.map((j) => `<div class="menu-row"><span>${esc(j.job)}</span><span>${j.paused ? "paused" : fmtIv(j.effective_s)}${j.clamped ? ` <span class="chip warn" title="this source never polls faster than ${esc(j.floor_s)}s">min ${esc(j.floor_s)}s</span>` : ""}</span></div>`).join("")}
-      ${st.note ? `<div class="menu-note">${esc(st.note)}</div>` : ""}
-      <div class="menu-note">${st.boost_enabled ? "Viewing a host boosts it to 1 s (30 s grace)." : "Boost while viewing is off."}</div>` : '<div class="menu-note">loading…</div>'}
+  const more = [...(why ? [esc(why)] : []),
+    ...(st ? [...st.jobs.map((j) => `<code>${esc(j.job)}</code>: ${j.paused ? "paused" : `every ${fmtIv(j.effective_s)}`}${j.clamped ? ` (this source never polls faster than ${esc(j.floor_s)}s)` : ""}`),
+      ...(st.note ? [esc(st.note)] : []), st.boost_enabled ? "Viewing a host boosts it to 1 s (30 s grace)." : "Boost while viewing is off."] : ["loading…"]),
+    "Default is the rate from config.yaml."];
+  return `<div class="menu poll" role="menu"><div class="menu-title">Polling rate${infoBtn("poll-menu", "Polling rate", infoList(more))}</div>
+    ${POLL_CHOICES.map(([v, label]) => `<button class="menu-item ${String(cur) === String(v) ? "on" : ""}" data-act="poll" data-v="${v}" ${why ? `disabled title="${esc(why)}"` : ""}>${label}${v === "default" ? '<span class="note">config</span>' : ""}</button>`).join("")}
     ${modelNameMenu(s)}${wakeUpdateMenu(s)}</div>`;
 }
 const POWER_LABEL = { shutdown: "Shut down", reboot: "Reboot", sleep: "Sleep", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)", bmc_on: "Power on (via BMC)" };
@@ -1414,11 +1421,12 @@ function wakeUpdateMenu(s) {
   const h = (wu.data?.hosts || []).find((x) => x.id === s.id);
   if (!h || !state.me?.can_control) return "";
   const why = controlWhyNot();
-  return `<div class="menu-sep"></div><div class="menu-title">Update unpowered hosts</div>
+  // the full sentence, word for word what the menu used to show under the item: now behind the info button and in the item's tooltip
+  const about = !h.can_join ? `Not possible: ${esc(h.why_not)}.` : h.can_wake ? `In a run you start on the Updates page, Fairy may wake it (via ${esc(h.relay)}), update its agent and switch it off again.`
+    : `In a run it is only updated while it is on: ${esc(h.no_wake)}.`;
+  return `<div class="menu-sep"></div><div class="menu-title">Update unpowered hosts${infoBtn("wu-menu", "Update unpowered hosts", infoList([about, ...(why ? [esc(why)] : [])]))}</div>
     <button class="menu-item ${h.opted_in ? "on" : ""}" type="button" data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"
-      ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""}>${h.opted_in ? "Switched on for this machine" : "Switch on for this machine"}<span class="note">${h.opted_in ? "click: off" : "off"}</span></button>
-    <div class="menu-note">${!h.can_join ? `Not possible: ${esc(h.why_not)}.` : h.can_wake ? `In a run you start on the Updates page, Fairy may wake it (via ${esc(h.relay)}), update its agent and switch it off again.`
-      : `In a run it is only updated while it is on: ${esc(h.no_wake)}.`}</div>`;
+      ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${about}">${h.opted_in ? "Switched on for this machine" : "Switch on for this machine"}<span class="note">${h.opted_in ? "click: off" : h.can_join ? "off" : "Not available"}</span></button>`;
 }
 // The dialog: which machines, in plain words what happens, then "Confirm it's you" for exactly that list.
 async function openWakeUpdate() {
