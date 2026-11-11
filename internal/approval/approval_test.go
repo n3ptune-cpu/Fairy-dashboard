@@ -1,0 +1,199 @@
+package approval
+
+import (
+	"encoding/base64"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
+)
+
+func p[T any](v T) *T { return &v }
+
+// The challenges of the protocol's test vectors (part1-passkey-protocol.md, 4.3): the bytes 00..1f and 80..9f.
+func vectorChallenge(first byte) string {
+	b := make([]byte, 32)
+	for i := range b {
+		b[i] = first + byte(i)
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+var (
+	shutdown60 = api.ApprovalRequest{Verb: api.ApprovePower, Action: p("shutdown"), DelayS: p(60)}
+	fan50      = api.ApprovalRequest{Verb: api.ApproveFanSet, Zone: p(0), Percent: p(50)}
+)
+
+func bound(agent string, req api.ApprovalRequest, challenge string) Bound {
+	canon, _ := req.Canonical()
+	return Bound{Target: Target{AgentID: agent, Name: strings.ToUpper(agent), Request: req}, Canonical: canon, Challenge: challenge}
+}
+
+// The plan's nonce is the protocol's: the three vectors of section 4.3, made from requests as the panel
+// builds them (not from the texts), so the canonical text and the nonce are both checked.
+func TestPlanNonceVectors(t *testing.T) {
+	a, b := vectorChallenge(0x00), vectorChallenge(0x80)
+	if a != "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8" || b != "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8" {
+		t.Fatal("the vector challenges:", a, b)
+	}
+	ea, eb := bound("pc-a", shutdown60, a), bound("pc-b", fan50, b)
+	if ea.Canonical != "power action=shutdown delay_s=60" || eb.Canonical != "fan_set zone=0 percent=50" {
+		t.Fatal("canonical texts:", ea.Canonical, eb.Canonical)
+	}
+	for _, c := range []struct {
+		name string
+		list []Bound
+		want string
+	}{
+		{"[A]", []Bound{ea}, "iIJWRjPBb50gLAFJ9H9myD3VD4DyAz4P1gDUQvSpFfs"},
+		{"[A, B]", []Bound{ea, eb}, "DQDax65TnNgoLbC3-4jWKUMPNImUsC8GzmuOlb6Y1DQ"},
+		{"[B, A]", []Bound{eb, ea}, "7ccQOntkRjlIF_95rwZ_Frf5s9ueuvVLigbjdltx1Po"},
+	} {
+		plan, err := NewPlan(c.list)
+		if err != nil {
+			t.Fatal(c.name, err)
+		}
+		if plan.Nonce() != c.want {
+			t.Errorf("%s: nonce %s, the protocol says %s", c.name, plan.Nonce(), c.want)
+		}
+		if n, _ := api.ApprovalNonce(plan.Entries()); n != plan.Nonce() || len(plan.Entries()) != len(c.list) {
+			t.Errorf("%s: the entries are not the list the nonce was made from", c.name)
+		}
+	}
+}
+
+// A plan is refused where a machine would refuse the list.
+func TestPlanRefusals(t *testing.T) {
+	a := vectorChallenge(0)
+	wrongText := bound("pc-a", shutdown60, a)
+	wrongText.Canonical = "power action=reboot delay_s=60"
+	noCanon := bound("pc-a", api.ApprovalRequest{Verb: "format_disk"}, a)
+	var many []Bound
+	for i := 0; i <= api.MaxApprovalEntries; i++ {
+		many = append(many, bound("pc", shutdown60, vectorChallenge(byte(i))))
+	}
+	for name, list := range map[string][]Bound{
+		"empty":                    nil,
+		"the same challenge twice": {bound("pc-a", shutdown60, a), bound("pc-b", fan50, a)},
+		"a short challenge":        {bound("pc-a", shutdown60, a[:42])},
+		"a challenge with padding": {bound("pc-a", shutdown60, a[:42]+"=")},
+		"another text":             {wrongText},
+		"no such request":          {noCanon},
+		"65 entries":               many,
+	} {
+		if _, err := NewPlan(list); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := NewPlan(many[:api.MaxApprovalEntries]); err != nil {
+		t.Error("64 entries:", err)
+	}
+}
+
+// An approval is handed out only for a request the plan covers, to the agent it was asked for: changing any
+// field, or sending it somewhere else, is refused here, before a machine is asked.
+func TestApprovalIsBoundToTheExactRequest(t *testing.T) {
+	plan, err := NewPlan([]Bound{bound("pc-a", shutdown60, vectorChallenge(0)), bound("pc-b", fan50, vectorChallenge(0x80))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const token = "header.payload.signature"
+	ap, err := For(plan, token, "pc-a", shutdown60)
+	if err != nil || ap.Token != token || len(ap.Entries) != 2 || ap.Entries[0].Request != "power action=shutdown delay_s=60" {
+		t.Fatal("the approved request:", ap, err)
+	}
+	for name, c := range map[string]struct {
+		agent string
+		req   api.ApprovalRequest
+	}{
+		"another delay":             {"pc-a", api.ApprovalRequest{Verb: api.ApprovePower, Action: p("shutdown"), DelayS: p(61)}},
+		"another action":            {"pc-a", api.ApprovalRequest{Verb: api.ApprovePower, Action: p("reboot"), DelayS: p(60)}},
+		"another verb":              {"pc-a", api.ApprovalRequest{Verb: api.ApproveApplyUpdate}},
+		"another machine":           {"pc-b", shutdown60},
+		"the other entry's fan":     {"pc-a", fan50},
+		"another percent":           {"pc-b", api.ApprovalRequest{Verb: api.ApproveFanSet, Zone: p(0), Percent: p(51)}},
+		"another zone":              {"pc-b", api.ApprovalRequest{Verb: api.ApproveFanSet, Zone: p(1), Percent: p(50)}},
+		"a machine not in the plan": {"pc-c", shutdown60},
+		"an extra field":            {"pc-a", api.ApprovalRequest{Verb: api.ApprovePower, Action: p("shutdown"), DelayS: p(60), Zone: p(0)}},
+	} {
+		if ap, err := For(plan, token, c.agent, c.req); !errors.Is(err, ErrNotCovered) || ap != nil {
+			t.Errorf("%s: handed out an approval (%v)", name, err)
+		}
+	}
+	if ap, err := For(plan, "", "pc-a", shutdown60); err == nil || ap != nil {
+		t.Error("no token, no approval")
+	}
+	if ap, err := For(nil, token, "pc-a", shutdown60); err == nil || ap != nil {
+		t.Error("no plan, no approval")
+	}
+	// two entries for the same request on the same machine: neither is "the" one
+	twice, err := NewPlan([]Bound{bound("pc-a", shutdown60, vectorChallenge(0)), bound("pc-a", shutdown60, vectorChallenge(0x80))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := For(twice, token, "pc-a", shutdown60); err == nil {
+		t.Error("an ambiguous plan handed out an approval")
+	}
+}
+
+// The panel's own checks of a verified token.
+func TestCheckClaims(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	good := Claims{Nonce: "the-nonce", Sub: "user-1", AuthTime: float64(now.Unix() - 5), AMR: []string{"phr", "mfa"}}
+	want := Want{Nonce: "the-nonce", Sub: "user-1", Now: now}
+	if f := Check(good, want); f != nil {
+		t.Fatal("a good token:", f)
+	}
+	edit := func(fn func(*Claims)) Claims { c := good; fn(&c); return c }
+	for name, c := range map[string]struct {
+		claims Claims
+		reason string
+	}{
+		"another nonce":         {edit(func(c *Claims) { c.Nonce = "another" }), ReasonNonce},
+		"no nonce":              {edit(func(c *Claims) { c.Nonce = "" }), ReasonNonce},
+		"another person":        {edit(func(c *Claims) { c.Sub = "user-2" }), ReasonPerson},
+		"no person":             {edit(func(c *Claims) { c.Sub = "" }), ReasonPerson},
+		"no auth_time":          {edit(func(c *Claims) { c.AuthTime = 0 }), ReasonNoAuth},
+		"signed in 121 s ago":   {edit(func(c *Claims) { c.AuthTime = float64(now.Unix() - 121) }), ReasonAuthTime},
+		"signed in an hour ago": {edit(func(c *Claims) { c.AuthTime = float64(now.Unix() - 3600) }), ReasonAuthTime},
+		"signed in in 121 s":    {edit(func(c *Claims) { c.AuthTime = float64(now.Unix() + 121) }), ReasonAuthTime},
+		"no passkey":            {edit(func(c *Claims) { c.AMR = []string{"pwd"} }), ReasonAMR},
+		"no amr":                {edit(func(c *Claims) { c.AMR = nil }), ReasonAMR},
+	} {
+		if f := Check(c.claims, want); f == nil || f.Reason != c.reason || f.Text == "" {
+			t.Errorf("%s: %v, want the reason %s", name, f, c.reason)
+		}
+	}
+	if f := Check(edit(func(c *Claims) { c.AuthTime = float64(now.Unix() - 120) }), want); f != nil {
+		t.Error("exactly two minutes old is still fresh:", f)
+	}
+	// A test build has no signed-in person: only that one comparison is skipped.
+	any := Want{Nonce: "the-nonce", AnyPerson: true, Now: now}
+	if f := Check(edit(func(c *Claims) { c.Sub = "whoever" }), any); f != nil {
+		t.Error("AnyPerson:", f)
+	}
+	if f := Check(edit(func(c *Claims) { c.Nonce = "another" }), any); f == nil || f.Reason != ReasonNonce {
+		t.Error("AnyPerson must not skip the nonce:", f)
+	}
+	if f := Check(edit(func(c *Claims) { c.AuthTime = float64(now.Unix() - 600) }), any); f == nil || f.Reason != ReasonAuthTime {
+		t.Error("AnyPerson must not skip the freshness:", f)
+	}
+	// an empty wanted person never matches an empty claim
+	if f := Check(edit(func(c *Claims) { c.Sub = "" }), Want{Nonce: "the-nonce", Now: now}); f == nil || f.Reason != ReasonPerson {
+		t.Error("no signed-in person and no sub must not match:", f)
+	}
+}
+
+// A token larger than a machine takes is refused before it is looked at.
+func TestCheckSize(t *testing.T) {
+	if f := CheckSize(strings.Repeat("a", api.MaxApprovalToken)); f != nil {
+		t.Error("8192 bytes:", f)
+	}
+	for _, n := range []int{0, api.MaxApprovalToken + 1, 1 << 20} {
+		if f := CheckSize(strings.Repeat("a", n)); f == nil || f.Reason != ReasonSize {
+			t.Errorf("%d bytes: %v", n, f)
+		}
+	}
+}

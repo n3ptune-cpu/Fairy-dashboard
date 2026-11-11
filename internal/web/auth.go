@@ -306,6 +306,7 @@ func (c *reqCtx) loginKey() string {
 func (s *Server) authRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /auth/login", s.h(s.authLogin))
 	m.HandleFunc("GET /auth/callback", s.h(s.authCallback))
+	m.HandleFunc("GET /auth/approval/callback", s.h(s.approvalCallback)) // config.ApprovalCallbackPath
 	m.HandleFunc("POST /auth/logout", s.h(s.authLogout))
 	m.HandleFunc("POST "+activePath, s.h(s.meActive))
 	m.HandleFunc("POST "+stepUpPath, s.h(s.confirmStepUp))
@@ -441,6 +442,9 @@ func (s *Server) confirmStepUp(c *reqCtx) error {
 			"cancelled, it is more than 3 minutes old, or it was asked for from another browser or address. Nothing was " +
 			"done. Press the button again."})
 	}
+	if kept.Approval != nil { // a machine checks this itself: one round trip with the client "Fairy PC actions"
+		return s.startApproval(c, u, kept, target, round)
+	}
 	params := map[string]any{"for": kept.Action}
 	if s.DemoUser != nil { // demo: simulate the Pocket ID round trip
 		s.demoMu.Lock()
@@ -480,6 +484,11 @@ func (s *Server) authCallback(c *reqCtx) error {
 	var foreign bool
 	if sess.SID != "" {
 		kept, foreign = s.codec.live.takePending(sess.SID, sess.State, c.client(), s.now())
+	}
+	if kept != nil && kept.Approval != nil {
+		// An action that waits for a machine's approval is never run by a sign-in: only the callback of the
+		// approval's own round trip runs it (approvalCallback). It was taken out above and is dropped.
+		kept = nil
 	}
 	if !s.login.allow(c.loginKey()) {
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
@@ -676,20 +685,13 @@ func (s *Server) endRefused(sub, cookieSID string) (int, error) {
 // otherSub: userinfo answered about another subject than the ID token's. Nothing of that answer is used, and
 // the caller refuses the sign-in (OIDC Core 5.3.2), whatever the account would be allowed without it.
 func (s *Server) verifiedClaims(ctx context.Context, p *oidc.Provider, code string, sess *sessionData) (claims map[string]any, groupsRead, otherSub bool, lf *loginFailure) {
-	redact := []string{code, sess.Verifier, s.oidc.secret}
-	tok, err := s.oidc.oauth(p).Exchange(ctx, code, oauth2.VerifierOption(sess.Verifier))
-	if err != nil {
-		return nil, false, false, exchangeFailure(err, redact...)
+	rawID, tok, redact, lf := s.oidc.exchangeCode(ctx, p, code, sess.Verifier)
+	if lf != nil {
+		return nil, false, false, lf
 	}
-	rawID, _ := tok.Extra("id_token").(string)
-	if rawID == "" {
-		return nil, false, false, &loginFailure{reason: "no id_token", attrs: []any{"error",
-			"the token response has no id_token (is the openid scope requested?)"}}
-	}
-	redact = append(redact, rawID, tok.AccessToken, tok.RefreshToken)
-	idt, err := p.Verifier(&oidc.Config{ClientID: s.Cfg.OIDC.ClientID}).Verify(ctx, rawID)
-	if err != nil {
-		return nil, false, false, &loginFailure{reason: "invalid id_token", attrs: []any{"error", safeErr(err, redact...)}}
+	idt, lf := s.oidc.verifyIDToken(ctx, p, rawID, redact)
+	if lf != nil {
+		return nil, false, false, lf
 	}
 	if idt.Nonce != sess.Nonce {
 		got := "different"

@@ -63,6 +63,7 @@ const testJS = `const signIn = document.querySelector("#login a.btn");
 if (signIn) signIn.textContent = "Continue as test-admin (test build)";
 new MutationObserver(() => {
   const go = document.getElementById("su-go"), note = document.getElementById("su-note");
+  if (document.querySelector(".stepup[data-approval]")) return;  // the machine's own check: that one is really Pocket ID
   if (go && go.textContent !== "Confirm (test build)") go.textContent = "Confirm (test build)";
   if (note && !note.dataset.fairytest) {
     note.dataset.fairytest = "1";
@@ -78,6 +79,7 @@ func (s *Server) EnableTestMode(key string) {
 	if !ValidTestKey(key) {
 		panic("web: EnableTestMode needs a start key of at least 32 letters, digits, - or _")
 	}
+	s.approvalAnyPerson = true // there is no signed-in person to compare an approver with (approval.go)
 	gate := testKeyGate{key: key, cookie: testKeyCookieValue(key)}
 	// The session cookie gets this panel's port into its name, like the key cookie: cookies know no port, and
 	// two test panels on one PC signed each other out with every page load. Both cookies are SameSite=Strict
@@ -401,6 +403,11 @@ func (s *Server) testStepUp(c *reqCtx) error {
 		Next      string `json:"next"`
 	}
 	key := c.pendingKey()
+	if s.codec.live.pendingNeedsApproval(key) {
+		// A machine checks this action itself: the approval is the one thing a test build really asks Pocket ID
+		// for (the client "Fairy PC actions"). Nothing is confirmed locally.
+		return s.confirmStepUp(c)
+	}
 	if err := c.decodeBody(&b); err != nil || len(b.PendingID) > 64 {
 		s.codec.live.dropPending(key)
 		return apierr.New(422, "invalid request body")
@@ -423,4 +430,12 @@ func (s *Server) testStepUp(c *reqCtx) error {
 	s.resumePending(c, kept)
 	c.json(200, map[string]any{"url": stepUpNext(safeNext(b.Next)), "action": kept.Action})
 	return nil
+}
+
+// pendingNeedsApproval reports whether the action waiting for sid needs a machine's approval (approval.go).
+func (l *liveSessions) pendingNeedsApproval(sid string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e := l.m[sid]
+	return e != nil && e.pending != nil && e.pending.Approval != nil
 }

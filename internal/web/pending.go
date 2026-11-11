@@ -62,6 +62,11 @@ type pendingAction struct {
 	At     time.Time
 	Client client // who asked for it: only this client can arm it, and only this client's confirmation runs it
 	Round  string // the state of the step-up round trip it is armed for ("": not armed)
+	// Approval: a machine this request goes to checks an approval itself (approval.go). The request then runs
+	// only after the round trip with the client "Fairy PC actions" that was made for exactly this plan, never
+	// after an ordinary "Confirm it's you". nil: an ordinary kept action.
+	Approval *approvalPlan
+	Next     string // where the page returns to after the approval's round trip (set when it starts)
 }
 
 // wildcardRe finds the path parameters of a route pattern ("{id}", "{path...}").
@@ -88,8 +93,9 @@ const (
 type ctxKey int
 
 const (
-	resumedKey ctxKey = iota // the request is the panel's own replay of a stored pending action
-	sessionKey               // the session to use instead of the cookie (the replay's, fresh from the sign-in)
+	resumedKey  ctxKey = iota // the request is the panel's own replay of a stored pending action
+	sessionKey                // the session to use instead of the cookie (the replay's, fresh from the sign-in)
+	approvalKey               // the verified approval the replay runs with (*approvalGrant, approval.go)
 )
 
 func (c *reqCtx) resumed() bool { return c.r.Context().Value(resumedKey) != nil }
@@ -111,7 +117,7 @@ const (
 
 // keepPending stores this request as the session's pending action (called when step-up refuses it) and returns
 // it. nil when the request is not kept; why says so for the two cases the page explains (notKept...).
-func (c *reqCtx) keepPending(u *model.User) (p *pendingAction, why string) {
+func (c *reqCtx) keepPending(u *model.User, plan *approvalPlan) (p *pendingAction, why string) {
 	if c.resumed() || (u.Auth != "session" && u.Auth != "demo") || c.r.Method == http.MethodGet ||
 		c.r.Method == http.MethodHead || c.fn == nil || c.r.Pattern == "" || !strings.HasPrefix(c.r.URL.Path, "/api/") {
 		return nil, ""
@@ -141,7 +147,7 @@ func (c *reqCtx) keepPending(u *model.User) (p *pendingAction, why string) {
 		}
 	}
 	p = &pendingAction{ID: randToken(18), Method: c.r.Method, Pattern: c.r.Pattern, Vals: vals, URL: *c.r.URL,
-		run: c.fn, Body: string(c.body), Label: label, Action: action, At: now, Client: c.client()}
+		run: c.fn, Body: string(c.body), Label: label, Action: action, At: now, Client: c.client(), Approval: plan}
 	if list := actionList[c.r.Pattern]; list != nil {
 		for _, line := range list(c, u) {
 			if len(p.Items) == maxActionItems {
@@ -299,7 +305,19 @@ func (r *recorder) Write(b []byte) (int, error) {
 // session (callback or demo), and keeps its outcome for the confirming client's next /api/me. p was taken out of the store by the caller
 // (takePending), so it runs at most once; nil runs nothing. It returns the status the action answered with (0:
 // nothing ran).
+//
+// A kept action that needs a machine's approval never runs here: an ordinary confirmation is not what it was
+// kept for (resumePendingWith runs it, after the approval's own round trip).
 func (s *Server) resumePending(c *reqCtx, p *pendingAction) int {
+	if p != nil && p.Approval != nil {
+		slog.Warn("a kept action that needs a machine's approval was not run: the confirmation that came back is not its approval", "route", p.Pattern)
+		return 0
+	}
+	return s.resumePendingWith(c, p, nil)
+}
+
+// resumePendingWith is resumePending with the verified approval the replay carries (nil: none).
+func (s *Server) resumePendingWith(c *reqCtx, p *pendingAction, grant *approvalGrant) int {
 	if p == nil || p.run == nil {
 		return 0
 	}
@@ -308,6 +326,9 @@ func (s *Server) resumePending(c *reqCtx, p *pendingAction) int {
 	// breaks, must not stop the request to the machine half-way (it may have taken it, and the audit log would
 	// then hold an error for an action that happened; r3-p1-01). The action's own time limits still apply.
 	ctx := context.WithValue(context.WithValue(context.WithoutCancel(c.r.Context()), resumedKey, true), sessionKey, sess)
+	if grant != nil {
+		ctx = context.WithValue(ctx, approvalKey, grant)
+	}
 	// The request is put together from what the router made of the original one. Nothing is parsed or routed a
 	// second time: the kept handler is called directly, with the kept path parameters.
 	u := p.URL

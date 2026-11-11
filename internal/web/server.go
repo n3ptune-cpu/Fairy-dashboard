@@ -93,11 +93,17 @@ type Server struct {
 	seen    map[string]time.Time // subject -> last "last seen" write
 	seenErr atomic.Bool          // the last write of a session's last use to sessions.json failed (saveSeen)
 
-	codec  *sessionCodec
-	oidc   *oidcClient
-	logo   *brandLogo // branding.logo, read once at startup (nil = built-in logo)
-	assetV string     // ?v= of the /static/* URLs (assetVersion)
-	index  []byte     // index.html with assetV filled in
+	codec *sessionCodec
+	oidc  *oidcClient
+	// approval is the Pocket ID client "Fairy PC actions" (approval.go); it is used only when approval: is set.
+	approval *oidcClient
+	// approvalAnyPerson: the approval's "same person as the signed-in one" check is skipped. Only a test
+	// build sets it (EnableTestMode, internal/web/testmode.go): it has no signed-in person. A release has no
+	// code that sets it.
+	approvalAnyPerson bool
+	logo              *brandLogo // branding.logo, read once at startup (nil = built-in logo)
+	assetV            string     // ?v= of the /static/* URLs (assetVersion)
+	index             []byte     // index.html with assetV filled in
 
 	wall *streamSlots // downloads of the sign-in wallpaper in flight (signin_wallpaper.go)
 
@@ -143,6 +149,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 		backgrounds: streamSlots{perUser: maxBackgroundsPerUser, total: maxBackgroundsTotal, open: map[string]int{}}}
 	s.codec.live.account = p.Admin.SessionAccount // whose session an id is, for making room (liveSessions.prune)
 	s.oidc = newOIDC(cfg, secrets)
+	s.approval = newApprovalOIDC(cfg, secrets)
 	s.logo = loadLogo(cfg.Branding.Logo)
 	s.Managed = managed.NewStore(cfg.DataDir)
 	s.Notes = notifications.Open(filepath.Join(cfg.DataDir, "notifications.json"))

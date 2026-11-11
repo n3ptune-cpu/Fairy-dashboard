@@ -29,11 +29,14 @@ type loginFailure struct {
 // staleState is the reason of a callback that is not the answer to this browser's current round trip.
 const staleState = "mismatching_state"
 
-func (f *loginFailure) auditOutcome() string {
+func (f *loginFailure) auditOutcome() string { return "failed: " + f.why() }
+
+// why is the reason with its addition, without the word "failed".
+func (f *loginFailure) why() string {
 	if f.audit != "" {
-		return "failed: " + f.reason + " (" + f.audit + ")"
+		return f.reason + " (" + f.audit + ")"
 	}
-	return "failed: " + f.reason
+	return f.reason
 }
 
 // exchangeFailure describes a failed code exchange. A *oauth2.RetrieveError contributes only its OAuth error

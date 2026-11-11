@@ -223,7 +223,7 @@ func (c *reqCtx) stepUpCheck(u *model.User, what string, window int, perAction b
 		}
 	}
 	c.audit(u, stepUpAction, c.r.URL.Path, map[string]any{"auth_age_s": math.Round(*age)}, stepUpAsked)
-	kept, why := c.keepPending(u)
+	kept, why := c.keepPending(u, nil)
 	msg := fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d min.", what, max(1, window/60))
 	if window < 60 || window%60 != 0 {
 		msg = fmt.Sprintf("Confirm it's you: %s need a Pocket ID sign-in from the last %d seconds.", what, window)

@@ -209,6 +209,15 @@ func (l *liveSessions) armPending(sid, id string, cl client, round string, now t
 	return p
 }
 
+// setPendingNext notes where the page returns to after the round trip `round` of the action waiting for sid.
+func (l *liveSessions) setPendingNext(sid, round, next string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e := l.m[sid]; e != nil && e.pending != nil && e.pending.Round == round && round != "" {
+		e.pending.Next = next
+	}
+}
+
 // takePending removes the action waiting for sid, whatever it is, and returns it only when it was armed for
 // this very round trip (round), the request comes from the client it was kept for, and it is not too old. So a
 // kept action can be handed out at most once, and a round trip that was not started for it (a link, a second
