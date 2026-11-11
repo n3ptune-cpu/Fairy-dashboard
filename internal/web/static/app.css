@@ -1,7 +1,7 @@
 /* Fairy theme: true black. Accent colours are only used for data. */
 :root {
   --bg: #000; --panel: #0a0a0a; --panel2: #0d0d0d; --hover: #141414; --line: #1a1a1a; --line2: #262626;
-  --text: #ededed; --muted: #8a8a8a; --faint: #808080;
+  --text: #ededed; --muted: #a0a0a0; --faint: #808080;
   --accent: #7aa2ff; --accent2: #9b7bff;
   --ok: #3ddc97; --warn: #f5b84b; --bad: #ff5d6c; --off: #4a4a4a;
   --cpu: #7aa2ff; --mem: #9b7bff; --disk: #49c6e5; --gpu: #3ddc97; --pwr: #f5b84b;
