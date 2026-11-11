@@ -416,10 +416,15 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .table.sessions .namecell .sub.ua { max-width: min(64ch, 30vw); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .table.sessions.all .namecell .sub.ua { max-width: min(48ch, 20vw); }
 .table.sessions.all td:first-child { min-width: 130px; }
-.table.sessions td.act .note { display: inline-block; max-width: 13ch; white-space: normal; text-align: right; }
+.table.sessions td.act .note { display: inline-block; width: 13ch; white-space: normal; text-align: right; }  /* two lines, never squeezed to four */
+/* the long values wrap instead of widening the table: an IPv6 address (an IPv4 one fits in 15ch and stays whole), an e-mail address, an account id */
+.table.sessions td[data-l="IP address"] { min-width: 15ch; overflow-wrap: anywhere; }
+.table.sessions .namecell .sub:not(.ua) { overflow-wrap: anywhere; }
 .table.sessions tr.cur td:first-child { box-shadow: inset 2px 0 0 var(--ok); }
 .table.sessions td .note { margin-top: 2px; }
-@media (max-width: 760px) {  /* a phone: every session is a block, each value with its heading in front */
+/* Every session is a block, each value with its heading in front: on a phone, and in every window in which the
+   table would not fit next to the open sidebar (its columns need about 920px; below 1240px there is less). */
+@media (max-width: 1240px) {
   .table.sessions, .table.sessions tbody { display: block; }
   .table.sessions thead { display: none; }
   .table.sessions tr.row { display: block; padding: 10px 12px; border-bottom: 1px solid #121212; }
@@ -429,11 +434,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   .table.sessions td { display: block; padding: 3px 0; border: 0; text-align: left; white-space: normal; }
   .table.sessions td[data-l]:not(.namecell)::before { content: attr(data-l); display: inline-block; min-width: 92px; color: var(--faint);
     font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
-  .table.sessions td[data-l]:not(.namecell) > .note, .table.sessions td.nowrap > .note { display: inline; margin-left: 8px; }
+  .table.sessions td[data-l]:not(.namecell) > .note, .table.sessions td.nowrap > .note { display: inline-block; margin-left: 8px; }
   .table.sessions .namecell .sub.ua, .table.sessions.all .namecell .sub.ua { max-width: 100%; }
-  .table.sessions td.act .note { max-width: none; text-align: left; }
+  .table.sessions td.act .note { width: auto; text-align: left; }
   .table.sessions td.act { padding-top: 8px; }
-  .table.sessions td.act .btn { width: 100%; justify-content: center; }
+  .table.sessions td.act .btn { width: 100%; max-width: 420px; justify-content: center; }
 }
 .demo-view { display: flex; flex-direction: column; gap: 4px; }
 .demo-view .select { width: 100%; padding: 5px 8px; font-size: 12px; }
