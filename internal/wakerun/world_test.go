@@ -49,6 +49,7 @@ type machine struct {
 	lastMsg    string
 	shutMode   string // ok | approval | refuse | ignore (accepted, but it stays on) | busy
 	pending    *Pending
+	staleOnce  bool // the first answer after a shutdown was asked for does not have the countdown in it yet
 	guests     int
 	guestsWhy  string // not "": the panel cannot see its guests
 	guestNames string
@@ -349,6 +350,9 @@ func (w *world) poll() {
 		if mc.pending != nil {
 			p := *mc.pending
 			o.Pending = &p
+		}
+		if mc.staleOnce && mc.pending != nil { // a poll that left before the shutdown was asked for and comes back after it
+			mc.staleOnce, o.Pending = false, nil
 		}
 		mc.obs = o
 	}

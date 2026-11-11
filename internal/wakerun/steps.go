@@ -431,8 +431,16 @@ func (m *Manager) stepShutting(r *Run, h *Host, now time.Time) {
 		return
 	}
 	h.offSince = time.Time{}
+	// An answer from after the request, well before the countdown ends, that has no countdown in it: it was
+	// cancelled. One such answer can come from a poll that was already on its way when the shutdown was asked
+	// for, so it counts when the run has seen the countdown before, or with the next answer (a cancel within
+	// a second of the request is never seen as pending at all).
+	gone := o.Pending == nil && o.SeenAt.After(h.shutdownSent) && o.SeenAt.Before(due.Add(-3*time.Second))
+	if gone && !h.pendingSeen && h.noPendingAt.IsZero() {
+		h.noPendingAt = o.SeenAt
+	}
 	switch {
-	case h.pendingSeen && o.Pending == nil && o.SeenAt.After(h.shutdownSent) && o.SeenAt.Before(due.Add(-3*time.Second)):
+	case gone && (h.pendingSeen || o.SeenAt.After(h.noPendingAt)):
 		m.end(r, h, StLeftOn, OnYes, now, "Its shutdown was cancelled, in the panel or on the machine, so it is ON."+updateTail(h))
 	case now.Sub(due) > offGrace:
 		m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("It is still on %s after its shutdown was due: the shutdown did not work. It is ON.", span(offGrace))+updateTail(h))

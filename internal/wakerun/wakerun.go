@@ -249,6 +249,7 @@ type Host struct {
 	versionNewAt  time.Time // when another version than VersionBefore was first seen
 	shutdownSent  time.Time
 	pendingSeen   bool      // the agent reported the run's shutdown as pending
+	noPendingAt   time.Time // the first answer after the request that had no countdown in it (see stepShutting)
 	offSince      time.Time // no answer since (while the countdown is over)
 	retries       int
 	lateSeen      bool // gave up, and it came online later

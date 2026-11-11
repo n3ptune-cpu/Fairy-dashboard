@@ -425,6 +425,9 @@ func TestShutdownOutcomes(t *testing.T) {
 			parts: []string{"It is still on 5 min after its shutdown was due: the shutdown did not work. It is ON."}},
 		{name: "someone cancels the countdown", during: func(_ *world, mc *machine) { mc.pending = nil }, state: StLeftOn, calls: "wake update shutdown", wantOn: true,
 			parts: []string{"Its shutdown was cancelled, in the panel or on the machine, so it is ON."}},
+		{name: "someone cancels the countdown within a second", during: func(_ *world, mc *machine) { mc.pending = nil }, state: StLeftOn, calls: "wake update shutdown", wantOn: true,
+			parts: []string{"Its shutdown was cancelled, in the panel or on the machine, so it is ON."}},
+		{name: "an answer from before the shutdown arrives after it", prep: func(_ *world, mc *machine) { mc.staleOnce = true }, state: StOff, calls: "wake update shutdown"},
 		{name: "one guest runs on the node", prep: func(_ *world, mc *machine) { mc.guests, mc.guestNames = 1, "win11" }, state: StLeftOn, calls: "wake update", wantOn: true,
 			parts: []string{"Left ON: 1 guest is running on it (win11)."}},
 		{name: "three guests run on the node", prep: func(_ *world, mc *machine) { mc.guests = 3 }, state: StLeftOn, calls: "wake update", wantOn: true,
@@ -454,7 +457,11 @@ func TestShutdownOutcomes(t *testing.T) {
 				if c.name == "another power action is pending" && h.State == StSettling && pc.pending == nil {
 					pc.pending = &Pending{Action: "reboot", At: w.now.Add(time.Hour)} // an admin's own, scheduled on the machine's page
 				}
-				if c.during != nil && !did && h.State == StShutting && w.now.Sub(h.Since) > 20*time.Second {
+				wait := 20 * time.Second
+				if strings.Contains(c.name, "within a second") { // before any poll has shown the countdown
+					wait = -time.Second
+				}
+				if c.during != nil && !did && h.State == StShutting && w.now.Sub(h.Since) > wait {
 					did = true
 					c.during(w, pc)
 				}
