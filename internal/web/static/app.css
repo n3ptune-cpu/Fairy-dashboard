@@ -589,6 +589,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 }
 .overview-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .overview-head .push { margin-left: auto; }
+.overview-head .count { margin-left: 0; }
+.overview-head .info-btn { margin-left: -2px; }
 .alert-sum { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; padding: 8px 12px; font-size: 12.5px;
   border: 1px solid rgba(245, 184, 75, .35); background: rgba(245, 184, 75, .06); color: #ffe2a8; }
 .alert-sum.ok { border-color: var(--line2); background: transparent; color: var(--muted); }

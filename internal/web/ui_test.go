@@ -164,6 +164,7 @@ func TestUIInfoButton(t *testing.T) {
 		`window.addEventListener("hashchange", () => closeInfo(false));`,
 		// the Updates page uses it three times
 		`infoBtn("upd-agents", "Update", infoList([`, `infoBtn("upd-panel", "Update panel", infoList([`, `infoBtn("wu", "Update unpowered hosts", infoList([`,
+		`infoBtn("ov-hosts", "Hosts", infoList([`, // the Overview: where the guests are
 		// and keeps one sentence for each button on the page
 		`Nothing updates by itself: <b>Update</b> installs the latest signed release on that agent.`,
 		`Update panel installs the latest signed release and restarts the panel.`,

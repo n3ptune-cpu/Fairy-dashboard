@@ -649,9 +649,12 @@ function pageOverview() {
     <div class="panel glass tile"><div class="label">Wall power${ups.length ? ` · ${ups.length} UPS` : ""}</div><div class="value pwr">${fmtW(state.power?.total_w)}</div>${spark(state.history.map((p) => p.total_w))}</div>
   </div>
   ${alertSummary()}
-  <div class="section-title overview-head">Hosts <span class="count">${hostGroups.reduce((a, [, h]) => a + h.length, 0)}</span>
-    ${state.me?.can_manage_users ? `<button class="btn push" type="button" data-act="add-host" ${controlOff() ? `disabled title="${esc(controlWhyNot())}"` : ""}>${I.plus}Add host</button>` : ""}</div>${hostTable(hostGroups)}
-  <p class="note">A Proxmox host's VMs and containers are on its page, and under it in the sidebar (the arrow).</p>`;
+  <div class="section-title overview-head">Hosts <span class="count">${hostGroups.reduce((a, [, h]) => a + h.length, 0)}</span>${infoBtn("ov-hosts", "Hosts", infoList([
+      "A click on a host opens its page.",
+      "A Proxmox host's VMs and containers are on its page, and under it in the sidebar (the arrow).",
+      "A host's model, cores and memory are on its page too. With a mouse, point at its name to see them here.",
+      "Offline hosts do not add to the CPU and memory totals."]))}
+    ${state.me?.can_manage_users ? `<button class="btn push" type="button" data-act="add-host" ${controlOff() ? `disabled title="${esc(controlWhyNot())}"` : ""}>${I.plus}Add host</button>` : ""}</div>${hostTable(hostGroups)}`;
 }
 
 // ---- polling menu (⋯) and power menu on the detail page
