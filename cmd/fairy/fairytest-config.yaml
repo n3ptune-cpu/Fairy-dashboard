@@ -1,0 +1,16 @@
+# Fairy TEST BUILD: config.yaml of a panel built with `go build -tags fairytest` (TESTING-LOCAL.md).
+# No secret belongs in this file, and the test build needs none.
+#
+# At its first start the test build writes this file to fairy-test/config.yaml next to the program and reads
+# it from there. Change that copy, then start the program again. Everything config.yaml of the real panel
+# knows works here too (deploy/config.example.yaml), except what a test build refuses to start with:
+#   - an `oidc:` block (there is no sign-in to configure),
+#   - a `listen:` or `public_url:` that is not 127.0.0.1, ::1 or localhost,
+#   - a `data_dir:` that holds files a test build did not make.
+
+listen: 127.0.0.1:8080          # the page is http://127.0.0.1:8080, on this PC only
+
+enroll:
+  allow_non_tailscale: true     # Add host may pair with a test VM on the same VMware network, without Tailscale
+  # panel_address: 192.168.50.10  # this PC's address as the test VM sees it. Left out, the test build takes this
+  #                               # PC's only private IPv4 address and says which one when it starts.

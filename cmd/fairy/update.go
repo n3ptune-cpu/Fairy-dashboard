@@ -32,6 +32,10 @@ import (
 // written to /var/lib/fairy-panel-update/status.json). Run by hand as root, it also installs or refreshes that
 // unit and its polkit rule, so the button works from then on.
 func update(args []string) int {
+	if testBuild { // a panel without sign-in is never the installed one: it has nothing to update (testmode.go)
+		fmt.Fprintln(os.Stderr, "fairy update:", testUpdateOff)
+		return 1
+	}
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	check := fs.Bool("check", false, "only show the installed and the latest version")
 	force := fs.Bool("force", false, "also reinstall the same version or install an older one")

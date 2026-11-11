@@ -38,6 +38,10 @@ func main() {
 	case "serve":
 		os.Exit(serve(os.Args[2:]))
 	case "admin":
+		if testBuild { // the CLI works on an installed panel's files; a test build keeps to its own folder
+			fmt.Fprintln(os.Stderr, "fairy admin:", testAdminOff)
+			os.Exit(1)
+		}
 		os.Exit(admin.Main(os.Args[2:], os.Stdout, os.Stderr))
 	case "update":
 		os.Exit(update(os.Args[2:]))
@@ -46,7 +50,7 @@ func main() {
 		if releaseKey != "" {
 			key = "built in"
 		}
-		fmt.Printf("fairy %s (%s, %s/%s) - release key: %s\n", version, runtime.Version(), runtime.GOOS, runtime.GOARCH, key)
+		fmt.Printf("fairy %s (%s, %s/%s) - release key: %s%s\n", version, runtime.Version(), runtime.GOOS, runtime.GOARCH, key, testNote)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

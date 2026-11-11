@@ -100,6 +100,7 @@ func serve(args []string) int {
 	if !ok {
 		return 2
 	}
+	testDefaults(&f) // a test build keeps to its own folder (does nothing in every other build, see testmode_off.go)
 	if err := f.loadEnv(); err != nil {
 		fmt.Fprintf(os.Stderr, "cannot read env file %s: %v\n", f.envFile, err)
 		return 1
@@ -114,9 +115,12 @@ func serve(args []string) int {
 
 	var p *panel
 	var code int
-	if f.demo {
+	switch {
+	case testBuild:
+		p, code = setupTest(f)
+	case f.demo:
 		p, code = setupDemo(f)
-	} else {
+	default:
 		p, code = setupPanel(f)
 	}
 	if p == nil {
@@ -152,6 +156,9 @@ func serve(args []string) int {
 		demo.SeedNotes(srv.Notes)
 	case runtime.GOOS == "linux":
 		srv.PanelRunner = panelupdate.Systemd{}
+	}
+	if testBuild {
+		testServer(srv, p)
 	}
 	if srv.Enroll.PanelAddr == "" {
 		slog.Warn("Add host: this machine has no single Tailscale address; set enroll: {panel_address: 100.x.y.z} in config.yaml")
@@ -254,7 +261,7 @@ func setupDemo(f serveFlags) (*panel, int) {
 	return &panel{cfg: cfg, secrets: secrets, poller: p, demoUser: &u}, 0
 }
 
-// setupPanel loads the secrets and config.yaml, validates the device configs and builds the poller.
+// setupPanel loads the secrets and config.yaml and builds the panel from them (buildPanel).
 func setupPanel(f serveFlags) (*panel, int) {
 	secrets, err := config.LoadSecrets()
 	if err != nil {
@@ -270,6 +277,17 @@ func setupPanel(f serveFlags) (*panel, int) {
 		}
 		return nil, 1
 	}
+	p, code := buildPanel(cfg, secrets)
+	if p != nil {
+		for _, w := range web.DeploymentWarnings(cfg, secrets) {
+			slog.Warn(w)
+		}
+	}
+	return p, code
+}
+
+// buildPanel validates the device configs, adds the hosts added in the panel and builds the poller.
+func buildPanel(cfg *config.Panel, secrets config.Secrets) (*panel, int) {
 	if err := power.ValidateConfigs(cfg.PowerSources); err != nil {
 		slog.Error("invalid config", "error", err)
 		return nil, 1
@@ -294,9 +312,6 @@ func setupPanel(f serveFlags) (*panel, int) {
 	if err != nil {
 		slog.Error("startup failed", "error", err)
 		return nil, 1
-	}
-	for _, w := range web.DeploymentWarnings(cfg, secrets) {
-		slog.Warn(w)
 	}
 	return &panel{cfg: cfg, secrets: secrets, poller: p, skipped: skipped}, 0
 }
