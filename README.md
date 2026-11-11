@@ -748,7 +748,9 @@ memory limit. Add it once:
     listed with "Unknown browser" until they are used again. See [Sessions](#sessions).
 14. **Update machines that are off** is new on the Updates page: it wakes machines that are normally off,
     updates their agent and switches them off again. Nothing happens until an admin switches a machine on
-    for it and starts a run; a script with an API token can do neither. See
+    for it and starts a run; a script with an API token can do neither. A machine counts as off for a run
+    only after 15 minutes without an answer, counted by the panel since its own start: for the first 15
+    minutes after this update's restart no machine is offered as off. See
     [Update machines that are off](#update-machines-that-are-off).
 
 Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
