@@ -72,10 +72,19 @@ type wuHost struct {
 	// Asleep: the panel itself sent it to sleep, and it has not answered since. For the panel "off" and
 	// "asleep" look the same (nothing at all), so the page says "asleep or off" and the dialog lists it apart,
 	// unticked: a machine that resumes from sleep does not look freshly started, and a run leaves it on.
-	Asleep  bool   `json:"asleep,omitempty"`
-	Version string `json:"version,omitempty"`
-	Behind  *bool  `json:"behind"`
+	Asleep bool `json:"asleep,omitempty"`
+	// Approval: the machine checks a passkey approval itself before an update or a shutdown ("required",
+	// "broken", "unknown"; empty: it does not). A run cannot take such a machine yet (wuNeedsApproval).
+	Approval string `json:"approval,omitempty"`
+	Version  string `json:"version,omitempty"`
+	Behind   *bool  `json:"behind"`
 }
+
+// wuNeedsApproval is why a machine that checks passkey approvals itself is in no run. A run sends its update
+// and its shutdown many minutes after the one confirmation that starts it, and the machine accepts an approval
+// only for a question it was asked a few minutes before: the run has none to give it. Until runs can ask for
+// one after the wake, such a machine is not taken at all, rather than woken and then left on.
+const wuNeedsApproval = "needs approval: not supported in runs yet (this machine checks a passkey approval itself before an update or a shutdown; use Update and Shut down on its own page)"
 
 type wakeUpdatePage struct {
 	Hosts    []wuHost         `json:"hosts"`
@@ -252,7 +261,8 @@ func (o runOps) Wake(ctx context.Context, id, by string) error {
 	return err
 }
 
-// Update is the Update button's request. grant is the approval of item 1.1; no agent takes one yet.
+// Update is the Update button's request. grant is the approval of item 1.1: a run has none (wuNeedsApproval),
+// so a machine that asks for one answers approval_required and the run says so.
 func (o runOps) Update(ctx context.Context, id, by string, _ any) error {
 	a, ok := o.s.Poller.AgentFor(id)
 	if !ok {
@@ -464,6 +474,9 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 		h.Power = "off"
 		h.Asleep = x.Asleep
 	}
+	if ap := s.Poller.ApprovalOf(a.ID); ap != nil && s.approvalWanted(a.ID) { // the last answer stays while it is off
+		h.Approval = ap.State
+	}
 	switch {
 	case !h.CanJoin:
 		h.Why = h.WhyNot
@@ -473,6 +486,8 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 		h.Why = "power control for this host is disabled by an administrator"
 	case o.Paused:
 		h.Why = "polling is paused for it"
+	case h.Approval != "":
+		h.Why = wuNeedsApproval
 	case o.Online:
 		h.Choice = wakerun.ModeUpdateOnly
 	case h.Power == "on":
@@ -589,6 +604,8 @@ func (s *Server) wuCheck(b wuStartBody) (map[string]wuHost, error) {
 			return nil, apierr.New(400, h.Name+" is not switched on for \"Update unpowered hosts\"")
 		case i < len(b.Hosts) && !h.CanWake:
 			return nil, apierr.New(400, h.Name+" cannot be woken and switched off again: "+h.NoWake)
+		case h.Approval != "": // refused here, before anybody is asked to confirm a run that could not do it
+			return nil, apierr.New(400, h.Name+" "+wuNeedsApproval)
 		}
 		out[id] = h
 	}

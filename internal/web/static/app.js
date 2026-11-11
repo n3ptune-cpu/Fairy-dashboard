@@ -1711,7 +1711,8 @@ function wakeUpdateBox() {
     <p class="note wu-rule info-keep">A machine takes part only after you switch it on here, one machine at a time.
       ${joined.length ? `${esc(joined.length)} ${joined.length === 1 ? "is" : "are"} switched on${can.length !== joined.length ? `, ${esc(can.length)} can be chosen right now` : ""}.` : "None is switched on yet."}</p>
     <div class="scroll"><table class="table wu-machines"><thead><tr><th>Machine</th><th>Now</th><th>Woken by</th><th>In these runs</th><th class="num"></th></tr></thead>
-      <tbody>${able.map(row).join("") || '<tr><td colspan="5" class="note">No machine with an agent that can update itself from the panel.</td></tr>'}</tbody></table></div></div>`;
+      <tbody>${able.map(row).join("") || '<tr><td colspan="5" class="note">No machine with an agent that can update itself from the panel.</td></tr>'}</tbody></table></div>
+    ${d.hosts.some((h) => h.approval) ? '<div class="note"><b>A machine that checks a passkey approval itself cannot be in a run yet</b>: update it and switch it off on its own page, where it asks for your passkey.</div>' : ""}</div>`;
 }
 // The per-host switch in the ⋯ menu of a machine's page (admins).
 function wakeUpdateMenu(s) {
