@@ -68,9 +68,8 @@ func (b *slowAgent) atAgent(agent string) (now, peak int) {
 // through for one user and maxAgentReadsPerAgent to one agent at a time, and answers the rest 429 at once: a
 // control request always finds room at the agent.
 func TestReadRequestsPassedToAnAgentAreLimited(t *testing.T) {
-	e := setup(t)
-	sb := &slowAgent{Backend: e.s.Poller.Backend, release: make(chan struct{}), now: map[string]int{}, peak: map[string]int{}}
-	e.s.Poller.Backend = sb
+	sb := &slowAgent{release: make(chan struct{}), now: map[string]int{}, peak: map[string]int{}}
+	e := setupWith(t, func(b poller.Backend) poller.Backend { sb.Backend = b; return sb })
 	var once sync.Once
 	letGo := func() { once.Do(func() { close(sb.release) }) }
 	t.Cleanup(letGo) // also when the test fails half-way: the held requests end before the server is closed

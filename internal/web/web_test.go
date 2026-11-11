@@ -35,9 +35,17 @@ type env struct {
 
 func setup(t *testing.T) *env {
 	t.Helper()
+	return setupWith(t, func(b poller.Backend) poller.Backend { return b })
+}
+
+// setupWith is setup with the test backend wrapped by wrap before the poller gets it. A test that wants
+// another backend wraps it here and does not replace Poller.Backend afterwards: the first poll leaves a
+// lookup running in the background (a node's CPU model) that still reads that field.
+func setupWith(t *testing.T, wrap func(poller.Backend) poller.Backend) *env {
+	t.Helper()
 	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
 	b := testutil.NewBackend()
-	p, err := poller.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, b)
+	p, err := poller.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, wrap(b))
 	if err != nil {
 		t.Fatal(err)
 	}
