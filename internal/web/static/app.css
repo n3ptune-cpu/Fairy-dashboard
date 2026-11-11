@@ -382,6 +382,30 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .check input:checked::after { content: ""; width: 6px; height: 3px; border: solid #000; border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); }
 .table.users .select, .table.assign .select { padding: 5px 8px; font-size: 12.5px; }
 .table .nowrap { white-space: nowrap; }
+/* ------------------------------------------------ sessions */
+.sess-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: -4px; }
+.sess-head .section-title { margin: 12px 0 0; }
+.table.sessions td { vertical-align: top; }
+.table.sessions .namecell .sub { margin-left: 0; }
+.table.sessions th { white-space: nowrap; }
+.table.sessions .namecell .sub.ua { max-width: 64ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.table.sessions tr.cur td:first-child { box-shadow: inset 2px 0 0 var(--ok); }
+.table.sessions td .note { margin-top: 2px; }
+@media (max-width: 760px) {  /* a phone: every session is a block, each value with its heading in front */
+  .table.sessions, .table.sessions tbody { display: block; }
+  .table.sessions thead { display: none; }
+  .table.sessions tr.row { display: block; padding: 10px 12px; border-bottom: 1px solid #121212; }
+  .table.sessions tbody tr.row:last-child { border-bottom: 0; }
+  .table.sessions tr.cur { box-shadow: inset 2px 0 0 var(--ok); }
+  .table.sessions tr.cur td:first-child { box-shadow: none; }
+  .table.sessions td { display: block; padding: 3px 0; border: 0; text-align: left; white-space: normal; }
+  .table.sessions td[data-l]:not(.namecell)::before { content: attr(data-l); display: inline-block; min-width: 92px; color: var(--faint);
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
+  .table.sessions td[data-l]:not(.namecell) > .note, .table.sessions td.nowrap > .note { display: inline; margin-left: 8px; }
+  .table.sessions .namecell .sub.ua { max-width: 100%; }
+  .table.sessions td.act { padding-top: 8px; }
+  .table.sessions td.act .btn { width: 100%; justify-content: center; }
+}
 .demo-view { display: flex; flex-direction: column; gap: 4px; }
 .demo-view .select { width: 100%; padding: 5px 8px; font-size: 12px; }
 #waiting .demo-view { margin: 14px auto; max-width: 260px; text-align: left; }

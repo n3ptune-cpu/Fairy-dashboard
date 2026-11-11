@@ -87,6 +87,7 @@ I.bell = svg('<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 
 I.plus = svg('<path d="M12 5v14M5 12h14"/>', 15);
 I.copy = svg('<rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>', 14);
 I.onoff = svg('<path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>', 15);
+I.sessions = svg('<rect x="2.5" y="4" width="13" height="10" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="16.5" y="9" width="5" height="11" rx="1.2"/>');
 
 const fmtRuntime = (s) => (s == null ? "–" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
 const fmtIv = (v) => (v == null ? "–" : `${+v.toFixed(1)}s`);
@@ -183,7 +184,7 @@ function showStepUp(pending, detail) {
   m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle">
     <div class="stepup-ico">${I.shield}</div>
     <h3 id="stitle">Confirm it's you</h3>
-    <p>${perAction ? "Every control action needs its own Pocket ID sign-in. This one confirms only the action below."
+    <p>${perAction ? "This action needs its own Pocket ID sign-in. It confirms only the action below."
       : `${win !== cfgWin ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${winText}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}`}</p>
     <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}</div>
     <p class="note" id="su-note">${kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
@@ -289,6 +290,7 @@ async function runPending() {
   render();
   if (current().page === "users") loadAdmin();
   if (current().page === "updates") loadUpdates();
+  if (current().page === "sessions") loadSessions();
   if (p.kind === "request" && p.path?.startsWith("/api/admin/updates")) { upd.fastUntil = Date.now() + 30000; updTick(); }
 }
 function spark(values, cls = "") {
@@ -1233,6 +1235,85 @@ document.addEventListener("submit", (e) => {
   if (name) adminCall(`Create site ${name}`, "POST", "/api/admin/sites", { name });
 });
 
+// ------------------------------------------------------------ sessions (everyone: their own; admins: everyone's)
+// Where this account is signed in, and "Sign out" for the other ones. The page gets a handle per session (id),
+// never a session id. Signing another session out always asks "Confirm it's you" (the server keeps the request
+// and runs it after the sign-in); the session this page uses is ended with Sign out in the menu.
+// Everything shown comes from the browser that signed in (User-Agent), the network (address) or the identity
+// provider (name, e-mail): all of it goes through esc().
+const sess = { mine: null, all: null, error: null, allError: null };
+async function loadSessions() {
+  try { sess.mine = await api("/api/me/sessions"); sess.error = null; }
+  catch (e) { sess.error = e.message; }
+  if (state.me?.can_manage_users) {
+    try { sess.all = await api("/api/admin/sessions"); sess.allError = null; }
+    catch (e) { sess.allError = e.message; if (e.status === 403) sess.all = null; }
+  }
+  render();
+  if (current().page === "sessions") schedule(loadSessions, 15000);  // sessions end and begin elsewhere
+}
+const fmtSpan = (s) => {  // 14400 -> "4 hours"
+  const n = +s || 0, [v, u] = n % 86400 === 0 ? [n / 86400, "day"] : n % 3600 === 0 ? [n / 3600, "hour"] : n % 60 === 0 ? [n / 60, "minute"] : [n, "second"];
+  return `${v} ${u}${v === 1 ? "" : "s"}`;
+};
+const sessWhen = (iso) => (iso ? `<span data-ago="${esc(iso)}">${ago(iso)}</span><div class="note">${esc(new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }))}</div>`
+  : '<span class="note">unknown</span>');
+// for the button's label and the "Confirm it's you" dialog (the label goes percent-encoded in X-Fairy-Action)
+const sessName = (x) => `${x.browser || "Unknown browser"}${x.ip || x.signed_in_ip ? ` (${x.ip || x.signed_in_ip})` : ""}`;
+const sessWho = (u) => (u ? u.email || u.name || u.sub : "");
+function sessRow(x, everyone) {
+  const u = x.user, ip = x.ip || x.signed_in_ip;
+  const who = everyone ? `<td class="namecell" data-l="User"><b>${esc(u?.name || u?.email || u?.sub || "–")}</b>${u?.you ? ' <span class="chip ok">you</span>' : ""}
+      <span class="sub">${esc(u?.email && u?.name ? u.email : "")}</span><span class="sub" title="Account id (OIDC subject)">id ${esc(u?.sub)}</span></td>` : "";
+  return `<tr class="row${x.current ? " cur" : ""}" data-key="ss-${esc(x.id)}">${who}
+    <td class="namecell" data-l="Browser"><b>${esc(x.browser || "Unknown browser")}</b>${x.current ? ' <span class="chip ok">This session</span>' : ""}
+      <span class="sub ua" title="${esc(x.user_agent)}">${x.user_agent ? esc(x.user_agent) : "browser not recorded"}</span></td>
+    <td data-l="IP address">${ip ? esc(ip) : '<span class="note">unknown</span>'}${x.location ? `<div class="note">${esc(x.location)}</div>` : ""}
+      ${x.ip && x.signed_in_ip && x.ip !== x.signed_in_ip ? `<div class="note">signed in from ${esc(x.signed_in_ip)}</div>` : ""}
+      ${!x.ip && x.signed_in_ip ? '<div class="note">at sign-in</div>' : ""}
+      ${(x.also_from || []).map((a) => `<div class="note warn-t" title="The same sign-in was also used from this address. A phone or laptop that changes networks does that. If it was not you, sign this session out: that ends every copy of it.">also used from ${esc(a.ip)} · <span data-ago="${esc(a.at)}">${ago(a.at)}</span></div>`).join("")}</td>
+    <td class="nowrap" data-l="Signed in">${sessWhen(x.signed_in)}</td>
+    <td class="nowrap" data-l="Last active">${sessWhen(x.last_active)}</td>
+    <td class="num act">${x.current ? '<span class="note">Sign out is in the menu</span>'
+      : `<button class="btn danger" data-act="sess-revoke" data-id="${esc(x.id)}" data-scope="${everyone ? "all" : "me"}"
+          data-label="${esc(`${everyone && !u?.you ? `${sessWho(u)}: ` : ""}${sessName(x)}`)}">Sign out</button>`}</td></tr>`;
+}
+const sessTable = (rows, everyone) => `<div class="panel glass scroll"><table class="table sessions${everyone ? " all" : ""}">
+  <thead><tr>${everyone ? "<th>User</th>" : ""}<th>Browser / device</th><th>IP address</th><th>Signed in</th><th>Last active</th><th class="num"></th></tr></thead>
+  <tbody>${rows.map((x) => sessRow(x, everyone)).join("")}</tbody></table></div>`;
+function pageSessions() {
+  setTitle("Sessions", "where you are signed in");
+  const d = sess.mine;
+  if (!d) return sess.error ? `<div class="error">${esc(sess.error)}</div>` : '<div class="empty">Loading…</div>';
+  const mine = d.sessions || [], others = mine.filter((x) => !x.current).length;
+  const everyone = state.me?.can_manage_users ? (sess.all ? `<div class="section-title">Everyone's sessions <span class="count">${esc(sess.all.sessions.length)}</span></div>
+      ${sess.all.sessions.length ? sessTable(sess.all.sessions, true) : '<div class="empty">Nobody is signed in.</div>'}`
+    : sess.allError ? `<div class="error">${esc(sess.allError)}</div>` : "") : "";
+  return `<div class="stack">
+    <div class="note users-help">Every browser you signed in with is a session. <b>Sign out</b> ends one of the others; it asks you to confirm it's you first, every time,
+      so that nobody who got hold of one sign-in can end yours. A session also ends by itself ${esc(fmtSpan(d.idle_timeout_s))} after it was last used,
+      and ${esc(fmtSpan(d.max_age_s))} after its sign-in.</div>
+    ${sess.error ? `<div class="error">${esc(sess.error)}</div>` : ""}
+    <div class="sess-head"><div class="section-title">Your sessions <span class="count">${esc(mine.length)}</span></div>
+      <button class="btn danger" data-act="sess-others" ${others ? "" : 'disabled title="You are signed in nowhere else"'}>Sign out everywhere else</button></div>
+    ${mine.length ? sessTable(mine, false) : `<div class="empty">No sessions to show${state.me?.demo ? ": the demo has no sign-in." : "."}</div>`}
+    ${everyone}</div>`;
+}
+async function sessCall(label, path, body) {
+  try {
+    const r = await controlCall({ kind: "request", label, method: "POST", path, body },
+      () => api(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }));
+    if (r) flash(r.message || `${label}: done`);
+  } catch (e) { flash(e.message, true); }
+  loadSessions();
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="sess-revoke"],[data-act="sess-others"]');
+  if (!t || t.disabled) return;
+  if (t.dataset.act === "sess-others") sessCall("Sign out everywhere else", "/api/me/sessions/revoke-others");
+  else sessCall(`Sign out ${t.dataset.label}`, t.dataset.scope === "all" ? "/api/admin/sessions/revoke" : "/api/me/sessions/revoke", { session: t.dataset.id });
+});
+
 // ------------------------------------------------------------ power confirmation dialog
 function openPowerDialog(s, action) {
   const caps = state.caps[s.id], cap = caps?.actions.find((a) => a.action === action);
@@ -1815,6 +1896,7 @@ function current() {
   if (h.startsWith("#/power")) return { page: "power" };
   if (h.startsWith("#/ups")) return { page: "ups" };
   if (h.startsWith("#/settings")) return { page: "settings" };
+  if (h.startsWith("#/sessions")) return { page: "sessions" };
   if (h.startsWith("#/audit")) return { page: "audit" };
   if (h.startsWith("#/users")) return { page: "users" };
   if (h.startsWith("#/updates")) return { page: "updates" };
@@ -1825,7 +1907,8 @@ const routeKey = (r) => `${r.page}:${r.id || ""}:${r.tab || ""}`;
 function pageHtml(r) {
   return r.page === "system" ? pageSystem(r.id, r.tab) : r.page === "power" ? pagePower() : r.page === "ups" ? pageUps()
     : r.page === "settings" ? pageSettings() : r.page === "audit" ? pageAudit() : r.page === "users" ? pageUsers()
-    : r.page === "updates" ? pageUpdates() : r.page === "notifications" ? pageNotifications() : pageOverview();
+    : r.page === "updates" ? pageUpdates() : r.page === "notifications" ? pageNotifications()
+    : r.page === "sessions" ? pageSessions() : pageOverview();
 }
 let renderQueued = false;
 function render() {  // coalesced to one DOM patch per frame
@@ -1859,6 +1942,7 @@ function route() {
   if (r.page === "users") loadAdmin();
   if (r.page === "updates") loadUpdates();
   if (r.page === "notifications") loadNotes(true);
+  if (r.page === "sessions") loadSessions();
   if (r.page === "system" && state.me?.can_manage_users) loadManaged();
   updateBell();
   renderNav(); renderAlerts(); closeAcct(false); syncAcct();
@@ -1959,7 +2043,7 @@ document.addEventListener("change", async (e) => {
 });
 
 // ------------------------------------------------------------ account menu (top bar, hamburger)
-// The signed-in user, Settings / Audit / Users and Sign out. Static DOM in the top bar (not morphed); the
+// The signed-in user, Settings / Sessions / Audit / Users and Sign out. Static DOM in the top bar (not morphed); the
 // active page is marked on every route. Keyboard: arrows / Home / End move, Escape closes and refocuses the button.
 const demoViewLabel = (v) => (v === "admin" ? "Admin (everything)" : v === "pending" ? "Waiting for access" : `Viewer · ${v.slice(7)}`);
 function buildAcct() {
@@ -1972,6 +2056,7 @@ function buildAcct() {
     <span class="acct-who"><span class="acct-name"><b>${esc(who)}</b>${roleChip}</span>${sub.map((x) => `<span class="note">${esc(x)}</span>`).join("")}</span></div>
     <div class="menu-sep" role="separator"></div>
     ${item("#/settings", I.settings, "Settings")}
+    ${item("#/sessions", I.sessions, "Sessions")}
     ${me.can_control ? item("#/audit", I.audit, "Audit") : ""}
     ${me.can_manage_users ? item("#/users", I.users, "Users") : ""}
     ${me.can_control ? item("#/updates", I.update, "Updates").replace("</span></a>", '</span><span class="upd-dot" id="upd-badge" hidden></span></a>') : ""}`;
@@ -1996,7 +2081,7 @@ function syncAcct() {
     a.classList.toggle("on", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
-  $("#acct-btn")?.classList.toggle("on", ["settings", "audit", "users", "updates"].includes(page));
+  $("#acct-btn")?.classList.toggle("on", ["settings", "sessions", "audit", "users", "updates"].includes(page));
 }
 const acctItems = () => [...document.querySelectorAll('#acct-menu [role^="menuitem"]')];
 const acctOpen = () => !$("#acct-menu").hidden;
