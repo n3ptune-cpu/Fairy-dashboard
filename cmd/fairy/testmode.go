@@ -163,6 +163,9 @@ func testSetup(f serveFlags, real []string) (*config.Panel, config.Secrets, erro
 	if err := testState(cfg.DataDir); err != nil {
 		return nil, none, err
 	}
+	if err := forgetTestSessions(cfg.DataDir); err != nil {
+		return nil, none, err
+	}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return nil, none, err
@@ -219,6 +222,24 @@ func testState(dir string) error {
 		}
 	}
 	return nil
+}
+
+// forgetTestSessions empties sessions.json of the test build's data folder (testState has made sure it holds
+// nobody's sessions but the test admin's). Every start makes a new session secret, so no cookie of an earlier
+// start is accepted any more; without this the sessions of those cookies would still be on the Sessions page,
+// for a day, next to the browsers that are really signed in.
+func forgetTestSessions(dir string) error {
+	st := adminstate.New(dir)
+	list, err := st.ListSessions()
+	if err != nil {
+		return err
+	}
+	sids := make([]string, 0, len(list))
+	for _, s := range list {
+		sids = append(sids, s.SID)
+	}
+	_, err = st.RemoveSessions(sids)
+	return err
 }
 
 // testServer switches the server to test mode, turns the panel's own update off and says so three times.

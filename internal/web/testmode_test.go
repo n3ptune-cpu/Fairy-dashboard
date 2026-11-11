@@ -235,3 +235,56 @@ func TestTestModeIsOffUntilEnabled(t *testing.T) {
 		t.Fatal("a plain server has test routes, or no sign-in")
 	}
 }
+
+// The Sessions page in a test build: two browsers that open the page are two sessions of the test admin; one
+// signs the other out after "Confirm it's you" (confirmed here), and a window that was signed out signs in
+// again as a new session when it is loaded again.
+func TestTestModeSessionsPage(t *testing.T) {
+	e := testPanel(t)
+	a, b := e.open(), e.open()
+	l := listed(t, e.do("GET", "/api/me/sessions", nil, "Cookie", a))
+	if len(l) != 2 || l[0]["current"] != true || l[0]["id"] != handleOf(e, a) || l[1]["id"] != handleOf(e, b) || l[1]["browser"] != "Go program" {
+		t.Fatalf("two browsers, two sessions: %v", l)
+	}
+	if all := listed(t, e.do("GET", "/api/admin/sessions", nil, "Cookie", a)); len(all) != 2 || all[0]["user"].(map[string]any)["sub"] != "test-admin" {
+		t.Fatalf("everyone's sessions: %v", all)
+	}
+	confirm := func(ck string, r resp) string {
+		t.Helper()
+		d, _ := r.body["detail"].(map[string]any)
+		if !stepUpRequired(r) || d["pending"] != true {
+			t.Fatalf("must be asked to confirm, and kept: %d %s", r.code, r.raw)
+		}
+		c := e.do("POST", stepUpPath, map[string]any{"pending_id": pendingID(r), "next": "/#/sessions"}, append([]string{"Cookie", ck}, sessWrite...)...)
+		if c.code != 200 || c.body["url"] != "/#/sessions" {
+			t.Fatalf("the dialog's button: %d %s", c.code, c.raw)
+		}
+		return sessionCookie(e, c.hdr)
+	}
+	r := e.revoke("/api/me/sessions/revoke", a, handleOf(e, b))
+	if d, _ := r.body["detail"].(map[string]any); d["action"] != "sign out another session of yours (Go program, 127.0.0.1)" {
+		t.Fatalf("what the dialog names: %s", r.raw)
+	}
+	a = confirm(a, r)
+	if works(e, b) {
+		t.Fatal("the other window is still signed in")
+	}
+	me := e.do("GET", "/api/me", nil, "Cookie", a)
+	if pr, _ := me.body["pending_result"].(map[string]any); pr["ok"] != true || pr["message"] != "Signed out: Go program, 127.0.0.1" {
+		t.Fatalf("the result: %s", me.raw)
+	}
+	// the window that was signed out, loaded again: a new session, as after Sign out
+	again := e.do("GET", "/", nil, "Cookie", b)
+	if again.code != 200 || !strings.Contains(again.hdr.Get("Set-Cookie"), "fairy_session=") || len(sessionsOf(e, "test-admin")) != 2 {
+		t.Fatalf("reloading the signed-out window: %d %q", again.code, again.hdr.Get("Set-Cookie"))
+	}
+	b = sessionCookie(e, again.hdr)
+	c := e.open()
+	a = confirm(a, e.do("POST", "/api/me/sessions/revoke-others", nil, append([]string{"Cookie", a}, sessWrite...)...))
+	if works(e, b) || works(e, c) || !works(e, a) || len(sessionsOf(e, "test-admin")) != 1 {
+		t.Fatal("everywhere else")
+	}
+	if got := auditOutcomes(e.s.Cfg.AuditLog); !strings.Contains(got, "sessions.revoke ok") || !strings.Contains(got, "sessions.revoke_others ok") {
+		t.Fatalf("audit: %s", got)
+	}
+}

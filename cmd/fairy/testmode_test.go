@@ -138,6 +138,14 @@ func TestTestBuildRefusesRealState(t *testing.T) {
 	if _, _, err := testSetup(c.f, c.real); err != nil {
 		t.Fatal("a test build's own state must be accepted:", err)
 	}
+	// ... and the sessions of the earlier start are gone: their cookies were signed with that start's secret, so
+	// they could only sit on the Sessions page as browsers that are not there
+	if left, err := sessions.ListSessions(); err != nil || len(left) != 0 {
+		t.Fatal("the sessions of an earlier start must leave sessions.json:", left, err)
+	}
+	if u := users.Load().Users; len(u) != 1 || u[web.TestUser.Sub].Role != access.RoleAdmin {
+		t.Fatal("the test admin stays:", u)
+	}
 	// ... but not with anybody else's session or account in it, marked or not
 	if err := sessions.AddSession("sid-of-somebody", adminstate.NewSession{Sub: "pocket-id-user-1"}); err != nil {
 		t.Fatal(err)
