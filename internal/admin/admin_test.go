@@ -294,3 +294,35 @@ func TestConfigCheckExplainsApproval(t *testing.T) {
 		t.Errorf("an issuer the machines refuse must be a warning:\n%s", out)
 	}
 }
+
+// `fairy admin config check` names an old tuya entry in a line of its own and is otherwise exactly as without
+// it: same lines, same exit code. The entry is read and not used; it is never a failure.
+func TestConfigCheckNamesIgnoredTuyaEntry(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	check := func(sources string) (int, string) {
+		t.Helper()
+		_ = os.WriteFile(cfg, []byte("public_url: https://p.example\ndata_dir: "+dir+"/data\noidc: {issuer: \"https://id.example\", client_id: c}\n"+sources), 0o600)
+		var out, errb bytes.Buffer
+		code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb)
+		return code, out.String() + errb.String()
+	}
+	const shelly = "  - {id: plug-a, type: shelly, url: \"http://192.168.1.50\"}\n"
+	const old = "  - {id: plug-agent-1, type: tuya, device_id: bf0123456789abcdef, ip: 192.168.1.60, local_key_env: TUYA_KEY_PLUG, version: \"3.4\", system: agent-1}\n"
+	plainCode, plain := check("power_sources:\n" + shelly)
+	code, out := check("power_sources:\n" + old + shelly)
+	const line = "note  power source \"plug-agent-1\": tuya is no longer supported and is ignored (remove the entry from config.yaml)\n"
+	if strings.Contains(plain, "tuya") || !strings.Contains(plain, "config "+cfg+": valid") {
+		t.Fatalf("without the entry:\n%s", plain)
+	}
+	if code != plainCode || strings.Replace(out, line, "", 1) != plain || strings.Count(out, "tuya") != 1 {
+		t.Fatalf("with the entry: exit %d (without: %d)\n%s\nwithout:\n%s", code, plainCode, out, plain)
+	}
+	if strings.Contains(out, "FAIL") || strings.Contains(out, "WARN  power source") {
+		t.Fatalf("the old entry is no problem:\n%s", out)
+	}
+	// a mistake in another entry is still one
+	if code, out := check("power_sources:\n" + old + "  - {id: plug-b, type: zigbee}\n"); code != 1 || !strings.Contains(out, "unknown type") {
+		t.Fatalf("an unknown type: exit %d\n%s", code, out)
+	}
+}

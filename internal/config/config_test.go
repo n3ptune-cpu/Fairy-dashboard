@@ -521,3 +521,46 @@ func TestApprovalBlock(t *testing.T) {
 		t.Fatal("the approval client's secret comes from its own variable:", err)
 	}
 }
+
+// A power source of a type that is no longer read (tuya, removed with Fairy-agent's pkg/tuya) never stops the
+// file from loading: the entry is taken out, whatever it holds, and named once. Everything else is as strict
+// as before.
+func TestOldTuyaEntryIsIgnored(t *testing.T) {
+	const old = `{id: plug-agent-1, type: tuya, device_id: bf0123456789abcdef, ip: 192.168.1.60, local_key_env: TUYA_KEY_PLUG, version: "3.4", system: agent-1}`
+	c, err := Parse([]byte(base + "power_sources:\n  - {id: plug-a, type: shelly, url: \"http://192.168.1.50\"}\n  - " + old +
+		"\n  - {id: plug-b, type: tasmota, url: \"http://192.168.1.51\"}\n"))
+	if err != nil {
+		t.Fatal("a config with the old tuya entry must load:", err)
+	}
+	if len(c.PowerSources) != 2 || c.PowerSources[0]["id"] != "plug-a" || c.PowerSources[1]["id"] != "plug-b" {
+		t.Fatalf("the other entries, in their order: %v", c.PowerSources)
+	}
+	want := `power source "plug-agent-1": tuya is no longer supported and is ignored (remove the entry from config.yaml)`
+	if got := c.Ignored(); len(got) != 1 || got[0] != want {
+		t.Fatalf("Ignored() = %q", got)
+	}
+	for _, entry := range []string{
+		`{type: tuya}`,
+		`{id: x, type: tuya, made_up_key: 1, another: [1, 2]}`,
+		`{id: x, type: tuya, version: "3.6"}`,
+		`{id: plug-a, type: tuya}`, // the id of another entry
+		`{id: x, type: tuya, scale: not-a-number, system: nowhere}`,
+	} {
+		for _, list := range []string{
+			"power_sources:\n  - " + entry + "\n",
+			"power_sources:\n  - {id: plug-a, type: shelly, url: \"http://192.168.1.50\"}\n  - " + entry + "\n",
+			"power_sources:\n  - " + entry + "\n  - " + entry + "\n  - {id: plug-a, type: shelly, url: \"http://192.168.1.50\"}\n",
+		} {
+			c, err := Parse([]byte(base + list))
+			if err != nil || len(c.Ignored()) != strings.Count(list, "tuya") || len(c.PowerSources) != strings.Count(list, "shelly") {
+				t.Errorf("%q: err=%v ignored=%q kept=%v", list, err, c.Ignored(), c.PowerSources)
+			}
+		}
+	}
+	if c, err := Parse([]byte(base + "power_sources:\n  - {id: plug-a, type: shelly, url: \"http://192.168.1.50\"}\n")); err != nil || c.Ignored() != nil {
+		t.Fatalf("nothing to say without such an entry: %v %q", err, c.Ignored())
+	}
+	if _, err := Parse([]byte(base + "tuya: {id: x}\n")); err == nil {
+		t.Fatal("an unknown top-level key is still refused")
+	}
+}

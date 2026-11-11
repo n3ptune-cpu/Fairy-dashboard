@@ -340,6 +340,9 @@ func setupPanel(f serveFlags) (*panel, int) {
 		}
 		return nil, 1
 	}
+	for _, line := range cfg.Ignored() { // an entry of an older release that is no longer read: said once, never fatal
+		slog.Warn("config.yaml: " + line)
+	}
 	p, code := buildPanel(cfg, secrets)
 	if p != nil {
 		for _, w := range web.DeploymentWarnings(cfg, secrets) {

@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
 	"gopkg.in/yaml.v3"
 )
 
@@ -376,7 +377,13 @@ type Panel struct {
 	Approval Approval `yaml:"approval"`
 
 	trusted []netip.Prefix
+	ignored []string
 }
+
+// Ignored returns one line for every entry of config.yaml that was read and is not used: a power source of a
+// type that is no longer supported (tuya). `fairy serve` logs the lines at start, `fairy admin config check`
+// prints them; they are never an error.
+func (c *Panel) Ignored() []string { return c.ignored }
 
 // ProxmoxList accepts either a single mapping (legacy: unprefixed ids) or a list (prefix "<id>-").
 type ProxmoxList []Proxmox
@@ -476,6 +483,9 @@ func Parse(data []byte) (*Panel, error) {
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	// A power source of a type that is no longer read (tuya) is taken out here, the one place every command
+	// loads the file through, and named by Ignored: it must never stop the panel from starting.
+	c.PowerSources, c.ignored = power.DropRemoved(c.PowerSources)
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}

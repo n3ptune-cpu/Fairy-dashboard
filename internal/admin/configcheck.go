@@ -101,6 +101,9 @@ func (c *cli) configCheck() int {
 	for _, n := range notes {
 		fmt.Fprintln(c.out, "ok    "+n)
 	}
+	for _, n := range cfg.Ignored() { // read, not used, and never a reason for exit code 1
+		fmt.Fprintln(c.out, "note  "+n)
+	}
 	for _, p := range problems {
 		fmt.Fprintln(c.out, "WARN  "+p)
 	}
