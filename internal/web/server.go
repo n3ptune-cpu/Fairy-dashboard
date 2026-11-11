@@ -104,6 +104,7 @@ type Server struct {
 	mux                              *http.ServeMux
 	answerTimeout                    time.Duration // how long a client may take over one answer (answerWriteTimeout; tests shorten it)
 	backgrounds                      streamSlots   // background downloads in flight (api_settings.go)
+	agentReads                       *agentReads   // read requests passed through to an agent, in flight (agentreads.go)
 }
 
 // New builds the server. demoUser != nil enables demo mode (caller guarantees a loopback listener).
@@ -116,6 +117,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 		control: newRateLimiter(cfg.ControlRatePerMin), pollCtl: newRateLimiter(cfg.ControlRatePerMin * 2),
 		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60), anonAudit: newAuditThrottle(),
 		settingsRL: newRateLimiter(30), uploadRL: newRateLimiter(uploadsPerMin), answerTimeout: answerWriteTimeout,
+		agentReads:  newAgentReads(),
 		backgrounds: streamSlots{perUser: maxBackgroundsPerUser, total: maxBackgroundsTotal, open: map[string]int{}}}
 	s.codec.live.account = p.Admin.SessionAccount // whose session an id is, for making room (liveSessions.prune)
 	s.oidc = newOIDC(cfg, secrets)

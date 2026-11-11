@@ -70,7 +70,12 @@ func (s *Server) fanStatus(c *reqCtx) error {
 		c.json(200, fs)
 		return nil
 	}
+	release, err := c.agentRead(a.ID)
+	if err != nil {
+		return err
+	}
 	data, err := c.agentCall(a, "GET", "/fan/status", nil)
+	release()
 	if err != nil {
 		return err
 	}

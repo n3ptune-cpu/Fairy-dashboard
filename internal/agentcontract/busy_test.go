@@ -87,16 +87,18 @@ func TestBusyAgentStaysOnline(t *testing.T) {
 	release := sync.OnceFunc(func() { close(slow.release) })
 	t.Cleanup(release) // before the servers close: a failed test must not leave them waiting for held requests
 
-	// Processes tabs through the panel, one more at a time, until the agent refuses one: every one before it
-	// now holds one of the agent's places and keeps it until the listing is let go
+	// Processes requests, one more at a time, until the agent refuses one: every one before it now holds one
+	// of the agent's places and keeps it until the listing is let go. They are sent to the agent itself, with
+	// its read token, as another reader of the same agent would: the panel alone no longer fills an agent, it
+	// passes at most 8 such requests on at a time (T-20, internal/web/agentreads.go).
 	results := make(chan int, 64)
 	var wg sync.WaitGroup
 	sent, refused := 0, 0
 	for sent < cap(results) && refused == 0 {
 		sent++
 		wg.Go(func() {
-			req, _ := http.NewRequest("GET", hs.URL+"/api/systems/srv-tower/processes?limit=25&sort=cpu", nil)
-			req.Header.Set("Authorization", "Bearer "+tok)
+			req, _ := http.NewRequest("GET", agentSrv.URL+"/processes?limit=25&sort=cpu", nil)
+			req.Header.Set("Authorization", "Bearer "+readTok)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				results <- 0
@@ -108,7 +110,7 @@ func TestBusyAgentStaysOnline(t *testing.T) {
 		})
 		select {
 		case c := <-results:
-			if c != 424 {
+			if c != 503 {
 				t.Fatalf("Processes request %d came back with %d while the listing waits", sent, c)
 			}
 			refused++
@@ -166,7 +168,7 @@ func TestBusyAgentStaysOnline(t *testing.T) {
 		switch c {
 		case 200:
 			answered++
-		case 424:
+		case 503:
 			refused++
 		default:
 			t.Fatal("a Processes request that waited ended with", c)

@@ -130,6 +130,11 @@ func (s *Server) processes(c *reqCtx) error {
 		return apierr.New(404, fmt.Sprintf("Per-process data for %s needs the Fairy agent running %s: the Proxmox API does "+
 			"not expose guest processes. Install the agent and set `links_to: %s` in config.yaml.", id, where, id))
 	}
+	release, err := c.agentRead(agent.ID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	pl, err := s.Poller.FetchProcesses(c.r.Context(), agent, id, limit, sortBy)
 	if he := (*devices.HTTPStatusError)(nil); errors.As(err, &he) { // it answered: 424, not 502 (apierr.Upstream)
 		return apierr.New(apierr.Upstream, "agent error: "+devices.Describe(err))
