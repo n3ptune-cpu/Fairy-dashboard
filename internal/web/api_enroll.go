@@ -347,13 +347,27 @@ func (s *Server) hostRemove(c *reqCtx) error {
 		wasOn = true
 		c.audit(u, "wakeupdate.switch", sid, map[string]any{"enabled": false, "because": "host removed"}, "ok")
 	}
+	// Its custom model name goes with it, for the same reason: the next machine added under this name starts
+	// with the model it reports itself. Also before the host is gone: a host is never removed with its name left.
+	hadModel := false
+	for _, sid := range []string{h.ID, h.Shown()} {
+		prev, err := s.Poller.Admin.SetHostModel(sid, "")
+		if err != nil {
+			c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
+			return err
+		}
+		if prev != "" {
+			hadModel = true
+			c.audit(u, "host.model", sid, map[string]any{"model": "", "before": prev, "because": "host removed"}, "ok")
+		}
+	}
 	s.Enroll.CancelHost(h.ID) // a Re-pair still pairing must not bring the host back
 	s.unpoll(h.ID)            // before the store forgets which node is the host's
 	if err := s.Managed.Remove(h.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
 		return err
 	}
-	c.audit(u, "host.remove", h.ID, map[string]any{"name": h.Name, "wake_update_was_on": wasOn}, "ok")
+	c.audit(u, "host.remove", h.ID, map[string]any{"name": h.Name, "wake_update_was_on": wasOn, "custom_model_removed": hadModel}, "ok")
 	if s.Notes != nil {
 		s.Notes.Add(notifications.Event{Kind: "host_removed", Type: "enroll", Severity: notifications.Info, Host: h.Name,
 			Text: fmt.Sprintf("removed from the panel by %s (the agent on the machine keeps running until you uninstall it)", actorOf(u))})

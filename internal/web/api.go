@@ -30,6 +30,7 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/systems/{id}/helper/start", s.h(s.helperStart))
 	m.HandleFunc("GET /api/systems/{id}/poll", s.h(s.getPoll))
 	m.HandleFunc("PUT /api/systems/{id}/poll", s.h(s.putPoll))
+	m.HandleFunc("PUT /api/systems/{id}/custom-model", s.h(s.customModelPut))
 	m.HandleFunc("GET /api/stream", s.h(s.stream))
 	s.sessionRoutes()
 	s.adminRoutes()

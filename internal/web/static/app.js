@@ -458,7 +458,19 @@ const hostIcon = (s) => osIcon(s, 18) || (s.kind === "node" ? I.cluster : I.mach
 const upsById = (id) => (state.ups?.ups || []).find((u) => u.id === id);
 const upsOf = (s) => (s.ups || []).map(upsById).filter(Boolean);
 const onBattery = (u) => u.status === "on_battery" || u.status === "low_battery";
-const model = (s) => s.hardware?.display || null;
+// The model shown for a host: the name an admin set in the panel ("Set model name"), else what the machine reports.
+const model = (s) => s.custom_model || s.hardware?.display || null;
+// Behind a custom name, never next to it: that it was set by hand, and what the machine itself reports. It is the
+// tooltip of the name (modelTitle: Overview) and the text behind the info button on the host's page (modelRow).
+const modelTip = (s) => `Set by hand. ${s.hardware?.display ? `Reported by the host: ${s.hardware.display}.` : "The host reports no model."}`;
+const modelTitle = (s) => (s.custom_model ? `${s.custom_model} · ${modelTip(s)}` : model(s));
+function modelRow(s) {
+  if (!model(s)) return "";
+  const bios = s.hardware?.bios_version;
+  if (!s.custom_model) return `<div class="list-row"><span>Model</span><span>${esc(model(s))}${bios ? ` <span class="note">BIOS ${esc(bios)}</span>` : ""}</span></div>`;
+  return `<div class="list-row"><span>Model</span><span title="${esc(modelTip(s))}">${esc(s.custom_model)}${infoBtn("host-model", "Model name",
+    `<p>${esc(modelTip(s))}${bios ? ` BIOS ${esc(bios)}.` : ""}</p>`, { label: modelTip(s) })}</span></div>`;
+}
 const subLine = (s) => s.kind === "node"
   ? ["Proxmox node", model(s) || s.cpu_model, s.cores && `${s.cores} cores`, s.mem_total && fmtBytes(s.mem_total)].filter(Boolean).join(" · ")
   : [model(s), s.os, s.cores && `${s.cores} threads`].filter(Boolean).join(" · ");
@@ -673,7 +685,7 @@ function hostRow(s) {
   const about = [subLine(s), clusterName(s) && `cluster ${clusterName(s)}`, ver && `fairy-agent ${ver}`].filter(Boolean).join(" · ");
   return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><div class="host-line"><span class="host-ico">${hostIcon(s)}</span><div class="host-main">
       <div class="host-l1"><a href="#/system/${enc(s.id)}" title="${esc(about)}"><span class="dot ${cssName(s.status)}"></span>${esc(s.name)}</a><span class="host-tags">${upsSigns(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span></div>
-      ${model(s) ? `<div class="host-model" title="${esc(model(s))}">${esc(model(s))}</div>` : ""}</div></div></td>
+      ${model(s) ? `<div class="host-model" title="${esc(modelTitle(s))}">${esc(model(s))}</div>` : ""}</div></div></td>
     <td class="col-kind"><span class="note">${esc(s.kind === "node" ? "Proxmox" : s.owner || s.group || "–")}</span></td>
     <td class="col-cpu" data-l="CPU">${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
     <td class="col-ram" data-l="RAM">${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
@@ -748,7 +760,7 @@ function pollMenu(s) {
     ${st ? `<div class="menu-sep"></div>${st.jobs.map((j) => `<div class="menu-row"><span>${esc(j.job)}</span><span>${j.paused ? "paused" : fmtIv(j.effective_s)}${j.clamped ? ` <span class="chip warn" title="this source never polls faster than ${esc(j.floor_s)}s">min ${esc(j.floor_s)}s</span>` : ""}</span></div>`).join("")}
       ${st.note ? `<div class="menu-note">${esc(st.note)}</div>` : ""}
       <div class="menu-note">${st.boost_enabled ? "Viewing a host boosts it to 1 s (30 s grace)." : "Boost while viewing is off."}</div>` : '<div class="menu-note">loading…</div>'}
-    ${wakeUpdateMenu(s)}</div>`;
+    ${modelNameMenu(s)}${wakeUpdateMenu(s)}</div>`;
 }
 const POWER_LABEL = { shutdown: "Shut down", reboot: "Reboot", sleep: "Sleep", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)", bmc_on: "Power on (via BMC)" };
 function powerMenu(s) {
@@ -833,7 +845,7 @@ function systemOverview(s) {
     ${(s.disks || []).length > 1 ? s.disks.map((d) => metric("disk", esc(d.mount), pct(d.used, d.total), `${fmtBytes(d.used)} / ${fmtBytes(d.total)}`)).join("") : ""}
     ${s.net_rx_bps != null || s.net_tx_bps != null ? `<div class="list-row"><span>Network</span><span>↓ ${fmtRate(s.net_rx_bps)} · ↑ ${fmtRate(s.net_tx_bps)}</span></div>` : ""}
     ${s.cpu_model ? `<div class="list-row"><span>Processor</span><span>${esc(s.cpu_model)}</span></div>` : ""}
-    ${s.hardware?.display ? `<div class="list-row"><span>Model</span><span>${esc(s.hardware.display)}${s.hardware.bios_version ? ` <span class="note">BIOS ${esc(s.hardware.bios_version)}</span>` : ""}</span></div>` : ""}
+    ${modelRow(s)}
     <div class="list-row"><span>Uptime</span><span>${fmtUptime(s.uptime_s)}</span></div>
     ${s.load_avg ? `<div class="list-row"><span>Load</span><span>${esc([].concat(s.load_avg).join(" · "))}</span></div>` : ""}
     <div class="list-row"><span>Last change</span><span data-ago="${esc(s.updated_at || s.last_seen)}">${ago(s.updated_at || s.last_seen)}</span></div></div>`;
@@ -2248,6 +2260,57 @@ document.addEventListener("click", (e) => {
       $("#rm-ok").onclick = closeModal;
     });
   }
+});
+
+// ------------------------------------------------------------ Set model name (admins, the ⋯ menu of a host's page)
+// A name of the panel's own for a host's model, shown in place of the one the machine reports (model()). The
+// dialog is a title, the field and three buttons, nothing to read: the field's placeholder is the reported
+// model, and what Clear does is its tooltip. The panel checks the name (1 to 64 characters, one line, no
+// invisible characters) and says what is wrong; the dialog shows that sentence. The host's name and both model
+// names are put into the dialog as properties (value, placeholder, ariaLabel, title), never as markup.
+function modelNameMenu(s) {
+  if (!isHost(s) || !state.me?.can_manage_users) return "";
+  return `<div class="menu-sep"></div><button class="menu-item" type="button" data-act="model-name">Set model name</button>`;
+}
+function openModelName(s) {
+  const reported = s.hardware?.display || "", custom = s.custom_model || "";
+  state.menu = null; render();
+  const m = $("#modal");
+  m.innerHTML = `<form class="modal-box" role="dialog" aria-modal="true" aria-labelledby="mn-t" id="mn-form" novalidate>
+    <h3 id="mn-t">Set model name</h3>
+    <div class="mfield"><input class="input" id="mn-in" maxlength="200" autocomplete="off" spellcheck="false" aria-describedby="mn-err"></div>
+    <div class="error" id="mn-err" role="alert"></div>
+    <div class="row-gap end"><button class="btn" type="button" id="mn-clear">Clear</button><button class="btn" type="button" id="mn-cancel">Cancel</button><button class="btn primary" type="submit" id="mn-save">Save</button></div></form>`;
+  const input = $("#mn-in"), err = $("#mn-err"), clear = $("#mn-clear");
+  input.ariaLabel = `Model name for ${s.name}`;
+  input.value = custom; input.placeholder = reported;
+  clear.title = reported ? `Show the reported model again: ${reported}` : "Show no model: the host reports none";
+  clear.disabled = !custom;
+  input.oninput = () => { err.textContent = ""; };  // the panel's sentence was about the name before this change
+  m.hidden = false;
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+  const close = () => { closeModal(); document.querySelector('[data-act="menu"][data-menu="poll"]')?.focus(); };
+  $("#mn-cancel").onclick = close;
+  const send = async (name) => {
+    const btns = [...m.querySelectorAll("button")];
+    btns.forEach((b) => (b.disabled = true)); err.textContent = "";
+    try {
+      const r = await api(`/api/systems/${enc(s.id)}/custom-model`, { method: "PUT", body: JSON.stringify({ custom_model: name }) });
+      const cur = state.byId[s.id];
+      if (cur) cur.custom_model = r.custom_model;  // shown at once; the stream brings the same with the next snapshot
+      close(); flash(r.message); render();
+    } catch (x) {
+      if (!err.isConnected) return;  // the dialog is gone (the session ended)
+      err.textContent = x.message; btns.forEach((b) => (b.disabled = false)); clear.disabled = !custom; input.focus();
+    }
+  };
+  clear.onclick = () => send("");
+  $("#mn-form").onsubmit = (e) => { e.preventDefault(); send(input.value); };
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="model-name"]');
+  const s = t && !t.disabled && state.byId[current().id];
+  if (s) openModelName(s);
 });
 
 // ------------------------------------------------------------ elevated helper Stop / Start

@@ -63,6 +63,9 @@ var matrixRoutes = []writeRoute{
 	{pattern: "POST /api/systems/{id}/fan/duty", path: "/api/systems/tower/fan/duty", body: map[string]any{"zone": 0, "percent": 50}, adminOnly: true, stepUp: true, controlToken: true, killSwitch: true},
 	{pattern: "POST /api/systems/{id}/power", path: "/api/systems/laptop/power", body: "POWER", adminOnly: true, stepUp: true, controlToken: true, killSwitch: true},
 	{pattern: "PUT /api/systems/{id}/poll", path: "/api/systems/laptop/poll", body: map[string]any{"interval_s": 5}, adminOnly: true, stepUp: true, controlToken: true, killSwitch: true},
+	// a host's model name is a label an admin sets for everyone to see: guarded like the sign-in wallpaper (no
+	// confirmation, no API token, and the kill switch, which stops device control, does not stop it)
+	{pattern: "PUT /api/systems/{id}/custom-model", path: "/api/systems/laptop/custom-model", body: map[string]any{"custom_model": "My PC"}, adminOnly: true},
 	{pattern: "POST /api/systems/{id}/helper/stop", path: "/api/systems/laptop/helper/stop", body: "CONFIRM", adminOnly: true, stepUp: true, killSwitch: true},
 	{pattern: "POST /api/systems/{id}/helper/start", path: "/api/systems/laptop/helper/start", body: "CONFIRM", adminOnly: true, stepUp: true, killSwitch: true},
 	{pattern: "POST /api/admin/updates", path: "/api/admin/updates", body: map[string]any{}, adminOnly: true, stepUp: true, controlToken: true, killSwitch: true},
