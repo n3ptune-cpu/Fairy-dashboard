@@ -1145,9 +1145,10 @@ function verChip(sysId, arrowOnly) {  // arrowOnly (the host list): nothing unle
   const stale = !!r.version_last_seen;  // the agent does not answer: no "update available" arrow for what it once reported
   const arrow = (r.behind === true && !stale) || updBusy(r);
   if (arrowOnly && !arrow) return "";
+  const L = upd.data?.latest, rel = L?.version ? `: ${buildLabel(L.version)}` : L?.tag ? `: ${L.tag}` : "";  // "Update available: build 42 (1a2b3c4)"
   return `<span class="ver">${arrowOnly ? "" : `<span class="chip ${r.behind === true && !stale ? "warn" : ""}" title="${esc(stale ? `fairy-agent ${r.version}, last seen. ${LAST_SEEN_TIP}` : `fairy-agent ${r.version || "?"}`)}">${esc(r.version ? `${buildLabel(r.version)}${stale ? " (last seen)" : ""}` : "agent ?")}</span>`}${arrow
     ? `<button class="upd-arrow ${updBusy(r) ? "busy" : ""}" type="button" data-act="upd-pop" data-sys="${esc(sysId)}" aria-haspopup="dialog" aria-expanded="${upd.popSys === sysId}"
-      aria-label="${esc(updBusy(r) ? `Update in progress on ${r.name}` : `Update available for ${r.name}`)}" title="${updBusy(r) ? "Update in progress" : "Update available"}">${I.uparrow}</button>` : ""}</span>`;
+      aria-label="${esc(updBusy(r) ? `Update in progress on ${r.name}` : `Update available for ${r.name}${rel}`)}" title="${esc(updBusy(r) ? "Update in progress" : `Update available${rel}`)}">${I.uparrow}</button>` : ""}</span>`;
 }
 function updPopHtml(r) {
   const d = upd.data, L = d.latest, why = controlWhyNot();
