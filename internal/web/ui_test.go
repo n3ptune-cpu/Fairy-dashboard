@@ -144,3 +144,80 @@ func TestUISessionsPage(t *testing.T) {
 		t.Error("app.css lacks the phone layout of the sessions table", err)
 	}
 }
+
+// "Update machines that are off" on the Updates page: the entry point, the dialog that says in plain words
+// what happens and lists the machines with tick boxes, the request it sends (through the "Confirm it's you"
+// path), the live rows, the report, the cancel dialog and the per-host switch. Everything it shows of a run or
+// a machine (names, the run's sentences, which can quote an agent's own error text) goes through esc().
+func TestUIWakeUpdate(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`await Promise.all([fetchPanelUpdate(), fetchUpdates(), fetchWakeUpdate()]);`, // loaded with the Updates page, every 2 s
+		`${wakeUpdateBox()}`,
+		`wu.data = await api("/api/admin/wake-update")`,
+		`data-act="wu-open"`, `>${I.onoff}Update machines that are off…</button>`,
+		`<b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.`,
+		// the dialog
+		`<h3 id="wu-t">Update machines that are off</h3>`,
+		`<li>It sends Wake-on-LAN through the machine named next to it.</li>`,
+		`and it goes on as soon as the machine's agent answers.`, `A machine that does not come online in that time is given up on and reported.`,
+		`It may then still be starting, or be on without its network (Tailscale).`,
+		`Fairy only switches off machines <b>this run woke</b>. A machine that is already on is never switched off; a Proxmox node with running guests is left on.`,
+		`Nobody is asked whether someone is using a machine the run woke: after its update it is switched off again.`,
+		`Off now: wake, update, switch off again`, `On now: update only, never switched off`, `Cannot take part right now`,
+		`${off.map((h) => tick(h, "wake", true)).join("")}`,        // machines that are off: ticked
+		`${on.map((h) => tick(h, "update_only", false)).join("")}`, // machines that are on: not ticked
+		`const body = { hosts: picked("wake"), update_only: picked("update_only"), update_if_on: !!$("#wu-ifon")?.checked };`,
+		`() => api(path, { method: "POST", body: JSON.stringify(body) }));`,
+		`if (r === null) return;  // "Confirm it's you" took the dialog's place: the run starts after the sign-in`,
+		// "Confirm it's you" shows the panel's line for every machine
+		`<ul class="su-items" id="su-items">${detail.items.map((x) => ` + "`" + `<li>${esc(x)}</li>` + "`" + `).join("")}</ul>`,
+		// live rows and the report
+		`<div class="wu-text">${esc(h.text)}${count}</div>`,
+		`<b data-countdown="${esc(h.shutdown_at)}">`,
+		`<span data-ago="${esc(h.wake_sent_at)}">`,
+		`left_on: ["bad", "LEFT ON"]`, `gave_up: ["bad", "gave up"]`, `off: ["ok", "done · off again"]`, `interrupted: ["bad", "interrupted"]`,
+		`${d.active ? wuRunBox(d.active, true) : d.last[0] ? ` + "`" + `<div class="wu-sub">Last run</div>${wuRunBox(d.last[0], false)}` + "`" + ` : ""}`, // the last run stays on the page
+		`data-act="wu-cancel" data-id="${esc(r.id)}"`,
+		// cancel: the default leaves the woken machines on
+		`<option value="">stay on (the report lists them as ON)</option><option value="1">are switched off again (an update that is running is waited for)</option>`,
+		`api(path, { method: "DELETE", body: JSON.stringify(body) }));`,
+		// the per-host switch, on the page and in a machine's ⋯ menu
+		`data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"`,
+		`${wakeUpdateMenu(s)}</div>` + "`;",
+		`api(path, { method: "PUT", body: JSON.stringify(body) }));`,
+		`["wakeupdate", "Update machines that are off"]`, // the Audit page's filter
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	start := strings.Index(js, "// ------------------------------------------------------------ Update machines that are off")
+	end := strings.Index(js, "// ------------------------------------------------------------ users, roles and sites")
+	if start < 0 || end < start {
+		t.Fatal("the section is not where this test looks for it")
+	}
+	sec := js[start:end]
+	// nothing of a machine or a run goes into the page as it came
+	if raw := regexp.MustCompile(`\$\{(h|r|d|c|l|x|e)\??\.[a-z_.?\[\]0-9]+\}`).FindAllString(sec, -1); len(raw) != 0 {
+		t.Errorf("the section inserts values without esc(): %v", raw)
+	}
+	if n := strings.Count(sec, "innerHTML"); n != 2 { // the two dialogs; the section itself is rendered by the page's morph
+		t.Errorf("innerHTML is used %d times in the section, want 2 (the dialogs)", n)
+	}
+	// a link is only ever made from a machine id through enc(), never from a text of the run
+	for _, m := range regexp.MustCompile(`href="[^"]*"`).FindAllString(sec, -1) {
+		if m != `href="#/system/${enc(h.id)}"` {
+			t.Errorf("unexpected link in the section: %s", m)
+		}
+	}
+	css, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{".wu-run {", ".wu-host {", ".wu-text {", ".su-items {", ".wu-log {"} {
+		if !strings.Contains(string(css), want) {
+			t.Errorf("app.css lacks %q", want)
+		}
+	}
+}
