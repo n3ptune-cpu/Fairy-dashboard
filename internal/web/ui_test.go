@@ -162,6 +162,12 @@ func TestUIInfoButton(t *testing.T) {
 		`const canHover = matchMedia("(hover: hover)");`,                                                           // pointing at it is for a mouse only
 		`el.style.left = `, `el.style.top = `, // placed over the page: nothing moves
 		`window.addEventListener("hashchange", () => closeInfo(false));`,
+		// the Updates page uses it three times
+		`infoBtn("upd-agents", "Update", infoList([`, `infoBtn("upd-panel", "Update panel", infoList([`, `infoBtn("wu", "Update machines that are off", infoList([`,
+		// and keeps one sentence for each button on the page
+		`Nothing updates by itself: <b>Update</b> installs the latest signed release on that agent.`,
+		`Update panel installs the latest signed release and restarts the panel.`,
+		`Wakes the machines you choose, updates their agent and switches them off again.`,
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %q", want)
@@ -196,7 +202,10 @@ func TestUIWakeUpdate(t *testing.T) {
 		`${wakeUpdateBox()}`,
 		`wu.data = await api("/api/admin/wake-update")`,
 		`data-act="wu-open"`, `>${I.onoff}Update machines that are off…</button>`,
-		`<b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.`,
+		// the two promises and the limit stay on the page itself (a sentence of the section's paragraphs), not behind the info button
+		`<b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.</p>`,
+		`<p class="note wu-rule">A machine takes part only after you switch it on here, one machine at a time.`,
+		`<h3>Update machines that are off${infoBtn("wu", "Update machines that are off", infoList([`,
 		// the dialog
 		`<h3 id="wu-t">Update machines that are off</h3>`,
 		`<li>It sends Wake-on-LAN through the machine named next to it.</li>`,
@@ -242,6 +251,20 @@ func TestUIWakeUpdate(t *testing.T) {
 		t.Fatal("the section is not where this test looks for it")
 	}
 	sec := js[start:end]
+	// what is behind the section's info button: how a run goes, never the promises
+	i := strings.Index(sec, `infoBtn("wu", `)
+	j := strings.Index(sec, `]))}</h3>`)
+	if i < 0 || j < i {
+		t.Fatal("the section's info button is not where this test looks for it")
+	}
+	for _, promise := range []string{"this run woke", "never switched off", "takes part only"} {
+		if strings.Contains(sec[i:j], promise) {
+			t.Errorf("%q is behind the info button; it has to be on the page", promise)
+		}
+		if !strings.Contains(sec[:i]+sec[j:], promise) {
+			t.Errorf("the section does not say %q on the page", promise)
+		}
+	}
 	// nothing of a machine or a run goes into the page as it came
 	if raw := regexp.MustCompile(`\$\{(h|r|d|c|l|x|e)\??\.[a-z_.?\[\]0-9]+\}`).FindAllString(sec, -1); len(raw) != 0 {
 		t.Errorf("the section inserts values without esc(): %v", raw)

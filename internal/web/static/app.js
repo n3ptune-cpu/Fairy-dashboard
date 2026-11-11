@@ -1064,9 +1064,12 @@ function pageUpdates() {
     ${why ? `<div class="note warn">${esc(why)}</div>` : ""}
     <div class="panel glass scroll"><table class="table updates"><thead><tr><th>Host</th><th>Version</th><th>Status</th><th>Self-update</th><th class="num"></th></tr></thead>
       <tbody>${d.agents.map(row).join("") || '<tr><td colspan="5" class="note">No agents in config.yaml.</td></tr>'}</tbody></table></div>
-    <div class="note">Nothing updates by itself. <b>Update</b> asks the agent to download the latest release from GitHub, check its signature,
-      install it, restart and roll back if the new version does not come up. Only agents with <code>self_update: true</code> here and
-      <code>self_update: enabled: true</code> in their own config.yaml can do this. Every Update asks you to confirm it's you and is written to the Audit log.</div></div>`;
+    <div class="note">Nothing updates by itself: <b>Update</b> installs the latest signed release on that agent.${infoBtn("upd-agents", "Update", infoList([
+      "The agent downloads the latest release from GitHub and checks its signature.",
+      "It installs the release and restarts: a few seconds offline.",
+      "If the new version does not come up, the agent rolls back by itself.",
+      "Only agents with <code>self_update: true</code> here and <code>self_update: enabled: true</code> in their own config.yaml can do this.",
+      "Every Update asks you to confirm it's you and is written to the Audit log."]))}</div></div>`;
 }
 // ---- Check for updates: GitHub now instead of the next background check (every 10 min). Read-only, so no
 // step-up; at most once every 30 s for the whole panel (the server says how long to wait).
@@ -1281,23 +1284,29 @@ function wakeUpdateBox() {
       ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
   const earlier = d.active ? d.last : d.last.slice(1), showEarlier = !!wu.open.earlier;
   return `<div class="panel glass pad wu" data-key="wu">
-    <div class="wu-top"><h3>Update machines that are off</h3>
+    <div class="wu-top"><h3>Update machines that are off${infoBtn("wu", "Update machines that are off", infoList([
+        "For machines that are normally switched off. You choose them and confirm once.",
+        `Fairy wakes each one (Wake-on-LAN) and waits up to ${esc(fmtSpan(d.settings.online_timeout_s))} for it to come online.`,
+        "It updates the machine's agent, like the Update button does.",
+        `About ${esc(fmtSpan(d.settings.settle_s))} after the result it asks for a shutdown with a countdown of ${esc(fmtSpan(d.settings.shutdown_delay_s))}. You can cancel the countdown.`,
+        `A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer. One that stopped answering more recently may be restarting, and is left alone.`,
+        "You can also switch a machine on for this in the ⋯ menu on its page.",
+        "Switching on, and every run, asks you to confirm it's you and is written to the Audit log.",
+        "API tokens cannot start a run.",
+        "After a restart of the panel a run is not continued: this page then says which machines it had woken."]))}</h3>
       <button class="btn primary" type="button" data-act="wu-open" ${!why && !d.active && !d.problem ? "" : "disabled"}
         title="${esc(why || (d.active ? "A run is going: one run at a time" : d.problem || "Choose the machines and start a run"))}">${I.onoff}Update machines that are off…</button></div>
-    <p class="note">For machines that are normally switched off. You choose them and confirm once; Fairy then wakes each one (Wake-on-LAN), waits up to ${esc(fmtSpan(d.settings.online_timeout_s))} for it to come online,
-      updates its agent like the Update button does, and about ${esc(fmtSpan(d.settings.settle_s))} after the result asks for a shutdown with a countdown of ${esc(fmtSpan(d.settings.shutdown_delay_s))} that you can cancel.
-      <b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.
-      A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer: one that stopped answering more recently may be restarting, and is left alone.
-      ${joined.length ? `${esc(joined.length)} machine${joined.length === 1 ? " is" : "s are"} switched on for this${can.length !== joined.length ? `, ${esc(can.length)} can be chosen right now` : ""}.` : "No machine is switched on for this yet: use the table below."}</p>
+    <p class="note">Wakes the machines you choose, updates their agent and switches them off again.
+      <b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.</p>
     ${d.problem ? `<div class="warnbox">${esc(d.problem)}</div>` : ""}
     ${d.active ? wuRunBox(d.active, true) : d.last[0] ? `<div class="wu-sub">Last run</div>${wuRunBox(d.last[0], false)}` : ""}
     ${earlier.length ? `<button class="wu-more" type="button" data-act="wu-log" data-k="earlier" aria-expanded="${showEarlier}">${showEarlier ? "Hide" : "Show"} ${earlier.length} earlier run${earlier.length === 1 ? "" : "s"}</button>
       ${showEarlier ? earlier.map((r) => wuRunBox(r, false)).join("") : ""}` : ""}
     <div class="wu-sub">Machines</div>
+    <p class="note wu-rule">A machine takes part only after you switch it on here, one machine at a time.
+      ${joined.length ? `${esc(joined.length)} ${joined.length === 1 ? "is" : "are"} switched on${can.length !== joined.length ? `, ${esc(can.length)} can be chosen right now` : ""}.` : "None is switched on yet."}</p>
     <div class="scroll"><table class="table wu-machines"><thead><tr><th>Machine</th><th>Now</th><th>Woken by</th><th>In these runs</th><th class="num"></th></tr></thead>
-      <tbody>${able.map(row).join("") || '<tr><td colspan="5" class="note">No machine with an agent that can update itself from the panel.</td></tr>'}</tbody></table></div>
-    <div class="note">A machine takes part only after you switch it on here (or in the ⋯ menu on its page). Switching on, and every run, asks you to confirm it's you and is written to the Audit log.
-      API tokens cannot start a run. After a restart of the panel a run is not continued: this page then says which machines it had woken.</div></div>`;
+      <tbody>${able.map(row).join("") || '<tr><td colspan="5" class="note">No machine with an agent that can update itself from the panel.</td></tr>'}</tbody></table></div></div>`;
 }
 // The per-host switch in the ⋯ menu of a machine's page (admins).
 function wakeUpdateMenu(s) {
@@ -2206,7 +2215,12 @@ function panelUpdateBox(d) {
     <button class="btn push" type="button" data-act="panel-upd" ${canGo ? "" : "disabled"} title="${esc(title)}">${I.update} ${running ? "Updating…" : "Update panel"}</button></div>
     ${steps}
     ${p && !p.ready ? `<div class="note warn">${esc(p.why)}</div>` : ""}
-    <div class="note">Update panel installs the latest signed release on the panel's host, restarts the panel and rolls back if it does not come up. It never installs an older version and needs a Pocket ID sign-in from the last 2 minutes. By hand: <code>fairy update</code> on the panel's host (as root).</div>`;
+    <div class="note">Update panel installs the latest signed release and restarts the panel.${infoBtn("upd-panel", "Update panel", infoList([
+      "The release is installed on the panel's host.",
+      "The panel restarts. If the new version does not come up, it rolls back.",
+      "It never installs an older version.",
+      "It needs a Pocket ID sign-in from the last 2 minutes.",
+      "By hand: <code>fairy update</code> on the panel's host (as root)."]))}</div>`;
 }
 document.addEventListener("click", async (e) => {
   const t = e.target.closest('[data-act="panel-upd"]');
