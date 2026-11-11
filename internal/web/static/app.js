@@ -1489,8 +1489,11 @@ function pageUsers() {
       <td>${t.site ? `<span class="chip ok">${esc(t.site)}</span>` : '<span class="chip warn">admins only</span>'}</td></tr>`;
   };
   return `<div class="stack">
-    <div class="note users-help">Pocket ID decides who may <b>sign in</b>. Here you decide what they <b>see</b>: <b>Admin</b> sees and controls everything;
-      <b>Viewer</b> only sees the sites ticked (read-only); new people wait with <b>No access</b> until you give them a role. Every change asks you to confirm it's you and is written to the Audit log.</div>
+    <div class="note users-help">Pocket ID decides who may <b>sign in</b>; here you decide what they <b>see</b>.${infoBtn("users", "Users", infoList([
+      "<b>Admin</b> sees and controls everything.",
+      "<b>Viewer</b> only sees the sites ticked, read-only.",
+      "New people wait with <b>No access</b> until you give them a role.",
+      "Every change asks you to confirm it's you and is written to the Audit log."]))}</div>
     <div class="section-title">People <span class="count">${d.users.length}</span></div>
     <div class="panel glass scroll"><table class="table users"><thead><tr><th>User</th><th>Role</th><th>Sites they see</th><th>Last seen</th><th class="num"></th></tr></thead>
       <tbody>${d.users.map(userRow).join("") || '<tr><td colspan="5" class="note">Nobody has signed in yet.</td></tr>'}</tbody></table></div>
@@ -1504,7 +1507,9 @@ function pageUsers() {
         <div class="panel glass scroll"><table class="table assign"><thead><tr><th>${k === "guests" ? "Guest" : "Name"}</th><th>Site</th><th>Visible to</th></tr></thead>
         <tbody>${rows.map(targetRow).join("")}</tbody></table></div>` : "";
     }).join("")}
-    <div class="note">Guests follow their node and power sources / UPSes follow the hosts they are attached to, unless you pick a site here. Anything without a site is visible to admins only.</div></div>`;
+    <div class="note info-keep">Anything without a site is visible to admins only.${infoBtn("users-sites", "Sites", infoList([
+      "A guest follows its node, unless you pick a site for it here.",
+      "A power source or a UPS follows the hosts it is attached to, unless you pick a site for it here."]))}</div></div>`;
 }
 async function adminCall(label, method, path, body) {
   try {
