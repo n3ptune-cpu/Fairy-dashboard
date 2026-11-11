@@ -346,7 +346,8 @@ function patchChildren(a, b) {
 // pointing at the button shows the panel as well. `html` is the caller's own markup: server values in it go
 // through esc() like everywhere. The panel is #info-pop in the page (role="status": a screen reader reads it when
 // it opens); it is placed with CSSOM, because the page's CSP allows no inline styles. Sentences that carry a
-// safety promise or a limit stay on the page itself, never only in here.
+// safety promise or a limit stay on the page itself, never only in here; they are marked .info-keep, and with
+// room for it the panel opens under the ones of its own section (at their left edge), not on top of them.
 const info = { html: {}, key: null, pinned: false, timer: null };
 function infoBtn(key, about, html) {
   info.html[key] = `<button class="info-x" type="button" aria-label="Close">${I.close}</button><div class="info-t">${esc(about)}</div>${html}`;
@@ -359,9 +360,13 @@ function placeInfo() {
   if (!btn) { closeInfo(false); return; }
   const b = btn.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight, edge = 8;
   if (b.bottom < 0 || b.top > innerHeight) { closeInfo(false); return; }  // its button was scrolled out of sight
+  const keep = [...(btn.closest(".panel, .modal-box, .stack")?.querySelectorAll(".info-keep") || [])].map((k) => k.getBoundingClientRect())
+    .filter((r) => r.height && r.bottom > b.top - 4 && r.top < innerHeight);
+  const under = keep.length ? Math.max(b.bottom, ...keep.map((r) => r.bottom)) + 6 : 0, fits = (top) => top >= edge && top + h <= innerHeight - edge;
   const below = b.bottom + 6, above = b.top - h - 6;
-  el.style.left = `${Math.max(edge, Math.min(b.left - 12, innerWidth - w - edge))}px`;
-  el.style.top = `${below + h <= innerHeight - edge ? below : above >= edge ? above : Math.max(edge, innerHeight - h - edge)}px`;
+  const left = under && fits(under) ? Math.min(b.left - 12, ...keep.map((r) => r.left)) : b.left - 12;
+  el.style.left = `${Math.max(edge, Math.min(left, innerWidth - w - edge))}px`;
+  el.style.top = `${under && fits(under) ? under : keep.length && fits(above) ? above : fits(below) ? below : fits(above) ? above : Math.max(edge, innerHeight - h - edge)}px`;
 }
 function closeInfo(refocus) {
   clearTimeout(info.timer);
@@ -1307,14 +1312,14 @@ function wakeUpdateBox() {
         "After a restart of the panel a run is not continued: this page then says which machines it had woken."]))}</h3>
       <button class="btn primary" type="button" data-act="wu-open" ${!why && !d.active && !d.problem ? "" : "disabled"}
         title="${esc(why || (d.active ? "A run is going: one run at a time" : d.problem || "Choose the machines and start a run"))}">${I.onoff}Update unpowered hosts…</button></div>
-    <p class="note">Wakes the machines you choose, updates their agent and switches them off again.
+    <p class="note info-keep">Wakes the machines you choose, updates their agent and switches them off again.
       <b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.</p>
     ${d.problem ? `<div class="warnbox">${esc(d.problem)}</div>` : ""}
     ${d.active ? wuRunBox(d.active, true) : d.last[0] ? `<div class="wu-sub">Last run</div>${wuRunBox(d.last[0], false)}` : ""}
     ${earlier.length ? `<button class="wu-more" type="button" data-act="wu-log" data-k="earlier" aria-expanded="${showEarlier}">${showEarlier ? "Hide" : "Show"} ${earlier.length} earlier run${earlier.length === 1 ? "" : "s"}</button>
       ${showEarlier ? earlier.map((r) => wuRunBox(r, false)).join("") : ""}` : ""}
     <div class="wu-sub">Machines</div>
-    <p class="note wu-rule">A machine takes part only after you switch it on here, one machine at a time.
+    <p class="note wu-rule info-keep">A machine takes part only after you switch it on here, one machine at a time.
       ${joined.length ? `${esc(joined.length)} ${joined.length === 1 ? "is" : "are"} switched on${can.length !== joined.length ? `, ${esc(can.length)} can be chosen right now` : ""}.` : "None is switched on yet."}</p>
     <div class="scroll"><table class="table wu-machines"><thead><tr><th>Machine</th><th>Now</th><th>Woken by</th><th>In these runs</th><th class="num"></th></tr></thead>
       <tbody>${able.map(row).join("") || '<tr><td colspan="5" class="note">No machine with an agent that can update itself from the panel.</td></tr>'}</tbody></table></div></div>`;

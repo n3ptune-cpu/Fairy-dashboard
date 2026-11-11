@@ -161,6 +161,7 @@ func TestUIInfoButton(t *testing.T) {
 		`if (e.key === "Escape" && info.key) { e.stopPropagation(); closeInfo(true); }`,                            // Escape, and the button has the focus again
 		`const canHover = matchMedia("(hover: hover)");`,                                                           // pointing at it is for a mouse only
 		`el.style.left = `, `el.style.top = `, // placed over the page: nothing moves
+		`querySelectorAll(".info-keep")`, // and under the sentences of its section that have to stay readable
 		`window.addEventListener("hashchange", () => closeInfo(false));`,
 		// the Updates page uses it three times
 		`infoBtn("upd-agents", "Update", infoList([`, `infoBtn("upd-panel", "Update panel", infoList([`, `infoBtn("wu", "Update unpowered hosts", infoList([`,
@@ -205,7 +206,8 @@ func TestUIWakeUpdate(t *testing.T) {
 		`data-act="wu-open"`, `>${I.onoff}Update unpowered hosts…</button>`,
 		// the two promises and the limit stay on the page itself (a sentence of the section's paragraphs), not behind the info button
 		`<b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.</p>`,
-		`<p class="note wu-rule">A machine takes part only after you switch it on here, one machine at a time.`,
+		`<p class="note wu-rule info-keep">A machine takes part only after you switch it on here, one machine at a time.`,
+		`<p class="note info-keep">Wakes the machines you choose, updates their agent and switches them off again.`,
 		`<h3>Update unpowered hosts${infoBtn("wu", "Update unpowered hosts", infoList([`,
 		// the dialog
 		`<h3 id="wu-t">Update unpowered hosts</h3>`,
