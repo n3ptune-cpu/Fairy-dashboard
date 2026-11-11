@@ -12,6 +12,7 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
 )
 
 var watchRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -60,8 +61,12 @@ const keepaliveEvery = 15 * time.Second
 
 // stream: Server-Sent Events, pushed every `intervals.stream` (1 s): `systems` (full, first), then
 // `systems_delta` {changed, removed}; `summary`, `ups`, `power` only when they change; `ups_event` on UPS
-// transitions; a `: keepalive` comment every 15 s regardless of traffic (proxy idle timers).
-// `?watch=<id>` boosts that system to 1 s polling while the stream is open.
+// transitions; `notes` (the bell's counts) when they change; `notes_new` with the warnings and critical events
+// made since the stream was opened (the page's pop-ups, see writeNewNotes); a `: keepalive` comment every 15 s
+// regardless of traffic (proxy idle timers).
+// `?watch=<id>` boosts that system to 1 s polling while the stream is open. `?notes_after=<id>` continues
+// `notes_new` after that notification instead of "now" (the page gives the `last` it was sent, so that opening
+// a host's page, which opens a new stream, loses no event).
 //
 // Everything sent is filtered to what the user may see (see view); access is re-checked every tick and the
 // stream ends when it changes (the browser reconnects and gets a fresh, re-filtered `systems` list).
@@ -82,6 +87,12 @@ func (s *Server) stream(c *reqCtx) error {
 	boost := ""
 	if watch != "" && s.Poller.HasSystem(watch) && v.Has(watch) {
 		boost = watch
+	}
+	notesAfter := int64(-1) // from now
+	if q := c.r.URL.Query().Get("notes_after"); q != "" {
+		if notesAfter, err = strconv.ParseInt(q, 10, 64); err != nil || notesAfter < 0 {
+			return apierr.New(422, "notes_after must be a notification id")
+		}
 	}
 	release, ok := s.codec.live.streams.acquire(c.user.Sub) // the user, or "token:<id>"
 	if !ok {
@@ -104,6 +115,12 @@ func (s *Server) stream(c *reqCtx) error {
 	st := &streamState{s: s, v: v, upsSeq: s.Poller.UPS.Seq(), last: map[string][]byte{}, quiet: time.Now()}
 	if c.user != nil {
 		st.sub = c.user.Sub
+	}
+	if s.Notes != nil {
+		st.noteAfter = s.Notes.LastID() // only events made after connecting ...
+		if notesAfter >= 0 && notesAfter < st.noteAfter {
+			st.noteAfter = notesAfter // ... or after the one the page saw last (never older than newNotesMaxAge)
+		}
 	}
 	iv := time.Duration(s.Cfg.Intervals.Stream * float64(time.Second))
 	if iv <= 0 {
@@ -158,6 +175,8 @@ type streamState struct {
 	upsSeq    int               // last UPS event sent (starts at "now": only events after connecting)
 	quiet     time.Time         // last keepalive
 	sub       string            // the user, for the `notes` counts
+	noteAfter int64             // id of the last notification considered for `notes_new`
+	noteSent  bool              // the first `notes_new` (it carries `last` even without events) was sent
 }
 
 // next returns the events due in this tick (possibly none).
@@ -167,6 +186,7 @@ func (st *streamState) next() []byte {
 	st.writeChanged(&out)
 	st.writeUPSEvents(&out)
 	st.writeNotes(&out)
+	st.writeNewNotes(&out)
 	if time.Since(st.quiet) > keepaliveEvery { // always, even while data flows
 		st.quiet = time.Now()
 		out.WriteString(": keepalive\n\n")
@@ -299,4 +319,69 @@ func (st *streamState) writeNotes(out *bytes.Buffer) {
 		st.last["notes"] = b
 		fmt.Fprintf(out, "event: notes\ndata: %s\n\n", b)
 	}
+}
+
+// `notes_new`: what the page shows as pop-ups. A stream sends the warnings and critical events that were made
+// while it is open: never the ones from before (no pop-ups for old events when a page loads or reconnects),
+// except after `?notes_after=<id>`, and then none older than newNotesMaxAge. At most maxNewNotes events go
+// into one event; a flood is counted in `more` instead (the page shows "N more").
+const (
+	maxNewNotes     = 20
+	newNotesMaxAge  = time.Minute
+	newNoteTextMax  = 240 // the pop-up shows a few lines; the whole text is on the Notifications page
+	newNoteHostMax  = 80
+	newNotesNothing = `{"last":%d,"events":[],"more":0,"more_urgent":0}`
+)
+
+// newNote is one event of `notes_new`: what a pop-up shows, and where its link leads (system_id, ups_id, type).
+type newNote struct {
+	ID       int64     `json:"id"`
+	T        time.Time `json:"t"`
+	Kind     string    `json:"kind"`
+	Type     string    `json:"type"`
+	Severity string    `json:"severity"`
+	Urgent   bool      `json:"urgent"` // notifications.Event.Urgent: shown with "Critical only"
+	SystemID string    `json:"system_id,omitempty"`
+	UPSID    string    `json:"ups_id,omitempty"`
+	Host     string    `json:"host,omitempty"`
+	Text     string    `json:"text"`
+}
+
+// writeNewNotes sends `notes_new` {last, events, more, more_urgent}: once when the stream opens (no events:
+// `last` is where the page's pop-ups start), then whenever a warning or critical event was made that this
+// user may see. Info events and events of systems outside the user's sites are never sent.
+func (st *streamState) writeNewNotes(out *bytes.Buffer) {
+	if st.s.Notes == nil || st.sub == "" {
+		return
+	}
+	evs, more, moreUrgent, last := st.s.Notes.Since(st.noteAfter, time.Now().Add(-newNotesMaxAge), eventVisibility(st.v), maxNewNotes)
+	st.noteAfter = last
+	if len(evs) == 0 && more == 0 {
+		if !st.noteSent {
+			st.noteSent = true
+			fmt.Fprintf(out, "event: notes_new\ndata: "+newNotesNothing+"\n\n", last)
+		}
+		return
+	}
+	p := struct {
+		Last       int64     `json:"last"`
+		Events     []newNote `json:"events"`
+		More       int       `json:"more"`
+		MoreUrgent int       `json:"more_urgent"`
+	}{Last: last, Events: make([]newNote, 0, len(evs)), More: more, MoreUrgent: moreUrgent}
+	for _, e := range evs {
+		p.Events = append(p.Events, newNoteOf(e))
+	}
+	b, err := json.Marshal(p)
+	if err != nil { // a time that cannot be written: the events are on the Notifications page
+		encodeFailed("notes_new", "", err)
+		b = []byte(fmt.Sprintf(newNotesNothing, last))
+	}
+	st.noteSent = true
+	fmt.Fprintf(out, "event: notes_new\ndata: %s\n\n", b)
+}
+
+func newNoteOf(e notifications.Event) newNote {
+	return newNote{ID: e.ID, T: e.T, Kind: e.Kind, Type: e.Type, Severity: e.Severity, Urgent: e.Urgent(), SystemID: e.SystemID,
+		UPSID: e.UPSID, Host: clipText(e.Host, newNoteHostMax), Text: clipText(e.Text, newNoteTextMax)}
 }

@@ -5,6 +5,7 @@
 package notifications
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,6 +108,13 @@ func (e Event) tier() int {
 
 // Active reports whether an alarm's condition still holds.
 func (e Event) Active() bool { return e.Alarm && e.Resolved == nil }
+
+// Urgent reports whether the event is one a pop-up shows with the setting "Critical only" (README,
+// "Notifications"): an event of severity critical (today only "UPS: low battery"), or one that starts an
+// alert, a condition that then holds (a host offline, a temperature over the limit, a UPS on battery or out
+// of reach). These are the events the Overview counts as "active alerts". Other warnings (an update that
+// failed, an unstable host, Add host that failed) are not urgent.
+func (e Event) Urgent() bool { return e.Severity == Critical || e.Alarm }
 
 type userState struct {
 	ReadUpTo  int64   `json:"read_up_to"`
@@ -492,6 +500,58 @@ func (s *Store) List(sub string, visible func(Event) bool, f Filter) Page {
 func (s *Store) Counts(sub string, visible func(Event) bool) (unread, active int) {
 	p := s.List(sub, visible, Filter{Limit: 1})
 	return p.Unread, p.ActiveAlerts
+}
+
+// LastID is the id of the newest event made so far (0 when there was none).
+func (s *Store) LastID() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.d.Next - 1
+}
+
+// Since returns the warnings and critical events with an id above after that visible allows, oldest first:
+// what an open page shows as pop-ups (the live stream's `notes_new`). last is the newest id there is, to ask
+// with next time. Events made before notBefore are left out (a page that was away for longer finds them on
+// the Notifications page), and so are info events. At most limit events are returned: urgent ones first (see
+// Event.Urgent), then the newest; more says how many were left out and moreUrgent how many of those were
+// urgent. A repeat that was counted on an older event (see merged) is not a new event and is not returned.
+func (s *Store) Since(after int64, notBefore time.Time, visible func(Event) bool, limit int) (evs []Event, more, moreUrgent int, last int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	last = s.d.Next - 1
+	for i := len(s.d.Events) - 1; i >= 0; i-- { // ids rise along the list
+		e := s.d.Events[i]
+		if e.ID <= after {
+			break
+		}
+		if (e.Severity != Warning && e.Severity != Critical) || e.T.Before(notBefore) || !visible(e) {
+			continue
+		}
+		evs = append(evs, e)
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	if len(evs) > limit {
+		slices.SortStableFunc(evs, func(a, b Event) int { // urgent first; within each, the newest first (as collected)
+			switch {
+			case a.Urgent() == b.Urgent():
+				return 0
+			case a.Urgent():
+				return -1
+			}
+			return 1
+		})
+		for _, e := range evs[limit:] {
+			more++
+			if e.Urgent() {
+				moreUrgent++
+			}
+		}
+		evs = evs[:limit]
+	}
+	slices.SortFunc(evs, func(a, b Event) int { return cmp.Compare(a.ID, b.ID) })
+	return evs, more, moreUrgent, last
 }
 
 func (s *Store) user(sub string) *userState {
