@@ -163,6 +163,11 @@ func TestUIInfoButton(t *testing.T) {
 		`const cls = battLow(b) ? "bad" : b.state === "discharging" ? "warn" : "ok";`,
 		"const title = [`Battery ${fmtP(b.percent)}`, BATT_STATE[b.state] || b.state, left].filter(Boolean).join(\" · \");",
 		"{ cls: `hflag ${cls}`, icon: battIcon(b), label: title }",
+		// the host list's UPS: the chip's states (on battery amber, low battery red), with the words in those two states
+		`const low = u.status === "low_battery", batt = onBattery(u), state = (Object.hasOwn(UPS_STATUS, u.status) && UPS_STATUS[u.status][1]) || String(u.status ?? "unknown");`,
+		"{ cls: `hflag ups ${low ? \"bad\" : batt ? \"warn\" : \"ok\"}`, icon: `${upsIcon(u)}${batt ? `<span>${low ? \"low battery\" : \"on battery\"}</span>` : \"\"}`, label: title }",
+		`<span class="host-tags">${upsSigns(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span>`,
+		`${upsChips(s)}${(s.tags || []).map(`, // the host's own page keeps the chip
 		`<div class="info-t">${esc(about)}</div>${html}`,
 		`<button class="info-x" type="button" aria-label="Close">${I.close}</button>`,
 		`if (info.key !== b.dataset.info) openInfo(b, true);` + "\n" + `  else if (info.pinned) closeInfo(false);`, // a click opens, a second click closes

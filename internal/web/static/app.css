@@ -362,6 +362,12 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
 .info-btn.hflag.warn { color: var(--warn); } .info-btn.hflag.bad { color: var(--bad); }
 .info-btn.hflag.warn:hover, .info-btn.hflag.warn[aria-expanded="true"] { background: rgba(245, 184, 75, .14); }
 .info-btn.hflag.bad:hover, .info-btn.hflag.bad[aria-expanded="true"] { background: rgba(255, 93, 108, .14); }
+/* the UPS: an upright unit; on battery it carries its words and a tint, so it is as easy to spot as the chip was */
+.info-btn.hflag.ups { display: inline-flex; align-items: center; gap: 4px; width: auto; min-width: 24px; justify-content: center; font: inherit; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.info-btn.hflag.ups.warn { padding: 0 7px 0 2px; background: rgba(245, 184, 75, .12); }
+.info-btn.hflag.ups.bad { padding: 0 7px 0 2px; background: rgba(255, 93, 108, .14); }
+.info-btn.hflag.ups.warn:hover, .info-btn.hflag.ups.warn[aria-expanded="true"] { background: rgba(245, 184, 75, .22); }
+.info-btn.hflag.ups.bad:hover, .info-btn.hflag.ups.bad[aria-expanded="true"] { background: rgba(255, 93, 108, .24); }
 .info-pop a { color: var(--accent); }
 .info-pop .list-row { padding: 4px 0; }
 .info-pop .list-row + p { margin: 8px 0 2px; }

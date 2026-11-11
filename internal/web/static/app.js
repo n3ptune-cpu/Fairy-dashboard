@@ -453,6 +453,29 @@ const model = (s) => s.hardware?.display || null;
 const subLine = (s) => s.kind === "node"
   ? ["Proxmox node", model(s) || s.cpu_model, s.cores && `${s.cores} cores`, s.mem_total && fmtBytes(s.mem_total)].filter(Boolean).join(" · ")
   : [model(s), s.os, s.cores && `${s.cores} threads`].filter(Boolean).join(" · ");
+// Host list: the UPS that feeds a host as a small sign in the family of the battery's and the helper's: an upright
+// unit (not the laptop battery's lying shape). On mains: quiet, a bolt inside. Running on its battery: amber, its
+// charge as a fill inside and the words "on battery" beside it. Low battery: red, "!" inside and "low battery". These
+// are the chip's states (onBattery, low_battery); the words stay in the alert states so that a host on a UPS that
+// runs on battery is as easy to spot as it was. Name and tooltip: "Powered by UPS <name> · <state> · <charge> ·
+// <time left>"; a click, Enter or a tap opens the same in the info panel. The host's own page keeps the chip below.
+function upsIcon(u) {
+  const low = u.status === "low_battery", ch = Number.isFinite(u.battery_charge) ? u.battery_charge : null;
+  const h = (ch == null ? 2 : Math.max(1, Math.min(4, Math.ceil(ch / 25)))) * 3;
+  return svg(`<rect x="6" y="3" width="12" height="18" rx="1.5"/>${low ? '<path d="M12 8v5M12 16.4v.01"/>'
+    : onBattery(u) ? `<rect x="8.6" y="${18.4 - h}" width="6.8" height="${h}" rx=".5" fill="currentColor" stroke="none"/>` : '<path d="M12.6 7.5 10 12.4h4l-2.6 4.9"/>'}`, 18);
+}
+const upsSigns = (s) => upsOf(s).map((u) => {
+  const low = u.status === "low_battery", batt = onBattery(u), state = (Object.hasOwn(UPS_STATUS, u.status) && UPS_STATUS[u.status][1]) || String(u.status ?? "unknown");
+  const ch = Number.isFinite(u.battery_charge) ? `${u.battery_charge.toFixed(0)}%` : "", left = u.battery_runtime_s != null ? fmtRuntime(u.battery_runtime_s) : "";
+  const title = [`Powered by UPS ${u.name}`, `${state}${u.stale ? " (stale)" : ""}`, ch, batt && left ? `~${left} left` : ""].filter(Boolean).join(" · ");
+  return infoBtn(`ups-${s.id}-${u.id}`, `UPS ${u.name}`, `<div class="list-row"><span>State</span><span>${esc(state)}${u.stale ? " · stale" : ""}</span></div>
+    ${ch ? `<div class="list-row"><span>Charge</span><span>${ch}</span></div>` : ""}
+    ${left ? `<div class="list-row"><span>Runtime${batt ? " left" : ""}</span><span>${left} <span class="note">mm:ss at current load</span></span></div>` : ""}
+    ${u.load_percent != null ? `<div class="list-row"><span>Load</span><span>${u.load_percent.toFixed(0)}%${u.watts != null ? ` · ${upsWatts(u)}` : ""}</span></div>` : ""}
+    <p>It powers ${esc(s.name)}. More on the <a href="#/ups">UPS page</a>.</p>`,
+    { cls: `hflag ups ${low ? "bad" : batt ? "warn" : "ok"}`, icon: `${upsIcon(u)}${batt ? `<span>${low ? "low battery" : "on battery"}</span>` : ""}`, label: title });
+}).join("");
 const upsChips = (s) => upsOf(s).map((u) => `<span class="chip ups ${u.status === "low_battery" ? "bad" : onBattery(u) ? "warn" : ""}" title="Powered by ${esc(u.name)}${onBattery(u) ? " · ON BATTERY" : ""}">${I.ups}UPS${onBattery(u) ? " · battery" : ""}</span>`).join("");
 // Laptop battery (agent's `battery` block): a chip in host rows and a box on the detail page.
 const BATT_STATE = { charging: "charging", discharging: "on battery", full: "full", idle: "plugged in, not charging", unknown: "unknown" };
@@ -638,7 +661,7 @@ function hostRow(s) {
   const gpus = s.gpus || [], w = watts(s), ver = state.me?.can_control && upd.bySys[s.id]?.version;
   const about = [subLine(s), clusterName(s) && `cluster ${clusterName(s)}`, ver && `fairy-agent ${ver}`].filter(Boolean).join(" · ");
   return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><div class="host-line"><span class="host-ico">${hostIcon(s)}</span><div class="host-main">
-      <div class="host-l1"><a href="#/system/${enc(s.id)}" title="${esc(about)}"><span class="dot ${cssName(s.status)}"></span>${esc(s.name)}</a><span class="host-tags">${upsChips(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span></div>
+      <div class="host-l1"><a href="#/system/${enc(s.id)}" title="${esc(about)}"><span class="dot ${cssName(s.status)}"></span>${esc(s.name)}</a><span class="host-tags">${upsSigns(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span></div>
       ${model(s) ? `<div class="host-model" title="${esc(model(s))}">${esc(model(s))}</div>` : ""}</div></div></td>
     <td class="col-kind"><span class="note">${esc(s.kind === "node" ? "Proxmox" : s.owner || s.group || "–")}</span></td>
     <td class="col-cpu" data-l="CPU">${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
