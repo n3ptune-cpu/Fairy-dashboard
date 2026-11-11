@@ -332,13 +332,28 @@ func (s *Server) hostRemove(c *reqCtx) error {
 		c.audit(u, "host.remove", h.ID, nil, "refused: "+err.Error())
 		return err
 	}
+	// A machine that is removed is no longer switched on for "Update machines that are off". A host's id is
+	// made from its name, so without this the next machine added under the same name would take part in
+	// runs without anybody having switched it on. First, so that a host is never gone with the switch left on.
+	wasOn := false
+	for _, sid := range []string{h.ID, h.Shown()} {
+		if !s.Poller.Admin.WakeUpdateEnabled(sid) {
+			continue
+		}
+		if err := s.Poller.Admin.SetWakeUpdate(sid, false); err != nil {
+			c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
+			return err
+		}
+		wasOn = true
+		c.audit(u, "wakeupdate.switch", sid, map[string]any{"enabled": false, "because": "host removed"}, "ok")
+	}
 	s.Enroll.CancelHost(h.ID) // a Re-pair still pairing must not bring the host back
 	s.unpoll(h.ID)            // before the store forgets which node is the host's
 	if err := s.Managed.Remove(h.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
 		return err
 	}
-	c.audit(u, "host.remove", h.ID, map[string]any{"name": h.Name}, "ok")
+	c.audit(u, "host.remove", h.ID, map[string]any{"name": h.Name, "wake_update_was_on": wasOn}, "ok")
 	if s.Notes != nil {
 		s.Notes.Add(notifications.Event{Kind: "host_removed", Type: "enroll", Severity: notifications.Info, Host: h.Name,
 			Text: fmt.Sprintf("removed from the panel by %s (the agent on the machine keeps running until you uninstall it)", actorOf(u))})

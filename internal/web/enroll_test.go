@@ -22,6 +22,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/enrollment"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
 )
 
 // Add host end to end (with a fake machine): a control action (step-up), one command with a 160-bit code, the
@@ -131,8 +132,15 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	} else if !e.s.Enroll.Cancel(r.body["id"].(string)) {
 		t.Fatal("cancel")
 	}
+	// the machine is switched on for "Update machines that are off": Remove takes that away with it
+	if err := e.s.Poller.Admin.SetWakeUpdate("srv-winpc", true); err != nil {
+		t.Fatal(err)
+	}
 	if r := e.do("DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": " SRV-WINPC "}, append([]string{"Cookie", c}, csrf...)...); r.code != 200 {
 		t.Fatal("remove", r.code, string(r.raw))
+	}
+	if e.s.Poller.Admin.WakeUpdateEnabled("srv-winpc") {
+		t.Error("the removed host is still switched on: the next machine added under this name inherits it")
 	}
 	e.s.Poller.PollOnce(context.Background())
 	if g := e.do("GET", "/api/systems/srv-winpc", nil, "Cookie", c); g.code != 404 {
@@ -152,6 +160,109 @@ func TestAddHostPairsAndPolls(t *testing.T) {
 	}
 	if v := e.do("GET", "/api/notifications?type=enroll", nil, "Cookie", e.cookie(viewer, 0)); v.code == 200 && len(v.body["events"].([]any)) != 0 {
 		t.Fatal("viewer sees admin-only events", string(v.raw))
+	}
+}
+
+// Remove host and "Update machines that are off" (review finding W5). A host's id is made from its name. The
+// per-machine switch stayed on in state.json when the host was removed, so another machine added later under
+// the same name took part in runs without anybody having switched it on. Now Remove switches it off, the
+// audit log says so, and a host added again under that name starts off.
+func TestRemoveHostSwitchesItOffForWakeUpdate(t *testing.T) {
+	e := setup(t)
+	e.s.Enroll.Interval = 20 * time.Millisecond
+	e.s.control = newRateLimiter(100)
+	e.s.Enroll.PanelAddr = "100.64.0.10"
+	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
+		return 200, enroll.Response{AgentVersion: "42-abc", Platform: "linux", Token: "winpc-read-token-xxxxxxxxxxxxxxxx",
+			ControlToken: "winpc-control-token-yyyyyyyyyyyyyy"}, "", nil
+	}
+	e.b.Mu.Lock()
+	e.b.Metrics["srv-winpc"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	e.b.Mu.Unlock()
+	c := e.cookie(controller(), 0)
+	hdr := []string{"Cookie", c, "X-Requested-With", "fairy"}
+	add := func() {
+		t.Helper()
+		r := e.do("POST", "/api/admin/hosts", map[string]any{"name": "SRV-WINPC", "os": "windows", "site": "Alice",
+			"options": map[string]any{"power_control": true, "self_update": true}}, hdr...)
+		if r.code != 201 {
+			t.Fatal(r.code, string(r.raw))
+		}
+		id, st := r.body["id"].(string), ""
+		for i := 0; i < 200 && st != "online"; i++ {
+			time.Sleep(20 * time.Millisecond)
+			e.s.Poller.PollOnce(context.Background())
+			st, _ = e.do("GET", "/api/admin/enrollments/"+id, nil, "Cookie", c).body["state"].(string)
+		}
+		if st != "online" {
+			t.Fatal("the host did not pair:", st)
+		}
+	}
+	row := func() map[string]any {
+		t.Helper()
+		return wuHostRow(t, e.do("GET", "/api/admin/wake-update", nil, "Cookie", c), "srv-winpc")
+	}
+	add()
+	if row()["opted_in"] != false {
+		t.Fatal("a new host is not switched on for these runs")
+	}
+	// an admin switches it on, through the route
+	if r := e.do("PUT", "/api/systems/srv-winpc/wake-update", map[string]any{"enabled": true}, hdr...); r.code != 200 {
+		t.Fatal(r.code, string(r.raw))
+	}
+	if row()["opted_in"] != true || !e.s.Poller.Admin.WakeUpdateEnabled("srv-winpc") {
+		t.Fatal("switched on")
+	}
+	// another machine's switch must stay as it is
+	if err := e.s.Poller.Admin.SetWakeUpdate("laptop", true); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.do("DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "SRV-WINPC"}, hdr...); r.code != 200 {
+		t.Fatal("remove", r.code, string(r.raw))
+	}
+	if e.s.Poller.Admin.WakeUpdateEnabled("srv-winpc") {
+		t.Fatal("the removed host is still switched on for these runs")
+	}
+	if !e.s.Poller.Admin.WakeUpdateEnabled("laptop") {
+		t.Fatal("removing one host switched another one off")
+	}
+	state := string(must(os.ReadFile(filepath.Join(e.s.Cfg.DataDir, "state.json"))))
+	if strings.Contains(state, "srv-winpc") || !strings.Contains(state, "laptop") {
+		t.Fatalf("state.json after Remove: %s", state)
+	}
+	// while it is gone, a run cannot name it
+	if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{UpdateOnly: []string{"srv-winpc"}, By: "Alice", BySub: "u2"}); err == nil {
+		t.Fatal("a run with a removed host started")
+	}
+	// the same name again (another machine, for all the panel knows): it starts off
+	add()
+	if h := row(); h["opted_in"] != false || h["choice"] != "" || !strings.Contains(h["why"].(string), "not switched on for this") {
+		t.Fatalf("the host added again under the same name: %v", h)
+	}
+	if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{UpdateOnly: []string{"srv-winpc"}, By: "Alice", BySub: "u2"}); err == nil || !strings.Contains(err.Error(), "is not switched on") {
+		t.Fatalf("a run with it: %v", err)
+	}
+	if r := e.wuStart(c, map[string]any{"update_only": []string{"srv-winpc"}}); r.code != 400 {
+		t.Fatal("the route:", r.code, string(r.raw))
+	}
+	// the audit log: the switch going off because of the removal, and the removal saying that it was on
+	found := false
+	for _, en := range e.auditEntries("", "wakeupdate.switch") {
+		p, _ := en["params"].(map[string]any)
+		found = found || (en["target"] == "srv-winpc" && p["enabled"] == false && p["because"] == "host removed")
+	}
+	rm := e.auditEntries("", "host.remove")
+	if p, _ := rm[0]["params"].(map[string]any); !found || len(rm) != 1 || p["wake_update_was_on"] != true {
+		t.Fatalf("audit: switch entry %v; host.remove %v", found, rm)
+	}
+	// a host that was not switched on: Remove writes no switch entry
+	n := len(e.auditEntries("", "wakeupdate.switch"))
+	if r := e.do("DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "SRV-WINPC"}, hdr...); r.code != 200 {
+		t.Fatal("remove", r.code, string(r.raw))
+	}
+	rm = e.auditEntries("", "host.remove")
+	if p, _ := rm[0]["params"].(map[string]any); len(e.auditEntries("", "wakeupdate.switch")) != n || len(rm) != 2 || p["wake_update_was_on"] != false {
+		t.Fatalf("second removal: %v", rm)
 	}
 }
 

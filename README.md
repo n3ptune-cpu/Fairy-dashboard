@@ -250,7 +250,8 @@ The rules, in plain words:
   it's you". It is kept in the panel (`state.json`, `wake_update_hosts`), not in config.yaml. The machine
   needs an agent with `self_update: true`; to be woken and switched off again it also needs
   `power_control: true` and `wol` with a relay ([Agents](#agents)). The machine the panel runs on cannot take
-  part.
+  part. **Remove** (for a host added with Add host) switches the machine off for this as well: a host that
+  is added again later under the same name starts off, like every new host.
 * **A run only switches off a machine that was off before the run and that the run woke itself.** For
   that, all of this must be true: the panel had asked the machine for 15 minutes without an answer when the
   run started; right before the wake the run asked the machine directly and got no answer; the relay
