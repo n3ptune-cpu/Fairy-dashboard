@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 )
@@ -130,6 +131,8 @@ func ValidateUpload(contentType string, data []byte) (string, error) {
 type Store struct {
 	dir, bgDir, file string
 	mu               sync.Mutex
+	signIn           atomic.Pointer[SignInPicture] // the sign-in wallpaper (signin.go)
+	signInOnce       sync.Once                     // it is read from bgDir once
 }
 
 // NewStore returns the store in dataDir.
