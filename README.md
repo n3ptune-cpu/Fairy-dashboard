@@ -179,9 +179,13 @@ manual install per machine) is in Fairy-agent's
   **One-time setup**: every `fairy update` run by hand as root installs (or refreshes) the unit and the polkit
   rule (`apt install polkitd` if it is missing). If the button says what is missing, run `fairy update` once
   more.
-  **What an update does not touch**: `fairy update` and the button replace the program only, never
-  `/etc/systemd/system/fairy.service`. What `deploy/fairy.service` has gained since your install (the memory
-  limit, the sandbox lines) is added once by hand: the memory limit as in
+  **Before you update to this version**: the new panel does not start with the example session secret, and
+  `fairy update` does not check that for you. Run the one-line check in
+  [Upgrading to this release](#upgrading-to-this-release), step 2, first.
+  **What an update does not touch**: `fairy update` and the button never replace
+  `/etc/systemd/system/fairy.service`. They replace the program; run by hand as root, `fairy update` also
+  writes the update unit and the polkit rule named above. What `deploy/fairy.service` has gained since your
+  install (the memory limit, the sandbox lines) is added once by hand: the memory limit as in
   [Upgrading to this release](#upgrading-to-this-release), step 3; the whole unit as in SECURITY-FIXES.md,
   to-do list, item 2.
 * **Agents**: admins see, in the panel, a banner when a newer Fairy-agent or Fairy-dashboard release exists
@@ -459,7 +463,7 @@ If you publish the releases yourself: publish the Fairy-agent release first. The
 agent release, and its Add host and Re-pair commands install that release. A panel whose agent release is
 not on GitHub yet refuses Add host and Re-pair until it is.
 
-### 2. Before `fairy update`: three settings
+### 2. Before `fairy update`: three settings and the session secret
 
 Open `/etc/fairy/config.yaml` and look at these three keys. A value in the middle column was accepted before
 and is refused now. A key that is not in the file is fine.
@@ -481,8 +485,33 @@ yourself, for example with `openssl rand -base64 48`, stays as it is and nobody 
 If yours is the example, make a real one with that command, write it into the line and continue. The log
 line and `fairy admin config check` of the new panel name the same command.
 
-If one of them is wrong, the new panel does not start. `fairy update` waits for the panel to answer after
-the restart. When it does not, it puts the old program back (it keeps it as `/usr/local/bin/fairy.old`) and
+**The check before you update to this version.** `fairy update` and the Update panel button do not look at
+the session secret first: the program that runs today does the update, and it does not know the new rule.
+This command answers "will the new panel refuse my session secret?". It only reads the file and prints
+`yes` or `no`, never the value. Run it on the panel host:
+
+```
+sudo env LC_ALL=C awk -v q="'" '/^[ \t]*(export[ \t]+)?FAIRY_SESSION_SECRET[ \t]*=/{v=$0;sub(/^[^=]*=[ \t]*/,"",v);sub(/[ \t\r]+$/,"",v);n=length(v);a=substr(v,1,1);b=substr(v,n,1);if(n>1&&a==b&&(a=="\""||a==q))v=substr(v,2,n-2);f=1} END{s=1;for(i=2;i<=length(v);i++)if(substr(v,i,1)!=substr(v,1,1)){s=0;break};print((!f||length(v)<32||index(v,"REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS")||s)?"yes":"no")}' /etc/fairy/fairy.env
+```
+
+`no`: update as usual. `yes`: do this before the update, as root:
+
+1. `openssl rand -base64 48`
+2. Write the output into `/etc/fairy/fairy.env` as the line `FAIRY_SESSION_SECRET=<that value>`.
+3. `systemctl restart fairy`. Everyone signs in once more. Then update.
+
+The command reads `/etc/fairy/fairy.env` only. If you set the secret somewhere else (a systemd drop-in with
+`Environment=`), look at the value there.
+
+If you update with the example value all the same: the new program is put in place and exits at once, again
+at every start that systemd tries. After about 45 seconds `fairy update` puts the old program back and ends
+with "the new version did not become healthy ... rolled back to the previous version". The panel is away for
+about 50 seconds and nothing is lost. The update's message does not say why: the reason is only in
+`journalctl -u fairy`.
+
+If one of the values above is wrong, the new panel does not start. `fairy update` waits for the panel to
+answer after the restart. When it does not, it puts the old program back (it keeps it as
+`/usr/local/bin/fairy.old`) and
 reports "rolled back to the previous version". Nothing is lost. Correct the value and run `fairy update`
 again. After the update you can check both files at any time with `sudo fairy admin config check` (as root:
 it only reads, and root can read `fairy.env`). As user `fairy` the same command shows every secret as
@@ -626,6 +655,14 @@ session settings as whole seconds).
 * Strict CSP, HSTS (https), frame/referrer/permissions policies, generic 500s, no secrets in logs or errors.
 * Sign-out is a POST with the CSRF header (no cross-site sign-out); visiting `/auth/login` keeps a valid session
   until a new sign-in completes.
+* A sign-out that cannot be written to `sessions.json` (disk full, read-only folder, wrong owner) answers 503
+  and says so. The session is then ended in the panel's memory only: a copy of its cookie is refused until
+  the panel restarts, and **after a restart that session is valid again** until it idles out or reaches
+  `session_max_age`. So when you see that message or its line in the log: make the file writable again, then
+  end the session for good on the panel host with `fairy admin sessions revoke-all` (everyone signs in once
+  more), or with `fairy admin sessions list` and `fairy admin sessions revoke <id from the list>` for that one
+  session. The browser that signed out no longer has the cookie, so signing out there once more is not
+  possible.
 * State files fail closed: an unreadable or corrupt `users.json`, `sessions.json`, `tokens.json` or `state.json`
   stops the panel at start, and at run time grants nothing (no sessions, control off) instead of being read as
   empty; such a file is never overwritten. Files are written `0600` by the service user, and `fairy admin`
