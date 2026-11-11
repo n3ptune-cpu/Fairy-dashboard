@@ -1,0 +1,210 @@
+package wakerun
+
+import (
+	"fmt"
+	"math/rand"
+	"strings"
+	"testing"
+	"time"
+)
+
+// mayShutDown says yes for a machine with the whole proof, and no as soon as any one part of it is missing,
+// with the reason for the report.
+func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
+	wake := t0.Add(10 * time.Second)
+	online := wake.Add(50 * time.Second)
+	up := int64(30) // it reported 30 s of uptime 50 s after the wake: it started after the wake
+	proven := func() (*Host, HostInfo, Observation) {
+		w, o, u := wake, online, up
+		return &Host{ID: "pc-a", Mode: ModeWake, StartStatus: "offline", ProbedOff: true, WakeSentAt: &w, Wakes: 1, OnlineAt: &o, BootUptimeS: &u},
+			HostInfo{ID: "pc-a", OptedIn: true}, Observation{Online: true, Status: "online"}
+	}
+	noGuests := func() (int, bool, string) { return 0, true, "" }
+	h, info, o := proven()
+	if ok, why := mayShutDown(h, info, o, noGuests); !ok || why != "" {
+		t.Fatalf("the whole proof: %v %q", ok, why)
+	}
+	early, late, zero := wake.Add(-time.Second), wake, int64(0)
+	long, exact, negative := int64(3*86400), int64(50), int64(-5)
+	for name, c := range map[string]struct {
+		change func(h *Host, info *HostInfo, o *Observation)
+		guests func() (int, bool, string)
+		why    string
+	}{
+		"chosen as a machine that is on":        {change: func(h *Host, _ *HostInfo, _ *Observation) { h.Mode = ModeUpdateOnly }, why: "chosen as a machine that is on"},
+		"an unknown mode":                       {change: func(h *Host, _ *HostInfo, _ *Observation) { h.Mode = "" }, why: "chosen as a machine that is on"},
+		"marked as already on":                  {change: func(h *Host, _ *HostInfo, _ *Observation) { h.AlreadyOn = true }, why: "already on before this run did anything"},
+		"online at the start":                   {change: func(h *Host, _ *HostInfo, _ *Observation) { h.StartStatus = "online" }, why: "did not show it as off when the run started"},
+		"stale at the start":                    {change: func(h *Host, _ *HostInfo, _ *Observation) { h.StartStatus = "stale" }, why: "did not show it as off"},
+		"never polled at the start":             {change: func(h *Host, _ *HostInfo, _ *Observation) { h.StartStatus = "" }, why: "did not show it as off"},
+		"not asked directly before the wake":    {change: func(h *Host, _ *HostInfo, _ *Observation) { h.ProbedOff = false }, why: "did not confirm that it was off right before the wake"},
+		"no wake by this run":                   {change: func(h *Host, _ *HostInfo, _ *Observation) { h.WakeSentAt = nil }, why: "sent no wake for it"},
+		"no wake accepted":                      {change: func(h *Host, _ *HostInfo, _ *Observation) { h.Wakes = 0 }, why: "sent no wake for it"},
+		"never seen online":                     {change: func(h *Host, _ *HostInfo, _ *Observation) { h.OnlineAt = nil }, why: "not seen coming online after this run's wake"},
+		"seen online before the wake":           {change: func(h *Host, _ *HostInfo, _ *Observation) { h.OnlineAt = &early }, why: "not seen coming online after this run's wake"},
+		"seen online at the moment of the wake": {change: func(h *Host, _ *HostInfo, _ *Observation) { h.OnlineAt = &late }, why: "not seen coming online after this run's wake"},
+		"no uptime reported":                    {change: func(h *Host, _ *HostInfo, _ *Observation) { h.BootUptimeS = nil }, why: "reports no uptime"},
+		"up for three days":                     {change: func(h *Host, _ *HostInfo, _ *Observation) { h.BootUptimeS = &long }, why: "running for longer than since the wake: it was already on"},
+		"up exactly as long as since the wake":  {change: func(h *Host, _ *HostInfo, _ *Observation) { h.BootUptimeS = &exact }, why: "running for longer than since the wake"},
+		"a negative uptime":                     {change: func(h *Host, _ *HostInfo, _ *Observation) { h.BootUptimeS = &negative }, why: "running for longer than since the wake"},
+		"no longer switched on for it":          {change: func(_ *Host, i *HostInfo, _ *Observation) { i.OptedIn = false }, why: "no longer switched on for"},
+		"its agent does not answer":             {change: func(_ *Host, _ *HostInfo, o *Observation) { o.Online = false }, why: "its agent is not answering right now"},
+		"a power action is pending":             {change: func(_ *Host, _ *HostInfo, o *Observation) { o.Pending = &Pending{Action: "reboot", At: t0} }, why: "another power action is already pending on it (reboot at 03:00:00 UTC)"},
+		"a guest runs":                          {guests: func() (int, bool, string) { return 1, true, "win11" }, why: "1 guest is running on it (win11)"},
+		"guests run":                            {guests: func() (int, bool, string) { return 4, true, "" }, why: "4 guests are running on it"},
+		"guests unknown":                        {guests: func() (int, bool, string) { return 0, false, "no Proxmox API for it" }, why: "cannot see whether guests run on it (no Proxmox API for it)"},
+	} {
+		h, info, o := proven()
+		if c.change != nil {
+			c.change(h, &info, &o)
+		}
+		g := noGuests
+		if c.guests != nil {
+			g = c.guests
+		}
+		ok, why := mayShutDown(h, info, o, g)
+		if ok || !strings.Contains(why, c.why) {
+			t.Errorf("%s: allowed=%v, reason %q (want %q)", name, ok, why, c.why)
+		}
+	}
+	// an uptime of 0 s is a machine that just started: the proof holds
+	h, info, o = proven()
+	h.BootUptimeS = &zero
+	if ok, _ := mayShutDown(h, info, o, noGuests); !ok {
+		t.Error("an uptime of 0 s after the wake")
+	}
+	// the guests are only asked about when everything else holds (the question can be slow, and its answer
+	// must never be what turns a machine that was on into one that may be switched off)
+	h, info, o = proven()
+	h.AlreadyOn = true
+	asked := false
+	mayShutDown(h, info, o, func() (int, bool, string) { asked = true; return 0, true, "" })
+	if asked {
+		t.Error("guests were asked about for a machine that is refused anyway")
+	}
+}
+
+// The rule against whatever happens. Many runs over machines that are made up at random: off for long, on
+// for days, on but unreachable, just gone quiet; a wake that works or does not; a person who switches a
+// machine on at some moment before or during the run; an agent without uptime; updates and shutdowns that
+// work, fail, hang or are refused; guests; a cancel of either kind, the kill switch, a machine taken out, all
+// at random moments. The world is the judge (world.Shutdown): a shutdown request for a machine that was
+// running when the run started, or when the run's first wake for it was accepted, fails the test. And every
+// run must end with every machine reported.
+func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
+	runs := 400
+	if testing.Short() {
+		runs = 60
+	}
+	total, shut := 0, map[string]int{}
+	for seed := 1; seed <= runs; seed++ {
+		rng := rand.New(rand.NewSource(int64(seed)))
+		w := newWorld(t)
+		pick := func(xs ...string) string { return xs[rng.Intn(len(xs))] }
+		secs := func(lo, hi int) time.Duration { return time.Duration(lo+rng.Intn(hi-lo+1)) * time.Second }
+		n := 1 + rng.Intn(5)
+		var req StartRequest
+		req.UpdateIfOn = rng.Intn(2) == 0
+		type later struct {
+			at time.Duration
+			do func()
+		}
+		var plan []later
+		for i := 0; i < n; i++ {
+			id := fmt.Sprintf("m%d", i)
+			var mc *machine
+			switch pick("off", "off", "off", "on", "unreachable", "quiet") {
+			case "off":
+				mc = w.off(id)
+			case "on":
+				mc = w.running(id)
+				mc.bootedAt = w.now.Add(-secs(1, 400000))
+			case "unreachable": // on, and the panel cannot reach it: it shows as stale or offline
+				mc = w.running(id)
+				mc.unreachable = true
+				back := secs(0, 500)
+				plan = append(plan, later{back, func() { mc.unreachable = false }})
+			case "quiet": // it went off a moment ago: the panel still shows "stale"
+				mc = w.running(id)
+				mc.on = false
+			}
+			mc.wakeBoots = rng.Intn(5) > 0
+			mc.bootTakes = secs(5, 420)
+			mc.post = time.Duration(rng.Int63n(int64(mc.bootTakes)))
+			mc.noUptime = rng.Intn(10) == 0
+			mc.updMode = pick("ok", "ok", "ok", "noverdict", "current", "fail", "rollback", "stuck", "approval", "refuse", "busy", "disabled")
+			mc.updTakes = secs(5, 200)
+			mc.shutMode = pick("ok", "ok", "ok", "approval", "refuse", "ignore", "busy")
+			if rng.Intn(6) == 0 {
+				mc.guests = rng.Intn(3)
+				if rng.Intn(3) == 0 {
+					mc.guestsWhy = "no Proxmox API for it"
+				}
+			}
+			if rng.Intn(8) == 0 {
+				mc.info.MACs = 1 + rng.Intn(4)
+			}
+			if rng.Intn(3) == 0 { // a person switches it on, some time around the run's wake
+				at := secs(0, 500)
+				ready := secs(1, 120)
+				plan = append(plan, later{at, func() {
+					if !mc.on {
+						mc.on, mc.bootedAt, mc.agentReadyAt = true, w.now, w.now.Add(ready)
+					}
+				}})
+			}
+			if rng.Intn(12) == 0 {
+				plan = append(plan, later{secs(0, 600), func() { mc.info.OptedIn = false }})
+			}
+			if rng.Intn(4) == 0 {
+				req.UpdateOnly = append(req.UpdateOnly, id)
+			} else {
+				req.Hosts = append(req.Hosts, id)
+			}
+		}
+		w.advance(secs(0, 90)) // before the run: the panel's view settles, or not quite
+		r := w.start(req)
+		if rng.Intn(3) == 0 {
+			off := rng.Intn(2) == 0
+			plan = append(plan, later{secs(0, 900), func() { _, _ = w.m.CancelRun(r.ID, "Bob", off) }})
+		}
+		if rng.Intn(15) == 0 {
+			plan = append(plan, later{secs(0, 900), func() { w.blocked = "control is disabled by an administrator" }})
+		}
+		startAt := w.now
+		for i := 0; i < 5*3600; i++ {
+			if a, _ := w.m.Snapshot(); a == nil {
+				break
+			}
+			for j := range plan {
+				if plan[j].do != nil && w.now.Sub(startAt) >= plan[j].at {
+					plan[j].do()
+					plan[j].do = nil
+				}
+			}
+			w.tick()
+		}
+		done := w.finish()
+		for _, h := range done.Hosts {
+			total++
+			shut[h.State]++
+			mc := w.ms[h.ID]
+			if h.State == StOff && (mc.onAtStart || mc.onAtFirstWake == nil || *mc.onAtFirstWake || h.Mode != ModeWake) {
+				t.Errorf("seed %d: %s ended as switched off, and the run did not wake it", seed, h.ID)
+			}
+			if mc.shutdowns > 0 && h.Mode != ModeWake {
+				t.Errorf("seed %d: %s was chosen as on and got a shutdown request", seed, h.ID)
+			}
+		}
+		if w.limited != 0 || w.maxInMin > 8 {
+			t.Errorf("seed %d: an agent refused %d requests of the run; most in a minute %d", seed, w.limited, w.maxInMin)
+		}
+		if t.Failed() {
+			t.Fatalf("seed %d: %s\nrequests: %v", seed, describe(done), w.calls)
+		}
+	}
+	t.Logf("%d runs, %d machines; how they ended: %s", runs, total, sorted(shut))
+	if shut[StOff] == 0 || shut[StLeftOn] == 0 || shut[StStayedOn] == 0 || shut[StGaveUp] == 0 || shut[StSkipped] == 0 {
+		t.Fatalf("the random runs did not reach every end state: %s", sorted(shut))
+	}
+}

@@ -1,0 +1,508 @@
+package wakerun
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+)
+
+// A world of machines for the tests: each one has a truth (is it running, since when, what starts it, what its
+// agent answers) and the view the panel's poller has of it, which lags behind the truth the way the real
+// poller's does. The world is the run's Ops and its clock; one second of it is: the machines move, the poller
+// polls, the run takes one step.
+//
+// The world also is the judge of the package's rule. It knows what the run cannot know for sure: whether a
+// machine was running when the run started and when the run's first wake for it was accepted. Every shutdown
+// request for a machine that was running at either moment fails the test, whatever the test is about.
+
+type machine struct {
+	info HostInfo
+
+	// the truth
+	on           bool
+	bootedAt     time.Time     // since when it runs
+	agentReadyAt time.Time     // its agent answers from then on (while it runs)
+	unreachable  bool          // it runs, but the panel cannot reach it: polls and the direct question time out
+	wakeBoots    bool          // a wake packet starts it when it is off
+	post         time.Duration // from the packet to the system running
+	bootTakes    time.Duration // from the packet to the agent answering
+	noUptime     bool          // its agent reports no uptime
+	paused       bool          // polling is paused for it in the panel
+	probeSays    string        // what the direct question answers instead of the truth ("": the truth)
+	relayDown    string        // the relay refuses its wake with this text
+	version      string
+	newVersion   string // what an update installs
+	behind       *bool  // what the panel knows: older than the newest release
+
+	updMode    string // ok | noverdict | current | fail | rollback | stuck | approval | refuse | busy (the first request is rate limited) | disabled
+	updTakes   time.Duration
+	updating   bool
+	updDoneAt  time.Time
+	updState   string
+	updMsg     string
+	lastAt     float64
+	lastOK     bool
+	lastMsg    string
+	shutMode   string // ok | approval | refuse | ignore (accepted, but it stays on) | busy
+	pending    *Pending
+	guests     int
+	guestsWhy  string // not "": the panel cannot see its guests
+	guestNames string
+
+	// the poller's view
+	everAnswered bool
+	lastAnswer   time.Time
+	obs          Observation
+
+	// for the judge
+	onAtStart     bool
+	onAtFirstWake *bool
+	wakes         int
+	shutdowns     int
+	wentOff       bool // a countdown ran out and switched it off
+	busyDone      map[string]bool
+}
+
+type world struct {
+	t       *testing.T
+	now     time.Time
+	m       *Manager
+	ms      map[string]*machine
+	order   []string
+	calls   []string // every request the run sent: "wake pc-a", "update pc-a", "shutdown pc-a 120", "cancel pc-a"
+	events  []Event
+	blocked string
+	// each agent's own limit, as the real agent keeps it: 12 control requests in a sliding minute
+	agentHits map[string][]time.Time
+	limited   int // requests an agent refused for that reason
+	maxInMin  int // the most requests any one agent got in a minute
+	started   bool
+}
+
+var t0 = time.Date(2026, 11, 11, 3, 0, 0, 0, time.UTC)
+
+func newWorld(t *testing.T) *world {
+	t.Helper()
+	w := &world{t: t, now: t0, ms: map[string]*machine{}, agentHits: map[string][]time.Time{}}
+	w.m = New(filepath.Join(t.TempDir(), "wake-update.json"), NewSettings(300, 60, 120, 8), w)
+	w.m.Now = func() time.Time { return w.now }
+	w.m.Event = func(e Event) { w.events = append(w.events, e) }
+	if err := w.m.Load(); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+// off adds a machine that is switched off and has been for a long time: a wake starts it, its agent answers
+// 40 s later, an update takes 30 s and works, a shutdown works.
+func (w *world) off(id string) *machine {
+	yes := true
+	mc := &machine{info: HostInfo{ID: id, Name: strings.ToUpper(id), AgentID: id, RelayID: "relay", MACs: 1, OptedIn: true},
+		wakeBoots: true, post: 10 * time.Second, bootTakes: 40 * time.Second, version: "16-aaaaaaa", newVersion: "17-bbbbbbb", behind: &yes,
+		updMode: "ok", updTakes: 30 * time.Second, updState: "idle", shutMode: "ok", busyDone: map[string]bool{}}
+	w.ms[id] = mc
+	w.order = append(w.order, id)
+	w.poll()
+	return mc
+}
+
+// running adds a machine that has been on for three days.
+func (w *world) running(id string) *machine {
+	mc := w.off(id)
+	mc.on, mc.bootedAt, mc.agentReadyAt = true, w.now.Add(-72*time.Hour), w.now.Add(-72*time.Hour+time.Minute)
+	w.poll()
+	return mc
+}
+
+// ---- the world as Ops
+
+func (w *world) Host(id string) (HostInfo, bool) {
+	mc := w.ms[id]
+	if mc == nil {
+		return HostInfo{}, false
+	}
+	return mc.info, true
+}
+
+func (w *world) Observe(id string) Observation {
+	if mc := w.ms[id]; mc != nil {
+		return mc.obs
+	}
+	return Observation{}
+}
+
+func (w *world) answers(mc *machine) bool {
+	return mc.on && !w.now.Before(mc.agentReadyAt) && !mc.unreachable
+}
+
+func (w *world) Probe(_ context.Context, id string) string {
+	mc := w.ms[id]
+	switch {
+	case mc.probeSays != "":
+		return mc.probeSays
+	case w.answers(mc):
+		return ""
+	case mc.unreachable:
+		return "timeout"
+	}
+	return "connection failed"
+}
+
+func (w *world) Kick(string) {}
+
+// hit counts a control request to an agent the way the agent does, and reports whether the agent takes it.
+func (w *world) hit(agent string) bool {
+	var keep []time.Time
+	for _, at := range w.agentHits[agent] {
+		if w.now.Sub(at) < time.Minute {
+			keep = append(keep, at)
+		}
+	}
+	if len(keep) >= 12 {
+		w.agentHits[agent] = keep
+		w.limited++
+		return false
+	}
+	w.agentHits[agent] = append(keep, w.now)
+	w.maxInMin = max(w.maxInMin, len(keep)+1)
+	return true
+}
+
+var errBusy = &OpError{Code: CodeRateLimited, Text: "too many control requests; try again in a minute"}
+
+func (w *world) Wake(_ context.Context, id, _ string) error {
+	mc := w.ms[id]
+	w.calls = append(w.calls, "wake "+id)
+	if mc.relayDown != "" {
+		return &OpError{Text: mc.relayDown}
+	}
+	for i := 0; i < mc.info.MACs; i++ { // one request to the relay per network card
+		if !w.hit(mc.info.RelayID) {
+			return errBusy
+		}
+	}
+	if mc.onAtFirstWake == nil {
+		on := mc.on
+		mc.onAtFirstWake = &on
+	}
+	mc.wakes++
+	if !mc.on && mc.wakeBoots {
+		mc.on, mc.bootedAt, mc.agentReadyAt = true, w.now.Add(mc.post), w.now.Add(mc.bootTakes)
+	}
+	return nil
+}
+
+func (w *world) busyOnce(mc *machine, what, mode string) bool {
+	if mode == "busy" && !mc.busyDone[what] {
+		mc.busyDone[what] = true
+		return true
+	}
+	return false
+}
+
+func (w *world) Update(_ context.Context, id, _ string, grant any) error {
+	mc := w.ms[id]
+	w.calls = append(w.calls, "update "+id)
+	if !w.answers(mc) {
+		return &OpError{Text: "agent unreachable: connection failed"}
+	}
+	if !w.hit(mc.info.AgentID) || w.busyOnce(mc, "update", mc.updMode) {
+		return errBusy
+	}
+	switch mc.updMode {
+	case "approval":
+		if grant == nil {
+			return &OpError{Code: CodeApproval, Text: "approval required: confirm this action with Pocket ID"}
+		}
+	case "refuse":
+		return &OpError{Text: "an update was installed on this machine less than 10 minutes ago; refused, try again in 6m0s"}
+	}
+	mc.updating, mc.updDoneAt, mc.updState, mc.updMsg = true, w.now.Add(mc.updTakes), "downloading", "downloading "+mc.newVersion
+	return nil
+}
+
+func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ string, grant any) (time.Time, error) {
+	mc := w.ms[id]
+	w.calls = append(w.calls, fmt.Sprintf("shutdown %s %d", id, int(delay.Seconds())))
+	mc.shutdowns++
+	// the judge
+	if mc.onAtStart {
+		w.t.Errorf("RULE BROKEN: shutdown sent to %s, which was running when the run started", id)
+	}
+	if mc.onAtFirstWake == nil {
+		w.t.Errorf("RULE BROKEN: shutdown sent to %s, for which the run never had a wake accepted", id)
+	} else if *mc.onAtFirstWake {
+		w.t.Errorf("RULE BROKEN: shutdown sent to %s, which was already running when the run's first wake was accepted", id)
+	}
+	if mc.guests > 0 || mc.guestsWhy != "" {
+		w.t.Errorf("RULE BROKEN: shutdown sent to %s with guests running or unknown", id)
+	}
+	if !w.answers(mc) {
+		return time.Time{}, &OpError{Text: "agent unreachable: connection failed"}
+	}
+	if !w.hit(mc.info.AgentID) || w.busyOnce(mc, "shutdown", mc.shutMode) {
+		return time.Time{}, errBusy
+	}
+	switch mc.shutMode {
+	case "approval":
+		if grant == nil {
+			return time.Time{}, &OpError{Code: CodeApproval, Text: "approval required: confirm this action with Pocket ID"}
+		}
+	case "refuse":
+		return time.Time{}, &OpError{Text: "the elevated helper is stopped: start the helper first"}
+	}
+	if mc.pending != nil {
+		return time.Time{}, &OpError{Text: "a " + mc.pending.Action + " is already pending; cancel it first"}
+	}
+	mc.pending = &Pending{Action: "shutdown", At: w.now.Add(delay)}
+	return mc.pending.At, nil
+}
+
+func (w *world) CancelShutdown(_ context.Context, id, _ string) error {
+	mc := w.ms[id]
+	w.calls = append(w.calls, "cancel "+id)
+	if !w.answers(mc) {
+		return &OpError{Text: "agent unreachable: connection failed"}
+	}
+	mc.pending = nil
+	return nil
+}
+
+func (w *world) Guests(id string, _ time.Time) (int, bool, string) {
+	mc := w.ms[id]
+	if mc.guestsWhy != "" {
+		return 0, false, mc.guestsWhy
+	}
+	return mc.guests, true, mc.guestNames
+}
+
+func (w *world) Blocked() string { return w.blocked }
+
+// ---- time
+
+// sim moves the machines: an update finishes, a countdown ends.
+func (w *world) sim() {
+	for _, id := range w.order {
+		mc := w.ms[id]
+		if mc.updating && !w.now.Before(mc.updDoneAt) && mc.updMode != "stuck" {
+			mc.updating = false
+			at := float64(w.now.Unix())
+			switch mc.updMode {
+			case "current":
+				mc.updState, mc.updMsg = "idle", "already up to date ("+mc.version+")"
+			case "fail":
+				mc.updState, mc.updMsg = "failed", "downloading the release: connection reset"
+			case "rollback": // the agent restarts twice; the old version answers again and reports the failed result
+				mc.agentReadyAt = w.now.Add(8 * time.Second)
+				mc.updState, mc.updMsg, mc.lastAt, mc.lastOK, mc.lastMsg = "failed", "health check failed", at+8, false, "the new version did not come up: rolled back"
+			case "noverdict": // the new version answers, and the installer's result never shows (an older agent)
+				mc.agentReadyAt = w.now.Add(5 * time.Second)
+				mc.version, mc.updState, mc.updMsg = mc.newVersion, "idle", ""
+			default: // the agent restarts with the new version and reports the installer's result a little later
+				mc.agentReadyAt = w.now.Add(5 * time.Second)
+				mc.version, mc.updState, mc.updMsg, mc.lastAt, mc.lastOK, mc.lastMsg = mc.newVersion, "idle", "", at+5, true, "updated"
+				no := false
+				mc.behind = &no
+			}
+		}
+		if mc.pending != nil && !w.now.Before(mc.pending.At) {
+			if mc.pending.Action == "shutdown" && mc.shutMode != "ignore" {
+				mc.on, mc.wentOff = false, true
+			}
+			mc.pending = nil
+		}
+	}
+}
+
+// poll is the panel's poller: every machine is asked once a second; one that does not answer is "stale" for a
+// minute and "offline" after that, and keeps the values of its last answer.
+func (w *world) poll() {
+	for _, id := range w.order {
+		mc := w.ms[id]
+		mc.obs.Paused = mc.paused
+		if mc.paused {
+			continue
+		}
+		if !w.answers(mc) {
+			mc.obs.Online = false
+			if mc.everAnswered && w.now.Sub(mc.lastAnswer) < time.Minute {
+				mc.obs.Status = "stale"
+			} else {
+				mc.obs.Status = "offline"
+			}
+			continue
+		}
+		mc.everAnswered, mc.lastAnswer = true, w.now
+		o := Observation{Online: true, SeenAt: w.now, Status: "online", Version: mc.version, UpdateEnabled: mc.updMode != "disabled",
+			UpdateState: mc.updState, UpdateMessage: mc.updMsg, LastAt: mc.lastAt, LastOK: mc.lastOK, LastMessage: mc.lastMsg, Behind: mc.behind}
+		if float64(w.now.Unix()) < mc.lastAt { // the installer has not written its result yet
+			o.LastAt, o.LastOK, o.LastMessage = 0, false, ""
+		}
+		if !mc.noUptime {
+			up := int64(w.now.Sub(mc.bootedAt).Seconds())
+			o.UptimeS = &up
+		}
+		if mc.pending != nil {
+			p := *mc.pending
+			o.Pending = &p
+		}
+		mc.obs = o
+	}
+}
+
+// tick is one second of the world.
+func (w *world) tick() {
+	w.now = w.now.Add(time.Second)
+	w.sim()
+	w.poll()
+	w.m.Tick(context.Background())
+}
+
+func (w *world) advance(d time.Duration) {
+	for end := w.now.Add(d); w.now.Before(end); {
+		w.tick()
+	}
+}
+
+// start begins a run and remembers, for the judge, which machines were running at that moment.
+func (w *world) start(req StartRequest) *Run {
+	w.t.Helper()
+	if req.By == "" {
+		req.By, req.BySub = "Ann", "sub-ann"
+	}
+	for _, mc := range w.ms {
+		mc.onAtStart, mc.onAtFirstWake, mc.wentOff = mc.on, nil, false
+	}
+	r, err := w.m.Start(req)
+	if err != nil {
+		w.t.Fatal("start:", err)
+	}
+	w.started = true
+	return r
+}
+
+// finish lets the world run until the run is over and returns it, after checking what must hold for every
+// run: it ends, every machine ends in an end state with a sentence and knows whether the machine is on, and
+// there is one "ended" event per machine and one for the run.
+func (w *world) finish() *Run {
+	w.t.Helper()
+	for i := 0; ; i++ {
+		if a, _ := w.m.Snapshot(); a == nil {
+			break
+		}
+		if i > 4*3600 {
+			a, _ := w.m.Snapshot()
+			w.t.Fatalf("the run did not end in four hours: %s", describe(a))
+		}
+		w.tick()
+	}
+	_, hist := w.m.Snapshot()
+	if len(hist) == 0 {
+		w.t.Fatal("no finished run")
+	}
+	r := hist[0]
+	w.wellReported(r)
+	return r
+}
+
+func (w *world) wellReported(r *Run) {
+	w.t.Helper()
+	if r.State == RunRunning || r.EndedAt == nil || r.Summary == "" {
+		w.t.Errorf("the run is not properly ended: %s", describe(r))
+	}
+	ends, runEnds := map[string]int{}, 0
+	for _, e := range w.events {
+		if e.Run.ID != r.ID {
+			continue
+		}
+		switch e.Kind {
+		case EvHostEnd:
+			ends[e.Host.ID]++
+		case EvRunEnd:
+			runEnds++
+		}
+	}
+	if runEnds != 1 {
+		w.t.Errorf("%d \"run ended\" events, want 1", runEnds)
+	}
+	for _, h := range r.Hosts {
+		if !h.Final() || strings.TrimSpace(h.Text) == "" || h.On == "" || len(h.Log) == 0 {
+			w.t.Errorf("%s is not properly ended: state %q on %q text %q", h.ID, h.State, h.On, h.Text)
+		}
+		if ends[h.ID] != 1 {
+			w.t.Errorf("%s: %d \"ended\" events, want 1", h.ID, ends[h.ID])
+		}
+		if !strings.Contains(r.Summary, h.Name+": "+h.Text) {
+			w.t.Errorf("the summary lacks %s", h.ID)
+		}
+		// what the run believes about the machine's power must not be wrong
+		mc := w.ms[h.ID]
+		if mc != nil && ((h.On == OnNo && (!mc.wentOff || h.State != StOff)) || (h.State == StOff && h.On != OnNo) ||
+			(h.On == OnYes && !mc.on && h.State != StLeftOn && h.State != StStayedOn) || (h.On == OnUntouched && (mc.wakes > 0 || mc.shutdowns > 0))) {
+			w.t.Errorf("%s: the run says it is %q, the machine is on=%v (%s: %s)", h.ID, h.On, mc.on, h.State, h.Text)
+		}
+	}
+}
+
+func describe(r *Run) string {
+	if r == nil {
+		return "no run"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "run %s", r.State)
+	for _, h := range r.Hosts {
+		fmt.Fprintf(&b, "\n  %s [%s] %s", h.ID, h.State, h.Text)
+	}
+	return b.String()
+}
+
+func host(r *Run, id string) *Host {
+	if r == nil {
+		return &Host{}
+	}
+	for _, h := range r.Hosts {
+		if h.ID == id {
+			return h
+		}
+	}
+	return &Host{}
+}
+
+func (w *world) callsFor(id string) string {
+	var out []string
+	for _, c := range w.calls {
+		f := strings.Fields(c)
+		if f[1] == id {
+			out = append(out, f[0])
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// steps are the audit events for one machine: "wake:ok update:ok shutdown:ok".
+func (w *world) steps(id string) string {
+	var out []string
+	for _, e := range w.events {
+		if e.Kind == EvStep && e.Host.ID == id {
+			out = append(out, e.Action+":"+e.Outcome)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+func sorted(m map[string]int) string {
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out []string
+	for _, k := range keys {
+		out = append(out, fmt.Sprintf("%s=%d", k, m[k]))
+	}
+	return strings.Join(out, " ")
+}

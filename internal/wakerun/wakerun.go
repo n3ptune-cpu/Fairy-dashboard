@@ -1,0 +1,758 @@
+// Package wakerun runs "Update machines that are off": for machines that are normally switched off it sends
+// Wake-on-LAN, waits for the agent, asks the agent to update itself, waits for the result and switches the
+// machine off again. It does by itself what an admin would do by hand with the existing Wake, Update and Shut
+// down buttons, in that order, and it sends nothing else: no new agent request exists for it.
+//
+// The rules it keeps (README, "Wake, update, shut down"):
+//
+//   - It only ever switches off a machine that this run woke: off when the run started, online only after the
+//     run's own wake. That is decided in one function, mayShutDown (shutdown.go), which is the only way to the
+//     shutdown request. A machine that was on is never switched off; it is updated only if the admin asked.
+//   - A Proxmox node with running guests, or whose guests the panel cannot see, stays on.
+//   - One run at a time. A run that the panel's restart interrupted is never continued: the journal
+//     (journal.go) is only read to report which machines the run had woken.
+//   - A run sends each agent at most a few control requests a minute (pacer.go).
+//   - Every machine of a run ends in a state with a sentence that says what happened; nothing ends unreported.
+//
+// The package has no HTTP in it and does not know the poller: it talks to the panel through Ops, so the tests
+// drive it with a clock and machines of their own. The web package starts runs (after "Confirm it's you") and
+// writes the audit log and the notifications from the events.
+package wakerun
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"log/slog"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+// How a machine is in a run.
+const (
+	ModeWake       = "wake"        // off: wake it, update it, switch it off again
+	ModeUpdateOnly = "update_only" // on: update it; it is never switched off
+)
+
+// The states of one machine in a run. The first eight are steps; the rest are where a machine ends.
+const (
+	StQueued   = "queued"            // waiting for its turn
+	StWaking   = "waking"            // the wake was sent; waiting for its agent to answer
+	StOnline   = "online"            // its agent answers; checking that it stays
+	StApproval = "awaiting_approval" // waiting for the approval after the wake (item 1.1; not used yet)
+	StUpdating = "updating"          // the agent's self-update
+	StSettling = "settling"          // the update is over; the pause before the shutdown request
+	StShutting = "shutting_down"     // the shutdown countdown runs on the machine
+
+	StOff         = "off"         // woken, updated (or not), switched off again
+	StStayedOn    = "stayed_on"   // was already on: updated (or not) and left on, as it must be
+	StLeftOn      = "left_on"     // the run woke it and did not switch it off: it is ON
+	StGaveUp      = "gave_up"     // it never came online after the wake, or the wake could not be sent
+	StSkipped     = "skipped"     // nothing was sent to it
+	StInterrupted = "interrupted" // the panel restarted while the machine was in the run
+)
+
+// The states of a run.
+const (
+	RunRunning     = "running"
+	RunDone        = "done"
+	RunCancelled   = "cancelled"
+	RunStopped     = "stopped"     // the run stopped itself (control disabled, or it took too long)
+	RunInterrupted = "interrupted" // the panel restarted
+)
+
+// What the run knows about a machine's power when it lets go of it.
+const (
+	OnYes       = "on"        // it answers
+	OnNo        = "off"       // the run switched it off and saw it go
+	OnUnknown   = "unknown"   // a wake or a shutdown was sent and the run did not see how it ended
+	OnUntouched = "untouched" // nothing was sent to it: it is whatever it was
+)
+
+// The results of the update step.
+const (
+	UpdOK       = "ok"
+	UpdCurrent  = "up_to_date"
+	UpdFailed   = "failed"
+	UpdApproval = "approval_required" // the agent asks for an approval the run does not have (item 1.1)
+	UpdStuck    = "stuck"             // no result in time
+	UpdNotTried = "not_tried"
+)
+
+// MaxHosts is how many machines one run takes.
+const MaxHosts = 16
+
+// Timings that are not settings.
+const (
+	wakeResend      = 60 * time.Second // the wake is sent again this often while the machine does not answer
+	kickEvery       = 5 * time.Second  // the poller is asked to poll a machine the run waits for
+	onlineSettle    = 15 * time.Second // the agent must answer this long without a gap before the update
+	updateStart     = 2 * time.Minute  // how long the run waits for an agent to be able to update (helper starting)
+	updateTimeout   = 15 * time.Minute // no result of the update by then: the machine is left on
+	updateIdleAfter = 10 * time.Second // an "idle" state only counts when it was polled this long after the request
+	verdictWait     = 90 * time.Second // after the new version answers: how long the installer's own verdict is waited for
+	agentBack       = 3 * time.Minute  // after the update: how long the agent may take to answer again
+	offConfirm      = 20 * time.Second // no answer for this long after the countdown: the machine is off
+	offGrace        = 5 * time.Minute  // still answering this long after the countdown: the shutdown failed
+	approvalTimeout = 15 * time.Minute
+	maxRetries      = 5
+	maxLog          = 40
+	historyKept     = 10
+)
+
+// Settings are the timings of a run (config.yaml, wake_update).
+type Settings struct {
+	OnlineTimeout time.Duration `json:"-"`
+	Settle        time.Duration `json:"-"`
+	ShutdownDelay time.Duration `json:"-"`
+	PerAgentMin   int           `json:"agent_requests_per_min"`
+	// the same three in seconds, for the journal and the page
+	OnlineTimeoutS int `json:"online_timeout_s"`
+	SettleS        int `json:"settle_s"`
+	ShutdownDelayS int `json:"shutdown_delay_s"`
+}
+
+// NewSettings makes Settings from whole seconds.
+func NewSettings(onlineTimeoutS, settleS, shutdownDelayS, perAgentMin int) Settings {
+	return Settings{OnlineTimeout: time.Duration(onlineTimeoutS) * time.Second, Settle: time.Duration(settleS) * time.Second,
+		ShutdownDelay: time.Duration(shutdownDelayS) * time.Second, PerAgentMin: perAgentMin,
+		OnlineTimeoutS: onlineTimeoutS, SettleS: settleS, ShutdownDelayS: shutdownDelayS}
+}
+
+// HostInfo is a machine as the panel's configuration knows it now.
+type HostInfo struct {
+	ID      string
+	Name    string
+	AgentID string // its own agent: the update and the shutdown go to it
+	RelayID string // the agent that sends its wake packets
+	MACs    int    // one wake request to the relay per network card
+	OptedIn bool   // an admin switched it on for these runs
+}
+
+// Pending is a power action an agent has scheduled.
+type Pending struct {
+	Action string
+	At     time.Time
+}
+
+// Observation is what the panel's poller last heard from a machine's agent.
+type Observation struct {
+	Online bool      // the latest poll was answered
+	SeenAt time.Time // when the last answered poll was
+	// Status is the agent's state as the panel keeps it: "online", "stale" (no answer for less than
+	// offline_after), "offline", or "" when the panel never polled it.
+	Status  string
+	Paused  bool   // polling is paused for it: the panel would never see it come online
+	UptimeS *int64 // from the last answered poll (nil: the agent did not say)
+	Version string
+	// the agent's self-update
+	UpdateEnabled bool
+	UpdateState   string // idle | downloading | applying | failed | unavailable | ""
+	UpdateMessage string
+	LastAt        float64 // when the installer wrote its last result (Unix seconds; 0: never)
+	LastOK        bool
+	LastMessage   string
+	Behind        *bool // older than the newest release the panel knows (nil: unknown)
+	Pending       *Pending
+}
+
+// OpError is why a request to a machine was not carried out.
+type OpError struct {
+	Code string // CodeApproval, CodeRateLimited or "" (anything else)
+	Text string // for people; no secrets
+}
+
+func (e *OpError) Error() string { return e.Text }
+
+// The codes of an OpError the run handles in a way of its own.
+const (
+	CodeApproval    = "approval_required" // the agent wants an approval (Pocket ID) for this request
+	CodeRateLimited = "rate_limited"      // the agent's control rate limit: try again later
+)
+
+// Ops is everything a run asks of the panel. The four requests are the existing ones: wake (through the
+// relay), the agent's self-update, the delayed shutdown and its cancel.
+type Ops interface {
+	// Host returns the machine as configured now; false when the panel no longer has it.
+	Host(id string) (HostInfo, bool)
+	// Observe returns the poller's latest view of the machine's agent.
+	Observe(id string) Observation
+	// Probe asks the machine's agent itself, now: "" when it answered, "timeout" or "connection failed" when
+	// nothing did, anything else when something answered that is not usable.
+	Probe(ctx context.Context, id string) string
+	// Kick asks the poller to poll the machine's agent at once.
+	Kick(id string)
+	Wake(ctx context.Context, id, by string) error
+	Update(ctx context.Context, id, by string, grant any) error
+	// Shutdown asks for the delayed, cancellable shutdown and returns when the countdown ends.
+	Shutdown(ctx context.Context, id string, delay time.Duration, by string, grant any) (time.Time, error)
+	CancelShutdown(ctx context.Context, id, by string) error
+	// Guests: how many guests run on the machine if it is a Proxmox node (0, true for any other machine). known
+	// is false when the panel cannot tell; why then says so. since is when the machine came online.
+	Guests(id string, since time.Time) (running int, known bool, why string)
+	// Blocked is why no control request may be sent at all right now ("": allowed): the kill switch.
+	Blocked() string
+}
+
+// Approver is the hook for item 1.1: a machine whose agent verifies a Pocket ID approval itself before an
+// update or a shutdown. A machine that is off cannot hand out the challenge such an approval is made for, so a
+// run asks for it once, after the machines are awake, for all of them together: a machine for which Needed
+// says yes waits in StApproval until Manager.Approve hands the run a grant, which then goes to Ops.Update and
+// Ops.Shutdown. Manager.Approval is nil today, so no machine ever waits there.
+type Approver interface {
+	Needed(h HostInfo, o Observation) bool
+}
+
+// LogLine is one line of a machine's history in a run.
+type LogLine struct {
+	T    time.Time `json:"t"`
+	Text string    `json:"text"`
+}
+
+// Host is one machine in a run. Everything in it is written to the journal; none of it is a secret.
+type Host struct {
+	ID    string    `json:"id"`
+	Name  string    `json:"name"`
+	Mode  string    `json:"mode"`
+	State string    `json:"state"`
+	Since time.Time `json:"since"` // when it entered State
+	Text  string    `json:"text"`  // what is happening, or how it ended, in a sentence
+
+	// What the run knows about "this run woke it" (mayShutDown reads these).
+	StartStatus string     `json:"start_status"`            // the agent's state when the run started
+	ProbedOff   bool       `json:"probed_off,omitempty"`    // asked directly right before the wake, nothing answered
+	WakeSentAt  *time.Time `json:"wake_sent_at,omitempty"`  // the run's first wake for it
+	Wakes       int        `json:"wakes,omitempty"`         // wake requests the relay accepted
+	OnlineAt    *time.Time `json:"online_at,omitempty"`     // its first answered poll after that wake
+	BootUptimeS *int64     `json:"boot_uptime_s,omitempty"` // the uptime it reported in that poll
+	AlreadyOn   bool       `json:"already_on,omitempty"`    // it was on before the run did anything
+
+	VersionBefore string     `json:"version_before,omitempty"`
+	VersionAfter  string     `json:"version_after,omitempty"`
+	Update        string     `json:"update,omitempty"` // the result of the update step (Upd...)
+	UpdateText    string     `json:"update_text,omitempty"`
+	UpdateSentAt  *time.Time `json:"update_sent_at,omitempty"`
+	ShutdownAt    *time.Time `json:"shutdown_at,omitempty"` // when the countdown ends
+	On            string     `json:"on,omitempty"`          // set when the machine ends (On...)
+	Log           []LogLine  `json:"log"`
+
+	// Working values of the run in memory. A run is never continued after a restart, so they are not kept.
+	lastWake      time.Time
+	lastKick      time.Time
+	goodSince     time.Time // the agent has answered without a gap since
+	lastAtBefore  float64   // the installer's last result before the run's update request
+	versionNewAt  time.Time // when another version than VersionBefore was first seen
+	shutdownSent  time.Time
+	pendingSeen   bool      // the agent reported the run's shutdown as pending
+	offSince      time.Time // no answer since (while the countdown is over)
+	retries       int
+	lateSeen      bool // gave up, and it came online later
+	grant         any  // the approval for this machine (item 1.1)
+	cancelHandled bool
+}
+
+// Final reports whether the machine has ended in this run.
+func (h *Host) Final() bool {
+	switch h.State {
+	case StOff, StStayedOn, StLeftOn, StGaveUp, StSkipped, StInterrupted:
+		return true
+	}
+	return false
+}
+
+// Cancel is who cancelled a run and how.
+type Cancel struct {
+	By string    `json:"by"`
+	At time.Time `json:"at"`
+	// SwitchOff: the machines the run had already woken are still switched off again. Without it they stay on.
+	SwitchOff bool `json:"switch_off"`
+}
+
+// Run is one run. It is the journal entry and what the page shows.
+type Run struct {
+	ID         string     `json:"id"`
+	State      string     `json:"state"`
+	StartedAt  time.Time  `json:"started_at"`
+	EndedAt    *time.Time `json:"ended_at,omitempty"`
+	By         string     `json:"by"`
+	BySub      string     `json:"by_sub,omitempty"`
+	ListHash   string     `json:"list_hash"` // names the confirmed list and options (dialog, audit log, run)
+	UpdateIfOn bool       `json:"update_if_on"`
+	Settings   Settings   `json:"settings"`
+	Latest     string     `json:"latest,omitempty"` // the newest agent release the panel knew at the start
+	Hosts      []*Host    `json:"hosts"`
+	Cancel     *Cancel    `json:"cancel,omitempty"`
+	Note       string     `json:"note,omitempty"`     // why the run stopped itself
+	Approval   string     `json:"approval,omitempty"` // "", "needed", "given" (item 1.1)
+	Summary    string     `json:"summary,omitempty"`  // one line per machine, when the run is over
+	// Reported: the interrupted run was reported after the restart (once).
+	Reported bool `json:"reported,omitempty"`
+}
+
+func (r *Run) clone() *Run {
+	c := *r
+	c.Hosts = make([]*Host, len(r.Hosts))
+	for i, h := range r.Hosts {
+		hc := *h
+		hc.Log = slices.Clone(h.Log)
+		c.Hosts[i] = &hc
+	}
+	if r.Cancel != nil {
+		cc := *r.Cancel
+		c.Cancel = &cc
+	}
+	return &c
+}
+
+// Event is something the audit log and the notifications are told. Run and Host are copies.
+type Event struct {
+	Kind    string // EvStep, EvHostEnd, EvRunEnd, EvInterrupted, EvApproval, EvLate
+	Run     *Run
+	Host    *Host          // nil for the run's own events
+	Action  string         // EvStep: wake | update | shutdown | cancel
+	Params  map[string]any // EvStep: details for the audit entry
+	Outcome string         // EvStep: "ok" or the error text
+}
+
+// The kinds of Event.
+const (
+	EvStep        = "step"            // a request was sent (or refused) for one machine
+	EvHostEnd     = "host_end"        // a machine ended
+	EvRunEnd      = "run_end"         // the run is over
+	EvInterrupted = "interrupted"     // the panel restarted during this run (reported at the next start)
+	EvApproval    = "approval_needed" // the woken machines wait for an approval (item 1.1)
+	EvLate        = "late_online"     // a machine the run gave up on came online later
+)
+
+// StartRequest is what an admin confirmed: the machines and the options, nothing else.
+type StartRequest struct {
+	Hosts      []string // machines that are off: wake, update, switch off again
+	UpdateOnly []string // machines that are on: update, never switch off
+	UpdateIfOn bool     // a machine of Hosts that turns out to be on is updated (and left on) instead of skipped
+	By, BySub  string
+	Latest     string
+}
+
+// ListHash names a list of machines and options with eight hex digits: the dialog, the audit log and the run
+// show the same value for the same request.
+func ListHash(hosts, updateOnly []string, updateIfOn bool) string {
+	a, b := slices.Clone(hosts), slices.Clone(updateOnly)
+	sort.Strings(a)
+	sort.Strings(b)
+	h := sha256.Sum256([]byte(fmt.Sprintf("fairy-wake-update-v1\x00%s\x00%s\x00%v", strings.Join(a, "\x01"), strings.Join(b, "\x01"), updateIfOn)))
+	return hex.EncodeToString(h[:4])
+}
+
+// StartError is why a run was not started. Busy: another run is active.
+type StartError struct {
+	Busy bool
+	Msg  string
+}
+
+func (e *StartError) Error() string { return e.Msg }
+
+// Manager holds the one active run and the last finished ones.
+type Manager struct {
+	Ops      Ops
+	Settings Settings
+	Now      func() time.Time
+	// Event is called for every Event, outside the manager's lock (nil: nobody listens).
+	Event func(Event)
+	// Approval is the hook for item 1.1 (nil: no machine needs an approval after the wake).
+	Approval Approver
+
+	path string // the journal ("" keeps nothing)
+
+	tickMu sync.Mutex // one Tick at a time
+	mu     sync.Mutex
+	active *Run
+	hist   []*Run // finished runs, newest first
+	jerr   error  // the journal cannot be read: no run starts
+	pace   *pacer
+	events []Event
+	dirty  bool
+}
+
+// New returns a manager that keeps its journal at path. Call Load before the first Start.
+func New(path string, settings Settings, ops Ops) *Manager {
+	return &Manager{Ops: ops, Settings: settings, Now: time.Now, path: path, pace: newPacer(settings.PerAgentMin)}
+}
+
+func (m *Manager) now() time.Time { return m.Now().UTC() }
+
+func newID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// Snapshot returns copies of the active run (nil: none) and of the finished ones, newest first.
+func (m *Manager) Snapshot() (active *Run, history []*Run) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active != nil {
+		active = m.active.clone()
+	}
+	for _, r := range m.hist {
+		history = append(history, r.clone())
+	}
+	return active, history
+}
+
+// JournalError is why no run can start (nil: the journal is fine).
+func (m *Manager) JournalError() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.jerr
+}
+
+// Start begins a run with exactly the machines of req. It refuses while another run is active, without
+// keeping or queueing anything.
+func (m *Manager) Start(req StartRequest) (*Run, error) {
+	now := m.now()
+	seen := map[string]bool{}
+	var hosts []*Host
+	add := func(ids []string, mode string) error {
+		for _, id := range ids {
+			if seen[id] {
+				return &StartError{Msg: "a machine is in the list twice: " + id}
+			}
+			seen[id] = true
+			info, ok := m.Ops.Host(id)
+			if !ok {
+				return &StartError{Msg: "unknown machine: " + id}
+			}
+			if !info.OptedIn {
+				return &StartError{Msg: info.Name + " is not switched on for \"Update machines that are off\""}
+			}
+			o := m.Ops.Observe(id)
+			hosts = append(hosts, &Host{ID: id, Name: info.Name, Mode: mode, State: StQueued, Since: now, Text: "waiting for its turn",
+				StartStatus: o.Status, Log: []LogLine{}})
+		}
+		return nil
+	}
+	if err := add(req.Hosts, ModeWake); err != nil {
+		return nil, err
+	}
+	if err := add(req.UpdateOnly, ModeUpdateOnly); err != nil {
+		return nil, err
+	}
+	if len(hosts) == 0 {
+		return nil, &StartError{Msg: "no machine was chosen"}
+	}
+	if len(hosts) > MaxHosts {
+		return nil, &StartError{Msg: fmt.Sprintf("at most %d machines in one run", MaxHosts)}
+	}
+	if why := m.Ops.Blocked(); why != "" {
+		return nil, &StartError{Msg: why}
+	}
+	m.mu.Lock()
+	if m.jerr != nil {
+		err := m.jerr
+		m.mu.Unlock()
+		return nil, &StartError{Msg: "the run journal cannot be used, so no run is started: " + err.Error()}
+	}
+	if a := m.active; a != nil {
+		m.mu.Unlock()
+		return nil, &StartError{Busy: true, Msg: fmt.Sprintf("a run started by %s at %s is still going: one run at a time. Wait for it, or cancel it.",
+			a.By, a.StartedAt.Format("15:04 UTC"))}
+	}
+	r := &Run{ID: newID(), State: RunRunning, StartedAt: now, By: req.By, BySub: req.BySub, UpdateIfOn: req.UpdateIfOn,
+		ListHash: ListHash(req.Hosts, req.UpdateOnly, req.UpdateIfOn), Settings: m.Settings, Latest: req.Latest, Hosts: hosts}
+	m.active = r
+	out := r.clone()
+	m.mu.Unlock()
+	m.save() // before anything is sent: a restart from here on knows about the run
+	return out, nil
+}
+
+// CancelRun cancels the active run id. Nothing new is started for any machine. The machines the run has
+// already woken stay on and are reported, or with switchOff are still switched off again.
+func (m *Manager) CancelRun(id, by string, switchOff bool) (*Run, error) {
+	m.mu.Lock()
+	r := m.active
+	if r == nil || r.ID != id {
+		m.mu.Unlock()
+		return nil, &StartError{Msg: "that run is not active (any more)"}
+	}
+	if r.Cancel == nil {
+		r.Cancel = &Cancel{By: by, At: m.now(), SwitchOff: switchOff}
+		m.dirty = true
+	}
+	out := r.clone()
+	m.mu.Unlock()
+	return out, nil
+}
+
+// Approve hands the active run the approval the woken machines wait for (item 1.1): every machine in
+// StApproval goes on to its update, and grant goes with its update and shutdown requests.
+func (m *Manager) Approve(id string, grant any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.active
+	if r == nil || r.ID != id {
+		return &StartError{Msg: "that run is not active (any more)"}
+	}
+	n := 0
+	for _, h := range r.Hosts {
+		if h.State == StApproval {
+			h.grant = grant
+			n++
+		}
+	}
+	if n == 0 {
+		return &StartError{Msg: "no machine of this run waits for an approval"}
+	}
+	r.Approval = "given"
+	m.dirty = true
+	return nil
+}
+
+// Loop runs the active run until ctx ends: one Tick a second.
+func (m *Manager) Loop(ctx context.Context) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			if a, _ := m.Snapshot(); a != nil { // the next start reports it from the journal
+				slog.Warn("wake-update: the panel stops during a run; it is not continued, the next start reports it", "run", a.ID)
+			}
+			return
+		case <-t.C:
+			m.Tick(ctx)
+		}
+	}
+}
+
+// Tick moves the active run one step: every machine that has not ended looks at what the panel knows now and
+// does at most the next thing. It is safe to call from one goroutine at a time (Loop, or a test).
+func (m *Manager) Tick(ctx context.Context) {
+	m.tickMu.Lock()
+	defer m.tickMu.Unlock()
+	m.mu.Lock()
+	if r := m.active; r != nil {
+		m.stepRun(ctx, r, m.now())
+	}
+	evs := m.events
+	m.events = nil
+	dirty := m.dirty
+	m.dirty = false
+	m.mu.Unlock()
+	if dirty {
+		m.save()
+	}
+	if m.Event != nil {
+		for _, e := range evs {
+			m.Event(e)
+		}
+	}
+}
+
+// io runs fn (a request that goes over the network) without the manager's lock, so the page can read the run
+// while a machine takes its time to answer.
+func (m *Manager) io(fn func()) {
+	m.mu.Unlock()
+	defer m.mu.Lock()
+	fn()
+}
+
+func (m *Manager) emit(kind string, r *Run, h *Host, action string, params map[string]any, outcome string) {
+	e := Event{Kind: kind, Run: r.clone(), Action: action, Params: params, Outcome: outcome}
+	if h != nil {
+		hc := *h
+		hc.Log = slices.Clone(h.Log)
+		e.Host = &hc
+	}
+	m.events = append(m.events, e)
+}
+
+// say sets what is shown for the machine now.
+func (m *Manager) say(h *Host, text string) {
+	if h.Text != text {
+		h.Text = text
+		m.dirty = true
+	}
+}
+
+// note adds a line to the machine's history.
+func (m *Manager) note(h *Host, now time.Time, text string) {
+	if len(h.Log) >= maxLog {
+		h.Log = h.Log[1:]
+	}
+	h.Log = append(h.Log, LogLine{T: now, Text: text})
+	m.dirty = true
+}
+
+// enter moves the machine to a step.
+func (m *Manager) enter(h *Host, state string, now time.Time, text string) {
+	h.State, h.Since, h.Text = state, now, text
+	h.goodSince, h.retries = time.Time{}, 0
+	m.note(h, now, text)
+}
+
+// end puts the machine into the state it ends in, with the sentence that says what happened.
+func (m *Manager) end(r *Run, h *Host, state, on string, now time.Time, text string) {
+	h.State, h.Since, h.Text, h.On = state, now, text, on
+	m.note(h, now, text)
+	m.emit(EvHostEnd, r, h, "", nil, "")
+}
+
+// stepRun is one step of the whole run. The caller holds m.mu (io releases it around requests).
+func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
+	stop := ""
+	if why := m.Ops.Blocked(); why != "" {
+		stop = why
+	} else if now.Sub(r.StartedAt) > m.maxRun(r) {
+		stop = "the run took longer than it ever should"
+	}
+	if stop != "" { // nothing more is sent, not even a cancel: every machine is reported as it is
+		r.Note = "stopped: " + stop
+		for _, h := range r.Hosts {
+			if !h.Final() {
+				m.endAsIs(r, h, now, "the run stopped ("+stop+")")
+			}
+		}
+		m.finish(r, now, RunStopped)
+		return
+	}
+	wakeTurn := true // one machine is asked directly and woken per step, in the order of the list
+	for _, h := range r.Hosts {
+		if h.Final() {
+			m.watchLate(r, h, now)
+			continue
+		}
+		if h.State == StQueued && h.Mode == ModeWake && r.Cancel == nil {
+			if !wakeTurn {
+				continue
+			}
+			wakeTurn = false
+		}
+		m.stepHost(ctx, r, h, now)
+	}
+	if m.Approval != nil && r.Approval == "" {
+		waiting, early := 0, 0
+		for _, h := range r.Hosts {
+			switch h.State {
+			case StApproval:
+				waiting++
+			case StQueued, StWaking, StOnline:
+				early++
+			}
+		}
+		if waiting > 0 && early == 0 { // every machine is awake or was given up on: ask once, for all of them
+			r.Approval = "needed"
+			m.dirty = true
+			m.emit(EvApproval, r, nil, "", nil, "")
+		}
+	}
+	for _, h := range r.Hosts {
+		if !h.Final() {
+			return
+		}
+	}
+	state := RunDone
+	if r.Cancel != nil {
+		state = RunCancelled
+	}
+	m.finish(r, now, state)
+}
+
+// maxRun is longer than the longest way through the steps of one machine, with room for every machine of the
+// run to wait for its turn at the relay.
+func (m *Manager) maxRun(r *Run) time.Duration {
+	s := r.Settings
+	return time.Duration(len(r.Hosts))*2*time.Minute + 2*s.OnlineTimeout + approvalTimeout + updateStart + updateTimeout + verdictWait +
+		agentBack + s.Settle + s.ShutdownDelay + offGrace + 10*time.Minute
+}
+
+func (m *Manager) finish(r *Run, now time.Time, state string) {
+	r.State, r.EndedAt = state, &now
+	var lines []string
+	for _, h := range r.Hosts {
+		lines = append(lines, h.Name+": "+h.Text)
+	}
+	r.Summary = strings.Join(lines, "\n")
+	m.active = nil
+	m.hist = append([]*Run{r}, m.hist...)
+	if len(m.hist) > historyKept {
+		m.hist = m.hist[:historyKept]
+	}
+	m.dirty = true
+	m.emit(EvRunEnd, r, nil, "", nil, "")
+}
+
+// endAsIs ends a machine where it is, without sending anything: what the run did to it so far decides the
+// state, and why is the reason it stops here.
+func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
+	switch {
+	case h.State == StShutting:
+		m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s while its shutdown was counting down (it ends at %s). Fairy no longer watches it: "+
+			"it switches off by itself unless someone cancels that.", why, clock(*h.ShutdownAt)))
+	case h.AlreadyOn || h.Mode == ModeUpdateOnly:
+		m.end(r, h, StStayedOn, OnYes, now, why+". It was already on and stays on."+updateTail(h))
+	case h.OnlineAt != nil:
+		m.end(r, h, StLeftOn, OnYes, now, why+". The run woke it and it is ON."+updateTail(h))
+	case h.WakeSentAt != nil:
+		m.end(r, h, StGaveUp, OnUnknown, now, why+". A wake was sent to it: if it switches on, it stays ON.")
+	default:
+		m.end(r, h, StSkipped, OnUntouched, now, why+". Nothing was sent to it.")
+	}
+}
+
+// updateTail says, at the end of a sentence about a machine, how far its update got.
+func updateTail(h *Host) string {
+	switch {
+	case h.Update == "" && h.UpdateSentAt != nil:
+		return " Its update was asked for and may still be running; the agent finishes it by itself."
+	case h.Update == UpdOK:
+		return " It was updated" + toVersion(h) + "."
+	case h.Update == UpdCurrent:
+		return " It already ran the newest release."
+	case h.Update == UpdFailed || h.Update == UpdStuck || h.Update == UpdApproval:
+		return " Its update did not work: " + h.UpdateText + "."
+	}
+	return ""
+}
+
+func toVersion(h *Host) string {
+	if h.VersionAfter != "" {
+		return " to " + h.VersionAfter
+	}
+	return ""
+}
+
+func clock(t time.Time) string { return t.UTC().Format("15:04:05 UTC") }
+
+// span is a duration in words ("3 days", "2 h", "40 s").
+func span(d time.Duration) string {
+	switch s := int64(d.Seconds()); {
+	case s >= 2*86400:
+		return fmt.Sprintf("%d days", s/86400)
+	case s >= 2*3600:
+		return fmt.Sprintf("%d h", s/3600)
+	case s >= 120:
+		return fmt.Sprintf("%d min", s/60)
+	default:
+		return fmt.Sprintf("%d s", s)
+	}
+}
+
+// watchLate looks once more at a machine the run gave up on after its wake: if it comes online while the run
+// still goes, that is said. It is on then, and the run does not touch it.
+func (m *Manager) watchLate(r *Run, h *Host, now time.Time) {
+	if h.State != StGaveUp || h.WakeSentAt == nil || h.lateSeen {
+		return
+	}
+	if o := m.Ops.Observe(h.ID); o.Online && o.SeenAt.After(*h.WakeSentAt) {
+		h.lateSeen, h.On = true, OnYes
+		h.Text += " It came online later (" + clock(o.SeenAt) + "): it is ON, and Fairy did not touch it."
+		m.note(h, now, "came online after the run had given up on it: it is ON")
+		m.emit(EvLate, r, h, "", nil, "")
+	}
+}
