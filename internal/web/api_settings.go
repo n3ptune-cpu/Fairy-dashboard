@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -42,8 +43,12 @@ func (s *Server) putSettings(c *reqCtx) error {
 		}
 		body.Background.Version = cur.Background.Version // server-owned
 	}
+	popups := "off"
+	if body.Popups.Enabled {
+		popups = fmt.Sprintf("%d s, %s", body.Popups.Seconds, body.Popups.Level)
+	}
 	c.audit(u, "settings.update", "", map[string]any{"background": body.Background.Kind, "dim": body.Dim,
-		"blur": body.Blur, "card_opacity": body.CardOpacity}, "ok")
+		"blur": body.Blur, "card_opacity": body.CardOpacity, "popups": popups}, "ok")
 	out, err := s.Settings.Put(u.Sub, body)
 	if err != nil {
 		return err

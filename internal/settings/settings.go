@@ -33,6 +33,28 @@ type Background struct {
 	Version int     `json:"version"` // bumped on every upload (cache busting)
 }
 
+// Popups are the pop-ups an open page shows for new notifications (README, "Notifications").
+type Popups struct {
+	Enabled bool   `json:"enabled"`
+	Seconds int    `json:"seconds"` // how long one stays: PopupMinSeconds-PopupMaxSeconds
+	Level   string `json:"level"`   // PopupCritical: critical events and alerts only; PopupWarning: every warning too
+}
+
+// The pop-up settings' limits and words.
+const (
+	PopupMinSeconds = 3
+	PopupMaxSeconds = 30
+	PopupCritical   = "critical"
+	PopupWarning    = "warning"
+)
+
+// DefaultPopups: on, 5 seconds, critical events only.
+func DefaultPopups() Popups { return Popups{Enabled: true, Seconds: 5, Level: PopupCritical} }
+
+func (p Popups) valid() bool {
+	return p.Seconds >= PopupMinSeconds && p.Seconds <= PopupMaxSeconds && (p.Level == PopupCritical || p.Level == PopupWarning)
+}
+
 // UserSettings are one user's UI settings.
 type UserSettings struct {
 	Theme       string     `json:"theme"`
@@ -40,11 +62,12 @@ type UserSettings struct {
 	Dim         int        `json:"dim"`          // 0-90 %
 	Blur        int        `json:"blur"`         // 0-40 px
 	CardOpacity int        `json:"card_opacity"` // 20-100 %
+	Popups      Popups     `json:"popups"`
 }
 
 // Defaults are the settings of a user who never changed them.
 func Defaults() UserSettings {
-	return UserSettings{Theme: "black", Background: Background{Kind: "none"}, Dim: 60, Blur: 14, CardOpacity: 72}
+	return UserSettings{Theme: "black", Background: Background{Kind: "none"}, Dim: 60, Blur: 14, CardOpacity: 72, Popups: DefaultPopups()}
 }
 
 // Validate checks ranges and the https-only URL (the backend never fetches it: no SSRF).
@@ -70,6 +93,9 @@ func (s *UserSettings) Validate() error {
 	}
 	if s.Dim < 0 || s.Dim > 90 || s.Blur < 0 || s.Blur > 40 || s.CardOpacity < 20 || s.CardOpacity > 100 {
 		return apierr.New(422, "dim 0-90, blur 0-40, card_opacity 20-100")
+	}
+	if !s.Popups.valid() {
+		return apierr.Errf(422, "popups.seconds %d-%d, popups.level %s or %s", PopupMinSeconds, PopupMaxSeconds, PopupCritical, PopupWarning)
 	}
 	return nil
 }
@@ -179,8 +205,22 @@ func (s *Store) get(sub string) UserSettings {
 	if !ok {
 		return Defaults()
 	}
-	st := Defaults()
-	if json.Unmarshal(raw, &st) != nil || st.Validate() != nil {
+	st := Defaults() // what the saved settings do not name keeps its default: settings saved before a field existed load as they are
+	if json.Unmarshal(raw, &st) != nil {
+		return Defaults()
+	}
+	if !st.Popups.valid() { // a saved value outside the limits: the default for it, the rest is kept
+		p := DefaultPopups()
+		if st.Popups.Seconds >= PopupMinSeconds && st.Popups.Seconds <= PopupMaxSeconds {
+			p.Seconds = st.Popups.Seconds
+		}
+		if st.Popups.Level == PopupWarning {
+			p.Level = PopupWarning
+		}
+		p.Enabled = st.Popups.Enabled
+		st.Popups = p
+	}
+	if st.Validate() != nil {
 		return Defaults()
 	}
 	return st
