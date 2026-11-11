@@ -114,7 +114,11 @@ func TestMachineThatNeverComesOnline(t *testing.T) {
 	w.start(StartRequest{Hosts: []string{"pc-dead", "pc-a"}})
 	w.advance(302 * time.Second)
 	a, _ := w.m.Snapshot()
-	has(t, host(a, "pc-dead"), StGaveUp, "It did not come online within 5 min after the wake", "If it did switch on, it is ON")
+	has(t, host(a, "pc-dead"), StGaveUp, "It did not come online within 5 min after the wake", "It may still be starting, or be on without its network connection (Tailscale)",
+		"if it did switch on, it is ON", "Fairy has not switched it off and will not")
+	if first := host(a, "pc-dead").Log[0].Text; first != "wake sent: waiting for it to come online, up to 5 min (the run goes on as soon as its agent answers)" {
+		t.Fatalf("the wait is not named: %s", first)
+	}
 	if got := w.callsFor("pc-dead"); got != "wake wake wake wake wake" {
 		t.Fatalf("wakes for the dead machine: %q", got)
 	}

@@ -42,7 +42,7 @@ const (
 // The states of one machine in a run. The first eight are steps; the rest are where a machine ends.
 const (
 	StQueued   = "queued"            // waiting for its turn
-	StWaking   = "waking"            // the wake was sent; waiting for its agent to answer
+	StWaking   = "waking"            // the wake was sent; waiting for it to come online (its agent answers)
 	StOnline   = "online"            // its agent answers; checking that it stays
 	StApproval = "awaiting_approval" // waiting for the approval after the wake (item 1.1; not used yet)
 	StUpdating = "updating"          // the agent's self-update

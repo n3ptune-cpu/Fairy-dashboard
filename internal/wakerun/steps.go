@@ -183,7 +183,7 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 	m.emit(EvStep, r, h, "wake", nil, "ok")
 	t := m.now() // after the relay's answer: the machine cannot have booted because of this run before now
 	h.WakeSentAt, h.lastWake, h.Wakes = &t, t, 1
-	m.enter(h, StWaking, t, "wake sent: waiting for its agent to answer")
+	m.enter(h, StWaking, t, "wake sent: waiting for it to come online, up to "+span(r.Settings.OnlineTimeout)+" (the run goes on as soon as its agent answers)")
 }
 
 func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo, now time.Time) {
@@ -200,13 +200,13 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 			// reach it), or someone switched it on before the run did.
 			m.alreadyOn(r, h, now, fmt.Sprintf("it has been up for %s, longer than the %s since the wake", span(time.Duration(*o.UptimeS)*time.Second), span(since)))
 		default:
-			m.enter(h, StOnline, now, fmt.Sprintf("its agent answers %s after the wake: checking that it stays", span(since)))
+			m.enter(h, StOnline, now, fmt.Sprintf("its agent answers %s after the wake: waiting %s to see that it stays online", span(since), span(onlineSettle)))
 		}
 		return
 	}
 	if now.Sub(*h.WakeSentAt) >= r.Settings.OnlineTimeout {
-		m.end(r, h, StGaveUp, OnUnknown, now, fmt.Sprintf("It did not come online within %s after the wake. If it did switch on, it is ON: "+
-			"Fairy has not switched it off and will not.", span(r.Settings.OnlineTimeout)))
+		m.end(r, h, StGaveUp, OnUnknown, now, fmt.Sprintf("It did not come online within %s after the wake. It may still be starting, or be on without its network "+
+			"connection (Tailscale): if it did switch on, it is ON. Fairy has not switched it off and will not.", span(r.Settings.OnlineTimeout)))
 		return
 	}
 	if now.Sub(h.lastKick) >= kickEvery {
@@ -391,7 +391,7 @@ func (m *Manager) startUpdate(ctx context.Context, r *Run, h *Host, info HostInf
 	m.emit(EvStep, r, h, "update", params, "ok")
 	t := m.now()
 	h.UpdateSentAt = &t
-	m.note(h, t, "update asked for (it runs "+orText(o.Version, "an unknown version")+")")
+	m.note(h, t, "update asked for (it runs "+orText(o.Version, "an unknown version")+"): waiting for its result, up to "+span(updateTimeout))
 	m.say(h, "updating: the agent downloads, checks and installs the newest signed release")
 }
 

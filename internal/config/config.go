@@ -240,11 +240,12 @@ type Enroll struct {
 }
 
 // WakeUpdate is the `wake_update:` block: the timings of "Update machines that are off" (Updates page; README:
-// "Wake, update, shut down"). Which machines take part is not set here: each one is switched on for it in the
+// "Update machines that are off"). Which machines take part is not set here: each one is switched on for it in the
 // panel (state.json), by an admin, behind "Confirm it's you".
 type WakeUpdate struct {
 	// OnlineTimeoutS: a machine the run woke is given up on when its agent has not answered by then (default
-	// 300, 60-1800).
+	// 300, 60-1800). A woken machine has to start, get its network and bring Tailscale up before its agent
+	// can answer, so the wait is generous; the run goes on the moment the agent answers.
 	OnlineTimeoutS int `yaml:"online_timeout_s"`
 	// SettleS is the pause between the result of the update and the shutdown request (default 60, 10-600).
 	SettleS int `yaml:"settle_s"`
