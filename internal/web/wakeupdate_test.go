@@ -960,3 +960,43 @@ func TestPanelUpdateWaitsForARun(t *testing.T) {
 		t.Fatalf("after the run: %d %s", r.code, r.raw)
 	}
 }
+
+// A run journal with a null machine entry (review finding W4) made the server panic while it was being made:
+// the panel did not start. Now the entry is left out, the panel starts, the page shows the runs, and nothing
+// stops a new run.
+func TestWakeUpdateJournalWithANullHostDoesNotStopThePanel(t *testing.T) {
+	e := setup(t)
+	if err := os.MkdirAll(e.s.Cfg.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"version":1,"active":{"id":"x","state":"running","by":"Alice","started_at":"2026-11-11T02:00:00Z","hosts":[null]},
+		"history":[{"id":"y","state":"done","by":"Alice","hosts":[null,{"id":"laptop","name":"laptop","mode":"update_only","state":"stayed_on","text":"It was on and stays on.","on":"on","log":[]}]}]}`
+	if err := os.WriteFile(filepath.Join(e.s.Cfg.DataDir, "wake-update.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s2 := New(e.s.Cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, e.s.Poller, nil, "test") // panicked here
+	srv := httptest.NewServer(s2.Handler())
+	defer srv.Close()
+	e2 := &env{t: t, s: s2, srv: srv, b: e.b}
+	if err := s2.WakeRuns.JournalError(); err != nil {
+		t.Fatalf("the journal is usable: %v", err)
+	}
+	page := e2.do("GET", "/api/admin/wake-update", nil, "Cookie", e2.cookie(controller(), 0))
+	last, _ := page.body["last"].([]any)
+	if page.code != 200 || page.body["problem"] != nil || page.body["active"] != nil || len(last) != 2 {
+		t.Fatalf("the page: %d %s", page.code, page.raw)
+	}
+	first, second := last[0].(map[string]any), last[1].(map[string]any)
+	if hosts, ok := first["hosts"].([]any); first["state"] != "interrupted" || !ok || len(hosts) != 0 {
+		t.Fatalf("the interrupted run, without the empty entry: %v", first)
+	}
+	if hosts, _ := second["hosts"].([]any); len(hosts) != 1 || hosts[0].(map[string]any)["text"] != "It was on and stays on." {
+		t.Fatalf("the finished run keeps its real entry: %v", second)
+	}
+	if err := s2.Poller.Admin.SetWakeUpdate("laptop", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.WakeRuns.Start(wakerun.StartRequest{UpdateOnly: []string{"laptop"}, By: "Alice", BySub: "u2"}); err != nil {
+		t.Fatalf("a new run: %v", err)
+	}
+}

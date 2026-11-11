@@ -1,7 +1,12 @@
 package wakerun
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -307,4 +312,82 @@ func TestSteadyClockIsNotTheTimeOfDay(t *testing.T) {
 	if b := m.mono(); a < 0 || b < a || b-a > time.Minute || m.now().Sub(time.Now()) < 2*time.Hour {
 		t.Fatalf("steady clock: %v then %v", a, b)
 	}
+}
+
+// The reviewer's test for finding W4, as written: a journal whose list of machines holds null made Load panic,
+// and the web server calls Load when it starts. The panel did not start.
+func TestReviewJournalWithANullHost(t *testing.T) {
+	for name, body := range map[string]string{
+		"active":  `{"version":1,"active":{"id":"x","state":"running","hosts":[null]},"history":[]}`,
+		"history": `{"version":1,"active":null,"history":[{"id":"x","state":"interrupted","hosts":[null]}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			if err := os.WriteFile(w.m.path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("Load panics (web.New calls it at start: the panel would not start): %v", p)
+				}
+			}()
+			err := w.m.Load()
+			t.Logf("Load: %v; journal error: %v", err, w.m.JournalError())
+			w.m.Snapshot()
+		})
+	}
+}
+
+// A null entry is left out with one line in the log. The journal stays usable: the other machines of the run
+// are reported as they are, the interrupted run is reported once, and a new run can be started.
+func TestJournalNullHostIsLeftOutAndSaidOnce(t *testing.T) {
+	var logged bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(old)
+	w := newWorld(t)
+	w.off("pc-a")
+	body := `{"version":1,"active":{"id":"feed","state":"running","started_at":"2026-11-11T02:00:00Z","by":"Ann","hosts":[null,
+		{"id":"pc-a","name":"PC-A","mode":"wake","state":"waking","wake_sent_at":"2026-11-11T02:01:00Z","wakes":1,"log":[]},null]},
+		"history":[{"id":"old","state":"done","hosts":[null,{"id":"pc-b","name":"PC-B","mode":"update_only","state":"stayed_on","text":"It was on and stays on.","on":"on","log":[]}]},
+		{"id":"empty","state":"done","hosts":[null]}]}`
+	if err := os.WriteFile(w.m.path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.m.Load(); err != nil || w.m.JournalError() != nil {
+		t.Fatalf("Load: %v; journal error: %v", err, w.m.JournalError())
+	}
+	if n := strings.Count(logged.String(), "empty (null) machine entries"); n != 1 || !strings.Contains(logged.String(), "entries=4") {
+		t.Fatalf("the log says it %d times: %s", n, logged.String())
+	}
+	act, hist := w.m.Snapshot()
+	if act != nil || len(hist) != 3 || len(hist[0].Hosts) != 1 || len(hist[1].Hosts) != 1 || len(hist[2].Hosts) != 0 {
+		t.Fatalf("after Load: active %v, history %s", act, describe(hist[0]))
+	}
+	has(t, host(hist[0], "pc-a"), StInterrupted, "A wake was sent to it at 02:01:00 UTC and it had not answered yet")
+	if hist[0].State != RunInterrupted || !hist[0].Reported || len(w.events) != 1 || w.events[0].Kind != EvInterrupted {
+		t.Fatalf("the interrupted run is reported once: %s, %d events", hist[0].State, len(w.events))
+	}
+	if host(hist[1], "pc-b").Text != "It was on and stays on." {
+		t.Fatalf("the finished run: %s", describe(hist[1]))
+	}
+	// nothing is sent because of the file, and the file the panel writes next has no null in it
+	for i := 0; i < 60; i++ {
+		w.m.Tick(context.Background())
+	}
+	after, _ := os.ReadFile(w.m.path)
+	var written journalFile
+	if err := json.Unmarshal(after, &written); err != nil || len(w.calls) != 0 || len(written.History) != 3 || written.History[0].ID != "feed" {
+		t.Fatalf("requests %v; the file (%v): %s", w.calls, err, after)
+	}
+	for _, r := range written.History {
+		for _, h := range r.Hosts {
+			if h == nil {
+				t.Fatalf("the file the panel wrote has a null entry: %s", after)
+			}
+		}
+	}
+	// and a new run starts
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	has(t, host(w.finish(), "pc-a"), StOff)
 }

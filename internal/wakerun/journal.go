@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
@@ -156,6 +157,21 @@ func readJournal(path string) (journalFile, error) {
 		if r == nil || len(r.Hosts) > MaxHosts {
 			return jf, fmt.Errorf("%s does not hold runs this panel wrote", path)
 		}
+	}
+	// A machine's entry that is null (the panel never writes one; a file edited by hand can have it) is left
+	// out, and the log says so once. It says nothing about any machine, so it is no reason to stop new runs,
+	// and it must never keep the panel from starting. The rest of the run is reported as it is.
+	dropped := 0
+	for _, r := range append([]*Run{jf.Active}, jf.History...) {
+		if r == nil {
+			continue
+		}
+		n := len(r.Hosts)
+		r.Hosts = slices.DeleteFunc(r.Hosts, func(h *Host) bool { return h == nil })
+		dropped += n - len(r.Hosts)
+	}
+	if dropped > 0 {
+		slog.Warn("wake-update: the run journal has empty (null) machine entries; they are left out", "path", path, "entries", dropped)
 	}
 	return jf, nil
 }
