@@ -48,7 +48,8 @@ type Secrets struct {
 	InsecureCookies    bool
 }
 
-// LoadSecrets reads the FAIRY_* secrets from the environment; FAIRY_SESSION_SECRET (32+ characters) is required.
+// LoadSecrets reads the FAIRY_* secrets from the environment; FAIRY_SESSION_SECRET (32+ characters, not the
+// example value: SessionSecretProblem) is required.
 func LoadSecrets() (Secrets, error) {
 	s := Secrets{
 		SessionSecret:      os.Getenv("FAIRY_SESSION_SECRET"),
@@ -56,10 +57,42 @@ func LoadSecrets() (Secrets, error) {
 		ProxmoxTokenSecret: os.Getenv("FAIRY_PROXMOX_TOKEN_SECRET"),
 		InsecureCookies:    truthy(os.Getenv("FAIRY_INSECURE_COOKIES")),
 	}
-	if len(s.SessionSecret) < 32 {
-		return s, errors.New("FAIRY_SESSION_SECRET is missing or shorter than 32 characters")
+	if p := SessionSecretProblem(s.SessionSecret); p != "" {
+		return s, errors.New("FAIRY_SESSION_SECRET is " + p)
 	}
 	return s, nil
+}
+
+// exampleSessionSecrets are the FAIRY_SESSION_SECRET values of every released deploy/fairy.env.example.
+// Everybody can read them, so none of them is a secret.
+var exampleSessionSecrets = []string{"REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS"}
+
+// newSessionSecret is how to make a real one. It goes into every message about a refused value.
+const newSessionSecret = "Make a real one with `openssl rand -base64 48`, write it into fairy.env as " +
+	"FAIRY_SESSION_SECRET=<that value> and restart the panel (everyone signs in once more)"
+
+// SessionSecretProblem says what is wrong with a FAIRY_SESSION_SECRET value, as the rest of a sentence that
+// starts "FAIRY_SESSION_SECRET is" ("" when nothing is). The panel does not start with such a value, and
+// `fairy admin config check` reports it. The value itself is never part of the answer.
+//
+// The secret signs the session cookies: whoever knows it can sign a cookie. So besides the length two exact
+// things are refused (T-05), and nothing is guessed about how random a value looks:
+//   - the example value of deploy/fairy.env.example (of any release), also inside quotes or with something
+//     added to it;
+//   - one character repeated.
+func SessionSecretProblem(v string) string {
+	if len(v) < 32 {
+		return "missing or shorter than 32 characters"
+	}
+	for _, ex := range exampleSessionSecrets {
+		if strings.Contains(v, ex) {
+			return "still the example value from fairy.env.example, which everybody can read. " + newSessionSecret
+		}
+	}
+	if strings.Count(v, v[:1]) == len(v) {
+		return "one character repeated, which is no secret. " + newSessionSecret
+	}
+	return ""
 }
 
 func truthy(v string) bool {

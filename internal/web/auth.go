@@ -32,8 +32,9 @@ const (
 // sessionCheck reports why sd is not a valid session right now ("" = valid). It changes nothing, so the live
 // stream can ask it every second.
 //
-// A session is valid while it is listed in sessions.json (not revoked by the CLI), younger than
-// session_max_age, and really used within session_idle_timeout. "Used" is kept on the server per session id
+// A session is valid while it is listed in sessions.json (not revoked by the CLI) for the account the cookie
+// names (T-22: everything the panel keeps per session id, the step-up window and a kept action included, is
+// reached only through this check), younger than session_max_age, and really used within session_idle_timeout. "Used" is kept on the server per session id
 // (the cookie's copy only seeds it after a restart) and moves only on real use, see markedRead and used.
 func (s *Server) sessionCheck(sd *sessionData) string {
 	now := s.now()
@@ -43,7 +44,7 @@ func (s *Server) sessionCheck(sd *sessionData) string {
 	if now.Unix()-sd.IAT > int64(s.Cfg.SessionMaxAge) {
 		return sessMaxAge
 	}
-	if !s.Poller.Admin.SessionValid(sd.SID, float64(sd.IAT)) {
+	if !s.Poller.Admin.SessionValid(sd.SID, sd.User.Sub, float64(sd.IAT)) {
 		return sessRevoked
 	}
 	seen := sd.Seen
@@ -233,7 +234,7 @@ func (c *reqCtx) authAge(u *model.User) *float64 {
 // /auth/login) can never stop a signed-in admin from confirming a control action.
 func (c *reqCtx) loginKey() string {
 	s := c.session()
-	if s.User != nil && s.SID != "" && c.s.Poller.Admin.SessionValid(s.SID, float64(s.IAT)) &&
+	if s.User != nil && s.SID != "" && c.s.Poller.Admin.SessionValid(s.SID, s.User.Sub, float64(s.IAT)) &&
 		c.s.now().Unix()-s.IAT <= int64(c.s.Cfg.SessionMaxAge) {
 		return "sub:" + s.User.Sub
 	}

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -66,5 +69,34 @@ func TestProxyWarning(t *testing.T) {
 	_ = cfg.Validate()
 	if len(cfg.Trusted()) != 1 || cfg.Trusted()[0] != netip.MustParsePrefix("10.0.0.5/32") || proxyWarning("10.0.0.20:8080", cfg) != "" {
 		t.Fatal("nginx trusted: no warning")
+	}
+}
+
+// T-05: `fairy serve` does not start with the example session secret (or one character repeated), and the
+// log line says what to do. A real secret gets past this check as before (here: to the missing config.yaml).
+func TestServeRefusesTheExampleSessionSecret(t *testing.T) {
+	old := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(old) })
+	f := serveFlags{cfgPath: filepath.Join(t.TempDir(), "config.yaml")}
+	start := func(secret string) (int, string) {
+		var log bytes.Buffer
+		slog.SetDefault(slog.New(slog.NewTextHandler(&log, nil)))
+		t.Setenv("FAIRY_SESSION_SECRET", secret)
+		p, code := setupPanel(f)
+		if p != nil {
+			t.Fatal("a panel without config.yaml")
+		}
+		return code, log.String()
+	}
+	for _, weak := range []string{"REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS", strings.Repeat("x", 40)} {
+		code, log := start(weak)
+		if code != 1 || !strings.Contains(log, "FAIRY_SESSION_SECRET") || !strings.Contains(log, "openssl rand -base64 48") ||
+			strings.Contains(log, "config not found") {
+			t.Fatalf("serve with %q: exit %d, log:\n%s", weak, code, log)
+		}
+	}
+	code, log := start("b0pV3m2x9QmJt8sYw1Zr5uKc7NfHd4Ea6LgTi0Oq2WsXy3Rv8BnMk1Jh5GfDc7Vb")
+	if code != 1 || strings.Contains(log, "FAIRY_SESSION_SECRET") || !strings.Contains(log, "config not found") {
+		t.Fatalf("serve with a real secret: exit %d, log:\n%s", code, log)
 	}
 }

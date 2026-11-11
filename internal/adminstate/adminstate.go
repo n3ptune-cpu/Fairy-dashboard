@@ -4,7 +4,7 @@
 //	state.json     poll_overrides, control_disabled {by, at, reason}, power_control_disabled [system ids],
 //	               sessions_revoked_before (epoch)
 //	sessions.json  sessions {sid: {sub, name, email, ip, created, created_ts}}: a signed cookie is only valid while
-//	               its sid is here
+//	               its sid is here, for the account (sub) it names
 package adminstate
 
 import (
@@ -92,10 +92,15 @@ func (a *State) PowerDisabledList() ([]string, error) {
 	return out, nil
 }
 
-// SessionValid reports whether a cookie's session id is still registered and was issued (iat, Unix seconds)
-// after the last revoke-all. While sessions.json or state.json is unreadable no session is valid (fail closed).
-func (a *State) SessionValid(sid string, iat float64) bool {
-	if sid == "" || a.state.Err() != nil || a.sessions.Err() != nil {
+// SessionValid reports whether a cookie's session id is still registered, was registered for this account
+// (sub, the subject in the cookie) and was issued (iat, Unix seconds) after the last revoke-all. While
+// sessions.json or state.json is unreadable no session is valid (fail closed).
+//
+// The subject is part of the question (T-22): a session id belongs to the account that signed in for it. The
+// cookie is signed, so its subject cannot be changed without FAIRY_SESSION_SECRET; with this check a secret
+// that leaked still gives nobody another account's session, only their own.
+func (a *State) SessionValid(sid, sub string, iat float64) bool {
+	if sid == "" || sub == "" || a.state.Err() != nil || a.sessions.Err() != nil {
 		return false
 	}
 	ss, _ := a.sessions.Get()["sessions"].(map[string]any)
@@ -104,7 +109,14 @@ func (a *State) SessionValid(sid string, iat float64) bool {
 		ss, _ = a.sessions.Refresh()["sessions"].(map[string]any)
 		rec, known = ss[sid]
 	}
-	return known && currentGen(rec) && iat > num(a.state.Get()["sessions_revoked_before"])
+	return known && currentGen(rec) && subjectOf(rec) == sub && iat > num(a.state.Get()["sessions_revoked_before"])
+}
+
+// subjectOf is the account a sessions.json entry was registered for ("" when the entry has none).
+func subjectOf(rec any) string {
+	m, _ := rec.(map[string]any)
+	sub, _ := m["sub"].(string)
+	return sub
 }
 
 // SessionGen is the generation of the sessions this release makes. An entry of sessions.json without it was

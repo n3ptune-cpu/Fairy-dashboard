@@ -17,7 +17,9 @@ import (
 // still be able to look at these files and to make the owner admin again.
 func TestBreakGlassOnTheOldReleasesFiles(t *testing.T) {
 	v := testutil.NewVBefore(t)
-	t.Setenv("FAIRY_SESSION_SECRET", v.Secrets.SessionSecret) // fairy.env, for `config check`
+	// fairy.env, for `config check`: a random value, as a real install has (the fixture signs its cookies with
+	// one character repeated, which `config check` and `fairy serve` refuse: T-05)
+	t.Setenv("FAIRY_SESSION_SECRET", "b0pV3m2x9QmJt8sYw1Zr5uKc7NfHd4Ea6LgTi0Oq2WsXy3Rv8BnMk1Jh5GfDc7Vb")
 	t.Cleanup(func() { stdin = os.Stdin })
 	run := func(answer string, args ...string) (int, string) {
 		stdin = strings.NewReader(answer)

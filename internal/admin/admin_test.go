@@ -92,6 +92,35 @@ func TestBreakGlassCLI(t *testing.T) {
 	}
 }
 
+// T-05: `config check` reports the example session secret (and one character repeated) and says what to do;
+// it never prints the value. A real secret is "present" as before.
+func TestConfigCheckReportsAWeakSessionSecret(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	_ = os.WriteFile(cfg, []byte("public_url: https://p.example\ndata_dir: "+dir+"/data\noidc: {issuer: https://id.example, client_id: c}\n"), 0o600)
+	check := func(secret string) (int, string) {
+		t.Setenv("FAIRY_SESSION_SECRET", secret)
+		var out, errb bytes.Buffer
+		code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb)
+		return code, out.String() + errb.String()
+	}
+	for _, weak := range []string{"REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS", strings.Repeat("k", 48)} {
+		code, out := check(weak)
+		if code != 1 || !strings.Contains(out, "WARN  FAIRY_SESSION_SECRET: ") || !strings.Contains(out, "openssl rand -base64 48") ||
+			strings.Contains(out, "FAIRY_SESSION_SECRET: present") || strings.Contains(out, strings.Repeat("k", 8)) {
+			t.Fatalf("config check with %q: exit %d\n%s", weak, code, out)
+		}
+	}
+	if _, out := check("short"); !strings.Contains(out, "WARN  FAIRY_SESSION_SECRET: missing or shorter than 32 characters") {
+		t.Fatalf("config check with a short secret:\n%s", out)
+	}
+	real := "b0pV3m2x9QmJt8sYw1Zr5uKc7NfHd4Ea6LgTi0Oq2WsXy3Rv8BnMk1Jh5GfDc7Vb"
+	if _, out := check(real); !strings.Contains(out, "ok    FAIRY_SESSION_SECRET: present") || strings.Contains(out, real) ||
+		strings.Contains(out, "WARN  FAIRY_SESSION_SECRET") {
+		t.Fatalf("config check with a real secret:\n%s", out)
+	}
+}
+
 func TestHealthReportsTheLastHealthFile(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.yaml")

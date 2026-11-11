@@ -74,8 +74,12 @@ fairy version
 See `deploy/config.example.yaml`, `deploy/fairy.env.example` and `deploy/fairy.service` (hardened systemd unit,
 no capabilities needed: the panel never runs local power or IPMI commands).
 
+`FAIRY_SESSION_SECRET` in `fairy.env` signs the session cookies. Make it with `openssl rand -base64 48`. The
+panel does not start with the example value from `deploy/fairy.env.example` or with one character repeated.
+
 **Updating a panel that already runs?** Read [Upgrading to this release](#upgrading-to-this-release) first.
-It is short, and it names three settings in `config.yaml` that the new panel refuses.
+It is short, and it names three settings in `config.yaml` and one line in `fairy.env` that the new panel
+refuses.
 
 ### Agents
 
@@ -460,6 +464,13 @@ and is refused now. A key that is not in the file is fine.
 For all three, `0` means "use the default" (12 hours, 4 seconds, 60 seconds), as before.
 
 Also refused: a fraction of a second in `session_max_age` or `session_idle_timeout` (`43200.5`).
+
+Then look at one line in `/etc/fairy/fairy.env` (as root): `FAIRY_SESSION_SECRET=...`. The new panel does
+not start when the value is still the example, `REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS`, or one
+character repeated. That value signs the session cookies, and the example is public. A value you made
+yourself, for example with `openssl rand -base64 48`, stays as it is and nobody has to sign in for it again.
+If yours is the example, make a real one with that command, write it into the line and continue. The log
+line and `fairy admin config check` of the new panel name the same command.
 
 If one of them is wrong, the new panel does not start. `fairy update` waits for the panel to answer after
 the restart. When it does not, it puts the old program back (it keeps it as `/usr/local/bin/fairy.old`) and

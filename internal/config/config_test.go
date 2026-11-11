@@ -157,3 +157,50 @@ func TestNaNAndInfTimingsRefused(t *testing.T) {
 		t.Fatal("defaults:", err)
 	}
 }
+
+// T-05: the session secret signs every session cookie, so a value everybody can read is no secret. The
+// example line of deploy/fairy.env.example and one character repeated are refused, with a message that says
+// what to do; a real random value is taken as before.
+func TestLoadSecretsRefusesTheExampleAndRepeatedCharacters(t *testing.T) {
+	example, err := os.ReadFile(filepath.Join("..", "..", "deploy", "fairy.env.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var placeholder string
+	for _, l := range strings.Split(string(example), "\n") {
+		if v, ok := strings.CutPrefix(l, "FAIRY_SESSION_SECRET="); ok {
+			placeholder = v
+		}
+	}
+	if len(placeholder) < 32 {
+		t.Fatalf("deploy/fairy.env.example has no FAIRY_SESSION_SECRET line of 32+ characters: %q", placeholder)
+	}
+	for _, v := range []string{placeholder, `"` + placeholder + `"`, placeholder + "1", strings.Repeat("s", 32), strings.Repeat("0", 64)} {
+		t.Setenv("FAIRY_SESSION_SECRET", v)
+		_, err := LoadSecrets()
+		if err == nil {
+			t.Fatalf("%q is accepted as the session secret", v)
+		}
+		if !strings.Contains(err.Error(), "openssl rand -base64 48") || !strings.Contains(err.Error(), "FAIRY_SESSION_SECRET") {
+			t.Fatalf("the message does not say what to do: %v", err)
+		}
+		if SessionSecretProblem(v) == "" {
+			t.Fatalf("SessionSecretProblem(%q) finds nothing", v)
+		}
+	}
+	// what `openssl rand -base64 48`, `openssl rand -hex 32` and a password manager give
+	for _, v := range []string{"b0pV3m2x9QmJt8sYw1Zr5uKc7NfHd4Ea6LgTi0Oq2WsXy3Rv8BnMk1Jh5GfDc7Vb", "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+		"correct horse battery staple and then some", strings.Repeat("ab", 16)} {
+		t.Setenv("FAIRY_SESSION_SECRET", v)
+		if s, err := LoadSecrets(); err != nil || s.SessionSecret != v {
+			t.Fatalf("%q is refused: %v", v, err)
+		}
+		if p := SessionSecretProblem(v); p != "" {
+			t.Fatalf("SessionSecretProblem(%q) = %q", v, p)
+		}
+	}
+	t.Setenv("FAIRY_SESSION_SECRET", "tiny-xyz")
+	if _, err := LoadSecrets(); err == nil || err.Error() != "FAIRY_SESSION_SECRET is missing or shorter than 32 characters" {
+		t.Fatalf("the message for a short secret changed: %v", err)
+	}
+}

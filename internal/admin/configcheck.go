@@ -65,8 +65,9 @@ func (c *cli) configCheck() int {
 		return 1
 	}
 	notes = append(notes, fmt.Sprintf("config %s: valid", c.cfgPath))
-	if _, err := config.LoadSecrets(); err != nil {
-		problems = append(problems, "FAIRY_SESSION_SECRET: missing or shorter than 32 characters")
+	if p := config.SessionSecretProblem(os.Getenv("FAIRY_SESSION_SECRET")); p != "" {
+		// too short, the example value or one character repeated: `fairy serve` does not start with it
+		problems = append(problems, "FAIRY_SESSION_SECRET: "+p)
 	} else {
 		notes = append(notes, "FAIRY_SESSION_SECRET: present")
 	}
