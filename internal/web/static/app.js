@@ -595,15 +595,17 @@ function setTitle(t, sub = "") { $("#page-title").textContent = t; $("#page-sub"
 const watts = (s) => s.power_w ?? linkedPower(s.id).watts;
 const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.util_percent || 0), 0) / s.gpus.length : null);
 
-// One line per host: what it is made of (model, cores, memory) is on its own page, and here in the name's tooltip.
+// One line per host, and under the name, small, the machine's model when it is known (only the model: cores,
+// memory, the system and the agent's version are on the host's own page, and here in the name's tooltip).
 // The name never wraps; in a narrow window its chips wrap next to it instead of pushing the table out of its panel.
 // Only chips that say something about now are in the row (UPS, battery, helper stopped, update available); the
 // cluster's name and the agent's version are on the host's page, and in the tooltip.
 function hostRow(s) {
   const gpus = s.gpus || [], w = watts(s), ver = state.me?.can_control && upd.bySys[s.id]?.version;
   const about = [subLine(s), clusterName(s) && `cluster ${clusterName(s)}`, ver && `fairy-agent ${ver}`].filter(Boolean).join(" · ");
-  return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><div class="host-line"><a href="#/system/${enc(s.id)}" title="${esc(about)}"><span class="host-ico">${hostIcon(s)}</span>
-      <span><span class="dot ${cssName(s.status)}"></span> ${esc(s.name)}</span></a><span class="host-tags">${upsChips(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span></div></td>
+  return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><div class="host-line"><span class="host-ico">${hostIcon(s)}</span><div class="host-main">
+      <div class="host-l1"><a href="#/system/${enc(s.id)}" title="${esc(about)}"><span class="dot ${cssName(s.status)}"></span>${esc(s.name)}</a><span class="host-tags">${upsChips(s)}${battChip(s)}${helperChip(s)}${guestCount(s)}${verChip(s.id, true)}</span></div>
+      ${model(s) ? `<div class="host-model" title="${esc(model(s))}">${esc(model(s))}</div>` : ""}</div></div></td>
     <td class="col-kind"><span class="note">${esc(s.kind === "node" ? "Proxmox" : s.owner || s.group || "–")}</span></td>
     <td class="col-cpu" data-l="CPU">${s.status === "paused" ? '<span class="note">paused</span>' : live(s) ? mini("cpu", s.cpu_percent) : `<span class="note">${s.asleep ? "asleep (from panel)" : `${esc(s.status)}${s.error ? ` · ${esc(s.error)}` : ""}`}</span>`}</td>
     <td class="col-ram" data-l="RAM">${live(s) && s.status !== "paused" ? mini("mem", pct(s.mem_used, s.mem_total)) : ""}</td>
@@ -657,7 +659,7 @@ function pageOverview() {
   <div class="section-title overview-head">Hosts <span class="count">${hostGroups.reduce((a, [, h]) => a + h.length, 0)}</span>${infoBtn("ov-hosts", "Hosts", infoList([
       "A click on a host opens its page.",
       "A Proxmox host's VMs and containers are on its page, and under it in the sidebar (the arrow).",
-      "A host's model, cores and memory are on its page too. With a mouse, point at its name to see them here.",
+      "A host's cores, memory and system are on its page. With a mouse, point at its name to see them here.",
       "Offline hosts do not add to the CPU and memory totals."]))}
     ${state.me?.can_manage_users ? `<button class="btn push" type="button" data-act="add-host" ${controlOff() ? `disabled title="${esc(controlWhyNot())}"` : ""}>${I.plus}Add host</button>` : ""}</div>${hostTable(hostGroups)}`;
 }
