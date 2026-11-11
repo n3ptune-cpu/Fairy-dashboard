@@ -100,6 +100,13 @@ Laptops: newer agents add an optional `battery` object to `/metrics` (`percent`,
 full / idle, `ac_online`, `power_w` positive while discharging, `time_remaining_s`, `health_pct`). The panel
 shows it as a Battery box on the host page and the charge in the host list; agents without it keep working.
 
+**Model name.** The Overview shows a host's model under its name when its agent reports one. An admin can set
+a name of their own instead: the host's page, the ⋯ menu, **Set model name**; **Clear** brings the reported
+model back. The reported model stays one step behind the name (its tooltip on the Overview, the ⓘ on the
+host's page). The name is kept by the panel (`state.json`, `host_models`), is 1 to 64 characters on one line,
+and goes when the host is removed. Admins only, from a browser session, no "Confirm it's you" (like the
+sign-in wallpaper); audited as `host.model`. API: `PUT /api/systems/{id}/custom-model`.
+
 **Elevated helper** (Fairy-agent v0.5.0+, Windows): the agent runs as `NT SERVICE\fairy-agent` and a separate
 LocalSystem service without network access, `fairy-agent-helper`, reads Core Temp and the BMC's sensors, drives
 the fans (with the agent's temperature watchdog), runs power actions and installs updates. `/metrics` then carries a
@@ -945,7 +952,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/config` | Reads and checks `config.yaml` (`config.go`, `validate.go`) and secrets from `fairy.env` / the environment (`env.go`). |
 | `internal/admin` | The break-glass CLI `fairy admin`: one file per command (users and sites, tokens, sessions, control, audit, config check, health). |
 | `internal/access` | `users.json`: users (by OIDC subject) with a role and sites, the list of sites, and which site each host / power source / UPS is assigned to. |
-| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the session list. |
+| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the hosts' custom model names (`hostmodel.go`), the session list. |
 | `internal/statefile` | Safe shared JSON files (state, sessions, tokens, users): lock, re-read, write to a temp file, rename (so CLI and server never lose changes). |
 | `internal/tokens` | Personal API tokens (`fy_...`), stored only as hashes in `tokens.json`. |
 | `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |

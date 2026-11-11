@@ -302,6 +302,11 @@ goes differently for you, send what the page shows and the lines of the `fairy-t
   panel sees no guest that is not stopped; one that the panel knows only through its agent is always left
   on. Neither was tried against a real Proxmox.
 
+## G. Trying the model name
+
+A host's page, **⋯**, **Set model name**: type a name, **Save**. It is under the host's name on the Overview
+and in the "Model" line of its page; the ⓘ there (or pointing at it on the Overview) says what the host
+reports. **Clear** in the same dialog brings the reported model back. Menu, **Audit**, "Host admin" lists both.
 
 ## What the test build does NOT prove
 
