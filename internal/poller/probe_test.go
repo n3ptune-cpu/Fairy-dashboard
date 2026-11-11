@@ -127,9 +127,10 @@ func TestProbeTellsARefusalFromNoAnswer(t *testing.T) {
 	}
 }
 
-// QuietSince: since when the panel has asked an agent poll after poll without an answer. An answer ends the
-// row. So does a time in which the panel did not ask: after it the row starts again, because nobody knows
-// what the machine did meanwhile.
+// QuietSince: since when the panel has asked an agent poll after poll and got nothing at all. An answer ends
+// the row. So does a refused connection: the machine itself sent the refusal, so it runs, and the silence can
+// only begin after it. So does a time in which the panel did not ask: after it the row starts again, because
+// nobody knows what the machine did meanwhile.
 func TestQuietSinceIsAnUnbrokenRowOfFailedPolls(t *testing.T) {
 	b := testutil.NewBackend()
 	down := true
@@ -173,7 +174,8 @@ func TestQuietSinceIsAnUnbrokenRowOfFailedPolls(t *testing.T) {
 	if i, ok := p.AgentInfo("laptop"); ok || !i.QuietSince.Equal(start) || i.Refused {
 		t.Fatalf("AgentInfo: %+v %v", i, ok)
 	}
-	// a poll the machine itself refuses: it runs, its agent does not listen. The row goes on.
+	// a poll the machine itself refuses: it runs, its agent does not listen. That is a sign of life like an
+	// answer: the twenty minutes of silence before it do not count any more.
 	b.Mu.Lock()
 	b.Metrics["laptop"] = func() (jsonx.M, error) {
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
@@ -181,8 +183,15 @@ func TestQuietSinceIsAnUnbrokenRowOfFailedPolls(t *testing.T) {
 	b.Mu.Unlock()
 	now = now.Add(time.Minute)
 	p.PollOnce(ctx)
-	if i, _, _ := p.AgentSeen("laptop"); !i.Refused || !i.QuietSince.Equal(start) || i.Online {
-		t.Fatalf("a refused poll: %+v", i)
+	if i, _, _ := p.AgentSeen("laptop"); !i.Refused || !i.QuietSince.IsZero() || i.Online {
+		t.Fatalf("a refused poll is not silence: %+v", i)
+	}
+	for n := 0; n < 14; n++ { // fourteen more minutes of refusals: still no silence
+		now = now.Add(time.Minute)
+		p.PollOnce(ctx)
+	}
+	if i, _, _ := p.AgentSeen("laptop"); !i.Refused || !i.QuietSince.IsZero() {
+		t.Fatalf("a quarter of an hour of refusals is not a quarter of an hour without an answer: %+v", i)
 	}
 	b.Mu.Lock()
 	b.Metrics["laptop"] = func() (jsonx.M, error) {
@@ -194,8 +203,9 @@ func TestQuietSinceIsAnUnbrokenRowOfFailedPolls(t *testing.T) {
 	b.Mu.Unlock()
 	now = now.Add(time.Minute)
 	p.PollOnce(ctx)
+	start = now // the silence begins with the first poll after the last refusal
 	if i, _, _ := p.AgentSeen("laptop"); i.Refused || !i.QuietSince.Equal(start) {
-		t.Fatalf("the next poll got no answer at all: %+v", i)
+		t.Fatalf("the next poll got no answer at all: the silence begins now, %+v, want %v", i, start)
 	}
 	// the slowest poll interval is inside the gap
 	now = now.Add(QuietGap)

@@ -5,8 +5,8 @@
 //
 // The rules it keeps (README, "Wake, update, shut down"):
 //
-//   - It only ever switches off a machine that was off before the run and that this run woke: no answer from it
-//     for MinOff (15 minutes) when the run started, online only after the run's own wake. That is decided in
+//   - It only ever switches off a machine that was off before the run and that this run woke: no sign of life
+//     from it for MinOff (15 minutes) when the run started, online only after the run's own wake. That is decided in
 //     one function, mayShutDown (shutdown.go), which is the only way to the shutdown request. A machine that was
 //     on is never switched off; it is updated only if the admin asked. A machine the run is not sure about (it
 //     stopped answering a few minutes ago: it may be restarting) is left alone: nothing is sent to it.
@@ -89,8 +89,10 @@ const (
 // MaxHosts is how many machines one run takes.
 const MaxHosts = 16
 
-// MinOff is how long the panel must have asked a machine's agent, poll after poll, without an answer before a
-// run takes the machine for off. One minute without an answer (offline_after) is also what a machine looks like
+// MinOff is how long the panel must have asked a machine's agent, poll after poll, and got nothing at all
+// before a run takes the machine for off. It counts from the last sign of life: an answer, a refused
+// connection (the machine runs, only its agent is stopped) or a Proxmox node shown as online each start it
+// again, so a machine that refused for 14 minutes and is silent for one is not off. One minute without an answer (offline_after) is also what a machine looks like
 // while it restarts, for Windows Update or because its owner restarted it, and such a machine comes back by
 // itself with a fresh uptime: a run would take it for a machine it woke, and switch it off. Fifteen minutes is
 // longer than a restart takes. It is not a setting: a shorter time would bring that mistake back.
@@ -168,8 +170,9 @@ type Observation struct {
 	// offline_after), "offline", or "" when the panel never polled it.
 	Status string
 	Paused bool // polling is paused for it: the panel would never see it come online
-	// QuietSince: since when the panel has asked its agent, poll after poll, without an answer. Zero while it
-	// answers, when it was never polled, and when the panel stopped asking in between (poller.QuietGap).
+	// QuietSince: since when the panel has asked its agent, poll after poll, and got nothing at all (no answer
+	// and no refused connection). Zero while it answers or shows another sign of life (OnBy), when it was never
+	// polled, and when the panel stopped asking in between (poller.QuietGap).
 	QuietSince time.Time
 	// OnBy: what else than its agent shows the machine as on right now ("the Proxmox API shows it as online",
 	// OnByRefused); "": nothing does.

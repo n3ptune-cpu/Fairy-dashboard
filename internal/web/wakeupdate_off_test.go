@@ -10,6 +10,7 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
 )
 
@@ -140,8 +141,8 @@ func TestWakeUpdateARefusedConnectionIsOn(t *testing.T) {
 		t.Fatalf("pc-b, which sends nothing at all: %v", h)
 	}
 	ops := runOps{e.s}
-	if o := ops.Observe("pc-a"); o.OnBy != wakerun.OnByRefused || wakerun.OffNow(o, f.now) || o.QuietSince.IsZero() {
-		t.Fatalf("the run's view of pc-a: %+v", o)
+	if o := ops.Observe("pc-a"); o.OnBy != wakerun.OnByRefused || wakerun.OffNow(o, f.now) || !o.QuietSince.IsZero() {
+		t.Fatalf("the run's view of pc-a (a refusal is a sign of life: no silence has begun): %+v", o)
 	}
 	if o := ops.Observe("node-srv-pvea"); o.OnBy != "the Proxmox API shows it as online" || wakerun.OffNow(o, f.now) {
 		t.Fatalf("the run's view of the node: %+v", o)
@@ -186,5 +187,124 @@ func TestWakeUpdateARefusedConnectionIsOn(t *testing.T) {
 	}
 	if got := f.requests(); len(got) != 0 {
 		t.Fatalf("requests: %v", got)
+	}
+}
+
+// The 15 minutes are 15 minutes of silence since the last sign of life, and a sign of life is more than an
+// answer: a refused connection (the machine itself sent the refusal) and, for a Proxmox node, the cluster
+// showing it as online. A machine that ran with its agent stopped for a quarter of an hour and then says
+// nothing for a minute is not "off for 15 minutes": one minute of silence is what a restart looks like, and it
+// would come back with a fresh uptime, like a machine the run woke. It is "not sure" and left alone, and it
+// counts as off only 15 minutes after its last sign of life. (Before this, the refused polls counted as
+// minutes without an answer.)
+func TestWakeUpdateSilenceCountsFromTheLastSignOfLife(t *testing.T) {
+	e := setup(t)
+	f := newFarm(t, e)
+	mode, nodeUp := "refuse", true
+	e.b.Mu.Lock()
+	e.b.Metrics["pc-a"] = func() (jsonx.M, error) { // it runs, its agent is stopped; later nothing answers at all
+		if mode == "refuse" {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+		}
+		return nil, os.ErrDeadlineExceeded
+	}
+	e.b.PVE = func() ([]jsonx.M, error) { // the cluster shows the node as online; later as offline
+		rows := testutil.PVEResources()
+		if !nodeUp {
+			rows[0] = jsonx.M{"id": "node/SRV-PVEA", "type": "node", "node": "SRV-PVEA", "status": "offline", "maxcpu": 8.0, "maxmem": float64(32 << 30)}
+		}
+		return rows, nil
+	}
+	e.b.Mu.Unlock()
+	if err := e.s.Poller.AddAgent(config.Agent{ID: "pve-agent", Name: "PVE agent", LinksTo: "node-srv-pvea", Managed: true, Token: "read-word", ControlToken: "control-word",
+		URL: "http://pve-agent", PowerControl: true, SelfUpdate: true}, &config.SystemOverride{ID: "node-srv-pvea", Wol: &config.Wol{MAC: "00:00:5e:00:53:09", Relay: "nas"}}); err != nil {
+		t.Fatal(err)
+	}
+	e.b.Mu.Lock()
+	e.b.Metrics["pve-agent"] = func() (jsonx.M, error) { return nil, os.ErrDeadlineExceeded } // the agent on the node is silent all the time
+	e.b.Mu.Unlock()
+	for i := 0; i < 90; i++ {
+		f.tick()
+	}
+	f.wait(14 * time.Minute)
+	f.optIn("pc-a", "pc-b", "node-srv-pvea")
+	admin := e.cookie(controller(), 0)
+	page := func() resp { return e.do("GET", "/api/admin/wake-update", nil, "Cookie", admin) }
+	ops := runOps{e.s}
+	both := []string{"pc-a", "node-srv-pvea"}
+
+	// a quarter of an hour in which each of the two showed that it runs: on, and no silence has begun
+	for _, id := range both {
+		if h := wuHostRow(t, page(), id); h["power"] != "on" || h["choice"] != "" {
+			t.Fatalf("%s while it shows that it runs: %v", id, h)
+		}
+		if o := ops.Observe(id); o.OnBy == "" || !o.QuietSince.IsZero() || wakerun.QuietFor(o, f.now) != 0 {
+			t.Fatalf("%s: a machine that shows that it runs is not silent: %+v", id, o)
+		}
+	}
+	if h := wuHostRow(t, page(), "pc-b"); h["power"] != "off" || h["choice"] != "wake" {
+		t.Fatalf("pc-b, which sent nothing at all in that time: %v", h)
+	}
+
+	// then both go silent (a restart begins like this). The silence counts from the first poll that gets
+	// nothing: for pc-a the poll a minute after its last refusal, for the node one poll later (the poll that
+	// learns from the cluster that the node is offline). Three minutes later:
+	e.b.Mu.Lock()
+	mode, nodeUp = "silent", false
+	e.b.Mu.Unlock()
+	f.wait(3 * time.Minute)
+	quiet := map[string]time.Duration{"pc-a": 2 * time.Minute, "node-srv-pvea": time.Minute}
+	for _, id := range both {
+		h := wuHostRow(t, page(), id)
+		why := "not sure that it is off: no answer for " + spanWords(quiet[id]) + " so far, and Fairy takes a machine for off only after 15 minutes (it may be restarting)"
+		if h["power"] != "unclear" || h["choice"] != "" || h["not_sure"] != true || h["why"] != why {
+			t.Fatalf("%s after %v of silence: %v", id, quiet[id], h)
+		}
+		if o := ops.Observe(id); o.OnBy != "" || wakerun.OffNow(o, f.now) || wakerun.QuietFor(o, f.now) != quiet[id] {
+			t.Fatalf("%s: the run's view: %+v, quiet for %v", id, o, wakerun.QuietFor(o, f.now))
+		}
+	}
+	// a run that names them anyway sends them nothing: no wake, so nothing can come back "woken" and be switched off
+	if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: both, UpdateIfOn: true, By: "Alice", BySub: "u2"}); err != nil {
+		t.Fatal(err)
+	}
+	run := f.finish()
+	for _, id := range both {
+		if h := hostOf(run, id); h.State != wakerun.StSkipped || h.On != wakerun.OnUntouched || h.Text != wakerun.NotSure || h.WakeSentAt != nil || h.ProbedOff {
+			t.Fatalf("%s in a run: %s (%s): %s", id, h.State, h.On, h.Text)
+		}
+	}
+	if got := f.requests(); len(got) != 0 {
+		t.Fatalf("requests: %v", got)
+	}
+
+	// still not sure just before 15 minutes of silence, and off from 15 minutes after the last sign of life
+	f.wait(12 * time.Minute) // fourteen and thirteen minutes of silence (the run above waited for nothing)
+	for _, id := range both {
+		if o := ops.Observe(id); wakerun.OffNow(o, f.now) || wakerun.QuietFor(o, f.now) >= wakerun.MinOff {
+			t.Fatalf("%s after %v of silence must not be off yet", id, wakerun.QuietFor(o, f.now))
+		}
+		if h := wuHostRow(t, page(), id); h["power"] != "unclear" {
+			t.Fatalf("%s just before the 15 minutes: %v", id, h)
+		}
+	}
+	f.wait(time.Minute)
+	if o := ops.Observe("pc-a"); !wakerun.OffNow(o, f.now) {
+		t.Fatalf("pc-a after %v of silence is off: %+v", wakerun.QuietFor(o, f.now), o)
+	}
+	if o := ops.Observe("node-srv-pvea"); wakerun.OffNow(o, f.now) {
+		t.Fatalf("the node after %v of silence is not off yet: %+v", wakerun.QuietFor(o, f.now), o)
+	}
+	f.wait(time.Minute)
+	for _, id := range both {
+		if o := ops.Observe(id); !wakerun.OffNow(o, f.now) || wakerun.QuietFor(o, f.now) < wakerun.MinOff {
+			t.Fatalf("%s after %v of silence is off: %+v", id, wakerun.QuietFor(o, f.now), o)
+		}
+	}
+	if h := wuHostRow(t, page(), "pc-a"); h["power"] != "off" || h["choice"] != "wake" {
+		t.Fatalf("pc-a 15 minutes after its last refusal: %v", h)
+	}
+	if h := wuHostRow(t, page(), "node-srv-pvea"); h["power"] != "off" {
+		t.Fatalf("the node 15 minutes after the cluster last showed it as online: %v", h)
 	}
 }

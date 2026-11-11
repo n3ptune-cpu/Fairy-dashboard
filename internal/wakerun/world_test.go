@@ -360,7 +360,9 @@ func (w *world) poll() {
 			mc.obs.OnBy = mc.onBy
 		}
 		if !w.answers(mc) {
-			if mc.quietSince.IsZero() {
+			if mc.obs.OnBy != "" { // it shows that it runs (the poller's rule): no silence, and none has begun
+				mc.quietSince = time.Time{}
+			} else if mc.quietSince.IsZero() {
 				mc.quietSince = w.now
 			}
 			mc.obs.Online, mc.obs.QuietSince = false, mc.quietSince

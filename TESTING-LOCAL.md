@@ -40,7 +40,8 @@ folder into the r4 folder **before** the first start.
    Its dialog lists the test VM under "On now: update only, never switched off".
 3. Tick the VM and start the run: it still ends with "It was on and stays on.", and the VM stays on.
 4. A host that does not answer is "not sure" for 15 minutes before it can count as off. The count starts
-   again at every start of the panel, so right after a start no machine is offered as off.
+   again at every start of the panel, so right after a start no machine is offered as off. It also starts
+   again each time the host answers or refuses the connection (it runs, only its agent is stopped).
 5. **Sessions**: make the window narrower and wider. Nothing scrolls sideways.
 6. **Settings**: the ⓘ buttons; the sign-in picture you set in r3 is still there (with the copied folder).
 7. If the VM has fans: change a fan. "Confirm it's you" names the change in words, not in braces. Else skip.
@@ -248,7 +249,9 @@ untick "Turn on fast startup"), or the run will take B for a machine that was on
    as offline after about a minute, but a run takes a machine for off only after 15 minutes without an
    answer (a PC that restarts is also silent for a few minutes). Until then the "Machines" table says "Now:
    unclear" for B and how long it has had no answer; after 15 minutes it says "Now: off". The panel must
-   have been running all that time: if you start it again, the 15 minutes start again.
+   have been running all that time: if you start it again, the 15 minutes start again. They count from B's
+   last sign of life: while Windows is still shutting down and the agent has already stopped, B refuses the
+   connection, and the table says "Now: on"; the 15 minutes start when B gives nothing at all any more.
 2. **Update unpowered hosts**: B is listed under "Off (no answer for 15 minutes or more): wake,
    update, switch off again", ticked. Start, **Confirm (test build)**.
 3. The run shows B as "waking". **Now power B on in VMware.** You have 5 minutes.
@@ -293,8 +296,9 @@ goes differently for you, send what the page shows and the lines of the `fairy-t
 
 * **That Wake-on-LAN really starts the PC** from "shut down": firmware and network card settings, the relay
   in the same network. Try **Power on** in the machine's Power menu first; a run sends the same request.
-* **That a PC that is off counts as off.** The panel must get no answer at all from it for 15 minutes. A PC
-  that is shut down gives none. If the report says "It is on (the machine refused the connection)" for a PC
+* **That a PC that is off counts as off.** The panel must get no answer at all from it for 15 minutes, and
+  no refused connection either: a refusal shows that the machine runs and starts the 15 minutes again. A PC
+  that is shut down gives neither. If the report says "It is on (the machine refused the connection)" for a PC
   that is off, something else answers at its address (a router, a firewall): tell us.
 * **That a PC the run woke counts as woken.** The run compares the uptime the PC reports with the time since
   the wake. Windows with Fast Startup keeps counting its uptime through "Shut down"; such a PC is taken for
