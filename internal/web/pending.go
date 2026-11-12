@@ -226,6 +226,7 @@ var actionList = map[string]func(c *reqCtx, u *model.User) []string{
 const (
 	maxActionItems = 32
 	maxPlanItems   = 80
+	maxResultItems = 128 // the lines of a result (one per machine of "Update all")
 )
 
 // decodeStrictly decodes a kept request's body the way its handler will: one reading only (strictBody), no
@@ -376,6 +377,18 @@ func (s *Server) resumePendingWith(c *reqCtx, p *pendingAction, grant *approvalG
 	}
 	if id, ok := body["id"].(string); ok && res.OK && len(id) <= 64 {
 		res.Ref = id // e.g. the Add host the action made
+	}
+	// An action about several machines says what happened on each (Update all: "lines"), and whether all of it
+	// worked ("all_ok"). "done" is said only for an action that says nothing itself.
+	if lines, ok := body["lines"].([]any); ok {
+		for _, l := range lines {
+			if s, ok := l.(string); ok && len(res.Items) < maxResultItems {
+				res.Items = append(res.Items, truncate(safeTarget(s), maxActionText))
+			}
+		}
+	}
+	if all, ok := body["all_ok"].(bool); ok && !all {
+		res.OK = false
 	}
 	if res.Message == "" && res.OK {
 		res.Message = "done"

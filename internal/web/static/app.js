@@ -330,7 +330,9 @@ function showPendingResult(pr) {
   // sentence in it, as it does when the panel refuses the form at once.
   const typed = pr.path === "/api/admin/hosts" ? keptAddHost() : null;
   if (!pr.ok && typed) { openAddHost(typed, pr.message || `HTTP ${pr.status}`); return; }
-  flash(`${pr.label}: ${pr.ok ? pr.message || "done" : `failed · ${pr.message || `HTTP ${pr.status}`}`}`, !pr.ok);
+  // an action about several machines brings a line per machine: the count is shown, the lines stay behind it
+  if (pr.items?.length) flash(`${pr.label}: ${pr.message || (pr.ok ? "done" : "not everything worked")}`, !pr.ok, pr.items);
+  else flash(`${pr.label}: ${pr.ok ? pr.message || "done" : `failed · ${pr.message || `HTTP ${pr.status}`}`}`, !pr.ok);
   if (pr.ok && pr.ref && /^\/api\/admin\/hosts(\/[^/]+\/repair)?$/.test(pr.path)) revealEnrollment(pr.ref);
   if (pr.path?.startsWith("/api/admin/updates")) upd.fastUntil = Date.now() + 30000;
   if (pr.path?.startsWith("/api/admin/wake-update") || pr.path?.endsWith("/wake-update")) fetchWakeUpdate();
@@ -1582,10 +1584,9 @@ async function updateCall(label, path, key) {
   upd.busy[key] = true; render();
   try {
     const r = await controlCall({ kind: "request", label, method: "POST", path, body: {} }, () => api(path, { method: "POST", body: "{}" }));
-    if (r?.results) {
-      const bad = r.results.filter((x) => !x.ok);
-      flash(bad.length ? `${r.results.length - bad.length} started, ${bad.length} not: ${bad.map((x) => `${x.id} (${x.error})`).join(", ")}` : `Update started on ${r.results.length} agent(s)`, bad.length > 0);
-    } else if (r) flash(`${label}: ${r.message || "started"}`);  // the request was taken; the row shows the result
+    // Update all: the panel's own count, and one line per machine behind "Details" (started, refused, not sent, offline)
+    if (r?.results) flash(`${label}: ${r.message || "done"}`, r.all_ok === false, r.lines);
+    else if (r) flash(`${label}: ${r.message || "started"}`);  // the request was taken; the row shows the result
   } catch (e) { flash(e.message, true); }
   delete upd.busy[key];
   upd.fastUntil = Date.now() + 30000;  // the agents' new state arrives with the next polls
@@ -2176,11 +2177,28 @@ async function refreshPoll(id) {
   try { state.poll[id] = await api(`/api/systems/${enc(id)}/poll`); } catch { /* ignore */ }
   render();
 }
-function flash(msg, bad = false) {
+// flash(msg, bad, details): one short line at the bottom right, gone after 5 seconds. With details (the lines
+// of a result about several machines, or the longer text behind a short sentence) it stays until it is closed,
+// and "Details" opens them: nothing that has to be read disappears by itself.
+function flash(msg, bad = false, details = null) {
+  const lines = (Array.isArray(details) ? details : details ? [details] : []).filter(Boolean).map(String);
   state.flash = { msg, bad, until: Date.now() + 5000 };
-  const f = $("#flash"); f.textContent = msg; f.className = `flash ${bad ? "bad" : ""}`; f.hidden = false;
-  clearTimeout(flash.t); flash.t = setTimeout(() => (f.hidden = true), 5000);
+  const f = $("#flash");
+  clearTimeout(flash.t);
+  f.className = `flash ${bad ? "bad" : ""}${lines.length ? " keep" : ""}`;
+  if (!lines.length) { f.textContent = msg; f.hidden = false; flash.t = setTimeout(() => (f.hidden = true), 5000); return; }
+  f.innerHTML = `<div class="flash-top"><span class="flash-msg">${esc(msg)}</span><button class="btn" type="button" data-flash="more" aria-expanded="false">Details</button><button class="flash-x" type="button" data-flash="x" aria-label="Close">×</button></div>
+    <ul class="flash-list" hidden>${lines.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+  f.hidden = false;
 }
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-flash]");
+  if (!b) return;
+  const f = $("#flash");
+  if (b.dataset.flash === "x") { f.hidden = true; return; }
+  const l = f.querySelector(".flash-list"), open = l.hidden;
+  l.hidden = !open; b.setAttribute("aria-expanded", String(open));
+});
 
 // Delegated clicks: survive DOM patching.
 document.addEventListener("click", async (e) => {

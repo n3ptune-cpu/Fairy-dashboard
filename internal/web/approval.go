@@ -52,6 +52,9 @@ type approvalPlan struct {
 	items   []string
 	message string
 	skipped map[string]turnOnResult
+	// refused are the machines of a batch that could not be asked for an approval, with the reason the dialog
+	// showed (by agent id): the replay records that reason for them, not "this is not what was approved".
+	refused map[string]error
 }
 
 // newApprovalPlan makes the kept form of plan.

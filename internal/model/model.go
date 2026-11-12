@@ -442,6 +442,9 @@ type PendingResult struct {
 	Message string `json:"message"`
 	Path    string `json:"path"`
 	Ref     string `json:"ref,omitempty"` // the id of what the action made (an Add host), if any
+	// Items: for an action about several machines (Update all), one line per machine with what happened
+	// there. The page shows Message and keeps the lines behind it until they are closed.
+	Items []string `json:"items,omitempty"`
 }
 
 // FanEvent is one entry of the agent's fan log (mode changes, watchdog).

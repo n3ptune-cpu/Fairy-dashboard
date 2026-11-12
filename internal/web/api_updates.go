@@ -1,8 +1,10 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/updates"
 )
 
@@ -275,6 +278,88 @@ type updateResult struct {
 	OK     bool           `json:"ok"`
 	Error  string         `json:"error,omitempty"`
 	Result map[string]any `json:"result,omitempty"`
+	// Name is the machine's name; State what became of its update: started, refused (the machine said no),
+	// not_sent (the panel sent it nothing: its check cannot be used, its binding is an alarm, it was not part
+	// of the approval), offline (it did not answer), skipped (nothing to do: up to date, busy, switched off).
+	// Why says it in a few words.
+	Name  string `json:"name"`
+	State string `json:"state"`
+	Why   string `json:"why,omitempty"`
+}
+
+// Outcomes of one machine in "Update all".
+const (
+	updStarted = "started"
+	updRefused = "refused"
+	updNotSent = "not_sent"
+	updOffline = "offline"
+	updSkipped = "skipped"
+)
+
+// shortWhy is an error in a few words for a line of a list: its first sentence, without the machine's own words
+// in brackets ("(<name> says: ...)"; of an "approval refused (<reason>)" the reason stays). The whole text is in
+// the audit entry.
+func shortWhy(err error) string {
+	text := "it did not work"
+	var ae *apierr.Error
+	if errors.As(err, &ae) {
+		text = fmt.Sprint(ae.Detail)
+	}
+	if i := strings.Index(text, " says: "); i >= 0 {
+		if open := strings.LastIndex(text[:i], " ("); open >= 0 {
+			depth, end := 0, len(text)
+			for j := open + 1; j < len(text); j++ { // the brackets can have brackets of their own
+				if text[j] == '(' {
+					depth++
+				} else if text[j] == ')' {
+					if depth--; depth == 0 {
+						end = j + 1
+						break
+					}
+				}
+			}
+			reason := ""
+			if rest, ok := strings.CutPrefix(text[i+len(" says: "):end], "approval refused ("); ok {
+				if r, _, ok := strings.Cut(rest, ")"); ok && r != "" && len(r) <= 40 {
+					reason = " (" + r + ")"
+				}
+			}
+			text = text[:open] + reason + text[end:]
+		}
+	}
+	if i := strings.Index(text, ". "); i > 20 {
+		text = text[:i]
+	}
+	return textsafe.Clip(strings.TrimSuffix(text, "."), 160)
+}
+
+// updateSummary is what "Update all" says when it is over (audit 5, r1-b2-02: it used to say "done" also when
+// machines had refused or were sent nothing): one sentence with the counts, one line per machine, and whether
+// every update that was to start did start.
+func updateSummary(results []updateResult) (message string, lines []string, allOK bool) {
+	n := map[string]int{}
+	for _, r := range results {
+		n[r.State]++
+		line := r.Name + ": " + strings.ReplaceAll(r.State, "_", " ")
+		if r.Why != "" {
+			line += " (" + r.Why + ")"
+		}
+		lines = append(lines, line)
+	}
+	not := n[updRefused] + n[updNotSent] + n[updOffline]
+	allOK = not == 0 && n[updStarted] > 0
+	switch {
+	case not == 0 && n[updStarted] == 0:
+		message = fmt.Sprintf("No update was started: %d skipped.", n[updSkipped])
+	case not == 0:
+		message = fmt.Sprintf("Update started on %d %s.", n[updStarted], plural(n[updStarted], "agent"))
+	default:
+		message = fmt.Sprintf("%d started, %d not.", n[updStarted], not)
+	}
+	if n[updSkipped] > 0 && n[updStarted]+not > 0 {
+		message = strings.TrimSuffix(message, ".") + fmt.Sprintf(", %d skipped.", n[updSkipped])
+	}
+	return message, lines, allOK
 }
 
 func (s *Server) updateAll(c *reqCtx) error {
@@ -306,7 +391,11 @@ func (s *Server) updateAll(c *reqCtx) error {
 		}
 		row := s.updateRow(c, a, latest)
 		if !row.CanUpdate {
-			out = append(out, updateResult{ID: a.ID, Error: "skipped: " + row.Why})
+			res := updateResult{ID: a.ID, Name: s.machineNames([]string{a.ID})[0], Error: "skipped: " + row.Why, State: updSkipped, Why: row.Why}
+			if row.Status != "online" {
+				res.State = updOffline // a machine that does not answer is not "nothing to do"
+			}
+			out = append(out, res)
 			continue
 		}
 		j := &job{a: a, params: updateParams(row, latest, true), target: -1}
@@ -330,7 +419,7 @@ func (s *Server) updateAll(c *reqCtx) error {
 	for _, j := range jobs {
 		if j.target >= 0 {
 			if oc := confirmed[j.target]; oc.err != nil { // its machine cannot be sent to (a broken trust file, no approval for it)
-				j.res, j.err = updateResult{ID: j.a.ID}, oc.err
+				j.res, j.err = updateResult{ID: j.a.ID, State: updNotSent}, oc.err
 				continue
 			} else if oc.approval != nil {
 				j.ap = oc.approval
@@ -341,15 +430,24 @@ func (s *Server) updateAll(c *reqCtx) error {
 		go func() {
 			defer wg.Done()
 			data, err := c.callUpdate(u, j.a, j.ap)
-			j.res, j.err = updateResult{ID: j.a.ID, OK: err == nil, Result: data}, err
+			j.res, j.err = updateResult{ID: j.a.ID, OK: err == nil, Result: data, State: updStarted}, err
+			var ae *apierr.Error
+			switch {
+			case err == nil:
+			case errors.As(err, &ae) && ae.Status == 502: // it did not answer (agentCall)
+				j.res.State = updOffline
+			default:
+				j.res.State = updRefused
+			}
 		}()
 	}
 	wg.Wait()
 	for _, j := range jobs { // audit entries one after the other, after the calls
 		outcome := "ok"
+		j.res.Name = s.machineNames([]string{j.a.ID})[0]
 		if j.err != nil {
 			outcome = errorOutcome(j.err)
-			j.res.Error = outcome
+			j.res.Error, j.res.Why = outcome, shortWhy(j.err)
 		}
 		c.audit(u, "update.agent", j.a.ID, j.params, outcome)
 		if j.err == nil {
@@ -358,7 +456,8 @@ func (s *Server) updateAll(c *reqCtx) error {
 		out = append(out, j.res)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	c.json(200, map[string]any{"results": out})
+	msg, lines, allOK := updateSummary(out)
+	c.json(200, map[string]any{"results": out, "message": msg, "lines": lines, "all_ok": allOK})
 	return nil
 }
 

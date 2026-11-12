@@ -385,6 +385,14 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .flash { position: fixed; right: 20px; bottom: 20px; z-index: 60; background: #0d1a12; border: 1px solid rgba(61, 220, 151, .35); color: #b8f5d9;
   padding: 10px 14px; font-size: 13px; max-width: 420px; }
 .flash.bad { background: #1f0b0e; border-color: rgba(255, 93, 108, .4); color: #ffc2c8; }
+.flash.keep { padding: 8px 8px 8px 14px; }
+.flash-top { display: flex; align-items: center; gap: 10px; }
+.flash-msg { flex: 1; min-width: 0; }
+.flash-top .btn { flex: none; }
+.flash-x { flex: none; width: 34px; height: 34px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
+.flash-x:hover { background: var(--hover); }
+.flash-list { margin: 8px 6px 4px 0; padding-left: 18px; max-height: 40vh; overflow: auto; font-size: 12.5px; }
+.flash-list li { margin: 3px 0; overflow-wrap: anywhere; }
 /* the info button: a section's one short sentence stays on the page, the rest opens in #info-pop over the page */
 .info-btn { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; margin: -4px 0 -4px 4px; border: 0; background: none;
   color: var(--muted); cursor: pointer; border-radius: 50%; vertical-align: middle; flex: none; }

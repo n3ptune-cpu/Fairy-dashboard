@@ -129,6 +129,9 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 			case !c.s.approvalWanted(t.agent.ID):
 				// nothing checks there, and no approval was asked for it: sent as before, on the strength of
 				// this confirmation (a batch that also goes to machines without the check)
+			case g.plan.refused[t.agent.ID] != nil:
+				// it could not be asked before the approval (its check cannot be used): that reason stands
+				out[i].err = g.plan.refused[t.agent.ID]
 			default:
 				out[i].err = apierr.New(409, "This is not the request that was approved for "+t.name+", so it was not sent. Nothing was done: press the button again.")
 			}
@@ -204,7 +207,11 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 		}
 		for i, t := range targets {
 			if out[i].err != nil {
-				ap.items = append(ap.items, t.name+": NOT sent ("+errText(out[i].err, "it cannot be sent to")+")")
+				ap.items = append(ap.items, t.name+": NOT sent ("+shortWhy(out[i].err)+")")
+				if ap.refused == nil {
+					ap.refused = map[string]error{}
+				}
+				ap.refused[t.agent.ID] = out[i].err
 			}
 		}
 	}
