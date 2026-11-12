@@ -313,3 +313,32 @@ func TestAPictureWithTooManyPixelsIsRefused(t *testing.T) {
 		t.Fatal("nothing may be deleted")
 	}
 }
+
+// Second review of audit 5's round 2 (note 9): the size of an extended WebP (VP8X). Its header holds width-1 and
+// height-1 in 24 bits each; PictureSize added the 1 to the lowest byte before it put the bytes together, so
+// every size whose lowest byte is 255 came out 256 too small: 512 x 512 read as 256 x 256, 1024 x 768 as
+// 768 x 768. (The limit held: the mistake only ever made a picture look smaller by at most 256 pixels a side.)
+func TestTheSizeOfAnExtendedWebP(t *testing.T) {
+	vp8x := func(w, h int) []byte {
+		d := make([]byte, 30)
+		copy(d, "RIFF")
+		binary.LittleEndian.PutUint32(d[4:], 22)
+		copy(d[8:], "WEBPVP8X")
+		binary.LittleEndian.PutUint32(d[16:], 10)
+		d[24], d[25], d[26] = byte(w-1), byte((w-1)>>8), byte((w-1)>>16)
+		d[27], d[28], d[29] = byte(h-1), byte((h-1)>>8), byte((h-1)>>16)
+		return d
+	}
+	for _, s := range [][2]int{{1, 1}, {255, 257}, {256, 256}, {500, 300}, {512, 512}, {1024, 768}, {2048, 1024}, {4096, 4096}, {8192, 4880}, {8448, 100}, {16384, 16384}, {1 << 24, 1 << 24}} {
+		if w, h, ok := PictureSize("image/webp", vp8x(s[0], s[1])); !ok || w != s[0] || h != s[1] {
+			t.Errorf("the header says %d x %d, PictureSize reads %d x %d (ok %v)", s[0], s[1], w, h, ok)
+		}
+	}
+	// and the limit is applied to the size the header really has: a side one over the limit is refused, the limit itself is not
+	if PixelProblem("image/webp", vp8x(MaxPictureSide+1, 100)) == "" {
+		t.Errorf("an extended WebP %d pixels wide is taken", MaxPictureSide+1)
+	}
+	if why := PixelProblem("image/webp", vp8x(MaxPictureSide, 100)); why != "" {
+		t.Errorf("an extended WebP %d pixels wide: %s", MaxPictureSide, why)
+	}
+}

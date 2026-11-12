@@ -308,7 +308,9 @@ func PictureSize(mime string, d []byte) (w, h int, ok bool) {
 		body := d[20:]
 		switch string(d[12:16]) {
 		case "VP8X":
-			return 1 + int(body[4]) | int(body[5])<<8 | int(body[6])<<16, 1 + int(body[7]) | int(body[8])<<8 | int(body[9])<<16, true
+			// 24 bits of width-1 and of height-1. The brackets matter: in Go "+" binds like "|", so without them
+			// the 1 was added to the low byte before the OR, and 512 x 512 read as 256 x 256.
+			return 1 + (int(body[4]) | int(body[5])<<8 | int(body[6])<<16), 1 + (int(body[7]) | int(body[8])<<8 | int(body[9])<<16), true
 		case "VP8 ":
 			return int(binary.LittleEndian.Uint16(body[6:]) & 0x3fff), int(binary.LittleEndian.Uint16(body[8:]) & 0x3fff), true
 		case "VP8L":
