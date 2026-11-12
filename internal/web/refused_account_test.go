@@ -1,7 +1,9 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -88,6 +90,108 @@ func TestNotAllowedAtASignInEndsOnlyWhatTheBrowserHeld(t *testing.T) {
 	}
 	if r := e.do("GET", "/api/me", nil, "Cookie", elsewhere); r.code != 200 {
 		t.Errorf("Vee's session in another browser must not be touched: %d", r.code)
+	}
+}
+
+// R7B-04. Pocket ID does not put the groups into the ID token, so the panel asks userinfo for them at every
+// sign-in and confirmation. When that request FAILS (userinfo answers 500, something that is not JSON, 404,
+// the connection breaks, or an answer about another subject), the account had no groups, counted as "not
+// allowed", and since r3-p1-12 that ended every session of the account. A failed request is "could not
+// check": the confirmation fails with a page that says so and this browser's cookie is cleared, as before
+// r3-p1-12, but nothing is ended on the server. Only an answer that was read and really lacks the allowed
+// group ends the account's sessions.
+func TestGroupsThatCouldNotBeReadEndNoSession(t *testing.T) {
+	for _, how := range []string{"500", "garbage", "cut", "404", "another subject"} {
+		t.Run("userinfo: "+how, func(t *testing.T) {
+			a := arm(t)
+			before := a.sess
+			second := a.e.staleCookie(model.User{Sub: "u1", Groups: []string{"viewers", "controllers"}}, 0) // the same account, another browser
+			q, rt := a.idp.confirmStart(a.e, a.id, "/#/system/laptop", a.sess)
+			a.idp.mu.Lock()
+			a.idp.claims = map[string]any{"auth_time": a.clk.now().Unix()} // no groups in the ID token: they come from userinfo
+			switch how {
+			case "404":
+			case "another subject":
+				a.idp.userinfo = map[string]any{"sub": "someone-else", "groups": []string{"viewers", "controllers"}}
+			default:
+				a.idp.userinfoFail = how
+			}
+			a.idp.mu.Unlock()
+			cb := a.e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+			refusalPage(t, "the confirmation", cb, 502, cbConfirm, cbNoGroups, "/#/system/laptop")
+			if a.powerCalls() != 0 {
+				t.Fatalf("the kept shutdown ran: %d", a.powerCalls())
+			}
+			if cookieAfter(a.e, rt, cb.hdr) != "" {
+				t.Error("this browser's cookie must be cleared, as it was before r3-p1-12")
+			}
+			for name, ck := range map[string]string{"the session as it was before": before, "the account's other session": second} {
+				if me := a.e.do("GET", "/api/me", nil, "Cookie", ck); me.code != 200 {
+					t.Errorf("R7B-04: %s was ended because userinfo could not be read: /api/me %d", name, me.code)
+				}
+			}
+			all, _ := a.e.s.Poller.Admin.Sessions()
+			if len(all) != 2 {
+				t.Errorf("R7B-04: %d sessions are registered, want the 2 there were", len(all))
+			}
+			var entry map[string]any
+			for _, x := range a.e.auditEntries("u1", "auth.login") {
+				if strings.HasPrefix(fmt.Sprint(x["outcome"]), "failed: the groups could not be read from Pocket ID (userinfo)") {
+					entry = x
+				}
+				if strings.HasPrefix(fmt.Sprint(x["outcome"]), "denied") {
+					t.Errorf("the audit log says the account was refused: %v", x)
+				}
+			}
+			if p, _ := entry["params"].(map[string]any); entry == nil || p["sessions_revoked"] != nil {
+				t.Errorf("the audit entry must say that the groups could not be read, and name no ended session: %v", entry)
+			}
+			// the same at a plain sign-in: a page, no session
+			a.idp.mu.Lock()
+			a.idp.claims = map[string]any{"auth_time": a.clk.now().Unix()}
+			a.idp.mu.Unlock()
+			q, rt = a.idp.login(a.e, "/auth/login?next=/", "")
+			cb = a.e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+			refusalPage(t, "the sign-in", cb, 502, cbSignIn, cbNoGroups, "/")
+			if cookieAfter(a.e, rt, cb.hdr) != "" {
+				t.Error("a sign-in that could not be checked must leave no cookie")
+			}
+		})
+	}
+
+	// userinfo answers, about this account, and the allowed group is not in it: that IS "not allowed", and it
+	// ends the account's sessions (r3-p1-12 holds for groups from userinfo too).
+	for _, groups := range []any{[]string{"strangers"}, []string{}, nil} {
+		a := arm(t)
+		before := a.sess
+		second := a.e.staleCookie(model.User{Sub: "u1", Groups: []string{"viewers", "controllers"}}, 0)
+		q, rt := a.idp.confirmStart(a.e, a.id, "/", a.sess)
+		a.idp.mu.Lock()
+		a.idp.claims = map[string]any{"auth_time": a.clk.now().Unix()}
+		a.idp.userinfo = map[string]any{"sub": "u1"}
+		if groups != nil {
+			a.idp.userinfo["groups"] = groups
+		}
+		a.idp.mu.Unlock()
+		cb := a.e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+		refusalPage(t, "the confirmation", cb, 403, cbNotAllowed, cbRefused, "/")
+		if a.powerCalls() != 0 || cookieAfter(a.e, rt, cb.hdr) != "" {
+			t.Fatalf("userinfo groups %v: shutdown requests %d, or the cookie was not cleared", groups, a.powerCalls())
+		}
+		for name, ck := range map[string]string{"the session as it was before": before, "the account's other session": second} {
+			if me := a.e.do("GET", "/api/me", nil, "Cookie", ck); me.code != 401 {
+				t.Errorf("userinfo groups %v: %s still works after \"not allowed\": /api/me %d", groups, name, me.code)
+			}
+		}
+		var entry map[string]any
+		for _, x := range a.e.auditEntries("u1", "auth.login") {
+			if x["outcome"] == "denied: not in an allowed group" {
+				entry = x
+			}
+		}
+		if p, _ := entry["params"].(map[string]any); entry == nil || p["sessions_revoked"] != float64(2) {
+			t.Errorf("userinfo groups %v: the audit entry must say that the account's two sessions were ended: %v", groups, entry)
+		}
 	}
 }
 

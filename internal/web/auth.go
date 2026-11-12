@@ -522,12 +522,24 @@ func (s *Server) authCallback(c *reqCtx) error {
 	}
 	ctx, cancel := context.WithTimeout(s.oidc.ctx(c.r.Context()), 15*time.Second)
 	defer cancel()
-	claims, lf := s.verifiedClaims(ctx, p, q.Get("code"), sess)
+	claims, groupsRead, lf := s.verifiedClaims(ctx, p, q.Get("code"), sess)
 	if lf != nil {
 		return fail(lf)
 	}
 	u := userFromClaims(claims, s.Cfg.OIDC.GroupsClaim)
 	if !isAllowed(u, s.Cfg.OIDC) {
+		if !groupsRead && emailAllowed(u, s.Cfg.OIDC) {
+			// R7B-04. The groups were to come from userinfo and that request failed: Pocket ID has not said
+			// that the account left the allowed groups, the panel could not ask. The sign-in or confirmation
+			// fails and this browser's cookie is cleared (as it was before r3-p1-12), but no session is ended
+			// on the server: a userinfo endpoint that is down for a moment must not sign the account out
+			// everywhere.
+			slog.Warn("login not decided: the groups could not be read from userinfo", "sub", u.Sub)
+			c.auditAnon("auth.login", "failed: the groups could not be read from Pocket ID (userinfo); not decided, no session ended",
+				actorOf(&u), &u.Sub, nil)
+			c.clearSession()
+			return page.refuse(502, cbNoGroups)
+		}
 		slog.Warn("login denied", "sub", u.Sub)
 		ended, werr := s.endRefused(u.Sub, sess.SID)
 		outcome, params := "denied: not in an allowed group", map[string]any(nil)
@@ -637,66 +649,75 @@ func (s *Server) endRefused(sub, cookieSID string) (int, error) {
 }
 
 // verifiedClaims exchanges the authorization code (with the PKCE verifier), verifies the ID token and its nonce
-// and returns the claims, merged with userinfo when the groups claim is missing from the ID token. On failure it
-// returns why, for the log and audit trail only (never shown to the client).
-func (s *Server) verifiedClaims(ctx context.Context, p *oidc.Provider, code string, sess *sessionData) (map[string]any, *loginFailure) {
+// and returns the claims, merged with userinfo when the groups claim is missing from the ID token. groupsRead
+// is false when the groups had to come from userinfo and userinfo could not be read: the claims then say
+// nothing about the groups (not "none"). On failure it returns why, for the log and audit trail only (never
+// shown to the client).
+func (s *Server) verifiedClaims(ctx context.Context, p *oidc.Provider, code string, sess *sessionData) (claims map[string]any, groupsRead bool, lf *loginFailure) {
 	redact := []string{code, sess.Verifier, s.oidc.secret}
 	tok, err := s.oidc.oauth(p).Exchange(ctx, code, oauth2.VerifierOption(sess.Verifier))
 	if err != nil {
-		return nil, exchangeFailure(err, redact...)
+		return nil, false, exchangeFailure(err, redact...)
 	}
 	rawID, _ := tok.Extra("id_token").(string)
 	if rawID == "" {
-		return nil, &loginFailure{reason: "no id_token", attrs: []any{"error",
+		return nil, false, &loginFailure{reason: "no id_token", attrs: []any{"error",
 			"the token response has no id_token (is the openid scope requested?)"}}
 	}
 	redact = append(redact, rawID, tok.AccessToken, tok.RefreshToken)
 	idt, err := p.Verifier(&oidc.Config{ClientID: s.Cfg.OIDC.ClientID}).Verify(ctx, rawID)
 	if err != nil {
-		return nil, &loginFailure{reason: "invalid id_token", attrs: []any{"error", safeErr(err, redact...)}}
+		return nil, false, &loginFailure{reason: "invalid id_token", attrs: []any{"error", safeErr(err, redact...)}}
 	}
 	if idt.Nonce != sess.Nonce {
 		got := "different"
 		if idt.Nonce == "" {
 			got = "missing"
 		}
-		return nil, &loginFailure{reason: "nonce mismatch", attrs: []any{"id_token_nonce", got,
+		return nil, false, &loginFailure{reason: "nonce mismatch", attrs: []any{"id_token_nonce", got,
 			"hint", "another sign-in was started in this browser, or the identity provider dropped the nonce"}}
 	}
-	claims := map[string]any{}
+	claims = map[string]any{}
 	if err := idt.Claims(&claims); err != nil {
-		return nil, &loginFailure{reason: "invalid claims", attrs: []any{"error", safeErr(err, redact...)}}
+		return nil, false, &loginFailure{reason: "invalid claims", attrs: []any{"error", safeErr(err, redact...)}}
 	}
+	groupsRead = true
 	if _, ok := claims[s.Cfg.OIDC.GroupsClaim]; !ok && slices.Contains(s.Cfg.OIDC.Scopes, "groups") {
-		mergeUserInfo(ctx, p, tok, idt.Subject, claims, redact)
+		groupsRead = mergeUserInfo(ctx, p, tok, idt.Subject, claims, redact)
 	}
 	if idt.Subject == "" {
-		return nil, &loginFailure{reason: "no sub claim"}
+		return nil, false, &loginFailure{reason: "no sub claim"}
 	}
 	claims["sub"] = idt.Subject
-	return claims, nil
+	return claims, groupsRead, nil
 }
 
 // mergeUserInfo adds the userinfo endpoint's claims (some providers only put groups there), but only when
-// userinfo is about the same subject as the ID token.
-func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, subject string, claims map[string]any, redact []string) {
+// userinfo is about the same subject as the ID token. It returns false when userinfo could not be read (the
+// request failed, the answer is not readable, or it is about another subject): what the account's groups are
+// is then not known. A provider without a userinfo endpoint has said all it says in the ID token.
+func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, subject string, claims map[string]any, redact []string) bool {
+	if p.UserInfoEndpoint() == "" {
+		return true
+	}
 	ui, err := p.UserInfo(ctx, oauth2.StaticTokenSource(tok))
 	if err != nil {
 		slog.Warn("OIDC userinfo request failed", "error", safeErr(err, redact...))
-		return
+		return false
 	}
 	extra := map[string]any{}
 	if err := ui.Claims(&extra); err != nil {
 		slog.Warn("OIDC userinfo ignored", "error", safeErr(err, redact...))
-		return
+		return false
 	}
 	if fmt.Sprint(extra["sub"]) != subject {
 		slog.Warn("OIDC userinfo ignored", "error", "userinfo sub differs from the ID token's")
-		return
+		return false
 	}
 	for k, v := range extra {
 		claims[k] = v
 	}
+	return true
 }
 
 // startSession replaces the previous session (oldSID) with a fresh one: a new random id registered in

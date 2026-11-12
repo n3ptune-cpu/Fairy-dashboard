@@ -32,6 +32,7 @@ const (
 	cbStale       = "This sign-in was started more than 10 minutes ago, in another browser, or its address was opened a second time. Go back and try again."
 	cbUnchecked   = "Fairy could not check Pocket ID's answer (an answer is good only once). Go back and try again; if it happens again, the panel's log says why."
 	cbUnreachable = "Fairy could not reach Pocket ID. Try again in a moment."
+	cbNoGroups    = "Fairy could not read this account's groups from Pocket ID, so it could not check the account. Sign in again in a moment."
 	cbRefused     = "Pocket ID signed you in, but this account may not use this panel. An administrator decides that with the allowed groups and e-mail addresses in Fairy's config."
 
 	// A repeat of a confirmation's callback from the cookie it was started with (steprepeat.go).

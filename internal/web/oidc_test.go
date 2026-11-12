@@ -35,6 +35,7 @@ type fakeIDP struct {
 	nonce         string         // nonce to put into the next ID token
 	claims        map[string]any // extra ID-token claims (groups, auth_time, ...)
 	userinfo      map[string]any // userinfo response (nil = 404)
+	userinfoFail  string         // "500": the userinfo endpoint answers 500; "garbage": 200 with a body that is not JSON; "cut": the connection breaks
 	verifierOK    bool           // the last token request carried the right PKCE verifier
 	tokenRequests int
 	tokenStatus   int    // non-zero: the token endpoint answers with this status and tokenBody
@@ -88,6 +89,17 @@ func newFakeIDP(t *testing.T) *fakeIDP {
 	mux.HandleFunc("GET /userinfo", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		switch f.userinfoFail {
+		case "500":
+			http.Error(w, "userinfo is down", http.StatusInternalServerError)
+			return
+		case "garbage":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("<html>not json"))
+			return
+		case "cut":
+			panic(http.ErrAbortHandler) // the connection ends without an answer
+		}
 		if f.userinfo == nil {
 			http.NotFound(w, r)
 			return
@@ -214,7 +226,9 @@ func TestPocketIDLoginAndStepUpRoundTrip(t *testing.T) {
 	delete(idp.claims, "groups")
 	idp.userinfo = map[string]any{"sub": "someone-else", "groups": []string{"viewers"}}
 	q, rt = idp.login(e, "/auth/login", "")
-	if r := e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt); r.code != 403 {
+	// (502 "could not read the groups", not 403 "not allowed", since R7B-04: an answer about somebody else says
+	// nothing about this account)
+	if r := e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt); r.code != 502 || cookieAfter(e, rt, r.hdr) != "" {
 		t.Fatal("userinfo for another subject must be ignored", r.code)
 	}
 	idp.userinfo = map[string]any{"sub": "u1", "groups": []string{"viewers"}}

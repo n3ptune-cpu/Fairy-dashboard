@@ -50,10 +50,12 @@ func isAllowed(u model.User, o config.OIDC) bool {
 	if len(o.AllowedGroups) > 0 && !slices.ContainsFunc(u.Groups, func(g string) bool { return slices.Contains(o.AllowedGroups, g) }) {
 		return false
 	}
-	if len(o.AllowedEmails) > 0 && !emailIn(&u, o.AllowedEmails) {
-		return false
-	}
-	return true
+	return emailAllowed(u, o)
+}
+
+// emailAllowed is isAllowed's e-mail rule alone: what can be said of an account whose groups are not known.
+func emailAllowed(u model.User, o config.OIDC) bool {
+	return len(o.AllowedEmails) == 0 || emailIn(&u, o.AllowedEmails)
 }
 
 func canControl(u *model.User, o config.OIDC) bool {
