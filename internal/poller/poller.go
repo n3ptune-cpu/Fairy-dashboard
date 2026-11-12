@@ -78,6 +78,7 @@ type Poller struct {
 	systems       map[string]model.System
 	sources       map[string]model.SourceStatus
 	sourceMono    map[string]time.Duration // source name -> the steady clock at its last good answer (AnsweredSinceUp)
+	sourceAsked   map[string]time.Duration // Proxmox source name -> the steady clock when the request left that brought its last good answer (ListAskedAgo)
 	sourceOrder   []string
 	agentPower    map[string]*model.ComponentPower
 	pveRefs       map[string]pveRef
@@ -116,7 +117,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 	p := &Poller{Cfg: cfg, Secrets: secrets, Clock: time.Now, born: time.Now(), rates: normalise.NewRateTracker(),
 		overrides: map[string]*config.SystemOverride{}, agents: map[string]config.Agent{},
 		clusters: map[string]config.Proxmox{}, systems: map[string]model.System{},
-		sources: map[string]model.SourceStatus{}, sourceMono: map[string]time.Duration{}, agentPower: map[string]*model.ComponentPower{},
+		sources: map[string]model.SourceStatus{}, sourceMono: map[string]time.Duration{}, sourceAsked: map[string]time.Duration{}, agentPower: map[string]*model.ComponentPower{},
 		pveRefs: map[string]pveRef{}, nodeCPU: map[string]string{}, nodeInflight: map[string]string{}, pveOverLimit: map[string]bool{},
 		pending: map[string]pendingNote{}, asleep: map[string]time.Time{}, clusterIDs: map[string][]string{}, fingerprints: map[string]uint64{},
 		agentFailures: map[string]int{}, agentQuiet: map[string]quietRow{}, agentInfo: map[string]AgentInfo{}, helperSeen: map[string]map[string]time.Time{}, snapVer: -1, snapJSONVer: -1,
@@ -374,6 +375,7 @@ func (p *Poller) RemoveProxmox(id string) {
 	}
 	delete(p.sources, "proxmox:"+id)
 	delete(p.sourceMono, "proxmox:"+id)
+	delete(p.sourceAsked, "proxmox:"+id)
 	p.sourceOrder = slices.DeleteFunc(p.sourceOrder, func(x string) bool { return x == "proxmox:"+id })
 	p.syncPresent()
 	p.snapVer, p.snapJSONVer = -1, -1

@@ -177,6 +177,11 @@ const (
 	cancelRetry  = 10 * time.Second
 	guestsEvery  = 5 * time.Second  // while a countdown runs: how often the guests of the machine are asked about again
 	guestsMargin = 15 * time.Second // ... and not in the last seconds of the countdown (stepShutting)
+	// guestsWait: before the shutdown request the run asks for a new list of a Proxmox node's guests and waits
+	// this long for one (guestsCurrent). None by then: the node is left on. guestsOld: a list whose request
+	// left longer ago than this does not say what runs on the node now.
+	guestsWait = 30 * time.Second
+	guestsOld  = 20 * time.Second
 	// offGrace: still answering this long after the run's own due time: the shutdown failed, or its agent counts
 	// a longer countdown than the run asked for. Either way the run lets go of the machine then, so that no
 	// agent decides how long the one run slot is taken (r1-p2-07). It also covers an agent that does not count
@@ -364,6 +369,14 @@ type Ops interface {
 	// of day of its first answer. What the panel knows about the guests must be from after that, and the
 	// implementation must not decide that with times of day alone (the panel's clock can be set in between).
 	Guests(id string, since time.Time) (running int, known bool, why string)
+	// AskGuests asks the panel to read the machine's guests anew (to poll its Proxmox API now), and reports
+	// where the panel stands with that. listed is false when there is nothing to read: the machine is not a
+	// node of a Proxmox API that the panel polls, and Guests answers by itself. Otherwise ok says whether the
+	// panel has a list from the API's latest poll, and ago how long ago the request left that brought it, by
+	// the panel's steady clock: what the list shows is not older than that. The run takes the guests of a node
+	// only from a list that was asked for after its own question (stepSettling), and that is not older than
+	// guestsOld (stepShutting).
+	AskGuests(id string) (listed, ok bool, ago time.Duration)
 	// Blocked is why no control request may be sent at all right now ("": allowed): the kill switch. The run
 	// stops then. The one request it still sends is CancelShutdown, for a countdown it started itself: that
 	// only ever stops a power action, and the panel lets it through the kill switch (stepRun).
@@ -494,6 +507,8 @@ type Host struct {
 	guestsAsked   bool          // the guests were asked about during the countdown ...
 	guestsMono    time.Duration // ... last at this moment on the steady clock
 	guestsUnseen  bool          // ... and the answer then was "cannot see them"
+	listWanted    bool          // the run asked for a new list of its guests before the shutdown request (guestsCurrent) ...
+	listWantMono  time.Duration // ... first at this moment on the steady clock
 	entry         int           // HostInfo.Entry when the run started
 	verdict       *verdict      // how the run would end it: the last look (look) is going on
 	askedAt       time.Time     // when the run's own direct question to it got an answer of any kind (it runs)

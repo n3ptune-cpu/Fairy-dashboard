@@ -74,6 +74,7 @@ func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout ti
 		timeout = time.Duration(p.Cfg.RequestTimeout * float64(time.Second))
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout*time.Duration(len(pve.URLs))+500*time.Millisecond)
+	asked := p.mono() // before the request leaves: what the answer shows is not older than this (ListAskedAgo)
 	data, err := p.Backend.FetchProxmox(cctx, pve, timeout)
 	cancel()
 	p.mu.Lock()
@@ -132,6 +133,28 @@ func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout ti
 	p.syncPresent()
 	lat := time.Since(start)
 	p.source(src, true, now, &lat, nil)
+	p.sourceAsked[src] = asked
+}
+
+// ListAskedAgo: how long ago did the request leave that brought the list the panel has from a Proxmox source
+// ("proxmox:<cluster id>"), by the steady clock? What that list shows (which guests run on which node) is the
+// cluster's state at some moment after that request left, so this is the most the list can be behind. The
+// moment its answer arrived (SourceStatus.LastSuccess, AnsweredSinceUp) says less: a request can be on its way
+// for seconds. ok is false when the panel has no such list, or when the source's latest poll failed (the list
+// is then the one of an earlier poll, and the panel shows the cluster as it was).
+//
+// It is for the wake / update / shut down run: before a run switches a Proxmox node off again it asks for a new
+// poll of the Proxmox API (Scheduler.Kick) and takes only a list whose request left after it asked. The API may
+// be polled as seldom as every five minutes (intervals.proxmox, the poll menu), and a list that old showed a
+// guest as stopped that had started minutes ago (audit 6, r4-p2-01).
+func (p *Poller) ListAskedAgo(source string) (ago time.Duration, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	at, has := p.sourceAsked[source]
+	if !has || !p.sources[source].OK {
+		return 0, false
+	}
+	return p.mono() - at, true
 }
 
 // proxmoxFailedLocked marks the cluster's systems stale / offline (paused ones keep their frozen values) and

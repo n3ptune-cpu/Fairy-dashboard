@@ -767,7 +767,53 @@ func (m *Manager) stepSettling(ctx context.Context, r *Run, h *Host, info HostIn
 		}
 		return
 	}
+	if !m.guestsCurrent(r, h, now) {
+		return
+	}
 	m.shutDown(ctx, r, h, info, o, now)
+}
+
+// noGuestList is why a Proxmox node is left on when the panel got no list of its guests that is from now.
+const noGuestList = "the panel got no current list of its guests from its Proxmox API"
+
+// guestsCurrent makes sure that what the panel knows about the guests of a Proxmox node is from now, before
+// mayShutDown asks about them: it asks the panel to poll the node's Proxmox API (Ops.AskGuests), at every step
+// until a list is there whose request left after the run first asked, and reports whether the run can go on to
+// the shutdown request. It only ever keeps a machine on: mayShutDown decides as before, with that list.
+//
+// mayShutDown's question was answered from whatever list the panel had, as long as it was from after the
+// node came online. The Proxmox API can be polled as seldom as every five minutes: a list from shortly after
+// the node's start showed its guest as stopped, the guest started seconds later, and a minute and a half
+// after that list the run asked for the shutdown, and watched the countdown with the same list (audit 6,
+// r4-p2-01). Now the list must have been asked for after the settle time was over, by the steady clock, and
+// must not be older than guestsOld when the run goes on. If no such list comes within guestsWait (the API does
+// not answer, its polling is paused), the answer is "cannot see its guests" and the node is left on, with what
+// Guests itself says about it when it says more.
+//
+// "Asked for after" is the moment the request left, not the moment its answer arrived: a poll that was on its
+// way when the run asked may have read the cluster before. The steady clock is read before the panel is asked,
+// so a list is never placed later than it was asked for.
+func (m *Manager) guestsCurrent(r *Run, h *Host, now time.Time) bool {
+	mono := m.mono()
+	if !h.listWanted {
+		h.listWanted, h.listWantMono = true, mono
+	}
+	listed, ok, ago := m.Ops.AskGuests(h.ID)
+	switch {
+	case !listed: // nothing to read: Guests answers by itself (an ordinary machine; a Proxmox host without an API in the panel)
+		return true
+	case ok && mono-ago > h.listWantMono && ago <= guestsOld:
+		return true
+	case mono-h.listWantMono < guestsWait:
+		m.say(h, "asking its Proxmox API which guests run on it")
+		return false
+	}
+	why := noGuestList
+	if _, known, w := m.Ops.Guests(h.ID, deref(h.OnlineAt)); !known && w != "" {
+		why = w
+	}
+	m.end(r, h, StLeftOn, OnYes, now, "Left ON: "+guestsKeepOn(0, false, why)+"."+updateTail(h))
+	return false
 }
 
 // stepShutting watches the countdown the run started until the machine is gone.
@@ -840,6 +886,13 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	if mono < h.dueMono-guestsMargin && (!h.guestsAsked || mono-h.guestsMono >= guestsEvery) {
 		h.guestsAsked, h.guestsMono = true, mono
 		running, known, names := m.Ops.Guests(h.ID, deref(h.OnlineAt))
+		// The list this was answered from must be from now here too (guestsCurrent; audit 6, r4-p2-01): the run
+		// asks for a new poll of the Proxmox API at every one of these looks, for the next one, and "no guest
+		// runs" from a list that was asked for longer ago than guestsOld is "cannot see its guests". (A guest
+		// that such a list shows as running calls the countdown off as it is.)
+		if listed, ok, ago := m.Ops.AskGuests(h.ID); listed && known && running == 0 && (!ok || ago > guestsOld) {
+			running, known, names = 0, false, noGuestList
+		}
 		switch why := guestsKeepOn(running, known, names); {
 		case why == "":
 			h.guestsUnseen = false

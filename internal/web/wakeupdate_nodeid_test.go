@@ -56,6 +56,10 @@ func setupSystems(t *testing.T, panelHosts []string, systems ...config.SystemOve
 	}
 	b.Metrics["pve-agent"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
 	p.PollOnce(context.Background())
+	// Once more: the first round polls the Proxmox API and the node's agent side by side, and the guests of a node
+	// count only from a list that came after its agent's first answer (poller.AnsweredSinceUp). Whichever of the
+	// two was handled first decided, and about one run in seventy the list was the earlier one.
+	p.PollOnce(context.Background())
 	s := New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, p, nil, "test")
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)

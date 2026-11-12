@@ -181,6 +181,14 @@ func (o runOps) Kick(id string) {
 	if a, ok := o.s.Poller.AgentFor(id); ok {
 		o.s.Poller.Scheduler.Kick("agent:" + a.ID)
 	}
+	// A Proxmox node is also what its cluster's row says about it ("online" counts as a sign of life for the
+	// run), and that row is as old as the Proxmox API's latest poll: it is asked for together with the agent's.
+	// (The run's questions about a node's guests ask for that poll too, AskGuests, and each time the API's own
+	// schedule starts again from there: without this, a node that went off stayed "online" by a cluster polled
+	// every five minutes for longer than the run waits to see a machine go.)
+	if x, ok := o.system(id); ok && x.Kind == "node" {
+		o.s.Poller.Scheduler.Kick("proxmox:" + model.Deref(x.ClusterID))
+	}
 }
 
 // opError turns the error of a control request into the run's: the agent's own code decides whether it is an
@@ -318,6 +326,16 @@ func (o runOps) Guests(id string, since time.Time) (int, bool, string) {
 	if !fresh {
 		return 0, false, "its Proxmox API has not answered since it came online"
 	}
+	// And the list must be from now. "Since it came online" lets a list through that is minutes old: the Proxmox
+	// API may be polled as seldom as every five minutes, and one answer shortly after the node's start, with its
+	// guest still stopped, was what a run read for the rest of its settle time and for its whole countdown: the
+	// node was switched off under a guest that had been running for over a minute (audit 6, r4-p2-01). The run
+	// asks for a new poll before it asks this (AskGuests) and waits for it; this is the same rule again at the
+	// place that answers, for every caller: a list whose request left longer ago than guestsMaxAge, by the
+	// poller's steady clock, is not what runs on the node now.
+	if ago, ok := o.s.Poller.ListAskedAgo(src); !ok || ago > guestsMaxAge {
+		return 0, false, guestsStale
+	}
 	// The panel counts the guests it has. When the API listed more rows than the panel takes from one source
 	// (normalise.MaxProxmoxGuests), rows were left out, and a guest that runs on this node may be one of them:
 	// that is "cannot see its guests" (second review, N1), not "none runs".
@@ -361,6 +379,29 @@ func (o runOps) Guests(id string, since time.Time) (int, bool, string) {
 		return 0, false, "the Proxmox API does not show as stopped: " + short(unsure)
 	}
 	return 0, true, ""
+}
+
+// guestsMaxAge: the panel's list of a Proxmox node's guests counts for a run only when the request that
+// brought it left no longer ago than this (runOps.Guests). With the Proxmox API polled every 2 s (the default)
+// the list is never that old; with slower polling the run's own request for a new poll makes it new
+// (runOps.AskGuests). guestsStale is what the report says otherwise.
+const (
+	guestsMaxAge = 20 * time.Second
+	guestsStale  = "the panel has no current list of its guests from its Proxmox API"
+)
+
+// AskGuests asks the poller to poll the Proxmox API of a node now, and says how old the list is that the panel
+// has (wakerun.Ops). A kick that comes while a poll is on its way is used up by that poll, so the run kicks
+// again until it has a list that was asked for after its own question.
+func (o runOps) AskGuests(id string) (listed, ok bool, ago time.Duration) {
+	x, found := o.system(id)
+	if !found || x.Kind != "node" {
+		return false, false, 0
+	}
+	src := "proxmox:" + model.Deref(x.ClusterID)
+	o.s.Poller.Scheduler.Kick(src)
+	ago, ok = o.s.Poller.ListAskedAgo(src)
+	return true, ok, ago
 }
 
 // guestStateWord is why a guest is not taken for stopped, for the report: the Proxmox API's own word when it

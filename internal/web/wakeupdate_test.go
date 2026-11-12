@@ -41,6 +41,9 @@ type farm struct {
 	pending map[string]time.Time // a shutdown is due then
 	wakes   bool                 // a wake packet starts a machine
 	seen    int                  // requests of the backend already handled
+	// poll: how the poller polls in a second of the farm (nil: every job once, PollOnce). A test that needs the
+	// poller's own schedule (what is due, and what was asked for with Kick) runs the scheduler here.
+	poll func()
 }
 
 const farmNew = "17-bbbbbbb"
@@ -146,7 +149,11 @@ func (f *farm) tick() {
 		}
 	}
 	f.e.b.Mu.Unlock()
-	f.e.s.Poller.PollOnce(context.Background())
+	if f.poll != nil {
+		f.poll()
+	} else {
+		f.e.s.Poller.PollOnce(context.Background())
+	}
 	f.e.s.WakeRuns.Tick(context.Background())
 }
 

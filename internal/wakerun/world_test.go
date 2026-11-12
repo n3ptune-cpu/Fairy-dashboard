@@ -66,6 +66,19 @@ type machine struct {
 	guests     int
 	guestsWhy  string // not "": the panel cannot see its guests
 	guestNames string
+	// list: it is a node of a Proxmox API that the panel polls, and what the panel knows about its guests is the
+	// list of that API's latest poll, not the truth above: the API is polled every listEvery (0: every second,
+	// like everything else) and when the run asks for it (AskGuests), a poll takes listTakes, and while listDown
+	// is set it fails. A poll shows the guests as they were when its request left.
+	list      bool
+	listEvery time.Duration
+	listTakes time.Duration
+	listDown  bool
+	listHas   listed  // the list the panel has
+	listFly   *listed // the poll that is on its way
+	listDue   time.Duration
+	listKick  bool
+	listPolls int // polls of the API that were started
 
 	// the poller's view
 	everAnswered bool
@@ -88,6 +101,14 @@ type machine struct {
 	shutdowns     int
 	wentOff       bool // a countdown ran out and switched it off
 	busyDone      map[string]bool
+}
+
+// listed is one poll of a node's Proxmox API (machine.list).
+type listed struct {
+	asked  time.Duration // the steady clock when its request left
+	ok     bool
+	guests int
+	names  string
 }
 
 type world struct {
@@ -394,10 +415,55 @@ func (w *world) CancelShutdown(_ context.Context, id, _ string) error {
 func (w *world) Guests(id string, _ time.Time) (int, bool, string) {
 	mc := w.ms[id]
 	w.guestsAsked++
+	if mc.list { // from the list of the API's latest poll, however old it is: how old it may be is the run's rule
+		if !mc.listHas.ok {
+			return 0, false, "its Proxmox API does not answer"
+		}
+		return mc.listHas.guests, true, mc.listHas.names
+	}
 	if mc.guestsWhy != "" {
 		return 0, false, mc.guestsWhy
 	}
 	return mc.guests, true, mc.guestNames
+}
+
+// AskGuests: like the panel's, it makes the poll of the node's Proxmox API due now, and says when the request of
+// the list the panel has left.
+func (w *world) AskGuests(id string) (bool, bool, time.Duration) {
+	mc := w.ms[id]
+	if mc == nil || !mc.list {
+		return false, false, 0
+	}
+	mc.listKick = true
+	w.clock.Lock()
+	defer w.clock.Unlock()
+	return true, mc.listHas.ok, w.mono - mc.listHas.asked
+}
+
+// pollList is the panel's poll of a node's Proxmox API, as the scheduler runs it: when it is due or was asked
+// for, never two at once (a poll that is asked for while one is on its way is not made: the next is due an
+// interval later).
+func (w *world) pollList(mc *machine) {
+	if f := mc.listFly; f != nil && w.mono >= f.asked+mc.listTakes {
+		mc.listFly = nil
+		if f.ok {
+			mc.listHas = *f
+		} else {
+			mc.listHas.ok = false // the panel keeps the list of the poll before, and knows that it is not the latest
+		}
+	}
+	if !mc.listKick && w.mono < mc.listDue {
+		return
+	}
+	mc.listKick, mc.listDue = false, w.mono+max(mc.listEvery, time.Second)
+	if mc.listFly != nil {
+		return
+	}
+	mc.listPolls++
+	mc.listFly = &listed{asked: w.mono, ok: !mc.listDown, guests: mc.guests, names: mc.guestNames}
+	if mc.listTakes == 0 {
+		w.pollList(mc)
+	}
 }
 
 func (w *world) Blocked() string { return w.blocked }
@@ -448,6 +514,9 @@ func (w *world) poll() {
 	for _, id := range w.order {
 		mc := w.ms[id]
 		mc.obs.Paused = mc.paused
+		if mc.list {
+			w.pollList(mc)
+		}
 		if mc.paused {
 			continue
 		}
