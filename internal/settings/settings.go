@@ -180,6 +180,7 @@ type Store struct {
 	signIn           atomic.Pointer[SignInPicture] // the sign-in wallpaper (signin.go)
 	signInOnce       sync.Once                     // it is read from bgDir once
 	stuck            bool                          // a damaged settings.json could not be moved aside, and that was said (loadAll)
+	unread           bool                          // settings.json could not be read at the latest try, and that was said (loadAll)
 }
 
 // NewStore returns the store in dataDir.
@@ -192,26 +193,40 @@ func NewStore(dataDir string) *Store {
 func (s *Store) Check() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.loadAll()
+	_, _ = s.loadAll()
+}
+
+// errUnread is what a save answers while settings.json cannot be read (loadAll).
+func errUnread() error {
+	return apierr.New(503, "Your settings were not saved: the panel could not read settings.json just now, and it never writes over a file it could not read. Try again in a moment.")
 }
 
 // loadAll reads everybody's settings. The caller holds s.mu. A file that does not exist is no settings yet.
 //
-// A file that is there and cannot be used (empty, cut off, not a JSON object; or not a plain file of a sane
-// size: a link, a folder) is no settings either, and it used to be read so without a word: the next save by
-// any user then wrote a new file with that one user over it, and everybody else's settings were gone with no
-// copy (audit 5, r3-p2-07). It is now moved aside like the other files the panel may start over
+// A file that was read and cannot be used (empty, cut off, not a JSON object), and one that is not a plain
+// file of a sane size (a link, a folder), is no settings either, and it used to be read so without a word: the
+// next save by any user then wrote a new file with that one user over it, and everybody else's settings were
+// gone with no copy (audit 5, r3-p2-07). It is moved aside like the other files the panel may start over
 // (statefile.KeepAside: settings.json.corrupt-<UTC time>), with one ERROR that names the copy. Everybody's
 // settings start empty (the defaults); the kept copy has what could be read of the old ones.
-func (s *Store) loadAll() map[string]json.RawMessage {
+//
+// A file that could not be READ is another matter (second review of fix7a, R7A-07): too many open files, an
+// I/O error, a wrong owner after a restore say nothing about what is in it. It was moved aside like a damaged
+// one: a good file was gone from its place, everybody's settings started over, and five such moments removed
+// the oldest kept copies. It is left where it is, with one ERROR for as long as it lasts, and the error is
+// returned (errUnread): the settings show as the defaults meanwhile, and nothing is saved until the file can
+// be read again, so that the defaults are never written over a file that was not read.
+func (s *Store) loadAll() (map[string]json.RawMessage, error) {
 	out := map[string]json.RawMessage{}
 	b, err := statefile.ReadFile(s.file, statefile.MaxBytes) // a plain file of a sane size, or it is not read
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return out
+		s.unread = false
+		return out, nil
 	case err == nil:
+		s.unread = false
 		if err = json.Unmarshal(b, &out); err == nil && out != nil {
-			return out
+			return out, nil
 		}
 		if err == nil { // "null"
 			err = errors.New("not a JSON object")
@@ -219,6 +234,15 @@ func (s *Store) loadAll() map[string]json.RawMessage {
 		if len(bytes.TrimSpace(b)) == 0 {
 			err = fmt.Errorf("it is empty (%d bytes)", len(b))
 		}
+	case statefile.IsNotAFile(err): // a link, a folder, a file far too large: nothing the panel wrote
+		s.unread = false
+	default:
+		if !s.unread {
+			s.unread = true // said once; the file is looked at again with every request
+			slog.Error("settings.json could not be read: it is left in place. Every user's settings show as the defaults, and nothing is saved, until it can be read again",
+				"path", s.file, "error", err)
+		}
+		return map[string]json.RawMessage{}, errUnread()
 	}
 	const means = "every user's settings start over with the defaults"
 	if aside, rerr := statefile.KeepAside(s.file); rerr == nil {
@@ -229,7 +253,7 @@ func (s *Store) loadAll() map[string]json.RawMessage {
 		slog.Error("settings.json cannot be used and could not be moved aside: "+means+", the file is still in place, and the next time somebody saves "+
 			"settings it is written over", "path", s.file, "error", err, "move", rerr)
 	}
-	return map[string]json.RawMessage{}
+	return map[string]json.RawMessage{}, nil
 }
 
 func (s *Store) saveAll(d map[string]json.RawMessage) error {
@@ -254,7 +278,8 @@ func (s *Store) Get(sub string) UserSettings {
 }
 
 func (s *Store) get(sub string) UserSettings {
-	raw, ok := s.loadAll()[sub]
+	all, _ := s.loadAll() // a file that cannot be read shows as the defaults; a save is what is refused then (put)
+	raw, ok := all[sub]
 	if !ok {
 		return Defaults()
 	}
@@ -289,7 +314,10 @@ func (s *Store) Put(sub string, st UserSettings) (UserSettings, error) {
 }
 
 func (s *Store) put(sub string, st UserSettings) error {
-	d := s.loadAll()
+	d, err := s.loadAll()
+	if err != nil { // the file could not be read: what is in it is not known, and it is not written over
+		return err
+	}
 	st.Background.Tag = "" // never stored: it is the file's, not a setting
 	b, _ := json.Marshal(st)
 	d[sub] = b
@@ -344,6 +372,9 @@ func (s *Store) removeAll(sub string) {
 func (s *Store) SaveBackground(sub, mime string, data []byte) (UserSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, err := s.loadAll(); err != nil { // before the picture is replaced: its settings could not be saved
+		return UserSettings{}, err
+	}
 	if err := os.MkdirAll(s.bgDir, 0o700); err != nil {
 		return UserSettings{}, err
 	}
@@ -361,6 +392,9 @@ func (s *Store) SaveBackground(sub, mime string, data []byte) (UserSettings, err
 func (s *Store) DeleteBackground(sub string) (UserSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, err := s.loadAll(); err != nil { // before the picture is removed: its settings could not be saved
+		return UserSettings{}, err
+	}
 	s.removeAll(sub)
 	st := s.get(sub)
 	st.Background = Background{Kind: "none", Version: st.Background.Version}
