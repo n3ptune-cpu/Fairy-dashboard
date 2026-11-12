@@ -1,8 +1,10 @@
 package web
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
@@ -10,6 +12,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
@@ -88,9 +91,73 @@ func (s *Server) fanStatus(c *reqCtx) error {
 	if err := json.Unmarshal(b, &fs); err != nil {
 		return apierr.New(apierr.Upstream, "agent returned an invalid fan status")
 	}
+	boundFanStatus(&fs)
 	model.Normalize(&fs)
 	c.json(200, fs)
 	return nil
+}
+
+// Limits for what one agent may put into its fan status, as for its system entry (normalise) and its process
+// list (poller.DecodeProcessList): the answer goes to the page every 3 s while a Fans tab is open. Far above
+// what a real board reports (Fairy-agent: two zones, the last 10 events, four modes).
+const (
+	maxFanWord    = 64  // vendor, mode, auto_mode, an unsupported mode, an event's action
+	maxFanName    = 128 // a fan's name, as in the system entry
+	maxFanDetail  = 256 // an event's detail
+	maxFanEvents  = 50  // the newest are kept (the agent itself keeps 50)
+	maxFanModes   = 16
+	maxFanZones   = 16
+	maxFanZoneKey = 8
+)
+
+// boundFanStatus cuts the texts and lists of an agent's fan status to the limits above.
+func boundFanStatus(fs *model.FanStatus) {
+	clip := func(p **string, n int) {
+		if *p != nil {
+			if v := normalise.ClipText(**p, n); v != **p {
+				*p = &v
+			}
+		}
+	}
+	clip(&fs.Vendor, maxFanWord)
+	clip(&fs.Mode, maxFanWord)
+	clip(&fs.AutoMode, maxFanWord)
+	clip(&fs.Error, textsafe.MaxError)
+	fs.Reason = normalise.ClipText(fs.Reason, maxFanWord)
+	if len(fs.Unsupported) > maxFanModes {
+		fs.Unsupported = fs.Unsupported[:maxFanModes]
+	}
+	for i, m := range fs.Unsupported {
+		fs.Unsupported[i] = normalise.ClipText(m, maxFanWord)
+	}
+	if len(fs.Fans) > normalise.MaxFans {
+		fs.Fans = fs.Fans[:normalise.MaxFans]
+	}
+	for i := range fs.Fans {
+		fs.Fans[i].Name = normalise.ClipText(fs.Fans[i].Name, maxFanName)
+	}
+	if n := len(fs.Events); n > maxFanEvents {
+		fs.Events = fs.Events[n-maxFanEvents:]
+	}
+	for i := range fs.Events {
+		fs.Events[i].Action = normalise.ClipText(fs.Events[i].Action, maxFanWord)
+		fs.Events[i].Detail = normalise.ClipText(fs.Events[i].Detail, maxFanDetail)
+	}
+	if len(fs.Duty) > 0 { // zones are "0", "1", ...: a longer key is no zone, and the first few are kept
+		keys := make([]string, 0, len(fs.Duty))
+		for k := range fs.Duty {
+			keys = append(keys, k)
+		}
+		slices.SortFunc(keys, func(a, b string) int { return cmp.Or(cmp.Compare(len(a), len(b)), cmp.Compare(a, b)) })
+		kept := 0
+		for _, k := range keys {
+			if len(k) > maxFanZoneKey || k != textsafe.Clean(k) || kept == maxFanZones {
+				delete(fs.Duty, k)
+				continue
+			}
+			kept++
+		}
+	}
 }
 
 // fanHelperStopped is why fan control is unavailable while the host's elevated helper is not running.
