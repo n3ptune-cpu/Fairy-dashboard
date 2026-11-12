@@ -15,8 +15,9 @@ import (
 // Second review of the fixes for audit 5, round 2 (note N3), the reviewer's test with what it must show: what
 // the real HTTP backend gives for a control request that is answered with an error status. With the agent's own
 // JSON: the status and the body, no error. With a body that is not the agent's (a proxy's error page): the
-// status and an error that is not NotSent. powerctl reads the status and takes both for a refusal; it took the
-// second for "no answer: the request may have arrived".
+// status and an error that is not NotSent. powerctl takes the first for the agent's refusal and the second for
+// "no answer: the request may have arrived" (powerctl.agentCall; for one day, commit d728730, it took both for
+// a refusal: audit 5, r3-p2-03).
 func TestAControlRequestAnsweredWithAnErrorStatus(t *testing.T) {
 	page := func(status int) *httptest.Server { // something in front of the agent (a reverse proxy) answers for it
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

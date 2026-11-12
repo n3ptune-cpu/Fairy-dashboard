@@ -471,17 +471,25 @@ type AgentRefusal struct {
 func (e *AgentRefusal) Error() string { return e.Err.Error() }
 func (e *AgentRefusal) Unwrap() error { return e.Err }
 
-// Unanswered is a control request that left the panel, or may have, and got no usable answer: a timeout, a
-// connection that broke, an answer with a good status that cannot be read (one with an error status is a
-// refusal, whatever its body: AgentRefusal). The agent may have taken the request: the wake packet
-// may be out, the update or the countdown may be running. It wraps the error the page gets ("agent
+// Unanswered is a control request that left the panel, or may have, and got no answer of the agent: a timeout,
+// a connection that broke, an answer that cannot be read, and an error status with a body that is not the
+// agent's (a proxy's 502, 503 or 504 page, another server's 404). The agent may have taken the request: the wake
+// packet may be out, the update or the countdown may be running. It wraps the error the page gets ("agent
 // unreachable: timeout"), so a click shows what it showed before; a caller that goes on working after the
-// request (the wake / update / shut down run) must not take it for "nothing happened". A request that
-// certainly never left (poller.NotSent: no connection could be had) is not one of these.
+// request (the wake / update / shut down run) must not take it for "nothing happened", and never sends the
+// request again because of it. A request that certainly never left (poller.NotSent: no connection could be
+// had) is not one of these, and neither is the agent's own "no" (AgentRefusal).
 type Unanswered struct{ Err *apierr.Error }
 
 func (e *Unanswered) Error() string { return e.Err.Error() }
 func (e *Unanswered) Unwrap() error { return e.Err }
+
+// agentsNo reports whether the body of an answer with an error status is the agent's own: the agent answers
+// every refusal with a JSON object that has its reason in "error" (and often a "code"). A proxy's error page,
+// an empty body, another server's JSON are not that.
+func agentsNo(data jsonx.M) bool {
+	return jsonx.S(data, "error") != "" || agentCode(data) != ""
+}
 
 // agentCode is an agent's error code as far as the panel repeats it: a short word of a-z, 0-9 and "_".
 func agentCode(data jsonx.M) string {
@@ -509,23 +517,36 @@ func UpdateAgent(ctx context.Context, p *poller.Poller, a config.Agent, requeste
 	return agentCall(ctx, p, a, "/update", map[string]any{"requested_by": requestedBy})
 }
 
+// agentCall sends one control request to an agent and says what came of it, in one of four ways:
+//
+//   - the agent's "yes": a good status. The data.
+//   - the agent's "no": a status of 400 or more with the agent's own error body (agentsNo). An AgentRefusal
+//     (for 401 the plain error about the control token): nothing was done, and the agent said so itself.
+//   - the request never left the panel (poller.NotSent): the plain error.
+//   - everything else is "no answer of the agent" (Unanswered): a timeout or a broken connection, and every
+//     answer that is not the agent's. A proxy between panel and agent answers 504 when it passed the request on
+//     and the agent's answer did not come in its time, and 502 when the connection to the agent broke after the
+//     request: in both the agent may have taken the request (audit 5, r3-p2-03: "Left ON: the shutdown was not
+//     accepted" for a machine that then went off; "It was not woken" for one that was). An error status with
+//     any other body than the agent's is treated the same: whatever stands between cannot speak for the agent.
 func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path string, body any) (jsonx.M, error) {
 	status, data, err := p.AgentRequest(ctx, a, "POST", path, body)
+	notTheAgents := func() error {
+		return &Unanswered{Err: apierr.New(502, fmt.Sprintf("agent unreachable: http %d, and not an answer of the agent", status))}
+	}
 	if err != nil {
 		e := apierr.New(502, "agent unreachable: "+devices.Describe(err))
 		var ns *poller.NotSent
 		if errors.As(err, &ns) {
 			return nil, e
 		}
-		if status >= 400 {
-			// An answer with an error status, and a body that is not the agent's (a proxy's 502 or 504 page for
-			// an agent that is down, another web server's 404 or 403 at its address): something answered, and
-			// what it said is "no". That is a refusal like the agent's own error, whatever the body is, and not
-			// a request that "may have arrived" (second review, N3: the wake / update / shut down run waited for
-			// a machine after a proxy's error page as after a wake that may have gone out).
-			return nil, &AgentRefusal{Err: apierr.New(502, fmt.Sprintf("agent unreachable: http %d, and not an answer of the agent", status)), Status: status}
+		if status >= 400 { // an error status whose body cannot be read
+			return nil, notTheAgents()
 		}
 		return nil, &Unanswered{Err: e}
+	}
+	if status >= 400 && !agentsNo(data) {
+		return nil, notTheAgents()
 	}
 	errMsg := func(def string) string {
 		if e := textsafe.Clip(jsonx.S(data, "error"), maxAgentError); e != "" {

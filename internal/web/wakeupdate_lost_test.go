@@ -42,14 +42,31 @@ func TestWakeUpdateARequestWithoutAnAnswerIsToldApart(t *testing.T) {
 		{func() (int, jsonx.M, error) {
 			return 409, jsonx.M{"error": "a shutdown is already pending; cancel it first"}, nil
 		}, "|a shutdown is already pending; cancel it first"},
-		// Second review, N3: an error status with a body that is not the agent's (what the HTTP backend gives for
-		// a proxy's 502 / 504 page, or another server's 404 / 403 page at the agent's address) is a refusal too,
-		// whatever the body: it was "no answer: the request may have arrived".
-		{func() (int, jsonx.M, error) { return 502, nil, devices.Errf("invalid response") }, "|agent unreachable: http 502, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 504, nil, devices.Errf("invalid response") }, "|agent unreachable: http 504, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 404, nil, devices.Errf("invalid response") }, "|agent unreachable: http 404, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 403, nil, devices.Errf("invalid response") }, "|agent unreachable: http 403, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 429, nil, devices.Errf("invalid response") }, "rate_limited|agent unreachable: http 429, and not an answer of the agent"},
+		// The agent's own "no" is a refusal, whatever its status: a JSON body with its reason in "error".
+		{func() (int, jsonx.M, error) { return 403, jsonx.M{"error": "forbidden for this token"}, nil }, "|forbidden for this token"},
+		{func() (int, jsonx.M, error) {
+			return 404, jsonx.M{"error": "that is disabled on this agent", "code": "power_disabled"}, nil
+		}, "|that is disabled on this agent"},
+		{func() (int, jsonx.M, error) { return 423, jsonx.M{"error": "locked by its owner"}, nil }, "|locked by its owner"},
+		{func() (int, jsonx.M, error) { return 429, jsonx.M{"error": "too many control requests"}, nil }, "rate_limited|too many control requests"},
+		{func() (int, jsonx.M, error) { return 500, jsonx.M{"error": "could not schedule the shutdown"}, nil }, "|could not schedule the shutdown"},
+		{func() (int, jsonx.M, error) { return 401, jsonx.M{"error": "unauthorized"}, nil }, "|agent refused the control token (check control_token_env)"},
+		// Audit 5, round 3 (r3-p2-03; second review of fix6, N1): an error status with a body that is not the
+		// agent's is NOT a refusal. A proxy answers 504 when it passed the request on and the agent's answer did
+		// not come in its time, and 502 when the connection to the agent broke after the request: the agent may
+		// have taken it. Whatever stands between panel and agent cannot speak for the agent, so every such answer
+		// is "no answer: it may have arrived", also a 404 or 403 page, a 429, a 401 and an error status with an
+		// empty body or with JSON that is not the agent's. (Commit d728730 had made each of these a refusal; these
+		// rows held "|agent unreachable: http 502, and not an answer of the agent" and "rate_limited|..." for 429.)
+		{func() (int, jsonx.M, error) { return 502, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 502, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 503, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 503, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 504, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 504, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 404, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 404, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 403, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 403, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 429, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 429, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 504, jsonx.M{}, nil }, "no_answer|agent unreachable: http 504, and not an answer of the agent"}, // an empty body
+		{func() (int, jsonx.M, error) { return 502, jsonx.M{"message": "Bad Gateway", "status": 502.0}, nil }, "no_answer|agent unreachable: http 502, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 401, jsonx.M{}, nil }, "no_answer|agent unreachable: http 401, and not an answer of the agent"},
 		// a good status with a body that cannot be read: the request may well have been carried out
 		{func() (int, jsonx.M, error) { return 200, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: invalid response"},
 	} {
@@ -156,29 +173,40 @@ func TestWakeUpdateALostWakeAnswerIsNotNothingSent(t *testing.T) {
 	}
 }
 
-// Second review, N3, through a run: the relay's address answers the wake request with a proxy's error page.
-// Nothing can have been sent. The run waited for the machine for the whole online timeout, as after a wake that
-// may have gone out; now it is a wake that could not be sent, said at once, and nothing else is asked of anyone.
-func TestWakeUpdateAnErrorPageForTheWakeIsARefusal(t *testing.T) {
-	for _, status := range []int{502, 504, 404, 403} {
+// The relay's own "no" to the wake request (second review of round 2, N3, as far as it still holds): nothing
+// was sent. The run says so at once, and nothing else is asked of anyone. Until audit 5, round 3 this test
+// held the same for an error PAGE at the relay's address (502, 504, 404, 403 with a body that is not the
+// agent's); those are "no answer: the wake may have gone out" again, see wakeupdate_proxy_test.go.
+func TestWakeUpdateTheRelaysOwnRefusalOfTheWake(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		body   jsonx.M
+		want   string
+	}{
+		{404, jsonx.M{"error": "wol relay is disabled on this agent", "code": "wol_disabled"}, "wol relay is disabled on this agent"},
+		{403, jsonx.M{"error": "that network card is not in this agent's list"}, "that network card is not in this agent's list"},
+		{500, jsonx.M{"error": "could not send the packet: network is down"}, "could not send the packet: network is down"},
+		{503, jsonx.M{"error": "the agent is stopping", "code": "stopping"}, "the agent is stopping"},
+	} {
 		e, f := lostFarm(t, "")
 		e.b.Reply = func(agent, path string) (int, jsonx.M, error) {
 			if agent == "nas" && path == "/wol" {
-				return status, nil, devices.Errf("invalid response")
+				return c.status, c.body, nil
 			}
 			return 0, nil, nil
 		}
+		f.wakes = false // the relay refused: no packet
 		if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "Alice", BySub: "u2"}); err != nil {
 			t.Fatal(err)
 		}
 		start := f.now
 		h := hostOf(f.finish(), "pc-a")
-		want := fmt.Sprintf("The wake could not be sent: agent unreachable: http %d, and not an answer of the agent. It was not woken.", status)
+		want := fmt.Sprintf("The wake could not be sent: %s. It was not woken.", c.want)
 		if h.State != wakerun.StGaveUp || h.On != wakerun.OnUntouched || h.WakeUnsure || h.Text != want || f.on["pc-a"] {
-			t.Errorf("%d: pc-a ended as %s (%s, wake unconfirmed %v): %s", status, h.State, h.On, h.WakeUnsure, h.Text)
+			t.Errorf("%d: pc-a ended as %s (%s, wake unconfirmed %v): %s", c.status, h.State, h.On, h.WakeUnsure, h.Text)
 		}
 		if got := strings.Join(f.requests(), ", "); got != "nas /wol" || f.now.Sub(start) > 30*time.Second {
-			t.Errorf("%d: requests %q, the run took %s", status, got, f.now.Sub(start))
+			t.Errorf("%d: requests %q, the run took %s", c.status, got, f.now.Sub(start))
 		}
 	}
 }

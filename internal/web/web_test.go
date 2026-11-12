@@ -989,7 +989,11 @@ func TestAgentErrorsAreNot502(t *testing.T) {
 		{"power: agent error", "POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "LAPTOP"}, 500,
 			jsonx.M{"error": "shutdown.exe failed"}, nil, 424, "shutdown.exe failed"},
 		{"power: control token", "POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "LAPTOP"}, 401,
-			nil, nil, 424, "control token"},
+			jsonx.M{"error": "unauthorized"}, nil, 424, "control token"}, // the agent's own 401, with its body
+		{"power: a 401 that is not the agent's", "POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "LAPTOP"}, 401,
+			nil, nil, 502, "agent unreachable: http 401, and not an answer of the agent"},
+		{"power: a proxy's 504 without a body", "POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "LAPTOP"}, 504,
+			nil, nil, 502, "agent unreachable: http 504, and not an answer of the agent"},
 	} {
 		reply.st, reply.body, reply.err = tc.st, tc.agent, tc.err
 		r := e.do(tc.method, tc.path, tc.body, hdr...)
