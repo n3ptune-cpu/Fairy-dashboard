@@ -1048,7 +1048,8 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   `settings.json` (everybody's page settings) is kept aside the same way, with one ERROR, and the settings
   start over with the defaults. In `state.json` a kill switch that is there in another shape than Fairy writes
   it (a hand edit such as `"control_disabled": true`) counts as ON, and so does a per-host power list that is
-  not a list (power control is then off for every host); one ERROR names the key. Every file the panel replaces is first written to the disk in full and then renamed into place, so
+  not a list of host ids (power control is then off for every host, and `fairy admin host <id> power-control`
+  changes nothing and says how to put the list right); one ERROR names the key. Every file the panel replaces is first written to the disk in full and then renamed into place, so
   a power cut leaves the old or the new content. Files are written `0600` by the service user, and
   `fairy admin` commands that change something refuse to run as another user (use
   `sudo -u fairy fairy admin ...`).

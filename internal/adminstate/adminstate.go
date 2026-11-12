@@ -124,23 +124,44 @@ func (a *State) StateData() (statefile.Data, int) {
 	return d, a.state.Version
 }
 
+// powerOffList reads "power_control_disabled" out of state.json's data: the systems whose power control is
+// off. ok is false when the key is there and is not what Fairy writes, a list of system ids (texts): any other
+// value, and a list with an entry that is not a text. raw is what was found.
+//
+// A list with other entries is no list of ids: `[{"id": "pc-a"}]` or `[["pc-a"]]` (a hand edit that meant
+// "pc-a") read as "off for no host", without a word (second review of fix7a, R7A-05).
+func powerOffList(d statefile.Data) (ids []string, raw any, ok bool) {
+	raw, present := d["power_control_disabled"]
+	if !present {
+		return nil, nil, true
+	}
+	l, isList := raw.([]any)
+	if !isList {
+		return nil, raw, false
+	}
+	for _, v := range l {
+		s, isText := v.(string)
+		if !isText {
+			return nil, raw, false
+		}
+		ids = append(ids, s)
+	}
+	return ids, raw, true
+}
+
 // PowerDisabled reports whether an administrator turned power control off for this system (always true while
-// state.json is unreadable, and while "power_control_disabled" is there and is not a list: the same reading as
-// for the kill switch, see ControlDisabled).
+// state.json is unreadable, and while "power_control_disabled" is there and is not a list of system ids: the
+// same reading as for the kill switch, see ControlDisabled).
 func (a *State) PowerDisabled(id string) bool {
 	if a.state.Err() != nil {
 		return true
 	}
-	raw, present := a.state.Get()["power_control_disabled"]
-	if !present {
-		return false
-	}
-	l, ok := raw.([]any)
+	ids, raw, ok := powerOffList(a.state.Get())
 	if !ok {
 		a.badShape("power_control_disabled", "the list of system ids that Fairy writes", "power control is OFF for every host until the key is put right or taken out", raw)
 		return true
 	}
-	return slices.Contains(l, any(id))
+	return slices.Contains(ids, id)
 }
 
 // PowerDisabledList returns the systems whose power control is off (read straight from disk).
@@ -590,14 +611,23 @@ func (a *State) SetControlDisabled(disabled bool, by, reason string) error {
 }
 
 // SetPowerDisabled turns power control off (or back on) for one system.
+//
+// It writes nothing while "power_control_disabled" is there in another shape than the list Fairy writes
+// (powerOffList). Power control is off for every host then (PowerDisabled). The command used to read such a
+// value as an empty list and write the list anew with what it knew: "host pc-a power-control disable" on
+// `"power_control_disabled": true` left ["pc-a"], and every other host was ON again, without a word (second
+// review of fix7a, R7A-05). The error says how to put the file right.
 func (a *State) SetPowerDisabled(id string, disabled bool) error {
 	_, err := statefile.Update(a.StatePath, func(d statefile.Data) error {
 		cur := map[string]bool{}
-		l, _ := d["power_control_disabled"].([]any)
-		for _, v := range l {
-			if s, ok := v.(string); ok {
-				cur[s] = true
-			}
+		ids, _, ok := powerOffList(d)
+		if !ok {
+			return fmt.Errorf("\"power_control_disabled\" in %s is not a list of host ids, so power control is off for every host, and nothing was changed. "+
+				"To put it right, edit that file so that the line reads \"power_control_disabled\": [] (or lists the hosts to keep off, like [\"pc-a\"]), then run this command again",
+				a.StatePath)
+		}
+		for _, s := range ids {
+			cur[s] = true
 		}
 		if disabled {
 			cur[id] = true

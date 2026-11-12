@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -91,7 +92,12 @@ func TestAPowerSwitchListOfAnyShapeIsOn(t *testing.T) {
 		{``, false, false, false},
 		{`[]`, false, false, false},
 		{`["laptop"]`, true, false, false},
-		{`["laptop", 5, null]`, true, false, false},
+		// (second review of fix7a, R7A-05: a list with an entry that is not a text is no list of system ids. It
+		// read as "off for laptop, on for everybody else", and the two below as "on for every host", without a word.)
+		{`["laptop", 5, null]`, true, true, true},
+		{`[{"id": "pc-a"}]`, true, true, true},
+		{`[["pc-a"]]`, true, true, true},
+		{`["pc-a", {"id": "laptop"}]`, true, true, true},
 		{`"laptop"`, true, true, true},
 		{`true`, true, true, true},
 		{`{"laptop": true}`, true, true, true},
@@ -119,10 +125,55 @@ func TestAPowerSwitchListOfAnyShapeIsOn(t *testing.T) {
 		if n := strings.Count(log, "level=ERROR"); (n == 1) != c.odd || n > 1 || (c.odd && !strings.Contains(log, "key=power_control_disabled")) {
 			t.Errorf("power_control_disabled %s: %d ERROR lines, want one that names the key: %v\n%s", c.value, n, c.odd, log)
 		}
-		if c.odd { // switching one host's power on again writes the list anew
-			if err := a.SetPowerDisabled("laptop", false); err != nil || a.PowerDisabled("laptop") || a.PowerDisabled("pc-a") {
-				t.Errorf("power_control_disabled %s: after \"power-control enable\": %v", c.value, err)
+		if c.odd && !strings.Contains(log, `\"power_control_disabled\" is not the list of system ids that Fairy writes: power control is OFF for every host`) {
+			t.Errorf("power_control_disabled %s: the ERROR: %s", c.value, log)
+		}
+		// Second review of fix7a (R7A-05): switching ONE host on or off wrote the list anew from what the command
+		// knew, an empty list plus that host: every other host, off a moment ago, was ON again, without a word.
+		// While the key has such a shape nothing is written, and the error says how to put it right.
+		if c.odd {
+			before, _ := os.ReadFile(a.StatePath)
+			for _, disable := range []bool{false, true} {
+				err := a.SetPowerDisabled("laptop", disable)
+				after, _ := os.ReadFile(a.StatePath)
+				if err == nil || !bytes.Equal(before, after) || !a.PowerDisabled("laptop") || !a.PowerDisabled("pc-a") {
+					t.Errorf("power_control_disabled %s: set laptop disabled=%v: error %v, file changed %v, off for laptop %v, for pc-a %v", c.value, disable, err,
+						!bytes.Equal(before, after), a.PowerDisabled("laptop"), a.PowerDisabled("pc-a"))
+					continue
+				}
+				for _, part := range []string{`"power_control_disabled"`, a.StatePath, "nothing was changed", `"power_control_disabled": []`, "run this command again"} {
+					if !strings.Contains(err.Error(), part) {
+						t.Errorf("power_control_disabled %s: the error lacks %q: %v", c.value, part, err)
+					}
+				}
+			}
+		} else { // a list of the shape Fairy writes, or no key: the command works as ever
+			if err := a.SetPowerDisabled("pc-a", true); err != nil || !a.PowerDisabled("pc-a") || a.PowerDisabled("laptop") != c.off {
+				t.Errorf("power_control_disabled %s: after switching pc-a off: %v; off for pc-a %v, for laptop %v", c.value, err, a.PowerDisabled("pc-a"), a.PowerDisabled("laptop"))
+			}
+			if err := a.SetPowerDisabled("pc-a", false); err != nil || a.PowerDisabled("pc-a") || a.PowerDisabled("laptop") != c.off {
+				t.Errorf("power_control_disabled %s: after switching pc-a on again: %v; off for pc-a %v, for laptop %v", c.value, err, a.PowerDisabled("pc-a"), a.PowerDisabled("laptop"))
 			}
 		}
+	}
+}
+
+// The reviewer's proof of R7A-05 (b): with "power_control_disabled": true every host is off. An admin switches
+// pc-a off with the command: pc-b, off a moment ago, was ON again.
+func TestSettingOneHostDoesNotSwitchTheOthersOn(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"power_control_disabled": true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := New(dir)
+	if !a.PowerDisabled("pc-a") || !a.PowerDisabled("pc-b") {
+		t.Fatal("an odd shape must be off for every host")
+	}
+	err := a.SetPowerDisabled("pc-a", true)
+	if !a.PowerDisabled("pc-b") {
+		t.Errorf("after \"host pc-a power-control disable\" power control for pc-b, which was off a moment ago, is ON (the command said: %v)", err)
+	}
+	if err == nil {
+		t.Errorf("the command wrote over a \"power_control_disabled\" that is not a list, and said nothing")
 	}
 }
