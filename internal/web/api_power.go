@@ -38,11 +38,20 @@ func (s *Server) powerAction(c *reqCtx) error {
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	bucket := s.control
-	if req.Action == "cancel" { // calling a countdown off is never refused because of other control requests
-		bucket = s.stopRL
+	// Calling a countdown off (the page's Cancel, the Power menu's "Cancel pending") is never refused because
+	// of other control requests: it has the request budget of the cancels (stopRL). And it is not refused by
+	// the kill switch or by the host's power switch either (stopGuard here, powerctl.Capabilities for both
+	// switches): a cancel only ever stops a power action, and a countdown that was running when an admin
+	// flipped the switch could otherwise not be called off from the panel at all (audit 5, r3-p2-06). It is
+	// still an admin's action with the CSRF header and "Confirm it's you", and the audit entry says that
+	// control was off (control_off). Every other action is refused by the kill switch here, as before.
+	var u *model.User
+	var err error
+	if req.Action == "cancel" {
+		u, err = c.stopGuard(s.stopRL)
+	} else {
+		u, err = c.controlGuard(s.control)
 	}
-	u, err := c.controlGuard(bucket)
 	if err != nil {
 		return err
 	}
@@ -52,6 +61,9 @@ func (s *Server) powerAction(c *reqCtx) error {
 		return err
 	}
 	params := map[string]any{"action": req.Action, "delay_s": *req.DelayS}
+	if off := powerctl.ControlOff(s.Poller, x.ID); off != "" && req.Action == "cancel" {
+		params["control_off"] = off // the cancel went through although control is off: that is said
+	}
 	who := model.Deref(u.Name)
 	if who == "" {
 		who = model.Deref(u.Email)

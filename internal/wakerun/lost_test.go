@@ -460,7 +460,10 @@ func TestTheReportSaysWhatIsSeen(t *testing.T) {
 		}
 	})
 
-	t.Run("the run stops while a machine it cannot reach counts down: not confirmed", func(t *testing.T) {
+	// (Until audit 5, round 3, r3-p2-06, a run that the kill switch stopped sent nothing, "not even a cancel":
+	// these two held "... while its shutdown was counting down (due at ...)" and "it switches off by itself
+	// unless someone cancels that", and that no cancel was sent. The run now calls its countdown off.)
+	t.Run("the kill switch stops the run while a machine it cannot reach counts down: the cancel does not get through, not confirmed", func(t *testing.T) {
 		w := newWorld(t)
 		pc := w.off("pc-a")
 		w.start(StartRequest{Hosts: []string{"pc-a"}})
@@ -472,22 +475,22 @@ func TestTheReportSaysWhatIsSeen(t *testing.T) {
 		at := w.now
 		r := w.finish()
 		h := host(r, "pc-a")
-		has(t, h, StLeftOn, "the run stopped (control is disabled by an administrator) while its shutdown was counting down (due at ",
-			"). Asked to switch off, not confirmed: it does not answer now.")
+		has(t, h, StLeftOn, "the run stopped (control is disabled by an administrator), but its shutdown countdown (due at ",
+			") could not be called off (agent unreachable: connection failed). Asked to switch off, not confirmed: it does not answer now.")
 		if h.On != OnUnknown || r.State != RunStopped || strings.Contains(h.Text, "it switches off by itself") {
 			t.Fatalf("power %q run %s: %s", h.On, r.State, h.Text)
 		}
 		if d := r.EndedAt.Sub(at); d < lookFor-2*time.Second || d > lookFor+2*time.Second {
 			t.Fatalf("the last look took %s, want %s", d, lookFor)
 		}
-		if strings.Contains(w.callsFor("pc-a"), "cancel") {
-			t.Fatalf("a stopped run sends nothing: %s", w.callsFor("pc-a"))
+		if got := w.callsFor("pc-a"); got != "wake update shutdown cancel" {
+			t.Fatalf("a run the kill switch stops sends one cancel for its countdown, and nothing else: %s", got)
 		}
 	})
 
-	t.Run("the run stops while a machine that answers counts down: as before, at once", func(t *testing.T) {
+	t.Run("the kill switch stops the run while a machine that answers counts down: called off, at once", func(t *testing.T) {
 		w := newWorld(t)
-		w.off("pc-a")
+		pc := w.off("pc-a")
 		w.start(StartRequest{Hosts: []string{"pc-a"}})
 		untilState(t, w, "pc-a", StShutting)
 		w.advance(5 * time.Second)
@@ -495,9 +498,15 @@ func TestTheReportSaysWhatIsSeen(t *testing.T) {
 		at := w.now
 		r := w.finish()
 		h := host(r, "pc-a")
-		has(t, h, StLeftOn, "while its shutdown was counting down (it ends at ", "it switches off by itself unless someone cancels that.")
+		if want := "the run stopped (control is disabled by an administrator): its shutdown countdown was called off. It came online after the wake and it is ON. It was updated to 17-bbbbbbb."; h.Text != want || h.State != StLeftOn {
+			t.Fatalf("[%s] %s", h.State, h.Text)
+		}
 		if h.On != OnYes || r.EndedAt.Sub(at) > 2*time.Second {
 			t.Fatalf("power %q after %s: %s", h.On, r.EndedAt.Sub(at), h.Text)
+		}
+		w.advance(5 * time.Minute)
+		if !pc.on || pc.pending != nil || w.callsFor("pc-a") != "wake update shutdown cancel" {
+			t.Fatalf("five minutes later: on %v, pending %v, requests %s", pc.on, pc.pending, w.callsFor("pc-a"))
 		}
 	})
 

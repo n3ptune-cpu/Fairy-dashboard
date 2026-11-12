@@ -773,6 +773,7 @@ const pendingLate = (s, due) => `<span class="note">by ${esc(s.power_pending.req
   ? ` · <span data-ago="${esc(s.power_pending.at)}">${ago(s.power_pending.at)}</span></span><b>still on</b>` : "</span>"}`;
 function pendingStrip(s, why) {
   const p = s.power_pending, due = pendingDue(p);
+  if (state.me?.can_control) why = "";  // a cancel only stops an action: the kill switch does not take it away (the server lets it through)
   const cancel = `<button class="btn push" data-act="power-now" data-action="cancel" ${why ? "disabled" : ""}>Cancel</button>`;
   if (due >= 0) return `<div class="pending-strip" data-key="due"><span><b>${esc(POWER_LABEL[p.action])}</b> requested</span>${pendingLate(s, due)}${cancel}</div>`;
   return `<div class="pending-strip"><b>${esc(POWER_LABEL[p.action])}</b> in <b data-countdown="${esc(p.at)}">${fmtRuntime(-due)}</b>
@@ -884,7 +885,7 @@ function powerMenu(s) {
   const caps = state.caps[s.id], why = controlWhyNot();
   if (!caps) return '<div class="menu"><div class="menu-note">loading…</div></div>';
   return `<div class="menu power" role="menu"><div class="menu-title">Power · ${esc(s.name)}</div>
-    ${caps.actions.map((a) => `<button class="menu-item ${a.action === "stop" || a.action === "shutdown" ? "danger" : ""}" data-act="power" data-action="${esc(a.action)}" ${a.available && !why ? "" : "disabled"} title="${esc(a.reason || "")}">
+    ${caps.actions.map((a) => `<button class="menu-item ${a.action === "stop" || a.action === "shutdown" ? "danger" : ""}" data-act="power" data-action="${esc(a.action)}" ${a.available && (!why || (a.action === "cancel" && state.me?.can_control)) ? "" : "disabled"} title="${esc(a.reason || "")}">
       ${esc(POWER_LABEL[a.action])}${a.available ? `<span class="note">${esc(a.via_label ? `via ${a.via_label}` : a.via || "")}${a.delayed ? " · countdown" : ""}</span>` : ""}</button>
       ${!a.available && a.reason ? `<div class="menu-why">${esc(a.reason)}</div>` : ""}`).join("")}
     ${why ? `<div class="menu-note">${esc(why)}</div>` : ""}

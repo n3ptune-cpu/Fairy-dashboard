@@ -249,12 +249,16 @@ func TestTheLastLookAfterAShutdownRequestWithoutAnAnswer(t *testing.T) {
 	w.blocked = "control is disabled by an administrator"
 	r := w.finish()
 	h := host(r, "pc-a")
-	want := "the run stopped (control is disabled by an administrator) after its shutdown request got no answer (it would be due at " + clock(due) + "). " +
-		"It does not answer now: not confirmed that it is on."
+	// (r3-p2-06: the run that the kill switch stops now tries to call the countdown off that its request may
+	// have started; the sentence held "... after its shutdown request got no answer (it would be due at ...).")
+	want := "the run stopped (control is disabled by an administrator), but its shutdown countdown (due at " + clock(due) + ") could not be called off " +
+		"(agent unreachable: connection failed). It does not answer now: not confirmed that it is on."
 	if h.State != StLeftOn || h.On != OnUnknown || h.Text != want || !pc.on {
 		t.Fatalf("%s/%s, really on %v: %s", h.State, h.On, pc.on, h.Text)
 	}
-	// while the machine answers, the same end says what may still happen, and that it is not known
+	// while the machine answers: the request did arrive, and the countdown it started is called off (r3-p2-06;
+	// until then "... after its shutdown request got no answer (it would be due at ...). Fairy no longer watches
+	// it: if the request arrived, it switches off by itself unless someone cancels that.", and it did go off)
 	w = newWorld(t)
 	pc = w.off("pc-a")
 	pc.shutLost, pc.staleOnce = "arrives", true // the first answer after the request does not show the countdown yet
@@ -262,11 +266,13 @@ func TestTheLastLookAfterAShutdownRequestWithoutAnAnswer(t *testing.T) {
 	untilState(t, w, "pc-a", StShutting)
 	w.blocked = "control is disabled by an administrator"
 	h = host(w.finish(), "pc-a")
-	has(t, h, StLeftOn, "the run stopped (control is disabled by an administrator) after its shutdown request got no answer (it would be due at ",
-		"). Fairy no longer watches it: if the request arrived, it switches off by itself unless someone cancels that.")
-	if h.On != OnYes {
-		t.Fatalf("power %q: %s", h.On, h.Text)
+	has(t, h, StLeftOn, "the run stopped (control is disabled by an administrator): its shutdown countdown was called off. It came online after the wake and it is ON.")
+	w.advance(5 * time.Minute)
+	if h.On != OnYes || !pc.on || pc.pending != nil {
+		t.Fatalf("power %q, the machine on %v, pending %v: %s", h.On, pc.on, pc.pending, h.Text)
 	}
+	// a run that stops for another reason (its journal cannot be written) still sends nothing, and says what
+	// may happen: TestTheReportAfterARestartNeverKnowsLessThanWhatWasSent
 }
 
 // Note N2 of the second review: the guests of a Proxmox node were asked about once, before the shutdown

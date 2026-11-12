@@ -400,7 +400,12 @@ The rules, in plain words:
   is left out, with one line in the log. Every request of a run is entered in the journal before it goes
   out. If the file cannot be written (a full disk), the run sends nothing further, stops and says so, the
   machines it has woken stay on and are reported, and no run starts until the file can be written again.)
-* **The kill switch stops a run**: no further request is sent, and what was woken stays on and is reported.
+* **The kill switch stops a run**: nothing further is started, and what was woken stays on and is reported.
+  A shutdown countdown the run had already started is called off (the one request a stopped run still sends);
+  if that cancel does not get through, the machine's line says so and names the time it may switch off.
+  Calling a countdown off is the one control action that works while the kill switch, or the power switch of
+  a host, is on: the page's **Cancel**, the Power menu's **Cancel pending** and **Cancel run** only ever stop
+  an action. The audit entry of such a cancel says that control was off.
 * Everything is in the audit log: who started the run, with which machines, and every wake, update,
   shutdown and result (`wakeupdate.*`, `power.wake`, `update.agent`, `power.shutdown`, each with the run's
   id).
@@ -920,7 +925,8 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   switched it on for this (a control action of its own). One place in the code decides whether a machine
   may be switched off (`mayShutDown` in `internal/wakerun/shutdown.go`), from what the run itself saw; a
   machine that was on is never switched off. The run's requests go through the per-host power switch, the
-  kill switch and the audit log like every control action, and are paced below the agents' own limit. Text
+  kill switch and the audit log like every control action (the cancel of a countdown passes both switches,
+  for a run as for a click), and are paced below the agents' own limit. Text
   from an agent (an update's error) is shown as text. The journal has no secrets and is never read as an
   instruction: after a restart the panel reports and does nothing.
 * API tokens: `fy_…`, CLI-created only, stored as SHA-256, scope `read` or `control`, optional expiry, never
@@ -932,6 +938,8 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
 * Writes: admin role (or control-scope token), CSRF header `X-Requested-With: fairy` + Origin /
   Sec-Fetch-Site checks for browsers, kill switch, per-host power flags, rate limits, typed confirmation for
   destructive power actions, append-only JSON-lines audit log (+ Audit page), optional ntfy/Discord notification.
+  One write passes the kill switch and the per-host power flag: the cancel of a pending shutdown, reboot or
+  sleep countdown (it only stops an action; everything else in this list applies to it).
   The audit log is bounded: lines are capped at 8 KiB, the file rotates by size (`audit_max_mb`, `audit_keep`;
   the Audit page shows the current file), and entries anyone can cause without signing in (rejected API tokens,
   failed or rate-limited sign-ins) are limited to 10 per client IP per minute and 300 in all, the rest summed

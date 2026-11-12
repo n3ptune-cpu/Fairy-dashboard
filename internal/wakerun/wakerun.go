@@ -336,7 +336,9 @@ type Ops interface {
 	// Guests: how many guests run on the machine if it is a Proxmox node (0, true for any other machine). known
 	// is false when the panel cannot tell; why then says so. since is when the machine came online.
 	Guests(id string, since time.Time) (running int, known bool, why string)
-	// Blocked is why no control request may be sent at all right now ("": allowed): the kill switch.
+	// Blocked is why no control request may be sent at all right now ("": allowed): the kill switch. The run
+	// stops then. The one request it still sends is CancelShutdown, for a countdown it started itself: that
+	// only ever stops a power action, and the panel lets it through the kill switch (stepRun).
 	Blocked() string
 }
 
@@ -965,9 +967,9 @@ func (m *Manager) look(r *Run, h *Host, now time.Time) {
 
 // stepRun is one step of the whole run. The caller holds m.mu (io releases it around requests).
 func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
-	stop := ""
+	stop, killSwitch := "", false
 	if why := m.Ops.Blocked(); why != "" {
-		stop = why
+		stop, killSwitch = why, true
 	} else if r.journalErr != "" {
 		// The record of what the run does is what the report after a restart is made from. Without it the run
 		// goes no further: no wake, no update, no shutdown from here on.
@@ -978,11 +980,25 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 		// is watching a countdown.
 		stop = "the run took longer than it ever should"
 	}
-	if stop != "" && r.stopped == "" { // nothing more is sent, not even a cancel: every machine is reported as it is
+	if stop != "" && r.stopped == "" {
+		// Nothing more is started for any machine: every one is reported as it is. When it is the kill switch
+		// that stops the run, one request is still sent: a countdown the run started itself is called off. The
+		// run used to send "not even a cancel", said "it switches off by itself unless someone cancels that",
+		// and with the kill switch on nobody could: the machine the admin wanted to keep on by stopping
+		// everything went off (audit 5, r3-p2-06). A cancel only ever stops a power action, and the panel lets it
+		// through the kill switch. What came of it is in the machine's sentence: called off, or not.
+		//
+		// A run that stops because its journal cannot be written still sends nothing at all: what the report
+		// after a restart is made from must never know less than what was sent, and a cancel is a request too.
+		// Its sentence says that the machine switches off by itself, and the page's Cancel is there for it.
 		r.stopped, r.Note = stop, "stopped: "+stop
 		m.dirty = true
 		for _, h := range r.Hosts {
-			if !h.Final() && h.verdict == nil {
+			switch {
+			case h.Final() || h.verdict != nil:
+			case h.State == StShutting && killSwitch:
+				m.callOff(ctx, r, h, now, "the run stopped ("+stop+")")
+			default:
 				m.endAsIs(r, h, now, "the run stopped ("+stop+")")
 			}
 		}

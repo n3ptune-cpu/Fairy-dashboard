@@ -119,22 +119,38 @@ func sameString(a, b *string) bool {
 const HelperStoppedWhy = "the elevated helper is stopped: start the helper first (Elevated helper, next to the host name)"
 
 // Capabilities lists every action with availability, reason, confirmation and route.
+//
+// The kill switch and the per-host power switch take every action away except one: "cancel", the calling off
+// of a pending shutdown, reboot or sleep countdown. A cancel only ever stops a power action, and the switches
+// are what an admin reaches for to stop things: with the cancel blocked too, a countdown that was running when
+// the switch was flipped could not be called off from the panel any more, and the machine went off (audit 5,
+// r3-p2-06). Nothing else passes them.
 func Capabilities(p *poller.Poller, s model.System) model.PowerCaps {
 	caps := capabilities(p, s)
-	blocked := ""
-	if p.Admin.ControlDisabled() != nil {
-		blocked = "control is disabled by an administrator (fairy admin control enable)"
-	} else if p.Admin.PowerDisabled(s.ID) {
-		blocked = fmt.Sprintf("power control for this host is disabled by an administrator (fairy admin host %s power-control enable)", s.ID)
-	}
+	blocked := ControlOff(p, s.ID)
 	if blocked != "" {
 		for i, a := range caps.Actions {
+			if a.Action == "cancel" {
+				continue
+			}
 			if a.Available {
 				caps.Actions[i].Available, caps.Actions[i].Reason, caps.Actions[i].Via = false, &blocked, nil
 			}
 		}
 	}
 	return caps
+}
+
+// ControlOff is why an administrator's switch takes the power actions of a system away right now ("": none
+// does): the kill switch, or the power switch of this host. The cancel of a countdown is exempt (Capabilities).
+func ControlOff(p *poller.Poller, id string) string {
+	if p.Admin.ControlDisabled() != nil {
+		return "control is disabled by an administrator (fairy admin control enable)"
+	}
+	if p.Admin.PowerDisabled(id) {
+		return fmt.Sprintf("power control for this host is disabled by an administrator (fairy admin host %s power-control enable)", id)
+	}
+	return ""
 }
 
 func capabilities(p *poller.Poller, s model.System) model.PowerCaps {

@@ -619,8 +619,9 @@ func TestCancelAndSwitchOffAgain(t *testing.T) {
 	}
 }
 
-// The kill switch goes on in the middle: nothing more is sent, not even a cancel, and every machine is
-// reported as it is.
+// The kill switch goes on in the middle: nothing more is started, and every machine is reported as it is. The
+// one request that still goes out is the cancel of a countdown the run started (audit 5, r3-p2-06; until then
+// "not even a cancel", and the machine went off with "it switches off by itself unless someone cancels that").
 func TestControlDisabledDuringARun(t *testing.T) {
 	w := newWorld(t)
 	w.off("pc-count").bootTakes = 20 * time.Second
@@ -636,10 +637,14 @@ func TestControlDisabledDuringARun(t *testing.T) {
 	before := len(w.calls)
 	w.blocked = "control is disabled by an administrator"
 	r := w.finish()
-	if r.State != RunStopped || r.Note != "stopped: control is disabled by an administrator" || len(w.calls) != before {
-		t.Fatalf("run %s note %q, requests after the switch: %v", r.State, r.Note, w.calls[before:])
+	if after := strings.Join(w.calls[before:], ", "); r.State != RunStopped || r.Note != "stopped: control is disabled by an administrator" || after != "cancel pc-count" {
+		t.Fatalf("run %s note %q, requests after the switch: %q (want the one cancel)", r.State, r.Note, after)
 	}
-	has(t, host(r, "pc-count"), StLeftOn, "the run stopped (control is disabled by an administrator) while its shutdown was counting down", "it switches off by itself unless someone cancels that")
+	has(t, host(r, "pc-count"), StLeftOn, "the run stopped (control is disabled by an administrator): its shutdown countdown was called off. It came online after the wake and it is ON.")
+	w.advance(5 * time.Minute)
+	if !w.ms["pc-count"].on {
+		t.Fatal("the machine whose countdown was called off went off")
+	}
 	has(t, host(r, "pc-wake"), StGaveUp, "A wake was sent to it: if it switches on, it stays ON.")
 	// and no run starts while it is on
 	if _, err := w.m.Start(StartRequest{Hosts: []string{"pc-wake"}, By: "Ann"}); err == nil || !strings.Contains(err.Error(), "control is disabled") {
