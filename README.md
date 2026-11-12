@@ -106,8 +106,8 @@ shows it as a Battery box on the host page and the charge in the host list; agen
 a name of their own instead: the host's page, the ⋯ menu, **Set model name**; **Clear** brings the reported
 model back. The reported model stays one step behind the name (its tooltip on the Overview, the ⓘ on the
 host's page). The name is kept by the panel (`state.json`, `host_models`), is 1 to 64 characters on one line,
-and goes when the host is removed. Admins only, from a browser session, no "Confirm it's you" (like the
-sign-in wallpaper); audited as `host.model`. API: `PUT /api/systems/{id}/custom-model`.
+and goes when the host is removed. Admins only, from a browser session, no "Confirm it's you"; audited as
+`host.model`. API: `PUT /api/systems/{id}/custom-model`.
 
 **Elevated helper** (Fairy-agent v0.5.0+, Windows): the agent runs as `NT SERVICE\fairy-agent` and a separate
 LocalSystem service without network access, `fairy-agent-helper`, reads Core Temp and the BMC's sensors, drives
@@ -700,8 +700,12 @@ page is black, with the same strip.
   one.
 * Your own background (the block above it in Settings) is separate: per account, shown only to you after
   the sign-in.
-* Only admins can change it, from a browser session; it asks for no "Confirm it's you", like the other
-  settings. Setting and removing it are in the audit log (`settings.signin_wallpaper_upload`,
+* Only admins can change it, from a browser session, and a change asks for "Confirm it's you" like the
+  other admin actions (the same window, `step_up_window_s`; with `step_up_per_action: true` every time): the
+  picture is what everyone sees before any sign-in. An upload outside the window is checked first (a file
+  the panel will not take is refused at once), then the picture waits in the panel's memory for up to 3
+  minutes and is stored right after the sign-in. Your own background never asks. Setting and removing the
+  sign-in picture are in the audit log (`settings.signin_wallpaper_upload`,
   `settings.signin_wallpaper_delete`; the Audit page's "Settings" filter).
 * Behind nginx the upload needs the exception the background upload has: `client_max_body_size 9m` for
   `/api/admin/signin-wallpaper` (`deploy/nginx.example.conf`). Without it nginx refuses a file over 128 KiB,

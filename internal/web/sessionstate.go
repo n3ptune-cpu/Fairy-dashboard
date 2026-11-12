@@ -270,6 +270,16 @@ func (l *liveSessions) takeResult(sid string, cl client, now time.Time) *model.P
 	return res
 }
 
+// pendingBody is the body of the request that waits for sid's step-up sign-in ("" when none waits).
+func (l *liveSessions) pendingBody(sid string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e := l.m[sid]; e != nil && e.pending != nil {
+		return e.pending.Body
+	}
+	return ""
+}
+
 // dropPending forgets the action waiting for sid.
 func (l *liveSessions) dropPending(sid string) {
 	l.mu.Lock()

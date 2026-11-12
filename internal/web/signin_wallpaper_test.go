@@ -363,9 +363,9 @@ func TestSignInWallpaperIsForAdmins(t *testing.T) {
 	if got := e.auditEntries("", "settings.signin_wallpaper_upload"); len(got) != 0 {
 		t.Error("a refused upload is logged as a change:", got)
 	}
-	// the admin: with a sign-in of any age (no confirmation is asked, as for the other settings)
-	old := append([]string{"Cookie", e.staleCookie(controller(), 24*60*60*1e9)}, csrf...)
-	if r := e.wallUpload(pngPic, "image/png", old...); r.code != 201 {
+	// the admin, inside the window of "Confirm it's you" (outside it the change is asked for:
+	// TestSignInWallpaperChangeAsksToConfirm)
+	if r := e.wallUpload(pngPic, "image/png", admin...); r.code != 201 {
 		t.Fatalf("an admin: %d %s", r.code, r.raw)
 	}
 	st := e.do("GET", wallAPI, nil, "Cookie", admin[1])
@@ -428,7 +428,8 @@ func TestSignInWallpaperRemovalAuditAndRestart(t *testing.T) {
 		t.Fatalf("the state after a restart: %d %s", r.code, r.raw)
 	}
 	// removal
-	if r := e2.raw(probe{method: "DELETE", path: wallAPI}, admin...); r.code != 200 || r.body["set"] != false || r.body["version"] != nil {
+	admin2 := []string{"Cookie", e2.cookie(controller(), 0), "X-Requested-With", "fairy"} // a confirmation does not outlive a restart
+	if r := e2.raw(probe{method: "DELETE", path: wallAPI}, admin2...); r.code != 200 || r.body["set"] != false || r.body["version"] != nil {
 		t.Fatal("removal:", r.code, string(r.raw))
 	}
 	if r := e2.do("GET", wallURL, nil); r.code != 404 {

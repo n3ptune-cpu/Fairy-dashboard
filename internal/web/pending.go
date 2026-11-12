@@ -178,6 +178,8 @@ var actionText = map[string]string{
 	"POST /api/me/sessions/revoke":        "sign out another session of yours",
 	"POST /api/me/sessions/revoke-others": "sign out all your other sessions",
 	"POST /api/admin/sessions/revoke":     "sign out a session",
+	"POST /api/admin/signin-wallpaper":    "change the sign-in picture",
+	"DELETE /api/admin/signin-wallpaper":  "remove the sign-in picture",
 	"POST /api/admin/wake-update":         "Update unpowered hosts",
 	"DELETE /api/admin/wake-update/{id}":  "cancel the run of \"Update unpowered hosts\"",
 	"PUT /api/systems/{id}/wake-update":   "\"Update unpowered hosts\" for {id}",
@@ -188,6 +190,8 @@ var actionText = map[string]string{
 var actionDetail = map[string]func(c *reqCtx, u *model.User) string{
 	"POST /api/me/sessions/revoke":    (*reqCtx).sessionDetail,
 	"POST /api/admin/sessions/revoke": (*reqCtx).sessionDetail,
+	// which picture: its kind and size, as the panel found them (signin_wallpaper.go)
+	"POST /api/admin/signin-wallpaper": (*reqCtx).wallpaperDetail,
 	// which machines, by the panel's names for them, and the value that names the list (api_wakeupdate.go)
 	"POST /api/admin/wake-update":        (*reqCtx).wakeUpdateDetail,
 	"DELETE /api/admin/wake-update/{id}": (*reqCtx).wakeUpdateCancelDetail,

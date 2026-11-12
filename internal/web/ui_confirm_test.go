@@ -43,6 +43,8 @@ var confirmLabels = map[string][]string{
 	"POST /api/admin/wake-update":         {"label: `Update unpowered hosts: ${n} machine${n === 1 ? \"\" : \"s\"}`, method: \"POST\""},
 	"DELETE /api/admin/wake-update/{id}":  {"label: `Cancel the run (woken machines ${off ? \"are switched off again\" : \"stay on\"})`, method: \"DELETE\""},
 	"PUT /api/systems/{id}/wake-update":   {"const label = `${on ? \"Switch on\" : \"Switch off\"} \"Update unpowered hosts\" for ${name}`;"},
+	"POST /api/admin/signin-wallpaper":    {`controlCall({ kind: "upload", label: "Set sign-in picture" }, () => api("/api/admin/signin-wallpaper", { method: "POST"`},
+	"DELETE /api/admin/signin-wallpaper":  {`label: "Remove sign-in picture" }, () => api("/api/admin/signin-wallpaper", { method: "DELETE" })`},
 }
 
 // jsonInText finds a value turned into JSON inside a text the page builds (a template literal).

@@ -76,10 +76,9 @@ func (s *Store) SignIn() *SignInPicture {
 	return s.signIn.Load()
 }
 
-// SaveSignIn stores data as the sign-in wallpaper, replacing the one before (413 too large, 400 empty, 415
-// not a PNG, JPEG or WebP picture). The file is written under another name and renamed, so the directory never
-// holds half a picture under the name that is read at start.
-func (s *Store) SaveSignIn(data []byte) (*SignInPicture, error) {
+// CheckSignIn is what SaveSignIn checks before it stores anything: the size, that the content is a whole PNG,
+// JPEG or WebP picture, and its pixels. The upload's handler asks it before it asks anybody to confirm.
+func CheckSignIn(data []byte) (*SignInPicture, error) {
 	if len(data) > MaxBackgroundBytes {
 		return nil, apierr.Errf(413, "picture larger than %d MiB", MaxBackgroundBytes>>20)
 	}
@@ -92,6 +91,17 @@ func (s *Store) SaveSignIn(data []byte) (*SignInPicture, error) {
 	}
 	if why := PixelProblem(p.Type, data); why != "" { // every visitor's browser has to paint it (r2-p3-02)
 		return nil, apierr.New(413, why)
+	}
+	return p, nil
+}
+
+// SaveSignIn stores data as the sign-in wallpaper, replacing the one before (413 too large, 400 empty, 415
+// not a PNG, JPEG or WebP picture). The file is written under another name and renamed, so the directory never
+// holds half a picture under the name that is read at start.
+func (s *Store) SaveSignIn(data []byte) (*SignInPicture, error) {
+	p, err := CheckSignIn(data)
+	if err != nil {
+		return nil, err
 	}
 	s.SignIn() // what is on disk is read before it is replaced, never after
 	s.mu.Lock()

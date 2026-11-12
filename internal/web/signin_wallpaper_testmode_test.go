@@ -26,8 +26,25 @@ func TestTestModeSignInWallpaperAndSignOut(t *testing.T) {
 	if r := e.wallUpload(pngPic, "image/png", "Cookie", ck); r.code != 403 {
 		t.Fatal("without the CSRF header:", r.code)
 	}
-	if r := e.wallUpload(pngPic, "image/png", write...); r.code != 201 || r.body["type"] != "image/png" {
-		t.Fatalf("the test admin's upload: %d %s", r.code, r.raw)
+	// A change of the sign-in picture asks "Confirm it's you" here too, and the test build's own button confirms
+	// it (no Pocket ID): the picture waited, and is stored by the confirmation.
+	confirm := func(r resp, cookie, action string) string {
+		t.Helper()
+		d, _ := r.body["detail"].(map[string]any)
+		if !stepUpRequired(r) || d["pending"] != true || d["action"] != action {
+			t.Fatalf("must be asked to confirm %q: %d %s", action, r.code, r.raw)
+		}
+		ok := e.do("POST", stepUpPath, map[string]any{"pending_id": d["pending_id"], "next": "/#/settings"}, "Cookie", cookie, "X-Requested-With", "fairy")
+		next := strings.Split(ok.hdr.Get("Set-Cookie"), ";")[0]
+		if ok.code != 200 || ok.body["action"] != action || next == "" {
+			t.Fatalf("the confirmation: %d %s", ok.code, ok.raw)
+		}
+		return next
+	}
+	ck = confirm(e.wallUpload(pngPic, "image/png", write...), ck, "change the sign-in picture (PNG, "+byteText(len(pngPic))+")")
+	write = []string{"Cookie", ck, "X-Requested-With", "fairy"}
+	if st := e.do("GET", wallAPI, nil, "Cookie", ck); st.code != 200 || st.body["set"] != true || st.body["type"] != "image/png" {
+		t.Fatalf("the test admin's upload after the confirmation: %d %s", st.code, st.raw)
 	}
 	g := e.do("GET", wallURL, nil) // no cookie: the picture is public, and asking for it signs nobody in
 	if g.code != 200 || g.hdr.Get("Content-Type") != "image/png" || g.hdr.Get("Set-Cookie") != "" || !bytes.Equal(g.raw, pngPic) ||
@@ -73,9 +90,7 @@ func TestTestModeSignInWallpaperAndSignOut(t *testing.T) {
 		t.Fatalf("a refused sign-out: %d %q", r.code, r.hdr.Values("Set-Cookie"))
 	}
 	// removal
-	if r := e.raw(probe{method: "DELETE", path: wallAPI}, "Cookie", ck, "X-Requested-With", "fairy"); r.code != 200 {
-		t.Fatal("removal:", r.code, string(r.raw))
-	}
+	confirm(e.raw(probe{method: "DELETE", path: wallAPI}, "Cookie", ck, "X-Requested-With", "fairy"), ck, "remove the sign-in picture")
 	if r := e.do("GET", wallURL, nil); r.code != 404 {
 		t.Fatal("after the removal:", r.code)
 	}

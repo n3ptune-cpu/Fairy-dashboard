@@ -3,8 +3,10 @@ package web
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
@@ -80,7 +82,7 @@ func (s *Server) serveWallpaper(w http.ResponseWriter, r *http.Request) {
 }
 
 // wallpaperAdmin: an admin with a browser session (API tokens are refused, like on the settings endpoints);
-// a change also needs the CSRF header and the same origin.
+// a change also needs the CSRF header and the same origin, and then "Confirm it's you" (wallpaperStepUp).
 func (c *reqCtx) wallpaperAdmin(write bool) (*model.User, error) {
 	u, err := c.requireSession()
 	if err != nil {
@@ -114,6 +116,109 @@ func (s *Server) getWallpaper(c *reqCtx) error {
 	return nil
 }
 
+// A change of the sign-in picture asks for "Confirm it's you", as the other admin actions do (the owner's
+// decision after r2-p1-02: the picture is shown to everyone who can open the panel's address, before any
+// sign-in, and a session cookie alone could replace it). The same window and the same kept-action flow
+// (pending.go): a request that is refused is kept and runs by itself right after the sign-in.
+//
+// An upload is too large to be kept as a request (pendingMaxBody), so what is kept for it is a small request
+// that names the picture, and the picture waits beside it: checked already, in memory, for as long as a kept
+// action lives, at most maxStagedPictures at a time. The name is a random value that never leaves the panel.
+const wallpaperStepUp = "changes to the sign-in picture"
+
+// maxStagedPictures bounds the pictures that wait for a confirmation (8 MiB each at most; admins only).
+const maxStagedPictures = 4
+
+type stagedPicture struct {
+	data  []byte
+	at    time.Time
+	owner string // the session that asked: it keeps one action, so one picture waits for it
+}
+
+// stagedPictures holds the sign-in pictures that wait for "Confirm it's you", by their name.
+type stagedPictures struct {
+	mu sync.Mutex
+	m  map[string]stagedPicture
+}
+
+// put keeps data for the session owner and returns its name. Pictures that waited too long go, and the one
+// that waited for the same session; when the room is full, the oldest.
+func (s *stagedPictures) put(owner string, data []byte, now time.Time) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.m == nil {
+		s.m = map[string]stagedPicture{}
+	}
+	oldest := ""
+	for k, p := range s.m {
+		if now.Sub(p.at) > pendingMaxAge || p.owner == owner {
+			delete(s.m, k)
+		} else if oldest == "" || p.at.Before(s.m[oldest].at) {
+			oldest = k
+		}
+	}
+	if len(s.m) >= maxStagedPictures {
+		delete(s.m, oldest)
+	}
+	name := randToken(18)
+	s.m[name] = stagedPicture{data, now, owner}
+	return name
+}
+
+// take hands the picture out, once (nil: it waited too long, was pushed out, or the panel restarted).
+func (s *stagedPictures) take(name string, now time.Time) []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.m[name]
+	delete(s.m, name)
+	if !ok || now.Sub(p.at) > pendingMaxAge {
+		return nil
+	}
+	return p.data
+}
+
+// peek is take without taking (for the dialog's description of the kept action).
+func (s *stagedPictures) peek(name string) []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.m[name].data
+}
+
+// stagedName reads the kept request of an upload: {"staged": name}.
+func stagedName(body []byte) string {
+	var b struct {
+		Staged string `json:"staged"`
+	}
+	if !decodeStrictly(body, &b) || len(b.Staged) > 64 {
+		return ""
+	}
+	return b.Staged
+}
+
+// wallpaperDetail is what the "Confirm it's you" dialog adds to "change the sign-in picture": which picture.
+func (c *reqCtx) wallpaperDetail(*model.User) string {
+	data := c.s.wallStage.peek(stagedName(c.body))
+	if data == nil {
+		return ""
+	}
+	kind := map[string]string{"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WebP"}[settings.SignInType(data)]
+	return kind + ", " + byteText(len(data))
+}
+
+// byteText is a size in the page's own units (fmtBytes in app.js).
+func byteText(n int) string {
+	units := []string{"B", "KiB", "MiB"}
+	v, i := float64(n), 0
+	for v >= 1024 && i < len(units)-1 {
+		v /= 1024
+		i++
+	}
+	if v >= 100 || i == 0 {
+		return fmt.Sprintf("%.0f %s", v, units[i])
+	}
+	return fmt.Sprintf("%.1f %s", v, units[i])
+}
+
 // uploadWallpaper stores the request's body as the sign-in wallpaper. What the browser calls the file (its
 // name, its Content-Type) is not looked at: the content says what it is (settings.SignInType).
 func (s *Server) uploadWallpaper(c *reqCtx) error {
@@ -121,18 +226,42 @@ func (s *Server) uploadWallpaper(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
-	if !s.uploadRL.allow(u.Sub) {
-		return apierr.New(429, "too many uploads; try again in a minute")
-	}
-	if c.r.ContentLength < 0 { // a body of unknown length is read ahead in part only (readBody): never stored cut off
-		return apierr.New(411, "the upload needs a Content-Length")
-	}
-	if c.r.ContentLength > settings.MaxBackgroundBytes {
-		return apierr.Errf(413, "picture larger than %d MiB", settings.MaxBackgroundBytes>>20)
-	}
-	data, err := io.ReadAll(io.LimitReader(c.r.Body, settings.MaxBackgroundBytes+1))
-	if err != nil || int64(len(data)) != c.r.ContentLength {
-		return apierr.New(400, "unreadable body")
+	var data []byte
+	if c.resumed() { // the panel's own replay right after "Confirm it's you": the picture that waited
+		if data = s.wallStage.take(stagedName(c.body), s.now()); data == nil {
+			return apierr.New(409, "the picture is no longer waiting for the confirmation (it waits 3 minutes): upload it again")
+		}
+		if err := c.stepUp(u, wallpaperStepUp); err != nil {
+			return err
+		}
+	} else {
+		if !s.uploadRL.allow(u.Sub) {
+			return apierr.New(429, "too many uploads; try again in a minute")
+		}
+		if c.r.ContentLength < 0 { // a body of unknown length is read ahead in part only (readBody): never stored cut off
+			return apierr.New(411, "the upload needs a Content-Length")
+		}
+		if c.r.ContentLength > settings.MaxBackgroundBytes {
+			return apierr.Errf(413, "picture larger than %d MiB", settings.MaxBackgroundBytes>>20)
+		}
+		data, err = io.ReadAll(io.LimitReader(c.r.Body, settings.MaxBackgroundBytes+1))
+		if err != nil || int64(len(data)) != c.r.ContentLength {
+			return apierr.New(400, "unreadable body")
+		}
+		// A file the panel will not take is refused now, with the reason, not after the passkey.
+		if _, err := settings.CheckSignIn(data); err != nil {
+			return err
+		}
+		// What is kept for the confirmation is the request "store the picture named ...", and the picture waits.
+		name := s.wallStage.put(c.pendingKey(), data, s.now())
+		c.body, c.bodyKept = []byte(`{"staged":"`+name+`"}`), true
+		err := c.stepUp(u, wallpaperStepUp)
+		if kept := s.codec.live.pendingBody(c.pendingKey()); err == nil || kept != string(c.body) {
+			s.wallStage.take(name, s.now()) // the sign-in is fresh, or the request was not kept: nothing waits
+		}
+		if err != nil {
+			return err
+		}
 	}
 	p, err := s.Settings.SaveSignIn(data)
 	if err != nil {
@@ -152,10 +281,13 @@ func (s *Server) deleteWallpaper(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
+	if err := c.stepUp(u, wallpaperStepUp); err != nil {
+		return err
+	}
+	was := s.Settings.SignIn() != nil
 	if !s.settingsRL.allow(u.Sub) {
 		return apierr.New(429, "too many settings changes; slow down")
 	}
-	was := s.Settings.SignIn() != nil
 	if err := s.Settings.DeleteSignIn(); err != nil {
 		c.audit(u, "settings.signin_wallpaper_delete", "", map[string]any{}, "failed: not removed")
 		return err

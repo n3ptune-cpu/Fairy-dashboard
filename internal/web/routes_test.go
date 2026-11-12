@@ -55,8 +55,8 @@ var matrixRoutes = []writeRoute{
 	{pattern: "POST /api/settings/background", path: "/api/settings/background", body: tinyPNG, ctype: "image/png"},
 	{pattern: "DELETE /api/settings/background", path: "/api/settings/background", pendingOK: true},
 	// the sign-in wallpaper is the panel's, not a user's own: admins only; no confirmation, like the other settings
-	{pattern: "POST /api/admin/signin-wallpaper", path: "/api/admin/signin-wallpaper", body: tinyPNG, ctype: "image/png", adminOnly: true},
-	{pattern: "DELETE /api/admin/signin-wallpaper", path: "/api/admin/signin-wallpaper", adminOnly: true},
+	{pattern: "POST /api/admin/signin-wallpaper", path: "/api/admin/signin-wallpaper", body: tinyPNG, ctype: "image/png", adminOnly: true, stepUp: true},
+	{pattern: "DELETE /api/admin/signin-wallpaper", path: "/api/admin/signin-wallpaper", adminOnly: true, stepUp: true},
 	{pattern: "POST /api/notifications/read", path: "/api/notifications/read", body: map[string]any{"all": true}, readToken: true, controlToken: true},
 	{pattern: "POST /api/notifications/dismiss", path: "/api/notifications/dismiss", body: map[string]any{"ids": []int{1}}, readToken: true, controlToken: true},
 	{pattern: "POST /api/systems/{id}/fan/mode", path: "/api/systems/tower/fan/mode", body: map[string]any{"mode": "full"}, adminOnly: true, stepUp: true, controlToken: true, killSwitch: true},

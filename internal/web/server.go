@@ -116,9 +116,10 @@ type Server struct {
 	settingsRL, uploadRL             *rateLimiter // per user: settings changes, background uploads
 	stopRL                           *rateLimiter // per user: "Cancel run" and the cancel of a countdown (stopsPerMin)
 	mux                              *http.ServeMux
-	answerTimeout                    time.Duration // how long a client may take over one answer (answerWriteTimeout; tests shorten it)
-	backgrounds                      streamSlots   // background downloads in flight (api_settings.go)
-	agentReads                       *agentReads   // read requests passed through to an agent, in flight (agentreads.go)
+	answerTimeout                    time.Duration  // how long a client may take over one answer (answerWriteTimeout; tests shorten it)
+	backgrounds                      streamSlots    // background downloads in flight (api_settings.go)
+	wallStage                        stagedPictures // sign-in pictures that wait for "Confirm it's you" (signin_wallpaper.go)
+	agentReads                       *agentReads    // read requests passed through to an agent, in flight (agentreads.go)
 }
 
 // stopsPerMin is how many cancels (of an "Update unpowered hosts" run, of a shutdown countdown) one user may

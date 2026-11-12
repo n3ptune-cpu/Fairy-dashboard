@@ -366,6 +366,7 @@ async function runPending() {
   try {
     if (p.kind === "power" && s) { await refreshCaps(s.id); openPowerDialog(s, p.action); }
     else if (p.kind === "request") { const r = await api(p.path, { method: p.method, body: JSON.stringify(p.body) }); flash(r?.message || `${p.label}: done`); }
+    else if (p.kind === "upload") flash(`${p.label}: choose the picture again`);  // a file is not kept by the page
   } catch (e) {
     const typed = p.kind === "request" && p.method === "POST" && p.path === "/api/admin/hosts" ? keptAddHost() : null;
     if (typed) openAddHost(typed, e.message); else flash(e.message, true);  // Add host: back in its dialog, as in showPendingResult
@@ -2080,6 +2081,7 @@ function signInPanel() {
   if (state.me?.role !== "admin") return "";
   return `<div class="panel glass pad" id="siw"><h3>Sign-in page${infoBtn("set-siw", "Sign-in page", infoList([
       "Upload only: PNG, JPEG or WebP, at most 8 MiB.",
+      "Changing it asks you to confirm it's you.",
       "It does not change your own background above."]))}</h3>
     <div class="note info-keep">Picture behind the sign-in page, the same for everyone. Anyone who can open this panel's address sees it before signing in, so pick one that may be public.</div>
     <div class="row-gap section-title"><label class="btn" for="siw-file">Upload picture…</label><input id="siw-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
@@ -2105,14 +2107,21 @@ function bindSignIn() {
     if (!file) return;
     err(null);
     if (signInWall?.max_bytes && file.size > signInWall.max_bytes) return err(new Error(`picture larger than ${Math.round(signInWall.max_bytes / 2 ** 20)} MiB`));  // the panel's own words for it
-    try { show(await api("/api/admin/signin-wallpaper", { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } })); flash("Sign-in picture saved"); }
+    // Outside the window of "Confirm it's you" the panel keeps the checked picture and stores it right after the sign-in.
+    try {
+      const w = await controlCall({ kind: "upload", label: "Set sign-in picture" }, () => api("/api/admin/signin-wallpaper", { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } }));
+      if (w) { show(w); flash("Sign-in picture saved"); }
+    }
     catch (x) {  // 413 without the panel's own words: the proxy in front of it refused the upload (README, "Sign-in wallpaper")
       err(x.status === 413 && !x.detail ? new Error("The upload was refused as too large before it reached the panel. nginx needs client_max_body_size 9m for /api/admin/signin-wallpaper, as for the background upload.") : x);
     }
   };
   $("#siw-clear").onclick = async () => {
     err(null);
-    try { show(await api("/api/admin/signin-wallpaper", { method: "DELETE" })); flash("Sign-in picture removed"); }
+    try {
+      const w = await controlCall({ kind: "request", method: "DELETE", path: "/api/admin/signin-wallpaper", label: "Remove sign-in picture" }, () => api("/api/admin/signin-wallpaper", { method: "DELETE" }));
+      if (w) { show(w); flash("Sign-in picture removed"); }
+    }
     catch (x) { err(x); }
   };
 }
