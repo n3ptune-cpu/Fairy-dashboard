@@ -820,8 +820,8 @@ memory limit. Add it once:
 
 Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
 `managed-hosts.yaml`, `state.json`, `settings.json`, and `sessions.json`, where it ignores what this one adds).
-It does not start when config.yaml has a `wake_update:` block (the one key that is new in this release):
-take the block out before you go back. A panel older than
+It does not start when config.yaml has a `wake_update:` block: take the block out first. (It is the one key
+that is new in this release; do it before you go back.) A panel older than
 the last release also does not start with `enroll: {allow_non_tailscale: ...}`, `step_up_per_action`, or a
 text such as `4h` in the two session settings: take those out as well (write the session settings as whole
 seconds). The older panel does not know the pop-up settings: when someone saves a setting there, that
