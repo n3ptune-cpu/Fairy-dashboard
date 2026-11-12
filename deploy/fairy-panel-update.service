@@ -18,7 +18,10 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/fairy update --yes --from-panel
-TimeoutStartSec=600
+# `fairy update` gives itself 15 minutes and may need two more to put the old program back; it reports its own
+# failure only when systemd does not stop it first. A run that is stopped anyway (also by a reboot) shows as
+# "stopped" on the Updates page, and the button works again.
+TimeoutStartSec=1080
 StateDirectory=fairy-panel-update
 StateDirectoryMode=0755
 UMask=0022

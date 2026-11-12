@@ -91,6 +91,9 @@ func update(args []string) int {
 	} else if !*check {
 		setupPanelButton()
 	}
+	if !*check {
+		clearStoppedRun(filepath.Dir(exe), panelupdate.StatusPath, *fromPanel, time.Now(), panelupdate.UnitActivity)
+	}
 	healthURL := "http://" + healthAddr(cfg, *envFile) + "/healthz"
 	cli := &release.CLI{Client: client, Key: key, Program: release.PanelProgram, Current: version, Target: exe,
 		Asset: release.AssetName(release.PanelProgram, runtime.GOOS, runtime.GOARCH), Out: os.Stdout, In: os.Stdin,
@@ -130,6 +133,25 @@ func setupPanelButton() {
 		fmt.Fprintln(os.Stderr, "fairy update: the Update panel button will not work yet:", err)
 	} else if len(changed) > 0 {
 		fmt.Println("Update panel button: ready (Updates page, admins).")
+	}
+}
+
+// clearStoppedRun tidies up after an "Update panel" run that was stopped half-way (a reboot, a crash, systemd's
+// time limit): what its download left next to the program is deleted, and a run by hand marks the status file
+// as "stopped", so the Updates page no longer shows that run as running (the button's own run writes a new
+// status anyway). Nothing of a run that can still be alive is touched.
+func clearStoppedRun(dir, statusPath string, fromPanel bool, now time.Time, unit func() panelupdate.Activity) {
+	for _, name := range panelupdate.RemoveStaleDownloads(dir, now) {
+		fmt.Println("removed what a stopped update left behind:", filepath.Join(dir, name))
+	}
+	if fromPanel {
+		return
+	}
+	if st, ok := panelupdate.Read(statusPath); !ok || st.Finished {
+		return
+	}
+	if st, dead := panelupdate.SettleFile(statusPath, now, unit()); dead {
+		fmt.Printf("An earlier Update panel run (started %s) stopped before it finished: marked as stopped.\n", st.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
 	}
 }
 

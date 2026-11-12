@@ -75,7 +75,7 @@ func (s *Server) panelUpdatePost(c *reqCtx) error {
 	switch {
 	case !p.Ready:
 		return apierr.New(409, p.Why)
-	case p.Status != nil && !p.Status.Finished:
+	case p.Status != nil && !p.Status.Finished: // only a run that can be alive: a stopped one reads as finished (Systemd.Status)
 		return apierr.New(409, "an update of the panel is already running")
 	case p.Behind == nil || !*p.Behind:
 		return apierr.New(409, "no newer signed panel release is known (the panel never installs an older or the same one)")
@@ -116,6 +116,8 @@ func (s *Server) notePanelUpdateResult() {
 		e.Kind, e.Severity, e.Text = "panel_update_rolled_back", notifications.Warning, "panel update rolled back: "+st.Message
 	case "failed":
 		e.Kind, e.Severity, e.Text = "panel_update_failed", notifications.Warning, "panel update failed: "+st.Message
+	case "stopped": // the run did not end by itself (panelupdate.Settled)
+		e.Kind, e.Severity, e.Text = "panel_update_stopped", notifications.Warning, "panel update "+st.Message
 	}
 	s.Notes.Add(e)
 }

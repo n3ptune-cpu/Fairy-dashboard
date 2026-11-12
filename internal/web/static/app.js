@@ -2725,7 +2725,7 @@ function panelUpdateBox(d) {
   const canGo = p?.ready && p?.behind === true && !running && !why;
   const title = why || (!p ? "loading…" : !p.ready ? p.why : p.behind !== true ? "No newer signed panel release" : running ? "An update is running" : `Install ${to} on the panel's host`);
   const at = st ? PANEL_STEPS.findIndex(([k]) => k === st.state) : -1;
-  const bad = st && ["failed", "rolled_back"].includes(st.state);
+  const bad = st && ["failed", "rolled_back", "stopped"].includes(st.state);  // stopped: the run did not end by itself
   const steps = st && (running || Date.now() - new Date(st.updated_at) < 3600e3) ? `<div class="steps">${PANEL_STEPS.map(([k, l], i) =>
     `<span class="${st.state === "done" || at > i ? "done" : at === i ? (st.finished ? "done" : "now") : ""}">${l}</span>`).join("")}${bad ? `<span class="bad">${esc(st.state.replace("_", " "))}</span>` : ""}</div>
     <div class="note">${pupd.restarting ? "The panel is restarting… this page reconnects by itself." : esc(st.message)}${st.started_at ? ` · started <span data-ago="${esc(st.started_at)}">${ago(st.started_at)}</span>` : ""}</div>` : "";
