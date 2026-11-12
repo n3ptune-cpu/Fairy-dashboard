@@ -99,6 +99,13 @@ func (s *Server) machineEvent(e poller.MachineEvent) {
 	b := e.Binding
 	key := "approval:" + e.AgentID
 	switch e.Kind {
+	case "gone":
+		// the record of a host that is not in the configuration any more was dropped (audit 6, r4-x1-03)
+		params := map[string]any{}
+		if b.Record.MachineID != "" {
+			params["on_record"], params["how"] = approval.ShortID(b.Record.MachineID), b.Record.How
+		}
+		entry("approval.record", e.AgentID, params, "dropped: the panel has no host with this id any more")
 	case "alarm":
 		params := map[string]any{"status": b.Status}
 		if len(b.With) > 0 {
