@@ -537,8 +537,13 @@ func TestApprovalStateIsVisible(t *testing.T) {
 		len(x["keys"].([]any)) != 1 || x["fan_window_s"] != 30.0 {
 		t.Fatalf("approval block for a viewer: %v", x)
 	}
-	if strings.Contains(string(r.raw), approvalAdminSub) {
-		t.Error("the allowed users' ids are not part of the block")
+	// the id as a value of its own: "u2" is two characters, and the answer carries a key (base64) and a
+	// thumbprint in which they turn up by chance once in a few hundred runs
+	if strings.Contains(string(r.raw), `"`+approvalAdminSub+`"`) {
+		t.Errorf("the allowed users' ids are not part of the block: %s", r.raw)
+	}
+	if list, isList := x["users"].([]any); isList {
+		t.Errorf("the block lists the allowed users: %v", list)
 	}
 }
 
