@@ -982,9 +982,9 @@ func TestAgentErrorsAreNot502(t *testing.T) {
 		{"wrong control token", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 401, jsonx.M{"error": "unauthorized"}, nil, 424, "control token"},
 		// not the agent's own answer: no answer of the agent, as on the power path below (the fan change may have arrived)
 		{"a 401 that is not the agent's", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 401, nil, nil, 502,
-			"agent unreachable: http 401, and not an answer of the agent"},
+			"no answer (http 401): it may have arrived"},
 		{"a 500 without a body", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 500, nil, nil, 502,
-			"agent unreachable: http 500, and not an answer of the agent"},
+			"no answer (http 500): it may have arrived"},
 		{"agent rate limit", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 429, jsonx.M{"error": "slow down"}, nil, 429, "slow down"},
 		{"unreachable", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 0, nil, devices.Errf("connection refused"), 502, "agent unreachable"},
 		{"fan status error", "GET", "/api/systems/tower/fan", nil, 503, jsonx.M{"error": "BMC busy"}, nil, 424, "BMC busy"},
@@ -995,9 +995,9 @@ func TestAgentErrorsAreNot502(t *testing.T) {
 		{"power: control token", "POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "LAPTOP"}, 401,
 			jsonx.M{"error": "unauthorized"}, nil, 424, "control token"}, // the agent's own 401, with its body
 		{"power: a 401 that is not the agent's", "POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "LAPTOP"}, 401,
-			nil, nil, 502, "agent unreachable: http 401, and not an answer of the agent"},
+			nil, nil, 502, "no answer (http 401): it may have arrived"},
 		{"power: a proxy's 504 without a body", "POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "LAPTOP"}, 504,
-			nil, nil, 502, "agent unreachable: http 504, and not an answer of the agent"},
+			nil, nil, 502, "no answer (http 504): it may have arrived"},
 	} {
 		reply.st, reply.body, reply.err = tc.st, tc.agent, tc.err
 		r := e.do(tc.method, tc.path, tc.body, hdr...)

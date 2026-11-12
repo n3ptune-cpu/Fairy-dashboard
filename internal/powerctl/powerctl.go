@@ -125,6 +125,20 @@ func sameString(a, b *string) bool {
 // HelperStoppedWhy is why a Windows host's power actions are unavailable while its elevated helper is stopped.
 const HelperStoppedWhy = "the elevated helper is stopped: start the helper first (Elevated helper, next to the host name)"
 
+// HelperAnswerWhy is what the panel says to an agent's 503 with the code helper_stopped or helper_error: the
+// request was not carried out because of the helper. It used to be HelperStoppedWhy for both, "the elevated
+// helper is stopped: start the helper first", which is not true for helper_error (the helper runs and did
+// not answer), and not always for helper_stopped: the agent answers a Cancel with it whenever it cannot tell
+// what is pending, also in the seconds after a request its running helper did not answer (review of the
+// agent's fix batch, RF7-05). The hint to start a helper that is stopped stays.
+func HelperAnswerWhy(code string) string {
+	if code == api.ReasonHelperError {
+		return "the elevated helper runs but did not answer its agent: try again in a moment (Elevated helper, next to the host name, shows how it is)"
+	}
+	return "the elevated helper is stopped, or did not answer its agent just now: if it is stopped, start the helper first " +
+		"(Elevated helper, next to the host name); if it runs, try again in a moment"
+}
+
 // Capabilities lists every action with availability, reason, confirmation and route.
 //
 // The kill switch and the per-host power switch take every action away except one: "cancel", the calling off
@@ -517,7 +531,13 @@ func (e *AgentRefusal) Unwrap() error { return e.Err }
 // request (the wake / update / shut down run) must not take it for "nothing happened", and never sends the
 // request again because of it. A request that certainly never left (poller.NotSent: no connection could be
 // had) is not one of these, and neither is the agent's own "no" (AgentRefusal).
-type Unanswered struct{ Err *apierr.Error }
+//
+// Short, when set, is the reason alone, for a sentence that says "got no answer (...): it may have arrived"
+// itself (a run's history).
+type Unanswered struct {
+	Err   *apierr.Error
+	Short string
+}
 
 func (e *Unanswered) Error() string { return e.Err.Error() }
 func (e *Unanswered) Unwrap() error { return e.Err }
@@ -581,8 +601,12 @@ func UpdateAgent(ctx context.Context, p *poller.Poller, a config.Agent, requeste
 // its "yes" or its "no"; the plain error when the request never left the panel; and an Unanswered in every
 // other case. There is one such rule in the panel, and this is it.
 func NoAnswer(path string, status int, data jsonx.M, err error) error {
+	// The words are true for whoever sent the status: a proxy between panel and agent, and the agent itself,
+	// whose own 504 says that its helper was handed the request and did not answer (they were "agent
+	// unreachable: http 504, and not an answer of the agent": review of the agent's fix batch, RF7-08).
 	notTheAgents := func() error {
-		return &Unanswered{Err: apierr.New(502, fmt.Sprintf("agent unreachable: http %d, and not an answer of the agent", status))}
+		return &Unanswered{Err: apierr.New(502, fmt.Sprintf("no answer (http %d): it may have arrived", status)),
+			Short: fmt.Sprintf("http %d in place of an answer", status)}
 	}
 	if err != nil {
 		e := apierr.New(502, "agent unreachable: "+devices.Describe(err))
@@ -640,7 +664,7 @@ func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path strin
 	refusal := func(e *apierr.Error) error { return &AgentRefusal{Err: e, Code: agentCode(data), Status: status} }
 	switch {
 	case status == 503 && (jsonx.S(data, "code") == api.ReasonHelperStopped || jsonx.S(data, "code") == api.ReasonHelperError):
-		return nil, refusal(apierr.New(409, HelperStoppedWhy)) // the helper stopped since the last poll: not an agent failure
+		return nil, refusal(apierr.New(409, HelperAnswerWhy(jsonx.S(data, "code")))) // not an agent failure
 	case status == 401: // the agent answered: 424, never 502 (see apierr.Upstream)
 		return nil, apierr.New(apierr.Upstream, "agent refused the control token (check control_token_env)")
 	case status == 404:

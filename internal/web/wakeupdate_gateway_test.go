@@ -48,7 +48,7 @@ func TestWakeUpdateAGatewaysJSONErrorForTheShutdownIsNotARefusal(t *testing.T) {
 		for _, l := range h.Log {
 			log += l.Text + "\n"
 		}
-		if want := "the shutdown request got no answer (agent unreachable: http " + map[int]string{504: "504", 502: "502"}[status] + ", and not an answer of the agent): it may have arrived."; !strings.Contains(log, want) {
+		if want := "the shutdown request got no answer (http " + map[int]string{504: "504", 502: "502"}[status] + " in place of an answer): it may have arrived."; !strings.Contains(log, want) {
 			t.Errorf("%d: the history lacks %q:\n%s", status, want, log)
 		}
 	}

@@ -89,7 +89,7 @@ func TestAProxysErrorStatusIsNotTheAgentsNo(t *testing.T) {
 	var lost *Unanswered
 	var no *AgentRefusal
 	if countdowns.Load() != 1 || !errors.As(err, &lost) || errors.As(err, &no) ||
-		said(err) != "agent unreachable: http 504, and not an answer of the agent" {
+		said(err) != "no answer (http 504): it may have arrived" {
 		t.Fatalf("the agent started %d countdown(s), and powerctl says: %T %v (want an Unanswered, never an AgentRefusal)", countdowns.Load(), err, err)
 	}
 }
@@ -111,16 +111,16 @@ func TestAnErrorStatusIsARefusalOnlyWithTheAgentsOwnBody(t *testing.T) {
 		{"the agent: locked", 423, "application/json", `{"error":"locked"}`, true, "locked"},
 		{"the agent: its rate limit", 429, "application/json", `{"error":"too many control requests"}`, true, "too many control requests"},
 		{"the agent: it failed", 500, "application/json", `{"error":"could not schedule the shutdown: exit status 1"}`, true, "could not schedule the shutdown: exit status 1"},
-		{"the agent: helper stopped", 503, "application/json", `{"error":"helper stopped","code":"helper_stopped"}`, true, HelperStoppedWhy},
-		{"a proxy's 502 page", 502, "text/html", "<html><h1>502 Bad Gateway</h1></html>", false, "agent unreachable: http 502, and not an answer of the agent"},
-		{"a proxy's 503 page", 503, "text/html", "<html><h1>503 Service Unavailable</h1></html>", false, "agent unreachable: http 503, and not an answer of the agent"},
-		{"a proxy's 504 page", 504, "text/html", "<html><h1>504 Gateway Time-out</h1></html>", false, "agent unreachable: http 504, and not an answer of the agent"},
-		{"a proxy's 504 without a body", 504, "", "", false, "agent unreachable: http 504, and not an answer of the agent"},
-		{"a proxy's 502 as JSON of its own", 502, "application/json", `{"message":"Bad Gateway","status":502}`, false, "agent unreachable: http 502, and not an answer of the agent"},
-		{"another server's 404 page", 404, "text/html", "<html>Not Found</html>", false, "agent unreachable: http 404, and not an answer of the agent"},
-		{"a sign-in proxy's 401", 401, "text/plain", "Unauthorized", false, "agent unreachable: http 401, and not an answer of the agent"},
-		{"a 429 that is not the agent's", 429, "text/plain", "slow down", false, "agent unreachable: http 429, and not an answer of the agent"},
-		{"an error with \"error\" that is not a text", 500, "application/json", `{"error":{"code":500}}`, false, "agent unreachable: http 500, and not an answer of the agent"},
+		{"the agent: helper stopped", 503, "application/json", `{"error":"helper stopped","code":"helper_stopped"}`, true, HelperAnswerWhy("helper_stopped")},
+		{"a proxy's 502 page", 502, "text/html", "<html><h1>502 Bad Gateway</h1></html>", false, "no answer (http 502): it may have arrived"},
+		{"a proxy's 503 page", 503, "text/html", "<html><h1>503 Service Unavailable</h1></html>", false, "no answer (http 503): it may have arrived"},
+		{"a proxy's 504 page", 504, "text/html", "<html><h1>504 Gateway Time-out</h1></html>", false, "no answer (http 504): it may have arrived"},
+		{"a proxy's 504 without a body", 504, "", "", false, "no answer (http 504): it may have arrived"},
+		{"a proxy's 502 as JSON of its own", 502, "application/json", `{"message":"Bad Gateway","status":502}`, false, "no answer (http 502): it may have arrived"},
+		{"another server's 404 page", 404, "text/html", "<html>Not Found</html>", false, "no answer (http 404): it may have arrived"},
+		{"a sign-in proxy's 401", 401, "text/plain", "Unauthorized", false, "no answer (http 401): it may have arrived"},
+		{"a 429 that is not the agent's", 429, "text/plain", "slow down", false, "no answer (http 429): it may have arrived"},
+		{"an error with \"error\" that is not a text", 500, "application/json", `{"error":{"code":500}}`, false, "no answer (http 500): it may have arrived"},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if c.ctype != "" {

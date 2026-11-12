@@ -207,7 +207,9 @@ func opError(err error) error {
 	}
 	var lost *powerctl.Unanswered
 	if errors.As(err, &lost) {
-		out.Code = wakerun.CodeNoAnswer
+		if out.Code = wakerun.CodeNoAnswer; lost.Short != "" { // the run's sentence says "got no answer (...): it may have arrived" itself
+			out.Text = lost.Short
+		}
 	}
 	var ref *powerctl.AgentRefusal
 	if errors.As(err, &ref) {

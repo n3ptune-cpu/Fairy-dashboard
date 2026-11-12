@@ -132,7 +132,7 @@ func TestWakeUpdateAGatewayErrorForTheCancelIsNotOff(t *testing.T) {
 		t.Errorf("REPORTED OFF after a cancel that arrived (the machine is on): %s", h.Text)
 	}
 	if h.State != wakerun.StLeftOn || h.On != wakerun.OnUnknown ||
-		!strings.Contains(h.Text, "the request to call its shutdown countdown (due at ") || !strings.Contains(h.Text, "off got no answer (agent unreachable: http 504, and not an answer of the agent): it may have arrived.") {
+		!strings.Contains(h.Text, "the request to call its shutdown countdown (due at ") || !strings.Contains(h.Text, "off got no answer (http 504 in place of an answer): it may have arrived.") {
 		t.Errorf("[%s] power %q: %s", h.State, h.On, h.Text)
 	}
 }

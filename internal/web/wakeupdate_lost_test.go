@@ -57,16 +57,16 @@ func TestWakeUpdateARequestWithoutAnAnswerIsToldApart(t *testing.T) {
 		// have taken it. Whatever stands between panel and agent cannot speak for the agent, so every such answer
 		// is "no answer: it may have arrived", also a 404 or 403 page, a 429, a 401 and an error status with an
 		// empty body or with JSON that is not the agent's. (Commit d728730 had made each of these a refusal; these
-		// rows held "|agent unreachable: http 502, and not an answer of the agent" and "rate_limited|..." for 429.)
-		{func() (int, jsonx.M, error) { return 502, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 502, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 503, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 503, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 504, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 504, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 404, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 404, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 403, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 403, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 429, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: http 429, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 504, jsonx.M{}, nil }, "no_answer|agent unreachable: http 504, and not an answer of the agent"}, // an empty body
-		{func() (int, jsonx.M, error) { return 502, jsonx.M{"message": "Bad Gateway", "status": 502.0}, nil }, "no_answer|agent unreachable: http 502, and not an answer of the agent"},
-		{func() (int, jsonx.M, error) { return 401, jsonx.M{}, nil }, "no_answer|agent unreachable: http 401, and not an answer of the agent"},
+		// rows held "|http 502 in place of an answer" and "rate_limited|..." for 429.)
+		{func() (int, jsonx.M, error) { return 502, nil, devices.Errf("invalid response") }, "no_answer|http 502 in place of an answer"},
+		{func() (int, jsonx.M, error) { return 503, nil, devices.Errf("invalid response") }, "no_answer|http 503 in place of an answer"},
+		{func() (int, jsonx.M, error) { return 504, nil, devices.Errf("invalid response") }, "no_answer|http 504 in place of an answer"},
+		{func() (int, jsonx.M, error) { return 404, nil, devices.Errf("invalid response") }, "no_answer|http 404 in place of an answer"},
+		{func() (int, jsonx.M, error) { return 403, nil, devices.Errf("invalid response") }, "no_answer|http 403 in place of an answer"},
+		{func() (int, jsonx.M, error) { return 429, nil, devices.Errf("invalid response") }, "no_answer|http 429 in place of an answer"},
+		{func() (int, jsonx.M, error) { return 504, jsonx.M{}, nil }, "no_answer|http 504 in place of an answer"}, // an empty body
+		{func() (int, jsonx.M, error) { return 502, jsonx.M{"message": "Bad Gateway", "status": 502.0}, nil }, "no_answer|http 502 in place of an answer"},
+		{func() (int, jsonx.M, error) { return 401, jsonx.M{}, nil }, "no_answer|http 401 in place of an answer"},
 		// a good status with a body that cannot be read: the request may well have been carried out
 		{func() (int, jsonx.M, error) { return 200, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: invalid response"},
 	} {

@@ -48,7 +48,7 @@ func TestAGatewayStatusIsNoAnswerWhateverTheBody(t *testing.T) {
 				_, err := agentCall(context.Background(), p, a, c.path, c.body)
 				var lost *Unanswered
 				var no *AgentRefusal
-				if err == nil || errors.As(err, &no) || !errors.As(err, &lost) || said(err) != "agent unreachable: http "+itoa(status)+", and not an answer of the agent" {
+				if err == nil || errors.As(err, &no) || !errors.As(err, &lost) || said(err) != "no answer (http "+itoa(status)+"): it may have arrived" {
 					t.Errorf("%d %s, POST %s %v: %T %q; want \"no answer of the agent\", never a refusal", status, name, c.path, c.body["action"], err, said(err))
 				}
 			}
@@ -76,7 +76,14 @@ func TestTheAgentsAndTheRelaysOwnAnswersStay(t *testing.T) {
 		{"the relay: a MAC it does not take", "/wol", 400, `{"error":"mac must be six hex pairs"}`, true, "mac must be six hex pairs"},
 		{"the agent: a shutdown is pending", "/power", 409, `{"error":"a shutdown is already pending; cancel it first"}`, true, "a shutdown is already pending; cancel it first"},
 		{"the agent: it could not schedule", "/power", 500, `{"error":"could not schedule the shutdown: exit status 1"}`, true, "could not schedule the shutdown: exit status 1"},
-		{"the agent: its helper is stopped", "/power", 503, `{"error":"helper stopped","code":"helper_stopped"}`, true, HelperStoppedWhy},
+		{"the agent: its helper is stopped", "/power", 503, `{"error":"helper stopped","code":"helper_stopped"}`, true, HelperAnswerWhy("helper_stopped")},
+		{"the agent: its helper runs and does not answer", "/power", 503, `{"error":"the helper did not answer: timeout","code":"helper_error"}`, true, HelperAnswerWhy("helper_error")},
+		// the agent's own 502 for a fan change its BMC did not take, on the fan routes only
+		{"the agent: the BMC did not take the fan mode", "/fan/mode", 502, `{"error":"BMC refused the fan mode: BMC completion code 0xC3 (timeout)"}`, true,
+			"BMC refused the fan mode: BMC completion code 0xC3 (timeout)"},
+		{"the agent: the fan mode cannot be read", "/fan/duty", 502, `{"error":"cannot read the fan mode: timeout"}`, true, "cannot read the fan mode: timeout"},
+		{"the same words on another route are a gateway's", "/power", 502, `{"error":"BMC refused the fan mode: x"}`, false, "no answer (http 502): it may have arrived"},
+		{"the agent's 504 on a fan route: its helper did not answer", "/fan/mode", 504, `{"error":"BMC refused the fan mode: x"}`, false, "no answer (http 504): it may have arrived"},
 		{"the agent: no update right now", "/update", 503, `{"error":"an update is running","code":"self_update_unavailable"}`, true, "an update is running"},
 		{"the BMC relay: no such target", "/bmc/power", 404, `{"error":"no bmc_relay target \"x\" on this agent","code":"unknown_target"}`, true, `no bmc_relay target "x" on this agent`},
 		{"the BMC relay: the BMC did not answer", "/bmc/power", 504, `{"error":"the BMC at 10.0.0.9 did not answer within 15 s (is the relay cabled to it?)","code":"bmc_unreachable"}`, true,
@@ -84,8 +91,8 @@ func TestTheAgentsAndTheRelaysOwnAnswersStay(t *testing.T) {
 		{"the BMC relay: the BMC refused the login", "/bmc/power", 502, `{"error":"the BMC at https://10.0.0.9 refused the login (401)","code":"bmc_refused"}`, true,
 			"the BMC at https://10.0.0.9 refused the login (401)"},
 		// a gateway in front of the relay is a gateway there too
-		{"a gateway's 504 in front of the BMC relay", "/bmc/power", 504, `{"error":"gateway timeout"}`, false, "agent unreachable: http 504, and not an answer of the agent"},
-		{"a gateway's 502 with another code", "/bmc/power", 502, `{"error":"bad gateway","code":"bad_gateway"}`, false, "agent unreachable: http 502, and not an answer of the agent"},
+		{"a gateway's 504 in front of the BMC relay", "/bmc/power", 504, `{"error":"gateway timeout"}`, false, "no answer (http 504): it may have arrived"},
+		{"a gateway's 502 with another code", "/bmc/power", 502, `{"error":"bad gateway","code":"bad_gateway"}`, false, "no answer (http 502): it may have arrived"},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -166,5 +173,62 @@ func TestAShutdownsYesNeedsTheAgentsCountdown(t *testing.T) {
 	laptop.PowerPending = &model.PowerPending{Action: "shutdown"}
 	if res, err := Execute(context.Background(), p, laptop, ask("cancel"), "Ann"); err != nil || res.Message != "cancelled" {
 		t.Errorf("a cancel: %+v %v", res, err)
+	}
+}
+
+// Review of the agent's fix batch (RF7-08, RF7-05), the words. The agent itself now answers a power request
+// with 504 when it handed the request to its helper and the helper did not answer in time. The panel read
+// that the right way (no answer, the request may have arrived) and said "agent unreachable: http 504, and not
+// an answer of the agent", which is not true of an agent that answered. And every 503 with the code
+// helper_stopped or helper_error was "the elevated helper is stopped: start the helper first", also for a
+// helper that runs: the agent answers a Cancel so in the seconds after such a 504.
+func TestTheWordsForNoAnswerAndForTheHelperAreTrue(t *testing.T) {
+	const agents504 = `{"error":"the helper was sent the shutdown and did not answer in time: it may be scheduled all the same. Look at what the machine shows as pending before anything else"}`
+	for name, body := range map[string]string{"the agent's own 504": agents504, "a proxy's 504": `<html><h1>504 Gateway Time-out</h1></html>`} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(504)
+			_, _ = w.Write([]byte(body))
+		}))
+		p, a := realPoller(t, srv.URL)
+		_, err := agentCall(context.Background(), p, a, "/power", map[string]any{"action": "shutdown", "delay_s": 120})
+		srv.Close()
+		var lost *Unanswered
+		if !errors.As(err, &lost) || said(err) != "no answer (http 504): it may have arrived" || lost.Short != "http 504 in place of an answer" || lost.Err.Status != 502 {
+			t.Errorf("%s: %T %q", name, err, said(err))
+		}
+		for _, untrue := range []string{"unreachable", "not an answer of the agent", "refused", "not accepted"} {
+			if err != nil && strings.Contains(err.Error(), untrue) {
+				t.Errorf("%s: %q says %q", name, err.Error(), untrue)
+			}
+		}
+	}
+	// the agent's 503 to a Cancel in the seconds after: the helper runs
+	for code, c := range map[string]struct{ must, mustNot []string }{
+		"helper_stopped": {[]string{"is stopped, or did not answer", "if it is stopped, start the helper first", "try again in a moment"}, []string{"the elevated helper is stopped:"}},
+		"helper_error":   {[]string{"runs but did not answer", "try again in a moment"}, []string{"is stopped", "start the helper"}},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(503)
+			_, _ = w.Write([]byte(`{"error":"helper stopped: cannot tell whether a shutdown is pending, and cannot cancel one","code":"` + code + `"}`))
+		}))
+		p, a := realPoller(t, srv.URL)
+		_, err := agentCall(context.Background(), p, a, "/power", map[string]any{"action": "cancel"})
+		srv.Close()
+		var no *AgentRefusal
+		if !errors.As(err, &no) || no.Err.Status != 409 || no.Code != code {
+			t.Fatalf("%s: %T %v", code, err, err)
+		}
+		for _, w := range c.must {
+			if !strings.Contains(said(err), w) {
+				t.Errorf("%s: %q does not say %q", code, said(err), w)
+			}
+		}
+		for _, w := range c.mustNot {
+			if strings.Contains(said(err), w) {
+				t.Errorf("%s: %q says %q", code, said(err), w)
+			}
+		}
 	}
 }

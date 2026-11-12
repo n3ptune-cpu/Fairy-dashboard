@@ -112,16 +112,16 @@ func TestAWriteWithoutAnAnswerOfTheAgentIsNotItsNo(t *testing.T) {
 		body jsonx.M
 		want string
 	}{
-		{"504 of a gateway, an HTML page", 504, nil, "agent unreachable: http 504, and not an answer of the agent"},
-		{"502 of a gateway, an HTML page", 502, nil, "agent unreachable: http 502, and not an answer of the agent"},
+		{"504 of a gateway, an HTML page", 504, nil, "no answer (http 504): it may have arrived"},
+		{"502 of a gateway, an HTML page", 502, nil, "no answer (http 502): it may have arrived"},
 		{"504 of a gateway that answers in JSON", 504, jsonx.M{"error": "upstream request timeout"},
-			"agent unreachable: http 504, and not an answer of the agent (the answer said: upstream request timeout)"},
+			"no answer (http 504): it may have arrived (the answer said: upstream request timeout)"},
 		{"the agent's own 504: its helper got the request and did not answer", 504, jsonx.M{"error": helperSilent},
-			"agent unreachable: http 504, and not an answer of the agent (the answer said: " + helperSilent + ")"},
-		{"502 of a gateway that answers in JSON", 502, jsonx.M{"error": "bad gateway"}, "agent unreachable: http 502, and not an answer of the agent (the answer said: bad gateway)"},
-		{"a redirect", 302, nil, "agent unreachable: http 302, and not an answer of the agent"},
-		{"an error page that is not the agent's", 500, nil, "agent unreachable: http 500, and not an answer of the agent"},
-		{"a login page of a proxy, 401", 401, nil, "agent unreachable: http 401, and not an answer of the agent"},
+			"no answer (http 504): it may have arrived (the answer said: " + helperSilent + ")"},
+		{"502 of a gateway that answers in JSON", 502, jsonx.M{"error": "bad gateway"}, "no answer (http 502): it may have arrived (the answer said: bad gateway)"},
+		{"a redirect", 302, nil, "no answer (http 302): it may have arrived"},
+		{"an error page that is not the agent's", 500, nil, "no answer (http 500): it may have arrived"},
+		{"a login page of a proxy, 401", 401, nil, "no answer (http 401): it may have arrived"},
 	} {
 		for i, w := range writes {
 			r, outcome := write(t, i, c.st, c.body, nil)
@@ -142,7 +142,7 @@ func TestAWriteWithoutAnAnswerOfTheAgentIsNotItsNo(t *testing.T) {
 func TestTheAgentsOwn502OfAFanRouteStaysItsAnswer(t *testing.T) {
 	for i, w := range writes {
 		r, outcome := write(t, i, 502, jsonx.M{"error": bmcSaidNo}, nil)
-		code, want := 502, "agent unreachable: http 502, and not an answer of the agent (the answer said: "+bmcSaidNo+")"
+		code, want := 502, "no answer (http 502): it may have arrived (the answer said: "+bmcSaidNo+")"
 		if strings.HasPrefix(w.name, "fan ") {
 			code, want = 424, bmcSaidNo
 		}
@@ -150,7 +150,7 @@ func TestTheAgentsOwn502OfAFanRouteStaysItsAnswer(t *testing.T) {
 			t.Errorf("%s: %d %q, the audit entry %q; want %d %q", w.name, r.code, got, outcome, code, want)
 		}
 		r, _ = write(t, i, 504, jsonx.M{"error": bmcSaidNo}, nil)
-		if got := fmt.Sprint(r.body["detail"]); r.code != 502 || !strings.HasPrefix(got, "agent unreachable: http 504, and not an answer of the agent") {
+		if got := fmt.Sprint(r.body["detail"]); r.code != 502 || !strings.HasPrefix(got, "no answer (http 504): it may have arrived") {
 			t.Errorf("%s, 504: %d %q", w.name, r.code, got)
 		}
 	}
@@ -206,6 +206,22 @@ func TestAWriteTheAgentTookIsOK(t *testing.T) {
 		r, outcome := write(t, i, 200, jsonx.M{"mode": "full", "state": "stopped"}, nil)
 		if r.code != 200 || outcome != "ok" {
 			t.Errorf("%s: %d %s, the audit entry %q", w.name, r.code, r.raw, outcome)
+		}
+	}
+}
+
+// The agent's 503 with the code helper_error to a fan change: its helper runs and did not answer (the change
+// was not written to it). It read "the elevated helper is stopped: the fans are on the BMC's own automatic
+// control. Start the helper ...", which is true of a stopped helper only. helper_stopped keeps that sentence.
+func TestAFanChangeWhoseHelperDidNotAnswerIsNotAStoppedHelper(t *testing.T) {
+	for i, w := range writes[:2] {
+		r, _ := write(t, i, 503, jsonx.M{"error": "the helper did not answer: timeout", "code": "helper_error"}, nil)
+		if got := fmt.Sprint(r.body["detail"]); r.code != 409 || !strings.Contains(got, "runs but did not answer") || strings.Contains(got, "stopped") || strings.Contains(got, "automatic") {
+			t.Errorf("%s, helper_error: %d %q", w.name, r.code, got)
+		}
+		r, _ = write(t, i, 503, jsonx.M{"error": "helper stopped: start fairy-agent-helper", "code": "helper_stopped"}, nil)
+		if got := fmt.Sprint(r.body["detail"]); r.code != 409 || got != fanHelperStopped {
+			t.Errorf("%s, helper_stopped: %d %q", w.name, r.code, got)
 		}
 	}
 }

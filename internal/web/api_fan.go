@@ -51,7 +51,7 @@ func unanswered(path string, status int, data jsonx.M, err error) error {
 	e := powerctl.NoAnswer(path, status, data, err)
 	var lost *powerctl.Unanswered
 	if said := textsafe.Clip(jsonx.S(data, "error"), maxAgentError); err == nil && said != "" && errors.As(e, &lost) {
-		return &powerctl.Unanswered{Err: apierr.New(502, fmt.Sprintf("%v (the answer said: %s)", lost.Err.Detail, said))}
+		return &powerctl.Unanswered{Err: apierr.New(502, fmt.Sprintf("%v (the answer said: %s)", lost.Err.Detail, said)), Short: lost.Short}
 	}
 	return e
 }
@@ -69,8 +69,11 @@ func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[s
 	if status == 401 { // never surface as our own 401 (that means "log in again")
 		return nil, apierr.New(apierr.Upstream, "agent rejected the control token (check control_token_env)")
 	}
-	if status == 503 && (jsonx.S(data, "code") == api.ReasonHelperStopped || jsonx.S(data, "code") == api.ReasonHelperError) {
+	if status == 503 && jsonx.S(data, "code") == api.ReasonHelperStopped {
 		return nil, apierr.New(409, fanHelperStopped) // the helper stopped since the last poll: not an agent failure
+	}
+	if status == 503 && jsonx.S(data, "code") == api.ReasonHelperError { // it runs and did not answer: not "stopped", and the fans are not on automatic
+		return nil, apierr.New(409, powerctl.HelperAnswerWhy(api.ReasonHelperError))
 	}
 	if status >= 400 { // the agent answered: its message must reach the user (no 502, see apierr.Upstream)
 		st := apierr.Upstream

@@ -46,7 +46,7 @@ func TestARedirectIsNotTheAgentsYes(t *testing.T) {
 			var no *AgentRefusal
 			if err == nil {
 				t.Errorf("%d, POST %s %v: a redirect that never reached the agent counts as accepted (%v)", status, c.path, c.body["action"], data)
-			} else if !errors.As(err, &lost) || errors.As(err, &no) || said(err) != "agent unreachable: http "+itoa(status)+", and not an answer of the agent" {
+			} else if !errors.As(err, &lost) || errors.As(err, &no) || said(err) != "no answer (http "+itoa(status)+"): it may have arrived" {
 				t.Errorf("%d, POST %s: %T %v, want \"no answer of the agent\"", status, c.path, err, err)
 			}
 		}
