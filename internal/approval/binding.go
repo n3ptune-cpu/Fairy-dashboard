@@ -56,6 +56,10 @@ type Record struct {
 	// Holder: an admin said that this host is the one that keeps MachineID while another host shows the same
 	// id. The other host stays flagged until it shows an id of its own.
 	Holder bool
+	// Alarm is the alarm that was last written to the audit log for this host ("": none, or it was cleared):
+	// "changed", "duplicate", "vanished", "too_old". It is kept with the record so that a restart of the panel
+	// does not write every standing alarm again (audit 5, r2-b2-09): an alarm is written when it CHANGES.
+	Alarm string
 }
 
 // Report is what a host says now (its latest answer since the panel started).

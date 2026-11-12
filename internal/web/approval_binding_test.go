@@ -111,6 +111,11 @@ func TestTurnOnTakesTheMachineIDOnRecord(t *testing.T) {
 	if entries := a.auditEntries("", "approval.turn_on"); len(entries) != 1 || entries[0]["params"].(map[string]any)["machine_id"] != approval.ShortID(sent) {
 		t.Errorf("audit: %v", entries)
 	}
+	// and the id that came on record has its own entry: which id, for which host, how, and by whom (audit 5, r2-b2-09)
+	if en := a.auditEntries("", "approval.machine_id"); len(en) != 1 || en[0]["target"] != "laptop" || en[0]["outcome"] != "on record" || en[0]["sub"] != approvalAdminSub ||
+		fmt.Sprint(en[0]["params"]) != fmt.Sprint(map[string]any{"how": approval.PinTurnOn, "machine_id": approval.ShortID(sent)}) || strings.Contains(fmt.Sprint(en), sent) {
+		t.Errorf("the entry for the id that came on record at Turn on: %v", en)
+	}
 	a.poll()
 	if b := a.s.Poller.BindingOf("laptop"); !b.OK() || b.Report.MachineID != sent || b.Record.How != approval.PinTurnOn {
 		t.Fatalf("after the next poll: %+v", b)

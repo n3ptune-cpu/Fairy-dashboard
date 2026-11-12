@@ -43,12 +43,23 @@ type machineStore struct {
 	dirty   map[string]uint64 // agent id -> the change that still has to be written
 	drop    map[string]uint64 // agent id -> its record still has to be removed from the file
 	seq     uint64
-	last    map[string]string // agent id -> the binding status last announced
+	last    map[string]string // agent id -> the binding status last announced (for a host with a record: its Record.Alarm)
 	writeEr string            // the last write error that was logged
+	// settleBy: until every agent was asked once since the start (or this time has come), no change of an alarm
+	// is announced. What one host shows can make another host's alarm, so before all of them were heard a
+	// standing alarm can look cleared, or like another one, for a moment.
+	settleBy time.Time
 }
+
+// machineSettle is how long after the start the poller waits at most for every agent to be asked once before it
+// announces changes of alarms (a paused agent is never asked).
+const machineSettle = 45 * time.Second
 
 func (p *Poller) loadMachines() {
 	p.mach = machineStore{dirty: map[string]uint64{}, drop: map[string]uint64{}, last: map[string]string{}}
+	if now, _ := p.now(); !now.IsZero() {
+		p.mach.settleBy = now.Add(machineSettle)
+	}
 	recs, err := p.Admin.Machines()
 	if err != nil {
 		slog.Error("the record of machine ids cannot be read: no machine is asked for an approval until it can", "error", err)
@@ -56,6 +67,32 @@ func (p *Poller) loadMachines() {
 		return
 	}
 	p.mach.records = recs
+	p.standingAlarmsLocked()
+}
+
+// standingAlarmsLocked takes the alarms the records say were written before this start as the ones last
+// announced: they hold until they change. Caller holds p.mu, or nobody else has the poller yet.
+func (p *Poller) standingAlarmsLocked() {
+	for id, r := range p.mach.records {
+		if _, ok := p.mach.last[id]; !ok && r.Alarm != "" {
+			p.mach.last[id] = r.Alarm
+		}
+	}
+}
+
+// machinesSettledLocked reports whether changes of alarms may be announced: every agent was asked at least
+// once since the start, or the start is machineSettle ago. Caller holds p.mu.
+func (p *Poller) machinesSettledLocked() bool {
+	if now, _ := p.now(); !now.Before(p.mach.settleBy) {
+		return true
+	}
+	for _, a := range p.Agents() {
+		_, answered := p.agentInfo[a.ID]
+		if _, failed := p.agentFailures[a.ID]; !answered && !failed {
+			return false
+		}
+	}
+	return true
 }
 
 // reloadMachinesLocked tries again to read a file that could not be read. Caller holds p.mu.
@@ -66,6 +103,7 @@ func (p *Poller) reloadMachinesLocked() {
 	if recs, err := p.Admin.Machines(); err == nil {
 		slog.Warn("the record of machine ids can be read again")
 		p.mach.records, p.mach.err = recs, nil
+		p.standingAlarmsLocked()
 	}
 }
 
@@ -156,8 +194,11 @@ func (p *Poller) noteMachineLocked(id string, ap *model.Approval, now time.Time)
 	return evs
 }
 
-// announceLocked compares every agent's binding with the one last announced. Caller holds p.mu.
+// announceLocked compares every agent's binding with the one last announced, and announces what changed: an
+// alarm when it begins or becomes another one, its end when it ends. What was announced is kept with the
+// host's record (Record.Alarm), so a restart of the panel announces nothing that still holds. Caller holds p.mu.
 func (p *Poller) announceLocked() (evs []MachineEvent) {
+	settled := p.machinesSettledLocked()
 	reps := p.reportsLocked()
 	seen := map[string]bool{}
 	for _, a := range p.Agents() {
@@ -167,10 +208,17 @@ func (p *Poller) announceLocked() (evs []MachineEvent) {
 		if st == approval.BindNoRecord || st == approval.BindNoStore { // not a machine's doing: the store event says it
 			st = approval.BindOK
 		}
-		if p.mach.last[a.ID] == st {
+		if p.mach.last[a.ID] == st || !settled {
 			continue
 		}
 		p.mach.last[a.ID] = st
+		if rec, ok := p.mach.records[a.ID]; ok && rec.Alarm != st && p.mach.err == nil {
+			rec.Alarm = st
+			p.mach.records[a.ID] = rec
+			p.mach.seq++
+			p.mach.dirty[a.ID] = p.mach.seq
+			delete(p.mach.drop, a.ID)
+		}
 		kind := "alarm"
 		if st == approval.BindOK {
 			kind = "clear"

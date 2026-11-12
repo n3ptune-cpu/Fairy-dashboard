@@ -23,6 +23,7 @@ import (
 //	      "state":      "required" | "broken" | "unknown" | "off" | "",   what the machine last said
 //	      "state_at":   "<RFC 3339>",
 //	      "holder":     true                         (optional) an admin said this host keeps an id two hosts show
+//	      "alarm":      "changed" | "duplicate" | ... (optional) the alarm last written to the audit log for it
 //	} } }
 //
 // Written like the other state files: under the file's lock, read again, changed, and put in place of the old
@@ -81,6 +82,8 @@ func parseMachines(path string, d statefile.Data) (map[string]approval.Record, e
 			r.StateAt, _ = time.Parse(time.RFC3339, s)
 		}
 		r.Holder, _ = e["holder"].(bool)
+		r.Alarm, _ = e["alarm"].(string)
+		r.Alarm = clipRecord(r.Alarm)
 		out[id] = r
 	}
 	return out, nil
@@ -124,6 +127,9 @@ func (a *State) SetMachines(set map[string]approval.Record, drop []string) error
 			}
 			if r.Holder {
 				e["holder"] = true
+			}
+			if r.Alarm != "" {
+				e["alarm"] = r.Alarm
 			}
 			m[id] = e
 		}

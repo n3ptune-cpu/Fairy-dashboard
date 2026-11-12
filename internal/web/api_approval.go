@@ -535,9 +535,13 @@ func (s *Server) turnOnRun(c *reqCtx, u *model.User, g *approvalGrant, hosts []s
 		res := s.sendTrust(c, a, name, in, g)
 		if res.Outcome == "accepted" {
 			// on record from this moment: the id the panel made up and the passkey signed, not what was answered
+			pinned := "on record"
 			if err := s.Poller.PinMachine(a.ID, in.MachineID, approval.PinTurnOn, actorOf(u)); err != nil {
 				res.Text += " Fairy could not write its machine id down (" + textsafe.Clip(err.Error(), 120) + "): it keeps it in memory and tries again."
+				pinned = "on record (kept in memory; machines.json could not be written: " + textsafe.Clip(err.Error(), 120) + ")"
 			}
+			// which id came on record for which host, and by whom: the same entry a first sight writes (machineEvent)
+			c.audit(u, "approval.machine_id", id, map[string]any{"how": approval.PinTurnOn, "machine_id": approval.ShortID(in.MachineID)}, pinned)
 		}
 		params := map[string]any{"issuer": in.Issuer, "client_id": in.ClientID, "keys": approval.Thumbprints(in.Keys), "users": in.Users,
 			"machine_id": approval.ShortID(in.MachineID), "result": res.Outcome}
