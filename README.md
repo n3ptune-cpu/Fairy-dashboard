@@ -736,6 +736,10 @@ to be converted and no file has to be deleted. The update itself signs nobody ou
    Before it, `find /var/lib/fairy -maxdepth 1 -name '*.json' -size 0` (your data folder) must print nothing:
    a `users.json` or `state.json` of 0 bytes, left by an old power cut, makes the update roll back until the
    file is restored from a backup or moved away.
+   The state files must be plain files: `find /var/lib/fairy -maxdepth 2 -type l` must not list `users.json`,
+   `state.json`, `sessions.json`, `tokens.json`, `managed-hosts.yaml` or a file in `secrets/`. This release
+   does not read a state file through a symbolic link: it refuses to start, and the update rolls back. Put the
+   file itself there (`cp --remove-destination <target> <link>`). A data folder that is itself a link is fine.
    **Update first, then add new config keys, then restart.** The one new key of this release is the
    `wake_update:` block. The program you run today does the update, and it refuses a config.yaml that has the
    block ("field wake_update not found"). So write the block only after the update, then

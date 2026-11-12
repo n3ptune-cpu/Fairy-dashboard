@@ -330,9 +330,18 @@ func buildPanel(cfg *config.Panel, secrets config.Secrets) (*panel, int) {
 	}
 	// Hosts added in the panel (Add host): merged after config.yaml, which wins on the same id; each one is
 	// validated like a hand-written entry, a bad one is skipped (logged, shown on the Add host dialog).
+	//
+	// A list that cannot be read at all stops the start, like state.json: managed-hosts.yaml (or a host's
+	// tokens file) that is a symbolic link, a pipe or a folder, or a list that is unreadable or not YAML. The
+	// panel used to start without the hosts, with one ERROR in the log: every machine added with Add host was
+	// gone from the pages and from the runs, and an update to this version went through like that (audit 5,
+	// r3-p4-03). Refused, `fairy update` rolls back by itself and the old version runs on.
 	added, skipped, err := managed.NewStore(cfg.DataDir).Merge(cfg)
 	if err != nil {
-		slog.Error("hosts added in the panel not loaded", "error", err)
+		slog.Error("refusing to start: the hosts added in the panel (Add host) cannot be read. The panel reads its state files only as plain files: "+
+			"put the file itself where a link is (cp --remove-destination <target> <link>), or restore it from a backup; moved away, the panel starts without those hosts",
+			"file", filepath.Join(cfg.DataDir, managed.FileName), "error", err)
+		return nil, 1
 	}
 	for _, w := range skipped {
 		slog.Warn(w)

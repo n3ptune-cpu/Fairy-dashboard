@@ -332,7 +332,7 @@ func (s *Store) Secret(id string) (Secret, error) {
 	if !configutil.ValidID(id) {
 		return sec, fmt.Errorf("invalid host id %q", id)
 	}
-	b, err := os.ReadFile(s.secretPath(id))
+	b, err := statefile.ReadFile(s.secretPath(id), statefile.MaxBytes) // a plain file of a sane size, like every state file
 	if err != nil {
 		return sec, err
 	}
@@ -390,6 +390,13 @@ func Check(cfg *config.Panel, e Entry) error {
 
 // Merge loads the managed hosts and adds the valid ones to cfg (config.yaml wins on id conflicts). It returns
 // the entries added and one line per host that was skipped (for the log and `fairy admin config check`).
+//
+// An error is a list that cannot be read at all: managed-hosts.yaml is unreadable, not YAML, or not a plain
+// file (a symbolic link, a pipe, a folder: the panel reads its state files only as plain files), or a host's
+// tokens file is not a plain file. The caller must not go on without the hosts: the panel's start refuses
+// (audit 5, r3-p4-03: with managed-hosts.yaml as a link the panel started with every added host gone and one
+// line in the log, and an update went through like that). A host whose tokens file is missing or does not
+// hold tokens is skipped as before ("Re-pair it"): that is one host, and it says so on the Add host dialog.
 func (s *Store) Merge(cfg *config.Panel) ([]Entry, []string, error) {
 	hosts, err := s.Load()
 	if err != nil {
@@ -399,6 +406,9 @@ func (s *Store) Merge(cfg *config.Panel) ([]Entry, []string, error) {
 	var skipped []string
 	for _, h := range hosts {
 		sec, err := s.Secret(h.ID)
+		if statefile.IsNotAFile(err) {
+			return nil, nil, fmt.Errorf("the tokens of the host %s: %w", h.ID, err)
+		}
 		if err != nil {
 			skipped = append(skipped, fmt.Sprintf("managed host %s: tokens unreadable (%v): Re-pair it", h.ID, err))
 			continue
