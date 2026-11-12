@@ -608,7 +608,7 @@ carry script; make it readable by the service, e.g. `0644`), set `branding: {log
 config.yaml and restart Fairy. It replaces the built-in logo in the sidebar and on the sign-in and waiting
 pages, and becomes the favicon. A missing or invalid file only logs a warning. To try one first:
 `fairy serve --demo --logo C:\path\to\logo.png` (Windows) or `fairy serve --demo --logo ./logo.png`.
-The file is read once at start (path from the config only) and served at `/branding/logo` without sign-in.
+The file is read once at start (path from the config only) and served at `/branding/logo` without sign-in (204, no content, when no logo is set).
 
 ### Sign-in wallpaper
 

@@ -66,13 +66,14 @@ func readLogo(path string) (*brandLogo, error) {
 }
 
 // serveLogo is GET /branding/logo: the configured logo, no sign-in needed (it is shown on the sign-in page and
-// as the favicon). It takes no parameters and only ever serves the file read at startup.
+// as the favicon). It takes no parameters and only ever serves the file read at startup; 204 when none is set.
 func (s *Server) serveLogo(w http.ResponseWriter, r *http.Request) {
 	l := s.logo
 	if l == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(404)
-		_, _ = w.Write([]byte(`{"detail":"no custom logo"}`))
+		// No logo is set (the default): 204, an answer without a picture. The page asks on every load; a 404 was
+		// an error line in the browser's console each time (r1-b1-16), the only one in normal use.
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	h := w.Header()

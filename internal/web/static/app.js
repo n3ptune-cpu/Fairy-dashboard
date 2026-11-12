@@ -2712,10 +2712,13 @@ document.addEventListener("click", async (e) => {
 
 // ------------------------------------------------------------ routing + rendering
 function schedule(fn, ms = 3000) { clearTimeout(state.timer); if (!signedOut) state.timer = setTimeout(fn, ms); }
+// A part of the address after "#". A broken %-escape (#/system/%E0%A4%A) is not an error of the page: the part
+// is taken as it stands, which is an id no system has, and the page says "Unknown system."
+const hashPart = (v) => { try { return decodeURIComponent(v); } catch { return v; } };
 function current() {
   const h = location.hash || "#/";
   const m = h.match(/^#\/system\/([^/]+)(?:\/(\w+))?$/);
-  if (m) return { page: "system", id: decodeURIComponent(m[1]), tab: m[2] || "overview" };
+  if (m) return { page: "system", id: hashPart(m[1]), tab: m[2] || "overview" };
   if (h.startsWith("#/power")) return { page: "power" };
   if (h.startsWith("#/ups")) return { page: "ups" };
   if (h.startsWith("#/settings")) return { page: "settings" };
@@ -2953,7 +2956,7 @@ document.addEventListener("keydown", (e) => {
 }, true);
 
 // Custom logo (branding.logo in config.yaml): when the server has one, it replaces the built-in logo on the
-// sign-in, waiting and main pages and becomes the favicon. Without one (404) nothing changes.
+// sign-in, waiting and main pages and becomes the favicon. Without one (204: no picture) nothing changes.
 (() => {
   const probe = new Image();
   probe.onload = () => {

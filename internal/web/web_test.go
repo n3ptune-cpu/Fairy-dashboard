@@ -653,7 +653,8 @@ func TestRevokedTokenEndsItsStream(t *testing.T) {
 // but a small raster image is ignored (built-in logo) without stopping the panel.
 func TestCustomLogo(t *testing.T) {
 	e := setup(t)
-	if r := e.do("GET", "/branding/logo", nil); r.code != 404 {
+	// no logo set: 204, not an error (r1-b1-16: the page asks on every load, and a 404 was a console error each time)
+	if r := e.do("GET", "/branding/logo", nil); r.code != 204 || len(r.raw) != 0 {
 		t.Fatal("no logo configured", r.code)
 	}
 	dir := t.TempDir()

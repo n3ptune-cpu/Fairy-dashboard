@@ -186,3 +186,22 @@ func TestUICriticalMeansTheSameInSettingsPopupsAndTheList(t *testing.T) {
 		}
 	}
 }
+
+// r1-b1-15: #/system/%E0%A4%A (a broken %-escape) threw "URI malformed" in every render and left an empty
+// page. It is now an id no system has: "Unknown system.", as for any other unknown id.
+func TestUIBrokenEscapeInTheAddressIsAnUnknownSystem(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const hashPart = (v) => { try { return decodeURIComponent(v); } catch { return v; } };`,
+		`if (m) return { page: "system", id: hashPart(m[1]), tab: m[2] || "overview" };`,
+		`Unknown system.`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	// no other place decodes a part of the address without the catch
+	if n := strings.Count(js, "decodeURIComponent("); n != 1 {
+		t.Errorf("decodeURIComponent is called in %d places, want only in hashPart", n)
+	}
+}
