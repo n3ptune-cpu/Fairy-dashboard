@@ -366,7 +366,9 @@ The rules, in plain words:
   its agent), the node is left on, and the report says why.
 * **One run at a time**, at most 16 machines in it. A second start is refused with a message. **Update
   panel** is refused while a run is going.
-* **Cancel run** starts nothing new: no further wake, no further update. The dialog asks what happens to
+* **Cancel run** is never refused because of other control requests: it has a request budget of its own (60
+  a minute for one admin), and so has the **Cancel** of a shutdown countdown.
+  It starts nothing new: no further wake, no further update. The dialog asks what happens to
   the machines the run has already woken: they stay on (the default; the report lists them as ON), or they
   are still switched off again (an update that is running is waited for first).
 * **A restart of the panel ends a run.** It is never continued. After the restart the page and a notification

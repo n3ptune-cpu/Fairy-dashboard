@@ -108,11 +108,18 @@ type Server struct {
 
 	control, pollCtl, login, adminRL *rateLimiter
 	settingsRL, uploadRL             *rateLimiter // per user: settings changes, background uploads
+	stopRL                           *rateLimiter // per user: "Cancel run" and the cancel of a countdown (stopsPerMin)
 	mux                              *http.ServeMux
 	answerTimeout                    time.Duration // how long a client may take over one answer (answerWriteTimeout; tests shorten it)
 	backgrounds                      streamSlots   // background downloads in flight (api_settings.go)
 	agentReads                       *agentReads   // read requests passed through to an agent, in flight (agentreads.go)
 }
+
+// stopsPerMin is how many cancels (of an "Update unpowered hosts" run, of a shutdown countdown) one user may
+// send in a minute. They have a budget of their own, apart from the control requests (control_rate_per_min):
+// a cancel only stops something, and it must work right after an admin used the minute's control requests
+// (r2-p2-09). Generous on purpose; every cancel is in the audit log.
+const stopsPerMin = 60
 
 // New builds the server. demoUser != nil enables demo mode (caller guarantees a loopback listener).
 func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *model.User, version string) *Server {
@@ -124,6 +131,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 		control: newRateLimiter(cfg.ControlRatePerMin), pollCtl: newRateLimiter(cfg.ControlRatePerMin * 2),
 		login: newRateLimiter(cfg.LoginRatePerMin), adminRL: newRateLimiter(60), anonAudit: newAuditThrottle(),
 		settingsRL: newRateLimiter(30), uploadRL: newRateLimiter(uploadsPerMin), answerTimeout: answerWriteTimeout,
+		stopRL:      newRateLimiter(stopsPerMin),
 		agentReads:  newAgentReads(),
 		backgrounds: streamSlots{perUser: maxBackgroundsPerUser, total: maxBackgroundsTotal, open: map[string]int{}}}
 	s.codec.live.account = p.Admin.SessionAccount // whose session an id is, for making room (liveSessions.prune)

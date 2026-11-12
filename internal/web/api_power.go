@@ -38,7 +38,11 @@ func (s *Server) powerAction(c *reqCtx) error {
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	u, err := c.controlGuard(s.control)
+	bucket := s.control
+	if req.Action == "cancel" { // calling a countdown off is never refused because of other control requests
+		bucket = s.stopRL
+	}
+	u, err := c.controlGuard(bucket)
 	if err != nil {
 		return err
 	}

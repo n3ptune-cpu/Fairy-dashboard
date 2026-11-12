@@ -241,3 +241,66 @@ func TestUIWakeUpdateLeftOnIsOnlySaidOfAMachineSeenOn(t *testing.T) {
 		}
 	}
 }
+
+// r2-p2-09 (audit 5, round 2): "Cancel run" was a control request like any other. An admin who had just used
+// the minute's six control requests (the panel's own example: switching six machines on for these runs) got
+// 429 for up to a minute, and the run went on. A cancel of a run, and of a shutdown countdown, now has a
+// budget of its own.
+func TestCancelsDoNotShareTheControlBudget(t *testing.T) {
+	e, f := lostFarm(t, "")
+	admin := e.cookie(controller(), 0) // signed in a moment ago: no "Confirm it's you" is due
+	w := []string{"Cookie", admin, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	useUp := func() {
+		t.Helper()
+		for i := 0; i < 6; i++ { // six control requests: the minute's worth
+			if r := e.do("PUT", "/api/systems/pc-b/wake-update", map[string]any{"enabled": true}, w...); r.code != 200 {
+				t.Fatalf("switch %d: %d %s", i, r.code, r.raw)
+			}
+		}
+		if r := e.do("PUT", "/api/systems/pc-b/wake-update", map[string]any{"enabled": true}, w...); r.code != 429 {
+			t.Fatalf("the seventh control request: %d, want 429", r.code)
+		}
+	}
+	useUp()
+	r, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "Alice", BySub: "u2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		f.tick()
+	}
+	// "Cancel run" works although the control budget is used up
+	c := e.do("DELETE", "/api/admin/wake-update/"+r.ID, map[string]any{"switch_off": false}, w...)
+	if a := activeRun(e); c.code != 200 || a.Cancel == nil {
+		t.Fatalf("Cancel run: %d %s (cancel recorded: %v)", c.code, c.raw, a.Cancel != nil)
+	}
+	f.finish()
+	// ... and so does calling a shutdown countdown off (the laptop has one pending in the test backend's answer)
+	e.b.Reply = nil
+	if c := e.do("POST", "/api/systems/laptop/power", map[string]any{"action": "cancel"}, w...); c.code == 429 {
+		t.Fatalf("cancel of a countdown: %d %s", c.code, c.raw)
+	}
+	// any other power request still meets the control budget
+	if c := e.do("POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 60, "confirm": "laptop"}, w...); c.code != 429 {
+		t.Fatalf("a reboot with the control budget used up: %d, want 429", c.code)
+	}
+	// the cancels' own budget is generous, and it is a budget: stopsPerMin a minute for one user
+	ok, limited := 0, 0
+	for i := 0; i < stopsPerMin+5; i++ {
+		switch c := e.do("DELETE", "/api/admin/wake-update/0000000000000000", nil, w...); c.code {
+		case 404: // no such run: the request got past the limit
+			ok++
+		case 429:
+			limited++
+		default:
+			t.Fatalf("cancel %d: %d %s", i, c.code, c.raw)
+		}
+	}
+	if ok != stopsPerMin-2 || limited != 7 { // two of the minute's cancels were used above
+		t.Fatalf("%d cancels passed and %d were limited, want %d and 7", ok, limited, stopsPerMin-2)
+	}
+	// cancels did not use up anything of another user's control budget, nor of this one's (it was full already)
+	if !e.s.control.free("someone-else") || e.s.control.free(controller().Sub) {
+		t.Fatal("the control budget was touched by the cancels")
+	}
+}

@@ -673,8 +673,10 @@ func (s *Server) wakeUpdateCancel(c *reqCtx) error {
 			return err
 		}
 	}
-	// The kill switch does not keep an admin from calling a run off (the run stops by itself when it is on).
-	u, err := c.stopGuard(s.control)
+	// The kill switch does not keep an admin from calling a run off (the run stops by itself when it is on), and
+	// neither does the limit on control requests: a cancel has a budget of its own (r2-p2-09). An admin who has
+	// just switched six machines on for these runs can still call the run off.
+	u, err := c.stopGuard(s.stopRL)
 	if err != nil {
 		return err
 	}
