@@ -49,3 +49,34 @@ func TestUIFansTabKeepsItsButtonsAndShowsNoMadeUpDuty(t *testing.T) {
 		t.Error("the Fans tab is built anew, or shows 50% for a duty that is not known")
 	}
 }
+
+// r2-b1-06: a countdown that had run out stayed "Shut down in 0:00 · Cancel" for as long as the agent went on
+// reporting the action (a minute; and the machine may never go down: a shutdown its system refuses). After its
+// time the line says "requested", has no Cancel, and says "still on" when the host still answers 20 s later.
+func TestUIACountdownThatRanOutSaysSo(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const PEND_LATE = 20;`,
+		`const pendingDue = (p) => (Date.now() - new Date(p.at)) / 1000;`,
+		"if (due >= 0) return `<div class=\"pending-strip\" data-key=\"due\"><span><b>${esc(POWER_LABEL[p.action])}</b> requested</span>${pendingLate(s, due)}</div>`;",
+		"due >= PEND_LATE && s.status === \"online\"",
+		"</span><b>still on</b>`",
+		"${s.power_pending ? pendingStrip(s, why) : \"\"}",
+		"`<span>${esc(p.action)} requested</span>${pendingLate(s, due)}`}",
+		// the second it runs out the line is drawn anew, also when no data arrives
+		`.some((el) => new Date(el.dataset.countdown) <= Date.now())) render();`,
+		"  pendingTick();\n}, 1000);",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	// Cancel is only in the line that still counts down
+	i := strings.Index(js, "function pendingStrip(s, why) {")
+	j := strings.Index(js[i:], "\n}\n")
+	fn := js[i : i+j]
+	due, cancel := strings.Index(fn, "if (due >= 0) return"), strings.Index(fn, `data-action="cancel"`)
+	if due < 0 || cancel < due || strings.Count(fn, `data-action="cancel"`) != 1 {
+		t.Error("the line of an action whose time has passed offers Cancel")
+	}
+}

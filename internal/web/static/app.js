@@ -725,12 +725,34 @@ function renderAlerts() {
   }
   const here = current().id;  // the system page shows its own countdown strip
   for (const s of state.systems.filter((x) => x.power_pending && x.id !== here)) {
-    const p = s.power_pending;
+    const p = s.power_pending, due = pendingDue(p);
     out.push(`<a class="alert-strip info" href="#/system/${enc(s.id)}" data-key="pend-${esc(s.id)}">${I.onoff}<b>${esc(s.name)}</b>
-      <span>${esc(p.action)} in <b data-countdown="${esc(p.at)}">${fmtRuntime(Math.max(0, (new Date(p.at) - Date.now()) / 1000))}</b></span>
-      <span class="note">requested by ${esc(p.requested_by || "?")}</span><span class="push">open →</span></a>`);
+      ${due < 0 ? `<span>${esc(p.action)} in <b data-countdown="${esc(p.at)}">${fmtRuntime(-due)}</b></span>
+      <span class="note">requested by ${esc(p.requested_by || "?")}</span>` : `<span>${esc(p.action)} requested</span>${pendingLate(s, due)}`}<span class="push">open →</span></a>`);
   }
   morph($("#alerts"), out.join(""));
+}
+
+// A shutdown, reboot or sleep with a countdown (power_pending, from the host's agent). When the countdown has run
+// out the agent has asked its system for the action, and goes on reporting it for a minute. From then on the page
+// does not say "in 0:00" and offers no Cancel (there is nothing left to cancel): it says "requested", and when the
+// machine still answers PEND_LATE seconds later, that it is still on. The line goes when the agent stops reporting
+// the action or the host stops answering, as before.
+const PEND_LATE = 20;  // as long as a run waits before it takes a machine for off (wakerun, offConfirm)
+const pendingDue = (p) => (Date.now() - new Date(p.at)) / 1000;  // seconds since it was due; negative while it counts down
+// "by Test admin", and from PEND_LATE on " · 25s ago · still on" (the host still answers)
+const pendingLate = (s, due) => `<span class="note">by ${esc(s.power_pending.requested_by || "?")}${due >= PEND_LATE && s.status === "online"
+  ? ` · <span data-ago="${esc(s.power_pending.at)}">${ago(s.power_pending.at)}</span></span><b>still on</b>` : "</span>"}`;
+function pendingStrip(s, why) {
+  const p = s.power_pending, due = pendingDue(p);
+  if (due >= 0) return `<div class="pending-strip" data-key="due"><span><b>${esc(POWER_LABEL[p.action])}</b> requested</span>${pendingLate(s, due)}</div>`;
+  return `<div class="pending-strip"><b>${esc(POWER_LABEL[p.action])}</b> in <b data-countdown="${esc(p.at)}">${fmtRuntime(-due)}</b>
+      <span class="note">requested by ${esc(p.requested_by || "?")}</span>
+      <button class="btn push" data-act="power-now" data-action="cancel" ${why ? "disabled" : ""}>Cancel</button></div>`;
+}
+// Once a second (the page's ticker): the second a countdown runs out its line is drawn anew, also when no data arrives.
+function pendingTick() {
+  if ([...document.querySelectorAll(".pending-strip [data-countdown], #alerts [data-countdown]")].some((el) => new Date(el.dataset.countdown) <= Date.now())) render();
 }
 
 // ------------------------------------------------------------ pages
@@ -871,9 +893,7 @@ function pageSystem(id, tab) {
     <div class="dh-meta"><span class="chip">${esc(kindLabel(s))}</span>${s.kind === "node" && !s.cluster ? '<span class="chip">Proxmox</span>' : ""}
       ${upsChips(s)}${(s.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}${verChip(s.id)}</div>
     <div class="sub">${esc(sub)}${s.updated_at ? ` · <span class="note">updated <span data-ago="${esc(s.updated_at)}">${ago(s.updated_at)}</span></span>` : ""}</div></div>
-    ${s.power_pending ? `<div class="pending-strip"><b>${esc(POWER_LABEL[s.power_pending.action])}</b> in <b data-countdown="${esc(s.power_pending.at)}">${fmtRuntime(Math.max(0, (new Date(s.power_pending.at) - Date.now()) / 1000))}</b>
-      <span class="note">requested by ${esc(s.power_pending.requested_by || "?")}</span>
-      <button class="btn push" data-act="power-now" data-action="cancel" ${why ? "disabled" : ""}>Cancel</button></div>` : ""}
+    ${s.power_pending ? pendingStrip(s, why) : ""}
     <nav class="tabs">${tabs.map(([k, label]) => `<a href="#/system/${enc(id)}${k === "overview" ? "" : "/" + k}" class="${k === tab ? "active" : ""}">${label}</a>`).join("")}</nav>`;
   if (tab === "processes") return head + '<div id="tab-body" data-keep><div class="empty">Loading processes…</div></div>';
   if (tab === "fans") return head + '<div id="tab-body" data-keep><div class="empty">Loading fan status…</div></div>';
@@ -2922,6 +2942,7 @@ setInterval(() => {
   netKnock();
   document.querySelectorAll("[data-ago]").forEach((el) => { const v = ago(el.dataset.ago); if (el.textContent !== v) el.textContent = v; });
   document.querySelectorAll("[data-countdown]").forEach((el) => { el.textContent = fmtRuntime(Math.max(0, (new Date(el.dataset.countdown) - Date.now()) / 1000)); });
+  pendingTick();
 }, 1000);
 
 // The stream ends when an admin changes your role or sites; on reconnect, reload if access changed.
