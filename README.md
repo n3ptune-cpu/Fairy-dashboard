@@ -308,7 +308,10 @@ The rules, in plain words:
   install could leave it without a working agent.
 * **A woken machine that could not be switched off is reported as ON**: its agent did not answer again after
   the update, the agent refused the shutdown, someone cancelled the countdown, or the machine is still on 5
-  minutes after the countdown ended. The run never tries another way to switch a machine off.
+  minutes after the countdown ended. The run never tries another way to switch a machine off: its shutdown
+  is the agent's own, with the countdown that can be cancelled. If the agent can no longer take it (power
+  control was switched off for the machine during the run), nothing is sent, also not a node shutdown through
+  the Proxmox API (`node_power: true`), and the machine is left on and reported.
 * **Nobody is asked.** The run does not look whether someone is signed in or working on a machine it woke,
   and shows nothing on its screen before the agent's own shutdown notice. Use it for machines that are off
   because nobody is using them.

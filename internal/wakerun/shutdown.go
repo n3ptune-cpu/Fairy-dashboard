@@ -112,6 +112,8 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 		switch {
 		case opCode(err) == CodeApproval:
 			m.end(r, h, StLeftOn, OnYes, now, "Left ON: its agent asks for an approval (Pocket ID) before a shutdown, and this run has none for it."+updateTail(h))
+		case opCode(err) == CodeNoAgentRoute: // the route the run confirmed at its start is gone: nothing was sent
+			m.end(r, h, StLeftOn, OnYes, now, NoAgentRoute+updateTail(h))
 		case opCode(err) == CodeRateLimited && h.retries < maxRetries:
 			h.retries++
 			m.say(h, "its agent is busy (its request limit): trying the shutdown again")

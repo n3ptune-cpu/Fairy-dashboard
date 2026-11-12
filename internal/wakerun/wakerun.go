@@ -224,7 +224,15 @@ func (e *OpError) Error() string { return e.Text }
 const (
 	CodeApproval    = "approval_required" // the agent wants an approval (Pocket ID) for this request
 	CodeRateLimited = "rate_limited"      // the agent's control rate limit: try again later
+	// CodeNoAgentRoute: the request would no longer go to the machine's own agent (its power control was
+	// switched off during the run). Nothing was sent. A run's shutdown is the agent's delayed, cancellable one
+	// or none: the machine is left on (NoAgentRoute).
+	CodeNoAgentRoute = "no_agent_route"
 )
+
+// NoAgentRoute is the one sentence for a woken machine whose agent can no longer shut it down.
+const NoAgentRoute = "Left ON: its agent can no longer shut it down (power control was switched off for it during the run), " +
+	"and a run switches a machine off through its own agent or not at all. Nothing was sent."
 
 // Ops is everything a run asks of the panel. The four requests are the existing ones: wake (through the
 // relay), the agent's self-update, the delayed shutdown and its cancel.

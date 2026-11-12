@@ -50,7 +50,7 @@ type machine struct {
 	lastAt     float64
 	lastOK     bool
 	lastMsg    string
-	shutMode   string // ok | approval | refuse | ignore (accepted, but it stays on) | busy
+	shutMode   string // ok | approval | refuse | ignore (accepted, but it stays on) | busy | noroute (the agent route is gone)
 	pending    *Pending
 	staleOnce  bool // the first answer after a shutdown was asked for does not have the countdown in it yet
 	guests     int
@@ -281,6 +281,9 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 		}
 	case "refuse":
 		return time.Time{}, &OpError{Text: "the elevated helper is stopped: start the helper first"}
+	case "noroute": // the panel finds, before it sends anything, that the request would not go to the agent
+		mc.shutdowns--
+		return time.Time{}, &OpError{Code: CodeNoAgentRoute, Text: "its own agent can no longer take the request"}
 	}
 	if mc.pending != nil {
 		return time.Time{}, &OpError{Text: "a " + mc.pending.Action + " is already pending; cancel it first"}

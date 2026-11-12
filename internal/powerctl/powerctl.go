@@ -39,7 +39,15 @@ type Request struct {
 	Action  string  `json:"action"`
 	DelayS  *int    `json:"delay_s"` // agent shutdown/reboot only (Linux rounds up to minutes); default 60
 	Confirm *string `json:"confirm"` // the system's name, typed (shutdown / stop)
+	// OnlyVia, when set, is the one route the action may take ("agent"): Execute refuses with ErrOtherRoute,
+	// before anything is sent, when the route it would take now is another one. It is never read from a request
+	// body. A wake / update / shut down run sets it for its shutdown: that one must be the agent's delayed,
+	// cancellable shutdown, never the Proxmox API's, which starts at once.
+	OnlyVia string `json:"-"`
 }
+
+// ErrOtherRoute is Execute's refusal of a request whose OnlyVia is not the route the action would take now.
+var ErrOtherRoute = apierr.New(409, "the action would not go the way it was asked to go; nothing was sent")
 
 // Validate checks the request and fills in the default delay (60 s).
 func (r *Request) Validate() error {
@@ -326,6 +334,9 @@ func Execute(ctx context.Context, p *poller.Poller, s model.System, req Request,
 	}
 	if err := CheckConfirmation(s, *c, req.Confirm); err != nil {
 		return model.PowerResult{}, err
+	}
+	if req.OnlyVia != "" && model.Deref(c.Via) != req.OnlyVia { // the same look at the routes that picks the one below
+		return model.PowerResult{}, ErrOtherRoute
 	}
 	res := model.PowerResult{SystemID: s.ID, Action: req.Action, Via: model.Deref(c.Via)}
 	switch {

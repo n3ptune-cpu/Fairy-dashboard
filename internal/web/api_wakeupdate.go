@@ -215,6 +215,9 @@ func (o runOps) power(ctx context.Context, id string, req powerctl.Request, by s
 		req.Confirm = &x.Name
 	}
 	res, err := powerctl.Execute(ctx, o.s.Poller, x, req, by)
+	if errors.Is(err, powerctl.ErrOtherRoute) {
+		return res, &wakerun.OpError{Code: wakerun.CodeNoAgentRoute, Text: "its own agent can no longer take the request"}
+	}
 	if err != nil {
 		return res, opError(err)
 	}
@@ -238,14 +241,18 @@ func (o runOps) Update(ctx context.Context, id, by string, _ any) error {
 	return opError(err)
 }
 
+// Shutdown is the agent's delayed, cancellable shutdown and nothing else. The route is part of the request
+// (OnlyVia): when the machine's agent can no longer take it (its power control was switched off during the
+// run) powerctl refuses before anything is sent, and never falls back to the Proxmox API's node shutdown,
+// which starts at once and cannot be cancelled. The run then leaves the machine on (CodeNoAgentRoute).
 func (o runOps) Shutdown(ctx context.Context, id string, delay time.Duration, by string, _ any) (time.Time, error) {
 	d := int(delay.Seconds())
-	res, err := o.power(ctx, id, powerctl.Request{Action: "shutdown", DelayS: &d}, by)
+	res, err := o.power(ctx, id, powerctl.Request{Action: "shutdown", DelayS: &d, OnlyVia: "agent"}, by)
 	if err != nil {
 		return time.Time{}, err
 	}
-	if res.Via != "agent" { // only the agent's shutdown counts down and can be cancelled
-		return time.Time{}, &wakerun.OpError{Text: "the shutdown did not go through the machine's own agent"}
+	if res.Via != "agent" { // cannot happen with OnlyVia; kept as the second look
+		return time.Time{}, &wakerun.OpError{Code: wakerun.CodeNoAgentRoute, Text: "the shutdown did not go through the machine's own agent"}
 	}
 	if res.Pending != nil {
 		return res.Pending.At, nil
