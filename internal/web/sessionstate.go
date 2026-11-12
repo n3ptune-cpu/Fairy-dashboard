@@ -28,6 +28,9 @@ type liveSessions struct {
 	// ended holds the ids of sessions that were ended while sessions.json could not be written (T-29): the
 	// file still lists them, the panel does not take them any more (end, isEnded). Session id -> when.
 	ended map[string]int64
+	// steps remembers the step-up round trips of the last two minutes, by the session id they started with and
+	// by the one they ended with (steprepeat.go).
+	steps map[string]*stepRun
 
 	streams streamSlots // how many live-update streams are open (stream.go)
 }

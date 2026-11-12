@@ -299,7 +299,10 @@ func (s *Server) resumePending(c *reqCtx, p *pendingAction) {
 		return
 	}
 	sess := c.session()
-	ctx := context.WithValue(context.WithValue(c.r.Context(), resumedKey, true), sessionKey, sess)
+	// Not cancelled with the callback's request: a browser that reloads the callback, or a connection that
+	// breaks, must not stop the request to the machine half-way (it may have taken it, and the audit log would
+	// then hold an error for an action that happened; r3-p1-01). The action's own time limits still apply.
+	ctx := context.WithValue(context.WithValue(context.WithoutCancel(c.r.Context()), resumedKey, true), sessionKey, sess)
 	// The request is put together from what the router made of the original one. Nothing is parsed or routed a
 	// second time: the kept handler is called directly, with the kept path parameters.
 	u := p.URL

@@ -916,7 +916,12 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   follows, and only when that same client comes back from Pocket ID. No link can do that: opening
   `/auth/login` in any form runs nothing and throws the waiting action away. The dialog and the audit log
   (`auth.step_up`, fields `for` and `runs`) name the action in the panel's own words. What runs is the request
-  as it was first routed (same route, same parameters, same body).
+  as it was first routed (same route, same parameters, same body). It runs to its end also when the browser
+  leaves in the middle (a reload, a broken connection). When the answer after the sign-in does not arrive and
+  the browser asks the same address again, the panel answers again instead of "login failed": for 2 minutes
+  it remembers the confirmation it last accepted for a session (memory only) and gives the same browser and
+  address the session and the page that answer carried, while nobody has used that session yet. The action
+  is not run a second time, and the page shows its result. Any other repeat is refused as before.
 * Sessions: HMAC-signed `__Host-fairy_session` cookie (HttpOnly, Secure, SameSite=Lax, host-only; the plain name
   `fairy_session` only with `FAIRY_INSECURE_COOKIES`) that is valid only while its id is
   in `sessions.json`, within the idle timeout and absolute lifetime; revocable with `fairy admin sessions`.

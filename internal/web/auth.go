@@ -197,6 +197,9 @@ func (c *reqCtx) sessionUser() *model.User {
 		c.use = true
 	}
 	c.s.codec.live.noteAddr(s.SID, c.ip(), c.s.now()) // for the Sessions page: where this session is used from
+	if !c.resumed() {
+		c.s.codec.live.stepUsed(s.SID) // the cookie of a session id a confirmation just gave out has arrived (steprepeat.go)
+	}
 	u := *s.User
 	u.Auth = "session"
 	if u.Groups == nil {
@@ -487,8 +490,29 @@ func (s *Server) authCallback(c *reqCtx) error {
 		}
 		return fail(f)
 	}
+	// A repeat of the confirmation this session's cookie already came from (the person went back to the
+	// callback's address): the same redirect, nothing else (steprepeat.go).
+	if t, ok := s.codec.live.stepDone(sess.SID, q.Get("state"), c.client(), s.now()); ok {
+		c.redirect(t)
+		return nil
+	}
 	if sess.State == "" || q.Get("state") != sess.State || s.now().Unix()-sess.Started > 600 {
 		return fail(&loginFailure{reason: "mismatching_state"})
+	}
+	// A step-up callback is remembered while it works and for two minutes after it was accepted, so that a
+	// repeat of exactly this callback (a reload, a lost answer) is answered again instead of ending in "login
+	// failed" with the action run and the browser signed out (steprepeat.go). Everything below is as strict
+	// as it was for the callback that does the work, and for a repeat that gets nothing.
+	var step *stepRun
+	if sess.StepUp && sess.SID != "" && sess.User != nil {
+		first, run := s.codec.live.beginStep(sess.SID, sess.State, c.client(), s.now())
+		switch {
+		case first:
+			step = run
+			defer s.codec.live.endStep(step)
+		case run != nil && s.repeatedStep(c, sess, run):
+			return nil
+		}
 	}
 	p, err := s.oidc.provider(c.r.Context())
 	if err != nil {
@@ -554,6 +578,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 		if err != nil {
 			return err
 		}
+		s.codec.live.stepAccepted(step, sid, target, s.now())
 		s.codec.live.confirm(sid, authTime, c.ip(), uaHash(c.r), s.now())
 		s.codec.live.touch(sid, s.now()) // confirming at Pocket ID is real use
 		sess.Seen = int64(now)
