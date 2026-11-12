@@ -439,7 +439,9 @@ who may approve is checked as always.
 
 Not run by us: no step of this part was tried against a real Pocket ID or a real Windows helper. On Linux
 the same build was run in a browser against a stand-in Pocket ID and the real agent (the report says what
-was simulated). If a step goes differently, stop there and send what I8 lists.
+was simulated). The stand-in is on another site than the panel and shows a page that needs a click before
+it sends the browser back, as Pocket ID does with its passkey prompt. If a step goes differently, stop there
+and send what I8 lists.
 
 You need: the dev VM with this zip and agent zip 3 (`Fairy-agent-part1-r3`) unpacked **next to each other**,
 the test VM `NSX-TEST-VM`, and your Pocket ID, reachable over https from the dev VM.
@@ -448,6 +450,67 @@ This is the second version of this part (zip 2). New since zip 1: every approval
 step 7 and I10), Cancel needs no passkey (I5), Update all says what happened on each machine, and the agent
 must be the one of agent zip 3: an agent of zip 2 on the VM shows "Agent too old" in its Approval box and
 gets no approval.
+
+### I0. The short path
+
+The same as I1 to I5 in few words, for somebody who has done it before. Every step has its section below.
+
+1. **Pocket ID**, as administrator: OIDC Clients, add a client. Name `Fairy PC actions`. Callback URL
+   `http://127.0.0.1:8080/auth/approval/callback` for the test panel (and, for the real panel, a second one:
+   `https://<public_url>/auth/approval/callback`). Public Client **on** and PKCE **on**; or a client that is
+   not public, with its secret given to the panel through the environment only (step 3; never type the secret
+   into a chat). Requires Re-Authentication **on**. Save.
+2. **Build and start**, dev VM, `cmd.exe`. The folder of this panel and the folder `Fairy-agent-part1-r3`
+   must be next to each other:
+
+   ```
+   cd /d E:\Projects\Fairy-agent-TEST\Fairy-dashboard-passkey-r2
+   set GOOS=
+   set GOARCH=
+   go build -tags fairytest -o fairy-test.exe .\cmd\fairy
+   fairy-test.exe serve
+   ```
+
+   The window prints `Open this address in a browser on this PC (it holds the start key: keep it to
+   yourself): http://127.0.0.1:8080/?key=...`. Paste **that address** into the browser's address bar, once.
+   A test build opens for no other address: `http://127.0.0.1:8080` alone answers "Test build: open the
+   address printed in its console window." until this browser has opened the printed one.
+3. Stop it (`Ctrl+C`). Open `fairy-test\config.yaml` in Notepad and add at the end, with your three values
+   in place of the three `<...>` (the angle brackets go too):
+
+   ```
+   approval:
+     issuer: <issuer>
+     client_id: <client id>
+     users: [<your Pocket ID user id>]
+   ```
+
+   * `<issuer>`: the address of your Pocket ID as its own address bar shows it, `https://` and the host
+     name, nothing behind it. It is the `issuer:` under `oidc:` in the real panel's `config.yaml`.
+   * `<client id>`: Pocket ID, OIDC Clients, `Fairy PC actions`: the field **Client ID**.
+   * `<your Pocket ID user id>`: Pocket ID, Users, open your own user: the last part of the address in the
+     address bar. It is an id, not your name and not your e-mail address.
+
+   Only for a client that is not public: `set FAIRY_APPROVAL_CLIENT_SECRET=` followed by the secret, in the
+   same `cmd.exe` window, before the next line. Then `fairy-test.exe serve` again. The window must show a line
+   with `!!! TEST BUILD: approvals for the machines are asked at` your Pocket ID's address and `callback
+   http://127.0.0.1:8080/auth/approval/callback`.
+4. The test VM with the agent of agent zip 3 (I3): its page has an **Approval** box that says "off".
+5. **Turn on…** in that box, **Turn on for 1 machine (passkey)**, **Continue to Pocket ID**, your passkey at
+   "Fairy PC actions". The browser comes back to the panel (see the note below), a message says "1 of 1
+   machines now check approvals themselves", and the Approval box says **required**.
+6. Power menu, **Shut down**, 60 seconds, type the name. "Confirm it's you" says that NSX-TEST-VM will check
+   this itself. **Continue to Pocket ID**, passkey. Back in the panel a bar on the VM's page counts down:
+   "Shut down in 0:57 requested by test-admin", with **Cancel** at its right end.
+7. **Cancel**: no dialog and no passkey. The message says "The shutdown of NSX-TEST-VM is cancelled." and
+   the VM stays on.
+
+**The way back from Pocket ID.** When Pocket ID sends the browser back, a white page with the one line "Fairy
+test build: back from Pocket ID. Continue" can show for a moment. It goes on by itself; if it stays, press
+**Continue**. (A test build's cookies are not sent with a jump that another site's page starts, so the panel
+asks the browser to come again from its own page. A real panel does not need this.) If you see "Test build:
+open the address printed in its console window." instead, this browser is not the one that opened the printed
+address of step 2: open that address here and press the button again.
 
 ### I1. Pocket ID: one new client
 
@@ -492,18 +555,21 @@ file): open it once. To keep the test VM and the settings of zip 1, copy the fol
 stay the same then.
 
 Stop it again (`Ctrl+C`), open `fairy-test\config.yaml` in Notepad and add these lines at the end (your
-three values in place of the words in capitals; with the copied folder they are there already), save, start
-it again:
+three values in place of the three `<...>`, without the angle brackets; with the copied folder they are there
+already), save, start it again:
 
 ```
 approval:
-  issuer: https://YOUR-POCKET-ID
-  client_id: THE-CLIENT-ID-FROM-I1
-  users: [YOUR-USER-ID]
+  issuer: <issuer>
+  client_id: <client id>
+  users: [<your Pocket ID user id>]
 ```
 
+`<issuer>` is the address of your Pocket ID (`https://` and the host name, as in `oidc: issuer:` of the real
+panel's config), `<client id>` the Client ID of I1, `<your Pocket ID user id>` the user id of I1.
+
 The window must now show a line that starts with `time=... level=WARN msg="!!! TEST BUILD: approvals for the
-machines are asked at https://YOUR-POCKET-ID` and has `callback http://127.0.0.1:8080/auth/approval/callback`
+machines are asked at` your Pocket ID's address and has `callback http://127.0.0.1:8080/auth/approval/callback`
 in it. If it refuses to start, the line says which of the three values it does not accept.
 
 ### I3. The test VM
@@ -535,10 +601,11 @@ From here on do **not** press Re-pair for the VM, and do not press Update: both 
    the check on the machine itself".)
 2. The dialog "Turn on the check on the machine itself" lists what the VM will trust: your Pocket ID's
    address, the client id, the signing key with its thumbprint, and "may approve:" with the user id from
-   I2. Read the user id. Press **Turn on for 1 machine (passkey)**. "Confirm it's you" then shows the same
+   I2 ("from approval.users; not a user of this panel": a test build has no users). Read the user id. Press **Turn on for 1 machine (passkey)**. "Confirm it's you" then shows the same
    once more, line by line; press **Continue to Pocket ID**.
 3. The browser goes to your Pocket ID. It shows **Fairy PC actions** and asks for your passkey. Use it.
-4. You are back in the panel, on the page you started from. The `fairy-test.exe serve` window has a new
+4. You are back in the panel, on the page you started from (a white page "Fairy test build: back from Pocket
+   ID." can show for a moment on the way: I0, "The way back from Pocket ID"). The `fairy-test.exe serve` window has a new
    line that starts with `time=... level=WARN msg="!!! TEST BUILD: an approval was accepted without
    checking` and ends with `approver=<an id>`: that is your user id as Pocket ID sends it.
 5. A message at the bottom right says "1 of 1 machines now check approvals themselves". The Approval box of
@@ -592,8 +659,8 @@ refused has another status and an `error=` text that starts with `approval`. No 
 In the panel: Menu, **Audit**. For each approved action there is `auth.approval` twice ("redirected to
 Pocket ID", then "ok" with the machine and the approver's id) and the action itself (`power.shutdown`,
 `approval.turn_on`). A `power.cancel` has no `auth.approval` before it. `approval.machine_id` is the entry
-for the id that came on record at Turn on (its first six characters). A long line of details is cut:
-click it to see all of it.
+for the id that came on record at Turn on (its first six characters, "how: turn-on", and who pressed Turn
+on). A long line of details is cut: click it to see all of it.
 
 ### I8. What to send back
 
