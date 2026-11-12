@@ -120,3 +120,151 @@ func TestRVP4TooSoonCornerAfterALostWake(t *testing.T) {
 		})
 	}
 }
+
+// MUST FIX 2 (P5): the answer to the shutdown request is lost because the way to the machine went down BEFORE
+// the request got there. The request never arrived; the machine is ON and out of reach. The report said
+// state "off", power "off": "... switched off again (the shutdown request got no answer, but it went off when
+// the countdown was due)", a green "done · off again" for a machine left on that nobody was told about.
+func TestRVP5LostShutdownRequestNeverArrivedAndTheMachineIsOutOfReach(t *testing.T) {
+	w := newWorld(t)
+	pc := w.off("pc-a")
+	pc.shutLost = "never"
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	pc.unreachable = true // from the tick after the request on
+	h := host(w.finish(), "pc-a")
+	has(t, h, StLeftOn, "It came online after the wake. Its shutdown request got no answer, Fairy never saw its countdown, and it does not answer now: "+
+		"not confirmed that it is off. It was updated to 17-bbbbbbb.")
+	if !pc.on || pc.wentOff || pc.pending != nil {
+		t.Fatalf("set-up: the request arrived (pending %v, on %v, went off %v)", pc.pending, pc.on, pc.wentOff)
+	}
+	if h.On != OnUnknown || w.callsFor("pc-a") != "wake update shutdown" { // not "off", and the request is not sent again
+		t.Fatalf("power %q, requests %q: %s", h.On, w.callsFor("pc-a"), h.Text)
+	}
+}
+
+// MUST FIX 2 (P5), the cancel: "Cancel run" (leave on) shortly before the countdown ends. The cancel REACHES
+// the agent (the countdown is called off, the machine stays on), its answer is lost, and the machine is out of
+// reach from then on. In three of these four timings the last look said "It is off (not answering)".
+func TestRVP5CancelArrivedAnswerLostThenOutOfReach(t *testing.T) {
+	for _, arrives := range []bool{true, false} {
+		for _, before := range []time.Duration{60 * time.Second, 25 * time.Second, 10 * time.Second, 3 * time.Second} {
+			w := newWorld(t)
+			pc := w.off("pc-a")
+			r := w.start(StartRequest{Hosts: []string{"pc-a"}})
+			untilState(t, w, "pc-a", StShutting)
+			due := *host(active(w), "pc-a").ShutdownAt
+			for w.now.Before(due.Add(-before)) {
+				w.tick()
+			}
+			if _, err := w.m.CancelRun(r.ID, "Bob", false); err != nil {
+				t.Fatal(err)
+			}
+			// the cancel's answer does not come, and nothing answers after it
+			pc.cancelLost, pc.unreachable = map[bool]string{true: "arrives", false: "never"}[arrives], true
+			at := w.now
+			done := w.finish() // its judge fails "off" for a machine that is on, and "on" for one that is off
+			h := host(done, "pc-a")
+			w.advance(before + 5*time.Second) // past the time the countdown ends, if it still runs
+			if pc.on != arrives {
+				t.Fatalf("set-up: the cancel arrived=%v, the machine is on=%v after the countdown's time", arrives, pc.on)
+			}
+			want := "The run was cancelled by Bob, and the request to call its shutdown countdown (due at " + clock(due) + ") off got no answer (agent unreachable: timeout): it may have arrived. " +
+				"Asked to switch off, not confirmed: it does not answer now."
+			if h.State != StLeftOn || h.On != OnUnknown || h.Text != want {
+				t.Fatalf("cancel %s before the countdown ends, it arrived=%v: %s/%s: %s", before, arrives, h.State, h.On, h.Text)
+			}
+			if d := done.EndedAt.Sub(at); d > lookFor+2*time.Second {
+				t.Fatalf("the last look took %s, at most %s", d, lookFor)
+			}
+			if got := w.steps("pc-a"); !strings.HasSuffix(got, "cancel:agent unreachable: timeout") {
+				t.Fatalf("audit steps: %s", got)
+			}
+		}
+	}
+}
+
+// The same cancel when its answer comes while the machine can be reached: nothing changes, it is ON at once,
+// with the sentence that says the cancel got no answer when it did not.
+func TestACancelWithoutAnAnswerOnAMachineThatAnswers(t *testing.T) {
+	w := newWorld(t)
+	pc := w.off("pc-a")
+	r := w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	due := *host(active(w), "pc-a").ShutdownAt
+	w.advance(30 * time.Second)
+	if _, err := w.m.CancelRun(r.ID, "Bob", false); err != nil {
+		t.Fatal(err)
+	}
+	pc.cancelLost = "arrives"
+	h := host(w.finish(), "pc-a")
+	has(t, h, StLeftOn, "The run was cancelled by Bob, and the request to call its shutdown countdown off got no answer (agent unreachable: timeout): it may switch off at "+clock(due)+
+		". Cancel it on the machine's page.")
+	if h.On != OnYes || !pc.on {
+		t.Fatalf("power %q on %v: %s", h.On, pc.on, h.Text)
+	}
+}
+
+// A cancel that the agent ANSWERS before the countdown is over, from a machine the panel's poller cannot reach
+// at that moment and that gives nothing afterwards: its countdown is called off and it is on. The last look
+// goes by the agent's answer to the run's own request; before, it waited, saw the silence run past the time
+// the countdown would have ended, and said "It is off (not answering)".
+func TestACancelTheAgentAnsweredIsNotOffWhenTheMachineGoesQuiet(t *testing.T) {
+	for _, before := range []time.Duration{60 * time.Second, 25 * time.Second, 10 * time.Second, 3 * time.Second} {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		r := w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StShutting)
+		due := *host(active(w), "pc-a").ShutdownAt
+		for w.now.Before(due.Add(-before)) {
+			w.tick()
+		}
+		if _, err := w.m.CancelRun(r.ID, "Bob", false); err != nil {
+			t.Fatal(err)
+		}
+		pc.unreachable, pc.cancelOK = true, true // the poll before the cancel is lost, the cancel gets through and is answered
+		h := host(w.finish(), "pc-a")
+		has(t, h, StLeftOn, "The run was cancelled by Bob: its shutdown countdown was called off. It came online after the wake and it is ON.")
+		if h.On != OnYes || !pc.on || pc.pending != nil {
+			t.Fatalf("cancel %s before the countdown ends: power %q on %v pending %v: %s", before, h.On, pc.on, pc.pending, h.Text)
+		}
+	}
+}
+
+// The last look and a shutdown request that got no answer (MUST FIX 2, the look's part): the run stops while
+// it watches such a machine, which never got the request and is out of reach. The look ran past the time the
+// countdown would have ended and said "It is off (not answering)". A request without an answer, of which no
+// countdown was ever seen, is not a shutdown the run knows of: "not confirmed", and no word of a countdown.
+func TestTheLastLookAfterAShutdownRequestWithoutAnAnswer(t *testing.T) {
+	w := newWorld(t)
+	pc := w.off("pc-a")
+	pc.shutLost = "never"
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	due := *host(active(w), "pc-a").ShutdownAt
+	pc.unreachable = true
+	for w.now.Before(due.Add(-5 * time.Second)) {
+		w.tick()
+	}
+	w.blocked = "control is disabled by an administrator"
+	r := w.finish()
+	h := host(r, "pc-a")
+	want := "the run stopped (control is disabled by an administrator) after its shutdown request got no answer (it would be due at " + clock(due) + "). " +
+		"It does not answer now: not confirmed that it is on."
+	if h.State != StLeftOn || h.On != OnUnknown || h.Text != want || !pc.on {
+		t.Fatalf("%s/%s, really on %v: %s", h.State, h.On, pc.on, h.Text)
+	}
+	// while the machine answers, the same end says what may still happen, and that it is not known
+	w = newWorld(t)
+	pc = w.off("pc-a")
+	pc.shutLost, pc.staleOnce = "arrives", true // the first answer after the request does not show the countdown yet
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	w.blocked = "control is disabled by an administrator"
+	h = host(w.finish(), "pc-a")
+	has(t, h, StLeftOn, "the run stopped (control is disabled by an administrator) after its shutdown request got no answer (it would be due at ",
+		"). Fairy no longer watches it: if the request arrived, it switches off by itself unless someone cancels that.")
+	if h.On != OnYes {
+		t.Fatalf("power %q: %s", h.On, h.Text)
+	}
+}

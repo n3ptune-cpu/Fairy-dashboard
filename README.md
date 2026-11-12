@@ -359,7 +359,9 @@ The rules, in plain words:
   off, not confirmed" (or "not confirmed that it is on"), with the power "on or off: not known". So: a
   **Cancel run** that comes after a countdown has run out reports that machine as off, not as "it is ON"; a
   shutdown request whose answer was lost (a timeout) is watched like one that was accepted, and the report
-  says how it ended; and a machine that refuses the connection after its countdown (its agent stopped, the
+  says how it ended (if the run never saw its countdown and the machine then gives nothing, that is "not
+  confirmed that it is off", never "off": the request may not have arrived; the same after a **Cancel run**
+  whose own request got no answer); and a machine that refuses the connection after its countdown (its agent stopped, the
   system hangs in its shutdown) is never "switched off": after 5 minutes it is reported as ON.
 * **Nobody is asked.** The run does not look whether someone is signed in or working on a machine it woke,
   and shows nothing on its screen before the agent's own shutdown notice. Use it for machines that are off

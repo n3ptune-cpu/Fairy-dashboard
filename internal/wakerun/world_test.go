@@ -56,6 +56,7 @@ type machine struct {
 	lastMsg    string
 	shutMode   string // ok | approval | refuse | ignore (accepted, but it stays on) | busy | noroute (the agent route is gone) | hang (at the end of the countdown its agent stops and the machine stays on: it refuses the connection)
 	cancelOK   bool   // a cancel is answered with "ok" also when the machine is gone (what a stand-in agent may do)
+	cancelLost string // the answer to a cancel is lost: "arrives" (the countdown is called off on the machine) | "never"
 	shutLost   string // the answer to the first shutdown request is lost: "arrives" (the countdown runs) | "never"
 	pending    *Pending
 	staleOnce  bool // the first answer after a shutdown was asked for does not have the countdown in it yet
@@ -344,6 +345,12 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 func (w *world) CancelShutdown(_ context.Context, id, _ string) error {
 	mc := w.ms[id]
 	w.calls = append(w.calls, "cancel "+id)
+	if mc.cancelLost != "" { // a timeout: the panel does not learn whether the agent got it
+		if mc.cancelLost == "arrives" {
+			mc.pending = nil
+		}
+		return errLost
+	}
 	if !w.answers(mc) && !mc.cancelOK {
 		return &OpError{Text: "agent unreachable: connection failed"}
 	}

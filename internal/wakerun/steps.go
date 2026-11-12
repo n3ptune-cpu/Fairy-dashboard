@@ -106,10 +106,25 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 	due := clock(*h.ShutdownAt)
 	if err != nil {
 		m.emit(EvStep, r, h, "cancel", nil, opText(err))
+		if opCode(err) == CodeNoAnswer {
+			// The cancel left and its answer did not come: it may have reached the agent, and then the countdown
+			// is called off and the machine stays on. The last look must not take its silence for "off".
+			h.cancelUnsure = true
+			m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s, and the request to call its shutdown countdown off got no answer (%s): it may switch off at %s. "+
+				"Cancel it on the machine's page.", why, opText(err), due),
+				fmt.Sprintf("%s, and the request to call its shutdown countdown (due at %s) off got no answer (%s): it may have arrived.", why, due, opText(err)))
+			return false
+		}
 		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s, but its shutdown countdown could not be called off (%s): it may switch off at %s. "+
 			"Cancel it on the machine's page.", why, opText(err), due),
 			fmt.Sprintf("%s, but its shutdown countdown (due at %s) could not be called off (%s).", why, due, opText(err)))
 		return false
+	}
+	if now.Before(*h.ShutdownAt) {
+		// Its agent took the cancel before the countdown was over: the machine runs, and its countdown is gone.
+		// That answer is what the last look goes by; a machine that is out of reach a moment later is not "off".
+		// (A cancel answered after the countdown ran out says nothing: the machine is on its way down.)
+		h.askedAt = now
 	}
 	m.emit(EvStep, r, h, "cancel", nil, "ok")
 	m.endSeen(r, h, StLeftOn, OnYes, now, why+": its shutdown countdown was called off. "+cameOnline(h)+" and it is ON."+updateTail(h),
@@ -546,17 +561,22 @@ func (m *Manager) stepShutting(r *Run, h *Host, now time.Time) {
 		}
 	}
 	// lost: all the run knows of its shutdown is a request that got no answer
-	lost := h.ShutdownUnsure && !h.pendingSeen
+	lost := h.lostShutdown()
 	if !o.Online && o.OnBy == "" { // nothing at all from it
 		if h.offSince.IsZero() {
 			h.offSince = now
 		}
-		if now.After(due) && now.Sub(h.offSince) >= offConfirm {
-			tail := "."
-			if lost {
-				tail = " (the shutdown request got no answer, but it went off when the countdown was due)."
-			}
-			m.end(r, h, StOff, OnNo, now, woken(h)+", "+updateWords(h)+", and switched off again"+tail)
+		switch {
+		case !now.After(due) || now.Sub(h.offSince) < offConfirm:
+		case lost:
+			// Silence is also what a dead link looks like, and a dead link is the usual reason an answer is lost:
+			// the request may never have arrived, and the machine may be on and out of reach. The run saw no
+			// countdown, so it does not say "off" (second review, P5). Left on as far as the run knows, power
+			// not known, and named in the notification.
+			m.end(r, h, StLeftOn, OnUnknown, now, cameOnline(h)+". Its shutdown request got no answer, Fairy never saw its countdown, and it does not answer now: "+
+				"not confirmed that it is off."+updateTail(h))
+		default:
+			m.end(r, h, StOff, OnNo, now, woken(h)+", "+updateWords(h)+", and switched off again.")
 		}
 		return
 	}

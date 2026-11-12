@@ -387,7 +387,8 @@ type Host struct {
 	ShutdownAt   *time.Time `json:"shutdown_at,omitempty"` // when the countdown ends
 	// ShutdownUnsure: the run's shutdown request left the panel and got no answer (CodeNoAnswer). The countdown
 	// may be running: ShutdownAt is then when it would end, and the run watches the machine as after a request
-	// that was accepted, until it sees how it ended.
+	// that was accepted, until it sees how it ended. "Off" is only said of it when its agent showed the
+	// countdown: silence alone is also what a request that never arrived looks like.
 	ShutdownUnsure bool      `json:"shutdown_unconfirmed,omitempty"`
 	On             string    `json:"on,omitempty"` // set when the machine ends (On...)
 	Log            []LogLine `json:"log"`
@@ -409,6 +410,7 @@ type Host struct {
 	lateSeen      bool // gave up, and it came online later
 	grant         any  // the approval for this machine (item 1.1)
 	cancelHandled bool
+	cancelUnsure  bool      // the run's cancel of its countdown left and got no answer: the countdown may be called off
 	entry         int       // HostInfo.Entry when the run started
 	verdict       *verdict  // how the run would end it: the last look (look) is going on
 	askedAt       time.Time // when the run's own direct question to it got an answer of any kind (it runs)
@@ -845,9 +847,10 @@ const (
 //   - Nothing was sent to it, or the run already says that it does not know: the result is written as it is.
 //   - The run believes it is on: an answer from now, or another sign of life (a refused connection is a
 //     machine that runs), confirms it. If it gives nothing, the run waits a short, fixed time (lookFor). When
-//     a shutdown was asked for (or may have been), its countdown is over and the machine has given nothing
-//     for offConfirm, the same confirmation the normal way uses, it is off: "off (not answering)". Otherwise
-//     the result says "not confirmed", and its power is "unknown".
+//     a shutdown was asked for that the run knows of (it was accepted, or its countdown was seen; not one
+//     that only got no answer), no cancel of the run may have called it off, its countdown is over and the
+//     machine has given nothing for offConfirm, the same confirmation the normal way uses, it is off: "off
+//     (not answering)". Otherwise the result says "not confirmed", and its power is "unknown".
 //   - The run saw it go off: written as that, unless it shows a sign of life again.
 func (m *Manager) look(r *Run, h *Host, now time.Time) {
 	v := h.verdict
@@ -886,9 +889,13 @@ func (m *Manager) look(r *Run, h *Host, now time.Time) {
 				v.silent = h.offSince
 			}
 		}
-		asked := h.ShutdownAt != nil // a shutdown was asked for, or may have been
+		// asked: a shutdown the run knows of (the request was accepted, or its countdown was seen). A request
+		// that got no answer and of which no countdown was ever seen is not one: it may never have arrived.
+		// And silence is "off" only when nothing can have called the countdown off: not after a cancel of
+		// the run whose answer was lost (it may have arrived; then the machine is on).
+		asked := h.ShutdownAt != nil && !h.lostShutdown()
 		switch {
-		case asked && now.After(*h.ShutdownAt) && now.Sub(v.silent) >= offConfirm:
+		case asked && !h.cancelUnsure && now.After(*h.ShutdownAt) && now.Sub(v.silent) >= offConfirm:
 			final(StOff, OnNo, base+seenOff)
 		case now.Sub(v.since) < lookFor:
 			if now.Sub(v.kicked) >= kickEvery {
@@ -1011,6 +1018,10 @@ func (m *Manager) finish(r *Run, now time.Time, state string) {
 // state, and why is the reason it stops here.
 func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
 	switch {
+	case h.State == StShutting && h.lostShutdown(): // no countdown the run knows of: the sentence does not claim one
+		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s after its shutdown request got no answer (it would be due at %s). Fairy no longer watches it: "+
+			"if the request arrived, it switches off by itself unless someone cancels that.", why, when(*h.ShutdownAt, now)),
+			fmt.Sprintf("%s after its shutdown request got no answer (it would be due at %s).", why, when(*h.ShutdownAt, now)))
 	case h.State == StShutting:
 		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s while its shutdown was counting down (it ends at %s). Fairy no longer watches it: "+
 			"it switches off by itself unless someone cancels that.", why, when(*h.ShutdownAt, now)),
@@ -1055,6 +1066,10 @@ func updateTail(h *Host) string {
 
 // lostWake reports whether all the run knows of its wake for the machine is a request that got no answer.
 func (h *Host) lostWake() bool { return h.WakeUnsure && h.Wakes == 0 }
+
+// lostShutdown reports whether all the run knows of its shutdown for the machine is a request that got no
+// answer: the agent never showed the countdown.
+func (h *Host) lostShutdown() bool { return h.ShutdownUnsure && !h.pendingSeen }
 
 // woken begins the sentence of a machine that came online after the run's wake and was switched off again.
 //

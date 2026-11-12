@@ -317,15 +317,41 @@ func TestShutdownAnswerLost(t *testing.T) {
 		}
 	})
 
-	t.Run("the agent took it and is not heard of again: off when the countdown was due", func(t *testing.T) {
+	// Second review (P5): this ended as "switched off again (the shutdown request got no answer, but it went off
+	// when the countdown was due)", power "off", on silence alone. The same silence is what a request that
+	// never arrived and a machine that is ON and out of reach look like (TestRVP5LostShutdownRequest...). The
+	// run saw no countdown, so it does not say "off".
+	t.Run("the agent took it and is not heard of again: not confirmed that it is off", func(t *testing.T) {
 		w := newWorld(t)
 		pc := w.off("pc-a")
 		pc.shutLost = "arrives"
 		w.start(StartRequest{Hosts: []string{"pc-a"}})
 		untilState(t, w, "pc-a", StShutting)
+		due := *host(active(w), "pc-a").ShutdownAt
 		pc.unreachable = true // the link that lost the answer stays down
+		r := w.finish()
+		h := host(r, "pc-a")
+		has(t, h, StLeftOn, "It came online after the wake. Its shutdown request got no answer, Fairy never saw its countdown, and it does not answer now: "+
+			"not confirmed that it is off. It was updated to 17-bbbbbbb.")
+		if h.On != OnUnknown || !h.ShutdownUnsure || strings.Contains(h.Text, "switched off again") {
+			t.Fatalf("power %q unsure %v: %s", h.On, h.ShutdownUnsure, h.Text)
+		}
+		if d := r.EndedAt.Sub(due); d <= 0 || d > 3*time.Second { // when the normal way would say "off": silent for 20 s, and the countdown's time over
+			t.Fatalf("the run let go %s after the countdown would be over", d)
+		}
+	})
+
+	t.Run("the agent took it, is out of reach for a while and shows its countdown then: off again", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.shutLost = "arrives"
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StShutting)
+		pc.unreachable = true
+		w.advance(30 * time.Second)
+		pc.unreachable = false // the countdown is seen now: the run knows of its shutdown
 		h := host(w.finish(), "pc-a")
-		has(t, h, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again (the shutdown request got no answer, but it went off when the countdown was due).")
+		has(t, h, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
 		if pc.on || h.On != OnNo {
 			t.Fatalf("on %v power %q: %s", pc.on, h.On, h.Text)
 		}
