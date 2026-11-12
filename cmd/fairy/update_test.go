@@ -328,3 +328,45 @@ func TestOneUpdateAtATime(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Second review of audit 5's round 2 (note 4): the installed version cannot use config.yaml (a key no version
+// knows), "Update panel" is pressed, the new version refuses the file, the rollback's old version refuses it
+// too: the panel is down, and the page that started it is gone. The button's run now stops before anything is
+// replaced and says why in the status the page shows. A run by hand goes on after its warning, as before.
+func TestTheButtonsUpdateStopsOnAConfigTheInstalledVersionCannotUse(t *testing.T) {
+	problem := "yaml: unmarshal errors: line 12: field wake_updaet not found in type config.Panel"
+	if why := configStops(false, problem); why != "" {
+		t.Fatalf("a run by hand must go on (it warns): %q", why)
+	}
+	if why := configStops(true, ""); why != "" {
+		t.Fatalf("a config the installed version can use: %q", why)
+	}
+	why := configStops(true, problem)
+	if !strings.HasPrefix(why, "config.yaml is not usable by the installed version: "+problem+". Nothing was changed.") || !strings.Contains(why, "Correct config.yaml on the panel's host first") {
+		t.Fatalf("the button's run: %q", why)
+	}
+	// what the page gets: a finished run, "failed", with the reason and the way out, whole
+	path := filepath.Join(t.TempDir(), "status.json")
+	(&panelupdate.Writer{Path: path, From: "51-aaaaaaa"}).Step("failed", "", why)
+	st, ok := panelupdate.Read(path)
+	if !ok || st.State != "failed" || !st.Finished || st.Message != why || st.To != "" {
+		t.Fatalf("the status file: %+v (read: %v)", st, ok)
+	}
+	// a long problem (a config with many unknown keys) leaves room for the way out in the 300 characters the status keeps
+	long := configStops(true, strings.Repeat("line 3: field x not found in type config.Panel; ", 20))
+	path = filepath.Join(t.TempDir(), "status.json")
+	(&panelupdate.Writer{Path: path, From: "51-aaaaaaa"}).Step("failed", "", long)
+	if st, _ := panelupdate.Read(path); st.Message != long || !strings.HasSuffix(st.Message, "after the update).") {
+		t.Fatalf("a long problem is cut in the status: %q", st.Message)
+	}
+	// and update() calls it before the address is looked up and anything is asked of the release host: the order in the source
+	src, err := os.ReadFile("update.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop, lock, preflight, run := strings.Index(string(src), "configStops(*fromPanel, cfgProblem)"), strings.Index(string(src), "lockUpdate(updateLockPath(exe))"),
+		strings.Index(string(src), "healthPreflight(healthURL"), strings.Index(string(src), "cli.Run(ctx)")
+	if stop < 0 || !(lock < stop && stop < preflight && preflight < run) {
+		t.Fatalf("update() must stop for the config after it holds the lock and before the preflight and the run: %d %d %d %d", lock, stop, preflight, run)
+	}
+}

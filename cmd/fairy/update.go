@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -71,7 +72,7 @@ func update(args []string) int {
 			repo = r
 		}
 		fmt.Fprintf(os.Stderr, "fairy update: warning: this installed version (%s) cannot use %s: %s\n", version, *cfgPath, cfgProblem)
-		if !*check {
+		if !*check && !*fromPanel { // (the button's run does not go on: configStops, below)
 			fmt.Fprintln(os.Stderr, configFirstNote)
 		}
 	}
@@ -131,6 +132,11 @@ func update(args []string) int {
 	}
 	if !*check {
 		clearStoppedRun(filepath.Dir(exe), panelupdate.StatusPath, *fromPanel, time.Now(), panelupdate.UnitActivity)
+	}
+	if why := configStops(*fromPanel, cfgProblem); why != "" && !*check {
+		fmt.Fprintln(os.Stderr, "fairy update:", why)
+		status.Step("failed", "", why)
+		return 1
 	}
 	addr, from := healthAddr(cfgListen, *envFile, serviceUnit())
 	healthURL := "http://" + addr + "/healthz"
@@ -255,6 +261,30 @@ const configFirstNote = "  The order is: update first, then add new config keys,
 	"may know the key). If it is rolled back, the old version will not start with this file until the key is taken out."
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// configStops is why a run by the Update panel button stops before anything is replaced when the installed
+// version cannot use config.yaml ("": the run goes on).
+//
+// Such a file is not always a key of the release that is about to be installed. With a key that NO version
+// knows (a typo) the new version refuses the file, the update is rolled back, the old version refuses it too,
+// and the panel is down (second review of audit 5's round 2, note 4). Whoever pressed the button has only the
+// page, and the page is then gone: so the button's run stops here, with the reason, while the panel still
+// runs. A run by hand goes on as before, after its warning: there the new version may well know the key, and
+// if not, the person is at a console, where the last message says what to take out.
+func configStops(fromPanel bool, cfgProblem string) string {
+	if !fromPanel || cfgProblem == "" {
+		return ""
+	}
+	const lead, tail = "config.yaml is not usable by the installed version: ", ". Nothing was changed. " +
+		"Correct config.yaml on the panel's host first (add the keys of a newer release after the update)."
+	if room := 300 - len(lead) - len(tail) - len("…"); len(cfgProblem) > room { // the status file keeps 300 bytes, and the way out must fit
+		for room > 0 && !utf8.RuneStart(cfgProblem[room]) {
+			room--
+		}
+		cfgProblem = cfgProblem[:room] + "…"
+	}
+	return lead + cfgProblem + tail
+}
 
 // setupPanelButton installs or refreshes fairy-panel-update.service and its polkit rule (the Updates page's
 // "Update panel" button). Problems are only reported: the manual update goes on.

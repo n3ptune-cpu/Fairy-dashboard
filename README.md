@@ -801,7 +801,11 @@ does not start with the block: the panel is down until you take the block out an
 `systemctl restart fairy`. From this release on `fairy update` asks the address the service really listens on
 (the unit's `--listen`, `FAIRY_LISTEN`, `listen:`, also from a config.yaml it cannot use otherwise), says
 "update first, then add new config keys, then restart" when the installed version refuses the file, and
-stops before it replaces anything when the running panel does not answer at that address.
+stops before it replaces anything when the running panel does not answer at that address. The **Update
+panel** button goes one step further: when the installed version refuses config.yaml it stops before it
+replaces anything ("config.yaml is not usable by the installed version: ..."), because a file that the new
+version refuses too (a typing mistake) would end with the panel down and the page gone. `fairy update` by
+hand warns and goes on, as before.
 
 ### 3. One step by hand: the memory limit
 
