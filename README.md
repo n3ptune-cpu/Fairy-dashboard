@@ -723,6 +723,9 @@ in `config.yaml`. Nothing has to be converted and no file has to be deleted.
 1. **Agents first, one at a time.** Press **Update** for one host on the Updates page of the panel you run
    today. Wait until it is online again. Then the next one. The new agent works with the old panel.
 2. **Then the panel.** On the panel host, as root: `fairy update`.
+   Before it, `find /var/lib/fairy -maxdepth 1 -name '*.json' -size 0` (your data folder) must print nothing:
+   a `users.json` or `state.json` of 0 bytes, left by an old power cut, makes the update roll back until the
+   file is restored from a backup or moved away.
    **Update first, then add new config keys, then restart.** The one new key of this release is the
    `wake_update:` block. The program you run today does the update, and it refuses a config.yaml that has the
    block ("field wake_update not found"). So write the block only after the update, then
