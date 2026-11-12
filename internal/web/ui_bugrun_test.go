@@ -205,3 +205,35 @@ func TestUIBrokenEscapeInTheAddressIsAnUnknownSystem(t *testing.T) {
 		t.Errorf("decodeURIComponent is called in %d places, want only in hashPart", n)
 	}
 }
+
+// r1-b1-14: with the keyboard, Tab left an open dialog and walked through the page behind it (Enter on the
+// sidebar's "Collapse" worked behind "Set model name"); two dialogs opened with the focus on the button behind
+// them or on nothing; after Escape the focus was on nothing. Every dialog is built into #modal, so one place
+// does it for all: Tab stays inside, the focus goes in on open and back to the opener on close.
+func TestUIDialogsKeepTheKeyboardFocus(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const modalKeys = { open: false, opener: null, sel: "", last: null, lastSel: "" };`,
+		`}).observe($("#modal"), { attributes: true, attributeFilter: ["hidden"] });`,
+		// in on open, unless the dialog put the focus somewhere in itself
+		`setTimeout(() => { if (!m.hidden && !m.contains(document.activeElement)) modalStops()[0]?.focus(); }, 30);`,
+		// back on close, unless something else has the focus by then
+		`if (document.activeElement && document.activeElement !== document.body) return;`,
+		`(o?.isConnected ? o : sel ? document.querySelector(sel) : null)?.focus();`,
+		// Tab and Shift+Tab turn round at the ends, and come in from outside
+		`if (e.key !== "Tab" || m.hidden || info.key) return;`,
+		`if (!m.contains(a)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }`,
+		`else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }`,
+		`else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }`,
+		// a dialog opened from a menu's item goes back to the menu's button
+		`const btn = e.target.closest(".menu-item") ? e.target.closest(".menu-wrap")?.querySelector('[data-act="menu"][data-menu]') : null;`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	// one place: no dialog has a Tab handler of its own (the other one closes the account menu)
+	if n := strings.Count(js, `e.key !== "Tab"`) + strings.Count(js, `e.key === "Tab"`); n != 2 || !strings.Contains(js, `else if (e.key === "Tab") closeAcct(false);`) {
+		t.Errorf("Tab is handled in %d places, want the dialogs' one and the account menu's", n)
+	}
+}

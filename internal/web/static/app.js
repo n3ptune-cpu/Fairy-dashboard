@@ -1904,6 +1904,51 @@ document.addEventListener("click", async (e) => {
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { state.menu = null; if (!$("#modal").hidden) closeModal(); render(); } });
 
+// ------------------------------------------------------------ dialogs and the keyboard
+// Every dialog is built into #modal, so this is the one place for all of them. While a dialog is open, Tab and
+// Shift+Tab stay inside it: the page behind cannot be reached with the keyboard. When it opens, the focus is
+// put into it unless the dialog did that itself; when it closes, the focus goes back to what had it before
+// (the button that opened it), if that is still on the page and nothing else took the focus.
+const modalKeys = { open: false, opener: null, sel: "", last: null, lastSel: "" };
+// What had the focus last while no dialog was open. An item of a menu goes away with its menu when the dialog
+// opens ("Set model name", "Shut down"): the menu's button stands for it, found again by its name if the
+// page drew it anew.
+document.addEventListener("focusin", (e) => {
+  if (!$("#modal").hidden || !(e.target instanceof Element)) return;
+  const btn = e.target.closest(".menu-item") ? e.target.closest(".menu-wrap")?.querySelector('[data-act="menu"][data-menu]') : null;
+  modalKeys.last = btn || e.target;
+  modalKeys.lastSel = btn ? `[data-act="menu"][data-menu="${CSS.escape(btn.dataset.menu)}"]` : "";
+});
+const modalStops = () => [...$("#modal").querySelectorAll("a[href], button, input, select, textarea, [tabindex]")]
+  .filter((el) => !el.disabled && el.tabIndex >= 0 && el.type !== "hidden" && el.getClientRects().length > 0);
+new MutationObserver(() => {
+  const m = $("#modal");
+  if (!m.hidden && !modalKeys.open) {
+    const a = document.activeElement;
+    const here = a && a !== document.body && !m.contains(a) && !a.closest(".menu-item");
+    modalKeys.open = true;
+    modalKeys.opener = here ? a : modalKeys.last; modalKeys.sel = here ? "" : modalKeys.lastSel;
+    setTimeout(() => { if (!m.hidden && !m.contains(document.activeElement)) modalStops()[0]?.focus(); }, 30);  // after a dialog's own focus (0 ms)
+  } else if (m.hidden && modalKeys.open) {
+    const o = modalKeys.opener, sel = modalKeys.sel;
+    modalKeys.open = false; modalKeys.opener = null;
+    setTimeout(() => {
+      if (document.activeElement && document.activeElement !== document.body) return;  // something else has it (a dialog's own way back)
+      (o?.isConnected ? o : sel ? document.querySelector(sel) : null)?.focus();
+    }, 0);
+  }
+}).observe($("#modal"), { attributes: true, attributeFilter: ["hidden"] });
+document.addEventListener("keydown", (e) => {
+  const m = $("#modal");
+  if (e.key !== "Tab" || m.hidden || info.key) return;  // an open info box has its own way out and back (Escape)
+  const stops = modalStops(), a = document.activeElement;
+  if (!stops.length) { e.preventDefault(); return; }
+  const first = stops[0], last = stops[stops.length - 1];
+  if (!m.contains(a)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+  else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+});
+
 function pageSettings() {
   setTitle("Settings", "appearance");
   const s = state.settings;
