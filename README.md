@@ -620,7 +620,9 @@ page is black, with the same strip.
   address can load it (`GET /branding/wallpaper`, like the logo). Use one that may be seen.
 * It is always a file the panel keeps (`<data_dir>/backgrounds/signin-wallpaper`, mode `0600`), never an
   address on another site: the sign-in page loads nothing from elsewhere. What the file is called does not
-  matter; its content decides, and SVG, GIF, HTML and everything else is refused.
+  matter; its content decides, and SVG, GIF, HTML and everything else is refused. The file has to be a whole
+  picture of its type (its parts are read to the end and its checksums checked, without unpacking it), not
+  only a file that begins like one; the same holds for a background a user uploads.
 * Your own background (the block above it in Settings) is separate: per account, shown only to you after
   the sign-in.
 * Only admins can change it, from a browser session; it asks for no "Confirm it's you", like the other

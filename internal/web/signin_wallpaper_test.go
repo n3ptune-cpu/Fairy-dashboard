@@ -2,6 +2,8 @@ package web
 
 import (
 	"bytes"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -43,6 +46,27 @@ func wallPictures(t *testing.T) (pngPic, jpg, webp []byte) {
 		t.Fatal(err)
 	}
 	return p.Bytes(), j.Bytes(), []byte("RIFF\x1a\x00\x00\x00WEBPVP8L\x0d\x00\x00\x00\x2f\x00\x00\x00\x10\x07\x10\x11\x11\x88\x88\xfe\x07\x00")
+}
+
+// pngOfSize is a real PNG of exactly n bytes: a small picture with one more chunk in it (a private one that
+// every reader skips) that fills the rest. Padding after the picture's end would not be a picture any more
+// (settings.Whole).
+func pngOfSize(t *testing.T, n int) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 4, 4))); err != nil {
+		t.Fatal(err)
+	}
+	pic := b.Bytes()
+	fill := n - len(pic) - 12
+	if fill < 0 {
+		t.Fatalf("a PNG of %d bytes: the smallest here has %d", n, len(pic)+12)
+	}
+	chunk := binary.BigEndian.AppendUint32(nil, uint32(fill))
+	chunk = append(append(chunk, "fiLl"...), bytes.Repeat([]byte{7}, fill)...)
+	chunk = binary.BigEndian.AppendUint32(chunk, crc32.ChecksumIEEE(chunk[4:]))
+	end := len(pic) - 12 // the IEND chunk
+	return slices.Concat(pic[:end], chunk, pic[end:])
 }
 
 // wallAdmin is a panel with an admin's cookie and CSRF header, and without the upload limit of 6 a minute.
@@ -122,8 +146,15 @@ func TestSignInWallpaperUploadTakesThreeTypesByContent(t *testing.T) {
 			t.Fatalf("%s changed the stored picture: %d %s", bad.name, g.code, g.hdr.Get("Content-Type"))
 		}
 	}
-	// exactly the limit is taken (a PNG followed by padding is still a PNG to every reader)
-	full := append(append([]byte{}, pngPic...), make([]byte, settings.MaxBackgroundBytes-len(pngPic))...)
+	// exactly the limit is taken, and one byte more is not
+	full := pngOfSize(t, settings.MaxBackgroundBytes)
+	if r := e.wallUpload(pngOfSize(t, settings.MaxBackgroundBytes+1), "image/png", admin...); r.code != 413 {
+		t.Fatalf("a picture one byte over the limit: %d %s", r.code, r.raw)
+	}
+	// a PNG followed by padding is not a whole picture (r1-p3-05): refused, whatever its size
+	if r := e.wallUpload(append(append([]byte{}, pngPic...), make([]byte, 4096)...), "image/png", admin...); r.code != 415 {
+		t.Fatalf("a picture with padding after its end: %d %s", r.code, r.raw)
+	}
 	if r := e.wallUpload(full, "image/png", admin...); r.code != 201 || r.body["bytes"] != float64(settings.MaxBackgroundBytes) {
 		t.Fatalf("a picture of exactly the limit: %d %s", r.code, r.raw)
 	}

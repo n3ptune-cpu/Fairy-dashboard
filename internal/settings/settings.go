@@ -150,6 +150,9 @@ func ValidateUpload(contentType string, data []byte) (string, error) {
 	if Sniff(data) != claimed {
 		return "", apierr.New(415, "file content does not match its declared image type")
 	}
+	if !Whole(claimed, data) { // it begins like one and is not one (picture.go)
+		return "", apierr.New(415, "the file is not a complete picture of its type (it is cut off or damaged)")
+	}
 	return claimed, nil
 }
 

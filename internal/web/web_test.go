@@ -381,7 +381,7 @@ func TestSettingsAndBackgroundUpload(t *testing.T) {
 		_ = json.Unmarshal(raw, &out.body)
 		return out
 	}
-	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...)
+	png := pngOfSize(t, 4096)
 	if r := upload("image/png", png); r.code != 403 {
 		t.Fatal("a user waiting for access stored a file", r.code)
 	}
@@ -393,6 +393,9 @@ func TestSettingsAndBackgroundUpload(t *testing.T) {
 	}
 	if r := upload("image/png", []byte("GIF89a....")); r.code != 415 {
 		t.Fatal("mismatched content accepted")
+	}
+	if r := upload("image/png", append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...)); r.code != 415 { // r1-p3-05
+		t.Fatal("a file that only begins like a PNG was accepted", r.code)
 	}
 	if r := upload("image/png", make([]byte, 8<<20+1)); r.code != 413 {
 		t.Fatal("too large accepted", r.code)

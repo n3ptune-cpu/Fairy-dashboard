@@ -73,9 +73,9 @@ func TestBackgroundDownloadIsStreamedAndLimitedPerUser(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{7}, 8<<20-8)...)
+	png, small := pngOfSize(t, 8<<20), pngOfSize(t, 4096)
 	e.uploadBackground(ca, png)
-	e.uploadBackground(cb, png[:4096])
+	e.uploadBackground(cb, small)
 
 	base := heapMiB()
 	const held = 20
@@ -94,7 +94,7 @@ func TestBackgroundDownloadIsStreamedAndLimitedPerUser(t *testing.T) {
 	}
 	// another user's download works, whole and with the headers it had
 	r = e.do("GET", "/api/settings/background", nil, "Cookie", cb)
-	if r.code != 200 || !bytes.Equal(r.raw, png[:4096]) || r.hdr.Get("Content-Type") != "image/png" ||
+	if r.code != 200 || !bytes.Equal(r.raw, small) || r.hdr.Get("Content-Type") != "image/png" ||
 		r.hdr.Get("Content-Security-Policy") != "default-src 'none'" || r.hdr.Get("Content-Disposition") != "inline" ||
 		r.hdr.Get("Cache-Control") != "private, max-age=86400" {
 		t.Fatalf("another user's download: %d, %d bytes, %v", r.code, len(r.raw), r.hdr)
@@ -112,7 +112,7 @@ func TestBackgroundDownloadSlotsAreReleased(t *testing.T) {
 	if _, _, err := e.s.Access.SetRole(viewer.Sub, "viewer", []string{}, "test", true); err != nil {
 		t.Fatal(err)
 	}
-	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{9}, 8<<20-8)...)
+	png := pngOfSize(t, 8<<20)
 	e.uploadBackground(ck, png)
 	get := "GET /api/settings/background HTTP/1.1\r\nHost: x\r\nUser-Agent: " + testUA + "\r\nCookie: " + ck + "\r\n\r\n"
 	var conns []net.Conn

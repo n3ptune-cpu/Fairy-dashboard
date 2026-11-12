@@ -2,7 +2,6 @@ package settings
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"io"
 	"os"
@@ -13,12 +12,12 @@ import (
 
 // The sign-in wallpaper: one picture for the whole panel, shown behind the sign-in page to everyone who can
 // open it, before any sign-in. It is stored the way a user's uploaded background is (a file in
-// <data_dir>/backgrounds, mode 0600, at most MaxBackgroundBytes, its type taken from its first bytes), with
+// <data_dir>/backgrounds, mode 0600, at most MaxBackgroundBytes, its type taken from its content), with
 // three differences, all because it is public:
 //
 //   - it is always an uploaded file, never a URL: the sign-in page loads nothing from another site;
-//   - only PNG, JPEG and WebP, and the header has to be whole (SignInType), whatever name or type the browser
-//     sent with it;
+//   - only PNG, JPEG and WebP, and the file has to be a whole picture of its type (SignInType, Whole),
+//     whatever name or type the browser sent with it;
 //   - it has one fixed file name, which no user's background can have (those are 24 hex digits and an
 //     extension), and it is kept in memory, so answering the public route never opens a file.
 
@@ -33,27 +32,14 @@ type SignInPicture struct {
 	Version string // 16 hex digits of the content's SHA-256: the ETag and the ?v= of its address
 }
 
-// SignInType returns the media type of a sign-in wallpaper from its first bytes: image/png, image/jpeg or
-// image/webp, and "" for everything else (SVG, HTML, GIF, AVIF, a picture whose header is cut off).
+// SignInType returns the media type of a sign-in wallpaper from its content: image/png, image/jpeg or
+// image/webp when the file is a whole picture of that type (Whole), and "" for everything else: SVG, HTML,
+// GIF, AVIF, a picture that is cut off, and a file that only begins like a picture.
 func SignInType(d []byte) string {
-	switch Sniff(d) {
-	case "image/png": // the signature, then the IHDR chunk (13 bytes) with a width and a height
-		if len(d) >= 33 && string(d[8:16]) == "\x00\x00\x00\x0dIHDR" && binary.BigEndian.Uint32(d[16:20]) != 0 &&
-			binary.BigEndian.Uint32(d[20:24]) != 0 {
-			return "image/png"
-		}
-	case "image/jpeg": // start of image, then a first segment that is there in full
-		if len(d) >= 6 && d[3] >= 0xc0 && d[3] != 0xff {
-			if n := int(binary.BigEndian.Uint16(d[4:6])); n >= 2 && len(d) >= 4+n {
-				return "image/jpeg"
-			}
-		}
-	case "image/webp": // RIFF, size, WEBP, then the first chunk: lossy, lossless or extended
-		if len(d) >= 20 {
-			switch string(d[12:16]) {
-			case "VP8 ", "VP8L", "VP8X":
-				return "image/webp"
-			}
+	switch mime := Sniff(d); mime {
+	case "image/png", "image/jpeg", "image/webp":
+		if Whole(mime, d) {
+			return mime
 		}
 	}
 	return ""
