@@ -953,7 +953,7 @@ async function loadProcesses(id) {
     morph(body, `<div class="toolbar">Sort by ${["cpu", "mem", "gpu"].map((k) => `<button class="btn ${k === procSort ? "on" : ""}" data-sort="${k}">${k.toUpperCase()}</button>`).join("")}
       <span class="push">${esc(d.total_processes ?? "?")} processes · CPU % is per core · refreshes every 2 s</span></div>
       <div class="panel glass scroll"><table class="table"><thead><tr><th>PID</th><th>Name</th><th>User</th><th class="num">CPU %</th><th class="num">RSS</th><th class="num">GPU mem</th><th>Command line (redacted)</th></tr></thead>
-      <tbody>${d.processes.map((p) => `<tr class="row" data-key="p${esc(p.pid)}"><td>${esc(p.pid)}</td><td><b>${esc(p.name)}</b></td><td>${esc(p.username || "–")}</td>
+      <tbody>${d.processes.map((p) => `<tr class="row" data-key="p${esc(p.pid)}"><td>${esc(p.pid)}</td><td class="pname" title="${esc(p.name)}"><b>${esc(p.name)}</b></td><td class="pname" title="${esc(p.username || "")}">${esc(p.username || "–")}</td>
         <td class="num">${p.cpu_percent?.toFixed(1) ?? "–"}</td><td class="num">${fmtBytes(p.rss)}</td><td class="num">${p.gpu_mem ? fmtBytes(p.gpu_mem) : "–"}${p.gpu_mem_by_gpu ? `<div class="note">${p.gpu_mem_by_gpu.map((b, i) => `GPU${i} ${fmtBytes(b)}`).join(" · ")}</div>` : ""}</td>
         <td class="cmd" title="${esc(p.cmdline || "")}">${esc(p.cmdline || "–")}</td></tr>`).join("")}</tbody></table></div>`);
     body.querySelectorAll("[data-sort]").forEach((b) => (b.onclick = () => { procSort = b.dataset.sort; loadProcesses(id); }));
@@ -1210,7 +1210,7 @@ function pageUpdates() {
     const vnote = r.version_last_seen ? `<div class="note" title="${esc(LAST_SEEN_TIP)}">last seen${r.behind === true ? " · older than the latest release" : ""}</div>`
       : r.behind === true ? '<div class="note">update available</div>' : "";
     const busy = upd.busy[r.id];
-    return `<tr class="row" data-key="up-${esc(r.id)}"><td class="namecell"><b>${state.byId[r.id] ? `<a href="#/system/${enc(r.id)}">${esc(r.name)}</a>` : esc(r.name)}</b><span class="sub">${esc(r.id)}</span></td>
+    return `<tr class="row" data-key="up-${esc(r.id)}"><td class="namecell"><b title="${esc(r.name)}">${state.byId[r.id] ? `<a href="#/system/${enc(r.id)}">${esc(r.name)}</a>` : esc(r.name)}</b><span class="sub" title="${esc(r.id)}">${esc(r.id)}</span></td>
       <td><span class="chip ${vcls}" title="${esc(r.version || "")}">${esc(cur)}</span>${vnote}</td>
       <td><span class="chip ${r.status === "online" ? "ok" : r.status === "offline" ? "bad" : ""}">${esc(r.status)}</span></td>
       <td>${r.configured ? updState(r) : '<span class="note">off</span>'}</td>
@@ -1445,7 +1445,7 @@ function wakeUpdateBox() {
   if (!d) return wu.error ? `<div class="panel glass pad wu"><h3>Update unpowered hosts</h3><div class="error">${esc(wu.error)}</div></div>` : "";
   const why = controlWhyNot(), joined = d.hosts.filter((h) => h.opted_in), can = joined.filter((h) => h.choice);
   const able = d.hosts.filter((h) => h.can_join || h.opted_in);
-  const row = (h) => `<tr class="row" data-key="wum-${esc(h.id)}"><td class="namecell"><b>${state.byId[h.id] ? `<a href="#/system/${enc(h.id)}">${esc(h.name)}</a>` : esc(h.name)}</b></td>
+  const row = (h) => `<tr class="row" data-key="wum-${esc(h.id)}"><td class="namecell"><b title="${esc(h.name)}">${state.byId[h.id] ? `<a href="#/system/${enc(h.id)}">${esc(h.name)}</a>` : esc(h.name)}</b></td>
     <td><span class="chip ${h.power === "on" ? "ok" : h.power === "off" ? "" : "warn"}"${h.asleep ? ' title="Sent to sleep from the panel. Asleep and off look the same from here."' : ""}>${esc(h.asleep ? "asleep or off" : h.power)}</span></td>
     <td>${h.can_wake ? `via ${esc(h.relay)}` : `<span class="note" title="Fairy cannot wake this machine: in a run it is only updated while it is on">${esc(h.no_wake || h.why_not)}</span>`}</td>
     <td>${h.opted_in ? '<span class="chip ok">switched on</span>' : '<span class="note">off</span>'}${h.opted_in && !h.choice ? `<div class="note">${esc(h.why)}</div>` : ""}</td>
@@ -1623,7 +1623,7 @@ function pageUsers() {
   const admins = d.users.filter((u) => u.role === "admin").length;
   const userRow = (u) => {
     const last = u.role === "admin" && admins <= 1;
-    return `<tr class="row" data-key="u-${esc(u.sub)}"><td class="namecell"><b>${esc(u.name || "–")}</b>${u.you ? ' <span class="chip ok">you</span>' : ""}
+    return `<tr class="row" data-key="u-${esc(u.sub)}"><td class="namecell"><b title="${esc(u.name || "")}">${esc(u.name || "–")}</b>${u.you ? ' <span class="chip ok">you</span>' : ""}
         <span class="sub">${esc(u.email || u.sub)}${unverified(u) ? ' <span class="chip warn" title="Pocket ID did not verify this address (or this person last signed in before the panel recorded it). The owner of the account may have typed it in: go by the id below.">unverified</span>' : ""}</span>
         ${u.email ? `<span class="sub" title="Account id (OIDC subject): the one part of this row the owner of the account cannot change">id ${esc(u.sub)}</span>` : ""}</td>
       <td><select class="select" data-act="u-role" data-sub="${esc(u.sub)}" ${last ? 'disabled title="The last admin cannot be demoted: make someone else admin first"' : ""}>
@@ -1641,7 +1641,7 @@ function pageUsers() {
   const targetRow = (t) => {
     const def = t.default ? `${t.default} (${FROM_LABEL[t.default_from] || t.default_from})` : "admins only";
     const where = [t.parent && `on ${t.parent}`, t.follows.length && `follows ${t.follows.join(", ")}`].filter(Boolean).join(" · ");
-    return `<tr class="row" data-key="t-${esc(t.target)}"><td class="namecell"><b>${esc(t.name)}</b><span class="sub">${esc(t.target)}${where ? ` · ${esc(where)}` : ""}</span></td>
+    return `<tr class="row" data-key="t-${esc(t.target)}"><td class="namecell"><b title="${esc(t.name)}">${esc(t.name)}</b><span class="sub" title="${esc(where ? `${t.target} · ${where}` : t.target)}">${esc(t.target)}${where ? ` · ${esc(where)}` : ""}</span></td>
       <td><select class="select" data-act="a-site" data-target="${esc(t.target)}"><option value="">Default: ${esc(def)}</option>
         ${sites.map((x) => `<option value="${esc(x)}" ${t.assigned === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></td>
       <td>${t.site ? `<span class="chip ok">${esc(t.site)}</span>` : '<span class="chip warn">admins only</span>'}</td></tr>`;

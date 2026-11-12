@@ -170,6 +170,13 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .table td.cmd { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 12px; max-width: 460px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .table .spark { width: 140px; height: 26px; }
+/* A long name without a space (a host, a guest, an account, a process) is cut with … at a share of the window, so that the
+   columns after it and the row's button stay in view. The whole name is its tooltip. */
+.table.updates .namecell > b, .table.wu-machines .namecell > b, .table.assign .namecell > b, .table.users .namecell > b,
+.table.updates .namecell .sub, .table.assign .namecell .sub, .table td.pname {
+  max-width: min(44ch, max(22vw, 120px)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table.updates .namecell > b, .table.wu-machines .namecell > b, .table.assign .namecell > b, .table.users .namecell > b { display: inline-block; vertical-align: bottom; }
+.table.updates .namecell > b a, .table.wu-machines .namecell > b a { display: inline; }
 .scroll { overflow-x: auto; }
 
 /* ------------------------------------------------ detail */
@@ -216,6 +223,12 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .metric .k { color: var(--muted); font-weight: 600; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .metric .v { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .metric .bar { height: 8px; }
+/* A box that lists mount points (their label has the whole path as its tooltip): its rows share one label column, as wide
+   as the longest label and at most 45% of the box, so a path is cut only when there is no room for it. */
+.panel:has(> .metric > .k[title]) { display: grid; grid-template-columns: fit-content(45%) minmax(40px, 1fr) 150px; column-gap: 12px; align-items: center; }
+.panel:has(> .metric > .k[title]) > * { grid-column: 1 / -1; }
+.panel:has(> .metric > .k[title]) > .metric { display: contents; }
+.panel:has(> .metric > .k[title]) > .metric > * { margin: 5px 0; }
 .panel h3 { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 .big-w { font-size: 32px; font-weight: 600; color: var(--pwr); font-variant-numeric: tabular-nums; }
 .big-w small { font-size: 14px; color: var(--muted); font-weight: 600; }
@@ -293,6 +306,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   .mini { grid-template-columns: 30px 34px; gap: 6px; }
   .table td, .table th { padding: 8px 8px; }
   .metric { grid-template-columns: 52px minmax(30px, 1fr) 118px; }
+  .panel:has(> .metric > .k[title]) { grid-template-columns: fit-content(40%) minmax(30px, 1fr) 118px; }
   .power-hero, .field { grid-template-columns: 1fr; }
 }
 
@@ -629,7 +643,7 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
   .table.hosts tr.row td[data-l]:has(.mini) { display: flex; align-items: center; gap: 8px; }
   .table.hosts tr.row td[data-l]:has(.mini)::before { content: attr(data-l); color: var(--faint); font-size: 12px; font-weight: 600; }
   .host-l1 { flex-wrap: wrap; }
-  .table.hosts .host-l1 > a { flex: 0 1 auto; white-space: normal; min-width: 0; }
+  .table.hosts .host-l1 > a { flex: 0 1 auto; white-space: normal; min-width: 0; overflow-wrap: anywhere; }
 }
 @container hosts (max-width: 600px) {  /* a phone: as before, without the owner and the GPU */
   .table.hosts tr.row { grid-template-columns: auto auto minmax(0, 1fr); column-gap: 14px; }
