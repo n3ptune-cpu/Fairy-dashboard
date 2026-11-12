@@ -53,7 +53,8 @@ Updates page and the start-up log say "TEST BUILD" too.
 
 ## What to click in zip 7
 
-Unpack the zip (folder `Fairy-dashboard-part1-r7`), open `cmd.exe` in it, then:
+Unpack the zip (folder `Fairy-dashboard-passkey-r3`) next to the folder `Fairy-agent-part1-r3` of agent zip 3
+(this package is built against that folder: part I, I2), open `cmd.exe` in it, then:
 
 ```
 go build -tags fairytest -o fairy-test.exe .\cmd\fairy
@@ -65,8 +66,8 @@ program: `go build -tags fairytest -o fairy-t ./cmd/fairy`, then `./fairy-t serv
 `fairy-test` stops with "Refusing to start: config .../fairy-test/config.yaml: ... not a directory".)
 
 Open the address the console prints (`http://127.0.0.1:8080/?key=...`, see above). To keep the test VM you
-added before, copy the folder `fairy-test` from the folder `Fairy-dashboard-part1-r6` into the folder
-`Fairy-dashboard-part1-r7` **before** the first start.
+added before, copy the folder `fairy-test` from the folder `Fairy-dashboard-passkey-r2` into the folder
+`Fairy-dashboard-passkey-r3` **before** the first start.
 
 1. **Overview**: one row per host. Under the name, small: the PC model. In the tile in front: the mark of its
    system (Windows, Debian, ...). Behind the name: small signs for the helper, the battery and the UPS, where
@@ -102,11 +103,12 @@ keeps its files in a folder `.fairy-demo` where you started it. Stop either prog
 
 ## A. Build and start (dev VM, `cmd.exe`, Go installed)
 
-1. Unpack the zip into your test folder. You get a folder like `Fairy-dashboard-part1-r7`.
+1. Unpack the zip into your test folder, next to the folder `Fairy-agent-part1-r3`. You get a folder
+   `Fairy-dashboard-passkey-r3`.
 2. Open `cmd.exe` and go into that folder (use your own path):
 
    ```
-   cd /d E:\Projects\Fairy-dashboard-TEST\Fairy-dashboard-part1-r7
+   cd /d E:\Projects\Fairy-dashboard-TEST\Fairy-dashboard-passkey-r3
    ```
 
 3. Build. The first time, Go downloads the packages it needs (a minute or so):
@@ -446,10 +448,13 @@ and send what I8 lists.
 You need: the dev VM with this zip and agent zip 3 (`Fairy-agent-part1-r3`) unpacked **next to each other**,
 the test VM `NSX-TEST-VM`, and your Pocket ID, reachable over https from the dev VM.
 
-This is the second version of this part (zip 2). New since zip 1: every approval names its machine (I4,
-step 7 and I10), Cancel needs no passkey (I5), Update all says what happened on each machine, and the agent
-must be the one of agent zip 3: an agent of zip 2 on the VM shows "Agent too old" in its Approval box and
-gets no approval.
+This is the third version of this part (zip 3, folder `Fairy-dashboard-passkey-r3`). New since zip 2: a
+machine id comes on record only when this panel turned the check on or an admin accepts the id (I10, steps 7
+to 9; what Turn on or an accept put on record with zip 2 stays on record), the accept dialog says what to
+compare the id with (I10, step 4), "Confirm it's you" says what your passkey signs and shows the Client ID
+(I5), the buttons are named **Turn on** without "…", and everything of panel zip 7 is in it (the parts
+before this one). The agent stays the one of agent zip 3: an agent of zip 2 on the VM shows "Agent too old"
+in its Approval box and gets no approval.
 
 ### I0. The short path
 
@@ -464,7 +469,7 @@ The same as I1 to I5 in few words, for somebody who has done it before. Every st
    must be next to each other:
 
    ```
-   cd /d E:\Projects\Fairy-agent-TEST\Fairy-dashboard-passkey-r2
+   cd /d E:\Projects\Fairy-dashboard-TEST\Fairy-dashboard-passkey-r3
    set GOOS=
    set GOARCH=
    go build -tags fairytest -o fairy-test.exe .\cmd\fairy
@@ -542,15 +547,16 @@ browser's address bar. (If that is not how your Pocket ID shows it: I4, step 4 s
 
 ### I2. Dev VM: build and start
 
-Both folders must be in `E:\Projects\Fairy-agent-TEST`: `Fairy-agent-part1-r3` (agent zip 3) and
-`Fairy-dashboard-passkey-r2` (this zip). This panel is built against that agent folder: with another folder
-name, or without it, `go build` stops with "replacement directory ../Fairy-agent-part1-r3 does not exist".
+Both folders must be in one folder (here `E:\Projects\Fairy-dashboard-TEST`): `Fairy-agent-part1-r3` (agent
+zip 3) and `Fairy-dashboard-passkey-r3` (this zip). This panel is built against that agent folder: with
+another folder name, or without it, `go build` stops with "replacement directory ../Fairy-agent-part1-r3 does
+not exist".
 In `cmd.exe`:
 
 ```
-cd /d E:\Projects\Fairy-agent-TEST
-tar -xf fairy-dashboard-passkey-testpanel-src-2.zip
-cd Fairy-dashboard-passkey-r2
+cd /d E:\Projects\Fairy-dashboard-TEST
+tar -xf fairy-dashboard-passkey-testpanel-src-3.zip
+cd Fairy-dashboard-passkey-r3
 set GOOS=
 set GOARCH=
 go build -tags fairytest -o fairy-test.exe .\cmd\fairy
@@ -559,9 +565,9 @@ fairy-test.exe serve
 ```
 
 `version` must say `TEST BUILD`. `serve` prints the address to open, with the start key (see the top of this
-file): open it once. To keep the test VM and the settings of zip 1, copy the folder `fairy-test` from
-`Fairy-dashboard-passkey-r1` into this folder **before** the first start; the start key and the address
-stay the same then.
+file): open it once. To keep the test VM and the settings of zip 2, copy the folder `fairy-test` from
+`Fairy-dashboard-passkey-r2` into this folder **before** the first start; the start key and the address
+stay the same then, and so does what the panel has on record for the VM.
 
 Stop it again (`Ctrl+C`), open `fairy-test\config.yaml` in Notepad and add these lines at the end (your
 three values in place of the three `<...>`, without the angle brackets; with the copied folder they are there
