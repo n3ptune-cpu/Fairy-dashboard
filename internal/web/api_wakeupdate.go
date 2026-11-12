@@ -791,7 +791,7 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 	}
 	note := func(sev, kind, sysID, host, text string) {
 		if s.Notes != nil {
-			s.Notes.Add(notifications.Event{Kind: kind, Type: "update", Severity: sev, SystemID: sysID, Host: host, Text: clipText(text, 1500)})
+			s.Notes.Add(notifications.Event{Kind: kind, Type: "update", Severity: sev, SystemID: sysID, Host: host, Text: clipText(text, wuNoteMax)})
 		}
 	}
 	switch e.Kind {
@@ -844,8 +844,102 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 		if attention {
 			sev = notifications.Warning
 		}
-		note(sev, kind, "", wuNoteHost, lead+". "+strings.ReplaceAll(r.Summary, "\n", " | "))
+		note(sev, kind, "", wuNoteHost, wuNoteText(lead, r.Hosts, wuNoteMax))
 	}
+}
+
+// wuNoteMax is how long a run's notification may be.
+const wuNoteMax = 1500
+
+// wuNeedsALook reports whether a machine's result is one somebody should look at, and the two words for it:
+// left on, given up on, interrupted, its power not known, or its update did not work.
+func wuNeedsALook(h *wakerun.Host) (string, bool) {
+	switch {
+	case h.State == wakerun.StLeftOn && h.On == wakerun.OnUnknown:
+		return "not confirmed", true
+	case h.State == wakerun.StLeftOn:
+		return "left ON", true
+	case h.State == wakerun.StGaveUp:
+		return "gave up", true
+	case h.State == wakerun.StInterrupted:
+		return "interrupted", true
+	case h.On == wakerun.OnUnknown:
+		return "on or off: not known", true
+	case h.Update != "" && h.Update != wakerun.UpdOK && h.Update != wakerun.UpdCurrent:
+		return "not updated", true
+	}
+	return "", false
+}
+
+// wuNoteText is the one notification of a run that is over (r2-p2-06). A run of sixteen machines does not fit
+// a notification with a sentence for each, and the text used to be cut where it ran out: the machines at the
+// end of the list were not named, also when they were the ones left ON. Now:
+//
+//   - the machines that need a look come first, each with its whole sentence, in the run's order;
+//   - when everything fits, the others follow, each with its sentence (a line per machine, as before);
+//   - when it does not, the others are counted ("9 skipped, 2 switched off again"), and of the machines that
+//     need a look as many as fit keep their sentence; the ones after them are named with two words ("H14
+//     (left ON)"). Every machine that needs a look is named, always;
+//   - no sentence is ever cut in the middle. The whole list, with every sentence, stays on the Updates page
+//     under "Last run" (and in the audit log).
+func wuNoteText(lead string, hosts []*wakerun.Host, limit int) string {
+	type look struct{ full, short string }
+	var looks []look
+	var others []string
+	counts, order := map[string]int{}, []string{}
+	for _, h := range hosts {
+		if word, yes := wuNeedsALook(h); yes {
+			looks = append(looks, look{h.Name + ": " + h.Text, h.Name + " (" + word + ")"})
+			continue
+		}
+		others = append(others, h.Name+": "+h.Text)
+		word := map[string]string{wakerun.StOff: "switched off again", wakerun.StStayedOn: "stay on", wakerun.StSkipped: "skipped"}[h.State]
+		if word == "" {
+			word = h.State
+		}
+		if counts[word] == 0 {
+			order = append(order, word)
+		}
+		counts[word]++
+	}
+	// 1. a sentence for every machine
+	all := make([]string, 0, len(hosts))
+	for _, l := range looks {
+		all = append(all, l.full)
+	}
+	if out := lead + ". " + strings.Join(append(all, others...), " | "); len(out) <= limit {
+		return out
+	}
+	// 2. the others counted; as many whole sentences as fit, from the top; the machines after them by two words
+	var rest []string
+	for _, word := range order {
+		rest = append(rest, fmt.Sprintf("%d %s", counts[word], word))
+	}
+	const where = " Every machine's result: Updates page, Last run."
+	build := func(full int) string {
+		parts := []string{}
+		for _, l := range looks[:full] {
+			parts = append(parts, l.full)
+		}
+		if full < len(looks) {
+			var names []string
+			for _, l := range looks[full:] {
+				names = append(names, l.short)
+			}
+			parts = append(parts, map[bool]string{true: "Need a look: ", false: "Also: "}[full == 0]+strings.Join(names, ", ")+".")
+		}
+		if len(rest) > 0 {
+			parts = append(parts, map[bool]string{true: "The others: ", false: ""}[len(looks) > 0]+strings.Join(rest, ", ")+".")
+		}
+		return lead + ". " + strings.Join(parts, " | ") + where
+	}
+	for full := len(looks); full >= 0; full-- {
+		if out := build(full); len(out) <= limit {
+			return out
+		}
+	}
+	// 3. names so long that even two words each do not fit: the count, whole
+	return clipText(lead, max(limit-120, 0)) + fmt.Sprintf(". %d of %d machines need a look. Every machine's result: Updates page, Last run.", len(looks), len(hosts))
 }
 
 // clipText cuts a text for a notification at a rune boundary.

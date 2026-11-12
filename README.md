@@ -261,7 +261,11 @@ For each ticked machine that is off:
    the countdown with **Cancel**, as for every shutdown from the panel.
 
 The page shows each machine's step while the run works, and which wait it is in ("waiting for it to come
-online, up to 5 min"). The report stays there afterwards (the last 10 runs). A finished run also makes one notification with a line per machine.
+online, up to 5 min"). The report stays there afterwards (the last 10 runs). A finished run also makes one notification: the
+machines that need a look first (left on, given up on, not confirmed, not updated), each with its sentence,
+then the others. When a sentence for every machine does not fit (a notification holds 1500 characters), the
+others are counted and the machines that need a look are all still named; no sentence is cut. The full list
+is always in "Last run".
 
 The rules, in plain words:
 
