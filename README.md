@@ -832,6 +832,11 @@ memory limit. Add it once:
     minutes after this update's restart no machine is offered as off. See
     [Update unpowered hosts](#update-unpowered-hosts).
 
+15. **Scripts that read `/api/notifications`**: the filter `severity=critical` now returns what the page
+    calls critical (every event that starts an alert, such as a host that goes offline, and every event
+    whose severity is critical), and `severity=warning` the other warnings. Before, both went by the stored
+    severity alone, where "host offline" is a warning. The `severity` field of each event is unchanged.
+
 Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
 `managed-hosts.yaml`, `state.json`, `settings.json`, and `sessions.json`, where it ignores what this one adds).
 It does not start when config.yaml has a `wake_update:` block: take the block out first. (It is the one key

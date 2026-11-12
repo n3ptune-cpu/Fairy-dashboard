@@ -329,7 +329,7 @@ func TestAnAgentCannotHoldTheRunWithAFarCountdown(t *testing.T) {
 		if h.State != StLeftOn || h.On != OnYes || !pc.on || r.State != RunDone {
 			t.Fatalf("%s: %s / %s (%s): %s", how, r.State, h.State, h.On, h.Text)
 		}
-		want := "Its agent says its shutdown is due at " + far.Format("2006-01-02 15:04:05") + " UTC, later than the 2 min the run asked for. Fairy no longer watches it: " +
+		want := "Its agent says its shutdown is due at " + far.Format("2006-01-02 15:04:05") + " UTC, later than the 2 min the run asked for (or the machine's clock is ahead of the panel's). Fairy no longer watches it: " +
 			"it is ON until then, and switches off then unless someone cancels that on its page. It was updated to 17-bbbbbbb."
 		if h.Text != want {
 			t.Fatalf("%s: %s", how, h.Text)

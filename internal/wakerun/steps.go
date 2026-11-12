@@ -517,7 +517,12 @@ func (m *Manager) farCountdown(r *Run, h *Host, at, now time.Time) bool {
 		return false
 	}
 	h.ShutdownAt = &at
-	m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("Its agent says its shutdown is due at %s, later than the %s the run asked for. Fairy no longer watches it: "+
+	// The run cannot tell a countdown the agent made longer from a machine whose own clock is ahead of the
+	// panel's by more than the slack (the agent says when the countdown ends, by its clock, and not what time
+	// it has): such a machine does switch off as asked, and is reported here all the same. The sentence
+	// names that case, so that a red "left on" for it can be read right.
+	m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("Its agent says its shutdown is due at %s, later than the %s the run asked for "+
+		"(or the machine's clock is ahead of the panel's). Fairy no longer watches it: "+
 		"it is ON until then, and switches off then unless someone cancels that on its page.", when(at, now), span(r.Settings.ShutdownDelay))+updateTail(h))
 	return true
 }
