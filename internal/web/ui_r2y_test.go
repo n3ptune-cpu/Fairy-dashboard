@@ -168,3 +168,18 @@ func TestUICreateSiteWithoutANameSaysSo(t *testing.T) {
 		}
 	}
 }
+
+// r2-b1 I-6: with updates.check_latest: false "Check for updates" stayed enabled and every press was answered
+// 409. The button is disabled and its tooltip says why (the line under it already names the setting).
+func TestUICheckForUpdatesIsOffWhenTheReleaseCheckIsOff(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const off = !!(d.latest?.disabled && d.panel_latest?.disabled);`,
+		`const title = off ? "The release check is off (updates.check_latest: false in config.yaml)" : busy ?`,
+		`data-act="upd-check" ${busy || wait || off ? "disabled" : ""}`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+}

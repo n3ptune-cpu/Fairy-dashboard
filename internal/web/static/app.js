@@ -1289,8 +1289,9 @@ function pageUpdates() {
 // step-up; at most once every 30 s for the whole panel (the server says how long to wait).
 function updCheckBtn(d) {
   const busy = upd.checking || d.check_running, wait = d.check_retry_s || 0;
-  const title = busy ? "Checking GitHub…" : wait ? `Checked just now: you can check again in ${wait} s` : "Look for new Fairy-agent and panel releases on GitHub now";
-  return `<button class="btn push" type="button" data-act="upd-check" ${busy || wait ? "disabled" : ""} aria-busy="${busy}" title="${esc(title)}">${busy
+  const off = !!(d.latest?.disabled && d.panel_latest?.disabled);  // updates.check_latest: false: a press would only be refused
+  const title = off ? "The release check is off (updates.check_latest: false in config.yaml)" : busy ? "Checking GitHub…" : wait ? `Checked just now: you can check again in ${wait} s` : "Look for new Fairy-agent and panel releases on GitHub now";
+  return `<button class="btn push" type="button" data-act="upd-check" ${busy || wait || off ? "disabled" : ""} aria-busy="${busy}" title="${esc(title)}">${busy
     ? '<span class="spinner" aria-hidden="true"></span> Checking…' : `${I.recheck} Check for updates`}</button>`;
 }
 function updCheckLine(d) {
