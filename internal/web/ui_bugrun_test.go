@@ -305,3 +305,26 @@ func TestTestingGuideSaysTheTwoThingsTheBugRunMet(t *testing.T) {
 		}
 	}
 }
+
+// r2-p3-05: the page's own rule (app.js, at esc) is that every server value goes through esc(), enc(), cssName()
+// or safeHref(), also where the server only ever sends a number or one of a few words. Four places did not: the
+// unread count in the sidebar, the action's name in the power menu, the process total, and the sign-in window in
+// "Confirm it's you" (a 403's window_s that is not a number went into the dialog as it came).
+func TestUIServerValuesGoThroughEsc(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		"`<span class=\"cpu\">${un ? `${esc(un)} new` : \"\"}</span>`",
+		"data-act=\"power\" data-action=\"${esc(a.action)}\"",
+		"${esc(d.total_processes ?? \"?\")} processes",
+		"from the last <b>${esc(winText)}</b>.",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %s", want)
+		}
+	}
+	for _, not := range []string{"${un} new", "data-action=\"${a.action}\"", "${d.total_processes ?? \"?\"} processes", "<b>${winText}</b>"} {
+		if strings.Contains(js, not) {
+			t.Errorf("app.js still prints a server value as it came: %s", not)
+		}
+	}
+}

@@ -236,7 +236,7 @@ function showStepUp(pending, detail) {
     <div class="stepup-ico">${I.shield}</div>
     <h3 id="stitle">Confirm it's you</h3>
     <p>${perAction ? "This action needs its own Pocket ID sign-in. It confirms only the action below."
-      : `${win !== cfgWin ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${winText}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}`}</p>
+      : `${win !== cfgWin ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${esc(winText)}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtUptime(age)}</b> ago.` : ""}`}</p>
     <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}${items}</div>
     <p class="note" id="su-note">${kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
       : newClient ? `This browser, or the address it now has, has not confirmed a sign-in for this session yet, so nothing was kept. Sign in again at Pocket ID (passkey) and you come straight back here to finish it${perAction ? "; it then asks once more, for this action alone" : ""}. Nothing has been sent yet.`
@@ -668,7 +668,7 @@ function renderNav() {
   let html = navLink("#/", `<span class="ico">${I.overview}</span>`, "Overview");
   const un = state.notes.unread;
   html += navLink("#/notifications", `<span class="ico">${I.bell}</span>`, "Notifications", state.notes.active_alerts ? "alarm" : "",
-    `<span class="cpu">${un ? `${un} new` : ""}</span>`);
+    `<span class="cpu">${un ? `${esc(un)} new` : ""}</span>`);
   html += `<div class="nav-sec"><div class="nav-title"><span class="ico">${I.machine}</span><span>Hosts</span></div>`;
   const cur = state.byId[current().id], curParent = cur ? parentOf(cur) : null;
   for (const [site, hosts] of hostsBySite()) {
@@ -829,7 +829,7 @@ function powerMenu(s) {
   const caps = state.caps[s.id], why = controlWhyNot();
   if (!caps) return '<div class="menu"><div class="menu-note">loading…</div></div>';
   return `<div class="menu power" role="menu"><div class="menu-title">Power · ${esc(s.name)}</div>
-    ${caps.actions.map((a) => `<button class="menu-item ${a.action === "stop" || a.action === "shutdown" ? "danger" : ""}" data-act="power" data-action="${a.action}" ${a.available && !why ? "" : "disabled"} title="${esc(a.reason || "")}">
+    ${caps.actions.map((a) => `<button class="menu-item ${a.action === "stop" || a.action === "shutdown" ? "danger" : ""}" data-act="power" data-action="${esc(a.action)}" ${a.available && !why ? "" : "disabled"} title="${esc(a.reason || "")}">
       ${esc(POWER_LABEL[a.action])}${a.available ? `<span class="note">${esc(a.via_label ? `via ${a.via_label}` : a.via || "")}${a.delayed ? " · countdown" : ""}</span>` : ""}</button>
       ${!a.available && a.reason ? `<div class="menu-why">${esc(a.reason)}</div>` : ""}`).join("")}
     ${why ? `<div class="menu-note">${esc(why)}</div>` : ""}
@@ -947,7 +947,7 @@ async function loadProcesses(id) {
     if (!$("#tab-body") || current().id !== id || current().tab !== "processes") return;
     if (d.disabled_by_host) { body.innerHTML = '<div class="empty">Process view disabled by host.<br><span class="note">The machine owner turned it off on their agent (processes: enabled: false in its config.yaml).</span></div>'; return; }
     morph(body, `<div class="toolbar">Sort by ${["cpu", "mem", "gpu"].map((k) => `<button class="btn ${k === procSort ? "on" : ""}" data-sort="${k}">${k.toUpperCase()}</button>`).join("")}
-      <span class="push">${d.total_processes ?? "?"} processes · CPU % is per core · refreshes every 2 s</span></div>
+      <span class="push">${esc(d.total_processes ?? "?")} processes · CPU % is per core · refreshes every 2 s</span></div>
       <div class="panel glass scroll"><table class="table"><thead><tr><th>PID</th><th>Name</th><th>User</th><th class="num">CPU %</th><th class="num">RSS</th><th class="num">GPU mem</th><th>Command line (redacted)</th></tr></thead>
       <tbody>${d.processes.map((p) => `<tr class="row" data-key="p${esc(p.pid)}"><td>${esc(p.pid)}</td><td><b>${esc(p.name)}</b></td><td>${esc(p.username || "–")}</td>
         <td class="num">${p.cpu_percent?.toFixed(1) ?? "–"}</td><td class="num">${fmtBytes(p.rss)}</td><td class="num">${p.gpu_mem ? fmtBytes(p.gpu_mem) : "–"}${p.gpu_mem_by_gpu ? `<div class="note">${p.gpu_mem_by_gpu.map((b, i) => `GPU${i} ${fmtBytes(b)}`).join(" · ")}</div>` : ""}</td>
