@@ -1969,9 +1969,29 @@ function applySettings() {
   root.setProperty("--blur", `${s.blur}px`);
   root.setProperty("--card-alpha", String(s.card_opacity / 100));
 }
+// The copy kept in this browser (written when a save to the panel failed) is used only when the panel cannot be
+// asked, and only if it is what the page itself writes there: the same kinds and ranges the panel takes
+// (settings.Validate), a background address only with https. Anything else is not used at all: the defaults.
+function storedSettings(raw) {
+  let s;
+  try { s = JSON.parse(raw); } catch { return null; }
+  const obj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  const int = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
+  if (!obj(s) || !obj(s.background) || !int(s.dim, 0, 90) || !int(s.blur, 0, 40) || !int(s.card_opacity, 20, 100)) return null;
+  const b = s.background, version = Number.isSafeInteger(b.version) && b.version >= 0 ? b.version : 0;
+  let url = null;
+  if (b.kind === "url") {
+    if (typeof b.url !== "string" || b.url.length > 2083 || /[\u0000-\u0020\u007f]/.test(b.url)) return null;
+    try { const u = new URL(b.url); if (u.protocol !== "https:" || !u.host) return null; } catch { return null; }
+    url = b.url;
+  } else if (b.kind !== "none" && b.kind !== "upload") return null;
+  const out = { theme: "black", background: { kind: b.kind, url, version }, dim: s.dim, blur: s.blur, card_opacity: s.card_opacity };
+  if (obj(s.popups)) out.popups = { enabled: s.popups.enabled, seconds: s.popups.seconds, level: s.popups.level };  // popPrefs checks each
+  return out;
+}
 async function loadSettings() {
   try { state.settings = await api("/api/settings"); }
-  catch { try { state.settings = JSON.parse(localStorage.getItem(LS_KEY)); } catch { state.settings = null; } }
+  catch { let raw = null; try { raw = localStorage.getItem(LS_KEY); } catch { /* storage blocked */ } state.settings = storedSettings(raw); }
   state.settings ||= { theme: "black", background: { kind: "none", url: null, version: 0 }, dim: 60, blur: 14, card_opacity: 72 };
   state.settings.popups = popPrefs();  // settings kept in this browser before pop-ups existed have none: the defaults
   applySettings();
