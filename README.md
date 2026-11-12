@@ -981,7 +981,11 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   `tokens.json.corrupt-<UTC time>` (for example `sessions.json.corrupt-20261112T140501Z`; never over an older copy, and the five
   newest copies of a file are kept), one ERROR in the log names it, and the panel starts with nobody signed in (everyone
   signs in again) or with no API token valid (make new ones). If the damaged file cannot be moved, the panel
-  starts all the same and the ERROR says that the file is still in place: move it away yourself. Every file the panel replaces is first written to the disk in full and then renamed into place, so
+  starts all the same and the ERROR says that the file is still in place: move it away yourself. A damaged
+  `settings.json` (everybody's page settings) is kept aside the same way, with one ERROR, and the settings
+  start over with the defaults. In `state.json` a kill switch that is there in another shape than Fairy writes
+  it (a hand edit such as `"control_disabled": true`) counts as ON, and so does a per-host power list that is
+  not a list (power control is then off for every host); one ERROR names the key. Every file the panel replaces is first written to the disk in full and then renamed into place, so
   a power cut leaves the old or the new content. Files are written `0600` by the service user, and
   `fairy admin` commands that change something refuse to run as another user (use
   `sudo -u fairy fairy admin ...`).

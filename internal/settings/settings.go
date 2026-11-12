@@ -6,7 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -171,6 +174,7 @@ type Store struct {
 	mu               sync.Mutex
 	signIn           atomic.Pointer[SignInPicture] // the sign-in wallpaper (signin.go)
 	signInOnce       sync.Once                     // it is read from bgDir once
+	stuck            bool                          // a damaged settings.json could not be moved aside, and that was said (loadAll)
 }
 
 // NewStore returns the store in dataDir.
@@ -178,13 +182,49 @@ func NewStore(dataDir string) *Store {
 	return &Store{dir: dataDir, bgDir: filepath.Join(dataDir, "backgrounds"), file: filepath.Join(dataDir, "settings.json")}
 }
 
+// Check looks at settings.json once, at the panel's start, so that a damaged file is moved aside and named in
+// the log then, and not at the first request for somebody's settings.
+func (s *Store) Check() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loadAll()
+}
+
+// loadAll reads everybody's settings. The caller holds s.mu. A file that does not exist is no settings yet.
+//
+// A file that is there and cannot be used (empty, cut off, not a JSON object; or not a plain file of a sane
+// size: a link, a folder) is no settings either, and it used to be read so without a word: the next save by
+// any user then wrote a new file with that one user over it, and everybody else's settings were gone with no
+// copy (audit 5, r3-p2-07). It is now moved aside like the other files the panel may start over
+// (statefile.KeepAside: settings.json.corrupt-<UTC time>), with one ERROR that names the copy. Everybody's
+// settings start empty (the defaults); the kept copy has what could be read of the old ones.
 func (s *Store) loadAll() map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
 	b, err := statefile.ReadFile(s.file, statefile.MaxBytes) // a plain file of a sane size, or it is not read
-	if err == nil {
-		_ = json.Unmarshal(b, &out)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return out
+	case err == nil:
+		if err = json.Unmarshal(b, &out); err == nil && out != nil {
+			return out
+		}
+		if err == nil { // "null"
+			err = errors.New("not a JSON object")
+		}
+		if len(bytes.TrimSpace(b)) == 0 {
+			err = fmt.Errorf("it is empty (%d bytes)", len(b))
+		}
 	}
-	return out
+	const means = "every user's settings start over with the defaults"
+	if aside, rerr := statefile.KeepAside(s.file); rerr == nil {
+		s.stuck = false
+		slog.Error("settings.json cannot be used: "+means+". The file is kept as "+aside, "path", s.file, "error", err)
+	} else if !s.stuck {
+		s.stuck = true // said once; the file is looked at again with every request
+		slog.Error("settings.json cannot be used and could not be moved aside: "+means+", the file is still in place, and the next time somebody saves "+
+			"settings it is written over", "path", s.file, "error", err, "move", rerr)
+	}
+	return map[string]json.RawMessage{}
 }
 
 func (s *Store) saveAll(d map[string]json.RawMessage) error {

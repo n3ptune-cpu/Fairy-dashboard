@@ -135,6 +135,7 @@ func serve(args []string) int {
 		return 1
 	}
 	srv := web.New(p.cfg, p.secrets, p.poller, p.demoUser, version)
+	srv.Settings.Check() // a damaged settings.json is moved aside and named in the log now, not at the first request
 	srv.Updates = latestSource(p.cfg, f.demo, p.cfg.Updates.AgentRepo, release.AgentProgram)
 	srv.PanelUpdates = latestSource(p.cfg, f.demo, p.cfg.Updates.PanelRepo, release.PanelProgram)
 	srv.ManagedSkipped = p.skipped

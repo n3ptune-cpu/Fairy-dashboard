@@ -13,10 +13,13 @@ package adminstate
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -49,6 +52,9 @@ const (
 type State struct {
 	StatePath, SessionsPath string
 	state, sessions         *statefile.Watched
+
+	shapeMu  sync.Mutex
+	shapeLog map[string]int // key of state.json -> the version of the file whose odd value was logged (badShape)
 }
 
 // New returns the state files of dataDir.
@@ -64,15 +70,43 @@ func num(v any) float64 {
 	return f
 }
 
+// badShape writes the one ERROR for a key of state.json whose value is not of the kind Fairy writes there
+// (want says which kind that is, means what the panel does about it): once for each change of the file, not at
+// every request that asks.
+func (a *State) badShape(key, want, means string, got any) {
+	a.shapeMu.Lock()
+	defer a.shapeMu.Unlock()
+	if v, logged := a.shapeLog[key]; logged && v == a.state.Version {
+		return
+	}
+	if a.shapeLog == nil {
+		a.shapeLog = map[string]int{}
+	}
+	a.shapeLog[key] = a.state.Version
+	slog.Error(fmt.Sprintf("state.json: %q is not %s: %s", key, want, means), "path", a.StatePath, "key", key, "found", fmt.Sprintf("%T", got))
+}
+
 // ControlDisabled returns the global kill switch (nil = control allowed). While state.json is unreadable or
 // corrupt, control counts as disabled (fail closed).
+//
+// The switch is on when the key is there: Fairy writes an object {by, at, reason} and takes the key out to
+// switch control on again. Any other value under the key (true, a text, a number, a list, null: a hand edit,
+// or a file another tool wrote) used to read as "no kill switch" (audit 5, r3-p2-07: "control_disabled": true
+// left control ON). It now reads as what it most likely means, and as the safe side: control is off, with one
+// ERROR that names the key. `fairy admin control enable` takes the key out, whatever is under it.
 func (a *State) ControlDisabled() *model.ControlState {
 	if err := a.state.Err(); err != nil {
 		return &model.ControlState{By: "fairy", Reason: "state.json is unreadable or corrupt (see the server log)"}
 	}
-	v, ok := a.state.Get()["control_disabled"].(map[string]any)
-	if !ok {
+	raw, present := a.state.Get()["control_disabled"]
+	if !present {
 		return nil
+	}
+	v, ok := raw.(map[string]any)
+	if !ok {
+		a.badShape("control_disabled", "the object {by, at, reason} that Fairy writes", "control is OFF until the key is put right or taken out (fairy admin control enable)", raw)
+		return &model.ControlState{By: "fairy", Reason: "state.json has a \"control_disabled\" that is not what Fairy writes (see the server log); " +
+			"control is off until it is put right (fairy admin control enable)"}
 	}
 	cs := &model.ControlState{}
 	cs.By, _ = v["by"].(string)
@@ -91,12 +125,21 @@ func (a *State) StateData() (statefile.Data, int) {
 }
 
 // PowerDisabled reports whether an administrator turned power control off for this system (always true while
-// state.json is unreadable).
+// state.json is unreadable, and while "power_control_disabled" is there and is not a list: the same reading as
+// for the kill switch, see ControlDisabled).
 func (a *State) PowerDisabled(id string) bool {
 	if a.state.Err() != nil {
 		return true
 	}
-	l, _ := a.state.Get()["power_control_disabled"].([]any)
+	raw, present := a.state.Get()["power_control_disabled"]
+	if !present {
+		return false
+	}
+	l, ok := raw.([]any)
+	if !ok {
+		a.badShape("power_control_disabled", "the list of system ids that Fairy writes", "power control is OFF for every host until the key is put right or taken out", raw)
+		return true
+	}
 	return slices.Contains(l, any(id))
 }
 
