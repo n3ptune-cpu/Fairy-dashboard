@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -93,6 +94,44 @@ func SessionSecretProblem(v string) string {
 		return "one character repeated, which is no secret. " + newSessionSecret
 	}
 	return ""
+}
+
+// EnvProblems lists what looks wrong in the panel's environment variables (every FAIRY_* and AGENT_TOKEN_*
+// one), by name and never with a value. Two things, both from a line of fairy.env that was uncommented as an
+// older fairy.env.example had it, with a comment behind the value (r2-p4-12):
+//
+//   - a value with a blank and then "#" in it: systemd's EnvironmentFile= and LoadEnvFile both take the
+//     comment as part of the value, so a secret or an address is not what was meant;
+//   - FAIRY_INSECURE_COOKIES with a value that is neither on nor off: it counts as off, and nothing else says so.
+//
+// The panel logs these at start and `fairy admin config check` lists them; nothing is refused (a password may
+// hold " #").
+func EnvProblems() []string {
+	var out []string
+	env := os.Environ()
+	sort.Strings(env)
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(k, "FAIRY_") && !strings.HasPrefix(k, "AGENT_TOKEN_") {
+			continue
+		}
+		if strings.Contains(v, " #") || strings.Contains(v, "\t#") {
+			out = append(out, k+" has a blank and a \"#\" in its value: a comment behind a value is read as part of the value "+
+				"(by systemd and by Fairy). Put the comment on a line of its own in fairy.env.")
+		}
+	}
+	if v, set := os.LookupEnv("FAIRY_INSECURE_COOKIES"); set && strings.TrimSpace(v) != "" && !truthy(v) && !falsy(v) {
+		out = append(out, "FAIRY_INSECURE_COOKIES is set to something that is neither 1 / true / yes / on nor 0 / false / no / off: it counts as off.")
+	}
+	return out
+}
+
+func falsy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "0", "false", "no", "off":
+		return true
+	}
+	return false
 }
 
 func truthy(v string) bool {

@@ -21,7 +21,6 @@ embedded in the binary.
 > [github.com/n3ptune-cpu/Fairy-agent](https://github.com/n3ptune-cpu/Fairy-agent), together with the device code
 > both programs share (plugs, UPSes, BMCs, Tuya). The panel imports that code from there instead of keeping a
 > copy, and `internal/agentcontract` runs the panel's real poller and web API against the real agent handler.
-> A full README (nginx / MikroTik deployment, load testing) follows.
 
 Two repositories:
 
@@ -76,6 +75,9 @@ no capabilities needed: the panel never runs local power or IPMI commands).
 
 `FAIRY_SESSION_SECRET` in `fairy.env` signs the session cookies. Make it with `openssl rand -base64 48`. The
 panel does not start with the example value from `deploy/fairy.env.example` or with one character repeated.
+In `fairy.env` nothing may follow a value: `FAIRY_INSECURE_COOKIES=1   # testing` is read, comment and all,
+as one value (by systemd and by Fairy), and the setting is then off. Comments go on lines of their own. The
+panel's log at start and `fairy admin config check` name a variable that looks like this.
 
 **Trying changes on your own PC, without Pocket ID?** That is a separate *test build*
 (`go build -tags fairytest`), see [TESTING-LOCAL.md](TESTING-LOCAL.md). It has no sign-in, so it only runs on
@@ -187,9 +189,20 @@ manual install per machine) is in Fairy-agent's
   downloading, verified, restarting and "running X" / rolled back, also after the panel's restart. The button
   needs a Pocket ID sign-in from the last **2 minutes** (always, also within the usual step-up window), the
   CSRF header and the kill switch off; it is audited as `panel.update`.
-  **One-time setup**: every `fairy update` run by hand as root installs (or refreshes) the unit and the polkit
-  rule (`apt install polkitd` if it is missing). If the button says what is missing, run `fairy update` once
-  more.
+  **One-time setup**: `fairy update` run by hand as root installs (or refreshes) the unit and the polkit
+  rule (`apt-get install polkitd` if polkit is missing). It writes nothing before you have said yes: it
+  first says what it would write, and does it after an update that went through, or, when there is nothing
+  to update, after a question of its own ("Set up the Update panel button now?"; `--yes` answers both).
+  After "N", an error or a rollback nothing was written. If the button says what is missing, run
+  `fairy update` once more.
+  **A run that was stopped** (the host restarted during the update, or systemd ended the unit at its time
+  limit of 18 minutes): the Updates page shows a red "stopped" with "stopped before it finished (while
+  downloading, <time>)" for an hour, and the button works again. Nothing has to be deleted by hand. What the
+  stopped download left next to the program (`/usr/local/bin/.download-*`) is removed by the next
+  `fairy update` or button run once it is older than 15 minutes. Details: `journalctl -u fairy-panel-update`.
+  **One update at a time**: a second `fairy update` (or the button) while one runs ends with "an update is
+  already running on this host" and changes nothing (the lock is `/usr/local/bin/.fairy-update.lock`; it
+  stays there, empty).
   **Before you update to this version**: the new panel does not start with the example session secret, and
   `fairy update` does not check that for you. Run the one-line check in
   [Upgrading to this release](#upgrading-to-this-release), step 2, first.
@@ -362,7 +375,8 @@ What to know before the first real run:
   other more slowly; nothing is lost.
 * The timings can be changed in config.yaml (`wake_update:`, see `deploy/config.example.yaml`): how long to
   wait for a machine (default 300 s), the pause before the shutdown (60 s), the countdown (120 s) and the
-  pacing.
+  pacing. A value outside its range stops the panel at start with the key and the line; that includes 0,
+  which does not mean "the default" here. For the default leave the key out.
 
 ### Add host
 

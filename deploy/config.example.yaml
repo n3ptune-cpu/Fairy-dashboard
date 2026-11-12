@@ -103,7 +103,8 @@ agents:
 # the panel (the Updates page, or the "..." menu on its page); that is not set in this file. A machine counts as
 # off only after 15 minutes without any answer from its address: no refused connection and no error answer
 # either (one that restarts is silent for less); that time is fixed, not a setting. These are the timings (the
-# defaults; whole numbers, a fraction is refused).
+# defaults; whole numbers in the range given, a fraction is refused, and so is 0: 0 is refused here, it does not
+# mean "the default". For the default leave the key out).
 # NEW in this release, and a panel older than it refuses the block ("field wake_update not found") and does
 # not start: update first, then add new config keys, then restart. Take the block out before going back.
 # wake_update:

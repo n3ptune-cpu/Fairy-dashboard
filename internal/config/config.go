@@ -259,6 +259,10 @@ type WakeUpdate struct {
 	AgentRequestsPerMin int `yaml:"agent_requests_per_min"`
 }
 
+// wakeUpdateRanges: lowest, highest and default value of each key of the block (Validate has the same limits).
+var wakeUpdateRanges = map[string][3]int{"online_timeout_s": {60, 1800, 300}, "settle_s": {10, 600, 60},
+	"shutdown_delay_s": {10, 3600, 120}, "agent_requests_per_min": {1, 30, 8}}
+
 // UnmarshalYAML reads the block as the plain fields above, with two things the plain way does not do: a
 // number with a fraction is refused (YAML's decoder cuts it off: settle_s: 30.5 became 30 without a word; the
 // session timings refuse one too), and a key this block does not have is refused here, because the strict
@@ -275,6 +279,15 @@ func (w *WakeUpdate) UnmarshalYAML(n *yaml.Node) error {
 			var f float64
 			if v.Kind == yaml.ScalarNode && v.Decode(&f) == nil && f != math.Trunc(f) {
 				return fmt.Errorf("line %d: wake_update.%s: %s is not a whole number", v.Line, k.Value, v.Value)
+			}
+			// A number that is written must be in its range, 0 included: here 0 is not "the default" (the
+			// example gives ranges that begin at 1, 10 and 60, and a 0 that silently ran as 120 seconds is
+			// not what was written; r2-p4-13). For the default the key is left out; a key with no value
+			// (YAML's null) counts as left out.
+			var i int
+			if v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null" && v.Decode(&i) == nil && i == 0 {
+				r := wakeUpdateRanges[k.Value]
+				return fmt.Errorf("line %d: wake_update.%s: %s is not in %d-%d (leave the key out for the default, %d)", v.Line, k.Value, v.Value, r[0], r[1], r[2])
 			}
 		}
 	}

@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -251,6 +253,47 @@ func TestWakeUpdateTimings(t *testing.T) {
 			t.Errorf("wake_update: {%s}: the error names no line: %v", bad, err)
 		}
 	}
+	// r2-p4-13 (audit 5): 0 was taken for every key and ran as the default (shutdown_delay_s: 0 was 120
+	// seconds, agent_requests_per_min: 0 was 8), while the example gives ranges that begin at 60, 10, 10 and 1.
+	// A 0 that is written is refused with the key, the line, the range and the way to get the default.
+	for bad, want := range map[string]string{
+		"online_timeout_s: 0":               "wake_update.online_timeout_s: 0 is not in 60-1800 (leave the key out for the default, 300)",
+		"settle_s: 0":                       "wake_update.settle_s: 0 is not in 10-600 (leave the key out for the default, 60)",
+		"shutdown_delay_s: 0":               "wake_update.shutdown_delay_s: 0 is not in 10-3600 (leave the key out for the default, 120)",
+		"agent_requests_per_min: 0":         "wake_update.agent_requests_per_min: 0 is not in 1-30 (leave the key out for the default, 8)",
+		"settle_s: -0":                      "wake_update.settle_s: -0 is not in 10-600",
+		"settle_s: 0.0":                     "wake_update.settle_s: 0.0 is not in 10-600",
+		"settle_s: 0x0":                     "wake_update.settle_s: 0x0 is not in 10-600",
+		"settle_s: 30, online_timeout_s: 0": "wake_update.online_timeout_s: 0 is not in 60-1800",
+	} {
+		_, err := Parse([]byte(base + "wake_update: {" + bad + "}\n"))
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "line ") {
+			t.Errorf("wake_update: {%s}: want an error with %q, got %v", bad, want, err)
+		}
+	}
+	// the range the example file gives for each key is the one that is checked
+	ex, err := os.ReadFile("../../deploy/config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, r := range wakeUpdateRanges {
+		if !regexp.MustCompile(fmt.Sprintf(`(?s)#   %s: %d .*?\(%d-%d\)`, key, r[2], r[0], r[1])).Match(ex) {
+			t.Errorf("deploy/config.example.yaml does not show %s with the default %d and the range %d-%d", key, r[2], r[0], r[1])
+		}
+		for _, v := range []int{r[0], r[1]} {
+			if _, err := Parse([]byte(fmt.Sprintf("%swake_update: {%s: %d}\n", base, key, v))); err != nil {
+				t.Errorf("%s: %d must be accepted: %v", key, v, err)
+			}
+		}
+		for _, v := range []int{r[0] - 1, r[1] + 1} {
+			if _, err := Parse([]byte(fmt.Sprintf("%swake_update: {%s: %d}\n", base, key, v))); err == nil {
+				t.Errorf("%s: %d must be refused", key, v)
+			}
+		}
+	}
+	if !strings.Contains(string(ex), "0 is refused") {
+		t.Error("deploy/config.example.yaml does not say that 0 is refused")
+	}
 	for _, empty := range []string{"wake_update:\n", "wake_update: {}\n", "wake_update: ~\n"} {
 		if c, err := Parse([]byte(base + empty)); err != nil || c.WakeUpdate.SettleS != 60 {
 			t.Errorf("%q: %v", empty, err)
@@ -289,5 +332,94 @@ func TestReadmeGoingBackNamesWhatTheOlderPanelRefuses(t *testing.T) {
 	// the block is one this panel reads and an older one cannot: if it is ever renamed, the paragraph must follow
 	if _, err := Parse([]byte(base + "wake_update: {settle_s: 30}\n")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// r2-p4-12 (audit 5): deploy/fairy.env.example had its comments behind the values. Uncommented as written,
+// `FAIRY_INSECURE_COOKIES=1   # local http testing ONLY` is one value, comment included (for systemd's
+// EnvironmentFile= and for LoadEnvFile), the setting was off and nothing said so.
+func TestEnvExampleHasNoCommentBehindAValue(t *testing.T) {
+	ex, err := os.ReadFile("../../deploy/fairy.env.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assign := regexp.MustCompile(`^(?:# )?([A-Z][A-Z0-9_]*)=(.*)$`)
+	seen := map[string]bool{}
+	for i, line := range strings.Split(string(ex), "\n") {
+		m := assign.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		seen[m[1]] = true
+		if strings.ContainsAny(m[2], " \t#") {
+			t.Errorf("deploy/fairy.env.example line %d: something follows the value of %s (a comment must be on a line of its own)", i+1, m[1])
+		}
+	}
+	for _, name := range []string{"FAIRY_SESSION_SECRET", "FAIRY_OIDC_CLIENT_SECRET", "FAIRY_PROXMOX_TOKEN_SECRET", "AGENT_TOKEN_AGENT_1", "FAIRY_NOTIFY_URL", "FAIRY_INSECURE_COOKIES"} {
+		if !seen[name] {
+			t.Errorf("deploy/fairy.env.example no longer shows %s", name)
+		}
+	}
+	// the file with its optional lines uncommented, loaded the way the panel loads it: the setting is on
+	dir := t.TempDir()
+	p := filepath.Join(dir, "fairy.env")
+	_ = os.WriteFile(p, []byte(strings.ReplaceAll(string(ex), "\n# FAIRY_", "\nFAIRY_")), 0o600)
+	for name := range seen {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+	}
+	if err := LoadEnvFile(p); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := LoadSecrets(); !s.InsecureCookies || s.OIDCClientSecret != "REPLACE_ME" || os.Getenv("FAIRY_NOTIFY_URL") != "https://ntfy.sh/your-private-topic" {
+		t.Fatalf("the example's optional lines, uncommented, are not read as written: %+v", s.InsecureCookies)
+	}
+	if p := EnvProblems(); len(p) != 0 {
+		t.Fatalf("the example, uncommented: %q", p)
+	}
+}
+
+// A comment behind a value is named at start and by `fairy admin config check`: the variable, never its value.
+func TestEnvProblemsNameACommentBehindAValue(t *testing.T) {
+	for _, name := range []string{"FAIRY_INSECURE_COOKIES", "FAIRY_OIDC_CLIENT_SECRET", "FAIRY_NOTIFY_URL", "FAIRY_SESSION_SECRET", "AGENT_TOKEN_AGENT_1"} {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+	}
+	if p := EnvProblems(); len(p) != 0 {
+		t.Fatalf("a clean environment: %q", p)
+	}
+	// the old example's three lines, as systemd hands them over
+	t.Setenv("FAIRY_INSECURE_COOKIES", "1                       # local http testing ONLY")
+	t.Setenv("FAIRY_OIDC_CLIENT_SECRET", "s3cr3t-value-of-the-client            # omit for a Pocket ID public client (PKCE only)")
+	t.Setenv("AGENT_TOKEN_AGENT_1", "tok-0123456789abcdefghij\t# the laptop")
+	t.Setenv("FAIRY_SESSION_SECRET", "a-secret-with-a-#-inside-but-no-blank-before-it-0123456789")
+	t.Setenv("OTHER_THING", "x # y") // not the panel's
+	p := EnvProblems()
+	all := strings.Join(p, "\n")
+	if len(p) != 4 {
+		t.Fatalf("want 4 problems, got %d:\n%s", len(p), all)
+	}
+	for _, want := range []string{"AGENT_TOKEN_AGENT_1 has a blank and a \"#\" in its value", "FAIRY_INSECURE_COOKIES has a blank and a \"#\" in its value",
+		"FAIRY_OIDC_CLIENT_SECRET has a blank and a \"#\" in its value", "FAIRY_INSECURE_COOKIES is set to something that is neither"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("missing %q in:\n%s", want, all)
+		}
+	}
+	for _, secret := range []string{"s3cr3t-value", "tok-0123456789", "a-secret-with", "local http testing"} {
+		if strings.Contains(all, secret) {
+			t.Fatalf("a value is shown: %s", all)
+		}
+	}
+	if s, _ := LoadSecrets(); s.InsecureCookies {
+		t.Fatal("the value with a comment must not switch the setting on")
+	}
+	for v, problems := range map[string]int{"1": 0, "on": 0, "0": 0, "off": 0, " yes ": 0, "": 0, "2": 1, "enabled": 1} {
+		for _, name := range []string{"FAIRY_OIDC_CLIENT_SECRET", "AGENT_TOKEN_AGENT_1"} {
+			os.Unsetenv(name)
+		}
+		t.Setenv("FAIRY_INSECURE_COOKIES", v)
+		if got := EnvProblems(); len(got) != problems {
+			t.Errorf("FAIRY_INSECURE_COOKIES=%q: %q", v, got)
+		}
 	}
 }

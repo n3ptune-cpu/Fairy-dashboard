@@ -96,6 +96,7 @@ func (c *cli) configCheck() int {
 			problems = append(problems, fmt.Sprintf("%s (%s): missing", e.env, e.what))
 		}
 	}
+	problems = append(problems, config.EnvProblems()...) // a comment behind a value in fairy.env
 	on := "off"
 	if os.Getenv("FAIRY_NOTIFY_URL") != "" {
 		on = "on"
