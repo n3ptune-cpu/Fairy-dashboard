@@ -285,7 +285,7 @@ func ShortID(id string) string {
 	return id
 }
 
-// CompareID is a machine id as the Approval box shows it and as the dialog of an accept shows it: the first
+// CompareID is a machine id as the Approval dialog shows it and as the dialog of an accept shows it: the first
 // eight and the last six characters, the form to hold next to the machine's own (`fairy-agent helper-status`,
 // line "machine id:"). The page makes the same form (shortKey). The audit log keeps ShortID.
 func CompareID(id string) string {
@@ -312,7 +312,7 @@ func BindingText(name, status string, with []string) string {
 	case BindTooOld:
 		return name + " runs an agent whose approvals do not name the machine (the test build of 2026-11-11). Install the current agent on it; Fairy asks it for no approval."
 	case BindNoRecord:
-		return name + " checks approvals itself, and its machine id is not on record: an admin accepts it in the Approval box on its page first."
+		return name + " checks approvals itself, and its machine id is not on record: an admin accepts it first (press Approval on its page)."
 	case BindNoStore:
 		return "Fairy cannot read its record of machine ids (machines.json in its data folder; the panel's log says why), so it asks no machine for an approval."
 	}

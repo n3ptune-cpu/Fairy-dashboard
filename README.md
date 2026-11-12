@@ -520,8 +520,8 @@ like the sign-in's. With `deploy/nginx.example.conf` that is at most 10 round tr
 
 **3. Turn it on.** The Updates page (admins) gets a box, **The check on the machine itself**: "N machines are
 ready for the check on the machine itself", with the button **Turn on the check for N machines** (when no
-machine is ready there is no button, and one line says so); a machine's own page has an **Approval** box with
-**Turn on** for that machine. Turn on is deliberate and proven:
+machine is ready there is no button, and one line says so); a machine's own page has the button **Approval** in
+its header, and the dialog behind it has **Turn on** for that machine. Turn on is deliberate and proven:
 
 * The dialog shows exactly what each machine will trust: the Pocket ID address, the client id, the signing
   key(s) Pocket ID publishes right now (key id and thumbprint) and the list of people who may approve there,
@@ -561,12 +561,13 @@ machine id is no secret, and a host that answers in another machine's name would
 The record belongs to the host's entry: a host you remove loses it, and so does a host you take out of
 `config.yaml` or rename there (at the next start, with a line in the log and in the Audit log). Under its new
 name it is "Not on record" and needs one accept.
-In the panel, admins see it in the Approval box (hover "Machine id"); other users and API tokens get no id
-from the panel. It is a name, not a secret: a machine shows its own id to whoever may read its `/metrics`,
+In the panel, admins see it in the host's Approval dialog (the **Approval** button on the host's page; hover
+"Machine id"); other users and API tokens get no id from the panel. It is a name, not a secret: a machine shows its own id to whoever may read its `/metrics`,
 and the machines of one batch see each other's (Known limits, below).
 
-From then on the record counts. The Overview shows a red key sign behind the host's name, and its Approval
-box and the Updates page say which of these it is:
+From then on the record counts. The Overview shows a red key sign behind the host's name; on the host's page
+the **Approval** button is red, with a red line under the header; and the dialog behind that button and the
+Updates page say which of these it is:
 
 * **the host has the check on and no id is on record for it** ("Not on record": the check was set on the
   machine itself or from another panel; or its id came on record "at first sight" in an earlier build of
@@ -579,16 +580,17 @@ box and the Updates page say which of these it is:
 * **a host that had the check shows none** any more.
 
 While a host is flagged, the panel asks it for no approval and sends it no fan, power or update request,
-and it is in no run. An admin resolves it in the host's Approval box: **Accept this machine's id** (not on
-record), **Accept this machine's new id** (changed) or "Accept that its check is off", in a browser, behind
-"Confirm it's you", with an entry in the Audit log. Before you accept an id, compare it with the machine's
-own: on the machine `fairy-agent helper-status`, line `machine id:` (the ⓘ in the box shows the id). A
+and it is in no run. An admin resolves it on the host's page: press **Approval**, and in the dialog **Accept
+this machine's id** (not on record), **Accept this machine's new id** (changed) or "Accept that its check is
+off", in a browser, behind "Confirm it's you", with an entry in the Audit log. Before you accept an id,
+compare it with the machine's own: on the machine `fairy-agent helper-status`, line `machine id:`. A
 machine that answers in another's name shows the other's id. "Confirm it's you" says the same and shows the
-id as the box does, its first eight and last six characters. The comparison catches something that sits
+id **in full**, on a line of its own that can be selected (and under it the id on record, where there is
+one): what comes on record is exactly the id that dialog showed. The comparison catches something that sits
 between the panel and the machine, and an agent that answers in another's name. It does not catch a host
 whose own administrator is hostile: only the real machine being on record in this panel stops that.
 For two hosts with one id, one id is accepted for one host only. The host that has the id on record has the
-button **This host keeps its machine id**; the other one has no button: its box names the host that keeps
+button **This host keeps its machine id**; the other one has no button: its dialog names the host that keeps
 the id and says what to do (on that machine `fairy-agent helper-trust set --new-machine-id`, then accept the
 new id on its page). A host that shows an id which is on record for another host never gets it, however it
 came to show it, and the panel refuses an accept for it, whoever sends the request. Two hosts that are both
@@ -600,7 +602,7 @@ changed while you were confirming"). Accept only when you know why it changed.
 now says that the machine checks this itself and, in one line, what your passkey signs ("shutdown in 60 s",
 "fan zone 1 to 30%"), and then Pocket ID asks for your passkey under the name of that client ("Fairy PC
 actions", if you named it so). One passkey per action: the panel's own 3-minute window does not count for these machines.
-Two exceptions, both decided by the machine and shown in its Approval box:
+Two exceptions, both decided by the machine and shown in its Approval dialog:
 
 * **Fan window** (default 30 s, at most 60): after one approved fan change, further fan changes on that
   machine need no new approval for that long, so a slider can be moved.
@@ -659,7 +661,7 @@ switch it off on its own page.
 
 **Windows and Linux** are treated the same by the panel. On Windows the elevated helper
 (`fairy-agent-helper`) checks what goes through it and the agent checks the rest with the same trust file;
-on Linux the agent checks everything. The Approval box says who checks ("Checked by").
+on Linux the agent checks everything. The Approval dialog says who checks ("Checked by").
 
 ### Add host
 

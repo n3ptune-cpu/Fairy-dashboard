@@ -247,7 +247,7 @@ func (s *Server) approvalAccept(c *reqCtx) error {
 			params["held_by"] = held.By
 			msg = acceptHeldText(name, s.machineNames(held.By))
 		case errors.Is(err, poller.ErrAcceptChanged):
-			msg = name + ": nothing was accepted. What it shows is not what the dialog showed: it changed while you were confirming. Look at its Approval box and press the button again."
+			msg = name + ": nothing was accepted. What it shows is not what the dialog showed: it changed while you were confirming. Press Approval on its page, look at what it shows now, and press the button again."
 		}
 		c.audit(u, "approval.accept", a.ID, params, "error 409: "+textsafe.Clip(err.Error(), 200))
 		return apierr.New(409, msg)
@@ -331,7 +331,7 @@ func acceptParams(before approval.Binding) map[string]any {
 }
 
 // acceptHeldText is the refusal of an accept on a host whose id another host keeps (by: their names), and
-// what to do instead. The Approval box of such a host says the same and has no button.
+// what to do instead. The Approval dialog of such a host says the same and has no button.
 func acceptHeldText(name string, by []string) string {
 	return name + ": nothing was accepted. The machine id it shows is kept by " + andNames(by) + ", and one id is accepted for one host only. " +
 		"Give " + name + " a new id on the machine itself (fairy-agent helper-trust set --new-machine-id), then accept the new id here."
@@ -410,7 +410,7 @@ func auditForToken(entries []map[string]any) {
 
 // acceptCompare is the last thing an admin reads before a machine id comes on record or is kept: the dialog's
 // own line under what would be accepted (second review of passkey-g, G-02). The same instruction is behind the
-// info button of the Approval box; an admin who reads the dialogs only must not accept blind.
+// info button of the Approval dialog; an admin who reads the dialogs only must not accept blind.
 const acceptCompare = "Compare it first with the machine's own: on the machine, fairy-agent helper-status, line \"machine id:\"."
 
 // The dialog's lines with a machine id IN FULL (audit 6, r4-p3-02). The page shows the id of such a line in a

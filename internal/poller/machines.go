@@ -147,10 +147,10 @@ func (p *Poller) demoteLocked() {
 			continue
 		}
 		if r.How == approval.PinFirstSight {
-			slog.Warn("a machine id that came on record at first sight (an earlier build) is not on record any more: an admin accepts the id the machine shows in its Approval box",
+			slog.Warn("a machine id that came on record at first sight (an earlier build) is not on record any more: an admin accepts the id the machine shows (Approval, on its page)",
 				"agent", id, "machine_id", approval.ShortID(r.MachineID))
 		} else {
-			slog.Warn("a machine id whose record does not say that this panel issued it at Turn on or that an admin accepted it is not on record any more: an admin accepts the id the machine shows in its Approval box",
+			slog.Warn("a machine id whose record does not say that this panel issued it at Turn on or that an admin accepted it is not on record any more: an admin accepts the id the machine shows (Approval, on its page)",
 				"agent", id, "machine_id", approval.ShortID(r.MachineID), "pinned", r.How)
 		}
 		p.mach.records[id] = d

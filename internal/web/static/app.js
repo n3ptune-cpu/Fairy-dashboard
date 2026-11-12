@@ -1007,7 +1007,7 @@ async function fetchApproval(force) {
   catch (e) { apv.error = e.message; if (e.status === 403) apv.data = null; }
   render();
 }
-// What an admin sees in a machine's Approval box beyond the block itself (the id on record, "not this panel's
+// What an admin sees in a machine's Approval dialog beyond the block itself (the id on record, "not this panel's
 // values", the button to accept) is the approval page, fetched earlier. When the block the live data brings
 // has changed since that fetch, the page is fetched again (at most once a second).
 const APV_AGAIN = 1000;

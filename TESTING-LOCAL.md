@@ -454,7 +454,7 @@ to 9; what Turn on or an accept put on record with zip 2 stays on record), the a
 compare the id with (I10, step 4), "Confirm it's you" says what your passkey signs and shows the Client ID
 (I5), the buttons are named **Turn on** without "…", and everything of panel zip 7 is in it (the parts
 before this one). The agent stays the one of agent zip 3: an agent of zip 2 on the VM shows "Agent too old"
-in its Approval box and gets no approval.
+(the **Approval** button on its page is red, and its dialog says so) and gets no approval.
 
 ### I0. The short path
 
@@ -501,11 +501,12 @@ The same as I1 to I5 in few words, for somebody who has done it before. Every st
    same `cmd.exe` window, before the next line. Then `fairy-test.exe serve` again. The window must show a line
    with `!!! TEST BUILD: approvals for the machines are asked at` your Pocket ID's address and `callback
    http://127.0.0.1:8080/auth/approval/callback`.
-4. The test VM with the agent of agent zip 3 (I3): its page has an **Approval** box that says "off".
-5. **Turn on** in that box, **Turn on for 1 machine (passkey)**, **Continue to Pocket ID**, your passkey at
+4. The test VM with the agent of agent zip 3 (I3): its page has the button **Approval** in its header. Press
+   it: the dialog says "off".
+5. **Turn on** in that dialog, **Turn on for 1 machine (passkey)**, **Continue to Pocket ID**, your passkey at
    Pocket ID, whose page must name the client `Fairy PC actions`. The browser comes back to the panel (see
-   the note below), a message says "1 of 1 machines now check approvals themselves", and the Approval box
-   says **required**.
+   the note below), a message says "1 of 1 machines now check approvals themselves", and the Approval
+   dialog says **required**.
 6. Power menu, **Shut down**, 60 seconds, type the name. "Confirm it's you" says that NSX-TEST-VM will check
    this itself. **Continue to Pocket ID**, passkey. Back in the panel a bar on the VM's page counts down:
    "Shut down in 0:57 requested by test-admin", with **Cancel** at its right end.
@@ -593,7 +594,7 @@ in it. If it refuses to start, the line says which of the three values it does n
 
 1. Add `NSX-TEST-VM` to this panel as in part B, with **power control** and **self-update** ticked.
    (Add host installs the released agent, build 16. It does not know the check yet: its page has no
-   Approval box.)
+   **Approval** button.)
 2. Put the self-built agent of agent zip 3 on the VM over it: `TEST-ON-WINDOWS.md` in the agent folder,
    section 13, part A (steps 1 to 5). The script there installs it for both services and leaves the check
    **off**. If the VM still has the agent and the trust of zip 1 / agent zip 2: part H there (H1) says what
@@ -607,21 +608,21 @@ in it. If it refuses to start, the line says which of the three values it does n
 
    `version` must say `16-selfbuilt`. `helper-status` must have `pipe protocol:   3` and the line
    `approval:        off (checked by the helper): no trust file, nothing needs an approval; the panel can set the trust once`.
-4. In the panel, the VM's page now has an **Approval** box: "off", "Would be checked by: the elevated helper
-   (LocalSystem)", and a **Turn on** button.
+4. In the panel, the VM's page now has the button **Approval** in its header. Press it. The dialog says
+   "off", "Would be checked by: the elevated helper (LocalSystem)", and has a **Turn on** button.
 
-   If the box says "required" with the red sentence **Not on record** instead, the VM still has the check
-   from an earlier test, and this panel did not turn it on (or it took the VM's id "at first sight" in an
-   earlier build, which counts as none now). Either clear it on the VM (the command in I9; the box then says
-   "Check gone", press **Accept that its check is off**, and go on with I4), or keep it and press **Accept
-   this machine's id** (I10, steps 7 to 9) and go on with I5.
+   If the button is red and the dialog says "required" with the red sentence **Not on record** instead, the
+   VM still has the check from an earlier test, and this panel did not turn it on (or it took the VM's id "at
+   first sight" in an earlier build, which counts as none now). Either clear it on the VM (the command in I9;
+   the dialog then says "Check gone", press **Accept that its check is off**, and go on with I4), or keep it
+   and press **Accept this machine's id** (I10, steps 7 to 9) and go on with I5.
 
 From here on do **not** press Re-pair for the VM, and do not press Update: both can put build 16 back.
 
 ### I4. Turn on, with your passkey
 
-1. On the VM's page, Approval box: **Turn on**. (The same is on the Updates page: "1 machine is ready for
-   the check on the machine itself", with the button **Turn on the check for 1 machine**.)
+1. On the VM's page press **Approval**, and in the dialog **Turn on**. (The same is on the Updates page: "1
+   machine is ready for the check on the machine itself", with the button **Turn on the check for 1 machine**.)
 2. The dialog "Turn on the check on the machine itself" lists what the VM will trust: your Pocket ID's
    address, the **Client ID** (compare it with the Client ID of `Fairy PC actions` in Pocket ID: the panel
    shows the id only, it does not know a client's name), the signing key with its thumbprint, and "may approve:" with the user id from
@@ -639,8 +640,9 @@ From here on do **not** press Re-pair for the VM, and do not press Update: both 
    ID." can show for a moment on the way: I0, "The way back from Pocket ID"). The `fairy-test.exe serve` window has a new
    line that starts with `time=... level=WARN msg="!!! TEST BUILD: an approval was accepted without
    checking` and ends with `approver=<an id>`: that is your user id as Pocket ID sends it.
-5. A message at the bottom right says "1 of 1 machines now check approvals themselves". The Approval box of
-   the VM says **required**, with Pocket ID's address, the Client ID, the pinned key and "Allowed users: 1".
+5. A message at the bottom right says "1 of 1 machines now check approvals themselves". The VM's **Approval**
+   button is green, and its dialog says **required**, with Pocket ID's address, the Client ID, the pinned key
+   and "Allowed users: 1".
    The result line (**switched on · locked**) is on the **Updates** page, in the box "The check on the
    machine itself", under "Last Turn on".
 
@@ -650,7 +652,7 @@ From here on do **not** press Re-pair for the VM, and do not press Update: both 
    `auth_time`: compare the VM's clock with the real time.
 6. On the VM: `helper-status` again. It must now say `approval:        required (checked by the helper)`,
    then `issuer:`, `client id:`, `pinned key:`, `allowed users:   1` and a line `machine id:`.
-7. **The machine id.** In the Approval box, point at the row **Machine id**: the tooltip shows the whole id
+7. **The machine id.** In the Approval dialog, point at the row **Machine id**: the tooltip shows the whole id
    and "(turn-on, by test-admin)". It is the id of the `machine id:` line of step 6: the panel made it up
    and the VM took it with the trust. The row **Trust set** says "from a panel".
 
@@ -697,8 +699,8 @@ on). A long line of details is cut: click it to see all of it.
 
 * the last 40 lines of the `fairy-test.exe serve` window (it never prints a token or a secret);
 * the output of the two commands in I7;
-* what the Approval box and the Turn on result say (a screenshot is fine), and for I10 the box with the
-  red sentence;
+* what the Approval dialog and the Turn on result say (a screenshot is fine), and for I10 the dialog with
+  the red sentence;
 * at which numbered step it went differently, if it did.
 
 ### I9. Afterwards
@@ -709,10 +711,11 @@ The check stays on until it is removed **on the VM** (the panel cannot):
 & "C:\Program Files\Fairy\fairy-agent.exe" helper-trust clear --yes
 ```
 
-Within half a minute the VM's Approval box has a red sentence: "Check gone." That is the alarm for a machine
-that had the check and shows none (the panel cannot know that it was you). Press **Accept that its check
-is off**, **Confirm (test build)**: the box says "off" again, with **Turn on**. The Notifications list says
-"its check being off was accepted by test-admin".
+Within half a minute the VM's page has a red line under its header, "Check gone: this machine shows no
+check now. Fairy sends it nothing.", and its **Approval** button is red. That is the alarm for a machine
+that had the check and shows none (the panel cannot know that it was you). Press **Approval**, then
+**Accept that its check is off**, **Confirm (test build)**: the dialog says "off" again, with **Turn on**.
+The Notifications list says "its check being off was accepted by test-admin".
 
 Then put the VM back as `TEST-ON-WINDOWS.md` in the agent folder says under "Going back to build 16", or
 back to its snapshot. In Pocket ID the client can stay: the live panel will use it with its own Callback
@@ -732,17 +735,20 @@ record.
    ```
 
    It answers `the machine id:   NEW, it was <old>`.
-2. Within half a minute the VM's page shows a red sentence in the Approval box: "Machine id changed. It
-   shows another machine id than the one Fairy has on record. No approvals until an admin accepts the new
-   id.", and the Overview shows a red key sign behind the VM's name (point at it, click it). The ⓘ in the
-   box says what can cause it.
+2. Within half a minute the VM's page has a red line under its header ("Machine id changed: no approvals
+   until the new id is accepted.") and a red **Approval** button. Press it: the dialog's red box says
+   "Machine id changed. It shows another machine id than the one Fairy has on record. No approvals until an
+   admin accepts the new id." The Overview shows a red key sign behind the VM's name (point at it, click
+   it). **More** in the dialog says what can cause it.
 3. Power menu, **Shut down**, 60 seconds, type the name. No passkey is asked: the page answers that the VM
    shows another machine id and that nothing was sent. The VM stays on, and its `helper.log` has no new
    `msg=request` line.
-4. In the Approval box press **Accept this machine's new id**. "Confirm it's you" says what would be
-   accepted (the first eight and last six characters of the id it shows and of the one on record, as the
-   box shows them) and, under it, what to compare first: the line `machine id:` of `helper-status` on the
-   VM. **Confirm (test build)**. The red sentence is gone, and the tooltip of **Machine id** says "(accepted, by test-admin)".
+4. In the Approval dialog press **Accept this machine's new id**. "Confirm it's you" says what would be
+   accepted ("it shows another machine id than the one on record"), then the id the VM shows and the id on
+   record, each **in full** on a line of its own, and under them what to compare first: the line
+   `machine id:` of `helper-status` on the VM. Compare the first of the two with that line, character by
+   character (the line can be selected and copied). **Confirm (test build)**. The red sentence is gone, and
+   the tooltip of **Machine id** says "(accepted, by test-admin)".
 5. **Shut down** again: now Pocket ID asks for the passkey, and the countdown starts. **Cancel**.
 6. Menu, **Audit**: `approval.alarm` ("alarm: changed"), `approval.accept`, `approval.alarm` ("cleared").
 
@@ -752,15 +758,16 @@ what it has on record:
 
 7. Stop the test panel (`Ctrl+C`), delete the file `fairy-test\data\machines.json`, start it again
    (`fairy-test.exe serve`). The VM still has the check on.
-8. Within half a minute the VM's Approval box says "required" with the red sentence "Not on record. Fairy has
-   no machine id on record for it. No approvals until an admin accepts its id.", and the Overview shows the
-   red key sign. **Shut down** (60 seconds, the name): no passkey is asked; the page answers "NSX-TEST-VM
-   checks approvals itself, and its machine id is not on record: an admin accepts it in the Approval box on
-   its page first. Nothing was sent."
-9. Press the ⓘ in the box: it shows the id the VM shows, in full. Compare it with the VM's own (on the VM
-   `helper-status`, the line `machine id:`); a machine that answers in another's name would show the other's
-   id. Then **Accept this machine's id**; "Confirm it's you" shows the id's first eight and last six
-   characters and the same instruction. **Confirm (test build)**. The red sentence is gone, the tooltip of
+8. Within half a minute the VM's **Approval** button is red, with the red line "Not on record: no approvals
+   until its machine id is accepted." under the header. Its dialog says "required" with the red sentence
+   "Not on record. Fairy has no machine id on record for it. No approvals until an admin accepts its id.",
+   and the Overview shows the red key sign. **Shut down** (60 seconds, the name): no passkey is asked; the
+   page answers "NSX-TEST-VM checks approvals itself, and its machine id is not on record: an admin accepts
+   it first (press Approval on its page). Nothing was sent."
+9. In the Approval dialog press **More**: it shows the id the VM shows, in full. Compare it with the VM's own
+   (on the VM `helper-status`, the line `machine id:`); a machine that answers in another's name would show
+   the other's id. Then **Accept this machine's id**; "Confirm it's you" shows the id in full once more, on
+   a line of its own, and the same instruction. **Confirm (test build)**. The red sentence is gone, the tooltip of
    **Machine id** says "(accepted, by test-admin)", and **Shut down** asks for the passkey again. **Cancel**.
    Audit: `approval.alarm` ("alarm: no_record"), `approval.accept`, `approval.alarm` ("cleared").
 

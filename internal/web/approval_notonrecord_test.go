@@ -17,7 +17,8 @@ import (
 // (audit 5, round 3, r3-x1-01). The panel's half; the same against the real agent is in
 // internal/agentcontract/notonrecord_test.go.
 
-const notOnRecordText = " checks approvals itself, and its machine id is not on record: an admin accepts it in the Approval box on its page first."
+// (audit 6, r4-p3-05 / r4-b1-02: the page has no "Approval box" any more; it was "... accepts it in the Approval box on its page first.")
+const notOnRecordText = " checks approvals itself, and its machine id is not on record: an admin accepts it first (press Approval on its page)."
 
 // A host that already has the check when the panel first hears from it (set on the machine, or by another
 // panel). It used to get the id it showed on record at once ("first sight"; this test replaces

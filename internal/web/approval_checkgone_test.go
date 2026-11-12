@@ -44,7 +44,7 @@ func TestACheckGoneBeforeTheNextPollIsSentNothing(t *testing.T) {
 			fresh := []string{"Cookie", a.cookie(controller(), 0), "X-Requested-With", "fairy", "Content-Type", "application/json"}
 			for who, hdr := range map[string][]string{"inside the panel's window": fresh, "outside it": a.csrf} {
 				r := a.do("POST", c.path, body, hdr...)
-				if r.code != 409 || r.body["detail"] != m.ID+checkGoneText+" An admin resolves it in the Approval box on the host's page." {
+				if r.code != 409 || r.body["detail"] != m.ID+checkGoneText+" An admin resolves it: press Approval on the host's page." {
 					t.Fatalf("%s: %d %s", who, r.code, r.raw)
 				}
 			}

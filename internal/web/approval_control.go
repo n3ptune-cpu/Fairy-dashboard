@@ -86,7 +86,7 @@ func (s *Server) bindingRefusal(agentID, name string) error {
 	if b.OK() {
 		return nil
 	}
-	if len(b.Held) > 0 { // another host keeps the id it shows: not "neither", and no button in its box
+	if len(b.Held) > 0 { // another host keeps the id it shows: not "neither", and no button in its Approval dialog
 		return apierr.New(409, approval.HeldText(name, s.machineNames(b.Held))+" Nothing was sent.")
 	}
 	return apierr.New(409, bindingRefusalText(name, b.Status, s.machineNames(b.With)))
@@ -97,7 +97,7 @@ func bindingRefusalText(name, status string, with []string) string {
 	msg := approval.BindingText(name, status, with) + " Nothing was sent."
 	switch status {
 	case approval.BindChanged, approval.BindDuplicate, approval.BindVanished:
-		msg += " An admin resolves it in the Approval box on the host's page."
+		msg += " An admin resolves it: press Approval on the host's page."
 	}
 	return msg
 }

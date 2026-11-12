@@ -610,7 +610,8 @@ func TestCheckSwitchedOnSinceTheLastPoll(t *testing.T) {
 			hdr := []string{"Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json"}
 			tokens := len(a.iss.Tokens())
 			r := a.do("POST", c.path, c.body(a), hdr...)
-			const notOnRecord = " checks approvals itself, and its machine id is not on record: an admin accepts it in the Approval box on its page first. Nothing was sent."
+			// (audit 6, r4-p3-05 / r4-b1-02: the page has no "Approval box" any more; it was "... accepts it in the Approval box on its page first.")
+			const notOnRecord = " checks approvals itself, and its machine id is not on record: an admin accepts it first (press Approval on its page). Nothing was sent."
 			if _, _, ok := approvalAsked(r); ok || r.code != 409 || !strings.Contains(string(r.raw), m.ID+notOnRecord) {
 				t.Fatalf("without an id on record nobody is asked for a passkey: %d %s", r.code, r.raw)
 			}
