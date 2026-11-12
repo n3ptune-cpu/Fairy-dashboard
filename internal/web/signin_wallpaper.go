@@ -166,6 +166,20 @@ func (s *stagedPictures) put(owner string, data []byte, now time.Time) string {
 	return name
 }
 
+// sweep lets go of the pictures whose time is over (audit 6, r4-p3-08: after Cancel, Escape or a dialog that was
+// left open nobody takes the picture, and it stayed in memory until the next upload or a restart, up to
+// maxStagedPictures of 8 MiB, although nothing could reach it after pendingMaxAge). The server's minute tick
+// calls it (Server.minutely).
+func (s *stagedPictures) sweep(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, p := range s.m {
+		if now.Sub(p.at) > pendingMaxAge {
+			delete(s.m, k)
+		}
+	}
+}
+
 // take hands the picture out, once (nil: it waited too long, was pushed out, or the panel restarted).
 func (s *stagedPictures) take(name string, now time.Time) []byte {
 	s.mu.Lock()

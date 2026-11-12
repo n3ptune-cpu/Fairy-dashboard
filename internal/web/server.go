@@ -421,7 +421,7 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 			case <-ctx.Done():
 				return
 			case now := <-t.C:
-				s.auditSuppressed(s.anonAudit.flush(now))
+				s.minutely(now)
 			}
 		}
 	}()
@@ -430,6 +430,13 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		return nil
 	}
 	return err
+}
+
+// minutely is what the server does once a minute by itself: the summary of throttled audit entries, and the
+// sign-in pictures that waited for a confirmation longer than a kept action lives.
+func (s *Server) minutely(now time.Time) {
+	s.auditSuppressed(s.anonAudit.flush(now))
+	s.wallStage.sweep(s.now())
 }
 
 // Saved is closed when the server has written what it still had to write after the context of Run ended: the
