@@ -342,9 +342,11 @@ What to know before the first real run:
 * **Windows: switch Fast Startup off** on the PCs that take part (Control Panel, Power Options, "Choose what
   the power buttons do", untick "Turn on fast startup"; or `powercfg /h off`). With Fast Startup, "Shut
   down" is a kind of hibernate and Windows keeps counting its uptime, as it does through sleep and
-  hibernate. The run then cannot tell such a PC from one that was on all along, treats it as "already on"
-  and leaves it on. That is the safe side (a PC that was asleep may have someone's open work), but it is
-  not what you want for a PC that was shut down.
+  hibernate. The run then cannot tell such a PC from one that was on all along, and leaves it on. That is
+  the safe side (a PC that was asleep may have someone's open work), but it is not what you want for a PC
+  that was shut down. The report says so as a warning: "It answered after the wake but did not look freshly
+  started (up for ...): it may have been asleep, or use Fast Startup. It was left on." A machine you sent
+  to sleep from the panel is shown as "asleep or off" and is listed apart in the dialog, not ticked.
 * The wake needs what **Power on** needs: Wake-on-LAN enabled in the firmware and on the network card, and
   a relay agent in the same network that is on.
 * The run paces itself: at most 8 control requests a minute to one agent (an agent accepts 12 a minute; the

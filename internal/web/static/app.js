@@ -1340,7 +1340,7 @@ const wuUpdateBad = (h) => !!h.update && !["ok", "up_to_date"].includes(h.update
 // The steps of one machine as a row of boxes: done, now, failed.
 function wuSteps(h) {
   const upd = h.update ? (wuUpdateBad(h) ? "bad" : "done") : h.state === "updating" ? "now" : "";
-  if (h.mode !== "wake" || h.already_on) {
+  if (h.mode !== "wake" || (h.already_on && !h.not_fresh)) {  // not_fresh: the run sent its wake, so it keeps the wake's row of steps
     const on = h.state !== "queued" && h.state !== "skipped";
     return `<div class="steps">${[["Is on", on ? "done" : ""], ["Update", upd], ["Stays on", h.state === "stayed_on" ? "done" : ""]]
       .map(([l, c]) => `<span class="${c}">${l}</span>`).join("")}</div>`;
@@ -1385,7 +1385,7 @@ function wakeUpdateBox() {
   const why = controlWhyNot(), joined = d.hosts.filter((h) => h.opted_in), can = joined.filter((h) => h.choice);
   const able = d.hosts.filter((h) => h.can_join || h.opted_in);
   const row = (h) => `<tr class="row" data-key="wum-${esc(h.id)}"><td class="namecell"><b>${state.byId[h.id] ? `<a href="#/system/${enc(h.id)}">${esc(h.name)}</a>` : esc(h.name)}</b></td>
-    <td><span class="chip ${h.power === "on" ? "ok" : h.power === "off" ? "" : "warn"}">${esc(h.power)}</span></td>
+    <td><span class="chip ${h.power === "on" ? "ok" : h.power === "off" ? "" : "warn"}"${h.asleep ? ' title="Sent to sleep from the panel. Asleep and off look the same from here."' : ""}>${esc(h.asleep ? "asleep or off" : h.power)}</span></td>
     <td>${h.can_wake ? `via ${esc(h.relay)}` : `<span class="note" title="Fairy cannot wake this machine: in a run it is only updated while it is on">${esc(h.no_wake || h.why_not)}</span>`}</td>
     <td>${h.opted_in ? '<span class="chip ok">switched on</span>' : '<span class="note">off</span>'}${h.opted_in && !h.choice ? `<div class="note">${esc(h.why)}</div>` : ""}</td>
     <td class="num"><button class="btn sm" type="button" data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"
@@ -1435,7 +1435,9 @@ async function openWakeUpdate() {
   wu.data = d;
   if (d.active) { flash("A run is going: one run at a time", true); render(); return; }
   const joined = d.hosts.filter((h) => h.opted_in);
-  const off = joined.filter((h) => h.choice === "wake"), on = joined.filter((h) => h.choice === "update_only");
+  // A machine the panel itself sent to sleep is "asleep or off": listed apart and not ticked (it does not look freshly started when it wakes)
+  const off = joined.filter((h) => h.choice === "wake" && !h.asleep), asleep = joined.filter((h) => h.choice === "wake" && h.asleep);
+  const on = joined.filter((h) => h.choice === "update_only");
   const unsure = joined.filter((h) => !h.choice && h.not_sure), rest = joined.filter((h) => !h.choice && !h.not_sure);
   const cannot = (l) => l.map((h) => `<div class="list-row"><span>${esc(h.name)}</span><span class="note">${esc(h.why)}</span></div>`).join("");
   const tick = (h, kind, checked) => `<label class="check opt"><input type="checkbox" data-wu="${kind}" value="${esc(h.id)}" ${checked ? "checked" : ""}><span>${esc(h.name)}
@@ -1456,8 +1458,9 @@ async function openWakeUpdate() {
       A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer. If Fairy is not sure that a machine is off, it leaves it alone and the report says so.
       Nobody is asked whether someone is using a machine the run woke: after its update it is switched off again.</div>
     ${joined.length ? "" : '<div class="warnbox">No machine is switched on for this yet. Close this, and switch machines on in the table on the Updates page (or in the ⋯ menu on a machine\'s page).</div>'}
-    ${off.length ? `<div class="wu-sub">Off (no answer for ${esc(fmtSpan(d.off_after_s))} or more): wake, update, switch off again</div><div class="opts wu-list">${off.map((h) => tick(h, "wake", true)).join("")}</div>
-      <label class="check opt wu-ifon"><input type="checkbox" id="wu-ifon"><span>If one of these turns out to be on after all: update it too
+    ${off.length ? `<div class="wu-sub">Off (no answer for ${esc(fmtSpan(d.off_after_s))} or more): wake, update, switch off again</div><div class="opts wu-list">${off.map((h) => tick(h, "wake", true)).join("")}</div>` : ""}
+    ${asleep.length ? `<div class="wu-sub">Asleep or off (sent to sleep from the panel): woken; left on if it was asleep</div><div class="opts wu-list">${asleep.map((h) => tick(h, "wake", false)).join("")}</div>` : ""}
+    ${off.length || asleep.length ? `<label class="check opt wu-ifon"><input type="checkbox" id="wu-ifon"><span>If one of these turns out to be on after all: update it too
         <span class="note">it stays on. Without this tick nothing is sent to it.</span></span></label>` : ""}
     ${on.length ? `<div class="wu-sub">On now: update only, never switched off</div><div class="opts wu-list">${on.map((h) => tick(h, "update_only", false)).join("")}</div>` : ""}
     ${unsure.length ? `<div class="wu-sub">Not sure that they are off: left alone</div>${cannot(unsure)}` : ""}

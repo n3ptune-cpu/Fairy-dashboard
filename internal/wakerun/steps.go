@@ -109,6 +109,10 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 func (m *Manager) alreadyOn(r *Run, h *Host, now time.Time, why string) {
 	h.AlreadyOn = true
 	switch {
+	case h.NotFresh && r.UpdateIfOn && r.Cancel == nil:
+		m.enter(h, StOnline, now, "answered after the wake but does not look freshly started (it may have been asleep): it is only updated and left on")
+	case h.NotFresh:
+		m.end(r, h, StLeftOn, OnYes, now, notFreshText(h)+" It was not updated.")
 	case r.UpdateIfOn && r.Cancel == nil:
 		m.enter(h, StOnline, now, "was already on ("+why+"): it is only updated and stays on")
 	case h.WakeSentAt != nil: // a wake packet changes nothing for a machine that is on
@@ -218,9 +222,14 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 		case o.UptimeS == nil:
 			m.enter(h, StOnline, now, "its agent answers, but reports no uptime: Fairy cannot tell that it started after the wake, so it will not switch it off")
 		case time.Duration(*o.UptimeS)*time.Second >= since:
-			// It has been running for longer than since the wake: it was on all along (the panel could not
-			// reach it), or someone switched it on before the run did.
-			m.alreadyOn(r, h, now, fmt.Sprintf("it has been up for %s, longer than the %s since the wake", span(time.Duration(*o.UptimeS)*time.Second), span(since)))
+			// Its uptime is longer than the time since the wake, so it did not start after it. It gave
+			// nothing at all for 15 minutes and at the direct question, and it answers now, after the wake:
+			// it resumed from sleep or hibernate, or is a Windows PC with Fast Startup (all of them go on
+			// counting the uptime), or it was on all along and out of reach. The run cannot tell which. It
+			// never switches such a machine off, and it does not say "it was already on" either: the wake may
+			// well be what brought it back. It is left on and reported as that, a warning (r1-p2-02).
+			h.NotFresh = true
+			m.alreadyOn(r, h, now, "")
 		default:
 			m.enter(h, StOnline, now, fmt.Sprintf("its agent answers %s after the wake: waiting %s to see that it stays online", span(since), span(onlineSettle)))
 		}
@@ -290,6 +299,10 @@ func (m *Manager) stepOnline(r *Run, h *Host, info HostInfo, now time.Time) {
 // woken machine on: it was off before, and the old version runs.
 func (m *Manager) updateDone(r *Run, h *Host, now time.Time, result, text string) {
 	h.Update, h.UpdateText = result, text
+	if h.NotFresh {
+		m.end(r, h, StLeftOn, OnYes, now, notFreshText(h)+updateTail(h))
+		return
+	}
 	if h.AlreadyOn || h.Mode == ModeUpdateOnly {
 		lead := "It was already on"
 		if h.Mode == ModeUpdateOnly {

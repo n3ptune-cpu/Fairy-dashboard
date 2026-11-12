@@ -213,3 +213,82 @@ func TestEveryRequestIsWrittenDownBeforeItGoesOut(t *testing.T) {
 		t.Fatal("the finished run in the journal still has a request going out")
 	}
 }
+
+// r1-p2-02, the auditor's proof: a machine whose uptime does not start again when it is woken (it slept or
+// hibernated, or it is a Windows PC that was shut down with Fast Startup). It is off or asleep, silent for a
+// day; the run wakes it; its first answer reports three days of uptime. The run said "It was already on",
+// left the machine it had woken on, and filed that as information ("done · stays on").
+//
+// Leaving it on is right: the run cannot tell it from a machine that was on all along. Saying "it was
+// already on" is not. Now it ends as left on, with a sentence that says what is known, and that is a warning.
+func TestAWokenMachineThatDoesNotLookFreshlyStartedIsAWarning(t *testing.T) {
+	for _, updateIfOn := range []bool{false, true} {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.wakeBoots = false // the world's own boot sets a fresh uptime; this one resumes
+		w.start(StartRequest{Hosts: []string{"pc-a"}, UpdateIfOn: updateIfOn})
+		for i := 0; i < 3600; i++ {
+			if a, _ := w.m.Snapshot(); a == nil {
+				break
+			}
+			if pc.wakes == 1 && !pc.on { // the run's wake packet resumes it; the system "has been up" for three days
+				pc.on, pc.bootedAt, pc.agentReadyAt = true, w.now.Add(-72*time.Hour), w.now.Add(30*time.Second)
+			}
+			w.tick()
+		}
+		r := w.finish()
+		h := host(r, "pc-a")
+		if pc.onAtStart || pc.onAtFirstWake == nil || *pc.onAtFirstWake {
+			t.Fatal("setup: the machine was not off before the run")
+		}
+		if !pc.on || pc.shutdowns != 0 || !h.AlreadyOn || !h.NotFresh {
+			t.Fatalf("update_if_on=%v: it must be left on: on=%v shutdowns=%d %+v", updateIfOn, pc.on, pc.shutdowns, h)
+		}
+		want := "It answered after the wake but did not look freshly started (up for 3 days): it may have been asleep, or use Fast Startup. It was left on."
+		tail, calls := " It was not updated.", "wake"
+		if updateIfOn {
+			tail, calls = " It was updated to 17-bbbbbbb.", "wake update"
+		}
+		if h.State != StLeftOn || h.On != OnYes || h.Text != want+tail || strings.Contains(h.Text, "already on") || w.callsFor("pc-a") != calls {
+			t.Fatalf("update_if_on=%v: %s (%s): %s; requests %q", updateIfOn, h.State, h.On, h.Text, w.callsFor("pc-a"))
+		}
+		// what the panel makes of it (web.wakeRunEvent): a machine that was left on is a warning
+		if ok, why := mayShutDown(h, pc.info, pc.obs, func() (int, bool, string) { return 0, true, "" }); ok || why != "it answered after the wake without looking freshly started" {
+			t.Fatalf("mayShutDown: %v %q", ok, why)
+		}
+	}
+	// cancelled, stopped and after a restart: the same sentence, never "it was already on"
+	for _, how := range []string{"cancel", "cancel and switch off", "stop", "restart"} {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.wakeBoots, pc.updTakes = false, 10*time.Minute
+		run := w.start(StartRequest{Hosts: []string{"pc-a"}, UpdateIfOn: true})
+		for i := 0; i < 120; i++ {
+			if pc.wakes == 1 && !pc.on {
+				pc.on, pc.bootedAt, pc.agentReadyAt = true, w.now.Add(-72*time.Hour), w.now.Add(30*time.Second)
+			}
+			w.tick()
+		}
+		var h *Host
+		switch how {
+		case "cancel", "cancel and switch off":
+			if _, err := w.m.CancelRun(run.ID, "Ann", how != "cancel"); err != nil {
+				t.Fatal(err)
+			}
+			h = host(w.finish(), "pc-a")
+		case "stop":
+			w.blocked = "control is disabled by an administrator"
+			h = host(w.finish(), "pc-a")
+		case "restart":
+			old, _ := w.restart()
+			h = host(old, "pc-a")
+		}
+		wantState := map[string]string{"restart": StInterrupted}[how]
+		if wantState == "" {
+			wantState = StLeftOn
+		}
+		if h.State != wantState || h.On != OnYes || !strings.Contains(h.Text, "did not look freshly started (up for 3 days)") || strings.Contains(h.Text, "already on") || pc.shutdowns != 0 || !pc.on {
+			t.Fatalf("%s: %s (%s): %s (shutdowns %d)", how, h.State, h.On, h.Text, pc.shutdowns)
+		}
+	}
+}

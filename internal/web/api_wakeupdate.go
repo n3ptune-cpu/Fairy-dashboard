@@ -68,7 +68,11 @@ type wuHost struct {
 	Choice string `json:"choice"`
 	Why    string `json:"why,omitempty"`
 	// NotSure: it does not answer, and not for long enough to be taken for off. The dialog lists it apart.
-	NotSure bool   `json:"not_sure,omitempty"`
+	NotSure bool `json:"not_sure,omitempty"`
+	// Asleep: the panel itself sent it to sleep, and it has not answered since. For the panel "off" and
+	// "asleep" look the same (nothing at all), so the page says "asleep or off" and the dialog lists it apart,
+	// unticked: a machine that resumes from sleep does not look freshly started, and a run leaves it on.
+	Asleep  bool   `json:"asleep,omitempty"`
 	Version string `json:"version,omitempty"`
 	Behind  *bool  `json:"behind"`
 }
@@ -353,6 +357,7 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 		h.Power = "on"
 	case wakerun.OffNow(o, now):
 		h.Power = "off"
+		h.Asleep = x.Asleep
 	}
 	switch {
 	case !h.CanJoin:

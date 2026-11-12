@@ -183,7 +183,10 @@ func TestMachineThatIsOnWhenTheRunStarts(t *testing.T) {
 // The machine was off when the admin chose it and when the run started, and someone switches it on before the
 // run gets to it. Its agent is not up yet, so the direct question gets no answer and a wake goes out, which
 // changes nothing. When the agent answers, it reports an uptime longer than the time since the wake: the run
-// did not wake it, and never switches it off.
+// never switches it off. (The system here starts at the moment of the button press. A machine that is still
+// in its firmware when the wake goes out starts its system after the wake: see
+// TestAMachineSomeoneSwitchedOnJustBeforeTheWake in audit5_test.go for what the run can and cannot tell.)
+// The run cannot know that it was a person and not its wake: it reports the machine as left on, a warning.
 func TestMachineSwitchedOnBySomeoneBeforeTheWake(t *testing.T) {
 	for _, updateIfOn := range []bool{false, true} {
 		w := newWorld(t)
@@ -200,10 +203,13 @@ func TestMachineSwitchedOnBySomeoneBeforeTheWake(t *testing.T) {
 		if !h.AlreadyOn || pc.shutdowns != 0 || !pc.on || h.On != OnYes {
 			t.Fatalf("update_if_on=%v: already_on=%v shutdowns=%d on=%v: %s", updateIfOn, h.AlreadyOn, pc.shutdowns, pc.on, h.Text)
 		}
+		if !h.NotFresh {
+			t.Fatal("the machine must be marked as not freshly started")
+		}
 		if updateIfOn {
-			has(t, h, StStayedOn, "It was already on and stays on.", "updated to 17-bbbbbbb")
+			has(t, h, StLeftOn, "It answered after the wake but did not look freshly started (up for 45 s): it may have been asleep, or use Fast Startup. It was left on.", "updated to 17-bbbbbbb")
 		} else {
-			has(t, h, StStayedOn, "It was already on (it has been up for", "longer than the", "It was not updated and stays on.")
+			has(t, h, StLeftOn, "It answered after the wake but did not look freshly started (up for 45 s)", "It was left on. It was not updated.")
 			if got := w.callsFor("pc-a"); got != "wake" {
 				t.Fatalf("requests: %q", got)
 			}
@@ -247,8 +253,8 @@ func TestMachineThatOnlyLookedOff(t *testing.T) {
 		pc.unreachable = false
 		r := w.finish()
 		h := host(r, "pc-a")
-		has(t, h, StStayedOn, "It was already on and stays on.")
-		if !h.ProbedOff || h.WakeSentAt == nil || !h.AlreadyOn || pc.shutdowns != 0 || !pc.on {
+		has(t, h, StLeftOn, "It answered after the wake but did not look freshly started (up for 3 days): it may have been asleep, or use Fast Startup. It was left on. It was updated to 17-bbbbbbb.")
+		if !h.ProbedOff || h.WakeSentAt == nil || !h.AlreadyOn || !h.NotFresh || pc.shutdowns != 0 || !pc.on {
 			t.Fatalf("%+v shutdowns %d", h, pc.shutdowns)
 		}
 		if got := w.callsFor("pc-a"); got != "wake update" {
@@ -256,7 +262,7 @@ func TestMachineThatOnlyLookedOff(t *testing.T) {
 		}
 		found := false
 		for _, l := range h.Log {
-			found = found || strings.Contains(l.Text, "it has been up for 3 days, longer than the")
+			found = found || strings.Contains(l.Text, "answered after the wake but does not look freshly started")
 		}
 		if !found {
 			t.Fatalf("the reason is not in its history: %+v", h.Log)

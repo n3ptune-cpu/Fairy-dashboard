@@ -106,6 +106,16 @@ const MinOff = 15 * time.Minute
 var NotSure = "Not sure that it is off, so nothing was sent to it: Fairy takes a machine for off only after " + span(MinOff) +
 	" without an answer (it may be restarting, or be on and out of reach)."
 
+// notFreshText is the sentence for a machine that answered after the run's wake without looking freshly
+// started (Host.NotFresh).
+func notFreshText(h *Host) string {
+	up := ""
+	if h.BootUptimeS != nil {
+		up = " (up for " + span(time.Duration(*h.BootUptimeS)*time.Second) + ")"
+	}
+	return "It answered after the wake but did not look freshly started" + up + ": it may have been asleep, or use Fast Startup. It was left on."
+}
+
 // The sentence for a machine that is on although its agent does not answer, with what shows that it is on.
 const onByText = "It is on (%s), and its agent does not answer. Nothing was sent to it and it stays on."
 
@@ -301,6 +311,12 @@ type Host struct {
 	// here for the record; mayShutDown measures again from the run's own readings.
 	OnlineAfterS *float64 `json:"online_after_s,omitempty"`
 	AlreadyOn    bool     `json:"already_on,omitempty"` // it was on before the run did anything
+	// NotFresh: the run asked it directly, got nothing, sent its wake, and the machine then answered with an
+	// uptime longer than the time since the wake. It did not start after the wake: it resumed from sleep or
+	// hibernate, or is a Windows PC with Fast Startup (all three keep counting the uptime), or it was on all
+	// along and out of reach. The run cannot tell which, so it never switches it off (AlreadyOn is set too),
+	// and it does not call that "it was already on": the machine ends as left on, with NotFreshText, a warning.
+	NotFresh bool `json:"not_fresh,omitempty"`
 	// Asking: the request that is about to go out to the machine, or is on its way ("wake", "update",
 	// "shutdown"); "" between requests. It is written to the journal before the request is sent (Manager.ask),
 	// so a journal read after a restart knows of every request that may have left, also when what came of it
@@ -823,6 +839,8 @@ func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
 	case h.State == StShutting:
 		m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s while its shutdown was counting down (it ends at %s). Fairy no longer watches it: "+
 			"it switches off by itself unless someone cancels that.", why, clock(*h.ShutdownAt)))
+	case h.NotFresh:
+		m.end(r, h, StLeftOn, OnYes, now, why+". "+notFreshText(h)+updateTail(h))
 	case h.AlreadyOn || h.Mode == ModeUpdateOnly:
 		m.end(r, h, StStayedOn, OnYes, now, why+". It was already on and stays on."+updateTail(h))
 	case h.OnlineAt != nil:

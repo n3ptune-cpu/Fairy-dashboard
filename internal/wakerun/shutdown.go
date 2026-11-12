@@ -37,6 +37,8 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 	switch {
 	case h.Mode != ModeWake:
 		return false, "it was chosen as a machine that is on: Fairy only updates those"
+	case h.NotFresh:
+		return false, "it answered after the wake without looking freshly started"
 	case h.AlreadyOn:
 		return false, "it was already on before this run did anything"
 	case h.StartStatus != "offline":

@@ -103,6 +103,9 @@ func interrupt(r *Run, now time.Time) {
 		case was == StShutting && h.ShutdownAt != nil:
 			h.On = OnUnknown
 			h.Text = fmt.Sprintf("The panel restarted while its shutdown was counting down (due at %s). Fairy stopped watching: check that it went off.", clock(*h.ShutdownAt))
+		case h.NotFresh:
+			h.On = OnYes
+			h.Text = "The panel restarted during the run. " + notFreshText(h) + updateTail(h)
 		case h.AlreadyOn || h.Mode == ModeUpdateOnly:
 			h.On = OnYes
 			h.Text = "The panel restarted during the run. It was already on and stays on." + updateTail(h)

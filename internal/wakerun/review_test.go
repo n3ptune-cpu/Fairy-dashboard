@@ -276,7 +276,7 @@ func TestClockSetForwardDuringTheWaitDoesNotMakeAMachineWoken(t *testing.T) {
 		pc.unreachable = false
 		r := w.finish()
 		h := host(r, "pc-a")
-		if pc.shutdowns != 0 || !pc.on || !h.AlreadyOn || h.State != StStayedOn {
+		if pc.shutdowns != 0 || !pc.on || !h.AlreadyOn || !h.NotFresh || h.State != StLeftOn {
 			t.Fatalf("update_if_on=%v: shutdowns %d: %s: %s", updateIfOn, pc.shutdowns, h.State, h.Text)
 		}
 		if h.OnlineAfterS == nil || *h.OnlineAfterS > 30 || h.OnlineAt.Sub(*h.WakeSentAt) < 55*time.Minute || *h.BootUptimeS >= 55*60 {
@@ -284,7 +284,7 @@ func TestClockSetForwardDuringTheWaitDoesNotMakeAMachineWoken(t *testing.T) {
 		}
 		found := false
 		for _, l := range h.Log {
-			found = found || strings.Contains(l.Text, "longer than the") || strings.Contains(l.Text, "It was already on (it has been up for")
+			found = found || strings.Contains(l.Text, "did not look freshly started (up for 50 min)") || strings.Contains(l.Text, "does not look freshly started")
 		}
 		if !found {
 			t.Fatalf("the reason is not in its history: %+v", h.Log)
