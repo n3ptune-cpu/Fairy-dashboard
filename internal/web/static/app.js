@@ -814,7 +814,10 @@ function approvalBinding(s, a) {
   // full), and the panel accepts nothing else. A host whose id another host keeps has no button: one id is
   // accepted for one host only, so the machine needs an id of its own first.
   const held = (a.binding_held || []).length > 0;
-  const btn = m?.can_accept && !held ? `<div class="row-gap ap-accept"><button class="btn" type="button" data-act="ap-accept" data-id="${esc(m.id)}" data-name="${esc(s.name)}" data-what="${esc(m.accept)}" data-shown="${esc(m.shown_id || "")}" ${why ? `disabled title="${esc(why)}"` : ""}>${esc(AP_ACCEPT[m.accept]?.[0] || AP_ACCEPT.id[0])}</button></div>` : "";
+  // "Check gone" has one thing to accept, that the check is off, and the live data says so by itself: its button
+  // is there as soon as the alarm is, not a moment later with the approval page (audit 6, r4-b1-07).
+  const what = a.binding === "vanished" && m ? "off" : m?.can_accept ? m.accept : "";
+  const btn = what && !held ? `<div class="row-gap ap-accept"><button class="btn" type="button" data-act="ap-accept" data-id="${esc(m.id)}" data-name="${esc(s.name)}" data-what="${esc(what)}" data-shown="${esc(what === "off" ? "" : m.shown_id || "")}" ${why ? `disabled title="${esc(why)}"` : ""}>${esc(AP_ACCEPT[what]?.[0] || AP_ACCEPT.id[0])}</button></div>` : "";
   const todo = held ? `<div class="ap-todo" id="ap-todo">Give this machine a new id on the machine itself (<code>fairy-agent helper-trust set --new-machine-id</code>), then accept the new id here.</div>` : "";
   return [`<div class="warnbox ap-bind" id="ap-bind"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${todo}${btn}</div>`, more];
 }
@@ -1008,6 +1011,9 @@ function approvalTurnOn(s) {
     ["It cannot be switched on from this panel: config.yaml has no <code>approval:</code> block (a separate Pocket ID client for PC actions)."]];
   const m = apvMachine(s), why = controlWhyNot();
   if (!m) { fetchApproval(); return ['<div class="note">Checking whether it can be switched on…</div>', []]; }
+  // The approval page is older than what the live data says about this machine (its check went a moment ago): its
+  // "Not ready: already on" is not said again; approvalFresh has asked for the page already (r4-b1-07).
+  if (apvStale(s, approvalOf(s))) return ['<div class="note" id="ap-on-note">Checking whether it can be switched on…</div>', []];
   return [`<div class="row-gap ap-on"><button class="btn primary" type="button" data-act="ap-open" data-id="${esc(m.id)}" ${m.ready && !why ? "" : "disabled"}
       title="${esc(why || (m.ready ? "Switch the check on for this machine: one passkey, then it is locked" : m.why))}">${I.shield}Turn on</button>
     <span class="note" id="ap-on-note">${m.ready ? "Ready" : esc(`Not ready: ${apShortWhy(m.why) || "no reason given"}`)}</span></div>`,

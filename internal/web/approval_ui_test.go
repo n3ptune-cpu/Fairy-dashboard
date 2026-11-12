@@ -29,7 +29,9 @@ func TestUIApproval(t *testing.T) {
 		"return infoBtn(`apflag-${s.id}`, name,", `{ cls: "hflag bad", icon: I.apKey, label:`,
 		`data-act="ap-accept"`, `id: ["Accept this machine's new id", (name) =>`, `keep: ["This host keeps its machine id", (name) =>`, `off: ["Accept that its check is off", (name) =>`,
 		// one id is accepted for one host only, and exactly the id the page shows (audit 5, r2-b2-02, r2-x1-01)
-		`const btn = m?.can_accept && !held ?`, `data-shown="${esc(m.shown_id || "")}"`, `const body = off ? { off: true } : { machine_id: t.dataset.shown || "" };`,
+		// (audit 6, r4-b1-07: "check gone" has its button from the live data; it was `m?.can_accept && !held` alone)
+		`const what = a.binding === "vanished" && m ? "off" : m?.can_accept ? m.accept : "";`, `const btn = what && !held ?`,
+		`data-shown="${esc(what === "off" ? "" : m.shown_id || "")}"`, `const body = off ? { off: true } : { machine_id: t.dataset.shown || "" };`,
 		`id="ap-todo">Give this machine a new id on the machine itself (<code>fairy-agent helper-trust set --new-machine-id</code>), then accept the new id here.`,
 		`if (held) return ` + "`${held} keeps this machine id. No approvals for this host until it shows an id of its own.`;",
 		"return [`<div class=\"warnbox ap-bind\" id=\"ap-bind\"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${todo}${btn}</div>`, more];", // the reasons: the dialog's "More"

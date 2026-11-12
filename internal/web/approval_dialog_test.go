@@ -120,7 +120,8 @@ const MID = "MID-on-record-AAAAAAAAAAAAAAAAAAAAAAAA", SHOWN = "SHOWN-by-the-mach
 const base = { state: "required", enforced_by: "helper", issuer: "https://id.example", client_id: "pc-actions", keys: [{ kid: "k1", alg: "ES256", thumbprint: "T".repeat(43) }], users: 2, fan_window_s: 30, boot_shutdown_s: 0, set_by: "panel", set_at: "2026-11-12T10:00:00Z", proto: 2 };
 const host = (a) => ({ id: "h1", name: "ALPHA", approval: a });
 // the approval page's data (admins): it is there in both passes, so that a viewer's dialog is shown not to read it
-const page = (m) => { apv.data = { machines: [{ id: "h1", system_id: "h1", ...m }] }; apv.at = Date.now(); };
+// (audit 6, r4-b1-07: fetched for the block as it is now, a: the page takes an older one for stale)
+const page = (m, a) => { apv.data = { machines: [{ id: "h1", system_id: "h1", ...m }] }; apv.at = Date.now(); apv.sig = dict([["h1", apvSig(a)]]); };
 const as = (admin) => { state.me = { can_control: admin, approval_client: true }; };
 const words = (t) => t.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ").trim();
 const cases = [
@@ -183,7 +184,7 @@ let n = 0;
 for (const [name, a, m, admin, viewer, shown, more] of cases) {
   n++;
   const s = host(a);
-  page(m);
+  page(m, a);
   for (const [who, isAdmin, want] of [["admin", true, admin], ["viewer", false, viewer]]) {
     as(isAdmin);
     const v = approvalBox(s), btn = approvalBtn(s), [body, hasMore] = approvalDialogBody(s);
@@ -201,6 +202,25 @@ for (const [name, a, m, admin, viewer, shown, more] of cases) {
       for (const x of ADMINS) if (v.html.includes(x) || v.more.join(" ").includes(x) || btn.includes(x)) fail(name + ": a viewer's dialog holds " + JSON.stringify(x));
     }
   }
+}
+// r4-b1-07: the check went a moment ago and the approval page is still the one from before ("required", already
+// on, nothing to accept). The dialog draws from the alarm: the button to accept that it is off is there, and the
+// old reason next to Turn on is not said.
+{
+  as(true);
+  const gone = { state: "off", enforced_by: "agent", proto: 2, binding: "vanished" };
+  page({ machine_id: MID, ready: false, why: "already on: it is changed only on the machine (fairy-agent helper-trust)" }, base);
+  const v = approvalBox(host(gone));
+  if (!v.html.includes('data-act="ap-accept"') || !v.html.includes('data-what="off"') || !v.html.includes('data-shown=""') || !v.html.includes("Accept that its check is off")) fail("stale page, check gone: no button to accept that it is off: " + v.html);
+  if (v.html.includes("already on") || !v.html.includes("Checking whether it can be switched on…") || v.html.includes('data-act="ap-open"')) fail("stale page, check gone: the old reason is still said: " + words(v.html));
+  // a viewer never gets the button, stale or not
+  as(false);
+  if (approvalBox(host(gone)).html.includes("ap-accept")) fail("a viewer has the button to accept");
+  // and once the page is fresh, its own words are back
+  as(true);
+  page({ machine_id: MID, can_accept: true, accept: "off", ready: false, why: "its check is gone: accept that first" }, gone);
+  const f = approvalBox(host(gone));
+  if (!f.html.includes("Not ready: its check is gone") || !f.html.includes('data-what="off"')) fail("fresh page, check gone: " + words(f.html));
 }
 // a host without the block: no button, no line, nothing to open
 as(true);
