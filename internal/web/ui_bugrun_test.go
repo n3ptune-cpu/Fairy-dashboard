@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -235,5 +236,55 @@ func TestUIDialogsKeepTheKeyboardFocus(t *testing.T) {
 	// one place: no dialog has a Tab handler of its own (the other one closes the account menu)
 	if n := strings.Count(js, `e.key !== "Tab"`) + strings.Count(js, `e.key === "Tab"`); n != 2 || !strings.Contains(js, `else if (e.key === "Tab") closeAcct(false);`) {
 		t.Errorf("Tab is handled in %d places, want the dialogs' one and the account menu's", n)
+	}
+}
+
+// r1-b1-19: texts that were wrong. The run dialog's extra tick read as one sentence without a stop ("update
+// it too it stays on."). And a panel with enroll.allow_non_tailscale (the test build) still said "The machine
+// must be in your Tailscale network." and called the name "Name in Tailscale".
+func TestUISmallTextsOfTheBugRun(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		"<span>If one of these turns out to be on after all: update it too.\n        <span class=\"note\">It stays on. Without this tick nothing is sent to it.</span></span></label>",
+		`${d.outside_tailscale === true ? "The panel must be able to reach the machine by its name or address." : "The machine must be in your Tailscale network."}`,
+		`<span>${d.outside_tailscale === true ? "Name" : "Name in Tailscale"} <b>*</b></span>`,
+		`(${d.outside_tailscale === true ? "its IP address" : "Tailscale IP"} or full name)`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+}
+
+// The Add host page says whether this panel also pairs outside Tailscale (enroll.allow_non_tailscale), so that
+// the dialog's words fit (r1-b1-19).
+func TestAddHostPageSaysWhetherItPairsOutsideTailscale(t *testing.T) {
+	e := setup(t)
+	c := e.cookie(controller(), 0)
+	if p := e.do("GET", "/api/admin/hosts", nil, "Cookie", c); p.code != 200 || p.body["outside_tailscale"] != false {
+		t.Fatalf("by default: %d %v", p.code, p.body["outside_tailscale"])
+	}
+	e.s.Cfg.Enroll.AllowNonTailscale = true
+	if p := e.do("GET", "/api/admin/hosts", nil, "Cookie", c); p.code != 200 || p.body["outside_tailscale"] != true {
+		t.Fatalf("with enroll.allow_non_tailscale: %d %v", p.code, p.body["outside_tailscale"])
+	}
+}
+
+// r1-b1-18 and the note of r1-b1-06: two lines the guide lacked. On Linux a test build named fairy-test is its
+// own state folder's name and does not start; and Add host needs GitHub on the dev VM too, not only on the test VM.
+func TestTestingGuideSaysTheTwoThingsTheBugRunMet(t *testing.T) {
+	b, err := os.ReadFile("../../TESTING-LOCAL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := strings.Join(strings.Fields(string(b)), " ")
+	for _, want := range []string{
+		"On Linux or macOS give the program another name than its state folder, which is `fairy-test` next to the program: `go build -tags fairytest -o fairy-t ./cmd/fairy`",
+		"The dev VM needs internet access for this part too: before it shows the command, the panel fetches the release's signed `SHA256SUMS` from GitHub",
+		"**Name**: the test VM's computer name",
+	} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("TESTING-LOCAL.md lacks %q", want)
+		}
 	}
 }

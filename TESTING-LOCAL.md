@@ -48,6 +48,10 @@ go build -tags fairytest -o fairy-test.exe .\cmd\fairy
 fairy-test.exe serve
 ```
 
+On Linux or macOS give the program another name than its state folder, which is `fairy-test` next to the
+program: `go build -tags fairytest -o fairy-t ./cmd/fairy`, then `./fairy-t serve`. (A program named
+`fairy-test` stops with "Refusing to start: config .../fairy-test/config.yaml: ... not a directory".)
+
 Open the address the console prints (`http://127.0.0.1:8080/?key=...`, see above: new in this build). To keep
 the test VM you added before, copy the folder `fairy-test` from the r4 folder into the r5 folder **before** the
 first start.
@@ -150,7 +154,10 @@ two ports do not take each other's cookie away.
 
 The agent is **never** installed on the dev VM. Use a throwaway Windows test VM on the same VMware network,
 with a snapshot from before anything Fairy, and with internet access (the command downloads the released
-Fairy-agent from GitHub and checks its signature, exactly like the real panel).
+Fairy-agent from GitHub and checks its signature, exactly like the real panel). The dev VM needs internet
+access for this part too: before it shows the command, the panel fetches the release's signed `SHA256SUMS`
+from GitHub and checks the install script with it. Without it the Add host dialog says "cannot check the
+Fairy-agent install script" and shows no command.
 
 1. On the **test VM**, in `cmd.exe`: `ipconfig`. Note its `IPv4 Address`.
 2. On the **dev VM**, look at the lines `fairy-test.exe serve` printed. One has `Add host: panel address`
@@ -158,7 +165,7 @@ Fairy-agent from GitHub and checks its signature, exactly like the real panel).
    only that address). If it is another address, or a line says the PC has no private address or more than
    one: stop the panel, open `fairy-test\config.yaml` in Notepad, remove the `#` in front of
    `panel_address:` and put the dev VM's `IPv4 Address` there, save, start again.
-3. In the panel: **Overview**, **Add host** (next to "Hosts"). Name: the test VM's computer name (letters,
+3. In the panel: **Overview**, **Add host** (next to "Hosts"). **Name**: the test VM's computer name (letters,
    digits, `-`). System: Windows. Address: the test VM's IPv4 address from step 1. Tick what you want to try
    (power control, self-update). Press **Make the code**.
 4. "Confirm it's you" appears and names the action. Press **Confirm (test build)**. Nothing goes to Pocket ID.

@@ -153,6 +153,9 @@ type hostsPage struct {
 	Managed      []managedRow            `json:"managed"`
 	Enrollments  []enrollment.Enrollment `json:"enrollments"`
 	Skipped      []string                `json:"skipped,omitempty"`
+	// OutsideTailscale: enroll.allow_non_tailscale is on, so the dialog must not say that the machine has to be
+	// in the Tailscale network (the test build's config has it on).
+	OutsideTailscale bool `json:"outside_tailscale"`
 }
 
 type nodeChoice struct {
@@ -187,7 +190,7 @@ func (s *Server) hostsPage(c *reqCtx) error {
 		return err
 	}
 	p := hostsPage{PanelAddress: s.Enroll.PanelAddr, PanelSource: s.Enroll.PanelSource, PanelVia: s.Enroll.PanelVia, AgentRelease: s.Enroll.ReleaseLabel(), Nodes: []nodeChoice{}, Relays: []idName{}, BMCRelays: []idName{},
-		Sites: []string{}, Managed: []managedRow{}, Enrollments: s.Enroll.List(), Skipped: s.ManagedSkipped}
+		Sites: []string{}, Managed: []managedRow{}, Enrollments: s.Enroll.List(), Skipped: s.ManagedSkipped, OutsideTailscale: s.Cfg.Enroll.AllowNonTailscale}
 	for _, x := range s.Poller.Snapshot() {
 		if x.Kind == "node" {
 			cl := ""

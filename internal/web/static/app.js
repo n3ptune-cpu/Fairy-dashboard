@@ -1516,8 +1516,8 @@ async function openWakeUpdate() {
     ${joined.length ? "" : '<div class="warnbox">No machine is switched on for this yet. Close this, and switch machines on in the table on the Updates page (or in the ⋯ menu on a machine\'s page).</div>'}
     ${off.length ? `<div class="wu-sub">Off (no answer for ${esc(fmtSpan(d.off_after_s))} or more): wake, update, switch off again</div><div class="opts wu-list">${off.map((h) => tick(h, "wake", true)).join("")}</div>` : ""}
     ${asleep.length ? `<div class="wu-sub">Asleep or off (sent to sleep from the panel): woken; left on if it was asleep</div><div class="opts wu-list">${asleep.map((h) => tick(h, "wake", false)).join("")}</div>` : ""}
-    ${off.length || asleep.length ? `<label class="check opt wu-ifon"><input type="checkbox" id="wu-ifon"><span>If one of these turns out to be on after all: update it too
-        <span class="note">it stays on. Without this tick nothing is sent to it.</span></span></label>` : ""}
+    ${off.length || asleep.length ? `<label class="check opt wu-ifon"><input type="checkbox" id="wu-ifon"><span>If one of these turns out to be on after all: update it too.
+        <span class="note">It stays on. Without this tick nothing is sent to it.</span></span></label>` : ""}
     ${on.length ? `<div class="wu-sub">On now: update only, never switched off</div><div class="opts wu-list">${on.map((h) => tick(h, "update_only", false)).join("")}</div>` : ""}
     ${unsure.length ? `<div class="wu-sub">Not sure that they are off: left alone</div>${cannot(unsure)}` : ""}
     ${rest.length ? `<div class="wu-sub">Cannot take part right now</div>${cannot(rest)}` : ""}
@@ -2414,16 +2414,16 @@ async function openAddHost(typed = null, problem = "") {
   const m = $("#modal");
   m.innerHTML = `<form class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="ah-t" id="ah-form">
     <h3 id="ah-t">Add host</h3>
-    <p class="info-keep">Fairy makes a one-time code and one command to run on the machine. The machine must be in your Tailscale network.${infoBtn("addhost", "Add host", infoList([
+    <p class="info-keep">Fairy makes a one-time code and one command to run on the machine. ${d.outside_tailscale === true ? "The panel must be able to reach the machine by its name or address." : "The machine must be in your Tailscale network."}${infoBtn("addhost", "Add host", infoList([
       "Run the command on the machine; the panel then pairs with it by itself.",
       ...(d.agent_release ? [`It installs Fairy-agent release <code>${esc(d.agent_release)}</code>.`,
         "The panel checks its install script against the release's signed SHA256SUMS before it shows the command."] : [])]))}</p>
     <div class="form-grid">
-      <label class="mfield"><span>Name in Tailscale <b>*</b></span><input class="input" id="ah-name" required maxlength="63" autocomplete="off" spellcheck="false" placeholder="e.g. agent-1"></label>
+      <label class="mfield"><span>${d.outside_tailscale === true ? "Name" : "Name in Tailscale"} <b>*</b></span><input class="input" id="ah-name" required maxlength="63" autocomplete="off" spellcheck="false" placeholder="e.g. agent-1"></label>
       <label class="mfield"><span>System</span><select class="select" id="ah-os"><option value="windows">Windows</option><option value="linux">Linux</option></select></label>
       <label class="mfield"><span>Site</span><select class="select" id="ah-site"><option value="">No site (admins only)</option>${d.sites.map((x) => `<option>${esc(x)}</option>`).join("")}</select></label>
       <label class="mfield"><span>Is it a Proxmox node?</span><select class="select" id="ah-node"><option value="">No</option><option value="__new__" title="The command makes the panel a read-only Proxmox API token on the node (standalone nodes)">Yes: a new node</option>${d.nodes.map((n) => `<option value="${esc(n.name)}">Yes: ${esc(n.name)}${n.cluster ? ` (${esc(n.cluster)})` : ""}, already in the panel</option>`).join("")}</select></label>
-      <label class="mfield full"><span>Address <span class="note">optional: only if the panel cannot reach the name (Tailscale IP or full name)</span></span><input class="input" id="ah-addr" maxlength="253" autocomplete="off" spellcheck="false" placeholder="100.x.y.z"></label>
+      <label class="mfield full"><span>Address <span class="note">optional: only if the panel cannot reach the name (${d.outside_tailscale === true ? "its IP address" : "Tailscale IP"} or full name)</span></span><input class="input" id="ah-addr" maxlength="253" autocomplete="off" spellcheck="false" placeholder="100.x.y.z"></label>
     </div>
     <div class="opts" role="group" aria-label="Options">${OPT_LABEL.map(([k, l, n]) => `<label class="check opt"><input type="checkbox" data-opt="${k}"><span>${esc(l)}<span class="note">${esc(n)}</span></span></label>`).join("")}
       <label class="mfield full" id="ah-ups-row" hidden><span>UPS name in NUT <span class="note">optional</span></span><input class="input" id="ah-ups" maxlength="64" autocomplete="off" placeholder="ups"></label></div>
