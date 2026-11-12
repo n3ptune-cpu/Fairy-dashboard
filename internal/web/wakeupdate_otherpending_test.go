@@ -18,9 +18,12 @@ import (
 // And what stays: while the agent shows the run's own shutdown, the cancel goes out and the machine stays on.
 func TestWakeUpdateTheRunsCancelLeavesAPersonsRebootAlone(t *testing.T) {
 	for _, c := range []struct {
-		name   string
-		kill   bool // the kill switch stops the run (false: Cancel run)
-		reboot bool // a person called the run's shutdown off and asked for a reboot, 20 s into the countdown
+		name string
+		kill bool // the kill switch stops the run (false: Cancel run)
+		// reboot: a person called the run's shutdown off and asked for a reboot, 30 s into the countdown, in the
+		// second in which the run is stopped or cancelled (a second later the run would have let go of the
+		// machine by itself: TestWakeUpdateARebootAfterTheDueTimeIsNotSwitchedOffAgain)
+		reboot bool
 	}{
 		{"the kill switch, a person's reboot is pending", true, true},
 		{"Cancel run, a person's reboot is pending", false, true},
@@ -59,7 +62,7 @@ func TestWakeUpdateTheRunsCancelLeavesAPersonsRebootAlone(t *testing.T) {
 			a, hist := e.s.WakeRuns.Snapshot()
 			if a != nil && hostOf(a, "pc-a").State == wakerun.StShutting {
 				since := f.now.Sub(hostOf(a, "pc-a").Since)
-				if c.reboot && !asked && since >= 20*time.Second {
+				if c.reboot && !asked && since >= 30*time.Second {
 					asked = true
 					e.b.Mu.Lock() // the person: Cancel on the machine's page, then Reboot with a delay
 					delete(f.pending, "pc-a")

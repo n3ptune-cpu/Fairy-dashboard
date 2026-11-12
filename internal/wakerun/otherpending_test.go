@@ -17,6 +17,10 @@ import (
 //
 // The cancel is left out now when the machine's agent shows another action than a shutdown as pending, in an
 // answer that is certainly from after it took the run's shutdown. In every other case it goes out as before.
+//
+// (Since the commit after this one the run lets go of such a machine at its next look anyway: stepShutting,
+// TestAnotherPendingActionEndsTheWatch. What is left for callOff is the look in which the run is stopped or
+// cancelled and sees the other action for the first time: in these tests both happen in the same second.)
 
 // stoppers are the three things that make a run call its countdown off.
 var stoppers = []struct {
@@ -48,8 +52,7 @@ func TestTheRunsCancelLeavesAnotherPendingActionAlone(t *testing.T) {
 			// a person, on the machine's page: the run's shutdown is called off, and another action asked for
 			at := w.now.Add(30 * time.Minute)
 			pc.pending = &Pending{Action: action, At: at}
-			w.tick() // the next poll shows it
-			s.do(t, w, r, pc)
+			s.do(t, w, r, pc) // in the same second: the run's next look is the first that shows it
 			h := host(over(t, w), "pc-a")
 			if strings.Contains(w.callsFor("pc-a"), "cancel") || pc.pending == nil || pc.pending.Action != action {
 				t.Errorf("%s, a %s is pending: the run sent a cancel (requests: %s); the %s a person asked for is still pending: %v",
@@ -58,10 +61,15 @@ func TestTheRunsCancelLeavesAnotherPendingActionAlone(t *testing.T) {
 			want := s.why + ": another power action is pending on it now (" + action + " at " + clock(at) + ", by the machine's own clock), not the shutdown the run asked for, " +
 				"so the run sent no cancel: its agent's cancel would call that one off. It came online after the wake and it is ON now. Fairy no longer watches it. " +
 				"It was updated to 17-bbbbbbb."
+			if s.name == "a guest starts" {
+				// the watch of the countdown sees the other action before it asks about the guests, and lets go there
+				want = "Its shutdown was called off, in the panel or on the machine, and another power action is pending on it now (" + action + " at " + clock(at) +
+					", by the machine's own clock). It is ON now. Fairy no longer watches it. It was updated to 17-bbbbbbb."
+			}
 			if h.State != StLeftOn || h.On != OnYes || h.Text != want || !pc.on {
 				t.Errorf("%s, a %s is pending: [%s] power %q, on %v: %s", s.name, action, h.State, h.On, pc.on, h.Text)
 			}
-			if strings.Contains(h.Text, "was called off") {
+			if strings.Contains(h.Text, "its shutdown countdown was called off") {
 				t.Errorf("%s: the sentence says that a countdown was called off: %s", s.name, h.Text)
 			}
 		}
@@ -99,20 +107,20 @@ func TestTheRunsCancelIsStillSentInEveryOtherCase(t *testing.T) {
 			t.Errorf("%s, no answer since the request: no cancel was sent (%s)", s.name, w.callsFor("pc-a"))
 		}
 
-		// it showed the other action, and its latest poll failed: what is pending now is not known, the cancel is tried
+		// it showed the other action once, before the run had seen its own countdown (one such answer is not
+		// sure), and its latest poll failed: what is pending now is not known, the cancel is tried
 		w = newWorld(t)
 		pc = w.off("pc-a")
 		r = w.start(StartRequest{Hosts: []string{"pc-a"}})
 		untilState(t, w, "pc-a", StShutting)
-		w.advance(30 * time.Second)
 		pc.pending = &Pending{Action: "reboot", At: w.now.Add(30 * time.Minute)}
-		w.advance(5 * time.Second)
+		w.tick()
 		pc.unreachable, pc.cancelOK = true, true
 		w.tick()
 		s.do(t, w, r, pc)
 		over(t, w)
 		if !strings.Contains(w.callsFor("pc-a"), "cancel") {
-			t.Errorf("%s, the other action was seen and the latest poll failed: no cancel was sent (%s)", s.name, w.callsFor("pc-a"))
+			t.Errorf("%s, the other action was seen once and the latest poll failed: no cancel was sent (%s)", s.name, w.callsFor("pc-a"))
 		}
 	}
 }

@@ -15,6 +15,9 @@ import (
 
 // The reviewer's proof: the kill switch goes on while the run still waits for a machine whose countdown is
 // over (its shutdown did not happen). A person has meanwhile asked for a reboot of that machine on its page.
+// (The kill switch came ten seconds after the reboot was asked for. Since the run lets go of a machine as soon
+// as its agent shows another action than the run's shutdown, that is in the same second here: the run has not
+// seen the reboot when it is stopped. TestAnotherPendingActionEndsTheWatch has the ten seconds.)
 func TestTheRunsCancelIsNotSentAfterItsOwnCountdown(t *testing.T) {
 	w := newWorld(t)
 	pc := w.off("pc-a")
@@ -28,8 +31,6 @@ func TestTheRunsCancelIsNotSentAfterItsOwnCountdown(t *testing.T) {
 		if !due.IsZero() && !personAsked && !w.now.Before(due.Add(60*time.Second)) {
 			personAsked = true
 			pc.pending = &Pending{Action: "reboot", At: w.now.Add(30 * time.Minute)} // a person, on the machine's page
-		}
-		if personAsked && !w.now.Before(due.Add(70*time.Second)) {
 			w.blocked = "control is disabled by an administrator"
 		}
 	}
@@ -37,7 +38,7 @@ func TestTheRunsCancelIsNotSentAfterItsOwnCountdown(t *testing.T) {
 	r := over(t, w)
 	h := host(r, "pc-a")
 	if strings.Contains(w.callsFor("pc-a"), "cancel") || pc.pending == nil {
-		t.Errorf("the run sent a cancel 70 s after its own countdown was over (requests: %s); the reboot a person asked for is still pending: %v", w.callsFor("pc-a"), pc.pending != nil)
+		t.Errorf("the run sent a cancel 60 s after its own countdown was over (requests: %s); the reboot a person asked for is still pending: %v", w.callsFor("pc-a"), pc.pending != nil)
 	}
 	want := "the run stopped (control is disabled by an administrator) after its shutdown countdown had run out (it was due at " + clock(due) + "), so the run sent no cancel. " +
 		"It came online after the wake and it is ON now. Fairy no longer watches it: if the shutdown is still under way, it switches off by itself. It was updated to 17-bbbbbbb."

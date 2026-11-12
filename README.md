@@ -354,6 +354,11 @@ The rules, in plain words:
   is the agent's own, with the countdown that can be cancelled. If the agent can no longer take it (power
   control was switched off for the machine during the run), nothing is sent, also not a node shutdown through
   the Proxmox API (`node_power: true`), and the machine is left on and reported.
+  When someone called the run's shutdown off on the machine's page and asked for another action there (a
+  reboot, sleep, or a shutdown of their own), the run lets go of the machine as soon as its agent shows that
+  action: it is reported as ON, with the action and its time, and a restart that makes it silent for a while
+  is never reported as "switched off again". (An agent does not say whose a shutdown is: one that is asked
+  for in the same second in which the run's is called off is taken for the run's.)
 * **The report says what the run saw, not what it assumed.** Before a machine's result is written the run
   looks at it once more. An answer from its agent, or a refused connection, is "is ON". A machine that gives
   nothing at all after a shutdown was asked for, once its countdown is over and for 20 seconds, is "off (not

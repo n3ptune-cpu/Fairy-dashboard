@@ -466,6 +466,8 @@ type Host struct {
 	pendingSeen     bool          // the agent reported the run's shutdown as pending
 	noPendingAt     time.Time     // the first answer after the request that had no countdown in it (see stepShutting)
 	otherAt         time.Time     // the first answer after the request that showed another action than a shutdown as pending (otherPending)
+	unpending       bool          // after its countdown was seen, an answer showed nothing pending (stepShutting: a shutdown that shows after that is not the run's)
+	notPending      bool          // the run saw that its shutdown is no longer what is pending, and another action is: silence is never its "off" (look)
 	offQuiet        bool          // it gives nothing at all right now ...
 	offSince        time.Duration // ... since this moment on the steady clock
 	// What the run has seen of the poller's row of silent polls while it watches the countdown (seeSilence):
@@ -969,7 +971,9 @@ func (m *Manager) look(r *Run, h *Host, now time.Time) {
 		// that got no answer and of which no countdown was ever seen is not one: it may never have arrived.
 		// And silence is "off" only when nothing can have called the countdown off: not after a cancel of
 		// the run whose answer was lost (it may have arrived; then the machine is on).
-		asked := h.ShutdownAt != nil && !h.lostShutdown()
+		// Nor after the run saw another action pending in its shutdown's place (notPending): the machine that
+		// then gives nothing is restarting, asleep, or was switched off by that action, not by the run.
+		asked := h.ShutdownAt != nil && !h.lostShutdown() && !h.notPending
 		switch {
 		case asked && !h.cancelUnsure && h.seenOff(mono): // the same proof the watch of the countdown asks for
 			final(StOff, OnNo, base+seenOff)

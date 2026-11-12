@@ -250,7 +250,8 @@ func (m *Manager) notCalledOff(r *Run, h *Host, now time.Time) {
 // In every other case (nothing pending, a shutdown pending, no answer since the request, the latest poll
 // failed) it says no, and the cancel goes out as before: a cancel too many loses an action a person asked for,
 // a cancel too few lets a machine go off that was to stay on. It is called at every look at a machine whose
-// countdown runs, and keeps the first such answer (otherAt).
+// countdown runs, and keeps the first such answer (otherAt). The watch of the countdown asks it too, and lets
+// go of the machine when it says yes (stepShutting).
 func (h *Host) otherPending(o Observation) *Pending {
 	if h.lostShutdown() || !o.Online || !o.SeenAt.After(h.shutdownSent) || o.Pending == nil || o.Pending.Action == "shutdown" {
 		return nil
@@ -275,7 +276,29 @@ func (m *Manager) endOtherPending(r *Run, h *Host, now time.Time, why string, p 
 	}
 	lead := fmt.Sprintf("%s: another power action is pending on it now (%s at %s, by the machine's own clock), not the shutdown the run asked for, %s: "+
 		"its agent's cancel would call that one off.", why, p.Action, when(p.At, now), sent)
+	h.notPending = true
 	m.endSeen(r, h, StLeftOn, OnYes, now, lead+" "+cameOnline(h)+" and it is ON now. Fairy no longer watches it."+updateTail(h), lead+updateTail(h))
+}
+
+// endOtherAction ends a machine whose countdown the run watches when its agent shows that the run's shutdown
+// is no longer what is pending, and another action is (stepShutting). The machine is on: it has just answered.
+// What becomes of it is that action's matter, and the sentence names it, with its time as the agent gives it
+// (by the machine's clock: it is only repeated). early: the look is before the run's countdown can have ended,
+// so only a cancel can have taken the run's shutdown away; later it may also have run out without switching
+// the machine off. From here on silence is never the run's "off" (notPending, look).
+func (m *Manager) endOtherAction(r *Run, h *Host, now time.Time, p *Pending, early bool) {
+	lead := "Its shutdown is no longer pending (it was called off, or it did not switch the machine off)"
+	if early {
+		lead = "Its shutdown was called off, in the panel or on the machine"
+	}
+	what, tail := fmt.Sprintf("another power action is pending on it now (%s at %s, by the machine's own clock)", p.Action, when(p.At, now)), " Fairy no longer watches it."
+	if p.Action == "shutdown" {
+		what = fmt.Sprintf("another shutdown was asked for after that (it ends at %s, by the machine's own clock), which is not the run's", when(p.At, now))
+		tail = " Fairy no longer watches it: it switches off then unless someone cancels that on its page."
+	}
+	text := lead + ", and " + what + "."
+	h.notPending = true
+	m.endSeen(r, h, StLeftOn, OnYes, now, text+" It is ON now."+tail+updateTail(h), text+updateTail(h))
 }
 
 // endPastDue ends a machine whose countdown is over by the run's own clock, for a run that was cancelled or
@@ -731,10 +754,33 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	mono := m.mono()
 	// counting: an answer from after the request, in which its agent shows the countdown
 	counting := o.Online && o.SeenAt.After(h.shutdownSent) && o.Pending != nil && o.Pending.Action == "shutdown"
+	// The run's shutdown is no longer what is pending on the machine, and another action is: the run lets go
+	// of it here, and never reads what comes after as its own shutdown. A person called the run's shutdown off
+	// on the machine's page and asked for a reboot; it started after the run's own due time, the machine gave
+	// nothing for longer than offConfirm while it restarted, and the run wrote "switched off again" for a
+	// machine that was back a minute later (found with RC-04 of the recheck of fix7r; the same for a sleep,
+	// which is not "off" either). It is known in two ways, both by answers that are surely from after the
+	// agent took the run's shutdown:
+	//   - the agent shows an action that is not a shutdown (otherPending: it holds one action at a time);
+	//   - the agent shows a shutdown again after an answer in which, with the run's countdown seen before,
+	//     nothing was pending (unpending). The run asks for one shutdown and never for a second, so that one
+	//     was asked for by someone else: it is not the run's, and its end is not the run's result.
+	// What the run cannot tell: a shutdown that someone asked for in place of the run's without an answer of
+	// the agent in between that shows none. The agent's answer does not say whose a shutdown is.
+	if p := h.otherPending(o); p != nil {
+		m.endOtherAction(r, h, now, p, mono < h.endMin)
+		return
+	}
+	if counting && h.unpending {
+		m.endOtherAction(r, h, now, o.Pending, mono < h.endMin)
+		return
+	}
 	if counting {
 		h.pendingSeen = true
 	}
-	h.otherPending(o) // kept for callOff: the first answer that shows another action than the run's shutdown
+	if h.pendingSeen && o.Online && o.SeenAt.After(h.shutdownSent) && o.Pending == nil {
+		h.unpending = true
+	}
 	// The guests of a Proxmox node were asked about before the shutdown request (mayShutDown). One that starts
 	// on the node, or arrives on it, while the countdown runs went unnoticed, and the node went off under it
 	// (second review, N2). So the run asks again every few seconds while its own countdown runs, and calls the
