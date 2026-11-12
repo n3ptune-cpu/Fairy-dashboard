@@ -1,6 +1,9 @@
 package web
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -103,6 +106,45 @@ func TestUIOneWordingForACountdown(t *testing.T) {
 		if strings.Contains(js, old) {
 			t.Errorf("app.js still words a countdown its own way: %s", old)
 		}
+	}
+}
+
+// r3-p1-10: "Confirm it's you" said "Your last sign-in was 0m ago" for a sign-in of the last minute (a window
+// of 30 seconds asks that soon). It says "less than a minute ago".
+func TestUIALastSignInOfThisMinuteIsNotZeroMinutes(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	js := appJS(t)
+	if !strings.Contains(js, "` Your last sign-in was <b>${fmtSince(age)}</b> ago.`") {
+		t.Fatal("the dialog does not word the age of the last sign-in with fmtSince")
+	}
+	var defs []string
+	for _, name := range []string{"const fmtUptime = ", "const fmtSince = "} {
+		i := strings.Index(js, name)
+		j := strings.Index(js[i:], ";\n")
+		if i < 0 || j < 0 {
+			t.Fatalf("app.js has no %s", name)
+		}
+		end := i + j + 1
+		if name == "const fmtUptime = " { // a function of several lines: up to its closing "};"
+			end = i + strings.Index(js[i:], "\n};") + 3
+		}
+		defs = append(defs, js[i:end])
+	}
+	script := strings.Join(defs, "\n") + `
+const want = { 0: "less than a minute", 7: "less than a minute", 59: "less than a minute", 59.9: "less than a minute", 60: "1m", 150: "2m", 3700: "1h 1m", 90000: "1d 1h" };
+let bad = 0;
+for (const [s, w] of Object.entries(want)) if (fmtSince(+s) !== w) { console.log("FAIL fmtSince(" + s + ") = " + fmtSince(+s) + ", want " + w); bad++; }
+if (!bad) console.log("ok");
+`
+	file := filepath.Join(t.TempDir(), "since.js")
+	if err := os.WriteFile(file, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(node, file).CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "ok" {
+		t.Fatalf("node: %v\n%s", err, out)
 	}
 }
 
