@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -21,10 +22,25 @@ import (
 func TestSilentPollsAreCountedPollByPoll(t *testing.T) {
 	b := testutil.NewBackend()
 	mode := "down"
+	// The clock of the test: the polls of the other machines read it from their own goroutines, so it is kept
+	// under a lock (the race detector saw the plain variable).
+	var ck sync.Mutex
 	var took time.Duration // how long a poll takes
 	now := time.Date(2026, 11, 11, 3, 0, 0, 0, time.UTC)
+	pass := func(d time.Duration) {
+		ck.Lock()
+		now = now.Add(d)
+		ck.Unlock()
+	}
+	takes := func(d time.Duration) {
+		ck.Lock()
+		took = d
+		ck.Unlock()
+	}
 	b.Metrics["laptop"] = func() (jsonx.M, error) {
+		ck.Lock()
 		now = now.Add(took)
+		ck.Unlock()
 		switch mode {
 		case "down":
 			return nil, devices.Errf("connection failed")
@@ -38,7 +54,11 @@ func TestSilentPollsAreCountedPollByPoll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Clock = func() time.Time { return now }
+	p.Clock = func() time.Time {
+		ck.Lock()
+		defer ck.Unlock()
+		return now
+	}
 	ctx := context.Background()
 	silent := func() SilentPolls {
 		i, _, _ := p.AgentSeen("laptop")
@@ -55,9 +75,9 @@ func TestSilentPollsAreCountedPollByPoll(t *testing.T) {
 	if s := silent(); s != (SilentPolls{}) {
 		t.Fatalf("never polled: %+v", s)
 	}
-	took = 3 * time.Second
+	takes(3 * time.Second)
 	p.PollOnce(ctx) // began at 0 s, ended at 3 s
-	now = now.Add(2 * time.Second)
+	pass(2 * time.Second)
 	first := silent()
 	if first.N != 1 || first.Row == 0 || first.BeganAgo != 5*time.Second || first.EndedAgo != 2*time.Second {
 		t.Fatalf("after one silent poll that took 3 s, looked at 2 s later: %+v", first)
@@ -93,8 +113,8 @@ func TestSilentPollsAreCountedPollByPoll(t *testing.T) {
 		t.Fatalf("two silent polls after an answer: %+v", third)
 	}
 	// the panel stopped asking (polling paused): the row is not given out any more, and the next poll begins one
-	took = 0
-	now = now.Add(p.quietGap(cfg.Intervals.Agent) + time.Second)
+	takes(0)
+	pass(p.quietGap(cfg.Intervals.Agent) + time.Second)
 	if s := silent(); s != (SilentPolls{}) {
 		t.Fatalf("after a time without polls: %+v", s)
 	}
