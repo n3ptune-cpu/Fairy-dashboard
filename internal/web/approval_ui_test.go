@@ -34,7 +34,9 @@ func TestUIApproval(t *testing.T) {
 		`data-shown="${esc(what === "off" ? "" : m.shown_id || "")}"`, `const body = off ? { off: true } : { machine_id: t.dataset.shown || "" };`,
 		`id="ap-todo">Give this machine a new id on the machine itself (<code>fairy-agent helper-trust set --new-machine-id</code>), then accept the new id here.`,
 		`if (held) return ` + "`${held} keeps this machine id. No approvals for this host until it shows an id of its own.`;",
-		"return [`<div class=\"warnbox ap-bind\" id=\"ap-bind\"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${todo}${btn}</div>`, more];", // the reasons: the dialog's "More"
+		// (audit 6, r4-b1-09: the box of a red state is red, "warnbox bad"; it was the amber "warnbox" alone)
+		"return [`<div class=\"warnbox bad ap-bind\" id=\"ap-bind\"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${todo}${btn}</div>`, more];", // the reasons: the dialog's "More"
+		"<div class=\"${a.state === \"broken\" ? \"warnbox bad\" : \"note warn\"}\" id=\"ap-error\">",
 		`m = admin ? apvMachine(s) : null`,                                            // the record's details: admins only
 		`if (apvStale(s, a) && Date.now() - apv.at > APV_AGAIN) fetchApproval(true);`, // a block that changed after the approval page was fetched (audit 6, r4-b1-01 and -07: once a second, it was every 3 s)
 		`const apvStale = (s, a) => !!apv.data && (apv.sig[s.id] ?? "") !== apvSig(a);`, "const APV_AGAIN = 1000;",

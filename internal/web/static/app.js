@@ -819,7 +819,7 @@ function approvalBinding(s, a) {
   const what = a.binding === "vanished" && m ? "off" : m?.can_accept ? m.accept : "";
   const btn = what && !held ? `<div class="row-gap ap-accept"><button class="btn" type="button" data-act="ap-accept" data-id="${esc(m.id)}" data-name="${esc(s.name)}" data-what="${esc(what)}" data-shown="${esc(what === "off" ? "" : m.shown_id || "")}" ${why ? `disabled title="${esc(why)}"` : ""}>${esc(AP_ACCEPT[what]?.[0] || AP_ACCEPT.id[0])}</button></div>` : "";
   const todo = held ? `<div class="ap-todo" id="ap-todo">Give this machine a new id on the machine itself (<code>fairy-agent helper-trust set --new-machine-id</code>), then accept the new id here.</div>` : "";
-  return [`<div class="warnbox ap-bind" id="ap-bind"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${todo}${btn}</div>`, more];
+  return [`<div class="warnbox bad ap-bind" id="ap-bind"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${todo}${btn}</div>`, more];
 }
 // What "Accept" is called, by what it accepts (the approval page's `accept`): the button, and the action's name.
 const AP_ACCEPT = table({
@@ -865,7 +865,7 @@ function approvalBox(s) {
   if (a.state === "broken" || a.state === "unknown") {
     const old = String(a.error || "").startsWith(AP_HELPER_OLD);
     return view(`${bind}
-      <div class="${a.state === "broken" ? "warnbox" : "note warn"}" id="ap-error">${a.state === "broken"
+      <div class="${a.state === "broken" ? "warnbox bad" : "note warn"}" id="ap-error">${a.state === "broken"
         ? "Its trust file cannot be used. It refuses fan, power and update requests until that is repaired <b>on the machine</b>: <code>fairy-agent helper-trust show</code>"
         : old ? "Its running helper is older than its agent: it refuses fan, power and update requests. <b>Restart the helper</b>: Stop helper, then Start helper."
         : "The machine cannot say whether it checks approvals. Start the helper (Elevated helper, next to the host name)."}</div>
