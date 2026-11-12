@@ -371,7 +371,12 @@ The rules, in plain words:
   stopped: a paused or suspended guest, one whose state the API gives as "unknown" (or not at all), and one
   whose polling is paused in the panel keep the node on as well. If the panel cannot know (the API has not
   answered since the node came online, or the machine is a Proxmox host that the panel knows only through
-  its agent), the node is left on, and the report says why. While the node's shutdown countdown runs, the run
+  its agent), the node is left on, and the report says why. The panel counts the guests the API lists for
+  its token: **the token must be allowed to see every guest** (role `PVEAuditor` on `/`, as Add host makes it;
+  a token of your own in `proxmox:` needs `VM.Audit` on the guests). A guest the API does not list for the
+  token does not exist for the panel, and a node whose guests are not listed is treated as a node without
+  guests: it is switched off. If the cluster lists more than the panel takes (64 nodes, 2000 guests), the node
+  is left on, because the panel then does not see all of them. While the node's shutdown countdown runs, the run
   asks again every few seconds: a guest that starts or arrives on the node then (until 15 seconds before the
   countdown ends) calls the countdown off, and the node is left on and reported.
 * **One run at a time**, at most 16 machines in it. A second start is refused with a message. **Update

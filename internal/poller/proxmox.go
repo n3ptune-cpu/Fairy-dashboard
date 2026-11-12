@@ -59,6 +59,14 @@ func (p *Poller) noteProxmoxLimit(clusterID string, l normalise.ProxmoxLimit) {
 	}
 }
 
+// ProxmoxRowsLeftOut reports whether the cluster's latest answer listed more nodes or guests than the panel
+// takes (noteProxmoxLimit): the panel then does not know every guest of the cluster.
+func (p *Poller) ProxmoxRowsLeftOut(clusterID string) bool {
+	p.limitMu.Lock()
+	defer p.limitMu.Unlock()
+	return p.pveOverLimit[clusterID]
+}
+
 func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout time.Duration) {
 	start := time.Now()
 	src := "proxmox:" + pve.ID

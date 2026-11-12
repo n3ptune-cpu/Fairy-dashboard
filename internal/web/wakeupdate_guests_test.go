@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +116,39 @@ func TestWakeUpdateAGuestThatStartsDuringTheNodesCountdown(t *testing.T) {
 	f.tick() // the farm acts on the requests of the run's last step
 	if _, counting := f.pending["pve-agent"]; counting {
 		t.Fatal("the node's countdown still runs")
+	}
+}
+
+// Second review, note N1: the panel takes at most 2000 guests from one Proxmox API and leaves the rest out. A
+// cluster that lists 2001 stopped guests before this node's running one: the running guest was among the rows
+// left out, and the node was switched off. Rows left out are "cannot see its guests" now.
+func TestWakeUpdateANodeWhoseClusterListsMoreThanThePanelTakesIsLeftOn(t *testing.T) {
+	h, f := nodeRun(t, func(h *wakerun.Host, rows []jsonx.M) ([]jsonx.M, error) {
+		if h == nil || (h.State != wakerun.StSettling && h.State != wakerun.StShutting) {
+			return rows, nil // (the long list only where the run decides: the test stays quick)
+		}
+		out := []jsonx.M{rows[0], rows[1]}
+		for i := 0; i < 2001; i++ {
+			out = append(out, jsonx.M{"id": fmt.Sprintf("lxc/%d", 1000+i), "type": "lxc", "vmid": float64(1000 + i), "name": fmt.Sprintf("c%d", i), "node": "SRV-PVEB", "status": "stopped"})
+		}
+		rows[2]["status"] = "running"
+		return append(out, rows[2]), nil
+	})
+	want := "Left ON: Fairy cannot see whether guests run on it (its Proxmox API lists more nodes or guests than the panel takes, so the panel does not see all of its guests). It was updated to 17-bbbbbbb."
+	if h.State != wakerun.StLeftOn || h.On != wakerun.OnYes || h.Text != want || !f.on["pve-agent"] {
+		t.Fatalf("%s/%s, on %v: %s", h.State, h.On, f.on["pve-agent"], h.Text)
+	}
+	if got := nodeRequests(f); got != "pve-agent /update" {
+		t.Fatalf("requests: %s", got)
+	}
+}
+
+// What the panel cannot tell (README, "A Proxmox node with running guests is left on"): an API that lists the
+// nodes and no guest at all, as for a token that may not see the guests. The node counts as one without
+// guests. This test holds that limit, so that a change of it is made on purpose and the README follows.
+func TestWakeUpdateANodeWhoseGuestsTheAPIDoesNotListCountsAsEmpty(t *testing.T) {
+	h, f := nodeRun(t, func(_ *wakerun.Host, rows []jsonx.M) ([]jsonx.M, error) { return rows[:2], nil })
+	if h.State != wakerun.StOff || f.on["pve-agent"] {
+		t.Fatalf("the stated limit no longer holds (good, if on purpose: then change the README and this test): %s/%s: %s", h.State, h.On, h.Text)
 	}
 }

@@ -302,6 +302,12 @@ func (o runOps) Guests(id string, since time.Time) (int, bool, string) {
 	if !fresh {
 		return 0, false, "its Proxmox API has not answered since it came online"
 	}
+	// The panel counts the guests it has. When the API listed more rows than the panel takes from one source
+	// (normalise.MaxProxmoxGuests), rows were left out, and a guest that runs on this node may be one of them:
+	// that is "cannot see its guests" (second review, N1), not "none runs".
+	if o.s.Poller.ProxmoxRowsLeftOut(model.Deref(x.ClusterID)) {
+		return 0, false, "its Proxmox API lists more nodes or guests than the panel takes, so the panel does not see all of its guests"
+	}
 	// A guest keeps its node on unless the panel can say that it is stopped: shown as stopped, and "stopped" in
 	// so many words in the Proxmox API's latest answer. Shown as running: it runs. Everything else (paused,
 	// suspended, "unknown", a word the panel does not know, a guest whose polling is paused, a guest row without
