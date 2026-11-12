@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 )
 
@@ -253,5 +254,47 @@ func TestUsersListReportsAnUnusableUsersFile(t *testing.T) {
 	e := newCLI(t) // a fresh install: no file
 	if code, out := e.run("", "users", "list"); code != 0 || !strings.Contains(out, "No users yet") {
 		t.Fatal(code, out)
+	}
+}
+
+// r2-p1-13 (audit 5): the README says the audit log never holds a session id; `fairy admin sessions revoke`
+// wrote the first 8 characters of the one it ended. It writes whose session it was and from which address
+// instead, as the Sessions page does.
+func TestSessionsRevokeWritesNoPartOfTheSessionID(t *testing.T) {
+	e := newCLI(t)
+	_ = os.WriteFile(e.cfg, []byte("public_url: https://p.example\ndata_dir: "+e.data+"\naudit_log: "+e.dir+"/audit.log\noidc: {issuer: https://id.example, client_id: c}\n"), 0o600)
+	st := adminstate.New(e.data)
+	const sid, other = "Qw3rTy-session-id-0123456789abcdef", "Zx9cVb-another-session-id-0123456789"
+	if err := st.AddSession(sid, adminstate.NewSession{Sub: "bob", IP: "203.0.113.21"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSession(other, adminstate.NewSession{Sub: "ann", IP: "203.0.113.9"}); err != nil {
+		t.Fatal(err)
+	}
+	code, out := e.run("", "sessions", "list")
+	if code != 0 || !strings.Contains(out, sid[:8]+"…") {
+		t.Fatal(code, out)
+	}
+	if code, out := e.run("", "sessions", "revoke", sid[:8]+"…"); code != 0 || !strings.Contains(out, "Revoked 1 session") {
+		t.Fatal(code, out)
+	}
+	log, err := os.ReadFile(e.dir + "/audit.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := 6; n <= len(sid); n++ {
+		if strings.Contains(string(log), sid[:n]) {
+			t.Fatalf("the audit log holds the first %d characters of the session id: %s", n, log)
+		}
+	}
+	if !strings.Contains(string(log), `"action":"sessions.revoke"`) || !strings.Contains(string(log), `"sub":"bob"`) ||
+		!strings.Contains(string(log), `"ip":"203.0.113.21"`) || !strings.Contains(string(log), `"count":1`) || strings.Contains(string(log), "ann") {
+		t.Fatalf("the entry must say whose session and from which address: %s", log)
+	}
+	if list, _ := st.ListSessions(); len(list) != 1 || list[0].Sub != "ann" {
+		t.Fatalf("%+v", list)
+	}
+	if code, _ := e.run("", "sessions", "revoke", "nothing-like-this"); code != 1 {
+		t.Fatal("no such session:", code)
 	}
 }

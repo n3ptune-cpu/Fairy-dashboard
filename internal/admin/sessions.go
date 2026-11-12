@@ -2,6 +2,7 @@ package admin
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
@@ -46,7 +47,23 @@ func (c *cli) sessions(args []string) (int, error) {
 		if len(args) != 2 {
 			return 2, errUsage
 		}
-		n, err := st.RevokeSession(strings.TrimSuffix(args[1], "…"))
+		prefix := strings.TrimSuffix(args[1], "…")
+		// whose sessions these are, for the audit log: the log names the person and the address, never a
+		// session id or a part of one (README, Security model)
+		var subs, ips []string
+		if list, err := st.ListSessions(); err == nil && len(prefix) >= 6 {
+			for _, s := range list {
+				if strings.HasPrefix(s.SID, prefix) {
+					if !slices.Contains(subs, s.Sub) {
+						subs = append(subs, s.Sub)
+					}
+					if s.IP != "" && !slices.Contains(ips, s.IP) {
+						ips = append(ips, s.IP)
+					}
+				}
+			}
+		}
+		n, err := st.RevokeSession(prefix)
 		if err != nil {
 			return 2, err
 		}
@@ -54,7 +71,7 @@ func (c *cli) sessions(args []string) (int, error) {
 			fmt.Fprintf(c.errw, "no session starting with %q\n", args[1])
 			return 1, nil
 		}
-		c.log("sessions.revoke", "", map[string]any{"prefix": args[1][:min(8, len(args[1]))], "count": n})
+		c.log("sessions.revoke", strings.Join(subs, ", "), map[string]any{"count": n, "sub": strings.Join(subs, ", "), "ip": strings.Join(ips, ", ")})
 		fmt.Fprintf(c.out, "Revoked %d session(s). That browser must sign in with Pocket ID again.\n", n)
 		return 0, nil
 	case "revoke-all":

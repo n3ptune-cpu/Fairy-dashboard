@@ -909,7 +909,9 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   read, so whoever holds a copy of a cookie can see that person's sessions; they cannot end them. What the
   page shows of a browser is the client's own text (User-Agent, cut to 256 bytes, control characters removed)
   and is escaped; the address is taken as everywhere else (`trusted_proxies`). The audit log has every
-  sign-out with who, whose session and from which address, and never a session id or cookie.
+  sign-out with who, whose session and from which address, and never a session id or cookie. That holds for
+  `fairy admin sessions revoke <id from the list>` too: its entry names the account and the address of the
+  session it ended, not the characters that were typed.
 * "Update unpowered hosts" (`/api/admin/wake-update`, `internal/wakerun`): a run sends only what an
   admin can already send by hand, through the same code and the same checks (wake through a relay, the
   agent's own update, the delayed shutdown, its cancel); there is no new agent request and nothing is run on
