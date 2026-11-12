@@ -986,11 +986,13 @@ async function fetchApproval(force) {
 }
 // What an admin sees in a machine's Approval box beyond the block itself (the id on record, "not this panel's
 // values", the button to accept) is the approval page, fetched earlier. When the block the live data brings
-// has changed since that fetch, the page is fetched again (at most every 3 seconds).
+// has changed since that fetch, the page is fetched again (at most once a second).
+const APV_AGAIN = 1000;
+const apvStale = (s, a) => !!apv.data && (apv.sig[s.id] ?? "") !== apvSig(a);
 function approvalFresh(s, a) {
   if (!state.me?.can_control) return;
   if (!apv.data) { fetchApproval(); return; }
-  if (apv.sig[s.id] !== apvSig(a) && Date.now() - apv.at > 3000) fetchApproval(true);
+  if (apvStale(s, a) && Date.now() - apv.at > APV_AGAIN) fetchApproval(true);
 }
 const apvMachine = (s) => (apv.data?.machines || []).find((m) => m.system_id === s.id || m.id === s.id);
 // who may approve, each person kept together: "Name id (why)". An id from approval.users that is no user of this
@@ -1031,6 +1033,10 @@ function turnOnResults(rep) {
 function approvalBanner() {
   if (!state.me?.can_control) return "";
   const d = apv.data;
+  // The list is the approval page, fetched earlier. When a machine's check has changed in the live data since
+  // (a Turn on a moment ago, a check that went), it is fetched again, as a host's dialog does (approvalFresh): it
+  // was asked for again at most every 30 s, and showed a machine as "ready" under its "switched on · locked".
+  if (d && Date.now() - apv.at > APV_AGAIN && state.systems.some((s) => (apv.sig[s.id] ?? "") !== apvSig(approvalOf(s)))) fetchApproval(true);
   if (!d) return apv.error ? `<div class="panel glass pad approval"><h3>The check on the machine itself</h3><div class="error">${esc(apv.error)}</div></div>` : "";
   const why = controlWhyNot(), known = d.machines.filter((m) => m.state), n = Number(d.ready) || 0;
   if (!known.length && !d.configured) return "";

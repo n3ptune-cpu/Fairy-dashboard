@@ -33,9 +33,12 @@ func TestUIApproval(t *testing.T) {
 		`id="ap-todo">Give this machine a new id on the machine itself (<code>fairy-agent helper-trust set --new-machine-id</code>), then accept the new id here.`,
 		`if (held) return ` + "`${held} keeps this machine id. No approvals for this host until it shows an id of its own.`;",
 		"return [`<div class=\"warnbox ap-bind\" id=\"ap-bind\"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${todo}${btn}</div>`, more];", // the reasons: the dialog's "More"
-		`m = admin ? apvMachine(s) : null`, // the record's details: admins only
-		`if (apv.sig[s.id] !== apvSig(a) && Date.now() - apv.at > 3000) fetchApproval(true);`, // a block that changed after the approval page was fetched
-		`${bind ? "" : '<p id="ap-lead">This machine does not check approvals itself.`,        // not under "Check gone"
+		`m = admin ? apvMachine(s) : null`,                                            // the record's details: admins only
+		`if (apvStale(s, a) && Date.now() - apv.at > APV_AGAIN) fetchApproval(true);`, // a block that changed after the approval page was fetched (audit 6, r4-b1-01 and -07: once a second, it was every 3 s)
+		`const apvStale = (s, a) => !!apv.data && (apv.sig[s.id] ?? "") !== apvSig(a);`, "const APV_AGAIN = 1000;",
+		// the Updates page's list follows the live data too (r4-b1-01)
+		`if (d && Date.now() - apv.at > APV_AGAIN && state.systems.some((s) => (apv.sig[s.id] ?? "") !== apvSig(approvalOf(s)))) fetchApproval(true);`,
+		`${bind ? "" : '<p id="ap-lead">This machine does not check approvals itself.`, // not under "Check gone"
 		`...(bind ? [] : ["The panel confirms these requests itself (Confirm it's you) and sends them with the panel's control token."])`,
 		`a.last_known ? " · last known" : ""`,
 		// the agent's changes of 2026-11-12: an old running helper is restarted, not started; how the trust was set

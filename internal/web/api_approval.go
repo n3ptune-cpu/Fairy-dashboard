@@ -297,6 +297,13 @@ func (s *Server) machineFor(a config.Agent, keys []api.TrustKey) approvalMachine
 		// was cleared on the machine and that says "off" now: Turn on is how its check comes back.
 		m.State, m.EnforcedBy, m.LastKnown, m.Why = ap.State, ap.EnforcedBy, ap.LastKnown, m.BindingText
 		return m
+	case ap.State == api.ApprovalOff && b.OK() && b.Known && b.Record.MachineID != "":
+		// An id is on record and the machine's last answer still says "off": that answer is from before the id
+		// came on record (a Turn on a moment ago; an answer from after it that says "off" is the alarm "check
+		// gone", above). The record counts: the machine is on, never "ready", until its next answer (audit 6,
+		// r4-b1-01: the Updates page listed the machines it had just called "switched on" as "off, ready").
+		m.State, m.EnforcedBy, m.Why = api.ApprovalRequired, ap.EnforcedBy, "already on: it is changed only on the machine (fairy-agent helper-trust)"
+		return m
 	case ap.State == api.ApprovalRequired:
 		m.State, m.EnforcedBy, m.LastKnown, m.Why = ap.State, ap.EnforcedBy, ap.LastKnown, "already on: it is changed only on the machine (fairy-agent helper-trust)"
 		m.SetBy, m.SetAt = ap.SetBy, ap.SetAt
