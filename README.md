@@ -312,15 +312,21 @@ The rules, in plain words:
   polls that is longer than the machine's poll interval allows (about half a minute at the default interval;
   the panel's host slept, the clock was set by more than that) starts the count again.
   What this cannot see: a machine that was on and out of reach for more than 15 minutes and then restarts
-  by itself during the run's wait looks like a machine the run woke.
-  **A second limit: a machine that a person switches on shortly before the run's wake.** While it is still in
-  its firmware or boot loader (seconds on a desktop, minutes on a server, without limit at a boot menu or a
-  disk password prompt) it gives nothing at all, like a machine that is off; its system starts after the wake
-  and reports a fresh uptime. For the run it is a machine it woke, and it is switched off after its update.
-  The same holds for a machine that starts by a firmware schedule or when the power returns. The panel
-  cannot tell these apart (it would need the agent to say why the machine started). Only one corner is cut
-  off: a machine whose agent answers within 8 seconds of the wake cannot have been off, and is left on
-  ("it was already starting"). So start a run when nobody is about to switch on a machine in its list.
+  by itself during the run's wait is treated as a machine the run woke.
+  **A second limit: a machine switched on by a person while the run waits for it is treated as woken by
+  the run.** The run cannot tell a power button from its wake packet. The window is the whole wait, not a
+  moment: from shortly before the wake (a machine that is still in its firmware or boot loader gives nothing
+  at all, like a machine that is off: seconds on a desktop, minutes on a server, without limit at a boot menu
+  or a disk password prompt) until the run gives up on the machine (`online_timeout_s`: 5 minutes by
+  default, up to 30; the wake is sent again every minute). Such a machine was off before the run, starts its
+  system after the wake and reports a fresh uptime: every part of the rule is true, and it is updated and
+  switched off, whoever switched it on. The same holds for a machine that starts by a firmware schedule or
+  when the power returns. The panel cannot tell these apart: it would need the agent to say why the machine
+  started (planned for a later agent release). That is why the report says "Came online after the wake",
+  not "Woken", and why the machine's steps in the report say that it is treated as woken. Only one corner is
+  cut off: a machine whose agent answers within 8 seconds of the wake cannot have been off, and is left on
+  ("it was already starting"). So start a run when nobody is about to switch on a machine in its list, and
+  keep `online_timeout_s` short.
 * **A machine that is already on is never switched off.** When you open the dialog it is offered as "update
   only" (unticked). A machine you ticked as off that turns out to be on when the run gets to it is skipped
   and nothing is sent to it, unless you ticked "If one of these turns out to be on after all: update it

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +11,7 @@ import (
 )
 
 // r1-p2-02 (audit 5) through the routes. A machine the panel itself sent to sleep gives nothing at all, like
-// one that is off, so after 15 minutes the page offered it as "Off", ticked. Woken, it resumes with the
+// one that is off, so after 15 minutes the page offered it as "Off", ticked. Came online after the wake, it resumes with the
 // uptime it had (sleep does not start it again), and the run said "It was already on" and filed that as
 // information.
 //
@@ -83,9 +84,15 @@ func TestWakeUpdateAMachineThatWasAsleepIsReportedAsAWarning(t *testing.T) {
 // button) and in the README, in one place each; the run dialog's own warning is not made longer for it.
 func TestWakeUpdateSaysItsLimit(t *testing.T) {
 	js := appJS(t)
-	limit := "A limit: a machine that someone switches on just before the wake, and that is still starting, looks like one the run woke. It is switched off after its update."
+	// r2-p2-01 (audit 5, round 2): the limit is the whole wait, not "just before the wake", and the words are
+	// the ones the README uses: "switched on by a person while the run waits for it ... treated as woken by the run".
+	limit := "`A limit: a machine switched on by a person while the run waits for it (up to ${esc(fmtSpan(d.settings.online_timeout_s))}), or just before the wake, " +
+		"is treated as woken by the run. It is switched off after its update. The report says \"came online after the wake\".`"
 	if strings.Count(js, limit) != 1 {
 		t.Fatalf("the info text must say the limit once: %d", strings.Count(js, limit))
+	}
+	if strings.Contains(js, "looks like one the run woke") {
+		t.Fatal("the older, narrower wording of the limit is still on the page")
 	}
 	i := strings.Index(js, `infoBtn("wu", "Update unpowered hosts", infoList([`)
 	if i < 0 || !strings.Contains(js[i:i+2500], limit) {
@@ -94,7 +101,21 @@ func TestWakeUpdateSaysItsLimit(t *testing.T) {
 	dlg := js[strings.Index(js, `async function openWakeUpdate()`):]
 	box := dlg[strings.Index(dlg, `<div class="warnbox">Fairy only switches off machines`):]
 	box = box[:strings.Index(box, "</div>")]
-	if n := len(strings.Fields(box)); n > 78 || strings.Contains(box, "firmware") {
+	if n := len(strings.Fields(box)); n > 88 || strings.Contains(box, "firmware") {
 		t.Fatalf("the dialog's fixed warning grew (%d words): %s", n, box)
+	}
+	if !strings.Contains(box, "a machine switched on by a person while the run waits for it is treated as woken by the run") {
+		t.Fatalf("the dialog's warning does not state the limit: %s", box)
+	}
+	// the README says it in the same words, with the real window
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"a machine switched on by a person while the run waits for it is treated as woken by", "The window is the whole wait", "up to 30",
+		`the report says "Came online after the wake"`} {
+		if !strings.Contains(strings.Join(strings.Fields(string(readme)), " "), want) {
+			t.Errorf("the README lacks %q", want)
+		}
 	}
 }

@@ -108,7 +108,7 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 		return false
 	}
 	m.emit(EvStep, r, h, "cancel", nil, "ok")
-	m.endSeen(r, h, StLeftOn, OnYes, now, why+": its shutdown countdown was called off. The run woke it and it is ON."+updateTail(h),
+	m.endSeen(r, h, StLeftOn, OnYes, now, why+": its shutdown countdown was called off. "+cameOnline(h)+" and it is ON."+updateTail(h),
 		why+": its shutdown countdown (due at "+due+") was asked to be called off."+updateTail(h))
 	return false
 }
@@ -264,6 +264,7 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 			m.enter(h, StOnline, now, "its agent answers, but reports no uptime: Fairy cannot tell that it started after the wake, so it will not switch it off")
 		default:
 			m.enter(h, StOnline, now, fmt.Sprintf("its agent answers %s after the wake: waiting %s to see that it stays online", span(since), span(onlineSettle)))
+			m.note(h, now, wokenNote) // the report's detail says what "came online after the wake" rests on, and its limit
 		}
 		return
 	}
@@ -348,7 +349,7 @@ func (m *Manager) updateDone(r *Run, h *Host, now time.Time, result, text string
 		return
 	}
 	if result == UpdStuck { // an install may be in flight: switching it off now could leave it half done
-		m.end(r, h, StLeftOn, OnYes, now, "Its update did not finish ("+text+"). The run woke it and left it ON, so an install that may still be running is not cut off.")
+		m.end(r, h, StLeftOn, OnYes, now, "Its update did not finish ("+text+"). "+cameOnline(h)+" and was left ON, so an install that may still be running is not cut off.")
 		return
 	}
 	lead := map[string]string{UpdOK: "updated" + toVersion(h), UpdCurrent: "already runs the newest release", UpdNotTried: "not updated"}[result]
@@ -508,7 +509,7 @@ func (m *Manager) stepSettling(ctx context.Context, r *Run, h *Host, info HostIn
 	o := m.Ops.Observe(h.ID)
 	if !o.Online { // the agent restarts after an update
 		if now.Sub(h.Since) > r.Settings.Settle+agentBack {
-			lead := "Its agent did not answer again after the update, so Fairy could not ask it to shut down. The run woke it"
+			lead := "Its agent did not answer again after the update, so Fairy could not ask it to shut down. " + cameOnline(h)
 			m.endSeen(r, h, StLeftOn, OnYes, now, lead+" and it is ON."+updateTail(h), lead+"."+updateTail(h))
 		}
 		return

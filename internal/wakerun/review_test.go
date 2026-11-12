@@ -18,7 +18,7 @@ import (
 // had woken, updated it and switched it off. Now a machine is off for a run only after MinOff without an
 // answer; less than that is "not sure", and nothing is sent.
 
-// The reviewer's test, as written. It failed with "Woken, updated ..., and switched off again."
+// The reviewer's test, as written. It failed with "Came online after the wake, updated ..., and switched off again."
 func TestReviewOnButUnreachableThenRestartsInsideTheWindow(t *testing.T) {
 	w := newWorld(t)
 	pc := w.running("pc-a") // on for three days
@@ -94,7 +94,7 @@ func TestOffOnlyAfterMinOffWithoutAnAnswer(t *testing.T) {
 			}
 			continue
 		}
-		has(t, h, StOff, "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
+		has(t, h, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
 		if got := w.callsFor("pc-a"); got != "wake update shutdown" || pc.on || !pc.wentOff || h.QuietForS == nil || *h.QuietForS < int64(MinOff/time.Second) {
 			t.Errorf("no answer for %v: requests %q on=%v quiet_for_s=%v", c.quiet, got, pc.on, h.QuietForS)
 		}

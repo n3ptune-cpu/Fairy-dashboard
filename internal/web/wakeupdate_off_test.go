@@ -101,7 +101,7 @@ func TestWakeUpdateOffIsAQuarterOfAnHourWithoutAnAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	run = f.finish()
-	if h := hostOf(run, "pc-a"); h.State != wakerun.StOff || h.Text != "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again." || f.on["pc-a"] {
+	if h := hostOf(run, "pc-a"); h.State != wakerun.StOff || h.Text != "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again." || f.on["pc-a"] {
 		t.Fatalf("pc-a: %s: %s (on=%v)", h.State, h.Text, f.on["pc-a"])
 	}
 	if got := strings.Join(f.requests(), ", "); got != "pc-b /update, nas /wol, pc-a /update, pc-a /power" {

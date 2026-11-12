@@ -181,7 +181,7 @@ func TestTheReportAfterARestartNeverKnowsLessThanWhatWasSent(t *testing.T) {
 		want := map[string]string{
 			"wake pc-a":     "The panel restarted while the run was sending a wake to it. Fairy does not know whether the wake went out: if it switched on, it is ON.",
 			"update pc-a":   " An update request was going out to it; if it arrived, the agent finishes the update by itself.",
-			"shutdown pc-a": "The panel restarted while the run was asking it to shut down. The run had woken it. Fairy does not know whether the request arrived: ",
+			"shutdown pc-a": "The panel restarted while the run was asking it to shut down. It had come online after the run's wake. Fairy does not know whether the request arrived: ",
 		}[call]
 		if !strings.Contains(oh.Text, want) || (call != "update pc-a" && oh.On != OnUnknown) {
 			t.Fatalf("during %s, after the restart (%s): %s", call, oh.On, oh.Text)

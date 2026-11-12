@@ -31,7 +31,7 @@ func TestOneMachineWokenUpdatedAndSwitchedOffAgain(t *testing.T) {
 	}
 	r := w.finish()
 	h := host(r, "pc-a")
-	has(t, h, StOff, "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
+	has(t, h, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
 	if got := strings.Join(w.calls, ", "); got != "wake pc-a, update pc-a, shutdown pc-a 120" {
 		t.Fatalf("requests: %s", got)
 	}
@@ -361,7 +361,7 @@ func TestUpdateOutcomesOfAWokenMachine(t *testing.T) {
 		{mode: "approval", state: StOff, update: UpdApproval, calls: "wake update shutdown", version: "16-aaaaaaa",
 			parts: []string{"NOT updated (its agent asks for an approval (Pocket ID) before an update, and this run has none for it)"}},
 		{mode: "stuck", state: StLeftOn, update: UpdStuck, calls: "wake update", wantOn: true, version: "16-aaaaaaa",
-			parts: []string{"Its update did not finish (no result 15 min after it was asked for)", "left it ON", "not cut off"}},
+			parts: []string{"Its update did not finish (no result 15 min after it was asked for)", "was left ON", "not cut off"}},
 	} {
 		t.Run(c.mode+"/"+c.calls, func(t *testing.T) {
 			w := newWorld(t)
@@ -529,8 +529,8 @@ func TestCancelLeavesWokenMachinesOn(t *testing.T) {
 	if done.State != RunCancelled {
 		t.Fatalf("run state %s", done.State)
 	}
-	has(t, host(done, "pc-count"), StLeftOn, "The run was cancelled by Bob: its shutdown countdown was called off. The run woke it and it is ON.", "It was updated to 17-bbbbbbb.")
-	has(t, host(done, "pc-upd"), StLeftOn, "The run was cancelled by Bob. The run woke it and it is ON.", "Its update was asked for and may still be running")
+	has(t, host(done, "pc-count"), StLeftOn, "The run was cancelled by Bob: its shutdown countdown was called off. It came online after the wake and it is ON.", "It was updated to 17-bbbbbbb.")
+	has(t, host(done, "pc-upd"), StLeftOn, "The run was cancelled by Bob. It came online after the wake and it is ON.", "Its update was asked for and may still be running")
 	has(t, host(done, "pc-wake"), StGaveUp, "The run was cancelled by Bob. A wake was sent to it: if it switches on, it stays ON.")
 	has(t, host(done, "win-test"), StStayedOn, "The run was cancelled by Bob. It was already on and stays on.", "Its update was asked for and may still be running")
 	queued := 0
@@ -655,9 +655,9 @@ func TestMachineTakenOutDuringARun(t *testing.T) {
 		"switched off for these runs": func(w *world) { w.ms["pc-a"].info.OptedIn = false },
 		"is no longer in the panel":   func(w *world) { w.ms["gone"] = w.ms["pc-a"]; delete(w.ms, "pc-a") },
 	} {
-		want, power := "The run woke it and it is ON.", OnYes
+		want, power := "It came online after the wake and it is ON.", OnYes
 		if what == "is no longer in the panel" {
-			want, power = "The run woke it. Fairy can no longer look at it.", OnUnknown
+			want, power = "It came online after the wake. Fairy can no longer look at it.", OnUnknown
 		}
 		w := newWorld(t)
 		pc := w.off("pc-a")
@@ -919,7 +919,7 @@ func TestApprovalAfterTheWake(t *testing.T) {
 	w.off("pc-a")
 	w.start(StartRequest{Hosts: []string{"pc-a"}})
 	done = w.finish()
-	has(t, host(done, "pc-a"), StLeftOn, "Nobody approved the update and the shutdown within 15 min. The run woke it and it is ON.")
+	has(t, host(done, "pc-a"), StLeftOn, "Nobody approved the update and the shutdown within 15 min. It came online after the wake and it is ON.")
 	if got := w.callsFor("pc-a"); got != "wake" {
 		t.Fatalf("requests: %q", got)
 	}

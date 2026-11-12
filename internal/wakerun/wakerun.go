@@ -55,7 +55,7 @@ const (
 
 	StOff         = "off"         // woken, updated (or not), switched off again
 	StStayedOn    = "stayed_on"   // was already on: updated (or not) and left on, as it must be
-	StLeftOn      = "left_on"     // the run woke it and did not switch it off: it is ON
+	StLeftOn      = "left_on"     // it came online after the run's wake and the run did not switch it off: it is ON
 	StGaveUp      = "gave_up"     // it never came online after the wake, or the wake could not be sent
 	StSkipped     = "skipped"     // nothing was sent to it
 	StInterrupted = "interrupted" // the panel restarted while the machine was in the run
@@ -122,6 +122,11 @@ func notFreshText(h *Host) string {
 	}
 	return "It answered after the wake but did not look freshly started" + up + ": it may have been asleep, or use Fast Startup. It was left on."
 }
+
+// wokenNote goes into the history of a machine that came online after the wake and looks freshly started: the
+// run treats it as woken by the run from here on, and this is what that rests on (r2-p2-01).
+const wokenNote = "it was off before the run and came up freshly started after the wake: the run treats it as woken by the run. " +
+	"A machine switched on by a person while the run waits for it looks the same, and is treated the same."
 
 // The sentence for a machine that is on although its agent does not answer, with what shows that it is on.
 const onByText = "It is on (%s), and its agent does not answer. Nothing was sent to it and it stays on."
@@ -1014,7 +1019,7 @@ func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
 		}
 		m.end(r, h, StStayedOn, OnYes, now, why+". It was already on and stays on."+tail)
 	case h.OnlineAt != nil:
-		m.endSeen(r, h, StLeftOn, OnYes, now, why+". The run woke it and it is ON."+updateTail(h), why+". The run woke it."+updateTail(h))
+		m.endSeen(r, h, StLeftOn, OnYes, now, why+". "+cameOnline(h)+" and it is ON."+updateTail(h), why+". "+cameOnline(h)+"."+updateTail(h))
 	case h.WakeSentAt != nil && h.lostWake():
 		m.end(r, h, StGaveUp, OnUnknown, now, why+". A wake may have gone out to it (the request got no answer): if it switches on, it stays ON.")
 	case h.WakeSentAt != nil:
@@ -1043,11 +1048,23 @@ func updateTail(h *Host) string {
 func (h *Host) lostWake() bool { return h.WakeUnsure && h.Wakes == 0 }
 
 // woken begins the sentence of a machine that came online after the run's wake and was switched off again.
+//
+// The report does not say "woken": that is what the run infers, not what it sees. It sees a machine that was
+// off, a wake that went out, and the machine coming online after it, freshly started. A machine that a person
+// switched on while the run waited for it looks exactly the same (the limit of r2-p2-01, see shutdown.go).
 func woken(h *Host) string {
 	if h.lostWake() {
 		return "Came online after a wake request that got no answer"
 	}
-	return "Woken"
+	return "Came online after the wake"
+}
+
+// cameOnline is the same inside a sentence about a machine that was not switched off again.
+func cameOnline(h *Host) string {
+	if h.lostWake() {
+		return "It came online after a wake request that got no answer"
+	}
+	return "It came online after the wake"
 }
 
 func toVersion(h *Host) string {

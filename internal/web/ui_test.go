@@ -244,7 +244,7 @@ func TestUIWakeUpdate(t *testing.T) {
 		`and it goes on as soon as the machine's agent answers.`, `A machine that does not come online in that time is given up on and reported.`,
 		`It may then still be starting, or be on without its network (Tailscale).`,
 		`Fairy only switches off machines <b>this run woke</b>. A machine that is already on is never switched off; a Proxmox node with running guests is left on.`,
-		`Nobody is asked whether someone is using a machine the run woke: after its update it is switched off again.`,
+		`Nobody is asked: a machine switched on by a person while the run waits for it is treated as woken by the run, and switched off after its update.`,
 		`Off (no answer for ${esc(fmtSpan(d.off_after_s))} or more): wake, update, switch off again`, `On now: update only, never switched off`, `Cannot take part right now`,
 		// a machine that stopped answering less than that long ago is not offered: it may be restarting
 		`A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer. If Fairy is not sure that a machine is off, it leaves it alone and the report says so.`,

@@ -128,7 +128,7 @@ func TestGuestsAreMatchedToTheirNodeByItsIdentity(t *testing.T) {
 }
 
 // The whole run with the farm: the node has a display name, its guest win11 runs after the wake. Before the
-// fix: "Woken, updated ..., and switched off again." Now it is left on with the guest's name.
+// fix: "Came online after the wake, updated ..., and switched off again." Now it is left on with the guest's name.
 func TestWakeUpdateARenamedNodeWithARunningGuestIsLeftOn(t *testing.T) {
 	for _, shown := range []string{"", "Big server"} {
 		t.Run("shown as "+shown, func(t *testing.T) {

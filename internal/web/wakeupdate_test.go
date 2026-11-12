@@ -630,7 +630,7 @@ func TestWakeUpdateRunEndToEnd(t *testing.T) {
 	}
 	run := f.finish()
 	pc, lap := hostOf(run, "pc-a"), hostOf(run, "laptop")
-	if run.State != wakerun.RunDone || pc.State != wakerun.StOff || !strings.Contains(pc.Text, "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.") {
+	if run.State != wakerun.RunDone || pc.State != wakerun.StOff || !strings.Contains(pc.Text, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.") {
 		t.Fatalf("pc-a: %s: %s", pc.State, pc.Text)
 	}
 	// laptop's agent does not report self-update: it is not asked, it stays on, and the report says why
@@ -676,7 +676,7 @@ func TestWakeUpdateRunEndToEnd(t *testing.T) {
 			found = n.Text
 		}
 	}
-	if !strings.Contains(found, "PC-A: Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.") || !strings.Contains(found, "laptop: It was on and stays on.") {
+	if !strings.Contains(found, "PC-A: Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.") || !strings.Contains(found, "laptop: It was on and stays on.") {
 		t.Fatalf("the notification: %q", found)
 	}
 	// the page after the run, and after a reload of the panel's memory: the report stays
@@ -809,7 +809,7 @@ func TestWakeUpdateRestartIsReportedNotContinued(t *testing.T) {
 	if act != nil || len(hist) != 1 || hist[0].ID != run.ID || hist[0].State != wakerun.RunInterrupted {
 		t.Fatalf("after the restart: %v %d", act, len(hist))
 	}
-	if h := hostOf(hist[0], "pc-a"); h.State != wakerun.StInterrupted || !strings.Contains(h.Text, "The run had woken it and it was ON (updating)") {
+	if h := hostOf(hist[0], "pc-a"); h.State != wakerun.StInterrupted || !strings.Contains(h.Text, "It had come online after the run's wake and was ON (updating)") {
 		t.Fatalf("pc-a: %s", h.Text)
 	}
 	for i := 0; i < 600; i++ { // ten minutes of the new panel's steps
@@ -828,7 +828,7 @@ func TestWakeUpdateRestartIsReportedNotContinued(t *testing.T) {
 			warn = n.Severity + ": " + n.Text
 		}
 	}
-	if !strings.HasPrefix(warn, "warning: the panel restarted during the run Alice started at 03:16 UTC; it is not continued.") || !strings.Contains(warn, "PC-A: The panel restarted during the run. The run had woken it and it was ON") {
+	if !strings.HasPrefix(warn, "warning: the panel restarted during the run Alice started at 03:16 UTC; it is not continued.") || !strings.Contains(warn, "PC-A: The panel restarted during the run. It had come online after the run's wake and was ON") {
 		t.Fatalf("the warning: %q", warn)
 	}
 	page := e2.do("GET", "/api/admin/wake-update", nil, "Cookie", e2.cookie(controller(), 0))

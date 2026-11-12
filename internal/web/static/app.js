@@ -1459,7 +1459,7 @@ function wakeUpdateBox() {
         "It updates the machine's agent, like the Update button does.",
         `About ${esc(fmtSpan(d.settings.settle_s))} after the result it asks for a shutdown with a countdown of ${esc(fmtSpan(d.settings.shutdown_delay_s))}. You can cancel the countdown.`,
         `A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer. One that stopped answering more recently may be restarting, and is left alone.`,
-        "A limit: a machine that someone switches on just before the wake, and that is still starting, looks like one the run woke. It is switched off after its update.",
+        `A limit: a machine switched on by a person while the run waits for it (up to ${esc(fmtSpan(d.settings.online_timeout_s))}), or just before the wake, is treated as woken by the run. It is switched off after its update. The report says "came online after the wake".`,
         "You can also switch a machine on for this in the ⋯ menu on its page.",
         "Switching on, and every run, asks you to confirm it's you and is written to the Audit log.",
         "API tokens cannot start a run.",
@@ -1518,7 +1518,7 @@ async function openWakeUpdate() {
     </ol>
     <div class="warnbox">Fairy only switches off machines <b>this run woke</b>. A machine that is already on is never switched off; a Proxmox node with running guests is left on.
       A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer. If Fairy is not sure that a machine is off, it leaves it alone and the report says so.
-      Nobody is asked whether someone is using a machine the run woke: after its update it is switched off again.</div>
+      Nobody is asked: a machine switched on by a person while the run waits for it is treated as woken by the run, and switched off after its update.</div>
     ${joined.length ? "" : '<div class="warnbox">No machine is switched on for this yet. Close this, and switch machines on in the table on the Updates page (or in the ⋯ menu on a machine\'s page).</div>'}
     ${off.length ? `<div class="wu-sub">Off (no answer for ${esc(fmtSpan(d.off_after_s))} or more): wake, update, switch off again</div><div class="opts wu-list">${off.map((h) => tick(h, "wake", true)).join("")}</div>` : ""}
     ${asleep.length ? `<div class="wu-sub">Asleep or off (sent to sleep from the panel): woken; left on if it was asleep</div><div class="opts wu-list">${asleep.map((h) => tick(h, "wake", false)).join("")}</div>` : ""}

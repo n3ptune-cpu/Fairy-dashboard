@@ -68,7 +68,7 @@ func TestRestartReportsTheInterruptedRunAndNeverContinuesIt(t *testing.T) {
 	}
 	r := hist[0]
 	has(t, host(r, "pc-count"), StInterrupted, "The panel restarted while its shutdown was counting down (due at", "check that it went off")
-	has(t, host(r, "pc-upd"), StInterrupted, "The run had woken it and it was ON (updating)", "Its update was asked for and may still be running")
+	has(t, host(r, "pc-upd"), StInterrupted, "It had come online after the run's wake and was ON (updating)", "Its update was asked for and may still be running")
 	has(t, host(r, "pc-wake"), StInterrupted, "A wake was sent to it at", "if it switched on, it is ON")
 	has(t, host(r, "q8"), StInterrupted, "The panel restarted before the run reached it. Nothing was sent to it.")
 	has(t, host(r, "win-test"), StInterrupted, "It was already on and stays on.")

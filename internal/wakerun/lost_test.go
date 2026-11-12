@@ -95,7 +95,7 @@ func TestUpdateAnswerLost(t *testing.T) {
 		pc.unreachable = true // and from then on the panel hears nothing from its agent
 		h := host(w.finish(), "pc-a")
 		has(t, h, StLeftOn, "Its update did not finish (not confirmed: the update request got no answer (agent unreachable: timeout), and its agent did not say how it ended within 15 min)",
-			"left it ON")
+			"was left ON")
 		if h.Update != UpdStuck || !pc.on || w.callsFor("pc-a") != "wake update" {
 			t.Fatalf("update %q on %v requests %q", h.Update, pc.on, w.callsFor("pc-a"))
 		}
@@ -179,7 +179,7 @@ func TestWakeAnswerLost(t *testing.T) {
 		pc.wakeLost = "never"
 		w.start(StartRequest{Hosts: []string{"pc-a"}})
 		h := host(w.finish(), "pc-a")
-		has(t, h, StOff, "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
+		has(t, h, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
 		if pc.on || h.Wakes != 1 || !h.WakeUnsure || w.callsFor("pc-a") != "wake wake update shutdown" {
 			t.Fatalf("on %v wakes %d requests %q: %s", pc.on, h.Wakes, w.callsFor("pc-a"), h.Text)
 		}
@@ -268,7 +268,7 @@ func TestShutdownAnswerLost(t *testing.T) {
 		pc.shutLost = "arrives"
 		w.start(StartRequest{Hosts: []string{"pc-a"}})
 		h := host(w.finish(), "pc-a")
-		has(t, h, StOff, "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
+		has(t, h, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
 		if pc.on || h.On != OnNo || !h.ShutdownUnsure || w.callsFor("pc-a") != "wake update shutdown" {
 			t.Fatalf("on %v power %q unsure %v requests %q: %s", pc.on, h.On, h.ShutdownUnsure, w.callsFor("pc-a"), h.Text)
 		}
@@ -288,7 +288,7 @@ func TestShutdownAnswerLost(t *testing.T) {
 		untilState(t, w, "pc-a", StShutting)
 		pc.unreachable = true // the link that lost the answer stays down
 		h := host(w.finish(), "pc-a")
-		has(t, h, StOff, "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again (the shutdown request got no answer, but it went off when the countdown was due).")
+		has(t, h, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again (the shutdown request got no answer, but it went off when the countdown was due).")
 		if pc.on || h.On != OnNo {
 			t.Fatalf("on %v power %q: %s", pc.on, h.On, h.Text)
 		}
@@ -370,7 +370,7 @@ func TestTheReportSaysWhatIsSeen(t *testing.T) {
 				h := host(done, "pc-a")
 				seen[h.State+"/"+h.On]++
 				switch {
-				case !late && (h.State != StLeftOn || h.On != OnYes || !pc.on || !strings.Contains(h.Text, "its shutdown countdown was called off. The run woke it and it is ON.")):
+				case !late && (h.State != StLeftOn || h.On != OnYes || !pc.on || !strings.Contains(h.Text, "its shutdown countdown was called off. It came online after the wake and it is ON.")):
 					t.Fatalf("cancel %d s into the countdown: %s/%s on=%v: %s", k, h.State, h.On, pc.on, h.Text)
 				case late && (h.State != StOff || h.On != OnNo || pc.on || !strings.HasSuffix(h.Text, " It is off (not answering).") || strings.Contains(h.Text, "it is ON")):
 					t.Fatalf("cancel %d s into the countdown, after it ended: %s/%s on=%v: %s", k, h.State, h.On, pc.on, h.Text)
@@ -434,9 +434,9 @@ func TestTheReportSaysWhatIsSeen(t *testing.T) {
 			want  string
 		}{
 			{"nothing at all from it", func(pc *machine) { pc.unreachable = true }, OnUnknown,
-				"Its agent stopped answering before the update. The run woke it. It does not answer now: not confirmed that it is on."},
+				"Its agent stopped answering before the update. It came online after the wake. It does not answer now: not confirmed that it is on."},
 			{"it refuses the connection", func(pc *machine) { pc.agentDown, pc.onBy = true, OnByRefused }, OnYes,
-				"Its agent stopped answering before the update. The run woke it and it is ON."},
+				"Its agent stopped answering before the update. It came online after the wake and it is ON."},
 		} {
 			w := newWorld(t)
 			pc := w.off("pc-a")
@@ -458,7 +458,7 @@ func TestTheReportSaysWhatIsSeen(t *testing.T) {
 		untilState(t, w, "pc-a", StSettling)
 		pc.unreachable = true
 		h := host(w.finish(), "pc-a")
-		has(t, h, StLeftOn, "Its agent did not answer again after the update, so Fairy could not ask it to shut down. The run woke it. It was updated to 17-bbbbbbb. "+
+		has(t, h, StLeftOn, "Its agent did not answer again after the update, so Fairy could not ask it to shut down. It came online after the wake. It was updated to 17-bbbbbbb. "+
 			"It does not answer now: not confirmed that it is on.")
 		if h.On != OnUnknown || strings.Contains(h.Text, "probably") {
 			t.Fatalf("power %q: %s", h.On, h.Text)
@@ -493,4 +493,48 @@ func logHas(h *Host, part string) bool {
 		}
 	}
 	return false
+}
+
+// r2-p2-01 (audit 5, round 2), the limit that stays, held as a known one: a machine that a person switches on
+// while the run waits for it is treated as woken by the run. The window is the whole wait (online_timeout_s:
+// 5 minutes by default, up to 30), not "shortly before the wake"; the panel cannot tell a power button from
+// its wake packet (that needs the agent to report the firmware's wake-up type). What this commit changes is
+// what is said: the report says "Came online after the wake", never "Woken", and the machine's history says
+// that it is treated as woken and that a machine switched on by a person looks the same.
+func TestAMachineSwitchedOnByAPersonDuringTheWaitIsTreatedAsWoken(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		onlineTimeout int
+		after         time.Duration // the person presses the button this long after the run's wake
+	}{
+		{"90 s into the default wait", 300, 90 * time.Second},
+		{"25 minutes into the longest wait a config may set", 1800, 25 * time.Minute},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.m.Settings = NewSettings(c.onlineTimeout, 60, 120, 8)
+			pc := w.off("pc-a")
+			pc.wakeBoots, pc.knownLimit = false, true // Wake-on-LAN does nothing for it (not set up in its firmware)
+			w.start(StartRequest{Hosts: []string{"pc-a"}})
+			untilState(t, w, "pc-a", StWaking)
+			w.advance(c.after)
+			pc.on, pc.bootedAt, pc.agentReadyAt = true, w.now.Add(5*time.Second), w.now.Add(25*time.Second) // the power button
+			h := host(w.finish(), "pc-a")
+			if h.State != StOff || pc.on || pc.shutdowns != 1 {
+				t.Fatalf("the stated limit no longer holds (good, if on purpose: then change the README, the info text and this test): %s: %s", h.State, h.Text)
+			}
+			if h.Text != "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again." || strings.Contains(h.Text, "Woken") {
+				t.Fatalf("the report: %s", h.Text)
+			}
+			if !logHas(h, "the run treats it as woken by the run. A machine switched on by a person while the run waits for it looks the same, and is treated the same.") {
+				t.Fatalf("the machine's history does not state the limit: %v", h.Log)
+			}
+		})
+	}
+	// and no sentence of a run says "woken" or "the run woke it" about a machine any more
+	for _, text := range []string{woken(&Host{}), cameOnline(&Host{}), woken(&Host{WakeUnsure: true}), cameOnline(&Host{WakeUnsure: true}), wokenNote} {
+		if strings.Contains(text, "Woken") || strings.Contains(text, "woke it") {
+			t.Errorf("%q", text)
+		}
+	}
 }

@@ -358,7 +358,7 @@ goes differently for you, send what the page shows and the lines of the `fairy-t
 * **That a PC the run woke counts as woken.** The run compares the uptime the PC reports with the time since
   the wake. Windows with Fast Startup keeps counting its uptime through "Shut down"; such a PC is taken for
   "already on" and left on. Switch Fast Startup off on the PCs that take part, then look at the first
-  report: it must say "Woken, updated ..., and switched off again".
+  report: it must say "Came online after the wake, updated ..., and switched off again".
 * **A PC that signs in by itself after the start**: the run asks nobody and shows nothing on the screen
   before the agent's shutdown notice. That the update and the shutdown go through while Windows is still
   signing in is to be seen on the real PC.

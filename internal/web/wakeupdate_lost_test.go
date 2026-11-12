@@ -147,7 +147,7 @@ func TestWakeUpdateALostShutdownAnswerIsWatched(t *testing.T) {
 	}
 	h := hostOf(f.finish(), "pc-a")
 	if h.State != wakerun.StOff || h.On != wakerun.OnNo || f.on["pc-a"] || !h.ShutdownUnsure ||
-		h.Text != "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again." {
+		h.Text != "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again." {
 		t.Errorf("pc-a ended as %s (%s, really on: %v): %s", h.State, h.On, f.on["pc-a"], h.Text)
 	}
 	if got := strings.Join(f.requests(), ", "); got != "nas /wol, pc-a /update, pc-a /power" { // asked once, not again
@@ -192,7 +192,7 @@ func activeRun(e *env) *wakerun.Run {
 
 // r2-p2-05 c) through the route: "Cancel run" with "leave on" in the 20 s between the end of the countdown
 // and the run seeing the machine go. The machine is off; the report said "its shutdown countdown was called
-// off. The run woke it and it is ON." Now the report says what the last look saw, at every second.
+// off. It came online after the wake and it is ON." Now the report says what the last look saw, at every second.
 func TestWakeUpdateACancelAfterTheCountdownSaysWhatIsSeen(t *testing.T) {
 	for _, k := range []int{-30, -1, 0, 1, 5, 10, 19} { // seconds after the countdown's end
 		t.Run(fmt.Sprintf("%+d s", k), func(t *testing.T) {
@@ -219,7 +219,7 @@ func TestWakeUpdateACancelAfterTheCountdownSaysWhatIsSeen(t *testing.T) {
 			on := f.on["pc-a"]
 			t.Logf("really on: %v; %s/%s: %s", on, h.State, h.On, h.Text)
 			switch {
-			case on && (h.State != wakerun.StLeftOn || h.On != wakerun.OnYes || !strings.Contains(h.Text, "its shutdown countdown was called off. The run woke it and it is ON.")):
+			case on && (h.State != wakerun.StLeftOn || h.On != wakerun.OnYes || !strings.Contains(h.Text, "its shutdown countdown was called off. It came online after the wake and it is ON.")):
 				t.Errorf("the machine is on; the report: %s/%s: %s", h.State, h.On, h.Text)
 			case !on && (h.State != wakerun.StOff || h.On != wakerun.OnNo || !strings.HasSuffix(h.Text, " It is off (not answering).") || strings.Contains(h.Text, "it is ON")):
 				t.Errorf("the machine is off; the report: %s/%s: %s", h.State, h.On, h.Text)
