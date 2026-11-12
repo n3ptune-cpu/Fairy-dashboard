@@ -299,6 +299,7 @@ function showStepUp(pending, detail) {
   $("#su-cancel").onclick = cancelStepUp;
   $("#su-go").onclick = kept ? () => confirmStepUp(detail.pending_id, nextPath) : () => { if (stepUpOpen) stepUpOpen.going = true; };
   m.onclick = (e) => { if (e.target === m) cancelStepUp(); };
+  if (appr) setTimeout(() => $("#su-cancel")?.focus(), 0);  // the first control is the info button of "Client ID" there: the focus starts on Cancel, as without it (audit 6, r4-b1-10)
 }
 // "Continue" for a kept action: ask the panel to confirm exactly this action. It answers with the address of
 // the sign-in at Pocket ID (or, in the demo, with the page to show after it has run the action).
@@ -1104,6 +1105,8 @@ async function openTurnOn(only, back) {
   m.querySelectorAll("input[data-ap]").forEach((x) => (x.onchange = sync));
   sync();
   $("#ap-x").onclick = back ? () => openApproval(back) : closeModal;
+  $("#ap-form").dataset.back = back || "";
+  setTimeout(() => $("#ap-x")?.focus(), 0);  // the focus starts on Cancel: it was on the first control, the info button of "Client ID" (audit 6, r4-b1-10)
   m.onclick = (e) => { if (e.target === m) closeModal(); };
   $("#ap-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -1123,6 +1126,13 @@ document.addEventListener("click", (e) => {
   if (!t || t.disabled) return;
   openTurnOn(t.dataset.id || "", t.closest("#ap-dlg")?.dataset.sys || "");
 });
+// Escape in "Turn on" does what its Cancel does: back to the Approval dialog it was opened from (it closed
+// everything; audit 6, r4-b1-10). Opened from the Updates page, both close it, as before. Not when an info box
+// took this Escape (its own handler comes first, and stops it).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.cancelBubble || $("#modal").hidden || !$("#ap-form")?.dataset.back) return;
+  e.stopPropagation(); $("#ap-x").click();
+}, true);
 // "Accept this machine's id" / "... new id" / "Accept that its check is off": always behind its own "Confirm it's you".
 document.addEventListener("click", async (e) => {
   const t = e.target.closest('[data-act="ap-accept"]');
