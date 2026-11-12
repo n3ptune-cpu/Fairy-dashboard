@@ -273,7 +273,8 @@ type updateResult struct {
 	Result map[string]any `json:"result,omitempty"`
 	// Name is the machine's name; State what became of its update: started, refused (the machine said no),
 	// not_sent (the panel sent it nothing: its check cannot be used, its binding is an alarm, it was not part
-	// of the approval), offline (it did not answer), skipped (nothing to do: up to date, busy, switched off).
+	// of the approval), offline (it did not answer the request, or stopped answering after the dialog listed
+	// it), skipped (it was not part of this press: up to date, busy, not answering when the button was pressed).
 	// Why says it in a few words.
 	Name  string `json:"name"`
 	State string `json:"state"`
@@ -386,8 +387,13 @@ func (s *Server) updateAll(c *reqCtx) error {
 		row := s.updateRow(c, a, latest)
 		if !row.CanUpdate {
 			res := updateResult{ID: a.ID, Name: s.machineNames([]string{a.ID})[0], Error: "skipped: " + row.Why, State: updSkipped, Why: row.Why}
-			if row.Status != "online" {
-				res.State = updOffline // a machine that does not answer is not "nothing to do"
+			// A machine that does not answer. When the confirmation's dialog listed it and it stopped answering
+			// before the kept request ran, its update did not start: "offline", counted with the ones that did
+			// not. When it was never part of this press (the button counts the machines that can update, the
+			// dialog lists the same ones), it is "skipped": "Update all (4)" does not answer "4 started, 1 not"
+			// about a fifth machine that was off all along (audit 6, r4-b1-13).
+			if g := c.approved(); row.Status != "online" && g != nil && g.plan.shown(a.ID, s.updateTarget(a).req) {
+				res.State = updOffline
 			}
 			out = append(out, res)
 			continue

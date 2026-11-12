@@ -120,15 +120,17 @@ func TestUpdateAllAnswerHasTheCountAndTheLines(t *testing.T) {
 	a.b.Mu.Unlock()
 	a.poll()
 	r := a.do("POST", "/api/admin/updates", map[string]any{}, "Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json")
-	if r.code != 200 || r.body["all_ok"] != false || r.body["message"] != "1 started, 1 not." ||
-		fmt.Sprint(r.body["lines"]) != "[laptop: started tower: offline (agent offline)]" {
+	// (audit 6, r4-b1-13: a machine that was not answering when the button was pressed is not part of the press;
+	// it read "1 started, 1 not." with "tower: offline (agent offline)", red)
+	if r.code != 200 || r.body["all_ok"] != true || r.body["message"] != "Update started on 1 agent, 1 skipped." ||
+		fmt.Sprint(r.body["lines"]) != "[laptop: started tower: skipped (agent offline)]" {
 		t.Fatalf("%d %s", r.code, r.raw)
 	}
 	states := map[string]any{}
 	for _, x := range r.body["results"].([]any) {
 		states[x.(map[string]any)["id"].(string)] = x.(map[string]any)["state"]
 	}
-	if states["laptop"] != "started" || states["tower"] != "offline" {
+	if states["laptop"] != "started" || states["tower"] != "skipped" {
 		t.Fatalf("results: %v", states)
 	}
 	// the page: the panel's own sentence, the lines behind "Details", and they stay until closed

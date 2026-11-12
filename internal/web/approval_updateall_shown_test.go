@@ -123,3 +123,44 @@ func TestUpdateAllKeepsWhatTheDialogSaidIsNotSent(t *testing.T) {
 		t.Fatalf("tower was sent %q although the dialog said NOT sent", sentPaths(a.tower.Asked()))
 	}
 }
+
+// The count on the button, the list in the dialog and what the answer counts are one set (audit 6, r4-b1-13:
+// "Update all (4)" answered "4 started, 1 not." about a fifth machine that was off all along). A machine that
+// was not answering when the button was pressed is "skipped". One the dialog listed that stops answering before
+// the passkey is given did not start: that one is "offline" and counted.
+func TestUpdateAllCountsTheMachinesItWasPressedFor(t *testing.T) {
+	a := newApprovalEnv(t)
+	a.selfUpdating(t)
+	a.require(t, a.laptop)
+	offline := func() {
+		a.b.Mu.Lock()
+		a.b.Metrics["tower"] = func() (jsonx.M, error) { return nil, devices.Errf("timeout") }
+		a.b.Mu.Unlock()
+		a.poll()
+	}
+	// the dialog lists tower; then tower stops answering
+	r := a.post("/api/admin/updates", map[string]any{})
+	id, _, ok := approvalAsked(r)
+	if items := fmt.Sprint(r.body["detail"].(map[string]any)["items"]); !ok || !strings.Contains(items, "tower: update of its agent (no check on the machine)") {
+		t.Fatalf("the dialog: %d %s", r.code, r.raw)
+	}
+	offline()
+	if cb := a.approve(t, id); cb.code != 303 {
+		t.Fatalf("callback: %d %s", cb.code, cb.raw)
+	}
+	if res := a.result(t); res["ok"] != false || res["message"] != "1 started, 1 not." || !strings.Contains(fmt.Sprint(res["items"]), "tower: offline (agent offline)") {
+		t.Fatalf("a machine of the dialog that went away: %v", res)
+	}
+	// the next press is for laptop alone: tower is not part of it
+	r = a.post("/api/admin/updates", map[string]any{})
+	id, _, ok = approvalAsked(r)
+	if !ok || strings.Contains(string(r.raw), "tower") {
+		t.Fatalf("the dialog without tower: %d %s", r.code, r.raw)
+	}
+	if cb := a.approve(t, id); cb.code != 303 {
+		t.Fatalf("callback: %d %s", cb.code, cb.raw)
+	}
+	if res := a.result(t); res["ok"] != true || res["message"] != "Update started on 1 agent, 1 skipped." || !strings.Contains(fmt.Sprint(res["items"]), "tower: skipped (agent offline)") {
+		t.Fatalf("a machine that was off all along: %v", res)
+	}
+}
