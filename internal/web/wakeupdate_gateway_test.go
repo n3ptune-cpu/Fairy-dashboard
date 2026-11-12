@@ -96,7 +96,8 @@ func TestWakeUpdateAGatewaysJSONErrorForTheWakeIsNotNothingSent(t *testing.T) {
 // A good status for the shutdown without the agent's countdown in the answer (something else answers at the
 // agent's address). It counted as accepted: "shutting down at ...", and silence after that time was "switched
 // off again" for a machine that never got a shutdown. It is "no answer": the run watches, sees no countdown,
-// and says that the request did not arrive.
+// and says so, with the machine's power "not known". (It said "the request did not arrive. It is ON." after
+// two answers without a countdown: a request can arrive later than that, audit 6, r4-p2-02.)
 func TestWakeUpdateAYesForTheShutdownWithoutACountdownIsNotAccepted(t *testing.T) {
 	e, f := lostFarm(t, "")
 	e.b.Reply = func(agent, path string) (int, jsonx.M, error) {
@@ -111,8 +112,9 @@ func TestWakeUpdateAYesForTheShutdownWithoutACountdownIsNotAccepted(t *testing.T
 		t.Fatal(err)
 	}
 	h := hostOf(f.finish(), "pc-a")
-	want := "The shutdown request got no answer, and its agent shows no countdown: the request did not arrive. It is ON. It was updated to 17-bbbbbbb."
-	if h.State != wakerun.StLeftOn || h.On != wakerun.OnYes || !h.ShutdownUnsure || !f.on["pc-a"] || h.Text != want {
+	want := "The shutdown request got no answer, and its agent has shown no countdown since (7 min). The request may still arrive: the machine then switches off 2 min later " +
+		"unless someone cancels that on its page. It is on now, and Fairy no longer watches it. It was updated to 17-bbbbbbb."
+	if h.State != wakerun.StLeftOn || h.On != wakerun.OnUnknown || !h.ShutdownUnsure || !f.on["pc-a"] || h.Text != want {
 		t.Errorf("[%s] power %q, shutdown unconfirmed %v, machine on %v: %s", h.State, h.On, h.ShutdownUnsure, f.on["pc-a"], h.Text)
 	}
 	log := ""

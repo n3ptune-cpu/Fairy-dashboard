@@ -278,10 +278,14 @@ func TestTheLastLookAfterAShutdownRequestWithoutAnAnswer(t *testing.T) {
 	h = host(w.finish(), "pc-a")
 	// (second review of fix7a, R7A-09: the run never saw a countdown, so it does not say that one was called
 	// off; it held "...: its shutdown countdown was called off. It came online after the wake and it is ON.")
+	// (Audit 6, r4-p2-02: nor does it say "it is ON" as the last word. It asked again until its own due time,
+	// heard "nothing is pending" each time, and a request that has not arrived by then still can: the power is
+	// "not known". It held "... none is pending. It came online after the wake and it is ON.", power "on".)
 	has(t, h, StLeftOn, "the run stopped (control is disabled by an administrator): its shutdown request had got no answer, so its agent was asked to call off a countdown, "+
-		"and it answered: none is pending. It came online after the wake and it is ON.")
+		"and it answered: none is pending. The request may still arrive: the machine then switches off 2 min later unless someone cancels that on its page. "+
+		"It is on now, and Fairy no longer watches it.")
 	w.advance(5 * time.Minute)
-	if h.On != OnYes || !pc.on || pc.pending != nil {
+	if h.On != OnUnknown || !pc.on || pc.pending != nil {
 		t.Fatalf("power %q, the machine on %v, pending %v: %s", h.On, pc.on, pc.pending, h.Text)
 	}
 	// a run that stops for another reason (its journal cannot be written) still sends nothing, and says what

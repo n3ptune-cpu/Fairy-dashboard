@@ -369,14 +369,18 @@ func TestShutdownAnswerLost(t *testing.T) {
 		}
 	})
 
-	t.Run("the agent never got it: its own word says so, and it is ON", func(t *testing.T) {
+	// (Audit 6, r4-p2-02: this ended after two answers without a countdown as "... its agent shows no countdown:
+	// the request did not arrive. It is ON.", power "on". A request can arrive later than that:
+	// latearrival_test.go. The run now watches on, and says what it knows.)
+	t.Run("the agent never got it: no countdown shows, and the run says that the request may still arrive", func(t *testing.T) {
 		w := newWorld(t)
 		pc := w.off("pc-a")
 		pc.shutLost = "never"
 		w.start(StartRequest{Hosts: []string{"pc-a"}})
 		h := host(w.finish(), "pc-a")
-		has(t, h, StLeftOn, "The shutdown request got no answer, and its agent shows no countdown: the request did not arrive. It is ON. It was updated to 17-bbbbbbb.")
-		if !pc.on || h.On != OnYes || w.callsFor("pc-a") != "wake update shutdown" {
+		has(t, h, StLeftOn, "The shutdown request got no answer, and its agent has shown no countdown since (7 min). The request may still arrive: the machine then switches off "+
+			"2 min later unless someone cancels that on its page. It is on now, and Fairy no longer watches it. It was updated to 17-bbbbbbb.")
+		if !pc.on || h.On != OnUnknown || w.callsFor("pc-a") != "wake update shutdown" {
 			t.Fatalf("on %v power %q requests %q: %s", pc.on, h.On, w.callsFor("pc-a"), h.Text)
 		}
 	})

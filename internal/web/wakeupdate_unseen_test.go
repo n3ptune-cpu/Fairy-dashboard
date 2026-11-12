@@ -94,14 +94,19 @@ func TestWakeUpdateTheRunsCancelIsSentWhenThePanelSeesNothingPending(t *testing.
 				cancels++
 			}
 		}
-		if cancels != 1 || !f.on["pc-a"] {
-			t.Errorf("%s: %d cancel(s) reached the agent, want 1; the machine is on: %v; [%s] %q: %s", c.name, cancels, f.on["pc-a"], h.State, h.On, h.Text)
+		// (audit 6, r4-p2-02: one cancel, until the request was seen to be able to arrive after it. The run never
+		// saw a countdown, so it asks again every 10 s until its own due time, 110 s after the first.)
+		if cancels < 11 || cancels > 12 || !f.on["pc-a"] {
+			t.Errorf("%s: %d cancel(s) reached the agent, want one every 10 s until the due time; the machine is on: %v; [%s] %q: %s", c.name, cancels, f.on["pc-a"], h.State, h.On, h.Text)
 		}
 		why := map[bool]string{true: "the run stopped (control is disabled by an administrator)", false: "The run was cancelled by Bob"}[c.kill]
-		// (its agent answered the run's own request a moment ago: that is a machine that runs, whatever the polls say)
+		// (Its agent answered the run's own request a moment ago: that is a machine that runs, whatever the polls
+		// say. It held "... none is pending. It came online after the wake and it is ON.", power "on": the request
+		// can still arrive after the last cancel, so the power is "not known" and the sentence says what may come.)
 		want := why + ": its shutdown request had got no answer, so its agent was asked to call off a countdown, and it answered: none is pending. " +
-			"It came online after the wake and it is ON. It was updated to 17-bbbbbbb."
-		if h.State != wakerun.StLeftOn || h.On != wakerun.OnYes || h.Text != want {
+			"The request may still arrive: the machine then switches off 2 min later unless someone cancels that on its page. It is on now, and Fairy no longer watches it. " +
+			"It was updated to 17-bbbbbbb."
+		if h.State != wakerun.StLeftOn || h.On != wakerun.OnUnknown || h.Text != want {
 			t.Errorf("%s: [%s] %q: %s", c.name, h.State, h.On, h.Text)
 		}
 	}

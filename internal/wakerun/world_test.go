@@ -44,8 +44,10 @@ type machine struct {
 	newVersion   string // what an update installs
 	behind       *bool  // what the panel knows: older than the newest release
 
-	updLost   string // the answer to the first update request is lost: "arrives" (the agent took it) | "never" (it did not)
-	updMode   string // ok | noverdict | current | fail | rollback | stuck | approval | refuse | busy (the first request is rate limited) | disabled
+	updLost   string // the answer to the first update request is lost: "arrives" (the agent took it) | "never" (it did not) | "late" (it reaches the agent updLate after it left)
+	updLate   time.Duration
+	updOnWay  time.Time // the update request that is still on its way arrives then (zero: none is)
+	updMode   string    // ok | noverdict | current | fail | rollback | stuck | approval | refuse | busy (the first request is rate limited) | disabled
 	updTakes  time.Duration
 	updating  bool
 	updDoneAt time.Time
@@ -60,7 +62,9 @@ type machine struct {
 	// "never" (it is not). The answer to every cancel is lost: "always arrives" (the first one calls the countdown
 	// off) | "always" (none arrives).
 	cancelLost string
-	shutLost   string // the answer to the first shutdown request is lost: "arrives" (the countdown runs) | "never"
+	shutLost   string // the answer to the first shutdown request is lost: "arrives" (the countdown runs) | "never" | "late" (it reaches the agent shutLate after it left, when the machine can be reached then)
+	shutLate   time.Duration
+	shutOnWay  *onWay // the shutdown request that is still on its way ("late")
 	pending    *Pending
 	staleOnce  bool // the first answer after a shutdown was asked for does not have the countdown in it yet
 	guests     int
@@ -101,6 +105,13 @@ type machine struct {
 	shutdowns     int
 	wentOff       bool // a countdown ran out and switched it off
 	busyDone      map[string]bool
+}
+
+// onWay is a shutdown request that left the panel, got no answer in the panel's time, and has not reached the
+// agent yet (machine.shutLost "late": it sits in a send queue and is sent again when the link is back).
+type onWay struct {
+	at    time.Time // it reaches the agent then, or at the first moment after that at which the agent can be reached
+	delay time.Duration
 }
 
 // listed is one poll of a node's Proxmox API (machine.list).
@@ -326,8 +337,11 @@ func (w *world) Update(_ context.Context, id, _ string, grant any) error {
 	}
 	if mc.updLost != "" && !mc.busyDone["update lost"] { // a timeout: the panel does not learn whether the agent got it
 		mc.busyDone["update lost"] = true
-		if mc.updLost == "arrives" {
+		switch mc.updLost {
+		case "arrives":
 			mc.updating, mc.updDoneAt, mc.updState, mc.updMsg = true, w.now.Add(mc.updTakes), "downloading", "downloading "+mc.newVersion
+		case "late":
+			mc.updOnWay = w.now.Add(mc.updLate)
 		}
 		return errLost
 	}
@@ -385,8 +399,11 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 	}
 	if mc.shutLost != "" && !mc.busyDone["shutdown lost"] { // a timeout: the panel does not learn whether the agent got it
 		mc.busyDone["shutdown lost"] = true
-		if mc.shutLost == "arrives" {
+		switch mc.shutLost {
+		case "arrives":
 			mc.pending = &Pending{Action: "shutdown", At: w.now.Add(delay)}
+		case "late":
+			mc.shutOnWay = &onWay{at: w.now.Add(mc.shutLate), delay: delay}
 		}
 		return time.Time{}, errLost
 	}
@@ -493,6 +510,16 @@ func (w *world) sim() {
 				mc.version, mc.updState, mc.updMsg, mc.lastAt, mc.lastOK, mc.lastMsg = mc.newVersion, "idle", "", at+5, true, "updated"
 				no := false
 				mc.behind = &no
+			}
+		}
+		if at := mc.updOnWay; !at.IsZero() && !w.now.Before(at) && w.answers(mc) {
+			mc.updOnWay = time.Time{}
+			mc.updating, mc.updDoneAt, mc.updState, mc.updMsg = true, w.now.Add(mc.updTakes), "downloading", "downloading "+mc.newVersion
+		}
+		if q := mc.shutOnWay; q != nil && !w.now.Before(q.at) && w.answers(mc) {
+			mc.shutOnWay = nil
+			if mc.pending == nil { // the agent holds one action at a time, and refuses this one otherwise
+				mc.pending = &Pending{Action: "shutdown", At: w.now.Add(q.delay)}
 			}
 		}
 		if mc.pending != nil && !w.now.Before(mc.pending.At) {

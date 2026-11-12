@@ -63,6 +63,12 @@ func TestRandomRunsWithLinkFlaps(t *testing.T) {
 				mc.updLost = pick("arrives", "never")
 			case 2:
 				mc.shutLost = pick("arrives", "never")
+				// Every third seed: the request arrives late instead, 1 to 150 s after it left, when the link is
+				// up then (audit 6, r4-p2-02). Taken from the seed, not from rng: the other seeds' runs stay the
+				// ones they were.
+				if seed%3 == 0 {
+					mc.shutLost, mc.shutLate = "late", time.Duration(1+seed%150)*time.Second
+				}
 			case 3:
 				mc.cancelLost = pick("arrives", "never")
 			}

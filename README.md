@@ -346,7 +346,8 @@ The rules, in plain words:
   itself reports: an install that runs is waited for and its real result reported; an agent that reports no
   install after a minute was "NOT updated (the update request got no answer ...)"; an agent that does not
   say is "not confirmed" and the machine is left on. And whatever the run believes, it never asks for a
-  shutdown while the agent says that it is downloading or installing an update.
+  shutdown while the agent says that it is downloading or installing an update. If such a request arrives
+  late, during the shutdown countdown, the run calls the countdown off and leaves the machine on.
 * **A woken machine that could not be switched off is reported as ON**: its agent did not answer again after
   the update, the agent refused the shutdown, someone cancelled the countdown, or the machine is still on 5
   minutes after the countdown ended (the run counts the countdown itself, from the moment its request was
@@ -377,7 +378,12 @@ The rules, in plain words:
   shutdown request whose answer was lost (a timeout) is watched like one that was accepted, and the report
   says how it ended (if the run never saw its countdown and the machine then gives nothing, that is "not
   confirmed that it is off", never "off": the request may not have arrived; the same after a **Cancel run**
-  whose own request got no answer); and a machine that refuses the connection after its countdown (its agent stopped, the
+  whose own request got no answer). An agent that answers and shows no countdown after such a request has not
+  got it so far, and no more than that: a request can reach the agent after the panel stopped waiting for its
+  answer. So the run goes on watching. A countdown that shows late is the run's own, counted from when it
+  showed; if none has shown 5 minutes after the time it would have ended, the report says "The shutdown request
+  got no answer ... The request may still arrive: the machine then switches off ... later unless someone
+  cancels that on its page", with the power "on or off: not known". And a machine that refuses the connection after its countdown (its agent stopped, the
   system hangs in its shutdown) is never "switched off": after 5 minutes it is reported as ON.
 * **Nobody is asked.** The run does not look whether someone is signed in or working on a machine it woke,
   and shows nothing on its screen before the agent's own shutdown notice. Use it for machines that are off
@@ -425,7 +431,9 @@ The rules, in plain words:
   A shutdown countdown the run had already started is called off (the one request a stopped run still sends,
   and only while that countdown can still be running: after its end the run sends nothing, so that an action
   someone asked for on the machine's page since is not called off; the same holds for **Cancel run**). The
-  cancel is also sent when the run's shutdown request had got no answer: it may have arrived.
+  cancel is also sent when the run's shutdown request had got no answer: it may have arrived. When the agent
+  answers "nothing is pending" to it, the request may still arrive later: the run asks again every 10 seconds
+  until the countdown's end, and calls off the countdown that shows.
   One case inside the countdown in which it is not sent: the machine's agent already shows another action
   than the run's shutdown as pending (someone called the shutdown off on the machine's page and asked for a
   reboot, say). The agent's cancel would call that one off, so the run sends none, and the machine's line

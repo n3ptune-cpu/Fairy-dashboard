@@ -463,7 +463,11 @@ type Host struct {
 	// ShutdownUnsure: the run's shutdown request left the panel and got no answer (CodeNoAnswer). The countdown
 	// may be running: ShutdownAt is then when it would end, and the run watches the machine as after a request
 	// that was accepted, until it sees how it ended. "Off" is only said of it when its agent showed the
-	// countdown: silence alone is also what a request that never arrived looks like.
+	// countdown: silence alone is also what a request that never arrived looks like. And an agent that shows
+	// no countdown has not got the request YET: it can still arrive (it waits in a send queue while the link is
+	// down and is sent again after the panel stopped waiting). The run never says that it did not arrive; when
+	// the countdown shows later, its end is counted from then (seeCountdown), and a machine whose agent never
+	// showed one ends with its power not known (lostEnd).
 	ShutdownUnsure bool      `json:"shutdown_unconfirmed,omitempty"`
 	On             string    `json:"on,omitempty"` // set when the machine ends (On...)
 	Log            []LogLine `json:"log"`
@@ -484,6 +488,7 @@ type Host struct {
 	// ended), each plus the delay. dueMono is the run's own due time.
 	endMin, dueMono time.Duration
 	pendingSeen     bool          // the agent reported the run's shutdown as pending
+	lateNoted       bool          // the history says that the countdown of a request without an answer showed late (seeCountdown)
 	noPendingAt     time.Time     // (SeenAt of) the first answer after the request that had no countdown in it (see stepShutting)
 	otherAt         time.Time     // (SeenAt of) the first answer after the request that showed another action than a shutdown as pending (otherPending)
 	pendingAt       time.Time     // the end of the run's countdown as its agent last gave it (by the machine's clock; stepShutting)
