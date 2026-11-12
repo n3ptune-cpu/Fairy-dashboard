@@ -72,6 +72,8 @@ func TestUpdatePanelButton(t *testing.T) {
 	r := post(e.cookie(controller(), 150*time.Second), csrf...)
 	if d, _ := r.body["detail"].(map[string]any); r.code != 401 || d["code"] != "step_up_required" || f.starts != 0 {
 		t.Fatal("must ask for a fresh sign-in", r.code, string(r.raw))
+	} else if want := fmt.Sprintf("Confirm it's you: updates of the panel need a Pocket ID sign-in from the last %d min.", panelUpdateFresh/60); d["message"] != want {
+		t.Fatalf("the sentence (audit 6, r4-p4-05: \"updating the panel need a ...\"): %q, want %q", d["message"], want) // what every caller names is a plural
 	}
 	if r := post(fresh, csrf...); r.code != 202 || f.starts != 1 {
 		t.Fatal("start", r.code, string(r.raw))

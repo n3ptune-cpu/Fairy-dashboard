@@ -64,7 +64,7 @@ func (s *Server) panelUpdatePost(c *reqCtx) error {
 	if off := s.Poller.Admin.ControlDisabled(); off != nil {
 		return c.deny(u, 423, "control is disabled by an administrator ("+off.By+")", "control disabled (kill switch)")
 	}
-	if err := c.stepUpWithin(u, "updating the panel", panelUpdateFresh); err != nil {
+	if err := c.stepUpWithin(u, "updates of the panel", panelUpdateFresh); err != nil {
 		return err
 	}
 	if !s.control.allow(u.Sub) {
