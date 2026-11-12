@@ -105,6 +105,7 @@ func clipP(p **string) {
 const (
 	errUnreadable = "the UPS reported a value that is not a number: its data cannot be read"
 	errMissing    = "the UPS is no longer in the UPS server's answer"
+	errNoUPS      = "the UPS server answers, but lists no UPS the panel can show"
 )
 
 // numericField: the measured values of a UPS row.
@@ -233,6 +234,60 @@ func (m *Manager) fail(keys []string, errMsg string) {
 	}
 }
 
+// sourceDown keeps an entry for a configured source of which the panel knows no UPS: one that has not
+// answered since the panel started (the server is down, or its address, port or password is wrong), or that
+// answers without a UPS the panel can show. Without it nothing existed for such a source (r2-p3-01): the UPS
+// page said "No UPS configured", there was no alert and no log line, and "a UPS cannot be reached" never
+// fired, also after a restart of the panel while the UPS server was down. The entry has the source's id (a
+// UPS's id is "<source>/<ups>"), its name, the systems it powers, the status "unreachable" and the reason.
+// One event and one log line when it appears; a changed reason only changes the text. Caller holds m.mu.
+func (m *Manager) sourceDown(c *upssrc.Source, errMsg string) {
+	errMsg = textsafe.ErrorText(errMsg)
+	if st := m.states[c.ID]; st != nil {
+		if st.Error == nil || *st.Error != errMsg {
+			cp := *st
+			cp.Error = model.P(errMsg)
+			m.states[c.ID] = &cp
+		}
+		return
+	}
+	name := c.Name
+	if name == "" {
+		name = c.ID
+	}
+	powers := slices.Clone(c.Powers.All)
+	for _, l := range c.Powers.ByName {
+		for _, id := range l {
+			if !slices.Contains(powers, id) {
+				powers = append(powers, id)
+			}
+		}
+	}
+	slices.Sort(powers)
+	if powers == nil {
+		powers = []string{}
+	}
+	st := &model.UpsState{ID: c.ID, Name: clip(name, maxLabel), UpsName: "UPS server", Status: "unreachable", Stale: true, Flags: []string{},
+		Powers: powers, Error: model.P(errMsg)}
+	m.states[c.ID] = st
+	m.order = append(m.order, c.ID)
+	m.event(st, "communication_lost", "warning", "the UPS server has not given the panel a UPS since the panel started ("+errMsg+")")
+}
+
+// sourceUp removes the entry of sourceDown once the source's UPSes are known, with the event that ends its
+// alert. Caller holds m.mu.
+func (m *Manager) sourceUp(c *upssrc.Source) {
+	st := m.states[c.ID]
+	if st == nil {
+		return
+	}
+	cp := *st
+	cp.Status, cp.Stale, cp.Error = "online", false, nil
+	m.event(&cp, "communication_restored", "info", "the UPS server answers: its UPSes are listed by their own names now")
+	delete(m.states, c.ID)
+	m.order = slices.DeleteFunc(m.order, func(k string) bool { return k == c.ID })
+}
+
 // PollSource polls one configured NUT source.
 func (m *Manager) PollSource(ctx context.Context, c *upssrc.Source, timeout time.Duration) {
 	if timeout <= 0 {
@@ -247,6 +302,9 @@ func (m *Manager) PollSource(ctx context.Context, c *upssrc.Source, timeout time
 			if strings.HasPrefix(k, c.ID+"/") {
 				keys = append(keys, k)
 			}
+		}
+		if len(keys) == 0 { // the panel knows no UPS of this source: the source itself is what cannot be reached
+			m.sourceDown(c, devices.Describe(err))
 		}
 		m.fail(keys, devices.Describe(err))
 	} else {
@@ -294,6 +352,14 @@ func (m *Manager) PollSource(ctx context.Context, c *upssrc.Source, timeout time
 			m.fail(lost, msg)
 		}
 		m.noteUnreadable(c.ID, unreadable)
+		switch {
+		case len(seen) > 0: // its UPSes are known now: the entry that stood for the source goes
+			m.sourceUp(c)
+		case len(lost) == 0 && unreadable > 0:
+			m.sourceDown(c, errUnreadable)
+		case len(lost) == 0:
+			m.sourceDown(c, errNoUPS)
+		}
 	}
 	evs := m.newEvents(evBefore)
 	m.mu.Unlock()

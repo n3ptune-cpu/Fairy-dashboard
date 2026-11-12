@@ -405,7 +405,7 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 func (s *Server) watch(ctx context.Context) {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
-	seq := s.Poller.UPS.Seq()
+	seq := 0 // from the panel's start: a UPS server that did not answer the very first poll is in there (the watcher's first call takes only that)
 	last := time.Now()
 	s.notePanelUpdateResult()
 	vers, lastAt := map[string]string{}, map[string]float64{}

@@ -107,7 +107,8 @@ func hottest(s model.System) (float64, string) {
 }
 
 // Observe compares a snapshot with the last one. The first call only learns the current state (no events at
-// panel start). upsEvents are the UPS manager's events since the last call.
+// panel start, but for a UPS that cannot be reached: see below). upsEvents are the UPS manager's events since
+// the last call.
 func (w *Watcher) Observe(now time.Time, systems []model.System, upsEvents []model.UpsEvent) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -143,10 +144,14 @@ func (w *Watcher) Observe(now time.Time, systems []model.System, upsEvents []mod
 			delete(w.asleep, id)
 		}
 	}
-	if !first {
-		for _, e := range upsEvents {
-			w.upsEvent(e)
+	for _, e := range upsEvents {
+		// The first call only learns the state, with one exception: a UPS server that cannot be reached at
+		// all. There is no state to learn it from, and the moment a panel starts while its UPS server is down
+		// is when the alert matters (r2-p3-01).
+		if first && e.Kind != "communication_lost" {
+			continue
 		}
+		w.upsEvent(e)
 	}
 }
 

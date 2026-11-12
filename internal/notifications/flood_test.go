@@ -230,3 +230,29 @@ func TestEventOwner(t *testing.T) {
 		t.Fatalf("%+v", evs)
 	}
 }
+
+// r2-p3-01 (audit 5): a panel that starts while its UPS server is down. The watcher's first look only learns
+// the state and makes no events, so the "cannot be reached" of the very first poll was dropped. That one kind
+// passes at the first look too; everything else at start is still only learned.
+func TestAUPSServerDownAtStartIsAnAlert(t *testing.T) {
+	w := &Watcher{Store: Open(filepath.Join(t.TempDir(), "n.json"))}
+	w.Observe(time.Now(), nil, []model.UpsEvent{
+		{UpsID: "rack/apc", UpsName: "APC", Kind: "on_battery", Severity: "warning", Message: "power lost"}, // a state at start: learned, not announced
+		{UpsID: "dead", UpsName: "Rack UPS", Kind: "communication_lost", Severity: "warning", Message: "the UPS server has not given the panel a UPS since the panel started (connection failed)"},
+	})
+	evs := events(w.Store)
+	if len(evs) != 1 || evs[0].Kind != "ups_communication_lost" || evs[0].UPSID != "dead" || evs[0].Host != "Rack UPS" || !evs[0].Active() || !evs[0].Urgent() {
+		t.Fatalf("%+v", evs)
+	}
+	// the server answers later: the alert ends
+	w.Observe(time.Now(), nil, []model.UpsEvent{{UpsID: "dead", UpsName: "Rack UPS", Kind: "communication_restored", Severity: "info", Message: "the UPS server answers"}})
+	active := 0
+	for _, e := range events(w.Store) {
+		if e.Active() {
+			active++
+		}
+	}
+	if active != 0 {
+		t.Fatalf("the alert must end when the server answers: %+v", events(w.Store))
+	}
+}
