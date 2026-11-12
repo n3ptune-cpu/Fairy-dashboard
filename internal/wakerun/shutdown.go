@@ -98,7 +98,11 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 		m.end(r, h, state, OnYes, now, "Left ON: "+why+"."+updateTail(h))
 		return
 	}
+	if !m.pace.fits(info.AgentID, 1, now) || !m.ask(r, h, "shutdown") { // written down before it goes out
+		return
+	}
 	if !m.pace.take(info.AgentID, 1, now) {
+		m.done(h)
 		return
 	}
 	delay := r.Settings.ShutdownDelay
@@ -106,6 +110,7 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 	var err error
 	id, by, grant := h.ID, r.By, h.grant // read under the lock; the request goes out without it
 	m.io(func() { at, err = m.Ops.Shutdown(ctx, id, delay, by, grant) })
+	m.done(h)
 	params := map[string]any{"delay_s": int(delay.Seconds())}
 	if err != nil {
 		m.emit(EvStep, r, h, "shutdown", params, opText(err))

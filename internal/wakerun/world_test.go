@@ -82,6 +82,7 @@ type world struct {
 	calls   []string // every request the run sent: "wake pc-a", "update pc-a", "shutdown pc-a 120", "cancel pc-a"
 	events  []Event
 	blocked string
+	during  func(call string) // called when a request of the run arrives, before the machine acts on it ("wake pc-a")
 	// each agent's own limit, as the real agent keeps it: 12 control requests in a sliding minute
 	agentHits map[string][]time.Time
 	limited   int // requests an agent refused for that reason
@@ -181,6 +182,12 @@ func (w *world) Probe(_ context.Context, id string) string {
 
 func (w *world) Kick(string) {}
 
+func (w *world) arrived(call string) {
+	if w.during != nil {
+		w.during(call)
+	}
+}
+
 // hit counts a control request to an agent the way the agent does, and reports whether the agent takes it.
 func (w *world) hit(agent string) bool {
 	var keep []time.Time
@@ -204,6 +211,7 @@ var errBusy = &OpError{Code: CodeRateLimited, Text: "too many control requests; 
 func (w *world) Wake(_ context.Context, id, _ string) error {
 	mc := w.ms[id]
 	w.calls = append(w.calls, "wake "+id)
+	w.arrived("wake " + id)
 	if mc.relayDown != "" {
 		return &OpError{Text: mc.relayDown}
 	}
@@ -234,6 +242,7 @@ func (w *world) busyOnce(mc *machine, what, mode string) bool {
 func (w *world) Update(_ context.Context, id, _ string, grant any) error {
 	mc := w.ms[id]
 	w.calls = append(w.calls, "update "+id)
+	w.arrived("update " + id)
 	if !w.answers(mc) {
 		return &OpError{Text: "agent unreachable: connection failed"}
 	}
@@ -255,6 +264,7 @@ func (w *world) Update(_ context.Context, id, _ string, grant any) error {
 func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ string, grant any) (time.Time, error) {
 	mc := w.ms[id]
 	w.calls = append(w.calls, fmt.Sprintf("shutdown %s %d", id, int(delay.Seconds())))
+	w.arrived("shutdown " + id)
 	mc.shutdowns++
 	// the judge
 	if mc.onAtStart {

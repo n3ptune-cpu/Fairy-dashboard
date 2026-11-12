@@ -12,7 +12,9 @@
 //     stopped answering a few minutes ago: it may be restarting) is left alone: nothing is sent to it.
 //   - A Proxmox node with running guests, or whose guests the panel cannot see, stays on.
 //   - One run at a time. A run that the panel's restart interrupted is never continued: the journal
-//     (journal.go) is only read to report which machines the run had woken.
+//     (journal.go) is only read to report which machines the run had woken. Every request of a run is entered
+//     in the journal before it goes out; a run whose journal cannot be written sends nothing further and
+//     stops, so the report after a restart never knows less than what was sent.
 //   - A run sends each agent at most a few control requests a minute (pacer.go).
 //   - Every machine of a run ends in a state with a sentence that says what happened; nothing ends unreported.
 //
@@ -124,6 +126,7 @@ const (
 	offConfirm      = 20 * time.Second // no answer for this long after the countdown: the machine is off
 	offGrace        = 5 * time.Minute  // still answering this long after the countdown: the shutdown failed
 	approvalTimeout = 15 * time.Minute
+	journalRetry    = 5 * time.Second // a journal that could not be written is tried again this often
 	maxRetries      = 5
 	maxLog          = 40
 	historyKept     = 10
@@ -298,6 +301,11 @@ type Host struct {
 	// here for the record; mayShutDown measures again from the run's own readings.
 	OnlineAfterS *float64 `json:"online_after_s,omitempty"`
 	AlreadyOn    bool     `json:"already_on,omitempty"` // it was on before the run did anything
+	// Asking: the request that is about to go out to the machine, or is on its way ("wake", "update",
+	// "shutdown"); "" between requests. It is written to the journal before the request is sent (Manager.ask),
+	// so a journal read after a restart knows of every request that may have left, also when what came of it
+	// could not be written any more.
+	Asking string `json:"asking,omitempty"`
 
 	VersionBefore string     `json:"version_before,omitempty"`
 	VersionAfter  string     `json:"version_after,omitempty"`
@@ -362,6 +370,10 @@ type Run struct {
 	Summary    string     `json:"summary,omitempty"`  // one line per machine, when the run is over
 	// Reported: the interrupted run was reported after the restart (once).
 	Reported bool `json:"reported,omitempty"`
+
+	// journalErr: a write of the journal failed while this run was going (in memory only). The run sends
+	// nothing further and stops at its next step.
+	journalErr string
 }
 
 func (r *Run) clone() *Run {
@@ -450,6 +462,10 @@ type Manager struct {
 	active *Run
 	hist   []*Run // finished runs, newest first
 	jerr   error  // the journal cannot be read: no run starts
+	// werr: the latest write of the journal failed (nil again after one that worked). No run starts while it
+	// is set; a run that was going when it was set stops (Run.journalErr). werrAt: when it was last tried.
+	werr   error
+	werrAt time.Time
 	pace   *pacer
 	events []Event
 	dirty  bool
@@ -494,6 +510,14 @@ func (m *Manager) JournalError() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.jerr
+}
+
+// JournalWriteError is why the journal could not be written at the latest try (nil: it could). No run starts
+// while it is set.
+func (m *Manager) JournalWriteError() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.werr
 }
 
 // Start begins a run with exactly the machines of req. It refuses while another run is active, without
@@ -556,7 +580,16 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 	m.active = r
 	out := r.clone()
 	m.mu.Unlock()
-	m.save() // before anything is sent: a restart from here on knows about the run
+	// Before anything is sent: a restart from here on knows about the run. A run that cannot be written down
+	// does not start.
+	if err := m.save(); err != nil {
+		m.mu.Lock()
+		if m.active == r {
+			m.active = nil
+		}
+		m.mu.Unlock()
+		return nil, &StartError{Msg: "the run journal cannot be written, so no run is started (nothing was sent): " + err.Error()}
+	}
 	return out, nil
 }
 
@@ -632,9 +665,12 @@ func (m *Manager) Tick(ctx context.Context) {
 	m.events = nil
 	dirty := m.dirty
 	m.dirty = false
+	// a journal that could not be written is tried again every few seconds, so that what a stopped run ended
+	// with gets written once the disk has room again
+	retry := m.werr != nil && m.now().Sub(m.werrAt) >= journalRetry
 	m.mu.Unlock()
-	if dirty {
-		m.save()
+	if dirty || retry {
+		_ = m.save() // a failure stops the run at its next step (stepRun)
 	}
 	if m.Event != nil {
 		for _, e := range evs {
@@ -697,6 +733,10 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 	stop := ""
 	if why := m.Ops.Blocked(); why != "" {
 		stop = why
+	} else if r.journalErr != "" {
+		// The record of what the run does is what the report after a restart is made from. Without it the run
+		// goes no further: no wake, no update, no shutdown from here on.
+		stop = "its journal (wake-update.json) could not be written: " + r.journalErr
 	} else if now.Sub(r.StartedAt) > m.maxRun(r) {
 		stop = "the run took longer than it ever should"
 	}

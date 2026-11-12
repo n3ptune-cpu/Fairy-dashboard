@@ -329,7 +329,9 @@ The rules, in plain words:
   switch them off yourself. (The run keeps a small journal for this, `wake-update.json` in the data folder:
   machine ids, steps and times, no secrets. If that file cannot be read, no run can be started until you have
   looked at it and moved it away. The panel starts all the same. An empty machine entry (`null`) in the file
-  is left out, with one line in the log.)
+  is left out, with one line in the log. Every request of a run is entered in the journal before it goes
+  out. If the file cannot be written (a full disk), the run sends nothing further, stops and says so, the
+  machines it has woken stay on and are reported, and no run starts until the file can be written again.)
 * **The kill switch stops a run**: no further request is sent, and what was woken stays on and is reported.
 * Everything is in the audit log: who started the run, with which machines, and every wake, update,
   shutdown and result (`wakeupdate.*`, `power.wake`, `update.agent`, `power.shutdown`, each with the run's

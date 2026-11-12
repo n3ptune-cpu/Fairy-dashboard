@@ -173,11 +173,16 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 	if r.Cancel != nil { // cancelled while the machine was being asked
 		return
 	}
-	if !m.pace.take(info.RelayID, info.MACs, now) {
+	if !m.pace.fits(info.RelayID, info.MACs, now) || !m.ask(r, h, "wake") { // written down before it goes out
+		return
+	}
+	if r.Cancel != nil || !m.pace.take(info.RelayID, info.MACs, now) { // cancelled while the journal was written
+		m.done(h)
 		return
 	}
 	var err error
 	m.io(func() { err = m.Ops.Wake(ctx, id, by) })
+	m.done(h)
 	if err != nil {
 		m.emit(EvStep, r, h, "wake", nil, opText(err))
 		if opCode(err) == CodeRateLimited && h.retries < maxRetries {
@@ -230,11 +235,16 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 		h.lastKick = now
 		m.Ops.Kick(h.ID)
 	}
-	if r.Cancel == nil && now.Sub(h.lastWake) >= wakeResend && m.pace.take(info.RelayID, info.MACs, now) {
+	if r.Cancel == nil && now.Sub(h.lastWake) >= wakeResend && m.pace.fits(info.RelayID, info.MACs, now) && m.ask(r, h, "wake") {
+		if r.Cancel != nil || !m.pace.take(info.RelayID, info.MACs, now) {
+			m.done(h)
+			return
+		}
 		h.lastWake = now
 		var err error
 		id, by := h.ID, r.By
 		m.io(func() { err = m.Ops.Wake(ctx, id, by) })
+		m.done(h)
 		if err != nil {
 			m.emit(EvStep, r, h, "wake", map[string]any{"again": true}, opText(err))
 			return
@@ -384,13 +394,18 @@ func (m *Manager) startUpdate(ctx context.Context, r *Run, h *Host, info HostInf
 		m.updateDone(r, h, now, UpdCurrent, "")
 		return
 	}
-	if !m.pace.take(info.AgentID, 1, now) {
+	if !m.pace.fits(info.AgentID, 1, now) || !m.ask(r, h, "update") { // written down before it goes out
+		return
+	}
+	if r.Cancel != nil || !m.pace.take(info.AgentID, 1, now) { // cancelled while the journal was written
+		m.done(h)
 		return
 	}
 	h.lastAtBefore = o.LastAt
 	var err error
 	id, by, grant := h.ID, r.By, h.grant // read under the lock; the request goes out without it
 	m.io(func() { err = m.Ops.Update(ctx, id, by, grant) })
+	m.done(h)
 	params := map[string]any{"from": o.Version, "latest": r.Latest}
 	if err != nil {
 		m.emit(EvStep, r, h, "update", params, opText(err))

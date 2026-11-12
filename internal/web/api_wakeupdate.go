@@ -428,6 +428,8 @@ func (s *Server) wakeUpdatePageData() wakeUpdatePage {
 	p.Last = append(p.Last, hist...)
 	if s.WakeRuns.JournalError() != nil {
 		p.Problem = "No run can be started: the run journal (wake-update.json in the panel's data folder) cannot be used. Look at it, then move it away."
+	} else if s.WakeRuns.JournalWriteError() != nil {
+		p.Problem = "No run can be started: the run journal (wake-update.json in the panel's data folder) cannot be written. Check that the disk has room."
 	}
 	return p
 }
@@ -558,6 +560,9 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	}
 	if s.WakeRuns.JournalError() != nil {
 		return apierr.New(409, "no run can be started: the run journal (wake-update.json in the panel's data folder) cannot be used")
+	}
+	if s.WakeRuns.JournalWriteError() != nil { // a run sends nothing it could not write down first
+		return apierr.New(409, "no run can be started: the run journal (wake-update.json in the panel's data folder) cannot be written")
 	}
 	if a, _ := s.WakeRuns.Snapshot(); a != nil { // before a passkey is asked for; Start checks again
 		return apierr.Errf(409, "a run started by %s at %s is still going: one run at a time. Wait for it, or cancel it.", a.By, a.StartedAt.Format("15:04 UTC"))

@@ -14,8 +14,14 @@ import (
 )
 
 // The journal (wake-update.json in the data folder, mode 0600) holds the active run and the last finished
-// ones. It is written before a run sends anything and at every change of a machine's state, so that after a
-// restart the panel can say which machines an interrupted run had woken and what it was doing with each.
+// ones. It is written before a run sends anything, before every single request of a run (Manager.ask: the
+// request is entered as "going out" first) and at every change of a machine's state, so that after a restart
+// the panel can say which machines an interrupted run had woken and what it was doing with each.
+//
+// A run needs its journal: when a write fails (a full disk), nothing further is sent, and the run stops and
+// says so. Because every request is entered before it leaves, the journal on the disk then still knows of
+// every request that may have left, and the report after a restart never says "nothing was sent" about a
+// machine that got a wake.
 //
 // That is all it is for. Nothing is ever sent because of what the file says: a run that was going when the
 // panel stopped becomes "interrupted", and the proof a run needs to switch a machine off (that this run woke
@@ -69,7 +75,7 @@ func (m *Manager) Load() error {
 	}
 	m.mu.Unlock()
 	if report != nil {
-		m.save()
+		_ = m.save() // if it cannot be written, the run is reported again after the next restart
 		slog.Warn("wake-update: the panel restarted during a run; it is not continued", "run", report.ID, "started_by", report.By)
 		if m.Event != nil {
 			m.Event(Event{Kind: EvInterrupted, Run: report})
@@ -87,8 +93,13 @@ func interrupt(r *Run, now time.Time) {
 			continue
 		}
 		was := h.State
-		h.State, h.Since = StInterrupted, now
+		asking := h.Asking // a request that was going out when the journal was last written
+		h.State, h.Since, h.Asking = StInterrupted, now, ""
 		switch {
+		case asking == "shutdown" && h.ShutdownAt == nil:
+			h.On = OnUnknown
+			h.Text = "The panel restarted while the run was asking it to shut down. The run had woken it. Fairy does not know whether the request arrived: " +
+				"if it did, it switches off by itself after its countdown; if not, it is ON. Check it." + updateTail(h)
 		case was == StShutting && h.ShutdownAt != nil:
 			h.On = OnUnknown
 			h.Text = fmt.Sprintf("The panel restarted while its shutdown was counting down (due at %s). Fairy stopped watching: check that it went off.", clock(*h.ShutdownAt))
@@ -101,9 +112,15 @@ func interrupt(r *Run, now time.Time) {
 		case h.WakeSentAt != nil:
 			h.On = OnUnknown
 			h.Text = fmt.Sprintf("The panel restarted during the run. A wake was sent to it at %s and it had not answered yet: if it switched on, it is ON.", clock(*h.WakeSentAt))
+		case asking == "wake":
+			h.On = OnUnknown
+			h.Text = "The panel restarted while the run was sending a wake to it. Fairy does not know whether the wake went out: if it switched on, it is ON."
 		default:
 			h.On = OnUntouched
 			h.Text = "The panel restarted before the run reached it. Nothing was sent to it."
+		}
+		if asking == "update" && h.UpdateSentAt == nil {
+			h.Text += " An update request was going out to it; if it arrived, the agent finishes the update by itself."
 		}
 		h.Log = append(h.Log, LogLine{T: now, Text: h.Text})
 	}
@@ -176,16 +193,17 @@ func readJournal(path string) (journalFile, error) {
 	return jf, nil
 }
 
-// save writes the journal: locked, to a temporary file, renamed (statefile). A failure is logged and does not
-// stop the run that is going: the machines matter more than the record.
-func (m *Manager) save() {
+// save writes the journal: locked, to a temporary file, renamed (statefile). A failure is logged (once, until
+// a write works again), kept in m.werr, and stops the run that is going at its next step: a run sends nothing
+// that it could not write down first.
+func (m *Manager) save() error {
 	if m.path == "" {
-		return
+		return nil
 	}
 	m.mu.Lock()
 	if m.jerr != nil { // never overwrite a file that could not be read
 		m.mu.Unlock()
-		return
+		return nil
 	}
 	jf := journalFile{Version: journalVersion, History: []*Run{}}
 	if m.active != nil {
@@ -200,7 +218,61 @@ func (m *Manager) save() {
 		d["version"], d["active"], d["history"] = jf.Version, jf.Active, jf.History
 		return nil
 	})
+	m.mu.Lock()
+	was := m.werr
+	m.werr, m.werrAt = err, m.now()
+	if err != nil && m.active != nil && m.active.journalErr == "" {
+		m.active.journalErr = journalErrText(err)
+	}
+	m.mu.Unlock()
+	switch {
+	case err != nil && was == nil:
+		slog.Error("wake-update: cannot write the run journal; a run that is going stops, and no run starts until it can be written", "path", m.path, "error", err)
+	case err == nil && was != nil:
+		slog.Info("wake-update: the run journal can be written again", "path", m.path)
+	}
+	return err
+}
+
+// journalErrText is a write error of the journal for a sentence: the system's own reason, without the path
+// (the report names the file).
+func journalErrText(err error) string {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Op + ": " + pe.Err.Error()
+	}
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		return le.Op + ": " + le.Err.Error()
+	}
+	return "the write failed"
+}
+
+// ask enters, in the journal, that a request (what: "wake", "update", "shutdown") is about to go out to the
+// machine, and reports whether the run may send it. The entry is written before the request leaves, with
+// everything else the run knows by then. If it cannot be written, the request is not sent, and the run stops
+// at its next step. The caller holds m.mu and calls done after the request came back.
+func (m *Manager) ask(r *Run, h *Host, what string) bool {
+	if m.path == "" {
+		return true
+	}
+	if r.journalErr != "" {
+		return false
+	}
+	h.Asking = what
+	var err error
+	m.io(func() { err = m.save() })
 	if err != nil {
-		slog.Error("wake-update: cannot write the run journal", "path", m.path, "error", err)
+		h.Asking = ""
+		return false
+	}
+	return true
+}
+
+// done ends what ask began: the request came back, and what came of it is in the machine's record.
+func (m *Manager) done(h *Host) {
+	if h.Asking != "" {
+		h.Asking = ""
+		m.dirty = true
 	}
 }
