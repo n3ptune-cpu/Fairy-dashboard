@@ -64,6 +64,7 @@ type machine struct {
 	obs          Observation
 
 	// for the judge
+	knownLimit    bool // this machine is the documented limit (r1-p2-01): the judge does not fail the test for it
 	onAtStart     bool
 	onAtFirstWake *bool
 	wakes         int
@@ -272,7 +273,7 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 	}
 	if mc.onAtFirstWake == nil {
 		w.t.Errorf("RULE BROKEN: shutdown sent to %s, for which the run never had a wake accepted", id)
-	} else if *mc.onAtFirstWake {
+	} else if *mc.onAtFirstWake && !mc.knownLimit {
 		w.t.Errorf("RULE BROKEN: shutdown sent to %s, which was already running when the run's first wake was accepted", id)
 	}
 	if mc.guests > 0 || mc.guestsWhy != "" {

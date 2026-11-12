@@ -23,9 +23,20 @@ import (
 //	ProbedOff    asked directly right before the wake, and nothing answered (the panel's view can be stale)
 //	WakeSentAt   this run sent a wake for it, and the relay accepted it
 //	OnlineAt     its first answered poll after that wake
-//	BootUptimeS  the uptime it reported in that poll: shorter than the time since the wake, so the machine
-//	             started after the wake. A machine that was on all along and only unreachable, or that
-//	             someone switched on just before the run, has been up for longer.
+//	BootUptimeS  the uptime it reported in that poll: shorter than the time since the wake, so the machine's
+//	             system started after the wake. A machine that was on all along and only unreachable has been
+//	             up for longer; so has one that slept (NotFresh).
+//
+//	             What this does NOT show (audit 5, r1-p2-01, a limit of the design): that the wake is what
+//	             started it. Uptime counts from the start of the operating system, not from the power button.
+//	             A machine that a person switches on shortly before the run's wake, and that is still in its
+//	             firmware or boot loader when the wake goes out (seconds on a desktop, minutes on a server,
+//	             without limit at a boot menu or a disk password), does not answer the direct question, starts
+//	             its system after the wake and reports a fresh uptime. So does one that starts by a firmware
+//	             schedule or when the power returns. Every line of mayShutDown is then true, and the run
+//	             switches it off after its update. The panel cannot close this: it would need the agent to
+//	             say why the machine started. Only one corner is cut off: a machine that answers sooner after
+//	             the wake than any machine that was off can (minBoot, TooSoon) was already starting.
 //	wakeMono, onlineMono (in memory only): the same two moments on the panel's steady clock. The uptime
 //	             must also be shorter than their difference, so that a clock that was set forward between
 //	             the wake and the answer cannot make the time since the wake longer than it was.

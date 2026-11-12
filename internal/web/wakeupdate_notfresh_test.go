@@ -78,3 +78,23 @@ func TestWakeUpdateAMachineThatWasAsleepIsReportedAsAWarning(t *testing.T) {
 		}
 	}
 }
+
+// r1-p2-01 (audit 5): the limit the panel cannot close is said where the feature is explained (the info
+// button) and in the README, in one place each; the run dialog's own warning is not made longer for it.
+func TestWakeUpdateSaysItsLimit(t *testing.T) {
+	js := appJS(t)
+	limit := "A limit: a machine that someone switches on just before the wake, and that is still starting, looks like one the run woke. It is switched off after its update."
+	if strings.Count(js, limit) != 1 {
+		t.Fatalf("the info text must say the limit once: %d", strings.Count(js, limit))
+	}
+	i := strings.Index(js, `infoBtn("wu", "Update unpowered hosts", infoList([`)
+	if i < 0 || !strings.Contains(js[i:i+2500], limit) {
+		t.Fatal("the limit must be in the feature's info box")
+	}
+	dlg := js[strings.Index(js, `async function openWakeUpdate()`):]
+	box := dlg[strings.Index(dlg, `<div class="warnbox">Fairy only switches off machines`):]
+	box = box[:strings.Index(box, "</div>")]
+	if n := len(strings.Fields(box)); n > 78 || strings.Contains(box, "firmware") {
+		t.Fatalf("the dialog's fixed warning grew (%d words): %s", n, box)
+	}
+}

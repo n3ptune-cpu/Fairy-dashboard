@@ -109,6 +109,13 @@ var NotSure = "Not sure that it is off, so nothing was sent to it: Fairy takes a
 // notFreshText is the sentence for a machine that answered after the run's wake without looking freshly
 // started (Host.NotFresh).
 func notFreshText(h *Host) string {
+	if h.TooSoon {
+		after := ""
+		if h.OnlineAfterS != nil {
+			after = " " + span(time.Duration(*h.OnlineAfterS*float64(time.Second)))
+		}
+		return "It answered" + after + " after the wake, sooner than a machine that was off can start: it was already starting (someone switched it on). It was left on."
+	}
 	up := ""
 	if h.BootUptimeS != nil {
 		up = " (up for " + span(time.Duration(*h.BootUptimeS)*time.Second) + ")"
@@ -135,6 +142,12 @@ const (
 	agentBack       = 3 * time.Minute  // after the update: how long the agent may take to answer again
 	offConfirm      = 20 * time.Second // no answer for this long after the countdown: the machine is off
 	offGrace        = 5 * time.Minute  // still answering this long after the countdown: the shutdown failed
+	// minBoot: no machine that was off answers this soon after a wake. Its firmware has to start, then the
+	// system, the agent and the network (with Tailscale), and the poller has to ask it: on the fastest PC that
+	// is well over eight seconds. An answer sooner than this comes from a machine that was already starting.
+	// The value is on the careful side on purpose: a machine wrongly taken for "already starting" would be
+	// left on at every run.
+	minBoot = 8 * time.Second
 	// countdownSlack: how much later than asked for an agent's own countdown may end and still be the run's to
 	// watch. Linux rounds a shutdown up to whole minutes, and the agent's clock is not the panel's; three
 	// minutes cover both. A countdown that ends later is the agent's own business: the run says so and lets go
@@ -322,6 +335,9 @@ type Host struct {
 	// along and out of reach. The run cannot tell which, so it never switches it off (AlreadyOn is set too),
 	// and it does not call that "it was already on": the machine ends as left on, with NotFreshText, a warning.
 	NotFresh bool `json:"not_fresh,omitempty"`
+	// TooSoon (with NotFresh): its agent answered sooner after the wake than a machine that was off can start
+	// (minBoot): it was already starting when the wake went out.
+	TooSoon bool `json:"too_soon,omitempty"`
 	// Asking: the request that is about to go out to the machine, or is on its way ("wake", "update",
 	// "shutdown"); "" between requests. It is written to the journal before the request is sent (Manager.ask),
 	// so a journal read after a restart knows of every request that may have left, also when what came of it

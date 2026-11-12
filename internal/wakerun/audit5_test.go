@@ -362,3 +362,85 @@ func TestAnAgentCannotHoldTheRunWithAFarCountdown(t *testing.T) {
 		t.Fatal("when:", when(t0, t0), when(t0.Add(24*time.Hour), t0))
 	}
 }
+
+// r1-p2-01 (Medium), a limit of the design that the panel cannot close. A person presses the power button
+// shortly before the run's wake. The machine is in its firmware when the run asks it directly (nothing
+// answers) and when the wake is accepted. Its system starts after the wake, so its first answer has a fresh
+// uptime, and every piece of evidence the run has says "this run woke it".
+//
+// This test says what the run does today, so that nobody reads the code as if the case were handled:
+//
+//   - the limit: the machine is updated and SWITCHED OFF. The world's judge would call that a broken rule;
+//     the machine is marked as the known limit. If this part ever fails, the limit was closed (the agent says
+//     why the machine started): change the README, the info text and this test together.
+//   - the one corner that is cut off: a machine whose agent answers within minBoot (8 s) of the wake cannot
+//     have been off. It is left on. That narrows the case only for a machine whose system and agent come up
+//     in under 8 s once its firmware is done; a PC takes longer, so for most machines it changes nothing.
+func TestAMachineSomeoneSwitchedOnJustBeforeTheWake(t *testing.T) {
+	t.Run("the limit: still in its firmware at the wake, it looks woken and is switched off", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.knownLimit = true
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		// between the start and the run's first step: a person presses the button. A server's firmware takes
+		// 90 s before the system starts; its agent answers 60 s after that.
+		pc.on, pc.bootedAt, pc.agentReadyAt = true, w.now.Add(90*time.Second), w.now.Add(150*time.Second)
+		pc.onAtStart = false // it was off when the run started
+		r := w.finish()
+		h := host(r, "pc-a")
+		if pc.onAtFirstWake == nil || !*pc.onAtFirstWake {
+			t.Fatal("setup: the machine was not running (in firmware) when the wake was accepted")
+		}
+		if h.State != StOff || pc.shutdowns != 1 || pc.on || h.NotFresh || h.AlreadyOn {
+			t.Fatalf("the documented limit no longer holds (good, if on purpose: see the comment): %s: %s", h.State, h.Text)
+		}
+	})
+	t.Run("already at the end of its start: it answers sooner than a machine that was off can", func(t *testing.T) {
+		for _, updateIfOn := range []bool{false, true} {
+			w := newWorld(t)
+			pc := w.off("pc-a")
+			w.start(StartRequest{Hosts: []string{"pc-a"}, UpdateIfOn: updateIfOn})
+			// the person pressed the button a while ago: the system starts 2 s from now, the agent answers at 6 s
+			pc.on, pc.bootedAt, pc.agentReadyAt = true, w.now.Add(2*time.Second), w.now.Add(6*time.Second)
+			pc.onAtStart = false
+			r := w.finish()
+			h := host(r, "pc-a")
+			if pc.onAtFirstWake == nil || !*pc.onAtFirstWake || h.BootUptimeS == nil || *h.BootUptimeS > 6 {
+				t.Fatalf("setup: the machine must be running at the wake and report a fresh uptime: %+v", h)
+			}
+			if pc.shutdowns != 0 || !pc.on || h.State != StLeftOn || h.On != OnYes || !h.TooSoon || !h.NotFresh || !h.AlreadyOn {
+				t.Fatalf("update_if_on=%v: shutdowns %d: %s: %s", updateIfOn, pc.shutdowns, h.State, h.Text)
+			}
+			if !strings.HasPrefix(h.Text, "It answered 5 s after the wake, sooner than a machine that was off can start: it was already starting (someone switched it on). It was left on.") {
+				t.Fatalf("update_if_on=%v: %s", updateIfOn, h.Text)
+			}
+		}
+	})
+	t.Run("a machine that was off and starts fast is still woken, updated and switched off", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.post, pc.bootTakes = 3*time.Second, 9*time.Second // faster than any PC, and still not under minBoot
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		if h := host(w.finish(), "pc-a"); h.State != StOff || h.TooSoon || pc.shutdowns != 1 {
+			t.Fatalf("%s: %s", h.State, h.Text)
+		}
+	})
+	t.Run("the direct question is the last thing before the wake", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		asked := false
+		w.during = func(call string) {
+			if call == "wake pc-a" && !asked {
+				asked = true
+				jf, err := readJournal(w.m.path)
+				if err != nil || jf.Active == nil || jf.Active.Hosts[0].Asking != "wake" || jf.Active.Hosts[0].ProbedOff {
+					t.Errorf("the wake must be written down before the direct question, not between it and the packet: %v %+v", err, jf.Active)
+				}
+			}
+		}
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		if h := host(w.finish(), "pc-a"); h.State != StOff || !asked || !h.ProbedOff || pc.wakes != 1 {
+			t.Fatalf("%s: %s", h.State, h.Text)
+		}
+	})
+}

@@ -1398,6 +1398,7 @@ function wakeUpdateBox() {
         "It updates the machine's agent, like the Update button does.",
         `About ${esc(fmtSpan(d.settings.settle_s))} after the result it asks for a shutdown with a countdown of ${esc(fmtSpan(d.settings.shutdown_delay_s))}. You can cancel the countdown.`,
         `A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer. One that stopped answering more recently may be restarting, and is left alone.`,
+        "A limit: a machine that someone switches on just before the wake, and that is still starting, looks like one the run woke. It is switched off after its update.",
         "You can also switch a machine on for this in the ⋯ menu on its page.",
         "Switching on, and every run, asks you to confirm it's you and is written to the Audit log.",
         "API tokens cannot start a run.",

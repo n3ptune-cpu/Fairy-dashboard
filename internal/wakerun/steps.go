@@ -156,10 +156,18 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		m.say(h, "waiting for its turn: the relay is sent only a few requests a minute")
 		return
 	}
+	// The wake is written down as "going out" first (ask), so that the direct question is the last thing before
+	// the packet: nothing but the question's own answer lies between "is it still silent" and the wake.
+	if !m.ask(r, h, "wake") {
+		return
+	}
 	// Then the machine itself, now: the panel's view can be a minute old, or the last of a row of failed polls.
 	var answer string
 	id, by := h.ID, r.By
 	m.io(func() { answer = m.Ops.Probe(ctx, id) })
+	if answer != "timeout" && answer != "connection failed" {
+		m.done(h) // no wake goes out
+	}
 	switch answer {
 	case "":
 		m.alreadyOn(r, h, now, "its agent answered when the run asked it directly, before any wake")
@@ -174,13 +182,7 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		m.end(r, h, StSkipped, OnUntouched, now, "Fairy could not tell that it is off: something at its address answered ("+answer+"). Nothing was sent to it.")
 		return
 	}
-	if r.Cancel != nil { // cancelled while the machine was being asked
-		return
-	}
-	if !m.pace.fits(info.RelayID, info.MACs, now) || !m.ask(r, h, "wake") { // written down before it goes out
-		return
-	}
-	if r.Cancel != nil || !m.pace.take(info.RelayID, info.MACs, now) { // cancelled while the journal was written
+	if r.Cancel != nil || !m.pace.take(info.RelayID, info.MACs, now) { // cancelled while the machine was being asked
 		m.done(h)
 		return
 	}
@@ -219,6 +221,11 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 		secs := since.Seconds()
 		h.OnlineAfterS = &secs
 		switch {
+		case h.onlineMono-h.wakeMono < minBoot:
+			// Its agent answers sooner after the wake than a machine that was off can start (firmware, system,
+			// agent, network): it was already on its way up when the wake went out. Someone switched it on.
+			h.NotFresh, h.TooSoon = true, true
+			m.alreadyOn(r, h, now, "")
 		case o.UptimeS == nil:
 			m.enter(h, StOnline, now, "its agent answers, but reports no uptime: Fairy cannot tell that it started after the wake, so it will not switch it off")
 		case time.Duration(*o.UptimeS)*time.Second >= since:
