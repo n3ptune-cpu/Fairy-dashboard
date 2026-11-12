@@ -214,6 +214,9 @@ func (c *cli) users(args []string) (int, error) {
 }
 
 func (c *cli) usersList(st *access.Store) (int, error) {
+	if err := st.Err(); err != nil { // unreadable, corrupt or empty: that is not "no users yet"
+		return 1, err
+	}
 	d := st.Load()
 	var rows [][]string
 	for _, u := range d.SortedUsers() {

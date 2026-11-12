@@ -232,3 +232,26 @@ func TestSetRoleReportsACorruptUsersFile(t *testing.T) {
 		t.Fatal(code, out)
 	}
 }
+
+// r2-p4-10 (audit 5), seen in the proof's re-run: with a users.json that cannot be used (0 bytes, or not JSON)
+// `fairy admin users list` printed "No users yet: users appear here after their first sign-in." It reports
+// the file instead.
+func TestUsersListReportsAnUnusableUsersFile(t *testing.T) {
+	for name, content := range map[string]string{"empty": "", "corrupt": "{not json"} {
+		e := newCLI(t)
+		if err := os.MkdirAll(e.data, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(e.data, "users.json"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, out := e.run("", "users", "list")
+		if code == 0 || strings.Contains(out, "No users yet") || !strings.Contains(out, "users.json") {
+			t.Fatalf("%s: exit %d: %s", name, code, out)
+		}
+	}
+	e := newCLI(t) // a fresh install: no file
+	if code, out := e.run("", "users", "list"); code != 0 || !strings.Contains(out, "No users yet") {
+		t.Fatal(code, out)
+	}
+}
