@@ -130,7 +130,7 @@ func (o runOps) Observe(id string) wakerun.Observation {
 	if known {
 		obs.Status = sys.Status
 	}
-	obs.Silent = wakerun.Silence{Row: info.Silent.Row, N: info.Silent.N, BeganAgo: info.Silent.BeganAgo, EndedAgo: info.Silent.EndedAgo}
+	obs.Silent = wakerun.Silence{Row: info.Silent.Row, N: info.Silent.N, BeganAgo: info.Silent.BeganAgo, EndedAgo: info.Silent.EndedAgo, SinceAgo: info.Silent.SinceAgo}
 	// On without a usable answer from its agent: the machine itself refused the panel's latest poll, or took
 	// part in it in another way (an HTTP status, an answer that is not the agent's, a connection that was made
 	// and then gave nothing: poller.AgentInfo.Sign), or it is a Proxmox node that the cluster shows as online.

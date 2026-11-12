@@ -73,6 +73,7 @@ type machine struct {
 	silRow  uint64
 	silN    int
 	silMono time.Duration // the steady clock at the latest of them
+	silFrom time.Duration // the steady clock at the first silent poll since its last answer or sign of life
 
 	// for the judge
 	knownLimit    bool // this machine is the documented limit (r1-p2-01): the judge does not fail the test for it
@@ -177,9 +178,9 @@ func (w *world) Observe(id string) Observation {
 		o := mc.obs
 		if mc.silN > 0 { // "how long ago", like the poller gives it: its polls take no time here
 			w.clock.Lock()
-			ago := w.mono - mc.silMono
+			ago, since := w.mono-mc.silMono, w.mono-mc.silFrom
 			w.clock.Unlock()
-			o.Silent = Silence{Row: mc.silRow, N: mc.silN, BeganAgo: ago, EndedAgo: ago}
+			o.Silent = Silence{Row: mc.silRow, N: mc.silN, BeganAgo: ago, EndedAgo: ago, SinceAgo: since}
 		}
 		return o
 	}
@@ -451,9 +452,9 @@ func (w *world) poll() {
 				if mc.quietSince.IsZero() {
 					mc.quietSince = w.now
 				}
-				if mc.silN == 0 { // a new row of silent polls
+				if mc.silN == 0 { // a new row of silent polls, after an answer or a sign of life
 					w.rows++
-					mc.silRow = w.rows
+					mc.silRow, mc.silFrom = w.rows, w.mono
 				}
 				mc.silN, mc.silMono = mc.silN+1, w.mono
 			}

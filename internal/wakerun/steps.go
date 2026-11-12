@@ -705,18 +705,33 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 // Now the silence must be seen by polls that were made after the run's own due time (dueMono): each poll of
 // the poller's row is placed on the run's steady clock, and only one that began after dueMono counts. The row
 // must be unbroken: an answer, a sign of life, paused polling or a time the panel did not watch ends it and
-// the count starts again. And a row that began while the countdown was still running (a poll of it ended
-// before endMin, the earliest the countdown can end) proves nothing however long it gets: a machine that
-// counts down answers; this one was out of reach, and its silence afterwards is the same silence (cutEarly).
-// That holds until it answers again.
+// the count starts again.
+//
+// And a machine that was out of reach while its countdown was still running proves nothing by its silence
+// afterwards, however long that gets: a machine that counts down answers; this one did not, and what comes
+// after is the same silence (cutEarly). The poller says since when it has had nothing at all from the machine
+// (Silence.SinceAgo): when that began before endMin, the earliest the countdown can end, cutEarly is set,
+// whichever polls the run's own looks happened to see (second review of fix7a, R7A-02: a look that came late
+// saw one row of two polls and never the first of them). cutEarly then holds until the machine answers or
+// shows a sign of life, and nothing else takes it back: not a new row of the poller, not a look without a row,
+// not a pause. Those only start the count again. (R7A-01: the poller starts a new row whenever the panel was
+// not watching, also when the time of day was set back by two seconds; the run took the new row for a new
+// silence and wrote "switched off again" for a machine that was on and had only been out of reach.)
 func (h *Host) seeSilence(o Observation, mono time.Duration) {
 	s := o.Silent
-	if o.Online || o.OnBy != "" || o.Paused || s.N == 0 {
+	if o.Online || o.OnBy != "" { // it answers, or shows that it runs: only this ends "out of reach"
 		h.silRow, h.silN, h.silAfter, h.cutEarly = 0, 0, 0, false
 		return
 	}
-	if s.Row != h.silRow { // another row than at the last look: something else lies between the two
-		h.silRow, h.silN, h.silAfter, h.cutEarly = s.Row, 0, 0, false
+	if o.Paused || s.N == 0 { // nothing was asked, or the poller has no row: the count starts again
+		h.silRow, h.silN, h.silAfter = 0, 0, 0
+		return
+	}
+	if mono-s.SinceAgo < h.endMin { // nothing at all from it since before its countdown can have ended
+		h.cutEarly = true
+	}
+	if s.Row != h.silRow { // another row than at the last look: the count starts again
+		h.silRow, h.silN, h.silAfter = s.Row, 0, 0
 	}
 	if s.N == h.silN { // no new poll since the last look
 		return
@@ -735,7 +750,8 @@ func (h *Host) seeSilence(o Observation, mono time.Duration) {
 
 // seenOff reports whether the silence the run has seen proves that the machine went off after its countdown
 // (seeSilence): at least offPolls polls in a row, all made after the run's own due time, the first of them
-// offConfirm ago, and the machine had not gone out of reach before the countdown can have ended.
+// offConfirm ago, and the machine was not out of reach before the countdown can have ended (or has answered
+// again since).
 func (h *Host) seenOff(mono time.Duration) bool {
 	return !h.cutEarly && h.silAfter >= offPolls && mono-h.silSince >= offConfirm
 }

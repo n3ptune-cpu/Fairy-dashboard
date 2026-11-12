@@ -125,9 +125,15 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 			// A sign of life, like an answer: the machine runs and only its agent gives no usable answer. The
 			// silence starts again with the first poll after this one that gets nothing at all.
 			q.silent = false
-		case !row || !q.silent || q.unwatched(now, mono, p.quietGap(max(q.interval, interval))):
-			// the first poll without any answer, or the panel was not watching in between
-			q.silent, q.since = true, mono
+		case !row || !q.silent:
+			// the first poll without any answer since the machine answered or showed a sign of life
+			q.silent, q.since, q.from = true, mono, began
+			p.quietRows++
+			q.row, q.n = p.quietRows, 0
+		case q.unwatched(now, mono, p.quietGap(max(q.interval, interval))):
+			// The panel was not watching in between: the row and its count start again. q.from stays where it
+			// is: the machine has given nothing since, as far as the panel asked it.
+			q.since = mono
 			p.quietRows++
 			q.row, q.n = p.quietRows, 0
 		}
@@ -270,6 +276,11 @@ type quietRow struct {
 	row   uint64
 	n     int
 	began time.Duration
+	// from: when the first poll began that got nothing at all since the machine last answered or showed a sign
+	// of life (steady clock). It is not the beginning of the row: a row also starts again when the panel was not
+	// watching for a while (unwatched), and the machine did not answer in between. Only an answer or a sign of
+	// life moves it. See SilentPolls.SinceAgo.
+	from time.Duration
 }
 
 // SilentPolls describes the unbroken row of polls of an agent that got nothing at all (no answer and no other
@@ -281,11 +292,20 @@ type quietRow struct {
 // began, and a row can be one poll that failed before polling was paused. The times are given as "how long
 // ago" on the steady clock, so that the caller can place them on a steady clock of its own; Row tells the
 // caller whether two looks saw the same row.
+//
+// SinceAgo is older than the row when the row started again without an answer in between: the panel was not
+// watching for a while (the time of day was set, the panel's host was suspended, polling was paused), and a
+// new row began with the next poll. The count starts again then; what the machine last gave does not change.
+// A caller that asks "was it already out of reach at a moment of mine" must go by SinceAgo, not by the row
+// (second review of fix7a, R7A-01 and R7A-02).
 type SilentPolls struct {
 	Row      uint64        // names the row
 	N        int           // polls in the row
 	BeganAgo time.Duration // how long ago the latest of them began (the request left) ...
 	EndedAgo time.Duration // ... and ended without an answer
+	// SinceAgo: how long ago the first poll began that got nothing at all since the machine's last answer or
+	// sign of life, whatever rows were started since.
+	SinceAgo time.Duration
 }
 
 // unwatched reports whether more time than gap lies between the row's latest poll and now, on either clock,
@@ -372,7 +392,7 @@ func (p *Poller) quietLocked(id string, interval float64) (time.Time, string, Si
 	if !q.silent {
 		return time.Time{}, q.sign, SilentPolls{}
 	}
-	return now.Add(-(mono - q.since)), q.sign, SilentPolls{Row: q.row, N: q.n, BeganAgo: mono - q.began, EndedAgo: mono - q.lastMono}
+	return now.Add(-(mono - q.since)), q.sign, SilentPolls{Row: q.row, N: q.n, BeganAgo: mono - q.began, EndedAgo: mono - q.lastMono, SinceAgo: mono - q.from}
 }
 
 func agentInfoOf(payload jsonx.M, now time.Time) AgentInfo {

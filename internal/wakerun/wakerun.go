@@ -266,6 +266,10 @@ type Silence struct {
 	N        int           // polls in the row (0: the latest poll was not such a poll)
 	BeganAgo time.Duration // how long ago the latest of them began (the request left) ...
 	EndedAgo time.Duration // ... and ended without an answer
+	// SinceAgo: how long ago the first poll began that got nothing at all since the machine last answered or
+	// showed a sign of life. That can be before the row: the poller starts a new row when it was not watching
+	// for a while, and the machine has not answered in between.
+	SinceAgo time.Duration
 }
 
 // ProbeRefused is Ops.Probe's answer for a connection the machine itself refused, reset or closed.
@@ -451,7 +455,7 @@ type Host struct {
 	silN          int           // how many polls of that row it has looked at
 	silAfter      int           // polls of the row that were made after the run's own due time (dueMono)
 	silSince      time.Duration // steady: when the first of those began
-	cutEarly      bool          // the row began before the countdown can have ended: the machine was out of reach then
+	cutEarly      bool          // it was out of reach before the countdown can have ended, and has not answered since
 	kickMono      time.Duration // steady: when the poller was last asked to poll it during the countdown
 	retries       int
 	lateSeen      bool // gave up, and it came online later
