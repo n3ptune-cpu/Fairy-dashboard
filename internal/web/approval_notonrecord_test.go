@@ -87,10 +87,10 @@ func TestAMachineThatShowsTheCheckIsNotOnRecordUntilAnAdminAccepts(t *testing.T)
 	if b := x.s.Poller.BindingOf("laptop"); b.Status != approval.BindNoRecord || b.Record.MachineID != "" {
 		t.Fatalf("after the refused accepts: %+v", b)
 	}
-	// the button: the dialog names the id's first six characters; asking is not accepting
+	// the button: the dialog names the id as the box does (first eight, last six), never in full; asking is not accepting
 	r := x.press("laptop", map[string]any{"machine_id": want})
 	if got := actionOf(r); !strings.Contains(got, "accept what laptop shows about its own check of approvals now") ||
-		!strings.Contains(got, "it shows the machine id "+approval.ShortID(want)+", which is not on record") || strings.Contains(got, want) {
+		!strings.Contains(got, "it shows the machine id "+approval.CompareID(want)+", which is not on record") || strings.Contains(got, want) {
 		t.Fatalf("the dialog: %q", got)
 	}
 	if b := x.s.Poller.BindingOf("laptop"); b.Status != approval.BindNoRecord {
@@ -301,7 +301,9 @@ func TestUINotOnRecord(t *testing.T) {
 	for _, want := range []string{
 		`no_record: ["Not on record", "Fairy has no machine id on record for it. No approvals until an admin accepts its id."],`,
 		`no_record: ["Fairy did not turn this check on: it was set on the machine itself, or from another panel.",`,
-		`"Before you accept, compare the id with the machine's own: on the machine <code>fairy-agent helper-status</code>, line <code>machine id:</code>. A machine that answers in another's name would show the other's id."],`,
+		`"Before you accept, compare the id with the machine's own: on the machine <code>fairy-agent helper-status</code>, line <code>machine id:</code>. A machine that answers in another's name would show the other's id.",`,
+		// (second review, G-02) what the comparison is worth, said plainly
+		`"The comparison catches something that sits between the panel and the machine, and an agent that answers in another's name. It does not catch a host whose own administrator is hostile. Only the real machine being on record in this panel stops that."],`,
 		`"Before you press, compare the id with the machine's own: on the machine <code>fairy-agent helper-status</code>, line <code>machine id:</code>."],`,
 		`first: ["Accept this machine's id", (name) => ` + "`Accept the machine id of ${name}`],",
 		`const b = a.binding ? AP_BINDING[a.binding] : null;`, // the Overview's sign: "not on record" is not left out any more

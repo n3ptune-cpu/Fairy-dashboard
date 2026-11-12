@@ -735,7 +735,8 @@ const AP_BINDING_MORE = table({
     "Turn the check on again, or accept that it is off."],
   too_old: ["It runs the test build of 2026-11-11. Its approvals are not tied to one machine, and it refuses this panel's."],
   no_record: ["Fairy did not turn this check on: it was set on the machine itself, or from another panel.",
-    "Before you accept, compare the id with the machine's own: on the machine <code>fairy-agent helper-status</code>, line <code>machine id:</code>. A machine that answers in another's name would show the other's id."],
+    "Before you accept, compare the id with the machine's own: on the machine <code>fairy-agent helper-status</code>, line <code>machine id:</code>. A machine that answers in another's name would show the other's id.",
+    "The comparison catches something that sits between the panel and the machine, and an agent that answers in another's name. It does not catch a host whose own administrator is hostile. Only the real machine being on record in this panel stops that."],
   unreadable: ["The panel's log says why. Until the file can be read, nothing is approved and no fan, power or update request is sent."] });
 // The start of the block's error when the RUNNING Windows helper is from before approvals (state "unknown"):
 // starting the helper does nothing then, it has to be stopped and started.

@@ -286,23 +286,42 @@ func acceptHeldText(name string, by []string) string {
 }
 
 // approvalAcceptDetail says, in the dialog that asks to confirm, what exactly would be accepted: the id the
-// request names (the one the page showed), not whatever the host shows by now.
+// request names (the one the page showed), not whatever the host shows by now. An id is shown in the form the
+// Approval box has (approval.CompareID: the first eight and the last six characters), so that what the admin
+// compares with the machine's own looks the same in both places. The audit log keeps the first six.
 func (c *reqCtx) approvalAcceptDetail(*model.User) string {
 	b := c.s.Poller.BindingOf(c.r.PathValue("id"))
 	var req acceptBody
 	_ = json.Unmarshal(c.body, &req)
 	switch {
 	case req.MachineID != "" && b.Record.MachineID == req.MachineID && len(b.With) > 0:
-		return "it keeps its machine id " + approval.ShortID(req.MachineID) + "; " + andNames(c.s.machineNames(b.With)) + " must get a new one"
+		return "it keeps its machine id " + approval.CompareID(req.MachineID) + "; " + andNames(c.s.machineNames(b.With)) + " must get a new one"
 	case req.MachineID != "" && b.Record.MachineID != "":
-		return "it shows the machine id " + approval.ShortID(req.MachineID) + "; on record is " + approval.ShortID(b.Record.MachineID)
+		return "it shows the machine id " + approval.CompareID(req.MachineID) + "; on record is " + approval.CompareID(b.Record.MachineID)
 	case req.MachineID != "" && len(b.With) > 0:
 		// nothing is on record for it, and another host without a record shows the same id: the first accept decides
-		return "it shows the machine id " + approval.ShortID(req.MachineID) + ", which is not on record; " + andNames(c.s.machineNames(b.With)) + " shows the same id and must get a new one"
+		return "it shows the machine id " + approval.CompareID(req.MachineID) + ", which is not on record; " + andNames(c.s.machineNames(b.With)) + " shows the same id and must get a new one"
 	case req.MachineID != "":
-		return "it shows the machine id " + approval.ShortID(req.MachineID) + ", which is not on record"
+		return "it shows the machine id " + approval.CompareID(req.MachineID) + ", which is not on record"
 	case req.Off:
 		return "it shows no check any more: it becomes a machine without the check"
 	}
 	return ""
+}
+
+// acceptCompare is the last thing an admin reads before a machine id comes on record or is kept: the dialog's
+// own line under what would be accepted (second review of passkey-g, G-02). The same instruction is behind the
+// info button of the Approval box; an admin who reads the dialogs only must not accept blind.
+const acceptCompare = "Compare it first with the machine's own: on the machine, fairy-agent helper-status, line \"machine id:\"."
+
+// approvalAcceptItems is that line, for the three accepts of an id (not on record, a new id, this host keeps
+// it). It is a line of its own, not a part of the one-line description: that one is cut (safeTarget,
+// maxActionText) and names hosts, and this sentence must be there in full whatever the hosts are called. An
+// accept of "its check is off" has no id to compare.
+func (c *reqCtx) approvalAcceptItems(*model.User) []string {
+	var req acceptBody
+	if json.Unmarshal(c.body, &req) != nil || req.MachineID == "" {
+		return nil
+	}
+	return []string{acceptCompare}
 }

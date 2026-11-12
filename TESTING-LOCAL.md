@@ -732,8 +732,9 @@ record.
    shows another machine id and that nothing was sent. The VM stays on, and its `helper.log` has no new
    `msg=request` line.
 4. In the Approval box press **Accept this machine's new id**. "Confirm it's you" says what would be
-   accepted (the first six characters of the id it shows and of the one on record). **Confirm (test
-   build)**. The red sentence is gone, and the tooltip of **Machine id** says "(accepted, by test-admin)".
+   accepted (the first eight and last six characters of the id it shows and of the one on record, as the
+   box shows them) and, under it, what to compare first: the line `machine id:` of `helper-status` on the
+   VM. **Confirm (test build)**. The red sentence is gone, and the tooltip of **Machine id** says "(accepted, by test-admin)".
 5. **Shut down** again: now Pocket ID asks for the passkey, and the countdown starts. **Cancel**.
 6. Menu, **Audit**: `approval.alarm` ("alarm: changed"), `approval.accept`, `approval.alarm` ("cleared").
 
@@ -750,7 +751,8 @@ what it has on record:
    its page first. Nothing was sent."
 9. Press the ⓘ in the box: it shows the id the VM shows, in full. Compare it with the VM's own (on the VM
    `helper-status`, the line `machine id:`); a machine that answers in another's name would show the other's
-   id. Then **Accept this machine's id**, **Confirm (test build)**. The red sentence is gone, the tooltip of
+   id. Then **Accept this machine's id**; "Confirm it's you" shows the id's first eight and last six
+   characters and the same instruction. **Confirm (test build)**. The red sentence is gone, the tooltip of
    **Machine id** says "(accepted, by test-admin)", and **Shut down** asks for the passkey again. **Cancel**.
    Audit: `approval.alarm` ("alarm: no_record"), `approval.accept`, `approval.alarm` ("cleared").
 

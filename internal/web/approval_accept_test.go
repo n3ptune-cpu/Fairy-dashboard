@@ -140,7 +140,7 @@ func TestIdentityChangedStopsApprovalsUntilAnAdminAccepts(t *testing.T) {
 	d, _ := r.body["detail"].(map[string]any)
 	if r.code != 401 || d["code"] != "step_up_required" || d["approval"] != nil ||
 		!strings.Contains(fmt.Sprint(d["action"]), "accept what laptop shows about its own check of approvals now") ||
-		!strings.Contains(fmt.Sprint(d["action"]), "it shows the machine id "+approval.ShortID(otherID)+"; on record is "+approval.ShortID(machineIDOf("laptop"))) {
+		!strings.Contains(fmt.Sprint(d["action"]), "it shows the machine id "+approval.CompareID(otherID)+"; on record is "+approval.CompareID(machineIDOf("laptop"))) {
 		t.Fatalf("an admin who signed in this second is still asked to confirm, with what would be accepted: %d %s", r.code, r.raw)
 	}
 	if b := a.s.Poller.BindingOf("laptop"); b.Status != approval.BindChanged {

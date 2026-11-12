@@ -57,7 +57,8 @@ type pendingAction struct {
 	Label   string // what the page calls the action (the X-Fairy-Action header of the request)
 	Action  string // what the panel itself says will run (describeAction): shown in the dialog and the audit log
 	// Items: for an action about a list (the machines of an "Update unpowered hosts" run), the panel's
-	// own line for each entry. Action is cut at maxActionText; the dialog shows these in full.
+	// own line for each entry; for the accept of a machine id, what to compare first. Action is cut at
+	// maxActionText; the dialog shows these in full.
 	Items  []string
 	At     time.Time
 	Client client // who asked for it: only this client can arm it, and only this client's confirmation runs it
@@ -216,9 +217,11 @@ var actionDetail = map[string]func(c *reqCtx, u *model.User) string{
 }
 
 // actionList is, per route, the panel's own line for each thing a kept request is about, when it is about a
-// list: the dialog shows every line, however long the list is (the one-line description is cut).
+// list: the dialog shows every line, however long the list is (the one-line description is cut). The accept of
+// a machine id has one line: what to compare first (api_machines.go).
 var actionList = map[string]func(c *reqCtx, u *model.User) []string{
-	"POST /api/admin/wake-update": (*reqCtx).wakeUpdateItems,
+	"POST /api/admin/wake-update":          (*reqCtx).wakeUpdateItems,
+	"POST /api/admin/approval/accept/{id}": (*reqCtx).approvalAcceptItems,
 }
 
 // maxActionItems is more than a run has machines (wakerun.MaxHosts). maxPlanItems is more than a Turn on has

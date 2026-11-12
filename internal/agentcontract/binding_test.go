@@ -449,7 +449,7 @@ func TestBindingIdentityChangedAndAccept(t *testing.T) {
 	}
 	// the admin: asked to confirm although the sign-in is seconds old, told what would be accepted
 	st, out = pn.call("POST", path, pn.acceptBody("pc-b"))
-	if d, _ := out["detail"].(map[string]any); !strings.Contains(fmt.Sprint(d["action"]), "it shows the machine id "+approval.ShortID(otherMachineID)+"; on record is "+approval.ShortID(idB)) {
+	if d, _ := out["detail"].(map[string]any); !strings.Contains(fmt.Sprint(d["action"]), "it shows the machine id "+approval.CompareID(otherMachineID)+"; on record is "+approval.CompareID(idB)) {
 		t.Fatalf("what the dialog says would be accepted: %d %v", st, out)
 	}
 	if res := pn.confirm(st, out); res["ok"] != true || !strings.Contains(fmt.Sprint(res["message"]), "the machine id it shows is on record now") {

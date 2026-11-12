@@ -576,7 +576,10 @@ and it is in no run. An admin resolves it in the host's Approval box: **Accept t
 record), **Accept this machine's new id** (changed) or "Accept that its check is off", in a browser, behind
 "Confirm it's you", with an entry in the Audit log. Before you accept an id, compare it with the machine's
 own: on the machine `fairy-agent helper-status`, line `machine id:` (the ⓘ in the box shows the id). A
-machine that answers in another's name shows the other's id.
+machine that answers in another's name shows the other's id. "Confirm it's you" says the same and shows the
+id as the box does, its first eight and last six characters. The comparison catches something that sits
+between the panel and the machine, and an agent that answers in another's name. It does not catch a host
+whose own administrator is hostile: only the real machine being on record in this panel stops that.
 For two hosts with one id, one id is accepted for one host only. The host that has the id on record has the
 button **This host keeps its machine id**; the other one has no button: its box names the host that keeps
 the id and says what to do (on that machine `fairy-agent helper-trust set --new-machine-id`, then accept the

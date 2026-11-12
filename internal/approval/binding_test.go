@@ -176,6 +176,27 @@ func TestNewMachineID(t *testing.T) {
 	}
 }
 
+// A machine id in the form to compare by eye (second review of passkey-g, G-02): the first eight and the last
+// six characters, as the Approval box shows it; never the id in full; the audit log's form stays the first six.
+func TestCompareID(t *testing.T) {
+	const id = "AbCdEfGh-0123456789_uVwXyZ"
+	if got := CompareID(id); got != "AbCdEfGh…uVwXyZ" {
+		t.Errorf("CompareID: %q", got)
+	}
+	if got := ShortID(id); got != "AbCdEf…" {
+		t.Errorf("ShortID: %q", got)
+	}
+	for n := api.MinMachineID; n <= api.MaxMachineID; n++ { // every length a machine id can have
+		id := strings.Repeat("x", n)
+		if got := CompareID(id); got == id || len([]rune(got)) != 15 {
+			t.Errorf("an id of %d characters: %q", n, got)
+		}
+	}
+	if CompareID("short") != "short" || CompareID("") != "" {
+		t.Error("a text that is no machine id is left as it is")
+	}
+}
+
 // Every alarm has one sentence for people, and it names the host.
 func TestBindingText(t *testing.T) {
 	for _, st := range []string{BindChanged, BindDuplicate, BindVanished, BindTooOld, BindNoRecord} {

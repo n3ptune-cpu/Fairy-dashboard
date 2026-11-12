@@ -272,6 +272,16 @@ func ShortID(id string) string {
 	return id
 }
 
+// CompareID is a machine id as the Approval box shows it and as the dialog of an accept shows it: the first
+// eight and the last six characters, the form to hold next to the machine's own (`fairy-agent helper-status`,
+// line "machine id:"). The page makes the same form (shortKey). The audit log keeps ShortID.
+func CompareID(id string) string {
+	if len(id) > 16 {
+		return id[:8] + "…" + id[len(id)-6:]
+	}
+	return id
+}
+
 // BindingText is one sentence for people about a host whose binding is not OK ("" for BindOK). name is the
 // host's name; with are the names of the hosts that share its id.
 func BindingText(name, status string, with []string) string {
