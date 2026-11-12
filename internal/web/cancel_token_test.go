@@ -9,8 +9,8 @@ import (
 // Second review of fix7a (R7A-10): since the cancel of a countdown passes the kill switch (2a2c6af), an API
 // token with control scope whose owner is an admin could cancel while the kill switch was on. A token skips
 // "Confirm it's you", and before that change the kill switch stopped tokens entirely. With the kill switch on
-// the cancel is for a signed-in admin's browser session only (with the confirmation, as before); a token gets
-// the 423 it always got. With the kill switch off nothing changes for a token.
+// the cancel is for a signed-in admin's browser session only (never asked to confirm: approval_cancel_test.go);
+// a token gets the 423 it always got. With the kill switch off nothing changes for a token.
 func TestWithTheKillSwitchOnACancelNeedsABrowserSession(t *testing.T) {
 	token := func(raw string) []string { return []string{"Authorization", "Bearer " + raw} }
 	// a panel whose laptop counts down, a control token and a read token (each step on a panel of its own: a
@@ -30,7 +30,7 @@ func TestWithTheKillSwitchOnACancelNeedsABrowserSession(t *testing.T) {
 	if r := e.post("cancel", token(ro)...); r.code != 403 || e.sent() != 0 {
 		t.Fatalf("kill switch off, a read token's cancel: %d %s", r.code, r.raw)
 	}
-	if r := e.post("cancel", token(ctl)...); r.code != 200 || r.body["message"] != "cancelled" || e.sent() != 1 {
+	if r := e.post("cancel", token(ctl)...); r.code != 200 || r.body["message"] != "The shutdown of laptop is cancelled." || e.sent() != 1 {
 		t.Fatalf("kill switch off, a control token's cancel: %d %s (requests sent: %d)", r.code, r.raw, e.sent())
 	}
 
@@ -68,8 +68,8 @@ func TestWithTheKillSwitchOnACancelNeedsABrowserSession(t *testing.T) {
 	if len(e.cancels()) != 0 {
 		t.Errorf("a refused cancel has a power.cancel entry: %v", e.cancels())
 	}
-	// the signed-in admin's cancel still goes through, with the CSRF header and a fresh confirmation
-	if r := e.post("cancel", e.admin...); r.code != 200 || r.body["message"] != "cancelled" || e.sent() != 1 {
+	// the signed-in admin's cancel still goes through, with the CSRF header
+	if r := e.post("cancel", e.admin...); r.code != 200 || r.body["message"] != "The shutdown of laptop is cancelled." || e.sent() != 1 {
 		t.Errorf("kill switch on, the page's Cancel of a signed-in admin: %d %s (requests sent: %d)", r.code, r.raw, e.sent())
 	}
 }
@@ -108,7 +108,7 @@ func TestNothingDressedUpAsACancelPassesTheKillSwitch(t *testing.T) {
 				t.Errorf("%s: with the kill switch on this left the panel: %s", body, q)
 			}
 		}
-		if r.code == 200 && r.body["message"] != "cancelled" {
+		if r.code == 200 && r.body["message"] != "The shutdown of laptop is cancelled." {
 			t.Errorf("%s: 200 %s", body, r.raw)
 		}
 		if r.code == 200 {

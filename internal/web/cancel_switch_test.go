@@ -130,22 +130,20 @@ func TestTheCancelOfACountdownPassesTheKillSwitchAndNothingElseDoes(t *testing.T
 				t.Errorf("%s: shutdown: %d %s", how, r.code, r.raw)
 			}
 		}
-		// the cancel is still an admin's action with the CSRF header and a fresh confirmation
+		// the cancel is still an admin's action with the CSRF header
 		if r := e.post("cancel", "Cookie", e.cookie(viewer, 0), "X-Requested-With", "fairy"); r.code != 403 {
 			t.Errorf("%s: a viewer's cancel: %d", how, r.code)
 		}
 		if r := e.post("cancel", "Cookie", e.c); r.code != 403 {
 			t.Errorf("%s: a cancel without the CSRF header: %d", how, r.code)
 		}
-		if r := e.post("cancel", "Cookie", e.cookie(controller(), 10*time.Minute), "X-Requested-With", "fairy"); r.code != 401 {
-			t.Errorf("%s: a cancel without a fresh confirmation: %d", how, r.code)
-		}
 		if e.sent() != 0 || len(e.cancels()) != 0 {
 			t.Fatalf("%s: a refused cancel was sent", how)
 		}
-		// and it goes through
-		r := e.post("cancel", e.admin...)
-		if r.code != 200 || r.body["message"] != "cancelled" || e.sent() != 1 {
+		// and it goes through, also with a sign-in that is ten minutes old: a cancel is never asked to confirm
+		// (approval_cancel_test.go)
+		r := e.post("cancel", "Cookie", e.cookie(controller(), 10*time.Minute), "X-Requested-With", "fairy")
+		if r.code != 200 || r.body["message"] != "The shutdown of laptop is cancelled." || e.sent() != 1 {
 			t.Fatalf("%s: the page's Cancel for the countdown: %d %s (requests sent: %d)", how, r.code, r.raw, e.sent())
 		}
 		en := e.cancels()

@@ -41,28 +41,25 @@ func (s *Server) powerAction(c *reqCtx) error {
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	// Calling a countdown off (the page's Cancel, the Power menu's "Cancel pending") is never refused because
-	// of other control requests: it has the request budget of the cancels (stopRL). And it is not refused by
-	// the kill switch or by the host's power switch either (controlAllowed without the kill switch here, as in
-	// stopGuard; powerctl.Capabilities for both switches): a cancel only ever stops a power action, and a
-	// countdown that was running when an admin flipped the switch could otherwise not be called off from the
-	// panel at all (audit 5, r3-p2-06). It is still an admin's action with the CSRF header and "Confirm it's
-	// you", and the audit entry says that control was off (control_off). Every other action is refused by the
-	// kill switch here, as before.
+	// Calling a countdown off (the page's Cancel, the Power menu's "Cancel pending") is not refused by the kill
+	// switch or by the host's power switch (controlAllowed without the kill switch here, as in stopGuard;
+	// powerctl.Capabilities for both switches): a cancel only ever stops a power action, and a countdown that
+	// was running when an admin flipped the switch could otherwise not be called off from the panel at all
+	// (audit 5, r3-p2-06). It is still an admin's action with the CSRF header, and the audit entry says that
+	// control was off (control_off). Every other action is refused by the kill switch here, as before.
 	//
-	// Past the kill switch only for a browser session: an API token cannot "confirm it's you", and the kill
-	// switch has always stopped tokens entirely. A token's cancel is refused by it like its every other write
-	// (423; second review of fix7a, R7A-10: for one batch a control token could cancel with the kill switch on).
-	// With the kill switch off a token's cancel is what it was.
-	bucket, killSwitch := s.control, true
-	if req.Action == "cancel" {
-		bucket, killSwitch = s.stopRL, asking.Auth == "token"
-	}
-	u, err := c.controlAllowed(killSwitch)
+	// Past the kill switch only for a browser session: the kill switch has always stopped tokens entirely. A
+	// token's cancel is refused by it like its every other write (423; second review of fix7a, R7A-10: for one
+	// batch a control token could cancel with the kill switch on). With the kill switch off a token's cancel
+	// is what it was.
+	u, err := c.controlAllowed(req.Action != "cancel" || asking.Auth == "token")
 	if err != nil {
 		return err
 	}
 	id := c.r.PathValue("id")
+	if req.Action == "cancel" {
+		return s.powerCancel(c, u, id, req)
+	}
 	// A machine that checks approvals itself is asked first (approval_control.go). Everything the action
 	// would be refused for anyway is checked before that, so nobody is sent to Pocket ID for nothing. Any
 	// other machine: "Confirm it's you" and then the checks, as before.
@@ -83,17 +80,14 @@ func (s *Server) powerAction(c *reqCtx) error {
 		}
 		return err
 	}
-	if !bucket.allow(u.Sub) {
-		return apierr.New(429, "too many control requests; slow down")
+	if !s.control.allow(u.Sub) {
+		return c.limited(u, s.control, "too many control requests")
 	}
 	x, err := c.find(id)
 	if err != nil {
 		return err
 	}
 	params := map[string]any{"action": req.Action, "delay_s": *req.DelayS}
-	if off := powerctl.ControlOff(s.Poller, x.ID); off != "" && req.Action == "cancel" {
-		params["control_off"] = off // the cancel went through although control is off: that is said
-	}
 	if ap != nil {
 		params["approval"] = "sent" // the machine checks it; the token itself is never written anywhere
 	}
@@ -124,6 +118,70 @@ func (s *Server) powerAction(c *reqCtx) error {
 	}
 	params["via"] = res.Via
 	c.audit(u, "power."+req.Action, id, params, "ok")
+	s.powerEvent(x, req, res, who)
+	c.json(200, res)
+	return nil
+}
+
+// cancelLate is how long after the end of a countdown (by the panel's clock against the time the agent gave) a
+// cancel is still reported as "sent at the end of the countdown" and not as "too late": the two clocks differ.
+const cancelLate = 2 * time.Second
+
+// powerCancel is "Cancel" of a pending shutdown, restart or sleep (audit 5, r1-b2-01). Stopping is the safe
+// direction and it has to be quick: a countdown can be ten seconds long. So it needs an admin, the CSRF header
+// and, for an API token, the kill switch (powerAction: a browser session's cancel passes the kill switch and
+// the host's power switch), and nothing more: no "Confirm it's you" and no approval of the machine, on machines
+// with and without the check (the agent takes a cancel without an approval, and has a request budget of its
+// own for it). It is the only power action that is let through like this.
+//
+// The agent answers a cancel with 200 whether or not something was still pending (it keeps a countdown that
+// ran out for another minute). So the panel does not repeat "cancelled" after it: it says what it knows. If
+// the countdown it showed had run out when the answer came, the machine is already shutting down, and the
+// answer is an error that says so.
+func (s *Server) powerCancel(c *reqCtx, u *model.User, id string, req powerctl.Request) error {
+	if !s.stopRL.allow(u.Sub) { // its own budget: calling a countdown off is never refused because of other control requests
+		return c.limited(u, s.stopRL, "too many control requests")
+	}
+	x, err := c.find(id)
+	if err != nil {
+		return err
+	}
+	params := map[string]any{"action": req.Action}
+	if off := powerctl.ControlOff(s.Poller, x.ID); off != "" {
+		params["control_off"] = off // the cancel went through although control is off: that is said
+	}
+	who := displayName(u)
+	was := x.PowerPending // what the page showed when Cancel was pressed
+	res, err := powerctl.Execute(c.r.Context(), s.Poller, x, req, who)
+	if err != nil {
+		why := ""
+		if a, ok := s.Poller.AgentFor(x.ID); ok {
+			why = s.unavailableWhy(a.ID)
+		}
+		err = approvalRefusal(x.Name, err, why)
+		c.audit(u, "power.cancel", id, params, errorOutcome(err))
+		return err
+	}
+	params["via"] = res.Via
+	what := "action"
+	if was != nil {
+		what = was.Action
+		params["pending"] = was.Action
+		if late := s.now().Sub(was.At); late > cancelLate {
+			// too late: the time was up before the cancel reached the machine
+			msg := fmt.Sprintf("Too late: the %s of %s had started %d s before the cancel reached it. Nothing was cancelled.", what, x.Name, int(late.Seconds()))
+			c.audit(u, "power.cancel", id, params, "error 409: too late, the countdown had run out")
+			return apierr.New(409, msg)
+		} else if late > -cancelLate {
+			res.Message = fmt.Sprintf("Cancel sent as the countdown of the %s of %s ran out: look whether it is still on.", what, x.Name)
+			c.audit(u, "power.cancel", id, params, "ok (sent as the countdown ran out)")
+			s.powerEvent(x, req, res, who)
+			c.json(200, res)
+			return nil
+		}
+	}
+	res.Message = fmt.Sprintf("The %s of %s is cancelled.", what, x.Name)
+	c.audit(u, "power.cancel", id, params, "ok")
 	s.powerEvent(x, req, res, who)
 	c.json(200, res)
 	return nil
