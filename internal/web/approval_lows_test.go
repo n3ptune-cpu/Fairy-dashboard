@@ -108,3 +108,44 @@ func TestAnApprovalWithNothingWaitingNamesTheCauses(t *testing.T) {
 		}
 	}
 }
+
+// r1-b2-09 (audit 5): the Audit page cut the details of an entry after escaping them, 64 characters into the
+// escaped text: `machines=["ALPHA-OFF&qu`. Approval entries are the first that carry lists. They are cut before
+// they are escaped, and a click shows all of them.
+func TestAuditDetailsAreCutBeforeTheyAreEscaped(t *testing.T) {
+	js := appJS(t)
+	if strings.Contains(js, ").slice(0, 64)}") {
+		t.Error("app.js cuts escaped text again")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed: the page's own function is not run here")
+	}
+	var parts []string
+	for _, re := range []string{`(?m)^const dict = .*$`, `(?m)^const esc = .*$`, `(?m)^const audit = .*$`, `(?ms)^const AUDIT_DET = .*?^function auditDetails\(e\) \{.*?^\}$`} {
+		m := regexp.MustCompile(re).FindString(js)
+		if m == "" {
+			t.Fatalf("app.js has no %s any more", re)
+		}
+		parts = append(parts, m)
+	}
+	script := `"use strict";
+` + strings.Join(parts, "\n") + `
+const fail = (m) => { console.log("FAIL " + m); process.exitCode = 1; };
+const e = { id: 7, params: { runs: "update all agents", machines: ["ALPHA-OFF", "BRAVO-REQ", "CHARLIE-BROKEN", "DELTA"], entries: 4 } };
+let h = auditDetails(e);
+if (/&[a-z#0-9]*(…|<)/.test(h) || !h.includes("…</button>") || !h.includes('title="runs=update all agents · machines=[&quot;ALPHA-OFF&quot;,&quot;BRAVO-REQ&quot;,&quot;CHARLIE-BROKEN&quot;,&quot;DELTA&quot;] · entries=4"')) fail("cut: " + h);
+audit.open[7] = true;
+h = auditDetails(e);
+if (!h.includes("&quot;DELTA&quot;] · entries=4</button>") || h.includes("…") || !h.includes('aria-expanded="true"')) fail("open: " + h);
+if (auditDetails({ id: 8, params: { delay_s: 10 } }) !== '<div class="note">delay_s=10</div>' || auditDetails({ id: 9 }) !== "") fail("short");
+if (!process.exitCode) console.log("ok");
+`
+	file := filepath.Join(t.TempDir(), "auditdet.js")
+	if err := os.WriteFile(file, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(node, file).CombinedOutput(); err != nil || !strings.HasPrefix(string(out), "ok") {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+}

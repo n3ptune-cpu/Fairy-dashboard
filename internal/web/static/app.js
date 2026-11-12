@@ -1419,7 +1419,16 @@ function pageUps() {
 }
 
 // ------------------------------------------------------------ audit page (control group only)
-const audit = { entries: [], next: null, q: "", action: "", host: "", loading: false, error: null };
+const audit = { entries: [], next: null, q: "", action: "", host: "", loading: false, error: null, open: dict() };
+// The details of an entry under its action: 64 characters, cut BEFORE they are escaped (it used to cut an entity
+// in two: machines=["ALPHA&qu), and a click shows all of them (audit 5, r1-b2-09).
+const AUDIT_DET = 64;
+function auditDetails(e) {
+  const d = Object.entries(e.params || {}).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ");
+  if (d.length <= AUDIT_DET) return d ? `<div class="note">${esc(d)}</div>` : "";
+  const open = !!audit.open[e.id];
+  return `<div class="note"><button class="audit-det" type="button" data-act="audit-det" data-id="${esc(e.id)}" aria-expanded="${open}" title="${open ? "Show less" : esc(d)}">${esc(open ? d : `${d.slice(0, AUDIT_DET - 1)}…`)}</button></div>`;
+}
 const AUDIT_ACTIONS = [["", "All actions"], ["auth", "Sign-in / step-up / denied"], ["power", "Power"], ["helper", "Elevated helper"], ["fan", "Fans"], ["poll", "Polling"],
   ["settings", "Settings"], ["token", "API tokens"], ["control", "Kill switch"], ["host", "Host admin"], ["sessions", "Sessions"],
   ["user", "Users / roles"], ["site", "Sites"], ["update", "Updates"], ["wakeupdate", "Update unpowered hosts"]];
@@ -1456,7 +1465,7 @@ function pageAudit() {
     ${audit.error ? `<div class="error">${esc(audit.error)}</div>` : ""}
     <div class="panel glass scroll"><table class="table audit"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Result</th><th>Source</th><th>IP</th></tr></thead><tbody>
     ${audit.entries.map((e) => `<tr class="row" data-key="a${esc(e.id)}"><td class="nowrap"><span data-ago="${esc(e.ts)}">${ago(e.ts)}</span><div class="note">${new Date(e.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div></td>
-      <td>${esc(e.actor)}${e.sub && e.sub !== e.actor ? `<div class="note" title="Account id (OIDC subject): the one part of this entry the owner of the account cannot choose. The name or address above is what the account says it is; '(unverified)' means Pocket ID did not verify that address.">id ${esc(e.sub)}</div>` : ""}</td><td><code>${esc(e.action)}</code>${Object.keys(e.params || {}).length ? `<div class="note">${esc(Object.entries(e.params).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ")).slice(0, 64)}</div>` : ""}</td>
+      <td>${esc(e.actor)}${e.sub && e.sub !== e.actor ? `<div class="note" title="Account id (OIDC subject): the one part of this entry the owner of the account cannot choose. The name or address above is what the account says it is; '(unverified)' means Pocket ID did not verify that address.">id ${esc(e.sub)}</div>` : ""}</td><td><code>${esc(e.action)}</code>${auditDetails(e)}</td>
       <td>${e.target ? (state.byId[e.target] ? `<a href="#/system/${enc(e.target)}">${esc(state.byId[e.target].name)}</a>` : esc(e.target)) : '<span class="note">–</span>'}</td>
       <td>${auditOutcome(e.outcome)}</td><td><span class="chip ${e.source === "cli" ? "warn" : e.source.startsWith("token:") ? "tok" : ""}" title="${esc(e.source)}">${esc(e.source.length > 16 ? e.source.slice(0, 15) + "…" : e.source)}</span></td>
       <td class="note">${esc(e.ip || "–")}</td></tr>`).join("") || `<tr><td colspan="7" class="note">${audit.loading ? "Loading…" : "No entries match."}</td></tr>`}</tbody></table></div>
@@ -1469,6 +1478,11 @@ document.addEventListener("submit", (e) => {
   loadAudit(true);
 });
 document.addEventListener("click", (e) => { if (e.target.closest('[data-act="audit-more"]')) loadAudit(false); });
+document.addEventListener("click", (e) => {
+  const b = e.target.closest('[data-act="audit-det"]');
+  if (!b) return;
+  audit.open[b.dataset.id] = !audit.open[b.dataset.id]; render();
+});
 
 // ------------------------------------------------------------ updates (admins only)
 // Each agent's version and self-update state next to the latest Fairy-agent release. Update makes the agent

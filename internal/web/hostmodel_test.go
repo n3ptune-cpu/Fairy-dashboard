@@ -627,7 +627,7 @@ func TestCustomModelIsTextNotMarkup(t *testing.T) {
 		"clear.title = reported ? `Show the reported model again: ${reported}` :", // what Clear does: its tooltip, a property
 		`err.textContent = x.message;`,                              // the panel's sentence, as text
 		`body: JSON.stringify({ custom_model: name })`,              // sent as JSON
-		`${esc(Object.entries(e.params).map(`,                       // the Audit page: an entry's values
+		"${esc(open ? d : `${d.slice(0, AUDIT_DET - 1)}…`)}",        // the Audit page: an entry's values
 		`if (!isHost(s) || !state.me?.can_manage_users) return "";`, // the menu entry: admins, hosts
 	} {
 		if !strings.Contains(js, want) {
