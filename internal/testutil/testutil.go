@@ -78,9 +78,11 @@ func PVEResources() []jsonx.M {
 	}
 }
 
-// AgentMetrics is an agent /metrics fixture.
+// AgentMetrics is an agent /metrics fixture. It has what every agent sends ("agent_version", here empty so
+// that the host's version stays unknown, and "platform"): the poller takes an answer without them as
+// "invalid response".
 func AgentMetrics() jsonx.M {
-	return jsonx.M{"hostname": "laptop", "platform": jsonx.M{"system": "Linux", "pretty": "Ubuntu 24.04.1 LTS"}, "uptime_s": 3600.0,
+	return jsonx.M{"agent_version": "", "hostname": "laptop", "platform": jsonx.M{"system": "Linux", "pretty": "Ubuntu 24.04.1 LTS"}, "uptime_s": 3600.0,
 		"cpu": jsonx.M{"percent": 12.5, "logical": 8.0}, "memory": jsonx.M{"total": float64(16 << 30), "used": float64(6 << 30)},
 		"disks": []any{jsonx.M{"mount": "/", "fstype": "ext4", "total": float64(500 << 30), "used": float64(100 << 30)},
 			jsonx.M{"mount": "/home", "fstype": "ext4", "total": float64(1000 << 30), "used": float64(300 << 30)}},

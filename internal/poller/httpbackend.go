@@ -547,10 +547,26 @@ func (b *httpBackend) FetchAgentMetrics(ctx context.Context, a config.Agent, tim
 		GotFirstResponseByte: func() { answered.Store(true) },
 	})
 	d, _, err := getJSON(ctx, b.agents, b.agentURL(a, "/metrics"), map[string]string{"Authorization": "Bearer " + b.readToken(a.ID)}, timeout, maxAgentBody)
+	if err == nil && !agentMetrics(d) {
+		d, err = nil, devices.Errf("invalid response")
+	}
 	if err != nil && (connected.Load() || answered.Load()) {
 		err = &reachedError{err: err, answered: answered.Load()}
 	}
 	return d, err
+}
+
+// agentMetrics reports whether a 200 answer to /metrics is an agent's. JSON alone is not enough: another
+// service at the agent's address (a wrong URL, a device that took the address over) that answers 200 with
+// {"a":"b"} used to make the host "online" with empty readings, and it never went offline (bug run of audit
+// 5, r2-b1-01). Every fairy-agent build since the first one sends "agent_version" as a text (a build made by
+// hand: "dev") and "platform" as an object (also with hide_host_details), whatever else is switched on or
+// off; an answer without them is "invalid response", like one that is not JSON. Nothing else is asked for,
+// and no value is looked at, so an agent that adds or drops other fields is not turned away.
+func agentMetrics(d jsonx.M) bool {
+	_, version := d["agent_version"].(string)
+	_, platform := d["platform"].(map[string]any)
+	return version && platform
 }
 
 func (b *httpBackend) FetchProcesses(ctx context.Context, a config.Agent, sid string, limit int, sortBy string) (model.ProcessList, error) {

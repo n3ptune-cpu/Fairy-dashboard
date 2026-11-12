@@ -36,7 +36,7 @@ func TestProbeAgentAsksTheAgentItself(t *testing.T) {
 		case "junk":
 			_, _ = w.Write([]byte("<html>not an agent</html>"))
 		default:
-			_, _ = w.Write([]byte(`{"hostname":"laptop","uptime_s":42,"agent_version":"16-abcdef0"}`))
+			_, _ = w.Write([]byte(`{"hostname":"laptop","uptime_s":42,"agent_version":"16-abcdef0","platform":{"system":"Linux","pretty":"Linux"}}`))
 		}
 	}))
 	defer laptop.Close()
