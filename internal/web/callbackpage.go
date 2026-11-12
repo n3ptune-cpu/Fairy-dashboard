@@ -29,6 +29,11 @@ const (
 	cbUnchecked   = "Fairy could not check Pocket ID's answer (an answer is good only once). Go back and try again; if it happens again, the panel's log says why."
 	cbUnreachable = "Fairy could not reach Pocket ID. Try again in a moment."
 	cbRefused     = "Pocket ID signed you in, but this account may not use this panel. An administrator decides that with the allowed groups and e-mail addresses in Fairy's config."
+
+	// A repeat of a confirmation's callback from the cookie it was started with (steprepeat.go).
+	cbRepeat     = "Already confirmed"
+	cbRepeatRan  = "The action was already sent. It is not sent again. Sign in again to go on."
+	cbRepeatNone = "This confirmation was already used. Sign in again to go on."
 )
 
 // callbackPage is where a refused callback ends: title is cbSignIn for a sign-in and cbConfirm for a
@@ -56,6 +61,16 @@ func (p callbackPage) limited(l *rateLimiter, key string) error {
 	wait := max(l.wait(key), 1)
 	p.c.w.Header().Set("Retry-After", strconv.Itoa(wait))
 	return p.refuse(429, fmt.Sprintf("Too many sign-in attempts from this address. Try again in %d s.", wait))
+}
+
+// repeated is the answer to the repeat of a confirmation's callback that was accepted, from the cookie the
+// round trip was started with: the page says so and sets no cookie. ran: a kept action was run by the first.
+func (p callbackPage) repeated(ran bool) error {
+	p.title = cbRepeat
+	if ran {
+		return p.refuse(409, cbRepeatRan)
+	}
+	return p.refuse(409, cbRepeatNone)
 }
 
 // failed is the refusal of a callback whose answer from Pocket ID did not pass: code is Pocket ID's own error

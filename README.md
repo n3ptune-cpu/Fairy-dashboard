@@ -951,11 +951,12 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   `/auth/login` in any form runs nothing and throws the waiting action away. The dialog and the audit log
   (`auth.step_up`, fields `for` and `runs`) name the action in the panel's own words. What runs is the request
   as it was first routed (same route, same parameters, same body). It runs to its end also when the browser
-  leaves in the middle (a reload, a broken connection). When the answer after the sign-in does not arrive and
-  the browser asks the same address again, the panel answers again instead of refusing: for 2 minutes
-  it remembers the confirmation it last accepted for a session (memory only) and gives the same browser and
-  address the session and the page that answer carried, while nobody has used that session yet. The action
-  is not run a second time, and the page shows its result. Any other repeat is refused as before.
+  leaves in the middle (a reload, a broken connection), and it runs once. Opening the address of an accepted
+  confirmation a second time (a reload, a lost answer) never hands out a session or a confirmation: a browser
+  that already holds the new session is sent to its page again, and one that still holds the cookie from
+  before gets a page that says the action was already sent, and signs in again. The panel recognises such a
+  repeat for 2 minutes (memory only) by the confirmation's state and code, the client's address and its
+  browser; any other repeat is refused as before.
   A refusal at the address Pocket ID sends the browser back to (cancelled there, started more than 10 minutes
   ago, an answer that does not check, the limit, Pocket ID not reachable, an account that is not allowed) is
   a small page without script: what happened in one sentence and one link back to the panel. Which check of
