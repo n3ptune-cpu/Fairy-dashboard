@@ -108,6 +108,16 @@ func update(args []string) int {
 		*yes = true
 		status = &panelupdate.Writer{Path: panelupdate.StatusPath, From: version}
 	}
+	if !*check {
+		// One update at a time on this host, from the first look to the end of a rollback: two runs that
+		// overlap take each other's fairy.old away, and a release that does not come up then leaves no
+		// working program (r2-p4-06).
+		unlock, err := lockUpdate(updateLockPath(exe))
+		if err != nil {
+			return updateLocked(err, updateLockPath(exe), status, panelupdate.StatusPath)
+		}
+		defer unlock()
+	}
 	// A run by hand also sets up the Update panel button (a unit file, a polkit rule, the package polkitd when
 	// it is missing). Nothing of that happens before the question is answered with yes: it is said first, and
 	// done after an update that went through, or after a question of its own when there is nothing to update.
@@ -167,6 +177,31 @@ func update(args []string) int {
 		setupPanelButton()
 	}
 	return 0
+}
+
+// errUpdateRunning: another `fairy update` on this host holds the lock.
+var errUpdateRunning = errors.New("an update is already running on this host (the Update panel button, or `fairy update` in another terminal): " +
+	"nothing was done. Wait for it to end and look at its result first")
+
+// updateLockPath is the lock file: next to the program, where both a run by hand and the button's unit may
+// write (the unit's ReadWritePaths). It stays there, empty.
+func updateLockPath(exe string) string {
+	return filepath.Join(filepath.Dir(exe), ".fairy-update.lock")
+}
+
+// updateLocked reports why the lock was not taken. The button's run also puts it into the status file for
+// the page, unless that file belongs to a run that is still going (the one that holds the lock).
+func updateLocked(err error, lockPath string, status *panelupdate.Writer, statusPath string) int {
+	if !errors.Is(err, errUpdateRunning) {
+		err = fmt.Errorf("cannot take the update lock %s: %w", lockPath, err)
+	}
+	fmt.Fprintln(os.Stderr, "fairy update:", err)
+	if status != nil {
+		if st, ok := panelupdate.Read(statusPath); !ok || st.Finished {
+			status.Step("failed", "", err.Error())
+		}
+	}
+	return 1
 }
 
 // answers hands release.CLI the terminal one line at a time and remembers what was answered, so that this

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -269,5 +270,61 @@ func TestTheButtonIsSetUpOnlyAfterAYes(t *testing.T) {
 	_ = os.WriteFile(unit, []byte("[Unit]\nDescription=older\n"), 0o644)
 	if p := panelupdate.Pending(unit, rules); len(p) != 1 || p[0] != "write "+unit {
 		t.Fatal(p)
+	}
+}
+
+// r2-p4-06 (audit 5): two `fairy update` runs that overlap took each other's fairy.old away; with a release
+// that does not come up no working program was left. One lock, held for the whole run, keeps them apart.
+func TestOneUpdateAtATime(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fairy update installs on Linux only")
+	}
+	dir := t.TempDir()
+	lock := updateLockPath(filepath.Join(dir, "fairy"))
+	if lock != filepath.Join(dir, ".fairy-update.lock") {
+		t.Fatal(lock)
+	}
+	unlock, err := lockUpdate(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockUpdate(lock); !errors.Is(err, errUpdateRunning) {
+		t.Fatal("a second run got the lock:", err)
+	}
+	// the second run, started by the button: it says so on the page, unless the page shows the first run
+	statusPath := filepath.Join(dir, "state", "status.json")
+	second := &panelupdate.Writer{Path: statusPath, From: "50-a"}
+	if code := updateLocked(errUpdateRunning, lock, second, statusPath); code != 1 {
+		t.Fatal(code)
+	}
+	st, ok := panelupdate.Read(statusPath)
+	if !ok || st.State != "failed" || !st.Finished || !strings.Contains(st.Message, "an update is already running on this host") {
+		t.Fatalf("%+v", st)
+	}
+	first := &panelupdate.Writer{Path: statusPath, From: "50-a"}
+	first.Step("downloading", "51-b", "downloading fairy-linux-amd64") // the run that holds the lock is the button's
+	if code := updateLocked(errUpdateRunning, lock, second, statusPath); code != 1 {
+		t.Fatal(code)
+	}
+	if st, _ := panelupdate.Read(statusPath); st.State != "downloading" || st.Finished {
+		t.Fatalf("the running run's status was written over: %+v", st)
+	}
+	// by hand: no status file is touched
+	if code := updateLocked(errUpdateRunning, lock, nil, statusPath); code != 1 {
+		t.Fatal(code)
+	}
+	// the first run ends (also by a crash: the system lets go of the lock): the next one gets it
+	unlock()
+	unlock2, err := lockUpdate(lock)
+	if err != nil {
+		t.Fatal("after the first run ended:", err)
+	}
+	unlock2()
+	if _, err := os.Stat(lock); err != nil {
+		t.Fatal("the lock file stays:", err)
+	}
+	// a lock that cannot be made is an error of its own, not "already running"
+	if _, err := lockUpdate(filepath.Join(dir, "none", ".fairy-update.lock")); err == nil || errors.Is(err, errUpdateRunning) {
+		t.Fatal(err)
 	}
 }
