@@ -29,3 +29,23 @@ func TestUIADialogClosesWhenTheAddressChanges(t *testing.T) {
 		t.Error("route() does not close a dialog of another address")
 	}
 }
+
+// r2-b1-05: the Fans tab was built anew with every refresh, so the mode button that opened "Confirm it's you"
+// was gone when the dialog closed and the focus was on nothing (12 of 12). And outside full mode, where the BMC
+// tells no duty, both zones read "50%": a number nobody measured.
+func TestUIFansTabKeepsItsButtonsAndShowsNoMadeUpDuty(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		"morph(body, `<div class=\"warnbox\">Writes go to the BMC.",
+		`const known = f.duty[z] != null, v = known ? f.duty[z] : 50;`,
+		"${known ? `${esc(v)}%` : \"–\"}</b>",
+		`body.querySelectorAll("[data-zone]").forEach((r) => (r.value = r.getAttribute("value")));`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	if strings.Contains(js, "f.duty[z] ?? 50") || strings.Contains(js, "body.innerHTML = `<div class=\"warnbox\">Writes go to the BMC.") {
+		t.Error("the Fans tab is built anew, or shows 50% for a duty that is not known")
+	}
+}

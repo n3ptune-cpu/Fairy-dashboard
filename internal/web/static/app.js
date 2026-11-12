@@ -984,17 +984,19 @@ async function loadFans(id) {
       const title = no ? "this board's BMC doesn't support this mode" : m === f.auto_mode ? "this board's automatic mode (fan_control.auto_mode)" : "";
       return `<button class="btn ${f.mode === m ? "on" : ""} ${no ? "unsupported" : ""}" data-mode="${m}" ${canCtl && !no ? "" : "disabled"}${title ? ` title="${esc(title)}"` : ""}${no ? ' aria-disabled="true"' : ""}>${m}${m === f.auto_mode ? ' <span class="note">auto</span>' : ""}</button>`;
     };
-    body.innerHTML = `<div class="warnbox">Writes go to the BMC. Manual speeds are never below <b>${esc(floor)}%</b> (the agent's minimum; the panel never sends less than 30%).${limits}${canCtl ? "" : ` ${esc(controlWhyNot())}`}</div>
+    // patched in place, not built anew: a mode button that opened "Confirm it's you" is still there to get the focus back
+    morph(body, `<div class="warnbox">Writes go to the BMC. Manual speeds are never below <b>${esc(floor)}%</b> (the agent's minimum; the panel never sends less than 30%).${limits}${canCtl ? "" : ` ${esc(controlWhyNot())}`}</div>
       ${f.error ? `<div class="error">${esc(f.error)}</div>` : ""}
       <div class="grid2"><div class="panel glass pad"><h3>Mode</h3><div class="row-gap">${["optimal", "standard", "heavyio", "full"].map(modeBtn).join("")}</div>
         ${unsupported.size ? `<div class="note">Greyed out: this board's BMC doesn't support ${esc([...unsupported].join(", "))}.</div>` : ""}
         <h3 class="gap">Zone duty (full mode only)</h3>${[0, 1].map((z) => {
-          const v = f.duty[z] ?? 50;
+          const known = f.duty[z] != null, v = known ? f.duty[z] : 50;  // the BMC tells a zone's duty in full mode only: no number without one
           return `<div class="duty-row"><span>Zone ${z}</span><input type="range" min="${esc(floor)}" max="100" step="5" value="${esc(v)}" data-zone="${z}" ${canCtl && full ? "" : "disabled"}>
-          <b data-duty-label="${z}">${esc(v)}%</b><button class="btn" data-apply="${z}" ${canCtl && full ? "" : "disabled"}>Set</button></div>`; }).join("")}
+          <b data-duty-label="${z}"${known ? "" : ' title="Not known: the BMC reports a zone\'s duty in full mode only"'}>${known ? `${esc(v)}%` : "–"}</b><button class="btn" data-apply="${z}" ${canCtl && full ? "" : "disabled"}>Set</button></div>`; }).join("")}
         <div class="note">Zone 0: CPU/system headers (FAN1…), zone 1: peripheral (FANA). Verify on your board.</div><div class="error" id="fan-err" role="alert">${esc(fanMsg[id] || "")}</div></div>
       <div class="stack"><div class="panel glass pad"><h3>Fans</h3>${f.fans.map((x) => `<div class="list-row"><span>${esc(x.name)}</span><span>${esc(x.rpm)} rpm</span></div>`).join("") || '<div class="note">no fan sensors</div>'}</div>
-        <div class="panel glass pad"><h3>Events</h3>${(f.events || []).slice().reverse().map((e) => `<div class="list-row"><span>${new Date(e.t * 1000).toLocaleTimeString()}</span><span>${esc(e.action)} · ${esc(e.detail)}</span></div>`).join("") || '<div class="note">none</div>'}</div></div></div>`;
+        <div class="panel glass pad"><h3>Events</h3>${(f.events || []).slice().reverse().map((e) => `<div class="list-row"><span>${new Date(e.t * 1000).toLocaleTimeString()}</span><span>${esc(e.action)} · ${esc(e.detail)}</span></div>`).join("") || '<div class="note">none</div>'}</div></div></div>`);
+    body.querySelectorAll("[data-zone]").forEach((r) => (r.value = r.getAttribute("value")));  // a slider that was moved shows what the BMC holds again
     const post = async (path, payload) => {
       const url = `/api/systems/${enc(id)}${path}`;
       try {
