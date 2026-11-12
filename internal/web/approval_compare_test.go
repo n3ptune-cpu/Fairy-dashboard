@@ -20,32 +20,32 @@ func itemsOf(r resp) []any {
 //
 // For each of the three accepts of an id ("Accept this machine's id", "This host keeps its machine id",
 // "Accept this machine's new id") "Confirm it's you" has the panel's own line, in full, under what would be
-// accepted; the id is the first eight and the last six characters there, never the id in full; the audit log
-// keeps the first six. The accept of "its check is off" has no id and no such line.
+// accepted; the audit log keeps the first six characters of an id. The accept of "its check is off" has no id
+// and no such line.
+//
+// Changed with audit 6, r4-p3-02: the dialog's lines now give the id that would be accepted IN FULL (and the
+// one on record, when it is another one), above the line that says what to compare. This test held the
+// opposite ("never the id in full"), which let a look-alike id pass: TestTheAcceptDialogShowsTheIDInFull.
 func TestTheAcceptDialogSaysWhatToCompare(t *testing.T) {
 	const compare = `Compare it first with the machine's own: on the machine, fairy-agent helper-status, line "machine id:".`
 	x := newAcceptAdmin(t)
 	idL := machineIDOf("laptop")
-	dialog := func(when string, r resp, want string, ids ...string) {
+	dialog := func(when string, r resp, want string, lines ...string) {
 		t.Helper()
 		got := actionOf(r)
 		if r.code != 401 || pendingID(r) == "" || !strings.Contains(got, want) {
 			t.Fatalf("%s: the dialog: %d %q, want %q", when, r.code, got, want)
 		}
-		if items := itemsOf(r); len(items) != 1 || items[0] != compare {
-			t.Fatalf("%s: the dialog's own line: %v", when, items)
-		}
-		for _, id := range ids {
-			if strings.Contains(string(r.raw), id) {
-				t.Fatalf("%s: the dialog's answer has the id in full: %s", when, r.raw)
-			}
+		// (audit 6, r4-p3-02: the ids in full, then what to compare; it was the one line, and no id in full)
+		if items := itemsOf(r); fmt.Sprint(items) != fmt.Sprint(append(lines, compare)) {
+			t.Fatalf("%s: the dialog's own lines: %v", when, items)
 		}
 	}
 	// 1. not on record
 	x.setTrust(t, x.laptop)
 	x.poll()
 	r := x.press("laptop", map[string]any{"machine_id": idL})
-	dialog("not on record", r, "it shows the machine id "+approval.CompareID(idL)+", which is not on record", idL)
+	dialog("not on record", r, "it shows the machine id "+approval.CompareID(idL)+", which is not on record", "Machine id it shows: "+idL)
 	if res := x.confirm(t, r); res["ok"] != true {
 		t.Fatalf("the accept: %v", res)
 	}
@@ -53,7 +53,7 @@ func TestTheAcceptDialogSaysWhatToCompare(t *testing.T) {
 	x.setTrustID(t, x.tower, idL)
 	x.poll()
 	r = x.press("laptop", map[string]any{"machine_id": idL})
-	dialog("keeps", r, "it keeps its machine id "+approval.CompareID(idL)+"; tower must get a new one", idL)
+	dialog("keeps", r, "it keeps its machine id "+approval.CompareID(idL)+"; tower must get a new one", "Machine id it keeps: "+idL)
 	if res := x.confirm(t, r); res["ok"] != true {
 		t.Fatalf("the accept: %v", res)
 	}
@@ -61,7 +61,7 @@ func TestTheAcceptDialogSaysWhatToCompare(t *testing.T) {
 	x.setTrustID(t, x.laptop, otherID)
 	x.poll()
 	r = x.press("laptop", map[string]any{"machine_id": otherID})
-	dialog("a new id", r, "it shows the machine id "+approval.CompareID(otherID)+"; on record is "+approval.CompareID(idL), idL, otherID)
+	dialog("a new id", r, "it shows the machine id "+approval.CompareID(otherID)+"; on record is "+approval.CompareID(idL), "Machine id it shows: "+otherID, "Machine id on record: "+idL)
 	if res := x.confirm(t, r); res["ok"] != true {
 		t.Fatalf("the accept: %v", res)
 	}
@@ -92,7 +92,7 @@ func TestTheAcceptDialogSaysWhatToCompare(t *testing.T) {
 	// the page shows the lines of the dialog, and makes the same form of an id in the box
 	js := appJS(t)
 	for _, want := range []string{
-		"const items = kept && Array.isArray(detail.items) && detail.items.length ? `<ul class=\"su-items\" id=\"su-items\">${detail.items.map((x) => `<li>${esc(x)}</li>`).join(\"\")}</ul>` : \"\";",
+		"const items = kept && Array.isArray(detail.items) && detail.items.length ? suIds(`<ul class=\"su-items\" id=\"su-items\">${detail.items.map((x) => `<li>${esc(x)}</li>`).join(\"\")}</ul>`) : \"\";", // (r4-p3-02: suIds around it)
 		"const shortKey = (t) => (typeof t === \"string\" && t.length > 16 ? `${t.slice(0, 8)}…${t.slice(-6)}` : String(t ?? \"\"));",
 	} {
 		if !strings.Contains(js, want) {
@@ -139,7 +139,7 @@ func TestTheDialogOfANewIDNamesAHostThatShowsTheSameID(t *testing.T) {
 	}
 	r = x.press("laptop", map[string]any{"machine_id": otherID})
 	want := "(it shows the machine id " + approval.CompareID(otherID) + "; on record is " + approval.CompareID(idL) + "; tower shows the same id)"
-	if got := actionOf(r); r.code != 401 || !strings.HasSuffix(got, want) || len(itemsOf(r)) != 1 {
+	if got := actionOf(r); r.code != 401 || !strings.HasSuffix(got, want) || len(itemsOf(r)) != 3 { // (r4-p3-02: the two ids in full and the line; it was the line alone)
 		t.Fatalf("the dialog for laptop: %d %q %v", r.code, got, itemsOf(r))
 	}
 	// the admin presses the right one: the machine that has a record

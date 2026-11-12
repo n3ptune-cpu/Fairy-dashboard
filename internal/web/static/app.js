@@ -246,6 +246,12 @@ function backToLeftPage() {
 // every way of leaving the dialog without "Continue" (Cancel, Escape, a click outside, reload, closing the tab)
 // tells the server to forget it. The dialog shows what the panel itself says it will run (detail.action).
 let stepUpOpen = null;  // the open dialog: { kept, going } (going: "Continue to Pocket ID" was pressed)
+// The dialog's list (already escaped). A line that gives a machine id ("Machine id it shows: <id>", from the
+// accept of an id) shows the id IN FULL in a line of its own: monospace, it wraps, and one click selects all of
+// it. It is what the admin holds next to the machine's own, character by character; a short form let a
+// look-alike pass. Only a line of exactly that shape is touched: a label of small letters and an id's characters.
+const SU_ID = /<li>(Machine id [a-z ]{1,24}): ([A-Za-z0-9_-]{8,128})<\/li>/g;
+const suIds = (html) => html.replace(SU_ID, '<li class="su-id">$1<code>$2</code></li>');
 function showStepUp(pending, detail) {
   state.menu = null; render();
   const kept = !!detail?.pending, perAction = !!detail?.per_action;  // per_action: step_up_per_action is on
@@ -272,7 +278,7 @@ function showStepUp(pending, detail) {
   const signs = kept && appr && typeof detail.signs === "string" && detail.signs ? `<span class="note">Your passkey signs</span><b id="su-signs">${esc(detail.signs)}</b>` : "";
   const client = appr ? `<span class="note">Client ID${clientIdInfo("su-client-id")}</span><b id="su-client"><code>${esc(appr.client_id || "–")}</code></b>` : "";
   // An action about a list (the machines of "Update unpowered hosts"): the panel's own line for each one.
-  const items = kept && Array.isArray(detail.items) && detail.items.length ? `<ul class="su-items" id="su-items">${detail.items.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  const items = kept && Array.isArray(detail.items) && detail.items.length ? suIds(`<ul class="su-items" id="su-items">${detail.items.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`) : "";
   const m = $("#modal");
   m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle"${appr ? " data-approval" : ""}>
     <div class="stepup-ico">${I.shield}</div>

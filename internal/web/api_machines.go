@@ -333,14 +333,37 @@ func (c *reqCtx) approvalAcceptDetail(*model.User) string {
 // info button of the Approval box; an admin who reads the dialogs only must not accept blind.
 const acceptCompare = "Compare it first with the machine's own: on the machine, fairy-agent helper-status, line \"machine id:\"."
 
-// approvalAcceptItems is that line, for the three accepts of an id (not on record, a new id, this host keeps
-// it). It is a line of its own, not a part of the one-line description: that one is cut (safeTarget,
-// maxActionText) and names hosts, and this sentence must be there in full whatever the hosts are called. An
-// accept of "its check is off" has no id to compare.
+// The dialog's lines with a machine id IN FULL (audit 6, r4-p3-02). The page shows the id of such a line in a
+// line of its own, monospace, that wraps and can be selected (app.js, suItem: it goes by these prefixes).
+const (
+	acceptIDShows  = "Machine id it shows: "
+	acceptIDKeeps  = "Machine id it keeps: "
+	acceptIDRecord = "Machine id on record: "
+)
+
+// approvalAcceptItems are the dialog's own lines for the three accepts of an id (not on record, a new id, this
+// host keeps it): the id that would be accepted, IN FULL, the id on record in full when it is another one,
+// and what to compare them with. They are lines of their own, not a part of the one-line description: that
+// one is cut (safeTarget, maxActionText) and names hosts, and these must be there in full whatever the hosts
+// are called. An accept of "its check is off" has no id to compare.
+//
+// In full, because the comparison with the machine's own `fairy-agent helper-status` is the security step of
+// an accept, and a short form (the first eight and the last six characters, as the dialog's rows have it)
+// let a look-alike id pass: "GONEmach…000004" on both lines, for two different ids (r4-p3-02). The id shown
+// is the one the request names, which is exactly what comes on record: a host that shows another one when
+// the request runs is refused (AcceptMachine). The accept is for an admin in a browser only, so no token
+// ever gets these lines.
 func (c *reqCtx) approvalAcceptItems(*model.User) []string {
 	var req acceptBody
 	if json.Unmarshal(c.body, &req) != nil || req.MachineID == "" {
 		return nil
 	}
-	return []string{acceptCompare}
+	rec := c.s.Poller.BindingOf(c.r.PathValue("id")).Record.MachineID
+	switch {
+	case rec == req.MachineID:
+		return []string{acceptIDKeeps + req.MachineID, acceptCompare}
+	case rec != "":
+		return []string{acceptIDShows + req.MachineID, acceptIDRecord + rec, acceptCompare}
+	}
+	return []string{acceptIDShows + req.MachineID, acceptCompare}
 }
