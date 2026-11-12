@@ -387,7 +387,9 @@ The rules, in plain words:
   stopped: a paused or suspended guest, one whose state the API gives as "unknown" (or not at all), and one
   whose polling is paused in the panel keep the node on as well. If the panel cannot know (the API has not
   answered since the node came online, or the machine is a Proxmox host that the panel knows only through
-  its agent), the node is left on, and the report says why. The panel counts the guests the API lists for
+  its agent), the node is left on, and the report says why. "Since the node came online" is decided by the
+  time of day and by the panel's steady clock, and both must agree: a list from before the node was up does
+  not count as new because the panel's clock was set back. The panel counts the guests the API lists for
   its token: **the token must be allowed to see every guest** (role `PVEAuditor` on `/`, as Add host makes it;
   a token of your own in `proxmox:` needs `VM.Audit` on the guests). A guest the API does not list for the
   token does not exist for the panel, and a node whose guests are not listed is treated as a node without

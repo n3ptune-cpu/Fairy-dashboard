@@ -305,6 +305,16 @@ func (o runOps) Guests(id string, since time.Time) (int, bool, string) {
 			fresh = st.OK && st.LastSuccess != nil && st.LastSuccess.After(since)
 		}
 	}
+	// "After since" compares two times of day, and the panel's clock can be set between them: set back an hour
+	// before the node's first answer, the list from before the wake (the node off, its guests stopped) looked an
+	// hour newer than the node's coming online, and the node was judged free of running guests on it. So the
+	// same is asked on the poller's steady clock as well, and both must hold: the Proxmox API's last good
+	// answer came after the node's agent came up (poller.AnsweredSinceUp). When the poller cannot tell, that
+	// is "cannot see its guests", and the node is left on. (A node without an agent is asked about by no run:
+	// Host fails for it.)
+	if a, ok := o.s.Poller.AgentFor(id); fresh && ok {
+		fresh = o.s.Poller.AnsweredSinceUp(src, a.ID)
+	}
 	if !fresh {
 		return 0, false, "its Proxmox API has not answered since it came online"
 	}

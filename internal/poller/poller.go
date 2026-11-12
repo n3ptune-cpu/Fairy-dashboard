@@ -77,6 +77,7 @@ type Poller struct {
 	mu            sync.Mutex
 	systems       map[string]model.System
 	sources       map[string]model.SourceStatus
+	sourceMono    map[string]time.Duration // source name -> the steady clock at its last good answer (AnsweredSinceUp)
 	sourceOrder   []string
 	agentPower    map[string]*model.ComponentPower
 	pveRefs       map[string]pveRef
@@ -115,7 +116,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 	p := &Poller{Cfg: cfg, Secrets: secrets, Clock: time.Now, born: time.Now(), rates: normalise.NewRateTracker(),
 		overrides: map[string]*config.SystemOverride{}, agents: map[string]config.Agent{},
 		clusters: map[string]config.Proxmox{}, systems: map[string]model.System{},
-		sources: map[string]model.SourceStatus{}, agentPower: map[string]*model.ComponentPower{},
+		sources: map[string]model.SourceStatus{}, sourceMono: map[string]time.Duration{}, agentPower: map[string]*model.ComponentPower{},
 		pveRefs: map[string]pveRef{}, nodeCPU: map[string]string{}, nodeInflight: map[string]string{}, pveOverLimit: map[string]bool{},
 		pending: map[string]pendingNote{}, asleep: map[string]time.Time{}, clusterIDs: map[string][]string{}, fingerprints: map[string]uint64{},
 		agentFailures: map[string]int{}, agentQuiet: map[string]quietRow{}, agentInfo: map[string]AgentInfo{}, helperSeen: map[string]map[string]time.Time{}, snapVer: -1, snapJSONVer: -1,
@@ -279,6 +280,7 @@ func (p *Poller) source(name string, ok bool, now time.Time, latency *time.Durat
 	}
 	if ok {
 		st.LastSuccess = model.P(now)
+		p.sourceMono[name] = p.mono() // the same moment as LastSuccess, on the steady clock
 	} else if had {
 		st.LastSuccess = prev.LastSuccess
 	}
@@ -371,6 +373,7 @@ func (p *Poller) RemoveProxmox(id string) {
 		}
 	}
 	delete(p.sources, "proxmox:"+id)
+	delete(p.sourceMono, "proxmox:"+id)
 	p.sourceOrder = slices.DeleteFunc(p.sourceOrder, func(x string) bool { return x == "proxmox:"+id })
 	p.syncPresent()
 	p.snapVer, p.snapJSONVer = -1, -1
@@ -509,6 +512,7 @@ func (p *Poller) RemoveAgent(id string) {
 	delete(p.helperSeen, id)
 	delete(p.agentPower, id)
 	delete(p.sources, "agent:"+id)
+	delete(p.sourceMono, "agent:"+id)
 	p.sourceOrder = slices.DeleteFunc(p.sourceOrder, func(x string) bool { return x == "agent:"+id })
 	p.syncPresent()
 	p.snapVer, p.snapJSONVer = -1, -1

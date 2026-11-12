@@ -360,7 +360,9 @@ type Ops interface {
 	Shutdown(ctx context.Context, id string, delay time.Duration, by string, grant any) (time.Time, error)
 	CancelShutdown(ctx context.Context, id, by string) error
 	// Guests: how many guests run on the machine if it is a Proxmox node (0, true for any other machine). known
-	// is false when the panel cannot tell; why then says so. since is when the machine came online.
+	// is false when the panel cannot tell; why then says so. since is when the machine came online: the time
+	// of day of its first answer. What the panel knows about the guests must be from after that, and the
+	// implementation must not decide that with times of day alone (the panel's clock can be set in between).
 	Guests(id string, since time.Time) (running int, known bool, why string)
 	// Blocked is why no control request may be sent at all right now ("": allowed): the kill switch. The run
 	// stops then. The one request it still sends is CancelShutdown, for a countdown it started itself: that

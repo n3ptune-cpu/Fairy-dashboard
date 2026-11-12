@@ -165,8 +165,17 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	now, ts := p.now()
 	sys := normalise.NormaliseAgent(a, payload, now, ts, p.rates)
 	info := agentInfoOf(payload, now)
-	info.seenMono = p.mono() // the same moment as SeenAt, on the steady clock (AgentInfo.SeenAgo)
+	info.seenMono = p.mono()          // the same moment as SeenAt, on the steady clock (AgentInfo.SeenAgo)
+	interval := p.agentInterval(a.ID) // before p.mu: it asks the scheduler
 	p.mu.Lock()
+	// upMono: where the row of answers that this one belongs to began (AnsweredSinceUp). An answer after a gap
+	// that the poll loop itself cannot make (quietGap) begins a new row: the machine was off, or the panel was
+	// not watching it. A poll or two without an answer (the agent restarts after its update) does not.
+	if prev, had := p.agentInfo[a.ID]; had && info.seenMono-prev.seenMono <= p.quietGap(interval) {
+		info.upMono = prev.upMono
+	} else {
+		info.upMono = info.seenMono
+	}
 	if sys.Helper != nil {
 		normalise.ApplyHelperPause(a, &sys, normalise.HelperUnavailable(payload), p.helperSeenLocked(a.ID, sys, now))
 	} else {
@@ -232,6 +241,7 @@ type AgentInfo struct {
 	// update / shut down run: "from after my shutdown request"; review of fix7r2, R2-01).
 	SeenAgo  time.Duration
 	seenMono time.Duration // the steady clock when the answer came
+	upMono   time.Duration // the steady clock when the first answer of this row of answers came (AnsweredSinceUp)
 	Online   bool          // the latest poll succeeded
 	// QuietSince: since when the panel has asked the agent, poll after poll, and got nothing at all: no answer
 	// and no other sign that the machine runs. Zero while it answers, while it shows that it runs without a
@@ -538,6 +548,27 @@ func (p *Poller) AgentSeen(id string) (AgentInfo, model.System, bool) {
 	i.Refused = i.Sign == SignRefused
 	s, known := p.systems[id]
 	return i, s, known
+}
+
+// AnsweredSinceUp: has the source (as in the health list: "proxmox:<cluster id>") given a good answer after the
+// agent came up, by the steady clock? "Came up" is the first answer of the agent's present row of answers:
+// the one that ended its last silence longer than quietGap (the machine was off, or the panel was not
+// watching), or its first answer since the panel started. Both moments are the panel's own, taken when the
+// two answers arrived, and no time of day is part of the question: SourceStatus.LastSuccess and
+// AgentInfo.SeenAt are times of day, and after the panel's clock was set back an old answer of the source
+// looks newer than everything that came after the setting.
+//
+// It is for the wake / update / shut down run's "which guests run on this Proxmox node": the cluster's list
+// counts only when it is from after the node came online (before that it shows the node's guests as they were
+// while the node was off). After a later silence of the agent that is longer than quietGap the list must be
+// newer than the agent's return as well: the node may have restarted meanwhile. False when the panel cannot
+// tell: no good answer from the source yet, or none from the agent.
+func (p *Poller) AnsweredSinceUp(source, agentID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	at, ok := p.sourceMono[source]
+	i, seen := p.agentInfo[agentID]
+	return ok && seen && at > i.upMono
 }
 
 // ProbeRefused is what ProbeAgent says when the machine itself turned the connection down.
