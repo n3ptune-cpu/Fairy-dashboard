@@ -3,6 +3,7 @@ package settings
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"image/gif"
 	"image/jpeg"
@@ -275,4 +276,67 @@ func wholeAVIF(d []byte) bool {
 		p += int(n)
 	}
 	return ftyp && meta && media
+}
+
+// The largest picture, in pixels, that is accepted at upload. The limit on the file (MaxBackgroundBytes) says
+// nothing about it: a white PNG of 20000 x 20000 pixels is 76 kB, and a browser that paints it needs four
+// bytes for each of its 400 million pixels. As the sign-in picture that is every visitor's tab (r2-p3-02).
+// 8192 a side and 40 megapixels hold every screen and every camera picture one would use as a background
+// (an 8K screen is 7680 x 4320, 33 megapixels).
+const (
+	MaxPictureSide   = 8192
+	MaxPicturePixels = 40_000_000
+)
+
+// PictureSize is the width and height in pixels that a picture of the media type mime states in its header
+// (as Sniff names the type). ok is false when the file states none that can be read. Nothing is decoded.
+func PictureSize(mime string, d []byte) (w, h int, ok bool) {
+	switch mime {
+	case "image/png":
+		c, err := png.DecodeConfig(bytes.NewReader(d))
+		return c.Width, c.Height, err == nil
+	case "image/jpeg":
+		c, err := jpeg.DecodeConfig(bytes.NewReader(d))
+		return c.Width, c.Height, err == nil
+	case "image/gif":
+		c, err := gif.DecodeConfig(bytes.NewReader(d))
+		return c.Width, c.Height, err == nil
+	case "image/webp": // the first chunk: the canvas of an extended file, else the bitstream's own size
+		if len(d) < 30 || string(d[:4]) != "RIFF" || string(d[8:12]) != "WEBP" {
+			return 0, 0, false
+		}
+		body := d[20:]
+		switch string(d[12:16]) {
+		case "VP8X":
+			return 1 + int(body[4]) | int(body[5])<<8 | int(body[6])<<16, 1 + int(body[7]) | int(body[8])<<8 | int(body[9])<<16, true
+		case "VP8 ":
+			return int(binary.LittleEndian.Uint16(body[6:]) & 0x3fff), int(binary.LittleEndian.Uint16(body[8:]) & 0x3fff), true
+		case "VP8L":
+			bits := binary.LittleEndian.Uint32(body[1:])
+			return int(bits&0x3fff) + 1, int(bits>>14&0x3fff) + 1, true
+		}
+		return 0, 0, false
+	case "image/avif": // the "image spatial extents" boxes: the largest width and height any item states
+		for i := 4; i+16 <= len(d); i++ {
+			if string(d[i:i+4]) != "ispe" || binary.BigEndian.Uint32(d[i-4:]) != 20 {
+				continue
+			}
+			w, h, ok = max(w, int(binary.BigEndian.Uint32(d[i+8:]))), max(h, int(binary.BigEndian.Uint32(d[i+12:]))), true
+		}
+		return w, h, ok
+	}
+	return 0, 0, false
+}
+
+// PixelProblem says in plain words why a picture is not accepted for its size in pixels ("" when it is fine).
+func PixelProblem(mime string, d []byte) string {
+	w, h, ok := PictureSize(mime, d)
+	switch {
+	case !ok || w <= 0 || h <= 0:
+		return "the picture does not say how many pixels it has, so it is not accepted"
+	case w > MaxPictureSide || h > MaxPictureSide || int64(w)*int64(h) > MaxPicturePixels:
+		return fmt.Sprintf("the picture is %d x %d pixels; at most %d pixels a side and %d megapixels are accepted (make it smaller and upload it again)",
+			w, h, MaxPictureSide, MaxPicturePixels/1_000_000)
+	}
+	return ""
 }

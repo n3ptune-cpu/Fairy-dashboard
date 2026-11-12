@@ -175,6 +175,18 @@ func (s *Server) SetDemoView(v string) error {
 	return nil
 }
 
+// warnOversizePictures says once, at start, that pictures stored before there was a limit on their size in
+// pixels are larger than an upload may be now (r2-p3-02). Nothing is deleted or hidden.
+func (s *Server) warnOversizePictures() {
+	signIn, backgrounds := s.Settings.OversizePictures()
+	if !signIn && backgrounds == 0 {
+		return
+	}
+	slog.Warn("stored pictures are larger than an upload may be now: they are kept and shown; a browser needs 4 bytes of memory "+
+		"for every pixel, so replace them with smaller ones in Settings", "sign_in_picture", signIn, "backgrounds", backgrounds,
+		"max_side_px", settings.MaxPictureSide, "max_megapixels", settings.MaxPicturePixels/1_000_000)
+}
+
 // DeploymentWarnings returns startup sanity warnings (behind nginx at e.g. https://panel.example.com).
 func DeploymentWarnings(cfg *config.Panel, secrets config.Secrets) []string {
 	var out []string
@@ -408,6 +420,7 @@ func (s *Server) watch(ctx context.Context) {
 	seq := 0 // from the panel's start: a UPS server that did not answer the very first poll is in there (the watcher's first call takes only that)
 	last := time.Now()
 	s.notePanelUpdateResult()
+	s.warnOversizePictures()
 	vers, lastAt := map[string]string{}, map[string]float64{}
 	for {
 		select {

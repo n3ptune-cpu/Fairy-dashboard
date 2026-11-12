@@ -4,13 +4,20 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"hash/crc32"
 	"image"
 	"image/color"
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 )
 
 // Real pictures of the five types. PNG, JPEG and GIF are made by the standard library; WebP and AVIF have no
@@ -170,5 +177,139 @@ func TestAPictureIsWholeOrRefused(t *testing.T) {
 	// a JPEG may carry data of its own after the end marker (cameras do that): still a whole picture
 	if !Whole("image/jpeg", append(append([]byte{}, jpg...), []byte("MPF trailer of a camera")...)) {
 		t.Error("a JPEG with a trailer after its end marker is refused")
+	}
+}
+
+// resized returns the picture with another size written into its header, and nothing else changed. The image
+// data no longer fits that size, which the check never looks at (no pixel is decoded): for the check it is
+// the auditor's file, a small file that states a huge size.
+func resized(t *testing.T, mime string, d []byte, w, h int) []byte {
+	t.Helper()
+	out := bytes.Clone(d)
+	switch mime {
+	case "image/png": // IHDR is the first chunk: width and height at 16 and 20, its checksum after 13 bytes of data
+		binary.BigEndian.PutUint32(out[16:], uint32(w))
+		binary.BigEndian.PutUint32(out[20:], uint32(h))
+		binary.BigEndian.PutUint32(out[29:], crc32.ChecksumIEEE(out[12:29]))
+	case "image/jpeg": // the frame header: marker, length, precision, height, width
+		for p := 2; p+9 < len(out); {
+			m, n := out[p+1], int(binary.BigEndian.Uint16(out[p+2:]))
+			if m >= 0xc0 && m <= 0xcf && m != 0xc4 && m != 0xc8 && m != 0xcc {
+				binary.BigEndian.PutUint16(out[p+5:], uint16(h))
+				binary.BigEndian.PutUint16(out[p+7:], uint16(w))
+				return out
+			}
+			p += 2 + n
+		}
+		t.Fatal("no frame header")
+	case "image/gif":
+		binary.LittleEndian.PutUint16(out[6:], uint16(w))
+		binary.LittleEndian.PutUint16(out[8:], uint16(h))
+	case "image/webp":
+		body := out[20:]
+		switch string(out[12:16]) {
+		case "VP8X":
+			body[4], body[5], body[6] = byte(w-1), byte((w-1)>>8), byte((w-1)>>16)
+			body[7], body[8], body[9] = byte(h-1), byte((h-1)>>8), byte((h-1)>>16)
+		case "VP8 ":
+			binary.LittleEndian.PutUint16(body[6:], uint16(w)&0x3fff)
+			binary.LittleEndian.PutUint16(body[8:], uint16(h)&0x3fff)
+		case "VP8L":
+			bits := binary.LittleEndian.Uint32(body[1:])&^0x0fffffff | uint32(w-1)&0x3fff | (uint32(h-1)&0x3fff)<<14
+			binary.LittleEndian.PutUint32(body[1:], bits)
+		}
+	case "image/avif":
+		i := bytes.Index(out, []byte("ispe"))
+		binary.BigEndian.PutUint32(out[i+8:], uint32(w))
+		binary.BigEndian.PutUint32(out[i+12:], uint32(h))
+	}
+	return out
+}
+
+// r2-p3-02 (audit 5): an upload was limited in bytes only. A white PNG of 20000 x 20000 pixels has 76 kB; as
+// the sign-in picture it made every visitor's tab take about 2 GiB. WebP had no look at its size at all. An
+// upload of more than 8192 pixels a side or 40 megapixels is refused, for the sign-in picture and for a
+// user's background, with a message that says the size and the limit.
+func TestAPictureWithTooManyPixelsIsRefused(t *testing.T) {
+	checked := map[string]int{}
+	defer func() {
+		for _, mime := range []string{"image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"} {
+			if checked[mime] < 4 {
+				t.Errorf("%s: only %d oversize files were looked at", mime, checked[mime])
+			}
+		}
+	}()
+	for name, pic := range realPictures(t) {
+		mime, data := pic[0].(string), pic[1].([]byte)
+		w, h, ok := PictureSize(mime, data)
+		if !ok || w <= 0 || h <= 0 || w > 4096 || h > 4096 || PixelProblem(mime, data) != "" {
+			t.Errorf("%s: a real picture: %d x %d (%v): %q", name, w, h, ok, PixelProblem(mime, data))
+			continue
+		}
+		limit := 16383 // what every one of these headers can state
+		for _, size := range [][2]int{{limit, limit}, {MaxPictureSide + 1, 16}, {16, MaxPictureSide + 1}, {7000, 6000}} {
+			big := resized(t, mime, data, size[0], size[1])
+			if !Whole(mime, big) {
+				continue // this header cannot be changed without breaking the file for the structure check (not the case today)
+			}
+			checked[mime]++
+			gw, gh, _ := PictureSize(mime, big)
+			why := PixelProblem(mime, big)
+			if gw != size[0] || gh != size[1] || !strings.Contains(why, fmt.Sprintf("the picture is %d x %d pixels; at most 8192 pixels a side and 40 megapixels", size[0], size[1])) {
+				t.Errorf("%s as %d x %d: read as %d x %d: %q", name, size[0], size[1], gw, gh, why)
+			}
+			if _, err := ValidateUpload(mime, big); err == nil || !strings.Contains(err.Error(), "megapixels") {
+				t.Errorf("%s as %d x %d: a user's background accepted it: %v", name, size[0], size[1], err)
+			}
+		}
+		for _, size := range [][2]int{{MaxPictureSide, 4882}, {4882, MaxPictureSide}, {6324, 6324}, {1, 1}} { // at the limits
+			if ok := resized(t, mime, data, size[0], size[1]); Whole(mime, ok) && PixelProblem(mime, ok) != "" {
+				t.Errorf("%s as %d x %d must be accepted: %s", name, size[0], size[1], PixelProblem(mime, ok))
+			}
+		}
+	}
+	// the auditor's case: a PNG that states 20000 x 20000
+	var small bytes.Buffer
+	_ = png.Encode(&small, image.NewGray(image.Rect(0, 0, 8, 8)))
+	bomb := resized(t, "image/png", small.Bytes(), 20000, 20000)
+	if SignInType(bomb) != "image/png" {
+		t.Fatal("setup: the file must be a whole PNG for the structure check")
+	}
+	st := NewStore(t.TempDir())
+	_, err := st.SaveSignIn(bomb)
+	var ae *apierr.Error
+	if !errors.As(err, &ae) || ae.Status != 413 || !strings.Contains(err.Error(), "the picture is 20000 x 20000 pixels") || st.SignIn() != nil {
+		t.Fatalf("the sign-in picture: %v", err)
+	}
+	if _, err := ValidateUpload("image/png", bomb); !errors.As(err, &ae) || ae.Status != 413 {
+		t.Fatalf("a user's background: %v", err)
+	}
+	if p, err := st.SaveSignIn(small.Bytes()); err != nil || p == nil {
+		t.Fatal("a small picture:", err)
+	}
+	// a file that states no size
+	if PixelProblem("image/avif", []byte("....ftypavif....")) == "" || PixelProblem("image/webp", []byte("RIFF....WEBPVP8?..............")) == "" {
+		t.Fatal("no size must be a problem")
+	}
+
+	// Pictures stored before there was a limit are kept and served, and counted once at start for one warning.
+	dir := t.TempDir()
+	old := NewStore(dir)
+	if si, bg := old.OversizePictures(); si || bg != 0 {
+		t.Fatal("an empty folder:", si, bg)
+	}
+	_ = os.MkdirAll(filepath.Join(dir, "backgrounds"), 0o700)
+	_ = os.WriteFile(filepath.Join(dir, "backgrounds", signInFile), bomb, 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "backgrounds", "0123456789abcdef01234567.png"), bomb, 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "backgrounds", "89abcdef0123456701234567.png"), small.Bytes(), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "backgrounds", "notes.txt"), []byte("not a picture"), 0o600)
+	if si, bg := old.OversizePictures(); !si || bg != 1 {
+		t.Fatalf("stored before the limit: sign-in %v, backgrounds %d", si, bg)
+	}
+	if p := old.SignIn(); p == nil || p.Type != "image/png" || len(p.Data) != len(bomb) {
+		t.Fatal("the stored sign-in picture must still be served")
+	}
+	if left, _ := os.ReadDir(filepath.Join(dir, "backgrounds")); len(left) != 4 {
+		t.Fatal("nothing may be deleted")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
@@ -89,6 +90,9 @@ func (s *Store) SaveSignIn(data []byte) (*SignInPicture, error) {
 	if p == nil {
 		return nil, apierr.New(415, "not a PNG, JPEG or WebP picture (the file's content decides, not its name; SVG is not accepted)")
 	}
+	if why := PixelProblem(p.Type, data); why != "" { // every visitor's browser has to paint it (r2-p3-02)
+		return nil, apierr.New(413, why)
+	}
 	s.SignIn() // what is on disk is read before it is replaced, never after
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,4 +117,36 @@ func (s *Store) DeleteSignIn() error {
 	}
 	s.signIn.Store(nil)
 	return nil
+}
+
+// OversizePictures looks, once at the panel's start, at the pictures that are already stored: the sign-in
+// picture and every user's background. It reports how many are larger in pixels than an upload may be now
+// (PixelProblem). They were accepted before there was a limit; they are kept and shown as before, and the
+// caller logs one warning.
+func (s *Store) OversizePictures() (signIn bool, backgrounds int) {
+	entries, err := os.ReadDir(s.bgDir)
+	if err != nil {
+		return false, 0
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		f, err := os.Open(filepath.Join(s.bgDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(f, MaxBackgroundBytes+1))
+		f.Close()
+		mime := Sniff(data)
+		if err != nil || mime == "" || len(data) > MaxBackgroundBytes || !Whole(mime, data) || PixelProblem(mime, data) == "" {
+			continue
+		}
+		if e.Name() == signInFile {
+			signIn = true
+		} else {
+			backgrounds++
+		}
+	}
+	return signIn, backgrounds
 }

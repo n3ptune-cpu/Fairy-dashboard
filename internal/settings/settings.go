@@ -154,6 +154,9 @@ func ValidateUpload(contentType string, data []byte) (string, error) {
 	if !Whole(claimed, data) { // it begins like one and is not one (picture.go)
 		return "", apierr.New(415, "the file is not a complete picture of its type (it is cut off or damaged)")
 	}
+	if p := PixelProblem(claimed, data); p != "" { // a small file can be a very large picture (r2-p3-02)
+		return "", apierr.New(413, p)
+	}
 	return claimed, nil
 }
 

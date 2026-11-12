@@ -638,6 +638,11 @@ page is black, with the same strip.
   matter; its content decides, and SVG, GIF, HTML and everything else is refused. The file has to be a whole
   picture of its type (its parts are read to the end and its checksums checked, without unpacking it), not
   only a file that begins like one; the same holds for a background a user uploads.
+* A picture may have at most 8192 pixels a side and 40 megapixels, whatever its file size: a browser needs
+  four bytes of memory for every pixel, and a 76 kB file can state 20000 x 20000. A larger one is refused
+  with its size in the message; the same holds for a background a user uploads. A picture that was stored
+  before this limit is kept and shown, and the panel's log says so once at start: replace it with a smaller
+  one.
 * Your own background (the block above it in Settings) is separate: per account, shown only to you after
   the sign-in.
 * Only admins can change it, from a browser session; it asks for no "Confirm it's you", like the other
