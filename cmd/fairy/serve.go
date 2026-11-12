@@ -15,9 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
-	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/demo"
@@ -308,7 +306,7 @@ func setupPanel(f serveFlags) (*panel, int) {
 		slog.Error(err.Error() + " (set it in fairy.env, loaded by systemd's EnvironmentFile= or --env-file)")
 		return nil, 1
 	}
-	cfg, err := config.Load(f.cfgPath)
+	cfg, err := config.LoadFull(f.cfgPath) // the one check of the file: `fairy update` asks the same before it swaps
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.Error("config not found", "path", f.cfgPath)
@@ -326,16 +324,9 @@ func setupPanel(f serveFlags) (*panel, int) {
 	return p, code
 }
 
-// buildPanel validates the device configs, adds the hosts added in the panel and builds the poller.
+// buildPanel adds the hosts added in the panel and builds the poller, from a config that was checked in full
+// (config.LoadFull, config.ParseFull).
 func buildPanel(cfg *config.Panel, secrets config.Secrets) (*panel, int) {
-	if err := power.ValidateConfigs(cfg.PowerSources); err != nil {
-		slog.Error("invalid config", "error", err)
-		return nil, 1
-	}
-	if err := ups.ValidateConfigs(cfg.UPS); err != nil {
-		slog.Error("invalid config", "error", err)
-		return nil, 1
-	}
 	// Hosts added in the panel (Add host): merged after config.yaml, which wins on the same id; each one is
 	// validated like a hand-written entry, a bad one is skipped (logged, shown on the Add host dialog).
 	//

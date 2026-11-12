@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
-	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
@@ -47,21 +45,13 @@ func secretEnvs(cfg *config.Panel) []secretEnv {
 // configCheck validates config.yaml and the environment. Secrets are reported as present/missing only.
 func (c *cli) configCheck() int {
 	var problems, notes []string
-	cfg, err := config.Load(c.cfgPath)
+	cfg, err := config.LoadFull(c.cfgPath) // the one check of the file: what `fairy serve` starts with
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(c.out, "FAIL  config not found: %s\n", c.cfgPath)
 		} else {
 			fmt.Fprintf(c.out, "FAIL  config %s is invalid:\n%v\n", c.cfgPath, err)
 		}
-		return 1
-	}
-	if err := power.ValidateConfigs(cfg.PowerSources); err != nil {
-		fmt.Fprintf(c.out, "FAIL  config %s is invalid:\n%v\n", c.cfgPath, err)
-		return 1
-	}
-	if err := ups.ValidateConfigs(cfg.UPS); err != nil {
-		fmt.Fprintf(c.out, "FAIL  config %s is invalid:\n%v\n", c.cfgPath, err)
 		return 1
 	}
 	notes = append(notes, fmt.Sprintf("config %s: valid", c.cfgPath))

@@ -58,7 +58,7 @@ func update(args []string) int {
 	// (config.Peek): the health check after the restart must ask that address, not the default.
 	repo := release.PanelRepo
 	cfgListen, cfgProblem := "", ""
-	if c, err := config.Load(*cfgPath); err == nil {
+	if c, err := config.LoadFull(*cfgPath); err == nil { // the one check of the file: what `fairy serve` starts with
 		cfgListen, repo = c.Listen, c.Updates.PanelRepo
 	} else if !errors.Is(err, os.ErrNotExist) {
 		cfgProblem = oneLine(err.Error())
@@ -152,25 +152,30 @@ func update(args []string) int {
 			return 1
 		}
 	}
+	// The version that is about to be installed checks the config file too, before anything is replaced
+	// (update_config.go). What it refuses stops the run, by hand and from the button: it would not start.
+	asked := &newVersion{file: *cfgPath}
 	cli := &release.CLI{Client: client, Key: key, Program: release.PanelProgram, Current: version, Target: exe,
 		Asset: release.AssetName(release.PanelProgram, runtime.GOOS, runtime.GOARCH), Out: os.Stdout, In: in,
 		Check: *check, Yes: *yes, Force: *force,
 		Installer: func(target, _ string) *release.Installer { return systemdInstaller(target, healthURL) },
-		RunNew: func(path string) (string, error) {
-			out, err := exec.Command(path, "version").Output()
-			return string(out), err
-		}}
-	if status != nil {
-		cli.Progress = func(state, to, msg string) {
-			if cfgProblem != "" && (state == "failed" || state == "rolled_back") { // the page shows the reason too
-				msg = "config.yaml is not usable by the installed version (" + cfgProblem + "); " + msg
-			}
-			status.Step(state, to, msg)
+		RunNew:    asked.runNew}
+	cli.Progress = func(state, to, msg string) {
+		if msg = asked.step(state, to, msg); status == nil {
+			return
 		}
+		if cfgProblem != "" && asked.problem == "" && (state == "failed" || state == "rolled_back") { // the page shows the reason too
+			msg = "config.yaml is not usable by the installed version (" + cfgProblem + "); " + msg
+		}
+		status.Step(state, to, msg)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	if err := cli.Run(ctx); err != nil {
+		if asked.problem != "" {
+			fmt.Fprintln(os.Stderr, "fairy update:", asked.stops())
+			return 1
+		}
 		fmt.Fprintln(os.Stderr, "fairy update:", err)
 		var rb *release.RolledBackError
 		if cfgProblem != "" && errors.As(err, &rb) {
@@ -258,7 +263,8 @@ func buttonWanted(in *answers, yes bool, todo []string, out io.Writer) bool {
 // configFirstNote is said when config.yaml holds something the installed version refuses, most likely a key
 // of the release that is about to be installed.
 const configFirstNote = "  The order is: update first, then add new config keys, then restart. The update goes on (the new version " +
-	"may know the key). If it is rolled back, the old version will not start with this file until the key is taken out."
+	"may know the key): the new version checks the file before anything is replaced, and the update stops there if it " +
+	"refuses the file too. If the update is rolled back later, the old version will not start with this file until the key is taken out."
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 

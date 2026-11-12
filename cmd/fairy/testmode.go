@@ -151,6 +151,9 @@ func testSetup(f serveFlags, real []string) (*config.Panel, config.Secrets, erro
 		return nil, none, err
 	}
 	cfg, err := config.Parse(out)
+	if err == nil {
+		err = cfg.CheckDevices() // no line: `out` is not the person's file as written
+	}
 	if err != nil {
 		return nil, none, fmt.Errorf("%s: %w", f.cfgPath, err)
 	}

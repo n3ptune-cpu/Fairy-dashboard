@@ -757,7 +757,13 @@ stops before it replaces anything when the running panel does not answer at that
 panel** button goes one step further: when the installed version refuses config.yaml it stops before it
 replaces anything ("config.yaml is not usable by the installed version: ..."), because a file that the new
 version refuses too (a typing mistake) would end with the panel down and the page gone. `fairy update` by
-hand warns and goes on, as before.
+hand warns and goes on to the next check.
+That check is made by both, after the download and before anything is replaced: the new version, once its
+signature and hash are verified, checks the config file itself, with the check `fairy serve` starts with
+and `fairy admin config check` reports (the entries of `ups:` and `power_sources:` included, which the
+update did not look at before). A file it refuses stops the update with the line: "the new version (...)
+refuses /etc/fairy/config.yaml: config: line 131 (ups, entry 1): ... Nothing was changed." Correct the file
+and update again. (A semantic mistake, such as an address that is not one, is named without a line.)
 
 Nothing has to be done on the agents for this panel: every agent the panel before it worked with works with
 this one, and it asks nothing new of them.
