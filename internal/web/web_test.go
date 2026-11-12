@@ -508,6 +508,80 @@ func TestDemoAnswersOnlyALoopbackName(t *testing.T) {
 	}
 }
 
+// r2-p1-04 (audit 5): `serve --demo` opened as http://localhost:PORT or http://[::1]:PORT loaded, and every
+// change was then "cross-origin request refused" (the write check compares the page's origin with the demo's
+// one address). The page is now sent on to that address when it is opened; the write check is as strict as
+// before, for the demo and for everything else.
+func TestDemoPageUnderAnotherLoopbackNameGoesToTheOneAddress(t *testing.T) {
+	e := setup(t)
+	u := controller()
+	u.Auth = "demo"
+	e.s.DemoUser = &u
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(e.srv.URL, "http://"))
+	e.s.Cfg.PublicURL = "http://127.0.0.1:" + port // as cmd/fairy sets it: http://<listen>
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	as := func(method, host, path string, hdr ...string) resp {
+		req, _ := http.NewRequest(method, e.srv.URL+path, strings.NewReader("{}"))
+		req.Host = host
+		for i := 0; i+1 < len(hdr); i += 2 {
+			req.Header.Set(hdr[i], hdr[i+1])
+		}
+		r, err := noFollow.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		raw, _ := io.ReadAll(r.Body)
+		out := resp{code: r.StatusCode, raw: raw, hdr: r.Header}
+		_ = json.Unmarshal(raw, &out.body)
+		return out
+	}
+	one := "http://127.0.0.1:" + port
+	for _, host := range []string{"localhost:" + port, "[::1]:" + port, "127.0.0.2:" + port, "localhost"} {
+		r := as("GET", host, "/")
+		if r.code != 307 || r.hdr.Get("Location") != one+"/" || r.hdr.Get("Cache-Control") != "no-store" {
+			t.Errorf("GET / as %s: %d Location %q", host, r.code, r.hdr.Get("Location"))
+		}
+		if r := as("GET", host, "/docs?x=1", "Sec-Fetch-Dest", "document"); r.code != 307 || r.hdr.Get("Location") != one+"/docs?x=1" {
+			t.Errorf("a document as %s: %d Location %q", host, r.code, r.hdr.Get("Location"))
+		}
+		// API requests and files under the other name are answered as before (a script, curl)
+		if r := as("GET", host, "/api/me"); r.code != 200 || r.body["demo"] != true {
+			t.Errorf("GET /api/me as %s: %d", host, r.code)
+		}
+		if r := as("GET", host, "/static/app.js", "Sec-Fetch-Dest", "script"); r.code != 200 {
+			t.Errorf("a file as %s: %d", host, r.code)
+		}
+		// the write check is not loosened: a page that is still open under the other name is refused as before
+		r = as("PUT", host, "/api/settings", "X-Requested-With", "fairy", "Content-Type", "application/json", "Origin", "http://"+host)
+		if r.code != 403 || r.body["detail"] != "cross-origin request refused" {
+			t.Errorf("a write from the page at %s: %d %s", host, r.code, r.raw)
+		}
+	}
+	// under the one address nothing is redirected and a write passes the origin check
+	if r := as("GET", "127.0.0.1:"+port, "/"); r.code != 200 {
+		t.Fatal("the one address", r.code)
+	}
+	if r := as("PUT", "127.0.0.1:"+port, "/api/settings", "X-Requested-With", "fairy", "Content-Type", "application/json", "Origin", one); r.code == 403 {
+		t.Fatal("a write from the one address", r.code, string(r.raw))
+	}
+	// a foreign name is still refused before anything else
+	if r := as("GET", "evil.example:"+port, "/"); r.code != 403 || strings.Contains(r.hdr.Get("Location"), "http") {
+		t.Fatal("a foreign name", r.code)
+	}
+	// not the demo: no redirect, whatever the name (the plain panel and the test build are not touched here)
+	e.s.DemoUser = nil
+	if r := as("GET", "localhost:"+port, "/"); r.code == 307 {
+		t.Fatal("the real panel redirected")
+	}
+	// a demo behind its own address (FAIRY_DEMO_URL): no rule
+	e.s.DemoUser = &u
+	e.s.Cfg.PublicURL = "https://demo.example.com"
+	if r := as("GET", "localhost:"+port, "/"); r.code != 200 {
+		t.Fatal("FAIRY_DEMO_URL elsewhere", r.code)
+	}
+}
+
 type fakeAddr string
 
 func (a fakeAddr) Network() string { return "tcp" }

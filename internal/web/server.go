@@ -260,6 +260,29 @@ func loopbackName(host string) bool {
 	return err == nil && a.IsLoopback()
 }
 
+// demoOtherName sends a page that is opened under another loopback name of the demo than the one in its
+// public_url (http://localhost:8090 or http://[::1]:8090 when the demo is http://127.0.0.1:8090) on to that
+// one address, and reports whether it did. Such a page loaded and then failed at every change with
+// "cross-origin request refused" (r2-p1-04): the write check compares the page's origin with public_url, and
+// that check is not loosened. Only the opening of a page is redirected (a GET or HEAD of "/" or of a document
+// the browser navigates to); API requests and files are answered as before. Without a loopback public_url
+// (FAIRY_DEMO_URL names something else) there is no such rule. The test build has the same rule of its own.
+func (s *Server) demoOtherName(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	if r.URL.Path != "/" && r.Header.Get("Sec-Fetch-Dest") != "document" {
+		return false
+	}
+	u, err := url.Parse(s.Cfg.BaseURL())
+	if err != nil || u.Host == "" || r.Host == u.Host || !loopbackName(u.Host) {
+		return false
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, u.Scheme+"://"+u.Host+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	return true
+}
+
 // Handler returns the full middleware chain.
 func (s *Server) Handler() http.Handler {
 	https := strings.HasPrefix(s.Cfg.PublicURL, "https://")
@@ -276,6 +299,9 @@ func (s *Server) Handler() http.Handler {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(403)
 				_, _ = w.Write([]byte(`{"detail":"demo mode only serves localhost"}`))
+				return
+			}
+			if s.demoOtherName(w, r) {
 				return
 			}
 		}
