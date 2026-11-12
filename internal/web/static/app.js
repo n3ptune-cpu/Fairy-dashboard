@@ -1330,7 +1330,7 @@ async function updateCall(label, path, key) {
     if (r?.results) {
       const bad = r.results.filter((x) => !x.ok);
       flash(bad.length ? `${r.results.length - bad.length} started, ${bad.length} not: ${bad.map((x) => `${x.id} (${x.error})`).join(", ")}` : `Update started on ${r.results.length} agent(s)`, bad.length > 0);
-    } else if (r) flash(`${label}: started`);
+    } else if (r) flash(`${label}: ${r.message || "started"}`);  // the request was taken; the row shows the result
   } catch (e) { flash(e.message, true); }
   delete upd.busy[key];
   upd.fastUntil = Date.now() + 30000;  // the agents' new state arrives with the next polls

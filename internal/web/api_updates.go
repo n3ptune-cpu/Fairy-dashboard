@@ -213,9 +213,15 @@ func (s *Server) updateOne(c *reqCtx) error {
 	}
 	c.audit(u, "update.agent", id, params, "ok")
 	s.updateEvent(a, params)
-	c.json(200, model.ControlResult{OK: true, Result: data})
+	// The agent took the request; how the update goes is not known yet (it downloads, verifies, restarts, and
+	// can fail at each step). The message says that, also after "Confirm it's you", where an answer without
+	// words was shown as "done" next to a row that said "failed" (audit 5, r2-b2-04).
+	c.json(200, map[string]any{"ok": true, "result": data, "message": updateStartedText})
 	return nil
 }
+
+// updateStartedText is what a single "Update" answers when the agent took the request.
+const updateStartedText = "started. Its row shows how it goes."
 
 type updateResult struct {
 	ID     string         `json:"id"`
