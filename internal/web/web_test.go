@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -462,6 +463,48 @@ func TestDemoServesLoopbackOnly(t *testing.T) {
 	}
 	if isLoopback(fakeAddr("192.168.1.5:8090")) || !isLoopback(fakeAddr("127.0.0.1:8090")) || !isLoopback(fakeAddr("[::1]:8090")) {
 		t.Fatal("loopback detection")
+	}
+}
+
+// r1-p3-07 (audit 5): the demo answered every Host name on its loopback socket, so a web page elsewhere that
+// points a name of its own at 127.0.0.1 (DNS rebinding) could read the demo's data. It now answers only under a
+// loopback name, as the test build does.
+func TestDemoAnswersOnlyALoopbackName(t *testing.T) {
+	e := setup(t)
+	u := viewer
+	u.Auth = "demo"
+	e.s.DemoUser = &u
+	as := func(host, path string) resp {
+		req, _ := http.NewRequest("GET", e.srv.URL+path, nil)
+		req.Host = host
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		raw, _ := io.ReadAll(r.Body)
+		out := resp{code: r.StatusCode, raw: raw, hdr: r.Header}
+		_ = json.Unmarshal(raw, &out.body)
+		return out
+	}
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(e.srv.URL, "http://"))
+	for _, host := range []string{"evil.example", "evil.example:" + port, "127.0.0.1.evil.example", "localhost.evil.example:" + port,
+		"192.168.1.5:" + port, "0.0.0.0:" + port, "[2001:db8::1]:" + port, "panel.lan"} {
+		for _, path := range []string{"/api/me", "/api/systems", "/", "/healthz"} {
+			if r := as(host, path); r.code != 403 || r.body["detail"] != "demo mode only serves localhost" || strings.Contains(string(r.raw), "viewer") {
+				t.Errorf("Host %s, %s: %d %s", host, path, r.code, r.raw)
+			}
+		}
+	}
+	for _, host := range []string{"127.0.0.1:" + port, "localhost:" + port, "localhost", "127.0.0.1", "[::1]:" + port, "127.0.0.2:" + port} {
+		if r := as(host, "/api/me"); r.code != 200 || r.body["demo"] != true {
+			t.Errorf("Host %s: %d %s", host, r.code, r.raw)
+		}
+	}
+	for host, want := range map[string]bool{"localhost": true, "LOCALHOST": false, "localhost.": false, "": false, "::1": true, "[::1]": true, "127.0.0.1:1": true, "evil.example": false} {
+		if loopbackName(host) != want {
+			t.Errorf("loopbackName(%q) = %v", host, !want)
+		}
 	}
 }
 

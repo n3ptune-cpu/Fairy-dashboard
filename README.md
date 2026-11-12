@@ -56,7 +56,7 @@ switches on for listeners on Linux. `go version -m fairy` shows `DefaultGODEBUG=
 fairy serve [--config /etc/fairy/config.yaml] [--env-file /etc/fairy/fairy.env] [--listen 127.0.0.1:8080]
                               # listen: --listen, else $FAIRY_LISTEN, else `listen:` in config.yaml, else
                               # 127.0.0.1:8080. The env file is read first, so FAIRY_* settings in it count.
-fairy serve --demo            # simulated data, NO login, refuses anything but 127.0.0.1 / ::1 (port 8090)
+fairy serve --demo            # simulated data, NO login, refuses anything but 127.0.0.1 / ::1 / localhost (port 8090)
 fairy serve --demo --demo-as viewer:Bob   # ...as a viewer of the Bob site sees it (or: pending, admin);
                               # the demo menu (top right) has a "Preview as" switcher too
 fairy admin help              # break-glass CLI: users and sites, tokens, sessions, control kill switch, host
@@ -821,7 +821,7 @@ session settings as whole seconds).
   folder, mode 0600); every other request gets 403. It also refuses a request for another host name or with a
   reverse proxy's usual headers, but those checks cannot see every proxy or port forward: a test build must
   never be put behind one, and the start key is the last line of defence if it is. (`fairy serve --demo`,
-  simulated data on loopback only, is in every build, as before.)
+  simulated data on loopback only and only under the names 127.0.0.1, ::1 or localhost, is in every build.)
 * Roles, managed in the panel (`users.json`, Users page or `fairy admin users|sites`), keyed by the OIDC subject:
   **admin** sees everything, may use control actions, the Audit and Users pages; **viewer** is read-only and sees
   only the systems, guests, power sources, UPSes (and their processes, sensors, history) of their sites;

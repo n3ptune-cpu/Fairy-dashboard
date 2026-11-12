@@ -246,6 +246,19 @@ func isLoopback(addr net.Addr) bool {
 	return err == nil && ap.Addr().Unmap().IsLoopback()
 }
 
+// loopbackName reports whether a request's Host header names this machine itself: 127.0.0.1 (any 127.x), ::1 or
+// localhost, with or without a port. Demo mode and the test build answer no other name.
+func loopbackName(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if host == "localhost" {
+		return true
+	}
+	a, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	return err == nil && a.IsLoopback()
+}
+
 // Handler returns the full middleware chain.
 func (s *Server) Handler() http.Handler {
 	https := strings.HasPrefix(s.Cfg.PublicURL, "https://")
@@ -254,8 +267,11 @@ func (s *Server) Handler() http.Handler {
 		// A handler that returns without writing is answered by net/http after it: that write has a deadline too.
 		defer sw.arm()
 		var w http.ResponseWriter = sw
-		if s.DemoUser != nil { // demo serves only requests that arrived on a loopback socket
-			if la, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr); !isLoopback(la) {
+		// Demo serves only requests that arrived on a loopback socket, and only under a loopback name: a web
+		// page elsewhere that points a name of its own at 127.0.0.1 (DNS rebinding) would otherwise read the
+		// demo as if it were its own site.
+		if s.DemoUser != nil {
+			if la, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr); !isLoopback(la) || !loopbackName(r.Host) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(403)
 				_, _ = w.Write([]byte(`{"detail":"demo mode only serves localhost"}`))

@@ -272,11 +272,7 @@ func testRefusal(r *http.Request) string {
 	if la, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr); !isLoopback(la) {
 		return "this request did not arrive on a loopback address"
 	}
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	if a, err := netip.ParseAddr(strings.Trim(host, "[]")); host != "localhost" && (err != nil || !a.IsLoopback()) {
+	if !loopbackName(r.Host) {
 		return "the request is for the host name " + safeText(r.Host, 80) + ", not for 127.0.0.1, ::1 or localhost"
 	}
 	for _, h := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Real-Ip", "Cf-Connecting-Ip"} {
