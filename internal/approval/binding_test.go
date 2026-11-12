@@ -270,3 +270,23 @@ func TestHeld(t *testing.T) {
 		t.Error(txt)
 	}
 }
+
+// HadCheck: the record says the host has the check on (audit 6, r4-x1-02). An id on record, or the mark that it
+// showed the check and nobody accepted; never what the host says now, and not a record that only holds a state.
+func TestHadCheck(t *testing.T) {
+	for name, c := range map[string]struct {
+		b    Binding
+		want bool
+	}{
+		"nothing on record":                       {Binding{}, false},
+		"an id on record":                         {Binding{Known: true, Record: Record{MachineID: "m", How: PinTurnOn}}, true},
+		"an id on record, the host says off":      {Binding{Known: true, Record: Record{MachineID: "m", How: PinAccepted}, Report: Report{Heard: true, Block: true, State: api.ApprovalOff}}, true},
+		"it showed the check, nobody accepted":    {Binding{Known: true, Record: Record{Unaccepted: true}}, true},
+		"a record with a state only":              {Binding{Known: true, Record: Record{State: api.ApprovalBroken}}, false},
+		"no record, the host shows the check now": {Binding{Report: Report{Heard: true, Block: true, State: api.ApprovalRequired, MachineID: "m"}}, false},
+	} {
+		if got := c.b.HadCheck(); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}

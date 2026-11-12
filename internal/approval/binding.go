@@ -152,6 +152,15 @@ func (b Binding) Checks() bool {
 	return pinned || (b.Known && (b.Record.Unaccepted || (b.Record.State != api.ApprovalOff && b.Record.State != "")))
 }
 
+// HadCheck reports whether the record says that this host has the check on: an id is on record for it, or it
+// showed the check on and no admin has accepted that id, or that the check is off, since (Record.Unaccepted).
+// When such a host shows no check, that is the alarm BindVanished, and only an admin's accept makes it a
+// machine without the check again. What the host says in between two polls does not: the panel never goes
+// back to the unapproved way for it by itself (audit 6, r4-x1-02).
+func (b Binding) HadCheck() bool {
+	return b.Known && (b.Record.MachineID != "" || b.Record.Unaccepted)
+}
+
 // ids are the ids a host stands for: the one on record and the one it shows.
 func ids(rec Record, known bool, rep Report) (out []string) {
 	if known && rec.MachineID != "" {

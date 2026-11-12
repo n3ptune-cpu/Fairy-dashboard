@@ -24,8 +24,11 @@ import (
 //
 // A machine in any other state is asked for a challenge for the exact request (POST /approval/challenge):
 //
-//   - "needed: false" (inside the machine's own fan window, the one shutdown shortly after boot, or the state
-//     went back to off): the request is confirmed and sent as before, without an approval.
+//   - "needed: false" inside the machine's own fan window or for the one shutdown shortly after boot: the
+//     request is confirmed and sent as before, without an approval. The same when it says its check is off and
+//     nothing is on record for it. A host that is ON RECORD as one with the check and says that nothing needs
+//     an approval is not believed: that is "check gone", nothing is sent, and the next poll raises the alarm
+//     (notNeeded; audit 6, r4-x1-02).
 //   - "needed: true": the request is kept with the plan (the machine's challenge and the canonical text of
 //     the request) and the dialog asks for the approval (askApproval). After the round trip the panel replays
 //     the kept request, the handler comes here again, and For hands out the approval for exactly the request
@@ -86,12 +89,17 @@ func (s *Server) bindingRefusal(agentID, name string) error {
 	if len(b.Held) > 0 { // another host keeps the id it shows: not "neither", and no button in its box
 		return apierr.New(409, approval.HeldText(name, s.machineNames(b.Held))+" Nothing was sent.")
 	}
-	msg := approval.BindingText(name, b.Status, s.machineNames(b.With)) + " Nothing was sent."
-	switch b.Status {
+	return apierr.New(409, bindingRefusalText(name, b.Status, s.machineNames(b.With)))
+}
+
+// bindingRefusalText is the sentence of bindingRefusal for a host whose binding is the alarm status.
+func bindingRefusalText(name, status string, with []string) string {
+	msg := approval.BindingText(name, status, with) + " Nothing was sent."
+	switch status {
 	case approval.BindChanged, approval.BindDuplicate, approval.BindVanished:
 		msg += " An admin resolves it in the Approval box on the host's page."
 	}
-	return apierr.New(409, msg)
+	return msg
 }
 
 // wantsTarget reports whether a control route builds the approval target for the agent: the machine must be
@@ -180,9 +188,11 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 	}
 	if u.Auth == "token" {
 		// A token cannot be sent to Pocket ID. What the machine would answer anyway is said here, without
-		// spending its request budget; a machine that is only "broken" or "unknown" answers for itself.
+		// spending its request budget; a machine that is only "broken" or "unknown" answers for itself. Not
+		// one that is on record as a machine with the check: it is sent nothing without an approval, whatever
+		// it said last (its check may be gone since the last poll; audit 6, r4-x1-02).
 		for _, i := range ask {
-			if ap := c.s.Poller.ApprovalOf(targets[i].agent.ID); ap != nil && ap.State == api.ApprovalRequired {
+			if ap := c.s.Poller.ApprovalOf(targets[i].agent.ID); (ap != nil && ap.State == api.ApprovalRequired) || c.s.Poller.BindingOf(targets[i].agent.ID).HadCheck() {
 				out[i].err = apierr.New(403, targets[i].name+" checks a passkey approval itself before it does this: an API token cannot give one. Use the panel in a browser.")
 			}
 		}
@@ -310,6 +320,9 @@ func (c *reqCtx) challenge(t approvalTarget) (*approval.Bound, string, error) {
 		return nil, "", apierr.New(apierr.Upstream, t.name+" answered the question about an approval for another request than the one asked. Nothing was sent.")
 	}
 	if !ch.Needed {
+		if err := c.notNeeded(t, ch.Reason); err != nil {
+			return nil, "", err
+		}
 		return nil, ch.Reason, nil
 	}
 	if _, err := api.DecodeChallenge(ch.Challenge); err != nil {
@@ -337,6 +350,42 @@ func (c *reqCtx) challenge(t approvalTarget) (*approval.Bound, string, error) {
 		return nil, "", apierr.New(409, approval.BindingText(t.name, approval.BindNoRecord, nil)+" Nothing was sent.")
 	}
 	return &approval.Bound{Target: approval.Target{AgentID: t.agent.ID, Name: t.name, Request: t.req}, Canonical: canon, Challenge: ch.Challenge, MachineID: id}, "", nil
+}
+
+// notNeeded looks at a machine's answer "this needs no approval" (needed: false, with its reason) before the
+// panel acts on it. nil: the request goes the unapproved way, as the machine says.
+//
+// A machine says so in three cases: inside its own fan window (fan requests only), for the one shutdown
+// shortly after boot that its own setting allows, and when it has no check at all ("off"). The first two are
+// the machine's own exceptions, counted there. The third is taken from a host for which nothing is on record.
+// For a host that is on record as one with the check (approval.Binding.HadCheck) it is "check gone": its trust
+// was cleared on the machine, or something else answers at its address. The panel does not fall back to an
+// unapproved request for it by itself (R4; it sent the shutdown at once, and raised the alarm with the next
+// poll). It refuses with the alarm's own sentence, sends nothing and asks the machine again now, so that the
+// alarm and "Accept that its check is off" are on the host's page; until an admin accepts, bindingRefusal says
+// no. An answer that fits neither the request nor the record ("fan_window" to a shutdown) is refused the same
+// way: the machine's check never says that.
+func (c *reqCtx) notNeeded(t approvalTarget, reason string) error {
+	switch {
+	case t.req.Verb == api.ApproveTrustSet:
+		return nil // Turn on: its caller takes "no challenge" as "not switched on"
+	case reason == "fan_window" && isFanRequest(t.req):
+		return nil
+	case reason == "boot_shutdown" && t.req.Verb == api.ApprovePower && t.req.Action != nil && *t.req.Action == "shutdown":
+		return nil
+	case !c.s.Poller.BindingOf(t.agent.ID).HadCheck():
+		return nil
+	}
+	c.s.Poller.Scheduler.Kick("agent:" + t.agent.ID) // the alarm, and the button to accept that the check is off
+	if reason != "off" && reason != "" {
+		return apierr.New(409, t.name+" has the check on, and answered that this needs no approval ("+textsafe.Clip(reason, 40)+"), which its check does not say for this request. Nothing was sent.")
+	}
+	return apierr.New(409, bindingRefusalText(t.name, approval.BindVanished, nil))
+}
+
+// isFanRequest reports whether r is a fan change (the two requests a machine's fan window covers).
+func isFanRequest(r api.ApprovalRequest) bool {
+	return r.Verb == api.ApproveFanMode || r.Verb == api.ApproveFanSet
 }
 
 // challengeRefusal is the machine's "no" to the question about an approval, in the panel's words where the
