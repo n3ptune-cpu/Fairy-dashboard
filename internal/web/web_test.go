@@ -929,7 +929,9 @@ func TestUpdatesPageAndButton(t *testing.T) {
 	}
 	_ = e.s.Poller.Admin.SetControlDisabled(false, "root", "")
 	r = e.do("POST", "/api/admin/updates/laptop", map[string]any{}, append([]string{"Cookie", c}, csrf...)...)
-	if r.code != 200 || r.body["ok"] != true || !strings.Contains(strings.Join(e.b.Requests, "\n"), "laptop POST /update map[requested_by:Alice]") {
+	// who asked goes to the machine in the form the audit log names a person by (audit 5, r1-b2-10: the
+	// countdown said "requested by <name>", a run and the last Turn on "by <address>")
+	if r.code != 200 || r.body["ok"] != true || !strings.Contains(strings.Join(e.b.Requests, "\n"), "laptop POST /update map[requested_by:n@example.com (unverified)]") {
 		t.Fatalf("update: %d %s %v", r.code, r.raw, e.b.Requests)
 	}
 	r = e.do("POST", "/api/admin/updates", map[string]any{}, append([]string{"Cookie", c}, csrf...)...)

@@ -175,15 +175,6 @@ func (s *Server) updatesPage(c *reqCtx) updatesPage {
 	return page
 }
 
-func displayName(u *model.User) string {
-	for _, v := range []*string{u.Name, u.Email} {
-		if s := model.Deref(v); s != "" {
-			return s
-		}
-	}
-	return u.Sub
-}
-
 // updateParams are the audit entry's details for one agent's update.
 func updateParams(row updateRow, latest updates.Latest, all bool) map[string]any {
 	params := map[string]any{"from": model.Deref(row.Version), "latest": latest.Version}
@@ -199,7 +190,9 @@ func updateParams(row updateRow, latest updates.Latest, all bool) map[string]any
 // callUpdate asks one agent to update itself (POST /update with the control token). Safe to run concurrently:
 // it only reads the request context.
 func (c *reqCtx) callUpdate(u *model.User, a config.Agent, ap *api.Approval) (map[string]any, error) {
-	body := map[string]any{"requested_by": displayName(u)}
+	// who asked, in the one form the panel names a person by (actorOf): the audit log, a run's "started by",
+	// "Last Turn on · by" and the countdown's "requested by" used to show two (audit 5, r1-b2-10)
+	body := map[string]any{"requested_by": actorOf(u)}
 	if ap != nil { // a machine that checks approvals itself: the approval made for its update
 		body["approval"] = ap
 	}

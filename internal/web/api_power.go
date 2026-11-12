@@ -91,13 +91,7 @@ func (s *Server) powerAction(c *reqCtx) error {
 	if ap != nil {
 		params["approval"] = "sent" // the machine checks it; the token itself is never written anywhere
 	}
-	who := model.Deref(u.Name)
-	if who == "" {
-		who = model.Deref(u.Email)
-	}
-	if who == "" {
-		who = u.Sub
-	}
+	who := actorOf(u) // the one form the panel names a person by (audit 5, r1-b2-10): the countdown said the display name
 	res, err := powerctl.ExecuteApproved(c.r.Context(), s.Poller, x, req, who, ap)
 	if err != nil {
 		if ap == nil && refusalCode(err) == api.CodeApprovalRequired {
@@ -150,7 +144,7 @@ func (s *Server) powerCancel(c *reqCtx, u *model.User, id string, req powerctl.R
 	if off := powerctl.ControlOff(s.Poller, x.ID); off != "" {
 		params["control_off"] = off // the cancel went through although control is off: that is said
 	}
-	who := displayName(u)
+	who := actorOf(u)     // the same form as everywhere else the panel names who did something (audit 5, r1-b2-10)
 	was := x.PowerPending // what the page showed when Cancel was pressed
 	res, err := powerctl.Execute(c.r.Context(), s.Poller, x, req, who)
 	if err != nil {

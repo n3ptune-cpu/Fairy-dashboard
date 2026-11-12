@@ -149,3 +149,29 @@ if (!process.exitCode) console.log("ok");
 		t.Fatalf("node: %v\n%s", err, out)
 	}
 }
+
+// r1-b2-10 (audit 5): "Last Turn on · by nora@example.test", a run "started by nora@example.test", the Audit
+// page the same, and a countdown "requested by Nora Admin": the request to the machine carried the display
+// name. It carries the form of the audit log now, for a shutdown and for an update.
+func TestTheMachineIsToldWhoAskedInTheAuditLogsForm(t *testing.T) {
+	a := newApprovalEnv(t)
+	a.selfUpdating(t)
+	u := controller()
+	name, mail := "Nora Admin", "nora@example.test"
+	u.Name, u.Email, u.EmailVerified = &name, &mail, true
+	fresh := a.cookie(u, 0)
+	hdr := []string{"Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	if r := a.do("POST", "/api/systems/laptop/power", a.shutdownBody(), hdr...); r.code != 200 {
+		t.Fatalf("shutdown: %d %s", r.code, r.raw)
+	}
+	if r := a.do("POST", "/api/admin/updates/laptop", map[string]any{}, hdr...); r.code != 200 {
+		t.Fatalf("update: %d %s", r.code, r.raw)
+	}
+	p := a.laptop.Passed()
+	if len(p) != 2 || p[0].Path != "/power" || p[0].Body["requested_by"] != mail || p[1].Path != "/update" || p[1].Body["requested_by"] != mail {
+		t.Fatalf("what the machine was told: %+v", p)
+	}
+	if e := a.auditEntries("", "power.shutdown"); len(e) != 1 || e[0]["actor"] != mail {
+		t.Fatalf("the audit entry: %v", e)
+	}
+}
