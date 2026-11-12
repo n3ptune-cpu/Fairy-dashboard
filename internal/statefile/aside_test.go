@@ -177,3 +177,115 @@ func TestKeepAsideMovesALinkNotItsTarget(t *testing.T) {
 		t.Fatalf("the link's target holds %q", b)
 	}
 }
+
+// Second review of fix7a (R7A-06): the kept copies were put in order by the time in their names, and the
+// "oldest" beyond five were removed right after a new one was made. When the panel host's clock is behind the
+// copies that are already there (a clock that was set back; a flat clock battery at the start after a power
+// cut, which is when files are found damaged), the copy that was just made is the "oldest": KeepAside removed
+// it at once, returned its name, and the caller logged "the damaged file is kept as <that name>". Nothing was
+// left of the file. The reviewer's proof.
+func TestKeepAsideNeverRemovesTheCopyItJustMade(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	now := time.Date(2026, 11, 12, 14, 0, 0, 0, time.UTC)
+	asideNow = func() time.Time { return now }
+	t.Cleanup(func() { asideNow = time.Now })
+	var older []string
+	for i := 0; i < 5; i++ {
+		if err := os.WriteFile(path, []byte("damaged "+string(rune('a'+i))), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		name, err := KeepAside(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// written an hour apart, as their names say
+		if err := os.Chtimes(name, now, now); err != nil {
+			t.Fatal(err)
+		}
+		older = append(older, name)
+		now = now.Add(time.Hour)
+	}
+	for round := 1; round <= 3; round++ { // the clock is behind, at one start after the other
+		now = time.Date(2020, 1, 1, 0, 0, 5*round, 0, time.UTC)
+		content := "everybody's settings, cut off " + string(rune('0'+round))
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		aside, err := KeepAside(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b, err := os.ReadFile(aside); err != nil || string(b) != content {
+			t.Fatalf("round %d: KeepAside says the file is kept as %s, and that copy holds %q: %v", round, filepath.Base(aside), b, err)
+		}
+		if _, err := os.Stat(path); err == nil {
+			t.Fatalf("round %d: the file is still in place", round)
+		}
+		got := kept(t, dir, "settings.json")
+		if len(got) != KeptCopies {
+			t.Fatalf("round %d: %d kept copies, want %d: %v", round, len(got), KeptCopies, got)
+		}
+		// what went is the copy that was written first, not the one with the "oldest" name
+		for _, gone := range older[:round] {
+			if _, err := os.Stat(gone); err == nil {
+				t.Fatalf("round %d: %s, the copy that was written first, is still there: %v", round, filepath.Base(gone), got)
+			}
+		}
+		for _, there := range older[round:] {
+			if _, err := os.Stat(there); err != nil {
+				t.Fatalf("round %d: %s was removed: %v", round, filepath.Base(there), got)
+			}
+		}
+	}
+}
+
+// Only names that KeepAside itself gives are counted and removed. A file somebody made by hand that merely
+// begins like a kept copy (settings.json.corrupt-keep, a note, a copy of a copy) is not the panel's to remove.
+func TestKeepAsideLeavesFilesAlonethatOnlyLookLikeItsCopies(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	now := time.Date(2026, 11, 12, 14, 0, 0, 0, time.UTC)
+	asideNow = func() time.Time { return now }
+	t.Cleanup(func() { asideNow = time.Now })
+	long := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC) // older than every copy, by the file's time and by the name
+	var mine []string
+	for _, name := range []string{"settings.json.corrupt-anything", "settings.json.corrupt-keep-this", "settings.json.corrupt-20190101T000000Z.bak",
+		"settings.json.corrupt-20190101T000000Z-10", "settings.json.corrupt-20190101T000000Z-1", "settings.json.corrupt-2019", "settings.json.corrupt-",
+		"settings.json.corrupt-20190101t000000z", "settings.json.corrupt-20190101T000000Z copy"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("the owner's"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, long, long); err != nil {
+			t.Fatal(err)
+		}
+		mine = append(mine, p)
+	}
+	for i := 0; i < 12; i++ { // twice in one second too: the names with -2
+		if err := os.WriteFile(path, []byte{byte('a' + i)}, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := KeepAside(path); err != nil {
+			t.Fatal(err)
+		}
+		if i%2 == 1 {
+			now = now.Add(time.Hour)
+		}
+	}
+	for _, p := range mine {
+		if b, err := os.ReadFile(p); err != nil || string(b) != "the owner's" {
+			t.Errorf("%s was removed or changed: %q %v", filepath.Base(p), b, err)
+		}
+	}
+	exact := regexp.MustCompile(`^settings\.json\.corrupt-\d{8}T\d{6}Z(-[2-9])?$`)
+	n := 0
+	for _, p := range kept(t, dir, "settings.json") {
+		if exact.MatchString(filepath.Base(p)) {
+			n++
+		}
+	}
+	if n != KeptCopies {
+		t.Errorf("%d kept copies of the panel's own, want %d: %v", n, KeptCopies, kept(t, dir, "settings.json"))
+	}
+}
