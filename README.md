@@ -413,6 +413,10 @@ The rules, in plain words:
   and only while that countdown can still be running: after its end the run sends nothing, so that an action
   someone asked for on the machine's page since is not called off; the same holds for **Cancel run**). The
   cancel is also sent when the run's shutdown request had got no answer: it may have arrived.
+  One case inside the countdown in which it is not sent: the machine's agent already shows another action
+  than the run's shutdown as pending (someone called the shutdown off on the machine's page and asked for a
+  reboot, say). The agent's cancel would call that one off, so the run sends none, and the machine's line
+  says which action is pending.
   A cancel that does not get through is tried again every 10 seconds until the countdown's end, and if none
   gets through, the machine's line says so and names the time it may switch off.
   Calling a countdown off is the one control action that works while the kill switch, or the power switch of

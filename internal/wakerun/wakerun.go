@@ -465,6 +465,7 @@ type Host struct {
 	endMin, dueMono time.Duration
 	pendingSeen     bool          // the agent reported the run's shutdown as pending
 	noPendingAt     time.Time     // the first answer after the request that had no countdown in it (see stepShutting)
+	otherAt         time.Time     // the first answer after the request that showed another action than a shutdown as pending (otherPending)
 	offQuiet        bool          // it gives nothing at all right now ...
 	offSince        time.Duration // ... since this moment on the steady clock
 	// What the run has seen of the poller's row of silent polls while it watches the countdown (seeSilence):
