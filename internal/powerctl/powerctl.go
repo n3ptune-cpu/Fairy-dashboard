@@ -45,6 +45,13 @@ type Request struct {
 	// body. A wake / update / shut down run sets it for its shutdown: that one must be the agent's delayed,
 	// cancellable shutdown, never the Proxmox API's, which starts at once.
 	OnlyVia string `json:"-"`
+	// PendingUnseen, for a cancel: send it to the system's own agent also when the panel's view shows nothing
+	// pending. It is never read from a request body. A wake / update / shut down run sets it for the cancel of
+	// a shutdown it asked for itself: when that request got no answer it may have arrived all the same, and
+	// the panel's view shows the countdown only after a poll that was answered (and drops it again after one
+	// that was not, once the agent's time for it has passed by the panel's clock). The agent answers a cancel
+	// with "ok" when nothing is pending, so the request is safe either way (second review of fix7a, R7A-09).
+	PendingUnseen bool `json:"-"`
 }
 
 // ErrOtherRoute is Execute's refusal of a request whose OnlyVia is not the route the action would take now.
@@ -332,6 +339,12 @@ func CheckConfirmation(s model.System, c model.PowerActionCap, confirm *string) 
 // Execute carries out one action after re-checking that it is available and, for typed actions, that the
 // system's name was typed. The route (agent, Proxmox API or Wake-on-LAN relay) comes from Capabilities.
 func Execute(ctx context.Context, p *poller.Poller, s model.System, req Request, requestedBy string) (model.PowerResult, error) {
+	if req.Action == "cancel" && req.PendingUnseen && s.PowerPending == nil {
+		// Only for the look at the routes below (s is this call's own copy): a cancel is on offer when something
+		// is pending, and the caller knows of a request of its own that may be. Everything else that decides
+		// about the cancel stays: it goes to the system's own agent with power control, or nowhere.
+		s.PowerPending = &model.PowerPending{Action: "shutdown"}
+	}
 	caps := Capabilities(p, s)
 	var c *model.PowerActionCap
 	for i := range caps.Actions {

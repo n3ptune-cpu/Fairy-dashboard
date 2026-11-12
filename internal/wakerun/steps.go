@@ -181,6 +181,14 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 		h.askedAt = now
 	}
 	m.emit(EvStep, r, h, "cancel", params, "ok")
+	if h.lostShutdown() {
+		// All the run knows of its shutdown is a request that got no answer: it never saw a countdown, and does
+		// not say that one was called off. Its agent took the cancel, which it also does when nothing is pending
+		// (R7A-09: the cancel is sent for such a request too; it used to be refused inside the panel).
+		lead := why + ": its shutdown request had got no answer, so its agent was asked to call off a countdown, and it answered: none is pending."
+		m.endSeen(r, h, StLeftOn, OnYes, now, lead+" "+cameOnline(h)+" and it is ON."+updateTail(h), lead+updateTail(h))
+		return
+	}
 	m.endSeen(r, h, StLeftOn, OnYes, now, why+": its shutdown countdown was called off. "+cameOnline(h)+" and it is ON."+updateTail(h),
 		why+": its shutdown countdown (due at "+due+") was asked to be called off."+updateTail(h))
 }

@@ -276,7 +276,10 @@ func TestTheLastLookAfterAShutdownRequestWithoutAnAnswer(t *testing.T) {
 	untilState(t, w, "pc-a", StShutting)
 	w.blocked = "control is disabled by an administrator"
 	h = host(w.finish(), "pc-a")
-	has(t, h, StLeftOn, "the run stopped (control is disabled by an administrator): its shutdown countdown was called off. It came online after the wake and it is ON.")
+	// (second review of fix7a, R7A-09: the run never saw a countdown, so it does not say that one was called
+	// off; it held "...: its shutdown countdown was called off. It came online after the wake and it is ON.")
+	has(t, h, StLeftOn, "the run stopped (control is disabled by an administrator): its shutdown request had got no answer, so its agent was asked to call off a countdown, "+
+		"and it answered: none is pending. It came online after the wake and it is ON.")
 	w.advance(5 * time.Minute)
 	if h.On != OnYes || !pc.on || pc.pending != nil {
 		t.Fatalf("power %q, the machine on %v, pending %v: %s", h.On, pc.on, pc.pending, h.Text)

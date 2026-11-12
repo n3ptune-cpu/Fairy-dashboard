@@ -408,8 +408,9 @@ The rules, in plain words:
 * **The kill switch stops a run**: nothing further is started, and what was woken stays on and is reported.
   A shutdown countdown the run had already started is called off (the one request a stopped run still sends,
   and only while that countdown can still be running: after its end the run sends nothing, so that an action
-  someone asked for on the machine's page since is not called off; the same holds for **Cancel run**);
-  a cancel that does not get through is tried again every 10 seconds until the countdown's end, and if none
+  someone asked for on the machine's page since is not called off; the same holds for **Cancel run**). The
+  cancel is also sent when the run's shutdown request had got no answer: it may have arrived.
+  A cancel that does not get through is tried again every 10 seconds until the countdown's end, and if none
   gets through, the machine's line says so and names the time it may switch off.
   Calling a countdown off is the one control action that works while the kill switch, or the power switch of
   a host, is on: the page's **Cancel**, the Power menu's **Cancel pending** and **Cancel run** only ever stop

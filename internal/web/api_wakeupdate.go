@@ -270,8 +270,12 @@ func (o runOps) Shutdown(ctx context.Context, id string, delay time.Duration, by
 	return time.Time{}, nil
 }
 
+// CancelShutdown is the cancel of the Power menu, for the countdown the run asked for itself. It is sent
+// whatever the panel's view of the machine shows as pending (PendingUnseen): the run's shutdown request may
+// have arrived without an answer, and the view shows a countdown only after a poll that was answered. The run
+// asks for it only while its own countdown can still be running (wakerun: callOff).
 func (o runOps) CancelShutdown(ctx context.Context, id, by string) error {
-	_, err := o.power(ctx, id, powerctl.Request{Action: "cancel"}, by)
+	_, err := o.power(ctx, id, powerctl.Request{Action: "cancel", PendingUnseen: true}, by)
 	return err
 }
 
