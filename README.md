@@ -790,9 +790,12 @@ session settings as whole seconds).
   [TESTING-LOCAL.md](TESTING-LOCAL.md)) has no sign-in, and so it is separate code that a build without the tag
   does not contain: a test of the normal build checks that, and the release workflow stops before signing if a
   built program says it is a test build. A test build refuses to start unless it listens on loopback only, has
-  no `oidc:` block and no session or OIDC secret, and its data folder is new or its own; it answers no request
-  that came through a proxy or for another host name. (`fairy serve --demo`, simulated data on loopback only,
-  is in every build, as before.)
+  no `oidc:` block and no session or OIDC secret, and its data folder is new or its own. It signs in only a
+  browser that opens the address it prints at start, which carries a random start key (kept in its data
+  folder, mode 0600); every other request gets 403. It also refuses a request for another host name or with a
+  reverse proxy's usual headers, but those checks cannot see every proxy or port forward: a test build must
+  never be put behind one, and the start key is the last line of defence if it is. (`fairy serve --demo`,
+  simulated data on loopback only, is in every build, as before.)
 * Roles, managed in the panel (`users.json`, Users page or `fairy admin users|sites`), keyed by the OIDC subject:
   **admin** sees everything, may use control actions, the Audit and Users pages; **viewer** is read-only and sees
   only the systems, guests, power sources, UPSes (and their processes, sensors, history) of their sites;

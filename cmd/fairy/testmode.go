@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	_ "embed"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -39,6 +40,10 @@ import (
 //
 // So putting this program in the place of an installed panel does not switch that panel's sign-in off: it
 // does not start. Its own files are in the folder fairy-test next to the program.
+//
+// And it signs in only a browser that opens the address it prints at start, which carries the start key
+// (testKey here, the check in internal/web/testmode.go). It must never be put behind a proxy or a port
+// forward; the key is the last line of defence if it is.
 const (
 	testBuild     = true
 	testNote      = "\nTEST BUILD (-tags fairytest): sign-in is off. It listens on 127.0.0.1 only. Never expose this."
@@ -46,7 +51,8 @@ const (
 		"button are off). Build it again from the source you want to try"
 	testAdminOff = "this is a test build (-tags fairytest): it has no `fairy admin`. That command works on the files of " +
 		"an installed panel, and a test build keeps to its own folder. Use the page"
-	testMarker = "FAIRY-TEST-STATE.txt" // in the data folder: a test build made it
+	testMarker  = "FAIRY-TEST-STATE.txt" // in the data folder: a test build made it
+	testKeyFile = "start-key"            // in the data folder: the start key (testKey)
 )
 
 //go:embed fairytest-config.yaml
@@ -185,6 +191,49 @@ func inside(path, dir string) bool {
 	return err1 == nil && err2 == nil && err3 == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// testKey returns the start key of the test build whose data folder is dir: the word a browser must present
+// once, in the address the program prints at start, before the page signs it in (internal/web/testmode.go).
+// It is made at the first start (32 random bytes, as 43 letters and digits), kept in the file start-key in the
+// data folder (mode 0600; the folder is 0700) and read from there at every later start, so the printed address
+// stays the same and can be bookmarked. Deleting the file gives a new key at the next start. A file that does
+// not hold a key stops the start: a short or guessable word there would be no protection.
+func testKey(dir string) (string, error) {
+	p := filepath.Join(dir, testKeyFile)
+	if st, err := os.Lstat(p); err == nil && !st.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is not a plain file: the start key is kept in a file of its own. Remove it; the next start makes a new key", p)
+	}
+	b, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			return "", err
+		}
+		key := base64.RawURLEncoding.EncodeToString(raw)
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return "", fmt.Errorf("the start key cannot be kept: %w", err)
+		}
+		_, err = f.WriteString(key + "\n")
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return "", fmt.Errorf("the start key cannot be kept in %s: %w", p, err)
+		}
+		return key, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("the start key cannot be read: %w", err)
+	}
+	_ = os.Chmod(p, 0o600) // a copied folder may have lost the mode
+	key := strings.TrimSpace(string(b))
+	if !web.ValidTestKey(key) {
+		return "", fmt.Errorf("%s does not hold a start key (at least 32 letters, digits, - or _). Delete the file: the next start "+
+			"makes a new key and prints the new address", p)
+	}
+	return key, nil
+}
+
 // testState accepts a data folder that does not exist yet or is empty (and marks it), or one a test build
 // marked before that still has nobody in it but the test admin. Anything else may be a real panel's state.
 func testState(dir string) error {
@@ -242,9 +291,18 @@ func forgetTestSessions(dir string) error {
 	return err
 }
 
-// testServer switches the server to test mode, turns the panel's own update off and says so three times.
-func testServer(srv *web.Server, p *panel) {
-	srv.EnableTestMode()
+// testServer switches the server to test mode, turns the panel's own update off and says so three times. It
+// returns what serve calls once the panel listens: it prints the one line with the address to open, start key
+// included. That line, on the program's standard output, is the only place the key is ever written to besides
+// its file; it is not passed to the log. nil: the start key could not be read or kept, and the panel must not
+// start.
+func testServer(srv *web.Server, p *panel) func() {
+	key, err := testKey(p.cfg.DataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Refusing to start: %v\n(This is a test build, -tags fairytest: it has no sign-in. See TESTING-LOCAL.md.)\n", err)
+		return nil
+	}
+	srv.EnableTestMode(key)
 	srv.PanelRunner = testRunner{}
 	// Without Tailscale between this PC and a test VM, the address agents pair with is this PC's address on
 	// their network. Only when the config asks for other networks and names no address.
@@ -257,6 +315,10 @@ func testServer(srv *web.Server, p *panel) {
 	}
 	for i := 0; i < 3; i++ {
 		slog.Warn("!!! " + web.TestBanner + " User " + web.TestUser.Sub + ", files in " + testDir() + " !!!")
+	}
+	address := strings.TrimRight(p.cfg.BaseURL(), "/") + "/?key=" + key
+	return func() {
+		fmt.Fprintln(os.Stdout, "Open this address in a browser on this PC (it holds the start key: keep it to yourself): "+address)
 	}
 }
 

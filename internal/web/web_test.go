@@ -31,6 +31,9 @@ type env struct {
 	s   *Server
 	srv *httptest.Server
 	b   *testutil.Backend
+	// also is a cookie ("name=value") that do sends with every request, next to the ones a test passes: the
+	// start key's cookie of a test build (testmode_test.go). Empty everywhere else.
+	also string
 }
 
 func setup(t *testing.T) *env {
@@ -110,6 +113,13 @@ type resp struct {
 	hdr  http.Header
 }
 
+// addAlso adds the cookie every request of this env carries (env.also), if there is one.
+func (e *env) addAlso(req *http.Request) {
+	if e.also != "" {
+		req.Header.Set("Cookie", strings.TrimPrefix(req.Header.Get("Cookie")+"; "+e.also, "; "))
+	}
+}
+
 func (e *env) do(method, path string, body any, hdr ...string) resp {
 	var rd io.Reader
 	if body != nil {
@@ -120,6 +130,7 @@ func (e *env) do(method, path string, body any, hdr ...string) resp {
 	for i := 0; i+1 < len(hdr); i += 2 {
 		req.Header.Set(hdr[i], hdr[i+1])
 	}
+	e.addAlso(req)
 	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	r, err := c.Do(req)
 	if err != nil {

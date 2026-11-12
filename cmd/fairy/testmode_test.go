@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -261,5 +262,63 @@ func TestTestBuildSaysSoAndDoesNotUpdateItself(t *testing.T) {
 	}
 	if _, ran := r.Status(); ran {
 		t.Fatal("no update ever ran")
+	}
+}
+
+// The start key (r1-p1-01 / r1-p4-01): made once, 32 random bytes, kept in the data folder with mode 0600, the
+// same at every later start (the printed address can be bookmarked), and never a weak word from a file
+// someone edited.
+func TestTestBuildStartKey(t *testing.T) {
+	dir := t.TempDir()
+	key, err := testKey(dir)
+	if err != nil || !web.ValidTestKey(key) || len(key) != 43 {
+		t.Fatalf("the first start: %q %v", key, err)
+	}
+	p := filepath.Join(dir, testKeyFile)
+	if st, err := os.Stat(p); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) {
+		t.Fatal("the key's file:", st, err)
+	}
+	if again, err := testKey(dir); err != nil || again != key {
+		t.Fatal("a later start must find the same key:", err)
+	}
+	if other, err := testKey(t.TempDir()); err != nil || other == key {
+		t.Fatal("another folder has another key:", err)
+	}
+	if runtime.GOOS != "windows" { // a copied folder may have lost the mode: it is set again
+		if err := os.Chmod(p, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := testKey(dir); err != nil {
+			t.Fatal(err)
+		}
+		if st, _ := os.Stat(p); st.Mode().Perm() != 0o600 {
+			t.Fatal("the mode after a start:", st.Mode().Perm())
+		}
+	}
+	for _, bad := range []string{"", "short", strings.Repeat("a", 31), strings.Repeat("a", 40) + "\nsecond line", "has a space " + strings.Repeat("a", 40)} {
+		if err := os.WriteFile(p, []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := testKey(dir); err == nil || got != "" || !strings.Contains(err.Error(), "Delete the file") || strings.Contains(err.Error(), "aaaa") {
+			t.Fatalf("%q in the file must stop the start (and not be repeated): %q %v", bad, got, err)
+		}
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Symlink(filepath.Join(dir, "elsewhere"), p); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := testKey(dir); err == nil {
+			t.Fatal("a link in the key's place must stop the start")
+		}
+		os.Remove(p)
+	}
+	if fresh, err := testKey(dir); err != nil || fresh == key || !web.ValidTestKey(fresh) {
+		t.Fatal("deleting the file gives a new key:", err)
+	}
+	if _, err := testKey(filepath.Join(dir, "no-such-folder")); err == nil {
+		t.Fatal("a key that cannot be kept must stop the start")
 	}
 }

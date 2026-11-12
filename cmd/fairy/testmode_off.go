@@ -15,6 +15,6 @@ const (
 	testAdminOff  = ""
 )
 
-func testDefaults(*serveFlags)           {}
-func setupTest(serveFlags) (*panel, int) { return nil, 1 }
-func testServer(*web.Server, *panel)     {}
+func testDefaults(*serveFlags)              {}
+func setupTest(serveFlags) (*panel, int)    { return nil, 1 }
+func testServer(*web.Server, *panel) func() { return func() {} }

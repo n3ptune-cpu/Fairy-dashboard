@@ -118,6 +118,7 @@ func (e *env) streamBody(path string, hdr ...string) (int, string) {
 	for i := 0; i+1 < len(hdr); i += 2 {
 		req.Header.Set(hdr[i], hdr[i+1])
 	}
+	e.addAlso(req)
 	r, err := http.DefaultClient.Do(req)
 	if err != nil {
 		e.t.Fatal(err)

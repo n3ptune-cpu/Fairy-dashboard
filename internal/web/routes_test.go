@@ -128,6 +128,7 @@ func (e *env) raw(p probe, hdr ...string) resp {
 	for i := 0; i+1 < len(hdr); i += 2 {
 		req.Header.Set(hdr[i], hdr[i+1])
 	}
+	e.addAlso(req)
 	if req.Header.Get("Content-Type") == "" {
 		if p.ctype != "" {
 			req.Header.Set("Content-Type", p.ctype)

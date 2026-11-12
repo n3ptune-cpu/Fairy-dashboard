@@ -3,10 +3,15 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,9 +27,14 @@ func testPanel(t *testing.T) *env {
 	t.Helper()
 	e := setup(t)
 	e.s.Cfg.OIDC.ControlGroups = []string{TestGroup}
-	e.s.EnableTestMode()
+	e.s.EnableTestMode(startKey)
+	e.also = TestKeyCookie(strings.TrimPrefix(e.srv.URL, "http://"), startKey) // a browser that opened the printed address
 	return e
 }
+
+// startKey is the start key of the test panels in these tests (cmd/fairy makes a random one and keeps it in
+// the data folder).
+const startKey = "start-key-of-the-web-tests-0123456789-ABCDEF"
 
 // open loads the page like a browser does and returns the session cookie it was given.
 func (e *env) open() string {
@@ -202,6 +212,7 @@ func TestTestModeAnswersThisPCOnly(t *testing.T) {
 			} else {
 				req.Header.Set(hdr[0], hdr[1])
 			}
+			req.Header.Set("Cookie", e.also) // with the start key's cookie: these checks do not lean on the key
 			res, err := http.DefaultClient.Do(req)
 			if err != nil {
 				t.Fatal(err)
@@ -214,8 +225,10 @@ func TestTestModeAnswersThisPCOnly(t *testing.T) {
 	}
 	// a request that did not arrive on a loopback socket (here: on none at all)
 	rec := httptest.NewRecorder()
-	e.s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://127.0.0.1/", nil))
-	if rec.Code != 403 || strings.Contains(rec.Body.String(), "<body>") {
+	off := httptest.NewRequest("GET", "http://127.0.0.1/", nil)
+	off.Header.Set("Cookie", TestKeyCookie("127.0.0.1", startKey))
+	e.s.Handler().ServeHTTP(rec, off)
+	if rec.Code != 403 || strings.Contains(rec.Body.String(), "<body>") || !strings.Contains(rec.Body.String(), "loopback") {
 		t.Fatal("not on a loopback socket:", rec.Code)
 	}
 	if r := e.do("GET", "/healthz", nil); r.code != 200 {
@@ -302,7 +315,7 @@ func TestTestModeSendsOtherLoopbackNamesToTheOneAddress(t *testing.T) {
 		port := e.srv.URL[strings.LastIndex(e.srv.URL, ":"):]
 		base := "http://" + tc.public + port
 		e.s.Cfg.PublicURL = base
-		e.s.EnableTestMode()
+		e.s.EnableTestMode(startKey)
 		ask := func(method, host, path string, hdr ...string) *http.Response {
 			t.Helper()
 			req, _ := http.NewRequest(method, e.srv.URL+path, nil)
@@ -310,6 +323,7 @@ func TestTestModeSendsOtherLoopbackNamesToTheOneAddress(t *testing.T) {
 			for i := 0; i+1 < len(hdr); i += 2 {
 				req.Header.Set(hdr[i], hdr[i+1])
 			}
+			req.Header.Set("Cookie", strings.TrimPrefix(req.Header.Get("Cookie")+"; "+TestKeyCookie(req.Host, startKey), "; "))
 			res, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
 			if err != nil {
 				t.Fatal(err)
@@ -357,5 +371,130 @@ func TestTestModeSendsOtherLoopbackNamesToTheOneAddress(t *testing.T) {
 	e := testPanel(t)
 	if r := e.do("GET", "/", nil); r.code != 200 {
 		t.Fatal(r.code)
+	}
+}
+
+// r1-p1-01 / r1-p4-01 (audit 5): a reverse proxy that rewrites Host to the upstream and adds no header (nginx's
+// bare proxy_pass), or a TCP forward, passes every per-request check: the request arrives on a loopback socket,
+// for a loopback host name, without a proxy header. The auditors' proof got the page, an admin session and a
+// confirmed admin action that way. What such a client does not have is the start key: without it nothing is
+// answered, and with it the browser gets a cookie and the clean address.
+func TestTestModeSignsInOnlyWithTheStartKey(t *testing.T) {
+	e := testPanel(t)
+	host := strings.TrimPrefix(e.srv.URL, "http://")
+	cookie := e.also
+	e.also = "" // a client that has only reached the port
+	sessions := func() int { return len(must(e.s.Poller.Admin.ListSessions())) }
+	// exactly what the proxied client of the proof sent: no cookie, the upstream's own Host, no proxy header
+	for _, p := range [][2]string{{"GET", "/"}, {"GET", "/api/me"}, {"GET", "/api/systems"}, {"GET", "/api/stream"}, {"GET", "/auth/login"},
+		{"GET", "/auth/login?step_up=1"}, {"GET", "/healthz"}, {"GET", "/static/app.js"}, {"GET", "/fairytest.js"}, {"GET", "/docs"},
+		{"GET", "/branding/wallpaper"}, {"POST", "/api/me/step-up"}, {"POST", "/api/admin/sites"}, {"POST", "/auth/logout"},
+		{"POST", "/api/me/sessions/revoke-others"}, {"PUT", "/api/settings"}, {"DELETE", "/api/me/pending"}} {
+		r := e.do(p[0], p[1], map[string]any{"name": "x"}, "X-Requested-With", "fairy", "Origin", e.s.Cfg.BaseURL())
+		if r.code != 403 || len(r.hdr.Values("Set-Cookie")) != 0 || !strings.Contains(string(r.raw), testKeyRefusal) || strings.Contains(string(r.raw), startKey) {
+			t.Errorf("%s %s without the start key: %d %q (cookies %q)", p[0], p[1], r.code, r.raw, r.hdr.Values("Set-Cookie"))
+		}
+		if strings.HasPrefix(p[1], "/api/") && r.body["detail"] != testKeyRefusal {
+			t.Errorf("%s %s must be refused in the API's own form: %s", p[0], p[1], r.raw)
+		}
+	}
+	// the proof itself: a proxy that forwards like nginx's bare proxy_pass (Host becomes the upstream's address,
+	// no X-Forwarded-* header), asked under a LAN name by a client that sets Origin as it likes
+	up, _ := url.Parse(e.srv.URL)
+	proxy := httptest.NewServer(&httputil.ReverseProxy{Director: func(r *http.Request) {
+		r.URL.Scheme, r.URL.Host, r.Host = up.Scheme, up.Host, up.Host
+		r.Header["X-Forwarded-For"] = nil
+	}})
+	defer proxy.Close()
+	for _, p := range [][2]string{{"GET", "/"}, {"GET", "/api/me"}, {"POST", "/api/admin/sites"}, {"POST", "/api/me/step-up"}} {
+		req, _ := http.NewRequest(p[0], proxy.URL+p[1], strings.NewReader(`{"name":"ProxySite"}`))
+		req.Host = "panel.lan:8405"
+		req.Header.Set("X-Requested-With", "fairy")
+		req.Header.Set("Origin", e.s.Cfg.BaseURL())
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != 403 || len(res.Header.Values("Set-Cookie")) != 0 || !strings.Contains(string(body), testKeyRefusal) {
+			t.Errorf("through the proxy, %s %s: %d %q (cookies %q)", p[0], p[1], res.StatusCode, body, res.Header.Values("Set-Cookie"))
+		}
+	}
+	if testKeyRefusal != "Test build: open the address printed in its console window." {
+		t.Fatal("the refusal's text is what was agreed:", testKeyRefusal)
+	}
+	// a wrong key, a key of another length, an empty one, the key in a header or a body, a made-up cookie
+	for _, k := range []string{"", "x", strings.Repeat("a", len(startKey)), startKey + "a", startKey[1:], strings.ToLower(startKey)} {
+		if r := e.do("GET", "/?key="+k, nil); r.code != 403 || len(r.hdr.Values("Set-Cookie")) != 0 {
+			t.Errorf("key %q: %d", k, r.code)
+		}
+	}
+	for _, h := range [][2]string{{"X-Key", startKey}, {"Authorization", "Bearer " + startKey}, {"Cookie", testKeyCookieName(host) + "=" + startKey},
+		{"Cookie", testKeyCookie + "=" + testKeyCookieValue(startKey)}, {"Cookie", testKeyCookieName(host) + "=" + strings.Repeat("0", 64)}} {
+		if r := e.do("GET", "/", nil, h[0], h[1]); r.code != 403 {
+			t.Errorf("%s: %d", h[0], r.code)
+		}
+	}
+	if r := e.do("POST", "/?key="+startKey, nil); r.code != 403 { // the key is taken from the address of a page, nothing else
+		t.Error("a POST with the key:", r.code)
+	}
+	if r := e.do("GET", "/api/me?key="+startKey, nil); r.code != 403 || len(r.hdr.Values("Set-Cookie")) != 0 {
+		t.Error("the API takes no key:", r.code)
+	}
+	if n := sessions(); n != 0 {
+		t.Fatalf("%d sessions were made without the start key", n)
+	}
+	// the printed address: a cookie that scripts cannot read and other sites cannot send, and the clean address
+	r := e.do("GET", "/?key="+startKey, nil)
+	set := r.hdr.Values("Set-Cookie")
+	if r.code != 303 || r.hdr.Get("Location") != "/" || len(set) != 1 || !strings.HasPrefix(set[0], cookie+";") ||
+		!strings.Contains(set[0], "HttpOnly") || !strings.Contains(set[0], "SameSite=Strict") || !strings.Contains(set[0], "Max-Age=315360000") ||
+		!strings.Contains(set[0], "Path=/") || r.hdr.Get("Cache-Control") != "no-store" {
+		t.Fatalf("the address with the key: %d to %q, %q", r.code, r.hdr.Get("Location"), set)
+	}
+	if strings.Contains(strings.Join(set, " ")+r.hdr.Get("Location")+string(r.raw), startKey) || sessions() != 0 {
+		t.Fatal("the answer to the key must not repeat it, and makes no session yet")
+	}
+	for from, to := range map[string]string{"/?x=1&key=" + startKey + "&y=%2F": "/?x=1&y=%2F", "/docs?key=" + startKey: "/docs"} {
+		if r := e.do("GET", from, nil); r.code != 303 || r.hdr.Get("Location") != to {
+			t.Errorf("%s: %d to %q, want %q", strings.ReplaceAll(from, startKey, "KEY"), r.code, r.hdr.Get("Location"), to)
+		}
+	}
+	// with the cookie the test build is what it was: the page signs in, the API answers
+	e.also = cookie
+	page := e.do("GET", "/", nil)
+	if page.code != 200 || !strings.Contains(page.hdr.Get("Set-Cookie"), "fairy_session=") || strings.Contains(string(page.raw), startKey) {
+		t.Fatalf("the page with the cookie: %d", page.code)
+	}
+	ck := strings.Split(page.hdr.Get("Set-Cookie"), ";")[0]
+	me := e.do("GET", "/api/me", nil, "Cookie", ck)
+	if me.code != 200 || me.body["role"] != "admin" || strings.Contains(string(me.raw), startKey) || strings.Contains(string(me.raw), testKeyCookieValue(startKey)) {
+		t.Fatalf("/api/me: %d %s", me.code, me.raw)
+	}
+	// a session cookie alone (copied out of the browser, or one a proxied client would be handed) is not enough
+	e.also = ""
+	if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code != 403 {
+		t.Fatal("a session without the start key's cookie:", r.code)
+	}
+	// the key is in no audit entry and no answer of the API that lists what the panel knows
+	e.also = cookie
+	raw, _ := os.ReadFile(e.s.Cfg.AuditLog)
+	for _, p := range []string{"/api/audit", "/api/me/sessions", "/api/admin/sessions", "/api/settings", "/api/summary"} {
+		raw = append(raw, e.do("GET", p, nil, "Cookie", ck).raw...)
+	}
+	if bytes.Contains(raw, []byte(startKey)) || bytes.Contains(raw, []byte(testKeyCookieValue(startKey))) {
+		t.Fatal("the start key (or its cookie) is in the audit log or an API answer")
+	}
+	// two test builds on one PC: the cookie's name carries the port, so neither takes the other's away
+	if a, b := testKeyCookieName("127.0.0.1:8080"), testKeyCookieName("127.0.0.1:8081"); a == b || a != "fairytest_key_8080" || testKeyCookieName("localhost") != "fairytest_key_80" {
+		t.Fatal("cookie names:", a, b)
+	}
+	for k, want := range map[string]bool{startKey: true, strings.Repeat("a", 32): true, strings.Repeat("a", 31): false, strings.Repeat("a", 129): false,
+		strings.Repeat("a", 31) + " ": false, strings.Repeat("a", 31) + "&": false, "": false} {
+		if ValidTestKey(k) != want {
+			t.Errorf("ValidTestKey(%q) = %v", k, !want)
+		}
 	}
 }

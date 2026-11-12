@@ -9,14 +9,32 @@ It is not a release and can never become one: a release is built without the tag
 
 Because it has no sign-in, a test build refuses to start unless everything says "a test, on this PC":
 
-* it listens on `127.0.0.1` (or `::1`, `localhost`) only, and answers no request that came through a proxy or
-  for another host name;
+* it listens on `127.0.0.1` (or `::1`, `localhost`) only, and answers no request for another host name or with
+  one of the headers a reverse proxy usually adds;
 * its config has no `oidc:` block, and neither `FAIRY_SESSION_SECRET` nor `FAIRY_OIDC_CLIENT_SECRET` is set;
 * its data folder is new, empty, or one a test build made, with nobody in it but `test-admin`;
 * none of its files is in an installed panel's folders (`/etc/fairy`, `/var/lib/fairy`, `C:\ProgramData\Fairy`).
 
 So putting the test program in the place of an installed panel does not switch that panel's sign-in off. It
 does not start, and says why.
+
+**It signs in only a browser that opens the address it prints.** At start the program prints one line:
+
+```
+Open this address in a browser on this PC (it holds the start key: keep it to yourself): http://127.0.0.1:8080/?key=...
+```
+
+The part after `key=` is the **start key**, a long random word. Open that address once: the browser gets a
+cookie, the address bar shows the plain `http://127.0.0.1:8080`, and from then on that browser may open the
+plain address. Every other request gets one line: "Test build: open the address printed in its console
+window." The key is kept in `fairy-test\data\start-key` and stays the same at every start, so the address can
+be bookmarked. Delete that file and the next start makes a new key.
+
+**Never put a test build behind a reverse proxy, a port forward or a tunnel** (nginx, `ssh -L`, `netsh
+interface portproxy`, a VMware port rule). The checks in the list above cannot see every one of them: a proxy
+that rewrites the host name and adds no header looks like a browser on this PC. If the port is forwarded all the
+same, the start key is the last line of defence: whoever reaches the port without it gets the one line above
+and nothing else. Whoever has the address with the key is admin.
 
 Every page has a red bar at the top: **TEST BUILD: sign-in is off. Never expose this.** `fairy version`, the
 Updates page and the start-up log say "TEST BUILD" too.
@@ -30,8 +48,9 @@ go build -tags fairytest -o fairy-test.exe .\cmd\fairy
 fairy-test.exe serve
 ```
 
-Open `http://127.0.0.1:8080`. To keep the test VM you added before, copy the folder `fairy-test` from the r4
-folder into the r5 folder **before** the first start.
+Open the address the console prints (`http://127.0.0.1:8080/?key=...`, see above: new in this build). To keep
+the test VM you added before, copy the folder `fairy-test` from the r4 folder into the r5 folder **before** the
+first start.
 
 1. **Overview**: one row per host. Under the name, small: the PC model. In the tile in front: the mark of its
    system (Windows, Debian, ...). Behind the name: small signs for the helper, the battery and the UPS, where
@@ -95,14 +114,20 @@ keeps its files in a folder `.fairy-demo` where you started it. Stop either prog
 
    The first start makes the folder `fairy-test` next to `fairy-test.exe`: `fairy-test\config.yaml` (a copy of
    `cmd\fairy\fairytest-config.yaml`, no secrets in it) and `fairy-test\data` (its state). The window shows
-   three lines with `TEST BUILD: sign-in is off` and then `fairy listening ... addr=127.0.0.1:8080`.
-6. In the browser **on the dev VM**, open this address:
+   three lines with `TEST BUILD: sign-in is off`, then `fairy listening ... addr=127.0.0.1:8080`, and last
+   the line with the address to open:
 
    ```
-   http://127.0.0.1:8080
+   Open this address in a browser on this PC (it holds the start key: keep it to yourself): http://127.0.0.1:8080/?key=...
    ```
+6. In the browser **on the dev VM**, open the address the console prints, with everything after `key=`
+   (mark it in the `cmd.exe` window, Enter copies it; paste it into the address bar).
 
-   You see the panel with the red bar, signed in as `test-admin`. No sign-in page.
+   You see the panel with the red bar, signed in as `test-admin`. No sign-in page. The address bar now shows
+   `http://127.0.0.1:8080` without the key, and this browser may open that plain address from now on (a
+   bookmark of the address with the key works for ever, in any browser on this PC).
+
+   Without the key the answer is one line: "Test build: open the address printed in its console window."
 
    `http://localhost:8080` works too: the test build sends the browser on to `http://127.0.0.1:8080`, and
    the address bar shows that. (The page and its requests have to use one address. Under the other name the
@@ -112,7 +137,13 @@ keeps its files in a folder `.fairy-demo` where you started it. Stop either prog
 
 If it prints `Refusing to start: ...`, the line says what is in the way (see the list above).
 
-Port 8080 already in use? Start with another one, and open that one: `fairy-test.exe serve --listen 127.0.0.1:8099`.
+Port 8080 already in use? Start with another one, and open the address it prints: `fairy-test.exe serve --listen 127.0.0.1:8099`.
+
+For a script or a test (curl, Playwright): read the key from `fairy-test\data\start-key` (the file holds the
+key and a line end, nothing else) and open `/?key=<key>` first, with a cookie jar or in the browser context
+that is used afterwards. For example `curl -c jar -b jar -L "http://127.0.0.1:8080/?key=<key>"`, then
+`curl -b jar http://127.0.0.1:8080/api/me`. The cookie is named `fairytest_key_<port>`, so two test builds on
+two ports do not take each other's cookie away.
 
 ## B. Add a test VM as a host
 
@@ -170,8 +201,9 @@ A new zip goes into a new folder; build and start there. The old folder can be d
 Every browser that opens the panel is its own sign-in, a **session**. To have two, use two browsers on the dev
 VM (Edge and Firefox, say), or one browser with a normal window and a private (InPrivate, incognito) window.
 
-1. Start the panel (part A). Open `http://127.0.0.1:8080` in the first window.
-2. Open `http://127.0.0.1:8080` in the second window too.
+1. Start the panel (part A). Open the address the console prints in the first window.
+2. Open the same address, with the key, in the second window too (another browser or a private window has no
+   cookie of the first one).
 3. In the first window: the menu button at the top right (three lines), then **Sessions**.
 4. Under "Your sessions" there are two lines. The one marked **This session** is the window you are looking
    at; the other one is the second window. Both show `127.0.0.1`, because both are on this PC. The times

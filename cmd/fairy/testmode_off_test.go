@@ -37,7 +37,9 @@ func TestNoTestModeInThisBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, backwards := range []string{"DLIUB TSET", "ffo si ni-ngis", "nimda-tset", "snimda-tsetyriaf", "ETATS-TSET-YRIAF", "edoMtseTelbanE", "dilavni.tsetyriaf"} {
+	for _, backwards := range []string{"DLIUB TSET", "ffo si ni-ngis", "nimda-tset", "snimda-tsetyriaf", "ETATS-TSET-YRIAF", "edoMtseTelbanE", "dilavni.tsetyriaf",
+		// the start key of a test build (audit 5, r1-p1-01): its cookie, its refusal, the printed line, its check
+		"yek_tsetyriaf", "wodniw elosnoc sti ni detnirp sserdda eht nepo", "yek trats eht sdloh ti", "yeKtseTdilaV"} {
 		needle := []byte(backwards)
 		slices.Reverse(needle)
 		if bytes.Contains(prog, needle) {

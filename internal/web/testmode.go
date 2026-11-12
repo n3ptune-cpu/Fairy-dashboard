@@ -4,6 +4,9 @@ package web
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -22,8 +25,14 @@ import (
 //
 // What it changes, and nothing else: there is no round trip to an identity provider. Opening the page signs
 // the browser in as the one built-in admin, with a real session (cookie, sessions.json, idle timeout, sign
-// out), and "Confirm it's you" is confirmed by its own button. Every HTML page carries the banner. Requests
-// are answered only on a loopback socket, for a loopback host name, and not when they came through a proxy.
+// out), and "Confirm it's you" is confirmed by its own button. Every HTML page carries the banner.
+//
+// Who is answered: only a browser that has presented the start key (testKeyGate): the address the program
+// prints at start carries it, and it is exchanged for a cookie once. Before that, every request must arrive on
+// a loopback socket, for a loopback host name, and without one of the headers a reverse proxy adds
+// (testRefusal). Those three checks cannot see every proxy: one that rewrites Host and adds no header, or a
+// plain TCP forward, passes them. So a test build must never be put behind a proxy or a port forward; if it
+// is all the same, the key is what is left between the forwarded port and an admin session.
 
 // TestBanner is on every page of a test build; TestGroup is the control group cmd/fairy puts into the config,
 // which makes TestUser admin at the first sign-in.
@@ -60,9 +69,14 @@ new MutationObserver(() => {
 }).observe(document.documentElement, { childList: true, subtree: true });
 `
 
-// EnableTestMode switches sign-in off for this server. cmd/fairy calls it, in a test build only, after it has
-// refused everything a test panel must not run with (cmd/fairy/testmode.go).
-func (s *Server) EnableTestMode() {
+// EnableTestMode switches sign-in off for this server, for browsers that present key (the start key, see
+// testKeyGate; it must be a ValidTestKey). cmd/fairy calls it, in a test build only, after it has refused
+// everything a test panel must not run with (cmd/fairy/testmode.go).
+func (s *Server) EnableTestMode(key string) {
+	if !ValidTestKey(key) {
+		panic("web: EnableTestMode needs a start key of at least 32 letters, digits, - or _")
+	}
+	gate := testKeyGate{key: key, cookie: testKeyCookieValue(key)}
 	inner := s.mux
 	m := http.NewServeMux()
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { inner.ServeHTTP(&bannerWriter{ResponseWriter: w}, r) })
@@ -97,8 +111,96 @@ func (s *Server) EnableTestMode() {
 		if s.testOtherName(w, r) {
 			return
 		}
+		if gate.stops(w, r) {
+			return
+		}
 		m.ServeHTTP(w, r)
 	})
+}
+
+// The start key. A test build has no sign-in, so whoever reaches its port would be admin. The per-request
+// checks below (testRefusal) stop a foreign host name and the proxies that announce themselves; they cannot
+// stop a proxy that does not, or a TCP forward. So the page signs nobody in who has not shown the start key:
+// a random word that cmd/fairy keeps in the test data folder (mode 0600) and prints once at start, inside the
+// address to open (http://127.0.0.1:8080/?key=...). A request to that address with the right key gets a cookie
+// (HttpOnly, SameSite=Strict, ten years; the key does not change between starts, so the address can be
+// bookmarked) and is sent on to the same address without the key. Every other request without the cookie is
+// answered 403 with one line. The key is compared in constant time, and it is in no log line, audit entry or
+// API answer: the cookie holds a hash of it, not the key.
+const (
+	testKeyParam   = "key"
+	testKeyCookie  = "fairytest_key"
+	testKeyMinLen  = 32
+	testKeyMaxLen  = 128
+	testKeyRefusal = "Test build: open the address printed in its console window."
+)
+
+// ValidTestKey reports whether key has the form of a start key: 32 to 128 letters, digits, - or _.
+func ValidTestKey(key string) bool {
+	if len(key) < testKeyMinLen || len(key) > testKeyMaxLen {
+		return false
+	}
+	for _, c := range []byte(key) {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// TestKeyCookie returns the cookie ("name=value") a browser holds after it opened the address with the start
+// key, for the address host (host:port): for tests and scripts that read the key from its file.
+func TestKeyCookie(host, key string) string {
+	return testKeyCookieName(host) + "=" + testKeyCookieValue(key)
+}
+
+func testKeyCookieValue(key string) string {
+	h := sha256.Sum256([]byte("fairy-test-start-key-cookie-v1\x00" + key))
+	return hex.EncodeToString(h[:])
+}
+
+// testKeyCookieName has the port in it: cookies are per host name, not per port, and two test builds on one PC
+// (two folders, two ports, two keys) would otherwise take each other's cookie away.
+func testKeyCookieName(host string) string {
+	_, port, err := net.SplitHostPort(host)
+	if err != nil || port == "" || len(port) > 5 || strings.Trim(port, "0123456789") != "" {
+		port = "80"
+	}
+	return testKeyCookie + "_" + port
+}
+
+type testKeyGate struct{ key, cookie string }
+
+// stops answers a request that does not come from a browser with the start key, and reports whether it did.
+func (g testKeyGate) stops(w http.ResponseWriter, r *http.Request) bool {
+	name := testKeyCookieName(r.Host)
+	q := r.URL.Query()
+	if q.Has(testKeyParam) && (r.Method == http.MethodGet || r.Method == http.MethodHead) && !strings.HasPrefix(r.URL.Path, "/api/") &&
+		subtle.ConstantTimeCompare([]byte(q.Get(testKeyParam)), []byte(g.key)) == 1 {
+		http.SetCookie(w, &http.Cookie{Name: name, Value: g.cookie, Path: "/", MaxAge: 10 * 365 * 86400, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+		q.Del(testKeyParam)
+		to := url.URL{Path: "/", RawQuery: q.Encode()}
+		if p := r.URL.Path; strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "//") && !strings.Contains(p, "\\") {
+			to.Path = p
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		http.Redirect(w, r, to.RequestURI(), http.StatusSeeOther) // the clean address: the key is not in the page's address
+		return true
+	}
+	if c, err := r.Cookie(name); err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(g.cookie)) == 1 {
+		return false
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	if strings.HasPrefix(r.URL.Path, "/api/") || strings.Contains(r.Header.Get("Accept"), "application/json") {
+		b, _ := json.Marshal(map[string]any{"detail": testKeyRefusal})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write(b)
+		return true
+	}
+	http.Error(w, testKeyRefusal, http.StatusForbidden)
+	return true
 }
 
 // testOtherName answers a request that came for another loopback name of this panel than the one in public_url
@@ -162,8 +264,10 @@ func (w signedOutWriter) WriteHeader(code int) {
 func (w signedOutWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // testRefusal says why a request is not answered ("" when it is): the listen address is checked at start, this
-// is the same rule for every request, plus the two ways a loopback port still gets exposed (a reverse proxy in
-// front of it, a foreign host name pointed at 127.0.0.1).
+// is the same rule for every request, plus two ways a loopback port still gets exposed that a request shows
+// (a reverse proxy in front of it that adds its usual headers, a foreign host name pointed at 127.0.0.1). It
+// does not see a proxy that rewrites Host and adds no header, or a TCP forward: for those there is the start
+// key (testKeyGate), which comes after this.
 func testRefusal(r *http.Request) string {
 	if la, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr); !isLoopback(la) {
 		return "this request did not arrive on a loopback address"

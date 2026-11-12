@@ -157,8 +157,11 @@ func serve(args []string) int {
 	case runtime.GOOS == "linux":
 		srv.PanelRunner = panelupdate.Systemd{}
 	}
-	if testBuild {
-		testServer(srv, p)
+	listening := func() {}
+	if testBuild { // sign-in off, for a browser that opens the address listening() prints
+		if listening = testServer(srv, p); listening == nil {
+			return 1
+		}
 	}
 	if srv.Enroll.PanelAddr == "" {
 		slog.Warn("Add host: this machine has no single Tailscale address; set enroll: {panel_address: 100.x.y.z} in config.yaml")
@@ -187,6 +190,7 @@ func serve(args []string) int {
 	go p.poller.Run(ctx)
 	slog.Info("fairy listening", "version", version, "addr", ln.Addr().String(), "public_url", p.cfg.BaseURL(),
 		"demo", f.demo)
+	listening()
 	if err := srv.Run(ctx, ln); err != nil {
 		slog.Error("server failed", "error", err)
 		return 1
