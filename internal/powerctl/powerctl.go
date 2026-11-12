@@ -472,8 +472,9 @@ func (e *AgentRefusal) Error() string { return e.Err.Error() }
 func (e *AgentRefusal) Unwrap() error { return e.Err }
 
 // Unanswered is a control request that left the panel, or may have, and got no answer of the agent: a timeout,
-// a connection that broke, an answer that cannot be read, and an error status with a body that is not the
-// agent's (a proxy's 502, 503 or 504 page, another server's 404). The agent may have taken the request: the wake
+// a connection that broke, an answer that cannot be read, and every answer that is not the agent's own: an
+// error status with a body that is not the agent's (a proxy's 502, 503 or 504 page, another server's 404), a
+// redirect, a good status without the agent's answer in it. The agent may have taken the request: the wake
 // packet may be out, the update or the countdown may be running. It wraps the error the page gets ("agent
 // unreachable: timeout"), so a click shows what it showed before; a caller that goes on working after the
 // request (the wake / update / shut down run) must not take it for "nothing happened", and never sends the
@@ -519,7 +520,7 @@ func UpdateAgent(ctx context.Context, p *poller.Poller, a config.Agent, requeste
 
 // agentCall sends one control request to an agent and says what came of it, in one of four ways:
 //
-//   - the agent's "yes": a good status. The data.
+//   - the agent's "yes": a 2xx status with the agent's own answer (a JSON object that is not empty). The data.
 //   - the agent's "no": a status of 400 or more with the agent's own error body (agentsNo). An AgentRefusal
 //     (for 401 the plain error about the control token): nothing was done, and the agent said so itself.
 //   - the request never left the panel (poller.NotSent): the plain error.
@@ -529,6 +530,8 @@ func UpdateAgent(ctx context.Context, p *poller.Poller, a config.Agent, requeste
 //     request: in both the agent may have taken the request (audit 5, r3-p2-03: "Left ON: the shutdown was not
 //     accepted" for a machine that then went off; "It was not woken" for one that was). An error status with
 //     any other body than the agent's is treated the same: whatever stands between cannot speak for the agent.
+//     A redirect is not followed, and it is not a "yes" either (r3-p2-08: a 302 with no body counted as
+//     accepted, for a wake, an update, a shutdown and a cancel); nor is a good status with an empty body.
 func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path string, body any) (jsonx.M, error) {
 	status, data, err := p.AgentRequest(ctx, a, "POST", path, body)
 	notTheAgents := func() error {
@@ -540,12 +543,12 @@ func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path strin
 		if errors.As(err, &ns) {
 			return nil, e
 		}
-		if status >= 400 { // an error status whose body cannot be read
+		if status >= 300 { // an error status or a redirect whose body cannot be read
 			return nil, notTheAgents()
 		}
 		return nil, &Unanswered{Err: e}
 	}
-	if status >= 400 && !agentsNo(data) {
+	if status < 200 || (status >= 300 && status < 400) || (status >= 400 && !agentsNo(data)) || (status < 300 && len(data) == 0) {
 		return nil, notTheAgents()
 	}
 	errMsg := func(def string) string {
