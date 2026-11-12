@@ -25,6 +25,29 @@ func URL() string {
 var discordHosts = map[string]bool{"discord.com": true, "discordapp.com": true, "ptb.discord.com": true,
 	"canary.discord.com": true}
 
+// discordMarks are the characters Discord reads as Markdown or as its own marks (<@id>, <#id>, <t:...>, <url>).
+const discordMarks = "\\*_~`|[]<>#"
+
+// discordText is s as Discord shows it letter for letter: a backslash before every character it would read as
+// Markdown. Title and message are plain text, and parts of them come from outside: a host's name from its agent,
+// a guest's from Proxmox, a UPS's from the machine it hangs on. Without this a name such as
+// "srv** [Session expired: sign in again](https://attacker.example/) **" was a masked link in the owner's
+// channel. An address written out is still a link, to the address one reads. ntfy gets plain text as before.
+func discordText(s string) string {
+	if !strings.ContainsAny(s, discordMarks) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		if r < 128 && strings.ContainsRune(discordMarks, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // BuildRequest returns the body, content type and extra headers for ntfy or Discord.
 func BuildRequest(rawURL, title, message string) ([]byte, string, map[string]string) {
 	u, _ := url.Parse(rawURL)
@@ -33,9 +56,12 @@ func BuildRequest(rawURL, title, message string) ([]byte, string, map[string]str
 		host = u.Hostname()
 	}
 	if discordHosts[host] {
-		c := "**" + title + "**\n" + message
+		c := "**" + discordText(title) + "**\n" + discordText(message)
 		if r := []rune(c); len(r) > 1900 {
 			c = string(r[:1900])
+			if n := len(c) - len(strings.TrimRight(c, `\`)); n%2 == 1 {
+				c = c[:len(c)-1] // the cut fell between a backslash and the character it stood before
+			}
 		}
 		b, _ := json.Marshal(map[string]any{"content": c, "allowed_mentions": map[string]any{"parse": []string{}}})
 		return b, "application/json", map[string]string{}
