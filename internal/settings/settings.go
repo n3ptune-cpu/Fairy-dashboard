@@ -34,7 +34,12 @@ var typeOrder = []string{"image/png", "image/jpeg", "image/webp", "image/gif", "
 type Background struct {
 	Kind    string  `json:"kind"`    // none | upload | url
 	URL     *string `json:"url"`     // only for kind=url (https only)
-	Version int     `json:"version"` // bumped on every upload (cache busting)
+	Version int     `json:"version"` // bumped on every upload
+	// Tag names the uploaded picture: this user's, this file (BackgroundTag). The page puts it into the
+	// picture's address and the answer carries it as its ETag, so that no two accounts share an address or a
+	// validator in a browser's cache (r3-p3-01). Worked out when the settings are read; never stored, and what
+	// a request sends is not used.
+	Tag string `json:"tag,omitempty"`
 }
 
 // Popups are the pop-ups an open page shows for new notifications (README, "Notifications").
@@ -271,6 +276,7 @@ func (s *Store) get(sub string) UserSettings {
 	if st.Validate() != nil {
 		return Defaults()
 	}
+	st.Background.Tag = s.tagFor(sub, st.Background.Kind)
 	return st
 }
 
@@ -278,14 +284,43 @@ func (s *Store) get(sub string) UserSettings {
 func (s *Store) Put(sub string, st UserSettings) (UserSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	st.Background.Tag = s.tagFor(sub, st.Background.Kind)
 	return st, s.put(sub, st)
 }
 
 func (s *Store) put(sub string, st UserSettings) error {
 	d := s.loadAll()
+	st.Background.Tag = "" // never stored: it is the file's, not a setting
 	b, _ := json.Marshal(st)
 	d[sub] = b
 	return s.saveAll(d)
+}
+
+// BackgroundTag names one user's uploaded picture as it is now: a hash of the account, the file's time (to the
+// nanosecond) and its size. Another account's picture, and this account's next upload, have another tag. ""
+// when there is no file. It is not a secret and opens nothing: the picture is only ever sent to its owner.
+func BackgroundTag(sub string, st os.FileInfo) string {
+	if st == nil || !st.Mode().IsRegular() {
+		return ""
+	}
+	h := sha256.Sum256([]byte(fmt.Sprintf("background\x00%s\x00%d\x00%d", sub, st.ModTime().UnixNano(), st.Size())))
+	return hex.EncodeToString(h[:])[:24]
+}
+
+// tagFor is the tag of sub's uploaded picture when the background is that picture ("" otherwise).
+func (s *Store) tagFor(sub, kind string) string {
+	if kind != "upload" {
+		return ""
+	}
+	p, _ := s.BackgroundPath(sub)
+	if p == "" {
+		return ""
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return ""
+	}
+	return BackgroundTag(sub, st)
 }
 
 // BackgroundPath returns the uploaded file and its type ("" if none).
@@ -318,7 +353,7 @@ func (s *Store) SaveBackground(sub, mime string, data []byte) (UserSettings, err
 		return UserSettings{}, fmt.Errorf("saving background: %w", err)
 	}
 	st := s.get(sub)
-	st.Background = Background{Kind: "upload", Version: st.Background.Version + 1}
+	st.Background = Background{Kind: "upload", Version: st.Background.Version + 1, Tag: s.tagFor(sub, "upload")}
 	return st, s.put(sub, st)
 }
 

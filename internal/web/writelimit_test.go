@@ -101,15 +101,16 @@ func TestBackgroundDownloadIsStreamedAndLimitedPerUser(t *testing.T) {
 	}
 	// r2-p3-03: the browser asks before every use of its copy. With the session the answer is "not changed" (no
 	// second download); signed out it is the refusal, so the copy is not shown to the next person.
-	lm := r.hdr.Get("Last-Modified")
-	if lm == "" {
-		t.Fatal("no Last-Modified: the browser could not ask whether its copy is still good")
+	// (r3-p3-01: what it asks with is the ETag, this user's and this file's; TestBackgroundIsNeverAnotherUsers.)
+	tag := r.hdr.Get("ETag")
+	if tag == "" {
+		t.Fatal("no ETag: the browser could not ask whether its copy is still good")
 	}
-	if r := e.do("GET", "/api/settings/background", nil, "Cookie", cb, "If-Modified-Since", lm); r.code != 304 || len(r.raw) != 0 ||
+	if r := e.do("GET", "/api/settings/background", nil, "Cookie", cb, "If-None-Match", tag); r.code != 304 || len(r.raw) != 0 ||
 		r.hdr.Get("Cache-Control") != "private, no-cache" {
 		t.Fatalf("asking with the session: %d, %d bytes, %q", r.code, len(r.raw), r.hdr.Get("Cache-Control"))
 	}
-	if r := e.do("GET", "/api/settings/background", nil, "If-Modified-Since", lm); r.code != 401 {
+	if r := e.do("GET", "/api/settings/background", nil, "If-None-Match", tag); r.code != 401 {
 		t.Fatalf("asking without a session: %d", r.code)
 	}
 	// the user's own page still works

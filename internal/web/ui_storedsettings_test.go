@@ -46,6 +46,14 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 if (!same(storedSettings(JSON.stringify(good)), good)) fail("a good copy: " + JSON.stringify(storedSettings(JSON.stringify(good))));
 const pop = { ...good, background: { kind: "upload", url: null, version: 9 }, popups: { enabled: false, seconds: 8, level: "warning" } };
 if (!same(storedSettings(JSON.stringify(pop)), pop)) fail("a good copy with pop-ups: " + JSON.stringify(storedSettings(JSON.stringify(pop))));
+// r3-p3-01: the panel's tag of an uploaded picture is kept (it is part of the picture's address), and only as what the panel makes
+const tagged = { ...good, background: { kind: "upload", url: null, version: 2, tag: "0123456789abcdef01234567" } };
+if (!same(storedSettings(JSON.stringify(tagged)), tagged)) fail("an upload with its tag: " + JSON.stringify(storedSettings(JSON.stringify(tagged))));
+for (const tag of ["../x", "ABCDEF0123", "abc", 12345678, "a".repeat(65), "0123456789abcdef&next=1"]) {
+  const got = storedSettings(JSON.stringify({ ...tagged, background: { ...tagged.background, tag } }));
+  if (!got || "tag" in got.background) fail("a tag the panel does not make was kept: " + JSON.stringify(tag));
+}
+if ("tag" in storedSettings(JSON.stringify({ ...good, background: { ...good.background, tag: "0123456789abcdef" } })).background) fail("a tag without an upload was kept");
 const none = { theme: "black", background: { kind: "none", url: null, version: 0 }, dim: 0, blur: 40, card_opacity: 20 };
 if (!same(storedSettings(JSON.stringify(none)), none)) fail("the edges of the ranges");
 // the four values of the audit, and their relatives: not used

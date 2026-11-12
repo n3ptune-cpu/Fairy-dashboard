@@ -133,10 +133,18 @@ func (s *Server) getBackground(c *reqCtx) error {
 	c.flush()
 	h := c.w.Header()
 	h.Set("Content-Type", mime)
-	// no-cache: the browser may keep the picture but asks before every use, and the question needs the session
-	// (answered 304 from the file's time). With a max-age the picture stayed readable from the browser's cache for a
-	// day after sign-out, for the next person at a shared browser profile.
+	// no-cache: the browser may keep the picture but asks before every use, and the question needs the session.
+	// With a max-age the picture stayed readable from the browser's cache for a day after sign-out, for the next
+	// person at a shared browser profile.
+	//
+	// What the browser asks with is the ETag, and the ETag is this user's and this file's (BackgroundTag). There
+	// is no Last-Modified, and ServeContent gets no time: the file's time was the only validator, the address
+	// was "?v=1" for nearly everyone, and so the next person at that browser, asking with the time of the
+	// picture of the person before, was answered 304 and shown that person's picture (r3-p3-01). A 304 is now
+	// only ever the answer to this user's own validator; anything else gets this user's picture, whole.
 	h.Set("Cache-Control", "private, no-cache")
+	h.Set("ETag", `"`+settings.BackgroundTag(u.Sub, st)+`"`)
+	h.Set("Vary", "Cookie")
 	h.Set("Content-Security-Policy", "default-src 'none'")
 	h.Set("Content-Disposition", "inline")
 	timeout := backgroundWriteTimeout
@@ -144,7 +152,7 @@ func (s *Server) getBackground(c *reqCtx) error {
 		timeout = s.answerTimeout
 	}
 	_ = http.NewResponseController(c.w).SetWriteDeadline(time.Now().Add(timeout))
-	http.ServeContent(c.w, c.r, "", st.ModTime(), f) // streams; answers Range and If-Modified-Since
+	http.ServeContent(c.w, c.r, "", time.Time{}, f) // streams; answers Range and If-None-Match (never If-Modified-Since)
 	return nil
 }
 

@@ -2120,7 +2120,9 @@ function bindSignIn() {
 // ------------------------------------------------------------ settings persistence (server, localStorage fallback)
 const LS_KEY = "fairy-settings";
 const cssUrl = (u) => `url("${String(u).replace(/["\\\n\r]/g, encodeURIComponent)}")`;
-const bgUrl = (s) => (s.background.kind === "upload" ? `/api/settings/background?v=${enc(s.background.version)}` : s.background.kind === "url" ? s.background.url : null);
+// The address of an uploaded picture carries the panel's tag for it (this account's, this file): two accounts
+// in one browser profile never share a cache entry. Without a tag (a copy kept from before): the counter.
+const bgUrl = (s) => (s.background.kind === "upload" ? `/api/settings/background?v=${enc(s.background.tag || s.background.version)}` : s.background.kind === "url" ? s.background.url : null);
 function applySettings() {
   const s = state.settings, root = document.documentElement.style, url = bgUrl(s);
   document.body.classList.toggle("has-bg", !!url);
@@ -2146,6 +2148,7 @@ function storedSettings(raw) {
     url = b.url;
   } else if (b.kind !== "none" && b.kind !== "upload") return null;
   const out = { theme: "black", background: { kind: b.kind, url, version }, dim: s.dim, blur: s.blur, card_opacity: s.card_opacity };
+  if (b.kind === "upload" && typeof b.tag === "string" && /^[0-9a-f]{8,64}$/.test(b.tag)) out.background.tag = b.tag;
   if (obj(s.popups)) out.popups = { enabled: s.popups.enabled, seconds: s.popups.seconds, level: s.popups.level };  // popPrefs checks each
   return out;
 }
