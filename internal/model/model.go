@@ -372,6 +372,8 @@ type Me struct {
 	DemoViews []string `json:"demo_views,omitempty"`
 	// PendingResult is the outcome of an action the panel ran right after a step-up sign-in (shown once).
 	PendingResult *PendingResult `json:"pending_result,omitempty"`
+	// Docs: the panel serves /docs (enable_docs: true). The page shows its "API docs" link only then.
+	Docs bool `json:"docs"`
 }
 
 // PendingResult is what happened to the action that waited for a step-up sign-in.

@@ -23,7 +23,7 @@ func (s *Server) me(c *reqCtx) error {
 	}
 	me := model.Me{User: *u, CanControl: g.Admin(), Demo: s.DemoUser != nil,
 		ControlDisabled: s.Poller.Admin.ControlDisabled(), StepUpWindowS: s.Cfg.StepUpWindowS, AuthAgeS: c.authAge(u),
-		Role: g.Role, Sites: g.Sites, AllSites: g.SeesAll(), CanManageUsers: g.Admin() && u.Auth != "token"}
+		Role: g.Role, Sites: g.Sites, AllSites: g.SeesAll(), CanManageUsers: g.Admin() && u.Auth != "token", Docs: s.Cfg.EnableDocs}
 	if me.Sites == nil {
 		me.Sites = []string{}
 	}

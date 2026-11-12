@@ -345,3 +345,29 @@ func TestUIButtonsOneHeight(t *testing.T) {
 		t.Error("app.css: .btn.primary sets a size of its own again")
 	}
 }
+
+// r1-p3-02 (audit 5): the footer's "API docs" link was on every page, also with the default enable_docs:
+// false, where /docs does not exist: a click left the panel for a page that read {"detail":"Not Found"}. The
+// link is hidden in the page as it is served, and shown only when /api/me says that the panel has /docs.
+func TestUIDocsLinkOnlyWhenThereAreDocs(t *testing.T) {
+	index, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), `<span id="doclink" hidden> · <a href="/docs">API docs</a></span>`) {
+		t.Error("index.html must serve the docs link hidden")
+	}
+	if !strings.Contains(appJS(t), `$("#doclink").hidden = state.me.docs !== true;`) {
+		t.Error("app.js must show the docs link only when /api/me says docs: true")
+	}
+	e := setup(t) // the test config has enable_docs: true
+	ck := e.cookie(controller(), 0)
+	if me := e.do("GET", "/api/me", nil, "Cookie", ck); me.code != 200 || me.body["docs"] != true || e.do("GET", "/docs", nil, "Cookie", ck).code != 200 {
+		t.Fatalf("with enable_docs: true, /api/me: %s", me.raw)
+	}
+	off := setup(t)
+	off.s.Cfg.EnableDocs = false
+	if me := off.do("GET", "/api/me", nil, "Cookie", off.cookie(controller(), 0)); me.code != 200 || me.body["docs"] != false {
+		t.Fatalf("with enable_docs: false, /api/me: %s", me.raw)
+	}
+}

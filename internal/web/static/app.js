@@ -2887,6 +2887,7 @@ async function boot() {
   // Back button left one behind): the server forgets it. One that just ran is already gone.
   api("/api/me/pending", { method: "DELETE" }).catch(() => { /* it expires by itself */ });
   $("#demo-banner").hidden = !state.me.demo;
+  $("#doclink").hidden = state.me.docs !== true;  // /docs exists only with enable_docs: true; the link led to a bare 404 otherwise
   if (state.me.role === "pending") {  // signed in, but no role yet: nothing else to load
     const w = $("#waiting");
     $("#waiting-who").textContent = state.me.email || state.me.name || state.me.sub;
