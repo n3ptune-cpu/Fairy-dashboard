@@ -6,14 +6,15 @@ import (
 	"testing"
 )
 
-// The page's part of the machine's own check of approvals: the box on a machine's page with every field of
-// the block, the flag for a broken machine on the Overview and the Updates page, the dialog's wording for an
-// approval, and that every value from a machine goes through esc().
+// The page's part of the machine's own check of approvals: the box of a machine with every field of the block
+// (opened from the button in the host's header: approval_dialog_test.go), the flag for a broken machine on the
+// Overview and the Updates page, the dialog's wording for an approval, and that every value from a machine goes
+// through esc().
 func TestUIApproval(t *testing.T) {
 	js := appJS(t)
 	for _, want := range []string{
 		`function approvalBox(s) {`, `function approvalChip(s) {`, `approval broken`,
-		`${approvalBox(s)}${managedBox(s)}`,                                                                       // on the machine's page, also while it is off
+		`<div class="actions">${approvalBtn(s)}${liveLabel(s)}`,                                                   // the button in the header of the machine's page, also while it is off
 		`${helperChip(s)}${approvalChip(s)}${guestCount(s)}`,                                                      // the Overview's host list
 		`r.approval === "broken"`,                                                                                 // the Updates page
 		`fairy-agent helper-trust show`,                                                                           // where a broken machine is repaired
@@ -31,9 +32,11 @@ func TestUIApproval(t *testing.T) {
 		`const btn = m?.can_accept && !held ?`, `data-shown="${esc(m.shown_id || "")}"`, `const body = off ? { off: true } : { machine_id: t.dataset.shown || "" };`,
 		`id="ap-todo">Give this machine a new id on the machine itself (<code>fairy-agent helper-trust set --new-machine-id</code>), then accept the new id here.`,
 		`if (held) return ` + "`${held} keeps this machine id. No approvals for this host until it shows an id of its own.`;",
-		"infoBtn(`apbind-${s.id}`, b[0], infoList(more))", `m = admin ? apvMachine(s) : null`, // the record's details: admins only
+		"return [`<div class=\"warnbox ap-bind\" id=\"ap-bind\"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${todo}${btn}</div>`, more];", // the reasons: the dialog's "More"
+		`m = admin ? apvMachine(s) : null`, // the record's details: admins only
 		`if (apv.sig[s.id] !== apvSig(a) && Date.now() - apv.at > 3000) fetchApproval(true);`, // a block that changed after the approval page was fetched
-		`${bind ? "" : '<div class="note">This machine does not check approvals itself.`,      // not under "Check gone"
+		`${bind ? "" : '<p id="ap-lead">This machine does not check approvals itself.`,        // not under "Check gone"
+		`...(bind ? [] : ["The panel confirms these requests itself (Confirm it's you) and sends them with the panel's control token."])`,
 		`a.last_known ? " · last known" : ""`,
 		// the agent's changes of 2026-11-12: an old running helper is restarted, not started; how the trust was set
 		`const AP_HELPER_OLD = "the running fairy-agent-helper is older than this agent";`, `<b>Restart the helper</b>: Stop helper, then Start helper`,
