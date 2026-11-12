@@ -11,7 +11,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// Why a sign-in failed, for the server log only (the client always gets a generic "login failed"). These
+// Why a sign-in failed, for the server log only (the callback's page says no more than "could not check Pocket
+// ID's answer", callbackpage.go). These
 // helpers never log the authorization code, the PKCE verifier, the client secret, tokens or a response body:
 // only RFC 6749's error / error_description, the HTTP status and error messages with URLs cut down to
 // scheme://host/path.
@@ -22,7 +23,11 @@ type loginFailure struct {
 	reason string
 	audit  string
 	attrs  []any
+	code   string // Pocket ID's own error code (through oauthCode), when the failure is one it reported
 }
+
+// staleState is the reason of a callback that is not the answer to this browser's current round trip.
+const staleState = "mismatching_state"
 
 func (f *loginFailure) auditOutcome() string {
 	if f.audit != "" {

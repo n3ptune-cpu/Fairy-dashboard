@@ -106,7 +106,7 @@ func TestARepeatedStepUpCallbackStaysStrict(t *testing.T) {
 	}
 	refused := func(t *testing.T, l lost, r resp) {
 		t.Helper()
-		if r.code != 400 || !strings.Contains(string(r.raw), "login failed") || l.a.powerCalls() != 1 {
+		if r.code != 400 || !strings.Contains(string(r.raw), "Go back and try again") || l.a.powerCalls() != 1 {
 			t.Fatalf("must be refused as before: %d %s; shutdown requests %d", r.code, strings.TrimSpace(string(r.raw)), l.a.powerCalls())
 		}
 		for _, ck := range (&http.Response{Header: r.hdr}).Cookies() {
@@ -153,7 +153,7 @@ func TestARepeatedStepUpCallbackStaysStrict(t *testing.T) {
 			t.Fatalf("first callback: %d", first.code)
 		}
 		a.idp.usedCode()
-		if r := a.e.do("GET", call, nil, "Cookie", rt); r.code != 400 || a.powerCalls() != 0 || !strings.Contains(string(r.raw), "login failed") {
+		if r := a.e.do("GET", call, nil, "Cookie", rt); r.code != 400 || a.powerCalls() != 0 || !strings.Contains(string(r.raw), "Go back and try again") {
 			t.Fatalf("repeat of a refused confirmation: %d %s", r.code, r.raw)
 		}
 		if r := a.e.do("GET", "/api/me", nil, "Cookie", a.sess); r.code != 200 {

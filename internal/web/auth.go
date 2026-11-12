@@ -463,6 +463,8 @@ func (s *Server) confirmStepUp(c *reqCtx) error {
 // starts a new, server-registered session. Every failure is audited and answered with a generic 400.
 func (s *Server) authCallback(c *reqCtx) error {
 	sess := c.session()
+	// Every refusal below is a page with one link back, not a line of JSON (callbackpage.go).
+	page := c.callbackPage(sess)
 	// The kept action leaves the store before anything is checked: whatever happens below, it can run at most
 	// once, and a confirmation that fails (or is rate limited, or belongs to another round trip) leaves nothing
 	// armed. Only a successful step-up for the same session runs it.
@@ -475,16 +477,17 @@ func (s *Server) authCallback(c *reqCtx) error {
 	}
 	if !s.login.allow(c.loginKey()) {
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
-		return apierr.New(429, "too many login attempts; try again in a minute")
+		return page.limited(s.login, c.loginKey())
 	}
 	q := c.r.URL.Query()
 	fail := func(f *loginFailure) error {
 		slog.Warn("OIDC callback failed", append([]any{"reason", f.reason}, f.attrs...)...)
 		c.auditAnon("auth.login", f.auditOutcome(), "", nil, nil)
-		return apierr.New(400, "login failed")
+		return page.failed(f.code, f.reason == staleState)
 	}
 	if e := q.Get("error"); e != "" {
 		f := &loginFailure{reason: oauthCode(truncate(e, 60))}
+		f.code = f.reason
 		if d := q.Get("error_description"); d != "" {
 			f.attrs = []any{"error_description", safeText(d, 200)}
 		}
@@ -497,7 +500,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 		return nil
 	}
 	if sess.State == "" || q.Get("state") != sess.State || s.now().Unix()-sess.Started > 600 {
-		return fail(&loginFailure{reason: "mismatching_state"})
+		return fail(&loginFailure{reason: staleState})
 	}
 	// A step-up callback is remembered while it works and for two minutes after it was accepted, so that a
 	// repeat of exactly this callback (a reload, a lost answer) is answered again instead of ending in "login
@@ -517,7 +520,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 	p, err := s.oidc.provider(c.r.Context())
 	if err != nil {
 		slog.Warn("OIDC callback failed", "reason", "discovery", "error", safeErr(err))
-		return apierr.New(502, "identity provider unreachable")
+		return page.refuse(502, cbUnreachable)
 	}
 	ctx, cancel := context.WithTimeout(s.oidc.ctx(c.r.Context()), 15*time.Second)
 	defer cancel()
@@ -538,7 +541,8 @@ func (s *Server) authCallback(c *reqCtx) error {
 		}
 		c.auditAnon("auth.login", outcome, actorOf(&u), &u.Sub, params)
 		c.clearSession()
-		return apierr.New(403, "not allowed")
+		page.title = cbNotAllowed
+		return page.refuse(403, cbRefused)
 	}
 	now := s.nowSec()
 	authTime := 0.0 // unknown: counts as long ago (never as "just now")
@@ -576,7 +580,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 		// the server for this client only. A copy of the cookie taken before this moment stops working.
 		sid, err := s.rotateSession(c, sess, u)
 		if err != nil {
-			return err
+			return page.err(err)
 		}
 		s.codec.live.stepAccepted(step, sid, target, s.now())
 		s.codec.live.confirm(sid, authTime, c.ip(), uaHash(c.r), s.now())
@@ -599,7 +603,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 	}
 	// a new session (another user, or no session before): nothing waits (kept was taken out above and is dropped)
 	if err := s.startSession(c, sess.SID, u, now, authTime); err != nil {
-		return err
+		return page.err(err)
 	}
 	c.redirect(target)
 	return nil

@@ -948,10 +948,14 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   (`auth.step_up`, fields `for` and `runs`) name the action in the panel's own words. What runs is the request
   as it was first routed (same route, same parameters, same body). It runs to its end also when the browser
   leaves in the middle (a reload, a broken connection). When the answer after the sign-in does not arrive and
-  the browser asks the same address again, the panel answers again instead of "login failed": for 2 minutes
+  the browser asks the same address again, the panel answers again instead of refusing: for 2 minutes
   it remembers the confirmation it last accepted for a session (memory only) and gives the same browser and
   address the session and the page that answer carried, while nobody has used that session yet. The action
   is not run a second time, and the page shows its result. Any other repeat is refused as before.
+  A refusal at the address Pocket ID sends the browser back to (cancelled there, started more than 10 minutes
+  ago, an answer that does not check, the limit, Pocket ID not reachable, an account that is not allowed) is
+  a small page without script: what happened in one sentence and one link back to the panel. Which check of
+  Pocket ID's answer failed is in the server log and the audit log only.
 * Sessions: HMAC-signed `__Host-fairy_session` cookie (HttpOnly, Secure, SameSite=Lax, host-only; the plain name
   `fairy_session` only with `FAIRY_INSECURE_COOKIES`) that is valid only while its id is
   in `sessions.json`, within the idle timeout and absolute lifetime; revocable with `fairy admin sessions`.

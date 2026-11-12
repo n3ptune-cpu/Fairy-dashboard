@@ -312,3 +312,18 @@ func TestAnEndedSessionLeavesTheListOnceTheFileIsWritable(t *testing.T) {
 		t.Fatalf("sessions.json still lists %d", n)
 	}
 }
+
+// r3-p1-06: a sign-in that cannot be recorded (sessions.json not writable) ends, like every refusal at the
+// callback, on a page with the panel's sentence and a link back, not on a line of JSON.
+func TestSignInThatCannotBeRecordedIsAPage(t *testing.T) {
+	e := setup(t)
+	idp := newFakeIDP(t)
+	e.s.Cfg.OIDC.Issuer = idp.srv.URL
+	idp.claims = map[string]any{"groups": []string{"viewers"}, "auth_time": e.s.now().Unix()}
+	q, rt := idp.login(e, "/auth/login?next=/", "")
+	_ = e.cookie(controller(), 0) // somebody is signed in: the file exists
+	lockSessionsFile(t, e)
+	r := e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+	refusalPage(t, "sessions.json not writable", r, 503, cbSignIn,
+		"Sign-in could not be recorded (the panel cannot write its session file); see the server log.", "/")
+}
