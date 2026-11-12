@@ -17,9 +17,10 @@ import (
 // 502 and 504 are what a gateway answers after it passed the request on: the agent may have taken it. Any JSON
 // object with a non-empty "error" at such a status was the agent's refusal all the same, and a gateway that
 // answers in JSON ({"error":"gateway timeout"}) was "Left ON: the shutdown was not accepted" for a machine
-// that then went off. 502 and 504 are "no answer of the agent" whatever the body. For a power request, an
-// update and a wake the agent itself never answers with them (Fairy-agent's pkg/agent: 400, 404, 409, 429,
-// 500, 503, and the approval statuses).
+// that then went off. 502 and 504 are "no answer of the agent" whatever the body. The agent itself answers a
+// power request with 504 in one case, and means just that: its helper was sent the request and did not answer
+// in time (Fairy-agent, r4-a1-01). Its other answers to a power request, an update and a wake are 400, 404,
+// 409, 429, 500, 503, and the approval statuses.
 func TestAGatewayStatusIsNoAnswerWhateverTheBody(t *testing.T) {
 	for _, status := range []int{502, 504} {
 		for name, body := range map[string]string{

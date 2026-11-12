@@ -620,9 +620,12 @@ func NoAnswer(path string, status int, data jsonx.M, err error) error {
 //     accepted, for a wake, an update, a shutdown and a cancel); nor is a good status with an empty body.
 //     And 502 and 504 are "no answer" whatever the body, also with a JSON body that has an "error" in it (a
 //     gateway that answers in JSON; second review of fix7a, R7A-08): they are the two statuses a gateway
-//     gives after it passed the request on. The agent does not answer a power request, an update or a wake
-//     with them. It does answer its BMC relay's request with them (the BMC refused, or did not answer), with
-//     a code of its own: see relaysOwn.
+//     gives after it passed the request on. The agent answers a power request with 504 itself in one case,
+//     and means the same by it: it handed the request to its helper (Windows) and the helper did not answer
+//     in time, so the shutdown may be scheduled, or the countdown cancelled, all the same (Fairy-agent,
+//     r4-a1-01; before that it was a 500, a refusal, for a machine that then went off). It answers an update
+//     and a wake with neither. It does answer its BMC relay's request with them (the BMC refused, or did not
+//     answer), with a code of its own, and a fan change its BMC did not take with 502: see relaysOwn.
 func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path string, body any) (jsonx.M, error) {
 	status, data, err := p.AgentRequest(ctx, a, "POST", path, body)
 	if e := NoAnswer(path, status, data, err); e != nil {
