@@ -442,6 +442,19 @@ func (s *Store) HasKey(key string) bool {
 	return false
 }
 
+// ActiveWithKey returns the alarms that hold now (Active) and whose Key begins with prefix, oldest first.
+func (s *Store) ActiveWithKey(prefix string) []Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Event
+	for _, e := range s.d.Events {
+		if e.Active() && strings.HasPrefix(e.Key, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // Filter narrows List.
 type Filter struct {
 	// Severity: info | warning | critical | "" (all). The words are the page's (Settings, the pop-ups): "critical"

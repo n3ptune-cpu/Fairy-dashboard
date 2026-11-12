@@ -441,6 +441,7 @@ func (s *Server) watch(ctx context.Context) {
 				seq = evs[len(evs)-1].Seq
 			}
 			s.Watch.Observe(now, s.Poller.Snapshot(), evs)
+			s.Watch.ForgetUPS(s.upsSourceKnown) // an alert of a UPS source that was taken out of the configuration ends
 			s.watchAgentUpdates(vers, lastAt)
 			if now.Sub(last) >= 10*time.Second {
 				last = now
@@ -450,6 +451,25 @@ func (s *Server) watch(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// upsSourceKnown reports whether the panel still has the source of a UPS: a `ups:` entry of config.yaml, an
+// agent (it reports the UPSes of its machine), or anything the UPS page still shows under that source.
+func (s *Server) upsSourceKnown(source string) bool {
+	for _, u := range s.Poller.UPS.Sources {
+		if u.ID == source {
+			return true
+		}
+	}
+	if _, ok := s.Poller.AgentByID(source); ok {
+		return true
+	}
+	for _, st := range s.Poller.UPS.Overview(false).UPS {
+		if st.ID == source || strings.HasPrefix(st.ID, source+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // watchAgentUpdates makes a notification when an agent comes back with another version, or reports a failed

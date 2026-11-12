@@ -256,3 +256,91 @@ func TestAUPSServerDownAtStartIsAnAlert(t *testing.T) {
 		t.Fatalf("the alert must end when the server answers: %+v", events(w.Store))
 	}
 }
+
+// Second review of audit 5's round 2 (note 8): the alert for a UPS server that cannot be reached is kept in the
+// list's file, the UPS manager's state is not. Every restart of the panel while the server was still down added
+// one more active warning, and one more push.
+func TestAUPSServerStillDownAfterARestartIsTheSameAlert(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "n.json")
+	down := model.UpsEvent{UpsID: "dead", UpsName: "Rack UPS", Kind: "communication_lost", Severity: "warning",
+		Message: "the UPS server has not given the panel a UPS since the panel started (connection failed)"}
+	pushed := 0
+	start := func() *Watcher { // a panel that starts: the list is read from its file, the watcher knows nothing
+		s := Open(path)
+		s.Push = func(string, string) { pushed++ }
+		return &Watcher{Store: s}
+	}
+	active := func(s *Store) (n int) {
+		for _, e := range events(s) {
+			if e.Active() {
+				n++
+			}
+		}
+		return n
+	}
+	w := start()
+	w.Observe(time.Now(), nil, []model.UpsEvent{down})
+	if len(events(w.Store)) != 1 || active(w.Store) != 1 || pushed != 1 {
+		t.Fatalf("the first start: %d events, %d active, %d pushed", len(events(w.Store)), active(w.Store), pushed)
+	}
+	for i := 0; i < 3; i++ { // three restarts while the server is still down
+		if err := w.Store.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		w = start()
+		w.Observe(time.Now(), nil, []model.UpsEvent{down})
+		w.Observe(time.Now(), nil, nil)
+		if len(events(w.Store)) != 1 || active(w.Store) != 1 || pushed != 1 {
+			t.Fatalf("restart %d: %d events, %d active, %d pushed; want the one alert, pushed once", i+1, len(events(w.Store)), active(w.Store), pushed)
+		}
+	}
+	// another server that is down is its own alert, also one whose id begins like the first one's
+	w.Observe(time.Now(), nil, []model.UpsEvent{{UpsID: "dead2", UpsName: "Other UPS", Kind: "communication_lost", Severity: "warning", Message: "x"}})
+	if active(w.Store) != 2 || pushed != 2 {
+		t.Fatalf("a second server: %d active, %d pushed", active(w.Store), pushed)
+	}
+	// the server answers: the alert ends, and when it is lost again later that is a new alert
+	w.Observe(time.Now(), nil, []model.UpsEvent{{UpsID: "dead", UpsName: "Rack UPS", Kind: "communication_restored", Severity: "info", Message: "the UPS server answers"}})
+	if active(w.Store) != 1 {
+		t.Fatalf("after it answered: %d active", active(w.Store))
+	}
+	w.Observe(time.Now(), nil, []model.UpsEvent{down})
+	if active(w.Store) != 2 || pushed != 3 {
+		t.Fatalf("lost again: %d active, %d pushed", active(w.Store), pushed)
+	}
+}
+
+// ... and after the UPS was taken out of config.yaml there was no card any more, but its alert stayed active in
+// the bell: nothing could end it.
+func TestTheAlertOfAUPSThatWasTakenOutEnds(t *testing.T) {
+	s := Open(filepath.Join(t.TempDir(), "n.json"))
+	pushed := 0
+	s.Push = func(string, string) { pushed++ }
+	w := &Watcher{Store: s}
+	w.Observe(time.Now(), nil, []model.UpsEvent{
+		{UpsID: "dead", UpsName: "Rack UPS", Kind: "communication_lost", Severity: "warning", Message: "connection failed"},
+		{UpsID: "keep", UpsName: "Other UPS", Kind: "communication_lost", Severity: "warning", Message: "connection failed"},
+	})
+	w.Observe(time.Now(), nil, []model.UpsEvent{{UpsID: "nut/apc", UpsName: "APC", Kind: "on_battery", Severity: "warning", Message: "power lost"}})
+	w.Observe(time.Now(), []model.System{{ID: "pc", Name: "PC", Kind: "agent", Status: "online"}}, nil)
+	before := pushed
+	has := map[string]bool{"dead": true, "keep": true, "nut": true}
+	known := func(source string) bool { return has[source] }
+	w.ForgetUPS(known)
+	if got := len(s.ActiveWithKey("")); got != 3 || len(events(s)) != 3 {
+		t.Fatalf("every source is still there: %d active, %d events", got, len(events(s)))
+	}
+	delete(has, "dead") // its `ups:` entry is taken out of config.yaml
+	delete(has, "nut")  // and the source of a UPS on battery too
+	w.ForgetUPS(known)
+	w.ForgetUPS(known) // (it is asked at every look: once is enough)
+	left := s.ActiveWithKey("")
+	if len(left) != 1 || left[0].UPSID != "keep" || pushed != before {
+		t.Fatalf("active afterwards: %+v, pushed %d more", left, pushed-before)
+	}
+	evs := events(s)
+	if len(evs) != 5 || evs[3].Kind != "ups_removed" || evs[3].UPSID != "dead" || evs[3].Host != "Rack UPS" || evs[3].Severity != Info ||
+		evs[3].Text != "no longer in the panel's configuration: its alert ended" || evs[4].UPSID != "nut/apc" || evs[0].Resolved == nil {
+		t.Fatalf("%+v", evs)
+	}
+}

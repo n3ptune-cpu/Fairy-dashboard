@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -254,8 +255,48 @@ func (w *Watcher) upsEvent(e model.UpsEvent) {
 		ev.Key = "ups:" + e.UpsID
 	case "communication_lost":
 		ev.Key, ev.Alarm = "upscomm:"+e.UpsID, true
+		// The alert for it may still hold from before a restart of the panel (the list is kept in a file, the UPS
+		// manager's state is not): a UPS server that is still down when the panel starts again is the same alert,
+		// not a second one, and it is not pushed a second time (second review of audit 5's round 2, note 8).
+		if sameKey(w.Store.ActiveWithKey(ev.Key), ev.Key) {
+			return
+		}
 	case "communication_restored":
 		ev.Key = "upscomm:" + e.UpsID
 	}
 	w.Store.Add(ev)
+}
+
+// sameKey reports whether one of the events has exactly this key (ActiveWithKey matches by its beginning).
+func sameKey(evs []Event, key string) bool {
+	for _, e := range evs {
+		if e.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// ForgetUPS ends the UPS alerts that nothing can end any more: the ones of a UPS whose source the panel no
+// longer has (its `ups:` entry was taken out of config.yaml, or the agent that reported it was removed). No
+// poll will ever say "back on mains" or "the UPS server answers" for it, so the alert stayed active in the bell
+// for good (second review of audit 5's round 2, note 8). known says whether the panel still has the source of
+// a UPS id (the id of a UPS is "<source>/<ups>", the id of a UPS server that never answered is "<source>").
+// The alert ends with one line in the list; nothing is pushed.
+func (w *Watcher) ForgetUPS(known func(source string) bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, prefix := range []string{"upscomm:", "ups:"} {
+		for _, e := range w.Store.ActiveWithKey(prefix) {
+			if e.Type != "ups" || e.UPSID == "" {
+				continue
+			}
+			source, _, _ := strings.Cut(e.UPSID, "/")
+			if known(source) {
+				continue
+			}
+			w.Store.Add(Event{Kind: "ups_removed", Type: "ups", Severity: Info, UPSID: e.UPSID, Host: e.Host, Key: e.Key,
+				Text: "no longer in the panel's configuration: its alert ended"})
+		}
+	}
 }
