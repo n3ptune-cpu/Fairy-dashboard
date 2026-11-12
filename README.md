@@ -406,7 +406,9 @@ The rules, in plain words:
   out. If the file cannot be written (a full disk), the run sends nothing further, stops and says so, the
   machines it has woken stay on and are reported, and no run starts until the file can be written again.)
 * **The kill switch stops a run**: nothing further is started, and what was woken stays on and is reported.
-  A shutdown countdown the run had already started is called off (the one request a stopped run still sends);
+  A shutdown countdown the run had already started is called off (the one request a stopped run still sends,
+  and only while that countdown can still be running: after its end the run sends nothing, so that an action
+  someone asked for on the machine's page since is not called off; the same holds for **Cancel run**);
   if that cancel does not get through, the machine's line says so and names the time it may switch off.
   Calling a countdown off is the one control action that works while the kill switch, or the power switch of
   a host, is on: the page's **Cancel**, the Power menu's **Cancel pending** and **Cancel run** only ever stop

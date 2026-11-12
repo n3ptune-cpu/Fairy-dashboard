@@ -986,7 +986,8 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 	}
 	if stop != "" && r.stopped == "" {
 		// Nothing more is started for any machine: every one is reported as it is. When it is the kill switch
-		// that stops the run, one request is still sent: a countdown the run started itself is called off. The
+		// that stops the run, one request is still sent: a countdown the run started itself is called off, while
+		// it can still be running (callOff: after the run's own due time nothing is sent, R7A-03). The
 		// run used to send "not even a cancel", said "it switches off by itself unless someone cancels that",
 		// and with the kill switch on nobody could: the machine the admin wanted to keep on by stopping
 		// everything went off (audit 5, r3-p2-06). A cancel only ever stops a power action, and the panel lets it

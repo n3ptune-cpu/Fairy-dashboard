@@ -80,8 +80,9 @@ func (m *Manager) stepHost(ctx context.Context, r *Run, h *Host, now time.Time) 
 }
 
 // cancelled handles a machine of a cancelled run and reports whether the machine still has steps to do. With
-// the default (leave on) it ends where it is, and a countdown the run started is called off. With "switch off
-// again" a machine the run woke goes on to its shutdown without anything new being started for it.
+// the default (leave on) it ends where it is, and a countdown the run started is called off while it can
+// still be running (callOff). With "switch off again" a machine the run woke goes on to its shutdown without
+// anything new being started for it.
 func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time) bool {
 	c := r.Cancel
 	why := "The run was cancelled by " + c.By
@@ -104,7 +105,18 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 
 // callOff asks the machine's agent to call off the countdown the run started, and ends the machine with what
 // came of that. why begins the sentence: who or what wanted the machine left on.
+//
+// It asks only while the run's own countdown can still be running: up to the run's due time on its steady
+// clock (dueMono). The agent has one cancel, and it calls off whatever action of the panel is pending on the
+// machine. After the run's due time that can no longer be the run's shutdown (it has started, or it did not
+// work), but it can be an action a person asked for on the machine's page since: the run's cancel took that
+// away, and the report said "its shutdown countdown was called off" (second review of fix7a, R7A-03). So
+// after the due time nothing is sent, and the machine ends as it is (endPastDue).
 func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, why string) {
+	if m.mono() > h.dueMono {
+		m.endPastDue(r, h, now, why)
+		return
+	}
 	var err error
 	id, by := h.ID, r.By
 	m.io(func() { err = m.Ops.CancelShutdown(ctx, id, by) })
@@ -139,6 +151,19 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 	m.emit(EvStep, r, h, "cancel", nil, "ok")
 	m.endSeen(r, h, StLeftOn, OnYes, now, why+": its shutdown countdown was called off. "+cameOnline(h)+" and it is ON."+updateTail(h),
 		why+": its shutdown countdown (due at "+due+") was asked to be called off."+updateTail(h))
+}
+
+// endPastDue ends a machine whose countdown is over by the run's own clock, for a run that was cancelled or
+// that the kill switch stopped: no cancel is sent (callOff), and the sentence says neither that a countdown
+// runs nor that one was called off. The last look adds what is seen: a machine that is going down, or has
+// gone, is reported as that.
+func (m *Manager) endPastDue(r *Run, h *Host, now time.Time, why string) {
+	lead := fmt.Sprintf("%s after its shutdown countdown had run out (it was due at %s), so the run sent no cancel.", why, when(*h.ShutdownAt, now))
+	if h.lostShutdown() { // no countdown the run knows of
+		lead = fmt.Sprintf("%s after the time its shutdown would have been due (%s; the request got no answer), so the run sent no cancel.", why, when(*h.ShutdownAt, now))
+	}
+	m.endSeen(r, h, StLeftOn, OnYes, now, lead+" "+cameOnline(h)+" and it is ON now. Fairy no longer watches it: if the shutdown is still under way, it switches off by itself."+
+		updateTail(h), lead+updateTail(h))
 }
 
 // alreadyOn handles a machine of the wake list that turns out to be on: it is updated and left on if the
