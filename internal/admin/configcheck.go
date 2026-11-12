@@ -77,6 +77,11 @@ func (c *cli) configCheck() int {
 	if len(cfg.OIDC.AllowedGroups) == 0 {
 		problems = append(problems, "oidc.allowed_groups is empty: any Pocket ID user of this client may sign in")
 	}
+	limit := fmt.Sprintf("control_rate_per_min: %d control requests a minute for one admin", cfg.ControlRatePerMin)
+	if cfg.ControlRatePerMin != config.DefaultControlRatePerMin { // the example file used to set 6: such a file keeps it
+		limit += fmt.Sprintf(" (set in config.yaml; without the line it is %d)", config.DefaultControlRatePerMin)
+	}
+	notes = append(notes, limit)
 	problems, notes = adminCheck(cfg, problems, notes)
 	problems, notes = managedCheck(cfg, problems, notes)
 	for _, e := range secretEnvs(cfg) {

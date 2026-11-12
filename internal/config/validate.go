@@ -68,6 +68,13 @@ func (c *Panel) Validate() error {
 	return nil
 }
 
+// DefaultControlRatePerMin is how many control requests one admin may send in a minute when config.yaml does
+// not say (control_rate_per_min). It was 6, which a person met by ordinary use: switching seven machines on
+// for "Update unpowered hosts" in a row is seven requests. What an AGENT accepts in a minute (12, its own
+// control_rate_per_min) and what a run sends to one agent (8, wake_update.agent_requests_per_min) are other
+// limits and did not change.
+const DefaultControlRatePerMin = 20
+
 // applyDefaults fills in every top-level setting that was left out (zero).
 func (c *Panel) applyDefaults() {
 	def := func(v *float64, d float64) {
@@ -94,7 +101,7 @@ func (c *Panel) applyDefaults() {
 		c.SessionIdleTimeout = min(DefaultSessionIdleTimeout, c.SessionMaxAge)
 	}
 	defi(&c.PowerHistoryS, 3600)
-	defi(&c.ControlRatePerMin, 6)
+	defi(&c.ControlRatePerMin, DefaultControlRatePerMin)
 	defi(&c.StepUpWindowS, 180)
 	defi(&c.LoginRatePerMin, 20)
 	if c.Updates.AgentRepo == "" {

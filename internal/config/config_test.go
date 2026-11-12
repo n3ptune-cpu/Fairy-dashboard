@@ -24,6 +24,17 @@ func TestParseDefaultsAndProxmoxForms(t *testing.T) {
 		len(c.Trusted()) != 2 || c.Proxmox[0].Prefix() != "" || !c.Boost() || c.LoginRatePerMin != 20 {
 		t.Fatalf("%+v", c)
 	}
+	// the limit on control requests: 20 a minute per admin unless the file says otherwise (it was 6); a file that
+	// has the old example's line keeps its 6
+	if c.ControlRatePerMin != 20 || DefaultControlRatePerMin != 20 {
+		t.Fatalf("control_rate_per_min defaults to %d, want 20", c.ControlRatePerMin)
+	}
+	if c6, err := Parse([]byte(base + "control_rate_per_min: 6\n")); err != nil || c6.ControlRatePerMin != 6 {
+		t.Fatalf("control_rate_per_min: 6 in the file: %v %v", c6, err)
+	}
+	if example, err := os.ReadFile(filepath.Join("..", "..", "deploy", "config.example.yaml")); err != nil || !strings.Contains(string(example), "\ncontrol_rate_per_min: 20 ") {
+		t.Fatalf("deploy/config.example.yaml must show the default of 20: %v", err)
+	}
 	if c, err := Parse([]byte(base + `enroll: {agent_release: build-9}`)); err != nil || c.Enroll.AgentRelease != "build-9" {
 		t.Fatal(err)
 	}

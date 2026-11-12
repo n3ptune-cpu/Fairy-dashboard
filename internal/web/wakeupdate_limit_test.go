@@ -25,28 +25,35 @@ func TestWakeUpdateStartAndTheLimitOnControlRequests(t *testing.T) {
 		return e.do("PUT", "/api/systems/"+id+"/wake-update", map[string]any{"enabled": on}, append([]string{"Cookie", a.sess}, wuWrite...)...)
 	}
 	limit := e.s.Cfg.ControlRatePerMin
-	if limit != 6 {
-		t.Fatalf("the test is written for the default of 6 control requests a minute, the panel has %d", limit)
+	if limit != 20 {
+		t.Fatalf("the default is 20 control requests a minute (it was 6), the panel has %d", limit)
 	}
-	// five switches: one control request of this minute is left
-	for i, id := range []string{"pc-a", "pc-b", "laptop", "pc-a", "pc-a"} {
-		if r := put(id, i != 3); r.code != 200 {
+	// all but one of the minute's control requests: the three machines are switched on, then pc-a off and on
+	// again until one request is left (an even number of times, so it ends on)
+	for i := 0; i < limit-1; i++ {
+		id, on := "pc-a", i < 3 || i%2 == 0
+		if i == 1 {
+			id = "pc-b"
+		} else if i == 2 {
+			id = "laptop"
+		}
+		if r := put(id, on); r.code != 200 {
 			t.Fatalf("switch %d (%s): %d %s", i+1, id, r.code, r.raw)
 		}
 	}
 	body := map[string]any{"hosts": []string{"pc-a", "pc-b"}}
 
-	// 1. asked while there is room: the dialog comes. Then the sixth switch uses the minute up, and the
+	// 1. asked while there is room: the dialog comes. Then the last switch uses the minute up, and the
 	// confirmation comes back: the run starts all the same.
 	r := e.wuStart(a.sess, body)
 	if !stepUpRequired(r) || pendingID(r) == "" {
 		t.Fatalf("a start inside the limit must be asked for its confirmation: %d %s", r.code, r.raw)
 	}
 	if x := put("laptop", false); x.code != 200 {
-		t.Fatalf("the sixth control request of the minute: %d %s", x.code, x.raw)
+		t.Fatalf("the last control request of the minute: %d %s", x.code, x.raw)
 	}
 	if x := put("laptop", true); x.code != 429 {
-		t.Fatalf("the seventh must be refused (the limit is still there): %d %s", x.code, x.raw)
+		t.Fatalf("one more must be refused (the limit is still there): %d %s", x.code, x.raw)
 	}
 	if cb := a.confirm(pendingID(r), false); cb.code != 303 {
 		t.Fatal("confirmation:", cb.code, string(cb.raw))

@@ -326,13 +326,13 @@ func TestCancelsDoNotShareTheControlBudget(t *testing.T) {
 	w := []string{"Cookie", admin, "X-Requested-With", "fairy", "Content-Type", "application/json"}
 	useUp := func() {
 		t.Helper()
-		for i := 0; i < 6; i++ { // six control requests: the minute's worth
+		for i := 0; i < e.s.Cfg.ControlRatePerMin; i++ { // the minute's worth of control requests (20 by default)
 			if r := e.do("PUT", "/api/systems/pc-b/wake-update", map[string]any{"enabled": true}, w...); r.code != 200 {
 				t.Fatalf("switch %d: %d %s", i, r.code, r.raw)
 			}
 		}
 		if r := e.do("PUT", "/api/systems/pc-b/wake-update", map[string]any{"enabled": true}, w...); r.code != 429 {
-			t.Fatalf("the seventh control request: %d, want 429", r.code)
+			t.Fatalf("one control request more than the minute's worth: %d, want 429", r.code)
 		}
 	}
 	useUp()

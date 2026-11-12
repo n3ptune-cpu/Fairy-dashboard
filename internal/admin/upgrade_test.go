@@ -62,6 +62,9 @@ func TestBreakGlassOnTheOldReleasesFiles(t *testing.T) {
 	}
 	if code, out := run("", "config", "check"); code != 0 || !strings.Contains(out, "valid") || !strings.Contains(out, "admins in users.json: 1") {
 		t.Fatalf("config check on the old config.yaml: %d\n%s", code, out)
+	} else if !strings.Contains(out, "ok    control_rate_per_min: 6 control requests a minute for one admin (set in config.yaml; without the line it is 20)") {
+		// the old example file set 6: a config copied from it keeps 6 after the update, and the check says so
+		t.Fatalf("config check must say that the old file keeps its limit of 6:\n%s", out)
 	}
 
 	// locked out: the owner is not admin any more (here: demoted with --force). The way back in:

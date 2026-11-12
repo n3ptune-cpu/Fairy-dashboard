@@ -77,6 +77,9 @@ func TestBreakGlassCLI(t *testing.T) {
 		strings.Contains(out, "not-printed-oidc-secret") {
 		t.Fatal("config check must report the client secret as present only", out)
 	}
+	if !strings.Contains(out, "ok    control_rate_per_min: 20 control requests a minute for one admin\n") {
+		t.Fatal("config check must name the limit on control requests (the default, 20)", out)
+	}
 	entries, _ := audit.Read(filepath.Join(dir, "data", "audit.log"), "", "", "", nil, 50)
 	if len(entries) < 6 || entries[0]["source"] != "cli" || entries[0]["ip"] != "local" {
 		t.Fatalf("%d %v", len(entries), entries)

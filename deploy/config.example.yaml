@@ -23,7 +23,7 @@ data_dir: /var/lib/fairy                  # state.json, sessions.json, tokens.js
 audit_log: /var/lib/fairy/audit.log       # append-only JSON lines (each line at most 8 KiB)
 audit_max_mb: 100                         # rotate audit.log -> audit.log.1 ... at this size; -1 = never (use logrotate)
 audit_keep: 5                             # rotated files kept (the oldest is deleted)
-control_rate_per_min: 6
+control_rate_per_min: 20                  # control requests one admin may send in a minute (the default; it was 6)
 login_rate_per_min: 20                    # per client IP (per user for a signed-in step-up)
 # X-Forwarded-For is believed only from these (rate limits + audit IPs). nginx in its own container: its address,
 # e.g. ["10.0.0.5/32"], with nginx setting X-Forwarded-For to the real client (deploy/nginx.example.conf).

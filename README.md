@@ -388,6 +388,10 @@ The rules, in plain words:
   panel** is refused while a run is going.
 * **Cancel run** is never refused because of other control requests: it has a request budget of its own (60
   a minute for one admin), and so has the **Cancel** of a shutdown countdown.
+* **The limit on control requests** is 20 a minute for one admin (`control_rate_per_min` in config.yaml; it
+  was 6, which switching seven machines on for these runs in a row already met). Over it the answer is "too
+  many control requests; try again in N s". An agent has its own limit (12 a minute, in its own config), and
+  a run sends one agent at most 8 a minute: both are unchanged.
   It starts nothing new: no further wake, no further update. The dialog asks what happens to
   the machines the run has already woken: they stay on (the default; the report lists them as ON), or they
   are still switched off again (an update that is running is waited for first).
@@ -775,6 +779,11 @@ and `fairy admin config check` reports (the entries of `ups:` and `power_sources
 update did not look at before). A file it refuses stops the update with the line: "the new version (...)
 refuses /etc/fairy/config.yaml: config: line 131 (ups, entry 1): ... Nothing was changed." Correct the file
 and update again. (A semantic mistake, such as an address that is not one, is named without a line.)
+
+**The limit on control requests** is now 20 a minute for one admin when config.yaml does not say (it was 6).
+A config.yaml copied from the older example file has the line `control_rate_per_min: 6` and keeps 6: change
+the number or take the line out, then `systemctl restart fairy`. `fairy admin config check` shows the number
+in use.
 
 Nothing has to be done on the agents for this panel: every agent the panel before it worked with works with
 this one, and it asks nothing new of them.
