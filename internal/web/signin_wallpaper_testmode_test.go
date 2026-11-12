@@ -17,7 +17,7 @@ func TestTestModeSignInWallpaperAndSignOut(t *testing.T) {
 	pngPic, _, _ := wallPictures(t)
 	ck := e.open()
 	write := []string{"Cookie", ck, "X-Requested-With", "fairy"}
-	if r := e.do("GET", wallURL, nil); r.code != 404 || r.hdr.Get("Set-Cookie") != "" {
+	if r := e.do("GET", wallURL, nil); r.code != 204 || r.hdr.Get("Set-Cookie") != "" {
 		t.Fatalf("no picture yet: %d, Set-Cookie %q", r.code, r.hdr.Get("Set-Cookie"))
 	}
 	if r := e.wallUpload([]byte("<svg xmlns=\"http://www.w3.org/2000/svg\"/>"), "image/png", write...); r.code != 415 {
@@ -91,7 +91,7 @@ func TestTestModeSignInWallpaperAndSignOut(t *testing.T) {
 	}
 	// removal
 	confirm(e.raw(probe{method: "DELETE", path: wallAPI}, "Cookie", ck, "X-Requested-With", "fairy"), ck, "remove the sign-in picture")
-	if r := e.do("GET", wallURL, nil); r.code != 404 {
+	if r := e.do("GET", wallURL, nil); r.code != 204 {
 		t.Fatal("after the removal:", r.code)
 	}
 }

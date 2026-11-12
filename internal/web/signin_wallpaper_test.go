@@ -185,13 +185,15 @@ func TestSignInWallpaperUploadTakesThreeTypesByContent(t *testing.T) {
 	}
 }
 
-// The public route: no sign-in, one picture or 404, the headers that make a browser treat it as a picture and
+// The public route: no sign-in, one picture or 204 (none set), the headers that make a browser treat it as a picture and
 // nothing else, and nothing in the request says which file is sent.
 func TestSignInWallpaperPublicRoute(t *testing.T) {
 	e, admin := wallAdmin(t)
 	pngPic, jpg, _ := wallPictures(t)
 	none := e.do("GET", wallURL, nil)
-	if none.code != 404 || none.body["detail"] != "no sign-in wallpaper" || none.hdr.Get("Content-Type") != "application/json" ||
+	// r3-p3-04: 204, an answer without a picture, like the logo's. It was 404, and the sign-in page, whose style
+	// sheet always asks for the picture, wrote an error line to the browser's console at every load.
+	if none.code != 204 || len(none.raw) != 0 || none.hdr.Get("Cache-Control") != "no-cache" ||
 		none.hdr.Get("X-Content-Type-Options") != "nosniff" || none.hdr.Get("Set-Cookie") != "" {
 		t.Fatalf("with no picture set: %d %s %v", none.code, none.raw, none.hdr)
 	}
@@ -199,7 +201,7 @@ func TestSignInWallpaperPublicRoute(t *testing.T) {
 	if r := e.raw(probe{method: "POST", path: "/api/settings/background", body: jpg, ctype: "image/jpeg"}, admin...); r.code != 201 {
 		t.Fatal("background upload", r.code, string(r.raw))
 	}
-	if r := e.do("GET", wallURL, nil); r.code != 404 {
+	if r := e.do("GET", wallURL, nil); r.code != 204 {
 		t.Fatal("a user's background is handed out as the sign-in wallpaper:", r.code)
 	}
 	up := e.wallUpload(pngPic, "image/png", admin...)
@@ -344,7 +346,7 @@ func TestSignInWallpaperIsForAdmins(t *testing.T) {
 		if r := e.raw(probe{method: "DELETE", path: wallAPI}, c.hdr...); r.code != c.want {
 			t.Errorf("removal by %s: %d %s (want %d)", name, r.code, r.raw, c.want)
 		}
-		if r := e.do("GET", wallURL, nil); r.code != 404 {
+		if r := e.do("GET", wallURL, nil); r.code != 204 {
 			t.Fatalf("after the upload by %s a picture is set", name)
 		}
 	}
@@ -432,10 +434,10 @@ func TestSignInWallpaperRemovalAuditAndRestart(t *testing.T) {
 	if r := e2.raw(probe{method: "DELETE", path: wallAPI}, admin2...); r.code != 200 || r.body["set"] != false || r.body["version"] != nil {
 		t.Fatal("removal:", r.code, string(r.raw))
 	}
-	if r := e2.do("GET", wallURL, nil); r.code != 404 {
+	if r := e2.do("GET", wallURL, nil); r.code != 204 {
 		t.Fatal("after the removal:", r.code)
 	}
-	if r := e2.do("GET", wallURL, nil, "If-None-Match", etag); r.code != 404 {
+	if r := e2.do("GET", wallURL, nil, "If-None-Match", etag); r.code != 204 {
 		t.Error("after the removal a browser that has the old picture is told 304:", r.code)
 	}
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
@@ -445,14 +447,14 @@ func TestSignInWallpaperRemovalAuditAndRestart(t *testing.T) {
 	if len(del) != 1 || del[0]["outcome"] != "ok" {
 		t.Errorf("the audit entry of the removal: %v", del)
 	}
-	if e3 := restart(); e3.do("GET", wallURL, nil).code != 404 {
+	if e3 := restart(); e3.do("GET", wallURL, nil).code != 204 {
 		t.Error("the picture is back after a restart")
 	}
 	// a file put into the data directory by hand is checked like an upload before it is ever handed out
 	if err := os.WriteFile(file, []byte("<html><script>alert(1)</script></html>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if r := restart().do("GET", wallURL, nil); r.code != 404 {
+	if r := restart().do("GET", wallURL, nil); r.code != 204 {
 		t.Errorf("HTML in the data directory is handed out: %d %s", r.code, r.hdr.Get("Content-Type"))
 	}
 }

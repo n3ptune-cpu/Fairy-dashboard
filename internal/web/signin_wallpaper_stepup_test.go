@@ -43,7 +43,7 @@ func TestSignInWallpaperChangeAsksToConfirm(t *testing.T) {
 	}
 	// the upload
 	id := asked(e.wallUpload(pngPic, "image/png", hdr()...), "change the sign-in picture (PNG, "+byteText(len(pngPic))+")")
-	if r := e.do("GET", wallURL, nil); r.code != 404 {
+	if r := e.do("GET", wallURL, nil); r.code != 204 {
 		t.Fatal("the picture was stored before the confirmation:", r.code)
 	}
 	if n := len(e.auditEntries("", "settings.signin_wallpaper_upload")); n != 0 {
@@ -84,7 +84,7 @@ func TestSignInWallpaperChangeAsksToConfirm(t *testing.T) {
 	if r := a.confirm(id, false); r.code != 303 {
 		t.Fatalf("the confirmation: %d %s", r.code, r.raw)
 	}
-	if r := e.do("GET", wallURL, nil); r.code != 404 {
+	if r := e.do("GET", wallURL, nil); r.code != 204 {
 		t.Fatal("after the confirmation the picture is still there:", r.code)
 	}
 	if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), "settings.signin_wallpaper_delete ok") {
@@ -118,7 +118,7 @@ func TestSignInWallpaperChangeAsksToConfirm(t *testing.T) {
 		t.Fatalf("%d pictures wait (at most %d)", n, maxStagedPictures)
 	}
 	e.s.wallStage.m = nil
-	if r := e.do("GET", wallURL, nil); r.code != 404 {
+	if r := e.do("GET", wallURL, nil); r.code != 204 {
 		t.Fatal("a picture was stored without a confirmation")
 	}
 

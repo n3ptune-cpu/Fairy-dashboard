@@ -264,7 +264,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 
 .login .signed-out { border: 1px solid #4a3810; background: rgba(245, 184, 75, .05); color: #f3cf86; border-radius: var(--radius); padding: 8px 12px; font-size: 12.5px; }
 /* The sign-in and the waiting view. The sign-in wallpaper fills the page (GET /branding/wallpaper; with none set
-   that is a 404 and the page stays black); the controls are a strip along the bottom, dark enough to read on
+   that is a 204, no picture, and the page stays black); the controls are a strip along the bottom, dark enough to read on
    any picture. A view that is hidden loads no picture. The demo's and a test build's banner stay above it. */
 .login { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; overflow-y: auto;
   background: var(--bg) url("/branding/wallpaper") center / cover no-repeat; }

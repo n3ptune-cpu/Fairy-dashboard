@@ -30,7 +30,7 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"POST", "/api/settings/background", "Upload a background image (raw body; PNG/JPEG/WebP/GIF/AVIF, max 8 MiB, no SVG)"},
 	{"GET", "/api/settings/background", "The uploaded background image"},
 	{"DELETE", "/api/settings/background", "Remove the uploaded background"},
-	{"GET", "/api/admin/signin-wallpaper", "The sign-in wallpaper's state: {set, type, bytes, version, max_bytes} (admins, browser session). The picture itself is public: GET /branding/wallpaper, 404 when none is set"},
+	{"GET", "/api/admin/signin-wallpaper", "The sign-in wallpaper's state: {set, type, bytes, version, max_bytes} (admins, browser session). The picture itself is public: GET /branding/wallpaper, 204 when none is set"},
 	{"POST", "/api/admin/signin-wallpaper", "Set the picture behind the sign-in page (admins, browser session; CSRF header; raw body with a Content-Length; asks to confirm it is you). PNG, JPEG or WebP by content, max 8 MiB; the file's name and Content-Type are not looked at. 415 for anything else, 413 too large"},
 	{"DELETE", "/api/admin/signin-wallpaper", "Remove the sign-in wallpaper (admins, browser session; CSRF header; asks to confirm it is you)"},
 	{"GET", "/api/systems/{id}/power", "Power actions for one system: available or why not, confirmation needed, pending shutdown"},

@@ -47,10 +47,11 @@ func (s *Server) serveWallpaper(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	p := s.Settings.SignIn()
 	if p == nil {
-		h.Set("Content-Type", "application/json")
+		// No picture is set (the default): 204, an answer without a picture, as for the logo (serveLogo). The
+		// sign-in page's style sheet asks on every load; a 404 was an error line in the browser's console each
+		// time (r3-p3-04).
 		h.Set("Cache-Control", cacheNoCache)
-		w.WriteHeader(404)
-		_, _ = w.Write([]byte(`{"detail":"no sign-in wallpaper"}`))
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	release, ok := s.wall.acquire(security.ClientIP(r, s.Cfg.Trusted()))
