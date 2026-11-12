@@ -17,8 +17,7 @@ func TestUITurnOnEscapeIsCancel(t *testing.T) {
 		// Escape: the same button, and only where Cancel is not a plain close; an info box's Escape comes first
 		`if (e.key !== "Escape" || e.cancelBubble || $("#modal").hidden || !$("#ap-form")?.dataset.back) return;`,
 		`e.stopPropagation(); $("#ap-x").click();`,
-		`setTimeout(() => $("#ap-x")?.focus(), 0);`,
-		`if (appr) setTimeout(() => $("#su-cancel")?.focus(), 0);`,
+		`focusAtTop("#ap-x");`, `if (appr) focusAtTop("#su-cancel");`, // (r4-p3-04: without scrolling the dialog; they were setTimeout(() => $(…)?.focus(), 0))
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %q", want)
@@ -45,5 +44,33 @@ func TestUIKillSwitchTooltipNamesTheWholeCommand(t *testing.T) {
 	}
 	if n := strings.Count(js, "admin control enable"); n != strings.Count(js, "fairy admin control enable") {
 		t.Errorf("app.js names the command without its program somewhere (%d places in all)", n)
+	}
+}
+
+// The Approval dialog opens at its top (audit 6, r4-p3-04). The focus is put on Close when it opens; in a window
+// lower than the dialog (360x640, 390x664) the browser scrolled Close into view, so the title, the state and
+// the red sentence were out of sight. The focus is set without scrolling now and the dialog's own scroll is
+// put to 0; the same for "Turn on" and for "Confirm it's you" of a machine's approval. Measured in the browser
+// runs at 360x640 and 390x664 (scrollTop 0, the title in sight), with pictures.
+func TestUIApprovalDialogOpensAtItsTop(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`function focusAtTop(sel) {`, `b.focus({ preventScroll: true });`, `if (box) box.scrollTop = 0;`,
+		`focusAtTop("#apd-x");`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	// no focus that scrolls is left on the buttons of these three dialogs
+	for _, old := range []string{`$("#apd-x")?.focus()`, `$("#ap-x")?.focus()`, `$("#su-cancel")?.focus()`} {
+		if strings.Contains(js, old) {
+			t.Errorf("app.js still has %s, which scrolls the dialog to its end", old)
+		}
+	}
+	// the dialog's box is what scrolls: it is the one with a height limit
+	if css := appCSS(t); !strings.Contains(css, ".modal-box.wide { max-width: 640px; max-height: calc(100vh - 32px); overflow-y: auto; }") ||
+		!strings.Contains(js, `<div class="modal-box wide approval" role="dialog"`) {
+		t.Error("the Approval dialog is not the box that scrolls any more: focusAtTop sets the scroll of .modal-box")
 	}
 }

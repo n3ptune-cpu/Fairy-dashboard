@@ -28,7 +28,7 @@ func TestUIApprovalButtonAndDialog(t *testing.T) {
 		"const box = $(\"#ap-dlg\");\n  if (!box || $(\"#modal\").hidden) return;",
 		`morph($("#ap-dlg-body"), html);`,
 		`if (!s || !approvalOf(s) || stepUpOpen) return;`, // never over "Confirm it's you"
-		`setTimeout(() => $("#apd-x")?.focus(), 0);`,      // the focus starts on Close, not on the first control (which can be an accept)
+		`focusAtTop("#apd-x");`,                           // the focus starts on Close, not on the first control (which can be an accept); (audit 6, r4-p3-04: without scrolling, it was setTimeout(() => $("#apd-x")?.focus(), 0))
 		// Turn on, pressed in the dialog: Cancel leads back to it
 		`openTurnOn(t.dataset.id || "", t.closest("#ap-dlg")?.dataset.sys || "");`, `$("#ap-x").onclick = back ? () => openApproval(back) : closeModal;`,
 		// next to Turn on: "Ready", or the reason in a few words; the whole sentence is behind "More"

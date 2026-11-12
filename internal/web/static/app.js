@@ -299,7 +299,7 @@ function showStepUp(pending, detail) {
   $("#su-cancel").onclick = cancelStepUp;
   $("#su-go").onclick = kept ? () => confirmStepUp(detail.pending_id, nextPath) : () => { if (stepUpOpen) stepUpOpen.going = true; };
   m.onclick = (e) => { if (e.target === m) cancelStepUp(); };
-  if (appr) setTimeout(() => $("#su-cancel")?.focus(), 0);  // the first control is the info button of "Client ID" there: the focus starts on Cancel, as without it (audit 6, r4-b1-10)
+  if (appr) focusAtTop("#su-cancel");  // the first control is the info button of "Client ID" there: the focus starts on Cancel, as without it (audit 6, r4-b1-10)
 }
 // "Continue" for a kept action: ask the panel to confirm exactly this action. It answers with the address of
 // the sign-in at Pocket ID (or, in the demo, with the page to show after it has run the action).
@@ -940,6 +940,18 @@ function approvalDialogSync() {
   const b = $("#apd-more");
   b.hidden = !hasMore; b.setAttribute("aria-expanded", String(apDlg.more));
 }
+// A dialog that is opened to be read opens at its top, with the focus on the button that leaves it. In a window
+// lower than the dialog (a phone) the browser scrolled the focused button into view, and the title, the state
+// and the red sentence were out of sight (audit 6, r4-p3-04).
+function focusAtTop(sel) {
+  setTimeout(() => {
+    const b = $(sel);
+    if (!b) return;
+    b.focus({ preventScroll: true });
+    const box = b.closest(".modal-box");
+    if (box) box.scrollTop = 0;
+  }, 0);
+}
 function openApproval(id) {
   const s = state.byId[id];
   if (!s || !approvalOf(s) || stepUpOpen) return;
@@ -949,7 +961,7 @@ function openApproval(id) {
     <div class="row-gap end"><button class="btn" type="button" id="apd-more" aria-expanded="false" aria-controls="ap-more">More</button><button class="btn" type="button" id="apd-x">Close</button></div></div>`;
   m.hidden = false;
   approvalDialogSync();
-  setTimeout(() => $("#apd-x")?.focus(), 0);  // it is opened to be read: the focus starts on Close, never on a button that accepts something
+  focusAtTop("#apd-x");  // it is opened to be read: the focus starts on Close, never on a button that accepts something
   $("#apd-more").onclick = () => { apDlg.more = !apDlg.more; approvalDialogSync(); };
   $("#apd-x").onclick = closeModal;
   m.onclick = (e) => { if (e.target === m) closeModal(); };
@@ -1106,7 +1118,7 @@ async function openTurnOn(only, back) {
   sync();
   $("#ap-x").onclick = back ? () => openApproval(back) : closeModal;
   $("#ap-form").dataset.back = back || "";
-  setTimeout(() => $("#ap-x")?.focus(), 0);  // the focus starts on Cancel: it was on the first control, the info button of "Client ID" (audit 6, r4-b1-10)
+  focusAtTop("#ap-x");  // the focus starts on Cancel: it was on the first control, the info button of "Client ID" (audit 6, r4-b1-10)
   m.onclick = (e) => { if (e.target === m) closeModal(); };
   $("#ap-form").onsubmit = async (e) => {
     e.preventDefault();
