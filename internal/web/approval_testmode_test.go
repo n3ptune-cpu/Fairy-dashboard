@@ -5,6 +5,9 @@ package web
 import (
 	"context"
 	"fmt"
+	"html"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -102,5 +105,108 @@ func TestTestBuildApprovalIsReal(t *testing.T) {
 	back = iss.Approve(t, fmt.Sprint(go2.body["url"]))
 	if cb := e.do("GET", back.RequestURI(), nil, "Cookie", ck); cb.code != 400 || len(laptop.Passed()) != 0 {
 		t.Fatalf("a stale approval in a test build: %d, passed %d", cb.code, len(laptop.Passed()))
+	}
+}
+
+// The way back from Pocket ID in a test build (audit 5, r2-b2-01). Pocket ID shows a page before it sends the
+// browser back, so that return is a navigation another site started, and a browser sends neither of the two
+// SameSite=Strict cookies with it. The gate answers exactly that request (a GET for the approval callback
+// without the key cookie) with a page of its own that asks for the same address again; the second request
+// carries the cookies and the mark, and runs the kept action. Everything else stays refused without the key.
+func TestTestModeTheWayBackFromPocketID(t *testing.T) {
+	var gb *testutil.GatedBackend
+	e := setupWith(t, func(b poller.Backend) poller.Backend {
+		gb = testutil.NewGatedBackend(b.(*testutil.Backend))
+		return gb
+	})
+	e.s.Cfg.OIDC.ControlGroups = []string{TestGroup}
+	iss := testutil.NewIssuer(t)
+	iss.Set(func(i *testutil.Issuer) { i.Sub = "pocket-id-user-of-the-owner" })
+	e.s.Cfg.Approval = config.Approval{ClientID: testApprovalClient, Issuer: iss.URL(), RunApprovalWaitS: 900,
+		Users: []string{"pocket-id-user-of-the-owner"}}
+	e.s.SetIDPClient(iss.Client())
+	e.s.EnableTestMode(startKey)
+	key := TestKeyCookie(strings.TrimPrefix(e.srv.URL, "http://"), startKey)
+	e.also = key
+	laptop := gb.Add(t, "laptop")
+	e.s.Poller.PollOnce(context.Background())
+	ck := e.open()
+	hdr := []string{"Cookie", ck, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	id, _, ok := approvalAsked(e.do("POST", "/api/admin/approval/turn-on", map[string]any{"hosts": []string{"laptop"}}, hdr...))
+	if !ok {
+		t.Fatal("Turn on was not asked to approve")
+	}
+	go1 := e.do("POST", stepUpPath, map[string]any{"pending_id": id, "next": "/"}, hdr...)
+	back := iss.Approve(t, fmt.Sprint(go1.body["url"]))
+
+	// 1. what the browser sends when Pocket ID's page sends it back: the address, and no cookie at all
+	e.also = ""
+	first := e.do("GET", back.RequestURI(), nil)
+	body := string(first.raw)
+	if first.code != 200 || len(first.hdr.Values("Set-Cookie")) != 0 || first.hdr.Get("Cache-Control") != "no-store" ||
+		first.hdr.Get("Referrer-Policy") != "no-referrer" || first.hdr.Get("Content-Security-Policy") != CSP ||
+		!strings.HasPrefix(first.hdr.Get("Content-Type"), "text/html") {
+		t.Fatalf("the return without cookies: %d %v\n%s", first.code, first.hdr, body)
+	}
+	if strings.Contains(body, "<script") || strings.Contains(body, startKey) || strings.Contains(body, strings.SplitN(key, "=", 2)[1]) ||
+		strings.Contains(body, "fairytest-banner") || len(laptop.Passed()) != 0 {
+		t.Fatalf("the page must show nothing of the panel and run nothing: %s", body)
+	}
+	// the address it asks for again: the same path, state and code as they came, and the mark
+	m := regexp.MustCompile(`<meta http-equiv="refresh" content="0; url=([^"]+)">`).FindStringSubmatch(body)
+	if m == nil || !strings.Contains(body, `<a href="`+m[1]+`" rel="noreferrer">Continue</a>`) {
+		t.Fatalf("no refresh and link to one address: %s", body)
+	}
+	again, err := url.Parse(html.UnescapeString(m[1]))
+	if err != nil || again.Path != config.ApprovalCallbackPath || again.Host != "" || again.Query().Get(testBackParam) != "1" {
+		t.Fatalf("the second address: %q %v", m[1], err)
+	}
+	for _, k := range []string{"state", "code"} {
+		if got, want := again.Query().Get(k), back.Query().Get(k); got != want || want == "" {
+			t.Fatalf("%s did not survive the page: %q, want %q", k, got, want)
+		}
+	}
+
+	// 2. the second request without the key cookie (a browser that never opened the printed address): refused, once
+	if r := e.do("GET", again.RequestURI(), nil, "Cookie", ck); r.code != 403 || !strings.Contains(string(r.raw), testKeyRefusal) || len(laptop.Passed()) != 0 {
+		t.Fatalf("the marked request without the key: %d %s", r.code, r.raw)
+	}
+	// the key alone is no session: the callback's own answer, and nothing ran
+	if r := e.do("GET", "/auth/approval/callback?state=x&code=y&"+testBackParam+"=1", nil, "Cookie", key); r.code != 401 || len(laptop.Passed()) != 0 {
+		t.Fatalf("the marked request with the key and without a session: %d %s", r.code, r.raw)
+	}
+
+	// 3. the second request as the browser sends it (a navigation of this site: both cookies): the kept action runs
+	e.also = key
+	if cb := e.do("GET", again.RequestURI(), nil, "Cookie", ck); cb.code != 303 {
+		t.Fatalf("the marked request with both cookies: %d %s", cb.code, cb.raw)
+	}
+	if ap := laptop.Gate.StatusNow(); ap.State != api.ApprovalRequired {
+		t.Fatalf("the machine after Turn on through the page: %+v", ap)
+	}
+	// 4. the same address once more, either form: nothing is waiting any more
+	for _, p := range []string{again.RequestURI(), back.RequestURI()} {
+		if cb := e.do("GET", p, nil, "Cookie", ck); cb.code != 400 || !strings.Contains(string(cb.raw), "No action is waiting") {
+			t.Fatalf("a callback address used again: %d %s", cb.code, cb.raw)
+		}
+	}
+
+	// 5. the page is for that one path and GET only, and it writes its address out again instead of repeating it
+	e.also = ""
+	for _, p := range [][2]string{{"HEAD", "/auth/approval/callback?state=a&code=b"}, {"POST", "/auth/approval/callback?state=a&code=b"},
+		{"GET", "/auth/approval/callback/?state=a&code=b"}, {"GET", "/auth/approval/callbackx?state=a"}, {"GET", "/auth/approval?state=a"},
+		{"GET", "/auth/callback?state=a&code=b"}, {"GET", "/auth/login"}, {"GET", "/api/auth/approval/callback"}, {"GET", "/"},
+		{"GET", "/auth/approval/callback?state=a&" + testBackParam + "="},
+		{"GET", "/auth/approval/callback?state=" + strings.Repeat("a", testBackMaxQuery)}} {
+		r := e.do(p[0], p[1], nil)
+		if r.code != 403 || len(r.hdr.Values("Set-Cookie")) != 0 || strings.Contains(string(r.raw), "refresh") {
+			t.Errorf("%s %.60s without the key: %d %.200s", p[0], p[1], r.code, r.raw)
+		}
+	}
+	hostile := e.do("GET", `/auth/approval/callback?state=%22%3E%3Cscript%3Ealert(1)%3C/script%3E&code=a%2Bb+c&x=%27+url=//evil.example/&y=1;z=2&code=2`, nil)
+	hb := string(hostile.raw)
+	want := "/auth/approval/callback?code=a%2Bb+c&amp;code=2&amp;fairytest_back=1&amp;state=%22%3E%3Cscript%3Ealert%281%29%3C%2Fscript%3E&amp;x=%27+url%3D%2F%2Fevil.example%2F" // a member with ";" is not one (net/url) and is left out
+	if hostile.code != 200 || strings.Count(hb, want) != 2 || strings.Contains(hb, "<script") || strings.Contains(hb, "'") || strings.Contains(hb, ";z") {
+		t.Fatalf("a hostile query on the page: %d\n%s", hostile.code, hb)
 	}
 }

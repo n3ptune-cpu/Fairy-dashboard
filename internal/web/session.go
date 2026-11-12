@@ -35,7 +35,8 @@ func (c *sessionCodec) name() string {
 	return plainCookieName
 }
 
-// sameSite is Lax (see write), except in a test build, which has no round trip to an identity provider.
+// sameSite is Lax (see write), except in a test build: its sign-in has no round trip to an identity provider,
+// and the way back from Pocket ID with a machine's approval goes through a page of its own (testBackPage).
 func (c *sessionCodec) sameSite() http.SameSite {
 	if c.strict {
 		return http.SameSiteStrictMode

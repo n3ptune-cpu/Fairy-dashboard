@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
@@ -82,9 +83,11 @@ func (s *Server) EnableTestMode(key string) {
 	s.approvalAnyPerson = true // there is no signed-in person to compare an approver with (approval.go)
 	gate := testKeyGate{key: key, cookie: testKeyCookieValue(key)}
 	// The session cookie gets this panel's port into its name, like the key cookie: cookies know no port, and
-	// two test panels on one PC signed each other out with every page load. Both cookies are SameSite=Strict
-	// (there is no identity provider to come back from). Neither keeps the cookies away from another web
-	// server on 127.0.0.1 that the same browser opens: see TESTING-LOCAL.md, "Who can reach it".
+	// two test panels on one PC signed each other out with every page load. Both cookies are SameSite=Strict:
+	// the sign-in has no identity provider to come back from, and the one way back there is (from Pocket ID,
+	// with a machine's approval) goes through a page of this panel first (testBackPage). Neither keeps the
+	// cookies away from another web server on 127.0.0.1 that the same browser opens: see TESTING-LOCAL.md,
+	// "Who can reach it".
 	if u, err := url.Parse(s.Cfg.BaseURL()); err == nil {
 		s.codec.plainName, s.codec.strict = testPortName(plainCookieName, u.Host), true
 	}
@@ -138,7 +141,8 @@ func (s *Server) EnableTestMode(key string) {
 // address to open (http://127.0.0.1:8080/?key=...). A request to that address with the right key gets a cookie
 // (HttpOnly, SameSite=Strict, ten years; the key does not change between starts, so the address can be
 // bookmarked) and a small page that goes on to the same address without the key (testKeyPage). Every other
-// request without the cookie is answered 403 with one line. The key is compared in constant time, and it is in no log line, audit entry or
+// request without the cookie is answered 403 with one line (but for the way back from Pocket ID, testBackPage).
+// The key is compared in constant time, and it is in no log line, audit entry or
 // API answer: the cookie holds a hash of it, not the key.
 const (
 	testKeyParam   = "key"
@@ -159,6 +163,49 @@ const (
 const testKeyPage = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">` +
 	`<meta http-equiv="refresh" content="0; url=%s"><title>Fairy test build</title></head>` +
 	`<body><p>Fairy test build: this browser may now open the panel. <a href="%s" rel="noreferrer">Continue</a></p></body></html>`
+
+// The way back from Pocket ID. An approval a machine checks itself is the one thing a test build asks a real
+// Pocket ID for, and Pocket ID shows a page (the passkey prompt) before it sends the browser back to
+// /auth/approval/callback. That return is a navigation another site's page started, so the browser sends
+// neither of the two SameSite=Strict cookies with it: the request arrived without the key cookie, got the
+// refusal above, and no approval could be finished (audit 5, r2-b2-01). The cookies stay Strict. Instead a GET
+// for exactly that path that comes without the key cookie is answered with testBackPage: a page of this panel
+// that asks for the same address again by itself. That second request is a navigation of this site, so it
+// carries both cookies, and it carries testBackParam, so that a browser that still has no key cookie (one that
+// never opened the printed address) gets the refusal instead of the page again.
+//
+// The page sets nothing and shows nothing of the panel: its body is the address the request itself came for,
+// with its query members written out again (url.Values.Encode: letters, digits, %XX and "-_.~+&=" only) and
+// HTML-escaped. It runs nothing: the callback behind it still needs the key cookie, the session and the kept
+// action of this very round trip. No script (the CSP allows none inline). A release has none of this, and
+// needs none: its session cookie is SameSite=Lax, which a browser does send with such a return.
+const (
+	testBackParam    = "fairytest_back"
+	testBackMaxQuery = 4096
+	testBackPage     = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">` +
+		`<meta http-equiv="refresh" content="0; url=%s"><title>Fairy test build</title></head>` +
+		`<body><p>Fairy test build: back from Pocket ID. <a href="%s" rel="noreferrer">Continue</a></p></body></html>`
+)
+
+// back answers the return from Pocket ID that came without the key cookie with testBackPage, and reports
+// whether it did: a GET for exactly the approval callback, not yet marked as the page's own second request.
+func (g testKeyGate) back(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet || r.URL.Path != config.ApprovalCallbackPath || len(r.URL.RawQuery) > testBackMaxQuery {
+		return false
+	}
+	q := r.URL.Query()
+	if q.Has(testBackParam) {
+		return false
+	}
+	q.Set(testBackParam, "1")
+	to := html.EscapeString((&url.URL{Path: config.ApprovalCallbackPath, RawQuery: q.Encode()}).RequestURI())
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, testBackPage, to, to)
+	return true
+}
 
 // ValidTestKey reports whether key has the form of a start key: 32 to 128 letters, digits, - or _.
 func ValidTestKey(key string) bool {
@@ -224,6 +271,9 @@ func (g testKeyGate) stops(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if c, err := r.Cookie(name); err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(g.cookie)) == 1 {
 		return false
+	}
+	if g.back(w, r) {
+		return true
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	if strings.HasPrefix(r.URL.Path, "/api/") || strings.Contains(r.Header.Get("Accept"), "application/json") {
