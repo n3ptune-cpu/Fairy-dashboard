@@ -179,16 +179,35 @@ async function netKnock() {
   document.body.classList.add("unreachable");
   renderAlerts();
 }
+// For a request that got, or would get, no answer: knock now instead of after NET_QUIET, and the error to show.
+const NET_ASK = 3000;
+function netKnockNow() { net.heard = Math.min(net.heard, Date.now() - NET_QUIET); net.knocked = 0; return netKnock(); }
+const netError = (msg) => { const e = new Error(msg); e.network = true; return e; };
 async function api(path, opts = {}) {
   const write = opts.method && opts.method !== "GET";
   if (write && !opts.label && ctlLabel) opts = { ...opts, label: ctlLabel };
   if (signedOut) { const e = new Error("signed out"); e.status = 401; throw e; }  // nothing is sent any more
+  // A write while the page has heard nothing from the panel for NET_ASK (its stream sends every second): knock
+  // first. No answer: the request is not sent at all, and the page says so in its own words.
+  if (write && !opts.keepalive && (net.down || Date.now() - net.heard > NET_ASK)) {
+    await netKnockNow();
+    if (net.down) throw netError("Panel not reachable. Nothing was sent.");
+  }
   const active = userActive();
   if (active) lastActiveSent = Date.now();  // this request tells the server: no extra signal needed for a minute
-  const res = await fetch(path, { credentials: "same-origin", ...opts,
-    headers: { Accept: "application/json", ...(write ? { "X-Requested-With": "fairy" } : {}), ...(active ? { "X-Fairy-Active": "1" } : {}),
-      ...(opts.body && typeof opts.body === "string" ? { "Content-Type": "application/json" } : {}),
-      ...(opts.label ? { "X-Fairy-Action": headerText(opts.label) } : {}), ...(opts.headers || {}) } });
+  let res;
+  try {
+    res = await fetch(path, { credentials: "same-origin", ...opts,
+      headers: { Accept: "application/json", ...(write ? { "X-Requested-With": "fairy" } : {}), ...(active ? { "X-Fairy-Active": "1" } : {}),
+        ...(opts.body && typeof opts.body === "string" ? { "Content-Type": "application/json" } : {}),
+        ...(opts.label ? { "X-Fairy-Action": headerText(opts.label) } : {}), ...(opts.headers || {}) } });
+  } catch (x) {
+    // No answer at all (the panel was stopped a moment ago, the network is gone). Not the browser's words for it
+    // ("Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."); and the strip at once.
+    if (x?.name === "AbortError") throw x;
+    netKnockNow();
+    throw netError(write ? "Panel not reachable. No answer: it is not known whether this was done." : "Panel not reachable.");
+  }
   const data = res.status === 204 ? null : await res.json().catch(() => ({}));
   if (res.status < 500) netHeard(false);
   if (!res.ok) {

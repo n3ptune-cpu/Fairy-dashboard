@@ -94,3 +94,24 @@ func TestUIARateLimitSaysHowLongToWait(t *testing.T) {
 		}
 	}
 }
+
+// r2-b1-11: while the panel was down, an action answered with the browser's words ("Failed to fetch"). Now a
+// write is not sent at all when the panel does not answer a knock ("Nothing was sent." is then true), and a
+// request that was sent and got no answer says so in the page's own words.
+func TestUIAPanelThatIsDownIsNamedInThePagesWords(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`if (write && !opts.keepalive && (net.down || Date.now() - net.heard > NET_ASK)) {`,
+		`if (net.down) throw netError("Panel not reachable. Nothing was sent.");`,
+		`throw netError(write ? "Panel not reachable. No answer: it is not known whether this was done." : "Panel not reachable.");`,
+		`function netKnockNow() { net.heard = Math.min(net.heard, Date.now() - NET_QUIET); net.knocked = 0; return netKnock(); }`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	// "Nothing was sent." is said only before the request is made
+	if i, j := strings.Index(js, `"Panel not reachable. Nothing was sent."`), strings.Index(js, "res = await fetch(path,"); i < 0 || j < i {
+		t.Error(`"Nothing was sent." must be decided before fetch() is called`)
+	}
+}
