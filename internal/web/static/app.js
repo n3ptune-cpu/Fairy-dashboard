@@ -679,6 +679,9 @@ function helperPausedLine(s) {
   return `<div class="paused-line"><span>${esc(text)}</span>${btn}</div>`;
 }
 const statusText = (s) => (s.status === "paused" ? "paused" : s.asleep ? "asleep (from panel)" : s.status);
+// A host that is "offline" (or stale) while its machine took part in the panel's latest poll (s.machine_on says how: it
+// refused the connection, answered with an error, ...). The status word stays; this is its tooltip and its info box.
+const MACHINE_ON = "The machine answers but its agent does not: it is on";
 
 // ------------------------------------------------------------ sidebar
 function navLink(href, ico, name, cls = "", extra = "") {
@@ -902,7 +905,8 @@ function pageSystem(id, tab) {
   const why = controlWhyNot();
   const hasPower = (s.power_actions || []).length > 0;
   const head = `<div class="detail-head"><div class="dh-title"><span class="dot ${cssName(s.status)}"></span>${osIcon(s, 22)}<h2>${esc(s.name)}</h2>
-    <span class="chip ${s.status === "online" ? "ok" : s.status === "stale" ? "warn" : s.status === "offline" ? "bad" : ""}">${esc(statusText(s))}</span>
+    <span class="chip ${s.status === "online" ? "ok" : s.status === "stale" ? "warn" : s.status === "offline" ? "bad" : ""}"${s.machine_on ? ` title="${esc(MACHINE_ON)}"` : ""}>${esc(statusText(s))}</span>${s.machine_on
+      ? infoBtn("machine-on", "Agent not answering", `<p>${esc(MACHINE_ON)}.</p><p>What shows it: ${esc(s.machine_on)}. Look at the agent on the machine; there is nothing to power on.</p>`, { label: MACHINE_ON }) : ""}
     ${helperBadge(s, menuOpen === "helper")}</div>
     <div class="actions">${liveLabel(s)}
       ${s.dwservice_url ? `<a class="btn" href="${safeHref(s.dwservice_url)}" target="_blank" rel="noopener noreferrer">Remote ${I.ext}</a>` : ""}
@@ -913,7 +917,7 @@ function pageSystem(id, tab) {
       <div class="menu-wrap"><button class="btn icon ${menuOpen === "poll" ? "on" : ""}" data-act="menu" data-menu="poll" title="Polling rate and host settings" aria-label="Polling rate and host settings">${I.more}</button>${menuOpen === "poll" ? pollMenu(s) : ""}</div>
     </div>
     <div class="dh-meta"><span class="chip">${esc(kindLabel(s))}</span>${s.kind === "node" && !s.cluster ? '<span class="chip">Proxmox</span>' : ""}
-      ${upsChips(s)}${(s.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}${verChip(s.id)}</div>
+      ${upsChips(s)}${(s.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}${s.kind === "agent" && !s.platform && !upd.bySys[s.id]?.version ? "" : verChip(s.id)}</div>
     <div class="sub">${esc(sub)}${s.updated_at ? ` · <span class="note">updated <span data-ago="${esc(s.updated_at)}">${ago(s.updated_at)}</span></span>` : ""}</div></div>
     ${s.power_pending ? pendingStrip(s, why) : ""}
     <nav class="tabs">${tabs.map(([k, label]) => `<a href="#/system/${enc(id)}${k === "overview" ? "" : "/" + k}" class="${k === tab ? "active" : ""}">${label}</a>`).join("")}</nav>`;
@@ -923,6 +927,7 @@ function pageSystem(id, tab) {
 }
 
 function wakeBlock(s) {
+  if (s.machine_on) return "";  // it is on, only its agent does not answer: "Power on" stays in the Power menu, it is not the thing to press
   return wolBlock(s) + bmcBlock(s);
 }
 // "Power on (via BMC, through AGENT-2)": a relay agent powers the machine on through its BMC (typed name).

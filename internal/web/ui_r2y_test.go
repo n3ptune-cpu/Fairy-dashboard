@@ -135,3 +135,22 @@ func TestUITextsThatDisagreed(t *testing.T) {
 		t.Error("the version chips write the commit in capitals")
 	}
 }
+
+// r2-b1-14: a host that was never seen had two tags, "AGENT" and "AGENT ?"; and a host whose agent is stopped
+// (its machine refuses the connection: machine_on) was offered "Power on" as the thing to press, while the
+// Updates page said it is on. The status word stays; its tooltip and an info button say what is known.
+func TestUIAHostWhoseAgentIsStoppedIsNotOfferedPowerOn(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const MACHINE_ON = "The machine answers but its agent does not: it is on";`,
+		`if (s.machine_on) return "";`,
+		"${s.machine_on ? ` title=\"${esc(MACHINE_ON)}\"` : \"\"}>${esc(statusText(s))}</span>",
+		`infoBtn("machine-on", "Agent not answering",`,
+		// one tag: the kind chip already says "agent" when neither system nor version is known
+		`${s.kind === "agent" && !s.platform && !upd.bySys[s.id]?.version ? "" : verChip(s.id)}</div>`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+}

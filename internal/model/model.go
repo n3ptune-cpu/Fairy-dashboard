@@ -199,6 +199,11 @@ type System struct {
 	PowerHelperReason string `json:"-"`
 	// Asleep: offline because the panel sent it to sleep (until it is seen online again).
 	Asleep bool `json:"asleep,omitempty"`
+	// MachineOn: the host's agent gave no usable answer to the latest poll (the host is stale or offline), but
+	// the machine itself took part in it; this is what showed that ("the machine refused the connection", "its
+	// address answered: http 401", ...: the poller's sign of life, which also keeps the machine from counting as
+	// off for "Update unpowered hosts"). Empty: it answers, or nothing at all came back.
+	MachineOn string `json:"machine_on,omitempty"`
 	// BMCRelayTargets: the bmc_relay target ids this agent reports (nil: no relay, or older than v0.4.2).
 	// Internal: decides whether "Power on (via BMC)" is offered for the machines it can wake.
 	BMCRelayTargets []string `json:"-"`

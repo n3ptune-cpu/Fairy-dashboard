@@ -260,6 +260,11 @@ func (p *Poller) buildSnapshot() []model.System {
 			s.Asleep = true
 			systems[id] = s
 		}
+		// stale or offline, and the latest poll met a machine that runs (lifeSign): the host's page says so
+		if q, ok := p.agentQuiet[id]; ok && q.sign != "" && s.Kind == "agent" && (s.Status == "offline" || s.Status == "stale") {
+			s.MachineOn = q.sign
+			systems[id] = s
+		}
 	}
 	p.mu.Unlock()
 	list := make([]model.System, 0, len(systems))
