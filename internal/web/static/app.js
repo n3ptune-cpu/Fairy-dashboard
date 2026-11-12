@@ -867,6 +867,23 @@ function approvalBtn(s) {
   if (!v) return "";
   return `<button class="btn ap-btn ${v.tone}" type="button" data-act="ap-dlg" aria-haspopup="dialog" title="${esc(`${AP_LABEL}: ${v.word}`)}" aria-label="${esc(`${AP_LABEL}: ${v.word}`)}">${I.shield}${esc(AP_LABEL)}</button>`;
 }
+// Host page, under the header: one line while the check needs an action now (the states whose button is red),
+// in the form of the countdown's line, with the button that opens the dialog. Nothing for green or amber.
+const AP_STRIP = table({
+  changed: "Machine id changed: no approvals until the new id is accepted.",
+  duplicate: "One machine id on two hosts: no approvals for either.",
+  vanished: "Check gone: this machine shows no check now. Fairy sends it nothing.",
+  too_old: "Agent too old: its approvals do not name the machine.",
+  no_record: "Not on record: no approvals until its machine id is accepted.",
+  unreadable: "Record unreadable: Fairy asks no machine for an approval." });
+function approvalStrip(s) {
+  const a = approvalOf(s);
+  if (!a || !((a.binding && AP_BINDING[a.binding]) || a.state === "broken")) return "";
+  const held = Array.isArray(a.binding_held) && a.binding_held.length ? andList(a.binding_held.map(String)) : "";
+  const text = !AP_BINDING[a.binding] ? "Approval broken: it refuses fan, power and update requests."
+    : a.binding === "duplicate" && held ? `One machine id on two hosts: ${held} keeps it.` : AP_STRIP[a.binding];
+  return `<div class="pending-strip bad" id="ap-strip" data-key="ap-strip"><span>${esc(text)}</span><button class="btn push" type="button" data-act="ap-dlg" aria-haspopup="dialog">${I.shield}${esc(AP_LABEL)}</button></div>`;
+}
 // The dialog. It is drawn from the live data like the page: render() draws it anew while it is open
 // (approvalDialogSync), so a state that changes under it shows without closing it. Another dialog that takes its
 // place in #modal ("Turn on", "Confirm it's you") is never touched: only the element with this dialog's id is.
@@ -1307,7 +1324,7 @@ function pageSystem(id, tab) {
     <div class="dh-meta"><span class="chip">${esc(kindLabel(s))}</span>${s.kind === "node" && !s.cluster ? '<span class="chip">Proxmox</span>' : ""}
       ${upsChips(s)}${(s.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}${s.kind === "agent" && !s.platform && !upd.bySys[s.id]?.version ? "" : verChip(s.id)}</div>
     <div class="sub">${esc(sub)}${s.updated_at ? ` · <span class="note">updated <span data-ago="${esc(s.updated_at)}">${ago(s.updated_at)}</span></span>` : ""}</div></div>
-    ${s.power_pending ? pendingStrip(s, why) : ""}
+    ${s.power_pending ? pendingStrip(s, why) : ""}${approvalStrip(s)}
     <nav class="tabs">${tabs.map(([k, label]) => `<a href="#/system/${enc(id)}${k === "overview" ? "" : "/" + k}" class="${k === tab ? "active" : ""}">${label}</a>`).join("")}</nav>`;
   if (tab === "processes") return head + '<div id="tab-body" data-keep><div class="empty">Loading processes…</div></div>';
   if (tab === "fans") return head + '<div id="tab-body" data-keep><div class="empty">Loading fan status…</div></div>';
