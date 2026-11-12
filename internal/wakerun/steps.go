@@ -127,12 +127,13 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 			fmt.Sprintf("%s, but its shutdown countdown (due at %s) could not be called off (%s).", why, due, opText(err)))
 		return
 	}
-	if m.now().Before(*h.ShutdownAt) {
-		// Its agent took the cancel before the countdown was over: the machine runs, and its countdown is gone.
-		// That answer is what the last look goes by; a machine that is out of reach a moment later is not "off".
-		// (A cancel answered after the countdown ran out says nothing: the machine is on its way down. What
-		// counts is when the answer came, not when the request left: the agent answers a cancel with "ok"
-		// also when nothing is pending any more, and a request can be on its way for seconds.)
+	if m.mono() < h.endMin {
+		// Its agent took the cancel before the countdown can have been over: the machine runs, and its countdown
+		// is gone. That answer is what the last look goes by; a machine that is out of reach a moment later is
+		// not "off". (A cancel answered after the countdown ran out says nothing: the machine is on its way
+		// down. What counts is when the answer came, not when the request left: the agent answers a cancel with
+		// "ok" also when nothing is pending any more, and a request can be on its way for seconds. "Over" is
+		// the run's own record of its request on the steady clock, never the agent's time: see shutDown.)
 		h.askedAt = now
 	}
 	m.emit(EvStep, r, h, "cancel", nil, "ok")
@@ -188,7 +189,7 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		m.end(r, h, StSkipped, OnUntouched, now, NotSure)
 		return
 	}
-	if !m.pace.fits(info.RelayID, info.MACs, now) {
+	if !m.pace.fits(info.RelayID, info.MACs, m.paceNow()) {
 		m.say(h, "waiting for its turn: the relay is sent only a few requests a minute")
 		return
 	}
@@ -219,7 +220,7 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		m.end(r, h, StSkipped, OnUntouched, now, "Fairy could not tell that it is off: something at its address answered ("+answer+"). Nothing was sent to it.")
 		return
 	}
-	if r.Cancel != nil || !m.pace.take(info.RelayID, info.MACs, now) { // cancelled while the machine was being asked
+	if r.Cancel != nil || !m.pace.take(info.RelayID, info.MACs, m.paceNow()) { // cancelled while the machine was being asked
 		m.done(h)
 		return
 	}
@@ -309,7 +310,8 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 		}
 		return
 	}
-	if now.Sub(*h.WakeSentAt) >= r.Settings.OnlineTimeout {
+	// (on either clock: a time of day that was set back during the wait must not make the wait longer, r3-p2-05)
+	if now.Sub(*h.WakeSentAt) >= r.Settings.OnlineTimeout || m.mono()-h.wakeMono >= r.Settings.OnlineTimeout {
 		lead := fmt.Sprintf("It did not come online within %s after the wake.", span(r.Settings.OnlineTimeout))
 		if h.lostWake() {
 			lead = fmt.Sprintf("The wake request got no answer, so Fairy does not know whether the wake went out. It did not come online within %s.", span(r.Settings.OnlineTimeout))
@@ -322,8 +324,8 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 		h.lastKick = now
 		m.Ops.Kick(h.ID)
 	}
-	if r.Cancel == nil && now.Sub(h.lastWake) >= wakeResend && m.pace.fits(info.RelayID, info.MACs, now) && m.ask(r, h, "wake") {
-		if r.Cancel != nil || !m.pace.take(info.RelayID, info.MACs, now) {
+	if r.Cancel == nil && now.Sub(h.lastWake) >= wakeResend && m.pace.fits(info.RelayID, info.MACs, m.paceNow()) && m.ask(r, h, "wake") {
+		if r.Cancel != nil || !m.pace.take(info.RelayID, info.MACs, m.paceNow()) {
 			m.done(h)
 			return
 		}
@@ -507,10 +509,10 @@ func (m *Manager) startUpdate(ctx context.Context, r *Run, h *Host, info HostInf
 		m.updateDone(r, h, now, UpdCurrent, "")
 		return
 	}
-	if !m.pace.fits(info.AgentID, 1, now) || !m.ask(r, h, "update") { // written down before it goes out
+	if !m.pace.fits(info.AgentID, 1, m.paceNow()) || !m.ask(r, h, "update") { // written down before it goes out
 		return
 	}
-	if r.Cancel != nil || !m.pace.take(info.AgentID, 1, now) { // cancelled while the journal was written
+	if r.Cancel != nil || !m.pace.take(info.AgentID, 1, m.paceNow()) { // cancelled while the journal was written
 		m.done(h)
 		return
 	}
@@ -565,46 +567,53 @@ func (m *Manager) stepSettling(ctx context.Context, r *Run, h *Host, info HostIn
 }
 
 // stepShutting watches the countdown the run started until the machine is gone.
+//
+// The countdown is timed by the run's own record, on the panel's steady clock (Manager.mono): the request was
+// answered at a moment the run read itself, and it asked for a delay it knows. dueMono is that moment plus the
+// delay: the latest the countdown can end. The agent also says when its countdown ends ("at", in its answer and
+// in every poll), but by the machine's clock, and a machine that was off for weeks has a clock that is behind,
+// or ahead, until it is set; the panel's own time of day can be set too. So the agent's "at" is never compared
+// with a clock of the panel (audit 5, r3-p2-01: with the machine's clock ten minutes behind, the run wrote "the
+// shutdown did not work. It is ON." one second into the countdown, and the machine went off two minutes later
+// with nobody told). What the agent reports is used for one thing: whether it still shows the action.
 func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Time) {
 	o := m.Ops.Observe(h.ID)
-	due := *h.ShutdownAt
-	if o.Online && o.SeenAt.After(h.shutdownSent) && o.Pending != nil && o.Pending.Action == "shutdown" {
-		if m.farCountdown(r, h, o.Pending.At, now) {
+	mono := m.mono()
+	// counting: an answer from after the request, in which its agent shows the countdown
+	counting := o.Online && o.SeenAt.After(h.shutdownSent) && o.Pending != nil && o.Pending.Action == "shutdown"
+	if counting {
+		h.pendingSeen = true
+	}
+	// The guests of a Proxmox node were asked about before the shutdown request (mayShutDown). One that starts
+	// on the node, or arrives on it, while the countdown runs went unnoticed, and the node went off under it
+	// (second review, N2). So the run asks again every few seconds while its own countdown runs, and calls the
+	// countdown off when a guest runs: the node is then left on and reported. It never asks for anything else
+	// here. "Cannot see the guests" counts when it is said twice in a row: one failed poll of the Proxmox API in
+	// two minutes must not keep a node on. The last guestsMargin of the countdown are left out: a cancel needs
+	// its time. Both are counted on the run's own clock, and the question does not wait for the agent's poll to
+	// show the countdown (r3-p2-02: a node whose clock was two minutes behind was never asked about, and went
+	// off under a guest that had started ninety seconds before).
+	if mono < h.dueMono-guestsMargin && (!h.guestsAsked || mono-h.guestsMono >= guestsEvery) {
+		h.guestsAsked, h.guestsMono = true, mono
+		running, known, names := m.Ops.Guests(h.ID, deref(h.OnlineAt))
+		switch why := guestsKeepOn(running, known, names); {
+		case why == "":
+			h.guestsUnseen = false
+		case !known && !h.guestsUnseen:
+			h.guestsUnseen = true
+		default:
+			m.callOff(ctx, r, h, now, "Left ON: "+why+" since its shutdown was asked for")
 			return
-		}
-		if !h.pendingSeen || !o.Pending.At.Equal(due) { // the agent's own time for it (by its clock, not the panel's)
-			h.pendingSeen, h.ShutdownAt, due = true, &o.Pending.At, o.Pending.At
-			m.dirty = true
-		}
-		// The guests of a Proxmox node were asked about before the shutdown request (mayShutDown). One that
-		// starts on the node, or arrives on it, while the countdown runs went unnoticed, and the node went off
-		// under it (second review, N2). So the run asks again every few seconds while its agent shows the
-		// countdown, and calls the countdown off when a guest runs: the node is then left on and reported. It
-		// never asks for anything else here. "Cannot see the guests" counts when it is said twice in a row: one
-		// failed poll of the Proxmox API in two minutes must not keep a node on. The last guestsMargin of the
-		// countdown are left out: a cancel needs its time, and the agent counts by its own clock.
-		if now.Before(due.Add(-guestsMargin)) && now.Sub(h.guestsAt) >= guestsEvery {
-			h.guestsAt = now
-			running, known, names := m.Ops.Guests(h.ID, deref(h.OnlineAt))
-			switch why := guestsKeepOn(running, known, names); {
-			case why == "":
-				h.guestsUnseen = false
-			case !known && !h.guestsUnseen:
-				h.guestsUnseen = true
-			default:
-				m.callOff(ctx, r, h, now, "Left ON: "+why+" since its shutdown was asked for")
-				return
-			}
 		}
 	}
 	// lost: all the run knows of its shutdown is a request that got no answer
 	lost := h.lostShutdown()
 	if !o.Online && o.OnBy == "" { // nothing at all from it
-		if h.offSince.IsZero() {
-			h.offSince = now
+		if !h.offQuiet {
+			h.offQuiet, h.offSince = true, mono
 		}
 		switch {
-		case !now.After(due) || now.Sub(h.offSince) < offConfirm:
+		case mono <= h.dueMono || mono-h.offSince < offConfirm:
 		case lost:
 			// Silence is also what a dead link looks like, and a dead link is the usual reason an answer is lost:
 			// the request may never have arrived, and the machine may be on and out of reach. The run saw no
@@ -617,22 +626,22 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 		}
 		return
 	}
-	h.offSince = time.Time{}
+	h.offQuiet = false
 	if !o.Online {
 		// Its agent does not answer, and something else shows that the machine runs (it refuses the connection:
 		// its agent stopped, the system hangs in its shutdown). That is a machine that is on, here as everywhere
 		// else (r2-p2-05): it is never reported as "switched off".
-		if now.Sub(due) > offGrace {
+		if mono-h.dueMono > offGrace {
 			m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("It still shows as on %s after its shutdown was due (%s), and its agent does not answer: the shutdown did not finish. It is ON.",
 				span(offGrace), o.OnBy)+updateTail(h))
 		}
 		return
 	}
-	// An answer from after the request, well before the countdown ends, that has no countdown in it: it was
+	// An answer from after the request, well before the countdown can end, that has no countdown in it: it was
 	// cancelled. One such answer can come from a poll that was already on its way when the shutdown was asked
 	// for, so it counts when the run has seen the countdown before, or with the next answer (a cancel within
 	// a second of the request is never seen as pending at all).
-	gone := o.Pending == nil && o.SeenAt.After(h.shutdownSent) && o.SeenAt.Before(due.Add(-3*time.Second))
+	gone := o.Pending == nil && o.SeenAt.After(h.shutdownSent) && mono < h.endMin-3*time.Second
 	if gone && !h.pendingSeen && h.noPendingAt.IsZero() {
 		h.noPendingAt = o.SeenAt
 	}
@@ -641,30 +650,19 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 		m.end(r, h, StLeftOn, OnYes, now, "The shutdown request got no answer, and its agent shows no countdown: the request did not arrive. It is ON."+updateTail(h))
 	case gone && (h.pendingSeen || o.SeenAt.After(h.noPendingAt)):
 		m.end(r, h, StLeftOn, OnYes, now, "Its shutdown was cancelled, in the panel or on the machine, so it is ON."+updateTail(h))
-	case now.Sub(due) > offGrace:
+	case mono-h.dueMono > offGrace && counting:
+		// The run's own countdown is long over, and its agent still shows a shutdown as pending: the agent
+		// counts another, longer one (an agent that took the request with a delay of its own; one that rounds
+		// up is covered by offGrace). The run asked for a countdown of Settings.ShutdownDelay and watched that
+		// one: no agent decides how long the one run slot is taken (r1-p2-07). The machine is on now; whether
+		// and when it goes off is the agent's word, and the report says exactly that. The time is the agent's,
+		// by the machine's clock, and is only repeated here.
+		m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("It is still on %s after the shutdown the run asked for was due, and its agent still shows a shutdown as pending "+
+			"(it gives %s as its end, by the machine's own clock). Fairy no longer watches it: "+
+			"it is ON until then, and switches off then unless someone cancels that on its page.", span(offGrace), when(o.Pending.At, now))+updateTail(h))
+	case mono-h.dueMono > offGrace:
 		m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("It is still on %s after its shutdown was due: the shutdown did not work. It is ON.", span(offGrace))+updateTail(h))
 	}
-}
-
-// farCountdown lets go of a machine whose agent says its shutdown is due later than the run asked for, by more
-// than countdownSlack, and reports whether it did. The run asked for a countdown of Settings.ShutdownDelay and
-// watches that one. An agent that answers with another time (a pending shutdown for tomorrow) would otherwise
-// keep the run going, and the one run slot taken, until the run's own limit of more than an hour. The machine
-// is on now; whether and when it goes off is the agent's word, and the report says exactly that.
-func (m *Manager) farCountdown(r *Run, h *Host, at, now time.Time) bool {
-	latest := h.shutdownSent.Add(r.Settings.ShutdownDelay + countdownSlack)
-	if !at.After(latest) {
-		return false
-	}
-	h.ShutdownAt = &at
-	// The run cannot tell a countdown the agent made longer from a machine whose own clock is ahead of the
-	// panel's by more than the slack (the agent says when the countdown ends, by its clock, and not what time
-	// it has): such a machine does switch off as asked, and is reported here all the same. The sentence
-	// names that case, so that a red "left on" for it can be read right.
-	m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("Its agent says its shutdown is due at %s, later than the %s the run asked for "+
-		"(or the machine's clock is ahead of the panel's). Fairy no longer watches it: "+
-		"it is ON until then, and switches off then unless someone cancels that on its page.", when(at, now), span(r.Settings.ShutdownDelay))+updateTail(h))
-	return true
 }
 
 // updateWords is the update's result inside the sentence of a machine that was switched off again.

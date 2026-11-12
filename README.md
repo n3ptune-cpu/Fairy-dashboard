@@ -348,7 +348,8 @@ The rules, in plain words:
   shutdown while the agent says that it is downloading or installing an update.
 * **A woken machine that could not be switched off is reported as ON**: its agent did not answer again after
   the update, the agent refused the shutdown, someone cancelled the countdown, or the machine is still on 5
-  minutes after the countdown ended. The run never tries another way to switch a machine off: its shutdown
+  minutes after the countdown ended (the run counts the countdown itself, from the moment its request was
+  accepted: a machine whose clock is wrong, or a panel clock that is set meanwhile, changes nothing). The run never tries another way to switch a machine off: its shutdown
   is the agent's own, with the countdown that can be cancelled. If the agent can no longer take it (power
   control was switched off for the machine during the run), nothing is sent, also not a node shutdown through
   the Proxmox API (`node_power: true`), and the machine is left on and reported.

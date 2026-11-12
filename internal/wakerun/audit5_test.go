@@ -297,8 +297,12 @@ func TestAWokenMachineThatDoesNotLookFreshlyStartedIsAWarning(t *testing.T) {
 // kept the run going for 1 h 6 min 31 s, until the run's own limit; no other run could start and "Update
 // panel" was refused all that time, and the sentence gave the end as a time without a date.
 //
-// Now the run watches the countdown it asked for, plus three minutes. A later one is reported, with its date,
-// and the run lets go of the machine.
+// The run watches the countdown it asked for, by its own clock, and five minutes more (offGrace). An agent
+// that still shows a shutdown as pending then counts another one: that is reported, with the agent's time and
+// its date, and the run lets go of the machine. (Until r3-p2-01 the run compared the agent's time with the
+// panel's clock and let go three minutes after its own due time; that comparison is gone, because a machine
+// whose clock is ahead looked the same as an agent with a longer countdown, and one whose clock is behind
+// looked like a failed shutdown.)
 func TestAnAgentCannotHoldTheRunWithAFarCountdown(t *testing.T) {
 	for _, how := range []string{"in its answer to the request", "in a later poll"} {
 		w := newWorld(t)
@@ -329,12 +333,13 @@ func TestAnAgentCannotHoldTheRunWithAFarCountdown(t *testing.T) {
 		if h.State != StLeftOn || h.On != OnYes || !pc.on || r.State != RunDone {
 			t.Fatalf("%s: %s / %s (%s): %s", how, r.State, h.State, h.On, h.Text)
 		}
-		want := "Its agent says its shutdown is due at " + far.Format("2006-01-02 15:04:05") + " UTC, later than the 2 min the run asked for (or the machine's clock is ahead of the panel's). Fairy no longer watches it: " +
+		want := "It is still on 5 min after the shutdown the run asked for was due, and its agent still shows a shutdown as pending (it gives " +
+			far.Format("2006-01-02 15:04:05") + " UTC as its end, by the machine's own clock). Fairy no longer watches it: " +
 			"it is ON until then, and switches off then unless someone cancels that on its page. It was updated to 17-bbbbbbb."
 		if h.Text != want {
 			t.Fatalf("%s: %s", how, h.Text)
 		}
-		if limit := w.m.Settings.ShutdownDelay + countdownSlack + 10*time.Second; took > limit {
+		if limit := w.m.Settings.ShutdownDelay + offGrace + 10*time.Second; took > limit {
 			t.Fatalf("%s: the run held on for %v after the shutdown was asked for, want at most %v", how, took, limit)
 		}
 		if a, _ := w.m.Snapshot(); a != nil {

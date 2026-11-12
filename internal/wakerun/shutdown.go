@@ -178,19 +178,20 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 		m.end(r, h, state, OnYes, now, "Left ON: "+why+"."+updateTail(h))
 		return
 	}
-	if !m.pace.fits(info.AgentID, 1, now) || !m.ask(r, h, "shutdown") { // written down before it goes out
+	if !m.pace.fits(info.AgentID, 1, m.paceNow()) || !m.ask(r, h, "shutdown") { // written down before it goes out
 		return
 	}
-	if !m.pace.take(info.AgentID, 1, now) {
+	if !m.pace.take(info.AgentID, 1, m.paceNow()) {
 		m.done(h)
 		return
 	}
 	delay := r.Settings.ShutdownDelay
-	var at time.Time
 	var err error
 	id, by, grant := h.ID, r.By, h.grant // read under the lock; the request goes out without it
-	before := m.now()
-	m.io(func() { at, err = m.Ops.Shutdown(ctx, id, delay, by, grant) })
+	before, beforeMono := m.now(), m.mono()
+	// The agent's own time for the end of the countdown (the answer's "at") is by the machine's clock: the run
+	// does not count with it. It times the countdown by its own record of this request (stepShutting).
+	m.io(func() { _, err = m.Ops.Shutdown(ctx, id, delay, by, grant) })
 	m.done(h)
 	params := map[string]any{"delay_s": int(delay.Seconds())}
 	if err != nil {
@@ -211,6 +212,7 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 			sent := m.now()
 			end := sent.Add(delay)
 			h.ShutdownAt, h.shutdownSent, h.ShutdownUnsure = &end, before, true
+			h.endMin, h.dueMono = beforeMono+delay, m.mono()+delay
 			m.enter(h, StShutting, sent, fmt.Sprintf("the shutdown request got no answer (%s): it may have arrived. If it did, it switches off at about %s", opText(err), clock(end)))
 		default:
 			m.end(r, h, StLeftOn, OnYes, now, "Left ON: the shutdown was not accepted ("+opText(err)+")."+updateTail(h))
@@ -218,14 +220,13 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 		return
 	}
 	m.emit(EvStep, r, h, "shutdown", params, "ok")
+	// The countdown the run asked for started on the machine between the moment before the request left and
+	// the moment its answer was here: it ends "delay" after that, between endMin and dueMono on the steady
+	// clock. ShutdownAt is the same end as a time of day by the panel's clock, for the words of the report.
 	sent := m.now()
-	if at.IsZero() {
-		at = sent.Add(delay)
-	}
+	at := sent.Add(delay)
 	h.ShutdownAt, h.shutdownSent = &at, sent
-	if m.farCountdown(r, h, at, sent) { // the agent took the request with a countdown of its own choosing
-		return
-	}
+	h.endMin, h.dueMono = beforeMono+delay, m.mono()+delay
 	m.enter(h, StShutting, sent, fmt.Sprintf("shutting down at %s (it can be cancelled on its page until then)", clock(at)))
 }
 

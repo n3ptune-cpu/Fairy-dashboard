@@ -162,7 +162,11 @@ const (
 	offConfirm      = 20 * time.Second // no answer for this long after the countdown: the machine is off
 	guestsEvery     = 5 * time.Second  // while a countdown runs: how often the guests of the machine are asked about again
 	guestsMargin    = 15 * time.Second // ... and not in the last seconds of the countdown (stepShutting)
-	offGrace        = 5 * time.Minute  // still answering this long after the countdown: the shutdown failed
+	// offGrace: still answering this long after the run's own due time: the shutdown failed, or its agent counts
+	// a longer countdown than the run asked for. Either way the run lets go of the machine then, so that no
+	// agent decides how long the one run slot is taken (r1-p2-07). It also covers an agent that does not count
+	// to the second (one that rounds up to the next whole minute).
+	offGrace = 5 * time.Minute
 	// The last look at a machine before its result is written (look): an answer this fresh is "it answers
 	// now"; a machine that gives nothing is waited for this long, and then the result says "not confirmed".
 	lookFresh = 5 * time.Second
@@ -172,12 +176,7 @@ const (
 	// is well over eight seconds. An answer sooner than this comes from a machine that was already starting.
 	// The value is on the careful side on purpose: a machine wrongly taken for "already starting" would be
 	// left on at every run.
-	minBoot = 8 * time.Second
-	// countdownSlack: how much later than asked for an agent's own countdown may end and still be the run's to
-	// watch. The agent counts by its own clock, which is not the panel's, and nothing promises that every agent
-	// counts to the second; three minutes cover that. A countdown that ends later is the agent's own business: the run says so and lets go
-	// of the machine, so that no agent decides how long the one run slot is taken (r1-p2-07).
-	countdownSlack  = 3 * time.Minute
+	minBoot         = 8 * time.Second
 	approvalTimeout = 15 * time.Minute
 	journalRetry    = 5 * time.Second // a journal that could not be written is tried again this often
 	maxRetries      = 5
@@ -313,7 +312,8 @@ type Ops interface {
 	Kick(id string)
 	Wake(ctx context.Context, id, by string) error
 	Update(ctx context.Context, id, by string, grant any) error
-	// Shutdown asks for the delayed, cancellable shutdown and returns when the countdown ends.
+	// Shutdown asks for the delayed, cancellable shutdown and returns when its agent says the countdown ends:
+	// a time by the machine's own clock, which the run does not count with (stepShutting).
 	Shutdown(ctx context.Context, id string, delay time.Duration, by string, grant any) (time.Time, error)
 	CancelShutdown(ctx context.Context, id, by string) error
 	// Guests: how many guests run on the machine if it is a Proxmox node (0, true for any other machine). known
@@ -395,8 +395,11 @@ type Host struct {
 	// UpdateUnsure: the run's update request left the panel and got no answer (CodeNoAnswer). The agent may
 	// have taken it. The run then goes by what the agent itself reports about its update (stepUpdating), and
 	// never by the missing answer.
-	UpdateUnsure bool       `json:"update_unconfirmed,omitempty"`
-	ShutdownAt   *time.Time `json:"shutdown_at,omitempty"` // when the countdown ends
+	UpdateUnsure bool `json:"update_unconfirmed,omitempty"`
+	// ShutdownAt: when the countdown ends, by the panel's clock: the moment the run's shutdown request was
+	// answered plus the delay it asked for. It is for the words of the report and for the journal. The run
+	// itself counts on the steady clock (dueMono), and never with the time the agent gives.
+	ShutdownAt *time.Time `json:"shutdown_at,omitempty"`
 	// ShutdownUnsure: the run's shutdown request left the panel and got no answer (CodeNoAnswer). The countdown
 	// may be running: ShutdownAt is then when it would end, and the run watches the machine as after a request
 	// that was accepted, until it sees how it ended. "Off" is only said of it when its agent showed the
@@ -406,29 +409,35 @@ type Host struct {
 	Log            []LogLine `json:"log"`
 
 	// Working values of the run in memory. A run is never continued after a restart, so they are not kept.
-	wakeMono      time.Duration // the steady clock when the run's first wake was accepted
-	wakeOKMono    time.Duration // the steady clock at WakeOKAt
-	onlineMono    time.Duration // the steady clock when the run saw its first answer after that wake
-	lastWake      time.Time
-	lastKick      time.Time
-	goodSince     time.Time // the agent has answered without a gap since
-	lastAtBefore  float64   // the installer's last result before the run's update request
-	updBefore     string    // the agent's update state and message before that request (UpdateUnsure)
-	versionNewAt  time.Time // when another version than VersionBefore was first seen
-	shutdownSent  time.Time
-	pendingSeen   bool      // the agent reported the run's shutdown as pending
-	noPendingAt   time.Time // the first answer after the request that had no countdown in it (see stepShutting)
-	offSince      time.Time // no answer since (while the countdown is over)
-	retries       int
-	lateSeen      bool // gave up, and it came online later
-	grant         any  // the approval for this machine (item 1.1)
-	cancelHandled bool
-	cancelUnsure  bool      // the run's cancel of its countdown left and got no answer: the countdown may be called off
-	guestsAt      time.Time // when the guests were last asked about during the countdown
-	guestsUnseen  bool      // ... and the answer then was "cannot see them"
-	entry         int       // HostInfo.Entry when the run started
-	verdict       *verdict  // how the run would end it: the last look (look) is going on
-	askedAt       time.Time // when the run's own direct question to it got an answer of any kind (it runs)
+	wakeMono     time.Duration // the steady clock when the run's first wake was accepted
+	wakeOKMono   time.Duration // the steady clock at WakeOKAt
+	onlineMono   time.Duration // the steady clock when the run saw its first answer after that wake
+	lastWake     time.Time
+	lastKick     time.Time
+	goodSince    time.Time // the agent has answered without a gap since
+	lastAtBefore float64   // the installer's last result before the run's update request
+	updBefore    string    // the agent's update state and message before that request (UpdateUnsure)
+	versionNewAt time.Time // when another version than VersionBefore was first seen
+	shutdownSent time.Time
+	// endMin, dueMono: the earliest and the latest end of the countdown the run asked for, on the steady clock:
+	// the moment before the shutdown request left, and the moment its answer was here (or the wait for it
+	// ended), each plus the delay. dueMono is the run's own due time.
+	endMin, dueMono time.Duration
+	pendingSeen     bool          // the agent reported the run's shutdown as pending
+	noPendingAt     time.Time     // the first answer after the request that had no countdown in it (see stepShutting)
+	offQuiet        bool          // it gives nothing at all right now ...
+	offSince        time.Duration // ... since this moment on the steady clock
+	retries         int
+	lateSeen        bool // gave up, and it came online later
+	grant           any  // the approval for this machine (item 1.1)
+	cancelHandled   bool
+	cancelUnsure    bool          // the run's cancel of its countdown left and got no answer: the countdown may be called off
+	guestsAsked     bool          // the guests were asked about during the countdown ...
+	guestsMono      time.Duration // ... last at this moment on the steady clock
+	guestsUnseen    bool          // ... and the answer then was "cannot see them"
+	entry           int           // HostInfo.Entry when the run started
+	verdict         *verdict      // how the run would end it: the last look (look) is going on
+	askedAt         time.Time     // when the run's own direct question to it got an answer of any kind (it runs)
 }
 
 // Final reports whether the machine has ended in this run.
@@ -474,6 +483,8 @@ type Run struct {
 	// stopped: why the run stopped itself (in memory only; Note has it for the page). From then on nothing is
 	// sent; the run ends when the last look at each machine is over.
 	stopped string
+	// startMono: the steady clock when the run started (in memory only), for the run's own limit (maxRun).
+	startMono time.Duration
 }
 
 func (r *Run) clone() *Run {
@@ -586,6 +597,10 @@ func (m *Manager) mono() time.Duration {
 	return time.Since(m.born) // both hold a steady clock reading, so this is not the difference of two times of day
 }
 
+// paceNow is the steady clock as a time, for the pacer: its minute must not get longer or shorter when the
+// time of day is set during a run (r3-p2-05).
+func (m *Manager) paceNow() time.Time { return time.Unix(0, 0).Add(m.mono()) }
+
 func newID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
@@ -676,7 +691,7 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 			a.By, a.StartedAt.Format("15:04 UTC"))}
 	}
 	r := &Run{ID: newID(), State: RunRunning, StartedAt: now, By: req.By, BySub: req.BySub, UpdateIfOn: req.UpdateIfOn,
-		ListHash: ListHash(req.Hosts, req.UpdateOnly, req.UpdateIfOn), Settings: m.Settings, Latest: req.Latest, Hosts: hosts}
+		ListHash: ListHash(req.Hosts, req.UpdateOnly, req.UpdateIfOn), Settings: m.Settings, Latest: req.Latest, Hosts: hosts, startMono: m.mono()}
 	m.active = r
 	out := r.clone()
 	m.mu.Unlock()
@@ -827,7 +842,9 @@ type verdict struct {
 	text      string    // the sentence, when the machine is seen the way the run believes it to be
 	neutral   string    // (believed on) the same without a word about its power; "": the look adds to text
 	since     time.Time // when the look began
-	silent    time.Time // it has given no sign of life since (zero: not known yet)
+	sinceMono time.Duration
+	quiet     bool          // it has given no sign of life ...
+	silent    time.Duration // ... since this moment on the steady clock
 	kicked    time.Time
 }
 
@@ -841,7 +858,7 @@ func (m *Manager) end(r *Run, h *Host, state, on string, now time.Time, text str
 // endSeen is end for a machine that may well not be the way the run believes: neutral is the sentence without
 // a word about its power, to which the look adds what it sees.
 func (m *Manager) endSeen(r *Run, h *Host, state, on string, now time.Time, text, neutral string) {
-	h.verdict = &verdict{state: state, on: on, text: text, neutral: neutral, since: now}
+	h.verdict = &verdict{state: state, on: on, text: text, neutral: neutral, since: now, sinceMono: m.mono()}
 	m.look(r, h, now)
 }
 
@@ -898,9 +915,10 @@ func (m *Manager) look(r *Run, h *Host, now time.Time) {
 	case !canSee: // taken out of the panel, or its polling is paused
 		final(v.state, OnUnknown, base+cannotLook)
 	default:
-		if v.silent.IsZero() {
-			v.silent = now
-			if !h.offSince.IsZero() { // the countdown's watch already saw it go quiet
+		mono := m.mono()
+		if !v.quiet {
+			v.quiet, v.silent = true, mono
+			if h.offQuiet { // the countdown's watch already saw it go quiet
 				v.silent = h.offSince
 			}
 		}
@@ -910,9 +928,9 @@ func (m *Manager) look(r *Run, h *Host, now time.Time) {
 		// the run whose answer was lost (it may have arrived; then the machine is on).
 		asked := h.ShutdownAt != nil && !h.lostShutdown()
 		switch {
-		case asked && !h.cancelUnsure && now.After(*h.ShutdownAt) && now.Sub(v.silent) >= offConfirm:
+		case asked && !h.cancelUnsure && mono > h.dueMono && mono-v.silent >= offConfirm: // by the run's own clock (stepShutting)
 			final(StOff, OnNo, base+seenOff)
-		case now.Sub(v.since) < lookFor:
+		case now.Sub(v.since) < lookFor && mono-v.sinceMono < lookFor:
 			if now.Sub(v.kicked) >= kickEvery {
 				v.kicked = now
 				m.Ops.Kick(h.ID)
@@ -937,7 +955,10 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 		// The record of what the run does is what the report after a restart is made from. Without it the run
 		// goes no further: no wake, no update, no shutdown from here on.
 		stop = "its journal (wake-update.json) could not be written: " + r.journalErr
-	} else if now.Sub(r.StartedAt) > m.maxRun(r) {
+	} else if m.mono()-r.startMono > m.maxRun(r) {
+		// By the steady clock: a time of day that is set back during a run must not keep the run, and the one
+		// run slot, for as long as the step (r3-p2-05), and one that is set forward must not stop a run that
+		// is watching a countdown.
 		stop = "the run took longer than it ever should"
 	}
 	if stop != "" && r.stopped == "" { // nothing more is sent, not even a cancel: every machine is reported as it is
