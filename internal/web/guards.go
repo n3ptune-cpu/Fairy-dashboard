@@ -63,9 +63,14 @@ func (c *reqCtx) controlGuard(bucket *rateLimiter) (*model.User, error) {
 	return c.guardControl(bucket, true)
 }
 
-// stopGuard is controlGuard for an action that only stops something the panel itself is doing (cancelling an
-// Add host that waits): everything controlGuard checks, except that the kill switch does not refuse it. The
-// kill switch stops device control; it must not keep an admin from calling a pairing off.
+// stopGuard is controlGuard for an action that only stops something: cancelling an Add host or Re-pair that
+// waits, "Cancel run" of "Update unpowered hosts", and the cancel of a pending shutdown, reboot or sleep
+// (POST /api/systems/{id}/power with action "cancel", api_power.go). Everything controlGuard checks, except
+// that the kill switch does not refuse it: still an admin, the CSRF header, "Confirm it's you" and a rate
+// limit (the cancel of a run and of a countdown have a budget of their own, stopRL). The kill switch stops
+// device control; it must not keep an admin from calling a pairing, a run or a countdown off. The cancel of a
+// countdown also passes the power switch of its host (powerctl.Capabilities); every other power action is
+// refused by both switches.
 func (c *reqCtx) stopGuard(bucket *rateLimiter) (*model.User, error) {
 	return c.guardControl(bucket, false)
 }

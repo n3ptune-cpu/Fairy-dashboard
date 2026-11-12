@@ -34,7 +34,7 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"POST", "/api/admin/signin-wallpaper", "Set the picture behind the sign-in page (admins, browser session; CSRF header; raw body; asks to confirm it is you). PNG, JPEG or WebP by content, max 8 MiB; the file's name and Content-Type are not looked at. 415 for anything else, 413 too large"},
 	{"DELETE", "/api/admin/signin-wallpaper", "Remove the sign-in wallpaper (admins, browser session; CSRF header; asks to confirm it is you)"},
 	{"GET", "/api/systems/{id}/power", "Power actions for one system: available or why not, confirmation needed, pending shutdown"},
-	{"POST", "/api/systems/{id}/power", "Shutdown / reboot / cancel / start / stop / wake (control group + CSRF header; `confirm` = the system name for typed actions)"},
+	{"POST", "/api/systems/{id}/power", "Shutdown / reboot / cancel / start / stop / wake (control group + CSRF header; `confirm` = the system name for typed actions). The kill switch (423) and the host's power switch (409) refuse every action but `cancel`: calling a pending shutdown, reboot or sleep off works while control is off (still admins, CSRF header, step-up, its own rate limit; the audit entry then carries `control_off`)"},
 	{"POST", "/api/systems/{id}/helper/stop", "Stop a Windows agent's elevated helper (admins, browser session only: API tokens get 403; CSRF header, recent sign-in; `confirm` = the host name). Fans go back to the BMC's automatic control, Core Temp / BMC readings pause"},
 	{"POST", "/api/systems/{id}/helper/start", "Start a Windows agent's elevated helper again (same checks as stop)"},
 	{"GET", "/api/systems/{id}/poll", "Polling rate for one system: override, effective interval per source, floors, boost"},
