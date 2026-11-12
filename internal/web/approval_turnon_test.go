@@ -189,9 +189,14 @@ func TestTurnOnResultsPerMachine(t *testing.T) {
 	for _, x := range page["last"].(map[string]any)["results"].([]any) {
 		res[x.(map[string]any)["id"].(string)] = x.(map[string]any)
 	}
-	if res["laptop"]["outcome"] != "accepted" || res["tower"]["outcome"] != "proof_refused" || !strings.Contains(fmt.Sprint(res["tower"]["text"]), "proof refused (") ||
-		!strings.Contains(fmt.Sprint(res["tower"]["text"]), "still open") {
+	if res["laptop"]["outcome"] != "accepted" || res["tower"]["outcome"] != "proof_refused" || !strings.Contains(fmt.Sprint(res["tower"]["more"]), "proof refused (") {
 		t.Fatalf("results: %v", res)
+	}
+	// one short sentence in the row, and "Nothing was written" once; the machine's own words are behind the
+	// info button (audit 5, r1-b2-07)
+	if text := fmt.Sprint(res["tower"]["text"]); !strings.HasPrefix(text, "it did not accept the proof (") || !strings.HasSuffix(text, "). Nothing was written: Turn on can be pressed again.") ||
+		strings.Count(text+fmt.Sprint(res["tower"]["more"]), "Nothing was written") != 2 || len(text) > 110 {
+		t.Fatalf("the row of the machine that refused the proof: %q", text)
 	}
 	if _, err := os.Stat(a.tower.TrustPath); err == nil {
 		t.Fatal("the machine that refused the proof has a trust file")

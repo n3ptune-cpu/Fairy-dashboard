@@ -92,6 +92,9 @@ type turnOnResult struct {
 	Name    string `json:"name"`
 	Outcome string `json:"outcome"` // accepted | proof_refused | already_set | offline | refused | not_asked
 	Text    string `json:"text"`
+	// More is the machine's own longer answer, for the info button of the row (audit 5, r1-b2-07): the row
+	// itself keeps one short sentence.
+	More string `json:"more,omitempty"`
 }
 
 type turnOnReport struct {
@@ -579,15 +582,30 @@ func (s *Server) sendTrust(c *reqCtx, a config.Agent, name string, in api.TrustI
 	case code == api.CodeTrustAlreadySet:
 		res.Outcome, res.Text = "already_set", "it already has a trust file: changed only on the machine (fairy-agent helper-trust show)"
 	case code == api.CodeTrustProofRefused || code == api.CodeTrustProofRequired:
-		res.Outcome, res.Text = "proof_refused", orText(text, "the approval did not verify against what it was proposed")+". Nothing was written; it is still open."
+		res.Outcome, res.Text, res.More = "proof_refused", "it did not accept the proof"+proofReason(text)+". Nothing was written: Turn on can be pressed again.", text
 	default:
 		res.Outcome = "refused"
-		res.Text = orText(text, fmt.Sprintf("it answered HTTP %d", status)) + ". Nothing was written."
+		res.Text = strings.TrimSuffix(orText(text, fmt.Sprintf("it answered HTTP %d", status)), ".")
+		if !strings.HasSuffix(res.Text, "Nothing was written") { // the machine's own words end with it already
+			res.Text += ". Nothing was written"
+		}
+		res.Text += "."
 		if msg, ok := approval.ErrorText(name, code, text, s.unavailableWhy(a.ID)); ok {
 			res.Text = msg
 		}
 	}
 	return res
+}
+
+// proofReason is the reason word of a machine's "proof refused (<reason>): ..." in brackets, "" when its answer
+// has none.
+func proofReason(text string) string {
+	if rest, ok := strings.CutPrefix(text, "proof refused ("); ok {
+		if reason, _, ok := strings.Cut(rest, ")"); ok && reason != "" && len(reason) <= 40 {
+			return " (" + reason + ")"
+		}
+	}
+	return ""
 }
 
 // turnOnDone keeps the report of the last Turn on for the page and logs it.

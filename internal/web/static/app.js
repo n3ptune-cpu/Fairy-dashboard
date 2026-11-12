@@ -836,7 +836,7 @@ function turnOnResults(rep) {
   if (!rep || !(rep.results || []).length) return "";
   return `<div class="wu-sub">Last Turn on · by ${esc(rep.by)} <span data-ago="${esc(rep.at)}">${ago(rep.at)}</span></div>
     ${rep.results.map((r) => { const [cls, label] = TURN_ON_RESULT[r.outcome] || ["", r.outcome];
-      return `<div class="list-row ap-res" data-key="apr-${esc(r.id)}"><span><b>${esc(r.name)}</b> <span class="chip ${cls}">${esc(label)}</span></span><span class="note">${esc(r.text)}</span></div>`; }).join("")}`;
+      return `<div class="list-row ap-res" data-key="apr-${esc(r.id)}"><span><b>${esc(r.name)}</b> <span class="chip ${cls}">${esc(label)}</span></span><span class="note">${esc(r.text)}${r.more ? infoBtn(`apr-${r.id}`, `What ${r.name} answered`, `<p>${esc(r.more)}</p>`) : ""}</span></div>`; }).join("")}`;
 }
 // Updates page: "N machines are ready for the check on the machine itself", with Turn on for all of them.
 function approvalBanner() {
@@ -2177,10 +2177,27 @@ async function refreshPoll(id) {
   try { state.poll[id] = await api(`/api/systems/${enc(id)}/poll`); } catch { /* ignore */ }
   render();
 }
+// A long refusal (a machine's own words in brackets, what to do about it) is not read in 5 seconds: the line shows
+// its first sentence without the brackets, and the whole text is behind "Details" (audit 5, r1-b2-07).
+const FLASH_LONG = 140;
+function flashParts(msg) {
+  if (msg.length <= FLASH_LONG) return [msg, null];
+  let short = msg;
+  const says = short.indexOf(" says: "), open = says < 0 ? -1 : short.lastIndexOf(" (", says);
+  if (open >= 0) {  // "(<machine> says: ...)", which can have brackets of its own
+    let depth = 0, j = open + 1;
+    for (; j < short.length; j++) { if (short[j] === "(") depth++; else if (short[j] === ")" && --depth === 0) break; }
+    short = short.slice(0, open) + short.slice(j + 1);
+  }
+  const dot = short.indexOf(". ");
+  if (dot > 0) short = short.slice(0, dot + 1);
+  return short.length < msg.length ? [short, msg] : [msg, null];
+}
 // flash(msg, bad, details): one short line at the bottom right, gone after 5 seconds. With details (the lines
 // of a result about several machines, or the longer text behind a short sentence) it stays until it is closed,
 // and "Details" opens them: nothing that has to be read disappears by itself.
 function flash(msg, bad = false, details = null) {
+  if (bad && !details) [msg, details] = flashParts(String(msg));
   const lines = (Array.isArray(details) ? details : details ? [details] : []).filter(Boolean).map(String);
   state.flash = { msg, bad, until: Date.now() + 5000 };
   const f = $("#flash");

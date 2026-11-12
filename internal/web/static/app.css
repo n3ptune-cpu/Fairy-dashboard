@@ -802,6 +802,7 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .ap-users { display: block; margin-top: 2px; }
 .opts .opt .ap-users .note { display: inline; }  /* the reason stays in its person's line (.opts .opt .note is a block) */
 .ap-res span:last-child { max-width: 62%; }
+.approval .list-row.ap-res > .note, .list-row.ap-res > .note { text-align: left; }  /* a sentence, not a value */
 /* the shield in the Turn on button is drawn 16 px, like every icon in a button, so the button is as high as the others (34 px) */
 .approval .btn svg { width: 16px; height: 16px; }
 .approval .ap-bind { margin: 0 0 10px; }
