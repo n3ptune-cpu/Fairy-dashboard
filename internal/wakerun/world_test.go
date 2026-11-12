@@ -348,6 +348,7 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 func (w *world) CancelShutdown(_ context.Context, id, _ string) error {
 	mc := w.ms[id]
 	w.calls = append(w.calls, "cancel "+id)
+	w.arrived("cancel " + id)
 	if mc.cancelLost != "" { // a timeout: the panel does not learn whether the agent got it
 		if mc.cancelLost == "arrives" {
 			mc.pending = nil

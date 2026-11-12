@@ -127,10 +127,12 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 			fmt.Sprintf("%s, but its shutdown countdown (due at %s) could not be called off (%s).", why, due, opText(err)))
 		return
 	}
-	if now.Before(*h.ShutdownAt) {
+	if m.now().Before(*h.ShutdownAt) {
 		// Its agent took the cancel before the countdown was over: the machine runs, and its countdown is gone.
 		// That answer is what the last look goes by; a machine that is out of reach a moment later is not "off".
-		// (A cancel answered after the countdown ran out says nothing: the machine is on its way down.)
+		// (A cancel answered after the countdown ran out says nothing: the machine is on its way down. What
+		// counts is when the answer came, not when the request left: the agent answers a cancel with "ok"
+		// also when nothing is pending any more, and a request can be on its way for seconds.)
 		h.askedAt = now
 	}
 	m.emit(EvStep, r, h, "cancel", nil, "ok")
