@@ -371,3 +371,25 @@ func TestUIDocsLinkOnlyWhenThereAreDocs(t *testing.T) {
 		t.Fatalf("with enable_docs: false, /api/me: %s", me.raw)
 	}
 }
+
+// r1-p3-03 (audit 5): with two or more disks every mount path is a label in the Resources box, in a column of
+// 70 px (52 px on a phone). "/var/lib/docker" ran on under the bar, a longer path wrapped to three lines, and
+// nothing showed the whole path. The label is cut with an ellipsis now, and its title is the full path.
+func TestUILongMountPathIsCutAndHasItsFullTextAsTitle(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		"const metric = (kind, label, p, text, full) => `<div class=\"metric\"><span class=\"k\"${full ? ` title=\"${esc(full)}\"` : \"\"}>${label}</span>",
+		"metric(\"disk\", esc(d.mount), pct(d.used, d.total), `${fmtBytes(d.used)} / ${fmtBytes(d.total)}`, d.mount)",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	css, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(css), ".metric .k { color: var(--muted); font-weight: 600; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }") {
+		t.Error("app.css: the metric label must be cut with an ellipsis")
+	}
+}

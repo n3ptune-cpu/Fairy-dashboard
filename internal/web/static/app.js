@@ -321,7 +321,8 @@ function spark(values, cls = "") {
 // Only capacity bars (RAM, disk) turn red when nearly full; high CPU/GPU utilisation or full VRAM is normal.
 const barEl = (kind, p) => `<div class="bar ${kind}${(kind === "mem" || kind === "disk") && p != null && p > 92 ? " hot" : ""}"><i data-w="${(p ?? 0).toFixed(1)}"></i></div>`;
 const mini = (kind, p) => (p == null ? '<span class="note">–</span>' : `<div class="mini">${barEl(kind, p)}<span>${fmtP(p)}</span></div>`);
-const metric = (kind, label, p, text) => `<div class="metric"><span class="k">${label}</span>${barEl(kind, p)}<span class="v">${text}</span></div>`;
+// label is HTML; full (plain text) is what the label says in full when it may be cut: a mount path is longer than its column
+const metric = (kind, label, p, text, full) => `<div class="metric"><span class="k"${full ? ` title="${esc(full)}"` : ""}>${label}</span>${barEl(kind, p)}<span class="v">${text}</span></div>`;
 // CSP has no 'unsafe-inline' for styles: widths go through the CSSOM. Changing data-w on an existing bar
 // animates it (CSS transition) because morph() keeps the element.
 const applyWidths = (root) => root.querySelectorAll("[data-w]").forEach((el) => { const w = `${el.dataset.w}%`; if (el.style.width !== w) el.style.width = w; });
@@ -859,7 +860,7 @@ function systemOverview(s) {
     ${metric("cpu", "CPU", s.cpu_percent, `${fmtP(s.cpu_percent)}${s.cores ? ` · ${esc(s.cores)} cores` : ""}`)}
     ${metric("mem", "Memory", pct(s.mem_used, s.mem_total), `${fmtBytes(s.mem_used)} / ${fmtBytes(s.mem_total)}`)}
     ${s.disk_total ? metric("disk", "Disk", pct(s.disk_used, s.disk_total), `${fmtBytes(s.disk_used)} / ${fmtBytes(s.disk_total)}`) : ""}
-    ${(s.disks || []).length > 1 ? s.disks.map((d) => metric("disk", esc(d.mount), pct(d.used, d.total), `${fmtBytes(d.used)} / ${fmtBytes(d.total)}`)).join("") : ""}
+    ${(s.disks || []).length > 1 ? s.disks.map((d) => metric("disk", esc(d.mount), pct(d.used, d.total), `${fmtBytes(d.used)} / ${fmtBytes(d.total)}`, d.mount)).join("") : ""}
     ${s.net_rx_bps != null || s.net_tx_bps != null ? `<div class="list-row"><span>Network</span><span>↓ ${fmtRate(s.net_rx_bps)} · ↑ ${fmtRate(s.net_tx_bps)}</span></div>` : ""}
     ${s.cpu_model ? `<div class="list-row"><span>Processor</span><span>${esc(s.cpu_model)}</span></div>` : ""}
     ${modelRow(s)}
