@@ -41,9 +41,14 @@ type Backend interface {
 
 // Poller owns the in-memory state of every system and source and the jobs that refresh it.
 type Poller struct {
-	Cfg       *config.Panel
-	Secrets   config.Secrets
-	Clock     func() time.Time
+	Cfg     *config.Panel
+	Secrets config.Secrets
+	Clock   func() time.Time
+	// Mono is a clock that only goes forward at the speed of time and does not move when the system's clock
+	// is set. nil: the steady clock reading Go keeps in the values of Clock (time.Now), or, with a Clock that
+	// has none (a test's), that Clock itself. How long an agent has given nothing at all is measured with it
+	// (agents.go, quietRow), so a clock that is set forward cannot make silence.
+	Mono      func() time.Duration
 	Backend   Backend
 	Power     *power.Manager
 	UPS       *ups.Manager
@@ -51,6 +56,7 @@ type Poller struct {
 	Scheduler *scheduler.Scheduler
 	StartedAt time.Time
 
+	born  time.Time // for mono: it holds Go's steady clock reading
 	rates *normalise.RateTracker
 	// cfgMu guards agents, overrides and the Cfg.Agents / Cfg.Systems slices, which hosts added or removed in
 	// the panel (Add host) change at run time. The slices are replaced, never changed in place. Read them only
@@ -83,7 +89,7 @@ type Poller struct {
 	clusterIDs    map[string][]string
 	fingerprints  map[string]uint64
 	agentFailures map[string]int
-	agentQuiet    map[string]quietRow             // agent id -> the row of failed polls it is in (see QuietGap)
+	agentQuiet    map[string]quietRow             // agent id -> the row of failed polls it is in (see quietGap)
 	helperSeen    map[string]map[string]time.Time // agent id -> helper reading group -> last seen while the helper ran ("" = last running poll)
 	agentInfo     map[string]AgentInfo
 	unencodable   map[string]bool // systems shown as error entries, already logged (see encodeSystems)
@@ -100,7 +106,7 @@ type Poller struct {
 
 // New builds the poller; backend nil = the real HTTP backend.
 func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, error) {
-	p := &Poller{Cfg: cfg, Secrets: secrets, Clock: time.Now, rates: normalise.NewRateTracker(),
+	p := &Poller{Cfg: cfg, Secrets: secrets, Clock: time.Now, born: time.Now(), rates: normalise.NewRateTracker(),
 		overrides: map[string]*config.SystemOverride{}, agents: map[string]config.Agent{},
 		clusters: map[string]config.Proxmox{}, systems: map[string]model.System{},
 		sources: map[string]model.SourceStatus{}, agentPower: map[string]*model.ComponentPower{},
@@ -206,6 +212,15 @@ func (p *Poller) agentJob(a config.Agent) *scheduler.Job {
 func (p *Poller) now() (time.Time, float64) {
 	t := p.Clock().UTC()
 	return t, float64(t.UnixNano()) / 1e9
+}
+
+// mono is the steady clock (see Poller.Mono). Clock's value is used as it comes (not through UTC(), which
+// drops the steady reading): with time.Now both it and born hold one, and their difference is steady time.
+func (p *Poller) mono() time.Duration {
+	if p.Mono != nil {
+		return p.Mono()
+	}
+	return p.Clock().Sub(p.born)
 }
 
 func (p *Poller) degrade(s model.System, now time.Time, err string) model.System {

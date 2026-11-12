@@ -248,15 +248,15 @@ func TestWakeUpdateSilenceCountsFromTheLastSignOfLife(t *testing.T) {
 	}
 
 	// then both go silent (a restart begins like this). The silence counts from the first poll that gets
-	// nothing: for pc-a the poll a minute after its last refusal. For the node it is that poll too, or the one
+	// nothing: for pc-a the poll ten seconds after its last refusal. For the node it is that poll too, or the one
 	// after it: the agent's poll and the cluster's run side by side, and the agent's may still see the node as
 	// online. Three minutes later:
 	e.b.Mu.Lock()
 	mode, nodeUp = "silent", false
 	e.b.Mu.Unlock()
 	f.wait(3 * time.Minute)
-	quiet := map[string]time.Duration{"pc-a": 2 * time.Minute, "node-srv-pvea": wakerun.QuietFor(ops.Observe("node-srv-pvea"), f.now)}
-	if q := quiet["node-srv-pvea"]; q != time.Minute && q != 2*time.Minute {
+	quiet := map[string]time.Duration{"pc-a": 170 * time.Second, "node-srv-pvea": wakerun.QuietFor(ops.Observe("node-srv-pvea"), f.now)}
+	if q := quiet["node-srv-pvea"]; q != 170*time.Second && q != 160*time.Second {
 		t.Fatalf("the node's silence began with one of the two polls after the cluster showed it as offline, not %v ago", q)
 	}
 	for _, id := range both {
@@ -284,7 +284,7 @@ func TestWakeUpdateSilenceCountsFromTheLastSignOfLife(t *testing.T) {
 	}
 
 	// still not sure just before 15 minutes of silence, and off from 15 minutes after the last sign of life
-	f.wait(12 * time.Minute) // fourteen minutes of silence, or thirteen (the run above waited for nothing)
+	f.wait(11 * time.Minute) // just under fourteen minutes of silence (the run above waited for nothing)
 	for _, id := range both {
 		if o := ops.Observe(id); wakerun.OffNow(o, f.now) || wakerun.QuietFor(o, f.now) >= wakerun.MinOff {
 			t.Fatalf("%s after %v of silence must not be off yet", id, wakerun.QuietFor(o, f.now))
@@ -293,14 +293,7 @@ func TestWakeUpdateSilenceCountsFromTheLastSignOfLife(t *testing.T) {
 			t.Fatalf("%s just before the 15 minutes: %v", id, h)
 		}
 	}
-	f.wait(time.Minute)
-	if o := ops.Observe("pc-a"); !wakerun.OffNow(o, f.now) {
-		t.Fatalf("pc-a after %v of silence is off: %+v", wakerun.QuietFor(o, f.now), o)
-	}
-	if o := ops.Observe("node-srv-pvea"); wakerun.OffNow(o, f.now) != (quiet["node-srv-pvea"] == 2*time.Minute) {
-		t.Fatalf("the node after %v of silence: off is %v: %+v", wakerun.QuietFor(o, f.now), wakerun.OffNow(o, f.now), o)
-	}
-	f.wait(time.Minute)
+	f.wait(2 * time.Minute)
 	for _, id := range both {
 		if o := ops.Observe(id); !wakerun.OffNow(o, f.now) || wakerun.QuietFor(o, f.now) < wakerun.MinOff {
 			t.Fatalf("%s after %v of silence is off: %+v", id, wakerun.QuietFor(o, f.now), o)

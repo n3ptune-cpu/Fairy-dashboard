@@ -313,6 +313,21 @@ func (s *Scheduler) Effective(j *Job) *float64 {
 	return s.effective(j)
 }
 
+// IntervalOf is the interval the job with this key runs at now, in seconds; false when there is no such job
+// or it is paused.
+func (s *Scheduler) IntervalOf(key string) (float64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j := s.jobs[key]
+	if j == nil {
+		return 0, false
+	}
+	if eff := s.effective(j); eff != nil {
+		return *eff, true
+	}
+	return 0, false
+}
+
 // TimeoutFor is the per-request timeout: below the interval (at least 0.8 s), capped by the source's own timeout.
 func TimeoutFor(j *Job, interval float64) time.Duration {
 	c := j.TimeoutCap

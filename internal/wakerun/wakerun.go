@@ -174,7 +174,8 @@ type Observation struct {
 	Paused bool // polling is paused for it: the panel would never see it come online
 	// QuietSince: since when the panel has asked its agent, poll after poll, and got nothing at all (no answer
 	// and no refused connection). Zero while it answers or shows another sign of life (OnBy), when it was never
-	// polled, and when the panel stopped asking in between (poller.QuietGap).
+	// polled, and when the panel stopped asking in between (longer than the machine's poll interval allows).
+	// The poller measures the silence with its steady clock and gives its beginning as a time of day.
 	QuietSince time.Time
 	// OnBy: what else than its agent's answer shows the machine as on right now ("the Proxmox API shows it as
 	// online", OnByRefused, "its address answered: http 401", ...); "": nothing does.

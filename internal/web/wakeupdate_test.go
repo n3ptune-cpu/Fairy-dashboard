@@ -159,10 +159,12 @@ func (f *farm) offline() {
 	f.wait(wakerun.MinOff)
 }
 
-// wait lets time pass in which nothing happens but a poll a minute.
+// wait lets time pass in which nothing happens but a poll every ten seconds: what the poll loop does with a
+// machine that does not answer (it is asked every second and put off by up to ten). A pause longer than the
+// poll interval allows would be "the panel was not watching", and the 15 minutes would start again.
 func (f *farm) wait(d time.Duration) {
 	for end := f.now.Add(d); f.now.Before(end); {
-		f.now = f.now.Add(time.Minute)
+		f.now = f.now.Add(10 * time.Second)
 		f.e.s.Poller.PollOnce(context.Background())
 	}
 }

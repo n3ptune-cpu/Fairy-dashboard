@@ -140,7 +140,9 @@ func TestQuietSinceIsAnUnbrokenRowOfFailedPolls(t *testing.T) {
 		}
 		return testutil.AgentMetrics(), nil
 	}
-	p, err := New(testutil.Config(t, []string{"http://pve.invalid"}, "http://laptop.invalid", "http://tower.invalid"), config.Secrets{}, b)
+	cfg := testutil.Config(t, []string{"http://pve.invalid"}, "http://laptop.invalid", "http://tower.invalid")
+	cfg.Intervals.Agent = 60 // a poll a minute, as this test polls: a longer pause is "not watching" (quietGap)
+	p, err := New(cfg, config.Secrets{}, b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,14 +209,18 @@ func TestQuietSinceIsAnUnbrokenRowOfFailedPolls(t *testing.T) {
 	if i, _, _ := p.AgentSeen("laptop"); i.Refused || !i.QuietSince.Equal(start) {
 		t.Fatalf("the next poll got no answer at all: the silence begins now, %+v, want %v", i, start)
 	}
-	// the slowest poll interval is inside the gap
-	now = now.Add(QuietGap)
+	// what the poll loop can take between two polls at this interval is inside the gap
+	gap := p.quietGap(60)
+	if gap != 76500*time.Millisecond || p.quietGap(1) != 26500*time.Millisecond || p.quietGap(300) != 331500*time.Millisecond {
+		t.Fatalf("the gap for a poll every 60 s, every second, every 300 s: %v %v %v", gap, p.quietGap(1), p.quietGap(300))
+	}
+	now = now.Add(gap)
 	p.PollOnce(ctx)
 	if !quiet().Equal(start) {
-		t.Fatalf("a poll after %v is still the same row: %v", QuietGap, quiet())
+		t.Fatalf("a poll after %v is still the same row: %v", gap, quiet())
 	}
 	// the panel did not ask for longer than that (polling paused, the host asleep, the clock set forward)
-	now = now.Add(QuietGap + time.Second)
+	now = now.Add(gap + time.Second)
 	if !quiet().IsZero() {
 		t.Fatal("no poll for longer than the gap: the panel is not watching, so it must not say when the quiet began")
 	}

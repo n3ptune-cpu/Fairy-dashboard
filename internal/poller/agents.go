@@ -17,7 +17,6 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
-	"github.com/n3ptune-cpu/Fairy-dashboard/internal/scheduler"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/ups"
 )
@@ -97,6 +96,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	defer p.Bump()
 	if err != nil {
 		msg := textsafe.ErrorText(devices.Describe(err))
+		interval := p.agentInterval(a.ID) // before p.mu: it asks the scheduler
 		p.mu.Lock()
 		now, _ := p.now()
 		if prev, ok := p.sources[name]; !ok || prev.OK {
@@ -118,24 +118,24 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		p.source(name, false, now, nil, &msg)
 		p.agentFailures[a.ID]++
 		q, row := p.agentQuiet[a.ID]
-		sign := lifeSign(err)
+		sign, mono := lifeSign(err), p.mono()
 		switch {
 		case sign != "" || p.nodeOnlineLocked(a):
 			// A sign of life, like an answer: the machine runs and only its agent gives no usable answer. The
 			// silence starts again with the first poll after this one that gets nothing at all.
-			q.since = time.Time{}
-		case !row || q.since.IsZero() || now.Before(q.last) || now.Sub(q.last) > QuietGap:
+			q.silent = false
+		case !row || !q.silent || q.unwatched(now, mono, p.quietGap(max(q.interval, interval))):
 			// the first poll without any answer, or the panel was not watching in between
-			q.since = now
+			q.silent, q.since = true, mono
 		}
-		q.last, q.sign = now, sign
+		q.last, q.lastMono, q.sign, q.interval = now, mono, sign, interval
 		p.agentQuiet[a.ID] = q
 		n := p.agentFailures[a.ID]
 		p.mu.Unlock()
 		p.Power.UpdateRemote(a.ID, nil, true, a.PowerLinks, a.PowerExcludeFromTotal)
 		p.UPS.UpdateFromAgent(a.ID, nil, true, a.UPSPowers, a.UPSNames)
 		if n >= 2 {
-			return math.Min(10, math.Pow(2, float64(n-2)))
+			return math.Min(agentBackoffMax, math.Pow(2, float64(n-2)))
 		}
 		return 0
 	}
@@ -206,8 +206,9 @@ type AgentInfo struct {
 	// QuietSince: since when the panel has asked the agent, poll after poll, and got nothing at all: no answer
 	// and no other sign that the machine runs. Zero while it answers, while it shows that it runs without a
 	// usable answer (see Sign; or it is a Proxmox node that the cluster shows as online), while it was never
-	// polled, and when the panel stopped asking (see QuietGap). So "quiet for 15 minutes" is 15 minutes since
-	// the last sign of life, never 14 minutes of refusals and one of silence.
+	// polled, and when the panel stopped asking (see quietGap). So "quiet for 15 minutes" is 15 minutes since
+	// the last sign of life, never 14 minutes of refusals and one of silence. It is measured with the steady
+	// clock and given as a time of day (quietLocked).
 	QuietSince time.Time
 	// Refused: the latest poll was refused by the machine itself (see ProbeRefused): it runs, and only its agent
 	// is not listening.
@@ -217,18 +218,53 @@ type AgentInfo struct {
 	Sign string
 }
 
-// QuietGap is the longest time between two failed polls of an agent that still counts as one row of them.
-// It is a little longer than the slowest interval a machine can be polled at. A longer gap means the panel was
-// not watching (polling was paused, the panel's host slept, the clock was set): what the machine did meanwhile
-// is not known, so the row starts again. "No answer for 15 minutes" is then never 14 of them unwatched.
-const QuietGap = (scheduler.MaxInterval + 60) * time.Second
+// agentBackoffMax is the longest pollAgent puts off the next poll of an agent that does not answer (seconds).
+const agentBackoffMax = 10
 
-// quietRow is an agent's unbroken row of failed polls: its latest one, what in that one showed that the
-// machine runs (lifeSign; "": nothing), and since when the polls of the row have got nothing at all (zero: the
-// latest one came with a sign that the machine runs).
+// quietGap is the longest time between two failed polls of an agent that still counts as one row of them,
+// for an agent that is polled every interval seconds. It is what the poll loop itself can take between two
+// polls of a machine that does not answer, and a little more: the interval (or the back-off of a failing
+// agent, whichever is longer), one request that runs into its timeout, and 15 seconds (a tenth of the interval
+// when that is more) for a busy panel. With the default interval of 1 s that is under half a minute; with the
+// slowest one (300 s) five and a half minutes. A longer gap means the panel was not watching (polling was
+// paused, the panel's host slept, a clock was set): what the machine did meanwhile is not known, so the row
+// starts again. It used to be six minutes for every agent, so that four polls with three pauses of just under
+// six minutes made "no answer for 17 minutes" (audit 5, r1-p2-04).
+func (p *Poller) quietGap(interval float64) time.Duration {
+	s := math.Max(interval, agentBackoffMax) + p.Cfg.RequestTimeout + 0.5 + math.Max(15, interval/10)
+	return time.Duration(s * float64(time.Second))
+}
+
+// agentInterval is the interval an agent is polled at now, in seconds (0: it is not polled, or paused). It
+// asks the scheduler, so it must not be called with p.mu held.
+func (p *Poller) agentInterval(id string) float64 {
+	iv, _ := p.Scheduler.IntervalOf("agent:" + id)
+	return iv
+}
+
+// quietRow is an agent's unbroken row of failed polls: its latest one (by the time of day and by the steady
+// clock), what in that one showed that the machine runs (lifeSign; "": nothing), the interval it was polled
+// at then, and, while the polls of the row get nothing at all (silent), since when on the steady clock.
+//
+// The silence is measured with the steady clock only (Poller.mono): the time of day can be set, by a person
+// or a time server, and a step forward must not turn nine minutes of silence into fifteen. The time of day is
+// still read at every poll, to notice that the panel was not watching: see unwatched.
 type quietRow struct {
-	since, last time.Time
-	sign        string
+	last     time.Time     // the latest failed poll, by the time of day
+	lastMono time.Duration // the same moment on the steady clock
+	since    time.Duration // steady clock: the first poll of the row that got nothing at all (while silent)
+	silent   bool          // the latest poll got nothing at all (no sign of life)
+	sign     string
+	interval float64 // seconds: the interval the agent was polled at when the latest poll ran
+}
+
+// unwatched reports whether more time than gap lies between the row's latest poll and now, on either clock,
+// or a clock went back. The two clocks see different things: the steady clock does not count the time the
+// panel's host was suspended, the time of day does; a paused poller or a stuck panel shows on both. A step
+// of the time of day that is larger than the gap also ends the row. That costs a machine that is off another
+// 15 minutes before it is offered, and never offers one that is not.
+func (q quietRow) unwatched(now time.Time, mono, gap time.Duration) bool {
+	return now.Before(q.last) || now.Sub(q.last) > gap || mono < q.lastMono || mono-q.lastMono > gap
 }
 
 // SignRefused is the sign of life of a machine that turned the connection down (see refused).
@@ -292,13 +328,21 @@ func (p *Poller) nodeOnlineLocked(a config.Agent) bool {
 	return ok && s.Kind == "node" && s.Status == "online"
 }
 
-// quietLocked is AgentInfo.QuietSince and AgentInfo.Sign for an agent. Caller holds p.mu.
-func (p *Poller) quietLocked(id string) (time.Time, string) {
+// quietLocked is AgentInfo.QuietSince and AgentInfo.Sign for an agent that is polled every interval seconds
+// now (agentInterval, read before the lock). Caller holds p.mu. QuietSince is given as a time of day because
+// that is what the callers compare with: it is now minus the silence the steady clock measured, so a clock
+// that was set meanwhile moves it along and changes nothing about how long the silence is.
+func (p *Poller) quietLocked(id string, interval float64) (time.Time, string) {
 	q, ok := p.agentQuiet[id]
-	if now, _ := p.now(); !ok || now.Before(q.last) || now.Sub(q.last) > QuietGap {
+	now, _ := p.now()
+	mono := p.mono()
+	if !ok || q.unwatched(now, mono, p.quietGap(max(q.interval, interval))) {
 		return time.Time{}, ""
 	}
-	return q.since, q.sign
+	if !q.silent {
+		return time.Time{}, q.sign
+	}
+	return now.Add(-(mono - q.since)), q.sign
 }
 
 func agentInfoOf(payload jsonx.M, now time.Time) AgentInfo {
@@ -371,12 +415,13 @@ func SelfUpdateBlock(su map[string]any) map[string]any {
 
 // AgentInfo returns the version and self-update state from the agent's last good poll.
 func (p *Poller) AgentInfo(id string) (AgentInfo, bool) {
+	interval := p.agentInterval(id)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
-	i.QuietSince, i.Sign = p.quietLocked(id)
+	i.QuietSince, i.Sign = p.quietLocked(id, interval)
 	i.Refused = i.Sign == SignRefused
 	return i, ok
 }
@@ -385,12 +430,13 @@ func (p *Poller) AgentInfo(id string) (AgentInfo, bool) {
 // read in one step: the entry's uptime and pending power action then belong to the poll that SeenAt names.
 // While the agent does not answer, the entry keeps the values of its last good poll.
 func (p *Poller) AgentSeen(id string) (AgentInfo, model.System, bool) {
+	interval := p.agentInterval(id)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
-	i.QuietSince, i.Sign = p.quietLocked(id)
+	i.QuietSince, i.Sign = p.quietLocked(id, interval)
 	i.Refused = i.Sign == SignRefused
 	s, known := p.systems[id]
 	return i, s, known

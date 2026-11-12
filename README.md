@@ -292,7 +292,10 @@ The rules, in plain words:
   for a minute is "not sure"; it counts as off 15 minutes after its last refusal, not before. The panel
   counts the 15 minutes itself, poll after poll: after a restart of the panel, after polling was paused for
   a machine, and for a machine that was just added, the count starts again. So for the first 15 minutes
-  after a restart of the panel no machine counts as off.
+  after a restart of the panel no machine counts as off. The silence is measured with a clock that does not
+  move when the system's clock is set, and time the panel did not watch is not counted: a pause between two
+  polls that is longer than the machine's poll interval allows (about half a minute at the default interval;
+  the panel's host slept, the clock was set by more than that) starts the count again.
   What this cannot see: a machine that was on and out of reach for more than 15 minutes and then restarts
   by itself during the run's wait looks like a machine the run woke.
 * **A machine that is already on is never switched off.** When you open the dialog it is offered as "update
