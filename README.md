@@ -1052,12 +1052,16 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   Changes to users and sites: admin browser session only, CSRF checks, step-up (same window), audited + notified;
   the kill switch does not block them.
 * `trusted_proxies` is used to find the client IP: for rate limits, the audit log, and as the address a
-  "Confirm it's you" is bound to (a wrong list makes every client look like the proxy). The login limiter
+  "Confirm it's you" is bound to (a wrong list makes every client look like the proxy). By default the list
+  is the panel's own host (127.0.0.1 and ::1), for a reverse proxy that runs there: so every program on that
+  host can connect to the panel and name any client address in `X-Forwarded-For`. A local account there that
+  also holds a copy of an admin's session cookie can pass for the address that confirmed; keep other accounts
+  off the panel's host, or the panel in a container of its own. The login limiter
   (`login_rate_per_min`) counts per client IP, and per user for a signed-in step-up, so attempts from other
   addresses do not use up an admin's budget for confirming a control action. A copy of the admin's own cookie,
   or another site that makes the admin's browser open `/auth/login` about 20 times a minute, still does, and
   each such request makes a waiting "Confirm it's you" forget its action: "Continue" then answers "too many
-  login attempts" or "no longer waiting" until the minute is over. Nothing runs because of it.
+  sign-in attempts" (with the seconds to wait) or "no longer waiting" until the minute is over. Nothing runs because of it.
 * Strict CSP, HSTS (https), frame/referrer/permissions policies, generic 500s, no secrets in logs or errors.
 * The sign-in wallpaper is, like the logo, handed out without a sign-in. Its route (`/branding/wallpaper`)
   reads no file name or other parameter from the request: it sends the one stored picture or 404, as
