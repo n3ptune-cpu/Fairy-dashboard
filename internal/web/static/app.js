@@ -269,6 +269,8 @@ async function confirmStepUp(id, nextPath) {
   }
   if (stepUpOpen !== su || typeof r?.url !== "string") return;
   if (/^https?:\/\//.test(r.url)) { location.assign(r.url); return; }
+  // anything else is an address of the panel itself ("/..."); never javascript:, data: or another scheme
+  if (!r.url.startsWith("/")) { su.going = false; if (go) go.disabled = false; flash("Confirm it's you: the panel named an address this page does not open", true); return; }
   location.href = r.url; location.reload();  // demo: the same page again, loaded anew like after a real sign-in
 }
 // Leave "Confirm it's you" without confirming: close it and make the server forget the kept action, so a later

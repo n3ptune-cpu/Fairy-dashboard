@@ -369,3 +369,19 @@ func TestUILongNamesDoNotWidenThePages(t *testing.T) {
 		t.Error("the rules of r2-p3-07 must stay at the end of app.css")
 	}
 }
+
+// r2-p3-11: "Continue" in "Confirm it's you" followed whatever address the answer named: an http(s) one with
+// location.assign, everything else with location.href, a javascript: address included (only a hostile identity
+// provider or panel could put one there). Now it is http(s) or an address of the panel itself, "/...".
+func TestUIStepUpFollowsOnlyAWebAddress(t *testing.T) {
+	js := appJS(t)
+	at := strings.Index(js, `if (!r.url.startsWith("/")) { su.going = false; if (go) go.disabled = false; flash(`)
+	href := strings.Index(js, `location.href = r.url; location.reload();`)
+	web := strings.Index(js, `if (/^https?:\/\//.test(r.url)) { location.assign(r.url); return; }`)
+	if web < 0 || at < web || href < at {
+		t.Fatalf("app.js: the address of the step-up answer is not checked before it is followed (%d %d %d)", web, at, href)
+	}
+	if strings.Count(js, "location.href = r.url") != 1 {
+		t.Error("another place follows r.url")
+	}
+}
