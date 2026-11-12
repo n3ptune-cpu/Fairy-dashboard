@@ -803,13 +803,31 @@ func TestCustomLogo(t *testing.T) {
 		"logo.svg": []byte(`<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>`),
 		"fake.png": []byte("<html>not an image</html>"),
 		"big.png":  pngOfSize(t, MaxLogoBytes+1),
-		// r2-p3-13: the logo had only its first bytes looked at. It is a whole picture now, as the sign-in picture is.
-		"begins-like.png":   append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 100)...),
-		"png-then-html.png": append(append([]byte{}, png...), "<html><script>alert(1)</script></html>"...),
-		"cut-off.png":       png[:len(png)-20],
 	} {
 		if loadLogo(write(name, b)) != nil {
 			t.Fatal("accepted", name)
+		}
+	}
+	// The logo is checked by its first bytes only (root's own file from config.yaml). For one commit it had to be
+	// a whole picture like the sign-in picture (r2-p3-13); that made an existing install lose its logo for bytes
+	// after the picture's end that every browser ignores, and is out again (second review, note 11). What such a
+	// file is served as does not depend on its content: the type of its first bytes, "nosniff", a policy that
+	// runs nothing.
+	for name, b := range map[string][]byte{
+		"newline-after-the-end.png":    append(append([]byte{}, png...), '\n'),
+		"zero-bytes-after-the-end.png": append(append([]byte{}, png...), make([]byte, 16)...),
+		"cut-off.png":                  png[:len(png)-20],
+		"begins-like.png":              append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 100)...),
+		"png-then-html.png":            append(append([]byte{}, png...), "<html><script>alert(1)</script></html>"...),
+	} {
+		l := loadLogo(write(name, b))
+		if l == nil {
+			t.Fatal("an existing install's logo is no longer used:", name)
+		}
+		e.s.logo = l
+		if r := e.do("GET", "/branding/logo", nil); r.code != 200 || r.hdr.Get("Content-Type") != "image/png" || !bytes.Equal(r.raw, b) ||
+			r.hdr.Get("X-Content-Type-Options") != "nosniff" || r.hdr.Get("Content-Security-Policy") != "default-src 'none'" {
+			t.Fatal(name, r.code, r.hdr)
 		}
 	}
 	if loadLogo(dir+"/missing.png") != nil || loadLogo(dir) != nil {

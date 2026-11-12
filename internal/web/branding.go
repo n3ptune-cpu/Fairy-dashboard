@@ -61,11 +61,12 @@ func readLogo(path string) (*brandLogo, error) {
 	if !logoTypes[mime] {
 		return nil, errors.New("not a PNG, JPEG, WebP or GIF image (SVG is not accepted)")
 	}
-	// the same check as for the sign-in picture: the logo is served without sign-in too, so a file that only
-	// begins like a picture (a PNG's first bytes, then anything) is not one
-	if !settings.Whole(mime, data) {
-		return nil, errors.New("not a whole picture of its type (cut off, or other data in it)")
-	}
+	// The logo is checked by its first bytes only, unlike the sign-in picture and a user's background (which
+	// are uploaded through the page and must be whole pictures of their type). It is root's own file, named in
+	// config.yaml, and it is served as the type its first bytes say, with "nosniff" and a policy that runs
+	// nothing. A check of the whole file was here for one commit (b43cc4a) and is out again: it made an
+	// existing install show the built-in logo instead of its own for a newline or some zero bytes after the
+	// picture's end, which every browser shows (second review of audit 5's round 2, note 11).
 	sum := sha256.Sum256(data)
 	return &brandLogo{data: data, mime: mime, etag: `"` + hex.EncodeToString(sum[:8]) + `"`}, nil
 }

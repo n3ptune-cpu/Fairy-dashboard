@@ -662,8 +662,9 @@ sessions. A person who is waiting for access does not have it.
 Copy your image to `/etc/fairy/logo.png` (PNG, JPEG, WebP or GIF, at most 1 MiB; SVG is refused because it can
 carry script; make it readable by the service, e.g. `0644`), set `branding: {logo: /etc/fairy/logo.png}` in
 config.yaml and restart Fairy. It replaces the built-in logo in the sidebar and on the sign-in and waiting
-pages, and becomes the favicon. The file has to be a whole picture of its type, as for the sign-in wallpaper
-below. A missing or invalid file only logs a warning. To try one first:
+pages, and becomes the favicon. The logo is checked by its first bytes only (they must be those of a PNG,
+JPEG, WebP or GIF): it is your own file, and it is not read to its end like the sign-in wallpaper below. A
+missing or invalid file only logs a warning. To try one first:
 `fairy serve --demo --logo C:\path\to\logo.png` (Windows) or `fairy serve --demo --logo ./logo.png`.
 The file is read once at start (path from the config only) and served at `/branding/logo` without sign-in (204, no content, when no logo is set).
 
