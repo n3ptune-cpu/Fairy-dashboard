@@ -104,3 +104,56 @@ func TestTheAcceptDialogSaysWhatToCompare(t *testing.T) {
 		t.Fatalf("the line: %d bytes, %q", len(acceptCompare), acceptCompare)
 	}
 }
+
+// A machine on record shows a NEW id that is not accepted yet (on the machine: --new-machine-id), and in that
+// window a host without a record shows the same new id (second review of passkey-g, G-03; the reviewer's
+// TestReviewG_ANewcomerShowsTheNewIDOfAMachineThatIsWaitingForItsAccept, pressed the way the page does). The
+// dialog of the machine's own accept names the other host, as the other host's dialog names the machine. Who
+// may accept is as it was: each has its button, the first accept decides, the other is refused afterwards.
+func TestTheDialogOfANewIDNamesAHostThatShowsTheSameID(t *testing.T) {
+	x := newAcceptAdmin(t)
+	x.require(t, x.laptop)
+	idL := machineIDOf("laptop")
+	x.setTrustID(t, x.laptop, otherID) // on the machine: --new-machine-id
+	x.poll()
+	// alone: the sentence as it was
+	r := x.press("laptop", map[string]any{"machine_id": otherID})
+	alone := "(it shows the machine id " + approval.CompareID(otherID) + "; on record is " + approval.CompareID(idL) + ")"
+	if got := actionOf(r); r.code != 401 || !strings.HasSuffix(got, alone) {
+		t.Fatalf("the dialog while no other host shows the id: %d %q", r.code, got)
+	}
+	x.setTrustID(t, x.tower, otherID) // the newcomer shows it too
+	x.poll()
+	_, ms := x.page(t)
+	// (laptop's box says "One machine id on two hosts" and names tower; its button is "Accept this machine's new id")
+	if m := ms["laptop"]; m["binding"] != approval.BindDuplicate || m["can_accept"] != true || m["accept"] != "id" || m["held_by"] != nil || fmt.Sprint(m["with"]) != "[tower]" {
+		t.Fatalf("laptop on the approval page: %v", m)
+	}
+	if m := ms["tower"]; m["binding"] != approval.BindNoRecord || m["can_accept"] != true || m["accept"] != "first" || m["held_by"] != nil {
+		t.Fatalf("tower on the approval page: %v", m)
+	}
+	// tower's dialog named laptop before; laptop's now names tower
+	r = x.press("tower", map[string]any{"machine_id": otherID})
+	if got := actionOf(r); r.code != 401 || !strings.Contains(got, "which is not on record; laptop shows the same id and must get a new one") {
+		t.Fatalf("the dialog for tower: %d %q", r.code, got)
+	}
+	r = x.press("laptop", map[string]any{"machine_id": otherID})
+	want := "(it shows the machine id " + approval.CompareID(otherID) + "; on record is " + approval.CompareID(idL) + "; tower shows the same id)"
+	if got := actionOf(r); r.code != 401 || !strings.HasSuffix(got, want) || len(itemsOf(r)) != 1 {
+		t.Fatalf("the dialog for laptop: %d %q %v", r.code, got, itemsOf(r))
+	}
+	// the admin presses the right one: the machine that has a record
+	res := x.confirm(t, r)
+	if res["ok"] != true || res["message"] != "laptop has the machine id on record now, and keeps it. tower stays flagged until it shows an id of its own (on it: fairy-agent helper-trust set --new-machine-id)." {
+		t.Fatalf("the result: %v", res)
+	}
+	if b := x.s.Poller.BindingOf("laptop"); !b.OK() || !b.Record.Holder || b.Record.MachineID != otherID {
+		t.Fatalf("laptop: %+v", b)
+	}
+	if r := x.press("tower", map[string]any{"machine_id": otherID}); r.code != 409 || pendingID(r) != "" || !strings.Contains(fmt.Sprint(r.body["detail"]), "kept by laptop") {
+		t.Fatalf("tower after laptop was accepted: %d %s", r.code, r.raw)
+	}
+	if _, ms := x.page(t); ms["tower"]["can_accept"] != nil || fmt.Sprint(ms["tower"]["held_by"]) != "[laptop]" {
+		t.Fatalf("tower on the approval page afterwards: %v", ms["tower"])
+	}
+}

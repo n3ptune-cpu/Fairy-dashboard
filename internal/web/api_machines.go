@@ -297,7 +297,18 @@ func (c *reqCtx) approvalAcceptDetail(*model.User) string {
 	case req.MachineID != "" && b.Record.MachineID == req.MachineID && len(b.With) > 0:
 		return "it keeps its machine id " + approval.CompareID(req.MachineID) + "; " + andNames(c.s.machineNames(b.With)) + " must get a new one"
 	case req.MachineID != "" && b.Record.MachineID != "":
-		return "it shows the machine id " + approval.CompareID(req.MachineID) + "; on record is " + approval.CompareID(b.Record.MachineID)
+		d := "it shows the machine id " + approval.CompareID(req.MachineID) + "; on record is " + approval.CompareID(b.Record.MachineID)
+		if others := c.s.machineNames(b.With); len(others) > 0 {
+			// Another host shows this new id too, and has it on record no more than this host has (a host that
+			// keeps it would have refused this accept before the dialog). The admin must know before the
+			// accept that there are two (second review of passkey-g, G-03). Who may accept is as it was.
+			verb := " shows"
+			if len(others) > 1 {
+				verb = " show"
+			}
+			d += "; " + andNames(others) + verb + " the same id"
+		}
+		return d
 	case req.MachineID != "" && len(b.With) > 0:
 		// nothing is on record for it, and another host without a record shows the same id: the first accept decides
 		return "it shows the machine id " + approval.CompareID(req.MachineID) + ", which is not on record; " + andNames(c.s.machineNames(b.With)) + " shows the same id and must get a new one"
