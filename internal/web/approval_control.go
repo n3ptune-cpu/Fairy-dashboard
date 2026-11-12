@@ -39,6 +39,9 @@ type approvalTarget struct {
 	agent config.Agent
 	name  string // the machine's name for people
 	req   api.ApprovalRequest
+	// machineID is set for a Turn on only: the id the panel made up for the machine. Every other request is
+	// bound to the id the panel has on record for the agent (challenge).
+	machineID string
 }
 
 // approvalOutcome is what confirmControl decided for one target: the approval to send with it (nil: none), or
@@ -49,10 +52,43 @@ type approvalOutcome struct {
 }
 
 // approvalWanted reports whether the agent must be asked before a control request: it sends an approval
-// block and its state is not "off".
+// block and its state is not "off"; or the panel's record says it did so when it last answered; or the panel's
+// decision about which machine it is, is an alarm (bindingRefusal then says no before anybody is asked).
 func (s *Server) approvalWanted(agentID string) bool {
-	ap := s.Poller.ApprovalOf(agentID)
-	return ap != nil && ap.State != api.ApprovalOff
+	return s.Poller.MachineChecks(agentID)
+}
+
+// machineNames are the names of agents for a sentence.
+func (s *Server) machineNames(agentIDs []string) []string {
+	out := make([]string, 0, len(agentIDs))
+	for _, id := range agentIDs {
+		name := id
+		if a, ok := s.Poller.AgentByID(id); ok {
+			name = a.DisplayName()
+			if x := s.Poller.RelaySystem(id); x != nil {
+				name = x.Name
+			}
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// bindingRefusal is the panel's own "no" for a machine whose binding is an alarm (internal/approval,
+// binding.go): the host shows another machine id than the one on record, two hosts have one id, a host that had
+// the check shows none, its agent is too old to name the machine, or the record cannot be read. No challenge
+// is asked for such a machine and no approval is handed to it. nil: nothing stands in the way.
+func (s *Server) bindingRefusal(agentID, name string) error {
+	b := s.Poller.BindingOf(agentID)
+	if b.OK() {
+		return nil
+	}
+	msg := approval.BindingText(name, b.Status, s.machineNames(b.With)) + " Nothing was sent."
+	switch b.Status {
+	case approval.BindChanged, approval.BindDuplicate, approval.BindVanished:
+		msg += " An admin resolves it in the Approval box on the host's page."
+	}
+	return apierr.New(409, msg)
 }
 
 // wantsTarget reports whether a control route builds the approval target for the agent: the machine must be
@@ -80,7 +116,13 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 		// The panel's own replay, right after the approval for this kept request was verified. Each request
 		// gets the approval only if it is exactly one the approval was given for.
 		for i, t := range targets {
-			ap, err := g.For(t.agent.ID, t.req)
+			// the binding is decided again now, with what every machine said meanwhile: an approval is never
+			// handed to a host that became an alarm while the person was at Pocket ID
+			if err := c.s.bindingRefusal(t.agent.ID, t.name); err != nil {
+				out[i].err = err
+				continue
+			}
+			ap, err := g.For(t.agent.ID, c.s.Poller.BindingOf(t.agent.ID).Record.MachineID, t.req)
 			switch {
 			case err == nil:
 				out[i].approval = ap
@@ -94,10 +136,19 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 		return out, nil
 	}
 	var ask []int
+	stopped := 0
 	for i, t := range targets {
+		if err := c.s.bindingRefusal(t.agent.ID, t.name); err != nil {
+			out[i].err = err // not asked, not sent: see bindingRefusal
+			stopped++
+			continue
+		}
 		if c.s.approvalWanted(t.agent.ID) {
 			ask = append(ask, i)
 		}
+	}
+	if stopped == len(targets) && stopped > 0 {
+		return out, nil // nothing can be sent at all: nobody is asked to confirm for nothing
 	}
 	if len(ask) == 0 {
 		return out, c.stepUp(u, what)
@@ -193,6 +244,9 @@ func (c *reqCtx) confirmOne(u *model.User, what string, target *approvalTarget) 
 // challenge asks the machine for its challenge for exactly t.req. It returns the bound request when an
 // approval is needed, nil and the machine's reason when it says none is needed right now ("off", "fan_window",
 // "boot_shutdown"), or why the request cannot be sent.
+// The bound request names the machine id the panel has ON RECORD for the agent (for a Turn on: the id the
+// panel made up, t.machineID). Nothing of the machine's answer goes into that id: the answer may be another
+// machine's, handed over in this host's name, and that other machine refuses an approval made for this id.
 // What the machine answers is compared with what the panel asked and with the panel's own configuration: a
 // machine that answers for another request, or that trusts another Pocket ID or client than the panel will
 // ask, is not sent anything.
@@ -229,7 +283,18 @@ func (c *reqCtx) challenge(t approvalTarget) (*approval.Bound, string, error) {
 				t.name, textsafe.Clip(ch.Issuer, 120), textsafe.Clip(ch.ClientID, 64), c.s.Cfg.ApprovalIssuer(), c.s.Cfg.Approval.ClientID))
 		}
 	}
-	return &approval.Bound{Target: approval.Target{AgentID: t.agent.ID, Name: t.name, Request: t.req}, Canonical: canon, Challenge: ch.Challenge}, "", nil
+	id := t.machineID
+	if t.req.Verb != api.ApproveTrustSet {
+		// decided once more, after the machine's answer: the record may have changed while it was asked
+		if err := c.s.bindingRefusal(t.agent.ID, t.name); err != nil {
+			return nil, "", err
+		}
+		id = c.s.Poller.BindingOf(t.agent.ID).Record.MachineID
+	}
+	if api.CheckMachineID(id) != nil {
+		return nil, "", apierr.New(409, approval.BindingText(t.name, approval.BindNoRecord, nil)+" Nothing was sent.")
+	}
+	return &approval.Bound{Target: approval.Target{AgentID: t.agent.ID, Name: t.name, Request: t.req}, Canonical: canon, Challenge: ch.Challenge, MachineID: id}, "", nil
 }
 
 // challengeRefusal is the machine's "no" to the question about an approval, in the panel's words where the
@@ -318,6 +383,10 @@ func refusalCode(err error) string {
 func (c *reqCtx) askAfterRefusal(u *model.User, t approvalTarget) error {
 	if c.resumed() || u.Auth == "token" || !c.s.approvalRL.allow(u.Sub) {
 		return nil
+	}
+	c.s.Poller.Scheduler.Kick("agent:" + t.agent.ID) // the page's view of the machine, and the panel's record, catch up
+	if err := c.s.bindingRefusal(t.agent.ID, t.name); err != nil {
+		return err
 	}
 	ch, _, err := c.challenge(t)
 	if err != nil {

@@ -1,0 +1,141 @@
+package approval
+
+import (
+	"bytes"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
+)
+
+const (
+	idA = "machine-id-A-0123456789ab"
+	idB = "machine-id-B-0123456789ab"
+	idC = "machine-id-C-0123456789ab"
+)
+
+var t0 = time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+
+func pin(id string) Record {
+	return Record{MachineID: id, How: PinTurnOn, At: t0, By: "nora", State: api.ApprovalRequired, StateAt: t0}
+}
+
+// shows is the answer of a machine that requires approvals and shows the id, asked after t0.
+func shows(id string) Report {
+	return Report{Heard: true, Block: true, State: api.ApprovalRequired, MachineID: id, Proto: api.ApprovalProto, Asked: t0.Add(time.Minute)}
+}
+
+func off() Report {
+	return Report{Heard: true, Block: true, State: api.ApprovalOff, Proto: api.ApprovalProto, Asked: t0.Add(time.Minute)}
+}
+
+func noBlock() Report { return Report{Heard: true, Asked: t0.Add(time.Minute)} }
+
+// The decision about which machine a host is (audit 5, r1-x1-01): every row is one state of the panel's record
+// and of what the hosts show, and what must come of it for the host "b".
+func TestEvaluate(t *testing.T) {
+	holder := pin(idA)
+	holder.Holder = true
+	for name, c := range map[string]struct {
+		recs   map[string]Record
+		reps   map[string]Report
+		want   string
+		with   []string
+		checks bool
+	}{
+		"nothing known":                           {nil, nil, BindOK, nil, false},
+		"an agent without the block":              {nil, map[string]Report{"b": noBlock()}, BindOK, nil, false},
+		"the check is off, nothing on record":     {nil, map[string]Report{"b": off()}, BindOK, nil, false},
+		"on record and shown, the same id":        {map[string]Record{"b": pin(idB)}, map[string]Report{"b": shows(idB)}, BindOK, nil, true},
+		"on record, silent since the start":       {map[string]Record{"b": pin(idB)}, nil, BindOK, nil, true},
+		"required, nothing on record yet":         {nil, map[string]Report{"b": shows(idB)}, BindNoRecord, nil, true},
+		"shows another id than the one on record": {map[string]Record{"b": pin(idB)}, map[string]Report{"b": shows(idC)}, BindChanged, nil, true},
+		"the block is gone":                       {map[string]Record{"b": pin(idB)}, map[string]Report{"b": noBlock()}, BindVanished, nil, true},
+		"it says off":                             {map[string]Record{"b": pin(idB)}, map[string]Report{"b": off()}, BindVanished, nil, true},
+		"it said off BEFORE the id came on record (right after Turn on)": {map[string]Record{"b": pin(idB)},
+			map[string]Report{"b": {Heard: true, Block: true, State: api.ApprovalOff, Proto: 2, Asked: t0.Add(-time.Second)}}, BindOK, nil, true},
+		"scheme 1 (the test build of 2026-11-11)": {nil, map[string]Report{"b": {Heard: true, Block: true, State: api.ApprovalRequired, Proto: 1, Asked: t0}}, BindTooOld, nil, true},
+		"scheme 2 without an id":                  {nil, map[string]Report{"b": {Heard: true, Block: true, State: api.ApprovalRequired, Proto: 2, Asked: t0}}, BindTooOld, nil, true},
+		"on record, and now an old agent":         {map[string]Record{"b": pin(idB)}, map[string]Report{"b": {Heard: true, Block: true, State: api.ApprovalRequired, Proto: 1, Asked: t0.Add(time.Minute)}}, BindTooOld, nil, true},
+		"broken trust file, id on record":         {map[string]Record{"b": pin(idB)}, map[string]Report{"b": {Heard: true, Block: true, State: api.ApprovalBroken, Proto: 2, Asked: t0.Add(time.Minute)}}, BindOK, nil, true},
+		// one id, two hosts: in every combination of "on record" and "shown"
+		"two records with one id": {map[string]Record{"a": pin(idA), "b": pin(idA)}, nil, BindDuplicate, []string{"a"}, true},
+		"a record and another host's shown id": {map[string]Record{"b": pin(idB)},
+			map[string]Report{"a": shows(idB), "b": shows(idB)}, BindDuplicate, []string{"a"}, true},
+		"a shown id and another host's record": {map[string]Record{"a": pin(idA)},
+			map[string]Report{"a": shows(idA), "b": shows(idA)}, BindDuplicate, []string{"a"}, true},
+		"two shown ids, nothing on record": {nil, map[string]Report{"a": shows(idA), "b": shows(idA)}, BindDuplicate, []string{"a"}, true},
+		"three hosts": {map[string]Record{"a": pin(idB), "b": pin(idB), "c": pin(idC)},
+			map[string]Report{"c": shows(idB)}, BindDuplicate, []string{"a", "c"}, true},
+		"the laundered Turn on: b was switched on, a now shows b's id": {map[string]Record{"b": pin(idB)},
+			map[string]Report{"a": shows(idB), "b": shows(idB)}, BindDuplicate, []string{"a"}, true},
+		"a host that shows this host's id while this host is silent": {map[string]Record{"b": pin(idB)},
+			map[string]Report{"a": shows(idB)}, BindDuplicate, []string{"a"}, true},
+		// the admin's word
+		"the other host keeps the id":       {map[string]Record{"a": holder, "b": pin(idA)}, map[string]Report{"a": shows(idA), "b": shows(idA)}, BindDuplicate, []string{"a"}, true},
+		"this host keeps the id":            {map[string]Record{"b": holder, "a": pin(idA)}, map[string]Report{"a": shows(idA), "b": shows(idA)}, BindOK, nil, true},
+		"both were said to keep it":         {map[string]Record{"a": holder, "b": holder}, nil, BindDuplicate, []string{"a"}, true},
+		"it keeps one id and shows another": {map[string]Record{"b": holder, "a": pin(idA)}, map[string]Report{"b": shows(idC)}, BindChanged, nil, true},
+		// a host that shows a new id of its own is "changed", also while its old id is still another host's
+		"new id of its own, the old one is shared": {map[string]Record{"a": pin(idA), "b": pin(idA)}, map[string]Report{"b": shows(idC)}, BindChanged, nil, true},
+		"new id that is another host's":            {map[string]Record{"a": pin(idA), "b": pin(idB)}, map[string]Report{"b": shows(idA)}, BindDuplicate, []string{"a"}, true},
+	} {
+		got := Evaluate("b", c.recs, c.reps)
+		if got.Status != c.want || !reflect.DeepEqual(got.With, c.with) || got.Checks() != c.checks || got.OK() != (c.want == BindOK) {
+			t.Errorf("%s: status %q with %v checks %v, want %q with %v checks %v", name, got.Status, got.With, got.Checks(), c.want, c.with, c.checks)
+		}
+	}
+	// the other side of the same picture: when b is flagged for sharing a's id, a is flagged too (unless a
+	// keeps the id by the admin's word)
+	recs := map[string]Record{"a": pin(idA), "b": pin(idB)}
+	reps := map[string]Report{"a": shows(idA), "b": shows(idA)}
+	if a, b := Evaluate("a", recs, reps), Evaluate("b", recs, reps); a.Status != BindDuplicate || b.Status != BindDuplicate {
+		t.Errorf("one id on two hosts must flag both: a %q, b %q", a.Status, b.Status)
+	}
+	recs["a"] = holder
+	if a, b := Evaluate("a", recs, reps), Evaluate("b", recs, reps); a.Status != BindOK || b.Status != BindDuplicate {
+		t.Errorf("after the admin's word a is in order and b stays flagged: a %q, b %q", a.Status, b.Status)
+	}
+	reps["b"] = shows(idB) // b shows an id of its own again
+	if a, b := Evaluate("a", recs, reps), Evaluate("b", recs, reps); a.Status != BindOK || b.Status != BindOK {
+		t.Errorf("b shows its own id again: a %q, b %q", a.Status, b.Status)
+	}
+}
+
+// A machine id the panel makes up is one a machine takes, and no two are the same.
+func TestNewMachineID(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 200; i++ {
+		id, err := NewMachineID(nil)
+		if err != nil || api.CheckMachineID(id) != nil || len(id) != 22 || seen[id] {
+			t.Fatalf("id %q: %v", id, err)
+		}
+		seen[id] = true
+	}
+	if id, err := NewMachineID(bytes.NewReader(make([]byte, 16))); err != nil || id != strings.Repeat("A", 22) {
+		t.Fatalf("16 zero bytes: %q %v", id, err)
+	}
+	if _, err := NewMachineID(bytes.NewReader(make([]byte, 5))); err == nil {
+		t.Fatal("a random source that runs dry must be an error, not a short id")
+	}
+	if ShortID(idA) == idA || !strings.HasPrefix(idA, strings.TrimSuffix(ShortID(idA), "…")) {
+		t.Fatal("the short form:", ShortID(idA))
+	}
+}
+
+// Every alarm has one sentence for people, and it names the host.
+func TestBindingText(t *testing.T) {
+	for _, st := range []string{BindChanged, BindDuplicate, BindVanished, BindTooOld, BindNoRecord} {
+		if txt := BindingText("PC-B", st, []string{"PC-A"}); !strings.Contains(txt, "PC-B") || len(txt) > 260 || strings.Contains(txt, idA) {
+			t.Errorf("%s: %q", st, txt)
+		}
+	}
+	if txt := BindingText("PC-B", BindDuplicate, []string{"PC-A", "PC-C"}); !strings.Contains(txt, "PC-A and PC-C") {
+		t.Error(txt)
+	}
+	if BindingText("PC-B", BindOK, nil) != "" || BindingText("PC-B", BindNoStore, nil) == "" {
+		t.Error("in order: no text; an unreadable record: a text")
+	}
+}

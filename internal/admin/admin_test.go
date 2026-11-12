@@ -311,7 +311,7 @@ func TestConfigCheckNamesIgnoredTuyaEntry(t *testing.T) {
 	const old = "  - {id: plug-agent-1, type: tuya, device_id: bf0123456789abcdef, ip: 192.168.1.60, local_key_env: TUYA_KEY_PLUG, version: \"3.4\", system: agent-1}\n"
 	plainCode, plain := check("power_sources:\n" + shelly)
 	code, out := check("power_sources:\n" + old + shelly)
-	const line = "note  power source \"plug-agent-1\": tuya is no longer supported and is ignored (remove the entry from config.yaml)\n"
+	const line = "note  power source \"plug-agent-1\": tuya is no longer supported and is ignored (remove the entry from config.yaml, and the line TUYA_KEY_PLUG=... from the env file: the plug's key is not used any more)\n"
 	if strings.Contains(plain, "tuya") || !strings.Contains(plain, "config "+cfg+": valid") {
 		t.Fatalf("without the entry:\n%s", plain)
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	agentapproval "github.com/n3ptune-cpu/Fairy-agent/pkg/approval"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
@@ -71,8 +72,24 @@ func (a *approvalEnv) poll() { a.s.Poller.PollOnce(context.Background()) }
 // "Turn on" writes), and lets the panel see it.
 func (a *approvalEnv) require(t *testing.T, machines ...*testutil.Machine) {
 	t.Helper()
+	a.setTrust(t, machines...)
+	a.poll()
 	for _, m := range machines {
-		tr, err := agentapproval.NewTrust(agentapproval.Trust{Issuer: a.iss.URL(), ClientID: testApprovalClient,
+		if ap := a.s.Poller.ApprovalOf(m.ID); ap == nil || ap.State != api.ApprovalRequired {
+			t.Fatalf("%s: the panel does not see the machine's state as required: %+v", m.ID, ap)
+		}
+		if b := a.s.Poller.BindingOf(m.ID); !b.OK() || b.Record.MachineID != machineIDOf(m.ID) || b.Record.How != approval.PinFirstSight {
+			t.Fatalf("%s: the panel did not take the machine's id on record at first sight: %+v", m.ID, b)
+		}
+	}
+}
+
+// setTrust writes the trust files on the machines, as `helper-trust set` does there, without the panel
+// hearing of it.
+func (a *approvalEnv) setTrust(t *testing.T, machines ...*testutil.Machine) {
+	t.Helper()
+	for _, m := range machines {
+		tr, err := agentapproval.NewTrust(agentapproval.Trust{Issuer: a.iss.URL(), ClientID: testApprovalClient, MachineID: machineIDOf(m.ID),
 			Keys: []api.TrustKey{agentapproval.KeyFromRSA(a.iss.Kid, &a.iss.Key.PublicKey)}, Users: []string{approvalAdminSub}})
 		if err != nil {
 			t.Fatal(err)
@@ -80,14 +97,13 @@ func (a *approvalEnv) require(t *testing.T, machines ...*testutil.Machine) {
 		if err := (agentapproval.Files{Path: m.TrustPath}).Create(tr); err != nil {
 			t.Fatal(err)
 		}
-	}
-	a.poll()
-	for _, m := range machines {
-		if ap := a.s.Poller.ApprovalOf(m.ID); ap == nil || ap.State != api.ApprovalRequired {
-			t.Fatalf("%s: the panel does not see the machine's state as required: %+v", m.ID, ap)
-		}
+		m.Gate.StatusNow() // the machine notices its new trust file at once (a real one looks at most every 5 s)
 	}
 }
+
+// machineIDOf is the machine id a test machine has in the trust file that require writes for it (set on the
+// machine, as `helper-trust set` does): the panel takes it on record the first time it sees it.
+func machineIDOf(agent string) string { return "id-of-" + agent + "-0123456789abcdef" }
 
 func (a *approvalEnv) post(path string, body any) resp { return a.do("POST", path, body, a.csrf...) }
 
@@ -526,9 +542,12 @@ func TestApprovalStateIsVisible(t *testing.T) {
 	}
 }
 
-// The panel's view of a machine can be a poll behind: a machine whose check was switched on a moment ago still
-// reads "off". The panel then sends the request as before, the machine refuses it ("approval_required"), and
-// instead of an error the panel asks the machine and shows the dialog for its approval.
+// The panel's view of a machine can be a poll behind: a machine whose check was switched on a moment ago, on
+// the machine itself, still reads "off". The panel then sends the request as before and the machine refuses it
+// ("approval_required"). The panel has no machine id on record for it yet, and it never takes one from an
+// answer that comes with a challenge: so nobody is sent to Pocket ID, the page says to try again, and nothing
+// passes. With the machine's next answer the id comes on record (first sight), and the same button asks for the
+// approval.
 func TestCheckSwitchedOnSinceTheLastPoll(t *testing.T) {
 	for name, c := range map[string]struct {
 		path string
@@ -543,19 +562,28 @@ func TestCheckSwitchedOnSinceTheLastPoll(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			a := newApprovalEnv(t)
 			m := c.m(a)
-			a.require(t, m)
-			// the panel still believes "off": put the old answer back without polling
-			a.gb.Stale(m.ID, jsonx.M{"state": "off", "enforced_by": "agent", "proto": 1.0})
-			a.poll()
+			a.setTrust(t, m) // on the machine; the panel still believes "off"
 			if ap := a.s.Poller.ApprovalOf(m.ID); ap == nil || ap.State != api.ApprovalOff {
 				t.Fatalf("the panel's view: %+v", ap)
 			}
 			fresh := a.cookie(controller(), 0) // inside the panel's own window: nothing is asked by the panel itself
 			hdr := []string{"Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+			tokens := len(a.iss.Tokens())
 			r := a.do("POST", c.path, c.body(a), hdr...)
+			if _, _, ok := approvalAsked(r); ok || r.code != 409 || !strings.Contains(string(r.raw), "has no machine id on record for "+m.ID+" yet") {
+				t.Fatalf("without an id on record nobody is asked for a passkey: %d %s", r.code, r.raw)
+			}
+			if len(m.Passed()) != 0 || len(a.iss.Tokens()) != tokens {
+				t.Fatalf("something passed the gate, or somebody was sent to Pocket ID: %+v", m.Passed())
+			}
+			a.poll() // the machine's next answer: its id comes on record
+			if b := a.s.Poller.BindingOf(m.ID); !b.OK() || b.Record.MachineID != machineIDOf(m.ID) || b.Record.How != approval.PinFirstSight {
+				t.Fatalf("the id did not come on record at first sight: %+v", b)
+			}
+			r = a.do("POST", c.path, c.body(a), hdr...)
 			id, _, ok := approvalAsked(r)
 			if !ok {
-				t.Fatalf("the machine's refusal must turn into the dialog: %d %s", r.code, r.raw)
+				t.Fatalf("with the id on record the button must ask for the approval: %d %s", r.code, r.raw)
 			}
 			if len(m.Passed()) != 0 {
 				t.Fatalf("something passed the gate: %+v", m.Passed())

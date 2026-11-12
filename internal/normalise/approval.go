@@ -3,6 +3,7 @@ package normalise
 import (
 	"regexp"
 	"slices"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
@@ -14,7 +15,8 @@ import (
 //
 //	"approval": {"state": "off"|"required"|"broken"|"unknown", "enforced_by": "helper"|"agent", "proto": 1,
 //	             "issuer": "...", "client_id": "...", "keys": [{"kid", "alg", "thumbprint"}], "users": 2,
-//	             "fan_window_s": 30, "boot_shutdown_s": 0, "error": "...", "agent_checks": [...], "agent_error": "..."}
+//	             "fan_window_s": 30, "boot_shutdown_s": 0, "error": "...", "agent_checks": [...], "agent_error": "...",
+//	             "machine_id": "...", "trust_hash": "...", "set_by": "panel"|"admin", "set_at": "<RFC 3339>"}
 //
 // Absent: an agent from before the feature (or a Windows agent with nothing that checks). Like every block of
 // an agent's answer it is read defensively: an unknown state reads as "unknown" (which the panel treats like
@@ -71,6 +73,22 @@ func agentApproval(m jsonx.M) *model.Approval {
 		}
 	}
 	out.AgentError = textsafe.Clip(jsonx.S(b, "agent_error"), 300)
+	// The machine's id, only while it requires approvals (the block has it only then). What is no id is
+	// dropped: the panel then has none to compare, and says "agent too old".
+	if id := jsonx.S(b, "machine_id"); out.State == api.ApprovalRequired && api.CheckMachineID(id) == nil {
+		out.MachineID = id
+	}
+	if h := jsonx.S(b, "trust_hash"); approvalThumbRe.MatchString(h) {
+		out.TrustHash = h
+	}
+	if by := jsonx.S(b, "set_by"); by == "panel" || by == "admin" {
+		out.SetBy = by
+	}
+	if at := jsonx.S(b, "set_at"); len(at) <= 40 {
+		if t, err := time.Parse(time.RFC3339, at); err == nil {
+			out.SetAt = t.UTC().Format(time.RFC3339)
+		}
+	}
 	return out
 }
 

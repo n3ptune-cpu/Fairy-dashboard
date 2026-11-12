@@ -136,7 +136,7 @@ type Helper struct {
 type Approval struct {
 	State      string `json:"state"`       // off | required | broken | unknown
 	EnforcedBy string `json:"enforced_by"` // helper (Windows: the LocalSystem helper) | agent | ""
-	Proto      int    `json:"proto"`       // the scheme's version (this panel knows 1)
+	Proto      int    `json:"proto"`       // the scheme's version (this panel knows 2: every approval names its machine)
 	// The rest is what the machine trusts, set while State is required.
 	Issuer        string        `json:"issuer"`
 	ClientID      string        `json:"client_id"`
@@ -148,6 +148,21 @@ type Approval struct {
 	// AgentChecks: on a machine whose helper enforces, the requests the agent carries out and checks itself.
 	AgentChecks []string `json:"agent_checks"`
 	AgentError  string   `json:"agent_error"` // why that check of the agent's cannot be used
+	// SetBy and SetAt: how and when the machine's trust came to be ("panel": a first-time set over the network;
+	// "admin": helper-trust set on the machine). Agents from before 2026-11-12 send neither.
+	SetBy string `json:"set_by,omitempty"`
+	SetAt string `json:"set_at,omitempty"`
+	// MachineID is the machine id the block shows. It is never in an answer of the panel's API: an admin in a
+	// browser sees it on the approval page, nobody else does. TrustHash likewise (the hash of what it trusts).
+	MachineID string `json:"-"`
+	TrustHash string `json:"-"`
+	// Binding is the panel's own decision about which machine this is (internal/approval, binding.go): ""
+	// (in order), "changed", "duplicate", "vanished", "too_old", "no_record", "unreadable". While it is not
+	// "", the panel asks the machine for no approval.
+	Binding string `json:"binding,omitempty"`
+	// LastKnown: the machine has not answered since the panel started; State is what it last said, from the
+	// panel's record.
+	LastKnown bool `json:"last_known,omitempty"`
 }
 
 // ApprovalKey is one Pocket ID signing key a machine has pinned.

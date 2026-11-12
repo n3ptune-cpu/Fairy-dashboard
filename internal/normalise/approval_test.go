@@ -33,7 +33,7 @@ func TestApprovalBlockOfTheAgent(t *testing.T) {
 		Issuer: "https://id.example.org", ClientID: "3f6c0c0e-0000-4000-8000-000000000000",
 		Keys: []api.ApprovalKey{{Kid: "abc123", Alg: "RS256", Thumbprint: thumb}}, Users: 2, FanWindowS: &w, BootShutdownS: &b,
 		AgentChecks: []string{api.ApproveFanSet, api.ApproveFanMode}}))
-	if got == nil || got.State != "required" || got.EnforcedBy != "helper" || got.Proto != 1 || got.Issuer != "https://id.example.org" ||
+	if got == nil || got.State != "required" || got.EnforcedBy != "helper" || got.Proto != api.ApprovalProto || got.Issuer != "https://id.example.org" ||
 		got.ClientID != "3f6c0c0e-0000-4000-8000-000000000000" || len(got.Keys) != 1 || got.Keys[0].Thumbprint != thumb || got.Users != 2 ||
 		got.FanWindowS == nil || *got.FanWindowS != 30 || got.BootShutdownS == nil || *got.BootShutdownS != 0 || len(got.AgentChecks) != 2 {
 		t.Fatalf("%+v", got)

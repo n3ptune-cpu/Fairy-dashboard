@@ -53,6 +53,9 @@ type ran struct {
 	err   error
 }
 
+// testMachineID is the machine id the round trip's tests have on record for "laptop".
+const testMachineID = "laptop-machine-id-0123456789"
+
 // keepWithPlan puts a kept action with an approval plan for one shutdown of "laptop" into the session's store,
 // as askApproval does, and returns its id and what its handler records.
 func (a *armed) keepWithPlan(t *testing.T) (string, *ran) {
@@ -61,7 +64,7 @@ func (a *armed) keepWithPlan(t *testing.T) (string, *ran) {
 	req := api.ApprovalRequest{Verb: api.ApprovePower, Action: &action, DelayS: &delay}
 	canon, _ := req.Canonical()
 	plan, err := approval.NewPlan([]approval.Bound{{Target: approval.Target{AgentID: "laptop", Name: "LAPTOP", Request: req},
-		Canonical: canon, Challenge: testChallenge(7)}})
+		Canonical: canon, Challenge: testChallenge(7), MachineID: testMachineID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +76,7 @@ func (a *armed) keepWithPlan(t *testing.T) (string, *ran) {
 		run: func(c *reqCtx) error {
 			out.times++
 			if g := c.approved(); g != nil {
-				ap, err := g.For("laptop", req)
+				ap, err := g.For("laptop", testMachineID, req)
 				out.err, out.sub = err, g.sub
 				if ap != nil {
 					out.token = ap.Token
@@ -121,7 +124,7 @@ func TestApprovalRoundTrip(t *testing.T) {
 	// One request to Pocket ID: the other client, PKCE, the plan's nonce, a fresh authentication, the callback.
 	wantNonce := "" // the nonce of the one-entry list, made here with the agent module's function
 	{
-		n, err := api.ApprovalNonce([]api.ApprovalEntry{{Challenge: testChallenge(7), Request: "power action=shutdown delay_s=60"}})
+		n, err := api.ApprovalNonce([]api.MachineEntry{{MachineID: testMachineID, Challenge: testChallenge(7), Request: "power action=shutdown delay_s=60"}})
 		if err != nil {
 			t.Fatal(err)
 		}

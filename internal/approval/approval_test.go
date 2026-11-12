@@ -26,13 +26,29 @@ var (
 	fan50      = api.ApprovalRequest{Verb: api.ApproveFanSet, Zone: p(0), Percent: p(50)}
 )
 
-func bound(agent string, req api.ApprovalRequest, challenge string) Bound {
-	canon, _ := req.Canonical()
-	return Bound{Target: Target{AgentID: agent, Name: strings.ToUpper(agent), Request: req}, Canonical: canon, Challenge: challenge}
+// The machine ids of the protocol's vectors (section 4.3): A is the form a machine makes up itself (16 bytes in
+// base64url), B a form a panel may choose (16 bytes in hex).
+const (
+	vectorIDA = "EBESExQVFhcYGRobHB0eHw"
+	vectorIDB = "00112233445566778899aabbccddeeff"
+)
+
+// idOf is the machine id the tests have "on record" for an agent.
+func idOf(agent string) string {
+	if agent == "pc-a" {
+		return vectorIDA
+	}
+	return vectorIDB
 }
 
-// The plan's nonce is the protocol's: the three vectors of section 4.3, made from requests as the panel
-// builds them (not from the texts), so the canonical text and the nonce are both checked.
+func bound(agent string, req api.ApprovalRequest, challenge string) Bound {
+	canon, _ := req.Canonical()
+	return Bound{Target: Target{AgentID: agent, Name: strings.ToUpper(agent), Request: req}, Canonical: canon, Challenge: challenge, MachineID: idOf(agent)}
+}
+
+// The plan's nonce is the protocol's: the vectors of section 4.3 (scheme 2: every entry names its machine),
+// made from requests as the panel builds them (not from the texts), so the canonical text, the machine id and
+// the nonce are all checked.
 func TestPlanNonceVectors(t *testing.T) {
 	a, b := vectorChallenge(0x00), vectorChallenge(0x80)
 	if a != "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8" || b != "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8" {
@@ -47,9 +63,11 @@ func TestPlanNonceVectors(t *testing.T) {
 		list []Bound
 		want string
 	}{
-		{"[A]", []Bound{ea}, "iIJWRjPBb50gLAFJ9H9myD3VD4DyAz4P1gDUQvSpFfs"},
-		{"[A, B]", []Bound{ea, eb}, "DQDax65TnNgoLbC3-4jWKUMPNImUsC8GzmuOlb6Y1DQ"},
-		{"[B, A]", []Bound{eb, ea}, "7ccQOntkRjlIF_95rwZ_Frf5s9ueuvVLigbjdltx1Po"},
+		{"[A]", []Bound{ea}, "iuzbNkchoxmnpwfVpzW2U6MBub-LzMt-A2XI8o5LAes"},
+		{"[A, B]", []Bound{ea, eb}, "MrQ7J0kZHsSvpcV4xJkpymWIwlm02CMZVJVGA_7jYhg"},
+		{"[B, A]", []Bound{eb, ea}, "w6XDMvf0lQ47z2U8XxFGXFKfw2228j--NjgkS-oJvYw"},
+		// entry A made for the other machine: what a panel would sign that took machine A's challenge for host B
+		{"[A for id B]", []Bound{otherID(ea, vectorIDB)}, "f8xqscm9-nl4LOV17mn_6cgQPh7gPRgxEzPwPiX6a8A"},
 	} {
 		plan, err := NewPlan(c.list)
 		if err != nil {
@@ -64,6 +82,11 @@ func TestPlanNonceVectors(t *testing.T) {
 	}
 }
 
+func otherID(b Bound, id string) Bound {
+	b.MachineID = id
+	return b
+}
+
 // A plan is refused where a machine would refuse the list.
 func TestPlanRefusals(t *testing.T) {
 	a := vectorChallenge(0)
@@ -75,13 +98,16 @@ func TestPlanRefusals(t *testing.T) {
 		many = append(many, bound("pc", shutdown60, vectorChallenge(byte(i))))
 	}
 	for name, list := range map[string][]Bound{
-		"empty":                    nil,
-		"the same challenge twice": {bound("pc-a", shutdown60, a), bound("pc-b", fan50, a)},
-		"a short challenge":        {bound("pc-a", shutdown60, a[:42])},
-		"a challenge with padding": {bound("pc-a", shutdown60, a[:42]+"=")},
-		"another text":             {wrongText},
-		"no such request":          {noCanon},
-		"65 entries":               many,
+		"empty":                     nil,
+		"the same challenge twice":  {bound("pc-a", shutdown60, a), bound("pc-b", fan50, a)},
+		"a short challenge":         {bound("pc-a", shutdown60, a[:42])},
+		"a challenge with padding":  {bound("pc-a", shutdown60, a[:42]+"=")},
+		"another text":              {wrongText},
+		"no such request":           {noCanon},
+		"65 entries":                many,
+		"no machine id":             {otherID(bound("pc-a", shutdown60, a), "")},
+		"a machine id that is none": {otherID(bound("pc-a", shutdown60, a), "short")},
+		"a machine id with a space": {otherID(bound("pc-a", shutdown60, a), "0011223344556677 899aabbccddeeff")},
 	} {
 		if _, err := NewPlan(list); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -100,8 +126,9 @@ func TestApprovalIsBoundToTheExactRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	const token = "header.payload.signature"
-	ap, err := For(plan, token, "pc-a", shutdown60)
-	if err != nil || ap.Token != token || len(ap.Entries) != 2 || ap.Entries[0].Request != "power action=shutdown delay_s=60" {
+	ap, err := For(plan, token, "pc-a", vectorIDA, shutdown60)
+	if err != nil || ap.Token != token || len(ap.Entries) != 2 || ap.Entries[0].Request != "power action=shutdown delay_s=60" ||
+		ap.Entries[0].MachineID != vectorIDA || ap.Entries[1].MachineID != vectorIDB {
 		t.Fatal("the approved request:", ap, err)
 	}
 	for name, c := range map[string]struct {
@@ -118,22 +145,29 @@ func TestApprovalIsBoundToTheExactRequest(t *testing.T) {
 		"a machine not in the plan": {"pc-c", shutdown60},
 		"an extra field":            {"pc-a", api.ApprovalRequest{Verb: api.ApprovePower, Action: p("shutdown"), DelayS: p(60), Zone: p(0)}},
 	} {
-		if ap, err := For(plan, token, c.agent, c.req); !errors.Is(err, ErrNotCovered) || ap != nil {
+		if ap, err := For(plan, token, c.agent, idOf(c.agent), c.req); !errors.Is(err, ErrNotCovered) || ap != nil {
 			t.Errorf("%s: handed out an approval (%v)", name, err)
 		}
 	}
-	if ap, err := For(plan, "", "pc-a", shutdown60); err == nil || ap != nil {
+	if ap, err := For(plan, "", "pc-a", vectorIDA, shutdown60); err == nil || ap != nil {
 		t.Error("no token, no approval")
 	}
-	if ap, err := For(nil, token, "pc-a", shutdown60); err == nil || ap != nil {
+	if ap, err := For(nil, token, "pc-a", vectorIDA, shutdown60); err == nil || ap != nil {
 		t.Error("no plan, no approval")
+	}
+	// the id on record for the host is another one now than when the plan was made (an admin accepted a new
+	// id while the person was at Pocket ID), or there is none: nothing is handed out
+	for _, now := range []string{vectorIDB, "", "EBESExQVFhcYGRobHB0eHx"} {
+		if ap, err := For(plan, token, "pc-a", now, shutdown60); !errors.Is(err, ErrNotCovered) || ap != nil {
+			t.Errorf("the id on record is %q now: handed out an approval made for %q", now, vectorIDA)
+		}
 	}
 	// two entries for the same request on the same machine: neither is "the" one
 	twice, err := NewPlan([]Bound{bound("pc-a", shutdown60, vectorChallenge(0)), bound("pc-a", shutdown60, vectorChallenge(0x80))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := For(twice, token, "pc-a", shutdown60); err == nil {
+	if _, err := For(twice, token, "pc-a", vectorIDA, shutdown60); err == nil {
 		t.Error("an ambiguous plan handed out an approval")
 	}
 }
@@ -209,7 +243,7 @@ func TestErrorTextFitsTheResultLine(t *testing.T) {
 		"token_key":       "helper-trust set --fetch-keys",
 		"token_signature": "helper-trust set --fetch-keys",
 		"audience":        "another client",
-		"nonce":           "press the button again",
+		"nonce":           "not the machine Fairy has on record",
 		"no_challenge":    "press the button again",
 	} {
 		said := "approval refused (" + reason + "): this user may not approve actions on this machine"

@@ -177,6 +177,9 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	s.WakeRuns = wakerun.New(filepath.Join(cfg.DataDir, "wake-update.json"),
 		wakerun.NewSettings(wu.OnlineTimeoutS, wu.SettleS, wu.ShutdownDelayS, wu.AgentRequestsPerMin), runOps{s})
 	s.WakeRuns.Event = s.wakeRunEvent
+	if p.OnMachine == nil { // the record of machine ids: its alarms go to the audit log and the Notifications list
+		p.OnMachine = s.machineEvent
+	}
 	// A run that was going when the panel stopped is reported here, once (audit log and a notification), and
 	// never continued. A journal that cannot be read is logged; no run starts until it is fixed.
 	_ = s.WakeRuns.Load()

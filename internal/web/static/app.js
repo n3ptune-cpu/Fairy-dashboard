@@ -706,7 +706,8 @@ function approvalBox(s) {
   const [cls, label] = APPROVAL_STATE[a.state] || APPROVAL_STATE.unknown;
   const row = (k, v, title = "") => `<div class="list-row"><span>${k}</span><span${title ? ` title="${esc(title)}"` : ""}>${v}</span></div>`;
   const head = `<h3>Approval <span class="chip ${cls}" id="ap-state">${esc(label)}</span></h3>`;
-  const proto = a.proto && a.proto !== 1 ? `<div class="note warn">This machine uses version ${esc(a.proto)} of the approval scheme; this panel knows version 1. Update the panel.</div>` : "";
+  const proto = !a.proto || a.proto === 2 || a.last_known ? "" : a.proto < 2 ? '<div class="note warn" id="ap-old">Agent too old: its approvals do not name the machine. Install the current agent on it.</div>'
+    : `<div class="note warn">This machine uses version ${esc(a.proto)} of the approval scheme; this panel knows version 2. Update the panel.</div>`;
   const agentErr = a.agent_error ? `<div class="note warn">The agent's own check cannot be used: ${esc(a.agent_error)}</div>` : "";
   if (a.state === "off") {
     return `<div class="panel glass pad approval" data-key="approval">${head}

@@ -83,9 +83,10 @@ type approvalGrant struct {
 func (g *approvalGrant) String() string       { return "[approval]" }
 func (g *approvalGrant) LogValue() slog.Value { return slog.StringValue("[approval]") }
 
-// For is the approval to send with req to the agent: refused unless the plan covers exactly that request.
-func (g *approvalGrant) For(agentID string, req api.ApprovalRequest) (*api.Approval, error) {
-	return approval.For(g.plan.plan, g.token, agentID, req)
+// For is the approval to send with req to the agent, whose machine id on record is machineID now: refused
+// unless the plan covers exactly that request, made for exactly that id.
+func (g *approvalGrant) For(agentID, machineID string, req api.ApprovalRequest) (*api.Approval, error) {
+	return approval.For(g.plan.plan, g.token, agentID, machineID, req)
 }
 
 // approved returns the approval this request runs with: only the panel's own replay of a kept request, right

@@ -45,7 +45,7 @@ func TestServeStartsWithAnOldTuyaEntry(t *testing.T) {
 	if p == nil || code != 0 {
 		t.Fatalf("the panel must start with the old entry: exit %d\n%s", code, log)
 	}
-	const line = `level=WARN msg="config.yaml: power source \"plug-tower\": tuya is no longer supported and is ignored (remove the entry from config.yaml)"`
+	const line = `level=WARN msg="config.yaml: power source \"plug-tower\": tuya is no longer supported and is ignored (remove the entry from config.yaml, and the line TUYA_KEY_PLUG=... from the env file: the plug's key is not used any more)"`
 	if strings.Count(log, "tuya") != 1 || !strings.Contains(log, line) || strings.Contains(log, "level=ERROR") {
 		t.Fatalf("one warning, no error:\n%s", log)
 	}

@@ -244,7 +244,12 @@ func (p *Poller) buildSnapshot() []model.System {
 		systems[k] = v
 	}
 	// An agent running ON a Proxmox node (links_to node-…) enriches that node instead of being a second host.
+	reps := p.reportsLocked()
 	for _, a := range p.Agents() {
+		if s, ok := systems[a.ID]; ok { // its approval block with the panel's decision; from the record when it is silent
+			s.Approval = p.shownApprovalLocked(a.ID, s.Approval, reps)
+			systems[a.ID] = s
+		}
 		node, okN := systems[p.linkOfLocked(a)]
 		agent, okA := systems[a.ID]
 		if !okN || !okA || node.Kind != "node" {

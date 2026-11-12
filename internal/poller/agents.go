@@ -91,6 +91,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	if timeout <= 0 {
 		timeout = time.Duration(p.Cfg.RequestTimeout * float64(time.Second))
 	}
+	asked, _ := p.now()
 	cctx, cancel := context.WithTimeout(ctx, timeout+500*time.Millisecond)
 	payload, err := p.Backend.FetchAgentMetrics(cctx, a, timeout)
 	cancel()
@@ -165,6 +166,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	now, ts := p.now()
 	sys := normalise.NormaliseAgent(a, payload, now, ts, p.rates)
 	info := agentInfoOf(payload, now)
+	info.AskedAt = asked
 	info.seenMono = p.mono()          // the same moment as SeenAt, on the steady clock (AgentInfo.SeenAgo)
 	interval := p.agentInterval(a.ID) // before p.mu: it asks the scheduler
 	p.mu.Lock()
@@ -186,6 +188,8 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	delete(p.agentFailures, a.ID)
 	delete(p.agentQuiet, a.ID)
 	p.systems[a.ID] = p.stamp(sys, now)
+	// what it says about its own check of approvals, against the panel's record (machines.go)
+	machineEvs := append(p.noteMachineLocked(a.ID, sys.Approval, now), p.announceLocked()...)
 	p.syncPresent()
 	p.agentPower[a.ID] = sys.ComponentPower
 	lat := time.Since(start)
@@ -194,6 +198,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	if newVersion {
 		p.saveVersion(a.ID, info.Version, now)
 	}
+	p.machinesChanged(machineEvs)
 	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)
 	p.UPS.UpdateFromAgent(a.ID, ups.AgentRows(payload["ups"]), false, a.UPSPowers, a.UPSNames)
 	return 0
@@ -242,7 +247,10 @@ type AgentInfo struct {
 	SeenAgo  time.Duration
 	seenMono time.Duration // the steady clock when the answer came
 	upMono   time.Duration // the steady clock when the first answer of this row of answers came (AnsweredSinceUp)
-	Online   bool          // the latest poll succeeded
+	// AskedAt: when the poll that got the last good answer was sent (the answer says nothing about what the
+	// panel did to the machine after that moment: machines.go).
+	AskedAt time.Time
+	Online  bool // the latest poll succeeded
 	// QuietSince: since when the panel has asked the agent, poll after poll, and got nothing at all: no answer
 	// and no other sign that the machine runs. Zero while it answers, while it shows that it runs without a
 	// usable answer (see Sign; or it is a Proxmox node that the cluster shows as online), while it was never
@@ -572,16 +580,26 @@ func (p *Poller) AnsweredSinceUp(source, agentID string) bool {
 }
 
 // ApprovalOf is what the agent last said about its own check of passkey approvals (the "approval" block of its
-// /metrics): nil for an agent that sends none, or that the panel has not heard from. It is the agent's own
-// entry, also for an agent that runs on a Proxmox node. While the agent does not answer, the last answer stays.
+// /metrics), with the panel's decision about its binding (Approval.Binding). It is the agent's own entry, also
+// for an agent that runs on a Proxmox node. While the agent does not answer, the last answer stays; for an
+// agent the panel has not heard from since it started, or that answers without the block, it is made from the
+// panel's record of that machine (Approval.LastKnown), so that a machine that had the check never reads as one
+// without it. nil: an agent that sends no block and has no record.
 func (p *Poller) ApprovalOf(agentID string) *model.Approval {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if s, ok := p.systems[agentID]; ok && s.Approval != nil {
-		a := *s.Approval
-		return &a
+	var live *model.Approval
+	if s, ok := p.systems[agentID]; ok {
+		live = s.Approval
 	}
-	return nil
+	return p.shownApprovalLocked(agentID, live, nil)
+}
+
+// MachineChecks reports whether the agent's machine must be treated as one that checks approvals itself, or
+// whose binding is an alarm (approval.Binding.Checks): it is then sent no fan, power or update request on the
+// strength of the panel's own confirmation, and is in no run.
+func (p *Poller) MachineChecks(agentID string) bool {
+	return p.BindingOf(agentID).Checks()
 }
 
 // ProbeRefused is what ProbeAgent says when the machine itself turned the connection down.

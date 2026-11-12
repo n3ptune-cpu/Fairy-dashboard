@@ -60,6 +60,29 @@ type approvalMachine struct {
 	// StaleKeys: the machine requires approvals and none of the keys it has pinned is one Pocket ID
 	// publishes now: every approval will be refused there until the keys are fetched again on the machine.
 	StaleKeys bool `json:"stale_keys,omitempty"`
+	// Binding is the panel's decision about which machine this is ("" in order; internal/approval,
+	// binding.go), BindingText one sentence about it, With the names of the hosts that have the same id.
+	Binding     string   `json:"binding,omitempty"`
+	BindingText string   `json:"binding_text,omitempty"`
+	With        []string `json:"with,omitempty"`
+	// CanAccept: an admin can accept what the machine shows now (POST /api/admin/approval/accept): its new
+	// id, or that its check is off (Accept says which: "id" or "off").
+	CanAccept bool   `json:"can_accept,omitempty"`
+	Accept    string `json:"accept,omitempty"`
+	// The record (machines.json), for an admin in a browser only: the id on record and the id the machine
+	// shows now, how and when the id came on record, and by whom. An API token gets none of them.
+	MachineID string     `json:"machine_id,omitempty"`
+	ShownID   string     `json:"shown_id,omitempty"`
+	Pinned    string     `json:"pinned,omitempty"`
+	PinnedAt  *time.Time `json:"pinned_at,omitempty"`
+	PinnedBy  string     `json:"pinned_by,omitempty"`
+	// LastKnown: it has not answered since the panel started; State is from the panel's record.
+	LastKnown bool `json:"last_known,omitempty"`
+	// OtherTrust: it trusts other values than this panel would set for it now (another Pocket ID, client, key
+	// or list of users: set by somebody else, changed on the machine, or the panel's own list changed since).
+	OtherTrust bool   `json:"other_trust,omitempty"`
+	SetBy      string `json:"set_by,omitempty"`
+	SetAt      string `json:"set_at,omitempty"`
 }
 
 // turnOnResult is how one machine answered a Turn on.
@@ -226,20 +249,51 @@ func (s *Server) machineFor(a config.Agent, keys []api.TrustKey) approvalMachine
 	info, _ := s.Poller.AgentInfo(a.ID)
 	m.Online = info.Online
 	ap := s.Poller.ApprovalOf(a.ID)
+	b := s.Poller.BindingOf(a.ID)
+	if !b.OK() {
+		m.Binding, m.With = b.Status, s.machineNames(b.With)
+		m.BindingText = approval.BindingText(m.Name, b.Status, m.With)
+		switch {
+		case b.Status == approval.BindVanished && b.Report.Heard:
+			m.CanAccept, m.Accept = true, "off"
+		case (b.Status == approval.BindChanged || b.Status == approval.BindDuplicate) && b.Report.Block && b.Report.MachineID != "":
+			m.CanAccept, m.Accept = true, "id"
+		}
+	}
+	if b.Known && b.Record.MachineID != "" {
+		at := b.Record.At
+		m.MachineID, m.Pinned, m.PinnedBy = b.Record.MachineID, b.Record.How, b.Record.By
+		if !at.IsZero() {
+			m.PinnedAt = &at
+		}
+	}
+	m.ShownID = b.Report.MachineID
 	switch {
 	case ap == nil:
 		m.Why = "its agent does not know this check (older than the release with it, or a Windows agent without the helper)"
 		return m
+	case m.Binding != "" && !(b.Status == approval.BindVanished && ap.State == api.ApprovalOff && !ap.LastKnown):
+		// an alarm: nothing is switched on until it is resolved. The one exception is the machine whose trust
+		// was cleared on the machine and that says "off" now: Turn on is how its check comes back.
+		m.State, m.EnforcedBy, m.LastKnown, m.Why = ap.State, ap.EnforcedBy, ap.LastKnown, m.BindingText
+		return m
 	case ap.State == api.ApprovalRequired:
-		m.State, m.EnforcedBy, m.Why = ap.State, ap.EnforcedBy, "already on: it is changed only on the machine (fairy-agent helper-trust)"
-		if keys != nil {
+		m.State, m.EnforcedBy, m.LastKnown, m.Why = ap.State, ap.EnforcedBy, ap.LastKnown, "already on: it is changed only on the machine (fairy-agent helper-trust)"
+		m.SetBy, m.SetAt = ap.SetBy, ap.SetAt
+		if keys != nil && !ap.LastKnown {
 			now := approval.Thumbprints(keys)
 			m.StaleKeys = !slices.ContainsFunc(ap.Keys, func(k model.ApprovalKey) bool { return slices.Contains(now, k.Thumbprint) })
+			if users := s.approvalUsersFor(a); ap.TrustHash != "" && len(users) > 0 {
+				m.OtherTrust = ap.TrustHash != api.TrustHash(approval.Proposal(s.Cfg.ApprovalIssuer(), s.Cfg.Approval.ClientID, keys, users))
+			}
 		}
 		return m
 	case ap.State != api.ApprovalOff:
-		m.State, m.EnforcedBy = ap.State, ap.EnforcedBy
+		m.State, m.EnforcedBy, m.LastKnown = ap.State, ap.EnforcedBy, ap.LastKnown
 		m.Why = "its check cannot be used (" + orText(ap.Error, ap.State) + "): repaired on the machine"
+		if helperTooOld(ap) {
+			m.Why = "its running helper is older than its agent: restart the helper (Stop, then Start, next to the host name)"
+		}
 		return m
 	}
 	m.State, m.EnforcedBy = ap.State, ap.EnforcedBy
@@ -249,6 +303,8 @@ func (s *Server) machineFor(a config.Agent, keys []api.TrustKey) approvalMachine
 	switch {
 	case !a.HasControl():
 		m.Why = "the panel has no control token for it"
+	case ap.Proto < api.ApprovalProto:
+		m.Why = fmt.Sprintf("agent too old (approval scheme %d; this panel uses %d): install the current agent on it", ap.Proto, api.ApprovalProto)
 	case ap.Proto != api.ApprovalProto:
 		m.Why = fmt.Sprintf("it uses version %d of the approval scheme; this panel knows version %d", ap.Proto, api.ApprovalProto)
 	case !m.Online:
@@ -273,7 +329,8 @@ func orText(a, b string) string {
 // approvalPage is the approval page's data (admins): the client, the keys Pocket ID publishes now, every
 // agent with its state, and how the last Turn on went.
 func (s *Server) approvalPage(c *reqCtx) error {
-	if _, err := c.requireAdmin("the approval settings"); err != nil {
+	u, err := c.requireAdmin("the approval settings")
+	if err != nil {
 		return err
 	}
 	page := approvalAdminPage{Configured: s.Cfg.ApprovalOn(), Client: approvalClientName, Keys: []model.ApprovalKey{},
@@ -290,6 +347,9 @@ func (s *Server) approvalPage(c *reqCtx) error {
 	}
 	for _, a := range s.Poller.Agents() {
 		m := s.machineFor(a, keys)
+		if u.Auth == "token" { // the ids are for an admin in a browser: a token learns none
+			m.MachineID, m.ShownID = "", ""
+		}
 		if !page.Configured && m.Ready {
 			m.Ready, m.Why = false, "the panel has no approval: block in config.yaml (the Pocket ID client \""+approvalClientName+"\")"
 		}
@@ -388,11 +448,19 @@ func (s *Server) approvalTurnOn(c *reqCtx) error {
 			continue
 		}
 		in := approval.Proposal(s.Cfg.ApprovalIssuer(), s.Cfg.Approval.ClientID, keys, m.Users)
+		// The machine's id is made up HERE, before the machine is asked anything, and goes into the proposal
+		// and into the entry the passkey signs. It comes on record when the machine has taken the proposal
+		// (sendTrust). No answer of the machine has a say in it.
+		mid, err := approval.NewMachineID(nil)
+		if err != nil {
+			return apierr.New(500, "no machine id could be made up: "+textsafe.Clip(err.Error(), 100))
+		}
+		in.MachineID = mid
 		if err := approval.CheckProposal(in); err != nil {
 			return apierr.New(409, "what "+m.Name+" would be told to trust is not something a machine accepts: "+textsafe.Clip(err.Error(), 200)+
 				". Nothing was sent.")
 		}
-		ch, _, err := c.challenge(approvalTarget{agent: a, name: m.Name, req: api.TrustSetRequest(in)})
+		ch, _, err := c.challenge(approvalTarget{agent: a, name: m.Name, req: api.TrustSetRequest(in), machineID: mid})
 		if err != nil || ch == nil {
 			refused = append(refused, turnOnResult{ID: id, Name: m.Name, Outcome: challengeOutcome(err), Text: errText(err, "the machine gave no challenge")})
 			continue
@@ -449,15 +517,26 @@ func (s *Server) turnOnRun(c *reqCtx, u *model.User, g *approvalGrant, hosts []s
 			continue
 		}
 		res := s.sendTrust(c, a, name, in, g)
+		if res.Outcome == "accepted" {
+			// on record from this moment: the id the panel made up and the passkey signed, not what was answered
+			if err := s.Poller.PinMachine(a.ID, in.MachineID, approval.PinTurnOn, actorOf(u)); err != nil {
+				res.Text += " Fairy could not write its machine id down (" + textsafe.Clip(err.Error(), 120) + "): it keeps it in memory and tries again."
+			}
+		}
 		params := map[string]any{"issuer": in.Issuer, "client_id": in.ClientID, "keys": approval.Thumbprints(in.Keys), "users": in.Users,
-			"result": res.Outcome}
+			"machine_id": approval.ShortID(in.MachineID), "result": res.Outcome}
 		outcome := "ok"
 		if res.Outcome != "accepted" {
 			outcome = "error: " + res.Outcome + ": " + res.Text
 		}
 		c.audit(u, "approval.turn_on", id, params, outcome)
 		results = append(results, res)
-		s.Poller.Scheduler.Kick("agent:" + a.ID) // the machine's new state shows at once
+	}
+	// Every machine is asked again at once, not only the ones that were switched on: if one of them handed the
+	// proposal on to another machine of this panel, that machine shows the id now, and the two are flagged as
+	// one id on two hosts before anybody approves anything else.
+	for _, a := range s.Poller.Agents() {
+		s.Poller.Scheduler.Kick("agent:" + a.ID)
 	}
 	s.turnOnDone(u, results)
 	ok := 0
@@ -478,7 +557,7 @@ func (s *Server) turnOnRun(c *reqCtx, u *model.User, g *approvalGrant, hosts []s
 // sendTrust sends one machine its proposal with the approval (POST /approval/trust) and reads its answer.
 func (s *Server) sendTrust(c *reqCtx, a config.Agent, name string, in api.TrustInit, g *approvalGrant) turnOnResult {
 	res := turnOnResult{ID: a.ID, Name: name}
-	ap, err := g.For(a.ID, api.TrustSetRequest(in))
+	ap, err := g.For(a.ID, in.MachineID, api.TrustSetRequest(in)) // the id of the proposal that was shown and approved
 	if err != nil {
 		res.Outcome, res.Text = "not_asked", "the approval is not for what this machine would be told to trust; nothing was sent to it"
 		return res
@@ -491,6 +570,9 @@ func (s *Server) sendTrust(c *reqCtx, a config.Agent, name string, in api.TrustI
 		res.Outcome, res.Text = "offline", "it did not answer ("+devices.Describe(err)+"). Whether it took the trust is not known: look at its page."
 	case status == 200 && jsonx.S(data, "state") == api.ApprovalRequired:
 		res.Outcome, res.Text = "accepted", "it verified the approval against what it was proposed and now checks approvals itself. It is locked."
+		if got := jsonx.S(data, "machine_id"); got != in.MachineID {
+			res.Text += " It answered with another machine id than the one Fairy gave it: look at its page."
+		}
 	case status == 200:
 		res.Outcome, res.Text = "refused", "it answered without saying that the check is on now (state: "+textsafe.Clip(jsonx.S(data, "state"), 20)+")"
 	case code == api.CodeTrustAlreadySet:

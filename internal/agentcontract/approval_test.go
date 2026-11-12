@@ -91,6 +91,19 @@ func (g *gated) sent(path string) [][]byte {
 	return out
 }
 
+// machineID is the machine id in the machine's own trust file (what the machine hashes into its entry).
+func (g *gated) machineID(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(g.trust)
+	var f struct {
+		MachineID string `json:"machine_id"`
+	}
+	if err != nil || json.Unmarshal(raw, &f) != nil || agentapi.CheckMachineID(f.MachineID) != nil {
+		t.Fatalf("%s: no machine id in its trust file: %v %s", g.id, err, raw)
+	}
+	return f.MachineID
+}
+
 // direct sends a control request straight to the agent, as someone holding the panel's control token would.
 func (g *gated) direct(t *testing.T, path string, body []byte) (int, map[string]any) {
 	t.Helper()
@@ -504,14 +517,20 @@ func TestE2EApprovedShutdownReplayAndSwap(t *testing.T) {
 	if !bytes.Contains(good, []byte(`"approval"`)) {
 		t.Fatalf("the request the agent accepted carried no approval: %s", good)
 	}
-	// replay: the same request with the same approval, a second time
-	if st, out := pn.a.direct(t, "/power", good); st != 403 || out["code"] != agentapi.CodeApprovalRefused {
-		t.Fatalf("the replay: %d %v", st, out)
+	// replay while the shutdown is pending: the agent's own check answers first (409), the approval is not
+	// even looked at
+	if st, out := pn.a.direct(t, "/power", good); st != 409 || len(pn.a.power.Scheduled) != 1 {
+		t.Fatalf("the replay while the shutdown is pending: %d %v", st, out)
 	}
-	// cancel needs no approval (it only stops something), then a second approval that is kept from the agent
+	// cancel needs no approval (it only stops something)
 	if st, out := pn.call("POST", "/api/systems/pc-a/power", map[string]any{"action": "cancel"}); st != 200 {
 		t.Fatalf("cancel: %d %v", st, out)
 	}
+	// replay: the same request with the same approval, a second time, with nothing in its way: used up
+	if st, out := pn.a.direct(t, "/power", good); st != 403 || out["code"] != agentapi.CodeApprovalRefused || len(pn.a.power.Scheduled) != 1 {
+		t.Fatalf("the replay: %d %v", st, out)
+	}
+	// then a second approval that is kept from the agent
 	pn.a.mu.Lock()
 	pn.a.hold = "/power"
 	pn.a.mu.Unlock()
@@ -651,19 +670,22 @@ func TestE2EUpdateAndUpdateAll(t *testing.T) {
 	}
 	// the installer of the test does not replace the agent, so the same agent can be asked again once its
 	// updater is idle
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
-		pn.poll()
-		_, page := pn.call("GET", "/api/admin/updates", nil)
-		idle := 0
-		for _, r := range page["agents"].([]any) {
-			if r.(map[string]any)["can_update"] == true {
-				idle++
+	idle := func() {
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+			pn.poll()
+			_, page := pn.call("GET", "/api/admin/updates", nil)
+			n := 0
+			for _, r := range page["agents"].([]any) {
+				if r.(map[string]any)["can_update"] == true {
+					n++
+				}
+			}
+			if n == 2 {
+				return
 			}
 		}
-		if idle == 2 {
-			break
-		}
 	}
+	idle()
 	tokens := len(pn.iss.Tokens())
 	st, out = pn.call("POST", "/api/admin/updates", map[string]any{})
 	id, machines, items, ok := asked(st, out)
@@ -682,7 +704,8 @@ func TestE2EUpdateAndUpdateAll(t *testing.T) {
 		t.Fatalf("%d approvals for one Update all of two machines", got)
 	}
 	// each machine got the whole list and found its own entry in it; the other machine's request with it is
-	// refused
+	// refused (once the updaters are idle again: a request that fails a check of its own is not looked at)
+	idle()
 	ua, ub := pn.a.sent("/update"), pn.b.sent("/update")
 	if st, out := pn.b.direct(t, "/update", ua[len(ua)-1]); st != 403 || out["code"] != agentapi.CodeApprovalRefused {
 		t.Fatalf("pc-a's update request on pc-b: %d %v", st, out)
@@ -773,7 +796,9 @@ func TestE2EMachineDecidesByItsOwnList(t *testing.T) {
 		if st != 200 || ch["needed"] != true || ch["request"] != "power action=shutdown delay_s=60" {
 			t.Fatalf("challenge: %d %v", st, ch)
 		}
-		entries := []agentapi.ApprovalEntry{{Challenge: fmt.Sprint(ch["challenge"]), Request: fmt.Sprint(ch["request"])}}
+		// straight to the agent, as a panel that checked nothing would: the entry names the machine by the id
+		// the machine itself shows (the agent hashes its own id in its own entry whatever is sent)
+		entries := []agentapi.MachineEntry{{MachineID: pn.a.machineID(t), Challenge: fmt.Sprint(ch["challenge"]), Request: fmt.Sprint(ch["request"])}}
 		nonce, err := agentapi.ApprovalNonce(entries)
 		if err != nil {
 			t.Fatal(err)

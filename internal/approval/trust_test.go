@@ -64,6 +64,13 @@ func TestTrustHashVectors(t *testing.T) {
 	}
 	// the request and the nonce of the first row, with challenge A of the nonce vectors
 	in := Proposal(vIssuer, vClient, []api.TrustKey{vKey1}, []User{vUser1})
+	if _, err := NewPlan([]Bound{TrustBound("pc-a", "PC-A", in, vectorChallenge(0))}); err == nil {
+		t.Fatal("a Turn on without a machine id of the panel's own was planned: the panel never leaves the id to the machine")
+	}
+	in.MachineID = vectorIDA // the id the panel makes up for the machine; it is not part of the hash (6.1)
+	if got := api.TrustHash(in); got != "dRtwOuCOmn_fN8xutDqtllZabcZQcFGbT4ShJzPoXpQ" {
+		t.Fatal("the machine id changed the trust hash:", got)
+	}
 	b := TrustBound("pc-a", "PC-A", in, vectorChallenge(0))
 	if b.Canonical != "trust_set hash=dRtwOuCOmn_fN8xutDqtllZabcZQcFGbT4ShJzPoXpQ" || len(b.Canonical) != 58 {
 		t.Fatalf("the request: %q", b.Canonical)
@@ -72,16 +79,19 @@ func TestTrustHashVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Nonce() != "iFRKUeYLgHVi_6skMmsg1vyhKKuVnD00CPc6y7pAAY0" {
+	if plan.Nonce() != "Nw43E0SfBmQd6YKupw1cRh0KU6h0UIifvU7Vc-fHqxE" { // section 6.2: the set proposes id A
 		t.Fatalf("the nonce of the first-time set: %s", plan.Nonce())
 	}
 	// the approval is handed out for exactly this proposal, not for one that differs in a user
-	if _, err := For(plan, "t.o.k", "pc-a", api.TrustSetRequest(in)); err != nil {
+	if _, err := For(plan, "t.o.k", "pc-a", in.MachineID, api.TrustSetRequest(in)); err != nil {
 		t.Fatal(err)
 	}
 	other := Proposal(vIssuer, vClient, []api.TrustKey{vKey1}, []User{vUser1, vUser2})
-	if _, err := For(plan, "t.o.k", "pc-a", api.TrustSetRequest(other)); err == nil {
+	if _, err := For(plan, "t.o.k", "pc-a", in.MachineID, api.TrustSetRequest(other)); err == nil {
 		t.Fatal("an approval was handed out for another proposal")
+	}
+	if _, err := For(plan, "t.o.k", "pc-a", vectorIDB, api.TrustSetRequest(in)); err == nil {
+		t.Fatal("an approval was handed out for another machine id than the proposal's")
 	}
 }
 

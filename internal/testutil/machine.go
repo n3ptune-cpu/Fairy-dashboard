@@ -80,8 +80,9 @@ func (m *Machine) Block() jsonx.M {
 }
 
 // request answers a POST the panel sends: handled reports whether the machine answered (false: the backend's
-// scripted answer follows).
-func (m *Machine) request(path string, body any) (handled bool, status int, data jsonx.M) {
+// scripted answer follows; applied, when not nil, is then told whether that answer was 200, as the agent tells
+// its gate that an approved fan change was applied).
+func (m *Machine) request(path string, body any) (handled bool, status int, data jsonx.M, applied func()) {
 	raw, _ := json.Marshal(body)
 	var fields map[string]any
 	_ = json.Unmarshal(raw, &fields)
@@ -99,14 +100,18 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 		dec.DisallowUnknownFields()
 		return dec.Decode(v) == nil
 	}
-	refusal := func(r *approval.Refusal) (bool, int, jsonx.M) {
-		return true, r.Status, jsonx.M{"error": r.Msg, "code": r.Code}
+	refusal := func(r *approval.Refusal) (bool, int, jsonx.M, func()) {
+		out := jsonx.M{"error": r.Msg, "code": r.Code}
+		if r.RetryAfterS > 0 {
+			out["retry_after_s"] = float64(r.RetryAfterS)
+		}
+		return true, r.Status, out, nil
 	}
 	switch path {
 	case api.PathApprovalChallenge:
 		var req api.ApprovalRequest
 		if !strict(&req) {
-			return true, 400, jsonx.M{"error": "not a request that can be approved"}
+			return true, 400, jsonx.M{"error": "not a request that can be approved"}, nil
 		}
 		ch, ref := m.Gate.Challenge(req)
 		if ref != nil {
@@ -115,11 +120,11 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 		out := jsonx.M{}
 		b, _ := json.Marshal(ch)
 		_ = json.Unmarshal(b, &out)
-		return true, 200, out
+		return true, 200, out, nil
 	case api.PathApprovalTrust:
 		var in api.TrustInit
 		if !strict(&in) {
-			return true, 400, jsonx.M{"error": "invalid", "code": api.CodeTrustInvalid}
+			return true, 400, jsonx.M{"error": "invalid", "code": api.CodeTrustInvalid}, nil
 		}
 		st, ref := m.Gate.Init(in)
 		if ref != nil {
@@ -128,7 +133,7 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 		out := jsonx.M{}
 		b, _ := json.Marshal(st)
 		_ = json.Unmarshal(b, &out)
-		return true, 200, out
+		return true, 200, out, nil
 	}
 	var b struct {
 		Action   string        `json:"action"`
@@ -154,13 +159,18 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 	case path == "/update":
 		req = api.ApprovalRequest{Verb: api.ApproveApplyUpdate}
 	default:
-		return false, 0, nil // cancel, wake, ...: nothing to check
+		return false, 0, nil, nil // cancel, wake, ...: nothing to check
 	}
-	if ref := m.Gate.Check(req, b.Approval); ref != nil {
+	// the agent's two questions: when the request arrives (nothing is used up), and when it is carried out
+	if ref := m.Gate.Precheck(req, b.Approval != nil); ref != nil {
+		return refusal(ref)
+	}
+	pass, ref := m.Gate.Admit(req, b.Approval)
+	if ref != nil {
 		return refusal(ref)
 	}
 	rec.Approved = b.Approval != nil
-	return false, 0, nil
+	return false, 0, nil, pass.Applied
 }
 
 // GatedBackend is a Backend whose agents can be Machines.
@@ -169,6 +179,7 @@ type GatedBackend struct {
 	mu       sync.Mutex
 	machines map[string]*Machine
 	lies     map[string]func(path string) (int, jsonx.M)
+	relays   map[string]func(path string, body any) (int, jsonx.M)
 	fails    map[string]error
 	stale    map[string]jsonx.M
 }
@@ -197,6 +208,31 @@ func (g *GatedBackend) Lie(id string, fn func(path string) (int, jsonx.M)) {
 		g.lies = map[string]func(path string) (int, jsonx.M){}
 	}
 	g.lies[id] = fn
+}
+
+// Relay is Lie for a machine that needs to see what it was sent: fn gets the request's body too, so it can
+// hand the request on to another machine (Forward) and answer with that machine's answer. For a host that
+// answers in the name of another one.
+func (g *GatedBackend) Relay(id string, fn func(path string, body any) (int, jsonx.M)) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.relays == nil {
+		g.relays = map[string]func(path string, body any) (int, jsonx.M){}
+	}
+	if fn == nil {
+		delete(g.relays, id)
+		return
+	}
+	g.relays[id] = fn
+}
+
+// Forward sends a POST to the machine id as if the panel had sent it there (through its gate), for Relay.
+func (g *GatedBackend) Forward(id, path string, body any) (int, jsonx.M) {
+	status, data, err := g.AgentRequest(context.Background(), config.Agent{ID: id}, http.MethodPost, path, body)
+	if err != nil {
+		return 502, jsonx.M{"error": err.Error()}
+	}
+	return status, data
 }
 
 // Stale makes the agent id's /metrics carry this approval block instead of the machine's real one (the answer of
@@ -243,10 +279,15 @@ func (g *GatedBackend) FetchAgentMetrics(ctx context.Context, a config.Agent, ti
 // AgentRequest sends a machine's control requests through its gate first.
 func (g *GatedBackend) AgentRequest(ctx context.Context, a config.Agent, method, path string, body any) (int, jsonx.M, error) {
 	g.mu.Lock()
-	m, lie, fail := g.machines[a.ID], g.lies[a.ID], g.fails[a.ID]
+	m, lie, fail, relay := g.machines[a.ID], g.lies[a.ID], g.fails[a.ID], g.relays[a.ID]
 	g.mu.Unlock()
 	if fail != nil && method == http.MethodPost {
 		return 0, nil, fail
+	}
+	if relay != nil && method == http.MethodPost {
+		if status, data := relay(path, body); status != 0 {
+			return status, data, nil
+		}
 	}
 	if lie != nil && method == http.MethodPost {
 		if status, data := lie(path); status != 0 {
@@ -254,9 +295,15 @@ func (g *GatedBackend) AgentRequest(ctx context.Context, a config.Agent, method,
 		}
 	}
 	if m != nil && method == http.MethodPost {
-		if handled, status, data := m.request(path, body); handled {
+		handled, status, data, applied := m.request(path, body)
+		if handled {
 			return status, data, nil
 		}
+		status, data, err := g.Backend.AgentRequest(ctx, a, method, path, body)
+		if err == nil && status == 200 && applied != nil {
+			applied() // the fan window opens only after an approved fan change that was applied
+		}
+		return status, data, err
 	}
 	return g.Backend.AgentRequest(ctx, a, method, path, body)
 }

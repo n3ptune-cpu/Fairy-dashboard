@@ -128,14 +128,14 @@ func CheckProposal(in api.TrustInit) error {
 	if len(in.Users) == 0 {
 		return errors.New("nobody would be allowed to approve: the list of users is empty")
 	}
-	_, err := agentapproval.FromInit(in, time.Unix(0, 0))
+	_, err := agentapproval.FromInit(in, time.Unix(0, 0), nil)
 	return err
 }
 
 // TrustBound is the request a machine must approve for the proposal in, as the plan keeps it: the machine's
-// challenge for "trust_set hash=<hash of in>".
+// challenge for "trust_set hash=<hash of in>", with the machine id the proposal gives it (in.MachineID).
 func TrustBound(agentID, name string, in api.TrustInit, challenge string) Bound {
 	req := api.TrustSetRequest(in)
 	canon, _ := req.Canonical()
-	return Bound{Target: Target{AgentID: agentID, Name: name, Request: req}, Canonical: canon, Challenge: challenge}
+	return Bound{Target: Target{AgentID: agentID, Name: name, Request: req}, Canonical: canon, Challenge: challenge, MachineID: in.MachineID}
 }

@@ -3,10 +3,15 @@
 //
 // A machine whose "approval" state is "required" runs a fan change, a shutdown / restart / sleep or an update
 // of its agent only together with an approval: an ID token of the Pocket ID client "Fairy PC actions" whose
-// nonce is made from a list of entries, one per (the machine's challenge, the exact request). The panel asks
-// each machine for its challenge, sends the person to Pocket ID once with the nonce of the whole list, checks
-// the answer for its own audit trail, and hands token and list to the machines. The machines do not trust the
-// panel: each verifies the token offline against the key it has pinned.
+// nonce is made from a list of entries, one per (the machine's id, the machine's challenge, the exact request).
+// The panel asks each machine for its challenge, sends the person to Pocket ID once with the nonce of the whole
+// list, checks the answer for its own audit trail, and hands token and list to the machines. The machines do
+// not trust the panel: each verifies the token offline against the key it has pinned.
+//
+// The machine id in an entry is the one the panel has ON RECORD for the host the action is for (binding.go),
+// never one that came with the challenge: a challenge is asked over the network and may be another machine's,
+// and the id is what ties the approval to the host the person saw on the screen. A machine checks the token
+// with its own id in its own entry, so an approval that was made for another host is refused by it.
 //
 // This package holds what can be said without HTTP: the list and its nonce (made with the agent module's own
 // functions, so panel and machine cannot drift apart), the panel's own checks of the token's claims, and the
@@ -31,25 +36,28 @@ type Target struct {
 	Request api.ApprovalRequest
 }
 
-// Bound is a Target after its machine was asked: the canonical text of the request and the machine's
-// challenge for exactly it.
+// Bound is a Target after its machine was asked: the canonical text of the request, the machine's challenge
+// for exactly it, and the machine id the panel has on record for that host (for a Turn on: the id the panel
+// made up for it).
 type Bound struct {
 	Target
 	Canonical string
 	Challenge string
+	MachineID string
 }
 
 // Plan is what one approval covers: the entries in the order the nonce was made from, each with the machine
 // and request it belongs to. It is made before the person is sent to Pocket ID and never changes afterwards.
 type Plan struct {
 	bound   []Bound
-	entries []api.ApprovalEntry
+	entries []api.MachineEntry
 	nonce   string
 }
 
 // NewPlan makes the plan of bound, in that order. It refuses what a machine would refuse: no entry, more than
 // api.MaxApprovalEntries, a malformed challenge, the same challenge twice, a request without a canonical text
-// or whose canonical text is not the one given.
+// or whose canonical text is not the one given, and an entry without a machine id (the panel never leaves
+// the choice of the id to the machine, also not for a Turn on).
 func NewPlan(bound []Bound) (*Plan, error) {
 	p := &Plan{bound: slices.Clone(bound)}
 	for _, b := range bound {
@@ -60,7 +68,10 @@ func NewPlan(bound []Bound) (*Plan, error) {
 		if canon != b.Canonical {
 			return nil, fmt.Errorf("%s: the request text %q is not the one of the request", b.Name, b.Canonical)
 		}
-		p.entries = append(p.entries, api.ApprovalEntry{Challenge: b.Challenge, Request: canon})
+		if err := api.CheckMachineID(b.MachineID); err != nil {
+			return nil, fmt.Errorf("%s: Fairy has no machine id on record for it (%w)", b.Name, err)
+		}
+		p.entries = append(p.entries, api.MachineEntry{MachineID: b.MachineID, Challenge: b.Challenge, Request: canon})
 	}
 	nonce, err := api.ApprovalNonce(p.entries)
 	if err != nil {
@@ -74,21 +85,25 @@ func NewPlan(bound []Bound) (*Plan, error) {
 func (p *Plan) Nonce() string { return p.nonce }
 
 // Entries is the whole list, as every machine of the plan gets it. The caller must not change it.
-func (p *Plan) Entries() []api.ApprovalEntry { return p.entries }
+func (p *Plan) Entries() []api.MachineEntry { return p.entries }
 
 // Bound is the plan's requests, in the order of Entries.
 func (p *Plan) Bound() []Bound { return slices.Clone(p.bound) }
 
-// Covers reports whether the plan holds exactly one entry for this request to this agent. The comparison is by
-// the canonical text: a request that differs in any field has another text.
-func (p *Plan) Covers(agentID string, req api.ApprovalRequest) bool {
+// Covers reports whether the plan holds exactly one entry for this request to this agent, made with the machine
+// id machineID (the id on record for the agent NOW: a plan that was made for another id is not sent). The
+// comparison of the request is by the canonical text: a request that differs in any field has another text.
+func (p *Plan) Covers(agentID, machineID string, req api.ApprovalRequest) bool {
 	canon, err := req.Canonical()
-	if err != nil {
+	if err != nil || machineID == "" {
 		return false
 	}
 	n := 0
 	for _, b := range p.bound {
 		if b.AgentID == agentID && b.Canonical == canon {
+			if b.MachineID != machineID {
+				return false
+			}
 			n++
 		}
 	}
@@ -174,10 +189,11 @@ func Check(c Claims, w Want) *Failure {
 // ErrNotCovered: the request that is about to be sent is not one the approval was given for.
 var ErrNotCovered = errors.New("this request is not the one that was approved")
 
-// For returns the approval to send with req to agentID: the token and the whole list. It refuses a request the
-// plan does not cover, so nothing that was changed after the approval is ever sent with it.
-func For(p *Plan, token, agentID string, req api.ApprovalRequest) (*api.Approval, error) {
-	if p == nil || token == "" || !p.Covers(agentID, req) {
+// For returns the approval to send with req to agentID, whose id on record is machineID: the token and the
+// whole list. It refuses a request the plan does not cover, so nothing that was changed after the approval is
+// ever sent with it, and nothing is sent to a host whose id on record is no longer the one the person approved.
+func For(p *Plan, token, agentID, machineID string, req api.ApprovalRequest) (*api.Approval, error) {
+	if p == nil || token == "" || !p.Covers(agentID, machineID, req) {
 		return nil, ErrNotCovered
 	}
 	return &api.Approval{Token: token, Entries: p.entries}, nil
@@ -200,6 +216,10 @@ func refusedHint(text string) string {
 		return " Pocket ID's signing key is not the one the machine has pinned (on the machine: fairy-agent helper-trust set --fetch-keys)."
 	case "issuer", "audience":
 		return " The machine trusts another Pocket ID or another client than this panel asks (on the machine: fairy-agent helper-trust show)."
+	case "nonce":
+		// the approval was made for the id Fairy has on record for this host, and the machine that answered
+		// has another one (or it passed the question on to another machine)
+		return " What answered is not the machine Fairy has on record for this host. Do not try again: look at the host."
 	}
 	return " A new approval is needed: press the button again."
 }

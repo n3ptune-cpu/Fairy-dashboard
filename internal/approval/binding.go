@@ -1,0 +1,253 @@
+package approval
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"io"
+	"sort"
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
+)
+
+// Which machine an approval is for (audit 5, r1-x1-01).
+//
+// A machine that checks approvals has a machine id in its trust file, and every approval names the id of the
+// machine it is for. A machine cannot see other machines, so what the id is worth rests on the panel: the panel
+// keeps, for each host, the id it has ON RECORD, and builds every approval with that one. It never takes the id
+// from an answer that came with a challenge. What is on record:
+//
+//   - the id the panel made up itself when the check was switched on from here ("turn-on"), or
+//   - the id of the first answer in which the panel saw a host that already had the check ("first-sight": trust
+//     on first use), or
+//   - the id an admin accepted in the panel after it changed on the machine ("accepted").
+//
+// From then on the record counts, not what the host says. Three things are an alarm, and while one of them
+// holds for a host the panel asks it for no challenge and hands it no approval:
+//
+//   - the host shows another id than the one on record ("changed");
+//   - two hosts have one id, on record or shown, in any combination ("duplicate"): a machine made from a copy of
+//     another one's disk, or one host answering in the name of another; both are flagged, because each of the
+//     two machines would accept an approval that was made for the other;
+//   - a host that has an id on record shows no check any more, or says it is off ("vanished").
+//
+// This file is the part without files and HTTP: the record, what a host shows, and the decision.
+
+// How a machine id came on record.
+const (
+	PinTurnOn     = "turn-on"
+	PinFirstSight = "first-sight"
+	PinAccepted   = "accepted"
+)
+
+// Record is what the panel keeps about one machine that checks approvals (machines.json, by agent id).
+type Record struct {
+	// MachineID is the id on record ("": none, for a host that is known to have the check but whose id the
+	// panel could not take: an agent of the test build of 2026-11-11).
+	MachineID string
+	How       string    // PinTurnOn, PinFirstSight, PinAccepted
+	At        time.Time // when it came on record
+	By        string    // who did it (the admin; "Fairy" for first sight)
+	// State is the approval state the machine last reported: required, broken, unknown, off, or "" (it
+	// answered without the block). It is what the panel goes by while the machine is silent, also after a
+	// restart: a machine with a record is never taken for one without the check.
+	State   string
+	StateAt time.Time
+	// Holder: an admin said that this host is the one that keeps MachineID while another host shows the same
+	// id. The other host stays flagged until it shows an id of its own.
+	Holder bool
+}
+
+// Report is what a host says now (its latest answer since the panel started).
+type Report struct {
+	Heard     bool   // it answered at least once since the panel started
+	Block     bool   // that answer had the approval block
+	State     string // the block's state
+	MachineID string // the block's machine_id ("" when it has none or it is no id)
+	Proto     int
+	// Asked is when the panel sent the request this answer is to. An answer that was asked for before the id
+	// came on record says nothing about the machine since: right after a Turn on the last answer still says
+	// "off", and that is not a check that vanished.
+	Asked time.Time
+}
+
+// What Evaluate says about a host. BindOK: nothing stands in the way of an approval for it.
+const (
+	BindOK        = ""
+	BindChanged   = "changed"
+	BindDuplicate = "duplicate"
+	BindVanished  = "vanished"
+	BindTooOld    = "too_old"
+	BindNoRecord  = "no_record"  // it requires approvals and the panel has no id on record for it (yet)
+	BindNoStore   = "unreadable" // machines.json cannot be read: the panel does not know what is on record
+)
+
+// Binding is the decision for one host.
+type Binding struct {
+	Status string
+	Record Record
+	Known  bool // a record exists
+	Report Report
+	// With are the other hosts (agent ids, sorted) that have the same id, for BindDuplicate.
+	With []string
+}
+
+// OK reports whether an approval may be asked for and handed to the host.
+func (b Binding) OK() bool { return b.Status == BindOK }
+
+// Checks reports whether the panel must treat the host as a machine that checks approvals itself: it says so
+// now, or it has a record that says it did when the panel last heard from it. Such a machine is never sent a
+// fan, power or update request on the strength of the panel's own confirmation alone, and is in no run.
+func (b Binding) Checks() bool {
+	if b.Status != BindOK {
+		return true
+	}
+	pinned := b.Known && b.Record.MachineID != ""
+	if b.Report.Block && (!pinned || !b.Report.Asked.Before(b.Record.At)) {
+		return b.Report.State != api.ApprovalOff
+	}
+	return pinned || (b.Known && b.Record.State != api.ApprovalOff && b.Record.State != "")
+}
+
+// ids are the ids a host stands for: the one on record and the one it shows.
+func ids(rec Record, known bool, rep Report) (out []string) {
+	if known && rec.MachineID != "" {
+		out = append(out, rec.MachineID)
+	}
+	if rep.Block && rep.State == api.ApprovalRequired && rep.MachineID != "" && (len(out) == 0 || out[0] != rep.MachineID) {
+		out = append(out, rep.MachineID)
+	}
+	return out
+}
+
+// Evaluate decides for the host id, from every host's record and report. A host without a record and without a
+// report is BindOK: nothing is known that would ask for an approval.
+func Evaluate(id string, recs map[string]Record, reps map[string]Report) Binding {
+	rec, known := recs[id]
+	rep := reps[id]
+	b := Binding{Record: rec, Known: known, Report: rep}
+	requires := rep.Block && rep.State == api.ApprovalRequired
+	pinned := known && rec.MachineID != ""
+	changed := pinned && requires && rep.MachineID != "" && rep.MachineID != rec.MachineID
+	// shared: the other hosts that have the id m, on record or shown
+	shared := func(m string) (with []string) {
+		for other := range union(recs, reps) {
+			if other == id {
+				continue
+			}
+			orec, oknown := recs[other]
+			for _, x := range ids(orec, oknown, reps[other]) {
+				// the admin's word: this host keeps the id on record, the other one must get its own
+				if x == m && !(pinned && rec.Holder && m == rec.MachineID && !(oknown && orec.Holder)) {
+					with = appendOnce(with, other)
+				}
+			}
+		}
+		return with
+	}
+	if changed {
+		// what counts is the id it shows now: the one on record is about to be replaced, or the host is not
+		// the machine on record
+		b.With = shared(rep.MachineID)
+	} else {
+		for _, m := range ids(rec, known, rep) {
+			for _, o := range shared(m) {
+				b.With = appendOnce(b.With, o)
+			}
+		}
+	}
+	sort.Strings(b.With)
+	switch {
+	case len(b.With) > 0:
+		b.Status = BindDuplicate
+	case requires && (rep.Proto != api.ApprovalProto || rep.MachineID == ""):
+		b.Status = BindTooOld
+	case changed:
+		b.Status = BindChanged
+	case pinned && rep.Heard && !rep.Asked.Before(rec.At) && (!rep.Block || rep.State == api.ApprovalOff):
+		b.Status = BindVanished
+	case requires && !pinned:
+		b.Status = BindNoRecord
+	}
+	return b
+}
+
+func union(recs map[string]Record, reps map[string]Report) map[string]struct{} {
+	out := make(map[string]struct{}, len(recs)+len(reps))
+	for k := range recs {
+		out[k] = struct{}{}
+	}
+	for k := range reps {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+func appendOnce(l []string, s string) []string {
+	for _, x := range l {
+		if x == s {
+			return l
+		}
+	}
+	return append(l, s)
+}
+
+// NewMachineID makes up a machine id for a Turn on: 16 random bytes as 22 characters of base64url, the form a
+// machine makes up itself (rnd nil: crypto/rand).
+func NewMachineID(rnd io.Reader) (string, error) {
+	if rnd == nil {
+		rnd = rand.Reader
+	}
+	var b [16]byte
+	if _, err := io.ReadFull(rnd, b[:]); err != nil {
+		return "", err
+	}
+	id := base64.RawURLEncoding.EncodeToString(b[:])
+	return id, api.CheckMachineID(id)
+}
+
+// ShortID is a machine id as the audit log and a sentence show it: enough to tell two apart, not the id.
+func ShortID(id string) string {
+	if len(id) > 8 {
+		return id[:6] + "…"
+	}
+	return id
+}
+
+// BindingText is one sentence for people about a host whose binding is not OK ("" for BindOK). name is the
+// host's name; with are the names of the hosts that share its id.
+func BindingText(name, status string, with []string) string {
+	switch status {
+	case BindChanged:
+		return name + " shows another machine id than the one Fairy has on record for it. Until an admin accepts the new id, Fairy asks it for no approval."
+	case BindDuplicate:
+		other := "another host"
+		if len(with) > 0 {
+			other = andList(with)
+		}
+		return name + " and " + other + " have the same machine id, so each would accept an approval made for the other. Until that is resolved, Fairy asks neither for an approval."
+	case BindVanished:
+		return name + " had the check on and now shows none. Fairy sends it no fan, power or update request until the check is back or an admin accepts that it is off."
+	case BindTooOld:
+		return name + " runs an agent whose approvals do not name the machine (the test build of 2026-11-11). Install the current agent on it; Fairy asks it for no approval."
+	case BindNoRecord:
+		return "Fairy has no machine id on record for " + name + " yet (it takes one at the next answer of the machine). Try again in a moment."
+	case BindNoStore:
+		return "Fairy cannot read its record of machine ids (machines.json in its data folder; the panel's log says why), so it asks no machine for an approval."
+	}
+	return ""
+}
+
+func andList(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	}
+	out := names[0]
+	for i := 1; i < len(names)-1; i++ {
+		out += ", " + names[i]
+	}
+	return out + " and " + names[len(names)-1]
+}

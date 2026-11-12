@@ -535,7 +535,7 @@ func TestOldTuyaEntryIsIgnored(t *testing.T) {
 	if len(c.PowerSources) != 2 || c.PowerSources[0]["id"] != "plug-a" || c.PowerSources[1]["id"] != "plug-b" {
 		t.Fatalf("the other entries, in their order: %v", c.PowerSources)
 	}
-	want := `power source "plug-agent-1": tuya is no longer supported and is ignored (remove the entry from config.yaml)`
+	want := `power source "plug-agent-1": tuya is no longer supported and is ignored (remove the entry from config.yaml, and the line TUYA_KEY_PLUG=... from the env file: the plug's key is not used any more)`
 	if got := c.Ignored(); len(got) != 1 || got[0] != want {
 		t.Fatalf("Ignored() = %q", got)
 	}

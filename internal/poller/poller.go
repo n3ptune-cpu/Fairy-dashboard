@@ -110,6 +110,11 @@ type Poller struct {
 	versionUnsaved map[string]bool
 	// agent id -> how often an agent was added in the panel under this id since the panel started (AgentEntry)
 	agentAdded map[string]int
+	// mach is the record of the machines that check approvals themselves (machines.go)
+	mach machineStore
+	// OnMachine, when set, hears what happens to that record: an id that came on record at first sight, a host
+	// whose binding became an alarm or is in order again. It is called outside the poller's locks.
+	OnMachine func(MachineEvent)
 }
 
 // New builds the poller; backend nil = the real HTTP backend.
@@ -159,6 +164,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 	}
 	p.Admin = adminstate.New(cfg.DataDir)
 	p.loadLastVersions()
+	p.loadMachines()
 	p.Scheduler = scheduler.New(filepath.Join(cfg.DataDir, "state.json"), cfg.Boost(), nil)
 	p.buildJobs()
 	return p, nil
@@ -516,10 +522,13 @@ func (p *Poller) RemoveAgent(id string) {
 	delete(p.sources, "agent:"+id)
 	delete(p.sourceMono, "agent:"+id)
 	p.sourceOrder = slices.DeleteFunc(p.sourceOrder, func(x string) bool { return x == "agent:"+id })
+	p.forgetMachineLocked(id) // a host added later under the same id starts without a machine id on record
+	machineEvs := p.announceLocked()
 	p.syncPresent()
 	p.snapVer, p.snapJSONVer = -1, -1
 	p.version++
 	p.mu.Unlock()
+	p.machinesChanged(machineEvs)
 	if kept { // a host added later under the same id starts without a version
 		p.saveVersion(id, "", time.Time{})
 	}
