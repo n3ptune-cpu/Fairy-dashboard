@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	agentapi "github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 )
@@ -28,6 +29,29 @@ func TestABatchHandsEveryMachineTheOthersIDsAndTheGuideSaysSo(t *testing.T) {
 		t.Fatalf("Update all: %d %v", st, out)
 	}
 	pn.approve(id)
+	// Both machines are updating now, each in the background, into a folder of this test. The test must not
+	// end before they are done: a folder an updater still writes to cannot be removed, and the test then
+	// failed with "TempDir RemoveAll cleanup: ... update: directory not empty" (about one run in fifteen; it is
+	// the failure of this package that the report of passkey-h could not name). Registered after the folders,
+	// so it runs before they are removed.
+	t.Cleanup(func() {
+		for deadline := time.Now().Add(5 * time.Second); (pn.a.applied.Load() < 1 || pn.b.applied.Load() < 1) && time.Now().Before(deadline); {
+			time.Sleep(10 * time.Millisecond)
+		}
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+			pn.poll()
+			_, page := pn.call("GET", "/api/admin/updates", nil)
+			idle := 0
+			for _, r := range page["agents"].([]any) {
+				if r.(map[string]any)["can_update"] == true {
+					idle++
+				}
+			}
+			if idle == 2 {
+				return
+			}
+		}
+	})
 	if updA := pn.a.sent("/update"); len(updA) != 1 || !strings.Contains(string(updA[0]), idB) {
 		t.Fatal("Update all: pc-a's POST /update does not carry pc-b's id any more: the guide's \"Known limits\" is out of date")
 	}
