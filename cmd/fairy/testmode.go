@@ -36,7 +36,8 @@ import (
 //   - it listens on 127.0.0.1, ::1 or localhost only, and public_url is such an address too;
 //   - config.yaml has no oidc: block, and neither FAIRY_SESSION_SECRET nor FAIRY_OIDC_CLIENT_SECRET is set;
 //   - its data folder is new, empty or one a test build made, with nobody in it but the test admin;
-//   - no file it uses is in the real panel's folders (/etc/fairy, /var/lib/fairy, C:\ProgramData\Fairy).
+//   - no file it uses is in the real panel's folders (/etc/fairy, /var/lib/fairy, C:\ProgramData\Fairy), also
+//     not through a symbolic link.
 //
 // So putting this program in the place of an installed panel does not switch that panel's sign-in off: it
 // does not start. Its own files are in the folder fairy-test next to the program.
@@ -180,15 +181,54 @@ func testSetup(f serveFlags, real []string) (*config.Panel, config.Secrets, erro
 		ProxmoxTokenSecret: os.Getenv("FAIRY_PROXMOX_TOKEN_SECRET")}, nil
 }
 
-// inside reports whether path is dir or below it (Windows: whatever the case of the letters).
+// inside reports whether path is dir or below it (Windows: whatever the case of the letters), by where the two
+// lead, not by how they are written: a symbolic link into an installed panel's folder is in that folder.
 func inside(path, dir string) bool {
 	a, err1 := filepath.Abs(path)
 	b, err2 := filepath.Abs(dir)
+	if err1 == nil && err2 == nil {
+		a, b = realPath(a), realPath(b)
+	}
 	if runtime.GOOS == "windows" {
 		a, b = strings.ToLower(a), strings.ToLower(b)
 	}
 	rel, err3 := filepath.Rel(b, a)
 	return err1 == nil && err2 == nil && err3 == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// realPath is the absolute path p with every symbolic link in it followed (filepath.EvalSymlinks), also when
+// the file or its last folders do not exist yet: the part that exists is followed, the rest is added as
+// written. A link that leads nowhere yet counts by where it would lead, because a file made through it is made
+// there. A path that cannot be followed (a loop of links) is returned as far as it got.
+func realPath(p string) string {
+	for i := 0; i < 64; i++ {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		dir, rest := p, ""
+		for {
+			if _, err := os.Lstat(dir); err == nil {
+				break
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				return p
+			}
+			rest, dir = filepath.Join(filepath.Base(dir), rest), parent
+		}
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(r, rest)
+		}
+		to, err := os.Readlink(dir) // dir exists and cannot be followed: a link whose target is not there
+		if err != nil {
+			return filepath.Join(dir, rest)
+		}
+		if !filepath.IsAbs(to) {
+			to = filepath.Join(filepath.Dir(dir), to)
+		}
+		p = filepath.Join(to, rest)
+	}
+	return p
 }
 
 // testKey returns the start key of the test build whose data folder is dir: the word a browser must present

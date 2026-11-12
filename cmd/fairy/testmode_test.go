@@ -322,3 +322,85 @@ func TestTestBuildStartKey(t *testing.T) {
 		t.Fatal("a key that cannot be kept must stop the start")
 	}
 }
+
+// r1-p4-04 (audit 5): "not in an installed panel's folders" compared how the paths are written. A symbolic
+// link into such a folder passed, and for audit_log: nothing else stopped it: the test build would have
+// written its entries into the real panel's audit log. The paths are compared by where they lead now.
+func TestTestBuildFollowsLinksIntoAnInstalledPanelsFolder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("making a symbolic link needs a privilege on Windows")
+	}
+	link := func(c *testCase, name, to string) string {
+		t.Helper()
+		p := filepath.Join(c.dir, name)
+		if err := os.Symlink(to, p); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.ToSlash(p)
+	}
+	real := func(c *testCase) string { return filepath.Join(c.dir, "var-lib-fairy") }
+	mk := func(c *testCase) {
+		t.Helper()
+		if err := os.MkdirAll(real(c), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// audit_log: through a linked folder, as a linked file, as a link to a file that is not there yet (the log
+	// would be made through it), and through two links in a row
+	c := newCase(t, "")
+	mk(c)
+	c.write("config.yaml", "data_dir: "+filepath.ToSlash(c.data())+"\naudit_log: "+link(c, "x", real(c))+"/audit.log\n")
+	c.refused("the folder of an installed panel")
+	c = newCase(t, "")
+	c.write("var-lib-fairy/audit.log", "")
+	c.write("config.yaml", "data_dir: "+filepath.ToSlash(c.data())+"\naudit_log: "+link(c, "a.log", filepath.Join(real(c), "audit.log"))+"\n")
+	c.refused("the folder of an installed panel")
+	c = newCase(t, "")
+	mk(c)
+	c.write("config.yaml", "data_dir: "+filepath.ToSlash(c.data())+"\naudit_log: "+link(c, "a.log", filepath.Join(real(c), "not-there-yet.log"))+"\n")
+	c.refused("the folder of an installed panel")
+	c = newCase(t, "")
+	mk(c)
+	link(c, "one", real(c))
+	c.write("config.yaml", "data_dir: "+filepath.ToSlash(c.data())+"\naudit_log: "+link(c, "two", "one")+"/sub/audit.log\n")
+	c.refused("the folder of an installed panel")
+	// data_dir and the config file itself
+	c = newCase(t, "")
+	mk(c)
+	c.write("config.yaml", "data_dir: "+link(c, "d", real(c))+"\n")
+	c.refused("the folder of an installed panel")
+	c = newCase(t, "")
+	mk(c)
+	c.write("config.yaml", "data_dir: "+link(c, "d", real(c))+"/new/data\n")
+	c.refused("the folder of an installed panel")
+	c = newCase(t, "")
+	c.write("etc-fairy/config.yaml", "listen: 127.0.0.1:8080\n")
+	c.f.cfgPath = link(c, "cfg", filepath.Join(c.dir, "etc-fairy")) + "/config.yaml"
+	c.refused("the folder of an installed panel")
+	// the installed panel's folder is itself reached through a link (/var/lib/fairy -> /srv/fairy)
+	c = newCase(t, "")
+	if err := os.MkdirAll(filepath.Join(c.dir, "srv"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link(c, "var-lib-fairy", filepath.Join(c.dir, "srv"))
+	c.write("config.yaml", "data_dir: "+filepath.ToSlash(filepath.Join(c.dir, "srv", "data"))+"\n")
+	c.refused("the folder of an installed panel")
+	// links that lead elsewhere are fine, and so is a loop of links that leads nowhere
+	c = newCase(t, "")
+	if err := os.MkdirAll(filepath.Join(c.dir, "elsewhere"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c.write("config.yaml", "data_dir: "+link(c, "d", filepath.Join(c.dir, "elsewhere"))+"/data\naudit_log: "+link(c, "l", filepath.Join(c.dir, "elsewhere"))+"/audit.log\n")
+	if _, _, err := testSetup(c.f, c.real); err != nil {
+		t.Fatal("a link that does not lead into an installed panel's folder:", err)
+	}
+	loopA, loopB := filepath.Join(c.dir, "loop-a"), filepath.Join(c.dir, "loop-b")
+	_ = os.Symlink(loopB, loopA)
+	_ = os.Symlink(loopA, loopB)
+	if inside(filepath.Join(loopA, "x"), real(c)) {
+		t.Fatal("a loop of links is not inside anything")
+	}
+	if got := realPath(filepath.Join(c.dir, "no", "such", "file")); got != filepath.Join(realPath(c.dir), "no", "such", "file") {
+		t.Fatal("a path that does not exist yet keeps its last parts:", got)
+	}
+}
