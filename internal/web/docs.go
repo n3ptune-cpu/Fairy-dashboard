@@ -66,7 +66,7 @@ var apiDoc = []struct{ method, path, summary string }{
 	{"POST", "/api/me/active", "Tell the panel that someone is using this page: keeps the session from idling out (CSRF header; answers 204). The UI sends it at most once a minute while there is input"},
 	{"GET", "/api/admin/panel-update", "The panel's own update: ready or why not, running version, newer release known, last run's progress (admins)"},
 	{"POST", "/api/admin/panel-update", "Start the panel's update unit (admins, browser session; sign-in from the last 2 minutes + CSRF header; never older)"},
-	{"GET", "/api/notifications", "Events newest first, as this user sees them. Query: severity, type, host, unread=1, before, limit. A repeated event is merged into one that carries `count` (2 and up)"},
+	{"GET", "/api/notifications", "Events newest first, as this user sees them. Query: severity, type, host, unread=1, before, limit. severity=critical: the events with `alarm` (they start an alert: a host offline, a temperature over its limit, a UPS on battery or out of reach) and those whose severity is critical; severity=warning: the other warnings. A repeated event is merged into one that carries `count` (2 and up)"},
 	{"GET", "/api/notifications/count", "Unread events and active alerts for this user"},
 	{"POST", "/api/notifications/read", "Mark events read: {ids} or {all: true} (CSRF header)"},
 	{"POST", "/api/notifications/dismiss", "Hide events from this user's list: {ids} (CSRF header)"},

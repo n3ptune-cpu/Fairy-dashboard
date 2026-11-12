@@ -2081,13 +2081,17 @@ function noteLink(e) {
   if (e.type === "update" && state.me?.can_control) return "#/updates";
   return "";
 }
+// One word for one kind of event, in Settings ("Critical: a host goes offline, ..."), in a pop-up, in this list
+// and in its filter: critical is an event of severity critical or one that starts an alert (`alarm`; the
+// stream calls both `urgent`). The stored severity of "host offline" is still warning (push priority).
+const noteSev = (e) => (e.severity === "critical" || e.alarm === true || e.urgent === true ? "critical" : e.severity);
 function noteRow(e) {
   const href = noteLink(e);
   const when = new Date(e.t);
   const host = e.host ? (href ? `<a href="${href}">${esc(e.host)}</a>` : esc(e.host)) : '<span class="note">–</span>';
   return `<tr class="row ${e.read ? "" : "unread"}" data-key="n${esc(e.id)}"><td class="nowrap"><span data-ago="${esc(e.t)}">${ago(e.t)}</span>
       <div class="note">${when.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div></td>
-    <td class="nowrap"><span class="sev ${esc(e.severity)}" aria-hidden="true"></span>${esc(e.severity)}</td>
+    <td class="nowrap"><span class="sev ${esc(noteSev(e))}" aria-hidden="true"></span>${esc(noteSev(e))}</td>
     <td>${host}</td>
     <td><span class="ntext">${esc(e.text)}</span>${e.active ? ' <span class="chip active" title="this condition still holds">active</span>'
       : e.resolved ? ` <span class="note">· resolved <span data-ago="${esc(e.resolved)}">${ago(e.resolved)}</span></span>` : ""}</td>
@@ -2212,7 +2216,7 @@ function popEl(it, sev, sign, name, text, href) {
 }
 function popShow(n) {
   const box = $("#toasts"), it = { at: n.at, left: popPrefs().seconds * 1000, timer: null, started: 0 };
-  it.el = popEl(it, n.sev === "critical" ? "critical" : "warning", "!", String(n.host || ""), String(n.text || ""), n.href);
+  it.el = popEl(it, n.urgent ? "critical" : "warning", "!", String(n.host || ""), String(n.text || ""), n.href);  // urgent: what "Critical only" shows
   pop.items.push(it);
   box.insertBefore(it.el, pop.more?.el || null);  // the "N more" one stays the last (shown on top)
   box.hidden = false;

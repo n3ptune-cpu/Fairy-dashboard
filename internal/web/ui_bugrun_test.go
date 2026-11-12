@@ -167,3 +167,22 @@ func TestUICancelledRunReport(t *testing.T) {
 		t.Error(`app.js still says "over" for the end of a run`)
 	}
 }
+
+// r1-b1-12: one word for one kind of event. With "Critical only" a pop-up came for an offline host (Settings:
+// "Critical: a host goes offline, ..."), but it read "warning:", the list called it "warning", and the
+// list's filter "Critical" did not find it. The pop-up and the list now say "critical" for what Settings
+// calls critical; the filter does the same on the server (internal/notifications).
+func TestUICriticalMeansTheSameInSettingsPopupsAndTheList(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const noteSev = (e) => (e.severity === "critical" || e.alarm === true || e.urgent === true ? "critical" : e.severity);`,
+		`<span class="sev ${esc(noteSev(e))}" aria-hidden="true"></span>${esc(noteSev(e))}</td>`,
+		`it.el = popEl(it, n.urgent ? "critical" : "warning", "!",`,
+		`"Critical: a host goes offline, a temperature passes its limit, a UPS goes on battery, runs low or cannot be reached."`,
+		`popAdd({ sev: e.severity, urgent: e.urgent === true || e.severity === "critical",`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+}

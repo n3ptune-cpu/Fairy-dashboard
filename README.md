@@ -552,7 +552,8 @@ The bell (top bar) and **Notifications** (sidebar): what changed, newest first. 
 did it, a temperature over 85 °C (for
 10 s) and back under 80 °C, UPS on battery / low battery / back on mains / connection lost, power actions,
 agent and panel updates, Add host results. Filters (severity, type, host, unread), mark read, mark all read,
-dismiss, per user; each person sees the hosts and UPSes of their sites (events without a host are for admins).
+dismiss, per user. "Critical" in the list and its filter is what it is for the pop-ups below: an event that
+starts an alert, or one of severity critical; each person sees the hosts and UPSes of their sites (events without a host are for admins).
 Kept in `<data_dir>/notifications.json` for 30 days (at most 2000). The Overview shows one line, "N active
 alerts", for alerts whose condition still holds. Warnings and critical events also go to `FAIRY_NOTIFY_URL`
 (ntfy or Discord) when it is set.

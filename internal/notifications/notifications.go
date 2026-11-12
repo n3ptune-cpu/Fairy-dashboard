@@ -116,6 +116,19 @@ func (e Event) Active() bool { return e.Alarm && e.Resolved == nil }
 // failed, an unstable host, Add host that failed) are not urgent.
 func (e Event) Urgent() bool { return e.Severity == Critical || e.Alarm }
 
+// severity reports whether the event is in the filter's severity (see Filter.Severity).
+func (f Filter) severity(e Event) bool {
+	switch f.Severity {
+	case "":
+		return true
+	case Critical:
+		return e.Urgent()
+	case Warning:
+		return e.Severity == Warning && !e.Urgent()
+	}
+	return e.Severity == f.Severity
+}
+
 type userState struct {
 	ReadUpTo  int64   `json:"read_up_to"`
 	Read      []int64 `json:"read,omitempty"`
@@ -429,7 +442,10 @@ func (s *Store) HasKey(key string) bool {
 
 // Filter narrows List.
 type Filter struct {
-	Severity string // info | warning | critical | "" (all)
+	// Severity: info | warning | critical | "" (all). The words are the page's (Settings, the pop-ups): "critical"
+	// is every urgent event (Event.Urgent: severity critical, or one that starts an alert, such as a host that
+	// goes offline), "warning" the other warnings. Every event is in exactly one of the three.
+	Severity string
 	Type     string
 	Host     string // system id
 	Unread   bool
@@ -480,7 +496,7 @@ func (s *Store) List(sub string, visible func(Event) bool, f Filter) Page {
 		if e.Active() {
 			p.ActiveAlerts++
 		}
-		if (f.Before > 0 && e.ID >= f.Before) || (f.Severity != "" && e.Severity != f.Severity) || (f.Type != "" && e.Type != f.Type) ||
+		if (f.Before > 0 && e.ID >= f.Before) || !f.severity(e) || (f.Type != "" && e.Type != f.Type) ||
 			(f.Host != "" && e.SystemID != f.Host) || (f.Unread && read) {
 			continue
 		}

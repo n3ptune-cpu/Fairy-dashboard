@@ -135,3 +135,55 @@ func TestSinceForPopups(t *testing.T) {
 		t.Fatalf("limit 2: %d events, more %d (%d urgent)", len(evs), more, moreUrgent)
 	}
 }
+
+// r1-b1-12 (audit 5, bug run): Settings says "Critical: a host goes offline, a temperature passes its limit, a
+// UPS goes on battery ...", and with "Critical only" the pop-up for an offline host came. But it read
+// "warning: ... offline", the list called it "warning", and the list's filter "Critical" did not find it. The
+// filter now uses the same meaning as Settings and the pop-ups (Event.Urgent), and every event is in exactly
+// one of the three severities.
+func TestTheSeverityFilterMeansWhatSettingsCallsCritical(t *testing.T) {
+	st := Open(filepath.Join(t.TempDir(), "n.json"))
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	st.Now = func() time.Time { now = now.Add(time.Second); return now }
+	offline := st.Add(Event{Kind: "host_offline", Type: "host", Severity: Warning, SystemID: "vm-b", Text: "offline · connection failed", Key: "offline:vm-b", Alarm: true})
+	hot := st.Add(Event{Kind: "temp_high", Type: "temperature", Severity: Warning, SystemID: "nas", Text: "CPU 91 °C (limit 85 °C)", Key: "temp:nas", Alarm: true})
+	onBatt := st.Add(Event{Kind: "ups_on_battery", Type: "ups", Severity: Warning, UPSID: "nas/apc", Text: "on battery", Key: "ups:nas/apc", Alarm: true})
+	low := st.Add(Event{Kind: "ups_low_battery", Type: "ups", Severity: Critical, UPSID: "nas/apc", Text: "LOW BATTERY"})
+	failed := st.Add(Event{Kind: "update_failed", Type: "update", Severity: Warning, SystemID: "nas", Text: "agent update failed: x"})
+	unstable := st.Add(Event{Kind: "host_unstable", Type: "host", Severity: Warning, SystemID: "pc", Text: "unstable"})
+	back := st.Add(Event{Kind: "power_requested", Type: "power", Severity: Info, SystemID: "pc", Text: "shutdown requested"})
+	ids := func(sev string) map[int64]bool {
+		out := map[int64]bool{}
+		for _, e := range st.List("u", all, Filter{Severity: sev, Limit: 50}).Events {
+			out[e.ID] = true
+		}
+		return out
+	}
+	want := map[string][]int64{
+		Critical: {offline.ID, hot.ID, onBatt.ID, low.ID},
+		Warning:  {failed.ID, unstable.ID},
+		Info:     {back.ID},
+		"":       {offline.ID, hot.ID, onBatt.ID, low.ID, failed.ID, unstable.ID, back.ID},
+	}
+	for sev, list := range want {
+		got := ids(sev)
+		if len(got) != len(list) {
+			t.Errorf("severity %q: %d events, want %d", sev, len(got), len(list))
+		}
+		for _, id := range list {
+			if !got[id] {
+				t.Errorf("severity %q does not find event %d", sev, id)
+			}
+		}
+	}
+	// what the filter calls critical is what a pop-up shows with "Critical only", event for event
+	for _, e := range st.List("u", all, Filter{Limit: 50}).Events {
+		if ids(Critical)[e.ID] != e.Urgent() {
+			t.Errorf("%s: critical in the list %v, urgent for the pop-up %v", e.Kind, ids(Critical)[e.ID], e.Urgent())
+		}
+	}
+	// the stored severity does not change: the push message of "host offline" keeps its priority
+	if offline.Severity != Warning || low.Severity != Critical {
+		t.Error("the stored severity changed")
+	}
+}
