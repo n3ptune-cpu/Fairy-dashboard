@@ -3,6 +3,7 @@ package web
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/powerctl"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
@@ -30,8 +32,37 @@ func (c *reqCtx) fanAgent(id string) (config.Agent, error) {
 // maxAgentError is how much of an agent's own error text reaches the page and the audit log.
 const maxAgentError = 300
 
+// unanswered says whether a request of this package that changes something on a machine (a fan change, the
+// "Update" button and "Update all", the helper's stop and start) got no answer of the agent: then it may have
+// arrived all the same, and it must not read as the agent's "no". The rule is the power path's own,
+// powerctl.NoAnswer, and so are the words: 502 and 504 whatever the body (a gateway between panel and agent
+// that passed the request on; and the agent's own 504 for a request it handed to its helper, which did not
+// answer), a redirect, an error status with a body that is not the agent's, a timeout, a broken connection.
+// These used to be "the agent answered with an error" (424, "agent error"), and a redirect was "ok", "started".
+// What the answer said, if it said something, is added in brackets: the agent's 504 says what may have happened
+// ("... the fans may have been changed all the same: look at the fan status"), and its 502 to a helper's stop
+// says why. (The agent's own 502 on a fan route, with the reason of its BMC, is its answer and stays one:
+// powerctl, relaysOwn.) A good status is left to the caller as it was: a fan change answered with `null` is
+// still a result.
+func unanswered(path string, status int, data jsonx.M, err error) error {
+	if err == nil && status >= 200 && status < 300 {
+		return nil
+	}
+	e := powerctl.NoAnswer(path, status, data, err)
+	var lost *powerctl.Unanswered
+	if said := textsafe.Clip(jsonx.S(data, "error"), maxAgentError); err == nil && said != "" && errors.As(e, &lost) {
+		return &powerctl.Unanswered{Err: apierr.New(502, fmt.Sprintf("%v (the answer said: %s)", lost.Err.Detail, said))}
+	}
+	return e
+}
+
 func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[string]any, error) {
 	status, data, err := c.s.Poller.AgentRequest(c.r.Context(), a, method, path, body)
+	if method == "POST" {
+		if e := unanswered(path, status, data, err); e != nil {
+			return nil, e
+		}
+	}
 	if err != nil {
 		return nil, apierr.New(502, "agent unreachable: "+devices.Describe(err))
 	}

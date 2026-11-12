@@ -153,7 +153,7 @@ func TestHelperAgentAnswers(t *testing.T) {
 	}{
 		{"not installed", 409, jsonx.M{"error": "not_installed"}, nil, 409, "not installed"},
 		{"older agent", 404, jsonx.M{"error": "not found"}, nil, 409, "v0.5.0"},
-		{"wrong control token", 401, nil, nil, 424, "control token"},
+		{"wrong control token", 401, jsonx.M{"error": "unauthorized"}, nil, 424, "control token"},
 		{"agent failure", 500, jsonx.M{"error": "OpenService: access denied"}, nil, 424, "access denied"},
 		{"unreachable", 0, nil, devices.Errf("connection refused"), 502, "agent unreachable"},
 		{"odd state", 200, jsonx.M{"state": "<b>"}, nil, 200, ""},

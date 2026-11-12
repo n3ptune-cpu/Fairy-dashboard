@@ -535,7 +535,17 @@ func agentsNo(data jsonx.M) bool {
 // answer within 15 s", "the BMC refused the login"), and with one of the relay's own codes (bmc_unreachable,
 // bmc_refused, bmc_error, ...). A gateway's JSON has no such code. The words of that answer are what the
 // person who clicked "Power on (via BMC)" needs; a run never uses this route.
-func relaysOwn(path string, data jsonx.M) bool {
+//
+// The fan routes are the other place: the agent answers a fan change its BMC did not take with 502 and the
+// BMC's reason ("BMC refused the fan mode: BMC completion code 0xC3 (timeout)", "cannot read the fan mode:
+// ..."), without a code. Those words are the agent's and they are what the person at the fan page needs, so a
+// 502 on a fan route that begins with them stays the agent's answer. Its 504 there is not: that is "the helper
+// was sent the change and did not answer", which is no answer.
+func relaysOwn(path string, status int, data jsonx.M) bool {
+	if path == "/fan/mode" || path == "/fan/duty" {
+		said := jsonx.S(data, "error")
+		return status == 502 && (strings.HasPrefix(said, "BMC refused the ") || strings.HasPrefix(said, "cannot read the fan mode: "))
+	}
 	return path == "/bmc/power" && strings.HasPrefix(agentCode(data), "bmc_")
 }
 
@@ -565,6 +575,35 @@ func UpdateAgent(ctx context.Context, p *poller.Poller, a config.Agent, requeste
 	return agentCall(ctx, p, a, "/update", map[string]any{"requested_by": requestedBy})
 }
 
+// NoAnswer is the first half of agentCall, for the panel's other requests that change something on a machine
+// (the fan routes, the single "Update" and "Update all", the helper's stop and start: internal/web). Given what
+// came of a POST to an agent (AgentRequest's three results) it returns nil when that is the agent's own answer,
+// its "yes" or its "no"; the plain error when the request never left the panel; and an Unanswered in every
+// other case. There is one such rule in the panel, and this is it.
+func NoAnswer(path string, status int, data jsonx.M, err error) error {
+	notTheAgents := func() error {
+		return &Unanswered{Err: apierr.New(502, fmt.Sprintf("agent unreachable: http %d, and not an answer of the agent", status))}
+	}
+	if err != nil {
+		e := apierr.New(502, "agent unreachable: "+devices.Describe(err))
+		var ns *poller.NotSent
+		if errors.As(err, &ns) {
+			return e
+		}
+		if status >= 300 { // an error status or a redirect whose body cannot be read
+			return notTheAgents()
+		}
+		return &Unanswered{Err: e}
+	}
+	if status < 200 || (status >= 300 && status < 400) || (status >= 400 && !agentsNo(data)) || (status < 300 && len(data) == 0) {
+		return notTheAgents()
+	}
+	if (status == 502 || status == 504) && !relaysOwn(path, status, data) {
+		return notTheAgents()
+	}
+	return nil
+}
+
 // agentCall sends one control request to an agent and says what came of it, in one of four ways:
 //
 //   - the agent's "yes": a 2xx status with the agent's own answer (a JSON object that is not empty). The data.
@@ -586,25 +625,8 @@ func UpdateAgent(ctx context.Context, p *poller.Poller, a config.Agent, requeste
 //     a code of its own: see relaysOwn.
 func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path string, body any) (jsonx.M, error) {
 	status, data, err := p.AgentRequest(ctx, a, "POST", path, body)
-	notTheAgents := func() error {
-		return &Unanswered{Err: apierr.New(502, fmt.Sprintf("agent unreachable: http %d, and not an answer of the agent", status))}
-	}
-	if err != nil {
-		e := apierr.New(502, "agent unreachable: "+devices.Describe(err))
-		var ns *poller.NotSent
-		if errors.As(err, &ns) {
-			return nil, e
-		}
-		if status >= 300 { // an error status or a redirect whose body cannot be read
-			return nil, notTheAgents()
-		}
-		return nil, &Unanswered{Err: e}
-	}
-	if status < 200 || (status >= 300 && status < 400) || (status >= 400 && !agentsNo(data)) || (status < 300 && len(data) == 0) {
-		return nil, notTheAgents()
-	}
-	if (status == 502 || status == 504) && !relaysOwn(path, data) {
-		return nil, notTheAgents()
+	if e := NoAnswer(path, status, data, err); e != nil {
+		return nil, e
 	}
 	errMsg := func(def string) string {
 		if e := textsafe.Clip(jsonx.S(data, "error"), maxAgentError); e != "" {

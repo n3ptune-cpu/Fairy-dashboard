@@ -5,7 +5,6 @@ import (
 	"slices"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
-	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -70,9 +69,11 @@ func (s *Server) helperAction(c *reqCtx, action string) error {
 	}
 	path := map[string]string{"stop": api.PathHelperStop, "start": api.PathHelperStart}[action]
 	status, data, err := s.Poller.AgentRequest(c.r.Context(), a, "POST", path, map[string]any{}) // the agent logs "panel <ip>"
+	// No answer of the agent (also "agent unreachable", as before): the helper may have been stopped or started.
+	if e := unanswered(path, status, data, err); e != nil {
+		return fail(e)
+	}
 	switch {
-	case err != nil:
-		return fail(apierr.New(502, "agent unreachable: "+devices.Describe(err)))
 	case status == 401: // never our own 401 (that means "sign in again")
 		return fail(apierr.New(apierr.Upstream, "agent rejected the control token (check control_token_env)"))
 	case status == 409 && jsonx.S(data, "error") == api.ErrHelperNotInstalled.Error():
