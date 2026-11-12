@@ -101,6 +101,9 @@ func interrupt(r *Run, now time.Time) {
 			h.On = OnUnknown
 			h.Text = "The panel restarted while the run was asking it to shut down. The run had woken it. Fairy does not know whether the request arrived: " +
 				"if it did, it switches off by itself after its countdown; if not, it is ON. Check it." + updateTail(h)
+		case was == StShutting && h.ShutdownAt != nil && h.ShutdownUnsure:
+			h.On = OnUnknown
+			h.Text = fmt.Sprintf("The panel restarted after a shutdown request for it got no answer (it would be due at %s). Fairy stopped watching: check whether it went off.", clock(*h.ShutdownAt))
 		case was == StShutting && h.ShutdownAt != nil:
 			h.On = OnUnknown
 			h.Text = fmt.Sprintf("The panel restarted while its shutdown was counting down (due at %s). Fairy stopped watching: check that it went off.", clock(*h.ShutdownAt))

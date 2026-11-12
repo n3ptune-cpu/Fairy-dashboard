@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -133,5 +134,110 @@ func TestWakeUpdateALostWakeAnswerIsNotNothingSent(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("the audit log lacks the wake without an answer: %v", e.auditEntries("", "power.wake"))
+	}
+}
+
+// r2-p2-05 a) with the real poller and powerctl: the shutdown request reaches the agent and its answer does
+// not reach the panel. The agent counts down and the machine goes off. The run said "Left ON: the shutdown
+// was not accepted (agent unreachable: timeout)", power "on".
+func TestWakeUpdateALostShutdownAnswerIsWatched(t *testing.T) {
+	e, f := lostFarm(t, "pc-a /power")
+	if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "Alice", BySub: "u2"}); err != nil {
+		t.Fatal(err)
+	}
+	h := hostOf(f.finish(), "pc-a")
+	if h.State != wakerun.StOff || h.On != wakerun.OnNo || f.on["pc-a"] || !h.ShutdownUnsure ||
+		h.Text != "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again." {
+		t.Errorf("pc-a ended as %s (%s, really on: %v): %s", h.State, h.On, f.on["pc-a"], h.Text)
+	}
+	if got := strings.Join(f.requests(), ", "); got != "nas /wol, pc-a /update, pc-a /power" { // asked once, not again
+		t.Errorf("requests: %s", got)
+	}
+}
+
+// r2-p2-05 b) with the real poller: after the countdown the machine's agent is gone and the machine refuses
+// the connection. The poller's own sign for it is "the machine refused the connection", which everywhere
+// else means "on"; the run said "switched off again", power "off".
+func TestWakeUpdateAMachineThatRefusesAfterItsCountdownIsNotOff(t *testing.T) {
+	e, f := lostFarm(t, "")
+	if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "Alice", BySub: "u2"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1200 && hostOf(activeRun(e), "pc-a").State != wakerun.StShutting; i++ {
+		f.tick()
+	}
+	e.b.Mu.Lock()
+	e.b.Metrics["pc-a"] = func() (jsonx.M, error) {
+		if _, counting := f.pending["pc-a"]; counting {
+			return f.metrics("pc-a")
+		}
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+	}
+	e.b.Mu.Unlock()
+	h := hostOf(f.finish(), "pc-a")
+	info, _, _ := e.s.Poller.AgentSeen("pc-a")
+	want := "It still shows as on 5 min after its shutdown was due (the machine refused the connection), and its agent does not answer: the shutdown did not finish. It is ON. It was updated to 17-bbbbbbb."
+	if !info.Refused || h.State != wakerun.StLeftOn || h.On != wakerun.OnYes || h.Text != want {
+		t.Errorf("refused=%v; pc-a ended as %s (%s): %s", info.Refused, h.State, h.On, h.Text)
+	}
+}
+
+func activeRun(e *env) *wakerun.Run {
+	a, _ := e.s.WakeRuns.Snapshot()
+	if a == nil {
+		return &wakerun.Run{}
+	}
+	return a
+}
+
+// r2-p2-05 c) through the route: "Cancel run" with "leave on" in the 20 s between the end of the countdown
+// and the run seeing the machine go. The machine is off; the report said "its shutdown countdown was called
+// off. The run woke it and it is ON." Now the report says what the last look saw, at every second.
+func TestWakeUpdateACancelAfterTheCountdownSaysWhatIsSeen(t *testing.T) {
+	for _, k := range []int{-30, -1, 0, 1, 5, 10, 19} { // seconds after the countdown's end
+		t.Run(fmt.Sprintf("%+d s", k), func(t *testing.T) {
+			e, f := lostFarm(t, "")
+			r, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "Alice", BySub: "u2"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 1200 && hostOf(activeRun(e), "pc-a").State != wakerun.StShutting; i++ {
+				f.tick()
+			}
+			due := *hostOf(activeRun(e), "pc-a").ShutdownAt
+			for f.now.Before(due.Add(time.Duration(k) * time.Second)) {
+				f.tick()
+			}
+			if activeRun(e).ID == "" {
+				t.Fatal("the run is over before the cancel")
+			}
+			c := e.do("DELETE", "/api/admin/wake-update/"+r.ID, nil, append([]string{"Cookie", e.cookie(controller(), 0)}, wuWrite...)...)
+			if c.code != 200 {
+				t.Fatalf("cancel: %d %s", c.code, c.raw)
+			}
+			h := hostOf(f.finish(), "pc-a")
+			on := f.on["pc-a"]
+			t.Logf("really on: %v; %s/%s: %s", on, h.State, h.On, h.Text)
+			switch {
+			case on && (h.State != wakerun.StLeftOn || h.On != wakerun.OnYes || !strings.Contains(h.Text, "its shutdown countdown was called off. The run woke it and it is ON.")):
+				t.Errorf("the machine is on; the report: %s/%s: %s", h.State, h.On, h.Text)
+			case !on && (h.State != wakerun.StOff || h.On != wakerun.OnNo || !strings.HasSuffix(h.Text, " It is off (not answering).") || strings.Contains(h.Text, "it is ON")):
+				t.Errorf("the machine is off; the report: %s/%s: %s", h.State, h.On, h.Text)
+			}
+		})
+	}
+}
+
+// The page: "LEFT ON" is for a machine the run saw as on. A machine the last look could not see is "not
+// confirmed", next to "on or off: not known".
+func TestUIWakeUpdateLeftOnIsOnlySaidOfAMachineSeenOn(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const label = h.state === "left_on" && h.on === "unknown" ? "not confirmed" : said;`,
+		`unknown: ["warn", "on or off: not known"]`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
 	}
 }

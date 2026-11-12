@@ -1411,7 +1411,9 @@ function wuSteps(h) {
   return `<div class="steps">${steps.map(([l, c]) => `<span class="${c}">${l}</span>`).join("")}</div>`;
 }
 function wuHostRow(r, h) {
-  const [cls, label] = WU_STATE[h.state] || ["", h.state], end = wuEnded(h), key = r.id + "/" + h.id;
+  const [cls, said] = WU_STATE[h.state] || ["", h.state], end = wuEnded(h), key = r.id + "/" + h.id;
+  // "LEFT ON" is for a machine the run saw as on. When its last look could not see the machine, the chip says that.
+  const label = h.state === "left_on" && h.on === "unknown" ? "not confirmed" : said;
   const warnEnd = end && cls === "ok" && wuUpdateBad(h);  // off again or left on as planned, but the update did not work
   const pw = end && WU_POWER[h.on] ? `<span class="chip ${WU_POWER[h.on][0]}">${WU_POWER[h.on][1]}</span>` : "";
   const count = h.state === "shutting_down" && h.shutdown_at ? ` <span class="note">in <b data-countdown="${esc(h.shutdown_at)}">${fmtRuntime(Math.max(0, (new Date(h.shutdown_at) - Date.now()) / 1000))}</b> · cancel it on <a href="#/system/${enc(h.id)}">its page</a></span>`

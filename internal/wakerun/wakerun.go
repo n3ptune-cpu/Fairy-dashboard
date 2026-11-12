@@ -146,6 +146,10 @@ const (
 	agentBack       = 3 * time.Minute  // after the update: how long the agent may take to answer again
 	offConfirm      = 20 * time.Second // no answer for this long after the countdown: the machine is off
 	offGrace        = 5 * time.Minute  // still answering this long after the countdown: the shutdown failed
+	// The last look at a machine before its result is written (look): an answer this fresh is "it answers
+	// now"; a machine that gives nothing is waited for this long, and then the result says "not confirmed".
+	lookFresh = 5 * time.Second
+	lookFor   = offConfirm + 10*time.Second
 	// minBoot: no machine that was off answers this soon after a wake. Its firmware has to start, then the
 	// system, the agent and the network (with Tailscale), and the poller has to ask it: on the fastest PC that
 	// is well over eight seconds. An answer sooner than this comes from a machine that was already starting.
@@ -368,8 +372,12 @@ type Host struct {
 	// never by the missing answer.
 	UpdateUnsure bool       `json:"update_unconfirmed,omitempty"`
 	ShutdownAt   *time.Time `json:"shutdown_at,omitempty"` // when the countdown ends
-	On           string     `json:"on,omitempty"`          // set when the machine ends (On...)
-	Log          []LogLine  `json:"log"`
+	// ShutdownUnsure: the run's shutdown request left the panel and got no answer (CodeNoAnswer). The countdown
+	// may be running: ShutdownAt is then when it would end, and the run watches the machine as after a request
+	// that was accepted, until it sees how it ended.
+	ShutdownUnsure bool      `json:"shutdown_unconfirmed,omitempty"`
+	On             string    `json:"on,omitempty"` // set when the machine ends (On...)
+	Log            []LogLine `json:"log"`
 
 	// Working values of the run in memory. A run is never continued after a restart, so they are not kept.
 	wakeMono      time.Duration // the steady clock when the run's first wake was accepted
@@ -388,6 +396,8 @@ type Host struct {
 	lateSeen      bool // gave up, and it came online later
 	grant         any  // the approval for this machine (item 1.1)
 	cancelHandled bool
+	verdict       *verdict  // how the run would end it: the last look (look) is going on
+	askedAt       time.Time // when the run's own direct question to it got an answer of any kind (it runs)
 }
 
 // Final reports whether the machine has ended in this run.
@@ -430,6 +440,9 @@ type Run struct {
 	// journalErr: a write of the journal failed while this run was going (in memory only). The run sends
 	// nothing further and stops at its next step.
 	journalErr string
+	// stopped: why the run stopped itself (in memory only; Note has it for the page). From then on nothing is
+	// sent; the run ends when the last look at each machine is over.
+	stopped string
 }
 
 func (r *Run) clone() *Run {
@@ -777,11 +790,106 @@ func (m *Manager) enter(h *Host, state string, now time.Time, text string) {
 	m.note(h, now, text)
 }
 
-// end puts the machine into the state it ends in, with the sentence that says what happened.
+// verdict is how the run would end a machine, before the last look at it.
+type verdict struct {
+	state, on string
+	text      string    // the sentence, when the machine is seen the way the run believes it to be
+	neutral   string    // (believed on) the same without a word about its power; "": the look adds to text
+	since     time.Time // when the look began
+	silent    time.Time // it has given no sign of life since (zero: not known yet)
+	kicked    time.Time
+}
+
+// end is how every machine of a run ends, and the only way: with the state the run would end it in, what the
+// run believes about its power, and the sentence that says what happened. Before that is written, the run
+// looks at the machine once more (look) and writes what it SEES (r2-p2-05): the report's power is never a guess.
 func (m *Manager) end(r *Run, h *Host, state, on string, now time.Time, text string) {
-	h.State, h.Since, h.Text, h.On = state, now, text, on
-	m.note(h, now, text)
-	m.emit(EvHostEnd, r, h, "", nil, "")
+	m.endSeen(r, h, state, on, now, text, "")
+}
+
+// endSeen is end for a machine that may well not be the way the run believes: neutral is the sentence without
+// a word about its power, to which the look adds what it sees.
+func (m *Manager) endSeen(r *Run, h *Host, state, on string, now time.Time, text, neutral string) {
+	h.verdict = &verdict{state: state, on: on, text: text, neutral: neutral, since: now}
+	m.look(r, h, now)
+}
+
+// What the last look adds to a sentence, or shows while it waits.
+const (
+	seenOff      = " It is off (not answering)."
+	notSeenOff   = " Asked to switch off, not confirmed: it does not answer now."
+	notSeenOn    = " It does not answer now: not confirmed that it is on."
+	notSeenAtAll = " It does not answer now, so that is not confirmed."
+	answersAgain = " It answered again after that: it is ON."
+	cannotLook   = " Fairy can no longer look at it."
+	lookingText  = "checking how it ended: it does not answer right now"
+)
+
+// look is the one last step of every machine: it looks at the machine again and writes the result with what
+// it sees. It sends nothing to the machine (it reads the poller's view and asks the poller to poll).
+//
+//   - Nothing was sent to it, or the run already says that it does not know: the result is written as it is.
+//   - The run believes it is on: an answer from now, or another sign of life (a refused connection is a
+//     machine that runs), confirms it. If it gives nothing, the run waits a short, fixed time (lookFor). When
+//     a shutdown was asked for (or may have been), its countdown is over and the machine has given nothing
+//     for offConfirm, the same confirmation the normal way uses, it is off: "off (not answering)". Otherwise
+//     the result says "not confirmed", and its power is "unknown".
+//   - The run saw it go off: written as that, unless it shows a sign of life again.
+func (m *Manager) look(r *Run, h *Host, now time.Time) {
+	v := h.verdict
+	final := func(state, on, text string) {
+		h.verdict = nil
+		h.State, h.Since, h.Text, h.On = state, now, text, on
+		m.note(h, now, text)
+		m.emit(EvHostEnd, r, h, "", nil, "")
+	}
+	if v.on != OnYes && v.on != OnNo {
+		final(v.state, v.on, v.text)
+		return
+	}
+	_, known := m.Ops.Host(h.ID)
+	o := m.Ops.Observe(h.ID)
+	canSee := known && !o.Paused
+	seenOn := canSee && ((o.Online && !o.SeenAt.Before(v.since.Add(-lookFresh))) || o.OnBy != "" ||
+		(!h.askedAt.IsZero() && !h.askedAt.Before(v.since.Add(-lookFresh)))) // the run's direct question was answered
+	base := v.neutral
+	if base == "" {
+		base = v.text
+	}
+	switch {
+	case v.on == OnNo && seenOn:
+		final(StLeftOn, OnYes, v.text+answersAgain)
+	case v.on == OnNo:
+		final(v.state, v.on, v.text)
+	case seenOn:
+		final(v.state, v.on, v.text)
+	case !canSee: // taken out of the panel, or its polling is paused
+		final(v.state, OnUnknown, base+cannotLook)
+	default:
+		if v.silent.IsZero() {
+			v.silent = now
+			if !h.offSince.IsZero() { // the countdown's watch already saw it go quiet
+				v.silent = h.offSince
+			}
+		}
+		asked := h.ShutdownAt != nil // a shutdown was asked for, or may have been
+		switch {
+		case asked && now.After(*h.ShutdownAt) && now.Sub(v.silent) >= offConfirm:
+			final(StOff, OnNo, base+seenOff)
+		case now.Sub(v.since) < lookFor:
+			if now.Sub(v.kicked) >= kickEvery {
+				v.kicked = now
+				m.Ops.Kick(h.ID)
+			}
+			m.say(h, lookingText)
+		case asked:
+			final(v.state, OnUnknown, base+notSeenOff)
+		case v.neutral != "":
+			final(v.state, OnUnknown, base+notSeenOn)
+		default:
+			final(v.state, OnUnknown, base+notSeenAtAll)
+		}
+	}
 }
 
 // stepRun is one step of the whole run. The caller holds m.mu (io releases it around requests).
@@ -796,11 +904,24 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 	} else if now.Sub(r.StartedAt) > m.maxRun(r) {
 		stop = "the run took longer than it ever should"
 	}
-	if stop != "" { // nothing more is sent, not even a cancel: every machine is reported as it is
-		r.Note = "stopped: " + stop
+	if stop != "" && r.stopped == "" { // nothing more is sent, not even a cancel: every machine is reported as it is
+		r.stopped, r.Note = stop, "stopped: "+stop
+		m.dirty = true
+		for _, h := range r.Hosts {
+			if !h.Final() && h.verdict == nil {
+				m.endAsIs(r, h, now, "the run stopped ("+stop+")")
+			}
+		}
+	}
+	if r.stopped != "" { // only the last look at the machines that do not answer is left (it sends nothing)
 		for _, h := range r.Hosts {
 			if !h.Final() {
-				m.endAsIs(r, h, now, "the run stopped ("+stop+")")
+				m.look(r, h, now)
+			}
+		}
+		for _, h := range r.Hosts {
+			if !h.Final() {
+				return
 			}
 		}
 		m.finish(r, now, RunStopped)
@@ -877,8 +998,9 @@ func (m *Manager) finish(r *Run, now time.Time, state string) {
 func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
 	switch {
 	case h.State == StShutting:
-		m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s while its shutdown was counting down (it ends at %s). Fairy no longer watches it: "+
-			"it switches off by itself unless someone cancels that.", why, when(*h.ShutdownAt, now)))
+		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s while its shutdown was counting down (it ends at %s). Fairy no longer watches it: "+
+			"it switches off by itself unless someone cancels that.", why, when(*h.ShutdownAt, now)),
+			fmt.Sprintf("%s while its shutdown was counting down (due at %s).", why, when(*h.ShutdownAt, now)))
 	case h.NotFresh:
 		m.end(r, h, StLeftOn, OnYes, now, why+". "+notFreshText(h)+updateTail(h))
 	case (h.AlreadyOn || h.Mode == ModeUpdateOnly) && h.WakeSentAt == nil && h.UpdateSentAt == nil && h.Update == "":
@@ -892,7 +1014,7 @@ func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
 		}
 		m.end(r, h, StStayedOn, OnYes, now, why+". It was already on and stays on."+tail)
 	case h.OnlineAt != nil:
-		m.end(r, h, StLeftOn, OnYes, now, why+". The run woke it and it is ON."+updateTail(h))
+		m.endSeen(r, h, StLeftOn, OnYes, now, why+". The run woke it and it is ON."+updateTail(h), why+". The run woke it."+updateTail(h))
 	case h.WakeSentAt != nil && h.lostWake():
 		m.end(r, h, StGaveUp, OnUnknown, now, why+". A wake may have gone out to it (the request got no answer): if it switches on, it stays ON.")
 	case h.WakeSentAt != nil:

@@ -247,6 +247,240 @@ func TestWakeAnswerLost(t *testing.T) {
 	})
 }
 
+// untilState ticks the world until the machine is in the state.
+func untilState(t *testing.T, w *world, id, state string) {
+	t.Helper()
+	for i := 0; i < 3600; i++ {
+		if host(active(w), id).State == state {
+			return
+		}
+		w.tick()
+	}
+	t.Fatalf("%s never got to %q: %s", id, state, describe(active(w)))
+}
+
+// r2-p2-05 a): the answer to the shutdown request is lost. The run said "Left ON: the shutdown was not
+// accepted (agent unreachable: timeout)", power "on", while the agent counted down and the machine went off.
+func TestShutdownAnswerLost(t *testing.T) {
+	t.Run("the agent took it and shows its countdown: off again", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.shutLost = "arrives"
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		h := host(w.finish(), "pc-a")
+		has(t, h, StOff, "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
+		if pc.on || h.On != OnNo || !h.ShutdownUnsure || w.callsFor("pc-a") != "wake update shutdown" {
+			t.Fatalf("on %v power %q unsure %v requests %q: %s", pc.on, h.On, h.ShutdownUnsure, w.callsFor("pc-a"), h.Text)
+		}
+		if got := w.steps("pc-a"); got != "wake:ok update:ok shutdown:agent unreachable: timeout" {
+			t.Fatalf("audit steps: %s", got)
+		}
+		if !logHas(h, "the shutdown request got no answer (agent unreachable: timeout): it may have arrived. If it did, it switches off at about ") {
+			t.Fatalf("the machine's history: %v", h.Log)
+		}
+	})
+
+	t.Run("the agent took it and is not heard of again: off when the countdown was due", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.shutLost = "arrives"
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StShutting)
+		pc.unreachable = true // the link that lost the answer stays down
+		h := host(w.finish(), "pc-a")
+		has(t, h, StOff, "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again (the shutdown request got no answer, but it went off when the countdown was due).")
+		if pc.on || h.On != OnNo {
+			t.Fatalf("on %v power %q: %s", pc.on, h.On, h.Text)
+		}
+	})
+
+	t.Run("the agent never got it: its own word says so, and it is ON", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.shutLost = "never"
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		h := host(w.finish(), "pc-a")
+		has(t, h, StLeftOn, "The shutdown request got no answer, and its agent shows no countdown: the request did not arrive. It is ON. It was updated to 17-bbbbbbb.")
+		if !pc.on || h.On != OnYes || w.callsFor("pc-a") != "wake update shutdown" {
+			t.Fatalf("on %v power %q requests %q: %s", pc.on, h.On, w.callsFor("pc-a"), h.Text)
+		}
+	})
+
+	t.Run("the panel restarts meanwhile", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.shutLost = "arrives"
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StShutting)
+		old, _ := w.restart()
+		if oh := host(old, "pc-a"); oh.On != OnUnknown || !strings.Contains(oh.Text, "The panel restarted after a shutdown request for it got no answer (it would be due at ") {
+			t.Fatalf("after a restart (%s): %s", oh.On, oh.Text)
+		}
+	})
+}
+
+// r2-p2-05 b): after the countdown the machine does not go off: its agent is gone and the machine refuses
+// the connection (the system hangs in its shutdown). The run said "switched off again", power "off", after
+// 20 s. A refused connection is a machine that is on, here as everywhere else.
+func TestRefusingAfterTheCountdownIsNotOff(t *testing.T) {
+	w := newWorld(t)
+	pc := w.off("pc-a")
+	pc.shutMode = "hang"
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	due := *host(active(w), "pc-a").ShutdownAt
+	r := w.finish()
+	h := host(r, "pc-a")
+	has(t, h, StLeftOn, "It still shows as on 5 min after its shutdown was due (the machine refused the connection), and its agent does not answer: the shutdown did not finish. It is ON.",
+		"It was updated to 17-bbbbbbb.")
+	if !pc.on || h.On != OnYes {
+		t.Fatalf("on %v power %q: %s", pc.on, h.On, h.Text)
+	}
+	if d := r.EndedAt.Sub(due); d < offGrace || d > offGrace+5*time.Second {
+		t.Fatalf("the run let go %s after the countdown, want %s", d, offGrace)
+	}
+}
+
+// r2-p2-05 c) and the last look in general: what the report says about a machine's power is what the run
+// sees when it lets go of the machine, never what it assumes.
+func TestTheReportSaysWhatIsSeen(t *testing.T) {
+	// A cancel with "leave on" at every second from the shutdown request until the run would be over. Before:
+	// in the 20 s after the countdown the report said "its shutdown countdown was called off. The run woke it
+	// and it is ON." about a machine that was off.
+	t.Run("cancel at every second of the countdown and after it", func(t *testing.T) {
+		for _, ok := range []bool{false, true} { // false: the agent of a machine that is gone does not answer the cancel
+			seen := map[string]int{}
+			for k := 0; k <= 150; k++ {
+				w := newWorld(t)
+				pc := w.off("pc-a")
+				pc.cancelOK = ok
+				r := w.start(StartRequest{Hosts: []string{"pc-a"}})
+				untilState(t, w, "pc-a", StShutting)
+				due := *host(active(w), "pc-a").ShutdownAt
+				w.advance(time.Duration(k) * time.Second)
+				if active(w) == nil {
+					break
+				}
+				late := !w.now.Add(time.Second).Before(due) // the run acts on a cancel at its next step, a second later
+				if _, err := w.m.CancelRun(r.ID, "Bob", false); err != nil {
+					t.Fatal(err)
+				}
+				at := w.now
+				done := w.finish() // its judge fails "on" for a machine that is off, and the other way round
+				h := host(done, "pc-a")
+				seen[h.State+"/"+h.On]++
+				switch {
+				case !late && (h.State != StLeftOn || h.On != OnYes || !pc.on || !strings.Contains(h.Text, "its shutdown countdown was called off. The run woke it and it is ON.")):
+					t.Fatalf("cancel %d s into the countdown: %s/%s on=%v: %s", k, h.State, h.On, pc.on, h.Text)
+				case late && (h.State != StOff || h.On != OnNo || pc.on || !strings.HasSuffix(h.Text, " It is off (not answering).") || strings.Contains(h.Text, "it is ON")):
+					t.Fatalf("cancel %d s into the countdown, after it ended: %s/%s on=%v: %s", k, h.State, h.On, pc.on, h.Text)
+				}
+				if d := done.EndedAt.Sub(at); d > lookFor+2*time.Second {
+					t.Fatalf("cancel %d s into the countdown: the last look took %s, at most %s", k, d, lookFor)
+				}
+			}
+			if seen[StLeftOn+"/"+OnYes] == 0 || seen[StOff+"/"+OnNo] == 0 {
+				t.Fatalf("cancel answered %v: the sweep did not see both sides: %v", ok, seen)
+			}
+		}
+	})
+
+	t.Run("the run stops while a machine it cannot reach counts down: not confirmed", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StShutting)
+		w.advance(5 * time.Second)
+		pc.unreachable = true
+		w.advance(3 * time.Second)
+		w.blocked = "control is disabled by an administrator"
+		at := w.now
+		r := w.finish()
+		h := host(r, "pc-a")
+		has(t, h, StLeftOn, "the run stopped (control is disabled by an administrator) while its shutdown was counting down (due at ",
+			"). Asked to switch off, not confirmed: it does not answer now.")
+		if h.On != OnUnknown || r.State != RunStopped || strings.Contains(h.Text, "it switches off by itself") {
+			t.Fatalf("power %q run %s: %s", h.On, r.State, h.Text)
+		}
+		if d := r.EndedAt.Sub(at); d < lookFor-2*time.Second || d > lookFor+2*time.Second {
+			t.Fatalf("the last look took %s, want %s", d, lookFor)
+		}
+		if strings.Contains(w.callsFor("pc-a"), "cancel") {
+			t.Fatalf("a stopped run sends nothing: %s", w.callsFor("pc-a"))
+		}
+	})
+
+	t.Run("the run stops while a machine that answers counts down: as before, at once", func(t *testing.T) {
+		w := newWorld(t)
+		w.off("pc-a")
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StShutting)
+		w.advance(5 * time.Second)
+		w.blocked = "control is disabled by an administrator"
+		at := w.now
+		r := w.finish()
+		h := host(r, "pc-a")
+		has(t, h, StLeftOn, "while its shutdown was counting down (it ends at ", "it switches off by itself unless someone cancels that.")
+		if h.On != OnYes || r.EndedAt.Sub(at) > 2*time.Second {
+			t.Fatalf("power %q after %s: %s", h.On, r.EndedAt.Sub(at), h.Text)
+		}
+	})
+
+	t.Run("its agent stops answering before the update", func(t *testing.T) {
+		for _, c := range []struct {
+			name  string
+			gone  func(pc *machine)
+			power string
+			want  string
+		}{
+			{"nothing at all from it", func(pc *machine) { pc.unreachable = true }, OnUnknown,
+				"Its agent stopped answering before the update. The run woke it. It does not answer now: not confirmed that it is on."},
+			{"it refuses the connection", func(pc *machine) { pc.agentDown, pc.onBy = true, OnByRefused }, OnYes,
+				"Its agent stopped answering before the update. The run woke it and it is ON."},
+		} {
+			w := newWorld(t)
+			pc := w.off("pc-a")
+			w.start(StartRequest{Hosts: []string{"pc-a"}})
+			untilState(t, w, "pc-a", StOnline)
+			c.gone(pc)
+			h := host(w.finish(), "pc-a")
+			has(t, h, StLeftOn, c.want)
+			if h.On != c.power || !pc.on {
+				t.Fatalf("%s: power %q on %v: %s", c.name, h.On, pc.on, h.Text)
+			}
+		}
+	})
+
+	t.Run("its agent does not answer again after the update", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StSettling)
+		pc.unreachable = true
+		h := host(w.finish(), "pc-a")
+		has(t, h, StLeftOn, "Its agent did not answer again after the update, so Fairy could not ask it to shut down. The run woke it. It was updated to 17-bbbbbbb. "+
+			"It does not answer now: not confirmed that it is on.")
+		if h.On != OnUnknown || strings.Contains(h.Text, "probably") {
+			t.Fatalf("power %q: %s", h.On, h.Text)
+		}
+	})
+
+	t.Run("a machine that was on and stops answering during its update", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.running("pc-a")
+		pc.updMode = "stuck"
+		w.start(StartRequest{UpdateOnly: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StUpdating)
+		w.advance(20 * time.Second)
+		pc.unreachable = true
+		h := host(w.finish(), "pc-a")
+		has(t, h, StStayedOn, "It was on and stays on. Its update did not work: no result 15 min after it was asked for. It does not answer now, so that is not confirmed.")
+		if h.On != OnUnknown {
+			t.Fatalf("power %q: %s", h.On, h.Text)
+		}
+	})
+}
+
 func active(w *world) *Run {
 	a, _ := w.m.Snapshot()
 	return a

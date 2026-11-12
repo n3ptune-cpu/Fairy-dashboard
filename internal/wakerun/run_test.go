@@ -648,12 +648,17 @@ func TestControlDisabledDuringARun(t *testing.T) {
 }
 
 // The machine is switched off for these runs, or removed from the panel, while the run works on it: the run
-// lets go of it where it is. A woken machine is then ON and is named so.
+// lets go of it where it is. A woken machine is then ON and is named so; one that is gone from the panel
+// cannot be looked at any more, and the report says that instead of guessing (r2-p2-05).
 func TestMachineTakenOutDuringARun(t *testing.T) {
 	for what, do := range map[string]func(w *world){
 		"switched off for these runs": func(w *world) { w.ms["pc-a"].info.OptedIn = false },
 		"is no longer in the panel":   func(w *world) { w.ms["gone"] = w.ms["pc-a"]; delete(w.ms, "pc-a") },
 	} {
+		want, power := "The run woke it and it is ON.", OnYes
+		if what == "is no longer in the panel" {
+			want, power = "The run woke it. Fairy can no longer look at it.", OnUnknown
+		}
 		w := newWorld(t)
 		pc := w.off("pc-a")
 		w.start(StartRequest{Hosts: []string{"pc-a"}})
@@ -671,8 +676,8 @@ func TestMachineTakenOutDuringARun(t *testing.T) {
 		if len(hist) != 1 {
 			t.Fatalf("%s: the run should be over", what)
 		}
-		has(t, host(hist[0], "pc-a"), StLeftOn, "The run woke it and it is ON.")
-		if !strings.Contains(strings.ToLower(host(hist[0], "pc-a").Text), strings.ToLower(what)[:10]) || len(w.calls) != before || !pc.on {
+		has(t, host(hist[0], "pc-a"), StLeftOn, want)
+		if !strings.Contains(strings.ToLower(host(hist[0], "pc-a").Text), strings.ToLower(what)[:10]) || len(w.calls) != before || !pc.on || host(hist[0], "pc-a").On != power {
 			t.Fatalf("%s: %s", what, host(hist[0], "pc-a").Text)
 		}
 	}

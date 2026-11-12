@@ -340,6 +340,15 @@ The rules, in plain words:
   is the agent's own, with the countdown that can be cancelled. If the agent can no longer take it (power
   control was switched off for the machine during the run), nothing is sent, also not a node shutdown through
   the Proxmox API (`node_power: true`), and the machine is left on and reported.
+* **The report says what the run saw, not what it assumed.** Before a machine's result is written the run
+  looks at it once more. An answer from its agent, or a refused connection, is "is ON". A machine that gives
+  nothing at all after a shutdown was asked for, once its countdown is over and for 20 seconds, is "off (not
+  answering)". When the run cannot see it either way within half a minute, the result says "Asked to switch
+  off, not confirmed" (or "not confirmed that it is on"), with the power "on or off: not known". So: a
+  **Cancel run** that comes after a countdown has run out reports that machine as off, not as "it is ON"; a
+  shutdown request whose answer was lost (a timeout) is watched like one that was accepted, and the report
+  says how it ended; and a machine that refuses the connection after its countdown (its agent stopped, the
+  system hangs in its shutdown) is never "switched off": after 5 minutes it is reported as ON.
 * **Nobody is asked.** The run does not look whether someone is signed in or working on a machine it woke,
   and shows nothing on its screen before the agent's own shutdown notice. Use it for machines that are off
   because nobody is using them.

@@ -34,6 +34,10 @@ func opCode(err error) string {
 
 // stepHost does at most the next thing for one machine. The caller holds m.mu.
 func (m *Manager) stepHost(ctx context.Context, r *Run, h *Host, now time.Time) {
+	if h.verdict != nil { // its steps are over: only the last look is left
+		m.look(r, h, now)
+		return
+	}
 	info, ok := m.Ops.Host(h.ID)
 	if !ok {
 		m.endAsIs(r, h, now, "It is no longer in the panel, so the run let go of it")
@@ -93,14 +97,19 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 	var err error
 	id, by := h.ID, r.By
 	m.io(func() { err = m.Ops.CancelShutdown(ctx, id, by) })
+	// A cancel that comes when the countdown has run out (the run takes offConfirm to see a machine go) finds a
+	// machine that is off, or going: what is written is what the last look sees, not "it is ON" (r2-p2-05).
+	due := clock(*h.ShutdownAt)
 	if err != nil {
 		m.emit(EvStep, r, h, "cancel", nil, opText(err))
-		m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s, but its shutdown countdown could not be called off (%s): it may switch off at %s. "+
-			"Cancel it on the machine's page.", why, opText(err), clock(*h.ShutdownAt)))
+		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s, but its shutdown countdown could not be called off (%s): it may switch off at %s. "+
+			"Cancel it on the machine's page.", why, opText(err), due),
+			fmt.Sprintf("%s, but its shutdown countdown (due at %s) could not be called off (%s).", why, due, opText(err)))
 		return false
 	}
 	m.emit(EvStep, r, h, "cancel", nil, "ok")
-	m.end(r, h, StLeftOn, OnYes, now, why+": its shutdown countdown was called off. The run woke it and it is ON."+updateTail(h))
+	m.endSeen(r, h, StLeftOn, OnYes, now, why+": its shutdown countdown was called off. The run woke it and it is ON."+updateTail(h),
+		why+": its shutdown countdown (due at "+due+") was asked to be called off."+updateTail(h))
 	return false
 }
 
@@ -166,7 +175,8 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 	id, by := h.ID, r.By
 	m.io(func() { answer = m.Ops.Probe(ctx, id) })
 	if answer != "timeout" && answer != "connection failed" {
-		m.done(h) // no wake goes out
+		m.done(h)       // no wake goes out
+		h.askedAt = now // something at its address answered the run itself, just now
 	}
 	switch answer {
 	case "":
@@ -498,8 +508,8 @@ func (m *Manager) stepSettling(ctx context.Context, r *Run, h *Host, info HostIn
 	o := m.Ops.Observe(h.ID)
 	if !o.Online { // the agent restarts after an update
 		if now.Sub(h.Since) > r.Settings.Settle+agentBack {
-			m.end(r, h, StLeftOn, OnYes, now, "Its agent did not answer again after the update, so Fairy could not ask it to shut down. The run woke it and it is "+
-				"probably still ON."+updateTail(h))
+			lead := "Its agent did not answer again after the update, so Fairy could not ask it to shut down. The run woke it"
+			m.endSeen(r, h, StLeftOn, OnYes, now, lead+" and it is ON."+updateTail(h), lead+"."+updateTail(h))
 		}
 		return
 	}
@@ -519,16 +529,32 @@ func (m *Manager) stepShutting(r *Run, h *Host, now time.Time) {
 			m.dirty = true
 		}
 	}
-	if !o.Online {
+	// lost: all the run knows of its shutdown is a request that got no answer
+	lost := h.ShutdownUnsure && !h.pendingSeen
+	if !o.Online && o.OnBy == "" { // nothing at all from it
 		if h.offSince.IsZero() {
 			h.offSince = now
 		}
 		if now.After(due) && now.Sub(h.offSince) >= offConfirm {
-			m.end(r, h, StOff, OnNo, now, woken(h)+", "+updateWords(h)+", and switched off again.")
+			tail := "."
+			if lost {
+				tail = " (the shutdown request got no answer, but it went off when the countdown was due)."
+			}
+			m.end(r, h, StOff, OnNo, now, woken(h)+", "+updateWords(h)+", and switched off again"+tail)
 		}
 		return
 	}
 	h.offSince = time.Time{}
+	if !o.Online {
+		// Its agent does not answer, and something else shows that the machine runs (it refuses the connection:
+		// its agent stopped, the system hangs in its shutdown). That is a machine that is on, here as everywhere
+		// else (r2-p2-05): it is never reported as "switched off".
+		if now.Sub(due) > offGrace {
+			m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("It still shows as on %s after its shutdown was due (%s), and its agent does not answer: the shutdown did not finish. It is ON.",
+				span(offGrace), o.OnBy)+updateTail(h))
+		}
+		return
+	}
 	// An answer from after the request, well before the countdown ends, that has no countdown in it: it was
 	// cancelled. One such answer can come from a poll that was already on its way when the shutdown was asked
 	// for, so it counts when the run has seen the countdown before, or with the next answer (a cancel within
@@ -538,6 +564,8 @@ func (m *Manager) stepShutting(r *Run, h *Host, now time.Time) {
 		h.noPendingAt = o.SeenAt
 	}
 	switch {
+	case gone && lost && o.SeenAt.After(h.noPendingAt):
+		m.end(r, h, StLeftOn, OnYes, now, "The shutdown request got no answer, and its agent shows no countdown: the request did not arrive. It is ON."+updateTail(h))
 	case gone && (h.pendingSeen || o.SeenAt.After(h.noPendingAt)):
 		m.end(r, h, StLeftOn, OnYes, now, "Its shutdown was cancelled, in the panel or on the machine, so it is ON."+updateTail(h))
 	case now.Sub(due) > offGrace:

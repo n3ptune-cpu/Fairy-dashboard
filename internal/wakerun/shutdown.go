@@ -128,6 +128,7 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 	var at time.Time
 	var err error
 	id, by, grant := h.ID, r.By, h.grant // read under the lock; the request goes out without it
+	before := m.now()
 	m.io(func() { at, err = m.Ops.Shutdown(ctx, id, delay, by, grant) })
 	m.done(h)
 	params := map[string]any{"delay_s": int(delay.Seconds())}
@@ -141,6 +142,15 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 		case opCode(err) == CodeRateLimited && h.retries < maxRetries:
 			h.retries++
 			m.say(h, "its agent is busy (its request limit): trying the shutdown again")
+		case opCode(err) == CodeNoAnswer:
+			// The request left and its answer did not come: the countdown may be running, and the machine will
+			// then go off (r2-p2-05). That is not "Left ON". The run watches the machine as after a request that
+			// was accepted: its agent's own word (a countdown, or none) and whether it goes quiet when the
+			// countdown would be over decide what the report says.
+			sent := m.now()
+			end := sent.Add(delay)
+			h.ShutdownAt, h.shutdownSent, h.ShutdownUnsure = &end, before, true
+			m.enter(h, StShutting, sent, fmt.Sprintf("the shutdown request got no answer (%s): it may have arrived. If it did, it switches off at about %s", opText(err), clock(end)))
 		default:
 			m.end(r, h, StLeftOn, OnYes, now, "Left ON: the shutdown was not accepted ("+opText(err)+")."+updateTail(h))
 		}

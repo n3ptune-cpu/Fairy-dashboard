@@ -52,7 +52,9 @@ type machine struct {
 	lastAt     float64
 	lastOK     bool
 	lastMsg    string
-	shutMode   string // ok | approval | refuse | ignore (accepted, but it stays on) | busy | noroute (the agent route is gone)
+	shutMode   string // ok | approval | refuse | ignore (accepted, but it stays on) | busy | noroute (the agent route is gone) | hang (at the end of the countdown its agent stops and the machine stays on: it refuses the connection)
+	cancelOK   bool   // a cancel is answered with "ok" also when the machine is gone (what a stand-in agent may do)
+	shutLost   string // the answer to the first shutdown request is lost: "arrives" (the countdown runs) | "never"
 	pending    *Pending
 	staleOnce  bool // the first answer after a shutdown was asked for does not have the countdown in it yet
 	guests     int
@@ -324,6 +326,13 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 	if mc.pending != nil {
 		return time.Time{}, &OpError{Text: "a " + mc.pending.Action + " is already pending; cancel it first"}
 	}
+	if mc.shutLost != "" && !mc.busyDone["shutdown lost"] { // a timeout: the panel does not learn whether the agent got it
+		mc.busyDone["shutdown lost"] = true
+		if mc.shutLost == "arrives" {
+			mc.pending = &Pending{Action: "shutdown", At: w.now.Add(delay)}
+		}
+		return time.Time{}, errLost
+	}
 	mc.pending = &Pending{Action: "shutdown", At: w.now.Add(delay)}
 	return mc.pending.At, nil
 }
@@ -331,7 +340,7 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 func (w *world) CancelShutdown(_ context.Context, id, _ string) error {
 	mc := w.ms[id]
 	w.calls = append(w.calls, "cancel "+id)
-	if !w.answers(mc) {
+	if !w.answers(mc) && !mc.cancelOK {
 		return &OpError{Text: "agent unreachable: connection failed"}
 	}
 	mc.pending = nil
@@ -376,7 +385,10 @@ func (w *world) sim() {
 			}
 		}
 		if mc.pending != nil && !w.now.Before(mc.pending.At) {
-			if mc.pending.Action == "shutdown" && mc.shutMode != "ignore" {
+			switch {
+			case mc.pending.Action == "shutdown" && mc.shutMode == "hang":
+				mc.agentDown, mc.onBy = true, OnByRefused // the system hangs in its shutdown: it runs, its agent is gone
+			case mc.pending.Action == "shutdown" && mc.shutMode != "ignore":
 				mc.on, mc.wentOff = false, true
 			}
 			mc.pending = nil
@@ -523,8 +535,10 @@ func (w *world) wellReported(r *Run) {
 		}
 		// what the run believes about the machine's power must not be wrong
 		mc := w.ms[h.ID]
+		// (since r2-p2-05 without an exception: "on" for a machine that is off, or "off" for one that is on, in
+		// whatever state it ended, fails the test)
 		if mc != nil && ((h.On == OnNo && (!mc.wentOff || h.State != StOff)) || (h.State == StOff && h.On != OnNo) ||
-			(h.On == OnYes && !mc.on && h.State != StLeftOn && h.State != StStayedOn) || (h.On == OnUntouched && (mc.wakes > 0 || mc.shutdowns > 0))) {
+			(h.On == OnYes && !mc.on) || (h.On == OnNo && mc.on) || (h.On == OnUntouched && (mc.wakes > 0 || mc.shutdowns > 0))) {
 			w.t.Errorf("%s: the run says it is %q, the machine is on=%v (%s: %s)", h.ID, h.On, mc.on, h.State, h.Text)
 		}
 	}
