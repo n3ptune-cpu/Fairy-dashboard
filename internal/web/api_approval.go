@@ -340,10 +340,23 @@ func (s *Server) machineFor(a config.Agent, keys []api.TrustKey) approvalMachine
 		m.Why = "nobody would be allowed to approve on it: set approval.users in config.yaml"
 	case len(m.Users) > api.MaxTrustUsers:
 		m.Why = fmt.Sprintf("%d users would be allowed; a machine takes at most %d", len(m.Users), api.MaxTrustUsers)
+	case s.Cfg.ApprovalIssuerProblem() != "":
+		// no machine takes an issuer that is not https: it was "Ready", and Turn on then failed (audit 6, r4-p3-09)
+		m.Why = s.Cfg.ApprovalIssuerProblem()
 	default:
 		m.Ready = true
 	}
 	return m
+}
+
+// ApprovalWarnings is what the log says at start about the approval: block (fairy serve, and the test build):
+// an issuer no machine accepts, in the words of the dialog's "Not ready" and of `fairy admin config check`.
+func ApprovalWarnings(cfg *config.Panel) []string {
+	if why := cfg.ApprovalIssuerProblem(); why != "" {
+		return []string{"approval: " + why + "; it is " + cfg.ApprovalIssuer() + ". The machines only accept an https issuer: no machine is " +
+			"ready to be switched on for the check until approval.issuer in config.yaml is an https:// address"}
+	}
+	return nil
 }
 
 func orText(a, b string) string {
@@ -441,6 +454,11 @@ func (s *Server) approvalTurnOn(c *reqCtx) error {
 	if !s.Cfg.ApprovalOn() {
 		return apierr.New(409, "this panel has no Pocket ID client for approvals (approval: in config.yaml, with the Client ID of a separate "+
 			"client for PC actions): the check cannot be switched on from here")
+	}
+	if why := s.Cfg.ApprovalIssuerProblem(); why != "" {
+		// what the page says for every machine ("Not ready: the issuer must be https"), for a caller that did not look
+		return apierr.New(409, "The check cannot be switched on from this panel: "+why+" (it is "+textsafe.Clip(s.Cfg.ApprovalIssuer(), 200)+
+			"; approval.issuer in config.yaml). Nothing was sent.")
 	}
 	if g := c.approved(); g != nil {
 		return s.turnOnRun(c, u, g, b.Hosts)

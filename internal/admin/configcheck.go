@@ -128,8 +128,8 @@ func approvalCheck(cfg *config.Panel, problems, notes []string) ([]string, []str
 	}
 	notes = append(notes, fmt.Sprintf("approval.client_id: %s  (at %s, from %s; it must be the Client ID of the separate client for PC actions in Pocket ID, not the sign-in client's)", cfg.Approval.ClientID, iss, from),
 		fmt.Sprintf("approval callback to register in Pocket ID for that client: %s  (Requires Re-Authentication: ON, PKCE: ON)", cfg.ApprovalCallback()))
-	if !strings.HasPrefix(iss, "https://") {
-		problems = append(problems, "approval: the issuer "+iss+" is not https. The machines only accept an https issuer, so the check "+
+	if why := cfg.ApprovalIssuerProblem(); why != "" { // the words of the Approval dialog's "Not ready" and of the log at start
+		problems = append(problems, "approval: "+why+"; it is "+iss+". The machines only accept an https issuer, so the check "+
 			"cannot be switched on for any of them")
 	}
 	if os.Getenv(config.ApprovalSecretEnv) != "" {

@@ -512,7 +512,9 @@ approval:
 ```
 
 `sudo fairy admin config check` shows the client, the callback address to enter in Pocket ID and whether the
-secret is set (present / not set, never its value). nginx needs no change: the callback is under `/auth/`
+secret is set (present / not set, never its value). The Pocket ID of the approvals must be at an `https://`
+address: a machine takes no other. With an `http://` one the panel starts, says so in its log and in the
+config check, and every machine is "Not ready: the issuer must be https". nginx needs no change: the callback is under `/auth/`
 like the sign-in's. With `deploy/nginx.example.conf` that is at most 10 round trips a minute per address
 (burst 10), sign-ins included.
 

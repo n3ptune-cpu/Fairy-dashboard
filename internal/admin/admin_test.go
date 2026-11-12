@@ -290,7 +290,8 @@ func TestConfigCheckExplainsApproval(t *testing.T) {
 	if !strings.Contains(out, "ok    FAIRY_APPROVAL_CLIENT_SECRET: present") || strings.Contains(out, "not-printed-approval-secret") {
 		t.Errorf("the secret is reported as present only:\n%s", out)
 	}
-	if !strings.Contains(out, "WARN  approval: the issuer http://id.lan:1411 is not https") || !strings.Contains(out, "from approval.issuer") {
+	// (audit 6, r4-p3-09: the words of the dialog's "Not ready"; it was "the issuer http://id.lan:1411 is not https")
+	if !strings.Contains(out, "WARN  approval: the issuer must be https; it is http://id.lan:1411. The machines only accept an https issuer") || !strings.Contains(out, "from approval.issuer") {
 		t.Errorf("an issuer the machines refuse must be a warning:\n%s", out)
 	}
 	// The owner's mix-up of 2026-11-12: the sign-in client's Client ID in approval.client_id. The check refuses

@@ -230,6 +230,7 @@ func DeploymentWarnings(cfg *config.Panel, secrets config.Secrets) []string {
 		out = append(out, "FAIRY_INSECURE_COOKIES is set: the session cookie is NOT Secure. Local http testing only.")
 	}
 	out = append(out, config.EnvProblems()...) // a comment behind a value in fairy.env (names only, never a value)
+	out = append(out, ApprovalWarnings(cfg)...)
 	if len(cfg.OIDC.AllowedGroups) == 0 && len(cfg.OIDC.AllowedEmails) == 0 {
 		out = append(out, "oidc.allowed_groups is empty: every Pocket ID user who can reach this client may sign in")
 	}
