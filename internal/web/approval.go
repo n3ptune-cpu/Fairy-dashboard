@@ -134,6 +134,9 @@ func (c *reqCtx) askApproval(u *model.User, plan *approvalPlan) error {
 	c.audit(u, stepUpAction, c.r.URL.Path, map[string]any{"approval": names}, stepUpAsked)
 	kept, why := c.keepPending(u, plan)
 	msg := "Confirm it's you: " + andNames(names) + " checks this approval itself, so it needs its own passkey, every time."
+	if len(names) > 1 {
+		msg = "Confirm it's you: " + andNames(names) + " each check this approval themselves, so it needs its own passkey, every time."
+	}
 	if plan.message != "" {
 		msg = plan.message
 	}

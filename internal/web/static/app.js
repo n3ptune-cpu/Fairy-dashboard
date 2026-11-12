@@ -252,6 +252,7 @@ function showStepUp(pending, detail) {
   // approval: a machine this action goes to checks the approval itself (the Pocket ID client "Fairy PC actions")
   const appr = detail?.approval && typeof detail.approval === "object" ? detail.approval : null;
   const apprWho = appr ? andList((Array.isArray(appr.machines) ? appr.machines : []).map(String)) || "The machine" : "";
+  const apprMany = !!appr && Array.isArray(appr.machines) && appr.machines.length > 1;
   const newClient = !kept && detail?.not_kept === "new_client";  // this browser / address has not confirmed for the session yet
   if (perAction && !kept && !newClient) { flash(`${pending.label}: cannot be confirmed (the request is too large to keep for the sign-in)`, true); return; }
   if (!kept) { try { sessionStorage.setItem(PENDING_KEY, JSON.stringify({ ...pending, ts: Date.now(), hash: location.hash })); } catch { /* ignore */ } }
@@ -271,11 +272,11 @@ function showStepUp(pending, detail) {
   m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle"${appr ? " data-approval" : ""}>
     <div class="stepup-ico">${I.shield}</div>
     <h3 id="stitle">Confirm it's you</h3>
-    <p>${appr ? `<b id="su-machine">${esc(apprWho)}</b> will check this itself before it does anything. Pocket ID will ask you to sign in to <b id="su-client">${esc(appr.client || "Fairy PC actions")}</b>. Your passkey confirms only the action below.`
+    <p>${appr ? `<b id="su-machine">${esc(apprWho)}</b> ${apprMany ? "will each check this themselves before they do anything" : "will check this itself before it does anything"}. Pocket ID will ask you to sign in to <b id="su-client">${esc(appr.client || "Fairy PC actions")}</b>. Your passkey confirms only the action below.`
       : perAction ? "This action needs its own Pocket ID sign-in. It confirms only the action below."
       : `${win !== cfgWin ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${esc(winText)}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtSince(age)}</b> ago.` : ""}`}</p>
     <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}${items}</div>
-    <p class="note" id="su-note">${kept && appr ? "You'll confirm with your passkey at Pocket ID. Right after that, Fairy sends this action with your approval to the machine, once, and shows you the result here. Nothing has been done yet."
+    <p class="note" id="su-note">${kept && appr ? `You'll confirm with your passkey at Pocket ID. Right after that, Fairy sends this action with your approval to ${apprMany ? "each machine" : "the machine"}, once, and shows you the result here. Nothing has been done yet.`
       : kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
       : newClient ? `This browser, or the address it now has, has not confirmed a sign-in for this session yet, so nothing was kept. Sign in again at Pocket ID (passkey) and you come straight back here to finish it${perAction ? "; it then asks once more, for this action alone" : ""}. Nothing has been sent yet.`
       : "You'll sign in again at Pocket ID (passkey) and come straight back here to finish it. Nothing has been sent yet."}</p>
@@ -807,7 +808,8 @@ function approvalBox(s) {
   return `<div class="panel glass pad approval ${bind ? "errcard" : ""}" data-key="approval">${head}${bind}
     <div class="note">Before this machine changes its fans, shuts down, restarts, sleeps or updates its agent, <b>${esc(approvalBy(a))}</b> verifies a Pocket ID approval (passkey) made for exactly that action. The panel cannot skip it.</div>
     ${row("Checked by", esc(approvalBy(a)))}
-    ${rec?.machine_id ? row("Machine id", `<code>${esc(shortKey(rec.machine_id))}</code>`, `The id Fairy has on record for this machine and puts into every approval for it: ${rec.machine_id} (${rec.pinned || ""}${rec.pinned_by ? `, by ${rec.pinned_by}` : ""})`) : ""}
+    ${rec?.machine_id ? row(rec.shown_id && rec.shown_id !== rec.machine_id ? "Machine id on record" : "Machine id", `<code>${esc(shortKey(rec.machine_id))}</code>`, `The id Fairy has on record for this machine and puts into every approval for it: ${rec.machine_id} (${rec.pinned || ""}${rec.pinned_by ? `, by ${rec.pinned_by}` : ""})`) : ""}
+    ${rec?.machine_id && rec.shown_id && rec.shown_id !== rec.machine_id ? row("Machine id it shows", `<code id="ap-shown">${esc(shortKey(rec.shown_id))}</code>`, `The id the machine shows now: ${rec.shown_id}`) : ""}
     ${checks.length ? row("Checked by the agent", esc(andList(checks)), "These requests do not go through the helper on this machine; its agent checks them with the same trust file") : ""}
     ${row("Pocket ID", esc(a.issuer || "–"))}
     ${row("Client", `<code>${esc(a.client_id || "–")}</code>`, "The Pocket ID client \"Fairy PC actions\"")}
@@ -843,7 +845,8 @@ function approvalFresh(s, a) {
   if (apv.sig[s.id] !== apvSig(a) && Date.now() - apv.at > 3000) fetchApproval(true);
 }
 const apvMachine = (s) => (apv.data?.machines || []).find((m) => m.system_id === s.id || m.id === s.id);
-const apvUsers = (m) => (m.users || []).map((u) => `${esc(u.name || "not a user of this panel")} <code title="${esc(u.sub)}">${esc(shortKey(u.sub))}</code> <span class="note">${esc(u.why)}</span>`).join("; ");
+// who may approve: "Name id (why)"; an id from approval.users that is no user of this panel has no name to show
+const apvUsers = (m) => (m.users || []).map((u) => `${u.name ? `${esc(u.name)} ` : ""}<code title="${esc(u.sub)}">${esc(shortKey(u.sub))}</code> <span class="note">(${esc(u.why === "approval.users" ? "from approval.users" : u.why)}${u.name ? "" : "; not a user of this panel"})</span>`).join("; ");
 // The button on the page of a machine whose check is off (admins), or why it cannot be switched on from here.
 function approvalTurnOn(s) {
   if (!state.me?.can_control) return "";
@@ -878,7 +881,7 @@ function approvalBanner() {
   const row = (m) => { const [cls, label] = APPROVAL_STATE[m.state] || ["", "–"];
     return `<tr class="row" data-key="apm-${esc(m.id)}"><td class="namecell"><b>${state.byId[m.system_id] ? `<a href="#/system/${enc(m.system_id)}">${esc(m.name)}</a>` : esc(m.name)}</b></td>
       <td><span class="chip ${cls}">${esc(label)}${m.last_known ? " · last known" : ""}</span>${m.binding && AP_BINDING[m.binding] ? ` <span class="chip bad" title="${esc(m.binding_text || AP_BINDING[m.binding][1])}">${esc(AP_BINDING[m.binding][0])}</span>` : ""}${m.stale_keys ? ' <span class="chip bad" title="It pins a key Pocket ID no longer publishes: fairy-agent helper-trust set --fetch-keys on the machine">old key</span>' : ""}${m.other_trust ? ' <span class="chip warn" title="It trusts another Pocket ID, client, key or list of users than this panel would set for it now: set by somebody else, changed on the machine, or this panel\'s own list changed since">other trust</span>' : ""}</td>
-      <td>${esc(m.enforced_by || "–")}</td><td class="note">${m.ready ? "ready" : esc(m.why || "")}</td></tr>`; };
+      <td data-l="checked by">${esc(m.enforced_by || "–")}</td><td class="note">${m.ready ? "ready" : esc(m.why || "")}</td></tr>`; };
   return `<div class="panel glass pad approval" data-key="apv">
     <div class="wu-top"><h3>The check on the machine itself</h3>
       <button class="btn primary" type="button" data-act="ap-open" ${d.ready && !why ? "" : "disabled"}
@@ -1803,10 +1806,12 @@ function wakeUpdateBox() {
   if (!d) return wu.error ? `<div class="panel glass pad wu"><h3>Update unpowered hosts</h3><div class="error">${esc(wu.error)}</div></div>` : "";
   const why = controlWhyNot(), joined = d.hosts.filter((h) => h.opted_in), can = joined.filter((h) => h.choice);
   const able = d.hosts.filter((h) => h.can_join || h.opted_in);
-  const row = (h) => `<tr class="row" data-key="wum-${esc(h.id)}"><td class="namecell"><b title="${esc(h.name)}">${state.byId[h.id] ? `<a href="#/system/${enc(h.id)}">${esc(h.name)}</a>` : esc(h.name)}</b></td>
+  // why a machine is in no run: in the last column, and on a phone (where that column is scrolled out of view) under its name
+  const whyNot = (h) => ((h.opted_in && !h.choice) || h.approval ? h.why || "" : "");
+  const row = (h) => `<tr class="row" data-key="wum-${esc(h.id)}"><td class="namecell"><b title="${esc(h.name)}">${state.byId[h.id] ? `<a href="#/system/${enc(h.id)}">${esc(h.name)}</a>` : esc(h.name)}</b>${whyNot(h) ? `<span class="note wu-why">${esc(whyNot(h))}</span>` : ""}</td>
     <td><span class="chip ${h.power === "on" ? "ok" : h.power === "off" ? "" : "warn"}"${h.asleep ? ' title="Sent to sleep from the panel. Asleep and off look the same from here."' : ""}>${esc(h.asleep ? "asleep or off" : h.power)}</span></td>
     <td>${h.can_wake ? `via ${esc(h.relay)}` : `<span class="note" title="Fairy cannot wake this machine: in a run it is only updated while it is on">${esc(h.no_wake || h.why_not)}</span>`}</td>
-    <td>${h.opted_in ? '<span class="chip ok">switched on</span>' : '<span class="note">off</span>'}${(h.opted_in && !h.choice) || h.approval ? `<div class="note">${esc(h.why)}</div>` : ""}</td>
+    <td>${h.opted_in ? '<span class="chip ok">switched on</span>' : '<span class="note">off</span>'}${whyNot(h) ? `<div class="note wu-why-col">${esc(whyNot(h))}</div>` : ""}</td>
     <td class="num"><button class="btn sm" type="button" data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"
       ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
   const earlier = d.active ? d.last : d.last.slice(1), showEarlier = !!wu.open.earlier;
@@ -2297,7 +2302,8 @@ document.addEventListener("click", async (e) => {
   } else if (act === "power" && s) {
     const a = t.dataset.action;
     const cap = state.caps[s.id]?.actions.find((c) => c.action === a);
-    if (cap?.confirm === "none") powerNow(s, a); else openPowerDialog(s, a);
+    // an item that needs no dialog (Cancel pending, Power on) closes the menu like the others do (audit 5, r2-b2-06)
+    if (cap?.confirm === "none") { state.menu = null; render(); powerNow(s, a); } else openPowerDialog(s, a);
   } else if (act === "resume") { runPending();
   } else if (act === "resume-drop") { dropPending(); render();
   } else if (act === "power-now" && s) {

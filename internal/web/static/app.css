@@ -743,10 +743,23 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .modal-box .wu-sub:first-of-type { margin-top: 4px; }
 .su-items { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--text); max-height: 40vh; overflow-y: auto; }
 .su-items li { margin: 4px 0; overflow-wrap: anywhere; }
+.table.wu-machines .wu-why { display: none; }
 @media (max-width: 760px) {
   .wu-head .push { margin-left: 0; }
   .wu-list { grid-template-columns: 1fr; }
   .table.wu-machines { min-width: 560px; } /* scrolls inside its panel instead of breaking every word */
+  /* why a machine is in no run: under its name, where it wraps, instead of in a column that is scrolled out of view */
+  .table.wu-machines .wu-why { display: block; max-width: 62vw; white-space: normal; overflow-wrap: anywhere; }
+  .table.wu-machines .wu-why-col { display: none; }
+  /* "The check on the machine itself": each machine is a block, and its reason is a line of its own that wraps */
+  .table.ap-machines, .table.ap-machines tbody { display: block; }
+  .table.ap-machines thead { display: none; }
+  .table.ap-machines tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--rule); }
+  .table.ap-machines td { padding: 0; border: 0; min-width: 0; }
+  .table.ap-machines td:nth-child(2) { text-align: right; }
+  .table.ap-machines td[data-l] { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; }
+  .table.ap-machines td[data-l]::before { content: attr(data-l) ": "; color: var(--faint); }
+  .table.ap-machines td.note { grid-column: 1 / -1; overflow-wrap: anywhere; }
   /* Updates on a phone: both tables scroll sideways inside their box. The button of a row stays in the window
      while the other columns pass under it, and its shadow shows that there is more to the left and right. */
   .table.updates td.num:last-child, .table.wu-machines td.num:last-child { position: sticky; right: 0; background: var(--panel);

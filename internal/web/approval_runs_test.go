@@ -248,7 +248,9 @@ func TestSwitchOnForRunsSaysWhatTheRowSays(t *testing.T) {
 	if r := put("pc-b"); r.code != 200 || !strings.HasPrefix(r.body["message"].(string), "PC-B can now be chosen for \"Update unpowered hosts\"") {
 		t.Fatalf("pc-b: %d %s", r.code, r.raw)
 	}
-	if js := appJS(t); !strings.Contains(js, "${(h.opted_in && !h.choice) || h.approval ? `<div class=\"note\">${esc(h.why)}</div>` : \"\"}") {
+	// (in its column, and under the name on a phone, where that column is scrolled out of view: audit 5, r2-b2-07)
+	if js := appJS(t); !strings.Contains(js, "const whyNot = (h) => ((h.opted_in && !h.choice) || h.approval ? h.why || \"\" : \"\");") ||
+		!strings.Contains(js, "${whyNot(h) ? `<div class=\"note wu-why-col\">${esc(whyNot(h))}</div>` : \"\"}") || !strings.Contains(js, "${whyNot(h) ? `<span class=\"note wu-why\">${esc(whyNot(h))}</span>` : \"\"}") {
 		t.Error("the row shows the reason only after the switch")
 	}
 }

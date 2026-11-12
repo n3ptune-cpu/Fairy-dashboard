@@ -19,6 +19,7 @@ func TestUIApproval(t *testing.T) {
 		`fairy-agent helper-trust show`,                                                                           // where a broken machine is repaired
 		`changed only on the machine, as administrator`,                                                           // locked
 		`will check this itself before it does anything`, `Pocket ID will ask you to sign in to`, `data-approval`, // the dialog
+		`apprMany ? "will each check this themselves before they do anything" :`,
 		`esc(a.issuer || "–")`, `esc(a.client_id || "–")`, `esc(k.kid)`, `esc(shortKey(k.thumbprint))`, `esc(a.error)`, `esc(a.agent_error)`,
 		`esc(a.users ?? "–")`, `esc(a.fan_window_s)`, `esc(a.boot_shutdown_s)`, `esc(apprWho)`, `esc(appr.client || "Fairy PC actions")`,
 		// which machine it is (audit 5, r1-x1-01): one flag with its words on hover and click, the reasons behind

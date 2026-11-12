@@ -438,9 +438,9 @@ func (s *Server) confirmStepUp(c *reqCtx) error {
 	round := randToken(24)
 	kept := s.codec.live.armPending(key, b.PendingID, c.client(), round, s.now())
 	if kept == nil {
-		return apierr.New(409, map[string]any{"code": "nothing_kept", "message": "The action is no longer waiting: it was " +
-			"cancelled, it is more than 3 minutes old, or it was asked for from another browser or address. Nothing was " +
-			"done. Press the button again."})
+		return apierr.New(409, map[string]any{"code": "nothing_kept", "message": "The action is no longer waiting. Another tab of yours " +
+			"started an action meanwhile, or pressed Continue for an older one (only one action waits at a time); or it was cancelled, is more " +
+			"than 3 minutes old, or was asked for from another browser or address. Nothing was done. Press the button again."})
 	}
 	if kept.Approval != nil { // a machine checks this itself: one round trip with the client "Fairy PC actions"
 		return s.startApproval(c, u, kept, target, round)
