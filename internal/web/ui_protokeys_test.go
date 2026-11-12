@@ -38,8 +38,8 @@ func TestUIMapsByServerNamesHaveNoPrototype(t *testing.T) {
 			t.Errorf("app.js still has a plain object looked up by name: %v", m)
 		}
 	}
-	if n := len(regexp.MustCompile(`(?m)^const [A-Z][A-Z_]+ = table\(\{`).FindAllString(js, -1)); n != 15 {
-		t.Errorf("want the page's 15 tables made with table(), found %d", n)
+	if n := len(regexp.MustCompile(`(?m)^const [A-Z][A-Z_]+ = table\(\{`).FindAllString(js, -1)); n != 17 {
+		t.Errorf("want the page's 17 tables made with table(), found %d", n)
 	}
 
 	t.Run("in node, with those names", func(t *testing.T) {

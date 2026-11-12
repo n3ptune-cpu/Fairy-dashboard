@@ -147,7 +147,9 @@ func TestNoRemoteChangeOfTrust(t *testing.T) {
 			got = append(got, r)
 		}
 	}
-	want := "GET /api/admin/approval|GET /auth/approval/callback|POST /api/admin/approval/turn-on"
+	// (accept changes what the PANEL has on record for a machine, after the machine was changed on the machine;
+	// it sends the machine nothing)
+	want := "GET /api/admin/approval|GET /auth/approval/callback|POST /api/admin/approval/accept/{id}|POST /api/admin/approval/turn-on"
 	if strings.Join(got, "|") != want {
 		t.Fatalf("routes about approvals: %v, want %s", got, want)
 	}

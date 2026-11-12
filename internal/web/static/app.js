@@ -102,6 +102,7 @@ I.onoff = svg('<path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>', 15);
 I.sessions = svg('<rect x="2.5" y="4" width="13" height="10" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="16.5" y="9" width="5" height="11" rx="1.2"/>');
 I.close = svg('<path d="M6 6l12 12M18 6 6 18"/>', 14);
 I.helperOk = svg('<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/>', 16);
+I.apKey = svg('<circle cx="7.5" cy="15.5" r="4"/><path d="m10.5 12.5 9-9M16 7l3 3M13.5 9.5l2 2"/>', 16);
 I.helperDown = svg('<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="M12 8v4.6M12 15.6v.01"/>', 16);
 I.info = svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.01"/>', 16);
 
@@ -693,29 +694,72 @@ const APPROVAL_VERB = table({ fan_set: "fan speed", fan_mode: "fan mode", power:
 const approvalOf = (s) => (s?.approval && typeof s.approval === "object" ? s.approval : null);
 const approvalBy = (a) => (a.enforced_by === "helper" ? "the elevated helper (LocalSystem)" : a.enforced_by === "agent" ? "the agent itself" : "–");
 const shortKey = (t) => (typeof t === "string" && t.length > 16 ? `${t.slice(0, 8)}…${t.slice(-6)}` : String(t ?? ""));
-// Host list and Updates page: a small flag only when the check is broken (the machine then refuses control).
+// The panel's own decision about which machine a host is (a.binding; absent: in order): a name and one sentence.
+// While one of these holds, Fairy asks the machine for no approval and sends it no fan, power or update request.
+const AP_BINDING = table({
+  changed: ["Machine id changed", "It shows another machine id than the one Fairy has on record. No approvals until an admin accepts the new id."],
+  duplicate: ["One machine id on two hosts", "Another host has the same machine id: each would accept an approval made for the other. No approvals for either."],
+  vanished: ["Check gone", "It had the check on the machine itself and shows none now. Fairy sends it no fan, power or update request."],
+  too_old: ["Agent too old", "Its approvals do not name the machine. Install the current agent on it."],
+  no_record: ["No machine id on record yet", "Fairy takes its id on record with the machine's next answer."],
+  unreadable: ["Record unreadable", "Fairy cannot read its record of machine ids (machines.json), so it asks no machine for an approval."] });
+const AP_BINDING_MORE = table({
+  changed: ["An administrator ran <code>fairy-agent helper-trust set --new-machine-id</code> on the machine, or cleared its trust and set it again: accept the new id.",
+    "If nobody did, what answers at this host's address may be another machine: do not accept, look at the host."],
+  duplicate: ["One of the two was made from a copy of the other's disk (a cloned VM, a restored image). On the copy, as administrator: <code>fairy-agent helper-trust set --new-machine-id</code>, then accept its new id on its page.",
+    "Or one host answers in the name of the other. Accept on the host that is the real one: it keeps the id, and the other stays flagged until it shows an id of its own."],
+  vanished: ["Its trust was removed on the machine (<code>fairy-agent helper-trust clear</code>), or its agent was put back to a release from before this check. Every request would then run with the panel's control token alone.",
+    "Turn the check on again, or accept that it is off."],
+  too_old: ["It runs the test build of 2026-11-11. Its approvals are not tied to one machine, and it refuses this panel's."],
+  no_record: ["Fairy never takes a machine id from an answer that comes with an approval question. Try again in a moment."],
+  unreadable: ["The panel's log says why. Until the file can be read, nothing is approved and no fan, power or update request is sent."] });
+// Host list and host page: one small flag when the check is broken or the panel's decision about the machine is an
+// alarm. It is a button like the helper's sign: its name and words on hover, and a click opens them.
 function approvalChip(s) {
   const a = approvalOf(s);
-  if (!a || a.state !== "broken") return "";
-  return `<span class="chip hchip bad" title="${esc(`This machine's own check of approvals is broken: ${a.error || "no details"}. It refuses fan, power and update requests until that is repaired on the machine.`)}">approval broken</span>`;
+  if (!a) return "";
+  const b = a.binding && a.binding !== "no_record" ? AP_BINDING[a.binding] : null;
+  if (!b && a.state !== "broken") return "";
+  const name = b ? b[0] : "Approval broken";
+  const text = b ? b[1] : `This machine's own check of approvals is broken: ${a.error || "no details"}. It refuses fan, power and update requests until that is repaired on the machine.`;
+  return infoBtn(`apflag-${s.id}`, name, `<p>${esc(text)}</p><p>Details are on <a href="#/system/${enc(s.id)}">its page</a>.</p>`, { cls: "hflag bad", icon: I.apKey, label: `${name}: ${text}` });
+}
+// Host page: the alarm in one line, the reasons behind the info button, and for an admin the one button that
+// accepts what the machine shows now (its new id, or that its check is off).
+function approvalBinding(s, a) {
+  const b = a.binding ? AP_BINDING[a.binding] : null;
+  if (!b) return "";
+  const admin = !!state.me?.can_control, m = admin ? apvMachine(s) : null, why = controlWhyNot();
+  const more = [...(AP_BINDING_MORE[a.binding] || [])];
+  if (m?.with?.length) more.push(`The same id: ${esc(andList(m.with))}.`);
+  if (m?.machine_id) more.push(`On record: <code>${esc(shortKey(m.machine_id))}</code> (${esc(m.pinned || "")}${m.pinned_by ? `, by ${esc(m.pinned_by)}` : ""})${m.shown_id && m.shown_id !== m.machine_id ? `. It shows: <code>${esc(shortKey(m.shown_id))}</code>` : ""}.`);
+  const btn = m?.can_accept ? `<div class="row-gap ap-accept"><button class="btn" type="button" data-act="ap-accept" data-id="${esc(m.id)}" data-name="${esc(s.name)}" data-what="${esc(m.accept)}" ${why ? `disabled title="${esc(why)}"` : ""}>${m.accept === "off" ? "Accept that its check is off" : "Accept this machine's new id"}</button></div>` : "";
+  return `<div class="warnbox ap-bind info-keep" id="ap-bind"><b>${esc(b[0])}.</b> ${esc(b[1])}${infoBtn(`apbind-${s.id}`, b[0], infoList(more))}${btn}</div>`;
 }
 // Host page: what the machine checks itself, who checks, and what it trusts. Everyone who sees the host sees it.
 function approvalBox(s) {
   const a = approvalOf(s);
   if (!a) return "";
-  const [cls, label] = APPROVAL_STATE[a.state] || APPROVAL_STATE.unknown;
+  approvalFresh(s, a);
+  const [cls, label] = a.binding === "vanished" && a.state !== "off" ? ["bad", "gone"] : APPROVAL_STATE[a.state] || APPROVAL_STATE.unknown;
   const row = (k, v, title = "") => `<div class="list-row"><span>${k}</span><span${title ? ` title="${esc(title)}"` : ""}>${v}</span></div>`;
-  const head = `<h3>Approval <span class="chip ${cls}" id="ap-state">${esc(label)}</span></h3>`;
+  const head = `<h3>Approval <span class="chip ${cls}" id="ap-state">${esc(label)}${a.last_known ? " · last known" : ""}</span></h3>`;
+  const bind = approvalBinding(s, a);
+  if (a.last_known || (a.binding === "vanished" && a.state !== "off")) {
+    // made from the panel's record: the machine is silent since the panel started, or answers without the check
+    return `<div class="panel glass pad approval ${bind ? "errcard" : ""}" data-key="approval">${head}${bind}
+      ${a.last_known ? '<div class="note" id="ap-last">No answer since the panel started. It checked approvals itself when Fairy last heard from it, so Fairy sends it nothing on its own confirmation and it is in no run.</div>' : ""}</div>`;
+  }
   const proto = !a.proto || a.proto === 2 || a.last_known ? "" : a.proto < 2 ? '<div class="note warn" id="ap-old">Agent too old: its approvals do not name the machine. Install the current agent on it.</div>'
     : `<div class="note warn">This machine uses version ${esc(a.proto)} of the approval scheme; this panel knows version 2. Update the panel.</div>`;
   const agentErr = a.agent_error ? `<div class="note warn">The agent's own check cannot be used: ${esc(a.agent_error)}</div>` : "";
   if (a.state === "off") {
-    return `<div class="panel glass pad approval" data-key="approval">${head}
-      <div class="note">This machine does not check approvals itself. Fan, power and update requests are confirmed in the panel only (Confirm it's you) and sent with the panel's control token.</div>
+    return `<div class="panel glass pad approval ${bind ? "errcard" : ""}" data-key="approval">${head}${bind}
+      ${bind ? "" : '<div class="note">This machine does not check approvals itself. Fan, power and update requests are confirmed in the panel only (Confirm it\'s you) and sent with the panel\'s control token.</div>'}
       ${row("Would be checked by", esc(approvalBy(a)))}${proto}${agentErr}${approvalTurnOn(s, a)}</div>`;
   }
   if (a.state === "broken" || a.state === "unknown") {
-    return `<div class="panel glass pad approval ${a.state === "broken" ? "errcard" : ""}" data-key="approval">${head}
+    return `<div class="panel glass pad approval ${a.state === "broken" || bind ? "errcard" : ""}" data-key="approval">${head}${bind}
       <div class="${a.state === "broken" ? "warnbox" : "note warn"}" id="ap-error">${a.state === "broken"
         ? `This machine has a trust file it cannot use${a.error ? `: <b>${esc(a.error)}</b>` : ""}. Until it is repaired <b>on the machine</b> it refuses fan, power and update requests. On the machine, as administrator: <code>fairy-agent helper-trust show</code>`
         : `The machine cannot say whether it checks approvals${a.error ? `: ${esc(a.error)}` : " (its elevated helper is not answering)"}. Start the helper (Elevated helper, next to the host name).`}</div>
@@ -723,9 +767,11 @@ function approvalBox(s) {
   }
   const keys = (a.keys || []).map((k) => `<span class="chip key" title="${esc(`${k.alg} · thumbprint ${k.thumbprint}`)}">${esc(k.kid)} · <code>${esc(shortKey(k.thumbprint))}</code></span>`).join(" ") || "–";
   const checks = (a.agent_checks || []).map((v) => APPROVAL_VERB[v]).filter(Boolean);
-  return `<div class="panel glass pad approval" data-key="approval">${head}
+  const rec = state.me?.can_control ? apvMachine(s) : null;  // the id on record: admins only (the approval page's data)
+  return `<div class="panel glass pad approval ${bind ? "errcard" : ""}" data-key="approval">${head}${bind}
     <div class="note">Before this machine changes its fans, shuts down, restarts, sleeps or updates its agent, <b>${esc(approvalBy(a))}</b> verifies a Pocket ID approval (passkey) made for exactly that action. The panel cannot skip it.</div>
     ${row("Checked by", esc(approvalBy(a)))}
+    ${rec?.machine_id ? row("Machine id", `<code>${esc(shortKey(rec.machine_id))}</code>`, `The id Fairy has on record for this machine and puts into every approval for it: ${rec.machine_id} (${rec.pinned || ""}${rec.pinned_by ? `, by ${rec.pinned_by}` : ""})`) : ""}
     ${checks.length ? row("Checked by the agent", esc(andList(checks)), "These requests do not go through the helper on this machine; its agent checks them with the same trust file") : ""}
     ${row("Pocket ID", esc(a.issuer || "–"))}
     ${row("Client", `<code>${esc(a.client_id || "–")}</code>`, "The Pocket ID client \"Fairy PC actions\"")}
@@ -739,13 +785,24 @@ function approvalBox(s) {
 // ---- Turn on (admins): switching a machine's own check on, with one passkey for all chosen machines.
 // apv.data is GET /api/admin/approval: the client, the keys Pocket ID publishes now, every agent's state, who
 // would be allowed to approve on each machine, and how the last Turn on went.
-const apv = { data: null, error: null, at: 0 };
+const apv = { data: null, error: null, at: 0, sig: dict() };
+// What the live data says about a machine's check, as far as the approval page depends on it.
+const apvSig = (a) => (a ? `${a.state}|${a.binding || ""}|${a.set_at || ""}|${a.last_known ? 1 : 0}` : "");
 async function fetchApproval(force) {
   if (!state.me?.can_control || (!force && Date.now() - apv.at < 30000)) return;
   apv.at = Date.now();
+  apv.sig = dict(state.systems.map((s) => [s.id, apvSig(approvalOf(s))]));
   try { apv.data = await api("/api/admin/approval"); apv.error = null; }
   catch (e) { apv.error = e.message; if (e.status === 403) apv.data = null; }
   render();
+}
+// What an admin sees in a machine's Approval box beyond the block itself (the id on record, "not this panel's
+// values", the button to accept) is the approval page, fetched earlier. When the block the live data brings
+// has changed since that fetch, the page is fetched again (at most every 3 seconds).
+function approvalFresh(s, a) {
+  if (!state.me?.can_control) return;
+  if (!apv.data) { fetchApproval(); return; }
+  if (apv.sig[s.id] !== apvSig(a) && Date.now() - apv.at > 3000) fetchApproval(true);
 }
 const apvMachine = (s) => (apv.data?.machines || []).find((m) => m.system_id === s.id || m.id === s.id);
 const apvUsers = (m) => (m.users || []).map((u) => `${esc(u.name || "not a user of this panel")} <code title="${esc(u.sub)}">${esc(shortKey(u.sub))}</code> <span class="note">${esc(u.why)}</span>`).join("; ");
@@ -782,7 +839,7 @@ function approvalBanner() {
   if (!known.length && !d.configured) return "";
   const row = (m) => { const [cls, label] = APPROVAL_STATE[m.state] || ["", "–"];
     return `<tr class="row" data-key="apm-${esc(m.id)}"><td class="namecell"><b>${state.byId[m.system_id] ? `<a href="#/system/${enc(m.system_id)}">${esc(m.name)}</a>` : esc(m.name)}</b></td>
-      <td><span class="chip ${cls}">${esc(label)}</span>${m.stale_keys ? ' <span class="chip bad" title="It pins a key Pocket ID no longer publishes: fairy-agent helper-trust set --fetch-keys on the machine">old key</span>' : ""}</td>
+      <td><span class="chip ${cls}">${esc(label)}${m.last_known ? " · last known" : ""}</span>${m.binding && AP_BINDING[m.binding] ? ` <span class="chip bad" title="${esc(m.binding_text || AP_BINDING[m.binding][1])}">${esc(AP_BINDING[m.binding][0])}</span>` : ""}${m.stale_keys ? ' <span class="chip bad" title="It pins a key Pocket ID no longer publishes: fairy-agent helper-trust set --fetch-keys on the machine">old key</span>' : ""}</td>
       <td>${esc(m.enforced_by || "–")}</td><td class="note">${m.ready ? "ready" : esc(m.why || "")}</td></tr>`; };
   return `<div class="panel glass pad approval" data-key="apv">
     <div class="wu-top"><h3>The check on the machine itself</h3>
@@ -852,6 +909,18 @@ document.addEventListener("click", (e) => {
   const t = e.target.closest('[data-act="ap-open"]');
   if (!t || t.disabled) return;
   openTurnOn(t.dataset.id || "");
+});
+// "Accept this machine's new id" / "Accept that its check is off": always behind its own "Confirm it's you".
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest('[data-act="ap-accept"]');
+  if (!t || t.disabled) return;
+  const off = t.dataset.what === "off", name = t.dataset.name, path = `/api/admin/approval/accept/${enc(t.dataset.id)}`;
+  const label = off ? `Accept that the check on ${name} is off` : `Accept the new machine id of ${name}`;
+  try {
+    const r = await controlCall({ kind: "request", label, method: "POST", path, body: {} }, () => api(path, { method: "POST", body: "{}" }));
+    if (r) flash(r.message || `${label}: done`);
+  } catch (x) { flash(x.message, true); }
+  fetchApproval(true);
 });
 const statusText = (s) => (s.status === "paused" ? "paused" : s.asleep ? "asleep (from panel)" : s.status);
 // A host that is "offline" (or stale) while its machine took part in the panel's latest poll (s.machine_on says how: it

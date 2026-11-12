@@ -41,6 +41,7 @@ import (
 func (s *Server) approvalRoutes() {
 	s.mux.HandleFunc("GET /api/admin/approval", s.h(s.approvalPage))
 	s.mux.HandleFunc("POST /api/admin/approval/turn-on", s.h(s.approvalTurnOn))
+	s.mux.HandleFunc("POST /api/admin/approval/accept/{id}", s.h(s.approvalAccept))
 }
 
 // MaxTurnOn is how many machines one confirmation switches on (one entry each; api.MaxApprovalEntries).

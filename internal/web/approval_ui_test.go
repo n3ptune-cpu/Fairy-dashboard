@@ -21,6 +21,15 @@ func TestUIApproval(t *testing.T) {
 		`will check this itself before it does anything`, `Pocket ID will ask you to sign in to`, `data-approval`, // the dialog
 		`esc(a.issuer || "–")`, `esc(a.client_id || "–")`, `esc(k.kid)`, `esc(shortKey(k.thumbprint))`, `esc(a.error)`, `esc(a.agent_error)`,
 		`esc(a.users ?? "–")`, `esc(a.fan_window_s)`, `esc(a.boot_shutdown_s)`, `esc(apprWho)`, `esc(appr.client || "Fairy PC actions")`,
+		// which machine it is (audit 5, r1-x1-01): one flag with its words on hover and click, the reasons behind
+		// the info button, and for an admin one button
+		`const AP_BINDING = table({`, `const AP_BINDING_MORE = table({`, `function approvalBinding(s, a) {`,
+		"return infoBtn(`apflag-${s.id}`, name,", `{ cls: "hflag bad", icon: I.apKey, label:`,
+		`data-act="ap-accept"`, `"Accept that its check is off" : "Accept this machine's new id"`,
+		"infoBtn(`apbind-${s.id}`, b[0], infoList(more))", `m = admin ? apvMachine(s) : null`, // the record's details: admins only
+		`if (apv.sig[s.id] !== apvSig(a) && Date.now() - apv.at > 3000) fetchApproval(true);`, // a block that changed after the approval page was fetched
+		`${bind ? "" : '<div class="note">This machine does not check approvals itself.`,      // not under "Check gone"
+		`a.last_known ? " · last known" : ""`,
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %q", want)

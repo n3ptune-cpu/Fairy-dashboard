@@ -236,7 +236,8 @@ func (g *GatedBackend) Forward(id, path string, body any) (int, jsonx.M) {
 }
 
 // Stale makes the agent id's /metrics carry this approval block instead of the machine's real one (the answer of
-// a poll from before the machine changed); nil: the real one again.
+// a poll from before the machine changed); nil: the real one again; an empty block: no block at all (the agent
+// was put back to a release from before the check).
 func (g *GatedBackend) Stale(id string, block jsonx.M) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -268,6 +269,8 @@ func (g *GatedBackend) FetchAgentMetrics(ctx context.Context, a config.Agent, ti
 	g.mu.Unlock()
 	switch {
 	case err != nil || m == nil:
+	case old != nil && len(old) == 0:
+		delete(out, "approval") // Stale(id, jsonx.M{}): no block at all, as an agent from before the check answers
 	case old != nil:
 		out["approval"] = old
 	default:

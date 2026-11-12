@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -97,3 +98,81 @@ func (s *Server) machineEvent(e poller.MachineEvent) {
 
 // adminstateMachines is the audit target of an entry about the record itself.
 const adminstateMachines = "machines.json"
+
+// approvalAccept is POST /api/admin/approval/accept/{id} (id: the agent's id): an admin accepts what the
+// machine shows NOW about its own check, after it was changed on the machine. It is the one way out of an alarm
+// that the machine cannot end by itself:
+//
+//   - the machine shows another machine id than the one on record (`fairy-agent helper-trust set
+//     --new-machine-id`, or clear and set, on the machine): the id it shows is on record from now on;
+//   - two hosts have one id: the host this is pressed for keeps the id, the other one stays flagged until it
+//     shows an id of its own (the copy gets one with `--new-machine-id`);
+//   - the machine had the check and shows none (`helper-trust clear` on the machine): the record is removed,
+//     and the machine is one without the check until it shows one again.
+//
+// Admins in a browser only (no API token), CSRF, the kill switch, and always its own "Confirm it's you": it
+// never rides on a confirmation given for something else. Nothing is sent to the machine.
+func (s *Server) approvalAccept(c *reqCtx) error {
+	if _, err := c.requireUser(); err != nil {
+		return err
+	}
+	u, err := c.controlAllowed(true)
+	if err != nil {
+		return err
+	}
+	if err := c.stepUpEach(u, "accepting what a machine shows about its own check"); err != nil {
+		return err
+	}
+	if !s.control.allow(u.Sub) {
+		return c.limited(u, s.control, "too many control requests")
+	}
+	id := c.r.PathValue("id")
+	a, ok := s.Poller.AgentByID(id)
+	if !ok {
+		return apierr.New(404, "unknown machine")
+	}
+	name := s.machineNames([]string{a.ID})[0]
+	what, before, err := s.Poller.AcceptMachine(a.ID, actorOf(u))
+	params := map[string]any{"was": before.Status}
+	if before.Record.MachineID != "" {
+		params["on_record_before"] = approval.ShortID(before.Record.MachineID)
+	}
+	if len(before.With) > 0 {
+		params["with"] = before.With
+	}
+	if what == "" { // nothing was accepted
+		c.audit(u, "approval.accept", a.ID, params, "error 409: "+textsafe.Clip(err.Error(), 200))
+		return apierr.New(409, name+": "+err.Error())
+	}
+	params["accepted"] = what
+	msg := name + ": its check is off, and Fairy treats it as a machine without the check from now on."
+	if what == "id" {
+		params["machine_id"] = approval.ShortID(before.Report.MachineID)
+		msg = name + ": the machine id it shows is on record now."
+		if after := s.Poller.BindingOf(a.ID); after.Known && after.Record.Holder {
+			msg = name + " keeps the machine id. The other host stays flagged until it shows an id of its own (on it: fairy-agent helper-trust set --new-machine-id)."
+		}
+	}
+	outcome := "ok"
+	if err != nil { // accepted, and the file could not be written
+		outcome = "ok (kept in memory; machines.json could not be written: " + textsafe.Clip(err.Error(), 120) + ")"
+		msg += " Fairy could not write that down (" + textsafe.Clip(err.Error(), 120) + "); it keeps it in memory and tries again."
+	}
+	c.audit(u, "approval.accept", a.ID, params, outcome)
+	c.json(200, map[string]any{"ok": true, "accepted": what, "message": msg})
+	return nil
+}
+
+// approvalAcceptDetail says, in the dialog that asks to confirm, what exactly would be accepted.
+func (c *reqCtx) approvalAcceptDetail(*model.User) string {
+	b := c.s.Poller.BindingOf(c.r.PathValue("id"))
+	switch {
+	case b.Report.Block && b.Report.MachineID != "" && b.Record.MachineID != "" && b.Record.MachineID != b.Report.MachineID:
+		return "it shows the machine id " + approval.ShortID(b.Report.MachineID) + "; on record is " + approval.ShortID(b.Record.MachineID)
+	case b.Status == approval.BindDuplicate && len(b.With) > 0:
+		return "it keeps its machine id; " + strings.Join(c.s.machineNames(b.With), ", ") + " must get a new one"
+	case b.Status == approval.BindVanished:
+		return "it shows no check any more: it becomes a machine without the check"
+	}
+	return ""
+}

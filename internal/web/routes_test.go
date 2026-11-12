@@ -92,6 +92,9 @@ var matrixRoutes = []writeRoute{
 	// approval, not for the panel's confirmation (TestTurnOn...); this panel has no approval: block, so an admin
 	// is told so (409).
 	{pattern: "POST /api/admin/approval/turn-on", path: "/api/admin/approval/turn-on", body: map[string]any{"hosts": []string{"laptop"}}, adminOnly: true, killSwitch: true},
+	// Accepting what a machine shows about its check (its new machine id, or that it is off): browser
+	// sessions only, and its own confirmation every time
+	{pattern: "POST /api/admin/approval/accept/{id}", path: "/api/admin/approval/accept/laptop", adminOnly: true, stepUp: true, each: true, killSwitch: true},
 }
 
 // Writes outside /api/, and the GET routes that change something. They are not rows of the table (they are not
