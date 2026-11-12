@@ -37,6 +37,12 @@ type MachineEvent struct {
 	Kind    string
 	Binding approval.Binding
 	Detail  string
+	// Accepted and By are set for a "clear" that is the end of an alarm because an admin (By) accepted what the
+	// machine shows: "off" (its check is off, and it is a machine without the check now), "new" (another id
+	// than the one that was on record) or "id" (the id it shows, where none was on record, or the one it
+	// keeps). Empty: the alarm ended by itself, and the check is on and matches the record.
+	Accepted string
+	By       string
 }
 
 // machineStore is the poller's part of the record. Guarded by Poller.mu.
@@ -435,6 +441,14 @@ func (p *Poller) AcceptMachine(agentID, by string, want AcceptWant) (what string
 		return "", before, ErrNothingToAccept
 	}
 	evs := p.announceLocked()
+	for i := range evs { // the end of this host's alarm is the admin's doing: said as that, not as "in order again"
+		if evs[i].AgentID == agentID && evs[i].Kind == "clear" {
+			evs[i].Accepted, evs[i].By = what, by
+			if what == "id" && before.Status == approval.BindChanged {
+				evs[i].Accepted = "new"
+			}
+		}
+	}
 	p.version++
 	p.mu.Unlock()
 	err = p.flushMachines()

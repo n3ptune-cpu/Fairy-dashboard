@@ -497,7 +497,7 @@ The same as I1 to I5 in few words, for somebody who has done it before. Every st
    with `!!! TEST BUILD: approvals for the machines are asked at` your Pocket ID's address and `callback
    http://127.0.0.1:8080/auth/approval/callback`.
 4. The test VM with the agent of agent zip 3 (I3): its page has an **Approval** box that says "off".
-5. **Turn on…** in that box, **Turn on for 1 machine (passkey)**, **Continue to Pocket ID**, your passkey at
+5. **Turn on** in that box, **Turn on for 1 machine (passkey)**, **Continue to Pocket ID**, your passkey at
    Pocket ID, whose page must name the client `Fairy PC actions`. The browser comes back to the panel (see
    the note below), a message says "1 of 1 machines now check approvals themselves", and the Approval box
    says **required**.
@@ -600,7 +600,7 @@ in it. If it refuses to start, the line says which of the three values it does n
    `version` must say `16-selfbuilt`. `helper-status` must have `pipe protocol:   3` and the line
    `approval:        off (checked by the helper): no trust file, nothing needs an approval; the panel can set the trust once`.
 4. In the panel, the VM's page now has an **Approval** box: "off", "Would be checked by: the elevated helper
-   (LocalSystem)", and a **Turn on…** button.
+   (LocalSystem)", and a **Turn on** button.
 
    If the box says "required" with the red sentence **Not on record** instead, the VM still has the check
    from an earlier test, and this panel did not turn it on (or it took the VM's id "at first sight" in an
@@ -612,8 +612,8 @@ From here on do **not** press Re-pair for the VM, and do not press Update: both 
 
 ### I4. Turn on, with your passkey
 
-1. On the VM's page, Approval box: **Turn on…**. (The same is on the Updates page: "1 machine is ready for
-   the check on the machine itself".)
+1. On the VM's page, Approval box: **Turn on**. (The same is on the Updates page: "1 machine is ready for
+   the check on the machine itself", with the button **Turn on the check for 1 machine**.)
 2. The dialog "Turn on the check on the machine itself" lists what the VM will trust: your Pocket ID's
    address, the **Client ID** (compare it with the Client ID of `Fairy PC actions` in Pocket ID: the panel
    shows the id only, it does not know a client's name), the signing key with its thumbprint, and "may approve:" with the user id from
@@ -626,7 +626,7 @@ From here on do **not** press Re-pair for the VM, and do not press Update: both 
    names another client): the `client_id` in `fairy-test\config.yaml` is another client's, usually the
    Client ID of the client the real panel signs in with; or the Callback URL line of I1 is missing in
    `Fairy PC actions`. Nothing was changed on the VM. Correct `client_id` (I0, step 3), restart the panel
-   and press **Turn on…** again.
+   and press **Turn on** again.
 4. You are back in the panel, on the page you started from (a white page "Fairy test build: back from Pocket
    ID." can show for a moment on the way: I0, "The way back from Pocket ID"). The `fairy-test.exe serve` window has a new
    line that starts with `time=... level=WARN msg="!!! TEST BUILD: an approval was accepted without
@@ -703,7 +703,8 @@ The check stays on until it is removed **on the VM** (the panel cannot):
 
 Within half a minute the VM's Approval box has a red sentence: "Check gone." That is the alarm for a machine
 that had the check and shows none (the panel cannot know that it was you). Press **Accept that its check
-is off**, **Confirm (test build)**: the box says "off" again, with **Turn on…**.
+is off**, **Confirm (test build)**: the box says "off" again, with **Turn on**. The Notifications list says
+"its check being off was accepted by test-admin".
 
 Then put the VM back as `TEST-ON-WINDOWS.md` in the agent folder says under "Going back to build 16", or
 back to its snapshot. In Pocket ID the client can stay: the live panel will use it with its own Callback

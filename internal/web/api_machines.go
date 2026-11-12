@@ -119,9 +119,25 @@ func (s *Server) machineEvent(e poller.MachineEvent) {
 		entry("approval.alarm", e.AgentID, nil, "cleared")
 		if s.Notes != nil {
 			s.Notes.Add(notifications.Event{Kind: "approval_ok", Type: "host", Severity: notifications.Info, SystemID: sys, Host: name,
-				Text: "its approval check is in order again", Key: key})
+				Text: machineClearText(e), Key: key})
 		}
 	}
+}
+
+// machineClearText says how an alarm ended. "In order again" is for a check that is on and matches the record.
+// When an admin accepted what the machine shows, the line says what was accepted and by whom: after "Accept
+// that its check is off" the check is OFF, and "in order again" read as if it were on.
+func machineClearText(e poller.MachineEvent) string {
+	by := textsafe.Clip(e.By, 80)
+	switch e.Accepted {
+	case "off":
+		return "its check being off was accepted by " + by
+	case "new":
+		return "its new machine id was accepted by " + by
+	case "id":
+		return "its machine id was accepted by " + by
+	}
+	return "its approval check is in order again"
 }
 
 // adminstateMachines is the audit target of an entry about the record itself.

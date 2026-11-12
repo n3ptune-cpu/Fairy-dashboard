@@ -517,8 +517,9 @@ like the sign-in's. With `deploy/nginx.example.conf` that is at most 10 round tr
 (burst 10), sign-ins included.
 
 **3. Turn it on.** The Updates page (admins) gets a box, **The check on the machine itself**: "N machines are
-ready for the check on the machine itself", with **Turn on…**; a machine's own page has an **Approval** box
-with the same button for that machine. Turn on is deliberate and proven:
+ready for the check on the machine itself", with the button **Turn on the check for N machines** (when no
+machine is ready there is no button, and one line says so); a machine's own page has an **Approval** box with
+**Turn on** for that machine. Turn on is deliberate and proven:
 
 * The dialog shows exactly what each machine will trust: the Pocket ID address, the client id, the signing
   key(s) Pocket ID publishes right now (key id and thumbprint) and the list of people who may approve there,

@@ -868,7 +868,7 @@ function approvalTurnOn(s) {
   const m = apvMachine(s), why = controlWhyNot();
   if (!m) { fetchApproval(); return '<div class="note">Checking whether it can be switched on…</div>'; }
   return `<div class="row-gap ap-on"><button class="btn primary" type="button" data-act="ap-open" data-id="${esc(m.id)}" ${m.ready && !why ? "" : "disabled"}
-      title="${esc(why || (m.ready ? "Switch the check on for this machine: one passkey, then it is locked" : m.why))}">${I.shield}Turn on…</button>
+      title="${esc(why || (m.ready ? "Switch the check on for this machine: one passkey, then it is locked" : m.why))}">${I.shield}Turn on</button>
     <span class="note">${m.ready ? "Ready. After it is switched on, it is changed only on the machine itself." : esc(m.why || "")}</span></div>`;
 }
 // A machine that requires approvals and has none of the keys Pocket ID publishes now (admins: needs the page's data).
@@ -885,12 +885,14 @@ function turnOnResults(rep) {
     ${rep.results.map((r) => { const [cls, label] = TURN_ON_RESULT[r.outcome] || ["", r.outcome];
       return `<div class="list-row ap-res" data-key="apr-${esc(r.id)}"><span><b>${esc(r.name)}</b> <span class="chip ${cls}">${esc(label)}</span></span><span class="note">${esc(r.text)}${r.more ? infoBtn(`apr-${r.id}`, `What ${r.name} answered`, `<p>${esc(r.more)}</p>`) : ""}</span></div>`; }).join("")}`;
 }
-// Updates page: "N machines are ready for the check on the machine itself", with Turn on for all of them.
+// Updates page: "N machines are ready for the check on the machine itself", with the button that says what it
+// does and for how many ("Turn on the check for 2 machines"). With no machine ready there is no dead button: one
+// short line says so, and the info button what "ready" means.
 function approvalBanner() {
   if (!state.me?.can_control) return "";
   const d = apv.data;
   if (!d) return apv.error ? `<div class="panel glass pad approval"><h3>The check on the machine itself</h3><div class="error">${esc(apv.error)}</div></div>` : "";
-  const why = controlWhyNot(), known = d.machines.filter((m) => m.state);
+  const why = controlWhyNot(), known = d.machines.filter((m) => m.state), n = Number(d.ready) || 0;
   if (!known.length && !d.configured) return "";
   const row = (m) => { const [cls, label] = APPROVAL_STATE[m.state] || ["", "–"];
     return `<tr class="row" data-key="apm-${esc(m.id)}"><td class="namecell"><b>${state.byId[m.system_id] ? `<a href="#/system/${enc(m.system_id)}">${esc(m.name)}</a>` : esc(m.name)}</b></td>
@@ -898,9 +900,11 @@ function approvalBanner() {
       <td data-l="checked by">${esc(m.enforced_by || "–")}</td><td class="note">${m.ready ? "ready" : esc(m.why || "")}</td></tr>`; };
   return `<div class="panel glass pad approval" data-key="apv">
     <div class="wu-top"><h3>The check on the machine itself</h3>
-      <button class="btn primary" type="button" data-act="ap-open" ${d.ready && !why ? "" : "disabled"}
-        title="${esc(why || (d.ready ? "Choose the machines and switch the check on: one passkey for all of them" : "No machine is ready to be switched on"))}">${I.shield}Turn on… (${esc(d.ready)})</button></div>
-    <p class="note" id="ap-ready"><b>${esc(d.ready)} machine${d.ready === 1 ? " is" : "s are"} ready for the check on the machine itself.</b>
+      ${n ? `<button class="btn primary" type="button" data-act="ap-open" ${why ? "disabled" : ""}
+        title="${esc(why || "Choose the machines and switch the check on: one passkey for all of them")}">${I.shield}Turn on the check for ${esc(n)} machine${n === 1 ? "" : "s"}</button>` : ""}</div>
+    ${n ? "" : `<p class="note" id="ap-none">No machine is waiting for the check.${infoBtn("ap-none", "No machine is waiting for the check",
+      "<p>A machine can be switched on from here when its agent knows the check, its check is off, it answers, and the panel has a control token for it. Each machine's row says why it is not ready.</p>")}</p>`}
+    <p class="note" id="ap-ready">${n ? `<b>${esc(n)} machine${n === 1 ? " is" : "s are"} ready for the check on the machine itself.</b>` : ""}
       A machine with the check on verifies a Pocket ID approval (passkey) itself before it changes its fans, shuts down, restarts, sleeps or updates its agent:
       the panel, or someone with the panel's control token, cannot do these without you. ${esc(d.required)} already check${d.required === 1 ? "s" : ""}${d.broken ? `, <b class="bad-t">${esc(d.broken)} broken</b>` : ""}.
       Nothing is switched on by itself. Once it is on, a machine is changed only on the machine (fairy-agent helper-trust).</p>
