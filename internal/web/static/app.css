@@ -365,7 +365,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .info-btn { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; margin: -4px 0 -4px 4px; border: 0; background: none;
   color: var(--muted); cursor: pointer; border-radius: 50%; vertical-align: middle; flex: none; }
 h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
-.info-btn:hover, .info-btn[aria-expanded="true"] { color: var(--text); background: #1c1c1c; }
+.info-btn:hover, .info-btn[aria-expanded="true"] { color: var(--text); background: var(--press); }
 .info-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; color: var(--text); }
 /* the same button as a sign in a host row. The helper: a shield with a tick (running, quiet) or with "!" (stopped amber, error red).
    The battery: its fill in four steps, a bolt beside it on mains (quiet), amber on battery, red with "!" when low. */
@@ -381,7 +381,7 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
 .info-pop .list-row + p { margin: 8px 0 2px; }
 .menu.info-pop { position: fixed; left: 0; top: 0; right: auto; z-index: 55; width: 400px; min-width: 0; max-width: calc(100vw - 16px); max-height: min(70vh, 520px);
   overflow-y: auto; overscroll-behavior: contain; padding: 12px 14px 10px; font-size: 12.5px; line-height: 1.5; color: #d6d6d6; }
-.info-pop .info-t { color: var(--text); font-weight: 700; font-size: 13px; margin: 0 30px 6px 0; }
+.info-pop .info-t { color: var(--text); font-weight: 600; font-size: 13px; margin: 0 30px 6px 0; }
 .info-pop .info-x { position: absolute; top: 6px; right: 6px; width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; background: none;
   color: var(--muted); cursor: pointer; }
 .info-pop .info-x:hover { color: var(--text); background: var(--hover); }
@@ -578,7 +578,7 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
 .table.hosts .host-l1 > a { flex: none; white-space: nowrap; gap: 7px; }
 /* the machine's model: one quiet line under the name, cut with … when it is longer than the cell (it never widens the table) */
 .host-model { width: 0; min-width: 100%; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint);
-  font-size: 11.5px; line-height: 1.2; }
+  font-size: 12px; line-height: 1.15; }
 .host-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; min-width: 0; }
 .host-tags .tag, .host-tags .chip, .host-tags .guest-count, .host-tags .ver { margin-left: 0; }
 /* The signs are one close group: 7 px of air between two glyphs, 8 px after the name, 14 px to the guests. A sign's button
@@ -607,7 +607,7 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
   .table.hosts, .table.hosts tbody, .table.hosts tr.group, .table.hosts tr.group td { display: block; }
   .table.hosts thead { display: none; }
   .table.hosts tr.group td { padding: 12px 14px 8px; }
-  .table.hosts tr.row { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr); align-items: center; gap: 8px 22px; padding: 11px 14px; border-bottom: 1px solid #121212; }
+  .table.hosts tr.row { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr); align-items: center; gap: 8px 22px; padding: 11px 14px; border-bottom: 1px solid var(--rule); }
   .table.hosts tbody tr.row:last-child { border-bottom: 0; }
   .table.hosts tr.row:hover { background: rgba(255, 255, 255, .025); }
   .table.hosts tr.row td { display: block; padding: 0; border: 0; background: none; }
@@ -618,7 +618,7 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
   .table.hosts tr.row td.col-gpu { grid-column: 3; }
   .table.hosts tr.row td.num { grid-column: 4; justify-self: end; }
   .table.hosts tr.row td[data-l]:has(.mini) { display: flex; align-items: center; gap: 8px; }
-  .table.hosts tr.row td[data-l]:has(.mini)::before { content: attr(data-l); color: var(--faint); font-size: 11.5px; font-weight: 700; }
+  .table.hosts tr.row td[data-l]:has(.mini)::before { content: attr(data-l); color: var(--faint); font-size: 12px; font-weight: 600; }
   .host-l1 { flex-wrap: wrap; }
   .table.hosts .host-l1 > a { flex: 0 1 auto; white-space: normal; min-width: 0; }
 }
@@ -721,7 +721,7 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
 .toast.critical { border-left-color: var(--bad); }
 .toast.more { border-left-color: var(--muted); }
 .toast-body { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 10px 4px 10px 12px; color: var(--text); }
-.toast-sign { flex: none; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700;
+.toast-sign { flex: none; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 600;
   line-height: 1; color: #000; background: var(--warn); }
 .toast.critical .toast-sign { background: var(--bad); }
 .toast.more .toast-sign { background: var(--muted); }
