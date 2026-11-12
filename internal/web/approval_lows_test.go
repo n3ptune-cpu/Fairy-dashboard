@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,5 +66,45 @@ if (!process.exitCode) console.log("ok");
 	}
 	if out, err := exec.Command(node, file).CombinedOutput(); err != nil || !strings.HasPrefix(string(out), "ok") {
 		t.Fatalf("node: %v\n%s", err, out)
+	}
+}
+
+// r1-b2-08 (audit 5): with two tabs, or after a restart of the panel while somebody was at Pocket ID, the
+// answer page said "it was cancelled, it is more than 3 minutes old, or this answer was used before": neither
+// of the two real causes. And "Back to Fairy" led to the Overview: the kept action, which knew the page, is
+// gone. The page names the causes, and the tab itself remembers the page it left.
+func TestAnApprovalWithNothingWaitingNamesTheCauses(t *testing.T) {
+	a := newApprovalEnv(t)
+	a.require(t, a.laptop, a.tower)
+	r := a.post("/api/systems/laptop/power", a.shutdownBody())
+	id, _, ok := approvalAsked(r)
+	if !ok {
+		t.Fatalf("%d %s", r.code, r.raw)
+	}
+	// the first tab goes to Pocket ID
+	go1 := a.post(stepUpPath, map[string]any{"pending_id": id, "next": "/#/system/laptop"})
+	if go1.code != 200 {
+		t.Fatalf("Continue: %d %s", go1.code, go1.raw)
+	}
+	// "another tab": a second action of the same session takes the place of the first
+	r2 := a.post("/api/systems/tower/fan/mode", map[string]any{"mode": "full"})
+	if _, _, ok := approvalAsked(r2); !ok {
+		t.Fatalf("%d %s", r2.code, r2.raw)
+	}
+	back := a.iss.Approve(t, fmt.Sprint(go1.body["url"]))
+	cb := a.do("GET", back.RequestURI(), nil, "Cookie", a.admin)
+	if cb.code != 400 || !strings.Contains(string(cb.raw), "Another tab of yours started an action meanwhile (only one waits at a time), or the panel was restarted") ||
+		!strings.Contains(string(cb.raw), "Nothing was done.") {
+		t.Fatalf("the first tab's answer: %d %s", cb.code, cb.raw)
+	}
+	js := appJS(t)
+	for _, want := range []string{
+		`try { sessionStorage.setItem(BACK_KEY, JSON.stringify({ ts: Date.now(), hash: location.hash })); } catch { /* ignore */ }`,
+		`if (b && !location.hash && typeof b.hash === "string" && b.hash.startsWith("#/") && Date.now() - b.ts <= 10 * 60 * 1000) history.replaceState(null, "", b.hash);`,
+		"  backToLeftPage();\n  route();",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
 	}
 }

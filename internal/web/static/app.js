@@ -230,6 +230,14 @@ async function api(path, opts = {}) {
 }
 // ---- step-up re-authentication: control actions need a recent Pocket ID sign-in
 const PENDING_KEY = "fairy-pending-action";
+// The page this tab left for Pocket ID (sessionStorage). The page that says why a sign-in or an approval was not
+// accepted cannot always know it (the kept action is gone), and links to the start page: boot() goes on from there.
+const BACK_KEY = "fairy-back";
+function backToLeftPage() {
+  let b = null;
+  try { b = JSON.parse(sessionStorage.getItem(BACK_KEY) || "null"); sessionStorage.removeItem(BACK_KEY); } catch { b = null; }
+  if (b && !location.hash && typeof b.hash === "string" && b.hash.startsWith("#/") && Date.now() - b.ts <= 10 * 60 * 1000) history.replaceState(null, "", b.hash);
+}
 // When the server kept the refused request (detail.pending), it runs it by itself right after the sign-in and
 // /api/me reports the result: the browser re-sends nothing (no dialog shown again). Otherwise (a large request,
 // or a browser or address this session has not confirmed from yet) the "Resume" offer is used.
@@ -298,6 +306,8 @@ async function confirmStepUp(id, nextPath) {
     return;
   }
   if (stepUpOpen !== su || typeof r?.url !== "string") return;
+  // this tab remembers the page it leaves: a "Back to Fairy" that leads to the start page lands here again
+  try { sessionStorage.setItem(BACK_KEY, JSON.stringify({ ts: Date.now(), hash: location.hash })); } catch { /* ignore */ }
   if (/^https?:\/\//.test(r.url)) { location.assign(r.url); return; }
   // anything else is an address of the panel itself ("/..."); never javascript:, data: or another scheme
   if (!r.url.startsWith("/")) { su.going = false; if (go) go.disabled = false; flash("Confirm it's you: the panel named an address this page does not open", true); return; }
@@ -3449,6 +3459,7 @@ async function boot() {
   } catch { /* no UPS */ }
   try { state.notes = await api("/api/notifications/count"); } catch { /* the stream sends them */ }
   window.addEventListener("hashchange", route);
+  backToLeftPage();
   route();
   updTick();
   showPendingResult(state.me.pending_result);  // an action that waited for this sign-in, run by the panel

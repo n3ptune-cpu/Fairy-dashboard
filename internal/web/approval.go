@@ -244,7 +244,10 @@ func (s *Server) approvalCallback(c *reqCtx) error {
 		return fail("another client", "The answer from Pocket ID came back from another browser or address than the one that asked for it.")
 	case kept == nil || kept.Approval == nil:
 		kept = nil
-		return fail("nothing waiting", "No action is waiting for this approval: it was cancelled, it is more than 3 minutes old, or this "+
+		// the two causes people meet come first (audit 5, r1-b2-08): one action waits per session, and a
+		// restart of the panel forgets it
+		return fail("nothing waiting", "No action is waiting for this approval any more. Another tab of yours started an action meanwhile "+
+			"(only one waits at a time), or the panel was restarted; or the action was cancelled, is more than 3 minutes old, or this "+
 			"answer was used before.")
 	}
 	target = stepUpNext(safeNext(kept.Next))
