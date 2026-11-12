@@ -659,6 +659,11 @@ in `config.yaml`. Nothing has to be converted and no file has to be deleted.
 1. **Agents first, one at a time.** Press **Update** for one host on the Updates page of the panel you run
    today. Wait until it is online again. Then the next one. The new agent works with the old panel.
 2. **Then the panel.** On the panel host, as root: `fairy update`.
+   **Update first, then add new config keys, then restart.** The one new key of this release is the
+   `wake_update:` block. The program you run today does the update, and it refuses a config.yaml that has the
+   block ("field wake_update not found"). So write the block only after the update, then
+   `systemctl restart fairy`. If the block is already in the file: take it out (or put `#` in front of its
+   lines), update, put it back, restart. What happens otherwise is in step 2 below, last paragraph.
 3. **Then Re-pair, once per machine, where you want it.** The Update button replaces the agent program only.
    The new service file, the separate polkit rules (Linux) and the folder checks (Windows) come with the
    installer, which Re-pair runs.
@@ -725,6 +730,15 @@ reports "rolled back to the previous version". Nothing is lost. Correct the valu
 again. After the update you can check both files at any time with `sudo fairy admin config check` (as root:
 it only reads, and root can read `fairy.env`). As user `fairy` the same command shows every secret as
 missing, and a client secret as "not set"; that is expected and says nothing about the install.
+
+If config.yaml already has the `wake_update:` block when you update: on a panel that listens on the default
+`127.0.0.1:8080` the update goes through. On a panel with another `listen:` address (the nginx layout) the
+old `fairy update` asks the wrong address after the restart, puts the old program back, and the old program
+does not start with the block: the panel is down until you take the block out and run
+`systemctl restart fairy`. From this release on `fairy update` asks the address the service really listens on
+(the unit's `--listen`, `FAIRY_LISTEN`, `listen:`, also from a config.yaml it cannot use otherwise), says
+"update first, then add new config keys, then restart" when the installed version refuses the file, and
+stops before it replaces anything when the running panel does not answer at that address.
 
 ### 3. One step by hand: the memory limit
 
@@ -806,7 +820,8 @@ memory limit. Add it once:
 
 Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
 `managed-hosts.yaml`, `state.json`, `settings.json`, and `sessions.json`, where it ignores what this one adds).
-It does not start when config.yaml has a `wake_update:` block: take the block out first. A panel older than
+It does not start when config.yaml has a `wake_update:` block (the one key that is new in this release):
+take the block out before you go back. A panel older than
 the last release also does not start with `enroll: {allow_non_tailscale: ...}`, `step_up_per_action`, or a
 text such as `4h` in the two session settings: take those out as well (write the session settings as whole
 seconds). The older panel does not know the pop-up settings: when someone saves a setting there, that

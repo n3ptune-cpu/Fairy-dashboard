@@ -392,6 +392,27 @@ func Load(path string) (*Panel, error) {
 	return Parse(data)
 }
 
+// Peek reads the two settings `fairy update` needs from a config.yaml that Load refuses: where the panel
+// listens and which repository its releases come from. Nothing is validated and unknown keys are passed over,
+// so a file written for a newer release (a key this program does not know yet) still says where the panel
+// listens. An error means the file is not YAML at all: no release can read it.
+func Peek(path string) (listen, panelRepo string, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", err
+	}
+	var v struct {
+		Listen  string `yaml:"listen"`
+		Updates struct {
+			PanelRepo string `yaml:"panel_repo"`
+		} `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(data, &v); err != nil {
+		return "", "", fmt.Errorf("config: %w", err)
+	}
+	return strings.TrimSpace(v.Listen), strings.TrimSpace(v.Updates.PanelRepo), nil
+}
+
 // Parse decodes YAML strictly (unknown keys are errors) and validates.
 func Parse(data []byte) (*Panel, error) {
 	var c Panel

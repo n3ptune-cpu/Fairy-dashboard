@@ -49,12 +49,28 @@ func update(args []string) int {
 		return 2
 	}
 
+	// The panel's config, as the service reads it. A file this installed version refuses (a key of a newer
+	// release, written before the update) still says where the panel listens and where its releases are
+	// (config.Peek): the health check after the restart must ask that address, not the default.
 	repo := release.PanelRepo
-	var cfg *config.Panel
+	cfgListen, cfgProblem := "", ""
 	if c, err := config.Load(*cfgPath); err == nil {
-		cfg, repo = c, c.Updates.PanelRepo
+		cfgListen, repo = c.Listen, c.Updates.PanelRepo
 	} else if !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(os.Stderr, "fairy update: warning: cannot read", *cfgPath+":", err)
+		cfgProblem = oneLine(err.Error())
+		l, r, perr := config.Peek(*cfgPath)
+		if perr != nil && !*check {
+			fmt.Fprintf(os.Stderr, "fairy update: %s cannot be read at all (%s). The panel would not start again after the update's "+
+				"restart: correct the file first. Nothing was changed.\n", *cfgPath, oneLine(perr.Error()))
+			return 1
+		}
+		if cfgListen = l; r != "" {
+			repo = r
+		}
+		fmt.Fprintf(os.Stderr, "fairy update: warning: this installed version (%s) cannot use %s: %s\n", version, *cfgPath, cfgProblem)
+		if !*check {
+			fmt.Fprintln(os.Stderr, configFirstNote)
+		}
 	}
 	client, err := release.NewClient(repo, "fairy/"+version)
 	if err != nil {
@@ -94,7 +110,20 @@ func update(args []string) int {
 	if !*check {
 		clearStoppedRun(filepath.Dir(exe), panelupdate.StatusPath, *fromPanel, time.Now(), panelupdate.UnitActivity)
 	}
-	healthURL := "http://" + healthAddr(cfg, *envFile) + "/healthz"
+	addr, from := healthAddr(cfgListen, *envFile, serviceUnit())
+	healthURL := "http://" + addr + "/healthz"
+	if !*check {
+		// Before anything is replaced: the running panel must answer where the check after the restart will
+		// ask. If it does not, this command has the wrong address (a --listen or FAIRY_LISTEN it cannot see),
+		// and it would roll a good update back.
+		if err := healthPreflight(healthURL, from, cfgProblem, serviceActive, healthOK); err != nil {
+			fmt.Fprintln(os.Stderr, "fairy update:", err)
+			if status != nil {
+				status.Step("failed", "", err.Error())
+			}
+			return 1
+		}
+	}
 	cli := &release.CLI{Client: client, Key: key, Program: release.PanelProgram, Current: version, Target: exe,
 		Asset: release.AssetName(release.PanelProgram, runtime.GOOS, runtime.GOARCH), Out: os.Stdout, In: os.Stdin,
 		Check: *check, Yes: *yes, Force: *force,
@@ -104,16 +133,33 @@ func update(args []string) int {
 			return string(out), err
 		}}
 	if status != nil {
-		cli.Progress = status.Step
+		cli.Progress = func(state, to, msg string) {
+			if cfgProblem != "" && (state == "failed" || state == "rolled_back") { // the page shows the reason too
+				msg = "config.yaml is not usable by the installed version (" + cfgProblem + "); " + msg
+			}
+			status.Step(state, to, msg)
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	if err := cli.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "fairy update:", err)
+		var rb *release.RolledBackError
+		if cfgProblem != "" && errors.As(err, &rb) {
+			fmt.Fprintf(os.Stderr, "fairy update: the installed version cannot use %s (%s), so it may not start either: "+
+				"take out what it does not know, then `systemctl restart fairy`.\n", *cfgPath, cfgProblem)
+		}
 		return 1
 	}
 	return 0
 }
+
+// configFirstNote is said when config.yaml holds something the installed version refuses, most likely a key
+// of the release that is about to be installed.
+const configFirstNote = "  The order is: update first, then add new config keys, then restart. The update goes on (the new version " +
+	"may know the key). If it is rolled back, the old version will not start with this file until the key is taken out."
+
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // setupPanelButton installs or refreshes fairy-panel-update.service and its polkit rule (the Updates page's
 // "Update panel" button). Problems are only reported: the manual update goes on.
@@ -155,26 +201,172 @@ func clearStoppedRun(dir, statusPath string, fromPanel bool, now time.Time, unit
 	}
 }
 
-// healthAddr is where the panel listens (FAIRY_LISTEN in fairy.env, else listen: in config.yaml, else the
-// default); 0.0.0.0 becomes 127.0.0.1.
-func healthAddr(cfg *config.Panel, envFile string) string {
-	addr := "127.0.0.1:8080"
-	if cfg != nil && cfg.Listen != "" {
-		addr = cfg.Listen
+// unitSettings is what systemd says about fairy.service: the command line it starts and the environment it
+// gives it. Empty when systemd cannot be asked.
+type unitSettings struct {
+	Args     []string // ExecStart's arguments
+	Env      []string // Environment=, as KEY=VALUE
+	EnvFiles []string // EnvironmentFile=, in order
+}
+
+// serviceUnit asks systemd for fairy.service's command line and environment.
+func serviceUnit() unitSettings {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "systemctl", "show", "fairy.service", "-p", "ExecStart", "-p", "Environment", "-p", "EnvironmentFiles").Output()
+	if err != nil {
+		return unitSettings{}
 	}
-	if b, err := os.ReadFile(envFile); err == nil {
+	return parseUnit(string(out))
+}
+
+// parseUnit reads `systemctl show -p ExecStart -p Environment -p EnvironmentFiles`:
+//
+//	ExecStart={ path=/usr/local/bin/fairy ; argv[]=/usr/local/bin/fairy serve --config /etc/fairy/config.yaml --env-file  ; ignore_errors=no ; ... }
+//	Environment=FAIRY_LISTEN=10.0.0.20:8080 OTHER=x
+//	EnvironmentFiles=/etc/fairy/fairy.env (ignore_errors=no)
+//
+// systemd joins the arguments with spaces and drops empty ones (--env-file ""), so a value is the word after
+// its flag unless that word is a flag itself.
+func parseUnit(out string) unitSettings {
+	var u unitSettings
+	for _, line := range strings.Split(out, "\n") {
+		k, v, _ := strings.Cut(strings.TrimSpace(line), "=")
+		switch k {
+		case "ExecStart":
+			if _, rest, ok := strings.Cut(v, "argv[]="); ok {
+				rest, _, _ = strings.Cut(rest, " ; ")
+				u.Args = strings.Fields(rest)
+			}
+		case "Environment":
+			u.Env = append(u.Env, strings.Fields(v)...)
+		case "EnvironmentFiles":
+			if f, _, _ := strings.Cut(v, " ("); strings.TrimPrefix(f, "-") != "" {
+				u.EnvFiles = append(u.EnvFiles, strings.TrimPrefix(f, "-"))
+			}
+		}
+	}
+	return u
+}
+
+// flag returns the value of --name (or -name, or --name=value) in the unit's command line.
+func (u unitSettings) flag(name string) (string, bool) {
+	for i, a := range u.Args {
+		a = strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
+		if v, ok := strings.CutPrefix(a, name+"="); ok {
+			return strings.Trim(v, `"'`), true
+		}
+		if a == name && len(a) < len(u.Args[i]) {
+			if i+1 < len(u.Args) && !strings.HasPrefix(u.Args[i+1], "-") {
+				return strings.Trim(u.Args[i+1], `"'`), true
+			}
+			return "", true
+		}
+	}
+	return "", false
+}
+
+// envFileListen is FAIRY_LISTEN in an env file ("" when it is not there). A comment behind the value is not
+// part of an address.
+func envFileListen(path string) string {
+	addr := ""
+	if b, err := os.ReadFile(path); err == nil && path != "" {
 		for _, line := range strings.Split(string(b), "\n") {
-			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "FAIRY_LISTEN="); ok {
+			if v, ok := strings.CutPrefix(strings.TrimPrefix(strings.TrimSpace(line), "export "), "FAIRY_LISTEN="); ok {
+				v, _, _ = strings.Cut(v, " #")
 				addr = strings.Trim(strings.TrimSpace(v), `"'`)
 			}
 		}
+	}
+	return addr
+}
+
+// healthAddr is where fairy.service listens after its restart, and where that is from (for messages). The
+// order is the service's own (serve.go, listenAddr): --listen on the unit's command line; FAIRY_LISTEN from
+// the unit's EnvironmentFile= (the last one wins) or Environment=, then from the env file the service reads
+// itself; `listen:` in the config.yaml the service starts with; else the default. Without systemd's answer
+// it is this command's own --env-file and --config, which are the unit's as shipped. 0.0.0.0 becomes 127.0.0.1.
+func healthAddr(cfgListen, envFile string, u unitSettings) (addr, from string) {
+	addr, from = defaultListen, "the default"
+	if cfgListen != "" {
+		addr, from = cfgListen, "listen: in config.yaml"
+	}
+	if p, ok := u.flag("config"); ok && p != "" { // the service starts with another config.yaml than --config names
+		if l, _, err := config.Peek(p); err == nil && l != "" {
+			addr, from = l, "listen: in "+p
+		}
+	}
+	if v := envFileListen(envFile); v != "" {
+		addr, from = v, "FAIRY_LISTEN in "+envFile
+	}
+	if p, ok := u.flag("env-file"); ok && p != "" {
+		if v := envFileListen(p); v != "" {
+			addr, from = v, "FAIRY_LISTEN in "+p
+		}
+	}
+	for _, kv := range u.Env {
+		if v, ok := strings.CutPrefix(kv, "FAIRY_LISTEN="); ok && v != "" {
+			addr, from = strings.Trim(v, `"'`), "Environment=FAIRY_LISTEN of fairy.service"
+		}
+	}
+	for _, p := range u.EnvFiles {
+		if v := envFileListen(p); v != "" {
+			addr, from = v, "FAIRY_LISTEN in "+p
+		}
+	}
+	if v, ok := u.flag("listen"); ok && v != "" {
+		addr, from = v, "--listen of fairy.service"
 	}
 	if h, p, err := net.SplitHostPort(addr); err == nil {
 		if ip := net.ParseIP(h); h == "" || (ip != nil && ip.IsUnspecified()) {
 			addr = net.JoinHostPort("127.0.0.1", p)
 		}
 	}
-	return addr
+	return addr, from
+}
+
+// healthPreflight is asked before anything is replaced. While fairy.service runs, the panel must answer the
+// health check at the address the check after the restart will use. If it does not, that address is wrong (or
+// the panel is not well), and the check after the restart could only fail: a good update would be rolled
+// back, and with a config.yaml the old version refuses the panel would stay down. A panel that is not running
+// is not asked: an update may be what repairs it.
+func healthPreflight(healthURL, from, cfgProblem string, active func() bool, healthy func(url string) error) error {
+	if !active() {
+		return nil
+	}
+	err := healthy(healthURL)
+	if err == nil {
+		return nil
+	}
+	msg := fmt.Sprintf("fairy.service is running, but the panel does not answer at %s (%v). That address is from %s. "+
+		"The check after the update would fail in the same way and a good update would be rolled back, so nothing was changed. "+
+		"Tell this command where the panel listens: `listen:` in config.yaml or FAIRY_LISTEN in fairy.env (the same file the service uses). "+
+		"If the panel itself hangs: `systemctl stop fairy`, then run this again.",
+		healthURL, err, from)
+	if cfgProblem != "" {
+		msg += " Also: the installed version cannot use config.yaml (" + cfgProblem + "). Update first, then add new config keys, then restart."
+	}
+	return errors.New(msg)
+}
+
+// serviceActive reports whether fairy.service runs now.
+func serviceActive() bool {
+	return systemctl(context.Background(), "is-active", "--quiet", "fairy.service") == nil
+}
+
+var healthClient = &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}
+
+// healthOK asks the panel's /healthz once (never through a proxy).
+func healthOK(url string) error {
+	resp, err := healthClient.Get(url)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func systemctl(ctx context.Context, args ...string) error {
