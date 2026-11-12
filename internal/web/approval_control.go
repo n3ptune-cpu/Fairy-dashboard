@@ -211,7 +211,10 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 			out[i].err = err
 		case ch != nil:
 			bound = append(bound, *ch)
-		case reason == "fan_window" && c.s.codec.live.fanNoted(c.session().SID, t.agent.ID, c.client(), c.s.now()):
+		case reason == "fan_window" && isFanRequest(t.req) && c.s.codec.live.fanNoted(c.session().SID, t.agent.ID, c.client(), c.s.now()):
+			// a fan change only (audit 6, r4-x1-06): a host that answers "fan_window" to a shutdown or an
+			// update does not get that request through without "Confirm it's you" on the strength of a fan
+			// change this session approved a moment ago
 			inWindow++
 		}
 	}
