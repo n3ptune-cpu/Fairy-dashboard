@@ -245,7 +245,7 @@ func (g testKeyGate) stops(w http.ResponseWriter, r *http.Request) bool {
 // with any other public_url there is no such rule.
 func (s *Server) testOtherName(w http.ResponseWriter, r *http.Request) bool {
 	u, err := url.Parse(s.Cfg.BaseURL())
-	if err != nil || u.Host == "" || strings.EqualFold(r.Host, u.Host) {
+	if err != nil || u.Host == "" || hostIsOf(r.Host, s.Cfg.BaseURL()) {
 		return false
 	}
 	if a, err := netip.ParseAddr(strings.Trim(u.Hostname(), "[]")); u.Hostname() != "localhost" && (err != nil || !a.IsLoopback()) {

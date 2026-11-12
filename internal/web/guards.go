@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"net/url"
 	"strconv"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
@@ -25,12 +24,8 @@ func (c *reqCtx) checkCSRF(u *model.User) error {
 	if c.r.Header.Get(CSRFHeader) != CSRFValue {
 		return c.deny(u, 403, "missing "+CSRFHeader+": "+CSRFValue+" header", "missing CSRF header")
 	}
-	if o := c.r.Header.Get("Origin"); o != "" {
-		ou, err1 := url.Parse(o)
-		bu, err2 := url.Parse(c.s.Cfg.BaseURL())
-		if err1 != nil || err2 != nil || ou.Scheme != bu.Scheme || ou.Host != bu.Host {
-			return c.deny(u, 403, "cross-origin request refused", "cross-origin ("+o+")")
-		}
+	if o := c.r.Header.Get("Origin"); o != "" && !sameOrigin(o, c.s.Cfg.BaseURL()) { // origin.go: the scheme's own port counts as named
+		return c.deny(u, 403, "cross-origin request refused", "cross-origin ("+o+")")
 	}
 	if sfs := c.r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
 		return c.deny(u, 403, "cross-site request refused", "cross-site")

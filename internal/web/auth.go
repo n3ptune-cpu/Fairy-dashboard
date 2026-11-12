@@ -759,7 +759,7 @@ func (s *Server) authLogout(c *reqCtx) error {
 	if sfs := c.r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
 		return apierr.New(403, "cross-site request refused")
 	}
-	if o := c.r.Header.Get("Origin"); o != "" && strings.TrimRight(o, "/") != c.s.Cfg.BaseURL() {
+	if o := c.r.Header.Get("Origin"); o != "" && !sameOrigin(o, c.s.Cfg.BaseURL()) {
 		return apierr.New(403, "cross-origin request refused")
 	}
 	u := c.sessionUser()

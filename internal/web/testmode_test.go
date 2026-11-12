@@ -368,6 +368,33 @@ func TestTestModeSendsOtherLoopbackNamesToTheOneAddress(t *testing.T) {
 			t.Fatalf("%s: a write from %s: %d", base, tc.other, res.StatusCode)
 		}
 	}
+	// r3-p1-07: a test build on port 80 (public_url http://127.0.0.1:80). The browser asks with "Host: 127.0.0.1":
+	// that IS the one address, and it was redirected to itself for ever.
+	{
+		e := setup(t)
+		e.s.Cfg.OIDC.ControlGroups = []string{TestGroup}
+		e.s.Cfg.PublicURL = "http://127.0.0.1:80"
+		e.s.EnableTestMode(startKey)
+		ask := func(host, path string) *http.Response {
+			req, _ := http.NewRequest("GET", e.srv.URL+path, nil)
+			req.Host = host
+			req.Header.Set("Cookie", TestKeyCookie(host, startKey))
+			res, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { res.Body.Close() })
+			return res
+		}
+		for _, host := range []string{"127.0.0.1", "127.0.0.1:80"} {
+			if res := ask(host, "/"); res.StatusCode != 200 {
+				t.Errorf("a test build on port 80, GET / with Host %s: %d to %q", host, res.StatusCode, res.Header.Get("Location"))
+			}
+		}
+		if res := ask("localhost", "/"); res.StatusCode != 307 || res.Header.Get("Location") != "http://127.0.0.1:80/" {
+			t.Errorf("a test build on port 80, GET / as localhost: %d to %q", res.StatusCode, res.Header.Get("Location"))
+		}
+	}
 	// a public_url that is no loopback address (not what cmd/fairy sets up): no such rule, as before
 	e := testPanel(t)
 	if r := e.do("GET", "/", nil); r.code != 200 {

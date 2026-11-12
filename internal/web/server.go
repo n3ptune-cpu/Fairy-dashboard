@@ -303,7 +303,7 @@ func (s *Server) demoOtherName(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	u, err := url.Parse(s.Cfg.BaseURL())
-	if err != nil || u.Host == "" || r.Host == u.Host || !loopbackName(u.Host) {
+	if err != nil || u.Host == "" || hostIsOf(r.Host, s.Cfg.BaseURL()) || !loopbackName(u.Host) {
 		return false
 	}
 	w.Header().Set("Cache-Control", "no-store")
