@@ -229,9 +229,12 @@ func TestUIDialogsKeepTheKeyboardFocus(t *testing.T) {
 	js := appJS(t)
 	for _, want := range []string{
 		`const modalKeys = { open: false, opener: null, sel: "", last: null, lastSel: "" };`,
-		`}).observe($("#modal"), { attributes: true, attributeFilter: ["hidden"] });`,
+		`}).observe($("#modal"), { attributes: true, attributeFilter: ["hidden"], childList: true });`,
 		// in on open, unless the dialog put the focus somewhere in itself
-		`setTimeout(() => { if (!m.hidden && !m.contains(document.activeElement)) modalStops()[0]?.focus(); }, 30);`,
+		`const intoIt = () => setTimeout(() => { if (!m.hidden && !m.contains(document.activeElement)) modalStops()[0]?.focus(); }, 30);`,
+		// and in again when another dialog takes an open one's place ("Confirm it's you" over the power dialog:
+		// second review of audit 5's fixes, note on 9e622b0: the focus was on nothing and Enter did nothing)
+		`} else if (!m.hidden && changes.some((c) => c.type === "childList")) {`,
 		// back on close, unless something else has the focus by then
 		`if (document.activeElement && document.activeElement !== document.body) return;`,
 		`(o?.isConnected ? o : sel ? document.querySelector(sel) : null)?.focus();`,

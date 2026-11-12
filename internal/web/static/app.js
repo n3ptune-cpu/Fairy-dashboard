@@ -1921,14 +1921,20 @@ document.addEventListener("focusin", (e) => {
 });
 const modalStops = () => [...$("#modal").querySelectorAll("a[href], button, input, select, textarea, [tabindex]")]
   .filter((el) => !el.disabled && el.tabIndex >= 0 && el.type !== "hidden" && el.getClientRects().length > 0);
-new MutationObserver(() => {
+new MutationObserver((changes) => {
   const m = $("#modal");
+  const intoIt = () => setTimeout(() => { if (!m.hidden && !m.contains(document.activeElement)) modalStops()[0]?.focus(); }, 30);  // after a dialog's own focus (0 ms)
   if (!m.hidden && !modalKeys.open) {
     const a = document.activeElement;
     const here = a && a !== document.body && !m.contains(a) && !a.closest(".menu-item");
     modalKeys.open = true;
     modalKeys.opener = here ? a : modalKeys.last; modalKeys.sel = here ? "" : modalKeys.lastSel;
-    setTimeout(() => { if (!m.hidden && !m.contains(document.activeElement)) modalStops()[0]?.focus(); }, 30);  // after a dialog's own focus (0 ms)
+    intoIt();
+  } else if (!m.hidden && changes.some((c) => c.type === "childList")) {
+    // Another dialog took this one's place ("Confirm it's you" over the power dialog): the control that had
+    // the focus is gone with the old one, so the focus goes to the new dialog's first control, as when a
+    // dialog opens. The opener stays the one of the first dialog.
+    intoIt();
   } else if (m.hidden && modalKeys.open) {
     const o = modalKeys.opener, sel = modalKeys.sel;
     modalKeys.open = false; modalKeys.opener = null;
@@ -1937,7 +1943,7 @@ new MutationObserver(() => {
       (o?.isConnected ? o : sel ? document.querySelector(sel) : null)?.focus();
     }, 0);
   }
-}).observe($("#modal"), { attributes: true, attributeFilter: ["hidden"] });
+}).observe($("#modal"), { attributes: true, attributeFilter: ["hidden"], childList: true });
 document.addEventListener("keydown", (e) => {
   const m = $("#modal");
   if (e.key !== "Tab" || m.hidden || info.key) return;  // an open info box has its own way out and back (Escape)
