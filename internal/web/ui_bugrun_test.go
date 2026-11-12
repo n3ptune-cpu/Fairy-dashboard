@@ -97,7 +97,7 @@ func TestUIAddHostComesBackWithItsFormAfterAFailure(t *testing.T) {
 func TestUIPhoneWidthTitleAndUpdatesButtons(t *testing.T) {
 	css := appCSS(t)
 	for _, want := range []string{
-		"text-overflow: ellipsis;\n  flex-shrink: 1000; }",
+		"text-overflow: ellipsis;\n  flex: 1 1 0; min-width: 0; }", // r2-b1-03: the sub-title has only what the title leaves
 		`.table.updates td.num:last-child, .table.wu-machines td.num:last-child { position: sticky; right: 0; background: var(--panel);`,
 	} {
 		if !strings.Contains(css, want) {

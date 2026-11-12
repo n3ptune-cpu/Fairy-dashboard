@@ -81,8 +81,11 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .topbar { position: sticky; top: var(--banner-h); z-index: 10; display: flex; align-items: center; gap: 12px; padding: 14px 28px;
   background: rgba(0, 0, 0, .8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
 .topbar h1 { margin: 0; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The grey sub-title takes only the room the title leaves (it starts at no width and grows into what is free), so the
+   page's title is cut only when it alone does not fit. A share of the shrinking, however small, cut the title by a
+   fraction of a pixel, and that is enough for "Notificatio…". */
 .crumb { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  flex-shrink: 1000; } /* the grey sub-title gives way first: the page's title is cut only when the sub-title is gone */
+  flex: 1 1 0; min-width: 0; }
 .acct { margin-left: auto; }
 .topbar .menu-btn { display: none; }
 /* Fluid: the page uses the screen; only very wide screens get a (generous) limit. */
