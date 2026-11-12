@@ -109,7 +109,8 @@ func (c *reqCtx) wantsTarget(agentID string) bool {
 //
 // others say what the same request also sends to machines on the strength of the panel's own confirmation
 // (nothing checks there; "<name>: <what>"): the dialog lists them too, because the one passkey starts them as
-// well (audit 5, r1-b2-04).
+// well (audit 5, r1-b2-04). The list must be complete: while it is not empty the request is never let through
+// without a confirmation (confirmTargets).
 func (c *reqCtx) confirmControl(u *model.User, what string, targets []approvalTarget, others []string) ([]approvalOutcome, error) {
 	return c.confirmTargets(u, what, targets, false, others)
 }
@@ -160,8 +161,12 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 			ask = append(ask, i)
 		}
 	}
-	if stopped == len(targets) && stopped > 0 {
-		return out, nil // nothing can be sent at all: nobody is asked to confirm for nothing
+	if stopped == len(targets) && stopped > 0 && len(others) == 0 {
+		// Nothing can be sent at all: nobody is asked to confirm for nothing. Only when the request goes to
+		// nobody else. A batch also sends to the machines of others, on the strength of the confirmation
+		// alone, and that confirmation must be asked for whatever the machines with the check say (audit 6,
+		// r4-x1-01: "Update all" ran without "Confirm it's you" while every machine with the check was flagged).
+		return out, nil
 	}
 	if len(ask) == 0 {
 		return out, c.stepUp(u, what)
