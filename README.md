@@ -356,7 +356,11 @@ The rules, in plain words:
 * **The report says what the run saw, not what it assumed.** Before a machine's result is written the run
   looks at it once more. An answer from its agent, or a refused connection, is "is ON". A machine that gives
   nothing at all after a shutdown was asked for, once its countdown is over and for 20 seconds, is "off (not
-  answering)". When the run cannot see it either way within half a minute, the result says "Asked to switch
+  answering)". That silence must be seen by the panel's own polls after the countdown's end, at least two of
+  them in a row; silence from before the end does not count. A machine that was already out of reach while
+  its countdown was still running, or whose polling is paused, is "not confirmed that it is off", with the
+  power "on or off: not known": the run cannot tell a machine that went off from a connection that dropped.
+  When the run cannot see it either way within half a minute, the result says "Asked to switch
   off, not confirmed" (or "not confirmed that it is on"), with the power "on or off: not known". So: a
   **Cancel run** that comes after a countdown has run out reports that machine as off, not as "it is ON"; a
   shutdown request whose answer was lost (a timeout) is watched like one that was accepted, and the report

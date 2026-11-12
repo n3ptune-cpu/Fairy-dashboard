@@ -86,6 +86,7 @@ func (p *Poller) linkOfLocked(a config.Agent) string {
 // pollAgent returns a back-off delay (s) while the agent is unreachable, so offline hosts aren't hit every second.
 func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Duration) float64 {
 	start := time.Now()
+	began := p.mono() // the steady clock before the request leaves (quietRow.began)
 	name := "agent:" + a.ID
 	if timeout <= 0 {
 		timeout = time.Duration(p.Cfg.RequestTimeout * float64(time.Second))
@@ -127,6 +128,11 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		case !row || !q.silent || q.unwatched(now, mono, p.quietGap(max(q.interval, interval))):
 			// the first poll without any answer, or the panel was not watching in between
 			q.silent, q.since = true, mono
+			p.quietRows++
+			q.row, q.n = p.quietRows, 0
+		}
+		if q.silent {
+			q.n, q.began = q.n+1, began
 		}
 		q.last, q.lastMono, q.sign, q.interval = now, mono, sign, interval
 		p.agentQuiet[a.ID] = q
@@ -216,6 +222,8 @@ type AgentInfo struct {
 	// Sign: what in the latest failed poll shows that the machine runs (lifeSign: SignRefused, an HTTP status,
 	// an answer that is not the agent's, a connection that was made and then gave nothing); "": nothing did.
 	Sign string
+	// Silent: the row of polls without any sign of life that QuietSince is the beginning of, poll by poll.
+	Silent SilentPolls
 }
 
 // agentBackoffMax is the longest pollAgent puts off the next poll of an agent that does not answer (seconds).
@@ -256,6 +264,28 @@ type quietRow struct {
 	silent   bool          // the latest poll got nothing at all (no sign of life)
 	sign     string
 	interval float64 // seconds: the interval the agent was polled at when the latest poll ran
+	// While silent: which row of silent polls this is (another number is another row: an answer, a sign of
+	// life or a time the panel did not watch lies between), how many polls it has, and when the latest of them
+	// began on the steady clock (lastMono is when it ended). See SilentPolls.
+	row   uint64
+	n     int
+	began time.Duration
+}
+
+// SilentPolls describes the unbroken row of polls of an agent that got nothing at all (no answer and no other
+// sign that the machine runs), up to the latest poll. N is 0 while the latest poll was answered or showed a
+// sign of life, while the agent was never polled, and when the panel stopped asking (quietGap).
+//
+// It is for a caller that must know that silence was seen by polls made after a moment of its own (the wake /
+// update / shut down run: "off" after a countdown). QuietSince alone does not say that: it is when the row
+// began, and a row can be one poll that failed before polling was paused. The times are given as "how long
+// ago" on the steady clock, so that the caller can place them on a steady clock of its own; Row tells the
+// caller whether two looks saw the same row.
+type SilentPolls struct {
+	Row      uint64        // names the row
+	N        int           // polls in the row
+	BeganAgo time.Duration // how long ago the latest of them began (the request left) ...
+	EndedAgo time.Duration // ... and ended without an answer
 }
 
 // unwatched reports whether more time than gap lies between the row's latest poll and now, on either clock,
@@ -332,17 +362,17 @@ func (p *Poller) nodeOnlineLocked(a config.Agent) bool {
 // now (agentInterval, read before the lock). Caller holds p.mu. QuietSince is given as a time of day because
 // that is what the callers compare with: it is now minus the silence the steady clock measured, so a clock
 // that was set meanwhile moves it along and changes nothing about how long the silence is.
-func (p *Poller) quietLocked(id string, interval float64) (time.Time, string) {
+func (p *Poller) quietLocked(id string, interval float64) (time.Time, string, SilentPolls) {
 	q, ok := p.agentQuiet[id]
 	now, _ := p.now()
 	mono := p.mono()
 	if !ok || q.unwatched(now, mono, p.quietGap(max(q.interval, interval))) {
-		return time.Time{}, ""
+		return time.Time{}, "", SilentPolls{}
 	}
 	if !q.silent {
-		return time.Time{}, q.sign
+		return time.Time{}, q.sign, SilentPolls{}
 	}
-	return now.Add(-(mono - q.since)), q.sign
+	return now.Add(-(mono - q.since)), q.sign, SilentPolls{Row: q.row, N: q.n, BeganAgo: mono - q.began, EndedAgo: mono - q.lastMono}
 }
 
 func agentInfoOf(payload jsonx.M, now time.Time) AgentInfo {
@@ -421,7 +451,7 @@ func (p *Poller) AgentInfo(id string) (AgentInfo, bool) {
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
-	i.QuietSince, i.Sign = p.quietLocked(id, interval)
+	i.QuietSince, i.Sign, i.Silent = p.quietLocked(id, interval)
 	i.Refused = i.Sign == SignRefused
 	return i, ok
 }
@@ -436,7 +466,7 @@ func (p *Poller) AgentSeen(id string) (AgentInfo, model.System, bool) {
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
-	i.QuietSince, i.Sign = p.quietLocked(id, interval)
+	i.QuietSince, i.Sign, i.Silent = p.quietLocked(id, interval)
 	i.Refused = i.Sign == SignRefused
 	s, known := p.systems[id]
 	return i, s, known

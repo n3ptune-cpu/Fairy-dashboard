@@ -606,23 +606,51 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 			return
 		}
 	}
+	// The poller is asked to poll the machine every few seconds while the countdown is watched: a machine that
+	// is polled once a minute, or one whose failed polls were put off, would otherwise not be looked at when
+	// the countdown ends.
+	if h.kickMono == 0 || mono-h.kickMono >= kickEvery {
+		h.kickMono = mono
+		m.Ops.Kick(h.ID)
+	}
+	h.seeSilence(o, mono)
 	// lost: all the run knows of its shutdown is a request that got no answer
 	lost := h.lostShutdown()
+	asked := woken(h) + ", " + updateWords(h) + ", and asked to switch off. "
+	if o.Paused {
+		// Polling is paused for it: what the run reads is the last poll before the pause, for ever. That poll
+		// says nothing about the machine after its countdown, whatever it was (r3-p2-04: one failed poll, then
+		// the pause, was "switched off again" for a machine that was on). The run waits for the countdown, in
+		// case polling is taken up again, and then says that it could not look.
+		if mono-h.dueMono > offConfirm {
+			m.end(r, h, StLeftOn, OnUnknown, now, asked+"Polling is paused for it, so Fairy could not see whether it went off: not confirmed that it is off.")
+		}
+		return
+	}
 	if !o.Online && o.OnBy == "" { // nothing at all from it
 		if !h.offQuiet {
 			h.offQuiet, h.offSince = true, mono
 		}
 		switch {
-		case mono <= h.dueMono || mono-h.offSince < offConfirm:
-		case lost:
+		case lost && mono > h.dueMono && mono-h.offSince >= offConfirm:
 			// Silence is also what a dead link looks like, and a dead link is the usual reason an answer is lost:
 			// the request may never have arrived, and the machine may be on and out of reach. The run saw no
 			// countdown, so it does not say "off" (second review, P5). Left on as far as the run knows, power
 			// not known, and named in the notification.
 			m.end(r, h, StLeftOn, OnUnknown, now, cameOnline(h)+". Its shutdown request got no answer, Fairy never saw its countdown, and it does not answer now: "+
 				"not confirmed that it is off."+updateTail(h))
-		default:
+		case lost:
+		case h.seenOff(mono):
+			// Off: after the run's own due time the machine gave nothing at all for offConfirm, as seen by at
+			// least offPolls polls in a row that were made after that time, and it had not gone out of reach
+			// while its countdown was still running (seeSilence).
 			m.end(r, h, StOff, OnNo, now, woken(h)+", "+updateWords(h)+", and switched off again.")
+		case mono-h.dueMono <= offGrace:
+		case h.cutEarly:
+			m.end(r, h, StLeftOn, OnUnknown, now, asked+"It was already out of reach before its countdown ended, and it does not answer now: Fairy cannot tell "+
+				"a machine that went off from a connection that dropped. Not confirmed that it is off.")
+		default: // the panel's polls of it did not run, or not in a row
+			m.end(r, h, StLeftOn, OnUnknown, now, asked+"It does not answer now, but the panel could not ask it often enough after its countdown: not confirmed that it is off.")
 		}
 		return
 	}
@@ -663,6 +691,53 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	case mono-h.dueMono > offGrace:
 		m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("It is still on %s after its shutdown was due: the shutdown did not work. It is ON.", span(offGrace))+updateTail(h))
 	}
+}
+
+// seeSilence reads the poller's row of silent polls for a machine whose countdown the run watches, and keeps
+// what "off" is proven with (seenOff). It is called at every look at such a machine.
+//
+// "Off" used to be: no answer at the run's look, since 20 s, once the countdown was over. The 20 s could lie
+// before the end of the countdown (a link that dropped 20 s before it: "off" one second after it), they could
+// be two failed polls that were both made before the end, and they could be one failed poll of a machine whose
+// polling was then paused, read again and again (audit 5, r3-p2-04). In each case a machine whose shutdown did
+// not happen was reported as "switched off again".
+//
+// Now the silence must be seen by polls that were made after the run's own due time (dueMono): each poll of
+// the poller's row is placed on the run's steady clock, and only one that began after dueMono counts. The row
+// must be unbroken: an answer, a sign of life, paused polling or a time the panel did not watch ends it and
+// the count starts again. And a row that began while the countdown was still running (a poll of it ended
+// before endMin, the earliest the countdown can end) proves nothing however long it gets: a machine that
+// counts down answers; this one was out of reach, and its silence afterwards is the same silence (cutEarly).
+// That holds until it answers again.
+func (h *Host) seeSilence(o Observation, mono time.Duration) {
+	s := o.Silent
+	if o.Online || o.OnBy != "" || o.Paused || s.N == 0 {
+		h.silRow, h.silN, h.silAfter, h.cutEarly = 0, 0, 0, false
+		return
+	}
+	if s.Row != h.silRow { // another row than at the last look: something else lies between the two
+		h.silRow, h.silN, h.silAfter, h.cutEarly = s.Row, 0, 0, false
+	}
+	if s.N == h.silN { // no new poll since the last look
+		return
+	}
+	h.silN = s.N
+	switch began, ended := mono-s.BeganAgo, mono-s.EndedAgo; {
+	case ended < h.endMin:
+		h.cutEarly = true
+	case began > h.dueMono:
+		if h.silAfter == 0 {
+			h.silSince = began
+		}
+		h.silAfter++ // one per look, also when several polls ran since the last one
+	}
+}
+
+// seenOff reports whether the silence the run has seen proves that the machine went off after its countdown
+// (seeSilence): at least offPolls polls in a row, all made after the run's own due time, the first of them
+// offConfirm ago, and the machine had not gone out of reach before the countdown can have ended.
+func (h *Host) seenOff(mono time.Duration) bool {
+	return !h.cutEarly && h.silAfter >= offPolls && mono-h.silSince >= offConfirm
 }
 
 // updateWords is the update's result inside the sentence of a machine that was switched off again.

@@ -90,6 +90,7 @@ type Poller struct {
 	fingerprints  map[string]uint64
 	agentFailures map[string]int
 	agentQuiet    map[string]quietRow             // agent id -> the row of failed polls it is in (see quietGap)
+	quietRows     uint64                          // rows of silent polls counted so far (quietRow.row)
 	helperSeen    map[string]map[string]time.Time // agent id -> helper reading group -> last seen while the helper ran ("" = last running poll)
 	agentInfo     map[string]AgentInfo
 	unencodable   map[string]bool // systems shown as error entries, already logged (see encodeSystems)

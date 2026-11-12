@@ -69,6 +69,10 @@ type machine struct {
 	lastAnswer   time.Time
 	quietSince   time.Time // the first of the row of polls without an answer it is in (zero: it answers)
 	obs          Observation
+	// the row of polls that got nothing at all, as the poller counts it (Observation.Silent)
+	silRow  uint64
+	silN    int
+	silMono time.Duration // the steady clock at the latest of them
 
 	// for the judge
 	knownLimit    bool // this machine is the documented limit (r1-p2-01): the judge does not fail the test for it
@@ -99,7 +103,9 @@ type world struct {
 	started   bool
 	// afterTick is called at the end of every second of the world (a test that changes a machine at a set time)
 	afterTick   func()
-	guestsAsked int // how often the run asked about a machine's guests
+	guestsAsked int            // how often the run asked about a machine's guests
+	rows        uint64         // rows of silent polls the poller has counted
+	kicks       map[string]int // how often the run asked the poller to poll a machine
 	// clock guards now and mono between tick, which moves them, and the Manager, which reads them through
 	// Now and Mono, also from another goroutine (TestReadingAndCancellingWhileARunWorks cancels from one).
 	clock sync.Mutex
@@ -168,7 +174,14 @@ func (w *world) Host(id string) (HostInfo, bool) {
 
 func (w *world) Observe(id string) Observation {
 	if mc := w.ms[id]; mc != nil {
-		return mc.obs
+		o := mc.obs
+		if mc.silN > 0 { // "how long ago", like the poller gives it: its polls take no time here
+			w.clock.Lock()
+			ago := w.mono - mc.silMono
+			w.clock.Unlock()
+			o.Silent = Silence{Row: mc.silRow, N: mc.silN, BeganAgo: ago, EndedAgo: ago}
+		}
+		return o
 	}
 	return Observation{}
 }
@@ -192,7 +205,12 @@ func (w *world) Probe(_ context.Context, id string) string {
 	return "connection failed"
 }
 
-func (w *world) Kick(string) {}
+func (w *world) Kick(id string) {
+	if w.kicks == nil {
+		w.kicks = map[string]int{}
+	}
+	w.kicks[id]++
+}
 
 func (w *world) arrived(call string) {
 	if w.during != nil {
@@ -428,9 +446,16 @@ func (w *world) poll() {
 		}
 		if !w.answers(mc) {
 			if mc.obs.OnBy != "" { // it shows that it runs (the poller's rule): no silence, and none has begun
-				mc.quietSince = time.Time{}
-			} else if mc.quietSince.IsZero() {
-				mc.quietSince = w.now
+				mc.quietSince, mc.silN = time.Time{}, 0
+			} else {
+				if mc.quietSince.IsZero() {
+					mc.quietSince = w.now
+				}
+				if mc.silN == 0 { // a new row of silent polls
+					w.rows++
+					mc.silRow = w.rows
+				}
+				mc.silN, mc.silMono = mc.silN+1, w.mono
 			}
 			mc.obs.Online, mc.obs.QuietSince = false, mc.quietSince
 			if mc.everAnswered && w.now.Sub(mc.lastAnswer) < time.Minute {
@@ -440,7 +465,7 @@ func (w *world) poll() {
 			}
 			continue
 		}
-		mc.everAnswered, mc.lastAnswer, mc.quietSince = true, w.now, time.Time{}
+		mc.everAnswered, mc.lastAnswer, mc.quietSince, mc.silN = true, w.now, time.Time{}, 0
 		o := Observation{Online: true, SeenAt: w.now, Status: "online", OnBy: mc.obs.OnBy, Version: mc.version, UpdateEnabled: mc.updMode != "disabled",
 			UpdateState: mc.updState, UpdateMessage: mc.updMsg, LastAt: mc.lastAt, LastOK: mc.lastOK, LastMessage: mc.lastMsg, Behind: mc.behind}
 		if float64(w.now.Unix()) < mc.lastAt { // the installer has not written its result yet

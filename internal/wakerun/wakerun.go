@@ -159,9 +159,12 @@ const (
 	unsureIdleAfter = time.Minute
 	verdictWait     = 90 * time.Second // after the new version answers: how long the installer's own verdict is waited for
 	agentBack       = 3 * time.Minute  // after the update: how long the agent may take to answer again
-	offConfirm      = 20 * time.Second // no answer for this long after the countdown: the machine is off
-	guestsEvery     = 5 * time.Second  // while a countdown runs: how often the guests of the machine are asked about again
-	guestsMargin    = 15 * time.Second // ... and not in the last seconds of the countdown (stepShutting)
+	// offConfirm, offPolls: "off" after a countdown is nothing at all from the machine for this long, seen by
+	// at least this many polls in a row that were made after the run's own due time (Host.seeSilence).
+	offConfirm   = 20 * time.Second
+	offPolls     = 2
+	guestsEvery  = 5 * time.Second  // while a countdown runs: how often the guests of the machine are asked about again
+	guestsMargin = 15 * time.Second // ... and not in the last seconds of the countdown (stepShutting)
 	// offGrace: still answering this long after the run's own due time: the shutdown failed, or its agent counts
 	// a longer countdown than the run asked for. Either way the run lets go of the machine then, so that no
 	// agent decides how long the one run slot is taken (r1-p2-07). It also covers an agent that does not count
@@ -237,7 +240,11 @@ type Observation struct {
 	QuietSince time.Time
 	// OnBy: what else than its agent's answer shows the machine as on right now ("the Proxmox API shows it as
 	// online", OnByRefused, "its address answered: http 401", ...); "": nothing does.
-	OnBy    string
+	OnBy string
+	// Silent: the unbroken row of polls that got nothing at all from the machine, up to the latest poll, as
+	// the poller counted it (N is 0 while the machine answers or shows a sign of life, and when the panel
+	// stopped asking). QuietSince says since when; this says which polls saw it.
+	Silent  Silence
 	UptimeS *int64 // from the last answered poll (nil: the agent did not say)
 	Version string
 	// the agent's self-update
@@ -249,6 +256,16 @@ type Observation struct {
 	LastMessage   string
 	Behind        *bool // older than the newest release the panel knows (nil: unknown)
 	Pending       *Pending
+}
+
+// Silence is a row of polls of a machine's agent that got nothing at all: no answer and no other sign that
+// the machine runs. The two times are "how long ago", measured by the poller on its steady clock: the run
+// places them on its own (Manager.mono).
+type Silence struct {
+	Row      uint64        // names the row: another value is another row (an answer or a sign of life lies between)
+	N        int           // polls in the row (0: the latest poll was not such a poll)
+	BeganAgo time.Duration // how long ago the latest of them began (the request left) ...
+	EndedAgo time.Duration // ... and ended without an answer
 }
 
 // ProbeRefused is Ops.Probe's answer for a connection the machine itself refused, reset or closed.
@@ -427,17 +444,24 @@ type Host struct {
 	noPendingAt     time.Time     // the first answer after the request that had no countdown in it (see stepShutting)
 	offQuiet        bool          // it gives nothing at all right now ...
 	offSince        time.Duration // ... since this moment on the steady clock
-	retries         int
-	lateSeen        bool // gave up, and it came online later
-	grant           any  // the approval for this machine (item 1.1)
-	cancelHandled   bool
-	cancelUnsure    bool          // the run's cancel of its countdown left and got no answer: the countdown may be called off
-	guestsAsked     bool          // the guests were asked about during the countdown ...
-	guestsMono      time.Duration // ... last at this moment on the steady clock
-	guestsUnseen    bool          // ... and the answer then was "cannot see them"
-	entry           int           // HostInfo.Entry when the run started
-	verdict         *verdict      // how the run would end it: the last look (look) is going on
-	askedAt         time.Time     // when the run's own direct question to it got an answer of any kind (it runs)
+	// What the run has seen of the poller's row of silent polls while it watches the countdown (seeSilence):
+	silRow        uint64        // the row it is counting in
+	silN          int           // how many polls of that row it has looked at
+	silAfter      int           // polls of the row that were made after the run's own due time (dueMono)
+	silSince      time.Duration // steady: when the first of those began
+	cutEarly      bool          // the row began before the countdown can have ended: the machine was out of reach then
+	kickMono      time.Duration // steady: when the poller was last asked to poll it during the countdown
+	retries       int
+	lateSeen      bool // gave up, and it came online later
+	grant         any  // the approval for this machine (item 1.1)
+	cancelHandled bool
+	cancelUnsure  bool          // the run's cancel of its countdown left and got no answer: the countdown may be called off
+	guestsAsked   bool          // the guests were asked about during the countdown ...
+	guestsMono    time.Duration // ... last at this moment on the steady clock
+	guestsUnseen  bool          // ... and the answer then was "cannot see them"
+	entry         int           // HostInfo.Entry when the run started
+	verdict       *verdict      // how the run would end it: the last look (look) is going on
+	askedAt       time.Time     // when the run's own direct question to it got an answer of any kind (it runs)
 }
 
 // Final reports whether the machine has ended in this run.
@@ -843,8 +867,6 @@ type verdict struct {
 	neutral   string    // (believed on) the same without a word about its power; "": the look adds to text
 	since     time.Time // when the look began
 	sinceMono time.Duration
-	quiet     bool          // it has given no sign of life ...
-	silent    time.Duration // ... since this moment on the steady clock
 	kicked    time.Time
 }
 
@@ -880,9 +902,9 @@ const (
 //   - The run believes it is on: an answer from now, or another sign of life (a refused connection is a
 //     machine that runs), confirms it. If it gives nothing, the run waits a short, fixed time (lookFor). When
 //     a shutdown was asked for that the run knows of (it was accepted, or its countdown was seen; not one
-//     that only got no answer), no cancel of the run may have called it off, its countdown is over and the
-//     machine has given nothing for offConfirm, the same confirmation the normal way uses, it is off: "off
-//     (not answering)". Otherwise the result says "not confirmed", and its power is "unknown".
+//     that only got no answer), no cancel of the run may have called it off, and the machine has given
+//     nothing after the run's own due time, the same proof the watch of the countdown asks for (seenOff),
+//     it is off: "off (not answering)". Otherwise the result says "not confirmed", and its power is "unknown".
 //   - The run saw it go off: written as that, unless it shows a sign of life again.
 func (m *Manager) look(r *Run, h *Host, now time.Time) {
 	v := h.verdict
@@ -916,19 +938,14 @@ func (m *Manager) look(r *Run, h *Host, now time.Time) {
 		final(v.state, OnUnknown, base+cannotLook)
 	default:
 		mono := m.mono()
-		if !v.quiet {
-			v.quiet, v.silent = true, mono
-			if h.offQuiet { // the countdown's watch already saw it go quiet
-				v.silent = h.offSince
-			}
-		}
+		h.seeSilence(o, mono)
 		// asked: a shutdown the run knows of (the request was accepted, or its countdown was seen). A request
 		// that got no answer and of which no countdown was ever seen is not one: it may never have arrived.
 		// And silence is "off" only when nothing can have called the countdown off: not after a cancel of
 		// the run whose answer was lost (it may have arrived; then the machine is on).
 		asked := h.ShutdownAt != nil && !h.lostShutdown()
 		switch {
-		case asked && !h.cancelUnsure && mono > h.dueMono && mono-v.silent >= offConfirm: // by the run's own clock (stepShutting)
+		case asked && !h.cancelUnsure && h.seenOff(mono): // the same proof the watch of the countdown asks for
 			final(StOff, OnNo, base+seenOff)
 		case now.Sub(v.since) < lookFor && mono-v.sinceMono < lookFor:
 			if now.Sub(v.kicked) >= kickEvery {
