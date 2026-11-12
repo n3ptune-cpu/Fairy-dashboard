@@ -248,3 +248,48 @@ func TestACancelThatTheAgentCallsTooLateIsNotCancelled(t *testing.T) {
 		t.Fatalf("the audit log: %v", es)
 	}
 }
+
+// The agent's answer of f439fc0 (review of its fix 7, RF7-02): in the minute after a shutdown, reboot or sleep
+// that got no answer (504), a Cancel that found nothing to stop is answered 409, "... may still be scheduled:
+// send the cancel again", and not 200. The panel's Cancel shows those words and never "cancelled" for it; the
+// audit log has it as an error; and the cancel sent again, which the machine then takes, is "cancelled" as any
+// cancel. On a machine with the check and on one without: a cancel is the same for both.
+//
+// (The panel sends a cancel only while it shows a countdown for the machine: powerctl answers "nothing pending"
+// itself otherwise. That is the plain panel's rule and is not touched here.)
+func TestACancelThatMayNotHaveStoppedItIsNotCancelled(t *testing.T) {
+	const again = "nothing was pending when the cancel reached the helper, but the shutdown that got no answer a moment ago may still be scheduled: " +
+		"send the cancel again (for a minute after such a request the agent cannot say that nothing is pending)"
+	for _, check := range []bool{false, true} {
+		a := newApprovalEnv(t)
+		if check {
+			a.require(t, a.laptop)
+		}
+		a.pendingAt(time.Now().Add(40 * time.Second))
+		refuse := true
+		a.gb.Lie("laptop", func(path string) (int, jsonx.M) {
+			if path == "/power" && refuse {
+				return 409, jsonx.M{"error": again}
+			}
+			return 0, nil
+		})
+		r := a.post("/api/systems/laptop/power", map[string]any{"action": "cancel"})
+		// (the plain panel's powerctl hands a machine's 409 on as 400; the words are the machine's)
+		if r.code < 400 || r.code > 499 || r.body["detail"] != again || strings.Contains(string(r.raw), "cancelled") || r.body["message"] != nil {
+			t.Fatalf("check on %v: the cancel: %d %s", check, r.code, r.raw)
+		}
+		if _, _, asked := approvalAsked(r); asked {
+			t.Fatalf("check on %v: a cancel asked for a passkey: %s", check, r.raw)
+		}
+		es := a.auditEntries("", "power.cancel")
+		if len(es) != 1 || !strings.HasPrefix(fmt.Sprint(es[0]["outcome"]), "error 4") || !strings.Contains(fmt.Sprint(es[0]["outcome"]), "may still be scheduled") {
+			t.Fatalf("check on %v: the audit log: %v", check, es)
+		}
+		// the same button again, and the machine has it by now
+		refuse = false
+		r = a.post("/api/systems/laptop/power", map[string]any{"action": "cancel"})
+		if msg, _ := r.body["message"].(string); r.code != 200 || msg != "The shutdown of laptop is cancelled." {
+			t.Fatalf("check on %v: the cancel sent again: %d %s", check, r.code, r.raw)
+		}
+	}
+}
