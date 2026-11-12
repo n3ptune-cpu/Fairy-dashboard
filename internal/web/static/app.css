@@ -81,7 +81,8 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .topbar { position: sticky; top: var(--banner-h); z-index: 10; display: flex; align-items: center; gap: 12px; padding: 14px 28px;
   background: rgba(0, 0, 0, .8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
 .topbar h1 { margin: 0; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.crumb { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crumb { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex-shrink: 1000; } /* the grey sub-title gives way first: the page's title is cut only when the sub-title is gone */
 .acct { margin-left: auto; }
 .topbar .menu-btn { display: none; }
 /* Fluid: the page uses the screen; only very wide screens get a (generous) limit. */
@@ -715,6 +716,10 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
   .wu-head .push { margin-left: 0; }
   .wu-list { grid-template-columns: 1fr; }
   .table.wu-machines { min-width: 560px; } /* scrolls inside its panel instead of breaking every word */
+  /* Updates on a phone: both tables scroll sideways inside their box. The button of a row stays in the window
+     while the other columns pass under it, and its shadow shows that there is more to the left and right. */
+  .table.updates td.num:last-child, .table.wu-machines td.num:last-child { position: sticky; right: 0; background: var(--panel);
+    box-shadow: -10px 0 8px -8px rgba(0, 0, 0, .9); }
 }
 /* pop-ups for new notifications (#toasts): lower right, the newest on top; a strip at the bottom on a phone. Over the page and a dialog's
    backdrop, under the info panel, the flash message and a test build's banner; .behind (set when they would lie over an open dialog)

@@ -88,3 +88,23 @@ func TestUIAddHostComesBackWithItsFormAfterAFailure(t *testing.T) {
 		t.Error("app.js keeps the typed form longer than one use, or without a limit")
 	}
 }
+
+// r1-b1-07, r1-b1-08: at phone width the page's title was cut ("Upd…") while the grey sub-title next to it
+// kept its room, and the buttons of the Updates page's two tables (Switch on, Update) were outside the window,
+// with nothing to show that the table scrolls.
+func TestUIPhoneWidthTitleAndUpdatesButtons(t *testing.T) {
+	css := appCSS(t)
+	for _, want := range []string{
+		"text-overflow: ellipsis;\n  flex-shrink: 1000; }",
+		`.table.updates td.num:last-child, .table.wu-machines td.num:last-child { position: sticky; right: 0; background: var(--panel);`,
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css lacks %q", want)
+		}
+	}
+	// the sticky button column is for narrow windows only
+	i, j := strings.Index(css, ".table.wu-machines { min-width: 560px; }"), strings.Index(css, ".table.updates td.num:last-child, .table.wu-machines td.num:last-child")
+	if i < 0 || j < i || strings.Contains(css[i:j], "\n}\n") {
+		t.Error("the sticky button column is not inside the phone-width block of the Updates page")
+	}
+}
