@@ -602,7 +602,9 @@ Two exceptions, both decided by the machine and shown in its Approval box:
 
 **Update all** asks for one approval that covers every machine with the check on; each machine verifies its
 own entry. The dialog lists every machine the button will update: the ones that check it, the ones that are
-not sent to (and why), and the ones without the check, which are updated on the same confirmation. The
+not sent to (and why), and the ones without the check, which are updated on the same confirmation. What is
+sent afterwards is that list: a machine that was not in it (it did not answer when you pressed the button)
+gets "not sent", and the next press is for it. The
 result is a count ("2 started, 1 not") with one line per machine behind **Details** (started, refused, not
 sent, offline), and it stays until you close it.
 

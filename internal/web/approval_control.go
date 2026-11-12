@@ -107,11 +107,12 @@ func (c *reqCtx) wantsTarget(agentID string) bool {
 //
 // The caller has checked who is asking (controlAllowed); the rate limit comes after this, as before.
 //
-// others say what the same request also sends to machines on the strength of the panel's own confirmation
-// (nothing checks there; "<name>: <what>"): the dialog lists them too, because the one passkey starts them as
-// well (audit 5, r1-b2-04). The list must be complete: while it is not empty the request is never let through
-// without a confirmation (confirmTargets).
-func (c *reqCtx) confirmControl(u *model.User, what string, targets []approvalTarget, others []string) ([]approvalOutcome, error) {
+// others are what the same request also sends to machines on the strength of the panel's own confirmation
+// (nothing checks there): the dialog lists them too, because the one passkey starts them as well (audit 5,
+// r1-b2-04), and they are kept with the plan: after the approval the request is sent to the machines the
+// dialog showed and to no other (audit 6, r4-x1-04). The list must be complete: while it is not empty the
+// request is never let through without a confirmation (confirmTargets).
+func (c *reqCtx) confirmControl(u *model.User, what string, targets, others []approvalTarget) ([]approvalOutcome, error) {
 	return c.confirmTargets(u, what, targets, false, others)
 }
 
@@ -121,7 +122,7 @@ const maxOthersListed = 12
 // confirmTargets is confirmControl. only: targets is everything this request sends (a single action, not a
 // batch that may also go to machines that are not asked): when its one machine refuses the question, that
 // refusal is the answer and nobody is asked to confirm a request that cannot be sent.
-func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTarget, only bool, others []string) ([]approvalOutcome, error) {
+func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTarget, only bool, others []approvalTarget) ([]approvalOutcome, error) {
 	out := make([]approvalOutcome, len(targets))
 	if g := c.approved(); g != nil {
 		// The panel's own replay, right after the approval for this kept request was verified. Each request
@@ -137,14 +138,20 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 			switch {
 			case err == nil:
 				out[i].approval = ap
-			case !c.s.approvalWanted(t.agent.ID):
-				// nothing checks there, and no approval was asked for it: sent as before, on the strength of
-				// this confirmation (a batch that also goes to machines without the check)
 			case g.plan.refused[t.agent.ID] != nil:
-				// it could not be asked before the approval (its check cannot be used): that reason stands
+				// it could not be asked before the approval (its check cannot be used), and the dialog said
+				// "NOT sent": that reason stands, whatever the machine says by now
 				out[i].err = g.plan.refused[t.agent.ID]
-			default:
+			case c.s.approvalWanted(t.agent.ID):
 				out[i].err = apierr.New(409, "This is not the request that was approved for "+t.name+", so it was not sent. Nothing was done: press the button again.")
+			case !g.plan.shown(t.agent.ID, t.req):
+				// Nothing checks there, and the dialog did not show it: it did not answer when the button was
+				// pressed, or it was added since. What runs after a confirmation is what the dialog showed
+				// (audit 6, r4-x1-04): the next press is for this machine.
+				out[i].err = apierr.New(409, t.name+" was not part of what was confirmed, so nothing was sent to it. Press the button again for it.")
+			default:
+				// nothing checks there, and the dialog listed it: sent as before, on the strength of this
+				// confirmation (a batch that also goes to machines without the check)
 			}
 		}
 		return out, nil
@@ -230,12 +237,17 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 			}
 		}
 		// and what it starts without a check on the machine
-		for i, line := range others {
+		for i, o := range others {
 			if i == maxOthersListed {
 				ap.items = append(ap.items, fmt.Sprintf("and %d more (no check on the machine)", len(others)-i))
 				break
 			}
-			ap.items = append(ap.items, line+" (no check on the machine)")
+			ap.items = append(ap.items, o.name+": "+requestWords(o.req)+" (no check on the machine)")
+		}
+	}
+	for _, o := range others { // kept with the plan: the replay sends to these and to no other machine without the check
+		if canon, err := o.req.Canonical(); err == nil {
+			ap.others[o.agent.ID] = canon
 		}
 	}
 	return nil, c.askApproval(u, ap)

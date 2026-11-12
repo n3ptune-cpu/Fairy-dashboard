@@ -56,11 +56,33 @@ type approvalPlan struct {
 	// refused are the machines of a batch that could not be asked for an approval, with the reason the dialog
 	// showed (by agent id): the replay records that reason for them, not "this is not what was approved".
 	refused map[string]error
+	// others are the machines without the check that the same request also goes to, as the dialog listed them:
+	// agent id -> the canonical text of the request. After the approval the request is sent to the machines of
+	// the plan and to these, never to a machine the dialog did not show (shown; audit 6, r4-x1-04).
+	others map[string]string
 }
 
 // newApprovalPlan makes the kept form of plan.
 func newApprovalPlan(plan *approval.Plan) *approvalPlan {
-	return &approvalPlan{plan: plan, verifier: oauth2.GenerateVerifier()}
+	return &approvalPlan{plan: plan, verifier: oauth2.GenerateVerifier(), others: map[string]string{}}
+}
+
+// shown reports whether the dialog showed this request to this agent as one the confirmation starts: it is a
+// request of the plan, or one to a machine without the check that the dialog listed.
+func (a *approvalPlan) shown(agentID string, req api.ApprovalRequest) bool {
+	canon, err := req.Canonical()
+	if err != nil {
+		return false
+	}
+	if a.others[agentID] == canon {
+		return true
+	}
+	for _, b := range a.plan.Bound() {
+		if b.AgentID == agentID && b.Canonical == canon {
+			return true
+		}
+	}
+	return false
 }
 
 // machines are the names of the plan's machines, each once, in the plan's order.
