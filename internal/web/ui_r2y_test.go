@@ -52,13 +52,19 @@ func TestUIFansTabKeepsItsButtonsAndShowsNoMadeUpDuty(t *testing.T) {
 
 // r2-b1-06: a countdown that had run out stayed "Shut down in 0:00 · Cancel" for as long as the agent went on
 // reporting the action (a minute; and the machine may never go down: a shutdown its system refuses). After its
-// time the line says "requested", has no Cancel, and says "still on" when the host still answers 20 s later.
+// time the line says "requested", and says "still on" when the host still answers 20 s later.
+//
+// Second review of fix6, F3: that line had no Cancel. "After its time" is the browser's clock against the
+// agent's, so with a machine whose clock is a minute behind the Cancel was gone for the last minute of the real
+// countdown (two minutes behind: no Cancel at all). Cancel is in both lines again: it is there for as long as
+// the agent reports the action.
 func TestUIACountdownThatRanOutSaysSo(t *testing.T) {
 	js := appJS(t)
 	for _, want := range []string{
 		`const PEND_LATE = 20;`,
 		`const pendingDue = (p) => (Date.now() - new Date(p.at)) / 1000;`,
-		"if (due >= 0) return `<div class=\"pending-strip\" data-key=\"due\"><span><b>${esc(POWER_LABEL[p.action])}</b> requested</span>${pendingLate(s, due)}</div>`;",
+		"const cancel = `<button class=\"btn push\" data-act=\"power-now\" data-action=\"cancel\" ${why ? \"disabled\" : \"\"}>Cancel</button>`;",
+		"if (due >= 0) return `<div class=\"pending-strip\" data-key=\"due\"><span><b>${esc(POWER_LABEL[p.action])}</b> requested</span>${pendingLate(s, due)}${cancel}</div>`;",
 		"due >= PEND_LATE && s.status === \"online\"",
 		"</span><b>still on</b>`",
 		"${s.power_pending ? pendingStrip(s, why) : \"\"}",
@@ -71,13 +77,14 @@ func TestUIACountdownThatRanOutSaysSo(t *testing.T) {
 			t.Errorf("app.js lacks %q", want)
 		}
 	}
-	// Cancel is only in the line that still counts down
+	// Cancel is one button, built before the two lines part, and both lines end with it: the line of an action
+	// whose time has passed by this browser's clock keeps it
 	i := strings.Index(js, "function pendingStrip(s, why) {")
 	j := strings.Index(js[i:], "\n}\n")
 	fn := js[i : i+j]
-	due, cancel := strings.Index(fn, "if (due >= 0) return"), strings.Index(fn, `data-action="cancel"`)
-	if due < 0 || cancel < due || strings.Count(fn, `data-action="cancel"`) != 1 {
-		t.Error("the line of an action whose time has passed offers Cancel")
+	button, due := strings.Index(fn, `data-action="cancel"`), strings.Index(fn, "if (due >= 0) return")
+	if button < 0 || due < button || strings.Count(fn, `data-action="cancel"`) != 1 || strings.Count(fn, "${cancel}</div>`;") != 2 {
+		t.Error("a line of the pending action has no Cancel")
 	}
 }
 

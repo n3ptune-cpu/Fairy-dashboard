@@ -760,9 +760,12 @@ function renderAlerts() {
 
 // A shutdown, reboot or sleep with a countdown (power_pending, from the host's agent). When the countdown has run
 // out the agent has asked its system for the action, and goes on reporting it for a minute. From then on the page
-// does not say "in 0:00" and offers no Cancel (there is nothing left to cancel): it says "requested", and when the
-// machine still answers PEND_LATE seconds later, that it is still on. The line goes when the agent stops reporting
-// the action or the host stops answering, as before.
+// does not say "in 0:00": it says "requested", and when the machine still answers PEND_LATE seconds later, that
+// it is still on. The line goes when the agent stops reporting the action or the host stops answering, as before.
+// Cancel stays in the line for as long as the agent reports the action. "Ran out" is this browser's clock against
+// the agent's (p.at), and the page has nothing that tells it how far the two are apart: on a machine whose clock
+// is a minute behind, the countdown really runs for a minute after the page says "requested". A cancel that
+// finds nothing left to cancel does nothing.
 const PEND_LATE = 20;  // as long as a run waits before it takes a machine for off (wakerun, offConfirm)
 const pendingDue = (p) => (Date.now() - new Date(p.at)) / 1000;  // seconds since it was due; negative while it counts down
 // "by Test admin", and from PEND_LATE on " · 25s ago · still on" (the host still answers)
@@ -770,10 +773,11 @@ const pendingLate = (s, due) => `<span class="note">by ${esc(s.power_pending.req
   ? ` · <span data-ago="${esc(s.power_pending.at)}">${ago(s.power_pending.at)}</span></span><b>still on</b>` : "</span>"}`;
 function pendingStrip(s, why) {
   const p = s.power_pending, due = pendingDue(p);
-  if (due >= 0) return `<div class="pending-strip" data-key="due"><span><b>${esc(POWER_LABEL[p.action])}</b> requested</span>${pendingLate(s, due)}</div>`;
+  const cancel = `<button class="btn push" data-act="power-now" data-action="cancel" ${why ? "disabled" : ""}>Cancel</button>`;
+  if (due >= 0) return `<div class="pending-strip" data-key="due"><span><b>${esc(POWER_LABEL[p.action])}</b> requested</span>${pendingLate(s, due)}${cancel}</div>`;
   return `<div class="pending-strip"><b>${esc(POWER_LABEL[p.action])}</b> in <b data-countdown="${esc(p.at)}">${fmtRuntime(-due)}</b>
       <span class="note">requested by ${esc(p.requested_by || "?")}</span>
-      <button class="btn push" data-act="power-now" data-action="cancel" ${why ? "disabled" : ""}>Cancel</button></div>`;
+      ${cancel}</div>`;
 }
 // Once a second (the page's ticker): the second a countdown runs out its line is drawn anew, also when no data arrives.
 function pendingTick() {
