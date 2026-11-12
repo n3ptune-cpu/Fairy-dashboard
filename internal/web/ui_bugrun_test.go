@@ -59,3 +59,32 @@ func TestUIPowerDialogDoesNotSayLinuxRoundsUp(t *testing.T) {
 		t.Errorf("app.js lacks %q", want)
 	}
 }
+
+// r1-b1-06: an Add host that failed after "Confirm it's you" (the panel could not reach GitHub) left no dialog,
+// the form was lost, and the error was in the corner box for five seconds. The dialog now comes back with what
+// was typed and the panel's whole sentence in it. What was typed waits in this tab's sessionStorage meanwhile.
+func TestUIAddHostComesBackWithItsFormAfterAFailure(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const AH_KEY = "fairy-addhost-form";`,
+		`if (r) openEnrollDialog(r); else keepAddHost(body);`,
+		`const typed = pr.path === "/api/admin/hosts" ? keptAddHost() : null;`,
+		`if (!pr.ok && typed) { openAddHost(typed, pr.message || ` + "`HTTP ${pr.status}`" + `); return; }`,
+		`async function openAddHost(typed = null, problem = "") {`,
+		`if (!typed) keptAddHost();`, // a new dialog forgets an older form
+		`$("#ah-err").textContent = problem;`,
+		// the values go in as properties, and a choice only if the list still has it
+		`const pick = (sel, v) => { if ([...sel.options].some((o) => o.value === text(v))) sel.value = text(v); };`,
+		`$("#ah-name").value = text(typed.name); $("#ah-addr").value = text(typed.address);`,
+		// the same when the action was run with "Resume" instead of by the panel
+		`if (typed) openAddHost(typed, e.message); else flash(e.message, true);`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	// what is kept is read once and removed, and it is not used when it is older than ten minutes
+	if !strings.Contains(js, `sessionStorage.removeItem(AH_KEY); } catch { k = null; }`) || !strings.Contains(js, `Date.now() - k.ts <= 10 * 60 * 1000 ? b : null;`) {
+		t.Error("app.js keeps the typed form longer than one use, or without a limit")
+	}
+}

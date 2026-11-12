@@ -336,9 +336,7 @@ func (s *Server) resumePending(c *reqCtx, p *pendingAction) {
 	if res.Message == "" && res.OK {
 		res.Message = "done"
 	}
-	if len(res.Message) > 300 {
-		res.Message = res.Message[:300]
-	}
+	res.Message = cutMessage(res.Message)
 	// kept on the server for the client that confirmed, until its page asks /api/me (once; see takeResult)
 	s.codec.live.putResult(c.pendingKey(), res, c.client(), s.now())
 	slog.Info("ran the action that waited for a step-up sign-in", "route", p.Pattern, "status", rec.status)
@@ -372,4 +370,25 @@ func (s *Server) dropPending(c *reqCtx) error {
 	}
 	c.json(200, map[string]any{"ok": true})
 	return nil
+}
+
+// maxResultMessage bounds the sentence of a kept action's result. It is long enough for the longest sentence the
+// panel makes (an Add host whose release check failed names the release, the address and the network error:
+// about 400 bytes); it used to be 300, which cut that one in the middle of a word.
+const maxResultMessage = 1000
+
+// cutMessage keeps a result's sentence whole up to maxResultMessage bytes. A longer one ends at the last
+// space before the limit (never inside a character) with "…".
+func cutMessage(m string) string {
+	if len(m) <= maxResultMessage {
+		return m
+	}
+	cut := maxResultMessage
+	for cut > 0 && !utf8.RuneStart(m[cut]) {
+		cut--
+	}
+	if i := strings.LastIndexByte(m[:cut], ' '); i > cut-80 {
+		cut = i
+	}
+	return m[:cut] + "…"
 }

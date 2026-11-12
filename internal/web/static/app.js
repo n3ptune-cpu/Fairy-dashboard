@@ -294,6 +294,10 @@ window.addEventListener("pageshow", (e) => {  // Back from Pocket ID: the dialog
 function showPendingResult(pr) {
   if (!pr) return;
   dropPending();
+  // An Add host that failed after "Confirm it's you": the dialog comes back with what was typed and the whole
+  // sentence in it, as it does when the panel refuses the form at once.
+  const typed = pr.path === "/api/admin/hosts" ? keptAddHost() : null;
+  if (!pr.ok && typed) { openAddHost(typed, pr.message || `HTTP ${pr.status}`); return; }
   flash(`${pr.label}: ${pr.ok ? pr.message || "done" : `failed · ${pr.message || `HTTP ${pr.status}`}`}`, !pr.ok);
   if (pr.ok && pr.ref && /^\/api\/admin\/hosts(\/[^/]+\/repair)?$/.test(pr.path)) revealEnrollment(pr.ref);
   if (pr.path?.startsWith("/api/admin/updates")) upd.fastUntil = Date.now() + 30000;
@@ -338,7 +342,10 @@ async function runPending() {
   try {
     if (p.kind === "power" && s) { await refreshCaps(s.id); openPowerDialog(s, p.action); }
     else if (p.kind === "request") { const r = await api(p.path, { method: p.method, body: JSON.stringify(p.body) }); flash(r?.message || `${p.label}: done`); }
-  } catch (e) { flash(e.message, true); }
+  } catch (e) {
+    const typed = p.kind === "request" && p.method === "POST" && p.path === "/api/admin/hosts" ? keptAddHost() : null;
+    if (typed) openAddHost(typed, e.message); else flash(e.message, true);  // Add host: back in its dialog, as in showPendingResult
+  }
   render();
   if (current().page === "users") loadAdmin();
   if (current().page === "updates") loadUpdates();
@@ -2339,9 +2346,21 @@ function closeModal() {
   if (stepUpOpen) { cancelStepUp(); return; }  // "Confirm it's you": closing it any way cancels the kept action
   const m = $("#modal"); m.hidden = true; m.innerHTML = ""; clearTimeout(enr.timer); enr.id = null;
 }
-async function openAddHost() {
+// What was typed into Add host, kept in this tab (sessionStorage) while "Confirm it's you" is on its way: the
+// page may leave for Pocket ID in between. Names, an address, options and MAC addresses; no code and no token.
+const AH_KEY = "fairy-addhost-form";
+function keepAddHost(body) { try { sessionStorage.setItem(AH_KEY, JSON.stringify({ ts: Date.now(), body })); } catch { /* storage blocked: the form is typed again */ } }
+function keptAddHost() {
+  let k = null;
+  try { k = JSON.parse(sessionStorage.getItem(AH_KEY) || "null"); sessionStorage.removeItem(AH_KEY); } catch { k = null; }
+  const b = k?.body;
+  return b !== null && typeof b === "object" && !Array.isArray(b) && Date.now() - k.ts <= 10 * 60 * 1000 ? b : null;
+}
+// typed, problem: the dialog as it was left, with the panel's sentence about it (see showPendingResult)
+async function openAddHost(typed = null, problem = "") {
   let d;
-  try { d = await api("/api/admin/hosts"); } catch (e) { flash(e.message, true); return; }
+  if (!typed) keptAddHost();  // a new dialog: an older form is not brought back later
+  try { d = await api("/api/admin/hosts"); } catch (e) { flash(problem ? `Add host: failed · ${problem}` : e.message, true); return; }
   enr.page = d;
   const m = $("#modal");
   m.innerHTML = `<form class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="ah-t" id="ah-form">
@@ -2381,6 +2400,18 @@ async function openAddHost() {
   m.querySelector('[data-opt="ups"]').onchange = (e) => ($("#ah-ups-row").hidden = !e.target.checked);
   $("#ah-node").onchange = (e) => { if (e.target.value) os.value = "linux"; syncOs(); };
   $("#ah-cancel").onclick = closeModal;
+  if (typed) {  // values go in as properties, and a choice only if the list still has it
+    const text = (v) => (typeof v === "string" ? v : "");
+    const pick = (sel, v) => { if ([...sel.options].some((o) => o.value === text(v))) sel.value = text(v); };
+    $("#ah-name").value = text(typed.name); $("#ah-addr").value = text(typed.address);
+    pick(os, typed.os); pick($("#ah-site"), typed.site); pick($("#ah-node"), typed.proxmox_new === true ? "__new__" : typed.node);
+    m.querySelectorAll("[data-opt]").forEach((x) => (x.checked = typed.options?.[x.dataset.opt] === true));
+    $("#ah-ups").value = text(typed.options?.ups_name); $("#ah-ups-row").hidden = typed.options?.ups !== true;
+    $("#ah-macs").value = Array.isArray(typed.wol_macs) ? typed.wol_macs.filter((x) => typeof x === "string").join(" ") : "";
+    pick($("#ah-relay"), typed.wol_relay); pick($("#ah-bmc-relay"), typed.bmc_relay); $("#ah-bmc-target").value = text(typed.bmc_target);
+    syncOs();
+  }
+  $("#ah-err").textContent = problem;
   setTimeout(() => $("#ah-name").focus(), 0);
   $("#ah-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -2393,7 +2424,7 @@ async function openAddHost() {
     $("#ah-go").disabled = true;
     try {
       const r = await controlCall({ kind: "request", label: `Add host ${body.name}` }, () => api("/api/admin/hosts", { method: "POST", body: JSON.stringify(body) }));
-      if (r) openEnrollDialog(r);
+      if (r) openEnrollDialog(r); else keepAddHost(body);  // "Confirm it's you" took the dialog's place: see showPendingResult
     } catch (x) { $("#ah-err").textContent = x.message; $("#ah-go").disabled = false; }
   };
 }
