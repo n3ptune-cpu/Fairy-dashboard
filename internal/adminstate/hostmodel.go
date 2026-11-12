@@ -18,6 +18,10 @@ import (
 // MaxModelName is how many characters a custom model name may have.
 const MaxModelName = 64
 
+// maxMarks is how many combining marks (accents and the like, Unicode Mn and Me) may follow one character. The
+// scripts that stack marks use two or three; more than that is a tower of marks over the line above.
+const maxMarks = 4
+
 // hostModelsKey is the name of the object in state.json.
 const hostModelsKey = "host_models"
 
@@ -28,8 +32,10 @@ const hostModelsKey = "host_models"
 // leaves of them), control characters and line breaks (Unicode Cc, and the line and paragraph separators
 // U+2028 / U+2029), format characters, which are invisible and can change how the text around them reads
 // (Cf: direction marks, overrides and isolates, zero-width characters, the byte order mark, tags), private-use
-// characters, a few characters that show as nothing without being Cf, and a name of more than MaxModelName
-// characters. The name is a label only: nothing is decided by it, and the page escapes it like every text.
+// characters, a few characters that show as nothing without being Cf, a name of more than MaxModelName
+// characters, a name in which nothing shows (no letter, digit, punctuation or symbol: only combining marks),
+// and more than maxMarks combining marks in a row. The name is a label only: nothing is decided by it, and
+// the page escapes it like every text.
 func ModelName(raw string) (string, error) {
 	if !utf8.ValidString(raw) {
 		return "", errors.New("model name is not valid text")
@@ -47,6 +53,22 @@ func ModelName(raw string) (string, error) {
 	name := strings.Join(strings.FieldsFunc(raw, unicode.IsSpace), " ")
 	if n := utf8.RuneCountInString(name); n > MaxModelName {
 		return "", fmt.Errorf("model name too long: at most %d characters", MaxModelName)
+	}
+	shows, marks := false, 0
+	for _, r := range name {
+		switch {
+		case unicode.In(r, unicode.Mn, unicode.Me):
+			if marks++; marks > maxMarks {
+				return "", errors.New("model name has too many accents on one character")
+			}
+			continue
+		case unicode.In(r, unicode.L, unicode.N, unicode.P, unicode.S, unicode.Mc):
+			shows = true
+		}
+		marks = 0
+	}
+	if name != "" && !shows {
+		return "", errors.New("model name needs a letter, a digit or a sign")
 	}
 	return name, nil
 }

@@ -22,6 +22,13 @@ func TestModelNameRules(t *testing.T) {
 		{`<img src=x onerror=alert(1)>"'&`, `<img src=x onerror=alert(1)>"'&`}, // markup is text: kept as typed
 		{strings.Repeat("x", MaxModelName), strings.Repeat("x", MaxModelName)},
 		{strings.Repeat("й", MaxModelName), strings.Repeat("й", MaxModelName)}, // characters, not bytes
+		// combining marks as scripts use them: one or two on a letter, up to four
+		{"Büro Tiếng Việt", "Büro Tiếng Việt"},
+		{"हिन्दी सर्वर", "हिन्दी सर्वर"}, {"เซิร์ฟเวอร์ ที่บ้าน", "เซิร์ฟเวอร์ ที่บ้าน"}, {"بَيْتٌ", "بَيْتٌ"},
+		{"é̂̃̄", "é̂̃̄"},
+		{"🏳️ ❤️ 1️⃣", "🏳️ ❤️ 1️⃣"}, // the picture form of a sign, a key cap
+		{strings.Repeat("😀", MaxModelName), strings.Repeat("😀", MaxModelName)},
+		{"-", "-"}, {"7", "7"}, {"№", "№"},
 	} {
 		got, err := ModelName(c.in)
 		if err != nil || got != c.want {
@@ -58,6 +65,15 @@ func TestModelNameRules(t *testing.T) {
 		"not UTF-8":                     "Gaming \xff PC",
 		"a cut-off UTF-8 sequence":      "Gaming PC \xe6\xb8",
 		"the replacement character":     "Gaming \ufffd PC",
+		// r1-p2-10 (audit 5): a name in which nothing shows, and a tower of marks on one letter
+		"only combining marks":          "\u0301\u0302\u0303",
+		"one combining mark":            "\u0301",
+		"marks and spaces only":         " \u0301 \u0308 ",
+		"only variation selectors":      "\ufe0f\ufe0f",
+		"five marks on one letter":      "Gaming PCe\u0301\u0302\u0303\u0304\u0305",
+		"64 marks on one letter":        "Z" + strings.Repeat("\u0351", MaxModelName-1),
+		"marks that enclose, stacked":   "A\u20dd\u20dd\u20dd\u20dd\u20dd",
+		"an unassigned character alone": "\U000e0fff",
 	} {
 		if got, err := ModelName(in); err == nil {
 			t.Errorf("%s: ModelName(%q) = %q, want an error", name, in, got)
