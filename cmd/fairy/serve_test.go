@@ -100,3 +100,27 @@ func TestServeRefusesTheExampleSessionSecret(t *testing.T) {
 		t.Fatalf("serve with a real secret: exit %d, log:\n%s", code, log)
 	}
 }
+
+// r2-p4-10 (audit 5): the panel does not start on a security state file that exists and is empty (it would
+// read as "no users yet" and "no kill switch"); a fresh install, where the files do not exist, starts.
+func TestStartRefusesAnEmptyStateFile(t *testing.T) {
+	dir := t.TempDir()
+	if !checkStateFiles(dir) {
+		t.Fatal("a fresh data folder must be fine")
+	}
+	for _, name := range []string{"users.json", "state.json", "sessions.json", "tokens.json"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if checkStateFiles(dir) {
+			t.Fatalf("an empty %s must stop the start", name)
+		}
+		if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if !checkStateFiles(dir) {
+			t.Fatalf("%s holding {} is a valid empty state", name)
+		}
+	}
+}

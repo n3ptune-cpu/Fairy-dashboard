@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 // Severity values.
@@ -631,11 +633,7 @@ func (s *Store) Flush() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return statefile.WriteAtomic(s.path, b, 0o600)
 }
 
 // Types and severities the page filters by.

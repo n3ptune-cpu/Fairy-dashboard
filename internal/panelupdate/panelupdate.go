@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/deploy"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 // Paths on the panel host.
@@ -201,11 +202,7 @@ func writeFile(path string, st Status) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return statefile.WriteAtomic(path, b, 0o644)
 }
 
 // Read returns the last run's status (ok=false when the unit never ran).
@@ -287,10 +284,7 @@ func Install(unitPath, polkitPath string, run func(name string, args ...string) 
 		if b, err := os.ReadFile(path); err == nil && string(b) == string(data) {
 			return nil
 		}
-		if err := os.WriteFile(path+".new", data, 0o644); err != nil {
-			return err
-		}
-		if err := os.Rename(path+".new", path); err != nil {
+		if err := statefile.WriteAtomic(path, data, 0o644); err != nil {
 			return err
 		}
 		changed = append(changed, path)

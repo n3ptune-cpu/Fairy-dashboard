@@ -4,10 +4,15 @@
 // Writes take an exclusive lock on <file>.lock, re-read, modify and atomically replace the file (mode 0600), so
 // the CLI and the running server never lose each other's changes. Readers reload when the file's mtime changes.
 //
-// The files fail closed: a missing file is empty, but a file that cannot be read (wrong owner or permissions) or
-// is not valid JSON is an error. It is never treated as empty and never overwritten, and a file (or the data
-// directory) owned by another user is not written at all, so running the CLI as the wrong user (e.g. root)
-// cannot leave files the service can no longer read.
+// The files fail closed: a missing file is empty, but a file that cannot be read (wrong owner or permissions),
+// is not valid JSON, or EXISTS AND IS EMPTY is an error. It is never treated as empty and never overwritten,
+// and a file (or the data directory) owned by another user is not written at all, so running the CLI as the
+// wrong user (e.g. root) cannot leave files the service can no longer read.
+//
+// WriteAtomic is the one way a file is replaced, here and for every other file the panel keeps (settings,
+// notifications, managed hosts and their secrets, pictures, the update's status): a temporary file next to
+// it, written and synced to the disk, then renamed over it, then the folder synced. Without the sync a power
+// cut shortly after the rename can leave the new name with 0 bytes.
 package statefile
 
 import (
@@ -19,6 +24,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -26,8 +32,12 @@ import (
 // Data is a state file's top-level JSON object.
 type Data = map[string]any
 
-// Read returns the file's top-level object: {} when the file does not exist (or is empty), an error when it
-// cannot be read or is not a JSON object. Callers must not treat an error as "empty".
+// Read returns the file's top-level object: {} when the file does not exist, an error when it cannot be read,
+// is empty or is not a JSON object. Callers must not treat an error as "empty".
+//
+// A file that exists with nothing in it is damaged, not new: Fairy never writes one (a state file holds at
+// least "{}"), and a power cut or a full disk can leave one behind. Read as "no state" it would switch the
+// kill switch off, forget who was removed and make the next sign-in the first admin again (r2-p4-10).
 func Read(path string) (Data, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -38,7 +48,9 @@ func Read(path string) (Data, error) {
 			"check its owner and mode, e.g. chown fairy:fairy and chmod 600)", path, err)
 	}
 	if len(bytes.TrimSpace(b)) == 0 {
-		return Data{}, nil
+		return nil, fmt.Errorf("%s is empty (%d bytes): Fairy never writes an empty state file, so this one is damaged "+
+			"(a power cut or a full disk can leave it). Fairy will not use or overwrite it; restore it from a backup, "+
+			"or move it aside to start that file over", path, len(b))
 	}
 	var d Data
 	if err := json.Unmarshal(b, &d); err != nil || d == nil {
@@ -89,15 +101,65 @@ func Update(path string, fn func(Data) error) (Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	tmp := filepath.Join(filepath.Dir(path), fmt.Sprintf(".%s.%d.tmp", filepath.Base(path), os.Getpid()))
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+	if err := WriteAtomic(path, b, 0o600); err != nil {
 		return nil, err
 	}
 	return d, nil
+}
+
+// WriteAtomic replaces path with data (mode perm) so that the name holds either the old content or all of the
+// new one, also after a power cut: the data goes to a new temporary file in the same folder, that file is
+// synced to the disk, renamed over path, and the folder is synced so the rename itself is on the disk. The
+// folder must exist. On any error the old file is untouched and the temporary one is removed.
+//
+// The folder's sync is best effort (Windows and some file systems cannot do it, and by then the file is
+// replaced): without it a power cut can bring the OLD content back, never an empty file.
+func WriteAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	fail := func(err error) error {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return fail(err)
+	}
+	if err := f.Chmod(perm); err != nil {
+		return fail(err)
+	}
+	if err := fsync(f); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	syncDir(dir)
+	return nil
+}
+
+// fsync writes a file (or a folder) through to the disk. A variable so that a test can see the order of the
+// calls; nothing else replaces it.
+var fsync = func(f *os.File) error { return f.Sync() }
+
+// syncDir asks the system to write a folder's entries to the disk (after a rename in it).
+func syncDir(dir string) {
+	if runtime.GOOS == "windows" { // a folder cannot be synced there
+		return
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = fsync(d)
+		d.Close()
+	}
 }
 
 // Watched is a cached view of a state file, reloaded when its mtime changes (checked at most every `every`).

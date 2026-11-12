@@ -572,6 +572,65 @@ func TestCorruptUsersFileFailsClosed(t *testing.T) {
 	}
 }
 
+// r2-p4-10 (audit 5): users.json and state.json of 0 bytes (what a power cut could leave) were read as "no
+// users yet" and "no kill switch": the next member of a control group became the first admin again, and
+// control was allowed. An empty file is a damaged file: nobody gets access, nobody is made admin, control is
+// off, and the files are left as they are.
+func TestEmptyStateFilesFailClosed(t *testing.T) {
+	e := setup(t)
+	c := e.cookie(controller(), 0)
+	if r := e.do("GET", "/api/me", nil, "Cookie", c); r.body["role"] != "admin" {
+		t.Fatal("setup", string(r.raw))
+	}
+	_ = e.s.Poller.Admin.SetControlDisabled(true, "root (cli)", "maintenance")
+	statePath := e.s.Poller.Admin.StatePath
+	for _, p := range []string{e.s.Access.Path, statePath} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(1100 * time.Millisecond) // the files are re-checked once a second
+	if e.s.Access.Err() == nil || !strings.Contains(e.s.Access.Err().Error(), "is empty") {
+		t.Fatal("users.json of 0 bytes must be an error:", e.s.Access.Err())
+	}
+	if off := e.s.Poller.Admin.ControlDisabled(); off == nil {
+		t.Fatal("state.json of 0 bytes: the kill switch reads as off")
+	}
+	newcomer := controller() // another member of the control group, never seen before
+	newcomer.Sub = "u-new"
+	for _, ck := range []string{c, e.cookie(newcomer, 0), e.cookie(viewer, 0)} {
+		// 401: with state.json unusable no session counts at all; 403: with only users.json unusable nobody has a role
+		if r := e.do("GET", "/api/systems", nil, "Cookie", ck); r.code != 401 && r.code != 403 {
+			t.Fatal("access with empty state files", r.code, string(r.raw))
+		}
+		if r := e.do("GET", "/api/me", nil, "Cookie", ck); r.code == 200 && r.body["role"] == "admin" {
+			t.Fatal("an admin was made from an empty users.json", string(r.raw))
+		}
+	}
+	if r := e.do("PUT", "/api/systems/laptop/poll", map[string]any{"interval_s": 5}, "Cookie", c, "X-Requested-With", "fairy"); r.code != 401 && r.code != 403 && r.code != 423 {
+		t.Fatal("control with empty state files", r.code)
+	}
+	// users.json alone (state.json is whole again): signed in, and nobody has a role, also not a newcomer
+	// from the control group
+	if err := os.WriteFile(statePath, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	for _, ck := range []string{e.cookie(newcomer, 0), e.cookie(controller(), 0)} {
+		if r := e.do("GET", "/api/systems", nil, "Cookie", ck); r.code != 403 {
+			t.Fatal("access with an empty users.json", r.code, string(r.raw))
+		}
+	}
+	if err := os.WriteFile(statePath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{e.s.Access.Path, statePath} {
+		if b, err := os.ReadFile(p); err != nil || len(b) != 0 {
+			t.Fatalf("%s was rewritten: %q %v", p, b, err)
+		}
+	}
+}
+
 // Anyone can send a bogus Bearer token: those audit entries are throttled per client IP and summed up, so an
 // anonymous flood cannot fill the disk with the audit log.
 func TestAnonymousAuditEntriesAreThrottled(t *testing.T) {

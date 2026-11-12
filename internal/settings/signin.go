@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 // The sign-in wallpaper: one picture for the whole panel, shown behind the sign-in page to everyone who can
@@ -95,11 +96,7 @@ func (s *Store) SaveSignIn(data []byte) (*SignInPicture, error) {
 		return nil, err
 	}
 	target := filepath.Join(s.bgDir, signInFile)
-	if err := os.WriteFile(target+".tmp", data, 0o600); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(target+".tmp", target); err != nil {
-		_ = os.Remove(target + ".tmp")
+	if err := statefile.WriteAtomic(target, data, 0o600); err != nil {
 		return nil, err
 	}
 	s.signIn.Store(p)

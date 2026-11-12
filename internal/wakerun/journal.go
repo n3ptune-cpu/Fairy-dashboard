@@ -1,6 +1,7 @@
 package wakerun
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -161,8 +162,9 @@ func readJournal(path string) (journalFile, error) {
 	if err != nil {
 		return jf, fmt.Errorf("cannot read %s: %w", path, err)
 	}
-	if len(b) == 0 {
-		return jf, nil
+	if len(bytes.TrimSpace(b)) == 0 { // the panel never writes it empty (statefile.Read says the same when it is written)
+		return jf, fmt.Errorf("%s is empty: it is damaged (a power cut or a full disk can leave it), and what a run did may be lost with it; "+
+			"restore it from a backup, or move it aside", path)
 	}
 	if err := json.Unmarshal(b, &jf); err != nil {
 		return jf, fmt.Errorf("%s is not a run journal (%v)", path, err)

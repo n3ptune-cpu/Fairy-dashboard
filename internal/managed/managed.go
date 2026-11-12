@@ -20,6 +20,7 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
@@ -265,31 +266,12 @@ func (s *Store) load() ([]Host, error) {
 	return d.Hosts, nil
 }
 
+// writeAtomic replaces one of the store's files (0600): statefile.WriteAtomic, the panel's one way to do that.
 func writeAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return statefile.WriteAtomic(path, data, 0o600)
 }
 
 func (s *Store) save(hosts []Host) error {

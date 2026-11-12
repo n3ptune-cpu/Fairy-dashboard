@@ -154,6 +154,8 @@ func TestUnusableJournalStopsNewRuns(t *testing.T) {
 	manyHosts := `{"version":1,"active":{"id":"r1","state":"running","hosts":[` + strings.TrimSuffix(strings.Repeat(`{"id":"h","state":"shutting_down"},`, MaxHosts+1), ",") + `]},"history":[]}`
 	for name, content := range map[string]string{
 		"not JSON":                     "{not json",
+		"empty (0 bytes)":              "", // what a power cut could leave: a run's record may be lost with it (r2-p4-10)
+		"blank":                        "\n",
 		"another version":              `{"version":7,"active":null,"history":[]}`,
 		"larger than it is":            big,
 		"a run without an id":          `{"version":1,"active":{"state":"running","hosts":[]},"history":[]}`,

@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 // MaxBackgroundBytes is the largest background image accepted (8 MiB).
@@ -183,11 +184,7 @@ func (s *Store) saveAll(d map[string]json.RawMessage) error {
 		return err
 	}
 	b, _ := json.MarshalIndent(d, "", " ")
-	tmp := strings.TrimSuffix(s.file, ".json") + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.file) // atomic
+	return statefile.WriteAtomic(s.file, b, 0o600)
 }
 
 // key: filenames never contain the raw sub.
@@ -269,7 +266,7 @@ func (s *Store) SaveBackground(sub, mime string, data []byte) (UserSettings, err
 	}
 	s.removeAll(sub)
 	target := filepath.Join(s.bgDir, key(sub)+"."+ImageTypes[mime])
-	if err := os.WriteFile(target, data, 0o600); err != nil {
+	if err := statefile.WriteAtomic(target, data, 0o600); err != nil {
 		return UserSettings{}, fmt.Errorf("saving background: %w", err)
 	}
 	st := s.get(sub)
