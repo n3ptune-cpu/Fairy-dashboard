@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 )
@@ -22,7 +23,22 @@ func (c *cli) sessions(args []string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
+		// What the Sessions page shows: when the person signed in (not when a "Confirm it's you" last renewed
+		// the entry, r3-p1-09) and when the session was last used. An entry stays in sessions.json for up to
+		// 30 days after its session ended by age or idleness; the panel refuses such a session, the page
+		// leaves it out, and here it is marked, so that the list does not show sessions nobody can use as
+		// if they were open. What this command cannot see is a use of the last minute or two: the file gets
+		// it once a minute, so "ended" by idleness is said only two minutes past the timeout.
+		now := float64(time.Now().Unix())
+		at := func(ts float64) string {
+			if ts <= 0 {
+				return "not known"
+			}
+			t := time.Unix(int64(ts), 0)
+			return ago(&t)
+		}
 		var rows [][]string
+		ended := 0
 		for _, s := range list {
 			who := s.Email
 			if who == "" {
@@ -35,12 +51,25 @@ func (c *cli) sessions(args []string) (int, error) {
 			if ip == "" {
 				ip = "?"
 			}
-			rows = append(rows, []string{s.SID[:min(8, len(s.SID))] + "…", who, ip, agoISO(s.Created)})
+			state := "open"
+			switch {
+			case s.SignedIn() > 0 && now-s.SignedIn() > float64(c.cfg.SessionMaxAge):
+				state = "ended (signed in too long ago)"
+			case s.SeenTS > 0 && now-s.SeenTS > float64(c.cfg.SessionIdleTimeout)+120:
+				state = "ended (not used)"
+			}
+			if state != "open" {
+				ended++
+			}
+			rows = append(rows, []string{s.SID[:min(8, len(s.SID))] + "…", who, ip, at(s.SignedIn()), at(s.SeenTS), state})
 		}
 		if len(rows) == 0 {
 			fmt.Fprintln(c.out, "No active sessions.")
 		} else {
-			fmt.Fprintln(c.out, table(rows, []string{"SESSION", "USER", "IP", "SIGNED IN"}))
+			fmt.Fprintln(c.out, table(rows, []string{"SESSION", "USER", "IP", "SIGNED IN", "LAST USED", "STATE"}))
+			if ended > 0 {
+				fmt.Fprintf(c.out, "ended: the panel no longer takes this session (session_max_age, session_idle_timeout). Its entry goes when its browser comes back, or after 30 days.\n")
+			}
 		}
 		return 0, nil
 	case "revoke":

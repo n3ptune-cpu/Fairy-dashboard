@@ -669,7 +669,9 @@ sessions. A person who is waiting for access does not have it.
   (`trusted_proxies`), nginx's otherwise. No location is looked up. "Unknown browser" and "unknown" stand for
   what was not recorded: a session from before this page, until it is used again.
 * Every sign-out from this page is in the audit log (`sessions.revoke`, `sessions.revoke_others`).
-  `fairy admin sessions list | revoke | revoke-all` on the panel host work as before.
+  `fairy admin sessions list | revoke | revoke-all` on the panel host work as before. The list shows the
+  sign-in and the last use the way this page does, and marks an entry whose session has ended by age or
+  idleness as "ended" (the file keeps such an entry for up to 30 days; this page leaves it out).
 
 ### Custom logo
 
