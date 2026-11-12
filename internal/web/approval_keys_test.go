@@ -35,3 +35,15 @@ func TestUITurnOnEscapeIsCancel(t *testing.T) {
 		t.Error("the Escape of Turn on is not a capture listener any more")
 	}
 }
+
+// The kill switch's tooltip names the command as the strip on the same page does (audit 6, r4-b1-12): it said
+// "admin control enable", which is not a command; the program is "fairy".
+func TestUIKillSwitchTooltipNamesTheWholeCommand(t *testing.T) {
+	js := appJS(t)
+	if !strings.Contains(js, "Re-enable on the server: fairy admin control enable`") || strings.Contains(js, "server: admin control enable") {
+		t.Error("app.js: the tooltip of a disabled control does not say `fairy admin control enable`")
+	}
+	if n := strings.Count(js, "admin control enable"); n != strings.Count(js, "fairy admin control enable") {
+		t.Errorf("app.js names the command without its program somewhere (%d places in all)", n)
+	}
+}

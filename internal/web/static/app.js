@@ -33,7 +33,7 @@ const cssName = (v) => (typeof v === "string" && /^[a-z0-9_-]{1,32}$/.test(v) ? 
 const safeHref = (u) => { try { const x = new URL(String(u), location.origin); return x.protocol === "https:" || x.protocol === "http:" ? esc(x.href) : "#"; } catch { return "#"; } };
 const controlOff = () => state.summary?.control_disabled || state.me?.control_disabled || null;
 const canControl = () => !!state.me?.can_control && !controlOff();
-const controlWhyNot = () => (controlOff() ? `Control is disabled by an administrator (${controlOff().by}). Re-enable on the server: admin control enable`
+const controlWhyNot = () => (controlOff() ? `Control is disabled by an administrator (${controlOff().by}). Re-enable on the server: fairy admin control enable`
   : !state.me?.can_control ? "Read-only: only admins can use control actions." : "");
 
 // ------------------------------------------------------------ formatting
