@@ -29,6 +29,13 @@ import (
 //	             machine may as well have been switched on by someone else during the wait, with no packet
 //	             of the run ever on the wire (the relay was down behind a proxy, or died with the connection
 //	             open). It is then left on and reported.
+//	WakeOKAt     after such a first request without an answer: when a later wake request for it was first
+//	             accepted. That one is the first wake the run knows of, so the machine must have started after
+//	             IT: online after it, an uptime shorter than the time since it (by both clocks, wakeOKMono),
+//	             and not sooner after it than a machine that was off can answer (minBoot). A machine whose
+//	             system was already starting when that request was accepted was switched on by someone, or by
+//	             the packet of the request that got no answer; the run cannot tell which, and leaves it on. (A
+//	             slow machine that the lost request did wake is then left on too: that is the price.)
 //	OnlineAt     its first answered poll after that wake
 //	BootUptimeS  the uptime it reported in that poll: shorter than the time since the wake, so the machine's
 //	             system started after the wake. A machine that was on all along and only unreachable has been
@@ -80,6 +87,8 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 		return false, "its agent reports no uptime, so Fairy cannot tell that it started after the wake"
 	case !uptimeUsable(*h.BootUptimeS): // before any arithmetic with it (r2-p2-08)
 		return false, fmt.Sprintf("its agent reports an uptime that cannot be right (%d s), so Fairy cannot tell that it started after the wake", *h.BootUptimeS)
+	case h.startedBeforeAcceptedWake(): // the first request got no answer: measured from the first one that was accepted
+		return false, "the run's first wake request for it got no answer, and it was already starting when a later one was accepted, so Fairy cannot tell that the run woke it"
 	case time.Duration(*h.BootUptimeS)*time.Second >= h.OnlineAt.Sub(*h.WakeSentAt):
 		return false, "it had been running for longer than since the wake: it was already on"
 	case time.Duration(*h.BootUptimeS)*time.Second >= h.onlineMono-h.wakeMono: // the same by the steady clock
@@ -100,6 +109,23 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 		return false, why
 	}
 	return true, ""
+}
+
+// startedBeforeAcceptedWake is one "no" of mayShutDown, for a machine whose first wake request got no answer
+// (WakeUnsure) and that answered with a usable uptime (the caller has checked OnlineAt and BootUptimeS). The
+// lost request is not a wake the run knows of; the first accepted one (WakeOKAt) is. It reports whether the
+// machine does NOT show that it started after that one: no such time is known, or its first answer is not
+// after it, or its uptime is not shorter than the time since it (by the times of day, and by the steady clock),
+// or it answered sooner after it than a machine that was off can (minBoot).
+func (h *Host) startedBeforeAcceptedWake() bool {
+	if !h.WakeUnsure {
+		return false
+	}
+	if h.WakeOKAt == nil || !h.OnlineAt.After(*h.WakeOKAt) {
+		return true
+	}
+	up, steady := time.Duration(*h.BootUptimeS)*time.Second, h.onlineMono-h.wakeOKMono
+	return up >= h.OnlineAt.Sub(*h.WakeOKAt) || up >= steady || steady < minBoot
 }
 
 // guestsKeepOn is why the guests of a Proxmox node keep it on ("": they do not): what Ops.Guests answered, as

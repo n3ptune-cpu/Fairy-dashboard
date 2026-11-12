@@ -169,15 +169,23 @@ func TestWakeAnswerLost(t *testing.T) {
 		}
 	})
 
-	t.Run("the packet went out, the machine is slow, and a later wake is accepted before it answers: off again", func(t *testing.T) {
+	// Second review of fix6, F1. This one ended "switched off again": the later wake was accepted, and "started
+	// after the wake" was measured from the request that got no answer. The accepted wake is the first one the
+	// run knows of, and this machine's system was up 50 s before it: for the run it looks exactly like a machine
+	// that a person switched on while no packet ever went out. It is left on. That is the price of F1: a slow
+	// machine that the run's lost request did wake stays on.
+	t.Run("the packet went out, the machine is slow, and a later wake is accepted before it answers: left on", func(t *testing.T) {
 		w := newWorld(t)
 		pc := w.off("pc-a")
 		pc.wakeLost, pc.bootTakes = "arrives", 100*time.Second // the wake is sent again after a minute
 		w.start(StartRequest{Hosts: []string{"pc-a"}})
 		h := host(w.finish(), "pc-a")
-		has(t, h, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
-		if pc.on || h.Wakes != 1 || !h.WakeUnsure || w.callsFor("pc-a") != "wake wake update shutdown" {
-			t.Fatalf("on %v wakes %d requests %q: %s", pc.on, h.Wakes, w.callsFor("pc-a"), h.Text)
+		has(t, h, StLeftOn, lateWakeLeftOn+" It was updated to 17-bbbbbbb.")
+		if !pc.on || pc.shutdowns != 0 || h.On != OnYes || h.Wakes != 1 || !h.WakeUnsure || w.callsFor("pc-a") != "wake wake update" {
+			t.Fatalf("on %v shutdown requests %d power %q wakes %d requests %q: %s", pc.on, pc.shutdowns, h.On, h.Wakes, w.callsFor("pc-a"), h.Text)
+		}
+		if !logHas(h, lateWakeNote) || logHas(h, "the run treats it as woken") {
+			t.Fatalf("the machine's history: %v", h.Log)
 		}
 	})
 
@@ -210,6 +218,7 @@ func TestWakeAnswerLost(t *testing.T) {
 		}
 	})
 
+	// (F1: unchanged. The machine starts after the accepted wake, also measured from that one: off again.)
 	t.Run("the first answer is lost, the next wake is accepted", func(t *testing.T) {
 		w := newWorld(t)
 		pc := w.off("pc-a")
@@ -219,6 +228,9 @@ func TestWakeAnswerLost(t *testing.T) {
 		has(t, h, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
 		if pc.on || h.Wakes != 1 || !h.WakeUnsure || w.callsFor("pc-a") != "wake wake update shutdown" {
 			t.Fatalf("on %v wakes %d requests %q: %s", pc.on, h.Wakes, w.callsFor("pc-a"), h.Text)
+		}
+		if h.WakeOKAt == nil || !h.WakeOKAt.After(*h.WakeSentAt) || !h.OnlineAt.After(*h.WakeOKAt) || !logHas(h, "the run treats it as woken") {
+			t.Fatalf("first accepted wake at %v, first request at %v, online at %v: %v", h.WakeOKAt, h.WakeSentAt, h.OnlineAt, h.Log)
 		}
 	})
 

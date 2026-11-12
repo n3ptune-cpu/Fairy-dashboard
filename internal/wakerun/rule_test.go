@@ -87,11 +87,54 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 	if ok, why := mayShutDown(h, info, o, noGuests); ok || why != "the run's wake request for it got no answer, so Fairy cannot tell that the run woke it" {
 		t.Errorf("a wake whose answer was lost, and the whole rest of the proof: allowed=%v, reason %q", ok, why)
 	}
-	// ... and yes once a later wake request for it was accepted
-	h, info, o = proven()
-	h.Wakes, h.WakeUnsure = 1, true
+	// ... and yes once a later wake request for it was accepted, when the machine started after THAT one
+	// (second review of fix6, F1). The fixture: the first request left 60 s before the accepted one; the machine
+	// answered 50 s after the accepted one with 30 s of uptime, as in the proof above.
+	lateProven := func() (*Host, HostInfo, Observation) {
+		h, info, o := proven()
+		first, accepted := wake.Add(-60*time.Second), wake
+		h.Wakes, h.WakeUnsure, h.WakeSentAt, h.WakeOKAt = 1, true, &first, &accepted
+		h.wakeMono, h.wakeOKMono = 7*time.Hour-60*time.Second, 7*time.Hour
+		return h, info, o
+	}
+	h, info, o = lateProven()
 	if ok, why := mayShutDown(h, info, o, noGuests); !ok {
 		t.Errorf("a first wake whose answer was lost, a later one accepted, and the whole rest of the proof: %q", why)
+	}
+	// Every measurement is taken from the accepted wake, not from the request that got no answer: each of
+	// these is "started after the wake" against the lost request (110 s before the answer) and not against the
+	// accepted one.
+	const lateWhy = "the run's first wake request for it got no answer, and it was already starting when a later one was accepted, so Fairy cannot tell that the run woke it"
+	up70, up50, up5 := int64(70), int64(50), int64(5)
+	for name, change := range map[string]func(h *Host){
+		"no time of an accepted wake is known":               func(h *Host) { h.WakeOKAt = nil },
+		"online before the accepted wake":                    func(h *Host) { h.OnlineAt = &early },
+		"online at the moment of the accepted wake":          func(h *Host) { h.OnlineAt = &late },
+		"up for longer than since the accepted wake":         func(h *Host) { h.BootUptimeS = &up70 },
+		"up exactly as long as since the accepted wake":      func(h *Host) { h.BootUptimeS = &up50 },
+		"up longer than the steady clock says since it":      func(h *Host) { h.onlineMono = h.wakeOKMono + 20*time.Second },
+		"up exactly as long as the steady clock says":        func(h *Host) { h.onlineMono = h.wakeOKMono + 30*time.Second },
+		"the steady clock says the answer came before it":    func(h *Host) { h.onlineMono = h.wakeOKMono - time.Second },
+		"answered 6 s after the accepted wake, up for 5 s":   func(h *Host) { h.BootUptimeS, h.onlineMono = &up5, h.wakeOKMono+6*time.Second },
+		"answered 7.9 s after the accepted wake, up for 5 s": func(h *Host) { h.BootUptimeS, h.onlineMono = &up5, h.wakeOKMono+7900*time.Millisecond },
+	} {
+		h, info, o = lateProven()
+		change(h)
+		if ok, why := mayShutDown(h, info, o, noGuests); ok || why != lateWhy {
+			t.Errorf("a first wake whose answer was lost, a later one accepted, %s: allowed=%v, reason %q", name, ok, why)
+		}
+	}
+	// 8 s after the accepted wake with a fresh uptime is no longer "too soon"
+	h, info, o = lateProven()
+	h.BootUptimeS, h.onlineMono = &up5, h.wakeOKMono+8*time.Second
+	if ok, why := mayShutDown(h, info, o, noGuests); !ok {
+		t.Errorf("answered 8 s after the accepted wake, up for 5 s: %q", why)
+	}
+	// and a machine whose first wake request was accepted is not measured this way at all
+	h, info, o = proven()
+	h.WakeOKAt, h.wakeOKMono = nil, 0
+	if ok, why := mayShutDown(h, info, o, noGuests); !ok {
+		t.Errorf("a first wake that was accepted has no second time: %q", why)
 	}
 	// an uptime of 0 s is a machine that just started: the proof holds
 	h, info, o = proven()

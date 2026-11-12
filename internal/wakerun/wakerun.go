@@ -133,6 +133,11 @@ const wokenNote = "it was off before the run and came up freshly started after t
 const lostWakeNote = "it came up freshly started, but the run's wake request for it got no answer: Fairy cannot tell that the run woke it. " +
 	"It is updated and left on."
 
+// lateWakeNote goes into the history of a machine whose first wake request got no answer and that was already
+// starting when a later one was accepted (mayShutDown, Host.startedBeforeAcceptedWake).
+const lateWakeNote = "it came up freshly started, but the run's first wake request for it got no answer, and it was already starting when a later one " +
+	"was accepted: Fairy cannot tell that the run woke it. It is updated and left on."
+
 // The sentence for a machine that is on although its agent does not answer, with what shows that it is on.
 const onByText = "It is on (%s), and its agent does not answer. Nothing was sent to it and it stays on."
 
@@ -352,7 +357,12 @@ type Host struct {
 	// packet may have gone out. WakeSentAt is then the moment before that request left, and the run waits for
 	// the machine exactly as after a wake the relay accepted. It is switched off again only if a wake request
 	// for it was accepted as well (Wakes, a later one of the wait): mayShutDown.
-	WakeUnsure  bool       `json:"wake_unconfirmed,omitempty"`
+	WakeUnsure bool `json:"wake_unconfirmed,omitempty"`
+	// WakeOKAt (only after a first request without an answer, WakeUnsure): when a wake request of the run for
+	// it was first accepted, read after the relay's answer. That is the first wake the run knows of, and what
+	// "started after the wake" is measured from then: a machine whose system was already starting at that
+	// moment is left on (mayShutDown).
+	WakeOKAt    *time.Time `json:"wake_accepted_at,omitempty"`
 	OnlineAt    *time.Time `json:"online_at,omitempty"`     // its first answered poll after that wake
 	BootUptimeS *int64     `json:"boot_uptime_s,omitempty"` // the uptime it reported in that poll
 	// OnlineAfterS: how long after the wake that answer came, in seconds. It is the shorter of two
@@ -397,6 +407,7 @@ type Host struct {
 
 	// Working values of the run in memory. A run is never continued after a restart, so they are not kept.
 	wakeMono      time.Duration // the steady clock when the run's first wake was accepted
+	wakeOKMono    time.Duration // the steady clock at WakeOKAt
 	onlineMono    time.Duration // the steady clock when the run saw its first answer after that wake
 	lastWake      time.Time
 	lastKick      time.Time

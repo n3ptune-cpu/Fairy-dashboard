@@ -298,9 +298,12 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 			m.enter(h, StOnline, now, "its agent answers, but reports no uptime: Fairy cannot tell that it started after the wake, so it will not switch it off")
 		default:
 			m.enter(h, StOnline, now, fmt.Sprintf("its agent answers %s after the wake: waiting %s to see that it stays online", span(since), span(onlineSettle)))
-			if h.lostWake() {
+			switch {
+			case h.lostWake():
 				m.note(h, now, lostWakeNote)
-			} else {
+			case h.startedBeforeAcceptedWake(): // only the words of the history: mayShutDown decides, later, by itself
+				m.note(h, now, lateWakeNote)
+			default:
 				m.note(h, now, wokenNote) // the report's detail says what "came online after the wake" rests on, and its limit
 			}
 		}
@@ -332,6 +335,12 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 		if err != nil {
 			m.emit(EvStep, r, h, "wake", map[string]any{"again": true}, opText(err))
 			return
+		}
+		if h.Wakes == 0 {
+			// The first request got no answer, and this is the first one the relay accepted: the first wake the
+			// run knows of. Read after the relay's answer, like the time of a first wake that was accepted.
+			t := m.now()
+			h.WakeOKAt, h.wakeOKMono = &t, m.mono()
 		}
 		h.Wakes++
 		m.dirty = true
