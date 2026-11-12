@@ -732,6 +732,7 @@ const AP_BINDING_MORE = table({
     "Or one host answers in the name of the other. Press the button on the host that is the real one: it keeps the id. The other then has no button: it stays flagged until it shows an id of its own.",
     "Before you press, compare the id with the machine's own: on the machine <code>fairy-agent helper-status</code>, line <code>machine id:</code>."],
   vanished: ["Its trust was removed on the machine (<code>fairy-agent helper-trust clear</code>), or its agent was put back to a release from before this check. Every request would then run with the panel's control token alone.",
+    "If nobody did, what answers at this host's address may be another machine: do not accept, look at the host.",
     "Turn the check on again, or accept that it is off."],
   too_old: ["It runs the test build of 2026-11-11. Its approvals are not tied to one machine, and it refuses this panel's."],
   no_record: ["Fairy did not turn this check on: it was set on the machine itself, or from another panel.",

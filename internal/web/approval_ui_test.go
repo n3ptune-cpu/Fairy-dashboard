@@ -83,3 +83,30 @@ func TestApprovalInMeAndUpdates(t *testing.T) {
 		t.Fatalf("an agent without the block: %s", x.raw)
 	}
 }
+
+// "Check gone" warns like "Machine id changed" (second review of passkey-g, G-09): behind the info button, when
+// nobody took the check off, do not accept. "Accept that its check is off" on one host, then an accept on a
+// host that shows that machine's id, is the way to hand a machine's id to another host with two accepts.
+func TestUICheckGoneWarnsBeforeAccepting(t *testing.T) {
+	js := appJS(t)
+	const warn = `"If nobody did, what answers at this host's address may be another machine: do not accept, look at the host."`
+	more := js[strings.Index(js, "const AP_BINDING_MORE = table({"):]
+	more = more[:strings.Index(more, "});")]
+	for _, kind := range []string{"changed", "vanished"} {
+		i := strings.Index(more, "\n  "+kind+": [")
+		if i < 0 {
+			t.Fatalf("no reasons for %q", kind)
+		}
+		entry := more[i+1:]
+		if j := strings.Index(entry, "],\n"); j >= 0 {
+			entry = entry[:j]
+		}
+		if !strings.Contains(entry, warn) {
+			t.Errorf("%s: the info button lacks the warning: %s", kind, entry)
+		}
+	}
+	// the warning comes before what to do
+	if !strings.Contains(more, warn+",\n    \"Turn the check on again, or accept that it is off.\"],") {
+		t.Error("\"Check gone\": the warning must stand before \"Turn the check on again, or accept that it is off.\"")
+	}
+}
