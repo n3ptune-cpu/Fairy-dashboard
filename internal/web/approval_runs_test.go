@@ -3,6 +3,7 @@ package web
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
@@ -20,8 +21,8 @@ func TestRunsLeaveOutMachinesThatCheckApprovals(t *testing.T) {
 	e.b.Metrics["pc-a"] = func() (jsonx.M, error) {
 		m, err := plain()
 		if err == nil {
-			m["approval"] = jsonx.M{"state": "required", "enforced_by": "agent", "proto": 1.0, "issuer": "https://id.example.org",
-				"client_id": "pc-actions", "users": 1.0, "fan_window_s": 30.0}
+			m["approval"] = jsonx.M{"state": "required", "enforced_by": "agent", "proto": 2.0, "machine_id": "farm-machine-id-of-pc-a-01",
+				"issuer": "https://id.example.org", "client_id": "pc-actions", "users": 1.0, "fan_window_s": 30.0}
 		}
 		return m, err
 	}
@@ -63,5 +64,153 @@ func TestRunsLeaveOutMachinesThatCheckApprovals(t *testing.T) {
 	r := e.wuStart(a.sess, map[string]any{"update_only": []string{"pc-b"}})
 	if d, _ := r.body["detail"].(map[string]any); r.code != 401 || d["code"] != "step_up_required" || d["approval"] != nil {
 		t.Fatalf("pc-b alone: %d %s", r.code, r.raw)
+	}
+}
+
+// checksItself makes the farm machine id one that requires approvals, with the machine id mid (scheme 2).
+func (f *farm) checksItself(id, mid string) {
+	f.e.b.Mu.Lock()
+	plain := f.e.b.Metrics[id]
+	f.e.b.Metrics[id] = func() (jsonx.M, error) {
+		m, err := plain()
+		if err == nil {
+			m["approval"] = jsonx.M{"state": "required", "enforced_by": "agent", "proto": 2.0, "machine_id": mid, "issuer": "https://id.example.org",
+				"client_id": "pc-actions", "users": 1.0, "fan_window_s": 30.0}
+		}
+		return m, err
+	}
+	f.e.b.Mu.Unlock()
+}
+
+// restarted is the farm for a panel that was started again on the same folders (env.restart): the same
+// machines in the state they are in, the farm's clock going on, and the new panel's clocks set to it.
+func (f *farm) restarted(e2 *env) *farm {
+	f2 := *f
+	f2.e = e2
+	p := e2.s.Poller
+	p.Clock = func() time.Time { return f2.now }
+	e2.s.WakeRuns.Now = p.Clock
+	began := f2.now
+	e2.s.WakeRuns.Mono = func() time.Duration { return f2.now.Sub(began) }
+	e2.b.Mu.Lock()
+	for _, id := range []string{"pc-a", "pc-b"} {
+		e2.b.Metrics[id] = func() (jsonx.M, error) { return f2.metrics(id) }
+	}
+	f2.seen = len(e2.b.Requests)
+	e2.b.Mu.Unlock()
+	return &f2
+}
+
+// r1-b2-03 (audit 5): the panel kept what a machine said about its check in memory only. After a restart of the
+// panel, a machine with the check on that was off was unknown to it: after the quarter of an hour it was
+// offered to "Update unpowered hosts" as an ordinary machine that is off, woken, could not be updated or
+// switched off (it asks for an approval the run does not have) and was LEFT ON. The panel now has the machine
+// on record (machines.json): it is in no run, also while it is silent, also after a restart, and its page and
+// the Updates page still say that it checks approvals.
+func TestAMachineWithTheCheckIsInNoRunAfterARestartOfThePanel(t *testing.T) {
+	a := signedIn(t)
+	e := a.e
+	f := newFarm(t, e)
+	const mid = "farm-machine-id-of-pc-a-01"
+	f.checksItself("pc-a", mid)
+	e.b.Mu.Lock()
+	f.on["pc-a"], f.on["pc-b"] = true, true
+	e.b.Mu.Unlock()
+	f.optIn("pc-a", "pc-b")
+	f.tick()
+	if b := e.s.Poller.BindingOf("pc-a"); !b.OK() || b.Record.MachineID != mid || b.Record.State != "required" {
+		t.Fatalf("on record while it answers: %+v", b)
+	}
+	// both machines are switched off; then the panel restarts (an update of the panel is one)
+	e.b.Mu.Lock()
+	f.on["pc-a"], f.on["pc-b"] = false, false
+	e.b.Mu.Unlock()
+	f.tick()
+	e2 := e.restart()
+	f2 := f.restarted(e2) // the same machines for the new panel, both off
+	if _, heard := e2.s.Poller.AgentInfo("pc-a"); heard {
+		t.Fatal("the test needs a panel that has not heard from pc-a since it started")
+	}
+	f2.offline() // no answer for a quarter of an hour and more
+	page := e2.do("GET", "/api/admin/wake-update", nil, "Cookie", a.sess)
+	if page.code != 200 {
+		t.Fatalf("the page: %d %s", page.code, page.raw)
+	}
+	h := wuHostRow(t, page, "pc-a")
+	if h["power"] != "off" || h["choice"] != "" || h["approval"] != "required" || !strings.HasPrefix(h["why"].(string), "needs approval: not supported in runs yet") {
+		t.Fatalf("pc-a after the restart, off for a quarter of an hour: %v", h)
+	}
+	if h := wuHostRow(t, page, "pc-b"); h["power"] != "off" || h["choice"] != "wake" || h["approval"] != nil {
+		t.Fatalf("pc-b has no check and is offered as before: %v", h)
+	}
+	// a start that names it is refused before anybody is asked to confirm, and nothing is sent: no wake
+	before := len(f2.requests())
+	for _, body := range []any{map[string]any{"hosts": []string{"pc-a"}}, map[string]any{"hosts": []string{"pc-a", "pc-b"}}} {
+		r := e2.wuStart(a.sess, body)
+		if d, _ := r.body["detail"].(string); r.code != 400 || !strings.HasPrefix(d, "PC-A needs approval: not supported in runs yet") {
+			t.Fatalf("a start with pc-a %v: %d %s", body, r.code, r.raw)
+		}
+	}
+	if act, hist := e2.s.WakeRuns.Snapshot(); act != nil || len(hist) != 0 || len(f2.requests()) != before {
+		t.Fatalf("no run was started and nothing was sent: %v", f2.requests()[before:])
+	}
+	// its page and the Updates page still know: the block is made from the record, marked "last known"
+	x := e2.do("GET", "/api/systems/pc-a", nil, "Cookie", a.sess)
+	if ap, _ := x.body["approval"].(map[string]any); ap == nil || ap["state"] != "required" || ap["last_known"] != true || strings.Contains(string(x.raw), mid) {
+		t.Fatalf("the system's block after the restart: %s", x.raw)
+	}
+	rows := map[string]any{}
+	for _, r := range e2.do("GET", "/api/admin/updates", nil, "Cookie", a.sess).body["agents"].([]any) {
+		rows[r.(map[string]any)["id"].(string)] = r.(map[string]any)["approval"]
+	}
+	if rows["pc-a"] != "required" || rows["pc-b"] != nil {
+		t.Fatalf("the Updates page's rows: %v", rows)
+	}
+	for _, m := range e2.do("GET", "/api/admin/approval", nil, "Cookie", a.sess).body["machines"].([]any) {
+		if m := m.(map[string]any); m["id"] == "pc-a" && (m["state"] != "required" || m["last_known"] != true || m["machine_id"] != mid) {
+			t.Fatalf("the approval page after the restart: %v", m)
+		}
+	}
+	// a shutdown from its page is not sent on the panel's own confirmation either: the machine is asked first
+	// (it does not answer: it is off)
+	r := e2.do("POST", "/api/systems/pc-a/power", map[string]any{"action": "wake"}, "Cookie", a.sess, "X-Requested-With", "fairy", "Content-Type", "application/json")
+	if r.code == 400 && strings.Contains(string(r.raw), "approval") {
+		t.Fatalf("waking needs no approval: %d %s", r.code, r.raw)
+	}
+	// it comes back and answers: the block is the machine's own again, the record is as it was, and it is
+	// still in no run
+	f2.checksItself("pc-a", mid)
+	e2.b.Mu.Lock()
+	f2.on["pc-a"] = true
+	e2.b.Mu.Unlock()
+	f2.tick()
+	if b := e2.s.Poller.BindingOf("pc-a"); !b.OK() || b.Record.MachineID != mid || !b.Report.Heard {
+		t.Fatalf("pc-a back online: %+v", b)
+	}
+	if h := wuHostRow(t, e2.do("GET", "/api/admin/wake-update", nil, "Cookie", a.sess), "pc-a"); h["choice"] != "" || h["approval"] != "required" {
+		t.Fatalf("pc-a back online: %v", h)
+	}
+}
+
+// A machine whose binding is an alarm is in no run either, and the reason says so.
+func TestAMachineWithAnAlarmIsInNoRun(t *testing.T) {
+	a := signedIn(t)
+	e := a.e
+	f := newFarm(t, e)
+	f.checksItself("pc-a", "farm-machine-id-of-pc-a-01")
+	f.checksItself("pc-b", "farm-machine-id-of-pc-a-01") // a copy of pc-a's disk
+	e.b.Mu.Lock()
+	f.on["pc-a"], f.on["pc-b"] = true, true
+	e.b.Mu.Unlock()
+	f.optIn("pc-a", "pc-b")
+	f.tick()
+	page := e.do("GET", "/api/admin/wake-update", nil, "Cookie", a.sess)
+	for _, id := range []string{"pc-a", "pc-b"} {
+		if h := wuHostRow(t, page, id); h["choice"] != "" || h["approval"] != "alarm" || !strings.HasPrefix(h["why"].(string), "in no run: has the same machine id as") {
+			t.Fatalf("%s: %v", id, h)
+		}
+	}
+	if r := e.wuStart(a.sess, map[string]any{"update_only": []string{"pc-b"}}); r.code != 400 || !strings.Contains(string(r.raw), "PC-B is in no run: has the same machine id as PC-A") {
+		t.Fatalf("a start with a flagged machine: %d %s", r.code, r.raw)
 	}
 }

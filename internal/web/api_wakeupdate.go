@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
@@ -74,10 +76,15 @@ type wuHost struct {
 	// unticked: a machine that resumes from sleep does not look freshly started, and a run leaves it on.
 	Asleep bool `json:"asleep,omitempty"`
 	// Approval: the machine checks a passkey approval itself before an update or a shutdown ("required",
-	// "broken", "unknown"; empty: it does not). A run cannot take such a machine yet (wuNeedsApproval).
+	// "broken", "unknown"; empty: it does not). A run cannot take such a machine yet (wuNeedsApproval). It is
+	// what the machine says now or, while it is silent, also after a restart of the panel, what the panel has
+	// on record for it (audit 5, r1-b2-03: the panel used to forget, offer the machine as "off", wake it and
+	// leave it on). "alarm": the panel's decision about which machine it is, is an alarm.
 	Approval string `json:"approval,omitempty"`
-	Version  string `json:"version,omitempty"`
-	Behind   *bool  `json:"behind"`
+	// approvalWhy is the sentence for that (wuNeedsApproval, or the alarm in words).
+	approvalWhy string
+	Version     string `json:"version,omitempty"`
+	Behind      *bool  `json:"behind"`
 }
 
 // wuNeedsApproval is why a machine that checks passkey approvals itself is in no run. A run sends its update
@@ -474,8 +481,15 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 		h.Power = "off"
 		h.Asleep = x.Asleep
 	}
-	if ap := s.Poller.ApprovalOf(a.ID); ap != nil && s.approvalWanted(a.ID) { // the last answer stays while it is off
-		h.Approval = ap.State
+	if ap := s.Poller.ApprovalOf(a.ID); ap != nil && s.approvalWanted(a.ID) { // the last answer stays while it is off; the record after a restart
+		h.Approval, h.approvalWhy = orText(ap.State, api.ApprovalUnknown), wuNeedsApproval
+		if b := s.Poller.BindingOf(a.ID); !b.OK() {
+			h.Approval = "alarm"
+			h.approvalWhy = "is in no run: " + machineAlarmText(b.Status, s.machineNames(b.With)) + " (see its page)"
+			if b.Status == approval.BindNoStore || b.Status == approval.BindNoRecord {
+				h.approvalWhy = "is in no run: " + approval.BindingText(x.Name, b.Status, nil)
+			}
+		}
 	}
 	switch {
 	case !h.CanJoin:
@@ -487,7 +501,7 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	case o.Paused:
 		h.Why = "polling is paused for it"
 	case h.Approval != "":
-		h.Why = wuNeedsApproval
+		h.Why = strings.TrimPrefix(h.approvalWhy, "is ")
 	case o.Online:
 		h.Choice = wakerun.ModeUpdateOnly
 	case h.Power == "on":
@@ -605,7 +619,7 @@ func (s *Server) wuCheck(b wuStartBody) (map[string]wuHost, error) {
 		case i < len(b.Hosts) && !h.CanWake:
 			return nil, apierr.New(400, h.Name+" cannot be woken and switched off again: "+h.NoWake)
 		case h.Approval != "": // refused here, before anybody is asked to confirm a run that could not do it
-			return nil, apierr.New(400, h.Name+" "+wuNeedsApproval)
+			return nil, apierr.New(400, h.Name+" "+h.approvalWhy)
 		}
 		out[id] = h
 	}
