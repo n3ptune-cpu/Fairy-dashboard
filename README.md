@@ -866,7 +866,10 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
 ## Security model
 
 * Pocket ID only (OIDC code flow + PKCE S256, nonce, state). No passwords anywhere. Pocket ID (allowed_groups /
-  allowed_emails, matched only for a verified email) decides who may sign in; nothing else.
+  allowed_emails, matched only for a verified email) decides who may sign in; nothing else. That is looked at
+  at every sign-in and every "Confirm it's you". When Pocket ID then says the account is not allowed (any
+  more), all sessions of that account end on the panel at once (audit: `auth.login`, "denied: not in an
+  allowed group", `sessions_revoked`). Between two sign-ins the panel does not ask Pocket ID.
 * No release has a way around that sign-in. The test build (`go build -tags fairytest`,
   [TESTING-LOCAL.md](TESTING-LOCAL.md)) has no sign-in, and so it is separate code that a build without the tag
   does not contain: a test of the normal build checks that, and the release workflow stops before signing if a

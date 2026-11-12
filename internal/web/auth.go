@@ -504,7 +504,15 @@ func (s *Server) authCallback(c *reqCtx) error {
 	u := userFromClaims(claims, s.Cfg.OIDC.GroupsClaim)
 	if !isAllowed(u, s.Cfg.OIDC) {
 		slog.Warn("login denied", "sub", u.Sub)
-		c.auditAnon("auth.login", "denied: not in an allowed group", actorOf(&u), &u.Sub, nil)
+		ended, werr := s.endRefused(u.Sub, sess.SID)
+		outcome, params := "denied: not in an allowed group", map[string]any(nil)
+		if ended > 0 {
+			params = map[string]any{"sessions_revoked": ended}
+		}
+		if werr != nil {
+			outcome += "; sessions.json not writable: its sessions are ended in memory only"
+		}
+		c.auditAnon("auth.login", outcome, actorOf(&u), &u.Sub, params)
 		c.clearSession()
 		return apierr.New(403, "not allowed")
 	}
@@ -570,6 +578,35 @@ func (s *Server) authCallback(c *reqCtx) error {
 	}
 	c.redirect(target)
 	return nil
+}
+
+// endRefused ends sessions on the server when the identity provider has just said, with a verified ID token,
+// that an account may not sign in (it left the allowed groups, or was never in one): every session of that
+// account, and the session of the browser that came back, whoever's it is (its cookie is cleared in the same
+// answer, as at a sign-out). r3-p1-12: only the cookie was cleared. At a "Confirm it's you" the session stayed
+// registered with the role it had, so a copy of the cookie, the other tab and the account's other sessions
+// went on until they idled out or reached a day. It returns how many sessions were ended and whether
+// sessions.json could not be written (they are then ended in memory, as in dropSession).
+func (s *Server) endRefused(sub, cookieSID string) (int, error) {
+	var sids []string
+	all, _ := s.Poller.Admin.Sessions()
+	listed := false
+	for _, x := range all {
+		if x.Sub == sub || x.SID == cookieSID {
+			sids = append(sids, x.SID)
+			listed = listed || x.SID == cookieSID
+		}
+	}
+	if len(sids) == 0 {
+		if cookieSID == "" {
+			return 0, nil
+		}
+		return 0, s.dropSession(cookieSID, "the session of a browser that came back with an account that is not allowed") // not listed, or the file cannot be read
+	}
+	if !listed && cookieSID != "" {
+		_ = s.dropSession(cookieSID, "the session of a browser that came back with an account that is not allowed")
+	}
+	return len(sids), s.dropSessions(sids, "a session of an account that Pocket ID does not allow any more")
 }
 
 // verifiedClaims exchanges the authorization code (with the PKCE verifier), verifies the ID token and its nonce
