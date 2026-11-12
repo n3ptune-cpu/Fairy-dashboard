@@ -201,6 +201,20 @@ func TestUIBrokenEscapeInTheAddressIsAnUnknownSystem(t *testing.T) {
 			t.Errorf("app.js lacks %q", want)
 		}
 	}
+	// Such an address, and any other with characters no system id has, must not be asked of the stream as the
+	// host to watch: the stream refuses it (422), and the page would retry for ever with a console error each
+	// time. The page's pattern is the stream's own.
+	if !strings.Contains(js, "const WATCHABLE = /^[a-z0-9][a-z0-9-]{0,79}$/;") || !strings.Contains(js, `connect(r.page === "system" && WATCHABLE.test(r.id) ? r.id : null);`) {
+		t.Error("app.js asks the stream to watch whatever the address holds")
+	}
+	if watchRe.String() != "^[a-z0-9][a-z0-9-]*$" {
+		t.Errorf("the stream's pattern for a watched id changed (%s): the page's WATCHABLE must follow", watchRe)
+	}
+	for id, want := range map[string]bool{"srv-tower": true, "a": true, "%E0%A4%A": false, "Foo": false, "a.b": false, "-a": false, "": false, strings.Repeat("a", 80): true, strings.Repeat("a", 81): false} {
+		if got := len(id) <= 80 && watchRe.MatchString(id); got != want {
+			t.Errorf("the stream takes %q as a watched id: %v", id, got)
+		}
+	}
 	// no other place decodes a part of the address without the catch
 	if n := strings.Count(js, "decodeURIComponent("); n != 1 {
 		t.Errorf("decodeURIComponent is called in %d places, want only in hashPart", n)

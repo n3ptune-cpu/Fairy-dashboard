@@ -2760,6 +2760,10 @@ function schedule(fn, ms = 3000) { clearTimeout(state.timer); if (!signedOut) st
 // A part of the address after "#". A broken %-escape (#/system/%E0%A4%A) is not an error of the page: the part
 // is taken as it stands, which is an id no system has, and the page says "Unknown system."
 const hashPart = (v) => { try { return decodeURIComponent(v); } catch { return v; } };
+// What the stream takes as the id of the host to watch (stream.go, watchRe). An address with anything else after
+// #/system/ names no system: the page says so and keeps its live stream, instead of asking for a stream the
+// panel refuses (422) again and again.
+const WATCHABLE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 function current() {
   const h = location.hash || "#/";
   const m = h.match(/^#\/system\/([^/]+)(?:\/(\w+))?$/);
@@ -2818,7 +2822,7 @@ function route() {
   updateBell();
   renderNav(); renderAlerts(); closeAcct(false); syncAcct();
   $("#shell").classList.remove("drawer"); $("#scrim").hidden = true;
-  connect(r.page === "system" ? r.id : null);  // boost the viewed host to 1 s polling
+  connect(r.page === "system" && WATCHABLE.test(r.id) ? r.id : null);  // boost the viewed host to 1 s polling
   window.scrollTo(0, 0);
 }
 
