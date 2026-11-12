@@ -84,7 +84,7 @@ func (s *Store) SaveSignIn(data []byte) (*SignInPicture, error) {
 		return nil, apierr.Errf(413, "picture larger than %d MiB", MaxBackgroundBytes>>20)
 	}
 	if len(data) == 0 {
-		return nil, apierr.New(400, "empty body")
+		return nil, apierr.New(400, "the file is empty")
 	}
 	p := newSignIn(data)
 	if p == nil {

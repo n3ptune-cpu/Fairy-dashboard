@@ -72,14 +72,14 @@ func (s *Server) uploadBackground(c *reqCtx) error {
 		return apierr.New(429, "too many uploads; try again in a minute")
 	}
 	if c.r.ContentLength > settings.MaxBackgroundBytes {
-		return apierr.New(413, "image too large")
+		return apierr.Errf(413, "picture larger than %d MiB", settings.MaxBackgroundBytes>>20)
 	}
 	data, err := io.ReadAll(io.LimitReader(c.r.Body, settings.MaxBackgroundBytes+1)) // bounded even without Content-Length
 	if err != nil {
 		return apierr.New(400, "unreadable body")
 	}
 	if len(data) > settings.MaxBackgroundBytes {
-		return apierr.New(413, "image too large")
+		return apierr.Errf(413, "picture larger than %d MiB", settings.MaxBackgroundBytes>>20)
 	}
 	mime, err := settings.ValidateUpload(c.r.Header.Get("Content-Type"), data)
 	if err != nil {

@@ -189,6 +189,8 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .detail-head .dh-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .detail-head .dh-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .detail-head .dh-meta .ver { margin-left: 2px; }
+/* A version is written as it is ("build 42 (1a2b3c4)"): a commit in capitals (1A2B3C4) is not the commit the dialogs name. */
+.ver .chip, .table.updates td:nth-child(2) .chip { text-transform: none; }
 .detail-head .sub { grid-column: 1 / -1; color: var(--muted); font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
 .detail-head .actions { grid-column: 2; grid-row: 1 / span 2; align-self: start; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 @media (max-width: 1000px) {

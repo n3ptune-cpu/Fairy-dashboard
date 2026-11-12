@@ -132,13 +132,15 @@ func Sniff(d []byte) string {
 	return ""
 }
 
-// ValidateUpload returns the verified media type or an error (413 too large, 415 wrong type, 400 empty).
+// ValidateUpload returns the verified media type or an error (413 too large, 415 wrong type, 400 empty). The
+// same refusal has the same words as for the sign-in picture (SaveSignIn): "picture larger than 8 MiB", "the
+// file is empty", "not a ... picture (...)" with the types this upload takes.
 func ValidateUpload(contentType string, data []byte) (string, error) {
 	if len(data) > MaxBackgroundBytes {
-		return "", apierr.Errf(413, "image larger than %d MiB", MaxBackgroundBytes>>20)
+		return "", apierr.Errf(413, "picture larger than %d MiB", MaxBackgroundBytes>>20)
 	}
 	if len(data) == 0 {
-		return "", apierr.New(400, "empty body")
+		return "", apierr.New(400, "the file is empty")
 	}
 	claimed := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
 	if _, ok := ImageTypes[claimed]; !ok {
@@ -146,7 +148,10 @@ func ValidateUpload(contentType string, data []byte) (string, error) {
 		if c == "" {
 			c = "?"
 		}
-		return "", apierr.Errf(415, "unsupported type %s; use PNG, JPEG, WebP, GIF or AVIF (no SVG)", c)
+		return "", apierr.Errf(415, "not a PNG, JPEG, WebP, GIF or AVIF picture (it was sent as %s; SVG is not accepted)", c)
+	}
+	if Sniff(data) == "" { // no picture at all (a text file named .png): the words of the sign-in picture's refusal
+		return "", apierr.New(415, "not a PNG, JPEG, WebP, GIF or AVIF picture (the file's content decides, not its name; SVG is not accepted)")
 	}
 	if Sniff(data) != claimed {
 		return "", apierr.New(415, "file content does not match its declared image type")

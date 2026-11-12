@@ -656,7 +656,7 @@ function helperBadge(s, open) {
 }
 function helperMenu(s, h) {
   const why = controlWhyNot(), down = h.state === "stopped" || h.state === "error";
-  const rows = [["State", `${(HELPER_STATE[h.state] || HELPER_STATE.unknown)[1]}${h.since ? ` · since ${ago(h.since).replace(" ago", "")}` : ""}`],
+  const rows = [["State", `${(HELPER_STATE[h.state] || HELPER_STATE.unknown)[1]}${h.since ? ` · for ${fmtUptime(secsSince(h.since))}` : ""}`],
     ["Does", (h.features || []).map((f) => HELPER_FEATURE[f]).filter(Boolean).join(", ") || "–"],
     ...((h.features || []).includes("fans") ? [["Fan watchdog", h.watchdog ? "on" : "off"]] : []),
     ...(h.version ? [["Version", h.version]] : [])];
@@ -2089,7 +2089,7 @@ function bindSignIn() {
     e.target.value = "";  // the same file can be chosen again
     if (!file) return;
     err(null);
-    if (signInWall?.max_bytes && file.size > signInWall.max_bytes) return err(new Error(`That file is larger than the limit of ${fmtBytes(signInWall.max_bytes)}.`));
+    if (signInWall?.max_bytes && file.size > signInWall.max_bytes) return err(new Error(`picture larger than ${Math.round(signInWall.max_bytes / 2 ** 20)} MiB`));  // the panel's own words for it
     try { show(await api("/api/admin/signin-wallpaper", { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } })); flash("Sign-in picture saved"); }
     catch (x) {  // 413 without the panel's own words: the proxy in front of it refused the upload (README, "Sign-in wallpaper")
       err(x.status === 413 && !x.detail ? new Error("The upload was refused as too large before it reached the panel. nginx needs client_max_body_size 9m for /api/admin/signin-wallpaper, as for the background upload.") : x);

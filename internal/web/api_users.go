@@ -150,8 +150,8 @@ func (s *Server) adminPage(me *model.User) adminPage {
 				as.Users++
 			}
 		}
-		for _, t := range page.Targets {
-			if t.Site == name {
+		for _, t := range page.Targets { // hosts only, as the column says: not its guests, power sources and UPSes
+			if t.Site == name && (t.Kind == "node" || t.Kind == "agent") {
 				as.Hosts++
 			}
 		}

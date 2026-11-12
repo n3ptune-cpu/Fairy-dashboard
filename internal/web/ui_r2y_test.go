@@ -115,3 +115,23 @@ func TestUIAPanelThatIsDownIsNamedInThePagesWords(t *testing.T) {
 		t.Error(`"Nothing was sent." must be decided before fetch() is called`)
 	}
 }
+
+// r2-b1-12: texts that disagreed. "running · since 64.7h" (every other duration on the page is "2d 16h"), and
+// the commit of a version in capitals in the chips ("BUILD 42 (1A2B3C4)") while the dialogs say "1a2b3c4".
+func TestUITextsThatDisagreed(t *testing.T) {
+	js, css := appJS(t), appCSS(t)
+	for _, want := range []string{
+		"${h.since ? ` · for ${fmtUptime(secsSince(h.since))}` : \"\"}",
+		"new Error(`picture larger than ${Math.round(signInWall.max_bytes / 2 ** 20)} MiB`)",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	if strings.Contains(js, `.replace(" ago", "")`) {
+		t.Error(`a duration is made from "ago" again ("since 64.7h")`)
+	}
+	if !strings.Contains(css, ".ver .chip, .table.updates td:nth-child(2) .chip { text-transform: none; }") {
+		t.Error("the version chips write the commit in capitals")
+	}
+}
