@@ -68,7 +68,7 @@ func (s *Server) customModelPut(c *reqCtx) error {
 		return err
 	}
 	if !s.adminRL.allow(u.Sub) {
-		return apierr.New(429, "too many changes; slow down")
+		return c.limited(u, s.adminRL, "too many changes")
 	}
 	raw, err := c.customModelBody()
 	if err != nil {

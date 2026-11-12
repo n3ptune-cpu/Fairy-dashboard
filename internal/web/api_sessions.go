@@ -351,7 +351,7 @@ func (s *Server) revokeSession(c *reqCtx, u *model.User, handle, sub string) err
 		return err
 	}
 	if !s.adminRL.allow(u.Sub) {
-		return apierr.New(429, "too many changes; slow down")
+		return c.limited(u, s.adminRL, "too many changes")
 	}
 	target := ownerLabel(t.Session)
 	params := map[string]any{"sub": t.Sub, "own": t.Sub == u.Sub, "browser": browserOf(t.UA), "ip": t.lastAddr()}
@@ -402,7 +402,7 @@ func (s *Server) revokeMyOtherSessions(c *reqCtx) error {
 		return err
 	}
 	if !s.adminRL.allow(u.Sub) {
-		return apierr.New(429, "too many changes; slow down")
+		return c.limited(u, s.adminRL, "too many changes")
 	}
 	n, sids := others() // the session of this request has a new id since the confirmation
 	params := map[string]any{"count": n}

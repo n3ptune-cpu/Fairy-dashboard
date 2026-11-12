@@ -629,7 +629,7 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	// it's you". The audit log gets a line for it.
 	limited := func() error {
 		c.audit(u, "wakeupdate.start", "run", params, "error 429: too many control requests; nothing was started")
-		return apierr.New(429, "too many control requests; slow down")
+		return apierr.New(429, c.waitText(u, s.control, "too many control requests")) // the sentence and Retry-After of every control route
 	}
 	if !c.resumed() && !s.control.free(u.Sub) {
 		return limited()

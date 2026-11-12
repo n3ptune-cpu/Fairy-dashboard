@@ -286,7 +286,7 @@ func (s *Server) deleteWallpaper(c *reqCtx) error {
 	}
 	was := s.Settings.SignIn() != nil
 	if !s.settingsRL.allow(u.Sub) {
-		return apierr.New(429, "too many settings changes; slow down")
+		return c.limited(u, s.settingsRL, "too many settings changes")
 	}
 	if err := s.Settings.DeleteSignIn(); err != nil {
 		c.audit(u, "settings.signin_wallpaper_delete", "", map[string]any{}, "failed: not removed")

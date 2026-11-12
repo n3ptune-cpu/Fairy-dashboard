@@ -2,6 +2,8 @@ package web
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -75,8 +77,13 @@ func TestWakeUpdateStartAndTheLimitOnControlRequests(t *testing.T) {
 	}
 	f.finish()
 	r = e.wuStart(a.sess, body)
-	if r.code != 429 || stepUpRequired(r) || fmt.Sprint(r.body["detail"]) != "too many control requests; slow down" {
-		t.Fatalf("a start over the limit: %d %s", r.code, r.raw)
+	// (r3-p1-13: it said "...; slow down", with no time and no Retry-After, unlike every other control route)
+	m := regexp.MustCompile(`^too many control requests; try again in (\d+) s$`).FindStringSubmatch(fmt.Sprint(r.body["detail"]))
+	if r.code != 429 || stepUpRequired(r) || m == nil || r.hdr.Get("Retry-After") != m[1] {
+		t.Fatalf("a start over the limit: %d %s (Retry-After %q)", r.code, r.raw, r.hdr.Get("Retry-After"))
+	}
+	if secs, _ := strconv.Atoi(m[1]); secs < 1 || secs > 60 {
+		t.Fatalf("try again in %d s", secs)
 	}
 	if keptID(e, a.sess) != "" {
 		t.Fatal("the refused start was kept for a confirmation")

@@ -26,7 +26,7 @@ func (s *Server) putSettings(c *reqCtx) error {
 		return err
 	}
 	if !s.settingsRL.allow(u.Sub) {
-		return apierr.New(429, "too many settings changes; slow down")
+		return c.limited(u, s.settingsRL, "too many settings changes")
 	}
 	raw, err := io.ReadAll(io.LimitReader(c.r.Body, 64<<10))
 	if err != nil {
@@ -162,7 +162,7 @@ func (s *Server) deleteBackground(c *reqCtx) error {
 		return err
 	}
 	if !s.settingsRL.allow(u.Sub) { // audited below, and open to every signed-in user: limited like the other settings changes
-		return apierr.New(429, "too many settings changes; slow down")
+		return c.limited(u, s.settingsRL, "too many settings changes")
 	}
 	c.audit(u, "settings.background_delete", "", map[string]any{}, "ok")
 	out, err := s.Settings.DeleteBackground(u.Sub)

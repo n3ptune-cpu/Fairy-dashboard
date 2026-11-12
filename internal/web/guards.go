@@ -95,10 +95,20 @@ func (c *reqCtx) guardControl(bucket *rateLimiter, killSwitch bool) (*model.User
 // gets a line in the audit log like every other one ("auth.denied", throttled per user as those are). The
 // limit on control requests is met by ordinary use (six machines switched on for runs in a row), so "slow
 // down" was not enough.
+//
+// Every limit a signed-in person can meet answers this way (r3-p1-13: the start of "Update unpowered hosts"
+// and the limits on changes to users, sessions, settings and model names still said "...; slow down", with
+// no time and no header).
 func (c *reqCtx) limited(u *model.User, l *rateLimiter, what string) error {
+	return c.deny(u, 429, c.waitText(u, l, what), what)
+}
+
+// waitText is the sentence of limited, and it sets Retry-After: for a refusal that writes its own line to the
+// audit log.
+func (c *reqCtx) waitText(u *model.User, l *rateLimiter, what string) string {
 	wait := max(l.wait(u.Sub), 1)
 	c.w.Header().Set("Retry-After", strconv.Itoa(wait))
-	return c.deny(u, 429, fmt.Sprintf("%s; try again in %d s", what, wait), what)
+	return fmt.Sprintf("%s; try again in %d s", what, wait)
 }
 
 // controlAllowed is the part of guardControl that comes before "Confirm it's you": who is asking (no API token
@@ -254,7 +264,7 @@ func (c *reqCtx) adminGuard() (*model.User, error) {
 		return nil, err
 	}
 	if !c.s.adminRL.allow(u.Sub) {
-		return nil, apierr.New(429, "too many changes; slow down")
+		return nil, c.limited(u, c.s.adminRL, "too many changes")
 	}
 	return u, nil
 }
