@@ -1426,10 +1426,10 @@ function wuRunBox(r, live) {
   const c = r.cancel;
   return `<div class="wu-run" data-key="wur-${esc(r.id)}">
     <div class="wu-head"><span class="chip ${cls}">${esc(label)}</span>
-      <span>started by <b>${esc(r.by)}</b> <span data-ago="${esc(r.started_at)}">${ago(r.started_at)}</span>${r.ended_at ? `, over <span data-ago="${esc(r.ended_at)}">${ago(r.ended_at)}</span>` : ""}
+      <span>started by <b>${esc(r.by)}</b> <span data-ago="${esc(r.started_at)}">${ago(r.started_at)}</span>${r.ended_at ? `, ended <span data-ago="${esc(r.ended_at)}">${ago(r.ended_at)}</span>` : ""}
         · ${esc(r.hosts.length)} machine${r.hosts.length === 1 ? "" : "s"} · list <code>${esc(r.list_hash)}</code></span>
       ${live && !c ? `<button class="btn danger push" type="button" data-act="wu-cancel" data-id="${esc(r.id)}" ${state.me?.can_control ? "" : "disabled"} title="${esc(why || "Stop the run")}">Cancel run</button>` : ""}</div>
-    ${c ? `<div class="note warn wu-note">Cancelled by ${esc(c.by)}: ${c.switch_off ? "the machines it has woken are still switched off again; nothing else is started." : "the machines it has woken stay on."}</div>` : ""}
+    ${c ? `<div class="note warn wu-note">Cancelled by ${esc(c.by)}: ${!r.hosts.some((h) => h.wake_sent_at) ? "nothing else is started." : c.switch_off ? "the machines it has woken are still switched off again; nothing else is started." : "the machines it has woken stay on."}</div>` : ""}
     ${r.note ? `<div class="note warn wu-note">${esc(r.note)}</div>` : ""}
     ${r.approval === "needed" ? '<div class="warnbox wu-note">The woken machines wait for your approval of their update and shutdown.</div>' : ""}
     ${r.hosts.map((h) => wuHostRow(r, h)).join("")}</div>`;

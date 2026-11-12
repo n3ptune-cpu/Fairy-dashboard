@@ -148,3 +148,22 @@ func TestUIOneWordForTheProcessorCount(t *testing.T) {
 		t.Errorf("app.js still calls the number cores: %v", m)
 	}
 }
+
+// r1-b1-11: the report of a cancelled run. A machine the run sent nothing to is "skipped · not touched" (the
+// state comes from the run, internal/wakerun), the note under the heading speaks of woken machines only when
+// the run woke one, and "over 2s ago" (which reads as "more than") is "ended 2s ago".
+func TestUICancelledRunReport(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`skipped: ["", "skipped"]`, `untouched: ["", "not touched"]`, `stayed_on: ["ok", "done · stays on"]`,
+		"`, ended <span data-ago=\"${esc(r.ended_at)}\">${ago(r.ended_at)}</span>`",
+		`Cancelled by ${esc(c.by)}: ${!r.hosts.some((h) => h.wake_sent_at) ? "nothing else is started."`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	if strings.Contains(js, ", over <span") {
+		t.Error(`app.js still says "over" for the end of a run`)
+	}
+}

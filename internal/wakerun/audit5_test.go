@@ -444,3 +444,48 @@ func TestAMachineSomeoneSwitchedOnJustBeforeTheWake(t *testing.T) {
 		}
 	})
 }
+
+// r1-b1-11 (audit 5, bug run): a run for machines that are on was cancelled before it had sent them anything,
+// and the report showed each with a green "done · stays on" and "It was already on and stays on.": nothing
+// said that the machine was NOT updated. A machine the run sent nothing to is reported as not touched, in
+// words. (One whose update was already asked for keeps "stays on" with what is known about the update:
+// TestCancelLeavesWokenMachinesOn, win-test.)
+func TestACancelledRunDoesNotCallUntouchedMachinesDone(t *testing.T) {
+	w := newWorld(t)
+	ids := []string{"win-a", "win-b", "win-c"}
+	for _, id := range ids {
+		w.running(id)
+	}
+	r := w.start(StartRequest{UpdateOnly: ids})
+	before := len(w.calls)
+	a, _ := w.m.Snapshot()
+	for _, id := range ids {
+		if h := host(a, id); h.UpdateSentAt != nil || h.Update != "" || h.Final() {
+			t.Fatalf("not the moment the test wants (the run has reached %s): %s", id, describe(a))
+		}
+	}
+	if _, err := w.m.CancelRun(r.ID, "test-admin", false); err != nil {
+		t.Fatal(err)
+	}
+	w.tick()
+	done := w.finish()
+	if done.State != RunCancelled {
+		t.Fatalf("run state %s", done.State)
+	}
+	for _, id := range ids {
+		h := host(done, id)
+		has(t, h, StSkipped, "The run was cancelled by test-admin. Nothing was sent to it: it was not updated. It was already on and stays on.")
+		if h.On != OnUntouched || h.UpdateSentAt != nil || h.WakeSentAt != nil {
+			t.Errorf("%s: on = %q, update sent %v, wake sent %v", id, h.On, h.UpdateSentAt, h.WakeSentAt)
+		}
+		if !w.ms[id].on {
+			t.Errorf("%s is not on any more", id)
+		}
+	}
+	if got := strings.Join(w.calls[before:], ","); got != "" {
+		t.Fatalf("after the cancel the run sent: %q", got)
+	}
+	if !strings.Contains(done.Summary, ": The run was cancelled by test-admin. Nothing was sent to it: it was not updated.") {
+		t.Errorf("the summary: %s", done.Summary)
+	}
+}

@@ -645,7 +645,14 @@ func (s *Server) wakeUpdateCancel(c *reqCtx) error {
 	}
 	c.audit(u, "wakeupdate.cancel", r.ID, map[string]any{"run": r.ID, "switch_off": r.Cancel.SwitchOff}, "ok")
 	msg := "run cancelled: the machines it has woken stay on"
-	if r.Cancel.SwitchOff {
+	woke := false
+	for _, h := range r.Hosts {
+		woke = woke || h.WakeSentAt != nil
+	}
+	switch {
+	case !woke: // it woke none (only machines that are on, or it was still at its start): no word about woken ones
+		msg = "run cancelled: nothing else is started"
+	case r.Cancel.SwitchOff:
 		msg = "run cancelled: the machines it has woken are switched off again"
 	}
 	c.json(200, map[string]any{"ok": true, "message": msg})

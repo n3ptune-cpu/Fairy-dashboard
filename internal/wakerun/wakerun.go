@@ -862,8 +862,16 @@ func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
 			"it switches off by itself unless someone cancels that.", why, when(*h.ShutdownAt, now)))
 	case h.NotFresh:
 		m.end(r, h, StLeftOn, OnYes, now, why+". "+notFreshText(h)+updateTail(h))
+	case (h.AlreadyOn || h.Mode == ModeUpdateOnly) && h.WakeSentAt == nil && h.UpdateSentAt == nil && h.Update == "":
+		// The run had not reached it: no wake, no update. That is not "done": it is reported as not touched, and
+		// the sentence says that it was not updated (r1-b1-11: it used to be a green "done · stays on").
+		m.end(r, h, StSkipped, OnUntouched, now, why+". Nothing was sent to it: it was not updated. It was already on and stays on.")
 	case h.AlreadyOn || h.Mode == ModeUpdateOnly:
-		m.end(r, h, StStayedOn, OnYes, now, why+". It was already on and stays on."+updateTail(h))
+		tail := updateTail(h)
+		if tail == "" {
+			tail = " It was not updated."
+		}
+		m.end(r, h, StStayedOn, OnYes, now, why+". It was already on and stays on."+tail)
 	case h.OnlineAt != nil:
 		m.end(r, h, StLeftOn, OnYes, now, why+". The run woke it and it is ON."+updateTail(h))
 	case h.WakeSentAt != nil:
