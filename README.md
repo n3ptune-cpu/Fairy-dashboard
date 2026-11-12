@@ -203,14 +203,14 @@ manual install per machine) is in Fairy-agent's
   **One update at a time**: a second `fairy update` (or the button) while one runs ends with "an update is
   already running on this host" and changes nothing (the lock is `/usr/local/bin/.fairy-update.lock`; it
   stays there, empty).
-  **Before you update to this version**: the new panel does not start with the example session secret, and
-  `fairy update` does not check that for you. Run the one-line check in
+  **Before you update to this version**: one combination of the two session settings does not start any
+  more, and `fairy update` does not check that for you. Look at
   [Upgrading to this release](#upgrading-to-this-release), step 2, first.
   **What an update does not touch**: `fairy update` and the button never replace
   `/etc/systemd/system/fairy.service`. They replace the program; run by hand as root, `fairy update` also
   writes the update unit and the polkit rule named above. What `deploy/fairy.service` has gained since your
   install (the memory limit, the sandbox lines) is added once by hand: the memory limit as in
-  [Upgrading to this release](#upgrading-to-this-release), step 3; the whole unit as in SECURITY-FIXES.md,
+  [Upgrading to this release](#upgrading-to-this-release), step 5; the whole unit as in SECURITY-FIXES.md,
   to-do list, item 2.
 * **Agents**: admins see, in the panel, a banner when a newer Fairy-agent or Fairy-dashboard release exists
   (dismissed per release), an arrow next to each host's agent version when it is behind (click: release notes
@@ -261,7 +261,7 @@ For each ticked machine that is off:
    the countdown with **Cancel**, as for every shutdown from the panel.
 
 The page shows each machine's step while the run works, and which wait it is in ("waiting for it to come
-online, up to 5 min"). The report stays there afterwards (the last 10 runs). A finished run also makes one notification: the
+online, up to 5 min"). The report stays there afterwards (the last 5 runs). A finished run also makes one notification: the
 machines that need a look first (left on, given up on, not confirmed, not updated), each with its sentence,
 then the others. When a sentence for every machine does not fit (a notification holds 1500 characters), the
 others are counted and the machines that need a look are all still named; no sentence is cut. The full list
@@ -715,13 +715,13 @@ page is black, with the same strip.
 
 ## Upgrading to this release
 
-This release changes how people stay signed in, how the panel pairs with agents and which values it accepts
-in `config.yaml`. Nothing has to be converted and no file has to be deleted.
+From the release before it. This one adds pages and settings (Sessions, "Update unpowered hosts", pop-ups, the
+sign-in picture, model names) and shortens how long a sign-in lasts when config.yaml does not say. Nothing has
+to be converted and no file has to be deleted. The update itself signs nobody out.
 
 ### 1. The order
 
-1. **Agents first, one at a time.** Press **Update** for one host on the Updates page of the panel you run
-   today. Wait until it is online again. Then the next one. The new agent works with the old panel.
+1. **Look at the two session settings**: section 2. One combination does not start any more.
 2. **Then the panel.** On the panel host, as root: `fairy update`.
    Before it, `find /var/lib/fairy -maxdepth 1 -name '*.json' -size 0` (your data folder) must print nothing:
    a `users.json` or `state.json` of 0 bytes, left by an old power cut, makes the update roll back until the
@@ -730,73 +730,7 @@ in `config.yaml`. Nothing has to be converted and no file has to be deleted.
    `wake_update:` block. The program you run today does the update, and it refuses a config.yaml that has the
    block ("field wake_update not found"). So write the block only after the update, then
    `systemctl restart fairy`. If the block is already in the file: take it out (or put `#` in front of its
-   lines), update, put it back, restart. What happens otherwise is in step 2 below, last paragraph.
-3. **Then Re-pair, once per machine, where you want it.** The Update button replaces the agent program only.
-   The new service file, the separate polkit rules (Linux) and the folder checks (Windows) come with the
-   installer, which Re-pair runs.
-4. **Then the check on each Linux agent**: Fairy-agent's AGENT.md, "Check your Linux agents". It only reads.
-
-Between steps 1 and 2, do not use Add host or Re-pair for a machine you already updated. The old panel's
-command installs the older agent again. If it happened: press Update for that machine once more.
-
-If you publish the releases yourself: publish the Fairy-agent release first. The panel is built against one
-agent release, and its Add host and Re-pair commands install that release. A panel whose agent release is
-not on GitHub yet refuses Add host and Re-pair until it is.
-
-### 2. Before `fairy update`: three settings and the session secret
-
-Open `/etc/fairy/config.yaml` and look at these three keys. A value in the middle column was accepted before
-and is refused now. A key that is not in the file is fine.
-
-| Key | Refused now | Accepted |
-| --- | --- | --- |
-| `session_idle_timeout` | 1 to 59, and any negative number | 60 or more (seconds), or a text such as `30m`, `4h`, `1d`; not longer than `session_max_age` |
-| `request_timeout` | less than 0.1, more than 300 | 0.1 to 300 (seconds) |
-| `offline_after` | less than 1, more than 604800 | 1 to 604800 (seconds) |
-
-For all three, `0` means "use the default" (4 hours, 4 seconds, 60 seconds), as before.
-
-Also refused: a fraction of a second in `session_max_age` or `session_idle_timeout` (`14400.5`).
-
-Then look at one line in `/etc/fairy/fairy.env` (as root): `FAIRY_SESSION_SECRET=...`. The new panel does
-not start when the value is still the example, `REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS`, or one
-character repeated. That value signs the session cookies, and the example is public. A value you made
-yourself, for example with `openssl rand -base64 48`, stays as it is and nobody has to sign in for it again.
-If yours is the example, make a real one with that command, write it into the line and continue. The log
-line and `fairy admin config check` of the new panel name the same command.
-
-**The check before you update to this version.** `fairy update` and the Update panel button do not look at
-the session secret first: the program that runs today does the update, and it does not know the new rule.
-This command answers "will the new panel refuse my session secret?". It only reads the file and prints
-`yes` or `no`, never the value. Run it on the panel host:
-
-```
-sudo env LC_ALL=C awk -v q="'" '/^[ \t]*FAIRY_SESSION_SECRET[ \t]*=/{v=$0;sub(/^[^=]*=[ \t]*/,"",v);sub(/[ \t\r]+$/,"",v);n=length(v);a=substr(v,1,1);b=substr(v,n,1);if(n>1&&a==b&&(a=="\""||a==q))v=substr(v,2,n-2);f=1} END{s=1;for(i=2;i<=length(v);i++)if(substr(v,i,1)!=substr(v,1,1)){s=0;break};print((!f||length(v)<32||index(v,"REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS")||s)?"yes":"no")}' /etc/fairy/fairy.env
-```
-
-`no`: update as usual. `yes`: do this before the update, as root:
-
-1. `openssl rand -base64 48`
-2. Write the output into `/etc/fairy/fairy.env` as the line `FAIRY_SESSION_SECRET=<that value>`.
-3. `systemctl restart fairy`. Everyone signs in once more. Then update.
-
-The command reads `/etc/fairy/fairy.env` only. If you set the secret somewhere else (a systemd drop-in with
-`Environment=`), look at the value there. systemd does not read a line that starts with `export`, and
-neither does this command.
-
-If you update with the example value all the same: the new program is put in place and exits at once, again
-at every start that systemd tries. After about 45 seconds `fairy update` puts the old program back and ends
-with "the new version did not become healthy ... rolled back to the previous version". The panel is away for
-about 50 seconds and nothing is lost. The update's message does not say why: the reason is only in
-`journalctl -u fairy`.
-
-If one of the values above is wrong, the new panel does not start. `fairy update` waits for the panel to
-answer after the restart. When it does not, it puts the old program back (it keeps it as
-`/usr/local/bin/fairy.old`) and
-reports "rolled back to the previous version". Nothing is lost. Correct the value and run `fairy update`
-again. After the update you can check both files at any time with `sudo fairy admin config check` (as root:
-it only reads, and root can read `fairy.env`). As user `fairy` the same command shows every secret as
-missing, and a client secret as "not set"; that is expected and says nothing about the install.
+   lines), update, put it back, restart. What happens otherwise is in the paragraph after this list.
 
 If config.yaml already has the `wake_update:` block when you update: on a panel that listens on the default
 `127.0.0.1:8080` the update goes through. On a panel with another `listen:` address (the nginx layout) the
@@ -811,10 +745,72 @@ replaces anything ("config.yaml is not usable by the installed version: ..."), b
 version refuses too (a typing mistake) would end with the panel down and the page gone. `fairy update` by
 hand warns and goes on, as before.
 
-### 3. One step by hand: the memory limit
+Nothing has to be done on the agents for this panel: every agent the panel before it worked with works with
+this one, and it asks nothing new of them.
 
-`fairy update` replaces the program, never `fairy.service`. An install made before this release has no
-memory limit. Add it once:
+### 2. Before `fairy update`: the two session settings
+
+When config.yaml sets neither `session_max_age` nor `session_idle_timeout`, a sign-in now ends after **one
+day**, and after **four hours** in which nobody used the page. Until this release that was 7 days and 12
+hours. Open `/etc/fairy/config.yaml` and look for the two keys:
+
+| In config.yaml | After the update |
+| --- | --- |
+| neither key | 1 day and 4 hours |
+| both keys | your values, as before. The example file used to set `session_max_age: 604800` and `session_idle_timeout: 43200`: a config.yaml copied from it keeps those long values until you change or remove the two lines |
+| only `session_max_age` | your value; the idle timeout is 4 hours, or the whole session when that is shorter |
+| only `session_idle_timeout`, one day or less | your value; the session is one day |
+| only `session_idle_timeout`, **more than one day** | **the new panel does not start**: `session_idle_timeout (2d) must not be longer than session_max_age (1d)` |
+
+In the last case, before the update: add a `session_max_age` that is at least as long, or make the idle
+timeout shorter.
+
+### 3. Behind nginx: one more location
+
+Only when nginx is in front of the panel and an admin wants to upload a picture for the sign-in page: that
+upload needs the exception the background upload already has, `client_max_body_size 9m` for
+`/api/admin/signin-wallpaper`. The block is in `deploy/nginx.example.conf`. Without it nginx refuses a
+picture over 128 KiB and the Settings page says so. See [Sign-in wallpaper](#sign-in-wallpaper).
+
+### 4. What you will notice afterwards
+
+1. **Nobody is signed out by the update.** The session cookie and its signing key are the same as before.
+   What ends a sign-in is its age: with the new defaults (section 2) one that is older than a day, or a tab
+   nobody used for four hours, signs in again.
+2. **Sessions** is new in the menu: where you are signed in, and Sign out for the other places. Signing
+   another session out asks "Confirm it's you" every time. A session that was open before the update is
+   listed with "Unknown browser" until that browser signs in again or confirms an action ("Confirm it's
+   you"). See [Sessions](#sessions).
+3. **Update unpowered hosts** is new on the Updates page: it wakes machines that are normally off,
+   updates their agent and switches them off again. Nothing happens until an admin switches a machine on
+   for it and starts a run; a script with an API token can do neither. A machine counts as off for a run
+   only after 15 minutes without any sign of life (no answer, and no refused connection either), counted
+   by the panel since its own start: for the first 15
+   minutes after this update's restart no machine is offered as off. See
+   [Update unpowered hosts](#update-unpowered-hosts).
+4. **Pop-ups.** A critical event that is made while a page of the panel is open (a host goes offline, a
+   temperature passes its limit, a UPS goes on battery) also shows in the lower right corner, for 5
+   seconds. They are on for everyone; each person changes that in **Settings**, "Pop-ups": on or off, 3 to
+   30 seconds, critical only or warnings too. See [Notifications](#notifications).
+5. **Settings, "Sign-in page"** (admins): a picture behind the sign-in page. It is public: everyone who can
+   open the panel's address sees it before signing in. See [Sign-in wallpaper](#sign-in-wallpaper).
+6. **Set model name** (admins): a host's page, the ⋯ menu. The name is shown in place of the model the
+   machine reports; **Clear** brings that back.
+7. **The Overview is one line per host.** Under the name, small, the machine's model; in front the mark of
+   its system; behind the name small signs for the elevated helper, the battery and the UPS, where the host
+   has one (point at a sign, or click it). Threads, memory and the system are on the host's page.
+8. **"Panel not reachable".** When a page hears nothing from the panel for ten seconds and a knock gets no
+   answer, a strip says so on every page and the status dots turn grey, until the panel answers again.
+9. **Scripts that read `/api/notifications`**: the filter `severity=critical` now returns what the page
+   calls critical (every event that starts an alert, such as a host that goes offline, and every event
+   whose severity is critical), and `severity=warning` the other warnings. Before, both went by the stored
+   severity alone, where "host offline" is a warning. The `severity` field of each event is unchanged.
+
+### 5. One step by hand: the memory limit (only an install older than the release before this one)
+
+`fairy update` replaces the program, never `fairy.service`. An install made before the release before this
+one has no memory limit, unless it was added then. Check: `systemctl show fairy -p MemoryMax` (536870912
+means 512M: nothing to do). Otherwise add it once:
 
 1. `sudo systemctl edit fairy`
 2. Write these two lines, then save:
@@ -824,75 +820,10 @@ memory limit. Add it once:
    MemoryMax=512M
    ```
 3. `sudo systemctl restart fairy`
-4. Check: `systemctl show fairy -p MemoryMax` (536870912 means 512M).
+4. Check again with the command above.
 
-### 4. What you will notice afterwards
-
-1. **Everyone signs in once.** The session cookie has a new name (`__Host-fairy_session`) and a new signing
-   key, so the old sign-ins end with the update: a cookie from before it is not accepted any more, also not
-   as a copy under the new name, and `fairy admin sessions list` shows nothing until someone has signed in
-   again. Roles, sites, API tokens, hosts and settings stay as they were, so you sign in and are admin.
-2. **Your first control action asks "Confirm it's you"**, also right after every panel restart. One
-   confirmation covers the next 3 minutes (`step_up_window_s: 180`). A config.yaml that sets
-   `step_up_window_s` keeps its value. The confirmation counts only for the browser and the address it was
-   made from: if your address changes (mobile data, a VPN), the next action asks again, and after that one
-   sign-in the page offers the action as "Resume" instead of running it by itself. The dialog now also shows,
-   under "Fairy will run", what the panel itself is about to do.
-3. **A tab nobody touches signs out** after 4 hours (`session_idle_timeout`), and every sign-in ends after one
-   day (`session_max_age`). These are the defaults since the release with the Sessions page; before it they
-   were 12 hours and 7 days. A config.yaml that sets the two keys keeps its values: the example file used to
-   set `session_max_age: 604800` and `session_idle_timeout: 43200`, so a config.yaml copied from it still has
-   the old, long values until you change or remove those two lines. One case does not start any more: a
-   config.yaml that sets only `session_idle_timeout`, to more than one day. The idle timeout may not be
-   longer than the session, which is now one day unless `session_max_age` says otherwise;
-   `fairy admin config check` names it.
-4. **The Users page** shows "unverified" next to an e-mail address that Pocket ID has not marked as
-   verified, and an "id ..." line per person. Signing in and roles do not depend on it. But
-   `fairy admin users set-role you@example.com admin` (example address) finds an account by its address only
-   when the address is verified. Otherwise use the subject from `fairy admin users list`:
-   `fairy admin users set-role <subject> admin`. Making an admin asks "Type yes to continue"; in a script add
-   `--yes`.
-   The Audit page and `fairy admin audit tail` follow the same rule: an address Pocket ID did not verify
-   reads `you@example.com (unverified)`, and every entry shows the account's id next to it. Entries written
-   before the update show the bare address; the id is there for them too.
-5. **Scripts with an API token** can no longer stop or start the elevated helper, or use Add host, Re-pair,
-   Remove, or cancel an Add host that is waiting. They get 403, "this action needs a browser sign-in".
-   Everything else a token could do, it still can. In the page, "Cancel Add host" asks "Confirm it's you"
-   when your last confirmation is older than the window.
-6. **Add host shows a new command**, and the panel pairs about 15 seconds after the command has run. Hosts
-   you added before the update keep working. Their page says "Pairing: made by an older panel, not
-   verified" until you Re-pair them.
-7. **Add host and Re-pair refuse** a machine at an address outside Tailscale, and an agent release that is
-   too old for the new pairing. See [Add host](#add-host).
-8. **The Updates page** can show a host as "failed" with a reason when its agent refuses a second update
-   within 10 minutes. See [Updates](#updates).
-9. **At most 8 open Fairy tabs per person**, and at most 50 sign-ins per person at a time (2000 for the
-   whole panel): one more signs out that person's oldest. `fairy admin sessions list` shows them.
-10. **`/docs`**, if you switched it on, needs a sign-in and a role.
-11. **Fewer notifications that repeat.** A temperature that keeps crossing its limit, or a host that reports
-    a finished update again and again, is one entry per 10 minutes with a count ("x7") and one push message.
-    One host, one Proxmox cluster or one UPS source sends at most 5 push messages a minute; the sixth says
-    that it is over its limit, and everything is on the Notifications page. See
-    [Notifications](#notifications).
-12. **Names are shown without control characters.** A host name, sensor label, guest name or error text
-    from a machine that contains escape sequences, line breaks or direction overrides is shown, logged and
-    sent on without them. Ordinary names, also with accents or non-Latin letters, are unchanged. A Proxmox
-    cluster with more than 64 nodes or 2000 guests is shown up to that number, and the log says so.
-13. **Sessions** is new in the menu: where you are signed in, and Sign out for the other places. Signing
-    another session out asks "Confirm it's you" every time. Sessions that were open before the update are
-    listed with "Unknown browser" until they are used again. See [Sessions](#sessions).
-14. **Update unpowered hosts** is new on the Updates page: it wakes machines that are normally off,
-    updates their agent and switches them off again. Nothing happens until an admin switches a machine on
-    for it and starts a run; a script with an API token can do neither. A machine counts as off for a run
-    only after 15 minutes without any sign of life (no answer, and no refused connection either), counted
-    by the panel since its own start: for the first 15
-    minutes after this update's restart no machine is offered as off. See
-    [Update unpowered hosts](#update-unpowered-hosts).
-
-15. **Scripts that read `/api/notifications`**: the filter `severity=critical` now returns what the page
-    calls critical (every event that starts an alert, such as a host that goes offline, and every event
-    whose severity is critical), and `severity=warning` the other warnings. Before, both went by the stored
-    severity alone, where "host offline" is a warning. The `severity` field of each event is unchanged.
+What else the release before this one asked for (its order with the agents, three settings and the session
+secret) is in that release's own README.
 
 Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
 `managed-hosts.yaml`, `state.json`, `settings.json`, and `sessions.json`, where it ignores what this one adds).

@@ -50,9 +50,9 @@ and nothing else. Whoever has the address with the key is admin.
 Every page has a red bar at the top: **TEST BUILD: sign-in is off. Never expose this.** `fairy version`, the
 Updates page and the start-up log say "TEST BUILD" too.
 
-## What to click in zip 5
+## What to click in zip 6
 
-Unpack the zip (folder `Fairy-dashboard-part1-r5`), open `cmd.exe` in it, then:
+Unpack the zip (folder `Fairy-dashboard-part1-r6`), open `cmd.exe` in it, then:
 
 ```
 go build -tags fairytest -o fairy-test.exe .\cmd\fairy
@@ -63,9 +63,9 @@ On Linux or macOS give the program another name than its state folder, which is 
 program: `go build -tags fairytest -o fairy-t ./cmd/fairy`, then `./fairy-t serve`. (A program named
 `fairy-test` stops with "Refusing to start: config .../fairy-test/config.yaml: ... not a directory".)
 
-Open the address the console prints (`http://127.0.0.1:8080/?key=...`, see above: new in this build). To keep
-the test VM you added before, copy the folder `fairy-test` from the r4 folder into the r5 folder **before** the
-first start.
+Open the address the console prints (`http://127.0.0.1:8080/?key=...`, see above). To keep the test VM you
+added before, copy the folder `fairy-test` from the folder `Fairy-dashboard-part1-r5` into the folder
+`Fairy-dashboard-part1-r6` **before** the first start.
 
 1. **Overview**: one row per host. Under the name, small: the PC model. In the tile in front: the mark of its
    system (Windows, Debian, ...). Behind the name: small signs for the helper, the battery and the UPS, where
@@ -87,7 +87,7 @@ first start.
    pass: "offline", with the VM's name. Shut down from the panel it is "off" and shows no pop-up.
 10. **Buttons**: buttons in one row are the same height. Look at the foot of a dialog (**Cancel** beside
     **Save** in "Set model name", the run's dialog, "Confirm it's you"), the row at the top of the VM's page,
-    and the rows of buttons on the Updates page. This is new in zip 5, like the last sentence of step 4.
+    and the rows of buttons on the Updates page. (New in zip 5, like the last sentence of step 4.)
 
 Every page with made-up data, without any machine: build the plain program and start its demo.
 
@@ -130,8 +130,9 @@ keeps its files in a folder `.fairy-demo` where you started it. Stop either prog
 
    The first start makes the folder `fairy-test` next to `fairy-test.exe`: `fairy-test\config.yaml` (a copy of
    `cmd\fairy\fairytest-config.yaml`, no secrets in it) and `fairy-test\data` (its state). The window shows
-   three lines with `TEST BUILD: sign-in is off`, then `fairy listening ... addr=127.0.0.1:8080`, and last
-   the line with the address to open:
+   three lines with `TEST BUILD: sign-in is off` (a line about this PC's address can come before them, and
+   one that starts with `Add host:` comes after them: see part B), then
+   `fairy listening ... addr=127.0.0.1:8080`, and last the line with the address to open:
 
    ```
    Open this address in a browser on this PC (it holds the start key: keep it to yourself): http://127.0.0.1:8080/?key=...
@@ -200,6 +201,48 @@ Fairy-agent install script" and shows no command.
 These steps were run on 2026-11-11 with a Windows 10 dev VM and a Windows 11 test VM without Tailscale, and
 work as written: step 6 ended with `not paired yet`, and after step 7 the host was paired and online within
 seconds. If step 6 ends differently for you, send what the window shows.
+
+### B2. Without internet: a host written into the config by hand
+
+Part B needs GitHub on both VMs. Without it Add host shows no command, and the panel can still be tried
+with a machine that **already runs fairy-agent** (a test VM you added earlier, for example): write it into
+the test folder's config yourself. This is how a host is set up in a real panel's `config.yaml` too.
+
+1. On the machine with the agent, as Administrator, read its two tokens: the one line in each of
+   `C:\ProgramData\fairy-agent\token` and `C:\ProgramData\fairy-agent\control-token` (Linux:
+   `/etc/fairy-agent/token` and `/etc/fairy-agent/control-token`). The second one is needed only for power
+   actions, updates, fans and the Wake-on-LAN relay. Note the agent's address: the line `listen:` of
+   `config.yaml` in the same folder (without that line it is the machine's Tailscale address, port 9101).
+2. On the dev VM, stop the panel (`Ctrl+C`). Make a file `fairy-test\hosts.env` with the tokens (a name of
+   your choice in front of each, capitals, digits and `_`):
+
+   ```
+   AGENT_TOKEN_TESTVM=<the line from token>
+   AGENT_CONTROL_TOKEN_TESTVM=<the line from control-token>
+   ```
+3. Open `fairy-test\config.yaml` in Notepad and add at the end (put the agent's own address in place of
+   `192.168.50.20`; `id` is small letters, digits and `-`, and not the id of a host the panel already has):
+
+   ```
+   updates: {check_latest: false}    # no GitHub: the Updates page then says "release check is off"
+   agents:
+     - id: testvm
+       name: TESTVM
+       url: "http://192.168.50.20:9101"
+       token_env: AGENT_TOKEN_TESTVM
+       control_token_env: AGENT_CONTROL_TOKEN_TESTVM   # leave this line and the next two out without a control token
+       power_control: true
+       self_update: true
+   ```
+
+   Power actions and Update work only where the agent's own `config.yaml` has them switched on as well.
+4. Start the panel with the file: `fairy-test.exe serve --env-file fairy-test\hosts.env`. The host is on the
+   Overview after the first poll. A wrong token shows it as offline with "http 401"; a name in `token_env`
+   that is not in the file stops the start, and the line says which one.
+
+A host written this way has no **Remove** and no **Re-pair** on its page (those belong to Add host): to take
+it out, delete its lines from `fairy-test\config.yaml` and start again. The tokens stay in `hosts.env`; they
+are the agent's real tokens, so delete the file when you are done.
 
 ## C. Start again from nothing
 

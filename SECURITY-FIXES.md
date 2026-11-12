@@ -5,8 +5,8 @@ was changed, and what **you** need to do on the server, in Pocket ID and in ngin
 with a test that proves it.
 
 A later review led to a second set of fixes (sign-in and sessions, pairing with agents, limits on what one
-agent can send). What that release changes for you, and the order to install it in, is in `README.md`,
-"Upgrading to this release". Three points of the list "Not changed" below were changed by it; they are marked
+agent can send). What that release changes for you, and the order to install it in, is in the `README.md` of
+that release, "Upgrading to this release". Three points of the list "Not changed" below were changed by it; they are marked
 there.
 
 **Short version of your to-do list** (details further down):
