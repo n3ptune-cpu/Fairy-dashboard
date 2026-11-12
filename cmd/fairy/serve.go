@@ -196,9 +196,16 @@ func serve(args []string) int {
 	listening()
 	err = srv.Run(ctx, ln)
 	stop() // also when the server failed: the poller stops, and writes what it still has to write
-	if !waitStopped(pollerDone, pollerStopWait) {
+	// One wait for both writers, pollerStopWait in all: the poller (an agent's version of the last minute) and
+	// the server's watcher (the notifications of the last seconds). They stop side by side.
+	until := time.Now().Add(pollerStopWait)
+	if !waitStopped(pollerDone, time.Until(until)) {
 		slog.Warn("the poller did not finish within " + pollerStopWait.String() + " (a request to a machine hangs): stopping without it; " +
 			"an agent version seen in the last minute may not be in state.json")
+	}
+	if !waitStopped(srv.Saved(), time.Until(until)) {
+		slog.Warn("the notifications of the last seconds were not written within " + pollerStopWait.String() + ": stopping without that; " +
+			"an event of the last ten seconds may not be in notifications.json")
 	}
 	if err != nil {
 		slog.Error("server failed", "error", err)
@@ -208,7 +215,8 @@ func serve(args []string) int {
 	return 0
 }
 
-// pollerStopWait is how long a stop waits for the poller to finish. When the poller stops it lets the polls
+// pollerStopWait is how long a stop waits for what still has to be written: the poller's last write, and the
+// notifications of the last seconds (web.Server.Saved). When the poller stops it lets the polls
 // that are on their way end and then writes what waited to be written: an agent's version of the last minute
 // (Poller.FlushVersions). Nothing waited for it, so the process was gone before that write, every time (second
 // review, P11). The wait has an end, so that a poll that hangs cannot keep the panel from stopping: systemd

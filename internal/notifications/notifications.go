@@ -208,6 +208,7 @@ func (s *Store) pushFor(owner string, now time.Time) (ok bool, note, notice stri
 // state; statefile.KeepAside: <name>.corrupt-<UTC time>, never over an older copy) and the list starts empty.
 func Open(path string) *Store {
 	s := &Store{path: path, Now: time.Now, d: fileData{Next: 1, Users: map[string]*userState{}}, subs: map[chan struct{}]bool{}}
+	removeStaleTemp(path)
 	b, err := statefile.ReadFile(path, statefile.MaxBytes) // a plain file of a sane size, or it is not read
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -232,6 +233,25 @@ func Open(path string) *Store {
 		}
 	}
 	return s
+}
+
+// removeStaleTemp removes what a write of the list left behind when the panel was stopped in the middle of it:
+// the temporary files of statefile.WriteAtomic for this list (.notifications.json.<random>.tmp). Nothing ever
+// removed them. Only the panel writes this list, and it is not writing now: every such file is a leftover. Only
+// plain files are removed.
+func removeStaleTemp(path string) {
+	dir, prefix := filepath.Dir(path), "."+filepath.Base(path)+"."
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if n := e.Name(); strings.HasPrefix(n, prefix) && strings.HasSuffix(n, ".tmp") && e.Type().IsRegular() {
+			if err := os.Remove(filepath.Join(dir, n)); err == nil {
+				slog.Info("notifications: removed the temporary file of a write that an earlier stop cut off", "path", filepath.Join(dir, n))
+			}
+		}
+	}
 }
 
 // Subscribe returns a channel that gets a (non-blocking) signal on every new event; cancel with the func.

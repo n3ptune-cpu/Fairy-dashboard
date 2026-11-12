@@ -80,6 +80,9 @@ type Server struct {
 	// Notifications page: the events and the watcher that makes them from the poller's snapshots.
 	Notes *notifications.Store
 	Watch *notifications.Watcher
+	// saved is closed when the watcher has written the notifications for the last time (Run, Saved).
+	saved     chan struct{}
+	savedOnce sync.Once
 	// WakeRuns runs "Update unpowered hosts" (Updates page): one run at a time, in the background.
 	WakeRuns *wakerun.Manager
 
@@ -139,6 +142,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	s.logo = loadLogo(cfg.Branding.Logo)
 	s.Managed = managed.NewStore(cfg.DataDir)
 	s.Notes = notifications.Open(filepath.Join(cfg.DataDir, "notifications.json"))
+	s.saved = make(chan struct{})
 	s.Notes.Push = notify.Notify
 	s.Watch = &notifications.Watcher{Store: s.Notes}
 	addr, src, via := cfg.Enroll.PanelAddress, "config", ""
@@ -400,7 +404,10 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
-	go s.watch(ctx)
+	go func() {
+		defer s.savedOnce.Do(func() { close(s.saved) }) // also when the watcher panics: nobody waits for ever
+		s.watch(ctx)
+	}()
 	go s.WakeRuns.Loop(ctx)
 	go func() { // write the throttled-entries summary even when the flood stops
 		t := time.NewTicker(time.Minute)
@@ -420,6 +427,14 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 	}
 	return err
 }
+
+// Saved is closed when the server has written what it still had to write after the context of Run ended: the
+// notifications of the last seconds (the watcher's last Notes.Flush). Run itself returns as soon as the
+// listener is closed, and nothing waited for that write: a stop ended the process in the middle of it about
+// every second time. The event was lost ("panel update started by ...", a host that went offline: after the
+// restart the watcher only learns the state, so the alert is not made again), and the temporary file of the
+// write stayed in the data folder (audit 5, r3-p4-04). `fairy serve` waits for this, with a limit.
+func (s *Server) Saved() <-chan struct{} { return s.saved }
 
 // watch turns the poller's snapshots into notifications (every 2 s) and saves them (every 10 s, and at the end).
 func (s *Server) watch(ctx context.Context) {
