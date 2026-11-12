@@ -57,7 +57,7 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 		"up exactly as long as it says":         {change: func(h *Host, _ *HostInfo, _ *Observation) { h.onlineMono = h.wakeMono + 30*time.Second }, why: "running for longer than since the wake"},
 		"no steady clock reading of the answer": {change: func(h *Host, _ *HostInfo, _ *Observation) { h.onlineMono = 0 }, why: "running for longer than since the wake"},
 		"no steady clock reading at all":        {change: func(h *Host, _ *HostInfo, _ *Observation) { h.wakeMono, h.onlineMono = 0, 0 }, why: "running for longer than since the wake"},
-		"a negative uptime":                     {change: func(h *Host, _ *HostInfo, _ *Observation) { h.BootUptimeS = &negative }, why: "running for longer than since the wake"},
+		"a negative uptime":                     {change: func(h *Host, _ *HostInfo, _ *Observation) { h.BootUptimeS = &negative }, why: "its agent reports an uptime that cannot be right (-5 s)"},
 		"no longer switched on for it":          {change: func(_ *Host, i *HostInfo, _ *Observation) { i.OptedIn = false }, why: "no longer switched on for"},
 		"its agent does not answer":             {change: func(_ *Host, _ *HostInfo, o *Observation) { o.Online = false }, why: "its agent is not answering right now"},
 		"a power action is pending":             {change: func(_ *Host, _ *HostInfo, o *Observation) { o.Pending = &Pending{Action: "reboot", At: t0} }, why: "another power action is already pending on it (reboot at 03:00:00 UTC)"},

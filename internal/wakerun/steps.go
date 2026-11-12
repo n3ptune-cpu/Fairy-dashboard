@@ -231,6 +231,12 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 	if o.Online && o.SeenAt.After(*h.WakeSentAt) {
 		at := o.SeenAt
 		h.OnlineAt, h.BootUptimeS = &at, o.UptimeS
+		if o.UptimeS != nil && !uptimeUsable(*o.UptimeS) {
+			// An uptime that cannot be right (negative, or longer than any machine was ever up) is no uptime: it
+			// is kept for the record and for mayShutDown's "no", and not used below (r2-p2-08).
+			m.note(h, now, fmt.Sprintf("its agent reports an uptime that cannot be right (%d s): it is not used", *o.UptimeS))
+			o.UptimeS = nil
+		}
 		// How long after the wake: by the two times, and by the steady clock, which a clock that was set
 		// forward meanwhile does not stretch. The shorter one counts (the steady one is read now, a moment
 		// after the answer, so it is the longer one unless the clock was set).

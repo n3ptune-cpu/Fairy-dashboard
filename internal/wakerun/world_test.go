@@ -34,6 +34,7 @@ type machine struct {
 	post         time.Duration // from the packet to the system running
 	bootTakes    time.Duration // from the packet to the agent answering
 	noUptime     bool          // its agent reports no uptime
+	uptimeSays   *int64        // its agent reports this uptime, whatever the truth is
 	paused       bool          // polling is paused for it in the panel
 	probeSays    string        // what the direct question answers instead of the truth ("": the truth)
 	relayDown    string        // the relay refuses its wake with this text
@@ -432,6 +433,10 @@ func (w *world) poll() {
 		}
 		if !mc.noUptime {
 			up := int64(w.now.Sub(mc.bootedAt).Seconds())
+			o.UptimeS = &up
+		}
+		if mc.uptimeSays != nil {
+			up := *mc.uptimeSays
 			o.UptimeS = &up
 		}
 		if mc.pending != nil {

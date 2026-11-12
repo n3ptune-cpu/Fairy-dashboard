@@ -71,7 +71,9 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 		return false, "it was not seen coming online after this run's wake"
 	case h.BootUptimeS == nil:
 		return false, "its agent reports no uptime, so Fairy cannot tell that it started after the wake"
-	case *h.BootUptimeS < 0 || time.Duration(*h.BootUptimeS)*time.Second >= h.OnlineAt.Sub(*h.WakeSentAt):
+	case !uptimeUsable(*h.BootUptimeS): // before any arithmetic with it (r2-p2-08)
+		return false, fmt.Sprintf("its agent reports an uptime that cannot be right (%d s), so Fairy cannot tell that it started after the wake", *h.BootUptimeS)
+	case time.Duration(*h.BootUptimeS)*time.Second >= h.OnlineAt.Sub(*h.WakeSentAt):
 		return false, "it had been running for longer than since the wake: it was already on"
 	case time.Duration(*h.BootUptimeS)*time.Second >= h.onlineMono-h.wakeMono: // the same by the steady clock
 		return false, "it had been running for longer than since the wake: it was already on"
@@ -97,6 +99,17 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 	}
 	return true, ""
 }
+
+// maxUptimeS is the longest uptime the run takes for one: fifty years, in seconds. No machine has been up for
+// longer, and every value up to it can be turned into a time.Duration (nanoseconds in 64 bits hold 292 years).
+// An agent that reports more (a broken counter, a hostile agent: values from about 9.3e9 s overflowed the
+// multiplication and came out negative, which is "shorter than the time since the wake") reports no usable
+// uptime, and a machine without a usable uptime is never switched off.
+const maxUptimeS = 50 * 365 * 24 * 3600
+
+// uptimeUsable reports whether an uptime in seconds can be compared with a time span: not negative, and not
+// longer than maxUptimeS.
+func uptimeUsable(s int64) bool { return s >= 0 && s <= maxUptimeS }
 
 // offAtStart: the panel had asked the machine without an answer for at least MinOff when the run started.
 func offAtStart(h *Host) bool {
