@@ -424,21 +424,14 @@ func TestOnlyATurnOnOrAnAcceptInTheFileCountsAsOnRecord(t *testing.T) {
 				if b := s2.Poller.BindingOf("tower"); !b.OK() || b.Record.MachineID != machineIDOf("tower") || b.Record.How != approval.PinTurnOn || b.Record.By != "nora" || !b.Record.At.Equal(at) {
 					t.Fatalf("start %d: tower's record was touched: %+v", i, b)
 				}
-				// One alarm when it begins, and nothing but that alarm afterwards. That a later start does not
-				// write a standing alarm again is the business of TestAStandingAlarmIsWrittenOnceAcrossRestarts
-				// and TestAnIDFromFirstSightInAnEarlierBuildsFileIsNotOnRecord. It is not counted here: this
-				// test starts from a file no panel wrote (no lock file yet), where the two writes of one poll
-				// (poller.flushMachines, called by two agents' answers) land in the wrong order often enough
-				// to be seen: the record in the file then lacks "alarm", and the next start writes the line
-				// once more. The id is out of the file either way.
+				// One alarm when it begins, and none again at a later start: the record in the file has the
+				// alarm. (This was not counted here while the two writes of one poll could land in the wrong
+				// order, poller.flushMachines: the record in the file then lacked "alarm" and the next start
+				// wrote the line once more, most often from a file no panel wrote, without a lock file, as
+				// here.)
 				al := a.auditEntries("", "approval.alarm")
-				if (i == 0 && len(al) != 1) || len(al) == 0 {
+				if len(al) != 1 || al[0]["target"] != "laptop" || al[0]["outcome"] != "alarm: no_record" {
 					t.Fatalf("start %d: %d alarms in the audit log: %v", i, len(al), al)
-				}
-				for _, e := range al {
-					if e["target"] != "laptop" || e["outcome"] != "alarm: no_record" {
-						t.Fatalf("start %d: the alarms in the audit log: %v", i, al)
-					}
 				}
 			}
 			raw, _ := os.ReadFile(adminstate.MachinesPath(a.s.Cfg.DataDir))

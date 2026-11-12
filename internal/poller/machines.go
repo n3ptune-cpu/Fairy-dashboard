@@ -288,7 +288,13 @@ func (p *Poller) emitMachines(evs []MachineEvent) {
 
 // flushMachines writes the records that changed since the last write. A failure is returned once per error
 // text and tried again at the next change or poll: the record in memory stays the one that counts.
+//
+// One write at a time (p.machWrite), and each takes its copy of the records while it holds that lock: so the
+// writes reach the file in the order of their copies, and the file never goes back to an older record. Without
+// it two answers of one poll could write in the opposite order, and the older copy stayed in the file.
 func (p *Poller) flushMachines() error {
+	p.machWrite.Lock()
+	defer p.machWrite.Unlock()
 	p.mu.Lock()
 	set, setSeq := map[string]approval.Record{}, map[string]uint64{}
 	for id, seq := range p.mach.dirty {

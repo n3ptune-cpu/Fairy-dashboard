@@ -112,6 +112,10 @@ type Poller struct {
 	agentAdded map[string]int
 	// mach is the record of the machines that check approvals themselves (machines.go)
 	mach machineStore
+	// machWrite is held for one write of machines.json, from the copy of the records to the file
+	// (flushMachines). Lock order: it is taken before mu, never while mu is held, and nothing but mu and the
+	// file's own lock is taken under it; it is never held while the panel waits for a machine.
+	machWrite sync.Mutex
 	// OnMachine, when set, hears what happens to that record: an id that came on record at first sight, a host
 	// whose binding became an alarm or is in order again. It is called outside the poller's locks.
 	OnMachine func(MachineEvent)
