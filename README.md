@@ -821,7 +821,10 @@ reads itself, else `/etc/fairy/config.yaml` (before, `fairy update` always read 
 --config FILE` names another file. When systemd does not say how `fairy.service` is started, or shows a
 command line with a space or a quote in an argument (systemd prints the arguments without quotes, so where
 a path with a space ends is not certain), the update stops ("cannot tell which config file fairy.service
-starts with ...") and asks for `--config`. The **Update panel** button also looks at the file the running
+starts with ...") and asks for `--config`. The unit's `Environment=` is read the way systemd prints it (an
+assignment with a space or a bracket in it stands in quotes: `"FAIRY_CONFIG_FILE=/etc/fairy/my dir/c.yaml"`,
+`"FAIRY_LISTEN=[::1]:8080"`); a line that is not written like that stops the update in the same way. A flag
+that stands twice in the unit counts where it stands last, as for `fairy serve`. The **Update panel** button also looks at the file the running
 panel was started with before it starts anything, and says on the page what is wrong with it.
 The next check is made by both, after the download and before anything is replaced: the new version, once its
 signature and hash are verified, checks the config file itself, with the check `fairy serve` starts with

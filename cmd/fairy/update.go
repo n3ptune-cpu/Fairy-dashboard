@@ -360,6 +360,9 @@ type unitSettings struct {
 	// Unsure: the command line as systemd shows it does not say for certain where each argument ends
 	// (unitWords, sureFlags): no path is taken from it.
 	Unsure bool
+	// EnvUnsure: the Environment= line is not written the way systemd writes one (unitEnv): what it sets is not
+	// certain, and no config file is taken from it or from anything that comes after it in the service's order.
+	EnvUnsure bool
 }
 
 // serviceUnit asks systemd for fairy.service's command line and environment.
@@ -397,7 +400,8 @@ func parseUnit(out string) unitSettings {
 				u.Args, u.Unsure = words, !sure || !sureFlags(words)
 			}
 		case "Environment":
-			u.Env = append(u.Env, strings.Fields(v)...)
+			kv, sure := unitEnv(v)
+			u.Env, u.EnvUnsure = append(u.Env, kv...), u.EnvUnsure || !sure
 		case "EnvironmentFiles":
 			if f, _, _ := strings.Cut(v, " ("); strings.TrimPrefix(f, "-") != "" {
 				u.EnvFiles = append(u.EnvFiles, strings.TrimPrefix(f, "-"))
@@ -405,6 +409,56 @@ func parseUnit(out string) unitSettings {
 		}
 	}
 	return u
+}
+
+// unitEnv reads the value of `systemctl show -p Environment`: the unit's assignments, separated by spaces, each
+// written by systemd's shell_maybe_quote. One without a character the shell cares about stands as it is
+// (FAIRY_LISTEN=10.0.0.20:8080). Every other one stands in double quotes as a whole, key and all, with a
+// backslash before each ", \, ` and $ in it:
+//
+//	Environment=A=b "FAIRY_CONFIG_FILE=/etc/fairy/my dir/c.yaml" "FAIRY_LISTEN=[::1]:8080" "X=say \"hi\""
+//
+// Audit 6, r4-p4-01: the line was cut at its spaces and searched for a word that begins with the key. The two
+// quoted ones above were not found, and nothing said so: the update checked /etc/fairy/config.yaml ("the
+// default") in place of the file the service starts with, swapped, and the panel stayed down; and a panel whose
+// IPv6 listen address stands there could never be updated.
+//
+// sure is false for a line systemd would not write like this: a quote that does not end or does not stand
+// around a whole assignment, a backslash before another character than those four, one of the five characters
+// in an assignment without quotes (also $'...', which an older systemd may write for a value with a line break).
+func unitEnv(line string) (kv []string, sure bool) {
+	const escaped = "\"\\`$"
+	space := func(c byte) bool { return c == ' ' || c == '\t' }
+	sure = true
+	for i := 0; i < len(line); {
+		if space(line[i]) {
+			i++
+			continue
+		}
+		var b strings.Builder
+		if line[i] == '"' {
+			closed := false
+			for i++; i < len(line) && !closed; i++ {
+				switch c := line[i]; {
+				case c == '"':
+					closed = true
+				case c == '\\' && i+1 < len(line) && strings.IndexByte(escaped, line[i+1]) >= 0:
+					i++
+					b.WriteByte(line[i])
+				default:
+					sure = sure && c != '\\'
+					b.WriteByte(c)
+				}
+			}
+			sure = sure && closed && (i == len(line) || space(line[i]))
+		}
+		for ; i < len(line) && !space(line[i]); i++ { // an assignment without quotes (or what follows a closing quote: not sure)
+			sure = sure && strings.IndexByte(escaped+"'", line[i]) < 0
+			b.WriteByte(line[i])
+		}
+		kv = append(kv, b.String())
+	}
+	return kv, sure
 }
 
 // unitWords splits a command line into its arguments. Spaces separate them. What stands in double or single
@@ -468,21 +522,24 @@ func sureFlags(words []string) bool {
 	return true
 }
 
-// flag returns the value of --name (or -name, or --name=value) in the unit's command line.
-func (u unitSettings) flag(name string) (string, bool) {
+// flag returns the value of --name (or -name, or --name=value) in the unit's command line. A flag that is
+// given more than once counts where it stands last, as it does for `fairy serve` (Go's flag package): the
+// first one was taken, and with `--config a.yaml --config b.yaml` the update checked a file the service does
+// not start with (audit 6, r4-p4-01).
+func (u unitSettings) flag(name string) (value string, found bool) {
 	for i, a := range u.Args {
 		a = strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
 		if v, ok := strings.CutPrefix(a, name+"="); ok {
-			return strings.Trim(v, `"'`), true
+			value, found = strings.Trim(v, `"'`), true
 		}
 		if a == name && len(a) < len(u.Args[i]) {
+			value, found = "", true
 			if i+1 < len(u.Args) && !strings.HasPrefix(u.Args[i+1], "-") {
-				return strings.Trim(u.Args[i+1], `"'`), true
+				value = strings.Trim(u.Args[i+1], `"'`)
 			}
-			return "", true
 		}
 	}
-	return "", false
+	return value, found
 }
 
 // configUnknown is said when systemd does not tell how fairy.service is started and no --config was given.
@@ -492,13 +549,18 @@ const (
 		configUnknownEnd
 	configUnsure = "cannot tell which config file fairy.service starts with (the command line systemd shows has a space or a quote in an argument: where it ends is not certain), " +
 		configUnknownEnd
+	configEnvUnsure = "cannot tell which config file fairy.service starts with (its Environment= is not written the way systemd writes one, so what it sets is not certain), " +
+		configUnknownEnd
 	configUnknownEnd = "so the file could not be checked before the restart. Nothing was changed. Name the file: fairy update --config /etc/fairy/config.yaml"
 )
 
 // unknownConfig is what the update says when serviceConfig could not tell the file.
 func (u unitSettings) unknownConfig() string {
-	if u.Unsure {
+	switch {
+	case u.Unsure:
 		return configUnsure
+	case len(u.Args) > 0 && u.EnvUnsure:
+		return configEnvUnsure
 	}
 	return configUnknown
 }
@@ -514,7 +576,8 @@ func (u unitSettings) unknownConfig() string {
 // reads itself (--env-file of the unit, without the flag the default file; it never overrides the
 // environment); else the default. known is false when systemd gave no command line for the unit, or one that
 // cannot be read for certain (a path with a space: parseUnit), and no --config was given: then nobody can
-// tell, and the default is only a guess.
+// tell, and the default is only a guess. The same when the unit's Environment= cannot be read for certain
+// (unitEnv) and neither the command line nor an EnvironmentFile= names the file.
 //
 // The file is never taken from the running panel (a path handed from the unprivileged service to this root
 // command would be read here and quoted in messages any user can read), and it is the unit as systemd has
@@ -538,9 +601,12 @@ func serviceConfig(u unitSettings, given string, givenSet bool) (path, from stri
 			return v[len(v)-1], key + " in " + u.EnvFiles[i], true
 		}
 	}
+	if u.EnvUnsure { // the variable may be set there, and it would win over what follows
+		return given, "the default; the Environment= systemd shows cannot be read for certain", false
+	}
 	for i := len(u.Env) - 1; i >= 0; i-- {
-		if v, ok := strings.CutPrefix(u.Env[i], key+"="); ok && strings.Trim(v, `"'`) != "" {
-			return strings.Trim(v, `"'`), "Environment=" + key + " of fairy.service", true
+		if v, ok := strings.CutPrefix(u.Env[i], key+"="); ok && v != "" {
+			return v, "Environment=" + key + " of fairy.service", true
 		}
 	}
 	own, ok := u.flag("env-file")
@@ -613,7 +679,7 @@ func healthAddr(cfgListen, envFile string, u unitSettings) (addr, from string) {
 	}
 	for _, kv := range u.Env {
 		if v, ok := strings.CutPrefix(kv, "FAIRY_LISTEN="); ok && v != "" {
-			addr, from = strings.Trim(v, `"'`), "Environment=FAIRY_LISTEN of fairy.service"
+			addr, from = v, "Environment=FAIRY_LISTEN of fairy.service"
 		}
 	}
 	for _, p := range u.EnvFiles {
