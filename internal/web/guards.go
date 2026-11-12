@@ -70,7 +70,9 @@ func (c *reqCtx) controlGuard(bucket *rateLimiter) (*model.User, error) {
 // limit (the cancel of a run and of a countdown have a budget of their own, stopRL). The kill switch stops
 // device control; it must not keep an admin from calling a pairing, a run or a countdown off. The cancel of a
 // countdown also passes the power switch of its host (powerctl.Capabilities); every other power action is
-// refused by both switches.
+// refused by both switches. With the kill switch on, the cancel of a countdown needs a signed-in admin's
+// browser session: the power route sends an API token's cancel through controlGuard, and the kill switch
+// answers it with 423 like the token's every other write (api_power.go; second review of fix7a, R7A-10).
 func (c *reqCtx) stopGuard(bucket *rateLimiter) (*model.User, error) {
 	return c.guardControl(bucket, false)
 }

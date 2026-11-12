@@ -50,9 +50,9 @@ and nothing else. Whoever has the address with the key is admin.
 Every page has a red bar at the top: **TEST BUILD: sign-in is off. Never expose this.** `fairy version`, the
 Updates page and the start-up log say "TEST BUILD" too.
 
-## What to click in zip 6
+## What to click in zip 7
 
-Unpack the zip (folder `Fairy-dashboard-part1-r6`), open `cmd.exe` in it, then:
+Unpack the zip (folder `Fairy-dashboard-part1-r7`), open `cmd.exe` in it, then:
 
 ```
 go build -tags fairytest -o fairy-test.exe .\cmd\fairy
@@ -64,8 +64,8 @@ program: `go build -tags fairytest -o fairy-t ./cmd/fairy`, then `./fairy-t serv
 `fairy-test` stops with "Refusing to start: config .../fairy-test/config.yaml: ... not a directory".)
 
 Open the address the console prints (`http://127.0.0.1:8080/?key=...`, see above). To keep the test VM you
-added before, copy the folder `fairy-test` from the folder `Fairy-dashboard-part1-r5` into the folder
-`Fairy-dashboard-part1-r6` **before** the first start.
+added before, copy the folder `fairy-test` from the folder `Fairy-dashboard-part1-r6` into the folder
+`Fairy-dashboard-part1-r7` **before** the first start.
 
 1. **Overview**: one row per host. Under the name, small: the PC model. In the tile in front: the mark of its
    system (Windows, Debian, ...). Behind the name: small signs for the helper, the battery and the UPS, where
@@ -101,11 +101,11 @@ keeps its files in a folder `.fairy-demo` where you started it. Stop either prog
 
 ## A. Build and start (dev VM, `cmd.exe`, Go installed)
 
-1. Unpack the zip into your test folder. You get a folder like `Fairy-dashboard-part1-r1`.
+1. Unpack the zip into your test folder. You get a folder like `Fairy-dashboard-part1-r7`.
 2. Open `cmd.exe` and go into that folder (use your own path):
 
    ```
-   cd /d E:\Projects\Fairy-dashboard-TEST\Fairy-dashboard-part1-r1
+   cd /d E:\Projects\Fairy-dashboard-TEST\Fairy-dashboard-part1-r7
    ```
 
 3. Build. The first time, Go downloads the packages it needs (a minute or so):
