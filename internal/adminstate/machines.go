@@ -17,12 +17,14 @@ import (
 //
 //	{ "machines": { "<agent id>": {
 //	      "machine_id": "<22-64 characters>",       the id on record ("" or absent: none)
-//	      "pinned":     "turn-on" | "first-sight" | "accepted",
+//	      "pinned":     "turn-on" | "accepted"       ("first-sight": an earlier build; the panel takes such an
+//	                                                 id off the record when it starts, approval.Record.Demote)
 //	      "pinned_at":  "<RFC 3339>",
-//	      "pinned_by":  "<who: the admin, or Fairy for first sight>",
+//	      "pinned_by":  "<who: the admin>",
 //	      "state":      "required" | "broken" | "unknown" | "off" | "",   what the machine last said
 //	      "state_at":   "<RFC 3339>",
 //	      "holder":     true                         (optional) an admin said this host keeps an id two hosts show
+//	      "unaccepted": true                         (optional) it showed the check on, with an id nobody accepted
 //	      "alarm":      "changed" | "duplicate" | ... (optional) the alarm last written to the audit log for it
 //	} } }
 //
@@ -82,6 +84,7 @@ func parseMachines(path string, d statefile.Data) (map[string]approval.Record, e
 			r.StateAt, _ = time.Parse(time.RFC3339, s)
 		}
 		r.Holder, _ = e["holder"].(bool)
+		r.Unaccepted, _ = e["unaccepted"].(bool)
 		r.Alarm, _ = e["alarm"].(string)
 		r.Alarm = clipRecord(r.Alarm)
 		out[id] = r
@@ -127,6 +130,9 @@ func (a *State) SetMachines(set map[string]approval.Record, drop []string) error
 			}
 			if r.Holder {
 				e["holder"] = true
+			}
+			if r.Unaccepted && r.MachineID == "" {
+				e["unaccepted"] = true
 			}
 			if r.Alarm != "" {
 				e["alarm"] = r.Alarm

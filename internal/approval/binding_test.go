@@ -33,6 +33,11 @@ func off() Report {
 
 func noBlock() Report { return Report{Heard: true, Asked: t0.Add(time.Minute)} }
 
+// unaccepted is the record of a host that showed the check on, with an id nobody accepted: nothing is on record.
+func unaccepted() Record {
+	return Record{State: api.ApprovalRequired, StateAt: t0, Unaccepted: true}
+}
+
 // The decision about which machine a host is (audit 5, r1-x1-01): every row is one state of the panel's record
 // and of what the hosts show, and what must come of it for the host "b".
 func TestEvaluate(t *testing.T) {
@@ -45,12 +50,22 @@ func TestEvaluate(t *testing.T) {
 		with   []string
 		checks bool
 	}{
-		"nothing known":                           {nil, nil, BindOK, nil, false},
-		"an agent without the block":              {nil, map[string]Report{"b": noBlock()}, BindOK, nil, false},
-		"the check is off, nothing on record":     {nil, map[string]Report{"b": off()}, BindOK, nil, false},
-		"on record and shown, the same id":        {map[string]Record{"b": pin(idB)}, map[string]Report{"b": shows(idB)}, BindOK, nil, true},
-		"on record, silent since the start":       {map[string]Record{"b": pin(idB)}, nil, BindOK, nil, true},
-		"required, nothing on record yet":         {nil, map[string]Report{"b": shows(idB)}, BindNoRecord, nil, true},
+		"nothing known":                       {nil, nil, BindOK, nil, false},
+		"an agent without the block":          {nil, map[string]Report{"b": noBlock()}, BindOK, nil, false},
+		"the check is off, nothing on record": {nil, map[string]Report{"b": off()}, BindOK, nil, false},
+		"on record and shown, the same id":    {map[string]Record{"b": pin(idB)}, map[string]Report{"b": shows(idB)}, BindOK, nil, true},
+		"on record, silent since the start":   {map[string]Record{"b": pin(idB)}, nil, BindOK, nil, true},
+		// not on record (audit 5, round 3, r3-x1-01): the check is on and no id was issued by the panel or
+		// accepted by an admin. Nothing the host shows changes that; and once it was seen so, "no check" is an alarm
+		"required, nothing on record":                           {nil, map[string]Report{"b": shows(idB)}, BindNoRecord, nil, true},
+		"required, seen before, nothing on record":              {map[string]Record{"b": unaccepted()}, map[string]Report{"b": shows(idB)}, BindNoRecord, nil, true},
+		"seen with the check, silent since the start":           {map[string]Record{"b": unaccepted()}, nil, BindOK, nil, true},
+		"seen with the check, said off, silent since a restart": {map[string]Record{"b": {State: api.ApprovalOff, StateAt: t0, Unaccepted: true}}, nil, BindOK, nil, true},
+		"seen with the check, and now the block is gone":        {map[string]Record{"b": unaccepted()}, map[string]Report{"b": noBlock()}, BindVanished, nil, true},
+		"seen with the check, and now it says off":              {map[string]Record{"b": unaccepted()}, map[string]Report{"b": off()}, BindVanished, nil, true},
+		"seen with the check, broken now":                       {map[string]Record{"b": unaccepted()}, map[string]Report{"b": {Heard: true, Block: true, State: api.ApprovalBroken, Proto: 2, Asked: t0.Add(time.Minute)}}, BindOK, nil, true},
+		"an id from an earlier build's first sight, demoted": {map[string]Record{"b": Record{MachineID: idB, How: PinFirstSight, At: t0, By: "Fairy", State: api.ApprovalRequired, StateAt: t0}.Demote()},
+			map[string]Report{"b": shows(idB)}, BindNoRecord, nil, true},
 		"shows another id than the one on record": {map[string]Record{"b": pin(idB)}, map[string]Report{"b": shows(idC)}, BindChanged, nil, true},
 		"the block is gone":                       {map[string]Record{"b": pin(idB)}, map[string]Report{"b": noBlock()}, BindVanished, nil, true},
 		"it says off":                             {map[string]Record{"b": pin(idB)}, map[string]Report{"b": off()}, BindVanished, nil, true},
@@ -66,7 +81,9 @@ func TestEvaluate(t *testing.T) {
 			map[string]Report{"a": shows(idB), "b": shows(idB)}, BindDuplicate, []string{"a"}, true},
 		"a shown id and another host's record": {map[string]Record{"a": pin(idA)},
 			map[string]Report{"a": shows(idA), "b": shows(idA)}, BindDuplicate, []string{"a"}, true},
-		"two shown ids, nothing on record": {nil, map[string]Report{"a": shows(idA), "b": shows(idA)}, BindDuplicate, []string{"a"}, true},
+		// two hosts without a record that show one id: both are "not on record" (the first accept decides)
+		"two shown ids, nothing on record": {nil, map[string]Report{"a": shows(idA), "b": shows(idA)}, BindNoRecord, []string{"a"}, true},
+		"two shown ids, both seen before":  {map[string]Record{"a": unaccepted(), "b": unaccepted()}, map[string]Report{"a": shows(idA), "b": shows(idA)}, BindNoRecord, []string{"a"}, true},
 		"three hosts": {map[string]Record{"a": pin(idB), "b": pin(idB), "c": pin(idC)},
 			map[string]Report{"c": shows(idB)}, BindDuplicate, []string{"a", "c"}, true},
 		"the laundered Turn on: b was switched on, a now shows b's id": {map[string]Record{"b": pin(idB)},
@@ -101,6 +118,27 @@ func TestEvaluate(t *testing.T) {
 	reps["b"] = shows(idB) // b shows an id of its own again
 	if a, b := Evaluate("a", recs, reps), Evaluate("b", recs, reps); a.Status != BindOK || b.Status != BindOK {
 		t.Errorf("b shows its own id again: a %q, b %q", a.Status, b.Status)
+	}
+}
+
+// An id that an earlier build took on record at first sight is not on record (audit 5, round 3, r3-x1-01):
+// the record loses the id and everything about how it came, and keeps that the host showed the check. A record
+// from Turn on or from an admin's accept is left as it is.
+func TestDemote(t *testing.T) {
+	old := Record{MachineID: idB, How: PinFirstSight, At: t0, By: "Fairy", State: api.ApprovalRequired, StateAt: t0, Holder: true, Alarm: BindDuplicate}
+	want := Record{State: api.ApprovalRequired, StateAt: t0, Unaccepted: true, Alarm: BindDuplicate}
+	if got := old.Demote(); got != want {
+		t.Errorf("a first-sight record: %+v, want %+v", got, want)
+	}
+	for _, how := range []string{PinTurnOn, PinAccepted} {
+		r := pin(idB)
+		r.How, r.Holder = how, true
+		if got := r.Demote(); got != r {
+			t.Errorf("%s: changed to %+v", how, got)
+		}
+	}
+	if got := unaccepted().Demote(); got != unaccepted() {
+		t.Errorf("a record without an id: %+v", got)
 	}
 }
 
@@ -158,6 +196,11 @@ func TestHeld(t *testing.T) {
 		"the same, and b says off now":            {map[string]Record{"a": holder, "b": pin(idA)}, map[string]Report{"a": shows(idA), "b": off()}, "[]", "[a]", BindDuplicate},
 		"b went on to an id of its own":           {map[string]Record{"a": holder, "b": pin(idA)}, map[string]Report{"a": shows(idA), "b": shows(idC)}, "[]", "[]", BindChanged},
 		"both show a new id nobody has on record": {map[string]Record{"a": pin(idA), "b": pin(idB)}, map[string]Report{"a": shows(idC), "b": shows(idC)}, "[]", "[]", BindDuplicate},
+		// audit 5, round 3: a host with no record never gets an id that is on record for another host, however
+		// that host came by it; two hosts with no record are both "not on record" and neither keeps anything
+		"b was seen before and shows a's id":     {map[string]Record{"a": pin(idA), "b": unaccepted()}, map[string]Report{"a": shows(idA), "b": shows(idA)}, "[]", "[a]", BindDuplicate},
+		"b shows a's id while a shows a new one": {map[string]Record{"a": pin(idA)}, map[string]Report{"a": shows(idC), "b": shows(idA)}, "[]", "[a]", BindDuplicate},
+		"neither has a record":                   {nil, map[string]Report{"a": shows(idA), "b": shows(idA)}, "[]", "[]", BindNoRecord},
 	} {
 		a, b := Evaluate("a", c.recs, c.reps), Evaluate("b", c.recs, c.reps)
 		if got := []string{strings.Join(append([]string{}, a.Held...), ","), strings.Join(append([]string{}, b.Held...), ",")}; "["+got[0]+"]" != c.heldA || "["+got[1]+"]" != c.heldB || b.Status != c.statusB {

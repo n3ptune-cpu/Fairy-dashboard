@@ -593,6 +593,12 @@ in it. If it refuses to start, the line says which of the three values it does n
 4. In the panel, the VM's page now has an **Approval** box: "off", "Would be checked by: the elevated helper
    (LocalSystem)", and a **Turn on…** button.
 
+   If the box says "required" with the red sentence **Not on record** instead, the VM still has the check
+   from an earlier test, and this panel did not turn it on (or it took the VM's id "at first sight" in an
+   earlier build, which counts as none now). Either clear it on the VM (the command in I9; the box then says
+   "Check gone", press **Accept that its check is off**, and go on with I4), or keep it and press **Accept
+   this machine's id** (I10, steps 7 to 9) and go on with I5.
+
 From here on do **not** press Re-pair for the VM, and do not press Update: both can put build 16 back.
 
 ### I4. Turn on, with your passkey
@@ -688,7 +694,7 @@ URL. To go back to the test panel of zip 1 or to an older panel: take the `appro
 `fairy-test\config.yaml` for a panel from before part I; the file `fairy-test\data\machines.json` can
 stay, older panels do not read it.
 
-### I10. The machine id: a changed id, and accepting it (about five minutes)
+### I10. The machine id: a changed id, an id that is not on record, and accepting it (about ten minutes)
 
 Do this after I5, with the check on. It shows what the panel does when a machine is not the one it has on
 record.
@@ -713,10 +719,30 @@ record.
 5. **Shut down** again: now Pocket ID asks for the passkey, and the countdown starts. **Cancel**.
 6. Menu, **Audit**: `approval.alarm` ("alarm: changed"), `approval.accept`, `approval.alarm` ("cleared").
 
+A check the panel did not turn on ("Not on record"). The panel takes a machine id on record only when it
+turned the check on itself (I4) or when you accept the id. To see that with the one VM, make the panel forget
+what it has on record:
+
+7. Stop the test panel (`Ctrl+C`), delete the file `fairy-test\data\machines.json`, start it again
+   (`fairy-test.exe serve`). The VM still has the check on.
+8. Within half a minute the VM's Approval box says "required" with the red sentence "Not on record. Fairy has
+   no machine id on record for it. No approvals until an admin accepts its id.", and the Overview shows the
+   red key sign. **Shut down** (60 seconds, the name): no passkey is asked; the page answers "NSX-TEST-VM
+   checks approvals itself, and its machine id is not on record: an admin accepts it in the Approval box on
+   its page first. Nothing was sent."
+9. Press the ⓘ in the box: it shows the id the VM shows, in full. Compare it with the VM's own (on the VM
+   `helper-status`, the line `machine id:`); a machine that answers in another's name would show the other's
+   id. Then **Accept this machine's id**, **Confirm (test build)**. The red sentence is gone, the tooltip of
+   **Machine id** says "(accepted, by test-admin)", and **Shut down** asks for the passkey again. **Cancel**.
+   Audit: `approval.alarm` ("alarm: no_record"), `approval.accept`, `approval.alarm` ("cleared").
+
 Not to be tried on one VM: two hosts with the same id (it needs a second machine made from a copy of the
 first one's disk). The Linux run did it with two agents: both are flagged, neither gets an approval. The
-original has the button "This host keeps its machine id"; the copy has no button, its box names the original
-and says to run `helper-trust set --new-machine-id` on the copy and then accept its new id there.
+host that has the id on record has the button "This host keeps its machine id"; the other has no button, its
+box names the first and says to run `helper-trust set --new-machine-id` on that machine and then accept its
+new id there. A host that shows an id which is on record for another host never gets it, also when the panel
+sees that host for the first time. Two hosts that are both not on record and show one id each have "Accept
+this machine's id", and the first accept decides.
 
 
 ## What the test build does NOT prove

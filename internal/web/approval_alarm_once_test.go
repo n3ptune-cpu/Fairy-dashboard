@@ -34,7 +34,7 @@ func TestAStandingAlarmIsWrittenOnceAcrossRestarts(t *testing.T) {
 	a.require(t, a.laptop, a.tower)
 	lines := func() []string {
 		var out []string
-		for _, e := range a.auditEntries("", "approval.alarm") {
+		for _, e := range a.alarmEntries() {
 			out = append(out, fmt.Sprint(e["target"], " ", e["outcome"]))
 		}
 		return out

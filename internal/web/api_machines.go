@@ -57,6 +57,8 @@ func retryAfter(data jsonx.M) int {
 // machineAlarmText is a binding alarm in a few words, for the Notifications list.
 func machineAlarmText(status string, with []string) string {
 	switch status {
+	case approval.BindNoRecord:
+		return "has the check on with a machine id that is not on record: no approvals until an admin accepts it"
 	case approval.BindChanged:
 		return "shows another machine id than the one on record: no approvals until an admin accepts it"
 	case approval.BindDuplicate:
@@ -97,8 +99,6 @@ func (s *Server) machineEvent(e poller.MachineEvent) {
 	b := e.Binding
 	key := "approval:" + e.AgentID
 	switch e.Kind {
-	case "pinned":
-		entry("approval.machine_id", e.AgentID, map[string]any{"how": b.Record.How, "machine_id": approval.ShortID(b.Record.MachineID)}, "on record")
 	case "alarm":
 		params := map[string]any{"status": b.Status}
 		if len(b.With) > 0 {
@@ -129,9 +129,12 @@ const adminstateMachines = "machines.json"
 
 // approvalAccept is POST /api/admin/approval/accept/{id} (id: the agent's id) with what the page showed:
 // {"machine_id": "<the id the host showed, in full>"} or {"off": true}. An admin accepts what the machine
-// shows about its own check, after it was changed on the machine. It is the one way out of an alarm that the
-// machine cannot end by itself:
+// shows about its own check. It is the one way out of an alarm that the machine cannot end by itself, and,
+// besides Turn on, the one way a machine id comes on record:
 //
+//   - the machine has the check on and nothing is on record for it (the check was set on the machine, or by
+//     another panel; "not on record"): the id it shows is on record from now on. Nothing a host shows comes on
+//     record without this (audit 5, round 3, r3-x1-01);
 //   - the machine shows another machine id than the one on record (`fairy-agent helper-trust set
 //     --new-machine-id`, or clear and set, on the machine): the id it shows is on record from now on;
 //   - two hosts have one id: the host this is pressed for keeps the id, the other one stays flagged until it
@@ -184,7 +187,7 @@ func (s *Server) approvalAccept(c *reqCtx) error {
 	}
 	// Before anybody is asked to confirm: an accept that would be refused for what the host shows, or for who
 	// keeps its id. (AcceptMachine decides again, under the record's lock, when the request runs.)
-	if b := s.Poller.BindingOf(a.ID); b.Status == approval.BindChanged || b.Status == approval.BindDuplicate || b.Status == approval.BindVanished {
+	if b := s.Poller.BindingOf(a.ID); b.Status == approval.BindChanged || b.Status == approval.BindDuplicate || b.Status == approval.BindVanished || b.Status == approval.BindNoRecord {
 		switch {
 		case acceptShows(b) != want:
 			return refuse(b, poller.ErrAcceptChanged)
@@ -277,8 +280,11 @@ func (c *reqCtx) approvalAcceptDetail(*model.User) string {
 		return "it keeps its machine id " + approval.ShortID(req.MachineID) + "; " + andNames(c.s.machineNames(b.With)) + " must get a new one"
 	case req.MachineID != "" && b.Record.MachineID != "":
 		return "it shows the machine id " + approval.ShortID(req.MachineID) + "; on record is " + approval.ShortID(b.Record.MachineID)
+	case req.MachineID != "" && len(b.With) > 0:
+		// nothing is on record for it, and another host without a record shows the same id: the first accept decides
+		return "it shows the machine id " + approval.ShortID(req.MachineID) + ", which is not on record; " + andNames(c.s.machineNames(b.With)) + " shows the same id and must get a new one"
 	case req.MachineID != "":
-		return "it shows the machine id " + approval.ShortID(req.MachineID)
+		return "it shows the machine id " + approval.ShortID(req.MachineID) + ", which is not on record"
 	case req.Off:
 		return "it shows no check any more: it becomes a machine without the check"
 	}

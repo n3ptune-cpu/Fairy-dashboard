@@ -67,8 +67,8 @@ type approvalMachine struct {
 	BindingText string   `json:"binding_text,omitempty"`
 	With        []string `json:"with,omitempty"`
 	// CanAccept: an admin can accept what the machine shows now (POST /api/admin/approval/accept). Accept says
-	// what that is: "id" (a new id), "keep" (the id it has on record, which another host shows too) or "off"
-	// (its check is gone). HeldBy: it cannot be accepted, because these hosts keep the id it shows (one id
+	// what that is: "first" (the id of a machine that has none on record), "id" (a new id), "keep" (the id it
+	// has on record, which another host shows too) or "off" (its check is gone). HeldBy: it cannot be accepted, because these hosts keep the id it shows (one id
 	// is accepted for one host only): the machine needs an id of its own first.
 	CanAccept bool     `json:"can_accept,omitempty"`
 	Accept    string   `json:"accept,omitempty"`
@@ -274,6 +274,9 @@ func (s *Server) machineFor(a config.Agent, keys []api.TrustKey) approvalMachine
 			if b.Record.MachineID == b.Report.MachineID {
 				m.Accept = "keep" // it shows the id it has on record (the original of a pair): nothing about it is new
 			}
+		case b.Status == approval.BindNoRecord && b.Report.Block && b.Report.MachineID != "":
+			// not on record: Fairy did not turn this check on. The id it shows comes on record by this accept only.
+			m.CanAccept, m.Accept = true, "first"
 		}
 	}
 	if b.Known && b.Record.MachineID != "" {
@@ -540,7 +543,7 @@ func (s *Server) turnOnRun(c *reqCtx, u *model.User, g *approvalGrant, hosts []s
 				res.Text += " Fairy could not write its machine id down (" + textsafe.Clip(err.Error(), 120) + "): it keeps it in memory and tries again."
 				pinned = "on record (kept in memory; machines.json could not be written: " + textsafe.Clip(err.Error(), 120) + ")"
 			}
-			// which id came on record for which host, and by whom: the same entry a first sight writes (machineEvent)
+			// which id came on record for which host, how, and by whom (an accept writes approval.accept)
 			c.audit(u, "approval.machine_id", id, map[string]any{"how": approval.PinTurnOn, "machine_id": approval.ShortID(in.MachineID)}, pinned)
 		}
 		params := map[string]any{"issuer": in.Issuer, "client_id": in.ClientID, "keys": approval.Thumbprints(in.Keys), "users": in.Users,

@@ -29,6 +29,9 @@ type approvalEnv struct {
 	tower  *testutil.Machine // fan_control
 	admin  string            // the session cookie of an admin whose sign-in is an hour old
 	csrf   []string
+	// what require itself left behind: every machine it sets up is "not on record" until its id is accepted,
+	// which is one alarm and its end in the audit log and in the Notifications list. The tests count from here.
+	alarmBase, noteBase int
 }
 
 const approvalAdminSub = "u2" // controller()'s Pocket ID user id
@@ -69,7 +72,10 @@ func newApprovalEnv(t *testing.T) *approvalEnv {
 func (a *approvalEnv) poll() { a.s.Poller.PollOnce(context.Background()) }
 
 // require gives machines a trust file for this issuer and client with the admin as the one allowed user (what
-// "Turn on" writes), and lets the panel see it.
+// "Turn on" writes), lets the panel see it, and takes each machine's id on record the one way a check that was
+// set on the machine comes on record: an admin accepts the id the machine shows (audit 5, round 3, r3-x1-01;
+// until then the panel took it at first sight). The button's own way through "Confirm it's you" is in
+// approval_notonrecord_test.go.
 func (a *approvalEnv) require(t *testing.T, machines ...*testutil.Machine) {
 	t.Helper()
 	a.setTrust(t, machines...)
@@ -78,8 +84,30 @@ func (a *approvalEnv) require(t *testing.T, machines ...*testutil.Machine) {
 		if ap := a.s.Poller.ApprovalOf(m.ID); ap == nil || ap.State != api.ApprovalRequired {
 			t.Fatalf("%s: the panel does not see the machine's state as required: %+v", m.ID, ap)
 		}
-		if b := a.s.Poller.BindingOf(m.ID); !b.OK() || b.Record.MachineID != machineIDOf(m.ID) || b.Record.How != approval.PinFirstSight {
-			t.Fatalf("%s: the panel did not take the machine's id on record at first sight: %+v", m.ID, b)
+		if b := a.s.Poller.BindingOf(m.ID); b.Status != approval.BindNoRecord || b.Record.MachineID != "" {
+			t.Fatalf("%s: a machine that shows the check must be \"not on record\", with nothing on record: %+v", m.ID, b)
+		}
+	}
+	a.acceptShown(t, machines...)
+	a.alarmBase, a.noteBase = len(a.auditEntries("", "approval.alarm")), 0
+	_, a.noteBase = a.alarms()
+}
+
+// alarmEntries are the approval.alarm entries of the audit log since require, newest first.
+func (a *approvalEnv) alarmEntries() []map[string]any {
+	all := a.auditEntries("", "approval.alarm")
+	return all[:len(all)-a.alarmBase]
+}
+
+// acceptShown is an admin's accept of the machine id each machine shows now.
+func (a *approvalEnv) acceptShown(t *testing.T, machines ...*testutil.Machine) {
+	t.Helper()
+	for _, m := range machines {
+		if what, _, err := a.s.Poller.AcceptMachine(m.ID, "test admin", poller.AcceptWant{MachineID: machineIDOf(m.ID)}); what != "id" || err != nil {
+			t.Fatalf("%s: the accept of its id: %q %v", m.ID, what, err)
+		}
+		if b := a.s.Poller.BindingOf(m.ID); !b.OK() || b.Record.MachineID != machineIDOf(m.ID) || b.Record.How != approval.PinAccepted {
+			t.Fatalf("%s: its id is not on record after the accept: %+v", m.ID, b)
 		}
 	}
 }
@@ -102,7 +130,7 @@ func (a *approvalEnv) setTrust(t *testing.T, machines ...*testutil.Machine) {
 }
 
 // machineIDOf is the machine id a test machine has in the trust file that require writes for it (set on the
-// machine, as `helper-trust set` does): the panel takes it on record the first time it sees it.
+// machine, as `helper-trust set` does): it comes on record when an admin accepts it.
 func machineIDOf(agent string) string { return "id-of-" + agent + "-0123456789abcdef" }
 
 func (a *approvalEnv) post(path string, body any) resp { return a.do("POST", path, body, a.csrf...) }
@@ -555,10 +583,11 @@ func TestApprovalStateIsVisible(t *testing.T) {
 
 // The panel's view of a machine can be a poll behind: a machine whose check was switched on a moment ago, on
 // the machine itself, still reads "off". The panel then sends the request as before and the machine refuses it
-// ("approval_required"). The panel has no machine id on record for it yet, and it never takes one from an
-// answer that comes with a challenge: so nobody is sent to Pocket ID, the page says to try again, and nothing
-// passes. With the machine's next answer the id comes on record (first sight), and the same button asks for the
-// approval.
+// ("approval_required"). The panel has no machine id on record for it, and it never takes one from an answer
+// that comes with a challenge: so nobody is sent to Pocket ID, the page says what to do, and nothing passes.
+// With the machine's next answer the panel sees the check. CHANGED (audit 5, round 3, r3-x1-01): the id does NOT
+// come on record by that; the machine is "not on record" and still gets no approval. Only after an admin has
+// accepted the id it shows does the same button ask for the approval.
 func TestCheckSwitchedOnSinceTheLastPoll(t *testing.T) {
 	for name, c := range map[string]struct {
 		path string
@@ -581,16 +610,26 @@ func TestCheckSwitchedOnSinceTheLastPoll(t *testing.T) {
 			hdr := []string{"Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json"}
 			tokens := len(a.iss.Tokens())
 			r := a.do("POST", c.path, c.body(a), hdr...)
-			if _, _, ok := approvalAsked(r); ok || r.code != 409 || !strings.Contains(string(r.raw), "has no machine id on record for "+m.ID+" yet") {
+			const notOnRecord = " checks approvals itself, and its machine id is not on record: an admin accepts it in the Approval box on its page first. Nothing was sent."
+			if _, _, ok := approvalAsked(r); ok || r.code != 409 || !strings.Contains(string(r.raw), m.ID+notOnRecord) {
 				t.Fatalf("without an id on record nobody is asked for a passkey: %d %s", r.code, r.raw)
 			}
 			if len(m.Passed()) != 0 || len(a.iss.Tokens()) != tokens {
 				t.Fatalf("something passed the gate, or somebody was sent to Pocket ID: %+v", m.Passed())
 			}
-			a.poll() // the machine's next answer: its id comes on record
-			if b := a.s.Poller.BindingOf(m.ID); !b.OK() || b.Record.MachineID != machineIDOf(m.ID) || b.Record.How != approval.PinFirstSight {
-				t.Fatalf("the id did not come on record at first sight: %+v", b)
+			a.poll() // the machine's next answer: the panel sees the check, and takes nothing on record
+			if b := a.s.Poller.BindingOf(m.ID); b.Status != approval.BindNoRecord || b.Record.MachineID != "" || !b.Checks() {
+				t.Fatalf("the machine must be \"not on record\" after its next answer: %+v", b)
 			}
+			asked := len(m.Asked())
+			r = a.do("POST", c.path, c.body(a), hdr...)
+			if _, _, ok := approvalAsked(r); ok || r.code != 409 || !strings.Contains(string(r.raw), m.ID+notOnRecord) {
+				t.Fatalf("a machine that is not on record is asked for no approval: %d %s", r.code, r.raw)
+			}
+			if len(m.Asked()) != asked || len(m.Passed()) != 0 || len(a.iss.Tokens()) != tokens {
+				t.Fatalf("a machine that is not on record was asked or sent something: %+v", m.Asked()[asked:])
+			}
+			a.acceptShown(t, m) // an admin accepts the id it shows
 			r = a.do("POST", c.path, c.body(a), hdr...)
 			id, _, ok := approvalAsked(r)
 			if !ok {

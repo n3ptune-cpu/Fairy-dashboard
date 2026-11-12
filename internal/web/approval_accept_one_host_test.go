@@ -173,32 +173,48 @@ func TestAnAcceptOnTheCopyIsRefused(t *testing.T) {
 	}
 }
 
-// Two hosts that both have the id on record (the copy was made before the panel saw either): neither keeps it
-// yet, so the first accept decides, and from then on the other one is refused.
+// Two hosts without a record that show the same id (the copy was made before the panel saw either): both are
+// "not on record", neither keeps anything, so the first accept decides, and from then on the other one is
+// refused.
+//
+// CHANGED (audit 5, round 3, r3-x1-01). This test used to start with laptop on record and tower first seen
+// with laptop's id, and held that the two were then equals, each with the button "This host keeps its machine
+// id", so that a press on tower took the id away from laptop. That is no longer so
+// (TestAHostFirstSeenWithAnIDThatIsOnRecordElsewhereGetsNoButton). What is left of "two equals" is two hosts
+// that are BOTH not on record: each has the button "Accept this machine's id", and the dialog names the other.
 func TestTheFirstAcceptDecidesBetweenTwoEquals(t *testing.T) {
 	x := newAcceptAdmin(t)
-	x.require(t, x.laptop)
 	idL := machineIDOf("laptop")
-	x.setTrustID(t, x.tower, idL) // tower is first seen with laptop's id: on record for both
+	x.setTrust(t, x.laptop)
+	x.setTrustID(t, x.tower, idL) // both are first seen with one id
 	x.poll()
 	_, ms := x.page(t)
-	for _, id := range []string{"laptop", "tower"} {
-		if m := ms[id]; m["can_accept"] != true || m["accept"] != "keep" || m["held_by"] != nil {
+	for id, other := range map[string]string{"laptop": "tower", "tower": "laptop"} {
+		if m := ms[id]; m["binding"] != approval.BindNoRecord || m["can_accept"] != true || m["accept"] != "first" || m["held_by"] != nil || m["machine_id"] != nil || fmt.Sprint(m["with"]) != "["+other+"]" {
 			t.Fatalf("%s: %v", id, m)
 		}
 	}
-	res := x.confirm(t, x.press("tower", map[string]any{"machine_id": idL}))
-	if res["ok"] != true || res["message"] != "tower keeps the machine id. laptop stays flagged until it shows an id of its own (on it: fairy-agent helper-trust set --new-machine-id)." {
+	x.stopped(t, "laptop's update", x.post("/api/admin/updates/laptop", map[string]any{}), "laptop checks approvals itself, and its machine id is not on record")
+	x.stopped(t, "tower's fan change", x.post("/api/systems/tower/fan/mode", map[string]any{"mode": "full"}), "tower checks approvals itself, and its machine id is not on record")
+	r := x.press("tower", map[string]any{"machine_id": idL})
+	if got := actionOf(r); !strings.Contains(got, "it shows the machine id "+approval.ShortID(idL)+", which is not on record; laptop shows the same id and must get a new one") {
+		t.Fatalf("the dialog for tower: %q", got)
+	}
+	res := x.confirm(t, r)
+	if res["ok"] != true || res["message"] != "tower has the machine id on record now, and keeps it. laptop stays flagged until it shows an id of its own (on it: fairy-agent helper-trust set --new-machine-id)." {
 		t.Fatalf("the result: %v", res)
 	}
 	if r := x.press("laptop", map[string]any{"machine_id": idL}); r.code != 409 || !strings.Contains(fmt.Sprint(r.body["detail"]), "kept by tower") {
 		t.Fatalf("laptop after tower was accepted: %d %s", r.code, r.raw)
 	}
-	if b := x.s.Poller.BindingOf("tower"); !b.OK() || !b.Record.Holder {
+	if b := x.s.Poller.BindingOf("tower"); !b.OK() || !b.Record.Holder || b.Record.How != approval.PinAccepted {
 		t.Fatalf("tower: %+v", b)
 	}
-	if b := x.s.Poller.BindingOf("laptop"); b.Status != approval.BindDuplicate || fmt.Sprint(b.Held) != "[tower]" || b.Record.Holder {
+	if b := x.s.Poller.BindingOf("laptop"); b.Status != approval.BindDuplicate || fmt.Sprint(b.Held) != "[tower]" || b.Record.Holder || b.Record.MachineID != "" {
 		t.Fatalf("laptop: %+v", b)
+	}
+	if _, ms := x.page(t); ms["laptop"]["can_accept"] != nil || fmt.Sprint(ms["laptop"]["held_by"]) != "[tower]" {
+		t.Fatalf("laptop on the approval page afterwards: %v", ms["laptop"])
 	}
 }
 

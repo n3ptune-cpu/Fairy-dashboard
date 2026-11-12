@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 )
 
 // A machine that checks passkey approvals itself is in no "Update unpowered hosts" run yet: a run has no
@@ -31,7 +33,17 @@ func TestRunsLeaveOutMachinesThatCheckApprovals(t *testing.T) {
 	f.optIn("pc-a", "pc-b")
 	f.tick()
 	page := func() resp { return e.do("GET", "/api/admin/wake-update", nil, "Cookie", a.sess) }
+	// It shows the check and nothing is on record for it (audit 5, round 3, r3-x1-01: no id comes on record at
+	// first sight any more): "not on record" is in no run either, and the row says why
 	h := wuHostRow(t, page(), "pc-a")
+	if h["choice"] != "" || h["approval"] != "alarm" || !strings.HasPrefix(h["why"].(string), "in no run: has the check on with a machine id that is not on record") {
+		t.Fatalf("pc-a while it is not on record: %v", h)
+	}
+	if r := e.wuStart(a.sess, map[string]any{"update_only": []string{"pc-a"}}); r.code != 400 || !strings.Contains(string(r.raw), "PC-A is in no run: has the check on with a machine id that is not on record") {
+		t.Fatalf("a start with a machine that is not on record: %d %s", r.code, r.raw)
+	}
+	f.accept(t, "pc-a", "farm-machine-id-of-pc-a-01") // an admin accepts its id: on record from here on
+	h = wuHostRow(t, page(), "pc-a")
 	if h["choice"] != "" || h["approval"] != "required" || !strings.HasPrefix(h["why"].(string), "needs approval: not supported in runs yet") {
 		t.Fatalf("pc-a while it is on: %v", h)
 	}
@@ -64,6 +76,18 @@ func TestRunsLeaveOutMachinesThatCheckApprovals(t *testing.T) {
 	r := e.wuStart(a.sess, map[string]any{"update_only": []string{"pc-b"}})
 	if d, _ := r.body["detail"].(map[string]any); r.code != 401 || d["code"] != "step_up_required" || d["approval"] != nil {
 		t.Fatalf("pc-b alone: %d %s", r.code, r.raw)
+	}
+}
+
+// accept is an admin's accept of the machine id mid that the farm machine shows (checksItself, and a tick since):
+// the one way the id of a check that was set on the machine comes on record.
+func (f *farm) accept(t *testing.T, id, mid string) {
+	t.Helper()
+	if what, _, err := f.e.s.Poller.AcceptMachine(id, "test admin", poller.AcceptWant{MachineID: mid}); what != "id" || err != nil {
+		t.Fatalf("%s: the accept of its id: %q %v", id, what, err)
+	}
+	if b := f.e.s.Poller.BindingOf(id); b.Record.MachineID != mid || b.Record.How != approval.PinAccepted {
+		t.Fatalf("%s after the accept: %+v", id, b)
 	}
 }
 
@@ -118,6 +142,7 @@ func TestAMachineWithTheCheckIsInNoRunAfterARestartOfThePanel(t *testing.T) {
 	e.b.Mu.Unlock()
 	f.optIn("pc-a", "pc-b")
 	f.tick()
+	f.accept(t, "pc-a", mid)
 	if b := e.s.Poller.BindingOf("pc-a"); !b.OK() || b.Record.MachineID != mid || b.Record.State != "required" {
 		t.Fatalf("on record while it answers: %+v", b)
 	}
@@ -198,11 +223,13 @@ func TestAMachineWithAnAlarmIsInNoRun(t *testing.T) {
 	e := a.e
 	f := newFarm(t, e)
 	f.checksItself("pc-a", "farm-machine-id-of-pc-a-01")
-	f.checksItself("pc-b", "farm-machine-id-of-pc-a-01") // a copy of pc-a's disk
 	e.b.Mu.Lock()
 	f.on["pc-a"], f.on["pc-b"] = true, true
 	e.b.Mu.Unlock()
 	f.optIn("pc-a", "pc-b")
+	f.tick()
+	f.accept(t, "pc-a", "farm-machine-id-of-pc-a-01")
+	f.checksItself("pc-b", "farm-machine-id-of-pc-a-01") // a copy of pc-a's disk
 	f.tick()
 	page := e.do("GET", "/api/admin/wake-update", nil, "Cookie", a.sess)
 	for _, id := range []string{"pc-a", "pc-b"} {
@@ -227,6 +254,7 @@ func TestSwitchOnForRunsSaysWhatTheRowSays(t *testing.T) {
 	f.on["pc-a"], f.on["pc-b"] = true, true
 	e.b.Mu.Unlock()
 	f.tick()
+	f.accept(t, "pc-a", "farm-machine-id-of-pc-a-01")
 	page := func() resp { return e.do("GET", "/api/admin/wake-update", nil, "Cookie", a.sess) }
 	if h := wuHostRow(t, page(), "pc-a"); h["opted_in"] != false || !strings.HasPrefix(h["why"].(string), "needs approval: not supported in runs yet") {
 		t.Fatalf("pc-a before the switch: %v", h)

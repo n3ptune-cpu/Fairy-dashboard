@@ -321,15 +321,23 @@ func TestBindingALaunderedTurnOnEndsAsOneIDOnTwoHosts(t *testing.T) {
 		fmt.Sprint(ms["pc-a"]["with"]) != "[PC-B]" || fmt.Sprint(ms["pc-b"]["with"]) != "[PC-A]" {
 		t.Fatalf("both hosts must be flagged as one id on two hosts: pc-a %v / pc-b %v", ms["pc-a"], ms["pc-b"])
 	}
+	// CHANGED (audit 5, round 3, r3-x1-01): nothing came on record for pc-a because it shows the id. The id is
+	// on record for pc-b, where the panel issued it; pc-a's box names pc-b and has no button. (It used to be on
+	// record for both, "on a par", each with the button "This host keeps its machine id".) pc-b shows no check
+	// of its own, so it has nothing to accept either.
+	if a, b := ms["pc-a"], ms["pc-b"]; a["machine_id"] != nil || a["pinned"] != nil || a["can_accept"] != nil || fmt.Sprint(a["held_by"]) != "[PC-B]" ||
+		b["pinned"] != approval.PinTurnOn || b["can_accept"] != nil {
+		t.Fatalf("what is on record, and who has a button: pc-a %v / pc-b %v", a, b)
+	}
 	if ap := pn.state("pc-a"); ap["binding"] != approval.BindDuplicate {
 		t.Fatalf("pc-a's block for everyone who sees it: %v", ap)
 	}
 	asked0 := len(pn.a.sent(agentapi.PathApprovalChallenge))
-	for _, g := range []*gated{pn.a, pn.b} {
+	for g, sentence := range map[*gated]string{pn.a: "PC-A has the same machine id as PC-B, which keeps it", pn.b: "PC-B and PC-A have the same machine id"} {
 		st, out := pn.shutdown(g, 60)
-		stopped(t, "the shutdown of "+g.id, st, out, "have the same machine id")
+		stopped(t, "the shutdown of "+g.id, st, out, sentence)
 		st, out = pn.call("POST", "/api/admin/updates/"+g.id, map[string]any{})
-		stopped(t, "the update of "+g.id, st, out, "have the same machine id")
+		stopped(t, "the update of "+g.id, st, out, sentence)
 	}
 	if len(pn.a.sent(agentapi.PathApprovalChallenge)) != asked0 || len(pn.a.sent("/power"))+len(pn.b.sent("/power"))+len(pn.a.sent("/update"))+len(pn.b.sent("/update")) != 0 ||
 		len(pn.a.power.Scheduled)+len(pn.b.power.Scheduled) != 0 {
@@ -351,29 +359,38 @@ func TestBindingALaunderedTurnOnEndsAsOneIDOnTwoHosts(t *testing.T) {
 	if st, out := pn.a.direct(t, "/power", []byte(`{"action":"shutdown","delay_s":60}`)); st != 403 || out["code"] != agentapi.CodeApprovalRequired {
 		t.Fatalf("pc-a with the token alone: %d %v", st, out)
 	}
-	// The admin looks, and says pc-a is the machine that keeps the id: pc-a is approved again; pc-b stays
-	// flagged until it shows an id of its own.
-	ms0 := fmt.Sprint(pn.machines()["pc-b"]["shown_id"]) // the id both show
-	if res := pn.confirm(pn.call("POST", "/api/admin/approval/accept/pc-a", pn.acceptBody("pc-a"))); res["ok"] != true || !strings.Contains(fmt.Sprint(res["message"]), "PC-A keeps the machine id") {
+	// The id pc-a holds is on record for pc-b, and one id is accepted for one host only: an accept for pc-a,
+	// made up without the page, is refused.
+	if st, out := pn.call("POST", "/api/admin/approval/accept/pc-a", map[string]any{"machine_id": idA}); st != 409 ||
+		!strings.Contains(fmt.Sprint(out["detail"]), "PC-A: nothing was accepted. The machine id it shows is kept by PC-B") {
+		t.Fatalf("a made-up accept on pc-a: %d %v", st, out)
+	}
+	// The way out is on the machine, as pc-a's box says: pc-a gets an id of its own (helper-trust set
+	// --new-machine-id), an admin accepts that one in the panel, and pc-a is approved again by approvals made
+	// for it alone.
+	pn.a.setMachineID(t, otherMachineID)
+	pn.settle("pc-a", approval.BindNoRecord)
+	if m := pn.machines()["pc-a"]; m["can_accept"] != true || m["accept"] != "first" || m["shown_id"] != otherMachineID || m["held_by"] != nil {
+		t.Fatalf("pc-a with an id of its own: %v", m)
+	}
+	if res := pn.confirm(pn.call("POST", "/api/admin/approval/accept/pc-a", pn.acceptBody("pc-a"))); res["ok"] != true || res["message"] != "PC-A: the machine id it shows is on record now." {
 		t.Fatalf("the accept on pc-a: %v", res)
 	}
-	st, out := pn.shutdown(pn.b, 60)
-	stopped(t, "the shutdown of pc-b after pc-a was accepted", st, out, "PC-B has the same machine id as PC-A, which keeps it: one id is accepted for one host only")
-	// and pc-b, the host that answered in pc-a's name, cannot be accepted for that id any more (audit 5, r2-b2-02):
-	// its box has no button, and a request made up without the page is refused
-	if ms := pn.machines(); ms["pc-b"]["can_accept"] != nil || fmt.Sprint(ms["pc-b"]["held_by"]) != "[PC-A]" || ms["pc-a"]["binding"] != nil {
-		t.Fatalf("the approval page after the accept on pc-a: %v", ms["pc-b"])
-	}
-	if st, out := pn.call("POST", "/api/admin/approval/accept/pc-b", map[string]any{"machine_id": ms0}); st != 409 || !strings.Contains(fmt.Sprint(out["detail"]), "PC-B: nothing was accepted") {
-		t.Fatalf("a made-up accept on pc-b: %d %v", st, out)
-	}
-	st, out = pn.shutdown(pn.a, 60)
+	st, out := pn.shutdown(pn.a, 60)
 	id, _, _, ok := asked(st, out)
 	if !ok {
 		t.Fatalf("pc-a after the accept: %d %v", st, out)
 	}
 	if res := pn.approve(id); res["ok"] != true || len(pn.a.power.Scheduled) != 1 || len(pn.b.power.Scheduled) != 0 {
 		t.Fatalf("the approved shutdown of pc-a: %v, scheduled %v", res, pn.a.power.Scheduled)
+	}
+	// pc-b, the host that handed the Turn on on: the id that is on record for it is nobody's now, and it shows
+	// no check itself. It is "Check gone", gets nothing, and an admin can accept that its check is off.
+	pn.settle("pc-b", approval.BindVanished)
+	st, out = pn.shutdown(pn.b, 60)
+	stopped(t, "the shutdown of pc-b after pc-a has its own id", st, out, "PC-B had the check on and now shows none")
+	if m := pn.machines(); m["pc-b"]["can_accept"] != true || m["pc-b"]["accept"] != "off" || m["pc-a"]["binding"] != nil {
+		t.Fatalf("the approval page at the end: pc-a %v / pc-b %v", m["pc-a"], m["pc-b"])
 	}
 }
 

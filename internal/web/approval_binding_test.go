@@ -134,38 +134,6 @@ func TestTurnOnTakesTheMachineIDOnRecord(t *testing.T) {
 	}
 }
 
-// First sight: a host that already has the check when the panel first hears from it gets the id it shows on
-// record, once, with an audit entry. What it shows later does not change the record.
-func TestFirstSightTakesTheIDOnRecordAndIsAudited(t *testing.T) {
-	a := newApprovalEnv(t)
-	a.require(t, a.laptop)
-	want := machineIDOf("laptop")
-	b := a.s.Poller.BindingOf("laptop")
-	if !b.OK() || b.Record.MachineID != want || b.Record.How != approval.PinFirstSight || b.Record.By != "Fairy" || b.Record.At.IsZero() {
-		t.Fatalf("%+v", b)
-	}
-	entries := a.auditEntries("", "approval.machine_id")
-	if len(entries) != 1 || entries[0]["target"] != "laptop" || entries[0]["outcome"] != "on record" || entries[0]["actor"] != "Fairy" ||
-		entries[0]["params"].(map[string]any)["how"] != approval.PinFirstSight || entries[0]["params"].(map[string]any)["machine_id"] != approval.ShortID(want) {
-		t.Fatalf("audit: %v", entries)
-	}
-	raw, _ := os.ReadFile(a.s.Cfg.AuditLog)
-	if strings.Contains(string(raw), want) {
-		t.Error("the whole machine id is in the audit log")
-	}
-	for i := 0; i < 3; i++ {
-		a.poll()
-	}
-	if n := len(a.auditEntries("", "approval.machine_id")); n != 1 {
-		t.Errorf("%d entries for one first sight", n)
-	}
-	// "tower" has no check: nothing is on record for it, and no file entry
-	recs, err := adminstate.New(a.s.Cfg.DataDir).Machines()
-	if _, there := recs["tower"]; err != nil || there || len(recs) != 1 {
-		t.Fatalf("machines.json: %v %+v", err, recs)
-	}
-}
-
 // The relay (the auditor's case, r1-x1-01): "laptop" answers the question about an approval with ANOTHER
 // machine's challenge ("tower") and hands the approved request on to that machine. The panel signs laptop's id
 // on record, tower checks with its own, and refuses. Nothing passes tower's gate; the panel shows and records
@@ -269,7 +237,7 @@ func TestMachineIDsAreForAdminsInABrowserOnly(t *testing.T) {
 		}
 	}
 	_, ms := a.page(t)
-	if ms["laptop"]["machine_id"] != ids[0] || ms["laptop"]["shown_id"] != ids[0] || ms["laptop"]["pinned"] != approval.PinFirstSight || ms["laptop"]["pinned_by"] != "Fairy" {
+	if ms["laptop"]["machine_id"] != ids[0] || ms["laptop"]["shown_id"] != ids[0] || ms["laptop"]["pinned"] != approval.PinAccepted || ms["laptop"]["pinned_by"] != "test admin" {
 		t.Fatalf("the approval page for an admin: %v", ms["laptop"])
 	}
 	// the page's stream and the system's own entry carry the decision, never an id

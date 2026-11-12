@@ -61,6 +61,7 @@ func (a *approvalEnv) accept(id, by string) (string, approval.Binding, error) {
 	return a.s.Poller.AcceptMachine(id, by, acceptShows(a.s.Poller.BindingOf(id)))
 }
 
+// alarms counts the alarms in the Notifications list: the ones that hold, and all of them since require.
 func (a *approvalEnv) alarms() (active, all int) {
 	for _, e := range a.s.Notes.List("", func(notifications.Event) bool { return true }, notifications.Filter{Limit: 200}).Events {
 		if e.Kind == "approval_alarm" {
@@ -70,7 +71,7 @@ func (a *approvalEnv) alarms() (active, all int) {
 			}
 		}
 	}
-	return active, all
+	return active, all - a.noteBase
 }
 
 const otherID = "another-machine-id-0123456789"
@@ -98,7 +99,7 @@ func TestIdentityChangedStopsApprovalsUntilAnAdminAccepts(t *testing.T) {
 		t.Fatal("tower must still be asked for its approval")
 	}
 	// the alarm: audit log (short ids only) and one notification that holds
-	al := a.auditEntries("", "approval.alarm")
+	al := a.alarmEntries()
 	if len(al) != 1 || al[0]["target"] != "laptop" || al[0]["outcome"] != "alarm: changed" || al[0]["params"].(map[string]any)["on_record"] != approval.ShortID(machineIDOf("laptop")) ||
 		al[0]["params"].(map[string]any)["shown"] != approval.ShortID(otherID) {
 		t.Fatalf("audit: %v", al)
@@ -108,7 +109,7 @@ func TestIdentityChangedStopsApprovalsUntilAnAdminAccepts(t *testing.T) {
 	}
 	a.poll()
 	a.poll()
-	if _, all := a.alarms(); all != 1 || len(a.auditEntries("", "approval.alarm")) != 1 {
+	if _, all := a.alarms(); all != 1 || len(a.alarmEntries()) != 1 {
 		t.Fatal("the alarm is raised once, not at every poll")
 	}
 	// everyone who sees the host sees the flag; the ids are not in it
@@ -182,8 +183,13 @@ func TestIdentityChangedStopsApprovalsUntilAnAdminAccepts(t *testing.T) {
 }
 
 // One id on two hosts (a machine made from a copy of another one's disk): BOTH are flagged and get no
-// approval. Accepting on one makes it the host that keeps the id; the other stays flagged until it shows an id
-// of its own, which an admin then accepts there.
+// approval. The host that has the id on record can be said to keep it; the other stays flagged until it shows
+// an id of its own, which an admin then accepts there.
+//
+// CHANGED (audit 5, round 3, r3-x1-01): tower, the copy, has no record when it shows laptop's id. It used to get
+// that id on record at first sight, which made the two "on a par", each with the button "This host keeps its
+// machine id". Now nothing comes on record for tower: laptop keeps the id, tower has no button and its
+// sentence names laptop. Both are still flagged until the admin's word for laptop.
 func TestOneIDOnTwoHostsFlagsBoth(t *testing.T) {
 	a := newApprovalEnv(t)
 	a.require(t, a.laptop)
@@ -195,8 +201,11 @@ func TestOneIDOnTwoHostsFlagsBoth(t *testing.T) {
 		}
 	}
 	asked := len(a.laptop.Asked()) + len(a.tower.Asked())
+	if b := a.s.Poller.BindingOf("tower"); b.Record.MachineID != "" || fmt.Sprint(b.Held) != "[laptop]" {
+		t.Fatalf("tower must have nothing on record, and laptop keeps the id it shows: %+v", b)
+	}
 	a.stopped(t, "laptop's shutdown", a.post("/api/systems/laptop/power", a.shutdownBody()), "laptop and tower have the same machine id")
-	a.stopped(t, "tower's fan change", a.post("/api/systems/tower/fan/mode", map[string]any{"mode": "full"}), "tower and laptop have the same machine id")
+	a.stopped(t, "tower's fan change", a.post("/api/systems/tower/fan/mode", map[string]any{"mode": "full"}), "tower has the same machine id as laptop, which keeps it")
 	if len(a.laptop.Asked())+len(a.tower.Asked()) != asked || len(a.iss.Asked()) != 0 {
 		t.Fatal("a machine with a shared id was asked for a challenge")
 	}
@@ -204,8 +213,14 @@ func TestOneIDOnTwoHostsFlagsBoth(t *testing.T) {
 		t.Fatalf("%d alarms hold, want one per host", active)
 	}
 	_, ms := a.page(t)
-	if m := ms["tower"]; m["binding"] != "duplicate" || fmt.Sprint(m["with"]) != "[laptop]" || m["can_accept"] != true || m["accept"] != "keep" {
-		t.Fatalf("the approval page: %v", m)
+	if m := ms["tower"]; m["binding"] != "duplicate" || fmt.Sprint(m["with"]) != "[laptop]" || m["can_accept"] != nil || m["accept"] != nil || fmt.Sprint(m["held_by"]) != "[laptop]" || m["machine_id"] != nil {
+		t.Fatalf("the approval page, the copy: %v", m)
+	}
+	if m := ms["laptop"]; m["binding"] != "duplicate" || fmt.Sprint(m["with"]) != "[tower]" || m["can_accept"] != true || m["accept"] != "keep" {
+		t.Fatalf("the approval page, the original: %v", m)
+	}
+	if what, _, err := a.accept("tower", "nora"); what != "" || err == nil {
+		t.Fatalf("an accept on the copy: %q %v", what, err)
 	}
 	// the admin's word: laptop is the original
 	if what, _, err := a.accept("laptop", "nora"); err != nil || what != "id" {
@@ -226,10 +241,11 @@ func TestOneIDOnTwoHostsFlagsBoth(t *testing.T) {
 	if a.s.Poller.BindingOf("tower").Status != approval.BindDuplicate || !a.s.Poller.BindingOf("laptop").OK() {
 		t.Fatal("after a poll")
 	}
-	// the copy gets its own id on the machine: now it is "changed", and an admin accepts it there
+	// the copy gets its own id on the machine: now it is "not on record" (it never had one), and an admin
+	// accepts it there
 	a.setTrustID(t, a.tower, otherID)
 	a.poll()
-	if b := a.s.Poller.BindingOf("tower"); b.Status != approval.BindChanged {
+	if b := a.s.Poller.BindingOf("tower"); b.Status != approval.BindNoRecord || len(b.With) != 0 {
 		t.Fatalf("tower with its own id: %+v", b)
 	}
 	if what, _, err := a.accept("tower", "nora"); err != nil || what != "id" {
@@ -251,6 +267,12 @@ func TestOneIDOnTwoHostsFlagsBoth(t *testing.T) {
 // check, with the id the panel made up FOR LAPTOP. No machine can see that. The panel does, at tower's next
 // answer: one id on two hosts. From then on neither is asked for anything, so the relay that this was the
 // preparation for never gets an approval to hand on.
+//
+// CHANGED (audit 5, round 3, r3-x1-01): tower, the machine that really holds the id, used to get it on record
+// at first sight, and an admin could then say "tower keeps it". Now tower has nothing on record: the id is on
+// record for laptop (the panel issued it there), tower's box names laptop and has no button. Both stay
+// without approvals. The way out is on the machine: tower gets an id of its own (helper-trust set
+// --new-machine-id) and an admin accepts that one; laptop, which never had a trust file, is then "Check gone".
 func TestALaunderedTurnOnIsFoundOutAsOneIDOnTwoHosts(t *testing.T) {
 	for name, honestBlock := range map[string]bool{"the hostile host shows the id": false, "the hostile host goes on saying off": true} {
 		t.Run(name, func(t *testing.T) {
@@ -280,11 +302,8 @@ func TestALaunderedTurnOnIsFoundOutAsOneIDOnTwoHosts(t *testing.T) {
 			}
 			a.poll() // the poll every Turn on ends with
 			lb, tb := a.s.Poller.BindingOf("laptop"), a.s.Poller.BindingOf("tower")
-			if lb.OK() || tb.Status != approval.BindDuplicate || tb.Record.MachineID != made {
+			if lb.Status != approval.BindDuplicate || tb.Status != approval.BindDuplicate || tb.Record.MachineID != "" || fmt.Sprint(tb.Held) != "[laptop]" || lb.Record.MachineID != made {
 				t.Fatalf("laptop %+v\ntower %+v", lb, tb)
-			}
-			if honestBlock && lb.Status != approval.BindVanished && lb.Status != approval.BindDuplicate {
-				t.Fatalf("laptop: %q", lb.Status)
 			}
 			// the relay this prepared: a shutdown "of laptop" that tower would now accept. It is never asked for.
 			asked, tokens := len(a.tower.Asked()), len(a.iss.Asked())
@@ -292,12 +311,54 @@ func TestALaunderedTurnOnIsFoundOutAsOneIDOnTwoHosts(t *testing.T) {
 			if _, _, ok := approvalAsked(r); ok || r.code != 409 {
 				t.Fatalf("the shutdown of laptop: %d %s", r.code, r.raw)
 			}
-			a.stopped(t, "tower's own fan change", a.post("/api/systems/tower/fan/mode", map[string]any{"mode": "full"}), "have the same machine id")
+			a.stopped(t, "tower's own fan change", a.post("/api/systems/tower/fan/mode", map[string]any{"mode": "full"}), "tower has the same machine id as laptop, which keeps it")
 			if len(a.tower.Asked()) != asked || len(a.iss.Asked()) != tokens || len(a.tower.Passed()) != 0 {
 				t.Fatalf("tower was asked or sent something: %+v", a.tower.Asked()[asked:])
 			}
 			if got := auditOutcomes(a.s.Cfg.AuditLog); !strings.Contains(got, "approval.alarm alarm: duplicate") || !strings.Contains(got, "approval.machine_id on record") {
 				t.Errorf("audit:\n%s", got)
+			}
+			// tower cannot be accepted for the id that is on record for laptop
+			if what, _, err := a.accept("tower", "nora"); what != "" || err == nil {
+				t.Fatalf("an accept on tower: %q %v", what, err)
+			}
+			// the way out: an id of its own on tower, accepted there; tower is approved by its own approvals again
+			a.setTrustID(t, a.tower, otherID)
+			a.poll()
+			if b := a.s.Poller.BindingOf("tower"); b.Status != approval.BindNoRecord {
+				t.Fatalf("tower with an id of its own: %+v", b)
+			}
+			if what, _, err := a.accept("tower", "nora"); what != "id" || err != nil {
+				t.Fatalf("the accept of tower's own id: %q %v", what, err)
+			}
+			if b := a.s.Poller.BindingOf("tower"); !b.OK() || b.Record.MachineID != otherID || b.Record.How != approval.PinAccepted {
+				t.Fatalf("tower after its accept: %+v", b)
+			}
+			if _, _, ok := approvalAsked(a.post("/api/systems/tower/fan/mode", map[string]any{"mode": "full"})); !ok {
+				t.Fatal("tower is asked for its own approval again")
+			}
+			// laptop, the host that handed the Turn on on, gains nothing by that. When it shows no check it is
+			// "Check gone" and gets nothing. When it goes on showing the id the panel issued for it, the panel
+			// has no reason left to flag it, and no machine holds that id any more: an approval for "laptop"
+			// that it hands on to tower is refused there (tower checks with its own id).
+			lb = a.s.Poller.BindingOf("laptop")
+			r = a.post("/api/systems/laptop/power", a.shutdownBody())
+			if honestBlock {
+				if lb.Status != approval.BindVanished || r.code != 409 {
+					t.Fatalf("laptop afterwards: %+v, its shutdown %d %s", lb, r.code, r.raw)
+				}
+			} else {
+				id, _, ok := approvalAsked(r)
+				if !lb.OK() || !ok {
+					t.Fatalf("laptop afterwards: %+v, its shutdown %d %s", lb, r.code, r.raw)
+				}
+				cb := a.approve(t, id)
+				if res := a.result(t); cb.code != 303 || res["ok"] == true || !strings.Contains(fmt.Sprint(res), "nonce") {
+					t.Fatalf("the approval for laptop, handed on to tower: %v", res)
+				}
+			}
+			if len(a.tower.Passed()) != 0 {
+				t.Fatalf("something reached tower: %+v", a.tower.Passed())
 			}
 		})
 	}
@@ -327,7 +388,7 @@ func TestAVanishedCheckIsAnAlarmNotAMachineWithoutTheCheck(t *testing.T) {
 			if len(a.laptop.Passed()) != passed || len(a.iss.Asked()) != 0 {
 				t.Fatalf("something was sent to the machine: %+v", a.laptop.Passed())
 			}
-			if active, _ := a.alarms(); active != 1 || len(a.auditEntries("", "approval.alarm")) != 1 {
+			if active, _ := a.alarms(); active != 1 || len(a.alarmEntries()) != 1 {
 				t.Fatalf("alarm: %d", active)
 			}
 			x := a.do("GET", "/api/systems/laptop", nil, "Cookie", a.admin)
@@ -406,7 +467,7 @@ func TestAnAgentOfSchemeOneIsTooOld(t *testing.T) {
 }
 
 // machines.json cannot be read: nothing is on record, so nothing is approved and nothing is sent, and the file
-// is not written over by a first sight. When it can be read again, the panel goes on.
+// is not written over by what a machine shows. When it can be read again, the panel goes on.
 func TestAnUnreadableRecordStopsEverything(t *testing.T) {
 	a := newApprovalEnv(t)
 	a.require(t, a.laptop)

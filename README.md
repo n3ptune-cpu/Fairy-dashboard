@@ -545,13 +545,17 @@ fairy-agent helper-trust clear                 # off again: nothing needs an app
 machine's trust file, and a machine accepts only an approval with its own id. A machine cannot see the other
 machines, so the panel keeps the id it has **on record** for each host (`machines.json` in the data folder,
 written like the other state files, mode 0600) and makes every approval with that one, never with what a
-host answers at that moment. The id comes on record when you Turn on from the panel (the panel makes it up),
-or the first time the panel sees a host that already has the check (set on the machine). Admins see it in
-the Approval box (hover "Machine id"); nobody else does, and no API answer carries it.
+host answers at that moment. An id comes on record in two ways only: when you Turn on from the panel (the
+panel makes it up), or when an admin accepts the id a host shows (below). Never because a host shows it: a
+machine id is no secret, and a host that answers in another machine's name would show that machine's id.
+Admins see it in the Approval box (hover "Machine id"); nobody else does, and no API answer carries it.
 
 From then on the record counts. The Overview shows a red key sign behind the host's name, and its Approval
 box and the Updates page say which of these it is:
 
+* **the host has the check on and no id is on record for it** ("Not on record": the check was set on the
+  machine itself or from another panel; or its id came on record "at first sight" in an earlier build of
+  this panel, which counts as none now);
 * **the host shows another id** than the one on record ("Machine id changed": its trust was set anew on the
   machine, or something else answers in its name);
 * **two hosts have the same id** (a machine made from a copy of another one's disk, or a host that hands the
@@ -560,12 +564,17 @@ box and the Updates page say which of these it is:
 * **a host that had the check shows none** any more.
 
 While a host is flagged, the panel asks it for no approval and sends it no fan, power or update request,
-and it is in no run. An admin resolves it in the host's Approval box: **Accept this machine's new id** (or
-"Accept that its check is off"), in a browser, behind "Confirm it's you", with an entry in the Audit log.
+and it is in no run. An admin resolves it in the host's Approval box: **Accept this machine's id** (not on
+record), **Accept this machine's new id** (changed) or "Accept that its check is off", in a browser, behind
+"Confirm it's you", with an entry in the Audit log. Before you accept an id, compare it with the machine's
+own: on the machine `fairy-agent helper-status`, line `machine id:` (the ⓘ in the box shows the id). A
+machine that answers in another's name shows the other's id.
 For two hosts with one id, one id is accepted for one host only. The host that has the id on record has the
 button **This host keeps its machine id**; the other one has no button: its box names the host that keeps
 the id and says what to do (on that machine `fairy-agent helper-trust set --new-machine-id`, then accept the
-new id on its page). The panel refuses an accept for it, whoever sends the request. Every accept is for the
+new id on its page). A host that shows an id which is on record for another host never gets it, however it
+came to show it, and the panel refuses an accept for it, whoever sends the request. Two hosts that are both
+not on record and show one id each have the button, and the first accept decides. Every accept is for the
 id the dialog showed: a machine that shows another one by the time you have confirmed is refused ("it
 changed while you were confirming"). Accept only when you know why it changed.
 
@@ -1121,9 +1130,10 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   the panel once, with a proof, and after that only on the machine. An approval names the machine it is for
   (the machine id in its trust file), and the panel makes it with the id it has on record for the host
   (`machines.json`), never with one a host answers with a challenge: a host that hands the panel's question
-  on to another machine gets an approval that machine refuses. A changed id, one id on two hosts and a check
-  that is gone stop every approval for the host until an admin accepts it (browser session only, "Confirm
-  it's you", audited). Machine ids are shown to admins in a browser only; the audit log has their first six
+  on to another machine gets an approval that machine refuses. An id comes on record only when the panel
+  issues it at Turn on or when an admin accepts it, never because a host shows it. A check that is on with
+  no id on record, a changed id, one id on two hosts and a check that is gone stop every approval for the
+  host until an admin accepts it (browser session only, "Confirm it's you", audited). Machine ids are shown to admins in a browser only; the audit log has their first six
   characters.
 * Roles, managed in the panel (`users.json`, Users page or `fairy admin users|sites`), keyed by the OIDC subject:
   **admin** sees everything, may use control actions, the Audit and Users pages; **viewer** is read-only and sees

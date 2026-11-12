@@ -24,7 +24,8 @@ func TestMachinesFile(t *testing.T) {
 	want := map[string]approval.Record{
 		"pc-a": {MachineID: "machine-id-A-0123456789ab", How: approval.PinTurnOn, At: at, By: "nora@example.test", State: "required", StateAt: at},
 		"pc-b": {MachineID: "machine-id-B-0123456789ab", How: approval.PinFirstSight, At: at, By: "Fairy", State: "broken", StateAt: at.Add(time.Hour), Holder: true},
-		"pc-c": {State: "required", StateAt: at}, // an old test build: the check without an id the panel could take
+		"pc-c": {State: "required", StateAt: at},                   // an old test build: the check without an id the panel could take
+		"pc-d": {State: "required", StateAt: at, Unaccepted: true}, // it showed the check on, with an id nobody accepted
 	}
 	if err := a.SetMachines(want, nil); err != nil {
 		t.Fatal(err)
@@ -45,7 +46,7 @@ func TestMachinesFile(t *testing.T) {
 	}
 	raw, _ := os.ReadFile(p)
 	for _, w := range []string{`"machines"`, `"machine_id": "machine-id-A-0123456789ab"`, `"pinned": "turn-on"`, `"pinned_by": "nora@example.test"`,
-		`"pinned_at": "2026-11-12T10:00:00Z"`, `"state": "broken"`, `"holder": true`} {
+		`"pinned_at": "2026-11-12T10:00:00Z"`, `"state": "broken"`, `"holder": true`, `"unaccepted": true`} {
 		if !strings.Contains(string(raw), w) {
 			t.Errorf("the file lacks %s:\n%s", w, raw)
 		}
@@ -57,7 +58,7 @@ func TestMachinesFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = a.Machines()
-	if err != nil || len(got) != 2 || got["pc-b"] != b || got["pc-a"] != want["pc-a"] {
+	if err != nil || len(got) != 3 || got["pc-b"] != b || got["pc-a"] != want["pc-a"] || got["pc-d"] != want["pc-d"] {
 		t.Fatalf("after the change: %v %+v", err, got)
 	}
 }

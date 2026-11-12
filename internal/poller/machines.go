@@ -15,8 +15,11 @@ import (
 // the file is adminstate's machines.json). The poller keeps it because the poller is what hears the machines:
 // every answer of an agent is compared with the record here, before anything else uses it.
 //
-//   - A host that shows the check with a machine id and has none on record gets that id on record ("first
-//     sight").
+//   - Nothing a host shows comes on record by itself (audit 5, round 3, r3-x1-01). An id is on record because
+//     the panel issued it at a Turn on (PinMachine) or because an admin accepted exactly the id the host showed
+//     (AcceptMachine). A host that shows the check on while it has no id on record is "not on record"
+//     (approval.BindNoRecord); that it showed the check is kept (Record.Unaccepted), the id is not.
+//   - A record an earlier build made at first sight counts as none (approval.Record.Demote).
 //   - What a host last said about its check is kept, so that a host that is silent, also after a restart of the
 //     panel, is still known to be one that checks approvals.
 //   - Every time something changes, each host's binding is decided again (approval.Evaluate), and a host whose
@@ -29,8 +32,8 @@ import (
 // MachineEvent is something about a machine's record that people must hear of (OnMachine).
 type MachineEvent struct {
 	AgentID string
-	// Kind: "pinned" (an id came on record at first sight), "alarm" (the binding became Binding.Status),
-	// "clear" (it is in order again), "store" (machines.json could not be written or read: Detail says why).
+	// Kind: "alarm" (the binding became Binding.Status), "clear" (it is in order again), "store" (machines.json
+	// could not be written or read: Detail says why).
 	Kind    string
 	Binding approval.Binding
 	Detail  string
@@ -67,7 +70,24 @@ func (p *Poller) loadMachines() {
 		return
 	}
 	p.mach.records = recs
+	p.demoteFirstSightLocked()
 	p.standingAlarmsLocked()
+}
+
+// demoteFirstSightLocked takes every id that an earlier build put on record at first sight off the record
+// (approval.Record.Demote), in memory and, with the next write, in the file. Such a host is "not on record"
+// from now on, until an admin accepts the id it shows. Caller holds p.mu, or nobody else has the poller yet.
+func (p *Poller) demoteFirstSightLocked() {
+	for id, r := range p.mach.records {
+		if r.How != approval.PinFirstSight {
+			continue
+		}
+		slog.Warn("a machine id that came on record at first sight (an earlier build) is not on record any more: an admin accepts the id the machine shows in its Approval box",
+			"agent", id, "machine_id", approval.ShortID(r.MachineID))
+		p.mach.records[id] = r.Demote()
+		p.mach.seq++
+		p.mach.dirty[id] = p.mach.seq
+	}
 }
 
 // standingAlarmsLocked takes the alarms the records say were written before this start as the ones last
@@ -103,6 +123,7 @@ func (p *Poller) reloadMachinesLocked() {
 	if recs, err := p.Admin.Machines(); err == nil {
 		slog.Warn("the record of machine ids can be read again")
 		p.mach.records, p.mach.err = recs, nil
+		p.demoteFirstSightLocked()
 		p.standingAlarmsLocked()
 	}
 }
@@ -162,17 +183,20 @@ func (p *Poller) noteMachineLocked(id string, ap *model.Approval, now time.Time)
 	if ap != nil {
 		state = ap.State
 	}
-	changed, first := false, false
-	if ap != nil && state == api.ApprovalRequired && ap.Proto == api.ApprovalProto && ap.MachineID != "" && rec.MachineID == "" {
-		rec.MachineID, rec.How, rec.At, rec.By, rec.Holder = ap.MachineID, approval.PinFirstSight, now.UTC(), "Fairy", false
-		changed, first = true, true
+	changed := false
+	if ap != nil && state == api.ApprovalRequired && ap.Proto == api.ApprovalProto && ap.MachineID != "" && rec.MachineID == "" && !rec.Unaccepted {
+		// It shows the check on, with an id, and nothing is on record for it. The id is NOT taken on record:
+		// it is only what this host says, and it may be another machine's. What is kept is that the host
+		// showed the check, so that it is "not on record" now and an alarm if the check goes.
+		rec.Unaccepted = true
+		changed = true
 	}
 	noCheck := ap == nil || state == api.ApprovalOff
 	switch {
 	case !known && !changed && noCheck:
 		return nil // a machine without the check, and nothing on record: nothing to keep
-	case known && rec.MachineID == "" && noCheck:
-		// it had the check without an id the panel could take (an old test build) and has none now
+	case known && rec.MachineID == "" && !rec.Unaccepted && noCheck:
+		// it had the check without an id anybody could accept (an old test build) and has none now
 		delete(p.mach.records, id)
 		delete(p.mach.dirty, id)
 		p.mach.seq++
@@ -187,11 +211,8 @@ func (p *Poller) noteMachineLocked(id string, ap *model.Approval, now time.Time)
 		p.mach.seq++
 		p.mach.dirty[id] = p.mach.seq
 		delete(p.mach.drop, id)
-		if first {
-			evs = append(evs, MachineEvent{AgentID: id, Kind: "pinned", Binding: approval.Binding{Record: rec, Known: true}})
-		}
 	}
-	return evs
+	return nil
 }
 
 // announceLocked compares every agent's binding with the one last announced, and announces what changed: an
@@ -205,7 +226,7 @@ func (p *Poller) announceLocked() (evs []MachineEvent) {
 		seen[a.ID] = true
 		b := p.bindingLocked(a.ID, reps)
 		st := b.Status
-		if st == approval.BindNoRecord || st == approval.BindNoStore { // not a machine's doing: the store event says it
+		if st == approval.BindNoStore { // not a machine's doing: the store event says it
 			st = approval.BindOK
 		}
 		if p.mach.last[a.ID] == st || !settled {
@@ -294,11 +315,14 @@ func (p *Poller) flushMachines() error {
 }
 
 // PinMachine takes machineID on record for the agent, as the id the panel itself gave the machine when the
-// check was switched on from here (how: approval.PinTurnOn). It returns an error when the record could not be
-// written; the id is on record in memory all the same.
+// check was switched on from here (how: approval.PinTurnOn; nothing else is taken). It returns an error when
+// the record could not be written; the id is on record in memory all the same.
 func (p *Poller) PinMachine(agentID, machineID, how, by string) error {
 	if err := api.CheckMachineID(machineID); err != nil {
 		return err
+	}
+	if how != approval.PinTurnOn {
+		return errors.New("a machine id comes on record through Turn on or through an admin's accept only")
 	}
 	p.mu.Lock()
 	p.reloadMachinesLocked()
@@ -321,7 +345,7 @@ func (p *Poller) PinMachine(agentID, machineID, how, by string) error {
 }
 
 // ErrNothingToAccept: the machine does not show anything now that an admin could accept.
-var ErrNothingToAccept = errors.New("the machine shows nothing to accept right now: it must be answering, and show another machine id than the one on record, the same id as another host, or no check at all")
+var ErrNothingToAccept = errors.New("the machine shows nothing to accept right now: it must be answering, and show a machine id that is not on record, another one than the one on record, the same id as another host, or no check at all")
 
 // ErrAcceptChanged: the machine does not show what the admin was shown when asked to confirm.
 var ErrAcceptChanged = errors.New("what the machine shows is not what the dialog showed: it changed while you were confirming")
@@ -343,9 +367,10 @@ type AcceptWant struct {
 
 // AcceptMachine is an admin's "accept what this machine shows" (by: who; want: what the admin was shown):
 //
-//   - it shows the check with a machine id: that id is on record from now on (approval.PinAccepted). If another
-//     host has the same id, this host is the one that keeps it (Record.Holder) and the other stays flagged
-//     until it shows an id of its own;
+//   - it shows the check with a machine id (one that is not on record for it: it has none yet, or another
+//     one; or the one it has, which another host shows too): that id is on record from now on
+//     (approval.PinAccepted). If another host shows the same id, this host is the one that keeps it
+//     (Record.Holder) and the other stays flagged until it shows an id of its own;
 //   - it shows no check, or says it is off, and had an id on record: the record is removed. The machine is
 //     then one without the check, until it shows one again.
 //
@@ -368,7 +393,7 @@ func (p *Poller) AcceptMachine(agentID, by string, want AcceptWant) (what string
 	rep := before.Report
 	now, _ := p.now()
 	switch {
-	case before.Status != approval.BindChanged && before.Status != approval.BindDuplicate && before.Status != approval.BindVanished:
+	case before.Status != approval.BindChanged && before.Status != approval.BindDuplicate && before.Status != approval.BindVanished && before.Status != approval.BindNoRecord:
 		p.mu.Unlock()
 		return "", before, ErrNothingToAccept
 	case rep.Block && rep.State == api.ApprovalRequired && rep.Proto == api.ApprovalProto && api.CheckMachineID(rep.MachineID) == nil:

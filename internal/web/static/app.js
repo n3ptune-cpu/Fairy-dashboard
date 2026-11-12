@@ -714,17 +714,19 @@ const AP_BINDING = table({
   duplicate: ["One machine id on two hosts", "Another host has the same machine id: each would accept an approval made for the other. No approvals for either."],
   vanished: ["Check gone", "It had the check on the machine itself and shows none now. Fairy sends it no fan, power or update request."],
   too_old: ["Agent too old", "Its approvals do not name the machine. Install the current agent on it."],
-  no_record: ["No machine id on record yet", "Fairy takes its id on record with the machine's next answer."],
+  no_record: ["Not on record", "Fairy has no machine id on record for it. No approvals until an admin accepts its id."],
   unreadable: ["Record unreadable", "Fairy cannot read its record of machine ids (machines.json), so it asks no machine for an approval."] });
 const AP_BINDING_MORE = table({
   changed: ["An administrator ran <code>fairy-agent helper-trust set --new-machine-id</code> on the machine, or cleared its trust and set it again: accept the new id.",
     "If nobody did, what answers at this host's address may be another machine: do not accept, look at the host."],
   duplicate: ["One of the two was made from a copy of the other's disk (a cloned VM, a restored image). On the copy, as administrator: <code>fairy-agent helper-trust set --new-machine-id</code>, then accept its new id on its page.",
-    "Or one host answers in the name of the other. Press the button on the host that is the real one: it keeps the id. The other then has no button: it stays flagged until it shows an id of its own."],
+    "Or one host answers in the name of the other. Press the button on the host that is the real one: it keeps the id. The other then has no button: it stays flagged until it shows an id of its own.",
+    "Before you press, compare the id with the machine's own: on the machine <code>fairy-agent helper-status</code>, line <code>machine id:</code>."],
   vanished: ["Its trust was removed on the machine (<code>fairy-agent helper-trust clear</code>), or its agent was put back to a release from before this check. Every request would then run with the panel's control token alone.",
     "Turn the check on again, or accept that it is off."],
   too_old: ["It runs the test build of 2026-11-11. Its approvals are not tied to one machine, and it refuses this panel's."],
-  no_record: ["Fairy never takes a machine id from an answer that comes with an approval question. Try again in a moment."],
+  no_record: ["Fairy did not turn this check on: it was set on the machine itself, or from another panel.",
+    "Before you accept, compare the id with the machine's own: on the machine <code>fairy-agent helper-status</code>, line <code>machine id:</code>. A machine that answers in another's name would show the other's id."],
   unreadable: ["The panel's log says why. Until the file can be read, nothing is approved and no fan, power or update request is sent."] });
 // The start of the block's error when the RUNNING Windows helper is from before approvals (state "unknown"):
 // starting the helper does nothing then, it has to be stopped and started.
@@ -743,7 +745,7 @@ const apBindingText = (a) => (a.binding === "duplicate" ? apDuplicateText(a) : A
 function approvalChip(s) {
   const a = approvalOf(s);
   if (!a) return "";
-  const b = a.binding && a.binding !== "no_record" ? AP_BINDING[a.binding] : null;
+  const b = a.binding ? AP_BINDING[a.binding] : null;
   if (!b && a.state !== "broken") return "";
   const name = b ? b[0] : "Approval broken";
   const text = b ? apBindingText(a) : `This machine's own check of approvals is broken: ${a.error || "no details"}. It refuses fan, power and update requests until that is repaired on the machine.`;
@@ -758,8 +760,9 @@ function approvalBinding(s, a) {
   const more = [...(AP_BINDING_MORE[a.binding] || [])];
   if (m?.with?.length) more.push(`The same id: ${esc(andList(m.with))}.`);
   if (m?.machine_id) more.push(`On record: <code>${esc(shortKey(m.machine_id))}</code> (${esc(m.pinned || "")}${m.pinned_by ? `, by ${esc(m.pinned_by)}` : ""})${m.shown_id && m.shown_id !== m.machine_id ? `. It shows: <code>${esc(shortKey(m.shown_id))}</code>` : ""}.`);
-  // The one button (admins). Its words say what it accepts: a new id, the id this host has and keeps while
-  // another host shows it too, or that the check is off. It carries exactly what this page shows (the id in
+  else if (m?.shown_id) more.push(`It shows: <code>${esc(m.shown_id)}</code>. Nothing is on record.`);
+  // The one button (admins). Its words say what it accepts: the id of a machine that has none on record, a new
+  // id, the id this host has and keeps while another host shows it too, or that the check is off. It carries exactly what this page shows (the id in
   // full), and the panel accepts nothing else. A host whose id another host keeps has no button: one id is
   // accepted for one host only, so the machine needs an id of its own first.
   const held = (a.binding_held || []).length > 0;
@@ -769,6 +772,7 @@ function approvalBinding(s, a) {
 }
 // What "Accept" is called, by what it accepts (the approval page's `accept`): the button, and the action's name.
 const AP_ACCEPT = table({
+  first: ["Accept this machine's id", (name) => `Accept the machine id of ${name}`],
   id: ["Accept this machine's new id", (name) => `Accept the new machine id of ${name}`],
   keep: ["This host keeps its machine id", (name) => `${name} keeps its machine id`],
   off: ["Accept that its check is off", (name) => `Accept that the check on ${name} is off`] });
@@ -809,7 +813,7 @@ function approvalBox(s) {
     <div class="note">Before this machine changes its fans, shuts down, restarts, sleeps or updates its agent, <b>${esc(approvalBy(a))}</b> verifies a Pocket ID approval (passkey) made for exactly that action. The panel cannot skip it.</div>
     ${row("Checked by", esc(approvalBy(a)))}
     ${rec?.machine_id ? row(rec.shown_id && rec.shown_id !== rec.machine_id ? "Machine id on record" : "Machine id", `<code>${esc(shortKey(rec.machine_id))}</code>`, `The id Fairy has on record for this machine and puts into every approval for it: ${rec.machine_id} (${rec.pinned || ""}${rec.pinned_by ? `, by ${rec.pinned_by}` : ""})`) : ""}
-    ${rec?.machine_id && rec.shown_id && rec.shown_id !== rec.machine_id ? row("Machine id it shows", `<code id="ap-shown">${esc(shortKey(rec.shown_id))}</code>`, `The id the machine shows now: ${rec.shown_id}`) : ""}
+    ${rec?.shown_id && rec.shown_id !== rec.machine_id && (rec.machine_id || a.binding === "no_record") ? row("Machine id it shows", `<code id="ap-shown">${esc(shortKey(rec.shown_id))}</code>`, `The id the machine shows now: ${rec.shown_id}`) : ""}
     ${checks.length ? row("Checked by the agent", esc(andList(checks)), "These requests do not go through the helper on this machine; its agent checks them with the same trust file") : ""}
     ${row("Pocket ID", esc(a.issuer || "–"))}
     ${row("Client", `<code>${esc(a.client_id || "–")}</code>`, "The Pocket ID client \"Fairy PC actions\"")}
@@ -952,7 +956,7 @@ document.addEventListener("click", (e) => {
   if (!t || t.disabled) return;
   openTurnOn(t.dataset.id || "");
 });
-// "Accept this machine's new id" / "Accept that its check is off": always behind its own "Confirm it's you".
+// "Accept this machine's id" / "... new id" / "Accept that its check is off": always behind its own "Confirm it's you".
 document.addEventListener("click", async (e) => {
   const t = e.target.closest('[data-act="ap-accept"]');
   if (!t || t.disabled) return;

@@ -486,7 +486,7 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 		if b := s.Poller.BindingOf(a.ID); !b.OK() {
 			h.Approval = "alarm"
 			h.approvalWhy = "is in no run: " + machineAlarmText(b.Status, s.machineNames(b.With)) + " (see its page)"
-			if b.Status == approval.BindNoStore || b.Status == approval.BindNoRecord {
+			if b.Status == approval.BindNoStore {
 				h.approvalWhy = "is in no run: " + approval.BindingText(x.Name, b.Status, nil)
 			}
 		}
