@@ -182,7 +182,8 @@ func (o runOps) Kick(id string) {
 }
 
 // opError turns the error of a control request into the run's: the agent's own code decides whether it is an
-// approval the agent asks for (item 1.1) or its rate limit; the text is the one the page would show.
+// approval the agent asks for (item 1.1) or its rate limit; a request that left the panel and got no usable
+// answer is "no answer" (the machine may have taken it); the text is the one the page would show.
 func opError(err error) error {
 	if err == nil {
 		return nil
@@ -193,6 +194,10 @@ func opError(err error) error {
 		if t, ok := ae.Detail.(string); ok && t != "" {
 			out.Text = t
 		}
+	}
+	var lost *powerctl.Unanswered
+	if errors.As(err, &lost) {
+		out.Code = wakerun.CodeNoAnswer
 	}
 	var ref *powerctl.AgentRefusal
 	if errors.As(err, &ref) {

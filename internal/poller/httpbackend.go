@@ -624,6 +624,16 @@ func DecodeProcessList(d jsonx.M, sid string) (model.ProcessList, error) {
 	return pl, nil
 }
 
+// NotSent is the error of a request to an agent that never left the panel: no connection to the agent could be
+// had (refused, no route, no answer to the attempt to connect, a name that does not resolve). Every other
+// failure of a request leaves open whether the agent got it: the request was written to a connection, or may
+// have been, and no usable answer came back. For a control request that difference matters (a wake, an
+// update or a shutdown whose answer was lost may be happening), so the backend says which it is.
+type NotSent struct{ Err error }
+
+func (e *NotSent) Error() string { return e.Err.Error() }
+func (e *NotSent) Unwrap() error { return e.Err }
+
 func (b *httpBackend) AgentRequest(ctx context.Context, a config.Agent, method, path string, body any) (int, jsonx.M, error) {
 	tok := b.readToken(a.ID)
 	if method == http.MethodPost {
@@ -636,9 +646,11 @@ func (b *httpBackend) AgentRequest(ctx context.Context, a config.Agent, method, 
 	}
 	cctx, cancel := context.WithTimeout(ctx, time.Duration((b.p.Cfg.RequestTimeout+8)*float64(time.Second))) // ipmi via powershell is slow
 	defer cancel()
+	var gotConn atomic.Bool // a connection (new or kept) was handed to the request: from then on it may have left
+	cctx = httptrace.WithClientTrace(cctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { gotConn.Store(true) }})
 	req, err := http.NewRequestWithContext(cctx, method, b.agentURL(a, path), rd)
 	if err != nil {
-		return 0, nil, devices.Errf("invalid url")
+		return 0, nil, &NotSent{Err: devices.Errf("invalid url")}
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	if body != nil {
@@ -646,6 +658,9 @@ func (b *httpBackend) AgentRequest(ctx context.Context, a config.Agent, method, 
 	}
 	resp, err := b.agents.Do(req)
 	if err != nil {
+		if !gotConn.Load() {
+			err = &NotSent{Err: err}
+		}
 		return 0, nil, err
 	}
 	defer resp.Body.Close()

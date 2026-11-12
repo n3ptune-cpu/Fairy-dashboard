@@ -259,6 +259,10 @@ const (
 	// switched off during the run). Nothing was sent. A run's shutdown is the agent's delayed, cancellable one
 	// or none: the machine is left on (NoAgentRoute).
 	CodeNoAgentRoute = "no_agent_route"
+	// CodeNoAnswer: the request left the panel, or may have, and no usable answer came back (a timeout, a
+	// connection that broke). The machine may have got it: the wake packet may be out, the update or the
+	// shutdown countdown may be running. The run never takes this for "nothing happened".
+	CodeNoAnswer = "no_answer"
 )
 
 // NoAgentRoute is the one sentence for a woken machine whose agent can no longer shut it down.

@@ -3,8 +3,14 @@ package powerctl
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -83,5 +89,42 @@ func TestUpdateAgent(t *testing.T) {
 	var ae *apierr.Error
 	if _, err := UpdateAgent(context.Background(), p, a, "Ann"); !errors.As(err, &ae) || ae.Status != 409 || len(b.Requests) != 1 {
 		t.Fatal("with control disabled nothing is sent", err, b.Requests)
+	}
+}
+
+// A control request that got no usable answer is told apart from one that never left the panel and from an
+// agent's own "no": the wake / update / shut down run must know that what it asked for may be happening
+// (audit 5, r2-p2-03, -04, -05). The page's error is the same in every case.
+func TestAnUnansweredRequestIsNotARefusal(t *testing.T) {
+	p, b := testPoller(t)
+	a, _ := p.AgentByID("laptop")
+	for _, c := range []struct {
+		name       string
+		reply      func() (int, jsonx.M, error)
+		unanswered bool
+	}{
+		{"timeout", func() (int, jsonx.M, error) { return 0, nil, context.DeadlineExceeded }, true},
+		{"an answer that cannot be read", func() (int, jsonx.M, error) { return 200, nil, devices.Errf("invalid response") }, true},
+		{"the connection broke", func() (int, jsonx.M, error) { return 0, nil, io.ErrUnexpectedEOF }, true},
+		{"never sent: no connection", func() (int, jsonx.M, error) {
+			return 0, nil, &poller.NotSent{Err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}}
+		}, false},
+		{"the agent says no", func() (int, jsonx.M, error) { return 409, jsonx.M{"error": "busy"}, nil }, false},
+		{"the agent fails", func() (int, jsonx.M, error) { return 500, jsonx.M{"error": "boom"}, nil }, false},
+	} {
+		b.Reply = func(string, string) (int, jsonx.M, error) { return c.reply() }
+		_, err := UpdateAgent(context.Background(), p, a, "Ann")
+		var ae *apierr.Error
+		if !errors.As(err, &ae) {
+			t.Errorf("%s: the page's error is %v", c.name, err)
+			continue
+		}
+		var lost *Unanswered
+		if errors.As(err, &lost) != c.unanswered {
+			t.Errorf("%s: unanswered %v, want %v (%v)", c.name, lost != nil, c.unanswered, err)
+		}
+		if c.unanswered && (ae.Status != 502 || !strings.HasPrefix(ae.Detail.(string), "agent unreachable: ")) {
+			t.Errorf("%s: the page's error changed: %d %v", c.name, ae.Status, ae.Detail)
+		}
 	}
 }

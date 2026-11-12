@@ -14,6 +14,7 @@ package powerctl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -375,7 +376,8 @@ func executeWake(ctx context.Context, p *poller.Poller, s model.System, res mode
 			}
 		}
 		if _, err := agentCall(ctx, p, relay, "/wol", body); err != nil {
-			if firstErr == nil {
+			var lost *Unanswered // a packet that may have gone out comes before a plain refusal
+			if firstErr == nil || (errors.As(err, &lost) && !errors.As(firstErr, &lost)) {
 				firstErr = err
 			}
 			continue
@@ -469,6 +471,17 @@ type AgentRefusal struct {
 func (e *AgentRefusal) Error() string { return e.Err.Error() }
 func (e *AgentRefusal) Unwrap() error { return e.Err }
 
+// Unanswered is a control request that left the panel, or may have, and got no usable answer: a timeout, a
+// connection that broke, an answer that cannot be read. The agent may have taken the request: the wake packet
+// may be out, the update or the countdown may be running. It wraps the error the page gets ("agent
+// unreachable: timeout"), so a click shows what it showed before; a caller that goes on working after the
+// request (the wake / update / shut down run) must not take it for "nothing happened". A request that
+// certainly never left (poller.NotSent: no connection could be had) is not one of these.
+type Unanswered struct{ Err *apierr.Error }
+
+func (e *Unanswered) Error() string { return e.Err.Error() }
+func (e *Unanswered) Unwrap() error { return e.Err }
+
 // agentCode is an agent's error code as far as the panel repeats it: a short word of a-z, 0-9 and "_".
 func agentCode(data jsonx.M) string {
 	c := jsonx.S(data, "code")
@@ -498,7 +511,12 @@ func UpdateAgent(ctx context.Context, p *poller.Poller, a config.Agent, requeste
 func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path string, body any) (jsonx.M, error) {
 	status, data, err := p.AgentRequest(ctx, a, "POST", path, body)
 	if err != nil {
-		return nil, apierr.New(502, "agent unreachable: "+devices.Describe(err))
+		e := apierr.New(502, "agent unreachable: "+devices.Describe(err))
+		var ns *poller.NotSent
+		if errors.As(err, &ns) {
+			return nil, e
+		}
+		return nil, &Unanswered{Err: e}
 	}
 	errMsg := func(def string) string {
 		if e := textsafe.Clip(jsonx.S(data, "error"), maxAgentError); e != "" {
