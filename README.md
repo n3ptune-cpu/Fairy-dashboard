@@ -938,7 +938,10 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   more), all sessions of that account end on the panel at once (audit: `auth.login`, "denied: not in an
   allowed group", `sessions_revoked`). When the groups are not in the ID token the panel reads them from
   Pocket ID's userinfo; if that request fails, the sign-in fails with a page that says so and no session is
-  ended (nothing was said about the account). Between two sign-ins the panel does not ask Pocket ID.
+  ended (nothing was said about the account). From userinfo the panel takes the groups, and a name or e-mail
+  address to show where the ID token has none; when a sign-in happened, whether an e-mail address is verified
+  and everything else come from the signed ID token alone, and a userinfo answer about another account
+  refuses the sign-in. Between two sign-ins the panel does not ask Pocket ID.
 * No release has a way around that sign-in. The test build (`go build -tags fairytest`,
   [TESTING-LOCAL.md](TESTING-LOCAL.md)) has no sign-in, and so it is separate code that a build without the tag
   does not contain: a test of the normal build checks that, and the release workflow stops before signing if a

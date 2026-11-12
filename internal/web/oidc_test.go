@@ -81,6 +81,10 @@ func newFakeIDP(t *testing.T) *fakeIDP {
 		claims := map[string]any{"iss": f.srv.URL, "aud": "cid", "sub": "u1", "nonce": f.nonce,
 			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(), "email": "n@example.com"}
 		for k, v := range f.claims {
+			if v == nil { // a test takes a claim out of the ID token (the e-mail address it has otherwise)
+				delete(claims, k)
+				continue
+			}
 			claims[k] = v
 		}
 		writeJSON(w, map[string]any{"access_token": "at", "token_type": "Bearer", "expires_in": 60,
