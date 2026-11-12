@@ -355,7 +355,11 @@ func (c *reqCtx) readBody() {
 		c.bodyKept = true // nothing to keep
 		return
 	}
-	if strings.HasPrefix(c.r.Header.Get("Content-Type"), "application/json") || c.r.ContentLength <= bodySniffMax {
+	// A body that is not JSON is read ahead only when it says that it is short. One of unknown length (no
+	// Content-Length: a chunked upload from a script or a proxy) is left for its handler, which reads it up to
+	// its own limit; it used to be read here to 64 KiB and the rest dropped, and the upload was then refused
+	// as "not a complete picture" (r3-p1-08: -1 is not "at most 2048").
+	if strings.HasPrefix(c.r.Header.Get("Content-Type"), "application/json") || (c.r.ContentLength >= 0 && c.r.ContentLength <= bodySniffMax) {
 		b, _ := io.ReadAll(io.LimitReader(c.r.Body, 64<<10))
 		c.body, c.bodyKept = b, true
 		c.r.Body = io.NopCloser(bytes.NewReader(b))

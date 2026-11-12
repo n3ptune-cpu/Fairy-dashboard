@@ -239,14 +239,12 @@ func (s *Server) uploadWallpaper(c *reqCtx) error {
 		if !s.uploadRL.allow(u.Sub) {
 			return apierr.New(429, "too many uploads; try again in a minute")
 		}
-		if c.r.ContentLength < 0 { // a body of unknown length is read ahead in part only (readBody): never stored cut off
-			return apierr.New(411, "the upload needs a Content-Length")
-		}
 		if c.r.ContentLength > settings.MaxBackgroundBytes {
 			return apierr.Errf(413, "picture larger than %d MiB", settings.MaxBackgroundBytes>>20)
 		}
+		// bounded also without a Content-Length (a chunked upload): read to the limit, whatever the transfer
 		data, err = io.ReadAll(io.LimitReader(c.r.Body, settings.MaxBackgroundBytes+1))
-		if err != nil || int64(len(data)) != c.r.ContentLength {
+		if err != nil || (c.r.ContentLength >= 0 && int64(len(data)) != c.r.ContentLength) {
 			return apierr.New(400, "unreadable body")
 		}
 		// A file the panel will not take is refused now, with the reason, not after the passkey.

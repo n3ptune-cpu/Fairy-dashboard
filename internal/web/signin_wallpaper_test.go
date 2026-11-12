@@ -158,21 +158,54 @@ func TestSignInWallpaperUploadTakesThreeTypesByContent(t *testing.T) {
 	if r := e.wallUpload(full, "image/png", admin...); r.code != 201 || r.body["bytes"] != float64(settings.MaxBackgroundBytes) {
 		t.Fatalf("a picture of exactly the limit: %d %s", r.code, r.raw)
 	}
-	// a body without a length (chunked) is refused: it would be read ahead in part and stored cut off
-	req, _ := http.NewRequest("POST", e.srv.URL+wallAPI, io.MultiReader(bytes.NewReader(pngPic)))
-	for i := 0; i+1 < len(admin); i += 2 {
-		req.Header.Set(admin[i], admin[i+1])
+	// r3-p1-08: a body without a length (a chunked upload, as a script or a proxy sends it) is read to the limit
+	// like any other. It used to be read ahead to 64 KiB and the rest dropped: the sign-in picture answered 411
+	// for that reason, and a user's own background of 300 KiB was refused as "not a complete picture".
+	chunked := func(path string, data []byte) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest("POST", e.srv.URL+path, io.MultiReader(bytes.NewReader(data))) // a reader without a length: sent chunked
+		for i := 0; i+1 < len(admin); i += 2 {
+			req.Header.Set(admin[i], admin[i+1])
+		}
+		req.Header.Set("Content-Type", "image/png")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if len(res.TransferEncoding) != 0 || req.ContentLength > 0 {
+			t.Fatal("the test's upload was not sent without a length")
+		}
+		b, _ := io.ReadAll(res.Body)
+		return res.StatusCode, string(b)
 	}
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	big := pngOfSize(t, 300<<10)
+	for _, c := range []struct {
+		name string
+		data []byte
+	}{{"a small picture", pngPic}, {"a picture of 300 KiB", big}, {"a picture of exactly the limit", full}} {
+		if code, body := chunked(wallAPI, c.data); code != 201 {
+			t.Errorf("the sign-in picture, %s without a Content-Length: %d %s", c.name, code, body)
+		}
+		if g := e.do("GET", wallURL, nil); !bytes.Equal(g.raw, c.data) {
+			t.Errorf("the sign-in picture, %s without a Content-Length: stored %d of %d bytes", c.name, len(g.raw), len(c.data))
+		}
+		if code, body := chunked("/api/settings/background", c.data); code != 201 {
+			t.Errorf("a user's own background, %s without a Content-Length: %d %s", c.name, code, body)
+		}
+		if g := e.do("GET", "/api/settings/background", nil, "Cookie", admin[1]); !bytes.Equal(g.raw, c.data) {
+			t.Errorf("a user's own background, %s without a Content-Length: stored %d of %d bytes", c.name, len(g.raw), len(c.data))
+		}
 	}
-	res.Body.Close()
-	if res.StatusCode != 411 {
-		t.Errorf("an upload without a Content-Length: %d", res.StatusCode)
+	// the limit holds without a length too, and nothing of such an upload is stored
+	over := pngOfSize(t, settings.MaxBackgroundBytes+1)
+	for _, path := range []string{wallAPI, "/api/settings/background"} {
+		if code, body := chunked(path, over); code != 413 || !strings.Contains(body, "picture larger than 8 MiB") {
+			t.Errorf("%s: one byte over the limit, without a Content-Length: %d %s", path, code, body)
+		}
 	}
 	if g := e.do("GET", wallURL, nil); !bytes.Equal(g.raw, full) {
-		t.Error("the upload without a length changed the stored picture")
+		t.Error("the upload over the limit changed the stored picture")
 	}
 	// uploads are limited like a user's background uploads (6 a minute)
 	e.s.uploadRL = newRateLimiter(uploadsPerMin)
