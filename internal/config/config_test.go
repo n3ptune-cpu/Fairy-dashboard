@@ -316,6 +316,40 @@ func TestWakeUpdateTimings(t *testing.T) {
 	}
 }
 
+// r3-p4-10 and r3-p4-06 (audit 5, round 3): three places where the README did not match the release. The
+// pointer to the upgrade section still named "three settings ... and one line in fairy.env" (the release
+// before); "Going back" named no command; and the upgrade steps left the update unit of the older release in
+// place (10 minutes) while the README said 18.
+func TestReadmeUpgradeTextsMatchThisRelease(t *testing.T) {
+	b, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := strings.Join(strings.Fields(string(b)), " ")
+	if strings.Contains(readme, "names three settings in `config.yaml` and one line in `fairy.env`") {
+		t.Error("the pointer to \"Upgrading to this release\" still describes the release before")
+	}
+	for _, want := range []string{
+		"names what to look at in `config.yaml` before the update: the two session settings",
+		// going back: where the older program is, and the commands
+		"Going back to the older panel: the update kept the program it replaced as `/usr/local/bin/fairy.old`",
+		"`systemctl stop fairy`", "`mv /usr/local/bin/fairy.old /usr/local/bin/fairy`", "`systemctl start fairy`",
+		"`fairy update --force` is not the way",
+		// the update unit after the upgrade
+		"**Then `fairy update` once more**, as root, and answer yes to \"Set up the Update panel button now\"",
+		"`TimeoutStartSec=600`", "This release's unit has 18 minutes",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README.md lacks %q", want)
+		}
+	}
+	// what the README says about this release's unit is what it holds (the release before: 600, read in its tree)
+	unit, err := os.ReadFile("../../deploy/fairy-panel-update.service")
+	if err != nil || !strings.Contains(string(unit), "\nTimeoutStartSec=1080\n") {
+		t.Errorf("deploy/fairy-panel-update.service: this release's limit is 18 minutes (1080 s): %v", err)
+	}
+}
+
 // r1-p4-02 and r1-p4-03 (audit 5): the last release refuses a config.yaml with a wake_update: block ("field
 // wake_update not found"), and it stores a user's settings without the pop-up settings. The README's paragraph
 // about going back named neither. It names every block this release adds to config.yaml, and the pop-ups.

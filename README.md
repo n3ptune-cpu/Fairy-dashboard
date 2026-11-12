@@ -84,8 +84,8 @@ panel's log at start and `fairy admin config check` name a variable that looks l
 `127.0.0.1` with its own empty state, and no release contains it.
 
 **Updating a panel that already runs?** Read [Upgrading to this release](#upgrading-to-this-release) first.
-It is short, and it names three settings in `config.yaml` and one line in `fairy.env` that the new panel
-refuses.
+It is short, and it names what to look at in `config.yaml` before the update: the two session settings (one
+combination of them does not start any more) and the `wake_update:` block (write it only after the update).
 
 ### Agents
 
@@ -196,7 +196,8 @@ manual install per machine) is in Fairy-agent's
   After "N", an error or a rollback nothing was written. If the button says what is missing, run
   `fairy update` once more.
   **A run that was stopped** (the host restarted during the update, or systemd ended the unit at its time
-  limit of 18 minutes): the Updates page shows a red "stopped" with "stopped before it finished (while
+  limit of 18 minutes; 10 minutes while the unit is still the one an older release wrote, see
+  [Upgrading to this release](#upgrading-to-this-release), step 3): the Updates page shows a red "stopped" with "stopped before it finished (while
   downloading, <time>)" for an hour, and the button works again. Nothing has to be deleted by hand. What the
   stopped download left next to the program (`/usr/local/bin/.download-*`) is removed by the next
   `fairy update` or button run once it is older than 15 minutes. Details: `journalctl -u fairy-panel-update`.
@@ -758,6 +759,14 @@ to be converted and no file has to be deleted. The update itself signs nobody ou
    `systemctl restart fairy`. If the block is already in the file: take it out (or put `#` in front of its
    lines), update, put it back, restart. What happens otherwise is in the paragraph after this list.
 
+3. **Then `fairy update` once more**, as root, and answer yes to "Set up the Update panel button now".
+   The first run was done by the program you had, and it wrote its own, older
+   `fairy-panel-update.service`: the one with a time limit of 10 minutes (`TimeoutStartSec=600`). This
+   release's unit has 18 minutes, which the **Update panel** button's run is planned for (15 minutes and a
+   rollback). The second run says "its files are older than this version" and writes the new unit after the
+   yes; nothing else is changed. Until then the button works with the older limit. The same holds after any
+   later release that changes the unit: the button never writes it, a run by hand does.
+
 If config.yaml already has the `wake_update:` block when you update: on a panel that listens on the default
 `127.0.0.1:8080` the update goes through. On a panel with another `listen:` address (the nginx layout) the
 old `fairy update` asks the wrong address after the restart, puts the old program back, and the old program
@@ -869,7 +878,11 @@ means 512M: nothing to do). Otherwise add it once:
 What else the release before this one asked for (its order with the agents, three settings and the session
 secret) is in that release's own README.
 
-Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
+Going back to the older panel: the update kept the program it replaced as `/usr/local/bin/fairy.old`, until
+the next update replaces that too. As root: `systemctl stop fairy`, `cp /usr/local/bin/fairy
+/usr/local/bin/fairy.new` (to keep this one), `mv /usr/local/bin/fairy.old /usr/local/bin/fairy`,
+`systemctl start fairy`. (`fairy update --force` is not the way: it installs the latest release again, not
+the older one.) The older panel reads the files this one writes (`users.json`, `notifications.json`,
 `managed-hosts.yaml`, `state.json`, `settings.json`, and `sessions.json`, where it ignores what this one adds).
 It does not start when config.yaml has a `wake_update:` block: take the block out first. (It is the one key
 that is new in this release; do it before you go back.) A panel older than
