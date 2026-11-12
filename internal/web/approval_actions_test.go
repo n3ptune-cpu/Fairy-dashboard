@@ -374,8 +374,14 @@ func TestApprovedUpdate(t *testing.T) {
 	if !ok {
 		t.Fatal("the update must ask for the machine's approval")
 	}
-	if cb := a.approve(t, id); cb.code != 303 || a.result(t)["ok"] != true {
-		t.Fatalf("approved update: %d", cb.code)
+	cb := a.approve(t, id)
+	// what the page shows afterwards is "Update laptop: started. Its row shows how it goes.": the agent took the
+	// request, and the row says how it went. It used to be "done" (audit 5, r2-b2-04).
+	if res := a.result(t); cb.code != 303 || res["ok"] != true || res["message"] != "started. Its row shows how it goes." {
+		t.Fatalf("approved update: %d %v", cb.code, res)
+	}
+	if js := appJS(t); !strings.Contains(js, "else if (r) flash(`${label}: ${r.message || \"started\"}`);") {
+		t.Error("app.js: a single Update that ran at once must show the panel's own words too")
 	}
 	p := a.laptop.Passed()
 	if len(p) != 1 || p[0].Path != "/update" || !p[0].Approved {
