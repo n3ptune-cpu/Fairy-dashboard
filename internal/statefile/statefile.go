@@ -51,19 +51,42 @@ func Read(path string) (Data, error) {
 			"check its owner and mode, e.g. chown fairy:fairy and chmod 600)", path, err)
 	}
 	if len(bytes.TrimSpace(b)) == 0 {
-		return nil, fmt.Errorf("%s is empty (%d bytes): Fairy never writes an empty state file, so this one is damaged "+
-			"(a power cut or a full disk can leave it). Fairy will not use or overwrite it; restore it from a backup, "+
-			"or move it aside to start that file over", path, len(b))
+		return nil, &DamagedError{Path: path, What: fmt.Sprintf("is empty (%d bytes): Fairy never writes an empty state file, so this one is damaged "+
+			"(a power cut or a full disk can leave it).", len(b))}
 	}
 	var d Data
 	if err := json.Unmarshal(b, &d); err != nil || d == nil {
 		if err == nil {
 			err = errors.New("not a JSON object")
 		}
-		return nil, fmt.Errorf("%s is corrupt (%v): Fairy will not use or overwrite it; restore it from a backup, "+
-			"or move it aside to start that file over", path, err)
+		return nil, &DamagedError{Path: path, What: fmt.Sprintf("is corrupt (%v):", err)}
 	}
 	return d, nil
+}
+
+// DamagedError is a state file that could be read and does not hold a state: it is empty, or not a JSON object
+// (cut off, or other content). It is not the error of a file that cannot be read at all, is not a plain file
+// or belongs to another user.
+type DamagedError struct {
+	Path string
+	What string // "is empty (0 bytes): ... ." or "is corrupt (...):"
+}
+
+func (e *DamagedError) Error() string {
+	// The way out, said with what it costs. For the list of users "move it aside" is not a harmless fresh
+	// start: without the file nobody has a role and nobody counts as removed, and the first person who signs
+	// in is the first admin again.
+	remedy := "restore it from a backup, or move it aside to start that file over"
+	if filepath.Base(e.Path) == "users.json" {
+		remedy = "restore it from a backup; moving it aside starts with no users, and the first person to sign in becomes admin"
+	}
+	return e.Path + " " + e.What + " Fairy will not use or overwrite it; " + remedy
+}
+
+// IsDamaged reports whether err is a *DamagedError.
+func IsDamaged(err error) bool {
+	var d *DamagedError
+	return errors.As(err, &d)
 }
 
 // Check reports whether a state file is usable: readable, valid and writable by this process (it and its

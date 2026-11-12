@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -101,26 +102,81 @@ func TestServeRefusesTheExampleSessionSecret(t *testing.T) {
 	}
 }
 
-// r2-p4-10 (audit 5): the panel does not start on a security state file that exists and is empty (it would
-// read as "no users yet" and "no kill switch"); a fresh install, where the files do not exist, starts.
-func TestStartRefusesAnEmptyStateFile(t *testing.T) {
-	dir := t.TempDir()
-	if !checkStateFiles(dir) {
-		t.Fatal("a fresh data folder must be fine")
+// r2-p4-10 (audit 5): the panel does not start on users.json or state.json that exist and are empty or cut off
+// (read as nothing they would be "no users yet" and "no kill switch"); a fresh install, where the files do not
+// exist, starts.
+//
+// Second review of that round (note 2): sessions.json and tokens.json in that state do not keep the panel
+// down. Read as nothing they mean "nobody is signed in" and "no token is valid". The damaged file is moved aside
+// as <name>.corrupt (kept, and out of the way of the next write), and one ERROR names it.
+func TestStartAndDamagedStateFiles(t *testing.T) {
+	old := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(old) })
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	check := func(dir string) (bool, string) {
+		logs.Reset()
+		ok := checkStateFiles(dir)
+		return ok, logs.String()
 	}
+	if ok, log := check(t.TempDir()); !ok || log != "" {
+		t.Fatalf("a fresh data folder must be fine: %s", log)
+	}
+	broken := map[string]string{"empty": "", "blanks only": " \n\t\n", "cut off": `{"users": {"sub-1": {"role": "adm`, "not an object": "[1, 2]\n"}
 	for _, name := range []string{"users.json", "state.json", "sessions.json", "tokens.json"} {
-		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, nil, 0o600); err != nil {
-			t.Fatal(err)
+		for what, content := range broken {
+			dir := t.TempDir()
+			p := filepath.Join(dir, name)
+			if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ok, log := check(dir)
+			now, _ := os.ReadFile(p)
+			aside, asideErr := os.ReadFile(p + ".corrupt")
+			switch name {
+			case "users.json", "state.json": // refused, the file untouched, the message names it
+				if ok || string(now) != content || asideErr == nil || !strings.Contains(log, "refusing to start") || !strings.Contains(log, p) {
+					t.Fatalf("%s, %s: start allowed=%v, file now %q, moved aside=%v, log: %s", name, what, ok, now, asideErr == nil, log)
+				}
+				first := strings.Contains(log, "restore it from a backup; moving it aside starts with no users, and the first person to sign in becomes admin")
+				if first != (name == "users.json") || (name == "users.json" && strings.Contains(log, "or move it aside to start that file over")) {
+					t.Fatalf("%s, %s: the remedy: %s", name, what, log)
+				}
+			default: // the panel starts; the damaged file is kept under another name; one ERROR names it
+				if !ok || now != nil || asideErr != nil || string(aside) != content {
+					t.Fatalf("%s, %s: start allowed=%v, file now %q, kept copy %q (%v), log: %s", name, what, ok, now, aside, asideErr, log)
+				}
+				if strings.Count(log, "level=ERROR") != 1 || !strings.Contains(log, name+" is damaged: the panel starts without it") || !strings.Contains(log, p+".corrupt") {
+					t.Fatalf("%s, %s: want one ERROR that names the file and its copy: %s", name, what, log)
+				}
+				if ok, log := check(dir); !ok || log != "" { // and the next start has nothing to say
+					t.Fatalf("%s, %s: the start after that: %v %s", name, what, ok, log)
+				}
+			}
+			if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if ok, log := check(dir); !ok {
+				t.Fatalf("%s holding {} is a valid empty state: %s", name, log)
+			}
 		}
-		if checkStateFiles(dir) {
-			t.Fatalf("an empty %s must stop the start", name)
-		}
-		if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if !checkStateFiles(dir) {
-			t.Fatalf("%s holding {} is a valid empty state", name)
+	}
+	// what is not "damaged" still stops the start for all four: a file the panel must not read at all
+	if runtime.GOOS != "windows" {
+		for _, name := range []string{"users.json", "state.json", "sessions.json", "tokens.json"} {
+			dir := t.TempDir()
+			if err := os.Symlink(filepath.Join(dir, "elsewhere"), filepath.Join(dir, name)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "elsewhere"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if ok, log := check(dir); ok || !strings.Contains(log, "refusing to start") {
+				t.Fatalf("%s as a symbolic link: start allowed=%v: %s", name, ok, log)
+			}
+			if _, err := os.Lstat(filepath.Join(dir, name+".corrupt")); err == nil {
+				t.Fatalf("%s as a symbolic link was moved aside", name)
+			}
 		}
 	}
 }

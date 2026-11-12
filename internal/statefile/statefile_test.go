@@ -125,6 +125,9 @@ func TestEmptyFileFailsClosed(t *testing.T) {
 		if name != "nul.json" && !strings.Contains(err.Error(), "is empty") {
 			t.Fatalf("%s: %v", name, err)
 		}
+		if !IsDamaged(err) { // told apart from a file that cannot be read at all (the start reads the difference)
+			t.Fatalf("%s: not a DamagedError: %v", name, err)
+		}
 		if _, err := Update(p, func(d Data) error { d["users"] = map[string]any{"a": map[string]any{"role": "admin"}}; return nil }); err == nil {
 			t.Fatalf("%s: Update wrote over a damaged file", name)
 		}
@@ -226,5 +229,27 @@ func TestWriteAtomicSyncsBeforeTheRename(t *testing.T) {
 	}
 	if st, _ := os.Stat(filepath.Join(dir, "status.json")); runtime.GOOS != "windows" && st.Mode().Perm() != 0o644 {
 		t.Fatal(st.Mode())
+	}
+}
+
+// For users.json the way out of a damaged file is said with what it costs: "move it aside" there is not a
+// harmless fresh start (second review of audit 5's round 2, note 2).
+func TestADamagedUsersFileSaysWhatMovingItAsideMeans(t *testing.T) {
+	dir := t.TempDir()
+	for _, content := range []string{"", `{"users": {"a": {"ro`} {
+		p := filepath.Join(dir, "users.json")
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Read(p)
+		if err == nil || !IsDamaged(err) || !strings.Contains(err.Error(), p) ||
+			!strings.Contains(err.Error(), "Fairy will not use or overwrite it; restore it from a backup; moving it aside starts with no users, and the first person to sign in becomes admin") ||
+			strings.Contains(err.Error(), "to start that file over") {
+			t.Fatalf("%q: %v", content, err)
+		}
+	}
+	// a file that cannot be read is not "damaged"
+	if _, err := Read(dir); err == nil || IsDamaged(err) {
+		t.Fatalf("a folder: %v", err)
 	}
 }

@@ -367,15 +367,33 @@ func ensureAuditLog(path string) bool {
 	return true
 }
 
-// checkStateFiles refuses to start when a security state file is unreadable, corrupt or owned by another user:
-// the panel never treats such a file as empty (that could hand out roles again or lose revocations).
+// checkStateFiles refuses to start when a security state file is unreadable, not a plain file, owned by another
+// user, or (users.json, state.json) empty or corrupt: the panel never treats such a file as empty (that could
+// hand out roles again, lose the list of removed people or switch the kill switch off).
+//
+// sessions.json and tokens.json that are empty or corrupt do not keep the panel down (second review of audit 5's
+// round 2, note 2). Read as nothing they say "nobody is signed in" and "no token is valid", which is the safe
+// reading, and a panel that stays down for it cannot be reached by an owner who is not at the machine. The
+// damaged file is moved aside as <name>.corrupt first, so that it is kept (the next sign-in or token would
+// otherwise find a damaged file it must not write over, and nobody could sign in), and one ERROR names it.
 func checkStateFiles(dataDir string) bool {
 	ok := true
 	for _, name := range []string{"users.json", "sessions.json", "tokens.json", "state.json"} {
-		if err := statefile.Check(filepath.Join(dataDir, name)); err != nil {
-			slog.Error("refusing to start: fix this state file first", "error", err)
-			ok = false
+		path := filepath.Join(dataDir, name)
+		err := statefile.Check(path)
+		if err == nil {
+			continue
 		}
+		if means := map[string]string{"sessions.json": "nobody is signed in: everyone signs in again",
+			"tokens.json": "no API token is valid: make new ones with fairy admin tokens create"}[name]; means != "" && statefile.IsDamaged(err) {
+			aside := path + ".corrupt"
+			if rerr := os.Rename(path, aside); rerr == nil {
+				slog.Error(name+" is damaged: the panel starts without it ("+means+"). The damaged file is kept as "+aside, "error", err)
+				continue
+			}
+		}
+		slog.Error("refusing to start: fix this state file first", "error", err)
+		ok = false
 	}
 	return ok
 }

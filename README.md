@@ -1017,14 +1017,17 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   more), or with `fairy admin sessions list` and `fairy admin sessions revoke <id from the list>` for that one
   session. The browser that signed out no longer has the cookie, so signing out there once more is not
   possible.
-* State files fail closed: an unreadable or corrupt `users.json`, `sessions.json`, `tokens.json` or `state.json`
-  stops the panel at start, and at run time grants nothing (no sessions, control off) instead of being read as
-  empty; such a file is never overwritten. A file that exists and is empty (0 bytes) counts as corrupt: the
-  panel never writes one, and read as "nothing yet" it would switch the kill switch off and make the next
-  sign-in the first admin again. Only a file that does not exist is a fresh start. The message names the
-  file; restore it from a backup, or move it aside (for `users.json` that means: the first sign-in through
-  `oidc.control_groups` / `oidc.bootstrap_admins` becomes admin again, and the list of removed people is
-  gone). Every file the panel replaces is first written to the disk in full and then renamed into place, so
+* State files fail closed: an unreadable `users.json`, `sessions.json`, `tokens.json` or `state.json`, and a
+  corrupt `users.json` or `state.json`, stops the panel at start, and at run time such a file grants nothing
+  (no sessions, control off) instead of being read as empty; it is never overwritten. A file that exists and
+  is empty (0 bytes) counts as corrupt: the panel never writes one, and read as "nothing yet" it would switch
+  the kill switch off and make the next sign-in the first admin again. Only a file that does not exist is a
+  fresh start. The message names the file; restore it from a backup, or move it aside (for `users.json` that
+  means: the first sign-in through `oidc.control_groups` / `oidc.bootstrap_admins` becomes admin again, and
+  the list of removed people is gone; the message says so). A corrupt or empty `sessions.json` or
+  `tokens.json` does not keep the panel down: at start it is moved aside as `sessions.json.corrupt` /
+  `tokens.json.corrupt`, one ERROR in the log names it, and the panel starts with nobody signed in (everyone
+  signs in again) or with no API token valid (make new ones). Every file the panel replaces is first written to the disk in full and then renamed into place, so
   a power cut leaves the old or the new content. Files are written `0600` by the service user, and
   `fairy admin` commands that change something refuse to run as another user (use
   `sudo -u fairy fairy admin ...`).
