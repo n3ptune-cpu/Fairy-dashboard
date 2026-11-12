@@ -80,3 +80,17 @@ func TestUIACountdownThatRanOutSaysSo(t *testing.T) {
 		t.Error("the line of an action whose time has passed offers Cancel")
 	}
 }
+
+// r2-b1-10: a rate limit's refusal (429) says how long to wait. The panel's own limit on control requests says
+// it in its text; for the others the page reads Retry-After.
+func TestUIARateLimitSaysHowLongToWait(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`const wait = res.status === 429 ? parseInt(res.headers.get("Retry-After"), 10) : 0;`,
+		"; try again in ${wait} s`;",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+}

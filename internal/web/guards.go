@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -83,9 +84,21 @@ func (c *reqCtx) guardControl(bucket *rateLimiter, killSwitch bool) (*model.User
 		return nil, err
 	}
 	if !bucket.allow(u.Sub) {
-		return nil, apierr.New(429, "too many control requests; slow down")
+		return nil, c.limited(u, bucket, "too many control requests")
 	}
 	return u, nil
+}
+
+// limited refuses a request that is over a rate limit: 429 that says how long to wait, in its text ("too many
+// control requests; try again in 42 s": what the page shows, also for an action that ran after "Confirm it's
+// you") and in Retry-After: the seconds until the limiter takes the next request of this user. The refusal
+// gets a line in the audit log like every other one ("auth.denied", throttled per user as those are). The
+// limit on control requests is met by ordinary use (six machines switched on for runs in a row), so "slow
+// down" was not enough.
+func (c *reqCtx) limited(u *model.User, l *rateLimiter, what string) error {
+	wait := max(l.wait(u.Sub), 1)
+	c.w.Header().Set("Retry-After", strconv.Itoa(wait))
+	return c.deny(u, 429, fmt.Sprintf("%s; try again in %d s", what, wait), what)
 }
 
 // controlAllowed is the part of guardControl that comes before "Confirm it's you": who is asking (no API token

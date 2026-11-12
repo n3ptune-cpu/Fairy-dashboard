@@ -197,6 +197,9 @@ async function api(path, opts = {}) {
     // itself sends 502 only when an agent or Proxmox cannot be reached; errors they report come as 4xx.
     const proxy = d == null && res.status >= 500 ? `HTTP ${res.status} from the proxy in front of the panel: the panel, or the host it had to reach, did not answer` : null;
     const e = new Error(d?.message || d?.[0]?.msg || (typeof d === "string" ? d : null) || proxy || `HTTP ${res.status}`);
+    // A rate limit (429) says in Retry-After how long to wait: "too many control requests; try again in 42 s"
+    const wait = res.status === 429 ? parseInt(res.headers.get("Retry-After"), 10) : 0;
+    if (wait > 0 && !/again in \d/.test(e.message)) e.message = `${e.message.replace(/; (slow down|try again in a (minute|moment))$/, "")}; try again in ${wait} s`;
     e.status = res.status; e.stepUp = d?.code === "step_up_required"; e.detail = d;
     if (res.status === 401 && !e.stepUp) sessionEnded();
     throw e;

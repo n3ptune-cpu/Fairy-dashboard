@@ -68,7 +68,7 @@ func (s *Server) panelUpdatePost(c *reqCtx) error {
 		return err
 	}
 	if !s.control.allow(u.Sub) {
-		return apierr.New(429, "too many control requests; slow down")
+		return c.limited(u, s.control, "too many control requests")
 	}
 	p := s.panelUpdatePage()
 	params := map[string]any{"from": s.Version, "latest": s.panelLatest().Version}

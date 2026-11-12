@@ -44,6 +44,26 @@ func (l *rateLimiter) allow(key string) bool {
 	return true
 }
 
+// wait is how many whole seconds from now the next hit of key will be within the budget (0: now): the time until
+// the oldest hit that still counts is a minute old. It records nothing.
+func (l *rateLimiter) wait(key string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	var live []time.Time
+	for _, t := range l.hits[key] {
+		if now.Sub(t) <= time.Minute {
+			live = append(live, t)
+		}
+	}
+	if len(live) < l.perMin {
+		return 0
+	}
+	// hits are in the order they were made: the one that has to leave is the perMin-th from the end
+	left := time.Minute - now.Sub(live[len(live)-l.perMin])
+	return int(left/time.Second) + 1
+}
+
 // free reports whether a hit would be within the budget right now, without recording one.
 func (l *rateLimiter) free(key string) bool {
 	l.mu.Lock()
