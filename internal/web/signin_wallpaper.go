@@ -237,7 +237,7 @@ func (s *Server) uploadWallpaper(c *reqCtx) error {
 		}
 	} else {
 		if !s.uploadRL.allow(u.Sub) {
-			return apierr.New(429, "too many uploads; try again in a minute")
+			return apierr.New(429, c.waitText(u, s.uploadRL, "too many uploads")) // with the time to wait and Retry-After
 		}
 		if c.r.ContentLength > settings.MaxBackgroundBytes {
 			return apierr.Errf(413, "picture larger than %d MiB", settings.MaxBackgroundBytes>>20)

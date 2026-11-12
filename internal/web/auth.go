@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -333,15 +334,22 @@ func (s *Server) authLogin(c *reqCtx) error {
 	if c.r.Header.Get("Authorization") != "" {
 		return apierr.New(403, "API tokens are not accepted on /auth")
 	}
-	if !s.login.allow(c.loginKey()) {
-		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
-		return apierr.New(429, "too many login attempts; try again in a minute")
-	}
 	q := c.r.URL.Query()
 	target := safeNext(q.Get("next"))
 	stepUp := q.Get("step_up") == "1"
 	if stepUp {
 		target = stepUpNext(target)
+	}
+	if key := c.loginKey(); !s.login.allow(key) {
+		// This address is opened by a browser (the Sign in button, a link): it gets the small page the way back
+		// from Pocket ID gives over the same limit, with the time to wait and Retry-After. It used to get a line
+		// of JSON, "try again in a minute", and no header (audit 6, r4-p1-04).
+		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
+		page := callbackPage{c: c, title: cbSignIn, back: target}
+		if stepUp {
+			page.title = cbConfirm
+		}
+		return page.limited(s.login, key)
 	}
 	if s.DemoUser != nil { // demo: simulate the Pocket ID round trip for the step-up screen
 		s.demoMu.Lock()
@@ -410,9 +418,11 @@ func (s *Server) confirmStepUp(c *reqCtx) error {
 	if err := c.checkCSRF(u); err != nil {
 		return err
 	}
-	if !s.login.allow(c.loginKey()) {
+	if key := c.loginKey(); !s.login.allow(key) {
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
-		return apierr.New(429, "too many login attempts; try again in a minute")
+		wait := max(s.login.wait(key), 1)
+		c.w.Header().Set("Retry-After", strconv.Itoa(wait))
+		return apierr.Errf(429, "too many sign-in attempts; try again in %d s", wait)
 	}
 	var b struct {
 		PendingID string `json:"pending_id"`

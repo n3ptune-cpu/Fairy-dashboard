@@ -516,8 +516,12 @@ func TestAReloadWhileTheKeptActionRuns(t *testing.T) {
 	raw, _ := io.ReadAll(got.r.Body)
 	got.r.Body.Close()
 	// (audit 6, r4-p1-01: it said "The action was already sent." here, while the request was still at the machine)
-	alreadyConfirmed(t, "the reload while the first callback is at work", resp{code: got.r.StatusCode, raw: raw, hdr: got.r.Header}, "/",
-		"The action is on its way. It is not sent again. Sign in again to go on.")
+	const onItsWay = "The action is on its way. It is not sent again. Sign in again to go on."
+	if !strings.Contains(string(raw), onItsWay) {
+		close(slow.release) // or the test would wait for the machine for ever
+		t.Fatalf("the reload while the first callback is at work: the page lacks %q:\n%s", onItsWay, raw)
+	}
+	alreadyConfirmed(t, "the reload while the first callback is at work", resp{code: got.r.StatusCode, raw: raw, hdr: got.r.Header}, "/", onItsWay)
 	close(slow.release) // the machine answers
 	for end := time.Now().Add(10 * time.Second); a.powerCalls() != 1 && time.Now().Before(end); {
 		time.Sleep(20 * time.Millisecond)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -67,11 +68,16 @@ func (p callbackPage) refuse(status int, msg string) error {
 	return p.c.errorPage(status, p.title, msg, p.back)
 }
 
-// limited is the refusal by the limit on sign-in attempts of one address, with the time to wait.
+// limited is the refusal by the limit on sign-in attempts, with the time to wait. The limit counts per address
+// for a browser that is not signed in, and per account for one that is (loginKey): the page says which.
 func (p callbackPage) limited(l *rateLimiter, key string) error {
 	wait := max(l.wait(key), 1)
 	p.c.w.Header().Set("Retry-After", strconv.Itoa(wait))
-	return p.refuse(429, fmt.Sprintf("Too many sign-in attempts from this address. Try again in %d s.", wait))
+	whose := "from this address"
+	if strings.HasPrefix(key, "sub:") {
+		whose = "for this account"
+	}
+	return p.refuse(429, fmt.Sprintf("Too many sign-in attempts %s. Try again in %d s.", whose, wait))
 }
 
 // repeated is the answer to the repeat of a confirmation's callback that was accepted, from the cookie the
