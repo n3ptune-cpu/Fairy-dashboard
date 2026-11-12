@@ -790,6 +790,16 @@ func (m *Manager) stepSettling(ctx context.Context, r *Run, h *Host, info HostIn
 		return
 	}
 	o := m.Ops.Observe(h.ID)
+	if o.Paused {
+		// Polling was paused for it during the run: what the run reads is the last poll before the pause, for
+		// ever. mayShutDown would decide on that picture ("its agent answers", "no power action pending", "no
+		// update being installed"), which says nothing about the machine now (audit 6, r4-p2-07: the run looked
+		// at the pause before the wake and during the countdown, not here). The run cannot tell, so it does not
+		// ask for the shutdown. (The last look cannot see it either: it adds "Fairy can no longer look at it".)
+		lead := "Left ON: polling was paused for it during the run, so Fairy does not see how it is now and did not ask it to shut down. " + cameOnline(h)
+		m.endSeen(r, h, StLeftOn, OnYes, now, lead+" and it is ON."+updateTail(h), lead+"."+updateTail(h))
+		return
+	}
 	if !o.Online { // the agent restarts after an update
 		if now.Sub(h.Since) > r.Settings.Settle+agentBack {
 			lead := "Its agent did not answer again after the update, so Fairy could not ask it to shut down. " + cameOnline(h)
