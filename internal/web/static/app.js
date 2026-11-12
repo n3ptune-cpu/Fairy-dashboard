@@ -2407,6 +2407,11 @@ function closeModal() {
   if (stepUpOpen) { cancelStepUp(); return; }  // "Confirm it's you": closing it any way cancels the kept action
   const m = $("#modal"); m.hidden = true; m.innerHTML = ""; clearTimeout(enr.timer); enr.id = null;
 }
+// A dialog belongs to the address it was built on (or built anew on: "… removed" after the page went to the
+// Overview). When the address changes under it (the browser's Back or Forward, a link), route() closes it the
+// way Cancel does: "Shut down ALPHA?" does not stay open, and usable, over another page.
+let modalAt = null;
+new MutationObserver(() => { modalAt = location.hash; }).observe($("#modal"), { childList: true });
 // What was typed into Add host, kept in this tab (sessionStorage) while "Confirm it's you" is on its way: the
 // page may leave for Pocket ID in between. Names, an address, options and MAC addresses; no code and no token.
 const AH_KEY = "fairy-addhost-form";
@@ -2814,6 +2819,7 @@ function route() {
   const pend = readPending();
   if (pend && !onPendingPage(pend)) dropPending();  // navigated away: the offer is gone
   closeUpdPop(false);
+  if (!$("#modal").hidden && modalAt !== location.hash) closeModal();  // never confirmed: closed as Cancel closes it
   state.menu = null;
   const r = current();
   if (r.page === "system") {
