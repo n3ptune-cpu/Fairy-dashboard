@@ -760,7 +760,7 @@ function approvalChip(s) {
   if (!b && a.state !== "broken") return "";
   const name = b ? b[0] : "Approval broken";
   const text = b ? apBindingText(a) : `This machine's own check of approvals is broken: ${a.error || "no details"}. It refuses fan, power and update requests until that is repaired on the machine.`;
-  return infoBtn(`apflag-${s.id}`, name, `<p>${esc(text)}</p><p>Details are on <a href="#/system/${enc(s.id)}">its page</a>.</p>`, { cls: "hflag bad", icon: I.apKey, label: `${name}: ${text}` });
+  return infoBtn(`apflag-${s.id}`, name, `<p>${esc(text)}</p><p>Details are on <a href="#/system/${enc(s.id)}" data-ap-go="${esc(s.id)}">its page</a>.</p>`, { cls: "hflag bad", icon: I.apKey, label: `${name}: ${text}` });
 }
 // The name of the machine's own check wherever the page offers it: the button in a host's header, the title of the
 // dialog that button opens, and every other button that opens that dialog. This is the one place to change it.
@@ -921,6 +921,22 @@ document.addEventListener("click", (e) => {
   const t = e.target.closest('[data-act="ap-dlg"]');
   if (t && current().page === "system") openApproval(current().id);
 });
+// A link that leads to a host's check (the sign on the Overview and next to a host's name: "Details are on its
+// page"): the host's page, with the dialog open. On that page already, it only opens the dialog. route() opens it
+// once the page is there; a link opened in another tab opens the page alone.
+let apGo = null;
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("a[data-ap-go]");
+  if (!a || e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  const id = a.dataset.apGo, r = current();
+  if (r.page === "system" && r.id === id) { e.preventDefault(); closeInfo(false); openApproval(id); }
+  else apGo = { id, at: Date.now() };
+});
+function approvalGo(r) {
+  const go = apGo;
+  apGo = null;
+  if (go && r.page === "system" && r.id === go.id && Date.now() - go.at < 3000) openApproval(go.id);
+}
 // ---- Turn on (admins): switching a machine's own check on, with one passkey for all chosen machines.
 // apv.data is GET /api/admin/approval: the client, the keys Pocket ID publishes now, every agent's state, who
 // would be allowed to approve on each machine, and how the last Turn on went.
@@ -3366,6 +3382,7 @@ function route() {
   $("#shell").classList.remove("drawer"); $("#scrim").hidden = true;
   connect(r.page === "system" && WATCHABLE.test(r.id) ? r.id : null);  // boost the viewed host to 1 s polling
   window.scrollTo(0, 0);
+  approvalGo(r);
 }
 
 // ------------------------------------------------------------ live data
