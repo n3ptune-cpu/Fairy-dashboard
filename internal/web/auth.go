@@ -484,7 +484,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 	}
 	if e := q.Get("error"); e != "" {
 		f := &loginFailure{reason: oauthCode(truncate(e, 60))}
-		f.code = f.reason
+		f.code = truncate(e, 60) // as sent: the page shows it only when it looks like an error code (callbackpage.go)
 		if d := q.Get("error_description"); d != "" {
 			f.attrs = []any{"error_description", safeText(d, 200)}
 		}

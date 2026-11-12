@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"unicode"
 	"unicode/utf8"
@@ -16,8 +17,10 @@ import (
 //
 // What the sentences say is kept as coarse as the JSON was: which check of the ID token failed stays in the
 // server log and the audit log only (oidclog.go). The one value that comes from outside, Pocket ID's `error`
-// parameter, is shown as oauthCode leaves it (printable ASCII, no quote or backslash, 60 characters) and escaped
-// by errorPage like everything else.
+// parameter, is shown only when it looks like an error code (shownCode: lower-case letters and underscores, as
+// the codes of RFC 6749 and OpenID Connect are) and escaped by errorPage like everything else. Anybody can
+// make a link to the callback with a text of their choosing in that parameter, and it needs no cookie: a
+// sentence is not put on the panel's page (R7B-03). The log and the audit entry keep what was sent.
 
 // The refusals of the callback, as the page says them.
 const (
@@ -25,6 +28,7 @@ const (
 	cbConfirm    = "Could not confirm it's you"
 	cbNotAllowed = "Not allowed"
 
+	cbErrorAnswer = "Pocket ID answered with an error. Go back and try again."
 	cbStale       = "This sign-in was started more than 10 minutes ago, in another browser, or its address was opened a second time. Go back and try again."
 	cbUnchecked   = "Fairy could not check Pocket ID's answer (an answer is good only once). Go back and try again; if it happens again, the panel's log says why."
 	cbUnreachable = "Fairy could not reach Pocket ID. Try again in a moment."
@@ -73,13 +77,18 @@ func (p callbackPage) repeated(ran bool) error {
 	return p.refuse(409, cbRepeatNone)
 }
 
+// shownCode is what an error code of Pocket ID must look like to be shown: access_denied, login_required,
+// interaction_required and the like.
+var shownCode = regexp.MustCompile(`^[a-z_]{1,40}$`)
+
 // failed is the refusal of a callback whose answer from Pocket ID did not pass: code is Pocket ID's own error
-// code when it sent one (already through oauthCode), stale says that the round trip is not this browser's
-// current one.
+// code when it sent one (as it was sent), stale says that the round trip is not this browser's current one.
 func (p callbackPage) failed(code string, stale bool) error {
 	switch {
-	case code != "":
+	case shownCode.MatchString(code):
 		return p.refuse(400, "Pocket ID answered with an error ("+code+"). Go back and try again.")
+	case code != "":
+		return p.refuse(400, cbErrorAnswer)
 	case stale:
 		return p.refuse(400, cbStale)
 	}

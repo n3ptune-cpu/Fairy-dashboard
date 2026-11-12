@@ -72,15 +72,18 @@ func TestEveryRefusalAtTheCallbackIsAPageWithALinkBack(t *testing.T) {
 		t.Errorf("the description Pocket ID sent is for the log only: %s", page)
 	}
 
-	// The code is somebody's text (anybody can make a link to the callback): it reaches the page only as text.
+	// The code is somebody's text (anybody can make a link to the callback): what does not look like an error
+	// code is not put on the page at all (R7B-03; it was shown as text, cut to 60 characters).
 	state, rt = start("/")
-	// It is cut to 60 characters and loses control characters, quotes and backslashes, as in the audit log.
 	evil := `<script>alert(1)</script>"\` + "\x01" + `<a href="https://evil.example">x</a>` + strings.Repeat("A", 200)
 	r = e.do("GET", "/auth/callback?error="+url.QueryEscape(evil)+"&state="+state, nil, "Cookie", rt)
-	page = refusalPage(t, "an error code with markup", r, 400, cbSignIn,
-		"Pocket ID answered with an error (<script>alert(1)</script><a href=https://evil.example>x). Go back and try again.", "/")
-	if strings.Contains(page, "<a href=https") || strings.Contains(page, "\x01") || strings.Contains(page, `\`) || strings.Contains(page, "AAA") {
-		t.Errorf("the code must go through the sanitising of the audit log: %s", page)
+	page = refusalPage(t, "an error code with markup", r, 400, cbSignIn, cbErrorAnswer, "/")
+	if strings.Contains(page, "alert") || strings.Contains(page, "evil.example") || strings.Contains(page, "\x01") || strings.Contains(page, `\`) || strings.Contains(page, "AAA") {
+		t.Errorf("nothing of a text that is not an error code may be on the page: %s", page)
+	}
+	// the audit log keeps it, sanitised as before
+	if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), "auth.login failed: <script>alert(1)</script><a href=https://evil.example>x") {
+		t.Errorf("the audit entry must keep what was sent: %s", auditOutcomes(e.s.Cfg.AuditLog))
 	}
 
 	// Not this browser's current round trip: a wrong state, and a callback without the round trip's cookie.
@@ -142,4 +145,53 @@ func TestTheCallbackSaysThatPocketIDIsNotReachable(t *testing.T) {
 	rt := strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]
 	r := e.do("GET", "/auth/callback?code=c&state=st", nil, "Cookie", rt)
 	refusalPage(t, "Pocket ID gone", r, 502, cbSignIn, cbUnreachable, "/#/power")
+}
+
+// R7B-03 (the reviewer's TestReviewB9h_ErrorParameterOnThePage). /auth/callback?error=... needs no cookie and
+// no state, so a plain link put a sentence of the sender's choosing on the panel's own page, under "Sign-in
+// failed". Only what looks like an error code (^[a-z_]{1,40}$) is shown now; anything else gets the sentence
+// without it. The audit entry keeps what was sent.
+func TestOnlyAnErrorCodeOfPocketIDIsShownOnThePage(t *testing.T) {
+	e := setup(t)
+	idp := newFakeIDP(t)
+	e.s.Cfg.OIDC.Issuer = idp.srv.URL
+	e.s.login = newRateLimiter(1000)
+	for _, p := range []string{
+		`<script>alert(1)</script>`, `"><img src=x onerror=alert(1)>`, `'onmouseover='alert(1)`, `</p><a href="https://evil.example">x</a>`,
+		`javascript:alert(1)`, `&lt;b&gt;`, "a\r\nSet-Cookie: x=y", `%3Cscript%3E`,
+	} {
+		r := e.do("GET", "/auth/callback?error="+url.QueryEscape(p)+"&error_description="+url.QueryEscape(p)+"&state="+url.QueryEscape(p)+"&code="+url.QueryEscape(p), nil)
+		body := string(r.raw)
+		if r.code != 400 || !strings.Contains(r.hdr.Get("Content-Type"), "text/html") {
+			t.Fatalf("%q: %d %s", p, r.code, r.hdr.Get("Content-Type"))
+		}
+		if strings.Contains(body, "<script") || strings.Contains(body, "<img") || strings.Contains(body, "alert") || strings.Contains(body, "evil.example") ||
+			strings.Count(body, "<a ") != 1 || !strings.Contains(body, `href="/"`) || len(r.hdr.Values("Set-Cookie")) != 0 {
+			t.Errorf("%q is not neutral on the page:\n%s", p, body)
+		}
+		refusalPage(t, p, r, 400, cbSignIn, cbErrorAnswer, "/")
+	}
+	// free text: a sentence of the sender's choosing, from a plain link with no cookie
+	msg := "Session locked. Call +1 555 0100 or open fairy-help.example"
+	r := e.do("GET", "/auth/callback?error="+url.QueryEscape(msg), nil)
+	if strings.Contains(string(r.raw), msg) || strings.Contains(string(r.raw), "555") || strings.Contains(string(r.raw), "fairy-help") {
+		t.Errorf("R7B-03: /auth/callback?error=... shows the sender's sentence on the panel's own page, no cookie needed: %q", msg)
+	}
+	refusalPage(t, "a sentence as the error", r, 400, cbSignIn, cbErrorAnswer, "/")
+	if !strings.Contains(auditOutcomes(e.s.Cfg.AuditLog), "auth.login failed: "+msg) {
+		t.Errorf("the audit entry must keep what was sent: %s", auditOutcomes(e.s.Cfg.AuditLog))
+	}
+	// what is shown, and what is not
+	for code, shown := range map[string]bool{
+		"access_denied": true, "login_required": true, "interaction_required": true, "server_error": true, "a": true,
+		strings.Repeat("a", 40): true, strings.Repeat("a", 41): false, "Access_denied": false, "access denied": false,
+		"access-denied": false, "access_denied2": false, "access_denied.": false, "call_me_now ": false, "zażółć": false,
+	} {
+		r := e.do("GET", "/auth/callback?error="+url.QueryEscape(code), nil)
+		want := cbErrorAnswer
+		if shown {
+			want = "Pocket ID answered with an error (" + code + "). Go back and try again."
+		}
+		refusalPage(t, code, r, 400, cbSignIn, want, "/")
+	}
 }

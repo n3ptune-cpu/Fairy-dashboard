@@ -23,7 +23,7 @@ type loginFailure struct {
 	reason string
 	audit  string
 	attrs  []any
-	code   string // Pocket ID's own error code (through oauthCode), when the failure is one it reported
+	code   string // Pocket ID's own error code as it was sent, when the failure is one it reported (for the page)
 }
 
 // staleState is the reason of a callback that is not the answer to this browser's current round trip.
