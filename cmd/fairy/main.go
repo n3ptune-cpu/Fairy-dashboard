@@ -46,7 +46,7 @@ func main() {
 	case "update":
 		os.Exit(update(os.Args[2:]))
 	case checkConfigCmd: // asked by `fairy update` of the version it is about to install (update_config.go)
-		os.Exit(checkConfig(os.Args[2:], os.Stdout))
+		os.Exit(checkConfigCommand(os.Args[2:], os.Stdout))
 	case "version", "--version", "-v":
 		key := "none (local build, fairy update refuses)"
 		if releaseKey != "" {

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"debug/buildinfo"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +39,18 @@ const (
 	checkConfigCmd  = "check-config"
 	checkConfigLead = "fairy check-config 1 "
 )
+
+// checkConfigCommand is `fairy check-config FILE` as the program answers it. A test build answers "refused"
+// whatever the file: the one who asks is an update that is about to install this program, and a test build is
+// never installed (audit 6, r4-p4-03; this is the answer an update of an older version gets, which does not
+// look at the file itself yet: runNew).
+func checkConfigCommand(args []string, out io.Writer) int {
+	if testBuild {
+		fmt.Fprintln(out, checkConfigLead+"refused "+testNeverInstalled)
+		return 1
+	}
+	return checkConfig(args, out)
+}
 
 // checkConfig is `fairy check-config FILE`: it reads the file only, and changes nothing.
 func checkConfig(args []string, out io.Writer) int {
@@ -103,11 +116,32 @@ type newVersion struct {
 	file    string // the config file the service starts with
 	to      string // the new version, once the run knows it
 	problem string // why the new version refuses the file ("": it does not, or could not say)
+	test    bool   // the downloaded program is a test build: it is never installed
+}
+
+// testNeverInstalled is what a test build is in the words of an update that was about to install one.
+const testNeverInstalled = "it is a test build (-tags fairytest), which has no sign-in and is never installed"
+
+// testBuildFile reports whether the program in the file was built with the tag fairytest: a panel without
+// sign-in (TESTING-LOCAL.md). It reads what the Go compiler wrote into the file, the lines `go version -m`
+// prints, and looks for the word the release workflow's guard looks for in them ("Refuse a test build"). The
+// file is not run for this.
+func testBuildFile(program string) bool {
+	info, err := buildinfo.ReadFile(program)
+	return err == nil && strings.Contains(info.String(), "fairytest")
 }
 
 // runNew is release.CLI's RunNew: the downloaded program must run here (`version`), and it must not refuse the
 // config file. An error ends the run before anything is replaced, and the CLI deletes the download.
+//
+// A test build is refused here too, before the swap (audit 6, r4-p4-03: published and signed as the newest
+// release it answered `check-config` with "ok", was swapped in, refused to start, and the panel was away for
+// some 50 s until the old program was back). What the file says of itself decides (testBuildFile), and such a
+// file is not run at all. A test build also answers `check-config` with "refused" (checkConfigCommand).
 func (n *newVersion) runNew(program string) (string, error) {
+	if n.test = testBuildFile(program); n.test {
+		return "", errors.New("it is a test build")
+	}
 	out, err := exec.Command(program, "version").Output()
 	if err != nil {
 		return string(out), err
@@ -124,11 +158,15 @@ func (n *newVersion) step(state, to, msg string) string {
 	if to != "" {
 		n.to = to
 	}
-	if n.problem != "" && state == "failed" {
+	if n.stopped() && state == "failed" {
 		return n.stops()
 	}
 	return msg
 }
+
+// stopped reports whether the run ended at the question to the new version: it is a test build, or it refuses
+// the config file.
+func (n *newVersion) stopped() bool { return n.test || n.problem != "" }
 
 // stops is what a run says, on the console and in the status the page shows, when the version it was about to
 // install refuses the config file: a run by hand and the button's run both stop there, before the swap.
@@ -136,6 +174,9 @@ func (n *newVersion) stops() string {
 	lead := "the new version"
 	if n.to != "" {
 		lead += " (" + n.to + ")"
+	}
+	if n.test {
+		return lead + " was not installed: " + testNeverInstalled + ". Nothing was changed."
 	}
 	lead += " refuses " + n.file + ": "
 	const tail = ". Nothing was changed. Correct the file on the panel's host, then update again."

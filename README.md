@@ -949,7 +949,9 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
 * No release has a way around that sign-in. The test build (`go build -tags fairytest`,
   [TESTING-LOCAL.md](TESTING-LOCAL.md)) has no sign-in, and so it is separate code that a build without the tag
   does not contain: a test of the normal build checks that, and the release workflow stops before signing if a
-  built program says it is a test build. A test build refuses to start unless it listens on loopback only, has
+  built program says it is a test build. `fairy update` does not install one either: it reads the build tag
+  out of the downloaded, verified file and stops before anything is replaced ("... was not installed: it is a
+  test build ..."). A test build refuses to start unless it listens on loopback only, has
   no `oidc:` block and no session or OIDC secret, and its data folder is new or its own. It signs in only a
   browser that opens the address it prints at start, which carries a random start key (kept in its data
   folder, mode 0600); every other request gets 403. It also refuses a request for another host name or with a

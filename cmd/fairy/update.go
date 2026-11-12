@@ -196,7 +196,7 @@ func update(args []string) int {
 		if msg = asked.step(state, to, msg); status == nil {
 			return
 		}
-		if cfgProblem != "" && asked.problem == "" && (state == "failed" || state == "rolled_back") { // the page shows the reason too
+		if cfgProblem != "" && !asked.stopped() && (state == "failed" || state == "rolled_back") { // the page shows the reason too
 			msg = "config.yaml is not usable by the installed version (" + cfgProblem + "); " + msg
 		}
 		status.Step(state, to, msg)
@@ -204,7 +204,7 @@ func update(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	if err := cli.Run(ctx); err != nil {
-		if asked.problem != "" {
+		if asked.stopped() {
 			fmt.Fprintln(os.Stderr, "fairy update:", asked.stops())
 			return 1
 		}

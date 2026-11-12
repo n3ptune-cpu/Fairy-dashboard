@@ -21,7 +21,15 @@ import (
 // a two-line script that starts it so, as a signed release on a stand-in release host.
 const asNewProgram = "FAIRY_TEST_AS_NEW_PROGRAM"
 
+// ranAsDownload: a file that gets a line whenever this test program is run with a first argument that is no
+// test flag, as an update runs a downloaded program (`version`, `check-config`): update_testbuild_test.go.
+const ranAsDownload = "FAIRY_TEST_RAN_AS_DOWNLOAD"
+
 func TestMain(m *testing.M) {
+	if mark := os.Getenv(ranAsDownload); mark != "" && len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		_ = os.WriteFile(mark, []byte(strings.Join(os.Args[1:], " ")+"\n"), 0o600)
+		os.Exit(2)
+	}
 	if v := os.Getenv(asNewProgram); v != "" {
 		switch {
 		case len(os.Args) == 2 && os.Args[1] == "version":
