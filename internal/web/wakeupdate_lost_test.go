@@ -113,6 +113,9 @@ func TestWakeUpdateALostUpdateAnswerIsNotAFailedUpdate(t *testing.T) {
 // r2-p2-04 with the real poller and powerctl: the wake request reaches the relay, the packet goes out, the
 // relay's answer does not reach the panel. The run said "The wake could not be sent ... It was not woken",
 // power "untouched", and the machine stayed on unseen.
+//
+// Second review (P4): the run waits for the machine and reports it, and it leaves it ON: a wake request
+// without an answer is not a wake the run knows of (no wake was accepted for it), so mayShutDown says no.
 func TestWakeUpdateALostWakeAnswerIsNotNothingSent(t *testing.T) {
 	e, f := lostFarm(t, "nas /wol")
 	if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "Alice", BySub: "u2"}); err != nil {
@@ -120,11 +123,11 @@ func TestWakeUpdateALostWakeAnswerIsNotNothingSent(t *testing.T) {
 	}
 	run := f.finish()
 	h := hostOf(run, "pc-a")
-	if h.State != wakerun.StOff || h.On != wakerun.OnNo || f.on["pc-a"] ||
-		h.Text != "Came online after a wake request that got no answer, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again." {
-		t.Errorf("pc-a ended as %s (%s, really on: %v): %s", h.State, h.On, f.on["pc-a"], h.Text)
+	if h.State != wakerun.StLeftOn || h.On != wakerun.OnYes || !f.on["pc-a"] || h.Wakes != 0 || !h.WakeUnsure ||
+		h.Text != "Left ON: the run's wake request for it got no answer, so Fairy cannot tell that the run woke it. It was updated to 17-bbbbbbb." {
+		t.Errorf("pc-a ended as %s (%s, really on: %v, wakes accepted: %d): %s", h.State, h.On, f.on["pc-a"], h.Wakes, h.Text)
 	}
-	if got := strings.Join(f.requests(), ", "); got != "nas /wol, pc-a /update, pc-a /power" {
+	if got := strings.Join(f.requests(), ", "); got != "nas /wol, pc-a /update" { // waited for, updated, and no shutdown request
 		t.Errorf("requests: %s", got)
 	}
 	// the audit log has the wake with what came of it
@@ -134,6 +137,11 @@ func TestWakeUpdateALostWakeAnswerIsNotNothingSent(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("the audit log lacks the wake without an answer: %v", e.auditEntries("", "power.wake"))
+	}
+	// and the run's notification names the machine as one that needs a look
+	word, look := wuNeedsALook(h)
+	if !look || word != "left ON" {
+		t.Errorf("the machine is not one that needs a look in the notification: %q %v", word, look)
 	}
 }
 

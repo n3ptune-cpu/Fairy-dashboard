@@ -17,8 +17,9 @@ import (
 // polls, the run takes one step.
 //
 // The world also is the judge of the package's rule. It knows what the run cannot know for sure: whether a
-// machine was running when the run started and when the run's first wake for it was accepted. Every shutdown
-// request for a machine that was running at either moment fails the test, whatever the test is about.
+// machine was running when the run started and when the run's first wake request for it went to the relay, and
+// whether the relay ever accepted a wake for it. Every shutdown request for a machine that was running at
+// either moment, or for which no wake was accepted, fails the test, whatever the test is about.
 
 type machine struct {
 	info HostInfo
@@ -72,6 +73,7 @@ type machine struct {
 	knownLimit    bool // this machine is the documented limit (r1-p2-01): the judge does not fail the test for it
 	onAtStart     bool
 	onAtFirstWake *bool
+	wakeAccepted  bool // the relay accepted a wake request of the run for it (a request without an answer is not that)
 	wakes         int
 	shutdowns     int
 	wentOff       bool // a countdown ran out and switched it off
@@ -244,6 +246,7 @@ func (w *world) Wake(_ context.Context, id, _ string) error {
 		return errLost
 	}
 	mc.wakes++
+	mc.wakeAccepted = true
 	if !mc.on && mc.wakeBoots {
 		mc.on, mc.bootedAt, mc.agentReadyAt = true, w.now.Add(mc.post), w.now.Add(mc.bootTakes)
 	}
@@ -296,10 +299,10 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 	if mc.onAtStart {
 		w.t.Errorf("RULE BROKEN: shutdown sent to %s, which was running when the run started", id)
 	}
-	if mc.onAtFirstWake == nil {
+	if !mc.wakeAccepted { // also when a wake request left and got no answer: that is not a wake the run knows of
 		w.t.Errorf("RULE BROKEN: shutdown sent to %s, for which the run never had a wake accepted", id)
 	} else if *mc.onAtFirstWake && !mc.knownLimit {
-		w.t.Errorf("RULE BROKEN: shutdown sent to %s, which was already running when the run's first wake was accepted", id)
+		w.t.Errorf("RULE BROKEN: shutdown sent to %s, which was already running when the run's first wake request went out", id)
 	}
 	if mc.guests > 0 || mc.guestsWhy != "" {
 		w.t.Errorf("RULE BROKEN: shutdown sent to %s with guests running or unknown", id)
@@ -474,7 +477,7 @@ func (w *world) start(req StartRequest) *Run {
 		req.By, req.BySub = "Ann", "sub-ann"
 	}
 	for _, mc := range w.ms {
-		mc.onAtStart, mc.onAtFirstWake, mc.wentOff = mc.on, nil, false
+		mc.onAtStart, mc.onAtFirstWake, mc.wakeAccepted, mc.wentOff = mc.on, nil, false, false
 	}
 	r, err := w.m.Start(req)
 	if err != nil {

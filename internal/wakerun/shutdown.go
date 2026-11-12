@@ -21,9 +21,14 @@ import (
 //	             (15 minutes). A machine that restarts is quiet for a few minutes and then comes back by
 //	             itself with a fresh uptime; without this it would look like a machine the run woke.
 //	ProbedOff    asked directly right before the wake, and nothing answered (the panel's view can be stale)
-//	WakeSentAt   this run sent a wake for it, and the relay accepted it (Wakes). Or the wake request left
-//	             and got no answer (WakeUnsure): the packet may have gone out, and WakeSentAt is the moment
-//	             before the request left, the earliest the packet can have been sent.
+//	WakeSentAt   this run sent a wake for it, and the relay accepted it (Wakes). When the first wake request
+//	             left and got no answer (WakeUnsure), the packet may have gone out: WakeSentAt is then the
+//	             moment before that request left, the earliest the packet can have been sent, and the run
+//	             waits for the machine. But a request without an answer is not a wake the run knows of: as
+//	             long as no wake request for the machine was accepted (Wakes), the answer here is no. The
+//	             machine may as well have been switched on by someone else during the wait, with no packet
+//	             of the run ever on the wire (the relay was down behind a proxy, or died with the connection
+//	             open). It is then left on and reported.
 //	OnlineAt     its first answered poll after that wake
 //	BootUptimeS  the uptime it reported in that poll: shorter than the time since the wake, so the machine's
 //	             system started after the wake. A machine that was on all along and only unreachable has been
@@ -67,6 +72,8 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 		return false, "the run did not confirm that it was off right before the wake"
 	case h.WakeSentAt == nil || (h.Wakes < 1 && !h.WakeUnsure):
 		return false, "this run sent no wake for it"
+	case h.Wakes < 1: // all the run has is a wake request that got no answer
+		return false, "the run's wake request for it got no answer, so Fairy cannot tell that the run woke it"
 	case h.OnlineAt == nil || !h.OnlineAt.After(*h.WakeSentAt):
 		return false, "it was not seen coming online after this run's wake"
 	case h.BootUptimeS == nil:

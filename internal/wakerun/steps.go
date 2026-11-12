@@ -214,8 +214,9 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		if opCode(err) == CodeNoAnswer {
 			// The request left and the relay's answer did not come: the packet may be out and the machine
 			// starting (r2-p2-04). The run does not say "it was not woken" and walk away: it waits for the
-			// machine exactly as after a wake that was accepted, counting from before the request left. What
-			// it then sees decides, through mayShutDown, like for every other machine.
+			// machine exactly as after a wake that was accepted, counting from before the request left, and
+			// goes on asking the relay. A machine that comes online without any wake request for it having
+			// been accepted is updated and left on: mayShutDown says no to it.
 			h.WakeSentAt, h.lastWake, h.wakeMono, h.WakeUnsure = &before, m.now(), beforeMono, true
 			m.enter(h, StWaking, m.now(), "the wake request got no answer ("+opText(err)+"): the wake may have gone out. Waiting for it to come online, up to "+
 				span(r.Settings.OnlineTimeout))
@@ -274,7 +275,11 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 			m.enter(h, StOnline, now, "its agent answers, but reports no uptime: Fairy cannot tell that it started after the wake, so it will not switch it off")
 		default:
 			m.enter(h, StOnline, now, fmt.Sprintf("its agent answers %s after the wake: waiting %s to see that it stays online", span(since), span(onlineSettle)))
-			m.note(h, now, wokenNote) // the report's detail says what "came online after the wake" rests on, and its limit
+			if h.lostWake() {
+				m.note(h, now, lostWakeNote)
+			} else {
+				m.note(h, now, wokenNote) // the report's detail says what "came online after the wake" rests on, and its limit
+			}
 		}
 		return
 	}

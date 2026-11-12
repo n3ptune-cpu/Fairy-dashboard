@@ -80,11 +80,18 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 			t.Errorf("%s: allowed=%v, reason %q (want %q)", name, ok, why, c.why)
 		}
 	}
-	// a wake request that left and got no answer counts as a wake that may have gone out: the rest of the proof decides
+	// A wake request that left and got no answer is not a wake the run knows of: with the whole rest of the
+	// proof, the answer is no (second review, P4) ...
 	h, info, o = proven()
 	h.Wakes, h.WakeUnsure = 0, true
+	if ok, why := mayShutDown(h, info, o, noGuests); ok || why != "the run's wake request for it got no answer, so Fairy cannot tell that the run woke it" {
+		t.Errorf("a wake whose answer was lost, and the whole rest of the proof: allowed=%v, reason %q", ok, why)
+	}
+	// ... and yes once a later wake request for it was accepted
+	h, info, o = proven()
+	h.Wakes, h.WakeUnsure = 1, true
 	if ok, why := mayShutDown(h, info, o, noGuests); !ok {
-		t.Errorf("a wake whose answer was lost, and the whole rest of the proof: %q", why)
+		t.Errorf("a first wake whose answer was lost, a later one accepted, and the whole rest of the proof: %q", why)
 	}
 	// an uptime of 0 s is a machine that just started: the proof holds
 	h, info, o = proven()
@@ -119,6 +126,7 @@ func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 	total, shut := 0, map[string]int{}
 	for seed := 1; seed <= runs; seed++ {
 		rng := rand.New(rand.NewSource(int64(seed)))
+		lostRng := rand.New(rand.NewSource(int64(seed) + 1_000_000)) // its own, so that rng draws what it drew before
 		w := newWorld(t)
 		pick := func(xs ...string) string { return xs[rng.Intn(len(xs))] }
 		secs := func(lo, hi int) time.Duration { return time.Duration(lo+rng.Intn(hi-lo+1)) * time.Second }
@@ -188,13 +196,23 @@ func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 				at := secs(0, 500)
 				ready := secs(1, 120)
 				plan = append(plan, later{at, func() {
-					if !mc.on {
+					if !mc.on && !mc.wentOff { // (not one the run has switched off and reported: the report was true when it was written)
 						mc.on, mc.bootedAt, mc.agentReadyAt = true, w.now, w.now.Add(ready)
 					}
 				}})
 			}
 			if rng.Intn(12) == 0 {
 				plan = append(plan, later{secs(0, 600), func() { mc.info.OptedIn = false }})
+			}
+			if lostRng.Intn(5) == 0 { // the answer to a request of the run is lost; the machine got the request, or did not
+				switch lostRng.Intn(3) {
+				case 0:
+					mc.wakeLost = []string{"arrives", "never", "always"}[lostRng.Intn(3)]
+				case 1:
+					mc.updLost = []string{"arrives", "never"}[lostRng.Intn(2)]
+				case 2:
+					mc.shutLost = []string{"arrives", "never"}[lostRng.Intn(2)]
+				}
 			}
 			if rng.Intn(4) == 0 {
 				req.UpdateOnly = append(req.UpdateOnly, id)
@@ -229,7 +247,7 @@ func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 			total++
 			shut[h.State]++
 			mc := w.ms[h.ID]
-			if h.State == StOff && (mc.onAtStart || mc.onAtFirstWake == nil || *mc.onAtFirstWake || h.Mode != ModeWake) {
+			if h.State == StOff && (mc.onAtStart || !mc.wakeAccepted || *mc.onAtFirstWake || h.Mode != ModeWake) {
 				t.Errorf("seed %d: %s ended as switched off, and the run did not wake it", seed, h.ID)
 			}
 			if mc.shutdowns > 0 && h.Mode != ModeWake {

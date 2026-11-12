@@ -128,6 +128,11 @@ func notFreshText(h *Host) string {
 const wokenNote = "it was off before the run and came up freshly started after the wake: the run treats it as woken by the run. " +
 	"A machine switched on by a person while the run waits for it looks the same, and is treated the same."
 
+// lostWakeNote goes into the history of a machine that came online freshly started after a wake request that
+// got no answer, with no wake request for it accepted: the run does not treat it as woken by the run.
+const lostWakeNote = "it came up freshly started, but the run's wake request for it got no answer: Fairy cannot tell that the run woke it. " +
+	"It is updated and left on."
+
 // The sentence for a machine that is on although its agent does not answer, with what shows that it is on.
 const onByText = "It is on (%s), and its agent does not answer. Nothing was sent to it and it stays on."
 
@@ -343,8 +348,8 @@ type Host struct {
 	Wakes       int        `json:"wakes,omitempty"`        // wake requests the relay accepted
 	// WakeUnsure: the run's first wake request for it left the panel and got no answer (CodeNoAnswer): the
 	// packet may have gone out. WakeSentAt is then the moment before that request left, and the run waits for
-	// the machine exactly as after a wake the relay accepted. Whether the machine may be switched off again
-	// is decided by the same evidence as always (mayShutDown).
+	// the machine exactly as after a wake the relay accepted. It is switched off again only if a wake request
+	// for it was accepted as well (Wakes, a later one of the wait): mayShutDown.
 	WakeUnsure  bool       `json:"wake_unconfirmed,omitempty"`
 	OnlineAt    *time.Time `json:"online_at,omitempty"`     // its first answered poll after that wake
 	BootUptimeS *int64     `json:"boot_uptime_s,omitempty"` // the uptime it reported in that poll

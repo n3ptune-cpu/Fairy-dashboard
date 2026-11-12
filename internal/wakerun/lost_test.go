@@ -138,25 +138,62 @@ func TestNoShutdownWhileTheAgentSaysItInstalls(t *testing.T) {
 // be sent ... It was not woken", power "untouched", and never looked at the machine again; the machine started
 // and stayed on. Now a lost answer is "a wake may have gone out": the run waits for the machine exactly as
 // after an accepted wake, and what it then sees decides through mayShutDown.
+//
+// Second review (P4): mayShutDown says no as long as no wake request for the machine was accepted. A request
+// without an answer is not a wake the run knows of: the machine is updated, LEFT ON and reported. (Before, it
+// was switched off again, also when no packet had ever gone out and someone else had switched it on.)
 func TestWakeAnswerLost(t *testing.T) {
-	t.Run("the packet went out: the machine comes up fresh, is updated and switched off again", func(t *testing.T) {
+	t.Run("the packet went out: the machine comes up fresh, is updated and left on", func(t *testing.T) {
 		w := newWorld(t)
 		pc := w.off("pc-a")
 		pc.wakeLost = "arrives"
 		w.start(StartRequest{Hosts: []string{"pc-a"}})
 		h := host(w.finish(), "pc-a")
-		has(t, h, StOff, "Came online after a wake request that got no answer, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
-		if pc.on || h.On != OnNo || !h.WakeUnsure || h.Wakes != 0 || h.WakeSentAt == nil || !h.OnlineAt.After(*h.WakeSentAt) {
-			t.Fatalf("on %v power %q unsure %v wakes %d: %s", pc.on, h.On, h.WakeUnsure, h.Wakes, h.Text)
+		has(t, h, StLeftOn, "Left ON: the run's wake request for it got no answer, so Fairy cannot tell that the run woke it. It was updated to 17-bbbbbbb.")
+		if !pc.on || h.On != OnYes || !h.WakeUnsure || h.Wakes != 0 || h.WakeSentAt == nil || !h.OnlineAt.After(*h.WakeSentAt) || h.Update != UpdOK {
+			t.Fatalf("on %v power %q unsure %v wakes %d update %q: %s", pc.on, h.On, h.WakeUnsure, h.Wakes, h.Update, h.Text)
 		}
-		if got := w.callsFor("pc-a"); got != "wake update shutdown" {
+		if got := w.callsFor("pc-a"); got != "wake update" { // waited for, updated, and no shutdown request
 			t.Fatalf("requests: %s", got)
 		}
-		if got := w.steps("pc-a"); got != "wake:agent unreachable: timeout update:ok shutdown:ok" {
+		if got := w.steps("pc-a"); got != "wake:agent unreachable: timeout update:ok" {
 			t.Fatalf("audit steps: %s", got)
 		}
-		if !logHas(h, "the wake request got no answer (agent unreachable: timeout): the wake may have gone out. Waiting for it to come online, up to 5 min") {
+		if !logHas(h, "the wake request got no answer (agent unreachable: timeout): the wake may have gone out. Waiting for it to come online, up to 5 min") ||
+			!logHas(h, "it came up freshly started, but the run's wake request for it got no answer: Fairy cannot tell that the run woke it. It is updated and left on.") ||
+			logHas(h, "the run treats it as woken") {
 			t.Fatalf("the machine's history: %v", h.Log)
+		}
+		if strings.Contains(h.Text, "It was not woken") {
+			t.Fatalf("r2-p2-04 is back: %s", h.Text)
+		}
+	})
+
+	t.Run("the packet went out, the machine is slow, and a later wake is accepted before it answers: off again", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.wakeLost, pc.bootTakes = "arrives", 100*time.Second // the wake is sent again after a minute
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		h := host(w.finish(), "pc-a")
+		has(t, h, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
+		if pc.on || h.Wakes != 1 || !h.WakeUnsure || w.callsFor("pc-a") != "wake wake update shutdown" {
+			t.Fatalf("on %v wakes %d requests %q: %s", pc.on, h.Wakes, w.callsFor("pc-a"), h.Text)
+		}
+	})
+
+	t.Run("cancelled with \"switch off again\" while it is waited for: still left on", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.wakeLost = "arrives"
+		r := w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StWaking)
+		if _, err := w.m.CancelRun(r.ID, "Bob", true); err != nil {
+			t.Fatal(err)
+		}
+		h := host(w.finish(), "pc-a")
+		has(t, h, StLeftOn, "Left ON: the run's wake request for it got no answer, so Fairy cannot tell that the run woke it.")
+		if !pc.on || pc.shutdowns != 0 || h.On != OnYes {
+			t.Fatalf("on %v shutdowns %d power %q: %s", pc.on, pc.shutdowns, h.On, h.Text)
 		}
 	})
 
