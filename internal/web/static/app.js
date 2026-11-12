@@ -854,7 +854,7 @@ function approvalBox(s) {
   if (a.last_known || gone) {
     // made from the panel's record: the machine is silent since the panel started, or answers without the check
     return view(`${bind}${a.last_known ? '<p id="ap-last">No answer since the panel started. Fairy sends it nothing on its own confirmation, and it is in no run.</p>' : ""}`,
-      a.last_known ? ["It checked approvals itself when Fairy last heard from it: that is why Fairy sends it nothing on its own confirmation and it is in no run."] : []);
+      a.last_known ? ["It checked approvals itself when Fairy last heard from it."] : []);
   }
   if (a.state === "off") {
     const [on, onMore] = approvalTurnOn(s);
@@ -870,10 +870,11 @@ function approvalBox(s) {
         : old ? "Its running helper is older than its agent: it refuses fan, power and update requests. <b>Restart the helper</b>: Stop helper, then Start helper."
         : "The machine cannot say whether it checks approvals. Start the helper (Elevated helper, next to the host name)."}</div>
       ${row("Checked by", esc(approvalBy(a)))}${proto}${agentErr}`,
+      // behind "More": what the lines above do not say (they said the lead again: audit 6, r4-b1-08)
       [a.state === "broken"
-        ? `This machine has a trust file it cannot use${a.error ? `: <b>${esc(a.error)}</b>` : ""}. Until it is repaired <b>on the machine</b> it refuses fan, power and update requests. On the machine, as administrator: <code>fairy-agent helper-trust show</code>`
-        : old ? "Its running helper is older than its agent, so nothing there can check an approval: it refuses fan, power and update requests. <b>Restart the helper</b>: Stop helper, then Start helper (Elevated helper, next to the host name)."
-        : `The machine cannot say whether it checks approvals${a.error ? `: ${esc(a.error)}` : " (its elevated helper is not answering)"}. Start the helper (Elevated helper, next to the host name).`]);
+        ? `${a.error ? `The machine says: <b>${esc(a.error)}</b>. ` : ""}<code>fairy-agent helper-trust show</code> is run on the machine, as administrator, and names what is wrong with the file.`
+        : old ? "Nothing on the machine can check an approval until then. Stop helper and Start helper are under Elevated helper, next to the host name."
+        : a.error ? `The machine says: ${esc(a.error)}.` : "Its elevated helper is not answering."]);
   }
   const keys = (a.keys || []).map((k) => `<span class="chip key" title="${esc(`${k.alg} · thumbprint ${k.thumbprint}`)}">${esc(k.kid)} · <code>${esc(shortKey(k.thumbprint))}</code></span>`).join(" ") || "–";
   const checks = (a.agent_checks || []).map((v) => APPROVAL_VERB[v]).filter(Boolean);
@@ -892,8 +893,8 @@ function approvalBox(s) {
       rec?.other_trust ? "It trusts another Pocket ID, client, key or list of users than this panel would set for it now: set by somebody else, changed on the machine, or this panel's own list changed since" : "How this machine's trust came to be: a first-time set over the network (Turn on), or helper-trust set on the machine") : ""}
     ${row("Shutdown after boot", a.boot_shutdown_s == null ? "–" : a.boot_shutdown_s === 0 ? "off" : `one within ${esc(a.boot_shutdown_s)} s`, "One shutdown without approval shortly after the machine started (for \"Update unpowered hosts\")")}
     ${proto}${agentErr}${approvalPinNote(a, s)}`,
-    [`Before this machine changes its fans, shuts down, restarts, sleeps or updates its agent, <b>${esc(approvalBy(a))}</b> verifies a Pocket ID approval (passkey) made for exactly that action. The panel cannot skip it.`,
-      "Locked: all of this is changed only on the machine, as administrator, with <code>fairy-agent helper-trust</code> (show, set, clear). The panel cannot change or remove it."]);
+    [`The approval is a Pocket ID sign-in with your passkey, made for exactly one action: a shutdown, a restart, a sleep, a fan change or an update of its agent. <b>${esc(approvalBy(a))}</b> verifies it.`,
+      "To change what it trusts: on the machine, as administrator, <code>fairy-agent helper-trust</code> (show, set, clear)."]);
 }
 // Host header: the button that opens the machine's check. It is there wherever the check has something to show
 // for this viewer (the same hosts and viewers that had the box on the page). Its colour is the state, and so are
@@ -2416,7 +2417,16 @@ function flashParts(msg) {
   }
   const dot = short.indexOf(". ");
   if (dot > 0) short = short.slice(0, dot + 1);
-  return short.length < msg.length ? [short, msg] : [msg, null];
+  if (short.length >= msg.length) return [msg, null];
+  // Behind "Details": what the line left out, not the line's own words again in front of it (audit 6, r4-b1-08).
+  const head = short.replace(/\.$/, "");
+  let rest = msg.startsWith(head) ? msg.slice(head.length).replace(/^[\s.]+/, "") : msg;
+  if (rest.startsWith("(")) {  // "(<machine> says: ...)": the machine's words without the brackets around them
+    let depth = 0, j = 0;
+    for (; j < rest.length; j++) { if (rest[j] === "(") depth++; else if (rest[j] === ")" && --depth === 0) break; }
+    rest = j < rest.length ? rest.slice(1, j) + rest.slice(j + 1) : rest.slice(1);
+  }
+  return [short, rest || msg];
 }
 // flash(msg, bad, details): one short line at the bottom right, gone after 5 seconds. With details (the lines
 // of a result about several machines, or the longer text behind a short sentence) it stays until it is closed,

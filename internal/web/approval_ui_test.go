@@ -18,7 +18,7 @@ func TestUIApproval(t *testing.T) {
 		`${helperChip(s)}${approvalChip(s)}${guestCount(s)}`,                                                      // the Overview's host list
 		`r.approval === "broken"`,                                                                                 // the Updates page
 		`fairy-agent helper-trust show`,                                                                           // where a broken machine is repaired
-		`changed only on the machine, as administrator`,                                                           // locked
+		`on the machine, as administrator, <code>fairy-agent helper-trust</code> (show, set, clear)`,              // (r4-b1-08: said once; the lead has "Locked")                                                           // locked
 		`will check this itself before it does anything`, `Pocket ID will ask for your passkey.`, `data-approval`, // the dialog
 		`apprMany ? "will each check this themselves before they do anything" :`,
 		`esc(a.issuer || "–")`, `esc(a.client_id || "–")`, `esc(k.kid)`, `esc(shortKey(k.thumbprint))`, `esc(a.error)`, `esc(a.agent_error)`,

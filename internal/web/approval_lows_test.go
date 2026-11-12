@@ -48,16 +48,21 @@ const fail = (m) => { console.log("FAIL " + m); process.exitCode = 1; };
 const broken = "CHARLIE cannot check approvals right now (CHARLIE says: approval unavailable: the trust file cannot be used (an administrator repairs it on the machine: fairy-agent helper-trust show)). Until that is repaired on the machine it refuses fan, power and update requests.";
 const refused = "Shut down BRAVO: failed · BRAVO did not accept the approval (BRAVO says: approval refused (no_challenge): no entry holds an open challenge of this machine for exactly this request (used already, expired)). Nothing was done. A new approval is needed: press the button again.";
 let [short, more] = flashParts(broken);
-if (short !== "CHARLIE cannot check approvals right now." || more !== broken) fail(short);
+// (audit 6, r4-b1-08: Details are what the line left out, the machine's words without their brackets; they were
+// the whole text, which starts with the line's own words)
+if (short !== "CHARLIE cannot check approvals right now." || more !== "CHARLIE says: approval unavailable: the trust file cannot be used (an administrator repairs it on the machine: fairy-agent helper-trust show). Until that is repaired on the machine it refuses fan, power and update requests.") fail(short + " | " + more);
 [short, more] = flashParts(refused);
-if (short !== "Shut down BRAVO: failed · BRAVO did not accept the approval." || more !== refused) fail(short);
+if (short !== "Shut down BRAVO: failed · BRAVO did not accept the approval." || more !== "BRAVO says: approval refused (no_challenge): no entry holds an open challenge of this machine for exactly this request (used already, expired). Nothing was done. A new approval is needed: press the button again.") fail(short + " | " + more);
+// a long text without brackets: the first sentence, and the rest behind Details
+[short, more] = flashParts("The first sentence of a long answer. " + "And then a second one that says more than the line has room for, ".repeat(3) + "to its end.");
+if (short !== "The first sentence of a long answer." || !more.startsWith("And then a second one") || more.includes("The first sentence")) fail("no brackets: " + short + " | " + more);
 [short, more] = flashParts("PC-A is offline");
 if (short !== "PC-A is offline" || more !== null) fail("a short one");
 [short, more] = flashParts("x".repeat(300));
 if (short.length !== 300 || more !== null) fail("nothing to cut");
 // brackets that never close (a text that was clipped): the sentence still ends before them
 [short, more] = flashParts("BRAVO did not accept the approval (BRAVO says: approval refused (clock): the token was issued " + "y".repeat(200));
-if (short !== "BRAVO did not accept the approval" || !more) fail("clipped: " + short);
+if (short !== "BRAVO did not accept the approval" || !more.startsWith("BRAVO says: approval refused (clock)")) fail("clipped: " + short + " | " + more);
 if (!process.exitCode) console.log("ok");
 `
 	file := filepath.Join(t.TempDir(), "flash.js")

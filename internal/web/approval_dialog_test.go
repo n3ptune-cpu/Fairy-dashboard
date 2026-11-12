@@ -34,12 +34,13 @@ func TestUIApprovalButtonAndDialog(t *testing.T) {
 		// next to Turn on: "Ready", or the reason in a few words; the whole sentence is behind "More"
 		`<span class="note" id="ap-on-note">${m.ready ? "Ready" : esc(` + "`Not ready: ${apShortWhy(m.why) || \"no reason given\"}`" + `)}</span>`,
 		`[m.ready ? "After it is switched on, it is changed only on the machine itself." : ` + "`It cannot be switched on right now: ${esc(m.why || \"the panel gives no reason\")}.`]",
-		// what stood in the box and is behind "More" now, word for word
-		`verifies a Pocket ID approval (passkey) made for exactly that action. The panel cannot skip it.`,
-		`"Locked: all of this is changed only on the machine, as administrator, with <code>fairy-agent helper-trust</code> (show, set, clear). The panel cannot change or remove it."`,
+		// behind "More": what the dialog's own lines do not say (audit 6, r4-b1-08: it held the box's two paragraphs
+		// word for word, which said "The panel cannot skip it." and "Locked: ..." a second time)
+		`The approval is a Pocket ID sign-in with your passkey, made for exactly one action: a shutdown, a restart, a sleep, a fan change or an update of its agent.`,
+		`"To change what it trusts: on the machine, as administrator, <code>fairy-agent helper-trust</code> (show, set, clear)."`,
 		`"If nobody did, what answers at this host's address may be another machine: do not accept, look at the host."`,
 		"compare the id with the machine's own: on the machine <code>fairy-agent helper-status</code>, line <code>machine id:</code>.",
-		`It checked approvals itself when Fairy last heard from it: that is why Fairy sends it nothing on its own confirmation and it is in no run.`,
+		`"It checked approvals itself when Fairy last heard from it."`, // (r4-b1-08: without the lead's second half again)
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %q", want)
@@ -128,7 +129,8 @@ const cases = [
   // name, block, page data, admin: [tone, word], viewer: [tone, word], what the admin's dialog must hold, what its "More" must hold
   ["required", base, { machine_id: MID, shown_id: MID, pinned: "turn-on" }, ["ok", "required"], ["ok", "required"],
     ["This machine checks a passkey approval itself before a fan, power or update action; the panel cannot skip it.", "Locked: it is changed only on the machine itself.", "Machine id", "Pinned key", "Allowed users"],
-    ["verifies a Pocket ID approval (passkey) made for exactly that action. The panel cannot skip it.", "Locked: all of this is changed only on the machine, as administrator, with fairy-agent helper-trust (show, set, clear). The panel cannot change or remove it."]],
+    // (audit 6, r4-b1-08: "More" says what the lines above do not; it said "The panel cannot skip it." and "Locked: ..." again)
+    ["The approval is a Pocket ID sign-in with your passkey, made for exactly one action: a shutdown, a restart, a sleep, a fan change or an update of its agent.", "verifies it.", "To change what it trusts: on the machine, as administrator, fairy-agent helper-trust (show, set, clear)."]],
   ["required, a key Pocket ID no longer publishes", base, { machine_id: MID, shown_id: MID, stale_keys: true }, ["warn", "required · old key"], ["ok", "required"],
     ["fairy-agent helper-trust set --fetch-keys"], []],
   ["required, not this panel's values", base, { machine_id: MID, shown_id: MID, other_trust: true }, ["warn", "required · other trust"], ["ok", "required"],
@@ -140,7 +142,7 @@ const cases = [
   ["required, a newer approval scheme", { ...base, proto: 3 }, { machine_id: MID, shown_id: MID }, ["warn", "required"], ["warn", "required"],
     ["This machine uses version 3 of the approval scheme; this panel knows version 2. Update the panel."], []],
   ["required, silent since the panel started", { ...base, last_known: true }, { machine_id: MID }, ["ok", "required · last known"], ["ok", "required · last known"],
-    ["No answer since the panel started. Fairy sends it nothing on its own confirmation, and it is in no run."], ["It checked approvals itself when Fairy last heard from it: that is why Fairy sends it nothing on its own confirmation and it is in no run."]],
+    ["No answer since the panel started. Fairy sends it nothing on its own confirmation, and it is in no run."], ["It checked approvals itself when Fairy last heard from it."]],
   ["off, ready", { state: "off", enforced_by: "agent", proto: 2 }, { ready: true }, ["warn", "off"], ["warn", "off"],
     ["This machine does not check approvals itself. Fan, power and update requests are confirmed in the panel only.", "Would be checked by", "Turn on", ">Ready<"],
     ["The panel confirms these requests itself (Confirm it's you) and sends them with the panel's control token.", "After it is switched on, it is changed only on the machine itself."]],
@@ -149,14 +151,14 @@ const cases = [
   ["off, not ready, a long reason", { state: "off", enforced_by: "agent", proto: 2 }, { ready: false, why: "nobody would be allowed to approve on it: set approval.users in config.yaml" }, ["warn", "off"], ["warn", "off"],
     ["Not ready: nobody would be allowed to approve on it<"], ["It cannot be switched on right now: nobody would be allowed to approve on it: set approval.users in config.yaml."]],
   ["unknown, the helper does not answer", { state: "unknown", enforced_by: "helper", proto: 2 }, {}, ["warn", "unknown"], ["warn", "unknown"],
-    ["The machine cannot say whether it checks approvals. Start the helper (Elevated helper, next to the host name)."], ["The machine cannot say whether it checks approvals (its elevated helper is not answering). Start the helper (Elevated helper, next to the host name)."]],
+    ["The machine cannot say whether it checks approvals. Start the helper (Elevated helper, next to the host name)."], ["Its elevated helper is not answering."]],
   ["unknown, an old helper is running", { state: "unknown", enforced_by: "helper", proto: 2, error: "the running fairy-agent-helper is older than this agent (it knows no approvals)" }, {}, ["warn", "unknown"], ["warn", "unknown"],
-    ["Its running helper is older than its agent: it refuses fan, power and update requests. Restart the helper : Stop helper, then Start helper."], ["so nothing there can check an approval: it refuses fan, power and update requests."]],
+    ["Its running helper is older than its agent: it refuses fan, power and update requests. Restart the helper : Stop helper, then Start helper."], ["Nothing on the machine can check an approval until then. Stop helper and Start helper are under Elevated helper, next to the host name."]],
   ["some state this page does not know", { state: "later", enforced_by: "helper", proto: 2 }, {}, ["warn", "unknown"], ["warn", "unknown"],
     ["Checked by"], []],
   ["broken", { state: "broken", enforced_by: "helper", proto: 2, error: "trust file: <bad>" }, {}, ["bad", "broken"], ["bad", "broken"],
     ["Its trust file cannot be used. It refuses fan, power and update requests until that is repaired on the machine : fairy-agent helper-trust show"],
-    ["This machine has a trust file it cannot use: trust file: &lt;bad&gt; . Until it is repaired on the machine it refuses fan, power and update requests. On the machine, as administrator: fairy-agent helper-trust show"]],
+    ["The machine says: trust file: &lt;bad&gt;", "fairy-agent helper-trust show is run on the machine, as administrator, and names what is wrong with the file."]],
   ["machine id changed", { ...base, binding: "changed" }, { machine_id: MID, shown_id: SHOWN, pinned: "turn-on", pinned_by: "nora", can_accept: true, accept: "id" }, ["bad", "required · Machine id changed"], ["bad", "required · Machine id changed"],
     ["Machine id changed. It shows another machine id than the one Fairy has on record. No approvals until an admin accepts the new id.", "Accept this machine's new id", "Machine id on record", "Machine id it shows"],
     ["If nobody did, what answers at this host's address may be another machine: do not accept, look at the host.", "On record:", "It shows:"]],
@@ -198,6 +200,9 @@ for (const [name, a, m, admin, viewer, shown, more] of cases) {
     if (isAdmin) {
       for (const x of shown) if (!html.includes(x.replace(/^>|<$/g, "")) && !v.html.includes(x)) fail(name + ": the dialog lacks " + JSON.stringify(x) + " in " + JSON.stringify(html));
       for (const x of more) if (!behind.includes(x)) fail(name + ": More lacks " + JSON.stringify(x) + " in " + JSON.stringify(behind));
+      // r4-b1-08: "More" does not say again what stands above it: no sentence of it, and not its three refrains
+      for (const sent of behind.split(/(?<=[.:]) /)) if (sent.length > 40 && html.includes(sent)) fail(name + ": More repeats " + JSON.stringify(sent));
+      for (const again of ["cannot skip", "Locked", "in no run", "refuses fan, power and update requests"]) if (html.includes(again) && behind.includes(again)) fail(name + ": More says " + JSON.stringify(again) + " again");
     } else {
       for (const x of ADMINS) if (v.html.includes(x) || v.more.join(" ").includes(x) || btn.includes(x)) fail(name + ": a viewer's dialog holds " + JSON.stringify(x));
     }
