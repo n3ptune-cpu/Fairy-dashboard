@@ -299,8 +299,7 @@ func PictureSize(mime string, d []byte) (w, h int, ok bool) {
 		c, err := jpeg.DecodeConfig(bytes.NewReader(d))
 		return c.Width, c.Height, err == nil
 	case "image/gif":
-		c, err := gif.DecodeConfig(bytes.NewReader(d))
-		return c.Width, c.Height, err == nil
+		return gifSize(d)
 	case "image/webp": // the first chunk: the canvas of an extended file, else the bitstream's own size
 		if len(d) < 30 || string(d[:4]) != "RIFF" || string(d[8:12]) != "WEBP" {
 			return 0, 0, false
@@ -318,16 +317,170 @@ func PictureSize(mime string, d []byte) (w, h int, ok bool) {
 			return int(bits&0x3fff) + 1, int(bits>>14&0x3fff) + 1, true
 		}
 		return 0, 0, false
-	case "image/avif": // the "image spatial extents" boxes: the largest width and height any item states
-		for i := 4; i+16 <= len(d); i++ {
-			if string(d[i:i+4]) != "ispe" || binary.BigEndian.Uint32(d[i-4:]) != 20 {
-				continue
-			}
-			w, h, ok = max(w, int(binary.BigEndian.Uint32(d[i+8:]))), max(h, int(binary.BigEndian.Uint32(d[i+12:]))), true
-		}
-		return w, h, ok
+	case "image/avif":
+		return avifSize(d)
 	}
 	return 0, 0, false
+}
+
+// gifSize is the size a GIF takes when it is painted: the "logical screen" of its header, or more when one of
+// its images reaches beyond it. A browser paints the frame, not the screen: a file whose header said 1 x 1 and
+// whose one image was 9000 x 9000 passed the limit and was painted with 81 megapixels (r3-p3-02). Every image
+// descriptor is read (the file is walked as wholeGIF walks it); a file that cannot be walked states no size.
+func gifSize(d []byte) (w, h int, ok bool) {
+	if len(d) < 13 || (string(d[:6]) != "GIF87a" && string(d[:6]) != "GIF89a") {
+		return 0, 0, false
+	}
+	le := func(p int) int { return int(binary.LittleEndian.Uint16(d[p:])) }
+	table := func(flags byte) int {
+		if flags&0x80 == 0 {
+			return 0
+		}
+		return 3 << ((flags & 7) + 1)
+	}
+	w, h = le(6), le(8)
+	p := 13 + table(d[10])
+	blocks := func() bool {
+		for {
+			if p >= len(d) {
+				return false
+			}
+			n := int(d[p])
+			p += 1 + n
+			if n == 0 {
+				return p <= len(d)
+			}
+		}
+	}
+	for images := 0; ; {
+		if p >= len(d) {
+			return 0, 0, false
+		}
+		switch d[p] {
+		case 0x3b:
+			return w, h, images > 0
+		case 0x21:
+			p += 2
+			if !blocks() {
+				return 0, 0, false
+			}
+		case 0x2c: // an image descriptor: left, top, width, height (two bytes each)
+			if len(d)-p < 10 {
+				return 0, 0, false
+			}
+			w, h = max(w, le(p+1)+le(p+5)), max(h, le(p+3)+le(p+7))
+			p += 10 + table(d[p+9]) + 1
+			if !blocks() {
+				return 0, 0, false
+			}
+			images++
+		default:
+			return 0, 0, false
+		}
+	}
+}
+
+// isoBoxes walks the boxes of an ISO media file (or of a box's content) and hands each to f: its four-letter
+// kind and its content. A length of 1 means a 64-bit length follows, 0 means "to the end". false: a box does
+// not fit, so the content is not what it claims to be.
+func isoBoxes(d []byte, f func(kind string, body []byte)) bool {
+	for p := 0; p < len(d); {
+		if len(d)-p < 8 {
+			return false
+		}
+		n, head := uint64(binary.BigEndian.Uint32(d[p:])), 8
+		switch n {
+		case 0:
+			n = uint64(len(d) - p)
+		case 1:
+			if len(d)-p < 16 {
+				return false
+			}
+			n, head = binary.BigEndian.Uint64(d[p+8:]), 16
+		}
+		if n < uint64(head) || n > uint64(len(d)-p) {
+			return false
+		}
+		f(string(d[p+4:p+8]), d[p+head:p+int(n)])
+		p += int(n)
+	}
+	return true
+}
+
+// avifSize is the largest width and height an AVIF file states where a decoder reads them: the "image spatial
+// extents" (ispe) of its items, which are in meta > iprp > ipco, and for an image sequence the size in each
+// track's header (moov > trak > tkhd). The boxes are read as boxes, with 32-bit and 64-bit lengths.
+//
+// It used to be "any 20-byte ispe box found anywhere in the file" (r3-p3-02): the real one, written with a
+// 64-bit length, was not found, and one of 16 x 16 inside a "free" box at the end was, so a picture of 8400
+// pixels a side passed. A file whose boxes do not fit, or that states no size in those places, states none
+// here, and is refused (PixelProblem).
+func avifSize(d []byte) (w, h int, ok bool) {
+	good := true
+	inside := func(body []byte, f func(kind string, body []byte)) {
+		if !isoBoxes(body, f) {
+			good = false
+		}
+	}
+	take := func(nw, nh uint32) {
+		if nw == 0 || nh == 0 || nw > 1<<30 || nh > 1<<30 {
+			good = false
+			return
+		}
+		w, h, ok = max(w, int(nw)), max(h, int(nh)), true
+	}
+	inside(d, func(kind string, body []byte) {
+		switch kind {
+		case "meta": // a full box: four bytes of version and flags, then boxes
+			if len(body) < 4 {
+				good = false
+				return
+			}
+			inside(body[4:], func(kind string, body []byte) {
+				if kind != "iprp" {
+					return
+				}
+				inside(body, func(kind string, body []byte) {
+					if kind != "ipco" {
+						return
+					}
+					inside(body, func(kind string, body []byte) {
+						if kind != "ispe" {
+							return
+						}
+						if len(body) != 12 { // version and flags, width, height
+							good = false
+							return
+						}
+						take(binary.BigEndian.Uint32(body[4:]), binary.BigEndian.Uint32(body[8:]))
+					})
+				})
+			})
+		case "moov":
+			inside(body, func(kind string, body []byte) {
+				if kind != "trak" {
+					return
+				}
+				inside(body, func(kind string, body []byte) {
+					if kind != "tkhd" {
+						return
+					}
+					if len(body) < 12 { // its last eight bytes: width and height as 16.16 fixed-point numbers
+						good = false
+						return
+					}
+					tw, th := binary.BigEndian.Uint32(body[len(body)-8:])>>16, binary.BigEndian.Uint32(body[len(body)-4:])>>16
+					if tw != 0 || th != 0 { // (a track that is not a picture has 0 x 0)
+						take(tw, th)
+					}
+				})
+			})
+		}
+	})
+	if !good {
+		return 0, 0, false
+	}
+	return w, h, ok
 }
 
 // PixelProblem says in plain words why a picture is not accepted for its size in pixels ("" when it is fine).

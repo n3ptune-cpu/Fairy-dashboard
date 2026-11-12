@@ -202,9 +202,14 @@ func resized(t *testing.T, mime string, d []byte, w, h int) []byte {
 			p += 2 + n
 		}
 		t.Fatal("no frame header")
-	case "image/gif":
+	case "image/gif": // the logical screen and every image in it (a browser paints the images)
 		binary.LittleEndian.PutUint16(out[6:], uint16(w))
 		binary.LittleEndian.PutUint16(out[8:], uint16(h))
+		for _, p := range gifImages(t, out) {
+			copy(out[p+1:], []byte{0, 0, 0, 0})
+			binary.LittleEndian.PutUint16(out[p+5:], uint16(w))
+			binary.LittleEndian.PutUint16(out[p+7:], uint16(h))
+		}
 	case "image/webp":
 		body := out[20:]
 		switch string(out[12:16]) {
@@ -340,5 +345,122 @@ func TestTheSizeOfAnExtendedWebP(t *testing.T) {
 	}
 	if why := PixelProblem("image/webp", vp8x(MaxPictureSide, 100)); why != "" {
 		t.Errorf("an extended WebP %d pixels wide: %s", MaxPictureSide, why)
+	}
+}
+
+// gifImages returns where the image descriptors of a GIF begin.
+func gifImages(t *testing.T, d []byte) []int {
+	t.Helper()
+	table := func(flags byte) int {
+		if flags&0x80 == 0 {
+			return 0
+		}
+		return 3 << ((flags & 7) + 1)
+	}
+	var at []int
+	p := 13 + table(d[10])
+	blocks := func() {
+		for p < len(d) {
+			n := int(d[p])
+			p += 1 + n
+			if n == 0 {
+				return
+			}
+		}
+	}
+	for p < len(d) && d[p] != 0x3b {
+		switch d[p] {
+		case 0x21:
+			p += 2
+			blocks()
+		case 0x2c:
+			at = append(at, p)
+			p += 10 + table(d[p+9]) + 1
+			blocks()
+		default:
+			t.Fatalf("not a GIF block at %d", p)
+		}
+	}
+	return at
+}
+
+// r3-p3-02 (audit 5, round 3): the pixel limit did not hold for a GIF or an AVIF. A GIF's size was the "logical
+// screen" of its header, and a browser paints the image, which may be larger: header 1 x 1, image 9000 x 9000,
+// 81 megapixels painted. An AVIF's size was "the largest 20-byte ispe box found anywhere in the file": the
+// real one, written with a 64-bit length, was not found, and a small one inside a "free" box at the end was.
+func TestThePixelLimitHoldsForGIFImagesAndAVIFBoxes(t *testing.T) {
+	refused := func(name, mime string, data []byte, w, h int) {
+		t.Helper()
+		if !Whole(mime, data) {
+			t.Fatalf("%s: setup: the file must pass the structure check", name)
+		}
+		gw, gh, ok := PictureSize(mime, data)
+		if !ok || gw != w || gh != h {
+			t.Errorf("%s: read as %d x %d (%v), want %d x %d", name, gw, gh, ok, w, h)
+		}
+		if _, err := ValidateUpload(mime, data); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("the picture is %d x %d pixels", w, h)) {
+			t.Errorf("%s: accepted as a user's background: %v", name, err)
+		}
+	}
+	// GIF: one small real picture, with its header and its images rewritten
+	pal := image.NewPaletted(image.Rect(0, 0, 8, 8), color.Palette{color.Black, color.White})
+	var one, two bytes.Buffer
+	_ = gif.Encode(&one, pal, nil)
+	_ = gif.EncodeAll(&two, &gif.GIF{Image: []*image.Paletted{pal, pal}, Delay: []int{10, 10}})
+	patch := func(src []byte, screenW, screenH int, images ...[4]int) []byte { // images: left, top, width, height
+		out := bytes.Clone(src)
+		binary.LittleEndian.PutUint16(out[6:], uint16(screenW))
+		binary.LittleEndian.PutUint16(out[8:], uint16(screenH))
+		for i, p := range gifImages(t, out) {
+			if i < len(images) {
+				for k, v := range images[i] {
+					binary.LittleEndian.PutUint16(out[p+1+2*k:], uint16(v))
+				}
+			}
+		}
+		return out
+	}
+	refused("gif: the auditor's file (screen 1 x 1, image 9000 x 9000)", "image/gif", patch(one.Bytes(), 1, 1, [4]int{0, 0, 9000, 9000}), 9000, 9000)
+	refused("gif: the largest an image can state", "image/gif", patch(one.Bytes(), 1, 1, [4]int{0, 0, 65535, 65535}), 65535, 65535)
+	refused("gif: an image that begins inside the screen and ends outside the limit", "image/gif", patch(one.Bytes(), 100, 100, [4]int{8000, 0, 300, 50}), 8300, 100)
+	refused("gif: the second image of an animation", "image/gif", patch(two.Bytes(), 8, 8, [4]int{0, 0, 8, 8}, [4]int{0, 0, 16, 8193}), 16, 8193)
+	refused("gif: an honest large one, as before", "image/gif", patch(one.Bytes(), 9000, 9000, [4]int{0, 0, 9000, 9000}), 9000, 9000)
+	if w, h, ok := PictureSize("image/gif", patch(two.Bytes(), 8192, 4000, [4]int{0, 0, 8192, 4000}, [4]int{10, 10, 100, 100})); !ok || w != 8192 || h != 4000 ||
+		PixelProblem("image/gif", patch(two.Bytes(), 8192, 4000, [4]int{0, 0, 8192, 4000}, [4]int{10, 10, 100, 100})) != "" {
+		t.Errorf("gif: a picture at the limit must be accepted: %d x %d (%v)", w, h, ok)
+	}
+	if _, _, ok := PictureSize("image/gif", one.Bytes()[:len(one.Bytes())-3]); ok {
+		t.Error("gif: a file that cannot be walked to its end states a size")
+	}
+
+	// AVIF: the auditor's two files (made with libavif; poc/avif-size.py), 8400 x 64 pixels
+	read := func(name string) []byte {
+		b, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	honest, trick := read("avif-honest-8400x64.avif"), read("avif-ispe64-8400x64.avif")
+	refused("avif: the honest file", "image/avif", honest, 8400, 64)
+	refused("avif: the size box with a 64-bit length, and a small decoy in a free box", "image/avif", trick, 8400, 64)
+	// a decoy alone changes nothing, wherever it stands: only the boxes a decoder reads count
+	decoy := []byte("\x00\x00\x00\x1cfree\x00\x00\x00\x14ispe\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x10")
+	refused("avif: a decoy after the honest file", "image/avif", append(bytes.Clone(honest), decoy...), 8400, 64)
+	small := b64(t, realAVIF)
+	big := append(bytes.Clone(small), []byte("\x00\x00\x00\x1cfree\x00\x00\x00\x14ispe\x00\x00\x00\x00\x00\x00\x23\x28\x00\x00\x23\x28")...) // a 9000 x 9000 "ispe" nobody reads
+	if w, h, ok := PictureSize("image/avif", big); !ok || w > 64 || h > 64 || PixelProblem("image/avif", big) != "" {
+		t.Errorf("avif: a small picture with a large box outside the item properties: %d x %d (%v)", w, h, ok)
+	}
+	// a file that states no size where a decoder reads it, or whose boxes do not fit, states none: refused
+	noSize := bytes.Replace(bytes.Clone(honest), []byte("ispe"), []byte("ispx"), 1)
+	if _, _, ok := PictureSize("image/avif", noSize); ok || PixelProblem("image/avif", noSize) == "" {
+		t.Error("avif: a file without a size box states a size")
+	}
+	broken := bytes.Clone(honest)
+	i := bytes.Index(broken, []byte("ipco"))
+	binary.BigEndian.PutUint32(broken[i-4:], 0x7fffffff) // a box longer than the box around it
+	if _, _, ok := PictureSize("image/avif", broken); ok || PixelProblem("image/avif", broken) == "" {
+		t.Error("avif: a file whose boxes do not fit states a size")
 	}
 }

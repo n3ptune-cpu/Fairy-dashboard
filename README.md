@@ -701,7 +701,9 @@ page is black, with the same strip.
   more data after its end mark (cameras write some there): the panel stores and serves that as it came.
 * A picture may have at most 8192 pixels a side and 40 megapixels, whatever its file size: a browser needs
   four bytes of memory for every pixel, and a 76 kB file can state 20000 x 20000. A larger one is refused
-  with its size in the message; the same holds for a background a user uploads. A picture that was stored
+  with its size in the message; the same holds for a background a user uploads (GIF and AVIF there too: for
+  a GIF every image in the file counts, not only its header, and for an AVIF the size its items or tracks
+  state; a file that states none where a decoder reads it is refused). A picture that was stored
   before this limit is kept and shown, and the panel's log says so once at start: replace it with a smaller
   one.
 * Your own background (the block above it in Settings) is separate: per account, shown only to you after
