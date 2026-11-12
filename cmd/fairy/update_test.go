@@ -473,3 +473,96 @@ func TestTheUpdateChecksTheConfigFileTheServiceStartsWith(t *testing.T) {
 		t.Fatalf("%q", why)
 	}
 }
+
+// R7B-05 (the reviewer's TestReviewB2_ServiceConfigSources, with the quoted forms). systemd shows the unit's
+// arguments joined with spaces, so `--config "/etc/my dir/c.yaml"` of the unit file is shown as two words. The
+// first was taken: the update checked "/etc/my" and stopped with "/etc/my ... does not exist". A line that
+// shows quotes is read with them; a line that does not say for certain where the path ends gives no path, and
+// the update stops with "cannot tell which config file" and the way out.
+func TestTheUnitsCommandLineIsReadForCertainOrNotAtAll(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, "fairy.env")
+	if err := os.WriteFile(env, []byte("FAIRY_CONFIG_FILE=/a/one.yaml\nexport FAIRY_CONFIG_FILE='/a/two.yaml'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spaced := filepath.Join(dir, "my env", "fairy.env")
+	if err := os.MkdirAll(filepath.Dir(spaced), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(spaced, []byte("FAIRY_CONFIG_FILE=/a/spaced.yaml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const def = "/etc/fairy/config.yaml"
+	show := func(argv string) string { return "ExecStart={ path=/f ; argv[]=" + argv + " ; ignore_errors=no }\n" }
+	for _, c := range []struct {
+		name, show, given string
+		set               bool
+		want              string
+		known             bool
+	}{
+		// the reviewer's five
+		{"flag on the unit", "ExecStart={ path=/usr/local/bin/fairy ; argv[]=/usr/local/bin/fairy serve --config /etc/x/c.yaml --env-file  ; ignore_errors=no }\n", def, false, "/etc/x/c.yaml", true},
+		{"--config of the command wins", "ExecStart={ path=/f ; argv[]=/f serve --config /etc/x/c.yaml ; }\n", "/mine.yaml", true, "/mine.yaml", true},
+		{"no command line", "", def, false, def, false},
+		{"EnvironmentFile, the last value", "ExecStart={ path=/f ; argv[]=/f serve ; }\nEnvironmentFiles=" + env + " (ignore_errors=no)\n", def, false, "/a/two.yaml", true},
+		{"a path with a space, as systemd shows it: not cut at the space, not guessed", show("/f serve --config /etc/my dir/c.yaml"), def, false, def, false},
+		// the quoted forms
+		{"a quoted path with a space", show(`/f serve --config "/etc/my dir/c.yaml"`), def, false, "/etc/my dir/c.yaml", true},
+		{"single quotes", show(`/f serve --config '/etc/my dir/c.yaml' --env-file ""`), def, false, "/etc/my dir/c.yaml", true},
+		{"--config=FILE", show("/f serve --config=/etc/x/eq.yaml --env-file "), def, false, "/etc/x/eq.yaml", true},
+		{"-config=FILE", show("/f serve -config=/etc/x/eq.yaml"), def, false, "/etc/x/eq.yaml", true},
+		{`--config="FILE with a space"`, show(`/f serve --config="/etc/my dir/c.yaml" --listen 127.0.0.1:8080`), def, false, "/etc/my dir/c.yaml", true},
+		{`"--config=FILE with a space"`, show(`/f serve "--config=/etc/my dir/c.yaml"`), def, false, "/etc/my dir/c.yaml", true},
+		{"a quoted path with a quote in it", show(`/f serve --config "/etc/my \"own\" dir/c.yaml"`), def, false, `/etc/my "own" dir/c.yaml`, true},
+		{"the program in a folder with a space, quoted", show(`"/opt/my apps/fairy" serve --config /etc/x/c.yaml`), def, false, "/etc/x/c.yaml", true},
+		{"the program in a folder with a space, as systemd shows it", show("/opt/my apps/fairy serve --config /etc/x/c.yaml"), def, false, "/etc/x/c.yaml", true},
+		{"started through a shell", show("/bin/sh -c exec /f serve --config /etc/x/c.yaml"), def, false, "/etc/x/c.yaml", true},
+		{"the service's own env file, quoted", show(`/f serve --env-file "` + spaced + `"`), def, false, "/a/spaced.yaml", true},
+		// what does not say for certain where the path ends
+		{"--config=FILE with a space, as systemd shows it", show("/f serve --config=/etc/my dir/c.yaml"), def, false, def, false},
+		{"a space in the path, more flags after it", show("/f serve --config /etc/my dir/c.yaml --env-file "), def, false, def, false},
+		{"a space in another flag's value: where its words end is not certain either", show("/f serve --env-file /etc/my dir/fairy.env --config /etc/x/c.yaml"), def, false, def, false},
+		{"a quote that does not close", show(`/f serve --config "/etc/my dir/c.yaml`), def, false, def, false},
+		{"an apostrophe in a path", show("/f serve --config /etc/o'brien/c.yaml"), def, false, def, false},
+		{"quotes inside a path", show("/f serve --config /etc/a'b c'd/c.yaml"), def, false, def, false},
+		{"something after the closing quote", show(`/f serve --config "/etc/my dir"/c.yaml`), def, false, def, false},
+		{"a space in the path, but the person names the file", show("/f serve --config /etc/my dir/c.yaml"), "/etc/my dir/c.yaml", true, "/etc/my dir/c.yaml", true},
+	} {
+		u := parseUnit(c.show)
+		p, from, known := serviceConfig(u, c.given, c.set)
+		if p != c.want || known != c.known {
+			t.Errorf("%s: %q (%s) known=%v, want %q known=%v", c.name, p, from, known, c.want, c.known)
+		}
+		if strings.Contains(p, "/etc/my") && p != "/etc/my dir/c.yaml" && !strings.Contains(p, `"own"`) {
+			t.Errorf("R7B-05: %s: the update would name %q, which is not the service's file", c.name, p)
+		}
+		if !known && u.unknownConfig() != map[bool]string{true: configUnsure, false: configUnknown}[len(u.Args) > 0] {
+			t.Errorf("%s: the stop says %q", c.name, u.unknownConfig())
+		}
+	}
+	// the words, as the service gets them
+	for line, want := range map[string]string{
+		`/f serve --config "/etc/my dir/c.yaml" --env-file ""`: "/f|serve|--config|/etc/my dir/c.yaml|--env-file|",
+		`/f serve --config /etc/fairy/config.yaml --env-file `: "/f|serve|--config|/etc/fairy/config.yaml|--env-file",
+		`/f  serve	--listen '127.0.0.1:8080'`:                  "/f|serve|--listen|127.0.0.1:8080",
+		``:                                                     "",
+	} {
+		if words, sure := unitWords(line); strings.Join(words, "|") != want || !sure {
+			t.Errorf("unitWords(%q) = %q, %v; want %q", line, strings.Join(words, "|"), sure, want)
+		}
+	}
+	// what the run says then: the reason, that nothing was changed, and what to pass; it fits the status file
+	for _, msg := range []string{configUnknown, configUnsure} {
+		if !strings.HasPrefix(msg, "cannot tell which config file fairy.service starts with (") || !strings.Contains(msg, "Nothing was changed") ||
+			!strings.Contains(clipTo(msg, 300), "fairy update --config /etc/fairy/config.yaml") || len(msg) > 300 {
+			t.Errorf("%d bytes: %s", len(msg), msg)
+		}
+	}
+	src, err := os.ReadFile("update.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "cfgStop = unit.unknownConfig()") {
+		t.Error("update() no longer stops with unit.unknownConfig()")
+	}
+}

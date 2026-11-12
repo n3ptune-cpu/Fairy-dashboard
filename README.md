@@ -786,10 +786,11 @@ hand warns and goes on.
 The file all of this is about is the one the service starts with: the unit's `--config`, else
 `FAIRY_CONFIG_FILE` from the unit's `EnvironmentFile=` / `Environment=` or from the env file the service
 reads itself, else `/etc/fairy/config.yaml` (before, `fairy update` always read the last one). `fairy update
---config FILE` names another file. When systemd does not say how `fairy.service` is started, the update
-stops ("cannot tell which config file fairy.service starts with ...") and asks for `--config`. The **Update
-panel** button also looks at the file the running panel was started with before it starts anything, and says
-on the page what is wrong with it.
+--config FILE` names another file. When systemd does not say how `fairy.service` is started, or shows a
+command line with a space or a quote in an argument (systemd prints the arguments without quotes, so where
+a path with a space ends is not certain), the update stops ("cannot tell which config file fairy.service
+starts with ...") and asks for `--config`. The **Update panel** button also looks at the file the running
+panel was started with before it starts anything, and says on the page what is wrong with it.
 The next check is made by both, after the download and before anything is replaced: the new version, once its
 signature and hash are verified, checks the config file itself, with the check `fairy serve` starts with
 and `fairy admin config check` reports (the entries of `ups:` and `power_sources:` included, which the

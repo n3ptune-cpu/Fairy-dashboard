@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -64,7 +65,7 @@ func update(args []string) int {
 	c, err := config.LoadFull(cfgFile) // the one check of the file: what `fairy serve` starts with
 	switch {
 	case !cfgKnown && !*check:
-		cfgStop = configUnknown // nothing is installed over a file that could not be checked
+		cfgStop = unit.unknownConfig() // nothing is installed over a file that could not be checked
 	case err == nil:
 		cfgListen, repo = c.Listen, c.Updates.PanelRepo
 	case *check && errors.Is(err, os.ErrNotExist): // --check works everywhere, also where no panel is installed
@@ -356,6 +357,9 @@ type unitSettings struct {
 	Args     []string // ExecStart's arguments
 	Env      []string // Environment=, as KEY=VALUE
 	EnvFiles []string // EnvironmentFile=, in order
+	// Unsure: the command line as systemd shows it does not say for certain where each argument ends
+	// (unitWords, sureFlags): no path is taken from it.
+	Unsure bool
 }
 
 // serviceUnit asks systemd for fairy.service's command line and environment.
@@ -376,7 +380,11 @@ func serviceUnit() unitSettings {
 //	EnvironmentFiles=/etc/fairy/fairy.env (ignore_errors=no)
 //
 // systemd joins the arguments with spaces and drops empty ones (--env-file ""), so a value is the word after
-// its flag unless that word is a flag itself.
+// its flag unless that word is a flag itself. It does not quote them: an argument with a space in it
+// (--config "/etc/my dir/c.yaml" in the unit file) is shown as two words, and nothing in the line says so.
+// R7B-05: the first word was taken ("/etc/my") and the update stopped naming a file that is not the service's.
+// A line that shows quotes is read with them (unitWords); a line whose words do not fit "a flag, then at most
+// one value" (sureFlags) is Unsure, and the update then asks for the file instead of guessing.
 func parseUnit(out string) unitSettings {
 	var u unitSettings
 	for _, line := range strings.Split(out, "\n") {
@@ -385,7 +393,8 @@ func parseUnit(out string) unitSettings {
 		case "ExecStart":
 			if _, rest, ok := strings.Cut(v, "argv[]="); ok {
 				rest, _, _ = strings.Cut(rest, " ; ")
-				u.Args = strings.Fields(rest)
+				words, sure := unitWords(rest)
+				u.Args, u.Unsure = words, !sure || !sureFlags(words)
 			}
 		case "Environment":
 			u.Env = append(u.Env, strings.Fields(v)...)
@@ -396,6 +405,67 @@ func parseUnit(out string) unitSettings {
 		}
 	}
 	return u
+}
+
+// unitWords splits a command line into its arguments. Spaces separate them. What stands in double or single
+// quotes is one argument (or the value of one: --config="/etc/my dir/c.yaml"), without the quotes, and "" is
+// an empty argument. sure is false when a quote does not end, or stands anywhere but around a whole argument
+// or a whole value: it may then be a character of a path, and the line says nothing for certain.
+func unitWords(line string) (words []string, sure bool) {
+	var b strings.Builder
+	open, quote, sure := false, byte(0), true
+	for i := 0; i < len(line); i++ {
+		switch c := line[i]; {
+		case quote != 0 && c == quote:
+			quote = 0
+			sure = sure && (i+1 == len(line) || line[i+1] == ' ' || line[i+1] == '\t')
+		case quote == '"' && c == '\\' && i+1 < len(line) && (line[i+1] == '"' || line[i+1] == '\\'):
+			i++
+			b.WriteByte(line[i])
+		case quote != 0:
+			b.WriteByte(c)
+		case c == '"' || c == '\'':
+			sure = sure && (!open || strings.HasSuffix(b.String(), "="))
+			quote, open = c, true
+		case c == ' ' || c == '\t':
+			if open {
+				words = append(words, b.String())
+				b.Reset()
+				open = false
+			}
+		default:
+			b.WriteByte(c)
+			open = true
+		}
+	}
+	if open {
+		words = append(words, b.String())
+	}
+	return words, sure && quote == 0
+}
+
+// sureFlags reports whether the words of a command line can be read for certain: after the program and its
+// command (`serve`; without that word, after the words before the first flag) come flags only, each with its
+// value in the same word (--name=value) or in the one word after it. `fairy serve` takes nothing else, so a
+// further word is the rest of a value with a space in it or an argument the program would ignore, and the
+// line does not say which.
+func sureFlags(words []string) bool {
+	isFlag := func(w string) bool { return len(w) > 1 && w[0] == '-' }
+	i := slices.Index(words, "serve") + 1
+	for i < len(words) && !isFlag(words[i]) {
+		i++
+	}
+	for i < len(words) {
+		own := strings.Contains(words[i], "=")
+		i++
+		if !own && i < len(words) && !isFlag(words[i]) {
+			i++
+		}
+		if i < len(words) && !isFlag(words[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // flag returns the value of --name (or -name, or --name=value) in the unit's command line.
@@ -416,8 +486,22 @@ func (u unitSettings) flag(name string) (string, bool) {
 }
 
 // configUnknown is said when systemd does not tell how fairy.service is started and no --config was given.
-const configUnknown = "cannot tell which config file fairy.service starts with (`systemctl show fairy.service` gave no command line), " +
-	"so the file could not be checked before the restart. Nothing was changed. Name the file: fairy update --config /etc/fairy/config.yaml"
+// configUnsure is the same stop for a command line that cannot be read for certain (unitSettings.Unsure).
+const (
+	configUnknown = "cannot tell which config file fairy.service starts with (`systemctl show fairy.service` gave no command line), " +
+		configUnknownEnd
+	configUnsure = "cannot tell which config file fairy.service starts with (the command line systemd shows has a space or a quote in an argument: where it ends is not certain), " +
+		configUnknownEnd
+	configUnknownEnd = "so the file could not be checked before the restart. Nothing was changed. Name the file: fairy update --config /etc/fairy/config.yaml"
+)
+
+// unknownConfig is what the update says when serviceConfig could not tell the file.
+func (u unitSettings) unknownConfig() string {
+	if u.Unsure {
+		return configUnsure
+	}
+	return configUnknown
+}
 
 // serviceConfig is the config file fairy.service starts with after its restart, and where that is from (for
 // messages): the file the update checks before it replaces anything, and reads `listen:` and
@@ -428,8 +512,9 @@ const configUnknown = "cannot tell which config file fairy.service starts with (
 // (serve.go, resolve): --config on the unit's command line; FAIRY_CONFIG_FILE from the unit's
 // EnvironmentFile= (the last file that has it) or Environment=; FAIRY_CONFIG_FILE in the env file the service
 // reads itself (--env-file of the unit, without the flag the default file; it never overrides the
-// environment); else the default. known is false when systemd gave no command line for the unit and no
-// --config was given: then nobody can tell, and the default is only a guess.
+// environment); else the default. known is false when systemd gave no command line for the unit, or one that
+// cannot be read for certain (a path with a space: parseUnit), and no --config was given: then nobody can
+// tell, and the default is only a guess.
 //
 // The file is never taken from the running panel (a path handed from the unprivileged service to this root
 // command would be read here and quoted in messages any user can read), and it is the unit as systemd has
@@ -441,6 +526,9 @@ func serviceConfig(u unitSettings, given string, givenSet bool) (path, from stri
 	}
 	if len(u.Args) == 0 {
 		return given, "the default; systemd did not say", false
+	}
+	if u.Unsure {
+		return given, "the default; the command line systemd shows cannot be read for certain", false
 	}
 	if p, ok := u.flag("config"); ok && p != "" {
 		return p, "--config of fairy.service", true
