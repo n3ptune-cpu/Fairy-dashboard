@@ -472,7 +472,8 @@ func (e *AgentRefusal) Error() string { return e.Err.Error() }
 func (e *AgentRefusal) Unwrap() error { return e.Err }
 
 // Unanswered is a control request that left the panel, or may have, and got no usable answer: a timeout, a
-// connection that broke, an answer that cannot be read. The agent may have taken the request: the wake packet
+// connection that broke, an answer with a good status that cannot be read (one with an error status is a
+// refusal, whatever its body: AgentRefusal). The agent may have taken the request: the wake packet
 // may be out, the update or the countdown may be running. It wraps the error the page gets ("agent
 // unreachable: timeout"), so a click shows what it showed before; a caller that goes on working after the
 // request (the wake / update / shut down run) must not take it for "nothing happened". A request that
@@ -515,6 +516,14 @@ func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path strin
 		var ns *poller.NotSent
 		if errors.As(err, &ns) {
 			return nil, e
+		}
+		if status >= 400 {
+			// An answer with an error status, and a body that is not the agent's (a proxy's 502 or 504 page for
+			// an agent that is down, another web server's 404 or 403 at its address): something answered, and
+			// what it said is "no". That is a refusal like the agent's own error, whatever the body is, and not
+			// a request that "may have arrived" (second review, N3: the wake / update / shut down run waited for
+			// a machine after a proxy's error page as after a wake that may have gone out).
+			return nil, &AgentRefusal{Err: apierr.New(502, fmt.Sprintf("agent unreachable: http %d, and not an answer of the agent", status)), Status: status}
 		}
 		return nil, &Unanswered{Err: e}
 	}

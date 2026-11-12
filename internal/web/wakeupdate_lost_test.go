@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
@@ -41,6 +42,16 @@ func TestWakeUpdateARequestWithoutAnAnswerIsToldApart(t *testing.T) {
 		{func() (int, jsonx.M, error) {
 			return 409, jsonx.M{"error": "a shutdown is already pending; cancel it first"}, nil
 		}, "|a shutdown is already pending; cancel it first"},
+		// Second review, N3: an error status with a body that is not the agent's (what the HTTP backend gives for
+		// a proxy's 502 / 504 page, or another server's 404 / 403 page at the agent's address) is a refusal too,
+		// whatever the body: it was "no answer: the request may have arrived".
+		{func() (int, jsonx.M, error) { return 502, nil, devices.Errf("invalid response") }, "|agent unreachable: http 502, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 504, nil, devices.Errf("invalid response") }, "|agent unreachable: http 504, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 404, nil, devices.Errf("invalid response") }, "|agent unreachable: http 404, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 403, nil, devices.Errf("invalid response") }, "|agent unreachable: http 403, and not an answer of the agent"},
+		{func() (int, jsonx.M, error) { return 429, nil, devices.Errf("invalid response") }, "rate_limited|agent unreachable: http 429, and not an answer of the agent"},
+		// a good status with a body that cannot be read: the request may well have been carried out
+		{func() (int, jsonx.M, error) { return 200, nil, devices.Errf("invalid response") }, "no_answer|agent unreachable: invalid response"},
 	} {
 		e.b.Reply = func(string, string) (int, jsonx.M, error) { return c.reply() }
 		if got := code(ops.Update(ctx, "laptop", "Ann", nil)); got != c.want {
@@ -142,6 +153,33 @@ func TestWakeUpdateALostWakeAnswerIsNotNothingSent(t *testing.T) {
 	word, look := wuNeedsALook(h)
 	if !look || word != "left ON" {
 		t.Errorf("the machine is not one that needs a look in the notification: %q %v", word, look)
+	}
+}
+
+// Second review, N3, through a run: the relay's address answers the wake request with a proxy's error page.
+// Nothing can have been sent. The run waited for the machine for the whole online timeout, as after a wake that
+// may have gone out; now it is a wake that could not be sent, said at once, and nothing else is asked of anyone.
+func TestWakeUpdateAnErrorPageForTheWakeIsARefusal(t *testing.T) {
+	for _, status := range []int{502, 504, 404, 403} {
+		e, f := lostFarm(t, "")
+		e.b.Reply = func(agent, path string) (int, jsonx.M, error) {
+			if agent == "nas" && path == "/wol" {
+				return status, nil, devices.Errf("invalid response")
+			}
+			return 0, nil, nil
+		}
+		if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "Alice", BySub: "u2"}); err != nil {
+			t.Fatal(err)
+		}
+		start := f.now
+		h := hostOf(f.finish(), "pc-a")
+		want := fmt.Sprintf("The wake could not be sent: agent unreachable: http %d, and not an answer of the agent. It was not woken.", status)
+		if h.State != wakerun.StGaveUp || h.On != wakerun.OnUntouched || h.WakeUnsure || h.Text != want || f.on["pc-a"] {
+			t.Errorf("%d: pc-a ended as %s (%s, wake unconfirmed %v): %s", status, h.State, h.On, h.WakeUnsure, h.Text)
+		}
+		if got := strings.Join(f.requests(), ", "); got != "nas /wol" || f.now.Sub(start) > 30*time.Second {
+			t.Errorf("%d: requests %q, the run took %s", status, got, f.now.Sub(start))
+		}
 	}
 }
 
