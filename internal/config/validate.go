@@ -221,7 +221,7 @@ func (c *Panel) validateApproval(errs *problems) {
 	}
 	if a.ClientID == "" {
 		if a.Issuer != "" || len(a.Users) > 0 || len(a.Owners) > 0 {
-			errs.add("approval: client_id is missing (the client id of \"Fairy PC actions\" in Pocket ID); without it the block does nothing")
+			errs.add("approval: client_id is missing (the Client ID of the separate client for PC actions in Pocket ID); without it the block does nothing")
 		}
 		return
 	}
@@ -229,7 +229,7 @@ func (c *Panel) validateApproval(errs *problems) {
 		errs.add("approval.client_id must be 1-128 characters of A-Z a-z 0-9 . _ ~ - (copy it from Pocket ID)")
 	}
 	if a.ClientID == c.OIDC.ClientID && c.ApprovalIssuer() == strings.TrimRight(c.OIDC.Issuer, "/") {
-		errs.add("approval.client_id is the sign-in client (oidc.client_id): approvals need a client of their own in Pocket ID (\"Fairy PC actions\")")
+		errs.add("approval.client_id is the sign-in client's Client ID (oidc.client_id). Approvals need a separate client in Pocket ID, with \"Requires Re-Authentication\" on: put that client's Client ID here")
 	}
 	if a.Issuer != "" && !isHTTPURL(a.Issuer) {
 		errs.add("approval.issuer must be an http(s) URL (leave it out to use oidc.issuer)")

@@ -178,7 +178,7 @@ func Check(c Claims, w Want) *Failure {
 	}
 	if now-c.AuthTime > MaxAuthAge.Seconds() {
 		return &Failure{ReasonAuthTime, "Pocket ID did not ask for your passkey again (your last sign-in there is more than two minutes old). " +
-			"The client \"Fairy PC actions\" needs \"Requires Re-Authentication\" switched on in Pocket ID."}
+			"The client for PC actions in Pocket ID (approval.client_id) needs \"Requires Re-Authentication\" switched on."}
 	}
 	if !slices.Contains(c.AMR, "phr") {
 		return &Failure{ReasonAMR, "Pocket ID does not say that a passkey was used for this approval (no \"phr\" in amr): the machines refuse it."}

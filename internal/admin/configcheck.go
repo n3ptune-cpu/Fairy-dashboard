@@ -119,14 +119,14 @@ func (c *cli) configCheck() int {
 func approvalCheck(cfg *config.Panel, problems, notes []string) ([]string, []string) {
 	if !cfg.ApprovalOn() {
 		return problems, append(notes, "approval: not set. Machines that check a passkey approval themselves cannot be switched on "+
-			"for that check or controlled from this panel (approval: {client_id: ...}, the Pocket ID client \"Fairy PC actions\")")
+			"for that check or controlled from this panel (approval: {client_id: ...}, the Client ID of a separate client for PC actions in Pocket ID)")
 	}
 	iss := cfg.ApprovalIssuer()
 	from := "approval.issuer"
 	if cfg.Approval.Issuer == "" {
 		from = "oidc.issuer"
 	}
-	notes = append(notes, fmt.Sprintf("approval.client_id: %s  (Pocket ID client \"Fairy PC actions\" at %s, from %s)", cfg.Approval.ClientID, iss, from),
+	notes = append(notes, fmt.Sprintf("approval.client_id: %s  (at %s, from %s; it must be the Client ID of the separate client for PC actions in Pocket ID, not the sign-in client's)", cfg.Approval.ClientID, iss, from),
 		fmt.Sprintf("approval callback to register in Pocket ID for that client: %s  (Requires Re-Authentication: ON, PKCE: ON)", cfg.ApprovalCallback()))
 	if !strings.HasPrefix(iss, "https://") {
 		problems = append(problems, "approval: the issuer "+iss+" is not https. The machines only accept an https issuer, so the check "+

@@ -35,8 +35,9 @@ import (
 // replayed request (approvalGrant), and the body of the requests to the machines of the plan. It is never
 // logged, never written to a file, never put into an answer to the browser and never kept after the replay.
 
-// approvalClientName is the name the client has in Pocket ID: its page says "Sign in to Fairy PC actions".
-const approvalClientName = "Fairy PC actions"
+// The panel knows the approval client's ID (approval.client_id), never its name: the name is Pocket ID's, and
+// an id of another client (the sign-in client's, put there by mistake) has another name. So no answer and no
+// text of the panel names the client; they show the Client ID, and the page says what it must be.
 
 // approvalPlan is what a kept action carries when it needs an approval: the plan, and the PKCE verifier of the
 // round trip that will ask for it. It lives in memory with the kept action and is gone with it.
@@ -141,7 +142,7 @@ func (c *reqCtx) askApproval(u *model.User, plan *approvalPlan) error {
 		msg = plan.message
 	}
 	detail := map[string]any{"code": "step_up_required", "window_s": c.s.Cfg.StepUpWindowS, "pending": kept != nil, "per_action": true,
-		"message": msg, "approval": map[string]any{"client": approvalClientName, "machines": names}}
+		"message": msg, "approval": map[string]any{"client_id": c.s.Cfg.Approval.ClientID, "machines": names}}
 	if b := plan.plan.Bound(); len(b) == 1 && len(plan.items) == 0 && b[0].Request.Verb != api.ApproveTrustSet {
 		// A single action (audit 5, round 3, r3-x1-03): what the passkey signs, with its numbers, in one line.
 		// The words are made from the request the machine was asked about and bound its challenge to, the
@@ -165,7 +166,7 @@ func (c *reqCtx) askApproval(u *model.User, plan *approvalPlan) error {
 // approvalNotConfigured is the answer when a machine wants an approval and the panel has no client to ask
 // Pocket ID with.
 const approvalNotConfigured = "this machine checks a passkey approval itself before it does this, and this panel has no Pocket ID client " +
-	"for that (approval: in config.yaml, the client \"" + approvalClientName + "\"). Nothing was done."
+	"for that (approval: in config.yaml, with the Client ID of a separate client for PC actions). Nothing was done."
 
 // andNames is a list of names in a sentence ("A", "A and B", "A, B and C"); more than four are counted.
 func andNames(names []string) string {
@@ -283,7 +284,7 @@ func (s *Server) approvalCallback(c *reqCtx) error {
 	idt, lf := s.approval.verifyIDToken(ctx, p, rawID, redact)
 	if lf != nil {
 		return fail(lf.why(), "Pocket ID's answer could not be verified (signature, issuer, client or expiry; the panel's log says which). "+
-			"Is approval.client_id the client id of \""+approvalClientName+"\"?", lf.attrs...)
+			"Is approval.client_id the Client ID of the separate client for PC actions in Pocket ID (not the sign-in client's)?", lf.attrs...)
 	}
 	var extra struct {
 		AuthTime float64  `json:"auth_time"`

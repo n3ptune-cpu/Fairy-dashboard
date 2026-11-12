@@ -38,7 +38,7 @@ func TestTurnOn(t *testing.T) {
 	logs := captureLog(t)
 	// the page: both machines are ready, nothing is on, and each would get the admin as its one approver
 	page, ms := a.page(t)
-	if page["configured"] != true || page["ready"] != 2.0 || page["required"] != 0.0 || page["client"] != "Fairy PC actions" ||
+	if page["configured"] != true || page["ready"] != 2.0 || page["required"] != 0.0 || page["client_id"] != testApprovalClient ||
 		page["callback"] != "https://panel.example.com/auth/approval/callback" || len(page["keys"].([]any)) != 1 {
 		t.Fatalf("page: %v", page)
 	}
@@ -61,7 +61,7 @@ func TestTurnOn(t *testing.T) {
 	d := r.body["detail"].(map[string]any)
 	items := fmt.Sprint(d["items"])
 	key := page["keys"].([]any)[0].(map[string]any)
-	for _, want := range []string{"Pocket ID: " + a.iss.URL(), "client " + testApprovalClient, "thumbprint " + key["thumbprint"].(string),
+	for _, want := range []string{"Pocket ID: " + a.iss.URL(), "Client ID " + testApprovalClient, "thumbprint " + key["thumbprint"].(string),
 		"laptop (checked by its agent): may approve: Alice [u2, admin]", "tower (checked by its agent): may approve: Alice [u2, admin]", "locked"} {
 		if !strings.Contains(items, want) {
 			t.Errorf("the dialog lacks %q:\n%s", want, items)

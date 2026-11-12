@@ -497,14 +497,15 @@ It is off for every machine until you turn it on, and machines with an older age
 | PKCE | on |
 | Requires Re-Authentication | **on**. This is what makes Pocket ID ask for the passkey every time. Without it Pocket ID answers from its own session, and the machine refuses the approval as too old (after Pocket ID's 60 seconds of grace). |
 
-Do not reuse the sign-in client: the panel refuses the same client id for both, and the machines accept only
-approvals made for this one.
+Do not reuse the sign-in client: the panel refuses the same Client ID for both (it does not start, and
+`fairy admin config check` says "approval.client_id is the sign-in client's Client ID ..."), and the machines
+accept only approvals made for this one.
 
 **2. Tell the panel** (config.yaml), then restart it:
 
 ```yaml
 approval:
-  client_id: "<the client id Pocket ID shows for Fairy PC actions>"
+  client_id: "<the Client ID of Fairy PC actions in Pocket ID; not the sign-in client's>"
   # issuer: https://id.example.org     # only if it is another Pocket ID than oidc.issuer
   # users: ["<Pocket ID user id>"]     # may approve too, besides the panel's admins and a host's owner
   # owners: {Straw: "<Pocket ID user id>"}   # who the owner label "Straw" is in Pocket ID
@@ -523,7 +524,11 @@ with the same button for that machine. Turn on is deliberate and proven:
   key(s) Pocket ID publishes right now (key id and thumbprint) and the list of people who may approve there,
   by name and user id. By default these are the panel's admins and the host's owner, if `approval.owners`
   says who that is in Pocket ID; `approval.users` adds people. The list is never empty.
-* You confirm **once**, with your passkey at "Fairy PC actions", for all chosen machines (at most 64).
+* You confirm **once**, with your passkey at Pocket ID, for all chosen machines (at most 64). Pocket ID's
+  page names the client you made (`Fairy PC actions`); the panel shows its **Client ID** only, because a
+  client's name is Pocket ID's to know. If Pocket ID answers "redirect_uri ... is not registered for this
+  client", `approval.client_id` is another client's (usually the sign-in client's), or the Callback URL is
+  missing in that client.
 * Each machine accepts its new trust only together with that approval, and only if the approval verifies
   with the very values it is asked to trust. So a wrong address, client id, key or user id is found now, not
   at the first shutdown. Nothing is written otherwise.
@@ -582,8 +587,8 @@ changed while you were confirming"). Accept only when you know why it changed.
 
 **What you see afterwards.** A fan, power or update action on such a machine opens the usual dialog, which
 now says that the machine checks this itself and, in one line, what your passkey signs ("shutdown in 60 s",
-"fan zone 1 to 30%"), and then Pocket ID asks for your passkey under the name "Fairy
-PC actions". One passkey per action: the panel's own 3-minute window does not count for these machines.
+"fan zone 1 to 30%"), and then Pocket ID asks for your passkey under the name of that client ("Fairy PC
+actions", if you named it so). One passkey per action: the panel's own 3-minute window does not count for these machines.
 Two exceptions, both decided by the machine and shown in its Approval box:
 
 * **Fan window** (default 30 s, at most 60): after one approved fan change, further fan changes on that
@@ -1132,7 +1137,7 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   simulated data on loopback only and only under the names 127.0.0.1, ::1 or localhost, is in every build.)
 * The check on the machine itself (optional, per machine; "The check on the machine itself" above): a machine
   that has it on verifies a Pocket ID ID token itself before a fan, power or update action: signature against
-  the key(s) it pinned, issuer, audience (the client "Fairy PC actions"), a user on its own list, a passkey
+  the key(s) it pinned, issuer, audience (the approval client, `approval.client_id`), a user on its own list, a passkey
   use that is seconds old, and a nonce that is a hash of its own one-time challenge and the exact request.
   The panel asks for that token in a round trip of its own (`/auth/approval/callback`, PKCE, the kept
   action's id as state) and checks it too, for the audit log and to fail early; the token is kept in memory

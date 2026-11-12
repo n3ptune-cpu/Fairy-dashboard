@@ -122,7 +122,8 @@ agents:
 # that client in Pocket ID first: Callback URL <public_url>/auth/approval/callback, Requires Re-Authentication
 # ON, PKCE ON, Public Client ON (or a secret as FAIRY_APPROVAL_CLIENT_SECRET in fairy.env).
 # approval:
-#   client_id: 00000000-0000-4000-8000-000000000000  # the client id Pocket ID shows for "Fairy PC actions"
+#   client_id: 00000000-0000-4000-8000-000000000000  # the Client ID of that second client. NOT the sign-in
+#                                         # client's (oidc.client_id): the panel refuses to start with that one.
 #   # issuer: https://id.example.org      # only if it is another Pocket ID than oidc.issuer
 #   # users: ["<Pocket ID user id>"]      # may approve too, besides the panel's admins and a host's owner
 #   # owners: {Straw: "<Pocket ID user id>"}  # who the owner label "Straw" (owner: Straw on a host) is in Pocket ID:

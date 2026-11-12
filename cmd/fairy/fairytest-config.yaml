@@ -20,5 +20,6 @@ enroll:
 # Sign-in to this panel stays off. Take the three values from Pocket ID (the client "Fairy PC actions").
 # approval:
 #   issuer: https://id.example.org      # your Pocket ID, as its own address bar shows it
-#   client_id: PASTE-THE-CLIENT-ID      # of "Fairy PC actions" (a public client: there is nothing more to store)
+#   client_id: PASTE-THE-CLIENT-ID      # of "Fairy PC actions", NOT of the client the real panel signs in with
+#                                       # (a public client: there is nothing more to store)
 #   users: [PASTE-YOUR-USER-ID]         # who may approve on a machine you switch the check on for

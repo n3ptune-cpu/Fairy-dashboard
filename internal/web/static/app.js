@@ -249,7 +249,8 @@ let stepUpOpen = null;  // the open dialog: { kept, going } (going: "Continue to
 function showStepUp(pending, detail) {
   state.menu = null; render();
   const kept = !!detail?.pending, perAction = !!detail?.per_action;  // per_action: step_up_per_action is on
-  // approval: a machine this action goes to checks the approval itself (the Pocket ID client "Fairy PC actions")
+  // approval: a machine this action goes to checks the approval itself. The panel knows the approval client's
+  // ID, not its name (the name is Pocket ID's): the dialog shows the Client ID and what it must be.
   const appr = detail?.approval && typeof detail.approval === "object" ? detail.approval : null;
   const apprWho = appr ? andList((Array.isArray(appr.machines) ? appr.machines : []).map(String)) || "The machine" : "";
   const apprMany = !!appr && Array.isArray(appr.machines) && appr.machines.length > 1;
@@ -269,16 +270,17 @@ function showStepUp(pending, detail) {
   // A single action that a machine checks itself: what the passkey signs, with its numbers ("shutdown in 60 s",
   // "fan zone 1 to 30%"), as the panel made it from the request the machine was asked about (detail.signs).
   const signs = kept && appr && typeof detail.signs === "string" && detail.signs ? `<span class="note">Your passkey signs</span><b id="su-signs">${esc(detail.signs)}</b>` : "";
+  const client = appr ? `<span class="note">Client ID${clientIdInfo("su-client-id")}</span><b id="su-client"><code>${esc(appr.client_id || "–")}</code></b>` : "";
   // An action about a list (the machines of "Update unpowered hosts"): the panel's own line for each one.
   const items = kept && Array.isArray(detail.items) && detail.items.length ? `<ul class="su-items" id="su-items">${detail.items.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
   const m = $("#modal");
   m.innerHTML = `<div class="modal-box stepup" role="dialog" aria-modal="true" aria-labelledby="stitle"${appr ? " data-approval" : ""}>
     <div class="stepup-ico">${I.shield}</div>
     <h3 id="stitle">Confirm it's you</h3>
-    <p>${appr ? `<b id="su-machine">${esc(apprWho)}</b> ${apprMany ? "will each check this themselves before they do anything" : "will check this itself before it does anything"}. Pocket ID will ask you to sign in to <b id="su-client">${esc(appr.client || "Fairy PC actions")}</b>. Your passkey confirms only the action below.`
+    <p>${appr ? `<b id="su-machine">${esc(apprWho)}</b> ${apprMany ? "will each check this themselves before they do anything" : "will check this itself before it does anything"}. Pocket ID will ask for your passkey. It confirms only the action below.`
       : perAction ? "This action needs its own Pocket ID sign-in. It confirms only the action below."
       : `${win !== cfgWin ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${esc(winText)}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtSince(age)}</b> ago.` : ""}`}</p>
-    <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}${signs}${items}</div>
+    <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}${signs}${items}${client}</div>
     <p class="note" id="su-note">${kept && appr ? `You'll confirm with your passkey at Pocket ID. Right after that, Fairy sends this action with your approval to ${apprMany ? "each machine" : "the machine"}, once, and shows you the result here. Nothing has been done yet.`
       : kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
       : newClient ? `This browser, or the address it now has, has not confirmed a sign-in for this session yet, so nothing was kept. Sign in again at Pocket ID (passkey) and you come straight back here to finish it${perAction ? "; it then asks once more, for this action alone" : ""}. Nothing has been sent yet.`
@@ -705,6 +707,10 @@ function helperPausedLine(s) {
   return `<div class="paused-line"><span>${esc(text)}</span>${btn}</div>`;
 }
 // ---- the machine's own check of approvals (s.approval; absent for agents from before it)
+// The approval client is shown by its ID only: the panel never learns a client's name from Pocket ID, and a name
+// printed next to an id hides a wrong id (the sign-in client's, put into approval.client_id by mistake).
+const CLIENT_ID_MUST = "It must be the Client ID of the separate client for PC actions in Pocket ID, not the sign-in client's.";
+const clientIdInfo = (key) => infoBtn(key, "Client ID", `<p>${CLIENT_ID_MUST}</p>`);
 const APPROVAL_STATE = table({ off: ["", "off"], required: ["ok", "required"], broken: ["bad", "broken"], unknown: ["warn", "unknown"] });
 const APPROVAL_VERB = table({ fan_set: "fan speed", fan_mode: "fan mode", power: "shutdown / restart / sleep", apply_update: "agent update" });
 const approvalOf = (s) => (s?.approval && typeof s.approval === "object" ? s.approval : null);
@@ -819,7 +825,7 @@ function approvalBox(s) {
     ${rec?.shown_id && rec.shown_id !== rec.machine_id && (rec.machine_id || a.binding === "no_record") ? row("Machine id it shows", `<code id="ap-shown">${esc(shortKey(rec.shown_id))}</code>`, `The id the machine shows now: ${rec.shown_id}`) : ""}
     ${checks.length ? row("Checked by the agent", esc(andList(checks)), "These requests do not go through the helper on this machine; its agent checks them with the same trust file") : ""}
     ${row("Pocket ID", esc(a.issuer || "–"))}
-    ${row("Client", `<code>${esc(a.client_id || "–")}</code>`, "The Pocket ID client \"Fairy PC actions\"")}
+    ${row(`Client ID${clientIdInfo(`apbox-client-${s.id}`)}`, `<code>${esc(a.client_id || "–")}</code>`)}
     ${row(`Pinned key${(a.keys || []).length === 1 ? "" : "s"}`, keys, "The Pocket ID signing key(s) this machine accepts, by key id and thumbprint")}
     ${row("Allowed users", esc(a.users ?? "–"), "How many Pocket ID users may approve on this machine")}
     ${row("Fan window", a.fan_window_s == null ? "–" : a.fan_window_s === 0 ? "off" : `${esc(a.fan_window_s)} s`, "After one approved fan change, more fan changes need no approval for this long")}
@@ -858,7 +864,7 @@ const apvUsers = (m) => (m.users || []).map((u) => `<span class="ap-user">${u.na
 // The button on the page of a machine whose check is off (admins), or why it cannot be switched on from here.
 function approvalTurnOn(s) {
   if (!state.me?.can_control) return "";
-  if (!state.me.approval_client) return '<div class="note">It cannot be switched on from this panel: config.yaml has no <code>approval:</code> block (the Pocket ID client "Fairy PC actions").</div>';
+  if (!state.me.approval_client) return '<div class="note">It cannot be switched on from this panel: config.yaml has no <code>approval:</code> block (a separate Pocket ID client for PC actions).</div>';
   const m = apvMachine(s), why = controlWhyNot();
   if (!m) { fetchApproval(); return '<div class="note">Checking whether it can be switched on…</div>'; }
   return `<div class="row-gap ap-on"><button class="btn primary" type="button" data-act="ap-open" data-id="${esc(m.id)}" ${m.ready && !why ? "" : "disabled"}
@@ -895,10 +901,10 @@ function approvalBanner() {
       <button class="btn primary" type="button" data-act="ap-open" ${d.ready && !why ? "" : "disabled"}
         title="${esc(why || (d.ready ? "Choose the machines and switch the check on: one passkey for all of them" : "No machine is ready to be switched on"))}">${I.shield}Turn on… (${esc(d.ready)})</button></div>
     <p class="note" id="ap-ready"><b>${esc(d.ready)} machine${d.ready === 1 ? " is" : "s are"} ready for the check on the machine itself.</b>
-      A machine with the check on verifies a Pocket ID approval (passkey, client "${esc(d.client)}") itself before it changes its fans, shuts down, restarts, sleeps or updates its agent:
+      A machine with the check on verifies a Pocket ID approval (passkey) itself before it changes its fans, shuts down, restarts, sleeps or updates its agent:
       the panel, or someone with the panel's control token, cannot do these without you. ${esc(d.required)} already check${d.required === 1 ? "s" : ""}${d.broken ? `, <b class="bad-t">${esc(d.broken)} broken</b>` : ""}.
       Nothing is switched on by itself. Once it is on, a machine is changed only on the machine (fairy-agent helper-trust).</p>
-    ${d.configured ? "" : '<div class="warnbox">This panel has no <code>approval:</code> block in config.yaml (the Pocket ID client "Fairy PC actions"), so it cannot switch the check on or get approvals.</div>'}
+    ${d.configured ? "" : '<div class="warnbox">This panel has no <code>approval:</code> block in config.yaml (a separate Pocket ID client for PC actions), so it cannot switch the check on or get approvals.</div>'}
     ${d.keys_error ? `<div class="warnbox">${esc(d.keys_error)}</div>` : ""}
     ${d.any_person ? '<div class="warnbox">Test build: this panel does not check that the person who approves is the person signed in (nobody is). The machines still check the approver against their own list, which comes from <code>approval.users</code>.</div>' : ""}
     ${turnOnResults(d.last)}
@@ -917,7 +923,7 @@ async function openTurnOn(only) {
     <p>From then on each ticked machine verifies a Pocket ID approval <b>itself</b> before it changes its fans, shuts down, restarts, sleeps or updates its agent.
       Every such action asks for your passkey, every time. This is what each machine will trust:</p>
     <div class="list-row"><span>Pocket ID</span><span>${esc(d.issuer)}</span></div>
-    <div class="list-row"><span>Client</span><span>${esc(d.client)} · <code>${esc(d.client_id)}</code></span></div>
+    <div class="list-row"><span>Client ID${clientIdInfo("ap-client-id")}</span><span><code id="ap-client-id">${esc(d.client_id)}</code></span></div>
     ${(d.keys || []).map((k) => `<div class="list-row"><span>Signing key</span><span>${esc(k.kid)} · <code title="${esc(k.thumbprint)}">${esc(shortKey(k.thumbprint))}</code></span></div>`).join("")}
     <div class="wu-sub">Machines, and who may approve on each</div>
     <div class="opts wu-list" id="ap-list">${ready.map((x) => `<label class="check opt"><input type="checkbox" data-ap value="${esc(x.id)}" checked><span>${esc(x.name)} <span class="note">checked by its ${esc(x.enforced_by || "agent")}</span>

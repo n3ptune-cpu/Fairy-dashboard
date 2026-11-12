@@ -111,8 +111,7 @@ type approvalAdminPage struct {
 	Issuer     string              `json:"issuer"`
 	ClientID   string              `json:"client_id"`
 	Callback   string              `json:"callback"`
-	Client     string              `json:"client"` // the client's name in Pocket ID
-	Keys       []model.ApprovalKey `json:"keys"`   // what Pocket ID publishes now (what a machine would pin)
+	Keys       []model.ApprovalKey `json:"keys"` // what Pocket ID publishes now (what a machine would pin)
 	KeysError  string              `json:"keys_error,omitempty"`
 	Machines   []approvalMachine   `json:"machines"`
 	Ready      int                 `json:"ready"`
@@ -352,7 +351,7 @@ func (s *Server) approvalPage(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
-	page := approvalAdminPage{Configured: s.Cfg.ApprovalOn(), Client: approvalClientName, Keys: []model.ApprovalKey{},
+	page := approvalAdminPage{Configured: s.Cfg.ApprovalOn(), Keys: []model.ApprovalKey{},
 		Machines: []approvalMachine{}, Max: MaxTurnOn, AnyPerson: s.approvalAnyPerson}
 	var keys []api.TrustKey
 	if page.Configured {
@@ -370,7 +369,7 @@ func (s *Server) approvalPage(c *reqCtx) error {
 			m.MachineID, m.ShownID = "", ""
 		}
 		if !page.Configured && m.Ready {
-			m.Ready, m.Why = false, "the panel has no approval: block in config.yaml (the Pocket ID client \""+approvalClientName+"\")"
+			m.Ready, m.Why = false, "the panel has no approval: block in config.yaml (a separate Pocket ID client for PC actions)"
 		}
 		if m.Ready && keys == nil {
 			m.Ready, m.Why = false, "Pocket ID's keys cannot be fetched right now"
@@ -431,8 +430,8 @@ func (s *Server) approvalTurnOn(c *reqCtx) error {
 		return err
 	}
 	if !s.Cfg.ApprovalOn() {
-		return apierr.New(409, "this panel has no Pocket ID client for approvals (approval: in config.yaml, the client \""+approvalClientName+
-			"\"): the check cannot be switched on from here")
+		return apierr.New(409, "this panel has no Pocket ID client for approvals (approval: in config.yaml, with the Client ID of a separate "+
+			"client for PC actions): the check cannot be switched on from here")
 	}
 	if g := c.approved(); g != nil {
 		return s.turnOnRun(c, u, g, b.Hosts)
@@ -451,7 +450,7 @@ func (s *Server) approvalTurnOn(c *reqCtx) error {
 		bound   []approval.Bound
 		refused []turnOnResult
 		trust   = map[string]api.TrustInit{}
-		items   = []string{fmt.Sprintf("Pocket ID: %s · client %s (%s)", s.Cfg.ApprovalIssuer(), s.Cfg.Approval.ClientID, approvalClientName)}
+		items   = []string{fmt.Sprintf("Pocket ID: %s · Client ID %s", s.Cfg.ApprovalIssuer(), s.Cfg.Approval.ClientID)}
 	)
 	for i, k := range shownKeys(keys) {
 		items = append(items, fmt.Sprintf("Key %d the machines will pin: %s · thumbprint %s", i+1, k.Kid, k.Thumbprint))

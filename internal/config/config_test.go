@@ -516,6 +516,19 @@ func TestApprovalBlock(t *testing.T) {
 	if c, err := Parse([]byte(base + `approval: {client_id: pc, owners: {Straw: user-s}}`)); err != nil || c.Approval.Owners["Straw"] != "user-s" {
 		t.Error("owners:", err)
 	}
+	// the sign-in client's Client ID (the owner's mix-up of 2026-11-12): refused with what to do instead; the
+	// panel does not start with it, and `fairy admin config check` says the same (internal/admin)
+	if _, err := Parse([]byte(base + `approval: {client_id: fairy}`)); err == nil ||
+		!strings.Contains(err.Error(), "approval.client_id is the sign-in client's Client ID (oidc.client_id). Approvals need a separate client in Pocket ID, with \"Requires Re-Authentication\" on: put that client's Client ID here") {
+		t.Errorf("the sign-in client's id as approval.client_id: %v", err)
+	}
+	// a panel without a sign-in client (a test build has no oidc: block) has nothing to compare with
+	if errs := func() (p problems) {
+		(&Panel{Approval: Approval{ClientID: "fairy", Issuer: "https://id.example.com", RunApprovalWaitS: 900}}).validateApproval(&p)
+		return
+	}(); len(errs) != 0 {
+		t.Errorf("without a sign-in client: %v", errs)
+	}
 	// the same client id at another Pocket ID is a different client
 	if _, err := Parse([]byte(base + `approval: {client_id: fairy, issuer: "https://other.example.org"}`)); err != nil {
 		t.Error(err)

@@ -374,8 +374,8 @@ func testServer(srv *web.Server, p *panel) func() {
 		slog.Warn("!!! " + web.TestBanner + " User " + web.TestUser.Sub + ", files in " + testDir() + " !!!")
 	}
 	if p.cfg.ApprovalOn() {
-		slog.Warn("!!! TEST BUILD: approvals for the machines are asked at " + p.cfg.ApprovalIssuer() + " (client " + p.cfg.Approval.ClientID +
-			", callback " + p.cfg.ApprovalCallback() + "). This panel does NOT check that the person who approves is the person signed " +
+		slog.Warn("!!! TEST BUILD: approvals for the machines are asked at " + p.cfg.ApprovalIssuer() + " (Client ID " + p.cfg.Approval.ClientID +
+			": it must be the one of the separate client for PC actions in Pocket ID, not the sign-in client's; callback " + p.cfg.ApprovalCallback() + "). This panel does NOT check that the person who approves is the person signed " +
 			"in here: nobody is. Each machine still checks the approver against its own list. !!!")
 	}
 	address := strings.TrimRight(p.cfg.BaseURL(), "/") + "/?key=" + key

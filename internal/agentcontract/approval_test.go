@@ -321,7 +321,7 @@ func (pn *approvalPanel) call(method, path string, body any) (int, map[string]an
 func asked(st int, out map[string]any) (id string, machines []any, items string, ok bool) {
 	d, _ := out["detail"].(map[string]any)
 	ap, _ := d["approval"].(map[string]any)
-	if st != 401 || d["code"] != "step_up_required" || ap == nil || ap["client"] != "Fairy PC actions" {
+	if st != 401 || d["code"] != "step_up_required" || ap == nil || ap["client_id"] != approvalClient || ap["client"] != nil {
 		return "", nil, "", false
 	}
 	id, _ = d["pending_id"].(string)

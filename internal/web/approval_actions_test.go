@@ -139,7 +139,7 @@ func (a *approvalEnv) post(path string, body any) resp { return a.do("POST", pat
 func approvalAsked(r resp) (id string, machines []any, ok bool) {
 	d, _ := r.body["detail"].(map[string]any)
 	ap, _ := d["approval"].(map[string]any)
-	if r.code != 401 || d["code"] != "step_up_required" || ap == nil || ap["client"] != "Fairy PC actions" || d["per_action"] != true {
+	if r.code != 401 || d["code"] != "step_up_required" || ap == nil || ap["client_id"] != testApprovalClient || ap["client"] != nil || d["per_action"] != true {
 		return "", nil, false
 	}
 	id, _ = d["pending_id"].(string)

@@ -272,7 +272,7 @@ func TestConfigCheckExplainsApproval(t *testing.T) {
 	}
 	out := check("approval: {client_id: pc-actions, users: [user-b]}\n")
 	for _, want := range []string{
-		"ok    approval.client_id: pc-actions  (Pocket ID client \"Fairy PC actions\" at https://id.example, from oidc.issuer)",
+		"ok    approval.client_id: pc-actions  (at https://id.example, from oidc.issuer; it must be the Client ID of the separate client for PC actions in Pocket ID, not the sign-in client's)",
 		"https://p.example/auth/approval/callback  (Requires Re-Authentication: ON, PKCE: ON)",
 		"ok    FAIRY_APPROVAL_CLIENT_SECRET: not set (public client: PKCE only)",
 		"ok    approval.users: 1 more than the panel's admins",
@@ -292,6 +292,19 @@ func TestConfigCheckExplainsApproval(t *testing.T) {
 	}
 	if !strings.Contains(out, "WARN  approval: the issuer http://id.lan:1411 is not https") || !strings.Contains(out, "from approval.issuer") {
 		t.Errorf("an issuer the machines refuse must be a warning:\n%s", out)
+	}
+	// The owner's mix-up of 2026-11-12: the sign-in client's Client ID in approval.client_id. The check refuses
+	// the file with a plain sentence (and `fairy serve` does not start with it: config.Parse is the same), and
+	// prints no client name anywhere.
+	out = check("approval: {client_id: c}\n")
+	if !strings.Contains(out, "FAIL  config "+cfg+" is invalid:") ||
+		!strings.Contains(out, "approval.client_id is the sign-in client's Client ID (oidc.client_id). Approvals need a separate client in Pocket ID, with \"Requires Re-Authentication\" on: put that client's Client ID here") {
+		t.Errorf("the sign-in client's id as approval.client_id must be refused:\n%s", out)
+	}
+	for _, o := range []string{out, check("approval: {client_id: pc-actions}\n"), check("")} {
+		if strings.Contains(o, "Fairy PC actions") {
+			t.Errorf("config check prints a client name it cannot know:\n%s", o)
+		}
 	}
 }
 

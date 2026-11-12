@@ -58,7 +58,7 @@ func TestTheSingleDialogSaysWhatThePasskeySigns(t *testing.T) {
 	js := appJS(t)
 	for _, want := range []string{
 		"const signs = kept && appr && typeof detail.signs === \"string\" && detail.signs ? `<span class=\"note\">Your passkey signs</span><b id=\"su-signs\">${esc(detail.signs)}</b>` : \"\";",
-		"<b>${esc(pending.label)}</b>${runs}${signs}${items}</div>",
+		"<b>${esc(pending.label)}</b>${runs}${signs}${items}",
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %q", want)

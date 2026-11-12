@@ -487,7 +487,8 @@ The same as I1 to I5 in few words, for somebody who has done it before. Every st
 
    * `<issuer>`: the address of your Pocket ID as its own address bar shows it, `https://` and the host
      name, nothing behind it. It is the `issuer:` under `oidc:` in the real panel's `config.yaml`.
-   * `<client id>`: Pocket ID, OIDC Clients, `Fairy PC actions`: the field **Client ID**.
+   * `<client id>`: Pocket ID, OIDC Clients, `Fairy PC actions`: the field **Client ID**. Not the Client ID
+     of the client the real panel signs in with ("Fairy"): the two are different clients.
    * `<your Pocket ID user id>`: Pocket ID, Users, open your own user: the last part of the address in the
      address bar. It is an id, not your name and not your e-mail address.
 
@@ -497,8 +498,9 @@ The same as I1 to I5 in few words, for somebody who has done it before. Every st
    http://127.0.0.1:8080/auth/approval/callback`.
 4. The test VM with the agent of agent zip 3 (I3): its page has an **Approval** box that says "off".
 5. **Turn on…** in that box, **Turn on for 1 machine (passkey)**, **Continue to Pocket ID**, your passkey at
-   "Fairy PC actions". The browser comes back to the panel (see the note below), a message says "1 of 1
-   machines now check approvals themselves", and the Approval box says **required**.
+   Pocket ID, whose page must name the client `Fairy PC actions`. The browser comes back to the panel (see
+   the note below), a message says "1 of 1 machines now check approvals themselves", and the Approval box
+   says **required**.
 6. Power menu, **Shut down**, 60 seconds, type the name. "Confirm it's you" says that NSX-TEST-VM will check
    this itself. **Continue to Pocket ID**, passkey. Back in the panel a bar on the VM's page counts down:
    "Shut down in 0:57 requested by test-admin", with **Cancel** at its right end.
@@ -512,6 +514,12 @@ asks the browser to come again from its own page. A real panel does not need thi
 open the address printed in its console window." instead, this browser is not the one that opened the printed
 address of step 2: open that address here and press the button again.
 
+**"redirect_uri ... is not registered for this client"** on Pocket ID's page (step 5 or 6) means that the
+`client_id` in `config.yaml` is another client's, usually the Client ID of the client the real panel signs in
+with, or that the Callback URL line of step 1 is missing in `Fairy PC actions`. The panel shows the
+**Client ID** it uses in the Turn on dialog and in "Confirm it's you", without a name: compare it with the
+Client ID of `Fairy PC actions` in Pocket ID. Correct step 3 and start the panel again.
+
 ### I1. Pocket ID: one new client
 
 In Pocket ID, as administrator: OIDC Clients, add a client.
@@ -524,7 +532,8 @@ In Pocket ID, as administrator: OIDC Clients, add a client.
 | PKCE | on |
 | Requires Re-Authentication | **on** |
 
-Save, and copy its **Client ID**. Later, for the live panel, add a second Callback URL to the same client:
+Save, and copy its **Client ID** (of this client, not of the client the real panel signs in with: Pocket ID
+lists both, and the panel cannot tell their ids apart by a name). Later, for the live panel, add a second Callback URL to the same client:
 `https://<your panel>/auth/approval/callback` (the panel's `public_url` with `/auth/approval/callback`; a
 client that is not public works too, with its secret as `FAIRY_APPROVAL_CLIENT_SECRET` in `fairy.env`).
 
@@ -606,16 +615,24 @@ From here on do **not** press Re-pair for the VM, and do not press Update: both 
 1. On the VM's page, Approval box: **Turn on…**. (The same is on the Updates page: "1 machine is ready for
    the check on the machine itself".)
 2. The dialog "Turn on the check on the machine itself" lists what the VM will trust: your Pocket ID's
-   address, the client id, the signing key with its thumbprint, and "may approve:" with the user id from
+   address, the **Client ID** (compare it with the Client ID of `Fairy PC actions` in Pocket ID: the panel
+   shows the id only, it does not know a client's name), the signing key with its thumbprint, and "may approve:" with the user id from
    I2 and "(approval.users)" behind it: where the id comes from. Read the user id. Press **Turn on for 1 machine (passkey)**. "Confirm it's you" then shows the same
    once more, line by line; press **Continue to Pocket ID**.
-3. The browser goes to your Pocket ID. It shows **Fairy PC actions** and asks for your passkey. Use it.
+3. The browser goes to your Pocket ID. Its page names the client, **Fairy PC actions**, and asks for your
+   passkey. Use it.
+
+   If Pocket ID shows an error instead, "redirect_uri ... is not registered for this client" (or its page
+   names another client): the `client_id` in `fairy-test\config.yaml` is another client's, usually the
+   Client ID of the client the real panel signs in with; or the Callback URL line of I1 is missing in
+   `Fairy PC actions`. Nothing was changed on the VM. Correct `client_id` (I0, step 3), restart the panel
+   and press **Turn on…** again.
 4. You are back in the panel, on the page you started from (a white page "Fairy test build: back from Pocket
    ID." can show for a moment on the way: I0, "The way back from Pocket ID"). The `fairy-test.exe serve` window has a new
    line that starts with `time=... level=WARN msg="!!! TEST BUILD: an approval was accepted without
    checking` and ends with `approver=<an id>`: that is your user id as Pocket ID sends it.
 5. A message at the bottom right says "1 of 1 machines now check approvals themselves". The Approval box of
-   the VM says **required**, with Pocket ID's address, the client, the pinned key and "Allowed users: 1".
+   the VM says **required**, with Pocket ID's address, the Client ID, the pinned key and "Allowed users: 1".
    The result line (**switched on · locked**) is on the **Updates** page, in the box "The check on the
    machine itself", under "Last Turn on".
 
@@ -632,8 +649,8 @@ From here on do **not** press Re-pair for the VM, and do not press Update: both 
 ### I5. Shutdown with a delay, and cancel
 
 1. VM's page, Power menu: **Shut down**, delay 60 seconds, type the name, confirm.
-2. The dialog says that NSX-TEST-VM will check this itself. **Continue to Pocket ID**, passkey at "Fairy PC
-   actions".
+2. The dialog says that NSX-TEST-VM will check this itself, what your passkey signs ("shutdown in 60 s") and
+   the Client ID. **Continue to Pocket ID**, passkey (Pocket ID's page names the client, "Fairy PC actions").
 3. Back in the panel: the page shows the countdown. Windows on the VM shows its shutdown notice.
 4. Press **Cancel** on the page within the minute. It needs no passkey and no confirmation of any kind:
    the countdown is gone at once, the message says "The shutdown of NSX-TEST-VM is cancelled." and the VM
