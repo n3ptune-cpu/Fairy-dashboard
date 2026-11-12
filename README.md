@@ -579,7 +579,8 @@ id the dialog showed: a machine that shows another one by the time you have conf
 changed while you were confirming"). Accept only when you know why it changed.
 
 **What you see afterwards.** A fan, power or update action on such a machine opens the usual dialog, which
-now says that the machine checks this itself, and then Pocket ID asks for your passkey under the name "Fairy
+now says that the machine checks this itself and, in one line, what your passkey signs ("shutdown in 60 s",
+"fan zone 1 to 30%"), and then Pocket ID asks for your passkey under the name "Fairy
 PC actions". One passkey per action: the panel's own 3-minute window does not count for these machines.
 Two exceptions, both decided by the machine and shown in its Approval box:
 

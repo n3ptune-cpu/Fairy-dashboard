@@ -99,7 +99,7 @@ func TestConfirmDialogSaysEveryActionInPlainWords(t *testing.T) {
 	dlg := js[from:to]
 	html := dlg[strings.Index(dlg, "const runs ="):]
 	for _, want := range []string{
-		`<span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}${items}`,
+		`<span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}${signs}${items}`,
 		`<span class="note">Fairy will run</span><b id="su-runs">${esc(detail.action)}</b>`,
 		"detail.items.map((x) => `<li>${esc(x)}</li>`)",
 	} {

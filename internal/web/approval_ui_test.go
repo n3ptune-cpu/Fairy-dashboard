@@ -51,7 +51,7 @@ func TestUIApproval(t *testing.T) {
 		}
 	}
 	// the dialog keeps the kept action's own description
-	for _, want := range []string{`<b>${esc(pending.label)}</b>${runs}${items}`, `Fairy will run`} {
+	for _, want := range []string{`<b>${esc(pending.label)}</b>${runs}${signs}${items}`, `Fairy will run`} {
 		if !strings.Contains(js, want) {
 			t.Errorf("the dialog lost %q", want)
 		}

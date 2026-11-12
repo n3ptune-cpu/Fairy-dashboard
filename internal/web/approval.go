@@ -142,6 +142,12 @@ func (c *reqCtx) askApproval(u *model.User, plan *approvalPlan) error {
 	}
 	detail := map[string]any{"code": "step_up_required", "window_s": c.s.Cfg.StepUpWindowS, "pending": kept != nil, "per_action": true,
 		"message": msg, "approval": map[string]any{"client": approvalClientName, "machines": names}}
+	if b := plan.plan.Bound(); len(b) == 1 && len(plan.items) == 0 && b[0].Request.Verb != api.ApproveTrustSet {
+		// A single action (audit 5, round 3, r3-x1-03): what the passkey signs, with its numbers, in one line.
+		// The words are made from the request the machine was asked about and bound its challenge to, the
+		// same ones a batch's lines are made from. (A batch and a Turn on have their own lines: items.)
+		detail["signs"] = requestWords(b[0].Request)
+	}
 	if !math.IsInf(age, 1) {
 		detail["auth_age_s"] = math.Round(age)
 	}

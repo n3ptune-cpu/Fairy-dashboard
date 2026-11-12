@@ -266,6 +266,9 @@ function showStepUp(pending, detail) {
   const winText = win % 60 ? `${win} seconds` : `${win / 60} minute${win === 60 ? "" : "s"}`;
   const nextPath = "/" + (location.hash || "#/");
   const runs = kept && typeof detail.action === "string" && detail.action ? `<span class="note">Fairy will run</span><b id="su-runs">${esc(detail.action)}</b>` : "";
+  // A single action that a machine checks itself: what the passkey signs, with its numbers ("shutdown in 60 s",
+  // "fan zone 1 to 30%"), as the panel made it from the request the machine was asked about (detail.signs).
+  const signs = kept && appr && typeof detail.signs === "string" && detail.signs ? `<span class="note">Your passkey signs</span><b id="su-signs">${esc(detail.signs)}</b>` : "";
   // An action about a list (the machines of "Update unpowered hosts"): the panel's own line for each one.
   const items = kept && Array.isArray(detail.items) && detail.items.length ? `<ul class="su-items" id="su-items">${detail.items.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
   const m = $("#modal");
@@ -275,7 +278,7 @@ function showStepUp(pending, detail) {
     <p>${appr ? `<b id="su-machine">${esc(apprWho)}</b> ${apprMany ? "will each check this themselves before they do anything" : "will check this itself before it does anything"}. Pocket ID will ask you to sign in to <b id="su-client">${esc(appr.client || "Fairy PC actions")}</b>. Your passkey confirms only the action below.`
       : perAction ? "This action needs its own Pocket ID sign-in. It confirms only the action below."
       : `${win !== cfgWin ? "This action needs" : "Control actions need"} a Pocket ID sign-in from the last <b>${esc(winText)}</b>.${age != null && age < 30 * 86400 ? ` Your last sign-in was <b>${fmtSince(age)}</b> ago.` : ""}`}</p>
-    <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}${items}</div>
+    <div class="stepup-action"><span class="note">Pending action</span><b>${esc(pending.label)}</b>${runs}${signs}${items}</div>
     <p class="note" id="su-note">${kept && appr ? `You'll confirm with your passkey at Pocket ID. Right after that, Fairy sends this action with your approval to ${apprMany ? "each machine" : "the machine"}, once, and shows you the result here. Nothing has been done yet.`
       : kept ? "You'll sign in again at Pocket ID (passkey). Right after that, Fairy runs this action once by itself and shows you the result here. Nothing has been done yet."
       : newClient ? `This browser, or the address it now has, has not confirmed a sign-in for this session yet, so nothing was kept. Sign in again at Pocket ID (passkey) and you come straight back here to finish it${perAction ? "; it then asks once more, for this action alone" : ""}. Nothing has been sent yet.`
