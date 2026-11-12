@@ -75,9 +75,15 @@ func TestStartRefusesAManagedHostsListThatIsNotAPlainFile(t *testing.T) {
 			t.Errorf("%s: the panel started (exit %d) without the hosts added in the panel (the host is there: %v); log: %s", what, code, has(cfg, "added-pc"), log)
 			continue
 		}
+		// "file" names the file that is the cause (second review of fix7a, R7A-11 b: for a host's tokens file it
+		// named managed-hosts.yaml, and the real path was only inside "error")
+		cause := filepath.Join(cfg.DataDir, "managed-hosts.yaml")
+		if strings.Contains(what, "tokens file") {
+			cause = filepath.Join(cfg.DataDir, "secrets", "agent-added-pc.json")
+		}
 		if strings.Count(log, "level=ERROR") != 1 || !strings.Contains(log, "refusing to start: the hosts added in the panel (Add host) cannot be read") ||
-			!strings.Contains(log, filepath.Join(cfg.DataDir, "managed-hosts.yaml")) {
-			t.Errorf("%s: want one ERROR that refuses and names the file: %s", what, log)
+			!strings.Contains(log, " file="+cause+" ") {
+			t.Errorf("%s: want one ERROR that refuses and names the file (file=%s): %s", what, cause, log)
 		}
 		if strings.Contains(what, "a link") && !strings.Contains(log, "is a symbolic link, not a plain file") {
 			t.Errorf("%s: the ERROR does not say what is there: %s", what, log)

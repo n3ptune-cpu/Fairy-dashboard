@@ -199,12 +199,12 @@ func serve(args []string) int {
 	stop() // also when the server failed: the poller stops, and writes what it still has to write
 	// One wait for both writers, pollerStopWait in all: the poller (an agent's version of the last minute) and
 	// the server's watcher (the notifications of the last seconds). They stop side by side.
-	until := time.Now().Add(pollerStopWait)
-	if !waitStopped(pollerDone, time.Until(until)) {
-		slog.Warn("the poller did not finish within " + pollerStopWait.String() + " (a request to a machine hangs): stopping without it; " +
+	pollerOK, savedOK := waitWriters(pollerDone, srv.Saved(), pollerStopWait, savedStopMin)
+	if !pollerOK {
+		slog.Warn("the poller did not finish within " + (pollerStopWait - savedStopMin).String() + " (a request to a machine hangs): stopping without it; " +
 			"an agent version seen in the last minute may not be in state.json")
 	}
-	if !waitStopped(srv.Saved(), time.Until(until)) {
+	if !savedOK {
 		slog.Warn("the notifications of the last seconds were not written within " + pollerStopWait.String() + ": stopping without that; " +
 			"an event of the last ten seconds may not be in notifications.json")
 	}
@@ -224,8 +224,30 @@ func serve(args []string) int {
 // waits 90 s before it kills, an admin at a console less.
 const pollerStopWait = 5 * time.Second
 
-// waitStopped waits for done to be closed, at most d, and reports whether it was.
+// savedStopMin is the part of pollerStopWait that is the notifications writer's own: the poller is waited for
+// for the rest, so the writer always has at least this long, also when a poll hangs.
+const savedStopMin = 500 * time.Millisecond
+
+// waitWriters waits at a stop for the poller and then for the notifications writer, total in all, and reports
+// which of them finished. The poller gets total minus least; the writer gets what is left of total, and never
+// less than least. It used to get "what is left" alone: after a poller that used up the whole time that was
+// zero or less, and whether a writer that had long finished counted as finished was a matter of chance
+// (second review of fix7a, R7A-11).
+func waitWriters(poller, saved <-chan struct{}, total, least time.Duration) (pollerOK, savedOK bool) {
+	until := time.Now().Add(total)
+	pollerOK = waitStopped(poller, total-least)
+	return pollerOK, waitStopped(saved, max(time.Until(until), least))
+}
+
+// waitStopped waits for done to be closed, at most d, and reports whether it was. What is closed already is
+// reported as closed whatever d is (a timer of no time has fired at once, and a select between the two picks
+// either).
 func waitStopped(done <-chan struct{}, d time.Duration) bool {
+	select {
+	case <-done:
+		return true
+	default:
+	}
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
@@ -340,9 +362,16 @@ func buildPanel(cfg *config.Panel, secrets config.Secrets) (*panel, int) {
 	// r3-p4-03). Refused, `fairy update` rolls back by itself and the old version runs on.
 	added, skipped, err := managed.NewStore(cfg.DataDir).Merge(cfg)
 	if err != nil {
+		// "file" is the file that is the cause: the list, or the tokens file of one host when that one is not a
+		// plain file (it named the list for both; the real path was only inside "error": R7A-11).
+		file := filepath.Join(cfg.DataDir, managed.FileName)
+		var not *statefile.NotAFileError
+		if errors.As(err, &not) {
+			file = not.Path
+		}
 		slog.Error("refusing to start: the hosts added in the panel (Add host) cannot be read. The panel reads its state files only as plain files: "+
 			"put the file itself where a link is (cp --remove-destination <target> <link>), or restore it from a backup; moved away, the panel starts without those hosts",
-			"file", filepath.Join(cfg.DataDir, managed.FileName), "error", err)
+			"file", file, "error", err)
 		return nil, 1
 	}
 	for _, w := range skipped {
