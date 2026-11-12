@@ -246,6 +246,17 @@ func (w *Watched) getLocked(force bool) Data {
 		mt = st.ModTime().UnixNano() ^ st.Size()<<1
 	case !errors.Is(statErr, fs.ErrNotExist):
 		mt = -3 // e.g. the directory is not searchable: an error, not "missing"
+	default:
+		// "Does not exist" is what os.Stat also says of a symbolic link whose target is away (a share that is
+		// not mounted, a file that is being moved). That is not a fresh start: something has this name, and
+		// what the file said (the kill switch, the per-host switches, the revoke-all time) is only out of reach.
+		// It read as "no state": control on, power control on for every host, every old session valid again
+		// (audit 6, r4-p2-04). Only a name that is not there at all is "missing".
+		if _, lerr := os.Lstat(w.Path); lerr == nil {
+			mt, statErr = -3, errors.New("it is a symbolic link whose target does not exist (the panel reads its state files only as plain files)")
+		} else if !errors.Is(lerr, fs.ErrNotExist) {
+			mt, statErr = -3, lerr
+		}
 	}
 	if mt != w.mtime || (w.err != nil && mt == -3) {
 		w.mtime = mt
