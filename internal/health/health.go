@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 // FileName is the status file's name inside the data directory.
@@ -68,7 +69,7 @@ func Write(dataDir string, r Report) error {
 // Read loads health.json from dataDir.
 func Read(dataDir string) (Report, error) {
 	var r Report
-	b, err := os.ReadFile(Path(dataDir))
+	b, err := statefile.ReadFile(Path(dataDir), statefile.MaxBytes) // a plain file of a sane size, or it is not read
 	if err != nil {
 		return r, err
 	}

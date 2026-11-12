@@ -39,10 +39,13 @@ type Data = map[string]any
 // least "{}"), and a power cut or a full disk can leave one behind. Read as "no state" it would switch the
 // kill switch off, forget who was removed and make the next sign-in the first admin again (r2-p4-10).
 func Read(path string) (Data, error) {
-	b, err := os.ReadFile(path)
+	b, err := ReadFile(path, MaxBytes) // a regular file of a sane size, or it is not read (safe.go)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return Data{}, nil
+		}
+		if IsNotAFile(err) {
+			return nil, err
 		}
 		return nil, fmt.Errorf("cannot read %s: %w (it must be readable by the user Fairy runs as; "+
 			"check its owner and mode, e.g. chown fairy:fairy and chmod 600)", path, err)

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,17 +62,16 @@ func newSignIn(data []byte) *SignInPicture {
 // memory.
 func (s *Store) SignIn() *SignInPicture {
 	s.signInOnce.Do(func() {
-		f, err := os.Open(filepath.Join(s.bgDir, signInFile))
+		// a regular file of at most that size, opened without waiting: a named pipe or a link under that name
+		// is not read (it used to hang the public picture route for good, r2-p2-10)
+		data, err := statefile.ReadFile(filepath.Join(s.bgDir, signInFile), MaxBackgroundBytes)
 		if err != nil {
+			if statefile.IsNotAFile(err) {
+				slog.Warn("sign-in wallpaper: not used", "error", err)
+			}
 			return
 		}
-		defer f.Close()
-		if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
-			return
-		}
-		if data, err := io.ReadAll(io.LimitReader(f, MaxBackgroundBytes+1)); err == nil {
-			s.signIn.Store(newSignIn(data))
-		}
+		s.signIn.Store(newSignIn(data))
 	})
 	return s.signIn.Load()
 }

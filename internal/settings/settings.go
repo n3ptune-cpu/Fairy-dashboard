@@ -175,7 +175,7 @@ func NewStore(dataDir string) *Store {
 
 func (s *Store) loadAll() map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
-	b, err := os.ReadFile(s.file)
+	b, err := statefile.ReadFile(s.file, statefile.MaxBytes) // a plain file of a sane size, or it is not read
 	if err == nil {
 		_ = json.Unmarshal(b, &out)
 	}

@@ -154,17 +154,22 @@ func joinLines(l []string) string {
 
 func readJournal(path string) (journalFile, error) {
 	var jf journalFile
-	st, err := os.Stat(path)
+	// What is at the path is looked at, not what a link there leads to: a link to /dev/zero has size 0 and no
+	// end, and a named pipe is waited on for ever (r2-p2-10). The read itself is bounded too.
+	st, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return jf, nil
 	}
 	if err != nil {
 		return jf, fmt.Errorf("cannot read %s: %w", path, err)
 	}
-	if st.Size() > journalMax {
+	if st.Mode().IsRegular() && st.Size() > journalMax {
 		return jf, fmt.Errorf("%s is larger than a run journal ever is (%d bytes)", path, st.Size())
 	}
-	b, err := os.ReadFile(path)
+	b, err := statefile.ReadFile(path, journalMax)
+	if statefile.IsNotAFile(err) {
+		return jf, err
+	}
 	if err != nil {
 		return jf, fmt.Errorf("cannot read %s: %w", path, err)
 	}

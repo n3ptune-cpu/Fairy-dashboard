@@ -248,7 +248,7 @@ func (s *Store) Load() ([]Host, error) {
 }
 
 func (s *Store) load() ([]Host, error) {
-	b, err := os.ReadFile(s.Path())
+	b, err := statefile.ReadFile(s.Path(), statefile.MaxBytes) // a plain file of a sane size, or it is not read
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}

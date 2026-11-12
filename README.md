@@ -379,7 +379,8 @@ The rules, in plain words:
   say which machines the interrupted run had woken and how far each one was; look at those machines and
   switch them off yourself. (The run keeps a small journal for this, `wake-update.json` in the data folder:
   machine ids, steps and times, no secrets. If that file cannot be read, no run can be started until you have
-  looked at it and moved it away. The panel starts all the same. An empty machine entry (`null`) in the file
+  looked at it and moved it away. The panel starts all the same, also when what is there is not a plain file
+  (a link, a named pipe): the panel reads its state files only as plain files of a sane size. An empty machine entry (`null`) in the file
   is left out, with one line in the log. Every request of a run is entered in the journal before it goes
   out. If the file cannot be written (a full disk), the run sends nothing further, stops and says so, the
   machines it has woken stay on and are reported, and no run starts until the file can be written again.)

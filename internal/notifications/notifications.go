@@ -208,7 +208,7 @@ func (s *Store) pushFor(owner string, now time.Time) (ok bool, note, notice stri
 // state) and the list starts empty.
 func Open(path string) *Store {
 	s := &Store{path: path, Now: time.Now, d: fileData{Next: 1, Users: map[string]*userState{}}, subs: map[chan struct{}]bool{}}
-	b, err := os.ReadFile(path)
+	b, err := statefile.ReadFile(path, statefile.MaxBytes) // a plain file of a sane size, or it is not read
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 	case err != nil:
