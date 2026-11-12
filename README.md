@@ -989,7 +989,8 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   leaves in the middle (a reload, a broken connection), and it runs once. Opening the address of an accepted
   confirmation a second time (a reload, a lost answer) never hands out a session or a confirmation: a browser
   that already holds the new session is sent to its page again, and one that still holds the cookie from
-  before gets a page that says the action was already sent, and signs in again. The panel recognises such a
+  before gets a page that says what came of the action (already sent; refused and not carried out; ended with
+  an error; or still on its way), and signs in again. The panel recognises such a
   repeat for 2 minutes (memory only) by the confirmation's state and code, the client's address and its
   browser; any other repeat is refused as before.
   A refusal at the address Pocket ID sends the browser back to (cancelled there, started more than 10 minutes

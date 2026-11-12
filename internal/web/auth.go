@@ -607,7 +607,9 @@ func (s *Server) authCallback(c *reqCtx) error {
 		default:
 			c.auditAnon("auth.step_up", "ok", actorOf(&u), &u.Sub, nil)
 		}
-		s.resumePending(c, kept)
+		// what came of the kept action is kept with the round trip: a repeat of this callback is told that, not
+		// "already sent" for an action the panel refused (stepOutcome)
+		s.codec.live.stepOutcome(step, s.resumePending(c, kept))
 		c.redirect(target)
 		return nil
 	}

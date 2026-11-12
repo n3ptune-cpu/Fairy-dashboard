@@ -36,9 +36,15 @@ const (
 	cbRefused     = "Pocket ID signed you in, but this account may not use this panel. An administrator decides that with the allowed groups and e-mail addresses in Fairy's config."
 
 	// A repeat of a confirmation's callback from the cookie it was started with (steprepeat.go).
-	cbRepeat     = "Already confirmed"
-	cbRepeatRan  = "The action was already sent. It is not sent again. Sign in again to go on."
-	cbRepeatNone = "This confirmation was already used. Sign in again to go on."
+	// The sentence says what the first callback knows of the kept action: it answered with a 2xx (sent), with a
+	// 4xx (refused, by the panel or by the machine: not carried out), with anything else (an error: the request
+	// may have arrived), or it has not answered yet.
+	cbRepeat        = "Already confirmed"
+	cbRepeatRan     = "The action was already sent. It is not sent again. Sign in again to go on."
+	cbRepeatRefused = "The action was not carried out: it was refused. It is not tried again. Sign in again to go on."
+	cbRepeatUnsure  = "The action ended with an error: Fairy does not know whether it went through. It is not sent again. Sign in again to go on."
+	cbRepeatAtWork  = "The action is on its way. It is not sent again. Sign in again to go on."
+	cbRepeatNone    = "This confirmation was already used. Sign in again to go on."
 )
 
 // callbackPage is where a refused callback ends: title is cbSignIn for a sign-in and cbConfirm for a
@@ -69,13 +75,21 @@ func (p callbackPage) limited(l *rateLimiter, key string) error {
 }
 
 // repeated is the answer to the repeat of a confirmation's callback that was accepted, from the cookie the
-// round trip was started with: the page says so and sets no cookie. ran: a kept action was run by the first.
-func (p callbackPage) repeated(ran bool) error {
+// round trip was started with: the page says so and sets no cookie. ran: a kept action was run by the first;
+// status: what it answered with (0: not yet).
+func (p callbackPage) repeated(ran bool, status int) error {
 	p.title = cbRepeat
-	if ran {
+	switch {
+	case !ran:
+		return p.refuse(409, cbRepeatNone)
+	case status == 0:
+		return p.refuse(409, cbRepeatAtWork)
+	case status >= 200 && status < 300:
 		return p.refuse(409, cbRepeatRan)
+	case status >= 400 && status < 500:
+		return p.refuse(409, cbRepeatRefused)
 	}
-	return p.refuse(409, cbRepeatNone)
+	return p.refuse(409, cbRepeatUnsure)
 }
 
 // shownCode is what an error code of Pocket ID must look like to be shown: access_denied, login_required,

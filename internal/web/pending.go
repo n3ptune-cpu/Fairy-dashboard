@@ -297,10 +297,11 @@ func (r *recorder) Write(b []byte) (int, error) {
 
 // resumePending runs p, the action that waited for the step-up sign-in the caller has just confirmed for this
 // session (callback or demo), and keeps its outcome for the confirming client's next /api/me. p was taken out of the store by the caller
-// (takePending), so it runs at most once; nil runs nothing.
-func (s *Server) resumePending(c *reqCtx, p *pendingAction) {
+// (takePending), so it runs at most once; nil runs nothing. It returns the status the action answered with (0:
+// nothing ran).
+func (s *Server) resumePending(c *reqCtx, p *pendingAction) int {
 	if p == nil || p.run == nil {
-		return
+		return 0
 	}
 	sess := c.session()
 	// Not cancelled with the callback's request: a browser that reloads the callback, or a connection that
@@ -347,6 +348,7 @@ func (s *Server) resumePending(c *reqCtx, p *pendingAction) {
 	// kept on the server for the client that confirmed, until its page asks /api/me (once; see takeResult)
 	s.codec.live.putResult(c.pendingKey(), res, c.client(), s.now())
 	slog.Info("ran the action that waited for a step-up sign-in", "route", p.Pattern, "status", rec.status)
+	return rec.status
 }
 
 // readBody keeps a write request's body (at most 64 KiB) so a refused step-up can store it.

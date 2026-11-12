@@ -39,9 +39,16 @@ func noCookieSet(t *testing.T, what string, h http.Header) {
 // one link back, no script, no cookie.
 func alreadySent(t *testing.T, what string, r resp, back string) {
 	t.Helper()
+	alreadyConfirmed(t, what, r, back, "The action was already sent. It is not sent again. Sign in again to go on.")
+}
+
+// alreadyConfirmed is alreadySent with the sentence the page must hold: what came of the kept action, as far as
+// the first callback knows it (audit 6, r4-p1-01).
+func alreadyConfirmed(t *testing.T, what string, r resp, back, sentence string) {
+	t.Helper()
 	body := string(r.raw)
 	if r.code != 409 || !strings.Contains(r.hdr.Get("Content-Type"), "text/html") || !strings.Contains(body, "<h1>Already confirmed</h1>") ||
-		!strings.Contains(body, "The action was already sent. It is not sent again. Sign in again to go on.") {
+		!strings.Contains(body, sentence) {
 		t.Fatalf("%s: %d %s", what, r.code, strings.TrimSpace(body))
 	}
 	if strings.Count(body, "<a ") != 1 || !strings.Contains(body, `href="`+back+`">Back to Fairy</a>`) || strings.Contains(body, "<script") {
@@ -508,7 +515,9 @@ func TestAReloadWhileTheKeptActionRuns(t *testing.T) {
 	}
 	raw, _ := io.ReadAll(got.r.Body)
 	got.r.Body.Close()
-	alreadySent(t, "the reload while the first callback is at work", resp{code: got.r.StatusCode, raw: raw, hdr: got.r.Header}, "/")
+	// (audit 6, r4-p1-01: it said "The action was already sent." here, while the request was still at the machine)
+	alreadyConfirmed(t, "the reload while the first callback is at work", resp{code: got.r.StatusCode, raw: raw, hdr: got.r.Header}, "/",
+		"The action is on its way. It is not sent again. Sign in again to go on.")
 	close(slow.release) // the machine answers
 	for end := time.Now().Add(10 * time.Second); a.powerCalls() != 1 && time.Now().Before(end); {
 		time.Sleep(20 * time.Millisecond)

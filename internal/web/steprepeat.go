@@ -21,9 +21,10 @@ import (
 //
 //   - with the new cookie (the answer did arrive; the person went back to the address): the same redirect,
 //     nothing else;
-//   - with the cookie the round trip was started with (the old id): a small page that says the action was
-//     already sent and to sign in again. It waits only until the first callback knows whether the confirmation
-//     was accepted, never for the kept action.
+//   - with the cookie the round trip was started with (the old id): a small page that says what came of the
+//     kept action, as far as the first callback knows it by then (sent, refused, not known, or still on its
+//     way), and to sign in again. It waits only until the first callback knows whether the confirmation was
+//     accepted, never for the kept action.
 //
 // A repeat never gets a session cookie and never a confirmation, and the kept action is not run again. The
 // first version of this file handed the old cookie the new session (R7B-01): a copy of the round trip's cookie
@@ -50,8 +51,10 @@ type stepRun struct {
 	at      time.Time     // when the callback started; when it was accepted, once it was
 	decided chan struct{} // closed when the confirmation was accepted, or when the first callback returned without
 	// set when the confirmation was accepted (stepAccepted), read under liveSessions.mu:
-	ok     bool
-	ran    bool // a kept action was run with it
+	ok  bool
+	ran bool // a kept action was run with it
+	// status: what the kept action answered with, once it has (stepOutcome); 0 while it is still at work
+	status int
 	newSID string
 	target string
 }
@@ -143,12 +146,25 @@ func (l *liveSessions) stepDone(sid, state, code string, cl client, now time.Tim
 	return r.target, true
 }
 
-// stepRepeat says whether run's confirmation was accepted and is still remembered, and whether a kept action
-// ran with it.
-func (l *liveSessions) stepRepeat(run *stepRun, now time.Time) (ran, ok bool) {
+// stepOutcome records what the kept action of an accepted round trip answered with (its HTTP status), when the
+// first callback has run it. "A kept action was run" (stepAccepted) is known before it runs and does not say
+// how it went: the kill switch, the host's power switch, a wrong typed name or a limit refuse it, and nothing
+// is sent. The repeat's page said "The action was already sent" for those too (audit 6, r4-p1-01).
+func (l *liveSessions) stepOutcome(run *stepRun, status int) {
+	if run == nil || status == 0 {
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return run.ran, run.ok && now.Sub(run.at) <= stepRepeatFor
+	run.status = status
+}
+
+// stepRepeat says whether run's confirmation was accepted and is still remembered, whether a kept action ran
+// with it, and what that action answered with (0: it has not answered yet).
+func (l *liveSessions) stepRepeat(run *stepRun, now time.Time) (ran bool, status int, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return run.ran, run.status, run.ok && now.Sub(run.at) <= stepRepeatFor
 }
 
 // repeatedStep answers the repeat of a step-up callback from the cookie it was started with (see the top of
@@ -163,12 +179,12 @@ func (s *Server) repeatedStep(c *reqCtx, page callbackPage, sess *sessionData, r
 	case <-c.r.Context().Done():
 		return true // the browser left again: nobody to answer
 	}
-	ran, ok := s.codec.live.stepRepeat(run, s.now())
+	ran, status, ok := s.codec.live.stepRepeat(run, s.now())
 	if !ok {
 		return false
 	}
 	c.auditAnon("auth.step_up", "repeated callback of a confirmation that was accepted: no session handed out, nothing run again",
 		actorOf(sess.User), &sess.User.Sub, nil)
-	_ = page.repeated(ran)
+	_ = page.repeated(ran, status)
 	return true
 }
