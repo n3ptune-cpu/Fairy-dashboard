@@ -103,7 +103,7 @@ agents:
 # the panel (the Updates page, or the "..." menu on its page); that is not set in this file. A machine counts as
 # off only after 15 minutes without any answer from its address: no refused connection and no error answer
 # either (one that restarts is silent for less); that time is fixed, not a setting. These are the timings (the
-# defaults):
+# defaults; whole numbers, a fraction is refused):
 # wake_update:
 #   online_timeout_s: 300                 # give up on a woken machine whose agent has not answered by then (60-1800).
 #                                         # It has to start, get its network and bring Tailscale up first; the run

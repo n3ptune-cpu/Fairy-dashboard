@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/netip"
 	"os"
 	"runtime"
@@ -256,6 +257,29 @@ type WakeUpdate struct {
 	// An agent accepts 12 a minute for everything (its control_rate_per_min); the rest stays free for the
 	// buttons of the page.
 	AgentRequestsPerMin int `yaml:"agent_requests_per_min"`
+}
+
+// UnmarshalYAML reads the block as the plain fields above, with two things the plain way does not do: a
+// number with a fraction is refused (YAML's decoder cuts it off: settle_s: 30.5 became 30 without a word; the
+// session timings refuse one too), and a key this block does not have is refused here, because the strict
+// mode of the whole file does not reach into a block that reads itself.
+func (w *WakeUpdate) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k, v := n.Content[i], n.Content[i+1]
+			switch k.Value {
+			case "online_timeout_s", "settle_s", "shutdown_delay_s", "agent_requests_per_min":
+			default:
+				return fmt.Errorf("line %d: field %s not found in wake_update", k.Line, k.Value)
+			}
+			var f float64
+			if v.Kind == yaml.ScalarNode && v.Decode(&f) == nil && f != math.Trunc(f) {
+				return fmt.Errorf("line %d: wake_update.%s: %s is not a whole number", v.Line, k.Value, v.Value)
+			}
+		}
+	}
+	type plain WakeUpdate
+	return n.Decode((*plain)(w))
 }
 
 // Intervals are the default polling intervals in seconds (each 1-300).

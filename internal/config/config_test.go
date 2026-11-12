@@ -222,4 +222,42 @@ func TestWakeUpdateTimings(t *testing.T) {
 			t.Errorf("wake_update: {%s} accepted", bad)
 		}
 	}
+	// r1-p4-07 (audit 5): a number with a fraction was cut off without a word (settle_s: 30.5 ran as 30). It is
+	// refused, as for the session timings, and the message names the key and the line.
+	for bad, want := range map[string]string{
+		"settle_s: 30.5":                      "wake_update.settle_s: 30.5 is not a whole number",
+		"online_timeout_s: 300.25":            "wake_update.online_timeout_s: 300.25 is not a whole number",
+		"shutdown_delay_s: 1.2e1":             "", // 12: a whole number written another way
+		"shutdown_delay_s: 1.25e1":            "wake_update.shutdown_delay_s: 1.25e1 is not a whole number",
+		"agent_requests_per_min: 7.9":         "wake_update.agent_requests_per_min: 7.9 is not a whole number",
+		"agent_requests_per_min: 8.0":         "", // what the plain field took and did not change
+		"settle_s: 30":                        "",
+		"settle_s: 0x1e":                      "",
+		"settle_s: '30'":                      "cannot unmarshal !!str",
+		"settle_s: [30]":                      "cannot unmarshal !!seq",
+		"settle_s: 30, settle_s: 40":          "already defined",
+		"settle_s: 30, settel_s: 40":          "field settel_s not found in wake_update",
+		"online_timeout_s: .inf":              "cannot unmarshal",
+		"online_timeout_s: 1e30":              "cannot unmarshal",
+		"settle_s: ~, shutdown_delay_s: null": "",
+	} {
+		c, err := Parse([]byte(base + "wake_update: {" + bad + "}\n"))
+		switch {
+		case want == "" && err != nil:
+			t.Errorf("wake_update: {%s}: %v", bad, err)
+		case want != "" && (err == nil || !strings.Contains(err.Error(), want)):
+			t.Errorf("wake_update: {%s}: want an error with %q, got %v (%+v)", bad, want, err, c)
+		case want != "" && !strings.Contains(err.Error(), "line "):
+			t.Errorf("wake_update: {%s}: the error names no line: %v", bad, err)
+		}
+	}
+	for _, empty := range []string{"wake_update:\n", "wake_update: {}\n", "wake_update: ~\n"} {
+		if c, err := Parse([]byte(base + empty)); err != nil || c.WakeUpdate.SettleS != 60 {
+			t.Errorf("%q: %v", empty, err)
+		}
+	}
+	c, err = Parse([]byte(base + "wake_update: {shutdown_delay_s: 1.2e1, agent_requests_per_min: 8.0, settle_s: 0x1e}\n"))
+	if err != nil || c.WakeUpdate != (WakeUpdate{OnlineTimeoutS: 300, SettleS: 30, ShutdownDelayS: 12, AgentRequestsPerMin: 8}) {
+		t.Fatal("whole numbers written another way:", c.WakeUpdate, err)
+	}
 }
