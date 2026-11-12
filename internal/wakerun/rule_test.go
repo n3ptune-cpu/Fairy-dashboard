@@ -80,6 +80,12 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 			t.Errorf("%s: allowed=%v, reason %q (want %q)", name, ok, why, c.why)
 		}
 	}
+	// a wake request that left and got no answer counts as a wake that may have gone out: the rest of the proof decides
+	h, info, o = proven()
+	h.Wakes, h.WakeUnsure = 0, true
+	if ok, why := mayShutDown(h, info, o, noGuests); !ok {
+		t.Errorf("a wake whose answer was lost, and the whole rest of the proof: %q", why)
+	}
 	// an uptime of 0 s is a machine that just started: the proof holds
 	h, info, o = proven()
 	h.BootUptimeS = &zero

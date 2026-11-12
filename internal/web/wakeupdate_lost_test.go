@@ -108,3 +108,30 @@ func TestWakeUpdateALostUpdateAnswerIsNotAFailedUpdate(t *testing.T) {
 		t.Errorf("requests: %s", got)
 	}
 }
+
+// r2-p2-04 with the real poller and powerctl: the wake request reaches the relay, the packet goes out, the
+// relay's answer does not reach the panel. The run said "The wake could not be sent ... It was not woken",
+// power "untouched", and the machine stayed on unseen.
+func TestWakeUpdateALostWakeAnswerIsNotNothingSent(t *testing.T) {
+	e, f := lostFarm(t, "nas /wol")
+	if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "Alice", BySub: "u2"}); err != nil {
+		t.Fatal(err)
+	}
+	run := f.finish()
+	h := hostOf(run, "pc-a")
+	if h.State != wakerun.StOff || h.On != wakerun.OnNo || f.on["pc-a"] ||
+		h.Text != "Came online after a wake request that got no answer, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again." {
+		t.Errorf("pc-a ended as %s (%s, really on: %v): %s", h.State, h.On, f.on["pc-a"], h.Text)
+	}
+	if got := strings.Join(f.requests(), ", "); got != "nas /wol, pc-a /update, pc-a /power" {
+		t.Errorf("requests: %s", got)
+	}
+	// the audit log has the wake with what came of it
+	found := false
+	for _, en := range e.auditEntries("", "power.wake") {
+		found = found || en["outcome"] == "error: agent unreachable: timeout"
+	}
+	if !found {
+		t.Errorf("the audit log lacks the wake without an answer: %v", e.auditEntries("", "power.wake"))
+	}
+}

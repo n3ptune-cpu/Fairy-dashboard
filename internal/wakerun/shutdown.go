@@ -21,7 +21,9 @@ import (
 //	             (15 minutes). A machine that restarts is quiet for a few minutes and then comes back by
 //	             itself with a fresh uptime; without this it would look like a machine the run woke.
 //	ProbedOff    asked directly right before the wake, and nothing answered (the panel's view can be stale)
-//	WakeSentAt   this run sent a wake for it, and the relay accepted it
+//	WakeSentAt   this run sent a wake for it, and the relay accepted it (Wakes). Or the wake request left
+//	             and got no answer (WakeUnsure): the packet may have gone out, and WakeSentAt is the moment
+//	             before the request left, the earliest the packet can have been sent.
 //	OnlineAt     its first answered poll after that wake
 //	BootUptimeS  the uptime it reported in that poll: shorter than the time since the wake, so the machine's
 //	             system started after the wake. A machine that was on all along and only unreachable has been
@@ -58,7 +60,7 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 		return false, "Fairy is not sure that it was off before the run: it had not gone " + span(MinOff) + " without an answer"
 	case !h.ProbedOff:
 		return false, "the run did not confirm that it was off right before the wake"
-	case h.WakeSentAt == nil || h.Wakes < 1:
+	case h.WakeSentAt == nil || (h.Wakes < 1 && !h.WakeUnsure):
 		return false, "this run sent no wake for it"
 	case h.OnlineAt == nil || !h.OnlineAt.After(*h.WakeSentAt):
 		return false, "it was not seen coming online after this run's wake"

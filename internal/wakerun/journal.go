@@ -113,6 +113,9 @@ func interrupt(r *Run, now time.Time) {
 		case h.OnlineAt != nil:
 			h.On = OnYes
 			h.Text = "The panel restarted during the run. The run had woken it and it was ON (" + was + "): it is still on unless someone switched it off." + updateTail(h)
+		case h.WakeSentAt != nil && h.lostWake():
+			h.On = OnUnknown
+			h.Text = fmt.Sprintf("The panel restarted during the run. A wake request for it went out at %s and got no answer, and it had not answered yet: if it switched on, it is ON.", clock(*h.WakeSentAt))
 		case h.WakeSentAt != nil:
 			h.On = OnUnknown
 			h.Text = fmt.Sprintf("The panel restarted during the run. A wake was sent to it at %s and it had not answered yet: if it switched on, it is ON.", clock(*h.WakeSentAt))

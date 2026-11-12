@@ -324,11 +324,16 @@ type Host struct {
 	Text  string    `json:"text"`  // what is happening, or how it ended, in a sentence
 
 	// What the run knows about "this run woke it" (mayShutDown reads these).
-	StartStatus string     `json:"start_status"`            // the agent's state when the run started
-	QuietForS   *int64     `json:"quiet_for_s,omitempty"`   // how long it had gone without an answer then (nil: not known)
-	ProbedOff   bool       `json:"probed_off,omitempty"`    // asked directly right before the wake, nothing answered
-	WakeSentAt  *time.Time `json:"wake_sent_at,omitempty"`  // the run's first wake for it
-	Wakes       int        `json:"wakes,omitempty"`         // wake requests the relay accepted
+	StartStatus string     `json:"start_status"`           // the agent's state when the run started
+	QuietForS   *int64     `json:"quiet_for_s,omitempty"`  // how long it had gone without an answer then (nil: not known)
+	ProbedOff   bool       `json:"probed_off,omitempty"`   // asked directly right before the wake, nothing answered
+	WakeSentAt  *time.Time `json:"wake_sent_at,omitempty"` // the run's first wake for it
+	Wakes       int        `json:"wakes,omitempty"`        // wake requests the relay accepted
+	// WakeUnsure: the run's first wake request for it left the panel and got no answer (CodeNoAnswer): the
+	// packet may have gone out. WakeSentAt is then the moment before that request left, and the run waits for
+	// the machine exactly as after a wake the relay accepted. Whether the machine may be switched off again
+	// is decided by the same evidence as always (mayShutDown).
+	WakeUnsure  bool       `json:"wake_unconfirmed,omitempty"`
 	OnlineAt    *time.Time `json:"online_at,omitempty"`     // its first answered poll after that wake
 	BootUptimeS *int64     `json:"boot_uptime_s,omitempty"` // the uptime it reported in that poll
 	// OnlineAfterS: how long after the wake that answer came, in seconds. It is the shorter of two
@@ -888,6 +893,8 @@ func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
 		m.end(r, h, StStayedOn, OnYes, now, why+". It was already on and stays on."+tail)
 	case h.OnlineAt != nil:
 		m.end(r, h, StLeftOn, OnYes, now, why+". The run woke it and it is ON."+updateTail(h))
+	case h.WakeSentAt != nil && h.lostWake():
+		m.end(r, h, StGaveUp, OnUnknown, now, why+". A wake may have gone out to it (the request got no answer): if it switches on, it stays ON.")
 	case h.WakeSentAt != nil:
 		m.end(r, h, StGaveUp, OnUnknown, now, why+". A wake was sent to it: if it switches on, it stays ON.")
 	default:
@@ -908,6 +915,17 @@ func updateTail(h *Host) string {
 		return " Its update did not work: " + h.UpdateText + "."
 	}
 	return ""
+}
+
+// lostWake reports whether all the run knows of its wake for the machine is a request that got no answer.
+func (h *Host) lostWake() bool { return h.WakeUnsure && h.Wakes == 0 }
+
+// woken begins the sentence of a machine that came online after the run's wake and was switched off again.
+func woken(h *Host) string {
+	if h.lostWake() {
+		return "Came online after a wake request that got no answer"
+	}
+	return "Woken"
 }
 
 func toVersion(h *Host) string {

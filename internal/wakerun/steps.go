@@ -187,6 +187,7 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		return
 	}
 	var err error
+	before, beforeMono := m.now(), m.mono() // the packet cannot have left before now
 	m.io(func() { err = m.Ops.Wake(ctx, id, by) })
 	m.done(h)
 	if err != nil {
@@ -194,6 +195,16 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		if opCode(err) == CodeRateLimited && h.retries < maxRetries {
 			h.retries++
 			m.say(h, "the relay is busy (its request limit): trying again")
+			return
+		}
+		if opCode(err) == CodeNoAnswer {
+			// The request left and the relay's answer did not come: the packet may be out and the machine
+			// starting (r2-p2-04). The run does not say "it was not woken" and walk away: it waits for the
+			// machine exactly as after a wake that was accepted, counting from before the request left. What
+			// it then sees decides, through mayShutDown, like for every other machine.
+			h.WakeSentAt, h.lastWake, h.wakeMono, h.WakeUnsure = &before, m.now(), beforeMono, true
+			m.enter(h, StWaking, m.now(), "the wake request got no answer ("+opText(err)+"): the wake may have gone out. Waiting for it to come online, up to "+
+				span(r.Settings.OnlineTimeout))
 			return
 		}
 		m.end(r, h, StGaveUp, OnUntouched, now, "The wake could not be sent: "+opText(err)+". It was not woken.")
@@ -247,8 +258,12 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 		return
 	}
 	if now.Sub(*h.WakeSentAt) >= r.Settings.OnlineTimeout {
-		m.end(r, h, StGaveUp, OnUnknown, now, fmt.Sprintf("It did not come online within %s after the wake. It may still be starting, or be on without its network "+
-			"connection (Tailscale): if it did switch on, it is ON. Fairy has not switched it off and will not.", span(r.Settings.OnlineTimeout)))
+		lead := fmt.Sprintf("It did not come online within %s after the wake.", span(r.Settings.OnlineTimeout))
+		if h.lostWake() {
+			lead = fmt.Sprintf("The wake request got no answer, so Fairy does not know whether the wake went out. It did not come online within %s.", span(r.Settings.OnlineTimeout))
+		}
+		m.end(r, h, StGaveUp, OnUnknown, now, lead+" It may still be starting, or be on without its network "+
+			"connection (Tailscale): if it did switch on, it is ON. Fairy has not switched it off and will not.")
 		return
 	}
 	if now.Sub(h.lastKick) >= kickEvery {
@@ -509,7 +524,7 @@ func (m *Manager) stepShutting(r *Run, h *Host, now time.Time) {
 			h.offSince = now
 		}
 		if now.After(due) && now.Sub(h.offSince) >= offConfirm {
-			m.end(r, h, StOff, OnNo, now, "Woken, "+updateWords(h)+", and switched off again.")
+			m.end(r, h, StOff, OnNo, now, woken(h)+", "+updateWords(h)+", and switched off again.")
 		}
 		return
 	}

@@ -277,8 +277,10 @@ The rules, in plain words:
   answer of any kind: also no refused connection, no error answer, no connection that was taken and then left
   without an answer) when the run started; right before the wake the run asked the machine directly and got
   nothing at all either; the relay
-  accepted the wake; the machine first answered after it; and the uptime it then reported is shorter than
-  the time since the wake, so it started after it. (That time is measured with a clock that does not move
+  accepted the wake (or the wake request left the panel and its answer was lost: the packet may have gone
+  out, so the run waits for the machine all the same and never reports "it was not woken" about it; the time
+  then counts from before that request left); the machine first answered after it; and the uptime it then
+  reported is shorter than the time since the wake, so it started after it. (That time is measured with a clock that does not move
   when the panel's clock is set, so a clock that jumps forward during the wait cannot make an old uptime
   look fresh.) If one of these is missing, the machine is left on.
 * **Off, on, or not sure.** For a run a machine is one of three things, and the dialog lists them apart:

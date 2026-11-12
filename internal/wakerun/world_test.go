@@ -37,6 +37,7 @@ type machine struct {
 	paused       bool          // polling is paused for it in the panel
 	probeSays    string        // what the direct question answers instead of the truth ("": the truth)
 	relayDown    string        // the relay refuses its wake with this text
+	wakeLost     string        // the answer to a wake request is lost: "arrives" (the first; the packet went out) | "never" (the first; no packet) | "always" (every one; no packet)
 	version      string
 	newVersion   string // what an update installs
 	behind       *bool  // what the panel knows: older than the newest release
@@ -228,6 +229,16 @@ func (w *world) Wake(_ context.Context, id, _ string) error {
 	if mc.onAtFirstWake == nil {
 		on := mc.on
 		mc.onAtFirstWake = &on
+	}
+	if mc.wakeLost != "" && (!mc.busyDone["wake lost"] || mc.wakeLost == "always") { // a timeout: the panel does not learn whether the packet went out
+		mc.busyDone["wake lost"] = true
+		if mc.wakeLost == "arrives" {
+			mc.wakes++
+			if !mc.on && mc.wakeBoots {
+				mc.on, mc.bootedAt, mc.agentReadyAt = true, w.now.Add(mc.post), w.now.Add(mc.bootTakes)
+			}
+		}
+		return errLost
 	}
 	mc.wakes++
 	if !mc.on && mc.wakeBoots {

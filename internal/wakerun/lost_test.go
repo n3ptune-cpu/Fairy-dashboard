@@ -134,6 +134,119 @@ func TestNoShutdownWhileTheAgentSaysItInstalls(t *testing.T) {
 	}
 }
 
+// r2-p2-04: the answer to the wake request is lost and the packet went out. The run said "The wake could not
+// be sent ... It was not woken", power "untouched", and never looked at the machine again; the machine started
+// and stayed on. Now a lost answer is "a wake may have gone out": the run waits for the machine exactly as
+// after an accepted wake, and what it then sees decides through mayShutDown.
+func TestWakeAnswerLost(t *testing.T) {
+	t.Run("the packet went out: the machine comes up fresh, is updated and switched off again", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.wakeLost = "arrives"
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		h := host(w.finish(), "pc-a")
+		has(t, h, StOff, "Came online after a wake request that got no answer, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
+		if pc.on || h.On != OnNo || !h.WakeUnsure || h.Wakes != 0 || h.WakeSentAt == nil || !h.OnlineAt.After(*h.WakeSentAt) {
+			t.Fatalf("on %v power %q unsure %v wakes %d: %s", pc.on, h.On, h.WakeUnsure, h.Wakes, h.Text)
+		}
+		if got := w.callsFor("pc-a"); got != "wake update shutdown" {
+			t.Fatalf("requests: %s", got)
+		}
+		if got := w.steps("pc-a"); got != "wake:agent unreachable: timeout update:ok shutdown:ok" {
+			t.Fatalf("audit steps: %s", got)
+		}
+		if !logHas(h, "the wake request got no answer (agent unreachable: timeout): the wake may have gone out. Waiting for it to come online, up to 5 min") {
+			t.Fatalf("the machine's history: %v", h.Log)
+		}
+	})
+
+	t.Run("no packet and no machine: not \"it was not woken\", but \"Fairy does not know\"", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.wakeLost = "always"
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		h := host(w.finish(), "pc-a")
+		has(t, h, StGaveUp, "The wake request got no answer, so Fairy does not know whether the wake went out. It did not come online within 5 min.",
+			"if it did switch on, it is ON")
+		if pc.on || h.On != OnUnknown || strings.Contains(h.Text, "It was not woken") || strings.Contains(w.callsFor("pc-a"), "update") {
+			t.Fatalf("on %v power %q requests %q: %s", pc.on, h.On, w.callsFor("pc-a"), h.Text)
+		}
+	})
+
+	t.Run("the first answer is lost, the next wake is accepted", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.wakeLost = "never"
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		h := host(w.finish(), "pc-a")
+		has(t, h, StOff, "Woken, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
+		if pc.on || h.Wakes != 1 || !h.WakeUnsure || w.callsFor("pc-a") != "wake wake update shutdown" {
+			t.Fatalf("on %v wakes %d requests %q: %s", pc.on, h.Wakes, w.callsFor("pc-a"), h.Text)
+		}
+	})
+
+	t.Run("the packet went out and the machine is slow: it is seen coming online later", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.wakeLost, pc.bootTakes = "arrives", 6*time.Minute
+		other := w.off("pc-b") // keeps the run going long enough to see it
+		other.updTakes = 4 * time.Minute
+		w.start(StartRequest{Hosts: []string{"pc-a", "pc-b"}})
+		h := host(w.finish(), "pc-a")
+		has(t, h, StGaveUp, "It did not come online within 5 min after the wake.", "It came online later", "it is ON") // later wakes were accepted
+		if !pc.on || h.On != OnYes {
+			t.Fatalf("on %v power %q: %s", pc.on, h.On, h.Text)
+		}
+	})
+
+	t.Run("a machine that was on and out of reach is still never switched off", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.running("pc-a")
+		pc.unreachable = true
+		w.silentFor(pc, 20*time.Minute)
+		pc.wakeLost = "arrives"
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		for i := 0; i < 30; i++ {
+			w.tick()
+		}
+		pc.unreachable = false // back in reach during the wait, up for three days
+		h := host(w.finish(), "pc-a")
+		has(t, h, StLeftOn, "did not look freshly started")
+		if !pc.on || strings.Contains(w.callsFor("pc-a"), "shutdown") {
+			t.Fatalf("on %v requests %q: %s", pc.on, w.callsFor("pc-a"), h.Text)
+		}
+	})
+
+	t.Run("cancelled, and the panel restarted, while the machine is waited for", func(t *testing.T) {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.wakeLost, pc.wakeBoots = "always", false
+		r := w.start(StartRequest{Hosts: []string{"pc-a"}})
+		for i := 0; i < 20; i++ {
+			w.tick()
+		}
+		old, _ := w.restart()
+		if oh := host(old, "pc-a"); oh.On != OnUnknown || !strings.Contains(oh.Text, "A wake request for it went out at") || !strings.Contains(oh.Text, "got no answer") {
+			t.Fatalf("after a restart (%s): %s", oh.On, oh.Text)
+		}
+		w2 := newWorld(t)
+		pc2 := w2.off("pc-a")
+		pc2.wakeLost, pc2.wakeBoots = "always", false
+		r = w2.start(StartRequest{Hosts: []string{"pc-a"}})
+		for i := 0; i < 20; i++ {
+			w2.tick()
+		}
+		if _, err := w2.m.CancelRun(r.ID, "Bob", false); err != nil {
+			t.Fatal(err)
+		}
+		h := host(w2.finish(), "pc-a")
+		has(t, h, StGaveUp, "The run was cancelled by Bob. A wake may have gone out to it (the request got no answer): if it switches on, it stays ON.")
+		if h.On != OnUnknown {
+			t.Fatalf("power %q", h.On)
+		}
+	})
+}
+
 func active(w *world) *Run {
 	a, _ := w.m.Snapshot()
 	return a
