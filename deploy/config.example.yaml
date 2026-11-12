@@ -120,7 +120,8 @@ agents:
 # update action on a machine that has the check switched on asks for a passkey at Pocket ID under the name of
 # a second client, "Fairy PC actions", and the MACHINE verifies that approval before it does anything. Create
 # that client in Pocket ID first: Callback URL <public_url>/auth/approval/callback, Requires Re-Authentication
-# ON, PKCE ON, Public Client ON (or a secret as FAIRY_APPROVAL_CLIENT_SECRET in fairy.env).
+# ON, PKCE ON, Public Client OFF with its secret as FAIRY_APPROVAL_CLIENT_SECRET in fairy.env (ON works too;
+# the README says what it costs).
 # approval:
 #   client_id: 00000000-0000-4000-8000-000000000000  # the Client ID of that second client. NOT the sign-in
 #                                         # client's (oidc.client_id): the panel refuses to start with that one.

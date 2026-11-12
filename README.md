@@ -493,7 +493,7 @@ It is off for every machine until you turn it on, and machines with an older age
 | --- | --- |
 | Name | `Fairy PC actions` (this is the name Pocket ID shows when it asks for the passkey) |
 | Callback URL | `<public_url>/auth/approval/callback`, for example `https://panel.example.com/auth/approval/callback` |
-| Public Client | on (nothing more to store), or off and the client secret as `FAIRY_APPROVAL_CLIENT_SECRET` in `fairy.env` |
+| Public Client | **off**, and the client secret as `FAIRY_APPROVAL_CLIENT_SECRET` in `fairy.env`. On works too (nothing to store), but then a person who is on a machine's list and has that machine's control token can get an approval from Pocket ID without the panel: no entry in the panel's Audit log, and the kill switch is not asked. |
 | PKCE | on |
 | Requires Re-Authentication | **on**. This is what makes Pocket ID ask for the passkey every time. Without it Pocket ID answers from its own session, and the machine refuses the approval as too old (after Pocket ID's 60 seconds of grace). |
 

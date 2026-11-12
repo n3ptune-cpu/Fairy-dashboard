@@ -539,8 +539,10 @@ In Pocket ID, as administrator: OIDC Clients, add a client.
 
 Save, and copy its **Client ID** (of this client, not of the client the real panel signs in with: Pocket ID
 lists both, and the panel cannot tell their ids apart by a name). Later, for the live panel, add a second Callback URL to the same client:
-`https://<your panel>/auth/approval/callback` (the panel's `public_url` with `/auth/approval/callback`; a
-client that is not public works too, with its secret as `FAIRY_APPROVAL_CLIENT_SECRET` in `fairy.env`).
+`https://<your panel>/auth/approval/callback` (the panel's `public_url` with `/auth/approval/callback`). For
+the live panel switch Public Client **off** then and give the panel the secret as
+`FAIRY_APPROVAL_CLIENT_SECRET` in `fairy.env` (README, "The check on the machine itself", step 1 says why);
+the test build takes the same secret from the environment (step 3 of the short path).
 
 Your **user id**: Pocket ID, Users, open your own user; the id is the last part of the address in the
 browser's address bar. (If that is not how your Pocket ID shows it: I4, step 4 shows the id.)
