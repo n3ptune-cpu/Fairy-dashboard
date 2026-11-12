@@ -675,9 +675,14 @@ func TestUpdateAllMixed(t *testing.T) {
 	a := newApprovalEnv(t)
 	a.selfUpdating(t)
 	a.require(t, a.laptop)
-	id, machines, ok := approvalAsked(a.post("/api/admin/updates", map[string]any{}))
+	r := a.post("/api/admin/updates", map[string]any{})
+	id, machines, ok := approvalAsked(r)
 	if !ok || len(machines) != 1 || machines[0] != "laptop" {
 		t.Fatal("the dialog names the machine that checks")
+	}
+	// and it lists the machine the same passkey updates without a check of its own (audit 5, r1-b2-04)
+	if items := fmt.Sprint(r.body["detail"].(map[string]any)["items"]); items != "[laptop: update of its agent (checked on the machine) tower: update of its agent (no check on the machine)]" {
+		t.Fatalf("the dialog's lines: %s", items)
 	}
 	if len(a.tower.Asked()) != 0 {
 		t.Fatalf("a machine without the check was asked: %+v", a.tower.Asked())

@@ -385,6 +385,7 @@ func (s *Server) updateAll(c *reqCtx) error {
 	// updates (approval_control.go). The others are confirmed and sent to as before; in a mixed batch the one
 	// approval is also the confirmation for them.
 	var targets []approvalTarget
+	var others []string // what goes to machines without the check, for the dialog
 	for _, a := range s.Poller.Agents() {
 		if !a.SelfUpdate {
 			continue
@@ -399,13 +400,15 @@ func (s *Server) updateAll(c *reqCtx) error {
 			continue
 		}
 		j := &job{a: a, params: updateParams(row, latest, true), target: -1}
-		if c.wantsTarget(a.ID) {
+		if t := s.updateTarget(a); c.wantsTarget(a.ID) {
 			j.target = len(targets)
-			targets = append(targets, s.updateTarget(a))
+			targets = append(targets, t)
+		} else {
+			others = append(others, t.name+": "+requestWords(t.req))
 		}
 		jobs = append(jobs, j)
 	}
-	confirmed, err := c.confirmControl(u, "control actions", targets)
+	confirmed, err := c.confirmControl(u, "control actions", targets, others)
 	if err != nil {
 		return err
 	}

@@ -103,14 +103,21 @@ func (c *reqCtx) wantsTarget(agentID string) bool {
 // the whole request is refused for now: asked to confirm (401, kept), or not allowed.
 //
 // The caller has checked who is asking (controlAllowed); the rate limit comes after this, as before.
-func (c *reqCtx) confirmControl(u *model.User, what string, targets []approvalTarget) ([]approvalOutcome, error) {
-	return c.confirmTargets(u, what, targets, false)
+//
+// others say what the same request also sends to machines on the strength of the panel's own confirmation
+// (nothing checks there; "<name>: <what>"): the dialog lists them too, because the one passkey starts them as
+// well (audit 5, r1-b2-04).
+func (c *reqCtx) confirmControl(u *model.User, what string, targets []approvalTarget, others []string) ([]approvalOutcome, error) {
+	return c.confirmTargets(u, what, targets, false, others)
 }
+
+// maxOthersListed is how many machines without the check the dialog names; the rest is a count.
+const maxOthersListed = 12
 
 // confirmTargets is confirmControl. only: targets is everything this request sends (a single action, not a
 // batch that may also go to machines that are not asked): when its one machine refuses the question, that
 // refusal is the answer and nobody is asked to confirm a request that cannot be sent.
-func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTarget, only bool) ([]approvalOutcome, error) {
+func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTarget, only bool, others []string) ([]approvalOutcome, error) {
 	out := make([]approvalOutcome, len(targets))
 	if g := c.approved(); g != nil {
 		// The panel's own replay, right after the approval for this kept request was verified. Each request
@@ -201,7 +208,7 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 		return nil, apierr.New(apierr.Upstream, "the machines' challenges cannot be used: "+textsafe.Clip(err.Error(), 200))
 	}
 	ap := newApprovalPlan(plan)
-	if len(targets) > 1 { // a batch: the dialog lists what the one approval covers, and what it does not
+	if len(targets) > 1 || len(others) > 0 { // a batch: the dialog lists what the one approval covers, and what it does not
 		for _, b := range bound {
 			ap.items = append(ap.items, b.Name+": "+requestWords(b.Request)+" (checked on the machine)")
 		}
@@ -213,6 +220,14 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 				}
 				ap.refused[t.agent.ID] = out[i].err
 			}
+		}
+		// and what it starts without a check on the machine
+		for i, line := range others {
+			if i == maxOthersListed {
+				ap.items = append(ap.items, fmt.Sprintf("and %d more (no check on the machine)", len(others)-i))
+				break
+			}
+			ap.items = append(ap.items, line+" (no check on the machine)")
 		}
 	}
 	return nil, c.askApproval(u, ap)
@@ -241,7 +256,7 @@ func (c *reqCtx) confirmOne(u *model.User, what string, target *approvalTarget) 
 		}
 		return nil, c.stepUp(u, what)
 	}
-	out, err := c.confirmTargets(u, what, []approvalTarget{*target}, true)
+	out, err := c.confirmTargets(u, what, []approvalTarget{*target}, true, nil)
 	if err != nil {
 		return nil, err
 	}
