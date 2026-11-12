@@ -52,6 +52,7 @@ type gated struct {
 	trust   string // the machine's trust file
 	bmc     *fakebmc.BMC
 	power   *agenttest.PowerExec
+	gate    *approval.Gate
 	applied atomic.Int32 // the agent started its installer
 
 	mu    sync.Mutex
@@ -151,6 +152,7 @@ control_rate_per_min: 60
 		ResultWait: 100 * time.Millisecond, Apply: func(context.Context) error { g.applied.Add(1); return nil }})
 	gate := approval.NewGate(approval.Options{Files: approval.Files{Path: g.trust}, EnforcedBy: agentapi.EnforcedByAgent,
 		Now: g.now, Uptime: func() (time.Duration, error) { return time.Hour, nil }})
+	g.gate = gate
 	var a *agent.Agent
 	a = agent.New(cfg, agent.Tokens{Read: readTok, Control: ctlTok}, agent.Deps{Collector: agenttest.NewCollector(), GPU: agenttest.GPU{},
 		BMC: bmc, Updater: upd, Version: "contract", Approval: gate,
@@ -188,8 +190,10 @@ type approvalPanel struct {
 	iss    *testutil.Issuer
 	a, b   *gated
 	p      *poller.Poller
+	ws     *web.Server
 	srv    *httptest.Server
 	c      *http.Client
+	dir    string // the panel's folder: data/ and audit.log
 	audit  string
 	mu     sync.Mutex
 	bodies []string // every answer the browser got
@@ -197,13 +201,25 @@ type approvalPanel struct {
 
 func newApprovalPanel(t *testing.T) *approvalPanel {
 	t.Helper()
-	pn := &approvalPanel{t: t, iss: testutil.NewIssuer(t), a: startGated(t, "pc-a"), b: startGated(t, "pc-b")}
+	return startPanel(t, &approvalPanel{iss: testutil.NewIssuer(t), a: startGated(t, "pc-a"), b: startGated(t, "pc-b"), dir: t.TempDir()}, nil)
+}
+
+// startPanel starts the panel of pn (its issuer, machines and folder are set) and signs the admin in. urls:
+// the address the panel reaches a machine at when it is not the machine's own (a front: binding_test.go). A
+// panel started on the folder of an earlier one is that panel after a restart.
+func startPanel(t *testing.T, pn *approvalPanel, urls map[string]string) *approvalPanel {
+	t.Helper()
+	pn.t = t
 	t.Setenv("E2E_READ", readTok)
 	t.Setenv("E2E_CONTROL", ctlTok)
-	dir := t.TempDir()
+	dir := pn.dir
 	pn.audit = filepath.Join(dir, "audit.log")
 	entry := func(g *gated) string {
-		return fmt.Sprintf("  - {id: %s, name: %s, url: %q, token_env: E2E_READ, power_control: true, self_update: true, fan_control: {vendor: supermicro, control_token_env: E2E_CONTROL}}\n", g.id, strings.ToUpper(g.id), g.srv.URL)
+		u := g.srv.URL
+		if urls[g.id] != "" {
+			u = urls[g.id]
+		}
+		return fmt.Sprintf("  - {id: %s, name: %s, url: %q, token_env: E2E_READ, power_control: true, self_update: true, fan_control: {vendor: supermicro, control_token_env: E2E_CONTROL}}\n", g.id, strings.ToUpper(g.id), u)
 	}
 	cfg, err := config.Parse([]byte(fmt.Sprintf(`
 public_url: https://panel.example.com
@@ -224,12 +240,24 @@ agents:
 	}
 	ws := web.New(cfg, secrets, pn.p, nil, "test")
 	ws.SetIDPClient(pn.iss.Client())
+	pn.ws = ws
 	pn.srv = httptest.NewServer(ws.Handler())
 	t.Cleanup(pn.srv.Close)
+	pn.poll()
+	pn.signIn()
+	if st, me := pn.call("GET", "/api/me", nil); st != 200 || me["can_control"] != true || me["approval_client"] != true {
+		t.Fatalf("the signed-in admin: %d %v", st, me)
+	}
+	return pn
+}
+
+// signIn starts a new browser and signs in whoever the issuer says: the panel sends the browser to the issuer,
+// the issuer back to the panel's callback.
+func (pn *approvalPanel) signIn() {
+	t := pn.t
+	t.Helper()
 	jar, _ := cookiejar.New(nil)
 	pn.c = &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	pn.poll()
-	// the sign-in: the panel sends the browser to the issuer, the issuer back to the panel's callback
 	resp := pn.get("/auth/login")
 	back := pn.iss.Approve(t, resp.Header.Get("Location"))
 	if back.Path != "/auth/callback" {
@@ -238,10 +266,6 @@ agents:
 	if resp := pn.get(back.RequestURI()); resp.StatusCode != 303 {
 		t.Fatalf("sign-in callback: %d", resp.StatusCode)
 	}
-	if st, me := pn.call("GET", "/api/me", nil); st != 200 || me["can_control"] != true || me["approval_client"] != true {
-		t.Fatalf("the signed-in admin: %d %v", st, me)
-	}
-	return pn
 }
 
 // poll lets the panel ask both agents now (an agent computes its /metrics at most every 250 ms).
