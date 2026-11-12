@@ -65,9 +65,16 @@ func canControl(u *model.User, o config.OIDC) bool {
 	return len(o.ControlGroups) > 0 && slices.ContainsFunc(u.Groups, func(g string) bool { return slices.Contains(o.ControlGroups, g) })
 }
 
-// safeNext only allows same-site relative redirects (no //evil.com, no schemes).
+// maxNext is the longest "next" the panel keeps. The page's own addresses are a few dozen characters. The value
+// goes into the signed cookie of the sign-in round trip: 5000 characters made a cookie of over 7 kB, which a
+// browser drops (it keeps the old one), and the way back then failed as "started in another browser" (audit 6,
+// r4-p1-05).
+const maxNext = 512
+
+// safeNext only allows same-site relative redirects (no //evil.com, no schemes), and none longer than maxNext:
+// anything else is the start page.
 func safeNext(t string) string {
-	if t == "" || !strings.HasPrefix(t, "/") || strings.HasPrefix(t, "//") || strings.Contains(t, "\\") {
+	if t == "" || len(t) > maxNext || !strings.HasPrefix(t, "/") || strings.HasPrefix(t, "//") || strings.Contains(t, "\\") {
 		return "/"
 	}
 	u, err := url.Parse(t)
