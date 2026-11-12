@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -200,5 +202,72 @@ func TestClearStoppedRun(t *testing.T) {
 	clearStoppedRun(bin, status, false, now, unit(panelupdate.ActivityNone))
 	if asked != 0 {
 		t.Fatal("asked", asked)
+	}
+}
+
+// r2-p4-07 (audit 5): `fairy update` by hand wrote the update unit and the polkit rule and ran `apt-get
+// install polkitd` before it knew whether there was an update and before its question; after "N" it printed
+// "Nothing changed." Now nothing is written before a yes.
+func TestTheButtonIsSetUpOnlyAfterAYes(t *testing.T) {
+	todo := []string{"write /etc/systemd/system/fairy-panel-update.service"}
+	cli := func(typed string) *answers { // release.CLI asked its question and read one line
+		a := &answers{r: bufio.NewReader(strings.NewReader(typed))}
+		line, _ := bufio.NewReader(a).ReadString('\n')
+		if line != strings.SplitAfter(typed, "\n")[0] {
+			t.Fatalf("the CLI read %q of %q", line, typed)
+		}
+		return a
+	}
+	for typed, want := range map[string]bool{"y\n": true, "yes\n": true, " YES \n": true, "n\n": false, "\n": false, "no\n": false, "": false, "yess\n": false} {
+		var out bytes.Buffer
+		if got := buttonWanted(cli(typed), false, todo, &out); got != want || out.Len() != 0 {
+			t.Errorf("the CLI's question answered %q: set up = %v, said %q", typed, got, out.String())
+		}
+	}
+	// --yes and nothing asked (an install with --yes, or already up to date with --yes)
+	var out bytes.Buffer
+	if !buttonWanted(&answers{r: bufio.NewReader(strings.NewReader(""))}, true, todo, &out) || out.Len() != 0 {
+		t.Fatal("--yes", out.String())
+	}
+	// already up to date, no --yes: the CLI asked nothing, so this command asks its own question
+	for typed, want := range map[string]bool{"y\n": true, "n\n": false, "": false} {
+		out.Reset()
+		got := buttonWanted(&answers{r: bufio.NewReader(strings.NewReader(typed))}, false, todo, &out)
+		if got != want || !strings.HasPrefix(out.String(), "Set up the Update panel button now (write /etc/systemd/system/fairy-panel-update.service)? [y/N] ") {
+			t.Errorf("own question answered %q: %v, %q", typed, got, out.String())
+		}
+		if !want && !strings.HasSuffix(out.String(), "Nothing changed.\n") {
+			t.Errorf("after a no: %q", out.String())
+		}
+	}
+	// the CLI's question and then a second line: the second one is still there for this command
+	a := &answers{r: bufio.NewReader(strings.NewReader("y\nn\n"))}
+	if line, _ := bufio.NewReader(a).ReadString('\n'); line != "y\n" || !a.yes() {
+		t.Fatal(line)
+	}
+	if rest, _ := a.r.ReadString('\n'); rest != "n\n" {
+		t.Fatalf("the reader took more than one line: %q left", rest)
+	}
+
+	// what would be written is known without writing it
+	dir := t.TempDir()
+	unit, rules := filepath.Join(dir, "fairy-panel-update.service"), filepath.Join(dir, "rules.d", "49-fairy-panel.rules")
+	p := panelupdate.Pending(unit, rules)
+	if len(p) != 3 || p[0] != "write "+unit || !strings.Contains(p[1], "apt-get install -y -q polkitd") || p[2] != "write "+rules {
+		t.Fatal(p)
+	}
+	if left, _ := os.ReadDir(dir); len(left) != 0 {
+		t.Fatal("Pending wrote something")
+	}
+	_ = os.Mkdir(filepath.Dir(rules), 0o755)
+	if _, err := panelupdate.Install(unit, rules, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p := panelupdate.Pending(unit, rules); len(p) != 0 {
+		t.Fatal("after the setup nothing is pending:", p)
+	}
+	_ = os.WriteFile(unit, []byte("[Unit]\nDescription=older\n"), 0o644)
+	if p := panelupdate.Pending(unit, rules); len(p) != 1 || p[0] != "write "+unit {
+		t.Fatal(p)
 	}
 }

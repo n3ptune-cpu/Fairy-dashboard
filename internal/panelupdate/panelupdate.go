@@ -276,6 +276,26 @@ func (s Systemd) Status() (Status, bool) {
 	return st.Settled(now, act), true
 }
 
+// Pending says what Install would do, without doing any of it: the files it would write and the package it
+// would install. Empty when the button is set up and up to date. `fairy update` shows this before its question.
+func Pending(unitPath, polkitPath string) []string {
+	var todo []string
+	same := func(path string, data []byte) bool {
+		b, err := os.ReadFile(path)
+		return err == nil && string(b) == string(data)
+	}
+	if !same(unitPath, deploy.PanelUpdateUnit) {
+		todo = append(todo, "write "+unitPath)
+	}
+	if _, err := os.Stat(filepath.Dir(polkitPath)); err != nil {
+		todo = append(todo, "install the package polkitd (apt-get install -y -q polkitd)")
+	}
+	if !same(polkitPath, deploy.PanelPolkitRules) {
+		todo = append(todo, "write "+polkitPath)
+	}
+	return todo
+}
+
 // Install writes the unit and the polkit rule (root, from `fairy update`) and reloads systemd. It returns what
 // it changed, for the CLI's output.
 func Install(unitPath, polkitPath string, run func(name string, args ...string) error) ([]string, error) {

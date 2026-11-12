@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -30,7 +32,8 @@ import (
 // --yes skips the question, --force reinstalls the same or an older release. Nothing runs this automatically,
 // except fairy-panel-update.service when an admin presses "Update panel" (--from-panel: no question, steps
 // written to /var/lib/fairy-panel-update/status.json). Run by hand as root, it also installs or refreshes that
-// unit and its polkit rule, so the button works from then on.
+// unit and its polkit rule, so the button works from then on: after the question was answered with yes (or
+// with --yes), never before, and it says before the question what it will write.
 func update(args []string) int {
 	if testBuild { // a panel without sign-in is never the installed one: it has nothing to update (testmode.go)
 		fmt.Fprintln(os.Stderr, "fairy update:", testUpdateOff)
@@ -104,8 +107,17 @@ func update(args []string) int {
 	if *fromPanel {
 		*yes = true
 		status = &panelupdate.Writer{Path: panelupdate.StatusPath, From: version}
-	} else if !*check {
-		setupPanelButton()
+	}
+	// A run by hand also sets up the Update panel button (a unit file, a polkit rule, the package polkitd when
+	// it is missing). Nothing of that happens before the question is answered with yes: it is said first, and
+	// done after an update that went through, or after a question of its own when there is nothing to update.
+	in := &answers{r: bufio.NewReader(os.Stdin)}
+	var buttonTodo []string
+	if !*fromPanel && !*check {
+		if buttonTodo = panelupdate.Pending(panelupdate.UnitPath, panelupdate.PolkitPath); len(buttonTodo) > 0 {
+			fmt.Println("The Update panel button (Updates page) is not set up on this host, or its files are older than this version.")
+			fmt.Println("After your yes this command will also:", strings.Join(buttonTodo, "; ")+".")
+		}
 	}
 	if !*check {
 		clearStoppedRun(filepath.Dir(exe), panelupdate.StatusPath, *fromPanel, time.Now(), panelupdate.UnitActivity)
@@ -125,7 +137,7 @@ func update(args []string) int {
 		}
 	}
 	cli := &release.CLI{Client: client, Key: key, Program: release.PanelProgram, Current: version, Target: exe,
-		Asset: release.AssetName(release.PanelProgram, runtime.GOOS, runtime.GOARCH), Out: os.Stdout, In: os.Stdin,
+		Asset: release.AssetName(release.PanelProgram, runtime.GOOS, runtime.GOARCH), Out: os.Stdout, In: in,
 		Check: *check, Yes: *yes, Force: *force,
 		Installer: func(target, _ string) *release.Installer { return systemdInstaller(target, healthURL) },
 		RunNew: func(path string) (string, error) {
@@ -151,7 +163,55 @@ func update(args []string) int {
 		}
 		return 1
 	}
+	if len(buttonTodo) > 0 && buttonWanted(in, *yes, buttonTodo, os.Stdout) {
+		setupPanelButton()
+	}
 	return 0
+}
+
+// answers hands release.CLI the terminal one line at a time and remembers what was answered, so that this
+// command knows whether the CLI asked its question and what the answer was (the CLI only returns nil for
+// "installed", "already up to date" and "no").
+type answers struct {
+	r     *bufio.Reader
+	asked bool
+	last  string
+}
+
+func (a *answers) Read(p []byte) (int, error) {
+	line, err := a.r.ReadString('\n')
+	a.asked, a.last = true, line
+	n := copy(p, line)
+	if n > 0 {
+		return n, nil
+	}
+	return 0, err
+}
+
+func (a *answers) yes() bool {
+	v := strings.ToLower(strings.TrimSpace(a.last))
+	return v == "y" || v == "yes"
+}
+
+// buttonWanted decides, after a run that ended without an error, whether the Update panel button is set up
+// now. The CLI asked and the answer was yes, or --yes was given: yes (it was said before the question). The
+// answer was no: no, and "Nothing changed." is true. The CLI did not ask (already up to date): this asks.
+func buttonWanted(in *answers, yes bool, todo []string, out io.Writer) bool {
+	switch {
+	case in.asked:
+		return in.yes()
+	case yes:
+		return true
+	}
+	fmt.Fprintf(out, "Set up the Update panel button now (%s)? [y/N] ", strings.Join(todo, "; "))
+	in.asked = false
+	var buf [256]byte
+	_, _ = in.Read(buf[:])
+	if in.yes() {
+		return true
+	}
+	fmt.Fprintln(out, "Nothing changed.")
+	return false
 }
 
 // configFirstNote is said when config.yaml holds something the installed version refuses, most likely a key
