@@ -380,6 +380,16 @@ func (p *Poller) PVERef(id string) (cluster, node, kind string, vmid *int, ok bo
 	return r.Cluster, r.Node, r.Kind, r.VMID, ok
 }
 
+// GuestState is a guest's state in the Proxmox API's latest answer, word for word, and whether the panel has
+// one for it at all. Only "stopped" means that the guest does not run: a paused or suspended guest still holds
+// its memory, and "unknown" (or any other word) says nothing.
+func (p *Poller) GuestState(id string) (state string, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	r, ok := p.pveRefs[id]
+	return r.State, ok && r.Kind != "node"
+}
+
 // Override returns the `systems:` entry for a system id, or nil.
 func (p *Poller) Override(id string) *config.SystemOverride {
 	p.cfgMu.RLock()

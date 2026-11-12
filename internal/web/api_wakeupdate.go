@@ -297,21 +297,56 @@ func (o runOps) Guests(id string, since time.Time) (int, bool, string) {
 	if !fresh {
 		return 0, false, "its Proxmox API has not answered since it came online"
 	}
-	var names []string
+	// A guest keeps its node on unless the panel can say that it is stopped: shown as stopped, and "stopped" in
+	// so many words in the Proxmox API's latest answer. Shown as running: it runs. Everything else (paused,
+	// suspended, "unknown", a word the panel does not know, a guest whose polling is paused, a guest row without
+	// a node) is "the panel cannot say": the node is left on for that too (r2-p2-07).
+	var names, unsure []string
 	for _, g := range o.s.Poller.Snapshot() {
-		if !poller.GuestOf(g, x) { // by the node's id, not by the name shown for it
+		if (g.Kind != "qemu" && g.Kind != "lxc") || model.Deref(g.ClusterID) != model.Deref(x.ClusterID) {
 			continue
 		}
-		if g.Status != "stopped" && g.Status != "offline" { // running, or the panel cannot say that it is not
+		if g.ParentID != nil && !poller.GuestOf(g, x) { // by the node's id, not by the name shown for it
+			continue // a guest of another node
+		}
+		state, ok := o.s.Poller.GuestState(g.ID)
+		switch {
+		case g.ParentID == nil: // the cluster did not say which node it is on
+			unsure = append(unsure, g.Name+" (no node given)")
+		case g.Status == "online":
 			names = append(names, g.Name)
+		case g.Status == "stopped" && ok && state == "stopped":
+		default:
+			unsure = append(unsure, g.Name+" ("+guestStateWord(g, state)+")")
 		}
 	}
-	sort.Strings(names)
-	n := len(names)
-	if n > 3 {
-		names = append(names[:3], "…")
+	short := func(l []string) string {
+		sort.Strings(l)
+		if len(l) > 3 {
+			l = append(l[:3], "…")
+		}
+		return strings.Join(l, ", ")
 	}
-	return n, true, strings.Join(names, ", ")
+	if n := len(names); n > 0 {
+		return n, true, short(names)
+	}
+	if len(unsure) > 0 {
+		return 0, false, "the Proxmox API does not show as stopped: " + short(unsure)
+	}
+	return 0, true, ""
+}
+
+// guestStateWord is why a guest is not taken for stopped, for the report: the Proxmox API's own word when it
+// is one of its plain ones.
+func guestStateWord(g model.System, state string) string {
+	if g.Status == "paused" {
+		return "polling paused"
+	}
+	switch state {
+	case "paused", "suspended", "unknown":
+		return state
+	}
+	return "state not known"
 }
 
 func (o runOps) Blocked() string {

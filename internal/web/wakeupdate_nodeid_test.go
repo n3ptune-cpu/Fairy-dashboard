@@ -17,6 +17,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/powerctl"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/scheduler"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
 )
@@ -241,5 +242,115 @@ console.log([names(guestsOf(state.systems[0])), names(guestsOf(state.systems[1])
 	}
 	if got := strings.TrimSpace(string(out)); got != "win11 truenas node-a node-b" {
 		t.Errorf("two nodes with the same shown name: %q, want each node its own guest", got)
+	}
+}
+
+// r2-p2-07 (audit 5, round 2): a guest that the Proxmox API reports as "unknown" on a node that is online was
+// counted as not running (the systems list shows every state it does not know as "offline"), and the node
+// was switched off. Only a guest that is stopped, in that word, lets its node go: every other state keeps the
+// node on, and so does a Proxmox API that fails or has not answered since the node came online.
+func TestOnlyAStoppedGuestLetsItsNodeBeSwitchedOff(t *testing.T) {
+	long := time.Now().Add(-time.Hour)
+	for _, c := range []struct {
+		status  any // what the cluster says about win11 on SRV-PVEA (nil: no status at all)
+		running int
+		known   bool
+		why     string
+	}{
+		{"stopped", 0, true, ""},
+		{"running", 1, true, "win11"},
+		{"unknown", 0, false, "the Proxmox API does not show as stopped: win11 (unknown)"},
+		{"paused", 0, false, "the Proxmox API does not show as stopped: win11 (paused)"},
+		{"suspended", 0, false, "the Proxmox API does not show as stopped: win11 (suspended)"},
+		{"prelaunch", 0, false, "the Proxmox API does not show as stopped: win11 (state not known)"},
+		{"STOPPED", 0, false, "the Proxmox API does not show as stopped: win11 (state not known)"},
+		{"", 0, false, "the Proxmox API does not show as stopped: win11 (state not known)"},
+		{nil, 0, false, "the Proxmox API does not show as stopped: win11 (state not known)"},
+		{7.0, 0, false, "the Proxmox API does not show as stopped: win11 (state not known)"},
+	} {
+		e := setup(t)
+		e.b.Mu.Lock()
+		e.b.PVE = func() ([]jsonx.M, error) {
+			rows := testutil.PVEResources()
+			if c.status == nil {
+				delete(rows[2], "status")
+			} else {
+				rows[2]["status"] = c.status
+			}
+			return rows, nil
+		}
+		e.b.Mu.Unlock()
+		e.s.Poller.PollOnce(context.Background())
+		n, known, why := runOps{e.s}.Guests("node-srv-pvea", long)
+		if n != c.running || known != c.known || why != c.why {
+			t.Errorf("win11 is %v: Guests = %d, known %v, %q; want %d, %v, %q", c.status, n, known, why, c.running, c.known, c.why)
+		}
+	}
+
+	t.Run("a guest row that names no node counts for every node of its cluster", func(t *testing.T) {
+		e := setup(t)
+		e.b.Mu.Lock()
+		e.b.PVE = func() ([]jsonx.M, error) {
+			rows := testutil.PVEResources()
+			rows[2]["status"] = "stopped"
+			delete(rows[3], "node") // the container: stopped, and the cluster does not say where
+			return rows, nil
+		}
+		e.b.Mu.Unlock()
+		e.s.Poller.PollOnce(context.Background())
+		if n, known, why := (runOps{e.s}).Guests("node-srv-pvea", long); n != 0 || known || why != "the Proxmox API does not show as stopped: minecraft (no node given)" {
+			t.Errorf("Guests = %d, known %v, %q", n, known, why)
+		}
+	})
+
+	t.Run("a guest whose polling is paused", func(t *testing.T) {
+		e := setup(t)
+		e.b.Mu.Lock()
+		e.b.PVE = func() ([]jsonx.M, error) {
+			rows := testutil.PVEResources()
+			rows[2]["status"] = "stopped"
+			return rows, nil
+		}
+		e.b.Mu.Unlock()
+		e.s.Poller.PollOnce(context.Background())
+		if n, known, _ := (runOps{e.s}).Guests("node-srv-pvea", long); n != 0 || !known {
+			t.Fatalf("all guests stopped: %d %v", n, known)
+		}
+		// the panel keeps what it last saw of win11, and that may be old
+		if err := e.s.Poller.SetPoll("qemu-100", &scheduler.Override{Paused: true}); err != nil {
+			t.Fatal(err)
+		}
+		if n, known, why := (runOps{e.s}).Guests("node-srv-pvea", long); n != 0 || known || why != "the Proxmox API does not show as stopped: win11 (polling paused)" {
+			t.Errorf("Guests = %d, known %v, %q", n, known, why)
+		}
+	})
+
+	t.Run("a Proxmox API that fails", func(t *testing.T) {
+		e := setup(t)
+		e.b.Mu.Lock()
+		e.b.PVE = func() ([]jsonx.M, error) { return nil, context.DeadlineExceeded }
+		e.b.Mu.Unlock()
+		e.s.Poller.PollOnce(context.Background())
+		if n, known, why := (runOps{e.s}).Guests("node-srv-pvea", long); n != 0 || known || why != "its Proxmox API has not answered since it came online" {
+			t.Errorf("Guests = %d, known %v, %q", n, known, why)
+		}
+	})
+
+	// the whole run: the node is woken, its guest shows as "unknown", the node is left on and no shutdown is sent
+	for _, status := range []string{"unknown", "paused"} {
+		t.Run("the run, guest "+status, func(t *testing.T) {
+			e := setup(t)
+			f := newFarm(t, e)
+			h := runNodeWithGuest(t, e, f, "", status)
+			want := "Left ON: Fairy cannot see whether guests run on it (the Proxmox API does not show as stopped: win11 (" + status + "))."
+			if h.State != wakerun.StLeftOn || h.On != wakerun.OnYes || !strings.HasPrefix(h.Text, want) {
+				t.Errorf("the node ended as %s (%s): %s", h.State, h.On, h.Text)
+			}
+			for _, r := range f.requests() {
+				if r == "pve-agent /power" {
+					t.Errorf("RULE BROKEN: a node with a guest of state %q was asked to shut down: %v", status, f.requests())
+				}
+			}
+		})
 	}
 }

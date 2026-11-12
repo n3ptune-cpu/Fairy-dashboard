@@ -22,6 +22,10 @@ import (
 type pveRef struct {
 	Cluster, Node, Kind string
 	VMID                *int
+	// State: a guest's "status" as the Proxmox API gave it in its latest answer, word for word ("running",
+	// "stopped", "unknown", ...). The systems list shows less (paused, suspended and every unknown word are
+	// shown as stopped or offline there); whoever must know that a guest is stopped asks GuestState.
+	State string
 }
 
 // maxNodeLookups is how many CPU-model requests (one per node, once) one cluster has running at the same time.
@@ -171,10 +175,10 @@ func (p *Poller) recordPVERefsLocked(clusterID, prefix string, data []jsonx.M) m
 		var id string
 		if typ == "node" {
 			id = prefix + "node-" + normalise.Slug(node)
-			p.pveRefs[id] = pveRef{clusterID, node, "node", nil}
+			p.pveRefs[id] = pveRef{Cluster: clusterID, Node: node, Kind: "node"}
 		} else if vmid := normalise.VMID(r); (typ == "qemu" || typ == "lxc") && vmid != nil { // the same ids as NormaliseProxmox
 			id = fmt.Sprintf("%s%s-%d", prefix, typ, *vmid)
-			p.pveRefs[id] = pveRef{clusterID, node, typ, vmid}
+			p.pveRefs[id] = pveRef{Cluster: clusterID, Node: node, Kind: typ, VMID: vmid, State: jsonx.S(r, "status")}
 		}
 		if id != "" {
 			refs[id] = true

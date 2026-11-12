@@ -337,9 +337,11 @@ The rules, in plain words:
   and shows nothing on its screen before the agent's own shutdown notice. Use it for machines that are off
   because nobody is using them.
 * **A Proxmox node with running guests is left on.** For a node the panel reads through the Proxmox API it
-  counts the guests that are not stopped; one is enough. If the panel cannot know (the API has not answered
-  since the node came online, or the machine is a Proxmox host that the panel knows only through its agent),
-  the node is left on, and the report says which of the two it was.
+  counts the guests that are not stopped; one is enough. Only a guest the API reports as "stopped" counts as
+  stopped: a paused or suspended guest, one whose state the API gives as "unknown" (or not at all), and one
+  whose polling is paused in the panel keep the node on as well. If the panel cannot know (the API has not
+  answered since the node came online, or the machine is a Proxmox host that the panel knows only through
+  its agent), the node is left on, and the report says why.
 * **One run at a time**, at most 16 machines in it. A second start is refused with a message. **Update
   panel** is refused while a run is going.
 * **Cancel run** starts nothing new: no further wake, no further update. The dialog asks what happens to
