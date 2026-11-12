@@ -645,6 +645,14 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .table.hosts td.col-gpu { white-space: nowrap; }
 .table.hosts td.col-gpu .mini { display: inline-grid; vertical-align: middle; }
 .table.hosts .gpu-n { margin-left: 6px; }
+/* The table (a panel wider than that): a very long name is cut with … instead of pushing RAM, GPU and Wall power out of
+   the panel (a name of 100 characters was 828 px in one line). The whole name is on the host's page, in the narrow
+   layout below, where it wraps, and in the tooltip. The room is what the other five columns leave, never under 28 ch (a name that short is never cut). */
+@container hosts (min-width: 940.1px) {
+  .table.hosts .host-l1 > a { display: block; flex: 0 1 auto; min-width: 0; max-width: max(28ch, calc(100cqw - 860px)); overflow: hidden; text-overflow: ellipsis;
+    padding: 4px 0 4px 4px; margin: -4px 0 -4px -4px; }  /* the room of the dot's ring, which the cut would clip */
+  .table.hosts .host-l1 > a > .dot { margin-right: 7px; vertical-align: 1px; }
+}
 @container hosts (max-width: 940px) {
   .table.hosts, .table.hosts tbody, .table.hosts tr.group, .table.hosts tr.group td { display: block; }
   .table.hosts thead { display: none; }

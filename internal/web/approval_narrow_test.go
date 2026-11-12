@@ -36,3 +36,38 @@ func TestUINarrowTablesKeepAWordsWidth(t *testing.T) {
 		}
 	}
 }
+
+// A host name of 100 characters on the Overview at 1440 px (audit 6, r4-b1-06): the name was 828 px in one line
+// and pushed "RAM" half and "GPU" and "Wall power" wholly out of the panel, for every host. In the table it is
+// cut with "…" now, in the room the other columns leave; the narrow layout (where it wraps) is untouched, and
+// the tooltip of a long name starts with the whole name. Measured in the browser runs at 1440 px, with pictures.
+func TestUIOverviewLongHostNameIsCut(t *testing.T) {
+	css, js := appCSS(t), appJS(t)
+	i := strings.Index(css, "@container hosts (min-width: 940.1px) {")
+	j := strings.Index(css, "@container hosts (max-width: 940px) {")
+	if i < 0 || j < i {
+		t.Fatal("app.css: the rule for the table layout is not in front of the narrow layout's")
+	}
+	block := css[i:j]
+	for _, want := range []string{
+		".table.hosts .host-l1 > a { display: block; flex: 0 1 auto; min-width: 0; max-width: max(28ch, calc(100cqw - 860px)); overflow: hidden; text-overflow: ellipsis;",
+		".table.hosts .host-l1 > a > .dot { margin-right: 7px;",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("app.css lacks %q in the table layout's block", want)
+		}
+	}
+	// the name stays in one line there (the rule this one builds on), and wraps in the narrow layout as before
+	for _, want := range []string{
+		".table.hosts .host-l1 > a { flex: none; white-space: nowrap; gap: 7px; }",
+		".table.hosts .host-l1 > a { flex: 0 1 auto; white-space: normal; min-width: 0; overflow-wrap: anywhere; }",
+		".hosts-panel { container: hosts / inline-size; }",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css lacks %q", want)
+		}
+	}
+	if !strings.Contains(js, "const about = [String(s.name || \"\").length > 24 && s.name, subLine(s),") || !strings.Contains(js, `title="${esc(about)}"`) {
+		t.Error("app.js: the tooltip of a long name does not start with the whole name")
+	}
+}

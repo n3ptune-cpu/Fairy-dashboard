@@ -1288,7 +1288,8 @@ const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.ut
 // cluster's name and the agent's version are on the host's page, and in the tooltip.
 function hostRow(s) {
   const gpus = s.gpus || [], w = watts(s), ver = state.me?.can_control && upd.bySys[s.id]?.version;
-  const about = [subLine(s), clusterName(s) && `cluster ${clusterName(s)}`, ver && `fairy-agent ${ver}${upd.bySys[s.id].version_last_seen ? " (last seen)" : ""}`].filter(Boolean).join(" · ");
+  // (a long name is cut with … in the table: the tooltip starts with the whole name then)
+  const about = [String(s.name || "").length > 24 && s.name, subLine(s), clusterName(s) && `cluster ${clusterName(s)}`, ver && `fairy-agent ${ver}${upd.bySys[s.id].version_last_seen ? " (last seen)" : ""}`].filter(Boolean).join(" · ");
   return `<tr class="row host ${live(s) && s.status !== "paused" ? "" : "dim"}" data-key="${esc(s.id)}" data-href="#/system/${enc(s.id)}"><td class="namecell"><div class="host-line"><span class="host-ico">${hostIcon(s)}</span><div class="host-main">
       <div class="host-l1"><a href="#/system/${enc(s.id)}" title="${esc(about)}"><span class="dot ${cssName(s.status)}"></span>${esc(s.name)}</a><span class="host-tags">${upsSigns(s)}${battChip(s)}${helperChip(s)}${approvalChip(s)}${guestCount(s)}${verChip(s.id, true)}</span></div>
       ${model(s) ? `<div class="host-model" title="${esc(modelTitle(s))}">${esc(model(s))}</div>` : ""}</div></div></td>
