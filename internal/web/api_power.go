@@ -28,7 +28,8 @@ func (s *Server) powerCaps(c *reqCtx) error {
 }
 
 func (s *Server) powerAction(c *reqCtx) error {
-	if _, err := c.requireUser(); err != nil {
+	asking, err := c.requireUser()
+	if err != nil {
 		return err
 	}
 	var req powerctl.Request
@@ -45,11 +46,18 @@ func (s *Server) powerAction(c *reqCtx) error {
 	// flipped the switch could otherwise not be called off from the panel at all (audit 5, r3-p2-06). It is
 	// still an admin's action with the CSRF header and "Confirm it's you", and the audit entry says that
 	// control was off (control_off). Every other action is refused by the kill switch here, as before.
+	//
+	// Past the kill switch only for a browser session: an API token cannot "confirm it's you", and the kill
+	// switch has always stopped tokens entirely. A token's cancel is refused by it like its every other write
+	// (423; second review of fix7a, R7A-10: for one batch a control token could cancel with the kill switch on).
+	// With the kill switch off a token's cancel is what it was.
 	var u *model.User
-	var err error
-	if req.Action == "cancel" {
+	switch {
+	case req.Action == "cancel" && asking.Auth != "token":
 		u, err = c.stopGuard(s.stopRL)
-	} else {
+	case req.Action == "cancel":
+		u, err = c.controlGuard(s.stopRL)
+	default:
 		u, err = c.controlGuard(s.control)
 	}
 	if err != nil {

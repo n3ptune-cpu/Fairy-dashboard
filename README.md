@@ -1002,7 +1002,9 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   Sec-Fetch-Site checks for browsers, kill switch, per-host power flags, rate limits, typed confirmation for
   destructive power actions, append-only JSON-lines audit log (+ Audit page), optional ntfy/Discord notification.
   One write passes the kill switch and the per-host power flag: the cancel of a pending shutdown, reboot or
-  sleep countdown (it only stops an action; everything else in this list applies to it).
+  sleep countdown (it only stops an action; everything else in this list applies to it). Past the kill switch
+  it goes for a signed-in admin only: an API token's cancel is refused while the kill switch is on (423), like
+  every other write of a token.
   The audit log is bounded: lines are capped at 8 KiB, the file rotates by size (`audit_max_mb`, `audit_keep`;
   the Audit page shows the current file), and entries anyone can cause without signing in (rejected API tokens,
   failed or rate-limited sign-ins) are limited to 10 per client IP per minute and 300 in all, the rest summed
