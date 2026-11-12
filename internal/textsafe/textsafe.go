@@ -10,7 +10,6 @@ package textsafe
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -22,10 +21,6 @@ import (
 //   - every other C0 and C1 control character and DEL is removed;
 //   - direction marks, embeddings, overrides and isolates (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to
 //     U+2069) and the byte order mark (U+FEFF) are removed;
-//   - characters that show as nothing are removed: the format characters (zero-width space and joiners, word
-//     joiner, soft hyphen, tags, ...), the blank letters (Hangul fillers, the combining grapheme joiner, ...) and
-//     variation selectors. With them two names could read exactly alike. The ones that make an emoji stay: a
-//     joiner between two pictures, and the one selector (text or picture form) right after a picture;
 //   - bytes that are not UTF-8 are removed.
 //
 // A text without any of these is returned as it is.
@@ -35,32 +30,8 @@ func Clean(s string) string {
 	}
 	var b strings.Builder
 	b.Grow(len(s))
-	// what the last character kept is: nothing special, a picture (an emoji), or a picture and its selector
-	const (
-		other = iota
-		pic
-		picSel
-	)
-	last := other
 	for i := 0; i < len(s); {
 		r, n := utf8.DecodeRuneInString(s[i:])
-		if Invisible(r) {
-			next, nn := utf8.DecodeRuneInString(s[i+n:])
-			if next == utf8.RuneError && nn <= 1 { // the end of the text, or a byte that is not UTF-8
-				next = 0
-			}
-			switch {
-			case r == 0x200d && last != other && picture(next): // a joiner between two pictures: one emoji
-				b.WriteString(s[i : i+n])
-			case (r == 0xfe0e || r == 0xfe0f) && last == pic: // the text or picture form of the emoji before it
-				b.WriteString(s[i : i+n])
-				last = picSel
-			}
-			i += n
-			continue
-		}
-		was := last
-		last = other
 		switch {
 		case r == utf8.RuneError && n <= 1: // not UTF-8
 			i += n
@@ -73,41 +44,14 @@ func Clean(s string) string {
 		case r == '\n' || r == '\r' || r == '\t' || r == '\v' || r == '\f' || r == 0x85 || r == 0x2028 || r == 0x2029:
 			b.WriteByte(' ')
 			i += n
-		case unwanted(r): // removed: what was kept before it is still the last character kept
-			last = was
+		case unwanted(r):
 			i += n
 		default:
-			if picture(r) {
-				last = pic
-			}
 			b.WriteString(s[i : i+n])
 			i += n
 		}
 	}
 	return b.String()
-}
-
-// Invisible reports a character that shows as nothing and is no space: a format character (Unicode Cf: the
-// zero-width space and joiners, the word joiner, the soft hyphen, tags, ...), a blank letter (the combining
-// grapheme joiner, the Hangul fillers, two Khmer inherent vowels, the empty Braille pattern) or a variation
-// selector. "Set model name" refuses the same ones (adminstate.ModelName).
-func Invisible(r rune) bool {
-	switch {
-	case r < 0xad:
-		return false
-	case unicode.Is(unicode.Cf, r):
-		return true
-	case r == 0x034f, r == 0x115f, r == 0x1160, r == 0x17b4, r == 0x17b5, r == 0x3164, r == 0xffa0, r == 0x2800:
-		return true
-	case r >= 0x180b && r <= 0x180f, r >= 0xfe00 && r <= 0xfe0f, r >= 0xe0100 && r <= 0xe01ef:
-		return true
-	}
-	return false
-}
-
-// picture reports an emoji or another symbol drawn as a picture.
-func picture(r rune) bool {
-	return !Invisible(r) && (r >= 0x1f000 && r <= 0x1faff || unicode.Is(unicode.So, r))
 }
 
 // dirty reports whether Clean would change s.
@@ -122,7 +66,7 @@ func dirty(s string) bool {
 			continue
 		}
 		r, n := utf8.DecodeRuneInString(s[i:])
-		if (r == utf8.RuneError && n <= 1) || unwanted(r) || Invisible(r) || r == 0x85 || r == 0x2028 || r == 0x2029 {
+		if (r == utf8.RuneError && n <= 1) || unwanted(r) || r == 0x85 || r == 0x2028 || r == 0x2029 {
 			return true
 		}
 		i += n

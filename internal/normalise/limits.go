@@ -10,8 +10,8 @@ import (
 // /metrics answer is kept in memory, copied into every snapshot and sent to every open page, so each list and
 // each text has an upper bound. The bounds are far above what a real machine reports; what is over them is cut
 // off (lists keep their first entries, texts their first bytes). Every text is also cleaned of the characters that
-// act on what shows it (textsafe.Clean: control characters, escape sequences, direction overrides, characters that
-// show as nothing; a line break becomes a space), whether it comes from an agent or from a Proxmox API.
+// act on what shows it (textsafe.Clean: control characters, escape sequences, direction overrides; a line break
+// becomes a space), whether it comes from an agent or from a Proxmox API.
 const (
 	MaxDisks        = 64
 	MaxTemps        = 256

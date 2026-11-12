@@ -4,8 +4,6 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
 // Much of what `fairy admin` prints comes from elsewhere: audit outcomes with agents' error texts, user names
@@ -15,8 +13,8 @@ import (
 // field of a line also goes through cell, which makes line breaks and tabs inside it visible instead of real.
 
 // unsafeRune reports runes a terminal may act on or that can disguise text: C0 controls except tab and
-// newline (ESC, CR, BEL, backspace...), DEL, C1 controls (8-bit CSI / OSC), bidi overrides and marks, the
-// byte order mark, and the characters that show as nothing (textsafe.Invisible). Together with lineRune it is the set textsafe.Clean takes out of a machine's text before
+// newline (ESC, CR, BEL, backspace...), DEL, C1 controls (8-bit CSI / OSC), bidi overrides and marks, and the
+// byte order mark. Together with lineRune it is the set textsafe.Clean takes out of a machine's text before
 // the panel keeps it (a test holds the two together); the CLI applies it again to everything it prints,
 // because not everything it prints came through there (an older audit log, names from the identity provider).
 func unsafeRune(r rune) bool {
@@ -28,8 +26,6 @@ func unsafeRune(r rune) bool {
 	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0x200e || r == 0x200f || r == 0x061c, r == 0xfeff:
 		return true
 	case r == 0x2028 || r == 0x2029: // Unicode line ends (cell shows them as escapes before this is asked)
-		return true
-	case textsafe.Invisible(r): // zero-width and blank characters: two names could read alike in a list
 		return true
 	}
 	return false
