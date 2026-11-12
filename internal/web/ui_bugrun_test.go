@@ -345,3 +345,27 @@ func TestUIUpsStripLeavesOutWhatIsNotKnown(t *testing.T) {
 		t.Error("the strip still prints a dash for a charge it does not know")
 	}
 }
+
+// r2-p3-07: long names without a space (a host's, a UPS's, a sensor's: from machines) made Notifications, Audit,
+// the UPS page and a host's page wider than the window, phone and desktop. The rules are pinned here; the widths
+// were measured in a browser against the auditor's lab (the report of the fixes has the numbers).
+func TestUILongNamesDoNotWidenThePages(t *testing.T) {
+	css := appCSS(t)
+	for _, want := range []string{
+		`#page, #alerts { overflow-wrap: break-word; }`,
+		`@media (max-width: 1100px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }`,
+		`@media (max-width: 760px) { .ups-cards, .sensor-grid.two { grid-template-columns: minmax(0, 1fr); } }`,
+		`.sensor-grid { grid-template-columns: minmax(0, 1fr); }`,
+		`.list-row > span:first-child { max-width: calc(100% - 11ch); }`,
+		`.ups-head > div { min-width: 0; }`,
+		`.toolbar .select { max-width: min(100%, 260px); text-overflow: ellipsis; }`,
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css lacks %q", want)
+		}
+	}
+	// they come after the rules they change (the same selectors earlier in the file)
+	if strings.Index(css, `#page, #alerts { overflow-wrap: break-word; }`) < strings.Index(css, `.sensor-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }`) {
+		t.Error("the rules of r2-p3-07 must stay at the end of app.css")
+	}
+}

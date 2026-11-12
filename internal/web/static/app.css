@@ -751,3 +751,14 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 @media (max-width: 760px) { .toasts { left: 8px; right: 8px; bottom: 8px; width: auto; } .toast-x { width: 44px; } }
 #popset .select { justify-self: start; }
+
+/* r2-p3-07: a long name without a space (a host's, a UPS's, a sensor's, a mount point's: all come from machines)
+   made pages wider than the window, phone and desktop. A word that does not fit its box breaks, and these boxes
+   no longer take their width from what is in them. */
+#page, #alerts { overflow-wrap: break-word; }
+@media (max-width: 1100px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .ups-cards, .sensor-grid.two { grid-template-columns: minmax(0, 1fr); } }
+.sensor-grid { grid-template-columns: minmax(0, 1fr); }
+.list-row > span:first-child { max-width: calc(100% - 11ch); }
+.ups-head > div { min-width: 0; }
+.toolbar .select { max-width: min(100%, 260px); text-overflow: ellipsis; }
