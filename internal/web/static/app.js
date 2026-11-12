@@ -145,6 +145,40 @@ function sessionEnded() {
 // it): at most 120 characters, line breaks and broken surrogate halves replaced first.
 const headerText = (v) => encodeURIComponent([...String(v).replace(/[\r\n]+/g, " ")].slice(0, 120).join("").replace(/[\uD800-\uDFFF]/gu, "\uFFFD"));
 let ctlLabel = null;  // set by controlCall while it starts its request: sent as X-Fairy-Action (the step-up dialog's label)
+// ---- is the panel reachable? The live data comes over one stream. While the panel cannot be reached (it is
+// stopped, the network is gone) the page must not show the last data as if it were live. `net` knows when the
+// page last heard from the panel: a stream event, the stream opening, an answer to a request, or an answer
+// to the knock below. After NET_QUIET without any of them the page knocks (GET /healthz, at most 4 s; an
+// answer below 500 is the panel's, 502 to 504 are a proxy's that cannot reach it). No answer: the strip "Panel
+// not reachable" on every page, no "live", grey dots (body.unreachable), a knock every NET_KNOCK, until the
+// panel answers again.
+const NET_QUIET = 10000, NET_KNOCK = 5000;
+const net = { heard: Date.now(), data: Date.now(), down: false, knocking: false, knocked: 0 };
+function netHeard(data) {
+  net.heard = Date.now();
+  if (data) net.data = net.heard;
+  if (!net.down) return;
+  net.down = false;
+  document.body.classList.remove("unreachable");
+  renderAlerts();
+  // the stream may be waiting out a retry of up to 30 s: connect now
+  if (!state.es && !signedOut && !leaving) { clearTimeout(streamRetry); streamBackoff = 0; connect(state.watch); }
+}
+async function netKnock() {
+  const now = Date.now();
+  if (signedOut || leaving || !state.me || net.knocking || now - net.heard < NET_QUIET || now - net.knocked < NET_KNOCK) return;
+  net.knocking = true; net.knocked = now;
+  let ok = false;
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), 4000);
+  try { ok = (await fetch("/healthz", { cache: "no-store", credentials: "same-origin", signal: ac.signal })).status < 500; } catch { /* no answer */ }
+  clearTimeout(t);
+  net.knocking = false;
+  if (ok) return netHeard(false);
+  if (net.down || signedOut || leaving) return;
+  net.down = true;
+  document.body.classList.add("unreachable");
+  renderAlerts();
+}
 async function api(path, opts = {}) {
   const write = opts.method && opts.method !== "GET";
   if (write && !opts.label && ctlLabel) opts = { ...opts, label: ctlLabel };
@@ -156,6 +190,7 @@ async function api(path, opts = {}) {
       ...(opts.body && typeof opts.body === "string" ? { "Content-Type": "application/json" } : {}),
       ...(opts.label ? { "X-Fairy-Action": headerText(opts.label) } : {}), ...(opts.headers || {}) } });
   const data = res.status === 204 ? null : await res.json().catch(() => ({}));
+  if (res.status < 500) netHeard(false);
   if (!res.ok) {
     const d = data?.detail;
     // No JSON detail on a 5xx: a proxy (e.g. Cloudflare on 502/504) answered instead of the panel. The panel
@@ -655,6 +690,8 @@ function renderNav() {
 // ------------------------------------------------------------ global alert strip (UPS on battery, pending shutdowns)
 function renderAlerts() {
   const out = [];
+  if (net.down) out.push(`<div class="alert-strip warn static" data-key="net-down" role="status">${I.recheck}<b>Panel not reachable</b>
+    <span>last data <span data-ago="${esc(new Date(net.data).toISOString())}">${esc(ago(net.data))}</span></span></div>`);
   const off = controlOff();
   if (off) out.push(`<div class="alert-strip bad static" data-key="control-off">${I.onoff}<b>Control is disabled</b>
     <span>by ${esc(off.by)} · ${esc(ago(off.at))}${off.reason ? ` · “${esc(off.reason)}”` : ""}</span>
@@ -2737,6 +2774,7 @@ function connect(watch) {
   const q = [watch ? `watch=${enc(watch)}` : "", pop.after !== null ? `notes_after=${enc(pop.after)}` : ""].filter(Boolean).join("&");
   const es = new EventSource(`/api/stream${q ? `?${q}` : ""}`);
   state.es = es;
+  for (const ev of ["open", "systems", "systems_delta", "summary", "ups", "notes", "notes_new", "ups_event", "power"]) es.addEventListener(ev, () => netHeard(ev !== "open"));
   es.addEventListener("open", () => { streamBackoff = 0; if (state.streamed) checkAccess(); state.streamed = true; });
   es.addEventListener("systems", (e) => { state.systems = JSON.parse(e.data).systems; indexSystems(); loadSites(); render(); ensurePowerOnCaps(); });
   es.addEventListener("systems_delta", (e) => {
@@ -2772,8 +2810,9 @@ async function loadSites() {  // the site of each host, for the sidebar and Over
 async function loadUpsEvents() {
   try { state.upsEvents = await api("/api/ups/events?limit=50"); render(); } catch { /* ignore */ }
 }
-// 1 s ticker for relative times and countdowns (no re-render needed)
+// 1 s ticker for relative times and countdowns (no re-render needed), and for the knock when the panel is quiet
 setInterval(() => {
+  netKnock();
   document.querySelectorAll("[data-ago]").forEach((el) => { const v = ago(el.dataset.ago); if (el.textContent !== v) el.textContent = v; });
   document.querySelectorAll("[data-countdown]").forEach((el) => { el.textContent = fmtRuntime(Math.max(0, (new Date(el.dataset.countdown) - Date.now()) / 1000)); });
 }, 1000);

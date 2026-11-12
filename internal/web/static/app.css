@@ -402,6 +402,10 @@ h3 .info-btn, .section-title .info-btn { margin-left: 6px; }
 .alert-strip { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; font-size: 13px; color: var(--text);
   border: 1px solid; font-variant-numeric: tabular-nums; }
 .alert-strip svg { flex: none; }
+/* the panel cannot be reached: what the page shows is the last data, not live (no "live", no coloured dots) */
+body.unreachable .dot, body.unreachable .dot.online, body.unreachable .dot.stale, body.unreachable .dot.offline, body.unreachable .dot.error { background: var(--off); box-shadow: none; }
+body.unreachable .live { display: none; }
+body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .alert-strip.warn { border-color: rgba(245, 184, 75, .55); background: rgba(245, 184, 75, .10); color: #ffe2a8; }
 .alert-strip.bad { border-color: rgba(255, 93, 108, .6); background: rgba(255, 93, 108, .13); color: #ffc9ce; animation: pulse 1.4s ease-in-out infinite; }
 .alert-strip.info { border-color: rgba(122, 162, 255, .4); background: rgba(122, 162, 255, .07); color: #c8d7ff; }
