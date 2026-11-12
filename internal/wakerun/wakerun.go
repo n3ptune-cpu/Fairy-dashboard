@@ -200,6 +200,9 @@ type HostInfo struct {
 	RelayID string // the agent that sends its wake packets
 	MACs    int    // one wake request to the relay per network card
 	OptedIn bool   // an admin switched it on for these runs
+	// Entry names the panel's entry for the machine's agent: another value means the agent was taken out and
+	// added again (Re-pair) since. A run lets go of a machine whose entry changed under it.
+	Entry int
 }
 
 // Pending is a power action an agent has scheduled.
@@ -401,6 +404,7 @@ type Host struct {
 	lateSeen      bool // gave up, and it came online later
 	grant         any  // the approval for this machine (item 1.1)
 	cancelHandled bool
+	entry         int       // HostInfo.Entry when the run started
 	verdict       *verdict  // how the run would end it: the last look (look) is going on
 	askedAt       time.Time // when the run's own direct question to it got an answer of any kind (it runs)
 }
@@ -614,7 +618,7 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 				return &StartError{Msg: info.Name + " is not switched on for \"Update unpowered hosts\""}
 			}
 			o := m.Ops.Observe(id)
-			h := &Host{ID: id, Name: info.Name, Mode: mode, State: StQueued, Since: now, Text: "waiting for its turn", StartStatus: o.Status, Log: []LogLine{}}
+			h := &Host{ID: id, Name: info.Name, Mode: mode, State: StQueued, Since: now, Text: "waiting for its turn", StartStatus: o.Status, Log: []LogLine{}, entry: info.Entry}
 			if q := QuietFor(o, now); q > 0 && o.OnBy == "" {
 				s := int64(q / time.Second)
 				h.QuietForS = &s

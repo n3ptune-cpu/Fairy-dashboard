@@ -47,6 +47,10 @@ func (m *Manager) stepHost(ctx context.Context, r *Run, h *Host, now time.Time) 
 		m.endAsIs(r, h, now, "It was switched off for \"Update unpowered hosts\" during the run, so the run let go of it")
 		return
 	}
+	if info.Entry != h.entry { // removed and added again between two steps (Re-pair): what the run knows is about the old entry
+		m.endAsIs(r, h, now, "It was paired again during the run (its entry in the panel was replaced), so the run let go of it")
+		return
+	}
 	if r.Cancel != nil && !m.cancelled(ctx, r, h, now) {
 		return
 	}

@@ -304,3 +304,30 @@ func TestCancelsDoNotShareTheControlBudget(t *testing.T) {
 		t.Fatal("the control budget was touched by the cancels")
 	}
 }
+
+// The same with the real poller: Poller.AgentEntry changes when an agent is added again under its id.
+func TestWakeUpdateARepairDuringARunIsNoticed(t *testing.T) {
+	e, f := lostFarm(t, "")
+	if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "Alice", BySub: "u2"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1200 && hostOf(activeRun(e), "pc-a").State != wakerun.StUpdating; i++ {
+		f.tick()
+	}
+	p := e.s.Poller
+	was := p.AgentEntry("pc-a")
+	a, _ := p.AgentByID("pc-a")
+	o := p.Override("pc-a")
+	p.RemoveAgent("pc-a")
+	if err := p.AddAgent(a, o); err != nil {
+		t.Fatal(err)
+	}
+	if p.AgentEntry("pc-a") == was {
+		t.Fatal("the entry's name did not change")
+	}
+	before := len(f.requests())
+	h := hostOf(f.finish(), "pc-a")
+	if !strings.Contains(h.Text, "It was paired again during the run") || h.State == wakerun.StOff || len(f.requests()) != before {
+		t.Fatalf("%s/%s, sent afterwards %v: %s", h.State, h.On, f.requests()[before:], h.Text)
+	}
+}

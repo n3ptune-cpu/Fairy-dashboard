@@ -105,6 +105,8 @@ type Poller struct {
 	// agent id -> when its version was last written to state.json, and whether a newer one waits to be written
 	versionSavedAt map[string]time.Time
 	versionUnsaved map[string]bool
+	// agent id -> how often an agent was added in the panel under this id since the panel started (AgentEntry)
+	agentAdded map[string]int
 }
 
 // New builds the poller; backend nil = the real HTTP backend.
@@ -448,6 +450,10 @@ func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
 		}
 	}
 	p.agents[a.ID] = a
+	if p.agentAdded == nil {
+		p.agentAdded = map[string]int{}
+	}
+	p.agentAdded[a.ID]++
 	p.Cfg.Agents = append(slices.Clone(p.Cfg.Agents), a)
 	if o != nil {
 		oo := *o
@@ -458,6 +464,15 @@ func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
 	p.Scheduler.Add(p.agentJob(a))
 	p.Scheduler.Kick("agent:" + a.ID)
 	return nil
+}
+
+// AgentEntry names the entry the panel has for an agent id right now: it changes every time an agent is added
+// under that id (Add host, Re-pair), so whoever works with an agent over minutes (a wake / update run) can
+// tell that the entry it started with was taken out and another one put in its place.
+func (p *Poller) AgentEntry(id string) int {
+	p.cfgMu.RLock()
+	defer p.cfgMu.RUnlock()
+	return p.agentAdded[id]
 }
 
 // RemoveAgent stops polling an agent added in the panel and forgets what it reported.

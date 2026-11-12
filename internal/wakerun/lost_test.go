@@ -538,3 +538,24 @@ func TestAMachineSwitchedOnByAPersonDuringTheWaitIsTreatedAsWoken(t *testing.T) 
 		}
 	}
 }
+
+// r2-p2-17 (Info): a machine that is removed from the panel and added again between two steps of a run (a
+// Re-pair) went on in the run, with the new entry and what the run knew about the old one. The run now lets
+// go of it, like of a machine that was removed.
+func TestAMachinePairedAgainDuringARunIsLetGo(t *testing.T) {
+	for _, state := range []string{StWaking, StUpdating, StSettling} {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", state)
+		before := len(w.calls)
+		pc.info.Entry++ // taken out and added again, in the same second
+		h := host(w.finish(), "pc-a")
+		if !strings.Contains(h.Text, "It was paired again during the run (its entry in the panel was replaced), so the run let go of it") || len(w.calls) != before {
+			t.Fatalf("%s: %s/%s, sent afterwards %v: %s", state, h.State, h.On, w.calls[before:], h.Text)
+		}
+		if h.State == StOff || pc.shutdowns != 0 {
+			t.Fatalf("%s: it was switched off: %s", state, h.Text)
+		}
+	}
+}

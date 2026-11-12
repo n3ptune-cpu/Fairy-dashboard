@@ -112,7 +112,7 @@ func (o runOps) Host(id string) (wakerun.HostInfo, bool) {
 	if !ok {
 		return wakerun.HostInfo{}, false
 	}
-	info := wakerun.HostInfo{ID: id, Name: x.Name, AgentID: a.ID, OptedIn: o.s.Poller.Admin.WakeUpdateEnabled(id)}
+	info := wakerun.HostInfo{ID: id, Name: x.Name, AgentID: a.ID, OptedIn: o.s.Poller.Admin.WakeUpdateEnabled(id), Entry: o.s.Poller.AgentEntry(a.ID)}
 	if ov := o.s.Poller.Override(id); ov != nil && ov.Wol != nil {
 		info.RelayID, info.MACs = ov.Wol.Relay, len(ov.Wol.AllMACs())
 	}
