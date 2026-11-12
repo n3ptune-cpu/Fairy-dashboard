@@ -1,8 +1,11 @@
 package web
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 )
 
 // The bug run of audit 5 (r1-b1): what each fix put into the page, so that it does not go away unnoticed. The
@@ -31,5 +34,15 @@ func TestUILongWordsDoNotWidenTheHostPage(t *testing.T) {
 		if !strings.Contains(css, want) {
 			t.Errorf("app.css lacks %q", want)
 		}
+	}
+}
+
+// r1-b1-03: the box of "Set model name" took 200 characters, the limit is 64 (adminstate.MaxModelName): the
+// 65th was refused only after Save. The box now stops at the limit.
+func TestUIModelNameBoxStopsAtTheLimit(t *testing.T) {
+	js := appJS(t)
+	want := fmt.Sprintf(`<input class="input" id="mn-in" maxlength="%d" autocomplete="off"`, adminstate.MaxModelName)
+	if !strings.Contains(js, want) {
+		t.Errorf("app.js lacks %q", want)
 	}
 }

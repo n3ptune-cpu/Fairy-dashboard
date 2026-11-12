@@ -31,7 +31,8 @@ const hostModelsKey = "host_models"
 // Refused, with a short sentence for the dialog: bytes that are not UTF-8 (and U+FFFD, which is what a decoder
 // leaves of them), control characters and line breaks (Unicode Cc, and the line and paragraph separators
 // U+2028 / U+2029), format characters, which are invisible and can change how the text around them reads
-// (Cf: direction marks, overrides and isolates, zero-width characters, the byte order mark, tags), private-use
+// (Cf: direction marks, overrides and isolates, zero-width characters, the byte order mark, tags; a joined
+// emoji has one, and is refused with a sentence of its own), private-use
 // characters, a few characters that show as nothing without being Cf, a name of more than MaxModelName
 // characters, a name in which nothing shows (no letter, digit, punctuation or symbol: only combining marks),
 // and more than maxMarks combining marks in a row. The name is a label only: nothing is decided by it, and
@@ -40,15 +41,22 @@ func ModelName(raw string) (string, error) {
 	if !utf8.ValidString(raw) {
 		return "", errors.New("model name is not valid text")
 	}
+	picture := false // the character before this one is a picture (an emoji), or belongs to one
 	for _, r := range raw {
 		switch {
 		case r == utf8.RuneError:
 			return "", errors.New("model name is not valid text")
 		case unicode.Is(unicode.Cc, r), r == 0x2028, r == 0x2029:
 			return "", errors.New("model name must be one line, without control characters")
+		case picture && (r == 0x200d || r >= 0xe0020 && r <= 0xe007f):
+			// An emoji that is several joined into one (a family, a person with a tool, a flag of a region): the
+			// joiner between them is a format character and stays refused, but "type it again" would send the
+			// person in a circle, because the emoji keyboard types the same again. The sentence says what to do.
+			return "", errors.New("model name has an emoji made of several: use a simple one")
 		case unicode.Is(unicode.Cf, r), unicode.Is(unicode.Co, r), blank(r):
 			return "", errors.New("model name has an invisible character: type it again")
 		}
+		picture = r >= 0x1f000 && r <= 0x1faff || unicode.Is(unicode.So, r) || picture && r == 0xfe0f
 	}
 	name := strings.Join(strings.FieldsFunc(raw, unicode.IsSpace), " ")
 	if n := utf8.RuneCountInString(name); n > MaxModelName {

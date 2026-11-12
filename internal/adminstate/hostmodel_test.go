@@ -81,6 +81,32 @@ func TestModelNameRules(t *testing.T) {
 			t.Errorf("%s: the error is a short sentence for the dialog, got %q", name, err)
 		}
 	}
+	// r1-b1-02 (audit 5, bug run): an emoji that is several joined into one was refused with "invisible character:
+	// type it again", and typing it again gives the same for ever. It is still refused (the joiner is a format
+	// character), with a sentence that says what to do. Every other invisible character keeps the old sentence.
+	const joined, invisible = "model name has an emoji made of several: use a simple one", "model name has an invisible character: type it again"
+	for in, want := range map[string]string{
+		"Tower 👨\u200d👩\u200d👧\u200d👦": joined, // a family
+		"🧑\u200d💻":          joined, // a person with a laptop
+		"🏳\ufe0f\u200d🌈 PC": joined, // a flag with a rainbow (after the picture form of the flag)
+		"❤\ufe0f\u200d🔥":    joined,
+		"🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f": joined, // the flag of a region: tag characters
+		"Gaming\u200dPC":      invisible, // a joiner between letters is no emoji
+		"\u200d👩":             invisible, // nor one in front of a picture
+		"Gaming PC\U000e0041": invisible, // a tag character after a letter
+		"PC \u202egnimaG":     invisible,
+		"👩\u200b👧":            invisible, // a zero-width space is not a joiner
+		"👩\ufeff":             invisible,
+	} {
+		if got, err := ModelName(in); err == nil || err.Error() != want {
+			t.Errorf("ModelName(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"Tower 👨👩👧👦", "🎮 Gaming", "🏳\ufe0f", "❤\ufe0f PC", "1\ufe0f\u20e3", "🇩🇪 Büro"} { // simple ones stay
+		if got, err := ModelName(in); err != nil || got != in {
+			t.Errorf("ModelName(%q) = %q, %v", in, got, err)
+		}
+	}
 }
 
 // Set, read, replace and remove; another host's name is left alone; the file is written in one step (no

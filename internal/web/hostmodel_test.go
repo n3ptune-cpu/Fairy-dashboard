@@ -273,6 +273,7 @@ func TestCustomModelIsCheckedByThePanel(t *testing.T) {
 		`{"custom_model": "Gaming\nPC"}`:                            "model name must be one line, without control characters",
 		`{"custom_model": "PC \u202egnimaG"}`:                       "model name has an invisible character: type it again",
 		`{"custom_model": "\u0301\u0302"}`:                          "model name needs a letter, a digit or a sign",
+		`{"custom_model": "Tower 👨\u200d👩\u200d👧"}`:                 "model name has an emoji made of several: use a simple one",
 		`{"custom_model": "Z` + strings.Repeat(`\u0351`, 20) + `"}`: "model name has too many accents on one character",
 		"{\"custom_model\": \"Gaming \xff PC\"}":                    "invalid request body: not valid UTF-8",
 		`{"custom_model": "Gaming \ud83c PC"}`:                      "model name is not valid text",

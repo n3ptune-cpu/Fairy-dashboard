@@ -2547,7 +2547,7 @@ function openModelName(s) {
   const m = $("#modal");
   m.innerHTML = `<form class="modal-box" role="dialog" aria-modal="true" aria-labelledby="mn-t" id="mn-form" novalidate>
     <h3 id="mn-t">Set model name</h3>
-    <div class="mfield"><input class="input" id="mn-in" maxlength="200" autocomplete="off" spellcheck="false" aria-describedby="mn-err"></div>
+    <div class="mfield"><input class="input" id="mn-in" maxlength="64" autocomplete="off" spellcheck="false" aria-describedby="mn-err"></div>
     <div class="error" id="mn-err" role="alert"></div>
     <div class="row-gap end"><button class="btn" type="button" id="mn-clear">Clear</button><button class="btn" type="button" id="mn-cancel">Cancel</button><button class="btn primary" type="submit" id="mn-save">Save</button></div></form>`;
   const input = $("#mn-in"), err = $("#mn-err"), clear = $("#mn-clear");
