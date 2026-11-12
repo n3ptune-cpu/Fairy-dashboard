@@ -64,11 +64,11 @@ func TestUIACountdownThatRanOutSaysSo(t *testing.T) {
 		`const PEND_LATE = 20;`,
 		`const pendingDue = (p) => (Date.now() - new Date(p.at)) / 1000;`,
 		"const cancel = `<button class=\"btn push\" data-act=\"power-now\" data-action=\"cancel\" ${why ? \"disabled\" : \"\"}>Cancel</button>`;",
-		"if (due >= 0) return `<div class=\"pending-strip\" data-key=\"due\"><span><b>${esc(POWER_LABEL[p.action])}</b> requested</span>${pendingLate(s, due)}${cancel}</div>`;",
+		"if (due >= 0) return `<div class=\"pending-strip\" data-key=\"due\"><span><b>${esc(pendingWord(p))}</b> requested</span>${pendingLate(s, due)}${cancel}</div>`;",
 		"due >= PEND_LATE && s.status === \"online\"",
 		"</span><b>still on</b>`",
 		"${s.power_pending ? pendingStrip(s, why) : \"\"}",
-		"`<span>${esc(p.action)} requested</span>${pendingLate(s, due)}`}",
+		"`<span>${esc(pendingWord(p))} requested</span>${pendingLate(s, due)}`}",
 		// the second it runs out the line is drawn anew, also when no data arrives
 		`.some((el) => new Date(el.dataset.countdown) <= Date.now())) render();`,
 		"  pendingTick();\n}, 1000);",
@@ -85,6 +85,24 @@ func TestUIACountdownThatRanOutSaysSo(t *testing.T) {
 	button, due := strings.Index(fn, `data-action="cancel"`), strings.Index(fn, "if (due >= 0) return")
 	if button < 0 || due < button || strings.Count(fn, `data-action="cancel"`) != 1 || strings.Count(fn, "${cancel}</div>`;") != 2 {
 		t.Error("a line of the pending action has no Cancel")
+	}
+}
+
+// r3-p3-05: one wording for one countdown. The strip on the other pages said the agent's word ("shutdown in
+// 1:28", "reboot requested"), the host's own page the page's label ("Shut down in 1:27", "Reboot requested").
+// Both use the label now.
+func TestUIOneWordingForACountdown(t *testing.T) {
+	js := appJS(t)
+	if !strings.Contains(js, `const pendingWord = (p) => POWER_LABEL[p.action] || String(p.action || "Power action");`) {
+		t.Fatal("app.js has no pendingWord")
+	}
+	if n := strings.Count(js, "esc(pendingWord(p))"); n != 4 {
+		t.Errorf("the countdown's word is written in %d places, want 4 (two lines on the host's page, two in the strip)", n)
+	}
+	for _, old := range []string{"esc(p.action)} in <b", "esc(p.action)} requested", "esc(POWER_LABEL[p.action])"} {
+		if strings.Contains(js, old) {
+			t.Errorf("app.js still words a countdown its own way: %s", old)
+		}
 	}
 }
 

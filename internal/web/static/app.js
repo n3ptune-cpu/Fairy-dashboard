@@ -753,8 +753,8 @@ function renderAlerts() {
   for (const s of state.systems.filter((x) => x.power_pending && x.id !== here)) {
     const p = s.power_pending, due = pendingDue(p);
     out.push(`<a class="alert-strip info" href="#/system/${enc(s.id)}" data-key="pend-${esc(s.id)}">${I.onoff}<b>${esc(s.name)}</b>
-      ${due < 0 ? `<span>${esc(p.action)} in <b data-countdown="${esc(p.at)}">${fmtRuntime(-due)}</b></span>
-      <span class="note">requested by ${esc(p.requested_by || "?")}</span>` : `<span>${esc(p.action)} requested</span>${pendingLate(s, due)}`}<span class="push">open →</span></a>`);
+      ${due < 0 ? `<span>${esc(pendingWord(p))} in <b data-countdown="${esc(p.at)}">${fmtRuntime(-due)}</b></span>
+      <span class="note">requested by ${esc(p.requested_by || "?")}</span>` : `<span>${esc(pendingWord(p))} requested</span>${pendingLate(s, due)}`}<span class="push">open →</span></a>`);
   }
   morph($("#alerts"), out.join(""));
 }
@@ -768,6 +768,9 @@ function renderAlerts() {
 // is a minute behind, the countdown really runs for a minute after the page says "requested". A cancel that
 // finds nothing left to cancel does nothing.
 const PEND_LATE = 20;  // as long as a run waits before it takes a machine for off (wakerun, offConfirm)
+// One wording for a countdown, on the host's own page and in the strip on every other page: the page's label
+// of the action ("Shut down in 1:28", "Reboot requested"). The strip used the agent's word ("shutdown in 1:28").
+const pendingWord = (p) => POWER_LABEL[p.action] || String(p.action || "Power action");
 const pendingDue = (p) => (Date.now() - new Date(p.at)) / 1000;  // seconds since it was due; negative while it counts down
 // "by Test admin", and from PEND_LATE on " · 25s ago · still on" (the host still answers)
 const pendingLate = (s, due) => `<span class="note">by ${esc(s.power_pending.requested_by || "?")}${due >= PEND_LATE && s.status === "online"
@@ -776,8 +779,8 @@ function pendingStrip(s, why) {
   const p = s.power_pending, due = pendingDue(p);
   if (state.me?.can_control) why = "";  // a cancel only stops an action: the kill switch does not take it away (the server lets it through)
   const cancel = `<button class="btn push" data-act="power-now" data-action="cancel" ${why ? "disabled" : ""}>Cancel</button>`;
-  if (due >= 0) return `<div class="pending-strip" data-key="due"><span><b>${esc(POWER_LABEL[p.action])}</b> requested</span>${pendingLate(s, due)}${cancel}</div>`;
-  return `<div class="pending-strip"><b>${esc(POWER_LABEL[p.action])}</b> in <b data-countdown="${esc(p.at)}">${fmtRuntime(-due)}</b>
+  if (due >= 0) return `<div class="pending-strip" data-key="due"><span><b>${esc(pendingWord(p))}</b> requested</span>${pendingLate(s, due)}${cancel}</div>`;
+  return `<div class="pending-strip"><b>${esc(pendingWord(p))}</b> in <b data-countdown="${esc(p.at)}">${fmtRuntime(-due)}</b>
       <span class="note">requested by ${esc(p.requested_by || "?")}</span>
       ${cancel}</div>`;
 }
