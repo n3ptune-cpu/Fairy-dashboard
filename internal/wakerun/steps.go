@@ -75,7 +75,7 @@ func (m *Manager) stepHost(ctx context.Context, r *Run, h *Host, now time.Time) 
 	case StSettling:
 		m.stepSettling(ctx, r, h, info, now)
 	case StShutting:
-		m.stepShutting(r, h, now)
+		m.stepShutting(ctx, r, h, now)
 	}
 }
 
@@ -98,6 +98,13 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 		return false
 	}
 	// the run's own countdown: call it off, so "cancelled" leaves the machine on
+	m.callOff(ctx, r, h, now, why)
+	return false
+}
+
+// callOff asks the machine's agent to call off the countdown the run started, and ends the machine with what
+// came of that. why begins the sentence: who or what wanted the machine left on.
+func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, why string) {
 	var err error
 	id, by := h.ID, r.By
 	m.io(func() { err = m.Ops.CancelShutdown(ctx, id, by) })
@@ -113,12 +120,12 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 			m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s, and the request to call its shutdown countdown off got no answer (%s): it may switch off at %s. "+
 				"Cancel it on the machine's page.", why, opText(err), due),
 				fmt.Sprintf("%s, and the request to call its shutdown countdown (due at %s) off got no answer (%s): it may have arrived.", why, due, opText(err)))
-			return false
+			return
 		}
 		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s, but its shutdown countdown could not be called off (%s): it may switch off at %s. "+
 			"Cancel it on the machine's page.", why, opText(err), due),
 			fmt.Sprintf("%s, but its shutdown countdown (due at %s) could not be called off (%s).", why, due, opText(err)))
-		return false
+		return
 	}
 	if now.Before(*h.ShutdownAt) {
 		// Its agent took the cancel before the countdown was over: the machine runs, and its countdown is gone.
@@ -129,7 +136,6 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 	m.emit(EvStep, r, h, "cancel", nil, "ok")
 	m.endSeen(r, h, StLeftOn, OnYes, now, why+": its shutdown countdown was called off. "+cameOnline(h)+" and it is ON."+updateTail(h),
 		why+": its shutdown countdown (due at "+due+") was asked to be called off."+updateTail(h))
-	return false
 }
 
 // alreadyOn handles a machine of the wake list that turns out to be on: it is updated and left on if the
@@ -548,7 +554,7 @@ func (m *Manager) stepSettling(ctx context.Context, r *Run, h *Host, info HostIn
 }
 
 // stepShutting watches the countdown the run started until the machine is gone.
-func (m *Manager) stepShutting(r *Run, h *Host, now time.Time) {
+func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Time) {
 	o := m.Ops.Observe(h.ID)
 	due := *h.ShutdownAt
 	if o.Online && o.SeenAt.After(h.shutdownSent) && o.Pending != nil && o.Pending.Action == "shutdown" {
@@ -558,6 +564,26 @@ func (m *Manager) stepShutting(r *Run, h *Host, now time.Time) {
 		if !h.pendingSeen || !o.Pending.At.Equal(due) { // the agent's own time for it (by its clock, not the panel's)
 			h.pendingSeen, h.ShutdownAt, due = true, &o.Pending.At, o.Pending.At
 			m.dirty = true
+		}
+		// The guests of a Proxmox node were asked about before the shutdown request (mayShutDown). One that
+		// starts on the node, or arrives on it, while the countdown runs went unnoticed, and the node went off
+		// under it (second review, N2). So the run asks again every few seconds while its agent shows the
+		// countdown, and calls the countdown off when a guest runs: the node is then left on and reported. It
+		// never asks for anything else here. "Cannot see the guests" counts when it is said twice in a row: one
+		// failed poll of the Proxmox API in two minutes must not keep a node on. The last guestsMargin of the
+		// countdown are left out: a cancel needs its time, and the agent counts by its own clock.
+		if now.Before(due.Add(-guestsMargin)) && now.Sub(h.guestsAt) >= guestsEvery {
+			h.guestsAt = now
+			running, known, names := m.Ops.Guests(h.ID, deref(h.OnlineAt))
+			switch why := guestsKeepOn(running, known, names); {
+			case why == "":
+				h.guestsUnseen = false
+			case !known && !h.guestsUnseen:
+				h.guestsUnseen = true
+			default:
+				m.callOff(ctx, r, h, now, "Left ON: "+why+" since its shutdown was asked for")
+				return
+			}
 		}
 	}
 	// lost: all the run knows of its shutdown is a request that got no answer

@@ -96,15 +96,25 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 		return false, "its agent says that an update is being installed on it right now (" + o.UpdateState + ")"
 	}
 	// A Proxmox node is left on while guests run on it, and also when the panel cannot see its guests.
-	switch running, known, why := guests(); {
-	case !known:
-		return false, "Fairy cannot see whether guests run on it (" + why + ")"
-	case running == 1:
-		return false, "1 guest is running on it" + guestNames(why)
-	case running > 1:
-		return false, fmt.Sprintf("%d guests are running on it", running) + guestNames(why)
+	if why := guestsKeepOn(guests()); why != "" {
+		return false, why
 	}
 	return true, ""
+}
+
+// guestsKeepOn is why the guests of a Proxmox node keep it on ("": they do not): what Ops.Guests answered, as
+// the words of the report. mayShutDown asks it before the shutdown request; the watch over the countdown asks
+// it again (stepShutting), only ever to call the countdown off.
+func guestsKeepOn(running int, known bool, why string) string {
+	switch {
+	case !known:
+		return "Fairy cannot see whether guests run on it (" + why + ")"
+	case running == 1:
+		return "1 guest is running on it" + guestNames(why)
+	case running > 1:
+		return fmt.Sprintf("%d guests are running on it", running) + guestNames(why)
+	}
+	return ""
 }
 
 // maxUptimeS is the longest uptime the run takes for one: fifty years, in seconds. No machine has been up for

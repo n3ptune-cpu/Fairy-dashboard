@@ -268,3 +268,71 @@ func TestTheLastLookAfterAShutdownRequestWithoutAnAnswer(t *testing.T) {
 		t.Fatalf("power %q: %s", h.On, h.Text)
 	}
 }
+
+// Note N2 of the second review: the guests of a Proxmox node were asked about once, before the shutdown
+// request. A guest that started on the node, or arrived on it, during the 120 s of the countdown was not
+// noticed, and the node went off under it. The run now asks again while the countdown runs and calls it off.
+func TestAGuestThatStartsDuringTheCountdownCallsItOff(t *testing.T) {
+	type c struct {
+		name   string
+		after  time.Duration               // into the countdown
+		change func(w *world, mc *machine) // what happens on the node then
+		state  string
+		want   string
+		calls  string
+	}
+	for _, c := range []c{
+		{"a guest starts 30 s into the countdown", 30 * time.Second, func(_ *world, mc *machine) { mc.guests, mc.guestNames = 1, "web01" }, StLeftOn,
+			"Left ON: 1 guest is running on it (web01) since its shutdown was asked for: its shutdown countdown was called off. It came online after the wake and it is ON. It was updated to 17-bbbbbbb.",
+			"wake update shutdown cancel"},
+		{"two guests arrive 100 s into the countdown", 100 * time.Second, func(_ *world, mc *machine) { mc.guests = 2 }, StLeftOn,
+			"Left ON: 2 guests are running on it since its shutdown was asked for: its shutdown countdown was called off.", "wake update shutdown cancel"},
+		{"a guest that is not clearly stopped any more", 30 * time.Second, func(_ *world, mc *machine) { mc.guestsWhy = "the Proxmox API does not show as stopped: db (paused)" }, StLeftOn,
+			"Left ON: Fairy cannot see whether guests run on it (the Proxmox API does not show as stopped: db (paused)) since its shutdown was asked for: its shutdown countdown was called off.",
+			"wake update shutdown cancel"},
+		{"the Proxmox API fails once and answers again: that is not a guest", 30 * time.Second, func(w *world, mc *machine) {
+			mc.guestsWhy = "its Proxmox API has not answered since it came online"
+			asked := w.guestsAsked
+			w.afterTick = func() {
+				if w.guestsAsked > asked { // one question of the run fell into it
+					mc.guestsWhy = ""
+				}
+			}
+		}, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.", "wake update shutdown"},
+		{"a guest starts in the last 10 s: too late for a cancel, as before", 110 * time.Second, func(_ *world, mc *machine) { mc.guests = 1 }, StOff,
+			"Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.", "wake update shutdown"},
+		{"the cancel gets no answer and the node is out of reach: said, and not \"off\"", 30 * time.Second, func(_ *world, mc *machine) {
+			mc.guests, mc.cancelLost = 1, "arrives"
+		}, StLeftOn, "Left ON: 1 guest is running on it since its shutdown was asked for, and the request to call its shutdown countdown off got no answer (agent unreachable: timeout): it may switch off at ",
+			"wake update shutdown cancel"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			pc := w.off("pve1")
+			w.start(StartRequest{Hosts: []string{"pve1"}})
+			untilState(t, w, "pve1", StShutting)
+			w.advance(c.after)
+			c.change(w, pc)
+			h := host(w.finish(), "pve1")
+			has(t, h, c.state, c.want)
+			if got := w.callsFor("pve1"); got != c.calls {
+				t.Fatalf("requests: %s", got)
+			}
+			if on := c.state == StLeftOn; pc.on != on || (on && h.On != OnYes) || pc.shutdowns != 1 {
+				t.Fatalf("on %v, power %q, shutdown requests %d: %s", pc.on, h.On, pc.shutdowns, h.Text)
+			}
+		})
+	}
+	// a machine without guests is asked about just the same and switched off as ever; and the run asks at most
+	// every guestsEvery, and only while the countdown runs
+	w := newWorld(t)
+	w.off("pc-a")
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	before := w.guestsAsked
+	h := host(w.finish(), "pc-a")
+	has(t, h, StOff, "switched off again")
+	if n := w.guestsAsked - before; n < 15 || n > 22 { // 120 s less the last 15 s, every 5 s
+		t.Fatalf("the guests were asked about %d times during the countdown", n)
+	}
+}

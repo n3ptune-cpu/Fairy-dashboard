@@ -97,6 +97,9 @@ type world struct {
 	limited   int // requests an agent refused for that reason
 	maxInMin  int // the most requests any one agent got in a minute
 	started   bool
+	// afterTick is called at the end of every second of the world (a test that changes a machine at a set time)
+	afterTick   func()
+	guestsAsked int // how often the run asked about a machine's guests
 	// clock guards now and mono between tick, which moves them, and the Manager, which reads them through
 	// Now and Mono, also from another goroutine (TestReadingAndCancellingWhileARunWorks cancels from one).
 	clock sync.Mutex
@@ -360,6 +363,7 @@ func (w *world) CancelShutdown(_ context.Context, id, _ string) error {
 
 func (w *world) Guests(id string, _ time.Time) (int, bool, string) {
 	mc := w.ms[id]
+	w.guestsAsked++
 	if mc.guestsWhy != "" {
 		return 0, false, mc.guestsWhy
 	}
@@ -469,6 +473,9 @@ func (w *world) tick() {
 	w.sim()
 	w.poll()
 	w.m.Tick(context.Background())
+	if w.afterTick != nil {
+		w.afterTick()
+	}
 }
 
 func (w *world) advance(d time.Duration) {

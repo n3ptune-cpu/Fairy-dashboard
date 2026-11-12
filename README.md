@@ -371,7 +371,9 @@ The rules, in plain words:
   stopped: a paused or suspended guest, one whose state the API gives as "unknown" (or not at all), and one
   whose polling is paused in the panel keep the node on as well. If the panel cannot know (the API has not
   answered since the node came online, or the machine is a Proxmox host that the panel knows only through
-  its agent), the node is left on, and the report says why.
+  its agent), the node is left on, and the report says why. While the node's shutdown countdown runs, the run
+  asks again every few seconds: a guest that starts or arrives on the node then (until 15 seconds before the
+  countdown ends) calls the countdown off, and the node is left on and reported.
 * **One run at a time**, at most 16 machines in it. A second start is refused with a message. **Update
   panel** is refused while a run is going.
 * **Cancel run** is never refused because of other control requests: it has a request budget of its own (60

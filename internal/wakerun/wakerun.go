@@ -155,6 +155,8 @@ const (
 	verdictWait     = 90 * time.Second // after the new version answers: how long the installer's own verdict is waited for
 	agentBack       = 3 * time.Minute  // after the update: how long the agent may take to answer again
 	offConfirm      = 20 * time.Second // no answer for this long after the countdown: the machine is off
+	guestsEvery     = 5 * time.Second  // while a countdown runs: how often the guests of the machine are asked about again
+	guestsMargin    = 15 * time.Second // ... and not in the last seconds of the countdown (stepShutting)
 	offGrace        = 5 * time.Minute  // still answering this long after the countdown: the shutdown failed
 	// The last look at a machine before its result is written (look): an answer this fresh is "it answers
 	// now"; a machine that gives nothing is waited for this long, and then the result says "not confirmed".
@@ -411,6 +413,8 @@ type Host struct {
 	grant         any  // the approval for this machine (item 1.1)
 	cancelHandled bool
 	cancelUnsure  bool      // the run's cancel of its countdown left and got no answer: the countdown may be called off
+	guestsAt      time.Time // when the guests were last asked about during the countdown
+	guestsUnseen  bool      // ... and the answer then was "cannot see them"
 	entry         int       // HostInfo.Entry when the run started
 	verdict       *verdict  // how the run would end it: the last look (look) is going on
 	askedAt       time.Time // when the run's own direct question to it got an answer of any kind (it runs)
