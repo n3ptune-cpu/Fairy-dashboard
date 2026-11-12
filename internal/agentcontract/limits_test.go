@@ -64,6 +64,10 @@ func TestABatchHandsEveryMachineTheOthersIDsAndTheGuideSaysSo(t *testing.T) {
 	for _, want := range []string{
 		"**Known limits.**",
 		"so every machine of that batch receives the machine ids of the others",
+		// audit 6, r4-x1-05: the limit is wider than the ids, and the guide says so
+		"so it also holds a usable approval for the other machines' entries",
+		"whoever has that copy and another machine's control token can start the action that was approved for that machine",
+		"as long as that machine has not used its entry itself and its challenge lives (15 minutes for an update)",
 		"sending the other machines' entries as hashes, which is a change of the protocol and needs a later agent release",
 		"It is a name, not a secret",
 		"A machine cannot tell whether another machine has the same id",

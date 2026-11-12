@@ -645,7 +645,11 @@ switch it off on its own page.
 * One approval that covers several machines (Turn on for several, Update all) is sent to each of them with
   the whole list of entries, so every machine of that batch receives the machine ids of the others. Each
   machine needs the list to work out what the passkey signed. An id alone opens nothing: it names a machine,
-  and it comes on record for a host only by Turn on or an admin's accept. What would close it: sending the
+  and it comes on record for a host only by Turn on or an admin's accept. But what a machine of the batch
+  receives is the whole approval, so it also holds a usable approval for the other machines' entries: whoever
+  has that copy and another machine's control token can start the action that was approved for that machine
+  (exactly that one, for example its update, and nothing else) once, as long as that machine has not used
+  its entry itself and its challenge lives (15 minutes for an update). What would close it: sending the
   other machines' entries as hashes, which is a change of the protocol and needs a later agent release.
 
 **Windows and Linux** are treated the same by the panel. On Windows the elevated helper
