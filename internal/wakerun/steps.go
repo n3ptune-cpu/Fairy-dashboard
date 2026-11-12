@@ -359,6 +359,18 @@ func (m *Manager) stepUpdating(ctx context.Context, r *Run, h *Host, info HostIn
 			return
 		case changed:
 			m.say(h, "the new version answers: waiting for the installer's check")
+		case h.UpdateUnsure && (o.UpdateState == "downloading" || o.UpdateState == "applying"):
+			m.say(h, "updating: "+orText(o.UpdateMessage, o.UpdateState)) // the request did arrive: wait for its result
+		case h.UpdateUnsure && h.updBefore == o.UpdateState+"|"+o.UpdateMessage && o.SeenAt.Sub(*h.UpdateSentAt) < unsureIdleAfter:
+			// The request's answer was lost and the agent says what it said before the request: wait a little.
+			// An agent that took the request shows it in its next answers.
+		case h.UpdateUnsure && h.updBefore == o.UpdateState+"|"+o.UpdateMessage:
+			// The agent answers, says what it said before the request, runs no update and has no new result:
+			// the request did not arrive, or changed nothing. The run cannot tell which and says so; no
+			// install is running. (An agent whose state or message changed did take the request: the cases
+			// below read its result as after a request that was answered.)
+			m.updateDone(r, h, now, UpdFailed, "the update request got no answer ("+h.UpdateText+"), and its agent reports no update running and no new result")
+			return
 		case o.UpdateState == "failed":
 			m.updateDone(r, h, now, UpdFailed, orText(o.UpdateMessage, "the agent reported a failure"))
 			return
@@ -371,7 +383,11 @@ func (m *Manager) stepUpdating(ctx context.Context, r *Run, h *Host, info HostIn
 		}
 	}
 	if since > updateTimeout {
-		m.updateDone(r, h, now, UpdStuck, fmt.Sprintf("no result %s after it was asked for", span(updateTimeout)))
+		text := fmt.Sprintf("no result %s after it was asked for", span(updateTimeout))
+		if h.UpdateUnsure { // the run could not find out, and does not guess
+			text = fmt.Sprintf("not confirmed: the update request got no answer (%s), and its agent did not say how it ended within %s", h.UpdateText, span(updateTimeout))
+		}
+		m.updateDone(r, h, now, UpdStuck, text)
 	}
 }
 
@@ -439,6 +455,14 @@ func (m *Manager) startUpdate(ctx context.Context, r *Run, h *Host, info HostInf
 		case opCode(err) == CodeRateLimited && h.retries < maxRetries:
 			h.retries++
 			m.say(h, "its agent is busy (its request limit): trying again")
+		case opCode(err) == CodeNoAnswer:
+			// The request left and its answer did not come: the agent may be installing right now (r2-p2-03).
+			// That is not "the update failed". From here the agent's own word counts: the run watches its
+			// update state like after a request that was accepted, counted from before the request left.
+			h.UpdateSentAt, h.UpdateUnsure, h.UpdateText = &now, true, opText(err)
+			h.updBefore = o.UpdateState + "|" + o.UpdateMessage
+			m.note(h, m.now(), "the update request got no answer ("+opText(err)+"): it may have arrived. Watching what its agent reports, up to "+span(updateTimeout))
+			m.say(h, "update asked for, no answer: watching what its agent reports")
 		default:
 			m.updateDone(r, h, now, UpdFailed, opText(err))
 		}

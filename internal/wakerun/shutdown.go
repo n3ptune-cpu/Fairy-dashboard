@@ -74,6 +74,10 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 		return false, "its agent is not answering right now"
 	case o.Pending != nil:
 		return false, fmt.Sprintf("another power action is already pending on it (%s at %s)", o.Pending.Action, clock(o.Pending.At))
+	case o.UpdateState == "downloading" || o.UpdateState == "applying":
+		// Whatever the run believes about its own update request (its answer may have been lost, or someone
+		// else started an update): a machine whose agent says that it is installing is not switched off.
+		return false, "its agent says that an update is being installed on it right now (" + o.UpdateState + ")"
 	}
 	// A Proxmox node is left on while guests run on it, and also when the panel cannot see its guests.
 	switch running, known, why := guests(); {

@@ -326,7 +326,12 @@ The rules, in plain words:
 * **A woken machine is switched off again also when its update failed** or was rolled back. The report says
   that the update did not work, and why (the agent's own words). The one exception: an update that never
   reports a result (15 minutes). That machine is left on and reported, because a shutdown in the middle of an
-  install could leave it without a working agent.
+  install could leave it without a working agent. For the same reason an update request whose answer is lost
+  (a timeout) is not taken for a failure: the agent may be installing. The run then goes by what the agent
+  itself reports: an install that runs is waited for and its real result reported; an agent that reports no
+  install after a minute was "NOT updated (the update request got no answer ...)"; an agent that does not
+  say is "not confirmed" and the machine is left on. And whatever the run believes, it never asks for a
+  shutdown while the agent says that it is downloading or installing an update.
 * **A woken machine that could not be switched off is reported as ON**: its agent did not answer again after
   the update, the agent refused the shutdown, someone cancelled the countdown, or the machine is still on 5
   minutes after the countdown ended. The run never tries another way to switch a machine off: its shutdown

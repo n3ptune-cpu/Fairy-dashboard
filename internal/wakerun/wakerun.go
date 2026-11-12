@@ -138,6 +138,10 @@ const (
 	updateStart     = 2 * time.Minute  // how long the run waits for an agent to be able to update (helper starting)
 	updateTimeout   = 15 * time.Minute // no result of the update by then: the machine is left on
 	updateIdleAfter = 10 * time.Second // an "idle" state only counts when it was polled this long after the request
+	// unsureIdleAfter: the same after an update request whose answer was lost. An agent that took the request
+	// reports "downloading" at its next answer; a minute of "idle" with no new result is an agent that runs no
+	// update. (mayShutDown looks at the agent's update state once more before a shutdown, whatever was seen.)
+	unsureIdleAfter = time.Minute
 	verdictWait     = 90 * time.Second // after the new version answers: how long the installer's own verdict is waited for
 	agentBack       = 3 * time.Minute  // after the update: how long the agent may take to answer again
 	offConfirm      = 20 * time.Second // no answer for this long after the countdown: the machine is off
@@ -354,9 +358,13 @@ type Host struct {
 	Update        string     `json:"update,omitempty"` // the result of the update step (Upd...)
 	UpdateText    string     `json:"update_text,omitempty"`
 	UpdateSentAt  *time.Time `json:"update_sent_at,omitempty"`
-	ShutdownAt    *time.Time `json:"shutdown_at,omitempty"` // when the countdown ends
-	On            string     `json:"on,omitempty"`          // set when the machine ends (On...)
-	Log           []LogLine  `json:"log"`
+	// UpdateUnsure: the run's update request left the panel and got no answer (CodeNoAnswer). The agent may
+	// have taken it. The run then goes by what the agent itself reports about its update (stepUpdating), and
+	// never by the missing answer.
+	UpdateUnsure bool       `json:"update_unconfirmed,omitempty"`
+	ShutdownAt   *time.Time `json:"shutdown_at,omitempty"` // when the countdown ends
+	On           string     `json:"on,omitempty"`          // set when the machine ends (On...)
+	Log          []LogLine  `json:"log"`
 
 	// Working values of the run in memory. A run is never continued after a restart, so they are not kept.
 	wakeMono      time.Duration // the steady clock when the run's first wake was accepted
@@ -365,6 +373,7 @@ type Host struct {
 	lastKick      time.Time
 	goodSince     time.Time // the agent has answered without a gap since
 	lastAtBefore  float64   // the installer's last result before the run's update request
+	updBefore     string    // the agent's update state and message before that request (UpdateUnsure)
 	versionNewAt  time.Time // when another version than VersionBefore was first seen
 	shutdownSent  time.Time
 	pendingSeen   bool      // the agent reported the run's shutdown as pending

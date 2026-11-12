@@ -61,6 +61,8 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 		"no longer switched on for it":          {change: func(_ *Host, i *HostInfo, _ *Observation) { i.OptedIn = false }, why: "no longer switched on for"},
 		"its agent does not answer":             {change: func(_ *Host, _ *HostInfo, o *Observation) { o.Online = false }, why: "its agent is not answering right now"},
 		"a power action is pending":             {change: func(_ *Host, _ *HostInfo, o *Observation) { o.Pending = &Pending{Action: "reboot", At: t0} }, why: "another power action is already pending on it (reboot at 03:00:00 UTC)"},
+		"its agent downloads an update":         {change: func(_ *Host, _ *HostInfo, o *Observation) { o.UpdateState = "downloading" }, why: "its agent says that an update is being installed on it right now (downloading)"},
+		"its agent applies an update":           {change: func(_ *Host, _ *HostInfo, o *Observation) { o.UpdateState = "applying" }, why: "its agent says that an update is being installed on it right now (applying)"},
 		"a guest runs":                          {guests: func() (int, bool, string) { return 1, true, "win11" }, why: "1 guest is running on it (win11)"},
 		"guests run":                            {guests: func() (int, bool, string) { return 4, true, "" }, why: "4 guests are running on it"},
 		"guests unknown":                        {guests: func() (int, bool, string) { return 0, false, "no Proxmox API for it" }, why: "cannot see whether guests run on it (no Proxmox API for it)"},

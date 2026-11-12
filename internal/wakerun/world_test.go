@@ -41,6 +41,7 @@ type machine struct {
 	newVersion   string // what an update installs
 	behind       *bool  // what the panel knows: older than the newest release
 
+	updLost    string // the answer to the first update request is lost: "arrives" (the agent took it) | "never" (it did not)
 	updMode    string // ok | noverdict | current | fail | rollback | stuck | approval | refuse | busy (the first request is rate limited) | disabled
 	updTakes   time.Duration
 	updating   bool
@@ -209,6 +210,9 @@ func (w *world) hit(agent string) bool {
 
 var errBusy = &OpError{Code: CodeRateLimited, Text: "too many control requests; try again in a minute"}
 
+// errLost is a request that left the panel and got no answer.
+var errLost = &OpError{Code: CodeNoAnswer, Text: "agent unreachable: timeout"}
+
 func (w *world) Wake(_ context.Context, id, _ string) error {
 	mc := w.ms[id]
 	w.calls = append(w.calls, "wake "+id)
@@ -250,6 +254,13 @@ func (w *world) Update(_ context.Context, id, _ string, grant any) error {
 	if !w.hit(mc.info.AgentID) || w.busyOnce(mc, "update", mc.updMode) {
 		return errBusy
 	}
+	if mc.updLost != "" && !mc.busyDone["update lost"] { // a timeout: the panel does not learn whether the agent got it
+		mc.busyDone["update lost"] = true
+		if mc.updLost == "arrives" {
+			mc.updating, mc.updDoneAt, mc.updState, mc.updMsg = true, w.now.Add(mc.updTakes), "downloading", "downloading "+mc.newVersion
+		}
+		return errLost
+	}
 	switch mc.updMode {
 	case "approval":
 		if grant == nil {
@@ -278,6 +289,9 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 	}
 	if mc.guests > 0 || mc.guestsWhy != "" {
 		w.t.Errorf("RULE BROKEN: shutdown sent to %s with guests running or unknown", id)
+	}
+	if mc.updating && w.answers(mc) {
+		w.t.Errorf("RULE BROKEN: shutdown sent to %s while its agent says that an update is being installed", id)
 	}
 	if !w.answers(mc) {
 		return time.Time{}, &OpError{Text: "agent unreachable: connection failed"}
