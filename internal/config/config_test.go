@@ -369,6 +369,8 @@ func TestReadmeGoingBackNamesWhatTheOlderPanelRefuses(t *testing.T) {
 		"`enroll: {allow_non_tailscale: ...}`", "`step_up_per_action`", "`4h`",
 		"pop-up settings (on or off, seconds, events) are the defaults again",
 		"custom model names", "the machines switched on for \"Update unpowered hosts\"",
+		// r1-b2-11 (audit 5): the older panel does not start with an approval: block either
+		"The same goes for an `approval:` block (\"field approval not found\").", "`machines.json`", "`fairy-agent helper-trust clear`",
 	} {
 		if !strings.Contains(para, want) {
 			t.Errorf("the paragraph lacks %q:\n%s", want, para)
@@ -376,6 +378,9 @@ func TestReadmeGoingBackNamesWhatTheOlderPanelRefuses(t *testing.T) {
 	}
 	// the block is one this panel reads and an older one cannot: if it is ever renamed, the paragraph must follow
 	if _, err := Parse([]byte(base + "wake_update: {settle_s: 30}\n")); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := Parse([]byte(base + "approval: {client_id: pc-actions}\n")); err != nil || !c.ApprovalOn() {
 		t.Fatal(err)
 	}
 }

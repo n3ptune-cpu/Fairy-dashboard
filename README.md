@@ -537,8 +537,33 @@ with the panel's tokens. It is changed only on the machine, as root / Administra
 fairy-agent helper-trust show                  # what this machine trusts, and whether it can be used
 fairy-agent helper-trust set --fetch-keys      # after a key rotation at Pocket ID: pin the new key(s)
 fairy-agent helper-trust set --user <id> ...   # another list of people (the users given replace the list)
+fairy-agent helper-trust set --new-machine-id  # on a machine made from a copy of another one's disk
 fairy-agent helper-trust clear                 # off again: nothing needs an approval; the panel can Turn on once more
 ```
+
+**Which machine an approval is for.** Every approval names the machine it is for, by a **machine id** in that
+machine's trust file, and a machine accepts only an approval with its own id. A machine cannot see the other
+machines, so the panel keeps the id it has **on record** for each host (`machines.json` in the data folder,
+written like the other state files, mode 0600) and makes every approval with that one, never with what a
+host answers at that moment. The id comes on record when you Turn on from the panel (the panel makes it up),
+or the first time the panel sees a host that already has the check (set on the machine). Admins see it in
+the Approval box (hover "Machine id"); nobody else does, and no API answer carries it.
+
+From then on the record counts. The Overview shows a red key sign behind the host's name, and its Approval
+box and the Updates page say which of these it is:
+
+* **the host shows another id** than the one on record ("Machine id changed": its trust was set anew on the
+  machine, or something else answers in its name);
+* **two hosts have the same id** (a machine made from a copy of another one's disk, or a host that hands the
+  panel's questions on to another machine): both are flagged, because each would accept an approval made
+  for the other;
+* **a host that had the check shows none** any more.
+
+While a host is flagged, the panel asks it for no approval and sends it no fan, power or update request,
+and it is in no run. An admin resolves it in the host's Approval box: **Accept this machine's new id** (or
+"Accept that its check is off"), in a browser, behind "Confirm it's you", with an entry in the Audit log.
+For two hosts with one id: accept on the one that keeps it; the other stays flagged until it shows an id of
+its own (`helper-trust set --new-machine-id` on it). Accept only when you know why it changed.
 
 **What you see afterwards.** A fan, power or update action on such a machine opens the usual dialog, which
 now says that the machine checks this itself, and then Pocket ID asks for your passkey under the name "Fairy
@@ -551,11 +576,20 @@ Two exceptions, both decided by the machine and shown in its Approval box:
   It is set on the machine (`helper-trust set --boot-shutdown N`).
 
 **Update all** asks for one approval that covers every machine with the check on; each machine verifies its
-own entry. Cancelling a pending shutdown needs no approval.
+own entry. The dialog lists every machine the button will update: the ones that check it, the ones that are
+not sent to (and why), and the ones without the check, which are updated on the same confirmation. The
+result is a count ("2 started, 1 not") with one line per machine behind **Details** (started, refused, not
+sent, offline), and it stays until you close it.
+
+**Cancel** of a pending shutdown, restart or sleep needs no passkey and no "Confirm it's you", with or
+without the check: an admin's session in a browser is enough, so a 10-second countdown can be stopped in
+time. If the machine had already begun to switch off when the cancel reached it, the page says "Too late"
+and not "cancelled".
 
 **Update unpowered hosts** does not ask for approvals yet. A machine with the check on is not taken
-into a run: the page says "needs approval: not supported in runs yet". Update it and switch it off on its
-own page.
+into a run: its row says "needs approval: not supported in runs yet", before and after "Switch on", also
+while the machine is off and after a restart of the panel (the panel has it on record). Update it and
+switch it off on its own page.
 
 **When something is wrong** the page says which thing, not "failed":
 
@@ -565,6 +599,15 @@ own page.
 * "approval refused (…)": the machine did not accept the approval; the reason is in brackets (`user`: you
   are not on its list; `token_key`: Pocket ID has a new signing key, run `helper-trust set --fetch-keys` on
   the machine; `clock` / `auth_time`: the machine's clock or the age of the passkey use).
+  `nonce`: what answered is not the machine the panel has on record for this host; do not try again, look
+  at the host.
+* "The helper that runs on ... is older than its agent" (Windows, after an update of the agent): press
+  **Stop helper**, then **Start helper**, next to the host's name. Until then the machine refuses fan, power
+  and update requests.
+* "Try again in N s": the machine has had its requests for this minute (it counts questions, actions and
+  cancels apart). The panel does not try again by itself.
+* A long refusal shows its first sentence; the machine's own words are behind **Details**, and the message
+  stays until you close it.
 * API tokens cannot give an approval: a control token gets 403 for these actions on such a machine.
 
 **Windows and Linux** are treated the same by the panel. On Windows the elevated helper
@@ -1027,8 +1070,11 @@ the next update replaces that too. As root: `systemctl stop fairy`, `cp /usr/loc
 `systemctl start fairy`. (`fairy update --force` is not the way: it installs the latest release again, not
 the older one.) The older panel reads the files this one writes (`users.json`, `notifications.json`,
 `managed-hosts.yaml`, `state.json`, `settings.json`, and `sessions.json`, where it ignores what this one adds).
-It does not start when config.yaml has a `wake_update:` block: take the block out first. (It is the one key
-that is new in this release; do it before you go back.) A panel older than
+It does not start when config.yaml has a `wake_update:` block: take the block out first. The same goes for
+an `approval:` block ("field approval not found"). (They are the two keys that are new in this release; do
+it before you go back.) The older panel does not know `machines.json` and leaves it alone; a machine with
+the check on still refuses what comes without an approval, so the older panel cannot change its fans, switch
+it off or update it until the check is cleared on the machine (`fairy-agent helper-trust clear`). A panel older than
 the last release also does not start with `enroll: {allow_non_tailscale: ...}`, `step_up_per_action`, or a
 text such as `4h` in the two session settings: take those out as well (write the session settings as whole
 seconds). The older panel does not know the pop-up settings: when someone saves a setting there, that
@@ -1068,7 +1114,13 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   action's id as state) and checks it too, for the audit log and to fail early; the token is kept in memory
   with the one kept action, passed to the machines it was asked for, and never logged, stored or sent to the
   browser. An approval is not a sign-in: it opens no window and changes no session. The trust is set from
-  the panel once, with a proof, and after that only on the machine.
+  the panel once, with a proof, and after that only on the machine. An approval names the machine it is for
+  (the machine id in its trust file), and the panel makes it with the id it has on record for the host
+  (`machines.json`), never with one a host answers with a challenge: a host that hands the panel's question
+  on to another machine gets an approval that machine refuses. A changed id, one id on two hosts and a check
+  that is gone stop every approval for the host until an admin accepts it (browser session only, "Confirm
+  it's you", audited). Machine ids are shown to admins in a browser only; the audit log has their first six
+  characters.
 * Roles, managed in the panel (`users.json`, Users page or `fairy admin users|sites`), keyed by the OIDC subject:
   **admin** sees everything, may use control actions, the Audit and Users pages; **viewer** is read-only and sees
   only the systems, guests, power sources, UPSes (and their processes, sensors, history) of their sites;
@@ -1305,8 +1357,8 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/apierr` | The error type that becomes an HTTP status + `{"detail": ...}`. |
 | `internal/demo` | `fairy serve --demo`: a simulated homelab (fake Proxmox, agents, plugs, UPS, BMC). |
 | test build | Only with `go build -tags fairytest`, never in a release ([TESTING-LOCAL.md](TESTING-LOCAL.md)): `cmd/fairy/testmode.go` (what it refuses to start with, its own folder), `internal/web/testmode.go` (sign-in and "Confirm it's you" without Pocket ID, the banner), `release/key.go` (the release key, for Add host). `cmd/fairy/testmode_off.go` is what every other build has instead. |
-| `internal/approval` | The check on the machine itself, the panel's part without HTTP: the list of requests an approval covers and its nonce (`approval.go`), the panel's own checks of the ID token, the proposal a Turn on sends (`trust.go`). `internal/web/approval.go` is the round trip, `approval_control.go` asks the machines and attaches the approval, `api_approval.go` is Turn on. |
-| `internal/agentcontract` | The panel <-> agent contract test: the panel's real poller, normaliser, power/UPS managers and web API against the real `fairy-agent` handler (fake collectors, fake BMC, fake devices). `approval_test.go`: the check on the machine itself, with the agent's real gate and a fake Pocket ID. |
+| `internal/approval` | The check on the machine itself, the panel's part without HTTP: the list of requests an approval covers and its nonce (`approval.go`), the panel's own checks of the ID token, the proposal a Turn on sends (`trust.go`), which machine an approval is for (`binding.go`; the record is `internal/adminstate/machines.go`, kept up by `internal/poller/machines.go`). `internal/web/approval.go` is the round trip, `approval_control.go` asks the machines and attaches the approval, `api_approval.go` is Turn on. |
+| `internal/agentcontract` | The panel <-> agent contract test: the panel's real poller, normaliser, power/UPS managers and web API against the real `fairy-agent` handler (fake collectors, fake BMC, fake devices). `approval_test.go`: the check on the machine itself, with the agent's real gate and a fake Pocket ID; `binding_test.go`: which machine an approval is for (a relayed challenge, one id on two hosts, a changed id, a restart). |
 | `internal/testutil` | Shared test fixtures. |
 | `deploy/` | Example `config.yaml`, `fairy.env`, the systemd unit `fairy.service`, nginx, the `fairy-update` wrapper, the Update panel unit and its polkit rule. (The agent's install files are in Fairy-agent.) |
 | `.github/workflows` | `release.yml` (signed release on every push to main), `ci.yml` (tests on pull requests). |

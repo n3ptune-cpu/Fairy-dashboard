@@ -15,7 +15,7 @@ enroll:
   # panel_address: 192.168.50.10  # this PC's address as the test VM sees it. Left out, the test build takes this
   #                               # PC's only private IPv4 address and says which one when it starts.
 
-# The check on the machine itself (TESTING-LOCAL.md, part G): with this block a fan, power or update action on a
+# The check on the machine itself (TESTING-LOCAL.md, part I): with this block a fan, power or update action on a
 # machine that checks approvals asks for your passkey at your real Pocket ID, and the machine verifies it.
 # Sign-in to this panel stays off. Take the three values from Pocket ID (the client "Fairy PC actions").
 # approval:
