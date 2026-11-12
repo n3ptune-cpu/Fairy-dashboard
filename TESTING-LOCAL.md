@@ -601,7 +601,7 @@ From here on do **not** press Re-pair for the VM, and do not press Update: both 
    the check on the machine itself".)
 2. The dialog "Turn on the check on the machine itself" lists what the VM will trust: your Pocket ID's
    address, the client id, the signing key with its thumbprint, and "may approve:" with the user id from
-   I2 ("from approval.users; not a user of this panel": a test build has no users). Read the user id. Press **Turn on for 1 machine (passkey)**. "Confirm it's you" then shows the same
+   I2 and "(approval.users)" behind it: where the id comes from. Read the user id. Press **Turn on for 1 machine (passkey)**. "Confirm it's you" then shows the same
    once more, line by line; press **Continue to Pocket ID**.
 3. The browser goes to your Pocket ID. It shows **Fairy PC actions** and asks for your passkey. Use it.
 4. You are back in the panel, on the page you started from (a white page "Fairy test build: back from Pocket

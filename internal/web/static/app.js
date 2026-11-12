@@ -845,8 +845,9 @@ function approvalFresh(s, a) {
   if (apv.sig[s.id] !== apvSig(a) && Date.now() - apv.at > 3000) fetchApproval(true);
 }
 const apvMachine = (s) => (apv.data?.machines || []).find((m) => m.system_id === s.id || m.id === s.id);
-// who may approve: "Name id (why)"; an id from approval.users that is no user of this panel has no name to show
-const apvUsers = (m) => (m.users || []).map((u) => `${u.name ? `${esc(u.name)} ` : ""}<code title="${esc(u.sub)}">${esc(shortKey(u.sub))}</code> <span class="note">(${esc(u.why === "approval.users" ? "from approval.users" : u.why)}${u.name ? "" : "; not a user of this panel"})</span>`).join("; ");
+// who may approve, each person kept together: "Name id (why)". An id from approval.users that is no user of this
+// panel has no name to show: "id (approval.users)", and the rest on hover.
+const apvUsers = (m) => (m.users || []).map((u) => `<span class="ap-user">${u.name ? `${esc(u.name)} ` : ""}<code title="${esc(u.sub)}">${esc(shortKey(u.sub))}</code> <span class="note"${u.name ? "" : ' title="This id is in approval.users of config.yaml. It is not a user of this panel."'}>(${esc(u.why)})</span></span>`).join("; ");
 // The button on the page of a machine whose check is off (admins), or why it cannot be switched on from here.
 function approvalTurnOn(s) {
   if (!state.me?.can_control) return "";
