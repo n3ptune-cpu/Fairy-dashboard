@@ -174,11 +174,11 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 /* ------------------------------------------------ detail */
 /* Host header: name + state on the left, actions top right, the descriptive chips and the one-line summary below. */
 .detail-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 20px; row-gap: 8px; align-items: center; margin-bottom: 16px; }
-.detail-head h2 { margin: 0; font-size: 20px; }
+.detail-head h2 { margin: 0; font-size: 20px; min-width: 0; overflow-wrap: anywhere; }
 .detail-head .dh-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .detail-head .dh-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .detail-head .dh-meta .ver { margin-left: 2px; }
-.detail-head .sub { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
+.detail-head .sub { grid-column: 1 / -1; color: var(--muted); font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
 .detail-head .actions { grid-column: 2; grid-row: 1 / span 2; align-self: start; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 @media (max-width: 1000px) {
   .detail-head { grid-template-columns: minmax(0, 1fr); }
@@ -221,6 +221,8 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .list-row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--rule); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .list-row:last-child { border-bottom: 0; }
 .list-row span:first-child { color: var(--muted); }
+/* a value without a space (a model name, a host name in an address) breaks where the row ends: it never widens the page */
+.list-row > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
 .push { margin-left: auto; }
 .warnbox { border: 1px solid #4a3810; background: rgba(245, 184, 75, .05); color: #f3cf86; border-radius: var(--radius); padding: 10px 12px; font-size: 12.5px; margin-bottom: 14px; }
