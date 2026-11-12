@@ -555,6 +555,8 @@ type AgentRefusal struct {
 	Err    *apierr.Error
 	Code   string
 	Status int // the agent's status (429: its control rate limit)
+	// RetryAfterS: with 429, in how many seconds the agent says to ask again (its Retry-After; 0: it did not say).
+	RetryAfterS int
 }
 
 func (e *AgentRefusal) Error() string { return e.Err.Error() }
@@ -709,7 +711,13 @@ func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path strin
 		}
 		return def
 	}
-	refusal := func(e *apierr.Error) error { return &AgentRefusal{Err: e, Code: agentCode(data), Status: status} }
+	refusal := func(e *apierr.Error) error {
+		r := &AgentRefusal{Err: e, Code: agentCode(data), Status: status}
+		if n := jsonx.IntP(data, "retry_after_s"); status == 429 && n != nil && *n >= 1 && *n <= 3600 {
+			r.RetryAfterS = *n
+		}
+		return r
+	}
 	switch {
 	case status == 503 && (jsonx.S(data, "code") == api.ReasonHelperStopped || jsonx.S(data, "code") == api.ReasonHelperError):
 		return nil, refusal(apierr.New(409, HelperAnswerWhy(jsonx.S(data, "code")))) // not an agent failure

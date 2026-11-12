@@ -247,7 +247,7 @@ func TestErrorTextFitsTheResultLine(t *testing.T) {
 		"no_challenge":    "press the button again",
 	} {
 		said := "approval refused (" + reason + "): this user may not approve actions on this machine"
-		msg, ok := ErrorText("NSX-TEST-VM", api.CodeApprovalRefused, said)
+		msg, ok := ErrorText("NSX-TEST-VM", api.CodeApprovalRefused, said, "")
 		if !ok || !strings.Contains(msg, want) || !strings.Contains(msg, said) || !strings.Contains(msg, "Nothing was done.") {
 			t.Errorf("%s: %q", reason, msg)
 		}
@@ -255,7 +255,50 @@ func TestErrorTextFitsTheResultLine(t *testing.T) {
 			t.Errorf("%s: %d characters, the result line holds 300: %q", reason, len(msg), msg)
 		}
 	}
-	if _, ok := ErrorText("x", "something_else", "text"); ok {
+	if _, ok := ErrorText("x", "something_else", "text", ""); ok {
 		t.Error("a code that is not the approval protocol's has no text here")
+	}
+}
+
+// "Cannot check approvals" says what to do for the reason the machine's own block gives: a trust file that
+// cannot be used is repaired on the machine; a Windows helper that is RUNNING and from before approvals must be
+// restarted (starting it does nothing); a helper that does not answer is started. No advice for another system
+// than the machine's, and no sentence twice.
+func TestUnavailableSaysWhatToDo(t *testing.T) {
+	const said = "the trust file /var/lib/fairy-agent/approval-trust.json is not valid JSON (an administrator repairs it on the machine: fairy-agent helper-trust show)"
+	broken, ok := ErrorText("LINUX-B", api.CodeApprovalUnavailable, said, WhyBroken)
+	if !ok || strings.Contains(broken, "Windows") || strings.Contains(broken, "helper running") || strings.Count(broken, "fairy-agent helper-trust show") != 1 {
+		t.Errorf("a broken trust file: %q", broken)
+	}
+	for _, code := range []string{api.CodeApprovalUnavailable, api.CodeHelperTooOld} {
+		old, ok := ErrorText("WIN-PC", code, "not run: the running fairy-agent-helper is older than this agent", WhyHelperOld)
+		if !ok || !strings.Contains(old, "Stop helper, then Start helper") || !strings.Contains(old, "Nothing was done.") || strings.Contains(old, "helper-trust") {
+			t.Errorf("%s with an old running helper: %q", code, old)
+		}
+	}
+	if down, _ := ErrorText("WIN-PC", api.CodeApprovalUnavailable, "", WhyHelperDown); !strings.Contains(down, "Start it") || strings.Contains(down, "Stop helper") {
+		t.Errorf("a helper that does not answer: %q", down)
+	}
+}
+
+// 429: the page says when to ask again, in the machine's own seconds, and which of its budgets it was.
+func TestBusySaysWhenToTryAgain(t *testing.T) {
+	for _, c := range []struct {
+		code     string
+		n        int
+		question bool
+		want     []string
+	}{
+		{api.CodeTooManyChallenges, 37, true, []string{"somebody else is asking", "Try again in 37 s."}},
+		{"", 60, true, []string{"approval questions for this minute", "Try again in 60 s."}},
+		{"", 0, false, []string{"control requests for this minute", "Try again in 60 s."}},
+		{"", 99999, false, []string{"Try again in 60 s."}},
+	} {
+		got := Busy("PC-A", c.code, c.n, c.question)
+		for _, w := range c.want {
+			if !strings.Contains(got, w) || !strings.HasPrefix(got, "PC-A ") {
+				t.Errorf("%+v: %q lacks %q", c, got, w)
+			}
+		}
 	}
 }

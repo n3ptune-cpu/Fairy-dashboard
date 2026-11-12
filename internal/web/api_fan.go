@@ -95,8 +95,11 @@ func (c *reqCtx) agentCall(a config.Agent, method, path string, body any) (map[s
 			}
 		}
 		// the machine's own check of approvals said no: what that means and what to do, around its own words
-		if m, ok := approval.ErrorText(a.DisplayName(), jsonx.S(data, "code"), textsafe.Clip(jsonx.S(data, "error"), maxAgentError)); ok {
+		if m, ok := approval.ErrorText(a.DisplayName(), jsonx.S(data, "code"), textsafe.Clip(jsonx.S(data, "error"), maxAgentError), c.s.unavailableWhy(a.ID)); ok {
 			return nil, &agentRefusal{err: apierr.New(st, m), code: jsonx.S(data, "code")}
+		}
+		if status == 429 { // its request budget: when to ask again, in the machine's own seconds
+			return nil, apierr.New(429, approval.Busy(a.DisplayName(), jsonx.S(data, "code"), retryAfter(data), false))
 		}
 		return nil, apierr.New(st, msg)
 	}

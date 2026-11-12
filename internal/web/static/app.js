@@ -713,6 +713,9 @@ const AP_BINDING_MORE = table({
   too_old: ["It runs the test build of 2026-11-11. Its approvals are not tied to one machine, and it refuses this panel's."],
   no_record: ["Fairy never takes a machine id from an answer that comes with an approval question. Try again in a moment."],
   unreadable: ["The panel's log says why. Until the file can be read, nothing is approved and no fan, power or update request is sent."] });
+// The start of the block's error when the RUNNING Windows helper is from before approvals (state "unknown"):
+// starting the helper does nothing then, it has to be stopped and started.
+const AP_HELPER_OLD = "the running fairy-agent-helper is older than this agent";
 // Host list and host page: one small flag when the check is broken or the panel's decision about the machine is an
 // alarm. It is a button like the helper's sign: its name and words on hover, and a click opens them.
 function approvalChip(s) {
@@ -762,6 +765,7 @@ function approvalBox(s) {
     return `<div class="panel glass pad approval ${a.state === "broken" || bind ? "errcard" : ""}" data-key="approval">${head}${bind}
       <div class="${a.state === "broken" ? "warnbox" : "note warn"}" id="ap-error">${a.state === "broken"
         ? `This machine has a trust file it cannot use${a.error ? `: <b>${esc(a.error)}</b>` : ""}. Until it is repaired <b>on the machine</b> it refuses fan, power and update requests. On the machine, as administrator: <code>fairy-agent helper-trust show</code>`
+        : String(a.error || "").startsWith(AP_HELPER_OLD) ? "Its running helper is older than its agent, so nothing there can check an approval: it refuses fan, power and update requests. <b>Restart the helper</b>: Stop helper, then Start helper (Elevated helper, next to the host name)."
         : `The machine cannot say whether it checks approvals${a.error ? `: ${esc(a.error)}` : " (its elevated helper is not answering)"}. Start the helper (Elevated helper, next to the host name).`}</div>
       ${row("Checked by", esc(approvalBy(a)))}${proto}${agentErr}</div>`;
   }
@@ -778,6 +782,8 @@ function approvalBox(s) {
     ${row(`Pinned key${(a.keys || []).length === 1 ? "" : "s"}`, keys, "The Pocket ID signing key(s) this machine accepts, by key id and thumbprint")}
     ${row("Allowed users", esc(a.users ?? "–"), "How many Pocket ID users may approve on this machine")}
     ${row("Fan window", a.fan_window_s == null ? "–" : a.fan_window_s === 0 ? "off" : `${esc(a.fan_window_s)} s`, "After one approved fan change, more fan changes need no approval for this long")}
+    ${a.set_by ? row("Trust set", `${a.set_by === "panel" ? "from a panel" : "on the machine"}${a.set_at ? ` · <span data-ago="${esc(a.set_at)}">${ago(a.set_at)}</span>` : ""}${rec?.other_trust ? ' · <b class="warn-t">not this panel\'s values</b>' : ""}`,
+      rec?.other_trust ? "It trusts another Pocket ID, client, key or list of users than this panel would set for it now: set by somebody else, changed on the machine, or this panel's own list changed since" : "How this machine's trust came to be: a first-time set over the network (Turn on), or helper-trust set on the machine") : ""}
     ${row("Shutdown after boot", a.boot_shutdown_s == null ? "–" : a.boot_shutdown_s === 0 ? "off" : `one within ${esc(a.boot_shutdown_s)} s`, "One shutdown without approval shortly after the machine started (for \"Update unpowered hosts\")")}
     ${proto}${agentErr}${approvalPinNote(a, s)}
     <div class="note" id="ap-locked">Locked: all of this is changed only on the machine, as administrator, with <code>fairy-agent helper-trust</code> (show, set, clear). The panel cannot change or remove it.</div></div>`;
@@ -839,7 +845,7 @@ function approvalBanner() {
   if (!known.length && !d.configured) return "";
   const row = (m) => { const [cls, label] = APPROVAL_STATE[m.state] || ["", "–"];
     return `<tr class="row" data-key="apm-${esc(m.id)}"><td class="namecell"><b>${state.byId[m.system_id] ? `<a href="#/system/${enc(m.system_id)}">${esc(m.name)}</a>` : esc(m.name)}</b></td>
-      <td><span class="chip ${cls}">${esc(label)}${m.last_known ? " · last known" : ""}</span>${m.binding && AP_BINDING[m.binding] ? ` <span class="chip bad" title="${esc(m.binding_text || AP_BINDING[m.binding][1])}">${esc(AP_BINDING[m.binding][0])}</span>` : ""}${m.stale_keys ? ' <span class="chip bad" title="It pins a key Pocket ID no longer publishes: fairy-agent helper-trust set --fetch-keys on the machine">old key</span>' : ""}</td>
+      <td><span class="chip ${cls}">${esc(label)}${m.last_known ? " · last known" : ""}</span>${m.binding && AP_BINDING[m.binding] ? ` <span class="chip bad" title="${esc(m.binding_text || AP_BINDING[m.binding][1])}">${esc(AP_BINDING[m.binding][0])}</span>` : ""}${m.stale_keys ? ' <span class="chip bad" title="It pins a key Pocket ID no longer publishes: fairy-agent helper-trust set --fetch-keys on the machine">old key</span>' : ""}${m.other_trust ? ' <span class="chip warn" title="It trusts another Pocket ID, client, key or list of users than this panel would set for it now: set by somebody else, changed on the machine, or this panel\'s own list changed since">other trust</span>' : ""}</td>
       <td>${esc(m.enforced_by || "–")}</td><td class="note">${m.ready ? "ready" : esc(m.why || "")}</td></tr>`; };
   return `<div class="panel glass pad approval" data-key="apv">
     <div class="wu-top"><h3>The check on the machine itself</h3>

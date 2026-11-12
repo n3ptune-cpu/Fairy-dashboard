@@ -7,6 +7,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
@@ -24,6 +25,31 @@ const helperTooOldPrefix = "the running fairy-agent-helper is older than this ag
 
 func helperTooOld(ap *model.Approval) bool {
 	return ap != nil && ap.State == api.ApprovalUnknown && strings.HasPrefix(ap.Error, helperTooOldPrefix)
+}
+
+// unavailableWhy is what the agent's own approval block says about why it cannot check approvals
+// (approval.ErrorText's why; "": the block does not say).
+func (s *Server) unavailableWhy(agentID string) string {
+	ap := s.Poller.ApprovalOf(agentID)
+	switch {
+	case ap == nil:
+		return ""
+	case helperTooOld(ap):
+		return approval.WhyHelperOld
+	case ap.State == api.ApprovalBroken:
+		return approval.WhyBroken
+	case ap.State == api.ApprovalUnknown && ap.EnforcedBy == api.EnforcedByHelper && !ap.LastKnown:
+		return approval.WhyHelperDown
+	}
+	return ""
+}
+
+// retryAfter is the "retry_after_s" of an agent's 429 answer (0: none).
+func retryAfter(data jsonx.M) int {
+	if n := jsonx.IntP(data, "retry_after_s"); n != nil && *n >= 1 && *n <= 3600 {
+		return *n
+	}
+	return 0
 }
 
 // machineAlarmText is a binding alarm in a few words, for the Notifications list.

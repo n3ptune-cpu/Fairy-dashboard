@@ -114,7 +114,11 @@ func (s *Server) powerAction(c *reqCtx) error {
 				}
 			}
 		}
-		err = approvalRefusal(x.Name, err)
+		why := ""
+		if a, ok := s.Poller.AgentFor(x.ID); ok {
+			why = s.unavailableWhy(a.ID)
+		}
+		err = approvalRefusal(x.Name, err, why)
 		c.audit(u, "power."+req.Action, id, params, errorOutcome(err))
 		return err
 	}

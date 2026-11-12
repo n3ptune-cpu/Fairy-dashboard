@@ -30,6 +30,9 @@ func TestUIApproval(t *testing.T) {
 		`if (apv.sig[s.id] !== apvSig(a) && Date.now() - apv.at > 3000) fetchApproval(true);`, // a block that changed after the approval page was fetched
 		`${bind ? "" : '<div class="note">This machine does not check approvals itself.`,      // not under "Check gone"
 		`a.last_known ? " · last known" : ""`,
+		// the agent's changes of 2026-11-12: an old running helper is restarted, not started; how the trust was set
+		`const AP_HELPER_OLD = "the running fairy-agent-helper is older than this agent";`, `<b>Restart the helper</b>: Stop helper, then Start helper`,
+		`row("Trust set", `, `>other trust</span>`,
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %q", want)

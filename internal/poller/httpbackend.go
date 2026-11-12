@@ -690,5 +690,12 @@ func (b *httpBackend) AgentRequest(ctx context.Context, a config.Agent, method, 
 			return resp.StatusCode, nil, devices.Errf("invalid response")
 		}
 	}
+	// "Too many requests": when to ask again is in the Retry-After header (an agent's request budgets: 60;
+	// too_many_challenges: 1 to 90). It is handed on as "retry_after_s", so the page can say "try again in N s".
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if n, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && n >= 1 && n <= 3600 {
+			out["retry_after_s"] = float64(n)
+		}
+	}
 	return resp.StatusCode, out, nil
 }

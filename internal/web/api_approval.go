@@ -583,7 +583,7 @@ func (s *Server) sendTrust(c *reqCtx, a config.Agent, name string, in api.TrustI
 	default:
 		res.Outcome = "refused"
 		res.Text = orText(text, fmt.Sprintf("it answered HTTP %d", status)) + ". Nothing was written."
-		if msg, ok := approval.ErrorText(name, code, text); ok {
+		if msg, ok := approval.ErrorText(name, code, text, s.unavailableWhy(a.ID)); ok {
 			res.Text = msg
 		}
 	}

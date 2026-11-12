@@ -224,12 +224,48 @@ func refusedHint(text string) string {
 	return " A new approval is needed: press the button again."
 }
 
+// Why a machine cannot check approvals right now (ErrorText's why), from its approval block.
+const (
+	WhyBroken     = "broken"      // its trust file cannot be used
+	WhyHelperOld  = "helper_old"  // Windows: the RUNNING helper is from before approvals; it must be restarted
+	WhyHelperDown = "helper_down" // Windows: the helper, which does the checking, is not answering
+)
+
+// Busy is what the page says when a machine answers 429: it has had its requests for now, and when to ask
+// again. question: it was the question about an approval (POST /approval/challenge), not the action. retryS is
+// the machine's own number (Retry-After; 0: none, a minute is the agent's budget).
+func Busy(name, code string, retryS int, question bool) string {
+	if retryS < 1 || retryS > 3600 {
+		retryS = 60
+	}
+	again := fmt.Sprintf(" Try again in %d s.", retryS)
+	switch {
+	case code == api.CodeTooManyChallenges:
+		return name + " holds as many open approval questions as it takes: somebody else is asking it for them. Nothing was sent." + again
+	case question:
+		return name + " has had its approval questions for this minute. Nothing was sent." + again
+	}
+	return name + " has had its control requests for this minute. Nothing was done." + again
+}
+
 // ErrorText is what the page says when a machine refuses with one of the approval protocol's codes: what it
-// means and what to do. name is the machine, text the machine's own words. ok is false for any other code.
-func ErrorText(name, code, text string) (msg string, ok bool) {
+// means and what to do. name is the machine, text the machine's own words, why what the machine's approval
+// block says about itself (WhyBroken, WhyHelperOld, WhyHelperDown; "": not known). ok is false for any other
+// code.
+func ErrorText(name, code, text, why string) (msg string, ok bool) {
 	said := ""
 	if text != "" {
 		said = " (" + name + " says: " + text + ")"
+	}
+	if code == api.CodeApprovalUnavailable || code == api.CodeHelperTooOld {
+		switch {
+		case why == WhyHelperOld || code == api.CodeHelperTooOld:
+			// "Start" alone does nothing: the old helper is running. It has to be stopped and started.
+			return "The helper that runs on " + name + " is older than its agent, so nothing there can check an approval. Restart it: Stop helper, then Start helper " +
+				"(next to the host name). Nothing was done.", true
+		case why == WhyHelperDown:
+			return "The helper on " + name + " is not answering, and it is what checks approvals there. Start it (next to the host name). Nothing was done.", true
+		}
 	}
 	switch code {
 	case api.CodeApprovalRequired:
@@ -238,11 +274,9 @@ func ErrorText(name, code, text string) (msg string, ok bool) {
 		return name + " did not accept the approval" + said + ". Nothing was done." + refusedHint(text), true
 	case api.CodeApprovalUnavailable:
 		return name + " cannot check approvals right now" + said + ". Until that is repaired on the machine it refuses fan, power and update " +
-			"requests (on the machine: fairy-agent helper-trust show; on Windows also: is the helper running?).", true
+			"requests.", true
 	case api.CodeApprovalDisabled:
 		return name + " has nothing that checks approvals (a Windows agent without its helper)" + said + ".", true
-	case api.CodeHelperTooOld:
-		return "the helper on " + name + " is older than its agent (an update that has not finished): restart the helper, then try again" + said + ".", true
 	}
 	return "", false
 }

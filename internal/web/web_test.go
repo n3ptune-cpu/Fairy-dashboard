@@ -985,7 +985,7 @@ func TestAgentErrorsAreNot502(t *testing.T) {
 			"no answer (http 401): it may have arrived"},
 		{"a 500 without a body", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 500, nil, nil, 502,
 			"no answer (http 500): it may have arrived"},
-		{"agent rate limit", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 429, jsonx.M{"error": "slow down"}, nil, 429, "slow down"},
+		{"agent rate limit", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 429, jsonx.M{"error": "slow down"}, nil, 429, "has had its control requests for this minute. Nothing was done. Try again in 60 s."}, // the machine's own budget, with when to ask again
 		{"unreachable", "POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, 0, nil, devices.Errf("connection refused"), 502, "agent unreachable"},
 		{"fan status error", "GET", "/api/systems/tower/fan", nil, 503, jsonx.M{"error": "BMC busy"}, nil, 424, "BMC busy"},
 		{"invalid fan status", "GET", "/api/systems/tower/fan", nil, 200, jsonx.M{"mode": 5}, nil, 424, "invalid fan status"},

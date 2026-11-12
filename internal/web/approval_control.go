@@ -260,7 +260,7 @@ func (c *reqCtx) challenge(t approvalTarget) (*approval.Bound, string, error) {
 		return nil, "", apierr.New(502, "agent unreachable: "+devices.Describe(err))
 	}
 	if status != 200 {
-		return nil, "", challengeRefusal(t.name, status, data)
+		return nil, "", challengeRefusal(t.name, status, data, c.s.unavailableWhy(t.agent.ID))
 	}
 	var ch api.ChallengeResponse
 	raw, _ := json.Marshal(data)
@@ -299,9 +299,9 @@ func (c *reqCtx) challenge(t approvalTarget) (*approval.Bound, string, error) {
 
 // challengeRefusal is the machine's "no" to the question about an approval, in the panel's words where the
 // code is one of the protocol's.
-func challengeRefusal(name string, status int, data jsonx.M) error {
+func challengeRefusal(name string, status int, data jsonx.M, why string) error {
 	code, text := jsonx.S(data, "code"), textsafe.Clip(jsonx.S(data, "error"), maxAgentError)
-	if msg, ok := approval.ErrorText(name, code, text); ok {
+	if msg, ok := approval.ErrorText(name, code, text, why); ok {
 		return apierr.New(409, msg)
 	}
 	switch {
@@ -310,7 +310,9 @@ func challengeRefusal(name string, status int, data jsonx.M) error {
 	case status == 503 && (code == api.ReasonHelperStopped || code == api.ReasonHelperError):
 		return apierr.New(409, "the elevated helper on "+name+" is not answering, and it is the one that checks approvals there: start the helper first (Elevated helper, next to the host name)")
 	case status == 429:
-		return apierr.New(429, name+" takes only a few control requests a minute and has had them: try again in a minute")
+		// its budget of questions, or its list of open ones (too_many_challenges): said with the machine's own
+		// number of seconds. The panel does not ask again by itself.
+		return apierr.New(429, approval.Busy(name, code, retryAfter(data), true))
 	case status == 404 && code == "":
 		// state said "ask", the agent has no such route: an agent from before the feature answers here
 		return apierr.New(409, name+" says it checks approvals, but its agent does not know how to be asked (it answered \"not found\"). Nothing was sent.")
@@ -339,13 +341,16 @@ func isStepUp(err error) bool {
 // approvalRefusal rewrites a machine's refusal of a power request when its code is one of the approval
 // protocol's (approval_required, approval_refused, approval_unavailable): the page then says what it means
 // and what to do, around the machine's own words. Any other error is returned as it is.
-func approvalRefusal(name string, err error) error {
+func approvalRefusal(name string, err error, why string) error {
 	var ref *powerctl.AgentRefusal
 	if !errors.As(err, &ref) {
 		return err
 	}
+	if ref.Status == 429 { // the machine's request budget: when to ask again, in its own seconds
+		return apierr.New(429, approval.Busy(name, ref.Code, ref.RetryAfterS, false))
+	}
 	text, _ := ref.Err.Detail.(string)
-	if msg, ok := approval.ErrorText(name, ref.Code, text); ok {
+	if msg, ok := approval.ErrorText(name, ref.Code, text, why); ok {
 		return apierr.New(ref.Err.Status, msg)
 	}
 	return err
