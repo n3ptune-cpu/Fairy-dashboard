@@ -33,6 +33,14 @@ func TestAWatchedFileThatIsALinkToNothingFailsClosed(t *testing.T) {
 	if d, err := w.Get(), w.Err(); len(d) != 0 || err == nil || !strings.Contains(err.Error(), "a symbolic link whose target does not exist") {
 		t.Errorf("a link to nothing: data %v, error %v; want no data and an error that names the link", d, err)
 	}
+	// looked at again and again, the same state is one version: nobody is told of a change that is none
+	v := w.Version
+	for i := 0; i < 20; i++ {
+		w.Get()
+	}
+	if w.Version != v {
+		t.Errorf("20 looks at the same unreadable file moved the version from %d to %d", v, w.Version)
+	}
 	// the target appears: still a link, which the panel does not read through (as before)
 	if err := os.MkdirAll(filepath.Join(dir, "not-mounted"), 0o700); err != nil {
 		t.Fatal(err)

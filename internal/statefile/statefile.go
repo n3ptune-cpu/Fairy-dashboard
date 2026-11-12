@@ -259,8 +259,15 @@ func (w *Watched) getLocked(force bool) Data {
 		}
 	}
 	if mt != w.mtime || (w.err != nil && mt == -3) {
+		// (A file that cannot be looked at, -3, has no time to tell one such state from the next, so it is
+		// judged again at every check. The version moves only when what was found is another thing than
+		// before: the switches look at the file at every request now, audit 6 r4-p2-03, and whoever follows
+		// Version would be told of a change ten times a second for as long as the file stays out of reach.)
+		same := mt == w.mtime && w.err != nil && w.err.Error() == fmt.Errorf("cannot read %s: %w", w.Path, statErr).Error()
 		w.mtime = mt
-		w.Version++
+		if !same {
+			w.Version++
+		}
 		var err error
 		switch mt {
 		case -2:

@@ -94,7 +94,13 @@ func (a *State) badShape(key, want, means string, got any) {
 // or a file another tool wrote) used to read as "no kill switch" (audit 5, r3-p2-07: "control_disabled": true
 // left control ON). It now reads as what it most likely means, and as the safe side: control is off, with one
 // ERROR that names the key. `fairy admin control enable` takes the key out, whatever is under it.
+//
+// The file is looked at now (one stat; it is read again only when it changed), like SessionValid does, not at
+// the copy of up to a second ago: `fairy admin control disable` is another process, and control stops with the
+// panel's next look after the command returned, not up to a second later (audit 6, r4-p2-03: in that second a
+// run's next step and a token's request still went out).
 func (a *State) ControlDisabled() *model.ControlState {
+	a.state.Refresh()
 	if err := a.state.Err(); err != nil {
 		return &model.ControlState{By: "fairy", Reason: "state.json is unreadable or corrupt (see the server log)"}
 	}
@@ -153,6 +159,7 @@ func powerOffList(d statefile.Data) (ids []string, raw any, ok bool) {
 // state.json is unreadable, and while "power_control_disabled" is there and is not a list of system ids: the
 // same reading as for the kill switch, see ControlDisabled).
 func (a *State) PowerDisabled(id string) bool {
+	a.state.Refresh() // now, not up to a second ago: see ControlDisabled
 	if a.state.Err() != nil {
 		return true
 	}

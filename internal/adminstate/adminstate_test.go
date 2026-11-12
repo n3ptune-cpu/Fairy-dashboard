@@ -249,3 +249,42 @@ func TestWakeUpdateSwitch(t *testing.T) {
 		t.Fatal("an unreadable state.json must switch it off for every host")
 	}
 }
+
+// Audit 6, r4-p2-03: the kill switch and a host's power switch are set by another process (`fairy admin control
+// disable`, `fairy admin host <id> power-control disable`). The running panel looked at state.json at most once
+// a second, so for up to a second after the command had returned it went on allowing control: a run's next
+// step, a token's request. Like the sessions (TestARevokeFromTheCLICountsFromTheNextRequest) the switches are
+// read from the file as it is now.
+func TestTheKillSwitchFromTheCLICountsAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	panel, cli := New(dir), New(dir)
+	for i := 0; i < 50; i++ { // the panel is in use: its view of the file is as fresh as it gets
+		if panel.ControlDisabled() != nil || panel.PowerDisabled("pc-a") {
+			t.Fatal("the set-up: control must be on")
+		}
+	}
+	if err := cli.SetPowerDisabled("pc-a", true); err != nil {
+		t.Fatal(err)
+	}
+	if !panel.PowerDisabled("pc-a") {
+		t.Error("the host's power switch was set by the CLI, and the panel's next look still allows power control for it")
+	}
+	if panel.PowerDisabled("pc-b") {
+		t.Error("another host's power control is off")
+	}
+	if err := cli.SetControlDisabled(true, "root (cli)", "stop everything"); err != nil {
+		t.Fatal(err)
+	}
+	if cs := panel.ControlDisabled(); cs == nil || cs.Reason != "stop everything" {
+		t.Errorf("the kill switch was set by the CLI, and the panel's next look says: %+v", cs)
+	}
+	if err := cli.SetControlDisabled(false, "root (cli)", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.SetPowerDisabled("pc-a", false); err != nil {
+		t.Fatal(err)
+	}
+	if panel.ControlDisabled() != nil || panel.PowerDisabled("pc-a") {
+		t.Error("control was enabled again by the CLI, and the panel's next look still refuses")
+	}
+}
