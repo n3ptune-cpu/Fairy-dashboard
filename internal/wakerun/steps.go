@@ -221,22 +221,26 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 		secs := since.Seconds()
 		h.OnlineAfterS = &secs
 		switch {
-		case h.onlineMono-h.wakeMono < minBoot:
-			// Its agent answers sooner after the wake than a machine that was off can start (firmware, system,
-			// agent, network): it was already on its way up when the wake went out. Someone switched it on.
-			h.NotFresh, h.TooSoon = true, true
-			m.alreadyOn(r, h, now, "")
-		case o.UptimeS == nil:
-			m.enter(h, StOnline, now, "its agent answers, but reports no uptime: Fairy cannot tell that it started after the wake, so it will not switch it off")
-		case time.Duration(*o.UptimeS)*time.Second >= since:
+		case o.UptimeS != nil && time.Duration(*o.UptimeS)*time.Second >= since:
 			// Its uptime is longer than the time since the wake, so it did not start after it. It gave
 			// nothing at all for 15 minutes and at the direct question, and it answers now, after the wake:
 			// it resumed from sleep or hibernate, or is a Windows PC with Fast Startup (all of them go on
 			// counting the uptime), or it was on all along and out of reach. The run cannot tell which. It
 			// never switches such a machine off, and it does not say "it was already on" either: the wake may
 			// well be what brought it back. It is left on and reported as that, a warning (r1-p2-02).
+			//
+			// This is asked before the minBoot case below: a resume from sleep is quick, and a machine that
+			// was asleep for days and answers 4 s after the run's own wake was not "switched on by someone".
 			h.NotFresh = true
 			m.alreadyOn(r, h, now, "")
+		case h.onlineMono-h.wakeMono < minBoot:
+			// Its agent answers sooner after the wake than a machine that was off can start (firmware, system,
+			// agent, network), and its uptime is fresh (or it reports none): it was already on its way up
+			// when the wake went out. Someone switched it on.
+			h.NotFresh, h.TooSoon = true, true
+			m.alreadyOn(r, h, now, "")
+		case o.UptimeS == nil:
+			m.enter(h, StOnline, now, "its agent answers, but reports no uptime: Fairy cannot tell that it started after the wake, so it will not switch it off")
 		default:
 			m.enter(h, StOnline, now, fmt.Sprintf("its agent answers %s after the wake: waiting %s to see that it stays online", span(since), span(onlineSettle)))
 		}

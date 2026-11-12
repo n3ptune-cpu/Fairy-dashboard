@@ -336,7 +336,8 @@ type Host struct {
 	// and it does not call that "it was already on": the machine ends as left on, with NotFreshText, a warning.
 	NotFresh bool `json:"not_fresh,omitempty"`
 	// TooSoon (with NotFresh): its agent answered sooner after the wake than a machine that was off can start
-	// (minBoot): it was already starting when the wake went out.
+	// (minBoot), with a fresh uptime: it was already starting when the wake went out. Never set for a machine
+	// whose uptime is longer than the time since the wake (that one was asleep, or on: NotFresh alone).
 	TooSoon bool `json:"too_soon,omitempty"`
 	// Asking: the request that is about to go out to the machine, or is on its way ("wake", "update",
 	// "shutdown"); "" between requests. It is written to the journal before the request is sent (Manager.ask),

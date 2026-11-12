@@ -416,6 +416,39 @@ func TestAMachineSomeoneSwitchedOnJustBeforeTheWake(t *testing.T) {
 			}
 		}
 	})
+	// Second review of audit 5's fixes, MUST FIX 1: a machine that was asleep and that the run's own wake
+	// resumes answers within seconds, with an uptime of days. Nobody switched it on: the report must use the
+	// "did not look freshly started" sentence, whatever minBoot says. The outcome is the same: left on.
+	t.Run("asleep, and quick to resume: the uptime decides the sentence, not the 8 seconds", func(t *testing.T) {
+		for _, after := range []time.Duration{4 * time.Second, 7 * time.Second, 12 * time.Second} {
+			w := newWorld(t)
+			pc := w.off("pc-a")
+			pc.wakeBoots = false // the world's own boot sets a fresh uptime; this one resumes
+			w.start(StartRequest{Hosts: []string{"pc-a"}})
+			for i := 0; i < 3600; i++ {
+				if a, _ := w.m.Snapshot(); a == nil {
+					break
+				}
+				if pc.wakes == 1 && !pc.on { // the run's wake packet resumes it; the system "has been up" for three days
+					pc.on, pc.bootedAt, pc.agentReadyAt = true, w.now.Add(-72*time.Hour), w.now.Add(after)
+				}
+				w.tick()
+			}
+			h := host(w.finish(), "pc-a")
+			if pc.onAtStart || pc.onAtFirstWake == nil || *pc.onAtFirstWake {
+				t.Fatal("setup: the machine was not off before the run")
+			}
+			if pc.shutdowns != 0 || !pc.on || h.State != StLeftOn || h.On != OnYes || !h.NotFresh || !h.AlreadyOn {
+				t.Fatalf("resumes %v after the wake: shutdowns %d: %s: %s", after, pc.shutdowns, h.State, h.Text)
+			}
+			if h.TooSoon || strings.Contains(h.Text, "someone switched it on") || strings.Contains(h.Text, "already starting") {
+				t.Fatalf("resumes %v after the wake: the report blames a person for a machine that was asleep: %s", after, h.Text)
+			}
+			if !strings.HasPrefix(h.Text, "It answered after the wake but did not look freshly started (up for 3 days): it may have been asleep, or use Fast Startup. It was left on.") {
+				t.Fatalf("resumes %v after the wake: %s", after, h.Text)
+			}
+		}
+	})
 	t.Run("a machine that was off and starts fast is still woken, updated and switched off", func(t *testing.T) {
 		w := newWorld(t)
 		pc := w.off("pc-a")
