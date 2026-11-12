@@ -450,6 +450,14 @@ func executeViaAgent(ctx context.Context, p *poller.Poller, s model.System, req 
 		return res, err
 	}
 	pending := normalise.Pending(data) // the same checks as for the block in the agent's report
+	if req.Action == "shutdown" && (pending == nil || pending.Action != "shutdown") {
+		// The agent's "yes" to a shutdown is a good status WITH the countdown it started: it always answers
+		// {"action":"shutdown","pending":{...}}. A good status with any other body is not the agent speaking
+		// (second review of fix7a, R7A-08: every non-empty JSON object counted as "accepted"). Like every answer
+		// that is not the agent's, it is "no answer": the request may have arrived all the same, and a caller
+		// that goes on (the run) watches the machine and never takes this for a countdown it knows of.
+		return res, &Unanswered{Err: apierr.New(502, "agent unreachable: its answer to the shutdown has no countdown in it, so it is not an answer of the agent")}
+	}
 	p.NotePending(s.ID, pending)
 	res.Pending = pending
 	if req.Action == "cancel" {
@@ -516,9 +524,19 @@ func (e *Unanswered) Unwrap() error { return e.Err }
 
 // agentsNo reports whether the body of an answer with an error status is the agent's own: the agent answers
 // every refusal with a JSON object that has its reason in "error" (and often a "code"). A proxy's error page,
-// an empty body, another server's JSON are not that.
+// an empty body, another server's JSON are not that. (With the statuses 502 and 504 not even such a body is
+// taken for the agent's: agentCall.)
 func agentsNo(data jsonx.M) bool {
 	return jsonx.S(data, "error") != "" || agentCode(data) != ""
+}
+
+// relaysOwn reports whether an answer with the status 502 or 504 is the agent's own all the same: on the one
+// route where the agent answers with them itself, its BMC relay (POST /bmc/power: "the BMC at ... did not
+// answer within 15 s", "the BMC refused the login"), and with one of the relay's own codes (bmc_unreachable,
+// bmc_refused, bmc_error, ...). A gateway's JSON has no such code. The words of that answer are what the
+// person who clicked "Power on (via BMC)" needs; a run never uses this route.
+func relaysOwn(path string, data jsonx.M) bool {
+	return path == "/bmc/power" && strings.HasPrefix(agentCode(data), "bmc_")
 }
 
 // agentCode is an agent's error code as far as the panel repeats it: a short word of a-z, 0-9 and "_".
@@ -561,6 +579,11 @@ func UpdateAgent(ctx context.Context, p *poller.Poller, a config.Agent, requeste
 //     any other body than the agent's is treated the same: whatever stands between cannot speak for the agent.
 //     A redirect is not followed, and it is not a "yes" either (r3-p2-08: a 302 with no body counted as
 //     accepted, for a wake, an update, a shutdown and a cancel); nor is a good status with an empty body.
+//     And 502 and 504 are "no answer" whatever the body, also with a JSON body that has an "error" in it (a
+//     gateway that answers in JSON; second review of fix7a, R7A-08): they are the two statuses a gateway
+//     gives after it passed the request on. The agent does not answer a power request, an update or a wake
+//     with them. It does answer its BMC relay's request with them (the BMC refused, or did not answer), with
+//     a code of its own: see relaysOwn.
 func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path string, body any) (jsonx.M, error) {
 	status, data, err := p.AgentRequest(ctx, a, "POST", path, body)
 	notTheAgents := func() error {
@@ -578,6 +601,9 @@ func agentCall(ctx context.Context, p *poller.Poller, a config.Agent, path strin
 		return nil, &Unanswered{Err: e}
 	}
 	if status < 200 || (status >= 300 && status < 400) || (status >= 400 && !agentsNo(data)) || (status < 300 && len(data) == 0) {
+		return nil, notTheAgents()
+	}
+	if (status == 502 || status == 504) && !relaysOwn(path, data) {
 		return nil, notTheAgents()
 	}
 	errMsg := func(def string) string {
