@@ -120,14 +120,25 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		p.agentFailures[a.ID]++
 		q, row := p.agentQuiet[a.ID]
 		sign, mono := lifeSign(err), p.mono()
+		// What this request itself got (q.nothing, q.from). The machine took part in it, or it did not: nothing
+		// that others say about the machine has a word here (see quietRow.from).
+		switch {
+		case sign != "":
+			q.nothing = false
+		case !q.nothing:
+			// the first poll whose own request got nothing since the machine answered or took part in a poll
+			q.nothing, q.from = true, began
+		}
 		switch {
 		case sign != "" || p.nodeOnlineLocked(a):
 			// A sign of life, like an answer: the machine runs and only its agent gives no usable answer. The
-			// silence starts again with the first poll after this one that gets nothing at all.
+			// silence starts again with the first poll after this one that gets nothing at all. (For the agent of
+			// a Proxmox node the cluster's row is such a sign for this question, "has it been off for a quarter
+			// of an hour", and for it only: q.from above does not move by it.)
 			q.silent = false
 		case !row || !q.silent:
 			// the first poll without any answer since the machine answered or showed a sign of life
-			q.silent, q.since, q.from = true, mono, began
+			q.silent, q.since = true, mono
 			p.quietRows++
 			q.row, q.n = p.quietRows, 0
 		case q.unwatched(now, mono, p.quietGap(max(q.interval, interval))):
@@ -276,11 +287,22 @@ type quietRow struct {
 	row   uint64
 	n     int
 	began time.Duration
-	// from: when the first poll began that got nothing at all since the machine last answered or showed a sign
-	// of life (steady clock). It is not the beginning of the row: a row also starts again when the panel was not
-	// watching for a while (unwatched), and the machine did not answer in between. Only an answer or a sign of
-	// life moves it. See SilentPolls.SinceAgo.
-	from time.Duration
+	// nothing: the latest poll's own request got nothing at all: no answer, and the machine took no part in it
+	// (lifeSign). from: when the first such poll began since the machine last answered or took part in a poll
+	// (steady clock). It is not the beginning of the row: a row also starts again when the panel was not watching
+	// for a while (unwatched), and the machine did not answer in between.
+	//
+	// Only the machine's own word moves from: an answer, or a sign of life in the request itself (a refused or
+	// reset connection, any HTTP status). What the Proxmox cluster says about a node does not (nodeOnlineLocked):
+	// its row is what the panel last read from the Proxmox API, and that lags behind a node that has dropped
+	// out by the cluster's own delay and the panel's poll interval. So silent, since and the row go by the
+	// cluster's row as well (a node that the cluster shows as online is not "off for a quarter of an hour"), and
+	// nothing and from never do: a poll that got nothing is the beginning of "out of reach" whatever the
+	// cluster's row said at that moment (recheck of fix7r, RC-01: the row said "online" for 25 s after the link
+	// to a node had dropped, the silence was counted from when the row turned, after the countdown's end, and
+	// the run wrote "switched off again" for a node that was on). See SilentPolls.SinceAgo.
+	nothing bool
+	from    time.Duration
 }
 
 // SilentPolls describes the unbroken row of polls of an agent that got nothing at all (no answer and no other
@@ -298,13 +320,20 @@ type quietRow struct {
 // new row began with the next poll. The count starts again then; what the machine last gave does not change.
 // A caller that asks "was it already out of reach at a moment of mine" must go by SinceAgo, not by the row
 // (second review of fix7a, R7A-01 and R7A-02).
+//
+// For the agent of a Proxmox node SinceAgo is also older than the row, and is given without a row (N is 0),
+// when the agent's polls got nothing while the cluster still showed the node as online: such a poll is not in
+// the row (the node is not "silent" while the cluster shows it as running), and it is where "out of reach"
+// begins all the same (quietRow.from; recheck of fix7r, RC-01).
 type SilentPolls struct {
 	Row      uint64        // names the row
 	N        int           // polls in the row
 	BeganAgo time.Duration // how long ago the latest of them began (the request left) ...
 	EndedAgo time.Duration // ... and ended without an answer
-	// SinceAgo: how long ago the first poll began that got nothing at all since the machine's last answer or
-	// sign of life, whatever rows were started since.
+	// SinceAgo: how long ago the first poll began whose own request got nothing at all since the machine's last
+	// answer or the last poll it took part in (a refused connection, an HTTP status), whatever rows were
+	// started since and whatever the Proxmox cluster showed. Never shorter than BeganAgo. 0 with N == 0: the
+	// latest poll was answered or the machine took part in it, or nothing is known.
 	SinceAgo time.Duration
 }
 
@@ -390,7 +419,13 @@ func (p *Poller) quietLocked(id string, interval float64) (time.Time, string, Si
 		return time.Time{}, "", SilentPolls{}
 	}
 	if !q.silent {
-		return time.Time{}, q.sign, SilentPolls{}
+		// No row. For a node that the cluster shows as online while its agent's own polls get nothing, the
+		// beginning of that is still said (quietRow.from).
+		var s SilentPolls
+		if q.nothing {
+			s.SinceAgo = mono - q.from
+		}
+		return time.Time{}, q.sign, s
 	}
 	return now.Add(-(mono - q.since)), q.sign, SilentPolls{Row: q.row, N: q.n, BeganAgo: mono - q.began, EndedAgo: mono - q.lastMono, SinceAgo: mono - q.from}
 }

@@ -145,6 +145,14 @@ const onByText = "It is on (%s), and its agent does not answer. Nothing was sent
 // the refusal, so it runs, and only its agent is not listening.
 const OnByRefused = "the machine refused the connection"
 
+// OnByCluster is what shows a Proxmox node as on while its agent gives nothing: the cluster's row for it, as
+// the panel last read it from the Proxmox API. It counts as "on" wherever the run asks whether a machine is
+// on (a node that the cluster shows as online is never taken for off, woken or reported as off). But unlike
+// every other OnBy it is not the machine's own word, and it can be older than the machine's silence: the
+// cluster and the panel's poll of it lag behind a node that dropped out. So it does not end "out of reach
+// before its countdown ended" (Host.seeSilence; recheck of fix7r, RC-01).
+const OnByCluster = "the Proxmox API shows it as online"
+
 // Timings that are not settings.
 const (
 	wakeResend      = 60 * time.Second // the wake is sent again this often while the machine does not answer
@@ -242,8 +250,9 @@ type Observation struct {
 	// polled, and when the panel stopped asking in between (longer than the machine's poll interval allows).
 	// The poller measures the silence with its steady clock and gives its beginning as a time of day.
 	QuietSince time.Time
-	// OnBy: what else than its agent's answer shows the machine as on right now ("the Proxmox API shows it as
-	// online", OnByRefused, "its address answered: http 401", ...); "": nothing does.
+	// OnBy: what else than its agent's answer shows the machine as on right now (OnByRefused, "its address
+	// answered: http 401", ...: the machine took part in the panel's latest poll of it; or OnByCluster: the
+	// Proxmox cluster lists the node as online); "": nothing does.
 	OnBy string
 	// Silent: the unbroken row of polls that got nothing at all from the machine, up to the latest poll, as
 	// the poller counted it (N is 0 while the machine answers or shows a sign of life, and when the panel
@@ -271,8 +280,12 @@ type Silence struct {
 	BeganAgo time.Duration // how long ago the latest of them began (the request left) ...
 	EndedAgo time.Duration // ... and ended without an answer
 	// SinceAgo: how long ago the first poll began that got nothing at all since the machine last answered or
-	// showed a sign of life. That can be before the row: the poller starts a new row when it was not watching
-	// for a while, and the machine has not answered in between.
+	// took part in a poll (a refused connection, an HTTP status). That can be before the row: the poller starts
+	// a new row when it was not watching for a while, and the machine has not answered in between. It is also
+	// given without a row (N is 0), for a Proxmox node whose agent's polls get nothing while the cluster shows
+	// the node as online (OnByCluster). The poller never gives one that is shorter than BeganAgo (the first
+	// such poll is not later than the latest): a Silence like that was not filled in, and the run reads it as
+	// "not known since when" (Host.seeSilence).
 	SinceAgo time.Duration
 }
 

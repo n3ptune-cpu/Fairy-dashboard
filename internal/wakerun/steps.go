@@ -807,22 +807,41 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 // (Silence.SinceAgo): when that began before endMin, the earliest the countdown can end, cutEarly is set,
 // whichever polls the run's own looks happened to see (second review of fix7a, R7A-02: a look that came late
 // saw one row of two polls and never the first of them). cutEarly then holds until the machine answers or
-// shows a sign of life, and nothing else takes it back: not a new row of the poller, not a look without a row,
-// not a pause. Those only start the count again. (R7A-01: the poller starts a new row whenever the panel was
-// not watching, also when the time of day was set back by two seconds; the run took the new row for a new
-// silence and wrote "switched off again" for a machine that was on and had only been out of reach.)
+// takes part in a poll itself, and nothing else takes it back: not a new row of the poller, not a look
+// without a row, not a pause. Those only start the count again. (R7A-01: the poller starts a new row whenever
+// the panel was not watching, also when the time of day was set back by two seconds; the run took the new row
+// for a new silence and wrote "switched off again" for a machine that was on and had only been out of reach.)
+//
+// Nor does the Proxmox cluster's row take it back (OnByCluster). That row is what the panel last read from
+// the Proxmox API, and it goes on saying "online" for a while after a node dropped out. The run took it for
+// the node's own sign of life: the link to a node dropped 19 s before its countdown's end and the shutdown did
+// not happen; the row said "online" until 5 s after the due time, so every look cleared cutEarly, and when the
+// row turned the silence seemed to begin there: "switched off again" for a node that was on (recheck of
+// fix7r, RC-01). The row still counts as "on" for everything else: while it says "online" no poll is counted
+// as silence after the due time, and stepShutting reports the node as on.
 func (h *Host) seeSilence(o Observation, mono time.Duration) {
 	s := o.Silent
-	if o.Online || o.OnBy != "" { // it answers, or shows that it runs: only this ends "out of reach"
+	if o.Online || (o.OnBy != "" && o.OnBy != OnByCluster) { // it answers, or took part in the latest poll: only this ends "out of reach"
 		h.silRow, h.silN, h.silAfter, h.cutEarly = 0, 0, 0, false
 		return
 	}
-	if o.Paused || s.N == 0 { // nothing was asked, or the poller has no row: the count starts again
+	if o.Paused { // nothing was asked: the count starts again
 		h.silRow, h.silN, h.silAfter = 0, 0, 0
 		return
 	}
-	if mono-s.SinceAgo < h.endMin { // nothing at all from it since before its countdown can have ended
+	// Since when the machine has given nothing, read at every look that has it: also without a row (a node the
+	// cluster shows as online). A row whose SinceAgo is shorter than the time since its latest poll began was
+	// not filled in by the poller (see Silence.SinceAgo): since when is not known then, and "not known" is not
+	// "since now" (recheck, RC-05). It is taken for the unsafe case: out of reach before the end.
+	switch {
+	case s.N > 0 && s.SinceAgo < s.BeganAgo:
 		h.cutEarly = true
+	case (s.N > 0 || s.SinceAgo > 0) && mono-s.SinceAgo < h.endMin: // nothing at all from it since before its countdown can have ended
+		h.cutEarly = true
+	}
+	if s.N == 0 || o.OnBy != "" { // the poller has no row, or the cluster shows the node as on: the count starts again
+		h.silRow, h.silN, h.silAfter = 0, 0, 0
+		return
 	}
 	if s.Row != h.silRow { // another row than at the last look: the count starts again
 		h.silRow, h.silN, h.silAfter = s.Row, 0, 0

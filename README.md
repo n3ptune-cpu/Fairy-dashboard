@@ -361,6 +361,9 @@ The rules, in plain words:
   them in a row; silence from before the end does not count. A machine that was already out of reach while
   its countdown was still running, or whose polling is paused, is "not confirmed that it is off", with the
   power "on or off: not known": the run cannot tell a machine that went off from a connection that dropped.
+  (For a Proxmox node "out of reach" begins with the first poll of its agent that got nothing, also while the
+  Proxmox API still listed the node as online: that list is a little behind when a node drops out. While it
+  says "online" the node counts as on, as everywhere else.)
   When the run cannot see it either way within half a minute, the result says "Asked to switch
   off, not confirmed" (or "not confirmed that it is on"), with the power "on or off: not known". So: a
   **Cancel run** that comes after a countdown has run out reports that machine as off, not as "it is ON"; a

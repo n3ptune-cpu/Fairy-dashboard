@@ -112,8 +112,15 @@ func TestOffNeedsSilentPollsMadeAfterTheDueTime(t *testing.T) {
 		o     Observation
 		proof bool // seenOff after it
 	}
+	// The poller also says since when the machine gave nothing (SinceAgo): here that is the first poll of the
+	// row, every row of this table begins after an answer. A look without it would read as "not known since
+	// when", and that is never proof (recheck of fix7r, RC-05; this table left it out until then).
+	var from time.Duration
 	silent := func(row uint64, n int, began, ended, at time.Duration) Observation {
-		return Observation{Silent: Silence{Row: row, N: n, BeganAgo: at - began, EndedAgo: at - ended}}
+		if n == 1 {
+			from = began
+		}
+		return Observation{Silent: Silence{Row: row, N: n, BeganAgo: at - began, EndedAgo: at - ended, SinceAgo: at - from}}
 	}
 	s := time.Second
 	for name, looks := range map[string][]look{
@@ -168,10 +175,18 @@ func TestOffNeedsSilentPollsMadeAfterTheDueTime(t *testing.T) {
 			{110 * s, silent(1, 3, 106*s, 110*s, 110*s), false},
 			{140 * s, silent(1, 4, 136*s, 140*s, 140*s), false},
 		},
-		"a poll that ends between the earliest and the latest end of the countdown is neither": {
-			{99 * s, silent(1, 1, 95*s, 99*s, 99*s), false},
+		"a poll between the earliest and the latest end of the countdown is neither": {
+			{99 * s, silent(1, 1, 98*s, 99*s, 99*s), false},
 			{104 * s, silent(1, 2, 101*s, 104*s, 104*s), false},
 			{125 * s, silent(1, 3, 121*s, 125*s, 125*s), true},
+		},
+		// (This row was "neither" while the table gave no SinceAgo. With the real poller it has been "out of
+		// reach before the end" since R7A-02: the first silent poll counts from when its request left.)
+		"a poll that left before the earliest end and failed after it: out of reach before the end": {
+			{99 * s, silent(1, 1, 95*s, 99*s, 99*s), false},
+			{104 * s, silent(1, 2, 101*s, 104*s, 104*s), false},
+			{125 * s, silent(1, 3, 121*s, 125*s, 125*s), false},
+			{160 * s, silent(1, 9, 156*s, 160*s, 160*s), false},
 		},
 	} {
 		h := &Host{endMin: 97 * s, dueMono: 100 * s}
