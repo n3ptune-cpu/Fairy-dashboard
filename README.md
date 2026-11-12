@@ -582,7 +582,10 @@ command. When the code runs out in that state, the Add host ends as "expired" an
 
 Hosts added this way are kept in `<data_dir>/managed-hosts.yaml` and their tokens in
 `<data_dir>/secrets/agent-<id>.json` (0600), not in config.yaml; both are merged at start (an id in config.yaml
-wins and the managed one is skipped with a log line) and checked by `fairy admin config check`. Their page has
+wins and the managed one is skipped with a log line) and checked by `fairy admin config check`. A list that
+holds no host while tokens of added hosts are still in `secrets/` (the file was emptied, cut off or lost) does
+not stop the start, but it is said: one WARN line at the start, on the Add host dialog and in the config check.
+Their page has
 **Re-pair** (a new code, e.g. after the panel lost the tokens) and **Remove** (stops polling, deletes the tokens;
 the agent stays installed until uninstalled on the machine); both ask for the host's name to be typed and a
 step-up sign-in, and are audited. Hosts in config.yaml are not changed by the panel. What a machine answers on

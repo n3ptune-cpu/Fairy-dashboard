@@ -404,6 +404,11 @@ func (s *Store) Merge(cfg *config.Panel) ([]Entry, []string, error) {
 	}
 	var added []Entry
 	var skipped []string
+	if len(hosts) == 0 {
+		if line := s.emptyList(); line != "" {
+			skipped = append(skipped, line)
+		}
+	}
 	for _, h := range hosts {
 		sec, err := s.Secret(h.ID)
 		if statefile.IsNotAFile(err) {
@@ -428,6 +433,45 @@ func (s *Store) Merge(cfg *config.Panel) ([]Entry, []string, error) {
 		added = append(added, e)
 	}
 	return added, skipped, nil
+}
+
+// emptyList is the one line for a list that holds no host although it looks as if it should (""): the tokens
+// of added hosts are still in secrets/, or the file is there without the two comment lines the panel always
+// writes (0 bytes, blanks, "null": a file that was emptied, not one the panel wrote). Such a list decodes as
+// "no hosts", so the panel started without every machine that was added in it, and without a word (audit 6,
+// r4-p2-06). The start goes on (an empty list is a valid list); the line is logged at the start, shown on the
+// Add host dialog and listed by `fairy admin config check`, like a host that was skipped.
+func (s *Store) emptyList() string {
+	var ids []string
+	if names, err := filepath.Glob(filepath.Join(s.dir, "secrets", "agent-*.json")); err == nil {
+		for _, n := range names {
+			ids = append(ids, strings.TrimSuffix(strings.TrimPrefix(filepath.Base(n), "agent-"), ".json"))
+		}
+	}
+	b, err := statefile.ReadFile(s.Path(), statefile.MaxBytes)
+	missing := errors.Is(err, os.ErrNotExist)
+	written := err == nil && strings.HasPrefix(string(b), header) // the panel's own file with no host left in it
+	what := FileName + " lists no host"
+	switch {
+	case missing:
+		what = FileName + " is missing"
+	case !written:
+		what = FileName + " is empty (it does not even hold the two comment lines the panel writes)"
+	}
+	switch {
+	case len(ids) > 0:
+		slices.Sort(ids)
+		n := len(ids)
+		if n > 8 {
+			ids = append(ids[:8], "...")
+		}
+		return fmt.Sprintf("%s, but the tokens of %d host(s) added in the panel are still in %s (%s): the list was emptied, cut off or lost, and these hosts are NOT loaded. "+
+			"Put %s back from a backup, or add them again (Add host). If they were removed on purpose, delete their agent-<id>.json files there",
+			what, n, filepath.Join(s.dir, "secrets"), strings.Join(ids, ", "), s.Path())
+	case !missing && !written:
+		return fmt.Sprintf("%s: no host added in the panel is loaded. If hosts were added (Add host), put %s back from a backup", what, s.Path())
+	}
+	return ""
 }
 
 func oneLine(err error) string {
