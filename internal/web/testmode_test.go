@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -422,7 +423,11 @@ func TestTestModeSignsInOnlyWithTheStartKey(t *testing.T) {
 			t.Errorf("through the proxy, %s %s: %d %q (cookies %q)", p[0], p[1], res.StatusCode, body, res.Header.Values("Set-Cookie"))
 		}
 	}
-	if testKeyRefusal != "Test build: open the address printed in its console window." {
+	// one line; it says that the address must be opened once by pasting it (second review, note A1: opened from
+	// a link on another web page the plain address is refused also later, and the line used to say only "open
+	// the address printed in its console window", which the person had just done)
+	if testKeyRefusal != "Test build: open the address printed in its console window. Paste it into the address bar once; a link on another web page does not open the panel." ||
+		strings.Contains(testKeyRefusal, "\n") {
 		t.Fatal("the refusal's text is what was agreed:", testKeyRefusal)
 	}
 	// a wrong key, a key of another length, an empty one, the key in a header or a body, a made-up cookie
@@ -449,17 +454,41 @@ func TestTestModeSignsInOnlyWithTheStartKey(t *testing.T) {
 	// the printed address: a cookie that scripts cannot read and other sites cannot send, and the clean address
 	r := e.do("GET", "/?key="+startKey, nil)
 	set := r.hdr.Values("Set-Cookie")
-	if r.code != 303 || r.hdr.Get("Location") != "/" || len(set) != 1 || !strings.HasPrefix(set[0], cookie+";") ||
+	// The answer is a page of the panel's own that goes on by itself, not a redirect (second review, note A1):
+	// a redirect is part of the navigation that brought the browser here, and when that began on another site
+	// (the address clicked in a chat) the browser did not send the Strict cookie it had just been given.
+	if r.code != 200 || r.hdr.Get("Location") != "" || len(set) != 1 || !strings.HasPrefix(set[0], cookie+";") ||
 		!strings.Contains(set[0], "HttpOnly") || !strings.Contains(set[0], "SameSite=Strict") || !strings.Contains(set[0], "Max-Age=315360000") ||
-		!strings.Contains(set[0], "Path=/") || r.hdr.Get("Cache-Control") != "no-store" {
-		t.Fatalf("the address with the key: %d to %q, %q", r.code, r.hdr.Get("Location"), set)
+		!strings.Contains(set[0], "Path=/") || r.hdr.Get("Cache-Control") != "no-store" || r.hdr.Get("Referrer-Policy") != "no-referrer" ||
+		!strings.HasPrefix(r.hdr.Get("Content-Type"), "text/html") {
+		t.Fatalf("the address with the key: %d, %q, headers %v", r.code, set, r.hdr)
 	}
-	if strings.Contains(strings.Join(set, " ")+r.hdr.Get("Location")+string(r.raw), startKey) || sessions() != 0 {
+	page0 := string(r.raw)
+	if !strings.Contains(page0, `<meta http-equiv="refresh" content="0; url=/">`) || !strings.Contains(page0, `<a href="/" rel="noreferrer">Continue</a>`) ||
+		!strings.Contains(page0, `<meta name="referrer" content="no-referrer">`) {
+		t.Fatalf("the page must go on to the clean address by itself, and offer a link: %s", page0)
+	}
+	if strings.Contains(strings.ToLower(page0), "<script") || strings.Contains(page0, "style=") || strings.Contains(page0, "onclick") ||
+		!strings.Contains(r.hdr.Get("Content-Security-Policy"), "script-src 'self'") {
+		t.Fatalf("no inline script or style (the CSP holds): %s", page0)
+	}
+	if strings.Contains(strings.Join(set, " ")+r.hdr.Get("Location")+page0, startKey) || sessions() != 0 {
 		t.Fatal("the answer to the key must not repeat it, and makes no session yet")
 	}
-	for from, to := range map[string]string{"/?x=1&key=" + startKey + "&y=%2F": "/?x=1&y=%2F", "/docs?key=" + startKey: "/docs"} {
-		if r := e.do("GET", from, nil); r.code != 303 || r.hdr.Get("Location") != to {
-			t.Errorf("%s: %d to %q, want %q", strings.ReplaceAll(from, startKey, "KEY"), r.code, r.hdr.Get("Location"), to)
+	if h := e.do("HEAD", "/?key="+startKey, nil); h.code != 200 || len(h.raw) != 0 || len(h.hdr.Values("Set-Cookie")) != 1 {
+		t.Fatalf("HEAD: %d, %d bytes", h.code, len(h.raw))
+	}
+	for from, to := range map[string]string{"/?x=1&key=" + startKey + "&y=%2F": "/?x=1&amp;y=%2F", "/docs?key=" + startKey: "/docs",
+		"/?a=%22%3E%3Cscript%3Ealert(1)%3C/script%3E&key=" + startKey: "/?a=%22%3E%3Cscript%3Ealert%281%29%3C%2Fscript%3E",
+		"//evil.example/?key=" + startKey:                             "/", "/x\\y?key=" + startKey: "/"} {
+		r := e.do("GET", from, nil)
+		if r.code == 307 || r.code == 301 { // net/http's own cleaning of a path with "//": it carries nothing
+			continue
+		}
+		body := string(r.raw)
+		if r.code != 200 || !strings.Contains(body, `content="0; url=`+to+`">`) || !strings.Contains(body, `<a href="`+to+`" rel`) ||
+			strings.Contains(body, startKey) || strings.Contains(body, "<script>") || strings.Contains(body, "evil.example") {
+			t.Errorf("%s: %d, want it to go on to %q: %s", strings.ReplaceAll(from, startKey, "KEY"), r.code, to, body)
 		}
 	}
 	// with the cookie the test build is what it was: the page signs in, the API answers
@@ -496,5 +525,62 @@ func TestTestModeSignsInOnlyWithTheStartKey(t *testing.T) {
 		if ValidTestKey(k) != want {
 			t.Errorf("ValidTestKey(%q) = %v", k, !want)
 		}
+	}
+}
+
+// Second review of audit 5's fixes (note A2) and r2-p1-01 / G3: two test panels in one browser shared the
+// session cookie (fairy_session on both), so loading one signed the other out, back and forth. A test build's
+// session cookie and its "signed out here" mark now carry the port in their names like the key cookie, and
+// the session cookie is SameSite=Strict like the key cookie (a test build has no identity provider to come
+// back from). The real panel's cookie is what it was.
+func TestTestModeCookiesCarryThePortAndAreStrict(t *testing.T) {
+	names := func(port string) []string {
+		e := setup(t)
+		e.s.Cfg.OIDC.ControlGroups = []string{TestGroup}
+		e.s.codec.secure = false // as cmd/fairy runs a test build: plain http on loopback
+		e.s.Cfg.PublicURL = "http://127.0.0.1:" + port
+		e.s.EnableTestMode(startKey)
+		return []string{e.s.codec.name(), testKeyCookieName("127.0.0.1:" + port), testPortName(testSignedOutCookie, "127.0.0.1:"+port)}
+	}
+	a, b := names("8080"), names("8081")
+	if strings.Join(a, " ") != "fairy_session_8080 fairytest_key_8080 fairytest_signed_out_8080" ||
+		strings.Join(b, " ") != "fairy_session_8081 fairytest_key_8081 fairytest_signed_out_8081" {
+		t.Fatal(a, b)
+	}
+	// on the wire: the page of a test build on plain http sets the session cookie under that name, Strict
+	e := setup(t)
+	e.s.Cfg.OIDC.ControlGroups = []string{TestGroup}
+	e.s.codec.secure = false
+	e.s.Cfg.PublicURL = e.srv.URL
+	e.s.EnableTestMode(startKey)
+	host := strings.TrimPrefix(e.srv.URL, "http://")
+	_, port, _ := net.SplitHostPort(host)
+	e.also = TestKeyCookie(host, startKey)
+	r := e.do("GET", "/", nil)
+	set := strings.Join(r.hdr.Values("Set-Cookie"), "\n")
+	if r.code != 200 || !strings.Contains(set, "fairy_session_"+port+"=") || !strings.Contains(set, "SameSite=Strict") ||
+		strings.Contains(set, "SameSite=Lax") || strings.Contains(set, "fairy_session=") {
+		t.Fatalf("the session cookie of a test build: %d\n%s", r.code, set)
+	}
+	ck := strings.Split(r.hdr.Get("Set-Cookie"), ";")[0]
+	if me := e.do("GET", "/api/me", nil, "Cookie", ck); me.code != 200 || me.body["sub"] != "test-admin" {
+		t.Fatal("the session under its new name:", me.code, string(me.raw))
+	}
+	// the other panel's cookie (same value, the other port's name) and the old plain name are not this panel's session
+	other := strings.Replace(ck, "fairy_session_"+port+"=", "fairy_session_1=", 1)
+	old := strings.Replace(ck, "fairy_session_"+port+"=", "fairy_session=", 1)
+	for _, c := range []string{other, old} {
+		if me := e.do("GET", "/api/me", nil, "Cookie", c); me.code != 401 {
+			t.Fatalf("a cookie under another name is read as this panel's session: %s: %d", strings.SplitN(c, "=", 2)[0], me.code)
+		}
+	}
+	// the real panel (no test mode): the names and SameSite=Lax of before, with and without FAIRY_INSECURE_COOKIES
+	p := setup(t)
+	if p.s.codec.name() != "__Host-fairy_session" || p.s.codec.sameSite() != http.SameSiteLaxMode {
+		t.Fatal("the real panel's cookie changed:", p.s.codec.name())
+	}
+	p.s.codec.secure = false
+	if p.s.codec.name() != "fairy_session" || p.s.codec.sameSite() != http.SameSiteLaxMode {
+		t.Fatal("the real panel's plain cookie changed:", p.s.codec.name())
 	}
 }

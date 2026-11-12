@@ -42,7 +42,9 @@ func TestNoTestModeInThisBuild(t *testing.T) {
 	}
 	for _, backwards := range []string{"DLIUB TSET", "ffo si ni-ngis", "nimda-tset", "snimda-tsetyriaf", "ETATS-TSET-YRIAF", "edoMtseTelbanE", "dilavni.tsetyriaf",
 		// the start key of a test build (audit 5, r1-p1-01): its cookie, its refusal, the printed line, its check
-		"yek_tsetyriaf", "wodniw elosnoc sti ni detnirp sserdda eht nepo", "yek trats eht sdloh ti", "yeKtseTdilaV"} {
+		"yek_tsetyriaf", "wodniw elosnoc sti ni detnirp sserdda eht nepo", "yek trats eht sdloh ti", "yeKtseTdilaV",
+		// audit 5, round 2: the console's trust line and the page that follows the key
+		"CP siht no margorp yreve stsurt", "lenap eht nepo won yam resworb siht"} {
 		needle := []byte(backwards)
 		slices.Reverse(needle)
 		if bytes.Contains(prog, needle) {

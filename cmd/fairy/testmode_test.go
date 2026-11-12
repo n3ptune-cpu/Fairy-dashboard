@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -402,5 +403,36 @@ func TestTestBuildFollowsLinksIntoAnInstalledPanelsFolder(t *testing.T) {
 	}
 	if got := realPath(filepath.Join(c.dir, "no", "such", "file")); got != filepath.Join(realPath(c.dir), "no", "such", "file") {
 		t.Fatal("a path that does not exist yet keeps its last parts:", got)
+	}
+}
+
+// r2-p1-01 (audit 5), decided as a guide line for now: the test build says at every start, in one short line,
+// that it trusts every program on this PC, and TESTING-LOCAL.md says why (cookies know no port) and what the
+// file modes are worth on Windows (r2-p1-06).
+func TestTestBuildSaysWhomItTrusts(t *testing.T) {
+	if testTrustNote != "A test build trusts every program on this PC: run it only on a machine you trust, never on a server." {
+		t.Fatal(testTrustNote)
+	}
+	src, err := os.ReadFile("testmode.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i, j := bytes.Index(src, []byte("fmt.Fprintln(os.Stderr, testTrustNote)")), bytes.Index(src, []byte(`"Open this address in a browser on this PC`)); i < 0 || j < i {
+		t.Fatal("the line must be printed right above the address at start")
+	}
+	b, err := os.ReadFile("../../TESTING-LOCAL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := strings.Join(strings.Fields(string(b)), " ")
+	for _, want := range []string{
+		"**A test build trusts every program on this PC. Run it only on a machine you trust, never on a server.**",
+		"A browser sends the test panel's cookies to every web server on `127.0.0.1`, whatever its port",
+		"On Windows the \"mode 0600\" of `start-key` and of the data folder does nothing",
+		"Paste it into the address bar once; a link on another web page does not open the panel.",
+	} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("TESTING-LOCAL.md lacks %q", want)
+		}
 	}
 }

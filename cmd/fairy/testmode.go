@@ -46,8 +46,11 @@ import (
 // (testKey here, the check in internal/web/testmode.go). It must never be put behind a proxy or a port
 // forward; the key is the last line of defence if it is.
 const (
-	testBuild     = true
-	testNote      = "\nTEST BUILD (-tags fairytest): sign-in is off. It listens on 127.0.0.1 only. Never expose this."
+	testBuild = true
+	testNote  = "\nTEST BUILD (-tags fairytest): sign-in is off. It listens on 127.0.0.1 only. Never expose this."
+	// testTrustNote is printed above the address at every start (r2-p1-01: a browser sends this panel's cookies
+	// to every web server on 127.0.0.1, whatever its port).
+	testTrustNote = "A test build trusts every program on this PC: run it only on a machine you trust, never on a server."
 	testUpdateOff = "this is a test build (-tags fairytest): it never updates itself (`fairy update` and the Update panel " +
 		"button are off). Build it again from the source you want to try"
 	testAdminOff = "this is a test build (-tags fairytest): it has no `fairy admin`. That command works on the files of " +
@@ -358,6 +361,7 @@ func testServer(srv *web.Server, p *panel) func() {
 	}
 	address := strings.TrimRight(p.cfg.BaseURL(), "/") + "/?key=" + key
 	return func() {
+		fmt.Fprintln(os.Stderr, testTrustNote) // standard output stays the one line with the address
 		fmt.Fprintln(os.Stdout, "Open this address in a browser on this PC (it holds the start key: keep it to yourself): "+address)
 	}
 }

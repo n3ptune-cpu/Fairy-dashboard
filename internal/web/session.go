@@ -29,7 +29,18 @@ func (c *sessionCodec) name() string {
 	if c.secure {
 		return hostCookieName
 	}
+	if c.plainName != "" {
+		return c.plainName
+	}
 	return plainCookieName
+}
+
+// sameSite is Lax (see write), except in a test build, which has no round trip to an identity provider.
+func (c *sessionCodec) sameSite() http.SameSite {
+	if c.strict {
+		return http.SameSiteStrictMode
+	}
+	return http.SameSiteLaxMode
 }
 
 // expireOld tells the browser to drop a cookie left under the plain name by an older version (normal mode only;
@@ -86,6 +97,10 @@ type sessionCodec struct {
 	maxAge    int
 	secure    bool
 	live      *liveSessions // per-session state that is not in the cookie (sessionstate.go)
+	// plainName and strict are set by the test build only (testmode.go): its own name for the cookie (with
+	// its port in it) and SameSite=Strict. Empty and false everywhere else.
+	plainName string
+	strict    bool
 	// now is the clock of everything that decides how old a session, a sign-in or a kept action is (the cookie,
 	// sessionUser, authAge, the login round trip, the pending action). Tests replace it; see Server.now.
 	now func() time.Time
@@ -164,7 +179,7 @@ func (c *sessionCodec) decode(r *http.Request) *sessionData {
 func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
 	if s == nil || s.empty() {
 		http.SetCookie(w, &http.Cookie{Name: c.name(), Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
-			Secure: c.secure, SameSite: http.SameSiteLaxMode})
+			Secure: c.secure, SameSite: c.sameSite()})
 		c.expireOld(w)
 		return
 	}
@@ -177,7 +192,7 @@ func (c *sessionCodec) write(w http.ResponseWriter, s *sessionData) {
 	// cookie with state/nonce/PKCE verifier. Writes are protected by the CSRF header + Origin checks.
 	// No Domain attribute, Path=/ and Secure: what the __Host- prefix requires.
 	http.SetCookie(w, &http.Cookie{Name: c.name(), Value: payload + "." + c.sign(payload), Path: "/",
-		MaxAge: c.maxAge, HttpOnly: true, Secure: c.secure, SameSite: http.SameSiteLaxMode})
+		MaxAge: c.maxAge, HttpOnly: true, Secure: c.secure, SameSite: c.sameSite()})
 	c.expireOld(w)
 }
 

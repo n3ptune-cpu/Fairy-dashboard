@@ -73,7 +73,8 @@ func TestTestBuildServes(t *testing.T) {
 	// r1-p1-01 / r1-p4-01: whoever only reaches the port (through a proxy that leaves no trace in the request,
 	// or a forwarded port) gets one line and no session; the start key is in the data folder, mode 0600, and
 	// the address with it leads to the page.
-	if code != 403 || strings.TrimSpace(page) != "Test build: open the address printed in its console window." || len(jar.Cookies(&url.URL{Scheme: "http", Host: addr})) != 0 {
+	if code != 403 || !strings.HasPrefix(page, "Test build: open the address printed in its console window. Paste it into the address bar once") ||
+		strings.Count(strings.TrimSpace(page), "\n") != 0 || len(jar.Cookies(&url.URL{Scheme: "http", Host: addr})) != 0 {
 		t.Fatalf("without the start key: %d %.200s", code, page)
 	}
 	if code, body := get("/api/me"); code != 403 || !strings.Contains(body, "open the address printed") {
@@ -86,9 +87,23 @@ func TestTestBuildServes(t *testing.T) {
 	if err != nil || !web.ValidTestKey(key) || len(key) < 43 || st.Mode().Perm() != 0o600 {
 		t.Fatalf("the start key's file: %v, %d characters, mode %v", err, len(key), st.Mode().Perm())
 	}
-	code, page = get("/?key=" + key) // the client follows the redirect to the clean address
+	code, page = get("/?key=" + key) // a small page that sets the cookie and goes on to the clean address by itself
+	if code != 200 || !strings.Contains(page, `<meta http-equiv="refresh" content="0; url=/">`) || strings.Contains(page, key) || strings.Contains(page, "<script") {
+		t.Fatalf("the answer to the key: %d %.300s", code, page)
+	}
+	code, page = get("/") // where that page goes
 	if code != 200 || !strings.Contains(page, web.TestBanner) || strings.Contains(page, key) {
 		t.Fatalf("the page: %d %.200s", code, page)
+	}
+	if n, p := 0, strings.Split(addr, ":"); true { // the session cookie carries this panel's port in its name
+		for _, c := range jar.Cookies(&url.URL{Scheme: "http", Host: addr}) {
+			if c.Name == "fairy_session_"+p[len(p)-1] || c.Name == "fairytest_key_"+p[len(p)-1] {
+				n++
+			}
+		}
+		if n != 2 {
+			t.Fatalf("cookies: %v", jar.Cookies(&url.URL{Scheme: "http", Host: addr}))
+		}
 	}
 	var me struct{ Sub, Role string }
 	if code, body := get("/api/me"); code != 200 || json.Unmarshal([]byte(body), &me) != nil || me.Sub != "test-admin" || me.Role != "admin" {

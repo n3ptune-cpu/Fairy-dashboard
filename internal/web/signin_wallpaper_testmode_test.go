@@ -37,8 +37,9 @@ func TestTestModeSignInWallpaperAndSignOut(t *testing.T) {
 	// Sign out, as the page sends it: the session ends and the browser is marked as signed out
 	out := e.do("POST", "/auth/logout", nil, append([]string{"Accept", "application/json"}, write...)...)
 	var mark string
+	markName := testPortName(testSignedOutCookie, strings.TrimPrefix(e.srv.URL, "http://")) // per port, like the other cookies
 	for _, c := range out.hdr.Values("Set-Cookie") {
-		if strings.HasPrefix(c, testSignedOutCookie+"=1") && strings.Contains(c, "HttpOnly") {
+		if strings.HasPrefix(c, markName+"=1") && strings.Contains(c, "HttpOnly") {
 			mark = strings.Split(c, ";")[0]
 		}
 	}
@@ -61,7 +62,7 @@ func TestTestModeSignInWallpaperAndSignOut(t *testing.T) {
 	in := e.do("GET", "/auth/login", nil, "Cookie", mark)
 	cleared := false
 	for _, c := range in.hdr.Values("Set-Cookie") {
-		cleared = cleared || (strings.HasPrefix(c, testSignedOutCookie+"=") && strings.Contains(c, "Max-Age=0"))
+		cleared = cleared || (strings.HasPrefix(c, markName+"=") && strings.Contains(c, "Max-Age=0"))
 	}
 	if in.code != 303 || !cleared || !works(e, sessionCookie(e, in.hdr)) {
 		t.Fatalf("Continue as test-admin: %d %q", in.code, in.hdr.Values("Set-Cookie"))

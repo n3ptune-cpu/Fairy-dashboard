@@ -8,6 +8,8 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"net/netip"
@@ -77,6 +79,13 @@ func (s *Server) EnableTestMode(key string) {
 		panic("web: EnableTestMode needs a start key of at least 32 letters, digits, - or _")
 	}
 	gate := testKeyGate{key: key, cookie: testKeyCookieValue(key)}
+	// The session cookie gets this panel's port into its name, like the key cookie: cookies know no port, and
+	// two test panels on one PC signed each other out with every page load. Both cookies are SameSite=Strict
+	// (there is no identity provider to come back from). Neither keeps the cookies away from another web
+	// server on 127.0.0.1 that the same browser opens: see TESTING-LOCAL.md, "Who can reach it".
+	if u, err := url.Parse(s.Cfg.BaseURL()); err == nil {
+		s.codec.plainName, s.codec.strict = testPortName(plainCookieName, u.Host), true
+	}
 	inner := s.mux
 	m := http.NewServeMux()
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { inner.ServeHTTP(&bannerWriter{ResponseWriter: w}, r) })
@@ -91,7 +100,9 @@ func (s *Server) EnableTestMode(key string) {
 		return nil
 	}))
 	m.HandleFunc("GET /auth/login", s.h(s.testLogin))
-	m.HandleFunc("POST /auth/logout", func(w http.ResponseWriter, r *http.Request) { inner.ServeHTTP(signedOutWriter{w}, r) })
+	m.HandleFunc("POST /auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		inner.ServeHTTP(signedOutWriter{w, testPortName(testSignedOutCookie, r.Host)}, r)
+	})
 	m.HandleFunc("POST "+stepUpPath, s.h(s.testStepUp))
 	asset := func(ctype, body string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -124,16 +135,28 @@ func (s *Server) EnableTestMode(key string) {
 // a random word that cmd/fairy keeps in the test data folder (mode 0600) and prints once at start, inside the
 // address to open (http://127.0.0.1:8080/?key=...). A request to that address with the right key gets a cookie
 // (HttpOnly, SameSite=Strict, ten years; the key does not change between starts, so the address can be
-// bookmarked) and is sent on to the same address without the key. Every other request without the cookie is
-// answered 403 with one line. The key is compared in constant time, and it is in no log line, audit entry or
+// bookmarked) and a small page that goes on to the same address without the key (testKeyPage). Every other
+// request without the cookie is answered 403 with one line. The key is compared in constant time, and it is in no log line, audit entry or
 // API answer: the cookie holds a hash of it, not the key.
 const (
 	testKeyParam   = "key"
 	testKeyCookie  = "fairytest_key"
 	testKeyMinLen  = 32
 	testKeyMaxLen  = 128
-	testKeyRefusal = "Test build: open the address printed in its console window."
+	testKeyRefusal = "Test build: open the address printed in its console window. Paste it into the address bar once; " +
+		"a link on another web page does not open the panel."
 )
+
+// testKeyPage is the answer to the address with the right key: a page of the panel's own that goes on to the
+// same address without the key, by itself. It used to be a redirect (303). But the cookie is SameSite=Strict,
+// and a redirect is still part of the navigation that brought the browser here: when that began on another
+// site (the address clicked in a chat or a notes page), the browser did not send the cookie it had just been
+// given, and the first open ended on the refusal. A page's own refresh, and its link, start a navigation of
+// this site, so the cookie is sent. No script (the CSP allows none inline), and the key is not in the page:
+// only the address without it, HTML-escaped. %s is that address, twice.
+const testKeyPage = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">` +
+	`<meta http-equiv="refresh" content="0; url=%s"><title>Fairy test build</title></head>` +
+	`<body><p>Fairy test build: this browser may now open the panel. <a href="%s" rel="noreferrer">Continue</a></p></body></html>`
 
 // ValidTestKey reports whether key has the form of a start key: 32 to 128 letters, digits, - or _.
 func ValidTestKey(key string) bool {
@@ -161,12 +184,15 @@ func testKeyCookieValue(key string) string {
 
 // testKeyCookieName has the port in it: cookies are per host name, not per port, and two test builds on one PC
 // (two folders, two ports, two keys) would otherwise take each other's cookie away.
-func testKeyCookieName(host string) string {
+func testKeyCookieName(host string) string { return testPortName(testKeyCookie, host) }
+
+// testPortName is a cookie name of a test build for the address host (host:port): name_port.
+func testPortName(name, host string) string {
 	_, port, err := net.SplitHostPort(host)
 	if err != nil || port == "" || len(port) > 5 || strings.Trim(port, "0123456789") != "" {
 		port = "80"
 	}
-	return testKeyCookie + "_" + port
+	return name + "_" + port
 }
 
 type testKeyGate struct{ key, cookie string }
@@ -183,9 +209,15 @@ func (g testKeyGate) stops(w http.ResponseWriter, r *http.Request) bool {
 		if p := r.URL.Path; strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "//") && !strings.Contains(p, "\\") {
 			to.Path = p
 		}
+		// the clean address: the key is in no later page's address, in no Referer, and not in this page's body
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		http.Redirect(w, r, to.RequestURI(), http.StatusSeeOther) // the clean address: the key is not in the page's address
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			clean := html.EscapeString(to.RequestURI())
+			_, _ = fmt.Fprintf(w, testKeyPage, clean, clean)
+		}
 		return true
 	}
 	if c, err := r.Cookie(name); err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(g.cookie)) == 1 {
@@ -247,16 +279,19 @@ func (s *Server) testOtherName(w http.ResponseWriter, r *http.Request) bool {
 const testSignedOutCookie = "fairytest_signed_out"
 
 func testSignedOut(r *http.Request) bool {
-	c, err := r.Cookie(testSignedOutCookie)
+	c, err := r.Cookie(testPortName(testSignedOutCookie, r.Host)) // per port, like the other two cookies
 	return err == nil && c.Value == "1"
 }
 
 // signedOutWriter sets the mark when the sign-out succeeded (204 for the page's request, 303 for a form).
-type signedOutWriter struct{ http.ResponseWriter }
+type signedOutWriter struct {
+	http.ResponseWriter
+	cookie string
+}
 
 func (w signedOutWriter) WriteHeader(code int) {
 	if code == http.StatusNoContent || code == http.StatusSeeOther {
-		http.SetCookie(w.ResponseWriter, &http.Cookie{Name: testSignedOutCookie, Value: "1", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		http.SetCookie(w.ResponseWriter, &http.Cookie{Name: w.cookie, Value: "1", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
@@ -332,7 +367,7 @@ func (s *Server) testLogin(c *reqCtx) error {
 	target := safeNext(q.Get("next"))
 	s.codec.live.dropPending(c.session().SID)
 	if testSignedOut(c.r) { // "Continue as test-admin" after a sign-out: the page signs in by itself again
-		http.SetCookie(c.w, &http.Cookie{Name: testSignedOutCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		http.SetCookie(c.w, &http.Cookie{Name: testPortName(testSignedOutCookie, c.r.Host), Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	}
 	switch u := c.sessionUser(); {
 	case u == nil:

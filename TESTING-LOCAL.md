@@ -27,8 +27,19 @@ Open this address in a browser on this PC (it holds the start key: keep it to yo
 The part after `key=` is the **start key**, a long random word. Open that address once: the browser gets a
 cookie, the address bar shows the plain `http://127.0.0.1:8080`, and from then on that browser may open the
 plain address. Every other request gets one line: "Test build: open the address printed in its console
-window." The key is kept in `fairy-test\data\start-key` and stays the same at every start, so the address can
-be bookmarked. Delete that file and the next start makes a new key.
+window. Paste it into the address bar once; a link on another web page does not open the panel." The address
+with the key also works when you click it in a chat or a notes page (it answers with a small page that goes
+on by itself). The plain address does not: opened from a link on another web page it gets the line above,
+also later; type or paste it, or use a bookmark. The key is kept in `fairy-test\data\start-key` and stays the
+same at every start, so the address can be bookmarked. Delete that file and the next start makes a new key.
+
+**A test build trusts every program on this PC. Run it only on a machine you trust, never on a server.** A
+browser sends the test panel's cookies to every web server on `127.0.0.1`, whatever its port (cookies know no
+port; the port in the cookies' names only keeps two test panels apart). So another program on this PC that
+listens on a loopback port, and that this browser opens once, can read both cookies and is then admin of
+the test panel. On Windows the "mode 0600" of `start-key` and of the data folder does nothing: the files
+take the rights of the folder the zip was unpacked into, so unpack it where other accounts of the PC cannot
+read (your own profile folder, not a shared drive).
 
 **Never put a test build behind a reverse proxy, a port forward or a tunnel** (nginx, `ssh -L`, `netsh
 interface portproxy`, a VMware port rule). The checks in the list above cannot see every one of them: a proxy
