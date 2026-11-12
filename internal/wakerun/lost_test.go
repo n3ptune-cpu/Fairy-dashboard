@@ -472,7 +472,7 @@ func TestTheReportSaysWhatIsSeen(t *testing.T) {
 		pc.unreachable = true
 		w.advance(3 * time.Second)
 		w.blocked = "control is disabled by an administrator"
-		at := w.now
+		due := *host(active(w), "pc-a").ShutdownAt
 		r := w.finish()
 		h := host(r, "pc-a")
 		has(t, h, StLeftOn, "the run stopped (control is disabled by an administrator), but its shutdown countdown (due at ",
@@ -480,11 +480,13 @@ func TestTheReportSaysWhatIsSeen(t *testing.T) {
 		if h.On != OnUnknown || r.State != RunStopped || strings.Contains(h.Text, "it switches off by itself") {
 			t.Fatalf("power %q run %s: %s", h.On, r.State, h.Text)
 		}
-		if d := r.EndedAt.Sub(at); d < lookFor-2*time.Second || d > lookFor+2*time.Second {
-			t.Fatalf("the last look took %s, want %s", d, lookFor)
+		// (second review of fix7a, R7A-04: the cancel is tried again until the run's own due time; the last look
+		// begins then. It was one cancel, and the look began at once.)
+		if d := r.EndedAt.Sub(due); d < lookFor-2*time.Second || d > lookFor+2*time.Second {
+			t.Fatalf("the last look took %s from the countdown's end, want %s", d, lookFor)
 		}
-		if got := w.callsFor("pc-a"); got != "wake update shutdown cancel" {
-			t.Fatalf("a run the kill switch stops sends one cancel for its countdown, and nothing else: %s", got)
+		if got := w.callsFor("pc-a"); oneCancel(got) != "wake update shutdown cancel" || strings.Count(got, "cancel") < 10 {
+			t.Fatalf("a run the kill switch stops sends the cancel for its countdown, again until it gets through, and nothing else: %s", got)
 		}
 	})
 

@@ -51,6 +51,10 @@ func (m *Manager) stepHost(ctx context.Context, r *Run, h *Host, now time.Time) 
 		m.endAsIs(r, h, now, "It was paired again during the run (its entry in the panel was replaced), so the run let go of it")
 		return
 	}
+	if c := h.calloff; c != nil { // the cancel of its countdown has not got through yet: only that is tried again
+		m.callOff(ctx, r, h, now, c.why)
+		return
+	}
 	if r.Cancel != nil && !m.cancelled(ctx, r, h, now) {
 		return
 	}
@@ -112,33 +116,61 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 // work), but it can be an action a person asked for on the machine's page since: the run's cancel took that
 // away, and the report said "its shutdown countdown was called off" (second review of fix7a, R7A-03). So
 // after the due time nothing is sent, and the machine ends as it is (endPastDue).
+//
+// A cancel that does not get through is tried again until that same due time (Host.calloff): the machine
+// stays in its step meanwhile, and every step of the run comes back here for it, with the first why.
 func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, why string) {
-	if m.mono() > h.dueMono {
+	c := h.calloff
+	if c != nil { // a cancel that is being tried again keeps the reason it was first asked for
+		why = c.why
+	}
+	switch mono := m.mono(); {
+	case c == nil && mono > h.dueMono:
 		m.endPastDue(r, h, now, why)
 		return
+	case c != nil && mono > h.dueMono: // tried until the run's own due time: it did not get through
+		m.notCalledOff(r, h, now)
+		return
+	case c != nil && mono-c.lastMono < cancelRetry:
+		return
 	}
+	began := m.mono()
 	var err error
 	id, by := h.ID, r.By
 	m.io(func() { err = m.Ops.CancelShutdown(ctx, id, by) })
+	var params map[string]any
+	if c != nil {
+		params = map[string]any{"again": true}
+	}
 	// A cancel that comes when the countdown has run out (the run takes offConfirm to see a machine go) finds a
 	// machine that is off, or going: what is written is what the last look sees, not "it is ON" (r2-p2-05).
 	due := clock(*h.ShutdownAt)
 	if err != nil {
-		m.emit(EvStep, r, h, "cancel", nil, opText(err))
+		m.emit(EvStep, r, h, "cancel", params, opText(err))
+		// A cancel that did not get through is tried again every cancelRetry while the run's own countdown can
+		// still be running (second review of fix7a, R7A-04: it was sent once, the run wrote "it may switch off
+		// at ... Cancel it on the machine's page." and let go with a minute and a half of countdown left; a node
+		// went off under a guest that had just started on it). A cancel is safe to repeat: the agent answers
+		// "ok" when nothing is pending. That goes for every way it can fail: no answer, a link that is down for
+		// some seconds, the agent's own "no".
+		if c == nil {
+			c = &callingOff{why: why}
+			h.calloff = c
+			m.note(h, m.now(), fmt.Sprintf("its shutdown countdown (due at %s) could not be called off yet (%s): trying again every %s until then", due, opText(err), span(cancelRetry)))
+		}
+		c.lastMono, c.tries, c.text = began, c.tries+1, opText(err)
 		if opCode(err) == CodeNoAnswer {
 			// The cancel left and its answer did not come: it may have reached the agent, and then the countdown
 			// is called off and the machine stays on. The last look must not take its silence for "off".
 			h.cancelUnsure = true
-			m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s, and the request to call its shutdown countdown off got no answer (%s): it may switch off at %s. "+
-				"Cancel it on the machine's page.", why, opText(err), due),
-				fmt.Sprintf("%s, and the request to call its shutdown countdown (due at %s) off got no answer (%s): it may have arrived.", why, due, opText(err)))
-			return
+			if c.lost == "" {
+				c.lost = opText(err)
+			}
 		}
-		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s, but its shutdown countdown could not be called off (%s): it may switch off at %s. "+
-			"Cancel it on the machine's page.", why, opText(err), due),
-			fmt.Sprintf("%s, but its shutdown countdown (due at %s) could not be called off (%s).", why, due, opText(err)))
+		m.say(h, "its shutdown countdown could not be called off yet: trying again until "+due)
 		return
 	}
+	h.calloff = nil
 	if m.mono() < h.endMin {
 		// Its agent took the cancel before the countdown can have been over: the machine runs, and its countdown
 		// is gone. That answer is what the last look goes by; a machine that is out of reach a moment later is
@@ -148,9 +180,38 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 		// the run's own record of its request on the steady clock, never the agent's time: see shutDown.)
 		h.askedAt = now
 	}
-	m.emit(EvStep, r, h, "cancel", nil, "ok")
+	m.emit(EvStep, r, h, "cancel", params, "ok")
 	m.endSeen(r, h, StLeftOn, OnYes, now, why+": its shutdown countdown was called off. "+cameOnline(h)+" and it is ON."+updateTail(h),
 		why+": its shutdown countdown (due at "+due+") was asked to be called off."+updateTail(h))
+}
+
+// callingOff is a cancel of the run's own countdown that has not got through yet, and is tried again (callOff).
+type callingOff struct {
+	why      string        // begins the sentence: who or what wanted the machine left on
+	lastMono time.Duration // steady: when the latest try began
+	tries    int
+	text     string // why the latest try failed
+	lost     string // why the first try failed that got no answer at all ("": none did: each was refused, or could not be sent)
+}
+
+// notCalledOff ends a machine whose countdown the run could not call off before the run's own due time
+// (callOff), with what the last look sees. If one of the tries got no answer the cancel may have arrived: the
+// sentence says so, and the last look never takes silence for "off" then (cancelUnsure).
+func (m *Manager) notCalledOff(r *Run, h *Host, now time.Time) {
+	c := h.calloff
+	due := clock(*h.ShutdownAt)
+	if c.tries > 1 {
+		m.note(h, now, fmt.Sprintf("its shutdown countdown could not be called off: %d tries until %s", c.tries, due))
+	}
+	if c.lost != "" {
+		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s, and the request to call its shutdown countdown off got no answer (%s): it may switch off at %s. "+
+			"Cancel it on the machine's page.", c.why, c.lost, due),
+			fmt.Sprintf("%s, and the request to call its shutdown countdown (due at %s) off got no answer (%s): it may have arrived.", c.why, due, c.lost))
+		return
+	}
+	m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s, but its shutdown countdown could not be called off (%s): it may switch off at %s. "+
+		"Cancel it on the machine's page.", c.why, c.text, due),
+		fmt.Sprintf("%s, but its shutdown countdown (due at %s) could not be called off (%s).", c.why, due, c.text))
 }
 
 // endPastDue ends a machine whose countdown is over by the run's own clock, for a run that was cancelled or

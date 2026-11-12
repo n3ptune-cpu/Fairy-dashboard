@@ -806,8 +806,12 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 		action := map[string]string{"wake": "power.wake", "update": "update.agent", "shutdown": "power.shutdown", "cancel": "power.cancel"}[e.Action]
 		if off := powerctl.ControlOff(s.Poller, e.Host.ID); off != "" && e.Action == "cancel" {
 			// the run called its own countdown off although control is off (the kill switch stopped the run, or
-			// the host's power switch was flipped): the entry says so, like the one of a click (api_power.go)
-			e.Params = map[string]any{"control_off": off}
+			// the host's power switch was flipped): the entry says so, like the one of a click (api_power.go).
+			// A cancel that is tried again has "again" in its entry, like a wake that is sent again.
+			if e.Params == nil {
+				e.Params = map[string]any{}
+			}
+			e.Params["control_off"] = off
 		}
 		outcome := e.Outcome
 		if outcome != "ok" {

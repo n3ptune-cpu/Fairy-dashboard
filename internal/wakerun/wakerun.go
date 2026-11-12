@@ -161,8 +161,12 @@ const (
 	agentBack       = 3 * time.Minute  // after the update: how long the agent may take to answer again
 	// offConfirm, offPolls: "off" after a countdown is nothing at all from the machine for this long, seen by
 	// at least this many polls in a row that were made after the run's own due time (Host.seeSilence).
-	offConfirm   = 20 * time.Second
-	offPolls     = 2
+	offConfirm = 20 * time.Second
+	offPolls   = 2
+	// cancelRetry: a cancel of the run's own countdown that did not get through is tried again this often,
+	// until the run's own due time (callOff). An agent takes twelve cancels a minute from everybody together
+	// (its default): six a minute leave room for the Cancel on the machine's page.
+	cancelRetry  = 10 * time.Second
 	guestsEvery  = 5 * time.Second  // while a countdown runs: how often the guests of the machine are asked about again
 	guestsMargin = 15 * time.Second // ... and not in the last seconds of the countdown (stepShutting)
 	// offGrace: still answering this long after the run's own due time: the shutdown failed, or its agent counts
@@ -462,6 +466,7 @@ type Host struct {
 	grant         any  // the approval for this machine (item 1.1)
 	cancelHandled bool
 	cancelUnsure  bool          // the run's cancel of its countdown left and got no answer: the countdown may be called off
+	calloff       *callingOff   // the run's cancel of its countdown has not got through yet and is tried again (callOff)
 	guestsAsked   bool          // the guests were asked about during the countdown ...
 	guestsMono    time.Duration // ... last at this moment on the steady clock
 	guestsUnseen  bool          // ... and the answer then was "cannot see them"
@@ -887,6 +892,7 @@ func (m *Manager) end(r *Run, h *Host, state, on string, now time.Time, text str
 // a word about its power, to which the look adds what it sees.
 func (m *Manager) endSeen(r *Run, h *Host, state, on string, now time.Time, text, neutral string) {
 	h.verdict = &verdict{state: state, on: on, text: text, neutral: neutral, since: now, sinceMono: m.mono()}
+	h.calloff = nil // its steps are over: no cancel is tried again
 	m.look(r, h, now)
 }
 
@@ -1008,9 +1014,16 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 			}
 		}
 	}
-	if r.stopped != "" { // only the last look at the machines that do not answer is left (it sends nothing)
+	if r.stopped != "" {
+		// Only the last look at the machines that do not answer is left (it sends nothing), and, for a run the
+		// kill switch stopped, the cancel of a countdown that has not got through yet (callOff tries it again
+		// until the run's own due time).
 		for _, h := range r.Hosts {
-			if !h.Final() {
+			switch {
+			case h.Final():
+			case h.verdict == nil && h.calloff != nil:
+				m.callOff(ctx, r, h, now, h.calloff.why)
+			default:
 				m.look(r, h, now)
 			}
 		}

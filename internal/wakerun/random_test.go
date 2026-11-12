@@ -12,7 +12,7 @@ import (
 
 // Audit 5, round 3 (r3-p2): the auditor's random runs (TestR3P2RandomRunsWithLinkFlaps), as they were. They
 // are the random runs of rule_test.go with what those leave out: a link that drops and comes back at any
-// moment (also during the countdown), a cancel whose answer is lost, a first answer after the shutdown request
+// moment (also during the countdown), a cancel whose answer is lost (the first one: the run tries again), a first answer after the shutdown request
 // that is stale, a machine that hangs in its shutdown, guests that start at any moment, polling paused or a
 // re-pair during the run. The judge of the world is on as ever (RULE BROKEN); on top of it the report is
 // compared with the machine ten minutes AFTER the run.
@@ -142,9 +142,11 @@ func TestRandomRunsWithLinkFlaps(t *testing.T) {
 			case h.On == OnYes && !mc.on && mc.wentOff && !saysItGoes:
 				bad++
 				t.Errorf("seed %d: %s reported ON (and no word that it may go off), and the run's countdown switched it off: [%s] %s\n  requests: %s", seed*7919, h.ID, h.State, h.Text, w.callsFor(h.ID))
-			case mc.guests > 0 && mc.wentOff && mc.shutdowns > 0 && offAt[h.ID].Sub(guestAt[h.ID]) > 25*time.Second && linkUp[h.ID] && mc.cancelLost == "":
-				// (not when the run's cancel for the guest got no answer: the run then says "it may switch off at
-				// ...", which is all it can do. With 4,500 runs one such seed comes up, 22030658.)
+			case mc.guests > 0 && mc.wentOff && mc.shutdowns > 0 && offAt[h.ID].Sub(guestAt[h.ID]) > 25*time.Second && linkUp[h.ID]:
+				// (Also when the answer to the run's cancel for the guest is lost: the run tries the cancel again
+				// until its own due time. With one cancel only, seed 22030658 of the 4,500 runs ended here: a node
+				// went off under a guest that had started well before, with a minute and a half in which the run
+				// could have tried again. This check was narrowed for that case in fix7a; second review, R7A-04.)
 				bad++
 				t.Errorf("seed %d: %s went off with a guest that had started %v before, and its link never dropped: [%s] %s\n  requests: %s\n  history: %s", seed*7919, h.ID, offAt[h.ID].Sub(guestAt[h.ID]), h.State, h.Text, w.callsFor(h.ID), logOf(h))
 			}

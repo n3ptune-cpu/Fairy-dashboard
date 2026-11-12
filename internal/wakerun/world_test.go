@@ -44,19 +44,22 @@ type machine struct {
 	newVersion   string // what an update installs
 	behind       *bool  // what the panel knows: older than the newest release
 
-	updLost    string // the answer to the first update request is lost: "arrives" (the agent took it) | "never" (it did not)
-	updMode    string // ok | noverdict | current | fail | rollback | stuck | approval | refuse | busy (the first request is rate limited) | disabled
-	updTakes   time.Duration
-	updating   bool
-	updDoneAt  time.Time
-	updState   string
-	updMsg     string
-	lastAt     float64
-	lastOK     bool
-	lastMsg    string
-	shutMode   string // ok | approval | refuse | ignore (accepted, but it stays on) | busy | noroute (the agent route is gone) | hang (at the end of the countdown its agent stops and the machine stays on: it refuses the connection)
-	cancelOK   bool   // a cancel is answered with "ok" also when the machine is gone (what a stand-in agent may do)
-	cancelLost string // the answer to a cancel is lost: "arrives" (the countdown is called off on the machine) | "never"
+	updLost   string // the answer to the first update request is lost: "arrives" (the agent took it) | "never" (it did not)
+	updMode   string // ok | noverdict | current | fail | rollback | stuck | approval | refuse | busy (the first request is rate limited) | disabled
+	updTakes  time.Duration
+	updating  bool
+	updDoneAt time.Time
+	updState  string
+	updMsg    string
+	lastAt    float64
+	lastOK    bool
+	lastMsg   string
+	shutMode  string // ok | approval | refuse | ignore (accepted, but it stays on) | busy | noroute (the agent route is gone) | hang (at the end of the countdown its agent stops and the machine stays on: it refuses the connection)
+	cancelOK  bool   // a cancel is answered with "ok" also when the machine is gone (what a stand-in agent may do)
+	// cancelLost: the answer to the first cancel is lost: "arrives" (the countdown is called off on the machine) |
+	// "never" (it is not). The answer to every cancel is lost: "always arrives" (the first one calls the countdown
+	// off) | "always" (none arrives).
+	cancelLost string
 	shutLost   string // the answer to the first shutdown request is lost: "arrives" (the countdown runs) | "never"
 	pending    *Pending
 	staleOnce  bool // the first answer after a shutdown was asked for does not have the countdown in it yet
@@ -368,8 +371,9 @@ func (w *world) CancelShutdown(_ context.Context, id, _ string) error {
 	mc := w.ms[id]
 	w.calls = append(w.calls, "cancel "+id)
 	w.arrived("cancel " + id)
-	if mc.cancelLost != "" { // a timeout: the panel does not learn whether the agent got it
-		if mc.cancelLost == "arrives" {
+	if mc.cancelLost != "" && (!mc.busyDone["cancel lost"] || strings.HasPrefix(mc.cancelLost, "always")) { // a timeout: the panel does not learn whether the agent got it
+		mc.busyDone["cancel lost"] = true
+		if strings.HasSuffix(mc.cancelLost, "arrives") {
 			mc.pending = nil
 		}
 		return errLost
@@ -615,6 +619,15 @@ func host(r *Run, id string) *Host {
 		}
 	}
 	return &Host{}
+}
+
+// oneCancel is callsFor with a cancel that was tried again counted once ("... shutdown cancel cancel" is
+// "... shutdown cancel").
+func oneCancel(calls string) string {
+	for strings.Contains(calls, "cancel cancel") {
+		calls = strings.ReplaceAll(calls, "cancel cancel", "cancel")
+	}
+	return calls
 }
 
 func (w *world) callsFor(id string) string {

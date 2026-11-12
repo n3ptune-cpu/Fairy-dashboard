@@ -174,18 +174,24 @@ func TestRVP5CancelArrivedAnswerLostThenOutOfReach(t *testing.T) {
 			if h.State != StLeftOn || h.On != OnUnknown || h.Text != want {
 				t.Fatalf("cancel %s before the countdown ends, it arrived=%v: %s/%s: %s", before, arrives, h.State, h.On, h.Text)
 			}
-			if d := done.EndedAt.Sub(at); d > lookFor+2*time.Second {
-				t.Fatalf("the last look took %s, at most %s", d, lookFor)
+			// (second review of fix7a, R7A-04: the cancel is tried again until the run's own due time, here
+			// against a link that stays down, and the last look begins then; it began at once)
+			if d := done.EndedAt.Sub(at); d > before+lookFor+2*time.Second {
+				t.Fatalf("the tries and the last look took %s, at most %s", d, before+lookFor)
 			}
-			if got := w.steps("pc-a"); !strings.HasSuffix(got, "cancel:agent unreachable: timeout") {
+			if got := w.steps("pc-a"); !strings.Contains(got, "shutdown:ok cancel:agent unreachable: timeout") {
 				t.Fatalf("audit steps: %s", got)
 			}
 		}
 	}
 }
 
-// The same cancel when its answer comes while the machine can be reached: nothing changes, it is ON at once,
-// with the sentence that says the cancel got no answer when it did not.
+// The same cancel while the machine can be reached, and no answer to any of the run's cancels comes (the first
+// one arrived): it is ON, with the sentence that says the cancel got no answer.
+//
+// (Second review of fix7a, R7A-04: the cancel is tried again until the run's own due time, and this sentence is
+// written only then. It was written after one cancel. A cancel that is answered at the second try:
+// TestACancelWithoutAnAnswerIsTriedAgain.)
 func TestACancelWithoutAnAnswerOnAMachineThatAnswers(t *testing.T) {
 	w := newWorld(t)
 	pc := w.off("pc-a")
@@ -196,12 +202,16 @@ func TestACancelWithoutAnAnswerOnAMachineThatAnswers(t *testing.T) {
 	if _, err := w.m.CancelRun(r.ID, "Bob", false); err != nil {
 		t.Fatal(err)
 	}
-	pc.cancelLost = "arrives"
-	h := host(w.finish(), "pc-a")
+	pc.cancelLost = "always arrives"
+	done := w.finish()
+	h := host(done, "pc-a")
 	has(t, h, StLeftOn, "The run was cancelled by Bob, and the request to call its shutdown countdown off got no answer (agent unreachable: timeout): it may switch off at "+clock(due)+
 		". Cancel it on the machine's page.")
 	if h.On != OnYes || !pc.on {
 		t.Fatalf("power %q on %v: %s", h.On, pc.on, h.Text)
+	}
+	if n := strings.Count(w.callsFor("pc-a"), "cancel"); n != 9 || done.EndedAt.Before(due) {
+		t.Fatalf("%d cancels, the run let go %v before the countdown's end: want one every %s for the 90 s that were left", n, due.Sub(*done.EndedAt), cancelRetry)
 	}
 }
 
@@ -307,8 +317,10 @@ func TestAGuestThatStartsDuringTheCountdownCallsItOff(t *testing.T) {
 		}, StOff, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.", "wake update shutdown"},
 		{"a guest starts in the last 10 s: too late for a cancel, as before", 110 * time.Second, func(_ *world, mc *machine) { mc.guests = 1 }, StOff,
 			"Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.", "wake update shutdown"},
-		{"the cancel gets no answer and the node is out of reach: said, and not \"off\"", 30 * time.Second, func(_ *world, mc *machine) {
-			mc.guests, mc.cancelLost = 1, "arrives"
+		// (second review of fix7a, R7A-04: the cancel is tried again until the run's own due time; here no answer
+		// to any of them comes. With one lost answer the second try calls it off: TestACancelWithoutAnAnswerIsTriedAgain.)
+		{"no cancel gets an answer: said, and not \"off\"", 30 * time.Second, func(_ *world, mc *machine) {
+			mc.guests, mc.cancelLost = 1, "always arrives"
 		}, StLeftOn, "Left ON: 1 guest is running on it since its shutdown was asked for, and the request to call its shutdown countdown off got no answer (agent unreachable: timeout): it may switch off at ",
 			"wake update shutdown cancel"},
 	} {
@@ -321,7 +333,7 @@ func TestAGuestThatStartsDuringTheCountdownCallsItOff(t *testing.T) {
 			c.change(w, pc)
 			h := host(w.finish(), "pve1")
 			has(t, h, c.state, c.want)
-			if got := w.callsFor("pve1"); got != c.calls {
+			if got := w.callsFor("pve1"); got != c.calls && (!strings.HasPrefix(c.name, "no cancel gets an answer") || oneCancel(got) != c.calls) {
 				t.Fatalf("requests: %s", got)
 			}
 			if on := c.state == StLeftOn; pc.on != on || (on && h.On != OnYes) || pc.shutdowns != 1 {
