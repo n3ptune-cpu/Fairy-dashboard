@@ -1003,7 +1003,9 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   version, an error message, a guest's name and tags) is cleaned where the answer comes in, before the panel
   keeps, shows, logs or sends it on: escape sequences (colours, cursor moves, window titles), control
   characters and direction overrides (the character that makes `gpj.exe` read `exe.jpg`) are removed, a line
-  break becomes a space, and every text has a longest length. From the answer of a newly paired machine the
+  break becomes a space, and every text has a longest length. Characters that show as nothing (zero-width
+  spaces and joiners, the soft hyphen, blank letters) are removed too, so two hosts cannot have names that
+  read alike and differ; an emoji keeps what it is made of. From the answer of a newly paired machine the
   panel keeps `agent_version` only when it is a version and `hostname` only when it is a computer name
   (letters, digits, `.`, `-`, `_`, at most 64). `fairy admin` applies the same rule to everything it prints.
   The page escapes HTML wherever it inserts a text; that has not changed.

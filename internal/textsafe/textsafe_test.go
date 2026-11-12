@@ -59,7 +59,8 @@ func TestClean(t *testing.T) {
 // Whatever goes in: valid UTF-8 comes out, with no control character, no escape, no direction mark, and
 // cleaning it again changes nothing.
 func FuzzClean(f *testing.F) {
-	for _, s := range []string{"", "host", "\x1b[31m", "\x1b]0;x\x07", "a\nb", "\u202e", "\xff", "\x1b", "\u009b1m", "é\x00", "\x1b[\x1b]\x1b"} {
+	for _, s := range []string{"", "host", "\x1b[31m", "\x1b]0;x\x07", "a\nb", "\u202e", "\xff", "\x1b", "\u009b1m", "é\x00", "\x1b[\x1b]\x1b",
+		"a\u200bb", "👨\u200d👩", "👨\u200b\u200d👩", "❤\ufe0f\u200d🔥", "👨\ufe0f\ufe0f", "\u200d👩", "👨\u200d", "x\u3164\u115fy", "🏴\U000e0067\U000e007f"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
@@ -70,6 +71,17 @@ func FuzzClean(f *testing.F) {
 		for _, r := range c {
 			if unicode.IsControl(r) || unwanted(r) || r == 0x2028 || r == 0x2029 {
 				t.Fatalf("Clean(%q) = %q still has %U", s, c, r)
+			}
+		}
+		rs := []rune(c)
+		for i, r := range rs { // an invisible character is left only where it makes an emoji
+			if !Invisible(r) {
+				continue
+			}
+			joins := r == 0x200d && i > 0 && i+1 < len(rs) && picture(rs[i+1]) && (picture(rs[i-1]) || i > 1 && rs[i-1] == 0xfe0f || i > 1 && rs[i-1] == 0xfe0e)
+			selects := (r == 0xfe0e || r == 0xfe0f) && i > 0 && picture(rs[i-1])
+			if !joins && !selects {
+				t.Fatalf("Clean(%q) = %q still has the invisible %U at %d", s, c, r, i)
 			}
 		}
 		if again := Clean(c); again != c {
@@ -160,5 +172,57 @@ func TestErrorText(t *testing.T) {
 	}
 	if ErrorText(got) != got {
 		t.Fatal("a clipped text is clipped again")
+	}
+}
+
+// r2-p3-09: a host's name kept characters that show as nothing (the auditor's agent a17 was "gnp.exe" + four
+// zero-width characters + "x" + a soft hyphen and three blank ones + "end": 19 characters that read
+// "gnp.exexend"), so one host could take a name that reads exactly like another's. "Set model name" refused
+// these already; now no text from a machine keeps them. What makes an emoji stays.
+func TestCleanDropsWhatShowsAsNothing(t *testing.T) {
+	a17 := "gnp.exe\u200b\u200c\u200d\u2060x\u00ad\u034f\u3164\u115fend"
+	if got := Clean(a17); got != "gnp.exexend" {
+		t.Errorf("the auditor's name: %q (%d characters)", got, len([]rune(got)))
+	}
+	for in, want := range map[string]string{
+		"srv\u200b-01":                         "srv-01", // zero-width space
+		"srv\u200c\u200d-01":                   "srv-01", // non-joiner and joiner between letters
+		"srv\u2060\u2061-01":                   "srv-01", // word joiner, function application
+		"soft\u00adhyphen":                     "softhyphen",
+		"hangul\u3164\u115f\u1160\uffa0filler": "hangulfiller",
+		"braille\u2800blank":                   "brailleblank",
+		"cgj\u034fkhmer\u17b4\u17b5":           "cgjkhmer",
+		"selector\ufe0f on a letter\ufe00":     "selector on a letter",
+		"tags\U000e0041\U000e007f":             "tags",
+		"mongolian\u180e\u180b":                "mongolian",
+		"ideographic\U000e0100 variant":        "ideographic variant",
+		// an emoji keeps what it is made of
+		"👨\u200d👩\u200d👧":    "👨\u200d👩\u200d👧",
+		"❤\ufe0f\u200d🔥 hot": "❤\ufe0f\u200d🔥 hot",
+		"🖥\ufe0f tower":      "🖥\ufe0f tower",
+		"text form ☎\ufe0e":  "text form ☎\ufe0e",
+		"🧑🏽\u200d💻":          "🧑🏽\u200d💻", // with a skin tone
+		// but nothing more than that
+		"🖥\ufe0f\ufe0f\ufe0f":             "🖥\ufe0f", // one selector
+		"👨\u200d":                         "👨",       // a joiner that joins nothing
+		"\u200d👩":                         "👩",
+		"👨\u200dx":                        "👨x",       // or joins a letter
+		"👨\u200b\u200d👩":                  "👨\u200d👩", // the zero-width space goes, the emoji stays one
+		"👨\u200d\u200d👩":                  "👨\u200d👩",
+		"🏴\U000e0067\U000e0062\U000e007f": "🏴", // the letters of a region's flag are tags
+		// spaces a person sees stay
+		"no\u00a0break and ideographic\u3000space": "no\u00a0break and ideographic\u3000space",
+	} {
+		got := Clean(in)
+		if got != want {
+			t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+		}
+		if again := Clean(got); again != got {
+			t.Errorf("Clean is not stable for %q: %q then %q", in, got, again)
+		}
+	}
+	// two hosts that differed only in what cannot be seen now have the same name
+	if Clean("nas\u200b") != Clean("nas") || Clean("n\u2060as") != "nas" {
+		t.Error("names that read alike still differ")
 	}
 }
