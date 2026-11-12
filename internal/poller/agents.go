@@ -149,7 +149,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		delete(p.helperSeen, a.ID)
 	}
 	p.agentInfo[a.ID] = info
-	newVersion := p.noteVersionLocked(a.ID, info.Version)
+	newVersion := p.noteVersionLocked(a.ID, info.Version, now)
 	delete(p.agentFailures, a.ID)
 	delete(p.agentQuiet, a.ID)
 	p.systems[a.ID] = p.stamp(sys, now)

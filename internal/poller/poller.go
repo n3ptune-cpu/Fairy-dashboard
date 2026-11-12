@@ -102,6 +102,9 @@ type Poller struct {
 	healthAt      time.Time
 	// agent id -> the version of its last good answer, kept over a restart (lastversion.go)
 	lastVersion map[string]string
+	// agent id -> when its version was last written to state.json, and whether a newer one waits to be written
+	versionSavedAt map[string]time.Time
+	versionUnsaved map[string]bool
 }
 
 // New builds the poller; backend nil = the real HTTP backend.
@@ -483,6 +486,8 @@ func (p *Poller) RemoveAgent(id string) {
 	delete(p.agentInfo, id)
 	_, kept := p.lastVersion[id]
 	delete(p.lastVersion, id)
+	delete(p.versionSavedAt, id)
+	delete(p.versionUnsaved, id)
 	delete(p.agentFailures, id)
 	delete(p.agentQuiet, id)
 	delete(p.helperSeen, id)
@@ -548,6 +553,7 @@ func (p *Poller) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			p.Scheduler.Wait()
+			p.FlushVersions() // a version that waited for its minute is written before the panel stops
 			p.Power.Close()
 			return
 		case <-t.C:
