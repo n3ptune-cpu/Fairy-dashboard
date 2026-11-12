@@ -779,7 +779,8 @@ const AP_HELPER_OLD = "the running fairy-agent-helper is older than this agent";
 // One machine id on two hosts, in the words of this host (a.binding_with: the other hosts by name; a.binding_held:
 // those that keep the id, so that this host needs an id of its own).
 function apDuplicateText(a) {
-  const names = (l) => (Array.isArray(l) && l.length ? andList(l.map(String)) : "");
+  // (a host the reader may not see is "another host", from the panel: the sentence starts with a capital)
+  const names = (l) => (Array.isArray(l) && l.length ? andList(l.map(String)).replace(/^another host/, "Another host") : "");
   const held = names(a.binding_held), other = names(a.binding_with);
   if (held) return `${held} keeps this machine id. No approvals for this host until it shows an id of its own.`;
   return `${other || "Another host"} ${other && a.binding_with.length > 1 ? "have" : "has"} the same machine id: each would accept an approval made for the other. No approvals for either.`;

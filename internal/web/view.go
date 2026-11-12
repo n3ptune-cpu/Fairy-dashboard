@@ -204,6 +204,9 @@ func (v *view) clean(x model.System) (model.System, bool) {
 		x.UPS = slices.DeleteFunc(slices.Clone(x.UPS), func(id string) bool { return !v.upsVis[id] })
 		changed = true
 	}
+	if cx, c := v.cleanBinding(x); c { // the names of hidden hosts that show the same machine id (api_machines.go)
+		x, changed = cx, true
+	}
 	return x, changed
 }
 

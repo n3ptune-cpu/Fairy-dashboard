@@ -55,7 +55,50 @@ func retryAfter(data jsonx.M) int {
 	return 0
 }
 
-// machineAlarmText is a binding alarm in a few words, for the Notifications list.
+// anotherHost stands for a host that shows the same machine id and that the reader may not see.
+const anotherHost = "another host"
+
+// cleanBinding takes the names of hosts the reader may not see out of what a visible system says about a
+// machine id that two hosts show (Approval.BindingWith, BindingHeld; audit 6, r4-p3-01: a viewer of one site,
+// and a site-limited API token, read the name of a host of another site there, in /api/systems, in one system
+// and in the stream). Hidden hosts become one "another host", without a name or an id, behind the ones the
+// reader sees. changed: something was taken out.
+func (v *view) cleanBinding(x model.System) (model.System, bool) {
+	a := x.Approval
+	if a == nil || (len(a.BindingWith) == 0 && len(a.BindingHeld) == 0) {
+		return x, false
+	}
+	seen := func(names, ids []string) ([]string, bool) {
+		var out []string
+		hidden := false
+		for i, name := range names {
+			if i < len(ids) && v.agentVisible(ids[i]) {
+				out = append(out, name)
+			} else {
+				hidden = true // (a name without its id is never passed on)
+			}
+		}
+		if hidden {
+			out = append(out, anotherHost)
+		}
+		return out, hidden
+	}
+	with, c1 := seen(a.BindingWith, a.BindingWithIDs)
+	held, c2 := seen(a.BindingHeld, a.BindingHeldIDs)
+	if !c1 && !c2 {
+		return x, false
+	}
+	cp := *a
+	cp.BindingWith, cp.BindingHeld, cp.BindingWithIDs, cp.BindingHeldIDs = with, held, nil, nil
+	x.Approval = &cp
+	return x, true
+}
+
+// machineAlarmText is a binding alarm in a few words: for a row of a run (admins; with: the names of the hosts
+// that show the same id), and for the Notifications list, where it names no other host (with nil). A
+// notification is one text for everybody who may see the host it is about, and the host that shows the same id
+// can be one of another site (audit 6, r4-p3-01). Which host it is, is in the host's Approval, for whoever may
+// see both, and in the audit log.
 func machineAlarmText(status string, with []string) string {
 	switch status {
 	case approval.BindNoRecord:
@@ -63,7 +106,7 @@ func machineAlarmText(status string, with []string) string {
 	case approval.BindChanged:
 		return "shows another machine id than the one on record: no approvals until an admin accepts it"
 	case approval.BindDuplicate:
-		other := "another host"
+		other := anotherHost
 		if len(with) > 0 {
 			other = strings.Join(with, ", ")
 		}
@@ -121,7 +164,7 @@ func (s *Server) machineEvent(e poller.MachineEvent) {
 		entry("approval.alarm", e.AgentID, params, "alarm: "+b.Status)
 		if s.Notes != nil {
 			s.Notes.Add(notifications.Event{Kind: "approval_alarm", Type: "host", Severity: notifications.Warning, SystemID: sys, Host: name,
-				Text: machineAlarmText(b.Status, s.machineNames(b.With)), Key: key, Alarm: true})
+				Text: machineAlarmText(b.Status, nil), Key: key, Alarm: true})
 		}
 	case "clear":
 		entry("approval.alarm", e.AgentID, nil, "cleared")

@@ -570,13 +570,14 @@ func (p *Poller) shownApprovalLocked(id string, live *model.Approval, reps map[s
 	if live != nil {
 		a := *live
 		a.Binding, a.BindingWith, a.BindingHeld = b.Status, p.hostNamesLocked(b.With), p.hostNamesLocked(b.Held)
+		a.BindingWithIDs, a.BindingHeldIDs = b.With, b.Held
 		return &a
 	}
 	if !b.Checks() {
 		return nil
 	}
 	a := &model.Approval{State: b.Record.State, Keys: []model.ApprovalKey{}, AgentChecks: []string{}, Binding: b.Status, MachineID: b.Record.MachineID,
-		BindingWith: p.hostNamesLocked(b.With), BindingHeld: p.hostNamesLocked(b.Held)}
+		BindingWith: p.hostNamesLocked(b.With), BindingHeld: p.hostNamesLocked(b.Held), BindingWithIDs: b.With, BindingHeldIDs: b.Held}
 	if !b.Report.Heard {
 		a.LastKnown = true // what it said before it went silent (or before the panel restarted)
 	}

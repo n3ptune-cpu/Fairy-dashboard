@@ -166,6 +166,11 @@ type Approval struct {
 	// accepted here. Names only, never an id.
 	BindingWith []string `json:"binding_with,omitempty"`
 	BindingHeld []string `json:"binding_held,omitempty"`
+	// BindingWithIDs and BindingHeldIDs are the agent ids behind BindingWith and BindingHeld, in the same
+	// order. Never in an answer: the panel uses them to leave out the name of a host that the reader may not
+	// see (a viewer of another site, a site-limited API token; audit 6, r4-p3-01).
+	BindingWithIDs []string `json:"-"`
+	BindingHeldIDs []string `json:"-"`
 	// LastKnown: the machine has not answered since the panel started; State is what it last said, from the
 	// panel's record.
 	LastKnown bool `json:"last_known,omitempty"`
