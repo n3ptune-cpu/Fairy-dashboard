@@ -61,6 +61,11 @@ func readLogo(path string) (*brandLogo, error) {
 	if !logoTypes[mime] {
 		return nil, errors.New("not a PNG, JPEG, WebP or GIF image (SVG is not accepted)")
 	}
+	// the same check as for the sign-in picture: the logo is served without sign-in too, so a file that only
+	// begins like a picture (a PNG's first bytes, then anything) is not one
+	if !settings.Whole(mime, data) {
+		return nil, errors.New("not a whole picture of its type (cut off, or other data in it)")
+	}
 	sum := sha256.Sum256(data)
 	return &brandLogo{data: data, mime: mime, etag: `"` + hex.EncodeToString(sum[:8]) + `"`}, nil
 }

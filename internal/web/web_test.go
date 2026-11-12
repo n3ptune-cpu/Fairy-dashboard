@@ -791,7 +791,7 @@ func TestCustomLogo(t *testing.T) {
 		t.Fatal("no logo configured", r.code)
 	}
 	dir := t.TempDir()
-	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 100)...)
+	png := pngOfSize(t, 300)
 	write := func(name string, b []byte) string {
 		p := dir + "/" + name
 		if err := os.WriteFile(p, b, 0o600); err != nil {
@@ -802,7 +802,11 @@ func TestCustomLogo(t *testing.T) {
 	for name, b := range map[string][]byte{
 		"logo.svg": []byte(`<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>`),
 		"fake.png": []byte("<html>not an image</html>"),
-		"big.png":  append(append([]byte{}, png...), make([]byte, MaxLogoBytes)...),
+		"big.png":  pngOfSize(t, MaxLogoBytes+1),
+		// r2-p3-13: the logo had only its first bytes looked at. It is a whole picture now, as the sign-in picture is.
+		"begins-like.png":   append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 100)...),
+		"png-then-html.png": append(append([]byte{}, png...), "<html><script>alert(1)</script></html>"...),
+		"cut-off.png":       png[:len(png)-20],
 	} {
 		if loadLogo(write(name, b)) != nil {
 			t.Fatal("accepted", name)

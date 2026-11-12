@@ -620,7 +620,8 @@ sessions. A person who is waiting for access does not have it.
 Copy your image to `/etc/fairy/logo.png` (PNG, JPEG, WebP or GIF, at most 1 MiB; SVG is refused because it can
 carry script; make it readable by the service, e.g. `0644`), set `branding: {logo: /etc/fairy/logo.png}` in
 config.yaml and restart Fairy. It replaces the built-in logo in the sidebar and on the sign-in and waiting
-pages, and becomes the favicon. A missing or invalid file only logs a warning. To try one first:
+pages, and becomes the favicon. The file has to be a whole picture of its type, as for the sign-in wallpaper
+below. A missing or invalid file only logs a warning. To try one first:
 `fairy serve --demo --logo C:\path\to\logo.png` (Windows) or `fairy serve --demo --logo ./logo.png`.
 The file is read once at start (path from the config only) and served at `/branding/logo` without sign-in (204, no content, when no logo is set).
 
@@ -636,8 +637,9 @@ page is black, with the same strip.
 * It is always a file the panel keeps (`<data_dir>/backgrounds/signin-wallpaper`, mode `0600`), never an
   address on another site: the sign-in page loads nothing from elsewhere. What the file is called does not
   matter; its content decides, and SVG, GIF, HTML and everything else is refused. The file has to be a whole
-  picture of its type (its parts are read to the end and its checksums checked, without unpacking it), not
-  only a file that begins like one; the same holds for a background a user uploads.
+  picture of its type (its parts are read up to its end mark and its checksums checked, without unpacking
+  it), not only a file that begins like one; the same holds for a background a user uploads. A JPEG may have
+  more data after its end mark (cameras write some there): the panel stores and serves that as it came.
 * A picture may have at most 8192 pixels a side and 40 megapixels, whatever its file size: a browser needs
   four bytes of memory for every pixel, and a 76 kB file can state 20000 x 20000. A larger one is refused
   with its size in the message; the same holds for a background a user uploads. A picture that was stored
