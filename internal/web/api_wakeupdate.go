@@ -572,19 +572,31 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	if a, _ := s.WakeRuns.Snapshot(); a != nil { // before a passkey is asked for; Start checks again
 		return apierr.Errf(409, "a run started by %s at %s is still going: one run at a time. Wait for it, or cancel it.", a.By, a.StartedAt.Format("15:04 UTC"))
 	}
-	// Always its own confirmation: only the panel's replay of this very request (this list, these options)
-	// passes, right after the sign-in that was made for it.
-	if err := c.stepUpEach(u, "runs that wake, update and switch off machines"); err != nil {
-		return err
-	}
-	if !s.control.allow(u.Sub) {
-		return apierr.New(429, "too many control requests; slow down")
-	}
 	text, _ := wuDescribe(b, hosts)
 	latest := s.latest()
 	req := wakerun.StartRequest{Hosts: b.Hosts, UpdateOnly: b.UpdateOnly, UpdateIfOn: b.UpdateIfOn, By: actorOf(u), BySub: u.Sub, Latest: latest.Version}
 	params := map[string]any{"hosts": b.Hosts, "update_only": b.UpdateOnly, "update_if_on": b.UpdateIfOn,
 		"list": wakerun.ListHash(b.Hosts, b.UpdateOnly, b.UpdateIfOn), "latest": latest.Version}
+	// The limit on control requests is looked at before a passkey is asked for (switching six machines on for
+	// these runs uses up a minute's worth): a start that would be refused is refused now, not after "Confirm
+	// it's you". The audit log gets a line for it.
+	limited := func() error {
+		c.audit(u, "wakeupdate.start", "run", params, "error 429: too many control requests; nothing was started")
+		return apierr.New(429, "too many control requests; slow down")
+	}
+	if !c.resumed() && !s.control.free(u.Sub) {
+		return limited()
+	}
+	// Always its own confirmation: only the panel's replay of this very request (this list, these options)
+	// passes, right after the sign-in that was made for it.
+	if err := c.stepUpEach(u, "runs that wake, update and switch off machines"); err != nil {
+		return err
+	}
+	// That replay counts as a control request, but the limit no longer refuses it: it was inside the limit when
+	// it was asked for, and it cannot be sent again without another confirmation of its own.
+	if !s.control.allow(u.Sub) && !c.resumed() {
+		return limited()
+	}
 	r, err := s.WakeRuns.Start(req)
 	if err != nil {
 		var se *wakerun.StartError

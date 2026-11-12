@@ -44,5 +44,18 @@ func (l *rateLimiter) allow(key string) bool {
 	return true
 }
 
+// free reports whether a hit would be within the budget right now, without recording one.
+func (l *rateLimiter) free(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now, n := time.Now(), 0
+	for _, t := range l.hits[key] {
+		if now.Sub(t) <= time.Minute {
+			n++
+		}
+	}
+	return n < l.perMin
+}
+
 // maxKeys bounds a limiter's memory.
 const maxKeys = 10000
