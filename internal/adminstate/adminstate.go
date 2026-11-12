@@ -123,17 +123,21 @@ func (a *State) PowerDisabledList() ([]string, error) {
 // The subject is part of the question (T-22): a session id belongs to the account that signed in for it. The
 // cookie is signed, so its subject cannot be changed without FAIRY_SESSION_SECRET; with this check a secret
 // that leaked still gives nobody another account's session, only their own.
+//
+// Both files are looked at now (one stat each; they are read again only when they changed), not at the copy
+// of up to a second ago: `fairy admin sessions revoke` and `revoke-all` are another process, and a session
+// they end is refused from the next request on, not a second later.
 func (a *State) SessionValid(sid, sub string, iat float64) bool {
-	if sid == "" || sub == "" || a.state.Err() != nil || a.sessions.Err() != nil {
+	if sid == "" || sub == "" {
 		return false
 	}
-	ss, _ := a.sessions.Get()["sessions"].(map[string]any)
-	rec, known := ss[sid]
-	if !known { // created a moment ago by another process? (cookies are signed, so this can't be spammed)
-		ss, _ = a.sessions.Refresh()["sessions"].(map[string]any)
-		rec, known = ss[sid]
+	st, se := a.state.Refresh(), a.sessions.Refresh()
+	if a.state.Err() != nil || a.sessions.Err() != nil {
+		return false
 	}
-	return known && currentGen(rec) && subjectOf(rec) == sub && iat > num(a.state.Get()["sessions_revoked_before"])
+	ss, _ := se["sessions"].(map[string]any)
+	rec, known := ss[sid]
+	return known && currentGen(rec) && subjectOf(rec) == sub && iat > num(st["sessions_revoked_before"])
 }
 
 // subjectOf is the account a sessions.json entry was registered for ("" when the entry has none).

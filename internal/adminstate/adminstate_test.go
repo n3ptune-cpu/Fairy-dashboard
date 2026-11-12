@@ -3,6 +3,7 @@ package adminstate
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,62 @@ func TestSessionValidChecksTheSubject(t *testing.T) {
 	}
 	if a.SessionValid("sid-unknown", "alice", iat) {
 		t.Fatal("an unknown session id is valid")
+	}
+}
+
+// r1-p1-02 (audit 5): `fairy admin sessions revoke <id>` and `revoke-all` run as another process. The panel
+// looked at the two files at most once a second, so a (copied) cookie went on working for up to a second after
+// the command had answered (59 and 146 requests in the auditor's run). The panel now looks at both files for
+// every request: the first request after the command is refused.
+func TestARevokeFromTheCLICountsFromTheNextRequest(t *testing.T) {
+	dir := t.TempDir()
+	panel, cli := New(dir), New(dir) // two processes: each has its own cached view of the two files
+	iat := float64(time.Now().Unix()) - 5
+	for _, sid := range []string{"sid-of-alice-0001", "sid-of-alice-0002", "sid-of-bob-000001"} {
+		if err := panel.AddSession(sid, NewSession{Sub: strings.Split(sid, "-")[2]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	valid := func(sid string) bool { return panel.SessionValid(sid, strings.Split(sid, "-")[2], iat) }
+	for i := 0; i < 50; i++ { // the panel is in use: its view of the files is as fresh as it gets
+		if !valid("sid-of-alice-0001") || !valid("sid-of-alice-0002") || !valid("sid-of-bob-000001") {
+			t.Fatal("a registered session is not valid")
+		}
+	}
+	// one session, by the start of its id
+	if n, err := cli.RevokeSession("sid-of-alice-0001"); err != nil || n != 1 {
+		t.Fatal("revoke:", n, err)
+	}
+	if valid("sid-of-alice-0001") {
+		t.Fatal("the session the CLI revoked is still valid at the next request")
+	}
+	if !valid("sid-of-alice-0002") || !valid("sid-of-bob-000001") {
+		t.Fatal("the other sessions are not valid any more")
+	}
+	// all of them: also a cookie whose entry someone put back (a copy of the file) is too old now
+	if n, err := cli.RevokeAllSessions(); err != nil || n != 2 {
+		t.Fatal("revoke-all:", n, err)
+	}
+	for _, sid := range []string{"sid-of-alice-0001", "sid-of-alice-0002", "sid-of-bob-000001"} {
+		if valid(sid) {
+			t.Fatalf("%s is still valid at the next request after revoke-all", sid)
+		}
+	}
+	if err := panel.AddSession("sid-of-alice-0002", NewSession{Sub: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if valid("sid-of-alice-0002") {
+		t.Fatal("a cookie issued before revoke-all is valid again because its entry is back")
+	}
+	if !panel.SessionValid("sid-of-alice-0002", "alice", float64(time.Now().Unix())+1) {
+		t.Fatal("a sign-in after revoke-all is not valid")
+	}
+	// a session another process registered a moment ago is known at once, as before
+	if err := cli.AddSession("sid-of-carol-0001", NewSession{Sub: "carol"}); err != nil {
+		t.Fatal(err)
+	}
+	if !panel.SessionValid("sid-of-carol-0001", "carol", float64(time.Now().Unix())+1) {
+		t.Fatal("a session registered by another process is not valid")
 	}
 }
 
