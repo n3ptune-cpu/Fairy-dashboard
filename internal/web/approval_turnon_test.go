@@ -62,7 +62,9 @@ func TestTurnOn(t *testing.T) {
 	items := fmt.Sprint(d["items"])
 	key := page["keys"].([]any)[0].(map[string]any)
 	for _, want := range []string{"Pocket ID: " + a.iss.URL(), "Client ID " + testApprovalClient, "thumbprint " + key["thumbprint"].(string),
-		"laptop (checked by its agent): may approve: Alice [u2, admin]", "tower (checked by its agent): may approve: Alice [u2, admin]", "locked"} {
+		// (audit 6, r4-b1-03: the two machines that get the same list stand above it, and each person has a line;
+		// it was "laptop (checked by its agent): may approve: Alice [u2, admin]" for each machine)
+		"laptop (checked by its agent); tower (checked by its agent) 1 person may approve on each of these 2 machines: · Alice [u2, admin]", "locked"} {
 		if !strings.Contains(items, want) {
 			t.Errorf("the dialog lacks %q:\n%s", want, items)
 		}

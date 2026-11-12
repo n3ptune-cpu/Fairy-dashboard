@@ -460,6 +460,7 @@ func (s *Server) approvalTurnOn(c *reqCtx) error {
 		refused []turnOnResult
 		trust   = map[string]api.TrustInit{}
 		items   = []string{fmt.Sprintf("Pocket ID: %s · Client ID %s", s.Cfg.ApprovalIssuer(), s.Cfg.Approval.ClientID)}
+		asked   []turnOnAsked // the machines of the plan, with who may approve on each: the dialog's lines
 	)
 	for i, k := range shownKeys(keys) {
 		items = append(items, fmt.Sprintf("Key %d the machines will pin: %s · thumbprint %s", i+1, k.Kid, k.Thumbprint))
@@ -494,7 +495,7 @@ func (s *Server) approvalTurnOn(c *reqCtx) error {
 		}
 		bound = append(bound, *ch)
 		trust[id] = in
-		items = append(items, fmt.Sprintf("%s (checked by its %s): may approve: %s", m.Name, orText(m.EnforcedBy, "agent"), userLine(m.Users)))
+		asked = append(asked, turnOnAsked{name: m.Name, by: orText(m.EnforcedBy, "agent"), users: m.Users})
 	}
 	if len(bound) == 0 {
 		for _, r := range refused {
@@ -503,10 +504,13 @@ func (s *Server) approvalTurnOn(c *reqCtx) error {
 		s.turnOnDone(u, refused)
 		return apierr.New(409, "The check could not be switched on for any of the chosen machines. "+resultLine(refused))
 	}
+	var notOn []string
 	for _, r := range refused {
-		items = append(items, fmt.Sprintf("%s: NOT switched on (%s)", r.Name, r.Text))
+		notOn = append(notOn, fmt.Sprintf("%s: NOT switched on (%s)", r.Name, r.Text))
 	}
-	items = append(items, "After this each of these machines is locked: what it trusts is changed only on the machine itself (fairy-agent helper-trust).")
+	const locked = "After this each of these machines is locked: what it trusts is changed only on the machine itself (fairy-agent helper-trust)."
+	items = append(items, turnOnLines(asked, maxPlanItems-len(items)-len(notOn)-1)...)
+	items = append(append(items, notOn...), locked)
 	plan, err := approval.NewPlan(bound)
 	if err != nil {
 		return apierr.New(apierr.Upstream, "the machines' challenges cannot be used: "+textsafe.Clip(err.Error(), 200))
@@ -724,25 +728,87 @@ func errText(err error, def string) string {
 	return def
 }
 
-// userLine is the list of users as the dialog shows it: name and the start of the Pocket ID user id.
-func userLine(users []approval.User) string {
-	var out []string
-	for _, u := range users {
-		name := u.Name
-		if name == "" {
-			name = "(not a user of this panel)"
-		}
-		out = append(out, fmt.Sprintf("%s [%s, %s]", name, shortSub(u.Sub), u.Why))
-	}
-	return strings.Join(out, "; ")
+// turnOnAsked is one machine of a Turn on as "Confirm it's you" shows it: its name, what checks there, and who
+// may approve on it from then on (the users of the proposal the passkey signs for it).
+type turnOnAsked struct {
+	name, by string
+	users    []approval.User
 }
 
-// shortSub is the start of a Pocket ID user id, enough to tell users apart in a dialog.
-func shortSub(sub string) string {
-	if len(sub) > 13 {
-		return sub[:13] + "…"
+// userLine is one person as the dialog shows them: the name, the Pocket ID user id IN FULL, and why they are on
+// the list. One line each, so that no line is cut in the middle of a list.
+func userLine(u approval.User) string {
+	name := u.Name
+	if name == "" {
+		name = "(not a user of this panel)"
 	}
-	return sub
+	return fmt.Sprintf("· %s [%s, %s]", name, u.Sub, u.Why)
+}
+
+// turnOnLines are the lines of "Confirm it's you" that say who may approve on which machine (audit 6,
+// r4-b1-03). It was one line per machine with all its people in it, and a line of the dialog is cut at 240
+// bytes: with five ids in approval.users the confirmation named two people and cut the third in its middle,
+// for the list that is locked into the machine afterwards.
+//
+// Now each person has a line of their own, with the user id in full, under the machine it is for and a line that
+// says how many they are. Machines that get the very same list stand together above it (several to a line), so
+// the list is not repeated for every machine. budget is how many lines the dialog has room for: when that is not enough the
+// last line says how many are left out and what to do, never a silent cut.
+func turnOnLines(asked []turnOnAsked, budget int) []string {
+	type group struct {
+		machines []string
+		users    []approval.User
+	}
+	var groups []*group
+	byList := map[string]*group{}
+	for _, a := range asked {
+		key := ""
+		for _, u := range a.users {
+			key += u.Sub + "\x00" + u.Name + "\x00" + u.Why + "\x01"
+		}
+		g := byList[key]
+		if g == nil {
+			g = &group{users: a.users}
+			byList[key] = g
+			groups = append(groups, g)
+		}
+		g.machines = append(g.machines, fmt.Sprintf("%s (checked by its %s)", a.name, a.by))
+	}
+	var lines []string
+	for _, g := range groups {
+		// the machines of one list, several to a line while a line stays well under what the dialog cuts
+		line := ""
+		for _, m := range g.machines {
+			if line != "" && len(line)+2+len(m) > 200 {
+				lines, line = append(lines, line), ""
+			}
+			if line != "" {
+				line += "; "
+			}
+			line += m
+		}
+		lines = append(lines, line)
+		who := "1 person may approve"
+		if len(g.users) != 1 {
+			who = fmt.Sprintf("%d people may approve", len(g.users))
+		}
+		if len(g.machines) == 1 {
+			lines = append(lines, who+" on it:")
+		} else {
+			lines = append(lines, fmt.Sprintf("%s on each of these %d machines:", who, len(g.machines)))
+		}
+		for _, u := range g.users {
+			lines = append(lines, userLine(u))
+		}
+	}
+	if budget < 2 {
+		budget = 2
+	}
+	if len(lines) > budget {
+		left := len(lines) - (budget - 1)
+		lines = append(lines[:budget-1], fmt.Sprintf("%d more lines do not fit here. Cancel, and turn on fewer machines at a time to read every list.", left))
+	}
+	return lines
 }
 
 func resultLine(results []turnOnResult) string {
