@@ -181,7 +181,8 @@ manual install per machine) is in Fairy-agent's
 * **The panel**: `fairy update` on its host as root (or the wrapper `deploy/fairy-update` as
   `/usr/local/sbin/fairy-update`). It checks the release signature with the key built into the running binary,
   keeps `/usr/local/bin/fairy.old`, restarts `fairy.service` and rolls back if the service does not stay up and
-  answer `/healthz`. Or **Update panel** on the Updates page (admins): the panel (user `fairy`, no root) may only
+  answer `/healthz`. It updates the program `fairy.service` starts: started from another file (a copy, an old
+  download) it stops at once and names the installed one. Or **Update panel** on the Updates page (admins): the panel (user `fairy`, no root) may only
   *start* the root oneshot unit `fairy-panel-update.service` (`deploy/fairy-panel-update.service`), allowed by one
   polkit rule (`deploy/fairy-panel.polkit.rules`: user `fairy`, that unit, verb `start`, nothing else). The unit
   runs `fairy update --yes --from-panel`, takes nothing from the web request, never installs an older or the

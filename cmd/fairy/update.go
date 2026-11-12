@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -122,6 +123,18 @@ func update(args []string) int {
 		status = &panelupdate.Writer{Path: panelupdate.StatusPath, From: version}
 	}
 	if !*check {
+		// The program this run replaces must be the one fairy.service starts (audit 6, r4-p4-02: started from a
+		// copy, `sudo ./fairy update` replaced the copy, restarted the service and said "Done: fairy N is
+		// running" with the installed program and the panel as they were).
+		if why := notTheServices(exe, unit.Path); why != "" {
+			fmt.Fprintln(os.Stderr, "fairy update:", why)
+			if status != nil {
+				if st, ok := panelupdate.Read(panelupdate.StatusPath); !ok || st.Finished {
+					status.Step("failed", "", clipTo(why, 300))
+				}
+			}
+			return 1
+		}
 		// One update at a time on this host, from the first look to the end of a rollback: two runs that
 		// overlap take each other's fairy.old away, and a release that does not come up then leaves no
 		// working program (r2-p4-06).
@@ -207,6 +220,58 @@ func update(args []string) int {
 		setupPanelButton()
 	}
 	return 0
+}
+
+// notTheServices says why this run must not go on: the program that was started (exe, links followed) is not
+// the file fairy.service starts (path= of its ExecStart, as systemd has it). "" when it is that file, by its
+// path or as the same file under another name, and when systemd did not say what the service starts: then the
+// check after the restart is the one that looks (serviceRunsOther).
+func notTheServices(exe, unitPath string) string {
+	if unitPath == "" {
+		return ""
+	}
+	svc, err := filepath.EvalSymlinks(unitPath)
+	if err != nil {
+		svc = filepath.Clean(unitPath)
+	}
+	if svc == exe {
+		return ""
+	}
+	if a, err := os.Stat(svc); err == nil {
+		if b, err := os.Stat(exe); err == nil && os.SameFile(a, b) {
+			return ""
+		}
+	}
+	return fmt.Sprintf("this program (%s) is not the one fairy.service runs (%s): an update of it would leave the panel as it is. "+
+		"Nothing was changed. Run the installed one: sudo %s update", exe, unitPath, unitPath)
+}
+
+// serviceMainPID asks systemd for the process fairy.service runs. ok is false when it does not say.
+func serviceMainPID(ctx context.Context) (pid int, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "systemctl", "show", "fairy.service", "-p", "MainPID", "--value").Output()
+	if err != nil {
+		return 0, false
+	}
+	pid, err = strconv.Atoi(strings.TrimSpace(string(out)))
+	return pid, err == nil && pid > 0
+}
+
+// serviceRunsOther reports whether the process pid runs another program than the file at target: the health
+// check after the restart says "healthy" (and the run "Done: fairy N is running") only for a service whose
+// process is the program that was just put in place. seen is false when that cannot be looked at (the
+// process is gone, /proc is not there): the check is then what it was, the service is active and answers.
+func serviceRunsOther(pid int, target string) (other, seen bool) {
+	runs, err := os.Stat(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return false, false
+	}
+	want, err := os.Stat(target)
+	if err != nil {
+		return false, false
+	}
+	return !os.SameFile(runs, want), true
 }
 
 // errUpdateRunning: another `fairy update` on this host holds the lock.
@@ -354,6 +419,7 @@ func clearStoppedRun(dir, statusPath string, fromPanel bool, now time.Time, unit
 // unitSettings is what systemd says about fairy.service: the command line it starts and the environment it
 // gives it. Empty when systemd cannot be asked.
 type unitSettings struct {
+	Path     string   // ExecStart's path=: the program systemd starts
 	Args     []string // ExecStart's arguments
 	Env      []string // Environment=, as KEY=VALUE
 	EnvFiles []string // EnvironmentFile=, in order
@@ -394,6 +460,10 @@ func parseUnit(out string) unitSettings {
 		k, v, _ := strings.Cut(strings.TrimSpace(line), "=")
 		switch k {
 		case "ExecStart":
+			if _, rest, ok := strings.Cut(v, "path="); ok {
+				rest, _, _ = strings.Cut(rest, " ; ")
+				u.Path = strings.TrimSpace(rest)
+			}
 			if _, rest, ok := strings.Cut(v, "argv[]="); ok {
 				rest, _, _ = strings.Cut(rest, " ; ")
 				words, sure := unitWords(rest)
@@ -759,6 +829,11 @@ func systemdInstaller(target, healthURL string) *release.Installer {
 		Healthy: func(ctx context.Context) error {
 			if err := systemctl(ctx, "is-active", "--quiet", "fairy.service"); err != nil {
 				return errors.New("fairy.service is not active")
+			}
+			if pid, ok := serviceMainPID(ctx); ok {
+				if other, seen := serviceRunsOther(pid, target); seen && other {
+					return fmt.Errorf("fairy.service runs another program than %s", target)
+				}
 			}
 			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 			resp, err := hc.Do(req)
