@@ -534,7 +534,9 @@ machine is ready there is no button, and one line says so); a machine's own page
   with the very values it is asked to trust. So a wrong address, client id, key or user id is found now, not
   at the first shutdown. Nothing is written otherwise.
 * The result is shown per machine and written to the Audit log: accepted, the proof was refused, already
-  set, or offline.
+  set, offline, or "not known": the machine was sent its trust and gave no answer, so it may have been
+  written. Look at the machine's **Approval** then; if it shows the check on and "Not on record", accept its
+  id there.
 
 **Afterwards it is locked.** The panel cannot change or remove a machine's trust, and neither can anybody
 with the panel's tokens. It is changed only on the machine, as root / Administrator:

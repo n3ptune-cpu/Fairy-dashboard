@@ -91,9 +91,11 @@ type approvalMachine struct {
 
 // turnOnResult is how one machine answered a Turn on.
 type turnOnResult struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Outcome string `json:"outcome"` // accepted | proof_refused | already_set | offline | refused | not_asked
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Outcome: accepted | proof_refused | already_set | offline (it was not sent the trust: it did not answer
+	// before) | refused | not_asked | no_answer (it was sent the trust and gave no answer: it may be written)
+	Outcome string `json:"outcome"`
 	Text    string `json:"text"`
 	// More is the machine's own longer answer, for the info button of the row (audit 5, r1-b2-07): the row
 	// itself keeps one short sentence.
@@ -561,19 +563,50 @@ func (s *Server) turnOnRun(c *reqCtx, u *model.User, g *approvalGrant, hosts []s
 		s.Poller.Scheduler.Kick("agent:" + a.ID)
 	}
 	s.turnOnDone(u, results)
-	ok := 0
+	ok, unknown := 0, 0
 	for _, r := range results {
-		if r.Outcome == "accepted" {
+		switch r.Outcome {
+		case "accepted":
 			ok++
+		case "no_answer":
+			unknown++
 		}
 	}
 	msg := fmt.Sprintf("%d of %d machines now check approvals themselves. %s", ok, len(results), resultLine(results))
+	if unknown > 0 {
+		// a machine that gave no answer may have taken the trust: the count is of the ones that said so, and
+		// the sentence does not claim a number nobody knows
+		msg = fmt.Sprintf("%d of %d machines confirmed that they check approvals themselves now; not known for %d (no answer). %s", ok, len(results), unknown, resultLine(results))
+	}
 	status := 200
 	if ok == 0 {
 		status = 409
 	}
 	c.json(status, map[string]any{"results": results, "message": textsafe.Clip(msg, 290), "detail": map[string]any{"message": textsafe.Clip(msg, 290)}})
 	return nil
+}
+
+// trustNoAnswer is what a Turn on says for a machine that was sent its trust and gave no answer: not "refused"
+// and not "nothing was written", because nobody knows.
+const trustNoAnswer = "no answer: it may have been written; look at the machine's Approval."
+
+// agentsOwn reports whether an answer with an error status is the agent's own "no": the agent answers every
+// refusal with a JSON object that has its reason in "error" or a "code". 502 and 504 are never that: they are
+// what a gateway answers after it passed the request on, and what the agent itself answers when its helper was
+// sent the request and did not answer in time (Fairy-agent, helperUnanswered: "it may be written all the same").
+func agentsOwn(status int, code, text string) bool {
+	return status >= 400 && status != 502 && status != 504 && (code != "" || text != "")
+}
+
+// trustTaken is the panel's own look at a machine that was sent its trust and gave no answer, before anything
+// final is said about it: it asks the machine for its state now. true only when the machine shows the check on
+// with the machine id the panel made up for it and with the hash of exactly this proposal: then it took the
+// trust, and the id is on record like after an answer. Everything else (no answer, no check yet, another
+// check) is "not known": the helper may still write it, and the machine's Approval shows what becomes of it.
+func (s *Server) trustTaken(c *reqCtx, a config.Agent, in api.TrustInit) bool {
+	ap, ok := s.Poller.ApprovalNow(c.r.Context(), a.ID)
+	return ok && ap != nil && ap.State == api.ApprovalRequired && ap.Proto == api.ApprovalProto &&
+		ap.MachineID == in.MachineID && ap.TrustHash != "" && ap.TrustHash == api.TrustHash(in)
 }
 
 // sendTrust sends one machine its proposal with the approval (POST /approval/trust) and reads its answer.
@@ -588,8 +621,23 @@ func (s *Server) sendTrust(c *reqCtx, a config.Agent, name string, in api.TrustI
 	status, data, err := s.Poller.AgentRequest(c.r.Context(), a, "POST", api.PathApprovalTrust, in)
 	code, text := jsonx.S(data, "code"), textsafe.Clip(jsonx.S(data, "error"), maxAgentError)
 	switch {
-	case err != nil:
-		res.Outcome, res.Text = "offline", "it did not answer ("+devices.Describe(err)+"). Whether it took the trust is not known: look at its page."
+	case err != nil || status < 200 || (status >= 300 && !agentsOwn(status, code, text)):
+		// The request left the panel and no answer of the agent came back: a timeout, a broken connection, a
+		// gateway's page, or the agent's own 504 (its helper has the trust and did not answer in time). It used
+		// to read "refused ... Nothing was written." for the last two, which nobody can know. The machine is
+		// asked for its state before anything final is said.
+		if s.trustTaken(c, a, in) {
+			res.Outcome, res.Text = "accepted", "it gave no answer to the request, and its state shows that it took the trust: it checks approvals itself now. It is locked."
+			break
+		}
+		res.Outcome, res.Text = "no_answer", trustNoAnswer
+		if err != nil {
+			res.More = "It did not answer (" + devices.Describe(err) + ")."
+		} else if text != "" {
+			res.More = text
+		} else {
+			res.More = fmt.Sprintf("It answered HTTP %d, which is not an answer of the agent.", status)
+		}
 	case status == 200 && jsonx.S(data, "state") == api.ApprovalRequired:
 		res.Outcome, res.Text = "accepted", "it verified the approval against what it was proposed and now checks approvals itself. It is locked."
 		if got := jsonx.S(data, "machine_id"); got != in.MachineID {

@@ -1011,7 +1011,7 @@ function approvalPinNote(a, s) {
   return m?.stale_keys ? `<div class="warnbox" id="ap-stale">This machine pins a key that Pocket ID no longer publishes: it will refuse every approval. On the machine, as administrator: <code>fairy-agent helper-trust set --fetch-keys</code></div>` : "";
 }
 const TURN_ON_RESULT = table({ accepted: ["ok", "switched on · locked"], proof_refused: ["bad", "proof refused"], already_set: ["warn", "already on"], offline: ["bad", "no answer"],
-  refused: ["bad", "not switched on"], not_asked: ["", "not asked"] });
+  refused: ["bad", "not switched on"], not_asked: ["", "not asked"], no_answer: ["warn", "not known"] });
 function turnOnResults(rep) {
   if (!rep || !(rep.results || []).length) return "";
   return `<div class="wu-sub">Last Turn on · by ${esc(rep.by)} <span data-ago="${esc(rep.at)}">${ago(rep.at)}</span></div>

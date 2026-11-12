@@ -33,6 +33,10 @@ var (
 	approvalAlgRe   = regexp.MustCompile(`^[A-Za-z0-9]{1,16}$`)
 )
 
+// AgentApproval is the `approval` block of an agent's /metrics answer as the poller takes it (nil: none), for a
+// caller that asks an agent itself (poller.ApprovalNow).
+func AgentApproval(m jsonx.M) *model.Approval { return agentApproval(m) }
+
 // agentApproval reads the optional `approval` block; nil when the agent sends none.
 func agentApproval(m jsonx.M) *model.Approval {
 	b := jsonx.Obj(m, "approval")

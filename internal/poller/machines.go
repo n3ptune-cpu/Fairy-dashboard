@@ -1,6 +1,7 @@
 package poller
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 )
 
 // The panel's record of the machines that check passkey approvals themselves (internal/approval, binding.go;
@@ -525,6 +527,25 @@ func (p *Poller) AcceptMachine(agentID, by string, want AcceptWant) (what string
 	err = p.flushMachines()
 	p.emitMachines(evs)
 	return what, before, err
+}
+
+// ApprovalNow asks the agent for its /metrics now and returns what it says about its own check (nil: it answers
+// without the block). ok is false when it gave no answer. Like ProbeAgent it does not change what the poller
+// knows; a caller that wants that kicks the agent's poll. It is for the one moment the panel must know before it
+// says anything final: a Turn on whose request got no answer (the trust may be written all the same).
+func (p *Poller) ApprovalNow(ctx context.Context, agentID string) (ap *model.Approval, ok bool) {
+	a, found := p.AgentByID(agentID)
+	if !found {
+		return nil, false
+	}
+	timeout := time.Duration(p.Cfg.RequestTimeout * float64(time.Second))
+	cctx, cancel := context.WithTimeout(ctx, timeout+500*time.Millisecond)
+	defer cancel()
+	payload, err := p.Backend.FetchAgentMetrics(cctx, a, timeout)
+	if err != nil {
+		return nil, false
+	}
+	return normalise.AgentApproval(payload), true
 }
 
 // forgetMachineLocked drops the record of an agent that was removed from the panel. Caller holds p.mu; the

@@ -399,6 +399,10 @@ func challengeRefusal(name string, status int, data jsonx.M, why string) error {
 		return apierr.New(409, msg)
 	}
 	switch {
+	case status == 502 || status == 504:
+		// No answer: a gateway's two statuses, and the agent's own when its helper was sent the question and
+		// did not answer in time. A question changes nothing on the machine, and no request follows it.
+		return apierr.New(502, fmt.Sprintf("%s gave no answer to the question about an approval (HTTP %d). No request was sent to it: try again.", name, status))
 	case status == 401:
 		return apierr.New(apierr.Upstream, "agent rejected the control token (check control_token_env)")
 	case status == 503 && (code == api.ReasonHelperStopped || code == api.ReasonHelperError):
