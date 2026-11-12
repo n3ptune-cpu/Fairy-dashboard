@@ -94,6 +94,12 @@ func (s *Server) stream(c *reqCtx) error {
 			return apierr.New(422, "notes_after must be a notification id")
 		}
 	}
+	// A browser that lost the connection opens the stream again by itself: with the address the page gave it and
+	// the id of the last `notes_new` it was sent (writeNewNotes). It goes on after that one, not "from now", or
+	// the events made during the break would never be pop-ups. The newer of the two counts.
+	if id, err := strconv.ParseInt(c.r.Header.Get("Last-Event-ID"), 10, 64); err == nil && id > notesAfter {
+		notesAfter = id
+	}
 	release, ok := s.codec.live.streams.acquire(c.user.Sub) // the user, or "token:<id>"
 	if !ok {
 		c.w.Header().Set("Retry-After", streamRetryAfterS)
@@ -177,6 +183,7 @@ type streamState struct {
 	sub       string            // the user, for the `notes` counts
 	noteAfter int64             // id of the last notification considered for `notes_new`
 	noteSent  bool              // the first `notes_new` (it carries `last` even without events) was sent
+	idTaken   bool              // an `ups_event` put its own id on the stream: the notes id has to follow it again
 }
 
 // next returns the events due in this tick (possibly none).
@@ -300,6 +307,7 @@ func (st *streamState) writeUPSEvents(out *bytes.Buffer) {
 			continue
 		}
 		fmt.Fprintf(out, "event: ups_event\nid: ups-%d\ndata: %s\n\n", e.Seq, b)
+		st.idTaken = true
 	}
 }
 
@@ -349,7 +357,10 @@ type newNote struct {
 
 // writeNewNotes sends `notes_new` {last, events, more, more_urgent}: once when the stream opens (no events:
 // `last` is where the page's pop-ups start), then whenever a warning or critical event was made that this
-// user may see. Info events and events of systems outside the user's sites are never sent.
+// user may see. Info events and events of systems outside the user's sites are never sent. Each one is followed
+// by `id: <last>` (a block of its own: it is no event, it only sets the stream's last event id), which a browser
+// sends back as Last-Event-ID when it reopens the stream by itself. An `ups_event` has an id of its own
+// (`ups-<seq>`, which nothing reads back): after one, the notes id is sent again, so that it stays the last.
 func (st *streamState) writeNewNotes(out *bytes.Buffer) {
 	if st.s.Notes == nil || st.sub == "" {
 		return
@@ -359,8 +370,11 @@ func (st *streamState) writeNewNotes(out *bytes.Buffer) {
 	if len(evs) == 0 && more == 0 {
 		if !st.noteSent {
 			st.noteSent = true
-			fmt.Fprintf(out, "event: notes_new\ndata: "+newNotesNothing+"\n\n", last)
+			fmt.Fprintf(out, "event: notes_new\ndata: "+newNotesNothing+"\n\nid: %d\n\n", last, last)
+		} else if st.idTaken {
+			fmt.Fprintf(out, "id: %d\n\n", last)
 		}
+		st.idTaken = false
 		return
 	}
 	p := struct {
@@ -377,8 +391,8 @@ func (st *streamState) writeNewNotes(out *bytes.Buffer) {
 		encodeFailed("notes_new", "", err)
 		b = []byte(fmt.Sprintf(newNotesNothing, last))
 	}
-	st.noteSent = true
-	fmt.Fprintf(out, "event: notes_new\ndata: %s\n\n", b)
+	st.noteSent, st.idTaken = true, false
+	fmt.Fprintf(out, "event: notes_new\ndata: %s\n\nid: %d\n\n", b, last)
 }
 
 func newNoteOf(e notifications.Event) newNote {
