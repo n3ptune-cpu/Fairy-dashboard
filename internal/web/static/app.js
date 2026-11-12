@@ -1705,7 +1705,7 @@ function pageUsers() {
     <div class="panel glass scroll"><table class="table users"><thead><tr><th>User</th><th>Role</th><th>Sites they see</th><th>Last seen</th><th class="num"></th></tr></thead>
       <tbody>${d.users.map(userRow).join("") || '<tr><td colspan="5" class="note">Nobody has signed in yet.</td></tr>'}</tbody></table></div>
     <div class="section-title">Sites <span class="count">${d.sites.length}</span></div>
-    <form class="toolbar" id="site-form"><input class="input" id="site-name" maxlength="40" placeholder="New site name, e.g. Home" autocomplete="off"><button class="btn" type="submit">Create site</button></form>
+    <form class="toolbar" id="site-form"><input class="input" id="site-name" maxlength="40" placeholder="New site name, e.g. Home" autocomplete="off"><button class="btn" type="submit">Create site</button><span class="error" id="site-err" role="alert"></span></form>
     <div class="panel glass scroll"><table class="table sites"><thead><tr><th>Site</th><th class="num">Hosts</th><th class="num">Viewers</th><th class="num"></th></tr></thead>
       <tbody>${d.sites.map(siteRow).join("") || '<tr><td colspan="4" class="note">No sites yet.</td></tr>'}</tbody></table></div>
     ${KIND_TITLE.map(([k, title, f]) => {
@@ -1758,8 +1758,12 @@ document.addEventListener("submit", (e) => {
   if (e.target.id !== "site-form") return;
   e.preventDefault();
   const name = $("#site-name").value.trim();
-  if (name) adminCall(`Create site ${name}`, "POST", "/api/admin/sites", { name });
+  if (name) { adminCall(`Create site ${name}`, "POST", "/api/admin/sites", { name }); return; }
+  // no name (or only spaces): say so at the field, instead of doing nothing
+  $("#site-err").textContent = "Type a name for the site.";
+  $("#site-name").focus();
 });
+document.addEventListener("input", (e) => { if (e.target.id === "site-name" && $("#site-err")) $("#site-err").textContent = ""; });
 
 // ------------------------------------------------------------ sessions (everyone: their own; admins: everyone's)
 // Where this account is signed in, and "Sign out" for the other ones. The page gets a handle per session (id),

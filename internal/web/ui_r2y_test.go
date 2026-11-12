@@ -154,3 +154,17 @@ func TestUIAHostWhoseAgentIsStoppedIsNotOfferedPowerOn(t *testing.T) {
 		}
 	}
 }
+
+// r2-b1-15: "Create site" with an empty name did nothing and said nothing.
+func TestUICreateSiteWithoutANameSaysSo(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		`<button class="btn" type="submit">Create site</button><span class="error" id="site-err" role="alert"></span></form>`,
+		`$("#site-err").textContent = "Type a name for the site.";`,
+		`if (e.target.id === "site-name" && $("#site-err")) $("#site-err").textContent = "";`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+}
