@@ -879,6 +879,14 @@ func (c *reqCtx) wakeUpdateSwitchDetail(*model.User) string {
 		return ""
 	}
 	if *b.Enabled {
+		// A machine that checks approvals itself is in no run. "Confirm it's you" said the opposite ("a run you
+		// start may then wake, update and switch off this machine"), after the page had asked the same, and
+		// the result then said that no run can take it (audit 6, r4-b1-04). The truth is said here, up front.
+		if x, err := c.find(c.r.PathValue("id")); err == nil {
+			if h, ok := c.s.wuHostOf(x); ok && h.Approval != "" {
+				return "switch it on; no run can take it for now: " + wuSwitchWhy(h)
+			}
+		}
 		return "switch it on: a run you start may then wake, update and switch off this machine"
 	}
 	return "switch it off"

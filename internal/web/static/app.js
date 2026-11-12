@@ -1978,7 +1978,7 @@ function wakeUpdateBox() {
     <td>${h.can_wake ? `via ${esc(h.relay)}` : `<span class="note" title="Fairy cannot wake this machine: in a run it is only updated while it is on">${esc(h.no_wake || h.why_not)}</span>`}</td>
     <td>${h.opted_in ? '<span class="chip ok">switched on</span>' : '<span class="note">off</span>'}${whyNot(h) ? `<div class="note wu-why-col">${esc(whyNot(h))}</div>` : ""}</td>
     <td class="num"><button class="btn sm" type="button" data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"
-      ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
+      ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.approval ? `No run can take it for now: ${h.why || "it checks approvals itself"}` : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
   const earlier = d.active ? d.last : d.last.slice(1), showEarlier = !!wu.open.earlier;
   return `<div class="panel glass pad wu" data-key="wu">
     <div class="wu-top"><h3>Update unpowered hosts${infoBtn("wu", "Update unpowered hosts", infoList([
@@ -2117,7 +2117,10 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.act === "wu-cancel") { openWakeCancel(t.dataset.id); return; }
   if (t.dataset.act === "wu-log") { const k = t.dataset.k; if (wu.open[k]) delete wu.open[k]; else wu.open[k] = true; render(); return; }
   const on = t.dataset.on === "1", name = t.dataset.name, path = `/api/systems/${enc(t.dataset.id)}/wake-update`, body = { enabled: on };
-  if (on && !confirm(`Switch "Update unpowered hosts" on for ${name}? In a run that you start on the Updates page, Fairy may then wake this machine, update its agent and switch it off again.`)) return;
+  // A machine that checks approvals itself is in no run: the question about waking it and switching it off is not
+  // asked for it. "Confirm it's you" says what is true for it, and so does the answer.
+  const inNoRun = !!(wu.data?.hosts || []).find((h) => h.id === t.dataset.id)?.approval;
+  if (on && !inNoRun && !confirm(`Switch "Update unpowered hosts" on for ${name}? In a run that you start on the Updates page, Fairy may then wake this machine, update its agent and switch it off again.`)) return;
   const label = `${on ? "Switch on" : "Switch off"} "Update unpowered hosts" for ${name}`;
   try {
     const r = await controlCall({ kind: "request", label, method: "PUT", path, body }, () => api(path, { method: "PUT", body: JSON.stringify(body) }));
