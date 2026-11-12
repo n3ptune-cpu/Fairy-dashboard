@@ -13,9 +13,9 @@ import (
 // Which machine an approval is for (audit 5, r1-x1-01).
 //
 // A machine that checks approvals has a machine id in its trust file, and every approval names the id of the
-// machine it is for. A machine cannot see other machines, so what the id is worth rests on the panel: the panel
-// keeps, for each host, the id it has ON RECORD, and builds every approval with that one. It never takes the id
-// from an answer that came with a challenge. An id comes on record in two ways only:
+// machine it is for. A machine cannot tell whether another machine has its id, so what the id is worth rests on
+// the panel: the panel keeps, for each host, the id it has ON RECORD, and builds every approval with that one.
+// It never takes the id from an answer that came with a challenge. An id comes on record in two ways only:
 //
 //   - the panel made it up itself when the check was switched on from here ("turn-on"), or
 //   - an admin accepted, in the panel, exactly the id the host showed ("accepted").

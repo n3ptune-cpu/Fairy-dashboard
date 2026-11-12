@@ -542,13 +542,15 @@ fairy-agent helper-trust clear                 # off again: nothing needs an app
 ```
 
 **Which machine an approval is for.** Every approval names the machine it is for, by a **machine id** in that
-machine's trust file, and a machine accepts only an approval with its own id. A machine cannot see the other
-machines, so the panel keeps the id it has **on record** for each host (`machines.json` in the data folder,
-written like the other state files, mode 0600) and makes every approval with that one, never with what a
-host answers at that moment. An id comes on record in two ways only: when you Turn on from the panel (the
+machine's trust file, and a machine accepts only an approval with its own id. A machine cannot tell whether
+another machine has the same id, so the panel keeps the id it has **on record** for each host
+(`machines.json` in the data folder, written like the other state files, mode 0600) and makes every approval
+with that one, never with what a host answers at that moment. An id comes on record in two ways only: when you Turn on from the panel (the
 panel makes it up), or when an admin accepts the id a host shows (below). Never because a host shows it: a
 machine id is no secret, and a host that answers in another machine's name would show that machine's id.
-Admins see it in the Approval box (hover "Machine id"); nobody else does, and no API answer carries it.
+In the panel, admins see it in the Approval box (hover "Machine id"); other users and API tokens get no id
+from the panel. It is a name, not a secret: a machine shows its own id to whoever may read its `/metrics`,
+and the machines of one batch see each other's (Known limits, below).
 
 From then on the record counts. The Overview shows a red key sign behind the host's name, and its Approval
 box and the Updates page say which of these it is:
@@ -623,6 +625,14 @@ switch it off on its own page.
 * A long refusal shows its first sentence; the machine's own words are behind **Details**, and the message
   stays until you close it.
 * API tokens cannot give an approval: a control token gets 403 for these actions on such a machine.
+
+**Known limits.**
+
+* One approval that covers several machines (Turn on for several, Update all) is sent to each of them with
+  the whole list of entries, so every machine of that batch receives the machine ids of the others. Each
+  machine needs the list to work out what the passkey signed. An id alone opens nothing: it names a machine,
+  and it comes on record for a host only by Turn on or an admin's accept. What would close it: sending the
+  other machines' entries as hashes, which is a change of the protocol and needs a later agent release.
 
 **Windows and Linux** are treated the same by the panel. On Windows the elevated helper
 (`fairy-agent-helper`) checks what goes through it and the agent checks the rest with the same trust file;
@@ -1134,8 +1144,10 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   on to another machine gets an approval that machine refuses. An id comes on record only when the panel
   issues it at Turn on or when an admin accepts it, never because a host shows it. A check that is on with
   no id on record, a changed id, one id on two hosts and a check that is gone stop every approval for the
-  host until an admin accepts it (browser session only, "Confirm it's you", audited). Machine ids are shown to admins in a browser only; the audit log has their first six
-  characters.
+  host until an admin accepts it (browser session only, "Confirm it's you", audited). In the panel, machine
+  ids are shown to admins in a browser only, and the audit log has their first six characters. They are
+  names, not secrets: the machines of one batch receive each other's ("Known limits" under "The check on
+  the machine itself").
 * Roles, managed in the panel (`users.json`, Users page or `fairy admin users|sites`), keyed by the OIDC subject:
   **admin** sees everything, may use control actions, the Audit and Users pages; **viewer** is read-only and sees
   only the systems, guests, power sources, UPSes (and their processes, sensors, history) of their sites;
