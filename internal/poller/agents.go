@@ -165,6 +165,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	now, ts := p.now()
 	sys := normalise.NormaliseAgent(a, payload, now, ts, p.rates)
 	info := agentInfoOf(payload, now)
+	info.seenMono = p.mono() // the same moment as SeenAt, on the steady clock (AgentInfo.SeenAgo)
 	p.mu.Lock()
 	if sys.Helper != nil {
 		normalise.ApplyHelperPause(a, &sys, normalise.HelperUnavailable(payload), p.helperSeenLocked(a.ID, sys, now))
@@ -225,7 +226,13 @@ type AgentInfo struct {
 	SelfUpdate map[string]any // the agent's self_update block (nil: off or an older agent)
 	Enabled    bool           // features.self_update
 	SeenAt     time.Time
-	Online     bool // the latest poll succeeded
+	// SeenAgo: how long ago that answer came, on the steady clock. SeenAt is a time of day: it can be compared
+	// with another time of day only as long as nobody set the clock in between. A caller that asks "did this
+	// answer come after a moment of mine" goes by SeenAgo and places it on a steady clock of its own (the wake /
+	// update / shut down run: "from after my shutdown request"; review of fix7r2, R2-01).
+	SeenAgo  time.Duration
+	seenMono time.Duration // the steady clock when the answer came
+	Online   bool          // the latest poll succeeded
 	// QuietSince: since when the panel has asked the agent, poll after poll, and got nothing at all: no answer
 	// and no other sign that the machine runs. Zero while it answers, while it shows that it runs without a
 	// usable answer (see Sign; or it is a Proxmox node that the cluster shows as online), while it was never
@@ -506,6 +513,9 @@ func (p *Poller) AgentInfo(id string) (AgentInfo, bool) {
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
+	if ok {
+		i.SeenAgo = p.mono() - i.seenMono
+	}
 	i.QuietSince, i.Sign, i.Silent = p.quietLocked(id, interval)
 	i.Refused = i.Sign == SignRefused
 	return i, ok
@@ -521,6 +531,9 @@ func (p *Poller) AgentSeen(id string) (AgentInfo, model.System, bool) {
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
+	if ok {
+		i.SeenAgo = p.mono() - i.seenMono
+	}
 	i.QuietSince, i.Sign, i.Silent = p.quietLocked(id, interval)
 	i.Refused = i.Sign == SignRefused
 	s, known := p.systems[id]

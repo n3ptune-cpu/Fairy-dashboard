@@ -125,7 +125,7 @@ func (o runOps) Observe(id string) wakerun.Observation {
 		return wakerun.Observation{}
 	}
 	info, sys, known := o.s.Poller.AgentSeen(a.ID)
-	obs := wakerun.Observation{Online: info.Online, SeenAt: info.SeenAt, QuietSince: info.QuietSince, Version: info.Version, UpdateEnabled: info.Enabled,
+	obs := wakerun.Observation{Online: info.Online, SeenAt: info.SeenAt, SeenAgo: info.SeenAgo, QuietSince: info.QuietSince, Version: info.Version, UpdateEnabled: info.Enabled,
 		Paused: o.s.Poller.Scheduler.IsPaused(id) || o.s.Poller.Scheduler.IsPaused(a.ID)}
 	if known {
 		obs.Status = sys.Status

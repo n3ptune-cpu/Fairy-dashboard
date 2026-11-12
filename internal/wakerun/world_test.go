@@ -73,10 +73,11 @@ type machine struct {
 	quietSince   time.Time // the first of the row of polls without an answer it is in (zero: it answers)
 	obs          Observation
 	// the row of polls that got nothing at all, as the poller counts it (Observation.Silent)
-	silRow  uint64
-	silN    int
-	silMono time.Duration // the steady clock at the latest of them
-	silFrom time.Duration // the steady clock at the first silent poll since its last answer or sign of life
+	silRow   uint64
+	silN     int
+	silMono  time.Duration // the steady clock at the latest of them
+	silFrom  time.Duration // the steady clock at the first silent poll since its last answer or sign of life
+	seenMono time.Duration // the steady clock at its last answer (Observation.SeenAgo)
 
 	// for the judge
 	knownLimit    bool // this machine is the documented limit (r1-p2-01): the judge does not fail the test for it
@@ -184,6 +185,11 @@ func (w *world) Observe(id string) Observation {
 			ago, since := w.mono-mc.silMono, w.mono-mc.silFrom
 			w.clock.Unlock()
 			o.Silent = Silence{Row: mc.silRow, N: mc.silN, BeganAgo: ago, EndedAgo: ago, SinceAgo: since}
+		}
+		if mc.everAnswered { // the same for its last answer
+			w.clock.Lock()
+			o.SeenAgo = w.mono - mc.seenMono
+			w.clock.Unlock()
 		}
 		return o
 	}
@@ -471,6 +477,7 @@ func (w *world) poll() {
 			continue
 		}
 		mc.everAnswered, mc.lastAnswer, mc.quietSince, mc.silN = true, w.now, time.Time{}, 0
+		mc.seenMono = w.mono
 		o := Observation{Online: true, SeenAt: w.now, Status: "online", OnBy: mc.obs.OnBy, Version: mc.version, UpdateEnabled: mc.updMode != "disabled",
 			UpdateState: mc.updState, UpdateMessage: mc.updMsg, LastAt: mc.lastAt, LastOK: mc.lastOK, LastMessage: mc.lastMsg, Behind: mc.behind}
 		if float64(w.now.Unix()) < mc.lastAt { // the installer has not written its result yet

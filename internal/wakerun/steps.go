@@ -129,7 +129,8 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 	if c != nil { // a cancel that is being tried again keeps the reason it was first asked for
 		why = c.why
 	}
-	switch mono := m.mono(); {
+	mono := m.mono()
+	switch {
 	case c == nil && mono > h.dueMono:
 		m.endPastDue(r, h, now, why)
 		return
@@ -139,8 +140,8 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 	case c != nil && mono-c.lastMono < cancelRetry:
 		return
 	}
-	if p := h.otherPending(m.Ops.Observe(h.ID)); p != nil {
-		m.endOtherPending(r, h, now, why, p)
+	if o := m.Ops.Observe(h.ID); h.otherPending(o, h.answeredAfter(o, mono, r.Settings.ShutdownDelay)) != nil {
+		m.endOtherPending(r, h, now, why, o.Pending)
 		return
 	}
 	began := m.mono()
@@ -252,18 +253,43 @@ func (m *Manager) notCalledOff(r *Run, h *Host, now time.Time) {
 // a cancel too few lets a machine go off that was to stay on. It is called at every look at a machine whose
 // countdown runs, and keeps the first such answer (otherAt). The watch of the countdown asks it too, and lets
 // go of the machine when it says yes (stepShutting).
-func (h *Host) otherPending(o Observation) *Pending {
-	if h.lostShutdown() || !o.Online || !o.SeenAt.After(h.shutdownSent) || o.Pending == nil || o.Pending.Action == "shutdown" {
+//
+// after: the answer is from after the run's request (answeredAfter: by the steady clock).
+func (h *Host) otherPending(o Observation, after bool) *Pending {
+	if h.lostShutdown() || !after || o.Pending == nil || o.Pending.Action == "shutdown" {
 		return nil
 	}
 	if !h.pendingSeen && h.otherAt.IsZero() {
 		h.otherAt = o.SeenAt
 	}
-	if !h.pendingSeen && !o.SeenAt.After(h.otherAt) {
+	// "The next answer" is another answer than the first: SeenAt names the answer, and the poller only ever
+	// shows its latest one. (It is not asked which of two times of day is the later.)
+	if !h.pendingSeen && o.SeenAt.Equal(h.otherAt) {
 		return nil
 	}
 	p := *o.Pending
 	return &p
+}
+
+// answeredAfter reports whether the poller's latest answer from the machine came after the run's shutdown
+// request: after the moment the request's answer was here, or, for a request that got no answer, after the
+// moment before it left. mono is the run's steady clock, read before the poller was asked; delay is the
+// countdown the run asked for.
+//
+// Both moments are on the run's steady clock. The request's is kept as the two ends of the countdown (shutDown
+// sets dueMono to the answer's moment plus the delay, and endMin to the moment before the request plus the
+// delay), and the answer is placed by "how long ago" as the poller measured it (Observation.SeenAgo). It used
+// to be SeenAt after shutdownSent, two times of day: after the panel's clock was set back during a countdown
+// no answer was "from after the request" until the clock had caught up, so the run saw neither its own
+// countdown, nor that it was called off, nor another action in its place. A person's reboot in the place of the
+// run's shutdown was again "switched off again" when the machine restarted, and the run's cancel called that
+// reboot off (review of fix7r2, R2-01).
+func (h *Host) answeredAfter(o Observation, mono, delay time.Duration) bool {
+	sent := h.dueMono - delay
+	if h.ShutdownUnsure {
+		sent = h.endMin - delay
+	}
+	return o.Online && mono-o.SeenAgo > sent
 }
 
 // endOtherPending ends a machine whose countdown the run was about to call off, and did not: its agent shows
@@ -750,10 +776,12 @@ func (m *Manager) stepSettling(ctx context.Context, r *Run, h *Host, info HostIn
 // shutdown did not work. It is ON." one second into the countdown, and the machine went off two minutes later
 // with nobody told). What the agent reports is used for one thing: whether it still shows the action.
 func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Time) {
+	mono := m.mono() // before the poller is asked: what it says "ago" is then never placed later than it was
 	o := m.Ops.Observe(h.ID)
-	mono := m.mono()
+	// after: the latest answer is from after the run's request, by the steady clock (answeredAfter)
+	after := h.answeredAfter(o, mono, r.Settings.ShutdownDelay)
 	// counting: an answer from after the request, in which its agent shows the countdown
-	counting := o.Online && o.SeenAt.After(h.shutdownSent) && o.Pending != nil && o.Pending.Action == "shutdown"
+	counting := after && o.Pending != nil && o.Pending.Action == "shutdown"
 	// The run's shutdown is no longer what is pending on the machine, and another action is: the run lets go
 	// of it here, and never reads what comes after as its own shutdown. A person called the run's shutdown off
 	// on the machine's page and asked for a reboot; it started after the run's own due time, the machine gave
@@ -767,7 +795,7 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	//     was asked for by someone else: it is not the run's, and its end is not the run's result.
 	// What the run cannot tell: a shutdown that someone asked for in place of the run's without an answer of
 	// the agent in between that shows none. The agent's answer does not say whose a shutdown is.
-	if p := h.otherPending(o); p != nil {
+	if p := h.otherPending(o, after); p != nil {
 		m.endOtherAction(r, h, now, p, mono < h.endMin)
 		return
 	}
@@ -778,7 +806,7 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	if counting {
 		h.pendingSeen = true
 	}
-	if h.pendingSeen && o.Online && o.SeenAt.After(h.shutdownSent) && o.Pending == nil {
+	if h.pendingSeen && after && o.Pending == nil {
 		h.unpending = true
 	}
 	// The guests of a Proxmox node were asked about before the shutdown request (mayShutDown). One that starts
@@ -866,14 +894,16 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	// cancelled. One such answer can come from a poll that was already on its way when the shutdown was asked
 	// for, so it counts when the run has seen the countdown before, or with the next answer (a cancel within
 	// a second of the request is never seen as pending at all).
-	gone := o.Pending == nil && o.SeenAt.After(h.shutdownSent) && mono < h.endMin-3*time.Second
+	// ("From after the request" is by the steady clock, and "the next answer" is another answer than the first,
+	// as in otherPending: neither asks which of two times of day is the later.)
+	gone := o.Pending == nil && after && mono < h.endMin-3*time.Second
 	if gone && !h.pendingSeen && h.noPendingAt.IsZero() {
 		h.noPendingAt = o.SeenAt
 	}
 	switch {
-	case gone && lost && o.SeenAt.After(h.noPendingAt):
+	case gone && lost && !o.SeenAt.Equal(h.noPendingAt):
 		m.end(r, h, StLeftOn, OnYes, now, "The shutdown request got no answer, and its agent shows no countdown: the request did not arrive. It is ON."+updateTail(h))
-	case gone && (h.pendingSeen || o.SeenAt.After(h.noPendingAt)):
+	case gone && (h.pendingSeen || !o.SeenAt.Equal(h.noPendingAt)):
 		m.end(r, h, StLeftOn, OnYes, now, "Its shutdown was cancelled, in the panel or on the machine, so it is ON."+updateTail(h))
 	case mono-h.dueMono > offGrace && counting:
 		// The run's own countdown is long over, and its agent still shows a shutdown as pending: the agent

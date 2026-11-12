@@ -241,6 +241,11 @@ type Pending struct {
 type Observation struct {
 	Online bool      // the latest poll was answered
 	SeenAt time.Time // when the last answered poll was
+	// SeenAgo: how long ago that answer came, measured by the poller on its steady clock. SeenAt is a time of
+	// day, and the panel's clock can be set while a run works: whether an answer came after a moment of the
+	// run's own is decided with SeenAgo, placed on the run's steady clock (Host.answeredAfter), never by
+	// comparing two times of day. SeenAt names the answer (another value is another answer) and is shown.
+	SeenAgo time.Duration
 	// Status is the agent's state as the panel keeps it: "online", "stale" (no answer for less than
 	// offline_after), "offline", or "" when the panel never polled it.
 	Status string
@@ -464,8 +469,8 @@ type Host struct {
 	// ended), each plus the delay. dueMono is the run's own due time.
 	endMin, dueMono time.Duration
 	pendingSeen     bool          // the agent reported the run's shutdown as pending
-	noPendingAt     time.Time     // the first answer after the request that had no countdown in it (see stepShutting)
-	otherAt         time.Time     // the first answer after the request that showed another action than a shutdown as pending (otherPending)
+	noPendingAt     time.Time     // (SeenAt of) the first answer after the request that had no countdown in it (see stepShutting)
+	otherAt         time.Time     // (SeenAt of) the first answer after the request that showed another action than a shutdown as pending (otherPending)
 	unpending       bool          // after its countdown was seen, an answer showed nothing pending (stepShutting: a shutdown that shows after that is not the run's)
 	notPending      bool          // the run saw that its shutdown is no longer what is pending, and another action is: silence is never its "off" (look)
 	offQuiet        bool          // it gives nothing at all right now ...
@@ -947,9 +952,15 @@ func (m *Manager) look(r *Run, h *Host, now time.Time) {
 		return
 	}
 	_, known := m.Ops.Host(h.ID)
+	lookMono := m.mono() // read before the poller is asked: an answer is then never placed later than it came
 	o := m.Ops.Observe(h.ID)
 	canSee := known && !o.Paused
-	seenOn := canSee && ((o.Online && !o.SeenAt.Before(v.since.Add(-lookFresh))) || o.OnBy != "" ||
+	// An answer "from now" is one that is not older than lookFresh when the look began, by the steady clock
+	// (SeenAgo): with the two times of day, a clock that was set back while the look waited made every answer
+	// after it look old ("It does not answer now" for a machine that answers), and one set back just before the
+	// look made an old answer look new (review of fix7r2, R2-01: no times of day are compared any more here,
+	// but for askedAt, which is set in the same step as the look begins when it counts).
+	seenOn := canSee && ((o.Online && lookMono-o.SeenAgo >= v.sinceMono-lookFresh) || o.OnBy != "" ||
 		(!h.askedAt.IsZero() && !h.askedAt.Before(v.since.Add(-lookFresh)))) // the run's direct question was answered
 	base := v.neutral
 	if base == "" {
