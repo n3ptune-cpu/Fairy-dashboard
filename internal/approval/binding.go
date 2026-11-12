@@ -176,8 +176,10 @@ func Evaluate(id string, recs map[string]Record, reps map[string]Report) Binding
 			}
 			orec, oknown := recs[other]
 			for _, x := range ids(orec, oknown, reps[other]) {
-				// the admin's word: this host keeps the id on record, the other one must get its own
-				if x == m && !(pinned && rec.Holder && m == rec.MachineID && !(oknown && orec.Holder)) {
+				// the admin's word: this host keeps the id on record, the other one must get its own. It does
+				// not count against another host that was said to keep THIS id too (both are flagged then).
+				// That the other host keeps some other id changes nothing (second review of passkey-g, G-01).
+				if x == m && !(pinned && rec.Holder && m == rec.MachineID && !(oknown && orec.Holder && orec.MachineID == m)) {
 					with = appendOnce(with, other)
 				}
 			}

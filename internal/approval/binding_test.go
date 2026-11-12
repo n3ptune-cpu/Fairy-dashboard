@@ -22,6 +22,13 @@ func pin(id string) Record {
 	return Record{MachineID: id, How: PinTurnOn, At: t0, By: "nora", State: api.ApprovalRequired, StateAt: t0}
 }
 
+// keeps is the record of a host that an admin said keeps the id.
+func keeps(id string) Record {
+	r := pin(id)
+	r.Holder = true
+	return r
+}
+
 // shows is the answer of a machine that requires approvals and shows the id, asked after t0.
 func shows(id string) Report {
 	return Report{Heard: true, Block: true, State: api.ApprovalRequired, MachineID: id, Proto: api.ApprovalProto, Asked: t0.Add(time.Minute)}
@@ -95,6 +102,12 @@ func TestEvaluate(t *testing.T) {
 		"this host keeps the id":            {map[string]Record{"b": holder, "a": pin(idA)}, map[string]Report{"a": shows(idA), "b": shows(idA)}, BindOK, nil, true},
 		"both were said to keep it":         {map[string]Record{"a": holder, "b": holder}, nil, BindDuplicate, []string{"a"}, true},
 		"it keeps one id and shows another": {map[string]Record{"b": holder, "a": pin(idA)}, map[string]Report{"b": shows(idC)}, BindChanged, nil, true},
+		// (G-01) the other host keeps an id too, but ANOTHER one, and shows this host's: the admin's word for this
+		// host counts; and the other way round, the host that shows a kept id that is not its own is flagged
+		"this host keeps its id, the other keeps another id and shows this one": {map[string]Record{"b": keeps(idB), "a": holder},
+			map[string]Report{"a": shows(idB), "b": shows(idB)}, BindOK, nil, true},
+		"this host keeps one id and shows another host's kept id": {map[string]Record{"b": keeps(idB), "a": holder},
+			map[string]Report{"a": shows(idA), "b": shows(idA)}, BindDuplicate, []string{"a"}, true},
 		// a host that shows a new id of its own is "changed", also while its old id is still another host's
 		"new id of its own, the old one is shared": {map[string]Record{"a": pin(idA), "b": pin(idA)}, map[string]Report{"b": shows(idC)}, BindChanged, nil, true},
 		"new id that is another host's":            {map[string]Record{"a": pin(idA), "b": pin(idB)}, map[string]Report{"b": shows(idA)}, BindDuplicate, []string{"a"}, true},
@@ -201,6 +214,8 @@ func TestHeld(t *testing.T) {
 		"b was seen before and shows a's id":     {map[string]Record{"a": pin(idA), "b": unaccepted()}, map[string]Report{"a": shows(idA), "b": shows(idA)}, "[]", "[a]", BindDuplicate},
 		"b shows a's id while a shows a new one": {map[string]Record{"a": pin(idA)}, map[string]Report{"a": shows(idC), "b": shows(idA)}, "[]", "[a]", BindDuplicate},
 		"neither has a record":                   {nil, map[string]Report{"a": shows(idA), "b": shows(idA)}, "[]", "[]", BindNoRecord},
+		// (G-01) a keeps idA and b keeps idB; b shows a's id: a keeps it, b cannot be accepted for it
+		"b keeps another id and shows a's kept id": {map[string]Record{"a": holder, "b": keeps(idB)}, map[string]Report{"a": shows(idA), "b": shows(idA)}, "[]", "[a]", BindDuplicate},
 	} {
 		a, b := Evaluate("a", c.recs, c.reps), Evaluate("b", c.recs, c.reps)
 		if got := []string{strings.Join(append([]string{}, a.Held...), ","), strings.Join(append([]string{}, b.Held...), ",")}; "["+got[0]+"]" != c.heldA || "["+got[1]+"]" != c.heldB || b.Status != c.statusB {
