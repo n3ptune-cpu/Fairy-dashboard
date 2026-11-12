@@ -219,3 +219,88 @@ func TestFutureAuthTimeIsClampedToNow(t *testing.T) {
 		t.Fatal("a future auth_time at a step-up kept the window open", r.code)
 	}
 }
+
+// r2-p1-03 (audit 5): with step_up_window_s below 120 the step-up's callback accepted a sign-in that Pocket ID
+// answered from its grace (auth_time up to 120 s old), wrote "auth.step_up ok", gave the session a new id, and
+// the action the step-up was made for was then refused: that sign-in was older than the window. The dialog
+// came back, again and again. One function decides now (stepUpFresh, stepUpAuthTimeOK): what the callback
+// accepts confirms the one kept action; everything else needs the window.
+func TestStepUpAcceptedMeansTheKeptActionRuns(t *testing.T) {
+	confirmAged := func(a *armed, id string, age time.Duration) resp {
+		t.Helper()
+		q, rt, r := a.idp.tryConfirmStart(a.e, id, "/", a.sess)
+		if r.code != 200 {
+			return r
+		}
+		a.idp.claims["auth_time"] = a.clk.now().Add(-age).Unix()
+		r = a.e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+		if r.code == 303 {
+			a.sess = sessionCookie(a.e, r.hdr)
+		}
+		return r
+	}
+	a := signedIn(t)
+	a.e.s.Cfg.StepUpWindowS = 30
+	id := a.shutdown()
+	if id == "" || a.powerCalls() != 0 {
+		t.Fatal("setup: the shutdown must be asked for")
+	}
+	// Pocket ID does not ask again: its last sign-in for this person is 100 s old, inside what the callback accepts
+	if r := confirmAged(a, id, 100*time.Second); r.code != 303 {
+		t.Fatal("the callback accepts a sign-in of 100 s ago", r.code, string(r.raw))
+	}
+	if a.powerCalls() != 1 {
+		t.Fatalf("the step-up was accepted and the action it was made for did not run (%d power requests)", a.powerCalls())
+	}
+	me := a.e.do("GET", "/api/me", nil, "Cookie", a.sess)
+	if pr, _ := me.body["pending_result"].(map[string]any); pr == nil || pr["ok"] != true {
+		t.Fatal("result of the confirmed action", string(me.raw))
+	}
+	// nothing else rides on it: that sign-in is older than the 30 seconds
+	if r := a.e.poll(a.sess); !stepUpRequired(r) {
+		t.Fatal("a second action must be asked for: the sign-in is 100 s old, the window 30 s", r.code, string(r.raw))
+	}
+	if a.shutdown() == "" || a.powerCalls() != 1 {
+		t.Fatal("the same action again must be asked for")
+	}
+	// a sign-in older than the callback accepts confirms nothing, as before
+	b := signedIn(t)
+	b.e.s.Cfg.StepUpWindowS = 30
+	id = b.shutdown()
+	if r := confirmAged(b, id, 121*time.Second); r.code != 400 || b.powerCalls() != 0 {
+		t.Fatal("a sign-in of 121 s ago", r.code, b.powerCalls())
+	}
+	// a fresh one opens the window for 30 seconds, and not for longer
+	c := signedIn(t)
+	c.e.s.Cfg.StepUpWindowS = 30
+	if r := confirmAged(c, c.shutdown(), 0); r.code != 303 || c.powerCalls() != 1 {
+		t.Fatal(r.code, c.powerCalls())
+	}
+	if r := c.e.poll(c.sess); r.code != 200 {
+		t.Fatal("inside the window", r.code, string(r.raw))
+	}
+	c.clk.advance(31 * time.Second)
+	if r := c.e.poll(c.sess); !stepUpRequired(r) {
+		t.Fatal("31 s later the window of 30 s is closed", r.code)
+	}
+
+	// the decision itself
+	for _, x := range []struct {
+		age    float64
+		window int
+		replay bool
+		want   bool
+	}{
+		{29, 30, false, true}, {31, 30, false, false}, {100, 30, false, false},
+		{100, 30, true, true}, {150, 30, true, true}, {151, 30, true, false},
+		{170, 180, false, true}, {181, 180, false, false}, {181, 180, true, false}, {179, 180, true, true},
+		{119, 120, false, true}, {121, 120, false, false}, {121, 120, true, true}, // the panel's own update (2 minutes)
+	} {
+		if got := stepUpFresh(x.age, x.window, x.replay); got != x.want {
+			t.Errorf("stepUpFresh(%v s, window %d, replay %v) = %v", x.age, x.window, x.replay, got)
+		}
+	}
+	if !stepUpAuthTimeOK(120) || stepUpAuthTimeOK(120.5) || perActionGrace <= stepUpMaxAuthAge {
+		t.Fatal("the callback's limit and the replay's must fit together")
+	}
+}

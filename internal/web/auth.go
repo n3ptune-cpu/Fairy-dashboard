@@ -532,7 +532,7 @@ func (s *Server) authCallback(c *reqCtx) error {
 				"just signed in again. Control actions stay locked. An administrator must make the identity provider "+
 				"send auth_time (it is required when Fairy asks for a fresh sign-in with max_age=0).", target)
 	}
-	if sess.StepUp && now-authTime > 120 {
+	if sess.StepUp && !stepUpAuthTimeOK(float64(now-authTime)) {
 		c.auditAnon("auth.step_up", "failed: identity provider did not re-authenticate (auth_time too old)", actorOf(&u), &u.Sub, nil)
 		return c.errorPage(400, "Could not confirm it's you",
 			"Pocket ID did not ask you to sign in again (your last sign-in there is more than two minutes old). "+

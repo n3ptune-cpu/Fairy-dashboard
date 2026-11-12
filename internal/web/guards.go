@@ -131,9 +131,33 @@ func (c *reqCtx) stepUp(u *model.User, what string) error {
 	return c.stepUpWithin(u, what, cfg.StepUpWindowS)
 }
 
-// perActionGrace is how old the confirming sign-in may be when the panel replays the one kept action in
-// step_up_per_action mode (the callback accepts an auth_time of up to two minutes ago).
-const perActionGrace = 150
+// How old a Pocket ID sign-in may be to confirm something. One place, so that the sign-in's callback and the
+// check of the action it was made for cannot disagree (r2-p1-03: with step_up_window_s below 120 the callback
+// accepted a sign-in of up to two minutes ago, said "confirmed", gave the session a new id, and the kept
+// action was then refused because that sign-in was older than the window; the dialog came back).
+const (
+	// stepUpMaxAuthAge: the callback of a step-up accepts a sign-in the identity provider made up to this many
+	// seconds ago (Pocket ID answers from a short grace instead of asking again).
+	stepUpMaxAuthAge = 120
+	// perActionGrace is how old the confirming sign-in may be when the panel itself replays the one action
+	// that sign-in was made for: what the callback accepts, and half a minute for the way back.
+	perActionGrace = stepUpMaxAuthAge + 30
+)
+
+// stepUpFresh is the one decision "is this sign-in fresh enough": age is how long ago this client confirmed
+// (seconds), window the action's window. replay: the request is the panel's own replay of the kept action,
+// right after the step-up that was made for it; a sign-in the callback accepted counts for that one request,
+// whatever the window. Every other request needs the window.
+func stepUpFresh(age float64, window int, replay bool) bool {
+	if replay {
+		return age <= float64(max(window, perActionGrace))
+	}
+	return age <= float64(window)
+}
+
+// stepUpAuthTimeOK is the callback's side of the same decision: whether a step-up's sign-in, made authAge
+// seconds ago at the identity provider, confirms anything at all.
+func stepUpAuthTimeOK(authAge float64) bool { return authAge <= stepUpMaxAuthAge }
 
 // stepUpWithin is stepUp with its own window (the panel's own update wants a sign-in from the last 2 minutes).
 // A refused browser request is kept and runs by itself right after the sign-in (pending.go).
@@ -161,11 +185,9 @@ func (c *reqCtx) stepUpCheck(u *model.User, what string, window int, perAction b
 	if age == nil {
 		return nil
 	}
-	if perAction {
-		if c.resumed() && *age <= float64(max(window, perActionGrace)) {
-			return nil
-		}
-	} else if *age <= float64(window) {
+	// perAction: only the panel's own replay passes, nothing is inherited. Otherwise the window counts, and
+	// for the replay of the action a step-up was made for, what that step-up's callback accepted (stepUpFresh).
+	if replay := c.resumed(); (replay || !perAction) && stepUpFresh(*age, window, replay) {
 		return nil
 	}
 	if c.bodyKept {
