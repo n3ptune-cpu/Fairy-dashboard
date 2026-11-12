@@ -73,6 +73,9 @@ type Server struct {
 	checks       updateCheckState // Check for updates: once per updateCheckEvery for the whole panel
 	// PanelRunner starts the panel's own update (fairy-panel-update.service); nil = not available here.
 	PanelRunner panelupdate.Runner
+	// ConfigCheck checks the config file this panel was started with, as the next start will ("": fine; else
+	// why not, in one line). Asked before the panel's update is started; nil = not asked.
+	ConfigCheck func() string
 	// Add host: the managed hosts, the pending enrollments, and the managed hosts skipped at start (and why).
 	Managed        *managed.Store
 	Enroll         *enrollment.Manager

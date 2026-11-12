@@ -93,6 +93,32 @@ func TestUpdatePanelButton(t *testing.T) {
 	}
 }
 
+// r3-p4-02: the button looks at the config file the running panel was started with before it starts the run:
+// a mistake made in it since the start is said on the page, and nothing is started.
+func TestUpdatePanelButtonLooksAtThePanelsOwnConfigFile(t *testing.T) {
+	e := setup(t)
+	f := &fakeRunner{ready: true}
+	e.s.PanelRunner = f
+	e.s.Version = "8-ddddddd"
+	e.s.PanelUpdates = updates.Static{Tag: "build-9", Version: "9-ccccccc", Build: model.P(9), Verified: true}
+	why := "/etc/fairy/panel.yaml: config: yaml: unmarshal errors: line 46: field wake_updte not found in type config.Panel"
+	asked := 0
+	e.s.ConfigCheck = func() string { asked++; return why }
+	fresh := e.cookie(controller(), 0)
+	post := func() resp {
+		return e.do("POST", "/api/admin/panel-update", map[string]any{}, "Cookie", fresh, "X-Requested-With", "fairy")
+	}
+	r := post()
+	if d, _ := r.body["detail"].(string); r.code != 409 || f.starts != 0 || asked != 1 ||
+		d != "the panel's config file has a mistake, so the panel would not start again after the update: "+why+". Correct it on the panel's host first." {
+		t.Fatalf("a config file with a mistake: %d %s (starts %d, asked %d)", r.code, r.raw, f.starts, asked)
+	}
+	why = ""
+	if r := post(); r.code != 202 || f.starts != 1 || asked != 2 {
+		t.Fatalf("a config file that is fine: %d %s (starts %d)", r.code, r.raw, f.starts)
+	}
+}
+
 // stoppedRunner is the real runner's reading of the status file (panelupdate.Systemd.Status) with a button
 // that can be pressed in a test.
 type stoppedRunner struct {

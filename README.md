@@ -757,8 +757,15 @@ stops before it replaces anything when the running panel does not answer at that
 panel** button goes one step further: when the installed version refuses config.yaml it stops before it
 replaces anything ("config.yaml is not usable by the installed version: ..."), because a file that the new
 version refuses too (a typing mistake) would end with the panel down and the page gone. `fairy update` by
-hand warns and goes on to the next check.
-That check is made by both, after the download and before anything is replaced: the new version, once its
+hand warns and goes on.
+The file all of this is about is the one the service starts with: the unit's `--config`, else
+`FAIRY_CONFIG_FILE` from the unit's `EnvironmentFile=` / `Environment=` or from the env file the service
+reads itself, else `/etc/fairy/config.yaml` (before, `fairy update` always read the last one). `fairy update
+--config FILE` names another file. When systemd does not say how `fairy.service` is started, the update
+stops ("cannot tell which config file fairy.service starts with ...") and asks for `--config`. The **Update
+panel** button also looks at the file the running panel was started with before it starts anything, and says
+on the page what is wrong with it.
+The next check is made by both, after the download and before anything is replaced: the new version, once its
 signature and hash are verified, checks the config file itself, with the check `fairy serve` starts with
 and `fairy admin config check` reports (the entries of `ups:` and `power_sources:` included, which the
 update did not look at before). A file it refuses stops the update with the line: "the new version (...)

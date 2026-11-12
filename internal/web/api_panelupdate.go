@@ -84,6 +84,16 @@ func (s *Server) panelUpdatePost(c *reqCtx) error {
 		return apierr.Errf(409, "\"Update unpowered hosts\" is running (started by %s): the panel's update would interrupt it. "+
 			"Wait for it, or cancel it on the Updates page.", a.By)
 	}
+	// The update restarts the panel, and the restart reads the config file again: the file this panel was
+	// started with. A mistake made in it since then would end with the panel down (r3-p4-02), so it is looked
+	// at here, where the person still has a page to read the reason on. The update's own run checks the file
+	// the unit names once more, and lets the new version check it.
+	if s.ConfigCheck != nil {
+		if why := s.ConfigCheck(); why != "" {
+			return apierr.Errf(409, "the panel's config file has a mistake, so the panel would not start again after the update: %s. "+
+				"Correct it on the panel's host first.", clipText(why, 300))
+		}
+	}
 	if err := s.PanelRunner.Start(c.r.Context()); err != nil {
 		c.audit(u, "panel.update", "panel", params, "error: "+err.Error())
 		return apierr.New(502, err.Error())

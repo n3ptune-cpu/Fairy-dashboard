@@ -156,6 +156,9 @@ func serve(args []string) int {
 		demo.SeedNotes(srv.Notes)
 	case runtime.GOOS == "linux":
 		srv.PanelRunner = panelupdate.Systemd{}
+		if !testBuild { // "Update panel" looks at the file this panel was started with before it starts the run
+			srv.ConfigCheck = func() string { return configFileProblem(f.cfgPath) }
+		}
 	}
 	listening := func() {}
 	if testBuild { // sign-in off, for a browser that opens the address listening() prints

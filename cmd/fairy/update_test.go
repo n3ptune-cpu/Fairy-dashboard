@@ -370,3 +370,106 @@ func TestTheButtonsUpdateStopsOnAConfigTheInstalledVersionCannotUse(t *testing.T
 		t.Fatalf("update() must stop for the config after it holds the lock and before the preflight and the run: %d %d %d %d", lock, stop, preflight, run)
 	}
 }
+
+// r3-p4-02: the config file the update checks is the one fairy.service starts with, found the way the service
+// finds it. Before, it was always this command's own default: with `--config /etc/fairy/panel.yaml` in the
+// unit nothing was checked (the default file did not exist, which was not a problem), and with
+// FAIRY_CONFIG_FILE in fairy.env the button could never update.
+func TestTheUpdateChecksTheConfigFileTheServiceStartsWith(t *testing.T) {
+	dir := t.TempDir()
+	env := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	def := config.DefaultConfigPath()
+	unit := func(args, rest string) unitSettings {
+		return parseUnit("ExecStart={ path=/usr/local/bin/fairy ; argv[]=/usr/local/bin/fairy serve " + args + " ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n" + rest)
+	}
+	fileA := env("a.env", "FAIRY_SESSION_SECRET=x\nFAIRY_CONFIG_FILE=/etc/fairy/from-a.yaml\n")
+	fileB := env("b.env", "export FAIRY_CONFIG_FILE=\"/etc/fairy/from-b.yaml\"\nFAIRY_CONFIG_FILE=/etc/fairy/from-b-last.yaml\n")
+	own := env("own.env", "# FAIRY_CONFIG_FILE=/etc/fairy/commented.yaml\nFAIRY_CONFIG_FILE='/etc/fairy/from-own.yaml'\nFAIRY_CONFIG_FILE=/etc/fairy/own-second.yaml\n")
+	empty := env("empty.env", "FAIRY_LISTEN=127.0.0.1:8080\n")
+	for _, c := range []struct {
+		name       string
+		u          unitSettings
+		given      string
+		givenSet   bool
+		path, from string
+		known      bool
+	}{
+		{name: "the unit as shipped", u: unit("--config /etc/fairy/config.yaml --env-file ", "Environment=\nEnvironmentFiles=/etc/fairy/fairy.env (ignore_errors=no)\n"),
+			path: "/etc/fairy/config.yaml", from: "--config of fairy.service", known: true},
+		{name: "the auditor's s2: another file in the unit", u: unit("--config /etc/fairy/panel.yaml --env-file ", "EnvironmentFiles=/etc/fairy/fairy.env (ignore_errors=no)\n"),
+			path: "/etc/fairy/panel.yaml", from: "--config of fairy.service", known: true},
+		{name: "--config=FILE", u: unit("--config=/etc/fairy/eq.yaml", ""), path: "/etc/fairy/eq.yaml", from: "--config of fairy.service", known: true},
+		{name: "the auditor's s15: FAIRY_CONFIG_FILE in the unit's EnvironmentFile", u: unit("--env-file ", "Environment=\nEnvironmentFiles="+fileA+" (ignore_errors=no)\n"),
+			path: "/etc/fairy/from-a.yaml", from: "FAIRY_CONFIG_FILE in " + fileA, known: true},
+		{name: "two EnvironmentFile lines: the last file that has it, and its last line", u: unit("--env-file ", "EnvironmentFiles="+fileA+" (ignore_errors=no)\nEnvironmentFiles=-"+fileB+" (ignore_errors=yes)\nEnvironmentFiles="+empty+" (ignore_errors=no)\n"),
+			path: "/etc/fairy/from-b-last.yaml", from: "FAIRY_CONFIG_FILE in " + fileB, known: true},
+		{name: "Environment= of the unit", u: unit("--env-file ", "Environment=A=b FAIRY_CONFIG_FILE=/etc/fairy/from-environment.yaml\nEnvironmentFiles="+empty+" (ignore_errors=no)\n"),
+			path: "/etc/fairy/from-environment.yaml", from: "Environment=FAIRY_CONFIG_FILE of fairy.service", known: true},
+		{name: "EnvironmentFile= wins over Environment=", u: unit("", "Environment=FAIRY_CONFIG_FILE=/etc/fairy/from-environment.yaml\nEnvironmentFiles="+fileA+" (ignore_errors=no)\n"),
+			path: "/etc/fairy/from-a.yaml", from: "FAIRY_CONFIG_FILE in " + fileA, known: true},
+		{name: "the env file the service reads itself (--env-file FILE): its first line counts, as in LoadEnvFile", u: unit("--env-file "+own, ""),
+			path: "/etc/fairy/from-own.yaml", from: "FAIRY_CONFIG_FILE in " + own, known: true},
+		{name: "the environment wins over the service's own env file", u: unit("--env-file "+own, "Environment=FAIRY_CONFIG_FILE=/etc/fairy/from-environment.yaml\n"),
+			path: "/etc/fairy/from-environment.yaml", from: "Environment=FAIRY_CONFIG_FILE of fairy.service", known: true},
+		{name: "--config of the unit wins over every FAIRY_CONFIG_FILE", u: unit("--config /etc/fairy/flag.yaml --env-file "+own, "Environment=FAIRY_CONFIG_FILE=/x.yaml\nEnvironmentFiles="+fileA+" (ignore_errors=no)\n"),
+			path: "/etc/fairy/flag.yaml", from: "--config of fairy.service", known: true},
+		{name: "nothing says: the default", u: unit("--env-file ", "EnvironmentFiles="+empty+" (ignore_errors=no)\n"), path: def, from: "the default", known: true},
+		{name: "--config given to this command wins", u: unit("--config /etc/fairy/panel.yaml", ""), given: "/root/try.yaml", givenSet: true,
+			path: "/root/try.yaml", from: "--config of this command", known: true},
+		{name: "systemd does not answer: nobody can tell", u: parseUnit(""), given: def, path: def, from: "the default; systemd did not say", known: false},
+		{name: "systemd does not answer, but the person names the file", u: parseUnit(""), given: "/etc/fairy/panel.yaml", givenSet: true,
+			path: "/etc/fairy/panel.yaml", from: "--config of this command", known: true},
+	} {
+		if c.given == "" {
+			c.given = def
+		}
+		path, from, known := serviceConfig(c.u, c.given, c.givenSet)
+		if path != c.path || from != c.from || known != c.known {
+			t.Errorf("%s: serviceConfig = %q, %q, %v; want %q, %q, %v", c.name, path, from, known, c.path, c.from, c.known)
+		}
+	}
+	// what a run says when it cannot tell: the reason, that nothing was changed, and what to pass; it fits the status file
+	if !strings.Contains(configUnknown, "cannot tell which config file fairy.service starts with") || !strings.Contains(configUnknown, "Nothing was changed") ||
+		!strings.Contains(configUnknown, "fairy update --config /etc/fairy/config.yaml") || len(configUnknown) > 300 {
+		t.Fatalf("%d bytes: %s", len(configUnknown), configUnknown)
+	}
+	// update() uses that file for the check, the new version's check and the messages, and holds the lock before it stops
+	src, err := os.ReadFile("update.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)[strings.Index(string(src), "func update("):strings.Index(string(src), "// errUpdateRunning")]
+	for _, want := range []string{"serviceConfig(unit, *cfgPath, flagSet(fs, \"config\"))", "config.LoadFull(cfgFile)", "config.Peek(cfgFile)", "&newVersion{file: cfgFile}", "healthAddr(cfgListen, *envFile, unit)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("update() no longer has %s", want)
+		}
+	}
+	if n := strings.Count(body, "*cfgPath"); n != 1 {
+		t.Errorf("update() uses its own --config in %d places: only serviceConfig may read it", n)
+	}
+	if lock, stop := strings.Index(body, "lockUpdate(updateLockPath(exe))"), strings.Index(body, "if cfgStop != \"\""); lock < 0 || stop < lock {
+		t.Errorf("update() must hold the lock before it stops for the config file and writes the status: %d %d", lock, stop)
+	}
+	// the file the running panel was started with, for the button's own look before it starts the run
+	bad := filepath.Join(dir, "panel.yaml")
+	if err := os.WriteFile(bad, []byte("public_url: https://panel.example.com\noidc: {issuer: \"https://id.example.com\", client_id: x}\nwake_updte:\n  enabled: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if why := configFileProblem(bad); !strings.HasPrefix(why, bad+": config: yaml: unmarshal errors: line 3: field wake_updte not found") || strings.Contains(why, "\n") {
+		t.Fatalf("%q", why)
+	}
+	if why := configFileProblem(filepath.Join(dir, "none.yaml")); why != filepath.Join(dir, "none.yaml")+": the file does not exist" {
+		t.Fatalf("%q", why)
+	}
+	good := filepath.Join(dir, "good.yaml")
+	_ = os.WriteFile(good, []byte("public_url: https://panel.example.com\noidc: {issuer: \"https://id.example.com\", client_id: x}\n"), 0o600)
+	if why := configFileProblem(good); why != "" {
+		t.Fatalf("%q", why)
+	}
+}

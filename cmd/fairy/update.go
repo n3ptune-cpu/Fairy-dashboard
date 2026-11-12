@@ -44,7 +44,7 @@ func update(args []string) int {
 	check := fs.Bool("check", false, "only show the installed and the latest version")
 	force := fs.Bool("force", false, "also reinstall the same version or install an older one")
 	yes := fs.Bool("yes", false, "do not ask before installing")
-	cfgPath := fs.String("config", "/etc/fairy/config.yaml", "panel config (updates.panel_repo, listen)")
+	cfgPath := fs.String("config", config.DefaultConfigPath(), "panel config; without it: the file fairy.service starts with (its --config or FAIRY_CONFIG_FILE)")
 	envFile := fs.String("env-file", "/etc/fairy/fairy.env", "panel env file (FAIRY_LISTEN)")
 	fromPanel := fs.Bool("from-panel", false, "run by fairy-panel-update.service (the Update panel button): no question, status file")
 	_ = fs.Parse(args)
@@ -53,25 +53,36 @@ func update(args []string) int {
 		return 2
 	}
 
-	// The panel's config, as the service reads it. A file this installed version refuses (a key of a newer
-	// release, written before the update) still says where the panel listens and where its releases are
-	// (config.Peek): the health check after the restart must ask that address, not the default.
+	// The panel's config: the file fairy.service starts with (serviceConfig), as the service reads it. A file
+	// this installed version refuses (a key of a newer release, written before the update) still says where
+	// the panel listens and where its releases are (config.Peek): the health check after the restart must ask
+	// that address, not the default.
+	unit := serviceUnit()
+	cfgFile, cfgFrom, cfgKnown := serviceConfig(unit, *cfgPath, flagSet(fs, "config"))
 	repo := release.PanelRepo
-	cfgListen, cfgProblem := "", ""
-	if c, err := config.LoadFull(*cfgPath); err == nil { // the one check of the file: what `fairy serve` starts with
+	cfgListen, cfgProblem, cfgStop := "", "", ""
+	c, err := config.LoadFull(cfgFile) // the one check of the file: what `fairy serve` starts with
+	switch {
+	case !cfgKnown && !*check:
+		cfgStop = configUnknown // nothing is installed over a file that could not be checked
+	case err == nil:
 		cfgListen, repo = c.Listen, c.Updates.PanelRepo
-	} else if !errors.Is(err, os.ErrNotExist) {
-		cfgProblem = oneLine(err.Error())
-		l, r, perr := config.Peek(*cfgPath)
+	case *check && errors.Is(err, os.ErrNotExist): // --check works everywhere, also where no panel is installed
+	default:
+		cfgProblem = configProblem(err)
+		if cfgFile != config.DefaultConfigPath() {
+			cfgProblem = cfgFile + ": " + cfgProblem // "config.yaml" in the messages is then this file
+		}
+		l, r, perr := config.Peek(cfgFile)
 		if perr != nil && !*check {
-			fmt.Fprintf(os.Stderr, "fairy update: %s cannot be read at all (%s). The panel would not start again after the update's "+
-				"restart: correct the file first. Nothing was changed.\n", *cfgPath, oneLine(perr.Error()))
-			return 1
+			cfgStop = fmt.Sprintf("%s (%s) cannot be read at all: %s. The panel would not start again after the update's "+
+				"restart: correct the file first. Nothing was changed.", cfgFile, cfgFrom, configProblem(perr))
+			break
 		}
 		if cfgListen = l; r != "" {
 			repo = r
 		}
-		fmt.Fprintf(os.Stderr, "fairy update: warning: this installed version (%s) cannot use %s: %s\n", version, *cfgPath, cfgProblem)
+		fmt.Fprintf(os.Stderr, "fairy update: warning: this installed version (%s) cannot use %s (%s): %s\n", version, cfgFile, cfgFrom, configProblem(err))
 		if !*check && !*fromPanel { // (the button's run does not go on: configStops, below)
 			fmt.Fprintln(os.Stderr, configFirstNote)
 		}
@@ -133,12 +144,19 @@ func update(args []string) int {
 	if !*check {
 		clearStoppedRun(filepath.Dir(exe), panelupdate.StatusPath, *fromPanel, time.Now(), panelupdate.UnitActivity)
 	}
+	if cfgStop != "" { // which file it is could not be told, or the file is not there or not YAML: both kinds of run stop
+		fmt.Fprintln(os.Stderr, "fairy update:", cfgStop)
+		if status != nil {
+			status.Step("failed", "", clipTo(cfgStop, 300))
+		}
+		return 1
+	}
 	if why := configStops(*fromPanel, cfgProblem); why != "" && !*check {
 		fmt.Fprintln(os.Stderr, "fairy update:", why)
 		status.Step("failed", "", why)
 		return 1
 	}
-	addr, from := healthAddr(cfgListen, *envFile, serviceUnit())
+	addr, from := healthAddr(cfgListen, *envFile, unit)
 	healthURL := "http://" + addr + "/healthz"
 	if !*check {
 		// Before anything is replaced: the running panel must answer where the check after the restart will
@@ -154,7 +172,7 @@ func update(args []string) int {
 	}
 	// The version that is about to be installed checks the config file too, before anything is replaced
 	// (update_config.go). What it refuses stops the run, by hand and from the button: it would not start.
-	asked := &newVersion{file: *cfgPath}
+	asked := &newVersion{file: cfgFile}
 	cli := &release.CLI{Client: client, Key: key, Program: release.PanelProgram, Current: version, Target: exe,
 		Asset: release.AssetName(release.PanelProgram, runtime.GOOS, runtime.GOARCH), Out: os.Stdout, In: in,
 		Check: *check, Yes: *yes, Force: *force,
@@ -180,7 +198,7 @@ func update(args []string) int {
 		var rb *release.RolledBackError
 		if cfgProblem != "" && errors.As(err, &rb) {
 			fmt.Fprintf(os.Stderr, "fairy update: the installed version cannot use %s (%s), so it may not start either: "+
-				"take out what it does not know, then `systemctl restart fairy`.\n", *cfgPath, cfgProblem)
+				"take out what it does not know, then `systemctl restart fairy`.\n", cfgFile, cfgProblem)
 		}
 		return 1
 	}
@@ -395,6 +413,76 @@ func (u unitSettings) flag(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// configUnknown is said when systemd does not tell how fairy.service is started and no --config was given.
+const configUnknown = "cannot tell which config file fairy.service starts with (`systemctl show fairy.service` gave no command line), " +
+	"so the file could not be checked before the restart. Nothing was changed. Name the file: fairy update --config /etc/fairy/config.yaml"
+
+// serviceConfig is the config file fairy.service starts with after its restart, and where that is from (for
+// messages): the file the update checks before it replaces anything, and reads `listen:` and
+// `updates.panel_repo` from (r3-p4-02: it was always this command's default, /etc/fairy/config.yaml; with
+// another file in the unit nothing was checked, and with FAIRY_CONFIG_FILE the button could never update).
+//
+// --config given to this command wins: the person says which file. Else the order is the service's own
+// (serve.go, resolve): --config on the unit's command line; FAIRY_CONFIG_FILE from the unit's
+// EnvironmentFile= (the last file that has it) or Environment=; FAIRY_CONFIG_FILE in the env file the service
+// reads itself (--env-file of the unit, without the flag the default file; it never overrides the
+// environment); else the default. known is false when systemd gave no command line for the unit and no
+// --config was given: then nobody can tell, and the default is only a guess.
+//
+// The file is never taken from the running panel (a path handed from the unprivileged service to this root
+// command would be read here and quoted in messages any user can read), and it is the unit as systemd has
+// loaded it that decides which file the restart uses, not the process that runs now.
+func serviceConfig(u unitSettings, given string, givenSet bool) (path, from string, known bool) {
+	const key = "FAIRY_CONFIG_FILE"
+	if givenSet {
+		return given, "--config of this command", true
+	}
+	if len(u.Args) == 0 {
+		return given, "the default; systemd did not say", false
+	}
+	if p, ok := u.flag("config"); ok && p != "" {
+		return p, "--config of fairy.service", true
+	}
+	for i := len(u.EnvFiles) - 1; i >= 0; i-- {
+		if v := envFileValues(u.EnvFiles[i], key); len(v) > 0 && v[len(v)-1] != "" {
+			return v[len(v)-1], key + " in " + u.EnvFiles[i], true
+		}
+	}
+	for i := len(u.Env) - 1; i >= 0; i-- {
+		if v, ok := strings.CutPrefix(u.Env[i], key+"="); ok && strings.Trim(v, `"'`) != "" {
+			return strings.Trim(v, `"'`), "Environment=" + key + " of fairy.service", true
+		}
+	}
+	own, ok := u.flag("env-file")
+	if !ok {
+		own = config.DefaultEnvFile()
+	}
+	if v := envFileValues(own, key); own != "" && len(v) > 0 && v[0] != "" {
+		return v[0], key + " in " + own, true
+	}
+	return config.DefaultConfigPath(), "the default", true
+}
+
+// envFileValues are the values of key in an env file, in the file's order, read as the panel reads the file
+// (config.LoadEnvFile: `export`, spaces and one pair of quotes around the value are dropped).
+func envFileValues(path, key string) []string {
+	var vals []string
+	if b, err := os.ReadFile(path); err == nil && path != "" {
+		for _, line := range strings.Split(string(b), "\n") {
+			line = strings.TrimPrefix(strings.TrimSpace(line), "export ")
+			k, v, ok := strings.Cut(line, "=")
+			if !ok || strings.TrimSpace(k) != key {
+				continue
+			}
+			if v = strings.TrimSpace(v); len(v) >= 2 && (v[0] == '"' && v[len(v)-1] == '"' || v[0] == '\'' && v[len(v)-1] == '\'') {
+				v = v[1 : len(v)-1]
+			}
+			vals = append(vals, v)
+		}
+	}
+	return vals
 }
 
 // envFileListen is FAIRY_LISTEN in an env file ("" when it is not there). A comment behind the value is not

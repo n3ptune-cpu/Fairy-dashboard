@@ -53,6 +53,15 @@ func checkConfig(args []string, out io.Writer) int {
 	return 0
 }
 
+// configFileProblem is why the next start would refuse this config file ("": it would not), with the file's
+// name: what the running panel says before it starts its own update.
+func configFileProblem(path string) string {
+	if _, err := config.LoadFull(path); err != nil {
+		return path + ": " + configProblem(err)
+	}
+	return ""
+}
+
 // configProblem is a refusal of config.yaml in one line.
 func configProblem(err error) string {
 	if errors.Is(err, os.ErrNotExist) {
