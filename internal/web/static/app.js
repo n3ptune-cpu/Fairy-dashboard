@@ -5,10 +5,20 @@
 "use strict";
 
 const $ = (s, root = document) => root.querySelector(s);
+// Everything that is looked up by a name the server supplies (a system id, a site name, a source id, a state)
+// is an object WITHOUT a prototype. A plain {} also "has" constructor, toString, __proto__ and the rest of
+// what every object inherits, and a site named "constructor" then found a function where a list was expected:
+// the Overview and the sidebar stopped for everyone who could see a host of that site (audit 5, r1-p3-01).
+//   dict(entries)  a map made by the page (state.byId, state.sites, groups by site, ...)
+//   table({...})   a fixed table of the page's own words, looked up by a word of the server's
+//   own(o, k)      a value by name out of an object that came as JSON (that one has a prototype)
+const dict = (entries) => { const d = Object.create(null); for (const [k, v] of entries || []) d[k] = v; return d; };
+const table = (o) => Object.freeze(Object.assign(Object.create(null), o));
+const own = (o, k) => (o != null && Object.hasOwn(o, k) ? o[k] : undefined);
 const state = {
-  me: null, systems: [], byId: {}, summary: null, power: null, history: [], settings: null, timer: null,
-  ups: null, upsHist: {}, upsEvents: [], menu: null, poll: {}, caps: {}, watch: undefined, es: null, flash: null,
-  sites: {}, open: {}, notes: { unread: 0, active_alerts: 0 }, managed: {},
+  me: null, systems: [], byId: dict(), summary: null, power: null, history: [], settings: null, timer: null,
+  ups: null, upsHist: dict(), upsEvents: [], menu: null, poll: dict(), caps: dict(), watch: undefined, es: null, flash: null,
+  sites: dict(), open: dict(), notes: { unread: 0, active_alerts: 0 }, managed: dict(),
 };
 const OPEN_KEY = "fairy-open-hosts";  // hosts whose guests are shown in the sidebar (this browser)
 try { for (const id of JSON.parse(localStorage.getItem(OPEN_KEY) || "[]")) state.open[id] = true; } catch { /* ignore */ }
@@ -47,7 +57,7 @@ const ago = (iso) => {
   const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
   return s < 60 ? `${s.toFixed(0)}s ago` : s < 3600 ? `${(s / 60).toFixed(0)}m ago` : `${(s / 3600).toFixed(1)}h ago`;
 };
-const kindLabel = (s) => ({ node: "node", qemu: "VM", lxc: "CT", agent: s.platform || "agent" }[s.kind]);
+const kindLabel = (s) => table({ node: "node", qemu: "VM", lxc: "CT", agent: s.platform || "agent" })[s.kind];
 const live = (s) => s.status === "online" || s.status === "stale" || s.status === "paused";  // paused = frozen values
 // A system whose data the panel could not put into its answer (impossible numbers from an agent or Proxmox)
 // arrives as a small entry { id, name, kind, status: "error", error }. It is never dropped or hidden: it gets an
@@ -350,7 +360,7 @@ function patchChildren(a, b) {
 // it opens); it is placed with CSSOM, because the page's CSP allows no inline styles. Sentences that carry a
 // safety promise or a limit stay on the page itself, never only in here; they are marked .info-keep, and with
 // room for it the panel opens under the ones of its own section (at their left edge), not on top of them.
-const info = { html: {}, key: null, pinned: false, timer: null };
+const info = { html: dict(), key: null, pinned: false, timer: null };
 // o (optional): another icon, class, name and tooltip for a button that flags a state, such as "Helper stopped".
 function infoBtn(key, about, html, o = {}) {
   info.html[key] = `<button class="info-x" type="button" aria-label="Close">${I.close}</button><div class="info-t">${esc(about)}</div>${html}`;
@@ -429,7 +439,7 @@ window.addEventListener("hashchange", () => closeInfo(false));
 const linkedPower = (id) => {
   const srcs = (state.power?.sources || []).filter((s) => s.readings.some((r) => r.system_id === id));
   const w = srcs.flatMap((s) => s.readings).filter((r) => r.system_id === id && r.watts != null).reduce((a, r) => a + r.watts, 0);
-  return { sources: srcs, watts: srcs.length ? w : null, history: state.history.map((h) => srcs.reduce((a, s) => a + (h.sources[s.id] || 0), 0) || null) };
+  return { sources: srcs, watts: srcs.length ? w : null, history: state.history.map((h) => srcs.reduce((a, s) => a + (own(h.sources, s.id) || 0), 0) || null) };
 };
 
 // ------------------------------------------------------------ grouping: hosts by site
@@ -439,7 +449,7 @@ const nodesOf = () => state.systems.filter((s) => s.kind === "node");
 const isHost = (s) => s.kind === "node" || s.kind === "agent";
 const siteOf = (s) => state.sites[s.id] || s.group || s.owner || "Other";
 const hostsBySite = () => {  // [[site, hosts]], sites A-Z, "Other" last
-  const groups = {};
+  const groups = dict();  // by site name: any name an admin can give a site, "constructor" too
   state.systems.filter(isHost).forEach((s) => (groups[siteOf(s)] ||= []).push(s));
   return Object.entries(groups).sort(([a], [b]) => (a === "Other") - (b === "Other") || a.localeCompare(b));
 };
@@ -506,7 +516,7 @@ const upsSigns = (s) => upsOf(s).map((u) => {
 }).join("");
 const upsChips = (s) => upsOf(s).map((u) => `<span class="chip ups ${u.status === "low_battery" ? "bad" : onBattery(u) ? "warn" : ""}" title="Powered by ${esc(u.name)}${onBattery(u) ? " · ON BATTERY" : ""}">${I.ups}UPS${onBattery(u) ? " · battery" : ""}</span>`).join("");
 // Laptop battery (agent's `battery` block): a chip in host rows and a box on the detail page.
-const BATT_STATE = { charging: "charging", discharging: "on battery", full: "full", idle: "plugged in, not charging", unknown: "unknown" };
+const BATT_STATE = table({ charging: "charging", discharging: "on battery", full: "full", idle: "plugged in, not charging", unknown: "unknown" });
 const battLow = (b) => b.state === "discharging" && b.percent != null && b.percent < 20;
 // Host list: the battery as a small sign in the family of the helper's and the update arrow, no box and no number.
 // The fill is the charge in four steps. On mains (charging, full, plugged in) it is quiet and has a bolt beside it;
@@ -547,10 +557,10 @@ function batteryBox(s) {
 }
 // ---- the Windows agent's elevated helper (Fairy-agent v0.5.0+: Core Temp, BMC sensors, fans, power, updates).
 // Shown only on hosts that need it; Linux and older agents have none.
-const HELPER_STATE = { running: ["ok", "running"], starting: ["warn", "starting…"], stopped: ["warn", "stopped"], error: ["bad", "error"],
-  not_installed: ["", "not installed"], unknown: ["", "unknown"] };
-const HELPER_READING = { coretemp: "Core Temp", ipmi: "BMC sensor" };
-const HELPER_FEATURE = { coretemp: "Core Temp", ipmi: "BMC sensors", fans: "fans", power: "power actions", update: "updates" };
+const HELPER_STATE = table({ running: ["ok", "running"], starting: ["warn", "starting…"], stopped: ["warn", "stopped"], error: ["bad", "error"],
+  not_installed: ["", "not installed"], unknown: ["", "unknown"] });
+const HELPER_READING = table({ coretemp: "Core Temp", ipmi: "BMC sensor" });
+const HELPER_FEATURE = table({ coretemp: "Core Temp", ipmi: "BMC sensors", fans: "fans", power: "power actions", update: "updates" });
 const helperOf = (s) => (s?.helper?.needed ? s.helper : null);
 const helperPaused = (s, g) => (s?.helper?.paused || []).includes(g);
 const andList = (xs) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
@@ -769,7 +779,7 @@ function pollMenu(s) {
     ${POLL_CHOICES.map(([v, label]) => `<button class="menu-item ${String(cur) === String(v) ? "on" : ""}" data-act="poll" data-v="${v}" ${why ? `disabled title="${esc(why)}"` : ""}>${label}${v === "default" ? '<span class="note">config</span>' : ""}</button>`).join("")}
     ${modelNameMenu(s)}${wakeUpdateMenu(s)}</div>`;
 }
-const POWER_LABEL = { shutdown: "Shut down", reboot: "Reboot", sleep: "Sleep", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)", bmc_on: "Power on (via BMC)" };
+const POWER_LABEL = table({ shutdown: "Shut down", reboot: "Reboot", sleep: "Sleep", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)", bmc_on: "Power on (via BMC)" });
 function powerMenu(s) {
   const caps = state.caps[s.id], why = controlWhyNot();
   if (!caps) return '<div class="menu"><div class="menu-note">loading…</div></div>';
@@ -902,7 +912,7 @@ async function loadProcesses(id) {
   schedule(() => loadProcesses(id), 2000);
 }
 
-const fanMsg = {};  // the last fan write error per system, shown until the next write succeeds
+const fanMsg = dict();  // the last fan write error per system, shown until the next write succeeds
 // Opened by a link or a reload (e.g. coming back from a step-up sign-in), the tab exists only once the host's
 // data has arrived: until then the loaders wait for it instead of leaving "Loading…" for good.
 const waitForTab = (id, tab, fn) => { const r = current(); if (r.page === "system" && r.id === id && r.tab === tab) schedule(fn, 300); };
@@ -983,12 +993,12 @@ function pagePower() {
         <td>${chip(s.status)}${s.error ? `<div class="error">${esc(s.error)}</div>` : ""}</td><td class="num"><b class="value pwr">${fmtW(r.watts)}</b></td>
         <td class="num">${r.voltage?.toFixed(1) ?? "–"}</td><td class="num">${r.current?.toFixed(2) ?? "–"}</td><td class="num">${r.energy_kwh_total?.toFixed(2) ?? "–"}</td>
         <td>${linked ? `<a href="#/system/${enc(linked.id)}">${esc(linked.name)}</a>` : "–"}${s.include_in_total ? "" : ' <span class="chip">not in total</span>'}</td>
-        <td>${spark(state.history.map((h) => h.sources[s.id] ?? null))}</td></tr>`; }).join("")}</tbody></table></div>`;
+        <td>${spark(state.history.map((h) => own(h.sources, s.id) ?? null))}</td></tr>`; }).join("")}</tbody></table></div>`;
 }
 
 // ------------------------------------------------------------ UPS page
-const UPS_STATUS = { online: ["ok", "online"], on_battery: ["warn", "on battery"], low_battery: ["bad", "LOW BATTERY"],
-  off: ["", "off"], unknown: ["", "unknown"], unreachable: ["bad", "unreachable"] };
+const UPS_STATUS = table({ online: ["ok", "online"], on_battery: ["warn", "on battery"], low_battery: ["bad", "LOW BATTERY"],
+  off: ["", "off"], unknown: ["", "unknown"], unreachable: ["bad", "unreachable"] });
 // Watts: estimated from load % × nominal W when the UPS has no power reading. Many small UPSes report 0 % load
 // below their resolution, so "0 W" while online is shown as "0 W?" (unknown, not zero).
 function upsWatts(u) {
@@ -1096,7 +1106,7 @@ document.addEventListener("click", (e) => { if (e.target.closest('[data-act="aud
 // Each agent's version and self-update state next to the latest Fairy-agent release. Update makes the agent
 // download, verify and install the release itself (and roll back if the new version does not come up); nothing
 // updates on its own. Refreshed every 2 s while the page is open.
-const upd = { data: null, error: null, busy: {}, bySys: {} };
+const upd = { data: null, error: null, busy: dict(), bySys: dict() };
 const updBusy = (r) => ["downloading", "applying"].includes(r?.self_update?.state);
 async function fetchUpdates() {
   if (!state.me?.can_control) return;
@@ -1106,7 +1116,7 @@ async function fetchUpdates() {
   render();
 }
 function updIndex() {  // after upd.data changed: the per-host lookup and the menu dot
-  upd.bySys = {};
+  upd.bySys = dict();
   for (const r of upd.data?.agents || []) upd.bySys[r.system_id || r.id] = r;
   const b = $("#upd-badge");
   if (b) { const n = upd.data?.behind || 0; b.hidden = !n; b.title = `${n} update${n === 1 ? "" : "s"} available`; }
@@ -1323,18 +1333,18 @@ function updBanner() {
 // switches off again the ones this run woke. The run works in the panel (internal/wakerun); this is its
 // dialog, its live progress and its report. Everything shown here that comes from the panel (machine names,
 // the sentences of a run, an agent's own error text inside them) goes through esc().
-const wu = { data: null, error: null, open: {} };
+const wu = { data: null, error: null, open: dict() };
 async function fetchWakeUpdate() {
   if (!state.me?.can_control) return;
   try { wu.data = await api("/api/admin/wake-update"); wu.error = null; }
   catch (e) { wu.error = e.message; if (e.status === 403) wu.data = null; }
   render();
 }
-const WU_STATE = { queued: ["", "waiting"], waking: ["warn", "waking"], online: ["warn", "online"], awaiting_approval: ["warn", "needs your approval"],
+const WU_STATE = table({ queued: ["", "waiting"], waking: ["warn", "waking"], online: ["warn", "online"], awaiting_approval: ["warn", "needs your approval"],
   updating: ["warn", "updating"], settling: ["warn", "pause before shutdown"], shutting_down: ["warn", "switching off"], off: ["ok", "done · off again"],
-  stayed_on: ["ok", "done · stays on"], left_on: ["bad", "LEFT ON"], gave_up: ["bad", "gave up"], skipped: ["", "skipped"], interrupted: ["bad", "interrupted"] };
-const WU_RUN = { running: ["warn", "running"], done: ["ok", "finished"], cancelled: ["", "cancelled"], stopped: ["bad", "stopped"], interrupted: ["bad", "interrupted"] };
-const WU_POWER = { on: ["warn", "is ON"], off: ["", "is off"], unknown: ["warn", "on or off: not known"], untouched: ["", "not touched"] };
+  stayed_on: ["ok", "done · stays on"], left_on: ["bad", "LEFT ON"], gave_up: ["bad", "gave up"], skipped: ["", "skipped"], interrupted: ["bad", "interrupted"] });
+const WU_RUN = table({ running: ["warn", "running"], done: ["ok", "finished"], cancelled: ["", "cancelled"], stopped: ["bad", "stopped"], interrupted: ["bad", "interrupted"] });
+const WU_POWER = table({ on: ["warn", "is ON"], off: ["", "is off"], unknown: ["warn", "on or off: not known"], untouched: ["", "not touched"] });
 const wuEnded = (h) => ["off", "stayed_on", "left_on", "gave_up", "skipped", "interrupted"].includes(h.state);
 const wuUpdateBad = (h) => !!h.update && !["ok", "up_to_date"].includes(h.update);
 // The steps of one machine as a row of boxes: done, now, failed.
@@ -1543,14 +1553,14 @@ async function loadAdmin() {
   catch (e) { admin.error = e.message; if (e.status === 403) admin.data = null; }
   if (current().page === "users") $("#page").innerHTML = `<div data-key="users">${pageUsers()}</div>`;
 }
-const ROLE_LABEL = { admin: "Admin", viewer: "Viewer", pending: "No access (waiting)" };
+const ROLE_LABEL = table({ admin: "Admin", viewer: "Viewer", pending: "No access (waiting)" });
 // Name and e-mail are what the account claims at Pocket ID; only the account id (OIDC subject) is certain.
 // email_verified is true only when Pocket ID vouched for the address at the last sign-in (null = not known yet).
 const unverified = (u) => !!u?.email && u.email_verified !== true;
 const adminUser = (sub) => admin.data?.users.find((x) => x.sub === sub);
 // for confirm() texts and the action label (the label goes percent-encoded in X-Fairy-Action, see headerText)
 const userIdent = (u) => !u ? "this user" : `${u.email || u.name || u.sub}${unverified(u) ? " (unverified e-mail)" : ""}${u.email || u.name ? ` [id ${u.sub}]` : ""}`;
-const FROM_LABEL = { panel: "set here", config: "config.yaml", node: "from its node", link: "follows its hosts" };
+const FROM_LABEL = table({ panel: "set here", config: "config.yaml", node: "from its node", link: "follows its hosts" });
 const KIND_TITLE = [["hosts", "Hosts", (t) => t.kind === "node" || t.kind === "agent"], ["guests", "VMs & containers", (t) => t.kind === "qemu" || t.kind === "lxc"],
   ["power", "Power sources", (t) => t.kind === "power"], ["ups", "UPS", (t) => t.kind === "ups"]];
 function pageUsers() {
@@ -2339,7 +2349,7 @@ function enrollSteps(e) {
 }
 // What answered at the machine's address is not the agent the code was given to: said in a box of its own,
 // above the progress text, because the enrollment itself keeps "waiting" (the real agent can still pair).
-const ENR_HINT_BOX = { unverified_answer: "Not a Fairy agent: something answers at this address, but it could not prove it has the join code. It was not added." };
+const ENR_HINT_BOX = table({ unverified_answer: "Not a Fairy agent: something answers at this address, but it could not prove it has the join code. It was not added." });
 const enrollHint = (e) => (ENR_HINT_BOX[e.hint] ? `<div class="warnbox" id="en-hint" role="alert">${esc(ENR_HINT_BOX[e.hint])}</div>` : "");
 function openEnrollDialog(cr) {
   const m = $("#modal");
@@ -2394,7 +2404,7 @@ async function loadManaged() {
   if (!state.me?.can_manage_users) return;
   try {
     const d = await api("/api/admin/hosts");
-    state.managed = Object.fromEntries((d.managed || []).map((h) => [h.system_id, h]));
+    state.managed = dict((d.managed || []).map((h) => [h.system_id, h]));
   } catch { /* keep */ }
   render();
 }
@@ -2672,7 +2682,7 @@ function route() {
 }
 
 // ------------------------------------------------------------ live data
-function indexSystems() { state.byId = Object.fromEntries(state.systems.map((s) => [s.id, s])); }
+function indexSystems() { state.byId = dict(state.systems.map((s) => [s.id, s])); }
 function pushUpsHistory(ov) {
   for (const u of ov.ups) {
     const h = (state.upsHist[u.id] ||= []);
@@ -2727,7 +2737,7 @@ function connect(watch) {
   es.addEventListener("ups_event", (e) => { state.upsEvents.unshift(JSON.parse(e.data)); render(); });
   es.addEventListener("power", (e) => {
     state.power = JSON.parse(e.data);
-    const sources = {};
+    const sources = dict();
     state.power.sources.forEach((s) => (sources[s.id] = s.readings.reduce((a, r) => a + (r.watts || 0), 0) || null));
     state.history.push({ t: state.power.generated_at, total_w: state.power.total_w, sources });
     if (state.history.length > 720) state.history.shift();
@@ -2736,7 +2746,7 @@ function connect(watch) {
   es.onerror = () => { if (es.readyState === EventSource.CLOSED && state.es === es) { state.es = null; streamLost(); } };
 }
 async function loadSites() {  // the site of each host, for the sidebar and Overview groups
-  try { state.sites = (await api("/api/system-sites")).sites || {}; render(); } catch { /* keep the last */ }
+  try { state.sites = dict(Object.entries((await api("/api/system-sites")).sites || {})); render(); } catch { /* keep the last */ }
 }
 async function loadUpsEvents() {
   try { state.upsEvents = await api("/api/ups/events?limit=50"); render(); } catch { /* ignore */ }
