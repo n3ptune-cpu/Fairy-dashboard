@@ -261,3 +261,33 @@ func TestWakeUpdateTimings(t *testing.T) {
 		t.Fatal("whole numbers written another way:", c.WakeUpdate, err)
 	}
 }
+
+// r1-p4-02 and r1-p4-03 (audit 5): the last release refuses a config.yaml with a wake_update: block ("field
+// wake_update not found"), and it stores a user's settings without the pop-up settings. The README's paragraph
+// about going back named neither. It names every block this release adds to config.yaml, and the pop-ups.
+func TestReadmeGoingBackNamesWhatTheOlderPanelRefuses(t *testing.T) {
+	b, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, para, ok := strings.Cut(string(b), "\nGoing back to the older panel:")
+	if !ok {
+		t.Fatal("README.md has no paragraph \"Going back to the older panel\"")
+	}
+	para, _, _ = strings.Cut(para, "\n\n")
+	para = strings.Join(strings.Fields(para), " ")
+	for _, want := range []string{
+		"It does not start when config.yaml has a `wake_update:` block: take the block out first.",
+		"`enroll: {allow_non_tailscale: ...}`", "`step_up_per_action`", "`4h`",
+		"pop-up settings (on or off, seconds, events) are the defaults again",
+		"custom model names", "the machines switched on for \"Update unpowered hosts\"",
+	} {
+		if !strings.Contains(para, want) {
+			t.Errorf("the paragraph lacks %q:\n%s", want, para)
+		}
+	}
+	// the block is one this panel reads and an older one cannot: if it is ever renamed, the paragraph must follow
+	if _, err := Parse([]byte(base + "wake_update: {settle_s: 30}\n")); err != nil {
+		t.Fatal(err)
+	}
+}

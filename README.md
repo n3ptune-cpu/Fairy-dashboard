@@ -804,9 +804,14 @@ memory limit. Add it once:
     [Update unpowered hosts](#update-unpowered-hosts).
 
 Going back to the older panel: it reads the files this one writes (`users.json`, `notifications.json`,
-`managed-hosts.yaml`, and `sessions.json`, where it ignores what this one adds). It does not start when config.yaml has `enroll: {allow_non_tailscale: ...}`,
-`step_up_per_action`, or a text such as `4h` in the two session settings. Take those out first (write the
-session settings as whole seconds).
+`managed-hosts.yaml`, `state.json`, `settings.json`, and `sessions.json`, where it ignores what this one adds).
+It does not start when config.yaml has a `wake_update:` block: take the block out first. A panel older than
+the last release also does not start with `enroll: {allow_non_tailscale: ...}`, `step_up_per_action`, or a
+text such as `4h` in the two session settings: take those out as well (write the session settings as whole
+seconds). The older panel does not know the pop-up settings: when someone saves a setting there, that
+person's pop-up settings (on or off, seconds, events) are the defaults again after the next update.
+Everything else is kept in both directions: custom model names, the machines switched on for "Update
+unpowered hosts", users, tokens, sessions and the sign-in picture.
 
 ## Security model
 
