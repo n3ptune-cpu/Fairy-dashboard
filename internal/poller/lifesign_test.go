@@ -3,11 +3,14 @@ package poller
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -158,6 +161,59 @@ func TestAnAnswerFromARunningMachineIsNeverSilence(t *testing.T) {
 				t.Fatalf("15 minutes of nothing at all after the last sign of life is off: %+v", info)
 			}
 		})
+	}
+}
+
+// A machine that takes the connection and closes it without a word: net/http reports that as EOF, as a reset,
+// or (about 1 time in 400, when it sees the close before it writes the request) as its own "server closed
+// idle connection". refused() must know all three, or the sign reads "took the connection and gave no answer:
+// error" now and then (second review of audit 5's fixes, MUST FIX 2: the sub-test "closes" above failed 7
+// times in 500). net/http does not export that error, so refused() compares its text: this test gets the
+// real error from the Go version in use, every time, and fails when its wording changes.
+func TestGoStillNamesAConnectionClosedBeforeTheRequest(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	tr := &http.Transport{Proxy: nil}
+	defer tr.CloseIdleConnections()
+	// The request waits a moment between getting its new connection and writing to it (GotConn runs there), so
+	// the transport has seen the close by then: the order that gives this error.
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { time.Sleep(100 * time.Millisecond) }})
+	seen := false
+	for i := 0; i < 20 && !seen; i++ {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+ln.Addr().String()+"/metrics", nil)
+		resp, err := tr.RoundTrip(req)
+		if err == nil {
+			resp.Body.Close()
+			t.Fatal("a closed connection answered")
+		}
+		if !refused(err) || lifeSign(err) != SignRefused {
+			t.Fatalf("a connection the machine closed is not taken as its sign of life: %v", err)
+		}
+		seen = err.Error() == closedIdleText
+	}
+	if !seen {
+		t.Fatalf("net/http no longer reports %q for a connection closed before the request: look at transport.go and at closedIdle", closedIdleText)
+	}
+	// wrapped as the panel's client and the backend wrap it
+	wrapped := &reachedError{err: &url.Error{Op: "Get", URL: "http://192.0.2.1:8080/metrics", Err: errors.New(closedIdleText)}}
+	if !refused(wrapped) || lifeSign(wrapped) != SignRefused {
+		t.Fatal("not recognised inside url.Error and reachedError")
+	}
+	// only the whole text of one error counts, not a longer text that holds it
+	if refused(errors.New("proxy says: http: server closed idle connection")) || refused(&net.OpError{Op: "dial", Net: "tcp", Err: context.DeadlineExceeded}) {
+		t.Fatal("too wide")
 	}
 }
 

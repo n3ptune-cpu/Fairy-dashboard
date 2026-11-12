@@ -492,8 +492,31 @@ func refused(err error) bool {
 	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
+	if closedIdle(err) {
+		return true
+	}
 	var en syscall.Errno
 	return runtime.GOOS == "windows" && errors.As(err, &en) && (en == wsaECONNREFUSED || en == wsaECONNRESET)
+}
+
+// closedIdleText is net/http's error for a connection that the other side closed before the request was
+// written to it (transport.go, errServerClosedIdle). The machine that takes a connection and closes it without
+// a word ends as io.EOF or a reset most of the time, and as this one when the close is seen first (about 1 in
+// 400 on loopback). A GET gets it only on a connection that was opened for this very request: on a kept one
+// net/http tries again by itself. So it is the same sign of a running machine as the other two.
+//
+// The value is not exported and wraps nothing, so errors.Is cannot name it: the text of one error in the
+// chain is compared, whole. TestGoStillNamesAConnectionClosedBeforeTheRequest fails when a Go version words
+// it differently.
+const closedIdleText = "http: server closed idle connection"
+
+func closedIdle(err error) bool {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if e.Error() == closedIdleText {
+			return true
+		}
+	}
+	return false
 }
 
 // FetchProcesses asks an agent for its top processes.
