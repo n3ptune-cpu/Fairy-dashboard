@@ -530,7 +530,7 @@ function modelRow(s) {
     `<p>${esc(modelTip(s))}${bios ? ` BIOS ${esc(bios)}.` : ""}</p>`, { label: modelTip(s) })}</span></div>`;
 }
 const subLine = (s) => s.kind === "node"
-  ? ["Proxmox node", model(s) || s.cpu_model, s.cores && `${s.cores} cores`, s.mem_total && fmtBytes(s.mem_total)].filter(Boolean).join(" · ")
+  ? ["Proxmox node", model(s) || s.cpu_model, s.cores && `${s.cores} threads`, s.mem_total && fmtBytes(s.mem_total)].filter(Boolean).join(" · ")
   : [model(s), s.os, s.cores && `${s.cores} threads`].filter(Boolean).join(" · ");
 // Host list: the UPS that feeds a host as a small sign in the family of the battery's and the helper's: an upright
 // unit (not the laptop battery's lying shape), no box and no words. On mains ("online"): quiet, a bolt inside.
@@ -735,7 +735,7 @@ function setTitle(t, sub = "") { $("#page-title").textContent = t; $("#page-sub"
 const watts = (s) => s.power_w ?? linkedPower(s.id).watts;
 const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.util_percent || 0), 0) / s.gpus.length : null);
 
-// One line per host, and under the name, small, the machine's model when it is known (only the model: cores,
+// One line per host, and under the name, small, the machine's model when it is known (only the model: threads,
 // memory, the system and the agent's version are on the host's own page, and here in the name's tooltip).
 // The name never wraps; in a narrow window its chips wrap next to it instead of pushing the table out of its panel.
 // Only chips that say something about now are in the row (UPS, battery, helper stopped, update available); the
@@ -787,7 +787,7 @@ function pageOverview() {
   const hostGroups = hostsBySite();
   const ups = state.ups?.ups || [];
   return `<div class="tiles">
-    ${t?.hosts ? `<div class="panel glass tile"><div class="label">CPU <span class="label-sub" title="Offline hosts do not add to the CPU and memory totals">all hosts · ${esc(hostsOf(t))}</span></div><div class="value">${fmtP(t.cpu_percent)}<small> of ${esc(t.cores)} cores</small></div>${barEl("cpu", t.cpu_percent)}</div>
+    ${t?.hosts ? `<div class="panel glass tile"><div class="label">CPU <span class="label-sub" title="Offline hosts do not add to the CPU and memory totals">all hosts · ${esc(hostsOf(t))}</span></div><div class="value">${fmtP(t.cpu_percent)}<small> of ${esc(t.cores)} threads</small></div>${barEl("cpu", t.cpu_percent)}</div>
     <div class="panel glass tile"><div class="label">Memory <span class="label-sub">all hosts</span></div><div class="value">${t.mem_total ? `${fmtBytes(t.mem_used)}<small> / ${fmtBytes(t.mem_total)}</small>` : `–<small> ${esc(hostsOf(t))}</small>`}</div>${barEl("mem", pct(t.mem_used, t.mem_total))}</div>` : ""}
     <div class="panel glass tile"><div class="label">Systems</div><div class="value">${esc(sm.counts.online)}<small> / ${esc(sm.counts.total)} online</small></div>
       <div class="counts"><span><span class="dot online"></span><b>${esc(sm.counts.online)}</b></span><span><span class="dot"></span><b>${esc(sm.counts.stopped)}</b></span>
@@ -799,7 +799,7 @@ function pageOverview() {
   <div class="section-title overview-head">Hosts <span class="count">${hostGroups.reduce((a, [, h]) => a + h.length, 0)}</span>${infoBtn("ov-hosts", "Hosts", infoList([
       "A click on a host opens its page.",
       "A Proxmox host's VMs and containers are on its page, and under it in the sidebar (the arrow).",
-      "A host's cores, memory and system are on its page. With a mouse, point at its name to see them here.",
+      "A host's threads, memory and system are on its page. With a mouse, point at its name to see them here.",
       "Offline hosts do not add to the CPU and memory totals."]))}
     ${state.me?.can_manage_users ? `<button class="btn push" type="button" data-act="add-host" ${controlOff() ? `disabled title="${esc(controlWhyNot())}"` : ""}>${I.plus}Add host</button>` : ""}</div>${hostTable(hostGroups)}`;
 }
@@ -901,7 +901,7 @@ function systemOverview(s) {
   }
   const lp = linkedPower(s.id), cp = s.component_power;
   const res = `<div class="panel glass pad"><h3>Resources</h3>
-    ${metric("cpu", "CPU", s.cpu_percent, `${fmtP(s.cpu_percent)}${s.cores ? ` · ${esc(s.cores)} cores` : ""}`)}
+    ${metric("cpu", "CPU", s.cpu_percent, `${fmtP(s.cpu_percent)}${s.cores ? ` · ${esc(s.cores)} threads` : ""}`)}
     ${metric("mem", "Memory", pct(s.mem_used, s.mem_total), `${fmtBytes(s.mem_used)} / ${fmtBytes(s.mem_total)}`)}
     ${s.disk_total ? metric("disk", "Disk", pct(s.disk_used, s.disk_total), `${fmtBytes(s.disk_used)} / ${fmtBytes(s.disk_total)}`) : ""}
     ${(s.disks || []).length > 1 ? s.disks.map((d) => metric("disk", esc(d.mount), pct(d.used, d.total), `${fmtBytes(d.used)} / ${fmtBytes(d.total)}`, d.mount)).join("") : ""}

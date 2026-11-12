@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -125,5 +126,25 @@ func TestUIBoxesAndListsAreAsHighAsAButton(t *testing.T) {
 		if !strings.Contains(css, want) {
 			t.Errorf("app.css lacks %q", want)
 		}
+	}
+}
+
+// r1-b1-10: the head of a host's page said "16 threads", its Resources card "16 cores", and the Overview added
+// the same numbers up as "of 134 cores". The number is the machine's logical processors (the agent reports
+// runtime.NumCPU, Proxmox maxcpu): threads. One word for it everywhere.
+func TestUIOneWordForTheProcessorCount(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		"s.cores && `${s.cores} threads`, s.mem_total && fmtBytes(s.mem_total)]", // a Proxmox node's head
+		"[model(s), s.os, s.cores && `${s.cores} threads`]",                      // a host's head
+		"` · ${esc(s.cores)} threads` : \"\"}`)}",                                // Resources
+		"<small> of ${esc(t.cores)} threads</small>",                             // Overview
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	if m := regexp.MustCompile("cores[)}]*\\} cores|\\d cores").FindAllString(js, -1); len(m) != 0 {
+		t.Errorf("app.js still calls the number cores: %v", m)
 	}
 }
