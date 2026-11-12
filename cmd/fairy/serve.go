@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
@@ -187,16 +188,42 @@ func serve(args []string) int {
 		slog.Error("listen failed", "addr", addr, "error", err)
 		return 1
 	}
-	go p.poller.Run(ctx)
+	pollerDone := make(chan struct{})
+	go func() { defer close(pollerDone); p.poller.Run(ctx) }()
 	slog.Info("fairy listening", "version", version, "addr", ln.Addr().String(), "public_url", p.cfg.BaseURL(),
 		"demo", f.demo)
 	listening()
-	if err := srv.Run(ctx, ln); err != nil {
+	err = srv.Run(ctx, ln)
+	stop() // also when the server failed: the poller stops, and writes what it still has to write
+	if !waitStopped(pollerDone, pollerStopWait) {
+		slog.Warn("the poller did not finish within " + pollerStopWait.String() + " (a request to a machine hangs): stopping without it; " +
+			"an agent version seen in the last minute may not be in state.json")
+	}
+	if err != nil {
 		slog.Error("server failed", "error", err)
 		return 1
 	}
 	slog.Info("stopped")
 	return 0
+}
+
+// pollerStopWait is how long a stop waits for the poller to finish. When the poller stops it lets the polls
+// that are on their way end and then writes what waited to be written: an agent's version of the last minute
+// (Poller.FlushVersions). Nothing waited for it, so the process was gone before that write, every time (second
+// review, P11). The wait has an end, so that a poll that hangs cannot keep the panel from stopping: systemd
+// waits 90 s before it kills, an admin at a console less.
+const pollerStopWait = 5 * time.Second
+
+// waitStopped waits for done to be closed, at most d, and reports whether it was.
+func waitStopped(done <-chan struct{}, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 // parseServeFlags parses the `fairy serve` flags; false means the flags were invalid (or -h was asked for).

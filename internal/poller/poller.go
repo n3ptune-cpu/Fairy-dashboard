@@ -567,8 +567,12 @@ func (p *Poller) Run(ctx context.Context) {
 		}
 		select {
 		case <-ctx.Done():
+			// A version that waited for its minute is written before the panel stops: first what waits now (the
+			// stop waits for the poller only a few seconds, and a poll that hangs must not cost it), then what
+			// the polls that were on their way still brought.
+			p.FlushVersions()
 			p.Scheduler.Wait()
-			p.FlushVersions() // a version that waited for its minute is written before the panel stops
+			p.FlushVersions()
 			p.Power.Close()
 			return
 		case <-t.C:
