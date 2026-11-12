@@ -275,7 +275,25 @@ func (p *Poller) PinMachine(agentID, machineID, how, by string) error {
 // ErrNothingToAccept: the machine does not show anything now that an admin could accept.
 var ErrNothingToAccept = errors.New("the machine shows nothing to accept right now: it must be answering, and show another machine id than the one on record, the same id as another host, or no check at all")
 
-// AcceptMachine is an admin's "accept what this machine shows now" (by: who):
+// ErrAcceptChanged: the machine does not show what the admin was shown when asked to confirm.
+var ErrAcceptChanged = errors.New("what the machine shows is not what the dialog showed: it changed while you were confirming")
+
+// HeldError: the machine id the host shows is kept by another host (By: agent ids), and one id is accepted
+// for one host only (approval.Binding.Held).
+type HeldError struct{ By []string }
+
+func (e *HeldError) Error() string {
+	return "the machine id it shows is on record for another host; one id is accepted for one host only"
+}
+
+// AcceptWant is what the admin was shown and confirmed: exactly one of the machine id the host showed in the
+// dialog, in full (MachineID), or that it shows no check (Off).
+type AcceptWant struct {
+	MachineID string
+	Off       bool
+}
+
+// AcceptMachine is an admin's "accept what this machine shows" (by: who; want: what the admin was shown):
 //
 //   - it shows the check with a machine id: that id is on record from now on (approval.PinAccepted). If another
 //     host has the same id, this host is the one that keeps it (Record.Holder) and the other stays flagged
@@ -283,8 +301,13 @@ var ErrNothingToAccept = errors.New("the machine shows nothing to accept right n
 //   - it shows no check, or says it is off, and had an id on record: the record is removed. The machine is
 //     then one without the check, until it shows one again.
 //
+// What is accepted is what the admin was shown, never what the host shows by the time the confirmation is
+// back (audit 5, r2-x1-01): a host that shows something else now is refused with ErrAcceptChanged. And an id
+// that another host keeps is not accepted for this one (HeldError; audit 5, r2-b2-02): the press on the copy
+// used to take the id away from the original.
+//
 // It returns what was accepted: "id" or "off", and the binding from before.
-func (p *Poller) AcceptMachine(agentID, by string) (what string, before approval.Binding, err error) {
+func (p *Poller) AcceptMachine(agentID, by string, want AcceptWant) (what string, before approval.Binding, err error) {
 	p.mu.Lock()
 	p.reloadMachinesLocked()
 	if p.mach.err != nil {
@@ -301,18 +324,19 @@ func (p *Poller) AcceptMachine(agentID, by string) (what string, before approval
 		p.mu.Unlock()
 		return "", before, ErrNothingToAccept
 	case rep.Block && rep.State == api.ApprovalRequired && rep.Proto == api.ApprovalProto && api.CheckMachineID(rep.MachineID) == nil:
+		if want.Off || want.MachineID != rep.MachineID {
+			p.mu.Unlock()
+			return "", before, ErrAcceptChanged
+		}
+		if len(before.Held) > 0 {
+			p.mu.Unlock()
+			return "", before, &HeldError{By: before.Held}
+		}
 		what = "id"
 		rec := approval.Record{MachineID: rep.MachineID, How: approval.PinAccepted, At: now.UTC(), By: by, State: rep.State, StateAt: now.UTC()}
 		for other, o := range p.mach.records {
-			if other == agentID || o.MachineID != rep.MachineID {
-				continue
-			}
-			rec.Holder = true // another host has this id on record: this one keeps it, by the admin's word
-			if o.Holder {
-				o.Holder = false
-				p.mach.records[other] = o
-				p.mach.seq++
-				p.mach.dirty[other] = p.mach.seq
+			if other != agentID && o.MachineID == rep.MachineID {
+				rec.Holder = true // another host has this id on record too: this one keeps it, by the admin's word
 			}
 		}
 		for other, r := range reps {
@@ -324,6 +348,10 @@ func (p *Poller) AcceptMachine(agentID, by string) (what string, before approval
 		p.mach.seq++
 		p.mach.dirty[agentID] = p.mach.seq
 	case rep.Heard && (!rep.Block || rep.State == api.ApprovalOff):
+		if !want.Off || want.MachineID != "" {
+			p.mu.Unlock()
+			return "", before, ErrAcceptChanged
+		}
 		what = "off"
 		delete(p.mach.records, agentID)
 		delete(p.mach.dirty, agentID)
@@ -362,13 +390,14 @@ func (p *Poller) shownApprovalLocked(id string, live *model.Approval, reps map[s
 	b := p.bindingLocked(id, reps)
 	if live != nil {
 		a := *live
-		a.Binding = b.Status
+		a.Binding, a.BindingWith, a.BindingHeld = b.Status, p.hostNamesLocked(b.With), p.hostNamesLocked(b.Held)
 		return &a
 	}
 	if !b.Checks() {
 		return nil
 	}
-	a := &model.Approval{State: b.Record.State, Keys: []model.ApprovalKey{}, AgentChecks: []string{}, Binding: b.Status, MachineID: b.Record.MachineID}
+	a := &model.Approval{State: b.Record.State, Keys: []model.ApprovalKey{}, AgentChecks: []string{}, Binding: b.Status, MachineID: b.Record.MachineID,
+		BindingWith: p.hostNamesLocked(b.With), BindingHeld: p.hostNamesLocked(b.Held)}
 	if !b.Report.Heard {
 		a.LastKnown = true // what it said before it went silent (or before the panel restarted)
 	}
@@ -376,4 +405,25 @@ func (p *Poller) shownApprovalLocked(id string, live *model.Approval, reps map[s
 		a.State = api.ApprovalUnknown
 	}
 	return a
+}
+
+// hostNamesLocked are the names the pages show for the agents ids (nil for none). Caller holds p.mu.
+func (p *Poller) hostNamesLocked(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		name := id
+		if a, ok := p.AgentByID(id); ok {
+			name = a.DisplayName()
+			if s, ok := p.systems[id]; ok && s.Name != "" {
+				name = s.Name
+			} else if s, ok := p.systems[p.linkOfLocked(a)]; ok && s.Name != "" {
+				name = s.Name
+			}
+		}
+		out = append(out, name)
+	}
+	return out
 }

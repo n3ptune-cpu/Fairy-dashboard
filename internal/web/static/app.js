@@ -719,7 +719,7 @@ const AP_BINDING_MORE = table({
   changed: ["An administrator ran <code>fairy-agent helper-trust set --new-machine-id</code> on the machine, or cleared its trust and set it again: accept the new id.",
     "If nobody did, what answers at this host's address may be another machine: do not accept, look at the host."],
   duplicate: ["One of the two was made from a copy of the other's disk (a cloned VM, a restored image). On the copy, as administrator: <code>fairy-agent helper-trust set --new-machine-id</code>, then accept its new id on its page.",
-    "Or one host answers in the name of the other. Accept on the host that is the real one: it keeps the id, and the other stays flagged until it shows an id of its own."],
+    "Or one host answers in the name of the other. Press the button on the host that is the real one: it keeps the id. The other then has no button: it stays flagged until it shows an id of its own."],
   vanished: ["Its trust was removed on the machine (<code>fairy-agent helper-trust clear</code>), or its agent was put back to a release from before this check. Every request would then run with the panel's control token alone.",
     "Turn the check on again, or accept that it is off."],
   too_old: ["It runs the test build of 2026-11-11. Its approvals are not tied to one machine, and it refuses this panel's."],
@@ -730,13 +730,22 @@ const AP_BINDING_MORE = table({
 const AP_HELPER_OLD = "the running fairy-agent-helper is older than this agent";
 // Host list and host page: one small flag when the check is broken or the panel's decision about the machine is an
 // alarm. It is a button like the helper's sign: its name and words on hover, and a click opens them.
+// One machine id on two hosts, in the words of this host (a.binding_with: the other hosts by name; a.binding_held:
+// those that keep the id, so that this host needs an id of its own).
+function apDuplicateText(a) {
+  const names = (l) => (Array.isArray(l) && l.length ? andList(l.map(String)) : "");
+  const held = names(a.binding_held), other = names(a.binding_with);
+  if (held) return `${held} keeps this machine id. No approvals for this host until it shows an id of its own.`;
+  return `${other || "Another host"} ${other && a.binding_with.length > 1 ? "have" : "has"} the same machine id: each would accept an approval made for the other. No approvals for either.`;
+}
+const apBindingText = (a) => (a.binding === "duplicate" ? apDuplicateText(a) : AP_BINDING[a.binding]?.[1] || "");
 function approvalChip(s) {
   const a = approvalOf(s);
   if (!a) return "";
   const b = a.binding && a.binding !== "no_record" ? AP_BINDING[a.binding] : null;
   if (!b && a.state !== "broken") return "";
   const name = b ? b[0] : "Approval broken";
-  const text = b ? b[1] : `This machine's own check of approvals is broken: ${a.error || "no details"}. It refuses fan, power and update requests until that is repaired on the machine.`;
+  const text = b ? apBindingText(a) : `This machine's own check of approvals is broken: ${a.error || "no details"}. It refuses fan, power and update requests until that is repaired on the machine.`;
   return infoBtn(`apflag-${s.id}`, name, `<p>${esc(text)}</p><p>Details are on <a href="#/system/${enc(s.id)}">its page</a>.</p>`, { cls: "hflag bad", icon: I.apKey, label: `${name}: ${text}` });
 }
 // Host page: the alarm in one line, the reasons behind the info button, and for an admin the one button that
@@ -748,9 +757,20 @@ function approvalBinding(s, a) {
   const more = [...(AP_BINDING_MORE[a.binding] || [])];
   if (m?.with?.length) more.push(`The same id: ${esc(andList(m.with))}.`);
   if (m?.machine_id) more.push(`On record: <code>${esc(shortKey(m.machine_id))}</code> (${esc(m.pinned || "")}${m.pinned_by ? `, by ${esc(m.pinned_by)}` : ""})${m.shown_id && m.shown_id !== m.machine_id ? `. It shows: <code>${esc(shortKey(m.shown_id))}</code>` : ""}.`);
-  const btn = m?.can_accept ? `<div class="row-gap ap-accept"><button class="btn" type="button" data-act="ap-accept" data-id="${esc(m.id)}" data-name="${esc(s.name)}" data-what="${esc(m.accept)}" ${why ? `disabled title="${esc(why)}"` : ""}>${m.accept === "off" ? "Accept that its check is off" : "Accept this machine's new id"}</button></div>` : "";
-  return `<div class="warnbox ap-bind info-keep" id="ap-bind"><b>${esc(b[0])}.</b> ${esc(b[1])}${infoBtn(`apbind-${s.id}`, b[0], infoList(more))}${btn}</div>`;
+  // The one button (admins). Its words say what it accepts: a new id, the id this host has and keeps while
+  // another host shows it too, or that the check is off. It carries exactly what this page shows (the id in
+  // full), and the panel accepts nothing else. A host whose id another host keeps has no button: one id is
+  // accepted for one host only, so the machine needs an id of its own first.
+  const held = (a.binding_held || []).length > 0;
+  const btn = m?.can_accept && !held ? `<div class="row-gap ap-accept"><button class="btn" type="button" data-act="ap-accept" data-id="${esc(m.id)}" data-name="${esc(s.name)}" data-what="${esc(m.accept)}" data-shown="${esc(m.shown_id || "")}" ${why ? `disabled title="${esc(why)}"` : ""}>${esc(AP_ACCEPT[m.accept]?.[0] || AP_ACCEPT.id[0])}</button></div>` : "";
+  const todo = held ? `<div class="ap-todo" id="ap-todo">Give this machine a new id on the machine itself (<code>fairy-agent helper-trust set --new-machine-id</code>), then accept the new id here.</div>` : "";
+  return `<div class="warnbox ap-bind info-keep" id="ap-bind"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${infoBtn(`apbind-${s.id}`, b[0], infoList(more))}${todo}${btn}</div>`;
 }
+// What "Accept" is called, by what it accepts (the approval page's `accept`): the button, and the action's name.
+const AP_ACCEPT = table({
+  id: ["Accept this machine's new id", (name) => `Accept the new machine id of ${name}`],
+  keep: ["This host keeps its machine id", (name) => `${name} keeps its machine id`],
+  off: ["Accept that its check is off", (name) => `Accept that the check on ${name} is off`] });
 // Host page: what the machine checks itself, who checks, and what it trusts. Everyone who sees the host sees it.
 function approvalBox(s) {
   const a = approvalOf(s);
@@ -933,9 +953,11 @@ document.addEventListener("click", async (e) => {
   const t = e.target.closest('[data-act="ap-accept"]');
   if (!t || t.disabled) return;
   const off = t.dataset.what === "off", name = t.dataset.name, path = `/api/admin/approval/accept/${enc(t.dataset.id)}`;
-  const label = off ? `Accept that the check on ${name} is off` : `Accept the new machine id of ${name}`;
+  const label = (AP_ACCEPT[t.dataset.what] || AP_ACCEPT.id)[1](name);
+  // what this page shows, and nothing else, is what the panel is asked to accept: the id in full, or "off"
+  const body = off ? { off: true } : { machine_id: t.dataset.shown || "" };
   try {
-    const r = await controlCall({ kind: "request", label, method: "POST", path, body: {} }, () => api(path, { method: "POST", body: "{}" }));
+    const r = await controlCall({ kind: "request", label, method: "POST", path, body }, () => api(path, { method: "POST", body: JSON.stringify(body) }));
     if (r) flash(r.message || `${label}: done`);
   } catch (x) { flash(x.message, true); }
   fetchApproval(true);

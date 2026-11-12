@@ -146,6 +146,20 @@ func (pn *approvalPanel) settle(host, binding string) {
 }
 
 // stopped: the panel itself refused (409) with the sentence, and asked nobody to confirm anything.
+// acceptBody is what the button in the Approval box sends for the agent: what the approval page shows for it
+// now (the machine id it shows, in full, or that its check is off).
+func (pn *approvalPanel) acceptBody(agent string) map[string]any {
+	pn.t.Helper()
+	m := pn.machines()[agent]
+	if m["can_accept"] != true {
+		pn.t.Fatalf("%s has nothing to accept on the approval page: %v", agent, m)
+	}
+	if m["accept"] == "off" {
+		return map[string]any{"off": true}
+	}
+	return map[string]any{"machine_id": m["shown_id"]}
+}
+
 func stopped(t *testing.T, what string, st int, out map[string]any, sentence string) {
 	t.Helper()
 	if d, _ := out["detail"].(string); st != 409 || !strings.Contains(d, sentence) || !strings.Contains(d, "Nothing was sent.") {
@@ -339,11 +353,20 @@ func TestBindingALaunderedTurnOnEndsAsOneIDOnTwoHosts(t *testing.T) {
 	}
 	// The admin looks, and says pc-a is the machine that keeps the id: pc-a is approved again; pc-b stays
 	// flagged until it shows an id of its own.
-	if res := pn.confirm(pn.call("POST", "/api/admin/approval/accept/pc-a", nil)); res["ok"] != true || !strings.Contains(fmt.Sprint(res["message"]), "PC-A keeps the machine id") {
+	ms0 := fmt.Sprint(pn.machines()["pc-b"]["shown_id"]) // the id both show
+	if res := pn.confirm(pn.call("POST", "/api/admin/approval/accept/pc-a", pn.acceptBody("pc-a"))); res["ok"] != true || !strings.Contains(fmt.Sprint(res["message"]), "PC-A keeps the machine id") {
 		t.Fatalf("the accept on pc-a: %v", res)
 	}
 	st, out := pn.shutdown(pn.b, 60)
-	stopped(t, "the shutdown of pc-b after pc-a was accepted", st, out, "have the same machine id")
+	stopped(t, "the shutdown of pc-b after pc-a was accepted", st, out, "PC-B has the same machine id as PC-A, which keeps it: one id is accepted for one host only")
+	// and pc-b, the host that answered in pc-a's name, cannot be accepted for that id any more (audit 5, r2-b2-02):
+	// its box has no button, and a request made up without the page is refused
+	if ms := pn.machines(); ms["pc-b"]["can_accept"] != nil || fmt.Sprint(ms["pc-b"]["held_by"]) != "[PC-A]" || ms["pc-a"]["binding"] != nil {
+		t.Fatalf("the approval page after the accept on pc-a: %v", ms["pc-b"])
+	}
+	if st, out := pn.call("POST", "/api/admin/approval/accept/pc-b", map[string]any{"machine_id": ms0}); st != 409 || !strings.Contains(fmt.Sprint(out["detail"]), "PC-B: nothing was accepted") {
+		t.Fatalf("a made-up accept on pc-b: %d %v", st, out)
+	}
 	st, out = pn.shutdown(pn.a, 60)
 	id, _, _, ok := asked(st, out)
 	if !ok {
@@ -408,7 +431,7 @@ func TestBindingIdentityChangedAndAccept(t *testing.T) {
 		t.Fatal("a refused accept changed the record")
 	}
 	// the admin: asked to confirm although the sign-in is seconds old, told what would be accepted
-	st, out = pn.call("POST", path, nil)
+	st, out = pn.call("POST", path, pn.acceptBody("pc-b"))
 	if d, _ := out["detail"].(map[string]any); !strings.Contains(fmt.Sprint(d["action"]), "it shows the machine id "+approval.ShortID(otherMachineID)+"; on record is "+approval.ShortID(idB)) {
 		t.Fatalf("what the dialog says would be accepted: %d %v", st, out)
 	}
@@ -475,7 +498,7 @@ func TestBindingAVanishedCheckIsAnAlarm(t *testing.T) {
 		t.Fatalf("pc-b on the page of the runs: %d %v", st, runRow(t, page, "pc-b"))
 	}
 	// an admin accepts that the check is off: from then on it is a machine without the check
-	if res := pn.confirm(pn.call("POST", "/api/admin/approval/accept/pc-b", nil)); res["ok"] != true || !strings.Contains(fmt.Sprint(res["message"]), "its check is off") {
+	if res := pn.confirm(pn.call("POST", "/api/admin/approval/accept/pc-b", pn.acceptBody("pc-b"))); res["ok"] != true || !strings.Contains(fmt.Sprint(res["message"]), "its check is off") {
 		t.Fatalf("the accept: %v", res)
 	}
 	st, out = pn.shutdown(pn.b, 60) // the sign-in of the accept is seconds old: it runs

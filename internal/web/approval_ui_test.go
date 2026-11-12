@@ -25,7 +25,11 @@ func TestUIApproval(t *testing.T) {
 		// the info button, and for an admin one button
 		`const AP_BINDING = table({`, `const AP_BINDING_MORE = table({`, `function approvalBinding(s, a) {`,
 		"return infoBtn(`apflag-${s.id}`, name,", `{ cls: "hflag bad", icon: I.apKey, label:`,
-		`data-act="ap-accept"`, `"Accept that its check is off" : "Accept this machine's new id"`,
+		`data-act="ap-accept"`, `id: ["Accept this machine's new id", (name) =>`, `keep: ["This host keeps its machine id", (name) =>`, `off: ["Accept that its check is off", (name) =>`,
+		// one id is accepted for one host only, and exactly the id the page shows (audit 5, r2-b2-02, r2-x1-01)
+		`const btn = m?.can_accept && !held ?`, `data-shown="${esc(m.shown_id || "")}"`, `const body = off ? { off: true } : { machine_id: t.dataset.shown || "" };`,
+		`id="ap-todo">Give this machine a new id on the machine itself (<code>fairy-agent helper-trust set --new-machine-id</code>), then accept the new id here.`,
+		`if (held) return ` + "`${held} keeps this machine id. No approvals for this host until it shows an id of its own.`;",
 		"infoBtn(`apbind-${s.id}`, b[0], infoList(more))", `m = admin ? apvMachine(s) : null`, // the record's details: admins only
 		`if (apv.sig[s.id] !== apvSig(a) && Date.now() - apv.at > 3000) fetchApproval(true);`, // a block that changed after the approval page was fetched
 		`${bind ? "" : '<div class="note">This machine does not check approvals itself.`,      // not under "Check gone"

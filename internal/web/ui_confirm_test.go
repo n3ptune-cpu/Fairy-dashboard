@@ -43,7 +43,7 @@ var confirmLabels = map[string][]string{
 	"POST /api/admin/wake-update":          {"label: `Update unpowered hosts: ${n} machine${n === 1 ? \"\" : \"s\"}`, method: \"POST\""},
 	"DELETE /api/admin/wake-update/{id}":   {"label: `Cancel the run (woken machines ${off ? \"are switched off again\" : \"stay on\"})`, method: \"DELETE\""},
 	"PUT /api/systems/{id}/wake-update":    {"const label = `${on ? \"Switch on\" : \"Switch off\"} \"Update unpowered hosts\" for ${name}`;"},
-	"POST /api/admin/approval/accept/{id}": {"const label = off ? `Accept that the check on ${name} is off` : `Accept the new machine id of ${name}`;"},
+	"POST /api/admin/approval/accept/{id}": {"const label = (AP_ACCEPT[t.dataset.what] || AP_ACCEPT.id)[1](name);", "id: [\"Accept this machine's new id\", (name) => `Accept the new machine id of ${name}`],", "keep: [\"This host keeps its machine id\", (name) => `${name} keeps its machine id`],", "off: [\"Accept that its check is off\", (name) => `Accept that the check on ${name} is off`] });"},
 	"POST /api/admin/signin-wallpaper":     {`controlCall({ kind: "upload", label: "Set sign-in picture" }, () => api("/api/admin/signin-wallpaper", { method: "POST"`},
 	"DELETE /api/admin/signin-wallpaper":   {`label: "Remove sign-in picture" }, () => api("/api/admin/signin-wallpaper", { method: "DELETE" })`},
 }

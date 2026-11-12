@@ -562,8 +562,12 @@ box and the Updates page say which of these it is:
 While a host is flagged, the panel asks it for no approval and sends it no fan, power or update request,
 and it is in no run. An admin resolves it in the host's Approval box: **Accept this machine's new id** (or
 "Accept that its check is off"), in a browser, behind "Confirm it's you", with an entry in the Audit log.
-For two hosts with one id: accept on the one that keeps it; the other stays flagged until it shows an id of
-its own (`helper-trust set --new-machine-id` on it). Accept only when you know why it changed.
+For two hosts with one id, one id is accepted for one host only. The host that has the id on record has the
+button **This host keeps its machine id**; the other one has no button: its box names the host that keeps
+the id and says what to do (on that machine `fairy-agent helper-trust set --new-machine-id`, then accept the
+new id on its page). The panel refuses an accept for it, whoever sends the request. Every accept is for the
+id the dialog showed: a machine that shows another one by the time you have confirmed is refused ("it
+changed while you were confirming"). Accept only when you know why it changed.
 
 **What you see afterwards.** A fan, power or update action on such a machine opens the usual dialog, which
 now says that the machine checks this itself, and then Pocket ID asks for your passkey under the name "Fairy

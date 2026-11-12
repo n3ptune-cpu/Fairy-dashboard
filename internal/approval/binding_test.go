@@ -139,3 +139,35 @@ func TestBindingText(t *testing.T) {
 		t.Error("in order: no text; an unreadable record: a text")
 	}
 }
+
+// One id is accepted for one host only (audit 5, r2-b2-02): which host keeps an id that two hosts share, so
+// that the other one cannot be accepted for it.
+func TestHeld(t *testing.T) {
+	holder := pin(idA)
+	holder.Holder = true
+	for name, c := range map[string]struct {
+		recs         map[string]Record
+		reps         map[string]Report
+		heldA, heldB string
+		statusB      string
+	}{
+		"b shows a's id, a has it on record":      {map[string]Record{"a": pin(idA), "b": pin(idB)}, map[string]Report{"a": shows(idA), "b": shows(idA)}, "[]", "[a]", BindDuplicate},
+		"b shows a's id and has no record":        {map[string]Record{"a": pin(idA)}, map[string]Report{"a": shows(idA), "b": shows(idA)}, "[]", "[a]", BindDuplicate},
+		"both have it on record: on a par":        {map[string]Record{"a": pin(idA), "b": pin(idA)}, map[string]Report{"a": shows(idA), "b": shows(idA)}, "[]", "[]", BindDuplicate},
+		"both on record, a by an admin's word":    {map[string]Record{"a": holder, "b": pin(idA)}, map[string]Report{"a": shows(idA), "b": shows(idA)}, "[]", "[a]", BindDuplicate},
+		"the same, and b says off now":            {map[string]Record{"a": holder, "b": pin(idA)}, map[string]Report{"a": shows(idA), "b": off()}, "[]", "[a]", BindDuplicate},
+		"b went on to an id of its own":           {map[string]Record{"a": holder, "b": pin(idA)}, map[string]Report{"a": shows(idA), "b": shows(idC)}, "[]", "[]", BindChanged},
+		"both show a new id nobody has on record": {map[string]Record{"a": pin(idA), "b": pin(idB)}, map[string]Report{"a": shows(idC), "b": shows(idC)}, "[]", "[]", BindDuplicate},
+	} {
+		a, b := Evaluate("a", c.recs, c.reps), Evaluate("b", c.recs, c.reps)
+		if got := []string{strings.Join(append([]string{}, a.Held...), ","), strings.Join(append([]string{}, b.Held...), ",")}; "["+got[0]+"]" != c.heldA || "["+got[1]+"]" != c.heldB || b.Status != c.statusB {
+			t.Errorf("%s: a held by %v, b held by %v (%s); want %s, %s (%s)", name, a.Held, b.Held, b.Status, c.heldA, c.heldB, c.statusB)
+		}
+		if len(a.Held) > 0 && len(b.Held) > 0 {
+			t.Errorf("%s: each of the two is said to keep the id", name)
+		}
+	}
+	if txt := HeldText("PC-B", []string{"PC-A"}); !strings.Contains(txt, "PC-B has the same machine id as PC-A, which keeps it") || !strings.Contains(txt, "helper-trust set --new-machine-id") {
+		t.Error(txt)
+	}
+}

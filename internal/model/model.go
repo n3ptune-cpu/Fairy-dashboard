@@ -160,6 +160,12 @@ type Approval struct {
 	// (in order), "changed", "duplicate", "vanished", "too_old", "no_record", "unreadable". While it is not
 	// "", the panel asks the machine for no approval.
 	Binding string `json:"binding,omitempty"`
+	// BindingWith: for "duplicate", the names of the other hosts that have the same machine id. BindingHeld:
+	// those of them that keep that id (an admin accepted it there, or they have it on record and this host
+	// does not): this host then gets no approval until it shows an id of its own, and its id cannot be
+	// accepted here. Names only, never an id.
+	BindingWith []string `json:"binding_with,omitempty"`
+	BindingHeld []string `json:"binding_held,omitempty"`
 	// LastKnown: the machine has not answered since the panel started; State is what it last said, from the
 	// panel's record.
 	LastKnown bool `json:"last_known,omitempty"`

@@ -66,10 +66,13 @@ type approvalMachine struct {
 	Binding     string   `json:"binding,omitempty"`
 	BindingText string   `json:"binding_text,omitempty"`
 	With        []string `json:"with,omitempty"`
-	// CanAccept: an admin can accept what the machine shows now (POST /api/admin/approval/accept): its new
-	// id, or that its check is off (Accept says which: "id" or "off").
-	CanAccept bool   `json:"can_accept,omitempty"`
-	Accept    string `json:"accept,omitempty"`
+	// CanAccept: an admin can accept what the machine shows now (POST /api/admin/approval/accept). Accept says
+	// what that is: "id" (a new id), "keep" (the id it has on record, which another host shows too) or "off"
+	// (its check is gone). HeldBy: it cannot be accepted, because these hosts keep the id it shows (one id
+	// is accepted for one host only): the machine needs an id of its own first.
+	CanAccept bool     `json:"can_accept,omitempty"`
+	Accept    string   `json:"accept,omitempty"`
+	HeldBy    []string `json:"held_by,omitempty"`
 	// The record (machines.json), for an admin in a browser only: the id on record and the id the machine
 	// shows now, how and when the id came on record, and by whom. An API token gets none of them.
 	MachineID string     `json:"machine_id,omitempty"`
@@ -257,11 +260,20 @@ func (s *Server) machineFor(a config.Agent, keys []api.TrustKey) approvalMachine
 	if !b.OK() {
 		m.Binding, m.With = b.Status, s.machineNames(b.With)
 		m.BindingText = approval.BindingText(m.Name, b.Status, m.With)
+		if len(b.Held) > 0 {
+			m.BindingText = approval.HeldText(m.Name, s.machineNames(b.Held))
+		}
 		switch {
 		case b.Status == approval.BindVanished && b.Report.Heard:
 			m.CanAccept, m.Accept = true, "off"
+		case len(b.Held) > 0:
+			// another host keeps its id: nothing to accept here until it shows an id of its own
+			m.HeldBy = s.machineNames(b.Held)
 		case (b.Status == approval.BindChanged || b.Status == approval.BindDuplicate) && b.Report.Block && b.Report.MachineID != "":
 			m.CanAccept, m.Accept = true, "id"
+			if b.Record.MachineID == b.Report.MachineID {
+				m.Accept = "keep" // it shows the id it has on record (the original of a pair): nothing about it is new
+			}
 		}
 	}
 	if b.Known && b.Record.MachineID != "" {

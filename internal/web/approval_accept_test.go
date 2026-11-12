@@ -56,6 +56,11 @@ func (a *approvalEnv) stopped(t *testing.T, what string, r resp, want string) {
 	}
 }
 
+// accept is an admin's accept of exactly what the host shows now (what the page showed and the request names).
+func (a *approvalEnv) accept(id, by string) (string, approval.Binding, error) {
+	return a.s.Poller.AcceptMachine(id, by, acceptShows(a.s.Poller.BindingOf(id)))
+}
+
 func (a *approvalEnv) alarms() (active, all int) {
 	for _, e := range a.s.Notes.List("", func(notifications.Event) bool { return true }, notifications.Filter{Limit: 200}).Events {
 		if e.Kind == "approval_alarm" {
@@ -130,7 +135,7 @@ func TestIdentityChangedStopsApprovalsUntilAnAdminAccepts(t *testing.T) {
 		t.Fatalf("without the CSRF header: %d", r.code)
 	}
 	fresh := a.cookie(controller(), 0)
-	r := a.do("POST", path, nil, "Cookie", fresh, "X-Requested-With", "fairy")
+	r := a.do("POST", path, map[string]any{"machine_id": otherID}, "Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json")
 	d, _ := r.body["detail"].(map[string]any)
 	if r.code != 401 || d["code"] != "step_up_required" || d["approval"] != nil ||
 		!strings.Contains(fmt.Sprint(d["action"]), "accept what laptop shows about its own check of approvals now") ||
@@ -141,7 +146,7 @@ func TestIdentityChangedStopsApprovalsUntilAnAdminAccepts(t *testing.T) {
 		t.Fatal("asking is not accepting")
 	}
 	// the accept itself (what the kept request runs after the confirmation)
-	what, before, err := a.s.Poller.AcceptMachine("laptop", "nora@example.test")
+	what, before, err := a.accept("laptop", "nora@example.test")
 	if err != nil || what != "id" || before.Status != approval.BindChanged {
 		t.Fatalf("accept: %q %v", what, err)
 	}
@@ -171,7 +176,7 @@ func TestIdentityChangedStopsApprovalsUntilAnAdminAccepts(t *testing.T) {
 		t.Fatalf("the entry names %q", got)
 	}
 	// nothing to accept any more
-	if what, _, err := a.s.Poller.AcceptMachine("laptop", "nora"); what != "" || err == nil {
+	if what, _, err := a.accept("laptop", "nora"); what != "" || err == nil {
 		t.Fatal("a second accept with nothing to accept")
 	}
 }
@@ -199,11 +204,11 @@ func TestOneIDOnTwoHostsFlagsBoth(t *testing.T) {
 		t.Fatalf("%d alarms hold, want one per host", active)
 	}
 	_, ms := a.page(t)
-	if m := ms["tower"]; m["binding"] != "duplicate" || fmt.Sprint(m["with"]) != "[laptop]" || m["can_accept"] != true || m["accept"] != "id" {
+	if m := ms["tower"]; m["binding"] != "duplicate" || fmt.Sprint(m["with"]) != "[laptop]" || m["can_accept"] != true || m["accept"] != "keep" {
 		t.Fatalf("the approval page: %v", m)
 	}
 	// the admin's word: laptop is the original
-	if what, _, err := a.s.Poller.AcceptMachine("laptop", "nora"); err != nil || what != "id" {
+	if what, _, err := a.accept("laptop", "nora"); err != nil || what != "id" {
 		t.Fatal(what, err)
 	}
 	if b := a.s.Poller.BindingOf("laptop"); !b.OK() || !b.Record.Holder {
@@ -212,7 +217,7 @@ func TestOneIDOnTwoHostsFlagsBoth(t *testing.T) {
 	if b := a.s.Poller.BindingOf("tower"); b.Status != approval.BindDuplicate {
 		t.Fatalf("tower must stay flagged: %+v", b)
 	}
-	a.stopped(t, "tower's fan change", a.post("/api/systems/tower/fan/mode", map[string]any{"mode": "full"}), "have the same machine id")
+	a.stopped(t, "tower's fan change", a.post("/api/systems/tower/fan/mode", map[string]any{"mode": "full"}), "tower has the same machine id as laptop, which keeps it")
 	if _, _, ok := approvalAsked(a.post("/api/systems/laptop/power", a.shutdownBody())); !ok {
 		t.Fatal("laptop is asked for its approval again")
 	}
@@ -227,7 +232,7 @@ func TestOneIDOnTwoHostsFlagsBoth(t *testing.T) {
 	if b := a.s.Poller.BindingOf("tower"); b.Status != approval.BindChanged {
 		t.Fatalf("tower with its own id: %+v", b)
 	}
-	if what, _, err := a.s.Poller.AcceptMachine("tower", "nora"); err != nil || what != "id" {
+	if what, _, err := a.accept("tower", "nora"); err != nil || what != "id" {
 		t.Fatal(what, err)
 	}
 	if b := a.s.Poller.BindingOf("tower"); !b.OK() || b.Record.MachineID != otherID || b.Record.Holder {
@@ -335,7 +340,7 @@ func TestAVanishedCheckIsAnAlarmNotAMachineWithoutTheCheck(t *testing.T) {
 				t.Fatalf("the approval page: %v", m)
 			}
 			// an admin accepts that it is off: the record is gone, and it is a machine without the check
-			if what, _, err := a.s.Poller.AcceptMachine("laptop", "nora"); err != nil || what != "off" {
+			if what, _, err := a.accept("laptop", "nora"); err != nil || what != "off" {
 				t.Fatal(what, err)
 			}
 			if b := a.s.Poller.BindingOf("laptop"); !b.OK() || b.Known || b.Checks() {

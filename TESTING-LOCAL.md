@@ -647,8 +647,9 @@ record.
 6. Menu, **Audit**: `approval.alarm` ("alarm: changed"), `approval.accept`, `approval.alarm` ("cleared").
 
 Not to be tried on one VM: two hosts with the same id (it needs a second machine made from a copy of the
-first one's disk). The Linux run did it with two agents: both are flagged, neither gets an approval, and
-accepting on one leaves the other flagged until `helper-trust set --new-machine-id` was run on it.
+first one's disk). The Linux run did it with two agents: both are flagged, neither gets an approval. The
+original has the button "This host keeps its machine id"; the copy has no button, its box names the original
+and says to run `helper-trust set --new-machine-id` on the copy and then accept its new id there.
 
 
 ## What the test build does NOT prove

@@ -90,6 +90,12 @@ type Binding struct {
 	Report Report
 	// With are the other hosts (agent ids, sorted) that have the same id, for BindDuplicate.
 	With []string
+	// Held are those of With that keep the id this host shares with them, so that it cannot be accepted for
+	// this host too (audit 5, r2-b2-02): one id is accepted for one host only. A host keeps an id when it has
+	// it on record by an admin's word (Record.Holder), or when it has it on record and this host does not
+	// (this host shows an id that is another host's). Two hosts that both have the id on record, neither by
+	// an admin's word, are on a par: Held is empty for both, and the first accept decides.
+	Held []string
 }
 
 // OK reports whether an approval may be asked for and handed to the host.
@@ -157,6 +163,18 @@ func Evaluate(id string, recs map[string]Record, reps map[string]Report) Binding
 		}
 	}
 	sort.Strings(b.With)
+	mine := ids(rec, known, rep)
+	if changed {
+		mine = []string{rep.MachineID}
+	}
+	for _, o := range b.With {
+		orec, ok := recs[o]
+		for _, m := range mine {
+			if ok && orec.MachineID == m && (orec.Holder || !pinned || rec.MachineID != m) {
+				b.Held = appendOnce(b.Held, o)
+			}
+		}
+	}
 	switch {
 	case len(b.With) > 0:
 		b.Status = BindDuplicate
@@ -236,6 +254,13 @@ func BindingText(name, status string, with []string) string {
 		return "Fairy cannot read its record of machine ids (machines.json in its data folder; the panel's log says why), so it asks no machine for an approval."
 	}
 	return ""
+}
+
+// HeldText is the sentence for a host that shows a machine id another host keeps (Binding.Held; held: their
+// names): it is not one of two equals any more, it is the one that needs an id of its own.
+func HeldText(name string, held []string) string {
+	return name + " has the same machine id as " + andList(held) + ", which keeps it: one id is accepted for one host only. Until " + name +
+		" has an id of its own (on the machine: fairy-agent helper-trust set --new-machine-id, then accept the new id on its page), Fairy asks it for no approval."
 }
 
 func andList(names []string) string {

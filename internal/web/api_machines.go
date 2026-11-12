@@ -1,6 +1,8 @@
 package web
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
@@ -125,9 +127,10 @@ func (s *Server) machineEvent(e poller.MachineEvent) {
 // adminstateMachines is the audit target of an entry about the record itself.
 const adminstateMachines = "machines.json"
 
-// approvalAccept is POST /api/admin/approval/accept/{id} (id: the agent's id): an admin accepts what the
-// machine shows NOW about its own check, after it was changed on the machine. It is the one way out of an alarm
-// that the machine cannot end by itself:
+// approvalAccept is POST /api/admin/approval/accept/{id} (id: the agent's id) with what the page showed:
+// {"machine_id": "<the id the host showed, in full>"} or {"off": true}. An admin accepts what the machine
+// shows about its own check, after it was changed on the machine. It is the one way out of an alarm that the
+// machine cannot end by itself:
 //
 //   - the machine shows another machine id than the one on record (`fairy-agent helper-trust set
 //     --new-machine-id`, or clear and set, on the machine): the id it shows is on record from now on;
@@ -135,6 +138,12 @@ const adminstateMachines = "machines.json"
 //     shows an id of its own (the copy gets one with `--new-machine-id`);
 //   - the machine had the check and shows none (`helper-trust clear` on the machine): the record is removed,
 //     and the machine is one without the check until it shows one again.
+//
+// One id is accepted for one host only (audit 5, r2-b2-02): an id that another host keeps (it was accepted
+// there, or it is on record there and not here) is refused here, 409, whoever sends the request; that host
+// must get an id of its own on the machine first. And what is accepted is exactly what the dialog showed
+// (audit 5, r2-x1-01): the request names it, and a host that shows something else when the request runs, also
+// after the confirmation, is refused: "it changed while you were confirming".
 //
 // Admins in a browser only (no API token), CSRF, the kill switch, and always its own "Confirm it's you": it
 // never rides on a confirmation given for something else. Nothing is sent to the machine.
@@ -146,37 +155,73 @@ func (s *Server) approvalAccept(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
+	var req acceptBody
+	if err := c.decodeBody(&req); err != nil {
+		return err
+	}
+	if (req.MachineID == "") != req.Off || len(req.MachineID) > 128 {
+		return apierr.New(422, "say what is accepted, as the page showed it: machine_id (the id the machine shows), or off: true")
+	}
+	a, ok := s.Poller.AgentByID(c.r.PathValue("id"))
+	if !ok {
+		return apierr.New(404, "unknown machine")
+	}
+	name := s.machineNames([]string{a.ID})[0]
+	want := poller.AcceptWant{MachineID: req.MachineID, Off: req.Off}
+	refuse := func(before approval.Binding, err error) error {
+		params := acceptParams(before)
+		msg := name + ": " + err.Error()
+		var held *poller.HeldError
+		switch {
+		case errors.As(err, &held):
+			params["held_by"] = held.By
+			msg = acceptHeldText(name, s.machineNames(held.By))
+		case errors.Is(err, poller.ErrAcceptChanged):
+			msg = name + ": nothing was accepted. What it shows is not what the dialog showed: it changed while you were confirming. Look at its Approval box and press the button again."
+		}
+		c.audit(u, "approval.accept", a.ID, params, "error 409: "+textsafe.Clip(err.Error(), 200))
+		return apierr.New(409, msg)
+	}
+	// Before anybody is asked to confirm: an accept that would be refused for what the host shows, or for who
+	// keeps its id. (AcceptMachine decides again, under the record's lock, when the request runs.)
+	if b := s.Poller.BindingOf(a.ID); b.Status == approval.BindChanged || b.Status == approval.BindDuplicate || b.Status == approval.BindVanished {
+		switch {
+		case acceptShows(b) != want:
+			return refuse(b, poller.ErrAcceptChanged)
+		case len(b.Held) > 0:
+			return refuse(b, &poller.HeldError{By: b.Held})
+		}
+	}
 	if err := c.stepUpEach(u, "accepting what a machine shows about its own check"); err != nil {
 		return err
 	}
 	if !s.control.allow(u.Sub) {
 		return c.limited(u, s.control, "too many control requests")
 	}
-	id := c.r.PathValue("id")
-	a, ok := s.Poller.AgentByID(id)
-	if !ok {
-		return apierr.New(404, "unknown machine")
-	}
-	name := s.machineNames([]string{a.ID})[0]
-	what, before, err := s.Poller.AcceptMachine(a.ID, actorOf(u))
-	params := map[string]any{"was": before.Status}
-	if before.Record.MachineID != "" {
-		params["on_record_before"] = approval.ShortID(before.Record.MachineID)
-	}
-	if len(before.With) > 0 {
-		params["with"] = before.With
-	}
+	what, before, err := s.Poller.AcceptMachine(a.ID, actorOf(u), want)
 	if what == "" { // nothing was accepted
-		c.audit(u, "approval.accept", a.ID, params, "error 409: "+textsafe.Clip(err.Error(), 200))
-		return apierr.New(409, name+": "+err.Error())
+		return refuse(before, err)
 	}
+	params := acceptParams(before)
 	params["accepted"] = what
 	msg := name + ": its check is off, and Fairy treats it as a machine without the check from now on."
 	if what == "id" {
 		params["machine_id"] = approval.ShortID(before.Report.MachineID)
 		msg = name + ": the machine id it shows is on record now."
 		if after := s.Poller.BindingOf(a.ID); after.Known && after.Record.Holder {
-			msg = name + " keeps the machine id. The other host stays flagged until it shows an id of its own (on it: fairy-agent helper-trust set --new-machine-id)."
+			// what was done, in the words of what was done: it kept an id it had, or it was given the id two hosts show
+			verb := " keeps the machine id. "
+			if before.Record.MachineID != before.Report.MachineID {
+				verb = " has the machine id on record now, and keeps it. "
+			}
+			switch others := s.machineNames(before.With); len(others) {
+			case 0:
+				msg = name + verb + "The other host stays flagged until it shows an id of its own (on it: fairy-agent helper-trust set --new-machine-id)."
+			case 1:
+				msg = name + verb + others[0] + " stays flagged until it shows an id of its own (on it: fairy-agent helper-trust set --new-machine-id)."
+			default:
+				msg = name + verb + andNames(others) + " stay flagged until each shows an id of its own (on each: fairy-agent helper-trust set --new-machine-id)."
+			}
 		}
 	}
 	outcome := "ok"
@@ -189,15 +234,52 @@ func (s *Server) approvalAccept(c *reqCtx) error {
 	return nil
 }
 
-// approvalAcceptDetail says, in the dialog that asks to confirm, what exactly would be accepted.
+// acceptBody is what the page showed when "Accept" was pressed: exactly one of the two.
+type acceptBody struct {
+	MachineID string `json:"machine_id"`
+	Off       bool   `json:"off"`
+}
+
+// acceptShows is what an accept of the host would accept now: the id it shows, or that it shows no check.
+func acceptShows(b approval.Binding) poller.AcceptWant {
+	if b.Report.Block && b.Report.State == api.ApprovalRequired && b.Report.MachineID != "" {
+		return poller.AcceptWant{MachineID: b.Report.MachineID}
+	}
+	return poller.AcceptWant{Off: true}
+}
+
+func acceptParams(before approval.Binding) map[string]any {
+	params := map[string]any{"was": before.Status}
+	if before.Record.MachineID != "" {
+		params["on_record_before"] = approval.ShortID(before.Record.MachineID)
+	}
+	if len(before.With) > 0 {
+		params["with"] = before.With
+	}
+	return params
+}
+
+// acceptHeldText is the refusal of an accept on a host whose id another host keeps (by: their names), and
+// what to do instead. The Approval box of such a host says the same and has no button.
+func acceptHeldText(name string, by []string) string {
+	return name + ": nothing was accepted. The machine id it shows is kept by " + andNames(by) + ", and one id is accepted for one host only. " +
+		"Give " + name + " a new id on the machine itself (fairy-agent helper-trust set --new-machine-id), then accept the new id here."
+}
+
+// approvalAcceptDetail says, in the dialog that asks to confirm, what exactly would be accepted: the id the
+// request names (the one the page showed), not whatever the host shows by now.
 func (c *reqCtx) approvalAcceptDetail(*model.User) string {
 	b := c.s.Poller.BindingOf(c.r.PathValue("id"))
+	var req acceptBody
+	_ = json.Unmarshal(c.body, &req)
 	switch {
-	case b.Report.Block && b.Report.MachineID != "" && b.Record.MachineID != "" && b.Record.MachineID != b.Report.MachineID:
-		return "it shows the machine id " + approval.ShortID(b.Report.MachineID) + "; on record is " + approval.ShortID(b.Record.MachineID)
-	case b.Status == approval.BindDuplicate && len(b.With) > 0:
-		return "it keeps its machine id; " + strings.Join(c.s.machineNames(b.With), ", ") + " must get a new one"
-	case b.Status == approval.BindVanished:
+	case req.MachineID != "" && b.Record.MachineID == req.MachineID && len(b.With) > 0:
+		return "it keeps its machine id " + approval.ShortID(req.MachineID) + "; " + andNames(c.s.machineNames(b.With)) + " must get a new one"
+	case req.MachineID != "" && b.Record.MachineID != "":
+		return "it shows the machine id " + approval.ShortID(req.MachineID) + "; on record is " + approval.ShortID(b.Record.MachineID)
+	case req.MachineID != "":
+		return "it shows the machine id " + approval.ShortID(req.MachineID)
+	case req.Off:
 		return "it shows no check any more: it becomes a machine without the check"
 	}
 	return ""
