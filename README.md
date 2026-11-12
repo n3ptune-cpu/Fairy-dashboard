@@ -691,7 +691,7 @@ The file is read once at start (path from the config only) and served at `/brand
 
 ### Sign-in wallpaper
 
-An admin can put a picture behind the sign-in page: **Settings**, "Sign-in page", **Upload picture…** (PNG,
+An admin can put a picture behind the sign-in page: **Settings**, "Sign-in page", **Upload picture** (PNG,
 JPEG or WebP, at most 8 MiB) and **Remove picture**. The sign-in page and "Waiting for access" show it over the
 whole window, with the name, the message and the button in a strip along the bottom; without a picture the
 page is black, with the same strip.

@@ -665,7 +665,7 @@ function helperMenu(s, h) {
     ...(h.version ? [["Version", h.version]] : [])];
   const act = h.state === "not_installed" ? '<div class="menu-note">Not installed: the agent\'s Windows installer (v0.5.0 or newer) sets it up.</div>'
     : `<button class="menu-item ${down ? "" : "danger"}" data-act="helper" data-action="${down ? "start" : "stop"}" ${why || h.state === "starting" ? "disabled" : ""}>
-      ${down ? "Start helper…" : "Stop helper…"}<span class="note">${h.state === "starting" ? "starting" : "type the name"}</span></button>`;
+      ${down ? "Start helper" : "Stop helper"}<span class="note">${h.state === "starting" ? "starting" : "type the name"}</span></button>`;
   return `<div class="menu helper" role="menu"><div class="menu-title">Elevated helper · ${esc(s.name)}</div>
     ${rows.map(([k, v]) => `<div class="menu-row"><span>${k}</span><span>${esc(v)}</span></div>`).join("")}
     ${h.state === "error" && h.error ? `<div class="menu-note bad">${esc(h.error)}</div>` : ""}
@@ -2035,7 +2035,7 @@ function pageSettings() {
       "Upload: PNG, JPEG, WebP, GIF or AVIF, at most 8 MiB. No SVG.",
       "Or paste the https URL of a picture."]))}</h3>
     <div class="note">A picture behind your own pages: upload one or paste an https URL.</div>
-    <div class="row-gap section-title"><label class="btn" for="bg-file">Upload image…</label><input id="bg-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" hidden>
+    <div class="row-gap section-title"><label class="btn" for="bg-file">Upload image</label><input id="bg-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" hidden>
       <button class="btn danger" id="bg-clear" ${bg.kind === "none" ? "disabled" : ""}>Remove background</button></div>
     <div class="row-gap"><input class="input" id="bg-url" type="url" placeholder="https://example.com/wallpaper.jpg" value="${bg.kind === "url" ? esc(bg.url) : ""}"><button class="btn" id="bg-url-apply">Use URL</button></div>
     <div class="preview" id="bg-preview"></div><div class="error" id="set-err"></div></div>${signInPanel()}
@@ -2089,7 +2089,7 @@ function signInPanel() {
       "Changing it asks you to confirm it's you.",
       "It does not change your own background above."]))}</h3>
     <div class="note info-keep">Picture behind the sign-in page, the same for everyone. Anyone who can open this panel's address sees it before signing in, so pick one that may be public.</div>
-    <div class="row-gap section-title"><label class="btn" for="siw-file">Upload picture…</label><input id="siw-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+    <div class="row-gap section-title"><label class="btn" for="siw-file">Upload picture</label><input id="siw-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
       <button class="btn danger" id="siw-clear" disabled>Remove picture</button></div>
     <div class="preview" id="siw-preview"></div><div class="note" id="siw-state">Loading…</div><div class="error" id="siw-err"></div></div>`;
 }

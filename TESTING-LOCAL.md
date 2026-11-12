@@ -291,7 +291,7 @@ forgets its sessions at every start, see below.)
 
 ## E. Trying the sign-in wallpaper
 
-1. Menu, **Settings**, "Sign-in page": **Upload picture…**, a PNG, JPEG or WebP of at most 8 MiB. The preview shows it.
+1. Menu, **Settings**, "Sign-in page": **Upload picture**, a PNG, JPEG or WebP of at most 8 MiB. The preview shows it.
 2. Menu, **Sign out**: the sign-in page shows the picture over the whole window, the button in a strip at the bottom.
 3. Narrow the window, then make it very wide: the strip stays at the bottom. The page stays until you press the button.
 4. Press **Continue as test-admin (test build)**: you are back in the panel.
