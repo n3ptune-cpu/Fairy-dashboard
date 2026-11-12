@@ -471,7 +471,8 @@ type Host struct {
 	pendingSeen     bool          // the agent reported the run's shutdown as pending
 	noPendingAt     time.Time     // (SeenAt of) the first answer after the request that had no countdown in it (see stepShutting)
 	otherAt         time.Time     // (SeenAt of) the first answer after the request that showed another action than a shutdown as pending (otherPending)
-	unpending       bool          // after its countdown was seen, an answer showed nothing pending (stepShutting: a shutdown that shows after that is not the run's)
+	pendingAt       time.Time     // the end of the run's countdown as its agent last gave it (by the machine's clock; stepShutting)
+	unpending       bool          // after its countdown was seen, an answer from after the run's due time showed nothing pending (stepShutting: another shutdown that shows after that is not the run's)
 	notPending      bool          // the run saw that its shutdown is no longer what is pending, and another action is: silence is never its "off" (look)
 	offQuiet        bool          // it gives nothing at all right now ...
 	offSince        time.Duration // ... since this moment on the steady clock

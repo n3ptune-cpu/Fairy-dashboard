@@ -306,6 +306,11 @@ func (m *Manager) endOtherPending(r *Run, h *Host, now time.Time, why string, p 
 	m.endSeen(r, h, StLeftOn, OnYes, now, lead+" "+cameOnline(h)+" and it is ON now. Fairy no longer watches it."+updateTail(h), lead+updateTail(h))
 }
 
+// sameShutdown: a pending shutdown whose end the agent gives within this of the end the run saw for its own
+// countdown is that countdown (stepShutting). Both are the agent's word, by the machine's clock: they are
+// compared with each other, never with a clock of the panel.
+const sameShutdown = 2 * time.Second
+
 // endOtherAction ends a machine whose countdown the run watches when its agent shows that the run's shutdown
 // is no longer what is pending, and another action is (stepShutting). The machine is on: it has just answered.
 // What becomes of it is that action's matter, and the sentence names it, with its time as the agent gives it
@@ -793,20 +798,34 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	//   - the agent shows a shutdown again after an answer in which, with the run's countdown seen before,
 	//     nothing was pending (unpending). The run asks for one shutdown and never for a second, so that one
 	//     was asked for by someone else: it is not the run's, and its end is not the run's result.
+	//     That answer counts only when it came after the run's own due time, when the run's countdown is
+	//     surely over. Before that, one answer without the countdown can be a hiccup of the agent that still
+	//     counts down (on Windows the agent shows what its helper remembers after its own process restarted,
+	//     and the helper may give no status for one poll): in the last seconds of the countdown, where the
+	//     rule "cancelled" below no longer ends the machine, the run took the same shutdown showing again for
+	//     someone else's, wrote "was called off ... which is not the run's", and let go of a machine that
+	//     went off two seconds later by the run's own countdown (review of fix7r2, R2-02). Such an answer
+	//     now changes nothing: the run goes on watching its countdown. And a shutdown whose end the agent
+	//     gives within sameShutdown of the one the run saw is the run's own, after the due time too (the
+	//     agent shows a shutdown for a minute after its time): the answer without it was a hiccup.
 	// What the run cannot tell: a shutdown that someone asked for in place of the run's without an answer of
-	// the agent in between that shows none. The agent's answer does not say whose a shutdown is.
+	// the agent, from after the run's due time, in between that shows none. The agent's answer does not say
+	// whose a shutdown is.
 	if p := h.otherPending(o, after); p != nil {
 		m.endOtherAction(r, h, now, p, mono < h.endMin)
 		return
 	}
 	if counting && h.unpending {
-		m.endOtherAction(r, h, now, o.Pending, mono < h.endMin)
-		return
+		if d := o.Pending.At.Sub(h.pendingAt); d > sameShutdown || d < -sameShutdown {
+			m.endOtherAction(r, h, now, o.Pending, mono < h.endMin)
+			return
+		}
+		h.unpending = false // the run's own shutdown shows again
 	}
 	if counting {
-		h.pendingSeen = true
+		h.pendingSeen, h.pendingAt = true, o.Pending.At
 	}
-	if h.pendingSeen && after && o.Pending == nil {
+	if h.pendingSeen && after && o.Pending == nil && mono-o.SeenAgo > h.dueMono {
 		h.unpending = true
 	}
 	// The guests of a Proxmox node were asked about before the shutdown request (mayShutDown). One that starts
