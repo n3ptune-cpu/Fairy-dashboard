@@ -43,8 +43,12 @@ func TestUIMessagesSayTheirMachineOnce(t *testing.T) {
 		}
 		parts = append(parts, m)
 	}
+	// (audit 6, r4-p3-06) what "names its machine" means is a function of its own now; the page before it had none
+	parts = append([]string{regexp.MustCompile(`(?m)^const namesIt = .*$`).FindString(js)}, parts...)
 	script := `"use strict";
-const state = { systems: [{ id: "vm", name: "NSX-TEST-VM" }, { id: "relay", name: "RELAY" }, { id: "nameless" }], byId: {} };
+const state = { systems: [{ id: "vm", name: "NSX-TEST-VM" }, { id: "relay", name: "RELAY" }, { id: "nameless" },
+  // (audit 6, r4-p3-06) machines whose names are letters of an ordinary result
+  { id: "s", name: "s" }, { id: "in", name: "in" }, { id: "sixty", name: "60" }, { id: "min", name: "minute" }, { id: "vmx", name: "NSX" }], byId: {} };
 for (const s of state.systems) state.byId[s.id] = s;
 ` + strings.Join(parts, "\n") + `
 const fail = (m) => { console.log("FAIL " + m); process.exitCode = 1; };
@@ -77,6 +81,29 @@ for (const [path, ok, label, message, want] of cases) {
   // the machine's name is in the line once, unless the panel's own sentence says it twice
   if (got && got.split("NSX-TEST-VM").length - 1 > Math.max(1, message.split("NSX-TEST-VM").length - 1)) fail("said twice: " + got);
 }
+// (audit 6, r4-p3-06) the name counts as a whole and where the panel's sentences put it, not as letters somewhere
+// in the text: a machine called "s", "in" or "60" was never named, and its refusals lost what was asked and "failed"
+const whole = [
+  ["/api/systems/s/power", true, "Shut down s in 1 minute", "shutdown in 60 s", "s: shutdown in 60 s."],
+  ["/api/systems/in/power", true, "Shut down in in 1 minute", "shutdown in 60 s", "in: shutdown in 60 s."],
+  ["/api/systems/sixty/power", true, "Shut down 60 in 1 minute", "shutdown in 60 s", "60: shutdown in 60 s."],
+  ["/api/systems/min/power", true, "Power on (Wake-on-LAN) · minute", "magic packet sent via RELAY; give it a minute to boot", "minute: magic packet sent via RELAY; give it a minute to boot."],
+  ["/api/systems/s/power", false, "Shut down s in 1 minute", "too many control requests; try again in 42 s", ""],
+  ["/api/systems/s/power", false, "Shut down s in 1 minute", "s did not accept the approval (s says: approval refused (user))", "s did not accept the approval (s says: approval refused (user))."],
+  ["/api/systems/s/power", true, "Cancel pending · s", "The shutdown of s is cancelled.", "The shutdown of s is cancelled."],
+  ["/api/systems/vmx/power", true, "Shut down NSX in 1 minute", "shutdown in 60 s", "NSX: shutdown in 60 s."],
+  // a refusal that names no machine keeps what was asked and "failed", whatever the machines are called
+  ["/api/admin/approval/accept/s", false, "Accept the new machine id of s", "too many control requests; try again in 42 s", ""],
+  [turnOn, false, "Turn on the check on the machine itself: 1 machine", "too many control requests; try again in 42 s", ""],
+  [turnOn, true, "Turn on the check on the machine itself: 2 machines", "2 of 2 machines now check approvals themselves. s: accepted; in: accepted", "2 of 2 machines now check approvals themselves. s: accepted; in: accepted."],
+  // a name that is the start of another name is not that name
+  ["/api/admin/approval/accept/vmx", true, "Accept the machine id of NSX", "NSX: the machine id it shows is on record now.", "NSX: the machine id it shows is on record now."],
+];
+for (const [path, ok, label, message, want] of whole) {
+  const got = saidOnce({ path, ok, label, message, status: ok ? 200 : 429 });
+  if (got !== want) fail("whole name: " + JSON.stringify(label + " / " + message) + ": " + JSON.stringify(got) + ", want " + JSON.stringify(want));
+}
+if (sayOnce("s", "shutdown in 60 s") !== "s: shutdown in 60 s." || sayOnce("NSX", "NSX-TEST-VM: accepted") !== "NSX: NSX-TEST-VM: accepted." || sayOnce("in", "in: accepted") !== "in: accepted.") fail("sayOnce goes by letters");
 // an update, a fan change, Add host, a run: untouched
 for (const p of ["/api/admin/updates/vm", "/api/admin/updates", "/api/systems/vm/fan/mode", "/api/admin/hosts", "/api/admin/wake-update", "/api/systems/vm/power/x", "/api/admin/approval"]) if (SAID_ONCE.test(p)) fail(p + " must keep its usual line");
 // the same action without a confirmation in between

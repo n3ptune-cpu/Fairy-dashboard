@@ -368,18 +368,24 @@ function showPendingResult(pr) {
 // "<machine>: <result>." (sayOnce). Everything else keeps "<what was asked>: <what happened>".
 const SAID_ONCE = /^\/api\/(systems\/[^/]+\/power|admin\/approval\/(turn-on|accept\/[^/]+))$/;
 const endDot = (t) => (/[.!?…]$/.test(t) ? t : `${t}.`);
-const sayOnce = (name, msg) => { const m = String(msg || "done"); return endDot(!name || m.includes(name) ? m : `${name}: ${m}`); };
+// Whether a sentence of the panel names this machine: "NAME: result" at the start or after another sentence
+// (Turn on: "… themselves. NAME: accepted; NAME2: refused"), the name as a whole at the start ("NAME did not
+// accept …"), or after "of" (a cancel: "The shutdown of NAME is cancelled."). Never the name's letters somewhere
+// in the text: a machine chooses its own name, and one called "s" or "in" is not named by "shutdown in 60 s"
+// (audit 6, r4-p3-06; it was msg.includes(name)).
+const namesIt = (msg, name) => !!name && ([`. ${name}: `, `; ${name}: `, ` of ${name} `].some((x) => msg.includes(x)) || (msg.startsWith(name) && /^(: | [\p{L}\p{N}])/u.test(msg.slice(name.length))));
+const sayOnce = (name, msg) => { const m = String(msg || "done"); return endDot(!name || namesIt(m, name) ? m : `${name}: ${m}`); };
 // The same for a result the panel kept while "Confirm it's you" was on its way (pr); "" when the usual line is to be shown.
 function saidOnce(pr) {
   const msg = pr.message || "";
   if (!msg) return "";
   const sys = /^\/api\/systems\/([^/]+)\/power$/.exec(pr.path || "");
   // Turn on and an accept: the panel's sentence names every machine it is about
-  if (!sys) return state.systems.some((s) => s.name && msg.includes(s.name)) ? endDot(msg) : "";
+  if (!sys) return state.systems.some((s) => namesIt(msg, s.name)) ? endDot(msg) : "";
   const name = state.byId[sys[1]]?.name;
   if (!name) return "";
   // a power action: the machine in front of a bare result; a refusal that does not name it keeps what was asked in front of it
-  return msg.includes(name) ? endDot(msg) : pr.ok ? sayOnce(name, msg) : "";
+  return namesIt(msg, name) ? endDot(msg) : pr.ok ? sayOnce(name, msg) : "";
 }
 // The machines' names come with the stream: a result that is there before them (right after the page loaded) waits
 // for them, for at most 3 seconds.
