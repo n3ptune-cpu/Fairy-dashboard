@@ -135,7 +135,7 @@ func TestAnAcceptOnTheCopyIsRefused(t *testing.T) {
 		t.Fatalf("laptop on the approval page: %v", m)
 	}
 	r := x.press("laptop", map[string]any{"machine_id": idL})
-	if got := actionOf(r); !strings.Contains(got, "it keeps its machine id "+approval.CompareID(idL)+"; tower must get a new one") {
+	if got := actionOf(r); !strings.Contains(got, "it keeps its machine id; tower must get a new one") {
 		t.Fatalf("the dialog for laptop: %q", got)
 	}
 	res := x.confirm(t, r)
@@ -162,7 +162,7 @@ func TestAnAcceptOnTheCopyIsRefused(t *testing.T) {
 		t.Fatalf("tower with its own id: %v", m)
 	}
 	r = x.press("tower", map[string]any{"machine_id": otherID})
-	if got := actionOf(r); !strings.Contains(got, "it shows the machine id "+approval.CompareID(otherID)+"; on record is "+approval.CompareID(idT)) {
+	if got := actionOf(r); !strings.Contains(got, "it shows another machine id than the one on record") {
 		t.Fatalf("the dialog for tower: %q", got)
 	}
 	if res := x.confirm(t, r); res["ok"] != true || res["message"] != "tower: the machine id it shows is on record now." {
@@ -197,7 +197,7 @@ func TestTheFirstAcceptDecidesBetweenTwoEquals(t *testing.T) {
 	x.stopped(t, "laptop's update", x.post("/api/admin/updates/laptop", map[string]any{}), "laptop checks approvals itself, and its machine id is not on record")
 	x.stopped(t, "tower's fan change", x.post("/api/systems/tower/fan/mode", map[string]any{"mode": "full"}), "tower checks approvals itself, and its machine id is not on record")
 	r := x.press("tower", map[string]any{"machine_id": idL})
-	if got := actionOf(r); !strings.Contains(got, "it shows the machine id "+approval.CompareID(idL)+", which is not on record; laptop shows the same id and must get a new one") {
+	if got := actionOf(r); !strings.Contains(got, "it shows a machine id that is not on record; laptop shows the same id and must get a new one") {
 		t.Fatalf("the dialog for tower: %q", got)
 	}
 	res := x.confirm(t, r)
@@ -251,7 +251,7 @@ func TestAnAcceptIsForTheIDTheDialogShowed(t *testing.T) {
 	}
 	// the flip: the dialog shows otherID; the host shows thirdID when the confirmation is back
 	r := x.press("laptop", map[string]any{"machine_id": otherID})
-	if got := actionOf(r); !strings.Contains(got, "it shows the machine id "+approval.CompareID(otherID)+"; on record is "+approval.CompareID(idL)) {
+	if got := actionOf(r); !strings.Contains(got, "it shows another machine id than the one on record") {
 		t.Fatalf("the dialog: %q", got)
 	}
 	x.setTrustID(t, x.laptop, thirdID)

@@ -90,7 +90,7 @@ func TestAMachineThatShowsTheCheckIsNotOnRecordUntilAnAdminAccepts(t *testing.T)
 	// the button: the dialog names the id as the box does (first eight, last six), never in full; asking is not accepting
 	r := x.press("laptop", map[string]any{"machine_id": want})
 	if got := actionOf(r); !strings.Contains(got, "accept what laptop shows about its own check of approvals now") ||
-		!strings.Contains(got, "it shows the machine id "+approval.CompareID(want)+", which is not on record") || strings.Contains(got, want) {
+		!strings.Contains(got, "it shows a machine id that is not on record") || strings.Contains(got, want) || strings.Contains(got, want[:6]) {
 		t.Fatalf("the dialog: %q", got)
 	}
 	if b := x.s.Poller.BindingOf("laptop"); b.Status != approval.BindNoRecord {

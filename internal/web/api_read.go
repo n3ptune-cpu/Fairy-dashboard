@@ -67,6 +67,9 @@ func (s *Server) auditPage(c *reqCtx) error {
 		before = &n
 	}
 	entries, next := audit.Read(s.Cfg.AuditLog, user, action, host, before, limit)
+	if u.Auth == "token" { // a machine id is for an admin in a browser: a token reads the entries without its characters
+		auditForToken(entries)
+	}
 	c.json(200, model.AuditPage{Entries: entries, Next: next})
 	return nil
 }

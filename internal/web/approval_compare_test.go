@@ -26,6 +26,8 @@ func itemsOf(r resp) []any {
 // Changed with audit 6, r4-p3-02: the dialog's lines now give the id that would be accepted IN FULL (and the
 // one on record, when it is another one), above the line that says what to compare. This test held the
 // opposite ("never the id in full"), which let a look-alike id pass: TestTheAcceptDialogShowsTheIDInFull.
+// And with r4-p3-03 the sentence of the kept action ("Fairy will run ...") has no characters of an id any
+// more: it goes to the audit log, and it held the first eight and last six of each id there.
 func TestTheAcceptDialogSaysWhatToCompare(t *testing.T) {
 	const compare = `Compare it first with the machine's own: on the machine, fairy-agent helper-status, line "machine id:".`
 	x := newAcceptAdmin(t)
@@ -45,7 +47,7 @@ func TestTheAcceptDialogSaysWhatToCompare(t *testing.T) {
 	x.setTrust(t, x.laptop)
 	x.poll()
 	r := x.press("laptop", map[string]any{"machine_id": idL})
-	dialog("not on record", r, "it shows the machine id "+approval.CompareID(idL)+", which is not on record", "Machine id it shows: "+idL)
+	dialog("not on record", r, "it shows a machine id that is not on record", "Machine id it shows: "+idL)
 	if res := x.confirm(t, r); res["ok"] != true {
 		t.Fatalf("the accept: %v", res)
 	}
@@ -53,7 +55,7 @@ func TestTheAcceptDialogSaysWhatToCompare(t *testing.T) {
 	x.setTrustID(t, x.tower, idL)
 	x.poll()
 	r = x.press("laptop", map[string]any{"machine_id": idL})
-	dialog("keeps", r, "it keeps its machine id "+approval.CompareID(idL)+"; tower must get a new one", "Machine id it keeps: "+idL)
+	dialog("keeps", r, "it keeps its machine id; tower must get a new one", "Machine id it keeps: "+idL)
 	if res := x.confirm(t, r); res["ok"] != true {
 		t.Fatalf("the accept: %v", res)
 	}
@@ -61,7 +63,7 @@ func TestTheAcceptDialogSaysWhatToCompare(t *testing.T) {
 	x.setTrustID(t, x.laptop, otherID)
 	x.poll()
 	r = x.press("laptop", map[string]any{"machine_id": otherID})
-	dialog("a new id", r, "it shows the machine id "+approval.CompareID(otherID)+"; on record is "+approval.CompareID(idL), "Machine id it shows: "+otherID, "Machine id on record: "+idL)
+	dialog("a new id", r, "it shows another machine id than the one on record", "Machine id it shows: "+otherID, "Machine id on record: "+idL)
 	if res := x.confirm(t, r); res["ok"] != true {
 		t.Fatalf("the accept: %v", res)
 	}
@@ -113,12 +115,11 @@ func TestTheAcceptDialogSaysWhatToCompare(t *testing.T) {
 func TestTheDialogOfANewIDNamesAHostThatShowsTheSameID(t *testing.T) {
 	x := newAcceptAdmin(t)
 	x.require(t, x.laptop)
-	idL := machineIDOf("laptop")
 	x.setTrustID(t, x.laptop, otherID) // on the machine: --new-machine-id
 	x.poll()
-	// alone: the sentence as it was
+	// alone: the sentence as it was (audit 6, r4-p3-03: in words; it held the two ids as "<8>…<6>")
 	r := x.press("laptop", map[string]any{"machine_id": otherID})
-	alone := "(it shows the machine id " + approval.CompareID(otherID) + "; on record is " + approval.CompareID(idL) + ")"
+	alone := "(it shows another machine id than the one on record)"
 	if got := actionOf(r); r.code != 401 || !strings.HasSuffix(got, alone) {
 		t.Fatalf("the dialog while no other host shows the id: %d %q", r.code, got)
 	}
@@ -134,11 +135,11 @@ func TestTheDialogOfANewIDNamesAHostThatShowsTheSameID(t *testing.T) {
 	}
 	// tower's dialog named laptop before; laptop's now names tower
 	r = x.press("tower", map[string]any{"machine_id": otherID})
-	if got := actionOf(r); r.code != 401 || !strings.Contains(got, "which is not on record; laptop shows the same id and must get a new one") {
+	if got := actionOf(r); r.code != 401 || !strings.Contains(got, "that is not on record; laptop shows the same id and must get a new one") { // (r4-p3-03: "a machine id that is ...")
 		t.Fatalf("the dialog for tower: %d %q", r.code, got)
 	}
 	r = x.press("laptop", map[string]any{"machine_id": otherID})
-	want := "(it shows the machine id " + approval.CompareID(otherID) + "; on record is " + approval.CompareID(idL) + "; tower shows the same id)"
+	want := "(it shows another machine id than the one on record; tower shows the same id)"
 	if got := actionOf(r); r.code != 401 || !strings.HasSuffix(got, want) || len(itemsOf(r)) != 3 { // (r4-p3-02: the two ids in full and the line; it was the line alone)
 		t.Fatalf("the dialog for laptop: %d %q %v", r.code, got, itemsOf(r))
 	}

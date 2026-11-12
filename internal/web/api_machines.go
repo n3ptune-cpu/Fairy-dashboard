@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
@@ -293,39 +294,75 @@ func acceptHeldText(name string, by []string) string {
 		"Give " + name + " a new id on the machine itself (fairy-agent helper-trust set --new-machine-id), then accept the new id here."
 }
 
-// approvalAcceptDetail says, in the dialog that asks to confirm, what exactly would be accepted: the id the
-// request names (the one the page showed), not whatever the host shows by now. An id is shown in the form the
-// Approval box has (approval.CompareID: the first eight and the last six characters), so that what the admin
-// compares with the machine's own looks the same in both places. The audit log keeps the first six.
+// approvalAcceptDetail says, in the dialog that asks to confirm, what exactly would be accepted, in words. The
+// ids themselves are in the dialog's own lines, in full (approvalAcceptItems), and not in this sentence: it is
+// the kept action's description, and that is written to the audit log with the confirmation ("for", "runs").
+// It held the first eight and the last six characters of each id there, which any API token of an admin could
+// read from GET /api/audit, while the approval page gives a token no id on purpose (audit 6, r4-p3-03). The
+// audit log's own entries about an accept keep the first six characters, for an admin's session
+// (auditForToken).
 func (c *reqCtx) approvalAcceptDetail(*model.User) string {
 	b := c.s.Poller.BindingOf(c.r.PathValue("id"))
 	var req acceptBody
 	_ = json.Unmarshal(c.body, &req)
+	others := c.s.machineNames(b.With)
+	shows, must := " shows", " must get a new one"
+	if len(others) > 1 {
+		shows, must = " show", " must each get a new one"
+	}
 	switch {
-	case req.MachineID != "" && b.Record.MachineID == req.MachineID && len(b.With) > 0:
-		return "it keeps its machine id " + approval.CompareID(req.MachineID) + "; " + andNames(c.s.machineNames(b.With)) + " must get a new one"
+	case req.MachineID != "" && b.Record.MachineID == req.MachineID && len(others) > 0:
+		return "it keeps its machine id; " + andNames(others) + must
 	case req.MachineID != "" && b.Record.MachineID != "":
-		d := "it shows the machine id " + approval.CompareID(req.MachineID) + "; on record is " + approval.CompareID(b.Record.MachineID)
-		if others := c.s.machineNames(b.With); len(others) > 0 {
+		d := "it shows another machine id than the one on record"
+		if len(others) > 0 {
 			// Another host shows this new id too, and has it on record no more than this host has (a host that
 			// keeps it would have refused this accept before the dialog). The admin must know before the
 			// accept that there are two (second review of passkey-g, G-03). Who may accept is as it was.
-			verb := " shows"
-			if len(others) > 1 {
-				verb = " show"
-			}
-			d += "; " + andNames(others) + verb + " the same id"
+			d += "; " + andNames(others) + shows + " the same id"
 		}
 		return d
-	case req.MachineID != "" && len(b.With) > 0:
+	case req.MachineID != "" && len(others) > 0:
 		// nothing is on record for it, and another host without a record shows the same id: the first accept decides
-		return "it shows the machine id " + approval.CompareID(req.MachineID) + ", which is not on record; " + andNames(c.s.machineNames(b.With)) + " shows the same id and must get a new one"
+		return "it shows a machine id that is not on record; " + andNames(others) + shows + " the same id and" + must
 	case req.MachineID != "":
-		return "it shows the machine id " + approval.CompareID(req.MachineID) + ", which is not on record"
+		return "it shows a machine id that is not on record"
 	case req.Off:
 		return "it shows no check any more: it becomes a machine without the check"
 	}
 	return ""
+}
+
+// The members of an audit entry about approvals that hold the first characters of a machine id.
+var auditIDParams = []string{"machine_id", "on_record", "on_record_before", "shown"}
+
+// auditShortIDRe finds a shortened machine id in a sentence of an entry written before audit 6: "the machine id
+// GONEmach…000004", "on record is GONEmach…000004", "its machine id GONEmach…000004".
+var auditShortIDRe = regexp.MustCompile(`(machine id|on record is) [A-Za-z0-9_-]{4,8}…[A-Za-z0-9_-]{0,6}`)
+
+// auditForToken takes the characters of machine ids out of the audit entries an API token reads (GET
+// /api/audit; audit 6, r4-p3-03). The panel hands a machine id to an admin in a browser only: the approval
+// page gives a token none. The audit log keeps the first six characters of an id in its entries about
+// approvals (which id came on record, an alarm's two ids), and entries from before this fix have eight and six
+// in the description of a confirmed accept. An admin's session reads them as they are; a token gets the
+// entries without them. The entries are the caller's own copies.
+func auditForToken(entries []map[string]any) {
+	for _, e := range entries {
+		p, _ := e["params"].(map[string]any)
+		if p == nil {
+			continue
+		}
+		if a, _ := e["action"].(string); strings.HasPrefix(a, "approval.") {
+			for _, k := range auditIDParams {
+				delete(p, k)
+			}
+		}
+		for k, v := range p {
+			if s, ok := v.(string); ok && strings.Contains(s, "…") {
+				p[k] = auditShortIDRe.ReplaceAllString(s, "$1 (not given to an API token)")
+			}
+		}
+	}
 }
 
 // acceptCompare is the last thing an admin reads before a machine id comes on record or is kept: the dialog's
