@@ -126,10 +126,13 @@ func (o runOps) Observe(id string) wakerun.Observation {
 	if known {
 		obs.Status = sys.Status
 	}
-	// On without an answer from its agent: the machine itself refused the panel's latest poll, or it is a
-	// Proxmox node that the cluster shows as online.
+	// On without a usable answer from its agent: the machine itself refused the panel's latest poll, or took
+	// part in it in another way (an HTTP status, an answer that is not the agent's, a connection that was made
+	// and then gave nothing: poller.AgentInfo.Sign), or it is a Proxmox node that the cluster shows as online.
 	if x, ok := o.system(id); info.Refused {
 		obs.OnBy = wakerun.OnByRefused
+	} else if info.Sign != "" {
+		obs.OnBy = info.Sign
 	} else if ok && x.Kind == "node" && x.Status == "online" && !info.Online {
 		obs.OnBy = "the Proxmox API shows it as online"
 	}

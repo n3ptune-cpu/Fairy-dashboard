@@ -91,8 +91,10 @@ const MaxHosts = 16
 
 // MinOff is how long the panel must have asked a machine's agent, poll after poll, and got nothing at all
 // before a run takes the machine for off. It counts from the last sign of life: an answer, a refused
-// connection (the machine runs, only its agent is stopped) or a Proxmox node shown as online each start it
-// again, so a machine that refused for 14 minutes and is silent for one is not off. One minute without an answer (offline_after) is also what a machine looks like
+// connection (the machine runs, only its agent is stopped), any other answer from its address (an HTTP error,
+// a body that is not the agent's, a connection that was taken and then gave nothing) or a Proxmox node shown
+// as online each start it again, so a machine that refused for 14 minutes and is silent for one is not off.
+// One minute without an answer (offline_after) is also what a machine looks like
 // while it restarts, for Windows Update or because its owner restarted it, and such a machine comes back by
 // itself with a fresh uptime: a run would take it for a machine it woke, and switch it off. Fifteen minutes is
 // longer than a restart takes. It is not a setting: a shorter time would bring that mistake back.
@@ -174,8 +176,8 @@ type Observation struct {
 	// and no refused connection). Zero while it answers or shows another sign of life (OnBy), when it was never
 	// polled, and when the panel stopped asking in between (poller.QuietGap).
 	QuietSince time.Time
-	// OnBy: what else than its agent shows the machine as on right now ("the Proxmox API shows it as online",
-	// OnByRefused); "": nothing does.
+	// OnBy: what else than its agent's answer shows the machine as on right now ("the Proxmox API shows it as
+	// online", OnByRefused, "its address answered: http 401", ...); "": nothing does.
 	OnBy    string
 	UptimeS *int64 // from the last answered poll (nil: the agent did not say)
 	Version string
@@ -231,8 +233,9 @@ type Ops interface {
 	// Observe returns the poller's latest view of the machine's agent.
 	Observe(id string) Observation
 	// Probe asks the machine's agent itself, now: "" when it answered, "timeout" or "connection failed" when
-	// nothing did, ProbeRefused when the machine refused the connection (it is on, its agent is not listening),
-	// anything else when something answered that is not usable.
+	// nothing did (no route, no answer to the attempt to connect), ProbeRefused when the machine refused the
+	// connection (it is on, its agent is not listening), anything else when something answered that is not
+	// usable, or took the connection and then gave nothing.
 	Probe(ctx context.Context, id string) string
 	// Kick asks the poller to poll the machine's agent at once.
 	Kick(id string)

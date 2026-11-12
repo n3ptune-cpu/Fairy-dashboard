@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
@@ -310,5 +311,73 @@ func TestWakeUpdateSilenceCountsFromTheLastSignOfLife(t *testing.T) {
 	}
 	if h := wuHostRow(t, page(), "node-srv-pvea"); h["power"] != "off" {
 		t.Fatalf("the node 15 minutes after the cluster last showed it as online: %v", h)
+	}
+}
+
+// r1-p2-03 (audit 5): a machine that answers with something that is not its agent's answer is on. An HTTP
+// status (401 after its token changed, 500), a body that is not JSON: each needs a machine that runs at that
+// address. Before, a quarter of an hour of those was "nothing at all for 15 minutes": the page offered the
+// machine as "Off", ticked. Now the page shows it as on, however long it lasts, a run sends it nothing, and
+// the 15 minutes begin with the first poll after the last such answer.
+func TestWakeUpdateAnAnswerThatIsNotTheAgentsIsOn(t *testing.T) {
+	for name, c := range map[string]struct {
+		err  error
+		sign string
+	}{
+		"401":  {&devices.HTTPStatusError{Code: 401}, "its address answered: http 401"},
+		"500":  {&devices.HTTPStatusError{Code: 500}, "its address answered: http 500"},
+		"junk": {devices.Errf("invalid response"), "its address answered: invalid response"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := setup(t)
+			f := newFarm(t, e)
+			silent := false
+			e.b.Mu.Lock()
+			e.b.Metrics["pc-a"] = func() (jsonx.M, error) {
+				if silent {
+					return nil, os.ErrDeadlineExceeded
+				}
+				return nil, c.err
+			}
+			e.b.Mu.Unlock()
+			f.offline() // more than a quarter of an hour of such answers
+			f.optIn("pc-a", "pc-b")
+			admin := e.cookie(controller(), 0)
+			page := func() resp { return e.do("GET", "/api/admin/wake-update", nil, "Cookie", admin) }
+			if h := wuHostRow(t, page(), "pc-a"); h["power"] != "on" || h["choice"] != "" || h["why"] != "it is on ("+c.sign+"), and its agent does not answer" {
+				t.Fatalf("pc-a on the page: %v", h)
+			}
+			if h := wuHostRow(t, page(), "pc-b"); h["power"] != "off" || h["choice"] != "wake" {
+				t.Fatalf("pc-b, which sends nothing at all: %v", h)
+			}
+			ops := runOps{e.s}
+			if o := ops.Observe("pc-a"); o.OnBy != c.sign || wakerun.OffNow(o, f.now) || !o.QuietSince.IsZero() {
+				t.Fatalf("the run's view of pc-a: %+v", o)
+			}
+			// a client that names it as "off" all the same: nothing goes out
+			if _, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, UpdateIfOn: true, By: "Alice", BySub: "u2"}); err != nil {
+				t.Fatal(err)
+			}
+			run := f.finish()
+			if h := hostOf(run, "pc-a"); h.State != wakerun.StSkipped || h.On != wakerun.OnYes || !h.AlreadyOn || h.WakeSentAt != nil ||
+				h.Text != "It is on ("+c.sign+"), and its agent does not answer. Nothing was sent to it and it stays on." {
+				t.Fatalf("pc-a: %s (%s): %s", h.State, h.On, h.Text)
+			}
+			if got := f.requests(); len(got) != 0 {
+				t.Fatalf("requests: %v", got)
+			}
+			// then nothing at all: "not sure" for 15 minutes from the first silent poll, then off
+			e.b.Mu.Lock()
+			silent = true
+			e.b.Mu.Unlock()
+			f.wait(14 * time.Minute)
+			if h := wuHostRow(t, page(), "pc-a"); h["power"] != "unclear" || h["not_sure"] != true {
+				t.Fatalf("14 minutes after its last answer: %v", h)
+			}
+			f.wait(2 * time.Minute)
+			if h := wuHostRow(t, page(), "pc-a"); h["power"] != "off" || h["choice"] != "wake" {
+				t.Fatalf("16 minutes after its last answer: %v", h)
+			}
+		})
 	}
 }

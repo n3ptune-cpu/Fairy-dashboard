@@ -118,17 +118,17 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		p.source(name, false, now, nil, &msg)
 		p.agentFailures[a.ID]++
 		q, row := p.agentQuiet[a.ID]
-		isRefused := refused(err)
+		sign := lifeSign(err)
 		switch {
-		case isRefused || p.nodeOnlineLocked(a):
-			// A sign of life, like an answer: the machine runs and only its agent does not answer. The
+		case sign != "" || p.nodeOnlineLocked(a):
+			// A sign of life, like an answer: the machine runs and only its agent gives no usable answer. The
 			// silence starts again with the first poll after this one that gets nothing at all.
 			q.since = time.Time{}
 		case !row || q.since.IsZero() || now.Before(q.last) || now.Sub(q.last) > QuietGap:
 			// the first poll without any answer, or the panel was not watching in between
 			q.since = now
 		}
-		q.last, q.refused = now, isRefused
+		q.last, q.sign = now, sign
 		p.agentQuiet[a.ID] = q
 		n := p.agentFailures[a.ID]
 		p.mu.Unlock()
@@ -204,14 +204,17 @@ type AgentInfo struct {
 	SeenAt     time.Time
 	Online     bool // the latest poll succeeded
 	// QuietSince: since when the panel has asked the agent, poll after poll, and got nothing at all: no answer
-	// and no other sign that the machine runs. Zero while it answers, while it shows that it runs without
-	// answering (it refuses the connection, or it is a Proxmox node that the cluster shows as online), while it
-	// was never polled, and when the panel stopped asking (see QuietGap). So "quiet for 15 minutes" is 15
-	// minutes since the last sign of life, never 14 minutes of refusals and one of silence.
+	// and no other sign that the machine runs. Zero while it answers, while it shows that it runs without a
+	// usable answer (see Sign; or it is a Proxmox node that the cluster shows as online), while it was never
+	// polled, and when the panel stopped asking (see QuietGap). So "quiet for 15 minutes" is 15 minutes since
+	// the last sign of life, never 14 minutes of refusals and one of silence.
 	QuietSince time.Time
 	// Refused: the latest poll was refused by the machine itself (see ProbeRefused): it runs, and only its agent
 	// is not listening.
 	Refused bool
+	// Sign: what in the latest failed poll shows that the machine runs (lifeSign: SignRefused, an HTTP status,
+	// an answer that is not the agent's, a connection that was made and then gave nothing); "": nothing did.
+	Sign string
 }
 
 // QuietGap is the longest time between two failed polls of an agent that still counts as one row of them.
@@ -220,13 +223,63 @@ type AgentInfo struct {
 // is not known, so the row starts again. "No answer for 15 minutes" is then never 14 of them unwatched.
 const QuietGap = (scheduler.MaxInterval + 60) * time.Second
 
-// quietRow is an agent's unbroken row of failed polls: its latest one, whether that one was refused by the
-// machine, and since when the polls of the row have got nothing at all (zero: the latest one came with a sign
-// that the machine runs).
+// quietRow is an agent's unbroken row of failed polls: its latest one, what in that one showed that the
+// machine runs (lifeSign; "": nothing), and since when the polls of the row have got nothing at all (zero: the
+// latest one came with a sign that the machine runs).
 type quietRow struct {
 	since, last time.Time
-	refused     bool
+	sign        string
 }
+
+// SignRefused is the sign of life of a machine that turned the connection down (see refused).
+const SignRefused = "the machine refused the connection"
+
+// lifeSign says what, in the error of a request to an agent, shows that the machine itself runs; "" when
+// nothing does. Only then did the request meet silence: no route to the machine, no answer to the attempt to
+// connect, a name that does not resolve. Everything else needs a machine that is switched on at that address:
+//
+//   - it refused, reset or closed the connection (SignRefused): its network stack answered, its agent does not
+//     listen;
+//   - it sent an answer the panel cannot use: an HTTP status (401 after its token changed, 500), a body that
+//     is not the agent's JSON, a certificate the panel does not accept;
+//   - it took the connection (the TCP handshake was completed for this very request) and then sent nothing
+//     in time: an agent that hangs, or one that is being stopped.
+//
+// Each of these starts the 15 minutes of "nothing at all" again, exactly like an answer (pollAgent), so a
+// machine that runs with a broken agent is never offered to a run as "off".
+func lifeSign(err error) string {
+	if err == nil {
+		return ""
+	}
+	if refused(err) {
+		return SignRefused
+	}
+	d := devices.Describe(err)
+	var he *devices.HTTPStatusError
+	var re *reachedError
+	switch {
+	case errors.As(err, &he), d == "invalid response":
+		return "its address answered: " + d
+	case errors.As(err, &re) && (re.answered || d == "tls verification failed"): // a certificate is an answer too
+		return "its address answered: " + d
+	case errors.As(err, &re):
+		return "its address took the connection and gave no answer: " + d
+	}
+	return ""
+}
+
+// reachedError is the error of a request to an agent in which the machine itself took part: it completed a
+// connection that was opened for this request, or sent at least one byte back (answered). The HTTP backend
+// wraps such an error in it (FetchAgentMetrics); what the error says (devices.Describe) stays the same. A
+// request that went out on a connection kept from an earlier poll and then got nothing is not wrapped: that
+// connection says nothing about now (the machine may have lost power since), and the next poll opens a new one.
+type reachedError struct {
+	err      error
+	answered bool
+}
+
+func (e *reachedError) Error() string { return e.err.Error() }
+func (e *reachedError) Unwrap() error { return e.err }
 
 // nodeOnlineLocked reports whether the agent is the one of a Proxmox node that the cluster shows as online
 // right now: the node runs, whatever its agent does. Caller holds p.mu.
@@ -239,13 +292,13 @@ func (p *Poller) nodeOnlineLocked(a config.Agent) bool {
 	return ok && s.Kind == "node" && s.Status == "online"
 }
 
-// quietLocked is AgentInfo.QuietSince and AgentInfo.Refused for an agent. Caller holds p.mu.
-func (p *Poller) quietLocked(id string) (time.Time, bool) {
+// quietLocked is AgentInfo.QuietSince and AgentInfo.Sign for an agent. Caller holds p.mu.
+func (p *Poller) quietLocked(id string) (time.Time, string) {
 	q, ok := p.agentQuiet[id]
 	if now, _ := p.now(); !ok || now.Before(q.last) || now.Sub(q.last) > QuietGap {
-		return time.Time{}, false
+		return time.Time{}, ""
 	}
-	return q.since, q.refused
+	return q.since, q.sign
 }
 
 func agentInfoOf(payload jsonx.M, now time.Time) AgentInfo {
@@ -323,7 +376,8 @@ func (p *Poller) AgentInfo(id string) (AgentInfo, bool) {
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
-	i.QuietSince, i.Refused = p.quietLocked(id)
+	i.QuietSince, i.Sign = p.quietLocked(id)
+	i.Refused = i.Sign == SignRefused
 	return i, ok
 }
 
@@ -336,7 +390,8 @@ func (p *Poller) AgentSeen(id string) (AgentInfo, model.System, bool) {
 	i, ok := p.agentInfo[id]
 	_, failing := p.agentFailures[id]
 	i.Online = ok && !failing
-	i.QuietSince, i.Refused = p.quietLocked(id)
+	i.QuietSince, i.Sign = p.quietLocked(id)
+	i.Refused = i.Sign == SignRefused
 	s, known := p.systems[id]
 	return i, s, known
 }
@@ -344,13 +399,19 @@ func (p *Poller) AgentSeen(id string) (AgentInfo, model.System, bool) {
 // ProbeRefused is what ProbeAgent says when the machine itself turned the connection down.
 const ProbeRefused = "connection refused"
 
+// ProbeReached starts what ProbeAgent says when the machine took the connection and the request then ended in
+// a timeout or a broken connection: the machine runs, so this is never the "timeout" of a machine that is off.
+const ProbeReached = "it took the connection and gave no answer: "
+
 // ProbeAgent asks an agent for its metrics now and says how that went: "" when it answered; "timeout" or
 // "connection failed" when nothing did (the words of devices.Describe); ProbeRefused when the connection was
 // refused, reset or closed without an answer; anything else ("http 401", "invalid response", "tls verification
-// failed") when something answered that the panel could not use. A refused connection is not "nothing
-// answered": the machine's own network stack sent the refusal, so the machine is on and only its agent is not
-// listening. It does not change what the poller knows. Unlike the poller's view, which can be up to
-// offline_after old or the result of a poll that is being retried more slowly, the answer is about this moment.
+// failed", ProbeReached + ...) when something answered that the panel could not use. A refused connection is
+// not "nothing answered": the machine's own network stack sent the refusal, so the machine is on and only its
+// agent is not listening. The same holds for a connection the machine took and then left without an answer:
+// that is never reported as "timeout" or "connection failed" (lifeSign). It does not change what the poller
+// knows. Unlike the poller's view, which can be up to offline_after old or the result of a poll that is being
+// retried more slowly, the answer is about this moment.
 func (p *Poller) ProbeAgent(ctx context.Context, id string) string {
 	a, ok := p.AgentByID(id)
 	if !ok {
@@ -363,6 +424,9 @@ func (p *Poller) ProbeAgent(ctx context.Context, id string) string {
 		d := devices.Describe(err)
 		if d != "timeout" && refused(err) {
 			return ProbeRefused
+		}
+		if (d == "timeout" || d == "connection failed") && lifeSign(err) != "" { // not silence: the machine took part
+			return ProbeReached + d
 		}
 		return d
 	}

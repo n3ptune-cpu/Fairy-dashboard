@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
@@ -530,8 +532,24 @@ func (b *httpBackend) agentURL(a config.Agent, path string) string {
 	return strings.TrimRight(a.URL, "/") + path
 }
 
+// FetchAgentMetrics is one poll of an agent. An error of a request in which the machine itself took part is
+// wrapped in reachedError, so that the poller can tell "the machine is on and its agent gave nothing usable"
+// from silence (lifeSign): the machine completed a connection opened for this request (ConnectDone without an
+// error: its network stack answered the handshake now), or it sent at least one byte of an answer.
 func (b *httpBackend) FetchAgentMetrics(ctx context.Context, a config.Agent, timeout time.Duration) (jsonx.M, error) {
+	var connected, answered atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		ConnectDone: func(_, _ string, err error) {
+			if err == nil {
+				connected.Store(true)
+			}
+		},
+		GotFirstResponseByte: func() { answered.Store(true) },
+	})
 	d, _, err := getJSON(ctx, b.agents, b.agentURL(a, "/metrics"), map[string]string{"Authorization": "Bearer " + b.readToken(a.ID)}, timeout, maxAgentBody)
+	if err != nil && (connected.Load() || answered.Load()) {
+		err = &reachedError{err: err, answered: answered.Load()}
+	}
 	return d, err
 }
 

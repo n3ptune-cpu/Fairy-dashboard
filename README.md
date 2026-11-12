@@ -261,7 +261,9 @@ The rules, in plain words:
   is added again later under the same name starts off, like every new host.
 * **A run only switches off a machine that was off before the run and that the run woke itself.** For
   that, all of this must be true: the panel had asked the machine for 15 minutes and got nothing at all (no
-  answer, and no refused connection either) when the run started; right before the wake the run asked the machine directly and got no answer; the relay
+  answer of any kind: also no refused connection, no error answer, no connection that was taken and then left
+  without an answer) when the run started; right before the wake the run asked the machine directly and got
+  nothing at all either; the relay
   accepted the wake; the machine first answered after it; and the uptime it then reported is shorter than
   the time since the wake, so it started after it. (That time is measured with a clock that does not move
   when the panel's clock is set, so a clock that jumps forward during the wait cannot make an old uptime
@@ -271,8 +273,10 @@ The rules, in plain words:
     more)", ticked. The run wakes it, updates it and switches it off again.
   * **On**: its agent answers. It is listed under "On now: update only", unticked. The report says "It was
     on and stays on." A machine also counts as on when it refuses the connection (the machine runs, only
-    its agent does not answer), and a Proxmox node when the Proxmox API shows it as online. Nothing is
-    sent to those; the report says "It is on (...), and its agent does not answer."
+    its agent does not answer), when anything else than its agent's answer comes from its address (an HTTP
+    error such as 401 or 500, a page that is not the agent's, a connection that is taken and then gives
+    nothing), and a Proxmox node when the Proxmox API shows it as online. Nothing is sent to those; the
+    report says "It is on (...), and its agent does not answer."
   * **Not sure**: its last sign of life is less than 15 minutes old. It may be restarting (a Windows Update
     restart looks like this for some minutes) or be on and out of reach. It is listed under "Not sure that
     they are off: left alone" and cannot be ticked. If a run meets such a machine, it sends it nothing, and
@@ -280,7 +284,9 @@ The rules, in plain words:
     only after 15 min without an answer (it may be restarting, or be on and out of reach)."
 
   The 15 minutes are fixed; they are not a setting. They count from the machine's last sign of life: an
-  answer from its agent, a refused connection, or, for a Proxmox node, the Proxmox API showing it as online.
+  answer from its agent, a refused connection, any other answer from its address (an error, a page that is
+  not the agent's, an accepted connection that then gives nothing), or, for a Proxmox node, the Proxmox API
+  showing it as online. Only "no route", or no answer at all to the attempt to connect, is silence.
   Each of these shows that the machine runs, so each starts the count again. A machine whose agent was
   stopped for 14 minutes (it refused the connection, and counted as on) and that then gives nothing at all
   for a minute is "not sure"; it counts as off 15 minutes after its last refusal, not before. The panel

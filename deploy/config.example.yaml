@@ -101,8 +101,9 @@ agents:
 # "Update unpowered hosts" (Updates page): Fairy wakes the ticked machines, updates their agent and
 # switches off again the ones this run woke. A machine takes part only after an admin switched it on for this in
 # the panel (the Updates page, or the "..." menu on its page); that is not set in this file. A machine counts as
-# off only after 15 minutes without an answer and without a refused connection (one that restarts is silent for
-# less); that time is fixed, not a setting. These are the timings (the defaults):
+# off only after 15 minutes without any answer from its address: no refused connection and no error answer
+# either (one that restarts is silent for less); that time is fixed, not a setting. These are the timings (the
+# defaults):
 # wake_update:
 #   online_timeout_s: 300                 # give up on a woken machine whose agent has not answered by then (60-1800).
 #                                         # It has to start, get its network and bring Tailscale up first; the run
