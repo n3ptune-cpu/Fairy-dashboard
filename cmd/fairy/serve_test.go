@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 )
@@ -108,7 +112,7 @@ func TestServeRefusesTheExampleSessionSecret(t *testing.T) {
 //
 // Second review of that round (note 2): sessions.json and tokens.json in that state do not keep the panel
 // down. Read as nothing they mean "nobody is signed in" and "no token is valid". The damaged file is moved aside
-// as <name>.corrupt (kept, and out of the way of the next write), and one ERROR names it.
+// as <name>.corrupt-<UTC time> (kept, and out of the way of the next write), and one ERROR names it.
 func TestStartAndDamagedStateFiles(t *testing.T) {
 	old := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(old) })
@@ -132,7 +136,13 @@ func TestStartAndDamagedStateFiles(t *testing.T) {
 			}
 			ok, log := check(dir)
 			now, _ := os.ReadFile(p)
-			aside, asideErr := os.ReadFile(p + ".corrupt")
+			copies, _ := filepath.Glob(p + ".corrupt*")
+			asideName, asideErr := "", error(os.ErrNotExist)
+			var aside []byte
+			if len(copies) == 1 {
+				asideName = copies[0]
+				aside, asideErr = os.ReadFile(asideName)
+			}
 			switch name {
 			case "users.json", "state.json": // refused, the file untouched, the message names it
 				if ok || string(now) != content || asideErr == nil || !strings.Contains(log, "refusing to start") || !strings.Contains(log, p) {
@@ -146,7 +156,10 @@ func TestStartAndDamagedStateFiles(t *testing.T) {
 				if !ok || now != nil || asideErr != nil || string(aside) != content {
 					t.Fatalf("%s, %s: start allowed=%v, file now %q, kept copy %q (%v), log: %s", name, what, ok, now, aside, asideErr, log)
 				}
-				if strings.Count(log, "level=ERROR") != 1 || !strings.Contains(log, name+" is damaged: the panel starts without it") || !strings.Contains(log, p+".corrupt") {
+				if !regexp.MustCompile(`^` + regexp.QuoteMeta(p) + `\.corrupt-\d{8}T\d{6}Z$`).MatchString(asideName) {
+					t.Fatalf("%s, %s: the kept copy is named %s", name, what, asideName)
+				}
+				if strings.Count(log, "level=ERROR") != 1 || !strings.Contains(log, name+" is damaged: the panel starts without it") || !strings.Contains(log, asideName) {
 					t.Fatalf("%s, %s: want one ERROR that names the file and its copy: %s", name, what, log)
 				}
 				if ok, log := check(dir); !ok || log != "" { // and the next start has nothing to say
@@ -174,9 +187,131 @@ func TestStartAndDamagedStateFiles(t *testing.T) {
 			if ok, log := check(dir); ok || !strings.Contains(log, "refusing to start") {
 				t.Fatalf("%s as a symbolic link: start allowed=%v: %s", name, ok, log)
 			}
-			if _, err := os.Lstat(filepath.Join(dir, name+".corrupt")); err == nil {
+			if m, _ := filepath.Glob(filepath.Join(dir, name+".corrupt*")); len(m) != 0 {
 				t.Fatalf("%s as a symbolic link was moved aside", name)
 			}
+		}
+	}
+}
+
+// Audit 5, round 3 (r3-p4-09, r3-p2-10): the kept copy of a damaged sessions.json or tokens.json.
+//
+//   - A second damaged file replaced the first kept copy without a word (the copy was <name>.corrupt, and the
+//     log said "is kept").
+//   - When <name>.corrupt was a folder the move failed and the panel stayed down: the case the keeping aside
+//     was made for.
+//
+// The copy has the time in its name and never replaces anything; and when the file cannot be moved at all the
+// panel starts all the same, with an ERROR that says that the damaged file is still in place.
+func TestStartAndTheKeptCopyOfADamagedStateFile(t *testing.T) {
+	old := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(old) })
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	check := func(dir string) (bool, string) {
+		logs.Reset()
+		ok := checkStateFiles(dir)
+		return ok, logs.String()
+	}
+	copies := func(p string) map[string]string {
+		out := map[string]string{}
+		m, _ := filepath.Glob(p + ".corrupt*")
+		for _, name := range m {
+			if st, err := os.Lstat(name); err == nil && st.Mode().IsRegular() {
+				b, _ := os.ReadFile(name)
+				out[name] = string(b)
+			}
+		}
+		return out
+	}
+	for _, name := range []string{"sessions.json", "tokens.json"} {
+		// damaged twice (the second time a second later, or in the same second): both copies are kept
+		dir := t.TempDir()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p+".corrupt", []byte("a copy the release before this one kept"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for i, content := range []string{"FIRST damaged copy", "", "{cut"} {
+			if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ok, log := check(dir)
+			if !ok || strings.Count(log, "level=ERROR") != 1 || !strings.Contains(log, "The damaged file is kept as "+p+".corrupt-") {
+				t.Fatalf("%s, damaged for the %d. time: start allowed=%v, log: %s", name, i+1, ok, log)
+			}
+			if _, err := os.Lstat(p); !os.IsNotExist(err) {
+				t.Fatalf("%s is still in place after it was kept aside", name)
+			}
+		}
+		got := copies(p)
+		var kept []string
+		for _, c := range got {
+			kept = append(kept, c)
+		}
+		sort.Strings(kept)
+		if want := []string{"", "FIRST damaged copy", "a copy the release before this one kept", "{cut"}; strings.Join(kept, "|") != strings.Join(want, "|") {
+			t.Fatalf("%s: the kept copies hold %q, want %q", name, kept, want)
+		}
+
+		// <name>.corrupt is a folder, and so is the name with this second's time (and the next seconds'): the
+		// panel starts, and the damaged file is kept under the next free name
+		dir = t.TempDir()
+		p = filepath.Join(dir, name)
+		if err := os.Mkdir(p+".corrupt", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for s := 0; s < 4; s++ {
+			if err := os.Mkdir(p+".corrupt-"+time.Now().UTC().Add(time.Duration(s)*time.Second).Format("20060102T150405Z"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ok, log := check(dir)
+		if got := copies(p); !ok || len(got) != 1 || strings.Count(log, "level=ERROR") != 1 || !regexp.MustCompile(regexp.QuoteMeta(p)+`\.corrupt-\d{8}T\d{6}Z-2"`).MatchString(log) {
+			t.Fatalf("%s with folders where the copy would go: start allowed=%v, kept %v, log: %s", name, ok, got, log)
+		}
+
+		// it cannot be moved at all (every name is taken): the panel starts all the same, says that the damaged
+		// file is still in place, and does not use it
+		dir = t.TempDir()
+		p = filepath.Join(dir, name)
+		for s := 0; s < 4; s++ {
+			stamp := p + ".corrupt-" + time.Now().UTC().Add(time.Duration(s)*time.Second).Format("20060102T150405Z")
+			for i := 1; i <= 9; i++ {
+				taken := stamp
+				if i > 1 {
+					taken = fmt.Sprintf("%s-%d", stamp, i)
+				}
+				if err := os.Mkdir(taken, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := os.WriteFile(p, []byte("{cut off"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ok, log = check(dir)
+		if !ok || strings.Count(log, "level=ERROR") != 1 || !strings.Contains(log, name+" is damaged and could not be moved aside: the panel starts without it") ||
+			!strings.Contains(log, "THE DAMAGED FILE IS STILL IN PLACE at "+p) || strings.Contains(log, "refusing to start") {
+			t.Fatalf("%s that cannot be moved aside: start allowed=%v, log: %s", name, ok, log)
+		}
+		if b, _ := os.ReadFile(p); string(b) != "{cut off" {
+			t.Fatalf("%s that could not be moved now holds %q", name, b)
+		}
+	}
+	// users.json and state.json are never moved: they stop the start (TestStartAndDamagedStateFiles)
+	for _, name := range []string{"users.json", "state.json"} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _ := check(dir); ok {
+			t.Fatalf("an empty %s did not stop the start", name)
+		}
+		if m, _ := filepath.Glob(filepath.Join(dir, name+".corrupt*")); len(m) != 0 {
+			t.Fatalf("%s was moved aside: %v", name, m)
 		}
 	}
 }

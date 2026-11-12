@@ -205,7 +205,7 @@ func (s *Store) pushFor(owner string, now time.Time) (ok bool, note, notice stri
 }
 
 // Open loads path (a missing file is empty). A corrupt file is moved aside (notifications are not security
-// state) and the list starts empty.
+// state; statefile.KeepAside: <name>.corrupt-<UTC time>, never over an older copy) and the list starts empty.
 func Open(path string) *Store {
 	s := &Store{path: path, Now: time.Now, d: fileData{Next: 1, Users: map[string]*userState{}}, subs: map[chan struct{}]bool{}}
 	b, err := statefile.ReadFile(path, statefile.MaxBytes) // a plain file of a sane size, or it is not read
@@ -216,8 +216,11 @@ func Open(path string) *Store {
 	default:
 		var d fileData
 		if err := json.Unmarshal(b, &d); err != nil {
-			slog.Error("notifications: corrupt list moved aside; starting empty", "path", path, "error", err)
-			_ = os.Rename(path, path+".corrupt")
+			if aside, rerr := statefile.KeepAside(path); rerr == nil {
+				slog.Error("notifications: corrupt list moved aside; starting empty", "path", path, "kept as", aside, "error", err)
+			} else {
+				slog.Error("notifications: corrupt list could not be moved aside; starting empty, and the next save writes over it", "path", path, "error", err, "move", rerr)
+			}
 		} else {
 			if d.Users == nil {
 				d.Users = map[string]*userState{}

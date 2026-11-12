@@ -374,8 +374,12 @@ func ensureAuditLog(path string) bool {
 // sessions.json and tokens.json that are empty or corrupt do not keep the panel down (second review of audit 5's
 // round 2, note 2). Read as nothing they say "nobody is signed in" and "no token is valid", which is the safe
 // reading, and a panel that stays down for it cannot be reached by an owner who is not at the machine. The
-// damaged file is moved aside as <name>.corrupt first, so that it is kept (the next sign-in or token would
+// damaged file is moved aside first, as <name>.corrupt-<UTC time> (statefile.KeepAside: never over a copy that
+// is already there, at most five copies of a file), so that it is kept (the next sign-in or token would
 // otherwise find a damaged file it must not write over, and nobody could sign in), and one ERROR names it.
+// When it cannot be moved (no name is free, the folder cannot be written) the panel starts all the same: the
+// damaged file is not used for anything, the ERROR says that it is still in place, and that file cannot be
+// written until someone moves it away.
 func checkStateFiles(dataDir string) bool {
 	ok := true
 	for _, name := range []string{"users.json", "sessions.json", "tokens.json", "state.json"} {
@@ -386,11 +390,14 @@ func checkStateFiles(dataDir string) bool {
 		}
 		if means := map[string]string{"sessions.json": "nobody is signed in: everyone signs in again",
 			"tokens.json": "no API token is valid: make new ones with fairy admin tokens create"}[name]; means != "" && statefile.IsDamaged(err) {
-			aside := path + ".corrupt"
-			if rerr := os.Rename(path, aside); rerr == nil {
+			if aside, rerr := statefile.KeepAside(path); rerr == nil {
 				slog.Error(name+" is damaged: the panel starts without it ("+means+"). The damaged file is kept as "+aside, "error", err)
-				continue
+			} else {
+				slog.Error(name+" is damaged and could not be moved aside: the panel starts without it ("+means+"), and THE DAMAGED FILE IS STILL IN PLACE at "+
+					path+". Nothing can be written to it until it is moved away (nobody can sign in, or no token can be made): move it yourself and restart",
+					"error", err, "move", rerr)
 			}
+			continue
 		}
 		slog.Error("refusing to start: fix this state file first", "error", err)
 		ok = false
