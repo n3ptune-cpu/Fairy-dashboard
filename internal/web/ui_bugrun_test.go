@@ -328,3 +328,20 @@ func TestUIServerValuesGoThroughEsc(t *testing.T) {
 		}
 	}
 }
+
+// r2-p3-08: the strip of a UPS on battery that gives no charge and no run time read "– · ~– left". The unknown
+// parts are left out now (both unknown: the strip says "on battery" and for how long, nothing more).
+func TestUIUpsStripLeavesOutWhatIsNotKnown(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		"const left = [Number.isFinite(u.battery_charge) ? `${u.battery_charge.toFixed(0)}%` : \"\", Number.isFinite(u.battery_runtime_s) ? `~${fmtRuntime(u.battery_runtime_s)} left` : \"\"].filter(Boolean).join(\" · \");",
+		"${left ? `<span>${esc(left)}</span>` : \"\"}",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %s", want)
+		}
+	}
+	if strings.Contains(js, "\"–\"} · ~${fmtRuntime(u.battery_runtime_s)} left") {
+		t.Error("the strip still prints a dash for a charge it does not know")
+	}
+}

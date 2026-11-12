@@ -709,9 +709,11 @@ function renderAlerts() {
   if (ub) out.push(ub);
   for (const u of (state.ups?.ups || []).filter(onBattery)) {
     const powered = u.powers.map((id) => state.byId[id]?.name || id);
+    // charge and run time only when the UPS gives them: without them the strip read "– · ~– left"
+    const left = [Number.isFinite(u.battery_charge) ? `${u.battery_charge.toFixed(0)}%` : "", Number.isFinite(u.battery_runtime_s) ? `~${fmtRuntime(u.battery_runtime_s)} left` : ""].filter(Boolean).join(" · ");
     out.push(`<a class="alert-strip ${u.status === "low_battery" ? "bad" : "warn"}" href="#/ups" data-key="ups-${esc(u.id)}">${I.ups}
       <b>${esc(u.name)}</b><span>${u.status === "low_battery" ? "LOW BATTERY" : "on battery"}</span>
-      <span>${u.battery_charge != null ? `${u.battery_charge.toFixed(0)}%` : "–"} · ~${fmtRuntime(u.battery_runtime_s)} left</span>
+      ${left ? `<span>${esc(left)}</span>` : ""}
       ${u.on_battery_since ? `<span class="note">for ${fmtRuntime(secsSince(u.on_battery_since))}</span>` : ""}
       ${powered.length ? `<span class="note">powers ${esc(powered.join(", "))}</span>` : ""}<span class="push">details →</span></a>`);
   }
