@@ -37,7 +37,7 @@ var Actions = []string{"start", "shutdown", "reboot", "sleep", "stop", "cancel",
 // Request is the POST /api/systems/{id}/power body.
 type Request struct {
 	Action  string  `json:"action"`
-	DelayS  *int    `json:"delay_s"` // agent shutdown/reboot only (Linux rounds up to minutes); default 60
+	DelayS  *int    `json:"delay_s"` // agent shutdown/reboot only; default 60
 	Confirm *string `json:"confirm"` // the system's name, typed (shutdown / stop)
 	// OnlyVia, when set, is the one route the action may take ("agent"): Execute refuses with ErrOtherRoute,
 	// before anything is sent, when the route it would take now is another one. It is never read from a request

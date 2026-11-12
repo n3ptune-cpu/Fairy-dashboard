@@ -46,3 +46,16 @@ func TestUIModelNameBoxStopsAtTheLimit(t *testing.T) {
 		t.Errorf("app.js lacks %q", want)
 	}
 }
+
+// r1-b1-05: the power dialog said "Linux rounds up to whole minutes". The agent waits the asked seconds itself
+// (time.AfterFunc, then systemctl poweroff; Fairy-agent pkg/agent/power_linux.go, since its first release): 10 s
+// are 10 s. Someone who relied on "at least a minute" to press Cancel had ten seconds. The sentence is gone.
+func TestUIPowerDialogDoesNotSayLinuxRoundsUp(t *testing.T) {
+	js := appJS(t)
+	if strings.Contains(js, "rounds up") || strings.Contains(js, "whole minutes") {
+		t.Error("app.js still says that a delay is rounded up")
+	}
+	if want := `<span class="note">a countdown with Cancel is shown</span></label>`; !strings.Contains(js, want) {
+		t.Errorf("app.js lacks %q", want)
+	}
+}

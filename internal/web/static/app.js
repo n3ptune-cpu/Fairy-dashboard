@@ -1794,7 +1794,7 @@ function openPowerDialog(s, action) {
       <span class="note">via ${esc(cap.via_label || cap.via)}</span></p>
     ${caps.kills_panel ? `<div class="warnbox">${esc(caps.warning)}</div>` : ""}
     ${cap.delayed ? `<label class="mfield">Delay <select id="m-delay"><option value="10">10 s</option><option value="60" selected>1 min</option><option value="300">5 min</option><option value="900">15 min</option></select>
-      <span class="note">a countdown with Cancel is shown${s.platform === "Linux" ? "; Linux rounds up to whole minutes" : ""}</span></label>` : ""}
+      <span class="note">a countdown with Cancel is shown</span></label>` : ""}
     ${typed ? `<label class="mfield"><span>Type <b>${esc(s.name)}</b> to confirm</span><input class="input" id="m-confirm" autocomplete="off" spellcheck="false" placeholder="${esc(s.name)}"></label>` : ""}
     <div class="error" id="m-err"></div>
     <div class="row-gap end"><button class="btn" id="m-cancel">Cancel</button><button class="btn danger-solid" id="m-go" ${typed ? "disabled" : ""}>${esc(label)}</button></div></div>`;

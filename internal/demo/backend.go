@@ -265,10 +265,7 @@ func (b *Backend) simPower(a config.Agent, body map[string]any) (int, jsonx.M, e
 	if delay == 0 {
 		delay = 60
 	}
-	used := delay
-	if a.ID != "srv-tower" && a.ID != "alice-laptop" { // Windows vs Linux (whole minutes)
-		used = (delay + 59) / 60 * 60
-	}
+	used := delay // to the second, on Windows and on Linux, as the agent does (it waits itself and then asks the system)
 	who := fmt.Sprint(body["requested_by"])
 	who = reqClean.ReplaceAllString(who, "")
 	if len(who) > 64 {

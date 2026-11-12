@@ -149,8 +149,8 @@ const (
 	// left on at every run.
 	minBoot = 8 * time.Second
 	// countdownSlack: how much later than asked for an agent's own countdown may end and still be the run's to
-	// watch. Linux rounds a shutdown up to whole minutes, and the agent's clock is not the panel's; three
-	// minutes cover both. A countdown that ends later is the agent's own business: the run says so and lets go
+	// watch. The agent counts by its own clock, which is not the panel's, and nothing promises that every agent
+	// counts to the second; three minutes cover that. A countdown that ends later is the agent's own business: the run says so and lets go
 	// of the machine, so that no agent decides how long the one run slot is taken (r1-p2-07).
 	countdownSlack  = 3 * time.Minute
 	approvalTimeout = 15 * time.Minute

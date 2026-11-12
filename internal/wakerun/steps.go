@@ -471,7 +471,7 @@ func (m *Manager) stepShutting(r *Run, h *Host, now time.Time) {
 		if m.farCountdown(r, h, o.Pending.At, now) {
 			return
 		}
-		if !h.pendingSeen || !o.Pending.At.Equal(due) { // the agent's own time for it (Linux rounds up to minutes)
+		if !h.pendingSeen || !o.Pending.At.Equal(due) { // the agent's own time for it (by its clock, not the panel's)
 			h.pendingSeen, h.ShutdownAt, due = true, &o.Pending.At, o.Pending.At
 			m.dirty = true
 		}

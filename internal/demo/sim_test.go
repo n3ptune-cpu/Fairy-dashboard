@@ -132,3 +132,22 @@ func TestDemoHelperStopStart(t *testing.T) {
 		t.Fatal(st, out)
 	}
 }
+
+// r1-b1-05 (audit 5, bug run): the demo's Linux machines rounded a shutdown delay up to whole minutes, and the
+// power dialog said that Linux does. The agent does not: it waits the asked seconds itself. Ten seconds are
+// ten seconds on every simulated machine.
+func TestDemoPowerDelayIsToTheSecond(t *testing.T) {
+	b := NewBackend(nil)
+	for _, id := range []string{"srv-tower", "llm-box", "backup-box", "bob-ryzen"} { // Windows and Linux
+		before := epoch()
+		st, out, err := b.AgentRequest(t.Context(), config.Agent{ID: id, PowerControl: true}, "POST", "/power", map[string]any{"action": "shutdown", "delay_s": 10, "requested_by": "test"})
+		p, _ := out["pending"].(map[string]any)
+		at, _ := p["at"].(float64)
+		if err != nil || st != 200 || p["delay_s"] != 10 || at < before+10 || at > epoch()+10 {
+			t.Errorf("%s: %d %v %v", id, st, out, err)
+		}
+		if st, _, _ := b.AgentRequest(t.Context(), config.Agent{ID: id, PowerControl: true}, "POST", "/power", map[string]any{"action": "cancel"}); st != 200 {
+			t.Errorf("%s: cancel %d", id, st)
+		}
+	}
+}
