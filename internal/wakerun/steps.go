@@ -461,6 +461,9 @@ func (m *Manager) stepShutting(r *Run, h *Host, now time.Time) {
 	o := m.Ops.Observe(h.ID)
 	due := *h.ShutdownAt
 	if o.Online && o.SeenAt.After(h.shutdownSent) && o.Pending != nil && o.Pending.Action == "shutdown" {
+		if m.farCountdown(r, h, o.Pending.At, now) {
+			return
+		}
 		if !h.pendingSeen || !o.Pending.At.Equal(due) { // the agent's own time for it (Linux rounds up to minutes)
 			h.pendingSeen, h.ShutdownAt, due = true, &o.Pending.At, o.Pending.At
 			m.dirty = true
@@ -490,6 +493,22 @@ func (m *Manager) stepShutting(r *Run, h *Host, now time.Time) {
 	case now.Sub(due) > offGrace:
 		m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("It is still on %s after its shutdown was due: the shutdown did not work. It is ON.", span(offGrace))+updateTail(h))
 	}
+}
+
+// farCountdown lets go of a machine whose agent says its shutdown is due later than the run asked for, by more
+// than countdownSlack, and reports whether it did. The run asked for a countdown of Settings.ShutdownDelay and
+// watches that one. An agent that answers with another time (a pending shutdown for tomorrow) would otherwise
+// keep the run going, and the one run slot taken, until the run's own limit of more than an hour. The machine
+// is on now; whether and when it goes off is the agent's word, and the report says exactly that.
+func (m *Manager) farCountdown(r *Run, h *Host, at, now time.Time) bool {
+	latest := h.shutdownSent.Add(r.Settings.ShutdownDelay + countdownSlack)
+	if !at.After(latest) {
+		return false
+	}
+	h.ShutdownAt = &at
+	m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("Its agent says its shutdown is due at %s, later than the %s the run asked for. Fairy no longer watches it: "+
+		"it is ON until then, and switches off then unless someone cancels that on its page.", when(at, now), span(r.Settings.ShutdownDelay))+updateTail(h))
+	return true
 }
 
 // updateWords is the update's result inside the sentence of a machine that was switched off again.

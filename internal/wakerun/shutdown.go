@@ -135,6 +135,9 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 		at = sent.Add(delay)
 	}
 	h.ShutdownAt, h.shutdownSent = &at, sent
+	if m.farCountdown(r, h, at, sent) { // the agent took the request with a countdown of its own choosing
+		return
+	}
 	m.enter(h, StShutting, sent, fmt.Sprintf("shutting down at %s (it can be cancelled on its page until then)", clock(at)))
 }
 

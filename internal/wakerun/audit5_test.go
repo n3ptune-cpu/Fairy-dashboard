@@ -292,3 +292,73 @@ func TestAWokenMachineThatDoesNotLookFreshlyStartedIsAWarning(t *testing.T) {
 		}
 	}
 }
+
+// r1-p2-07, the auditor's proof: an agent that takes the shutdown and reports it as pending for the next day
+// kept the run going for 1 h 6 min 31 s, until the run's own limit; no other run could start and "Update
+// panel" was refused all that time, and the sentence gave the end as a time without a date.
+//
+// Now the run watches the countdown it asked for, plus three minutes. A later one is reported, with its date,
+// and the run lets go of the machine.
+func TestAnAgentCannotHoldTheRunWithAFarCountdown(t *testing.T) {
+	for _, how := range []string{"in its answer to the request", "in a later poll"} {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.shutMode = "ignore"
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		start := w.now
+		far := start.Add(24 * time.Hour)
+		var asked time.Time
+		for i := 0; i < 6*3600; i++ {
+			if a, _ := w.m.Snapshot(); a == nil {
+				break
+			}
+			if pc.pending != nil && asked.IsZero() {
+				asked = w.now
+			}
+			if pc.pending != nil && (how == "in a later poll" && w.now.Sub(asked) >= 30*time.Second) {
+				pc.pending.At = far // what the agent says from now on
+			}
+			w.tick()
+			if how == "in its answer to the request" && pc.pending != nil {
+				pc.pending.At = far
+			}
+		}
+		r := w.finish()
+		h := host(r, "pc-a")
+		took := r.EndedAt.Sub(asked)
+		if h.State != StLeftOn || h.On != OnYes || !pc.on || r.State != RunDone {
+			t.Fatalf("%s: %s / %s (%s): %s", how, r.State, h.State, h.On, h.Text)
+		}
+		want := "Its agent says its shutdown is due at " + far.Format("2006-01-02 15:04:05") + " UTC, later than the 2 min the run asked for. Fairy no longer watches it: " +
+			"it is ON until then, and switches off then unless someone cancels that on its page. It was updated to 17-bbbbbbb."
+		if h.Text != want {
+			t.Fatalf("%s: %s", how, h.Text)
+		}
+		if limit := w.m.Settings.ShutdownDelay + countdownSlack + 10*time.Second; took > limit {
+			t.Fatalf("%s: the run held on for %v after the shutdown was asked for, want at most %v", how, took, limit)
+		}
+		if a, _ := w.m.Snapshot(); a != nil {
+			t.Fatal("the run slot is still taken")
+		}
+	}
+	// what an agent may do with the time: Linux rounds the countdown up to the next whole minute
+	w := newWorld(t)
+	pc := w.off("pc-a")
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	rounded := false
+	for i := 0; i < 3600; i++ {
+		if a, _ := w.m.Snapshot(); a == nil {
+			break
+		}
+		if pc.pending != nil && !rounded {
+			pc.pending.At, rounded = pc.pending.At.Truncate(time.Minute).Add(2*time.Minute), true
+		}
+		w.tick()
+	}
+	if h := host(w.finish(), "pc-a"); h.State != StOff || !rounded {
+		t.Fatalf("a countdown rounded up by the agent: %s: %s", h.State, h.Text)
+	}
+	if when(t0, t0) != "03:00:00 UTC" || when(t0.Add(24*time.Hour), t0) != "2026-11-12 03:00:00 UTC" {
+		t.Fatal("when:", when(t0, t0), when(t0.Add(24*time.Hour), t0))
+	}
+}

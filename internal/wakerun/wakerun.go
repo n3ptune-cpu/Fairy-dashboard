@@ -135,6 +135,11 @@ const (
 	agentBack       = 3 * time.Minute  // after the update: how long the agent may take to answer again
 	offConfirm      = 20 * time.Second // no answer for this long after the countdown: the machine is off
 	offGrace        = 5 * time.Minute  // still answering this long after the countdown: the shutdown failed
+	// countdownSlack: how much later than asked for an agent's own countdown may end and still be the run's to
+	// watch. Linux rounds a shutdown up to whole minutes, and the agent's clock is not the panel's; three
+	// minutes cover both. A countdown that ends later is the agent's own business: the run says so and lets go
+	// of the machine, so that no agent decides how long the one run slot is taken (r1-p2-07).
+	countdownSlack  = 3 * time.Minute
 	approvalTimeout = 15 * time.Minute
 	journalRetry    = 5 * time.Second // a journal that could not be written is tried again this often
 	maxRetries      = 5
@@ -838,7 +843,7 @@ func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
 	switch {
 	case h.State == StShutting:
 		m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s while its shutdown was counting down (it ends at %s). Fairy no longer watches it: "+
-			"it switches off by itself unless someone cancels that.", why, clock(*h.ShutdownAt)))
+			"it switches off by itself unless someone cancels that.", why, when(*h.ShutdownAt, now)))
 	case h.NotFresh:
 		m.end(r, h, StLeftOn, OnYes, now, why+". "+notFreshText(h)+updateTail(h))
 	case h.AlreadyOn || h.Mode == ModeUpdateOnly:
@@ -875,6 +880,14 @@ func toVersion(h *Host) string {
 }
 
 func clock(t time.Time) string { return t.UTC().Format("15:04:05 UTC") }
+
+// when is clock for a time that may be on another day than now: then the date is said too.
+func when(t, now time.Time) string {
+	if t.UTC().Format("2006-01-02") == now.UTC().Format("2006-01-02") {
+		return clock(t)
+	}
+	return t.UTC().Format("2006-01-02 15:04:05 UTC")
+}
 
 // span is a duration in words ("3 days", "2 h", "40 s").
 func span(d time.Duration) string {
