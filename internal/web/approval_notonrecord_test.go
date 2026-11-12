@@ -320,3 +320,141 @@ func TestUINotOnRecord(t *testing.T) {
 		}
 	}
 }
+
+// machinesFileOfPasskeyF is machines.json as the test build of 2026-11-12 (branch passkey-f, ea49127) writes
+// it, made with that build's own code: the record of its Turn on (laptop), of its accept (tower, with "keeps")
+// and of its first sight (nas).
+const machinesFileOfPasskeyF = `{
+ "machines": {
+  "laptop": {
+   "machine_id": "id-of-laptop-0123456789abcdef",
+   "pinned": "turn-on",
+   "pinned_at": "2026-11-12T09:30:00Z",
+   "pinned_by": "nora@example.test",
+   "state": "required",
+   "state_at": "2026-11-12T09:30:00Z"
+  },
+  "nas": {
+   "machine_id": "id-of-nas-0123456789abcdef",
+   "pinned": "first-sight",
+   "pinned_at": "2026-11-12T09:30:00Z",
+   "pinned_by": "Fairy",
+   "state": "required",
+   "state_at": "2026-11-12T09:30:00Z"
+  },
+  "tower": {
+   "holder": true,
+   "machine_id": "id-of-tower-0123456789abcdef",
+   "pinned": "accepted",
+   "pinned_at": "2026-11-12T09:30:00Z",
+   "pinned_by": "nora@example.test",
+   "state": "required",
+   "state_at": "2026-11-12T09:30:00Z"
+  }
+ }
+}`
+
+// What counts as on record when the panel reads machines.json is an allow-list (second review of passkey-g,
+// G-06): an id whose record says "turn-on" or "accepted", the two values the panel writes at a Turn on and at
+// an admin's accept. An id with any other word, with an empty one or with none is taken off the record at the
+// start exactly as a first-sight id is: the host is "not on record" (one alarm, also across restarts), the id
+// goes out of the file with the next write, and an admin's accept puts it on record.
+func TestOnlyATurnOnOrAnAcceptInTheFileCountsAsOnRecord(t *testing.T) {
+	at := time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
+	write := func(t *testing.T, a *approvalEnv, text string) {
+		t.Helper()
+		if err := os.WriteFile(adminstate.MachinesPath(a.s.Cfg.DataDir), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The file of the owner's test build: what its Turn on and its accept wrote is on record as it was; what it
+	// took at first sight is not (as since audit 5, round 3).
+	t.Run("the file of the test build of 2026-11-12", func(t *testing.T) {
+		a := newApprovalEnv(t)
+		a.setTrust(t, a.laptop, a.tower)
+		write(t, a, machinesFileOfPasskeyF)
+		s2 := a.restarted(t)
+		if b := s2.Poller.BindingOf("laptop"); !b.OK() || b.Record.MachineID != machineIDOf("laptop") || b.Record.How != approval.PinTurnOn || b.Record.By != "nora@example.test" || !b.Record.At.Equal(at) || b.Record.Holder {
+			t.Fatalf("laptop (Turn on): %+v", b)
+		}
+		if b := s2.Poller.BindingOf("tower"); !b.OK() || b.Record.MachineID != machineIDOf("tower") || b.Record.How != approval.PinAccepted || b.Record.By != "nora@example.test" || !b.Record.At.Equal(at) || !b.Record.Holder {
+			t.Fatalf("tower (accepted, keeps): %+v", b)
+		}
+		if b := s2.Poller.BindingOf("nas"); b.Record.MachineID != "" || !b.Record.Unaccepted || b.Record.How != "" || !b.Checks() {
+			t.Fatalf("nas (first sight): %+v", b)
+		}
+		if al := a.auditEntries("", "approval.alarm"); len(al) != 0 {
+			t.Fatalf("alarms for machines that are on record: %v", al)
+		}
+		recs, err := adminstate.New(a.s.Cfg.DataDir).Machines()
+		if err != nil || recs["laptop"].MachineID != machineIDOf("laptop") || recs["tower"].MachineID != machineIDOf("tower") || !recs["tower"].Holder || recs["nas"].MachineID != "" || !recs["nas"].Unaccepted {
+			t.Fatalf("machines.json afterwards: %v %+v", err, recs)
+		}
+	})
+	// laptop's id with a `pinned` the panel never writes; tower's from a Turn on
+	for name, pinned := range map[string]string{
+		"no pinned member":                 ``,
+		"an empty word":                    `"pinned": "",`,
+		"a word the panel does not know":   `"pinned": "imported",`,
+		"another spelling of turn-on":      `"pinned": "Turn-On",`,
+		"accepted with a space behind it":  `"pinned": "accepted ",`,
+		"not a text":                       `"pinned": true,`,
+		"first-sight, as an earlier build": `"pinned": "first-sight",`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newApprovalEnv(t)
+			a.setTrust(t, a.laptop, a.tower)
+			write(t, a, `{"machines": {
+			  "laptop": {"machine_id": "`+machineIDOf("laptop")+`", `+pinned+` "pinned_at": "2026-11-12T09:30:00Z", "pinned_by": "somebody", "holder": true, "state": "required", "state_at": "2026-11-12T09:30:00Z"},
+			  "tower":  {"machine_id": "`+machineIDOf("tower")+`", "pinned": "turn-on", "pinned_at": "2026-11-12T09:30:00Z", "pinned_by": "nora", "state": "required", "state_at": "2026-11-12T09:30:00Z"}}}`)
+			// before any answer: still a machine that checks approvals, with no id on record
+			p0, err := poller.New(a.s.Cfg, a.s.Secrets, a.gb)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if b := p0.BindingOf("laptop"); !b.Checks() || b.Record.MachineID != "" || b.Record.How != "" || b.Record.By != "" || b.Record.Holder || !b.Record.Unaccepted {
+				t.Fatalf("laptop right after the start: %+v", b)
+			}
+			var s2 *Server
+			for i := 0; i < 3; i++ { // the start, and two restarts while it holds
+				s2 = a.restarted(t)
+				if b := s2.Poller.BindingOf("laptop"); b.Status != approval.BindNoRecord || b.Record.MachineID != "" {
+					t.Fatalf("start %d: laptop: %+v", i, b)
+				}
+				if b := s2.Poller.BindingOf("tower"); !b.OK() || b.Record.MachineID != machineIDOf("tower") || b.Record.How != approval.PinTurnOn || b.Record.By != "nora" || !b.Record.At.Equal(at) {
+					t.Fatalf("start %d: tower's record was touched: %+v", i, b)
+				}
+				// One alarm when it begins, and nothing but that alarm afterwards. That a later start does not
+				// write a standing alarm again is the business of TestAStandingAlarmIsWrittenOnceAcrossRestarts
+				// and TestAnIDFromFirstSightInAnEarlierBuildsFileIsNotOnRecord. It is not counted here: this
+				// test starts from a file no panel wrote (no lock file yet), where the two writes of one poll
+				// (poller.flushMachines, called by two agents' answers) land in the wrong order often enough
+				// to be seen: the record in the file then lacks "alarm", and the next start writes the line
+				// once more. The id is out of the file either way.
+				al := a.auditEntries("", "approval.alarm")
+				if (i == 0 && len(al) != 1) || len(al) == 0 {
+					t.Fatalf("start %d: %d alarms in the audit log: %v", i, len(al), al)
+				}
+				for _, e := range al {
+					if e["target"] != "laptop" || e["outcome"] != "alarm: no_record" {
+						t.Fatalf("start %d: the alarms in the audit log: %v", i, al)
+					}
+				}
+			}
+			raw, _ := os.ReadFile(adminstate.MachinesPath(a.s.Cfg.DataDir))
+			if strings.Contains(string(raw), machineIDOf("laptop")) || strings.Contains(string(raw), "somebody") || !strings.Contains(string(raw), `"unaccepted": true`) || !strings.Contains(string(raw), machineIDOf("tower")) {
+				t.Fatalf("machines.json after the start:\n%s", raw)
+			}
+			// the way on: an admin accepts the id the machine shows
+			if what, before, err := s2.Poller.AcceptMachine("laptop", "nora", poller.AcceptWant{MachineID: machineIDOf("laptop")}); what != "id" || err != nil || before.Status != approval.BindNoRecord {
+				t.Fatalf("the accept: %q %v", what, err)
+			}
+			if b := s2.Poller.BindingOf("laptop"); !b.OK() || b.Record.How != approval.PinAccepted || b.Record.Holder {
+				t.Fatalf("laptop after the accept: %+v", b)
+			}
+			if recs, err := adminstate.New(a.s.Cfg.DataDir).Machines(); err != nil || recs["laptop"].MachineID != machineIDOf("laptop") || recs["laptop"].How != approval.PinAccepted {
+				t.Fatalf("machines.json after the accept: %v %+v", err, recs)
+			}
+		})
+	}
+}

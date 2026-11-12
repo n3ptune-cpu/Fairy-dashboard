@@ -19,7 +19,8 @@ import (
 //     the panel issued it at a Turn on (PinMachine) or because an admin accepted exactly the id the host showed
 //     (AcceptMachine). A host that shows the check on while it has no id on record is "not on record"
 //     (approval.BindNoRecord); that it showed the check is kept (Record.Unaccepted), the id is not.
-//   - A record an earlier build made at first sight counts as none (approval.Record.Demote).
+//   - A record whose id did not come one of these two ways counts as none (approval.Record.Demote): one an
+//     earlier build made at first sight, and one that does not say how its id came.
 //   - What a host last said about its check is kept, so that a host that is silent, also after a restart of the
 //     panel, is still known to be one that checks approvals.
 //   - Every time something changes, each host's binding is decided again (approval.Evaluate), and a host whose
@@ -76,21 +77,29 @@ func (p *Poller) loadMachines() {
 		return
 	}
 	p.mach.records = recs
-	p.demoteFirstSightLocked()
+	p.demoteLocked()
 	p.standingAlarmsLocked()
 }
 
-// demoteFirstSightLocked takes every id that an earlier build put on record at first sight off the record
-// (approval.Record.Demote), in memory and, with the next write, in the file. Such a host is "not on record"
-// from now on, until an admin accepts the id it shows. Caller holds p.mu, or nobody else has the poller yet.
-func (p *Poller) demoteFirstSightLocked() {
+// demoteLocked takes every id off the record that did not come on record through a Turn on or an admin's
+// accept (approval.Record.Demote: an allow-list of the two values this panel writes), in memory and, with the
+// next write, in the file: an id that an earlier build took at first sight, and an id whose record does not say
+// how it came or says something else. Such a host is "not on record" from now on, until an admin accepts the
+// id it shows. Caller holds p.mu, or nobody else has the poller yet.
+func (p *Poller) demoteLocked() {
 	for id, r := range p.mach.records {
-		if r.How != approval.PinFirstSight {
+		d := r.Demote()
+		if d == r {
 			continue
 		}
-		slog.Warn("a machine id that came on record at first sight (an earlier build) is not on record any more: an admin accepts the id the machine shows in its Approval box",
-			"agent", id, "machine_id", approval.ShortID(r.MachineID))
-		p.mach.records[id] = r.Demote()
+		if r.How == approval.PinFirstSight {
+			slog.Warn("a machine id that came on record at first sight (an earlier build) is not on record any more: an admin accepts the id the machine shows in its Approval box",
+				"agent", id, "machine_id", approval.ShortID(r.MachineID))
+		} else {
+			slog.Warn("a machine id whose record does not say that this panel issued it at Turn on or that an admin accepted it is not on record any more: an admin accepts the id the machine shows in its Approval box",
+				"agent", id, "machine_id", approval.ShortID(r.MachineID), "pinned", r.How)
+		}
+		p.mach.records[id] = d
 		p.mach.seq++
 		p.mach.dirty[id] = p.mach.seq
 	}
@@ -129,7 +138,7 @@ func (p *Poller) reloadMachinesLocked() {
 	if recs, err := p.Admin.Machines(); err == nil {
 		slog.Warn("the record of machine ids can be read again")
 		p.mach.records, p.mach.err = recs, nil
-		p.demoteFirstSightLocked()
+		p.demoteLocked()
 		p.standingAlarmsLocked()
 	}
 }

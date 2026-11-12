@@ -17,8 +17,9 @@ import (
 //
 //	{ "machines": { "<agent id>": {
 //	      "machine_id": "<22-64 characters>",       the id on record ("" or absent: none)
-//	      "pinned":     "turn-on" | "accepted"       ("first-sight": an earlier build; the panel takes such an
-//	                                                 id off the record when it starts, approval.Record.Demote)
+//	      "pinned":     "turn-on" | "accepted"       (anything else, or nothing, with a machine_id: the panel
+//	                                                 takes the id off the record when it starts,
+//	                                                 approval.Record.Demote; "first-sight" is an earlier build's)
 //	      "pinned_at":  "<RFC 3339>",
 //	      "pinned_by":  "<who: the admin>",
 //	      "state":      "required" | "broken" | "unknown" | "off" | "",   what the machine last said

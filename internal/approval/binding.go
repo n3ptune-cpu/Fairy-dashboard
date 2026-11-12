@@ -39,7 +39,8 @@ import (
 //
 // This file is the part without files and HTTP: the record, what a host shows, and the decision.
 
-// How a machine id came on record.
+// How a machine id came on record. These two are the whole list: a record whose How is anything else has no id
+// on record (Record.Demote).
 const (
 	PinTurnOn   = "turn-on"
 	PinAccepted = "accepted"
@@ -76,11 +77,14 @@ type Record struct {
 	Alarm string
 }
 
-// Demote returns the record as it counts now. An id that came on record at first sight (an earlier build's
-// machines.json) is not on record: the record keeps what the machine last said and that it showed the check,
-// and loses the id, who "kept" it and how it came. Every other record is returned as it is.
+// Demote returns the record as it counts now. An id is on record only when the record says that it came one of
+// the two ways: How is PinTurnOn or PinAccepted, the values this panel writes at a Turn on and at an admin's
+// accept. It is an allow-list (second review of passkey-g, G-06): an id with "first-sight" (an earlier build's
+// machines.json), with no How at all, or with any other word is not on record. Such a record keeps what the
+// machine last said and that it showed the check, and loses the id, who "kept" it and how it came. A record
+// from a Turn on or an accept is returned as it is, and so is a record that never had an id.
 func (r Record) Demote() Record {
-	if r.How != PinFirstSight {
+	if r.How == PinTurnOn || r.How == PinAccepted {
 		return r
 	}
 	r.Unaccepted = r.Unaccepted || r.MachineID != ""

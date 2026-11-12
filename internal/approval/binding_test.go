@@ -136,7 +136,7 @@ func TestEvaluate(t *testing.T) {
 
 // An id that an earlier build took on record at first sight is not on record (audit 5, round 3, r3-x1-01):
 // the record loses the id and everything about how it came, and keeps that the host showed the check. A record
-// from Turn on or from an admin's accept is left as it is.
+// from Turn on or from an admin's accept is left as it is, and nothing else counts as on record.
 func TestDemote(t *testing.T) {
 	old := Record{MachineID: idB, How: PinFirstSight, At: t0, By: "Fairy", State: api.ApprovalRequired, StateAt: t0, Holder: true, Alarm: BindDuplicate}
 	want := Record{State: api.ApprovalRequired, StateAt: t0, Unaccepted: true, Alarm: BindDuplicate}
@@ -152,6 +152,26 @@ func TestDemote(t *testing.T) {
 	}
 	if got := unaccepted().Demote(); got != unaccepted() {
 		t.Errorf("a record without an id: %+v", got)
+	}
+	if r := (Record{State: api.ApprovalRequired, StateAt: t0}); r.Demote() != r {
+		t.Errorf("a record with nothing but what the machine last said: %+v", r.Demote())
+	}
+	// An allow-list (second review of passkey-g, G-06): an id is on record only with one of the two values the
+	// panel writes at a Turn on and at an accept. No value at all, an unknown one, and one that only looks
+	// like one of the two are none.
+	for _, how := range []string{"", "imported", "manual", "Turn-On", "ACCEPTED", "accepted ", " turn-on", "turn-on\n", "turn_on", PinFirstSight + "," + PinAccepted} {
+		r := pin(idB)
+		r.How, r.Holder, r.Alarm = how, true, BindChanged
+		want := Record{State: api.ApprovalRequired, StateAt: t0, Unaccepted: true, Alarm: BindChanged}
+		if got := r.Demote(); got != want {
+			t.Errorf("how %q: %+v, want %+v", how, got, want)
+		}
+		if b := Evaluate("b", map[string]Record{"b": r.Demote()}, map[string]Report{"b": shows(idB)}); b.Status != BindNoRecord || !b.Checks() {
+			t.Errorf("how %q: a host that shows the very id that was in the file: %q", how, b.Status)
+		}
+		if b := Evaluate("b", map[string]Record{"b": r.Demote()}, nil); b.OK() != true || !b.Checks() {
+			t.Errorf("how %q: silent since the start it must still count as a machine that checks: %+v", how, b)
+		}
 	}
 }
 
