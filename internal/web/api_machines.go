@@ -223,7 +223,8 @@ func (s *Server) approvalAccept(c *reqCtx) error {
 	}
 	params := acceptParams(before)
 	params["accepted"] = what
-	msg := name + ": its check is off, and Fairy treats it as a machine without the check from now on."
+	// one short line: "Confirm it's you" said before what this means (approvalAcceptDetail: "it becomes a machine without the check")
+	msg := name + ": check off, accepted."
 	if what == "id" {
 		params["machine_id"] = approval.ShortID(before.Report.MachineID)
 		msg = name + ": the machine id it shows is on record now."

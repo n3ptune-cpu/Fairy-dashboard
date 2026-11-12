@@ -515,7 +515,7 @@ func TestBindingAVanishedCheckIsAnAlarm(t *testing.T) {
 		t.Fatalf("pc-b on the page of the runs: %d %v", st, runRow(t, page, "pc-b"))
 	}
 	// an admin accepts that the check is off: from then on it is a machine without the check
-	if res := pn.confirm(pn.call("POST", "/api/admin/approval/accept/pc-b", pn.acceptBody("pc-b"))); res["ok"] != true || !strings.Contains(fmt.Sprint(res["message"]), "its check is off") {
+	if res := pn.confirm(pn.call("POST", "/api/admin/approval/accept/pc-b", pn.acceptBody("pc-b"))); res["ok"] != true || res["message"] != "PC-B: check off, accepted." {
 		t.Fatalf("the accept: %v", res)
 	}
 	st, out = pn.shutdown(pn.b, 60) // the sign-in of the accept is seconds old: it runs

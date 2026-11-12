@@ -348,11 +348,37 @@ function showPendingResult(pr) {
   if (!pr.ok && typed) { openAddHost(typed, pr.message || `HTTP ${pr.status}`); return; }
   // an action about several machines brings a line per machine: the count is shown, the lines stay behind it
   if (pr.items?.length) flash(`${pr.label}: ${pr.message || (pr.ok ? "done" : "not everything worked")}`, !pr.ok, pr.items);
+  else if (SAID_ONCE.test(pr.path || "")) whenSystems(() => flash(saidOnce(pr) || `${pr.label}: ${pr.ok ? pr.message || "done" : `failed · ${pr.message || `HTTP ${pr.status}`}`}`, !pr.ok));
   else flash(`${pr.label}: ${pr.ok ? pr.message || "done" : `failed · ${pr.message || `HTTP ${pr.status}`}`}`, !pr.ok);
   if (pr.ok && pr.ref && /^\/api\/admin\/hosts(\/[^/]+\/repair)?$/.test(pr.path)) revealEnrollment(pr.ref);
   if (pr.path?.startsWith("/api/admin/updates")) upd.fastUntil = Date.now() + 30000;
   if (pr.path?.startsWith("/api/admin/wake-update") || pr.path?.endsWith("/wake-update")) fetchWakeUpdate();
   if (pr.path?.startsWith("/api/admin/approval")) fetchApproval(true);
+}
+// A power action, Turn on and an accept name their machine in what was asked ("Shut down ALPHA in 1 minute",
+// "Accept the machine id of ALPHA") and the result names it again ("ALPHA: the machine id ...") or is a bare
+// "shutdown in 60 s". Their line says it once: the result alone when it names the machine, else
+// "<machine>: <result>." (sayOnce). Everything else keeps "<what was asked>: <what happened>".
+const SAID_ONCE = /^\/api\/(systems\/[^/]+\/power|admin\/approval\/(turn-on|accept\/[^/]+))$/;
+const endDot = (t) => (/[.!?…]$/.test(t) ? t : `${t}.`);
+const sayOnce = (name, msg) => { const m = String(msg || "done"); return endDot(!name || m.includes(name) ? m : `${name}: ${m}`); };
+// The same for a result the panel kept while "Confirm it's you" was on its way (pr); "" when the usual line is to be shown.
+function saidOnce(pr) {
+  const msg = pr.message || "";
+  if (!msg) return "";
+  const sys = /^\/api\/systems\/([^/]+)\/power$/.exec(pr.path || "");
+  // Turn on and an accept: the panel's sentence names every machine it is about
+  if (!sys) return state.systems.some((s) => s.name && msg.includes(s.name)) ? endDot(msg) : "";
+  const name = state.byId[sys[1]]?.name;
+  if (!name) return "";
+  // a power action: the machine in front of a bare result; a refusal that does not name it keeps what was asked in front of it
+  return msg.includes(name) ? endDot(msg) : pr.ok ? sayOnce(name, msg) : "";
+}
+// The machines' names come with the stream: a result that is there before them (right after the page loaded) waits
+// for them, for at most 3 seconds.
+function whenSystems(fn) {
+  if (state.systems.length) { fn(); return; }
+  const t0 = Date.now(), i = setInterval(() => { if (state.systems.length || Date.now() - t0 > 3000) { clearInterval(i); fn(); } }, 100);
 }
 // The action waiting for a step-up sign-in (sessionStorage: this tab only), offered as "Resume" once back.
 function readPending() {
@@ -2319,7 +2345,7 @@ function openPowerDialog(s, action) {
     const what = `${label} ${s.name}`, timed = body.delay_s ? `${what} in ${fmtSpan(body.delay_s)}` : what;
     try {
       const r = await api(`/api/systems/${enc(s.id)}/power`, { method: "POST", body: JSON.stringify(body), label: timed });
-      close(); state.menu = null; flash(r.message); refreshCaps(s.id);
+      close(); state.menu = null; flash(sayOnce(s.name, r.message)); refreshCaps(s.id);
       actionDone({ kind: "power", system: s.id, action });
     } catch (e) {
       if (e.stepUp) { close(); showStepUp({ kind: "power", action, system: s.id, label: e.detail?.pending ? timed : what }, e.detail); return; }
@@ -2332,7 +2358,7 @@ async function powerNow(s, action) {
   try {
     const r = await controlCall({ kind: "request", label: `${POWER_LABEL[action]} · ${s.name}`, system: s.id, method: "POST", path, body: { action } },
       () => api(path, { method: "POST", body: JSON.stringify({ action }) }));
-    if (r) { flash(r.message); refreshCaps(s.id); }
+    if (r) { flash(sayOnce(s.name, r.message)); refreshCaps(s.id); }
   } catch (e) { flash(e.message, true); }
 }
 // The "Power on" buttons (Wake-on-LAN and BMC) are enabled from the power capabilities, so a system page that
