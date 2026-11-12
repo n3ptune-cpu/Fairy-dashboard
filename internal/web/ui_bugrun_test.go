@@ -108,3 +108,22 @@ func TestUIPhoneWidthTitleAndUpdatesButtons(t *testing.T) {
 		t.Error("the sticky button column is not inside the phone-width block of the Updates page")
 	}
 }
+
+// r1-b1-09: a button beside a text box or a list was 2 px lower than its neighbour (34 px next to 36 px) on
+// Notifications, Audit, Settings and Users, and in the Add host dialog a box (36 px) stood beside a list (33
+// px). A box and a list are now as high as a button. Measured in a browser: 63 rows of controls, none unequal.
+func TestUIBoxesAndListsAreAsHighAsAButton(t *testing.T) {
+	css := appCSS(t)
+	for _, want := range []string{
+		`.input, .select { height: 34px; }`,
+		// a button's 34 px: 16 px of text + 2 x 8 px + the border
+		`padding: 8px 12px; border-radius: var(--radius); font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; line-height: 1.28; }`,
+		// the small lists inside a table and the demo's switcher keep their own size
+		`.table.users .select, .table.assign .select { padding: 4px 8px; font-size: 12.5px; height: auto; }`,
+		`.demo-view .select { width: 100%; padding: 4px 8px; font-size: 12px; height: auto; }`,
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("app.css lacks %q", want)
+		}
+	}
+}

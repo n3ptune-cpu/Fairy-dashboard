@@ -240,6 +240,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .field output { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
 .row-gap { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .input { background: var(--well); border: 1px solid var(--line2); color: var(--text); border-radius: var(--radius); padding: 8px 10px; font: inherit; font-size: 13px; flex: 1; min-width: 200px; }
+/* A text box and a list are as high as a button (.btn, 34 px): a row that holds a box, a list and a button has one height. */
+.input, .select { height: 34px; }
 .preview { height: 120px; border-radius: var(--radius); border: 1px solid var(--line2); background: var(--well) center / cover no-repeat; margin-top: 12px; }
 
 .login .signed-out { border: 1px solid #4a3810; background: rgba(245, 184, 75, .05); color: #f3cf86; border-radius: var(--radius); padding: 8px 12px; font-size: 12.5px; }
@@ -471,7 +473,7 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .check input { appearance: none; width: 14px; height: 14px; margin: 0; border: 1px solid var(--line2); background: var(--well); cursor: pointer; display: grid; place-items: center; }
 .check input:checked { background: var(--accent); border-color: var(--accent); }
 .check input:checked::after { content: ""; width: 6px; height: 3px; border: solid #000; border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); }
-.table.users .select, .table.assign .select { padding: 4px 8px; font-size: 12.5px; }
+.table.users .select, .table.assign .select { padding: 4px 8px; font-size: 12.5px; height: auto; }
 .table .nowrap { white-space: nowrap; }
 /* ------------------------------------------------ sessions */
 .sess-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: -4px; }
@@ -507,7 +509,7 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
   .table.sessions td.act .btn { width: 100%; max-width: 420px; justify-content: center; }
 }
 .demo-view { display: flex; flex-direction: column; gap: 4px; }
-.demo-view .select { width: 100%; padding: 4px 8px; font-size: 12px; }
+.demo-view .select { width: 100%; padding: 4px 8px; font-size: 12px; height: auto; }
 #waiting .demo-view { margin: 14px auto; max-width: 260px; text-align: left; }
 #waiting p { color: var(--muted); }
 
