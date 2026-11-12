@@ -133,7 +133,10 @@ func (s *Server) getBackground(c *reqCtx) error {
 	c.flush()
 	h := c.w.Header()
 	h.Set("Content-Type", mime)
-	h.Set("Cache-Control", "private, max-age=86400")
+	// no-cache: the browser may keep the picture but asks before every use, and the question needs the session
+	// (answered 304 from the file's time). With a max-age the picture stayed readable from the browser's cache for a
+	// day after sign-out, for the next person at a shared browser profile.
+	h.Set("Cache-Control", "private, no-cache")
 	h.Set("Content-Security-Policy", "default-src 'none'")
 	h.Set("Content-Disposition", "inline")
 	timeout := backgroundWriteTimeout
