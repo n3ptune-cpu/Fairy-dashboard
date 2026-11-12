@@ -8,6 +8,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/power"
 )
 
@@ -33,10 +34,10 @@ type siteRef struct {
 func (s *Server) sites(d access.Data, snap []model.System) map[string]siteRef {
 	p := s.Poller
 	out := make(map[string]siteRef, len(snap))
-	nodeOf := map[[2]string]string{} // (cluster id, node name) -> node system id
+	nodes := map[string]model.System{} // node system id -> node
 	for _, x := range snap {
 		if x.Kind == "node" {
-			nodeOf[[2]string{model.Deref(x.ClusterID), x.Name}] = x.ID
+			nodes[x.ID] = x
 		}
 	}
 	configSite := func(x model.System) string {
@@ -77,8 +78,9 @@ func (s *Server) sites(d access.Data, snap []model.System) map[string]siteRef {
 		}
 		def, from := configSite(x), fromConfig
 		if def == "" {
-			if n, ok := nodeOf[[2]string{model.Deref(x.ClusterID), model.Deref(x.Parent)}]; ok && out[n].Site != "" {
-				def, from = out[n].Site, fromNode
+			// a guest's node is found by its id (ParentID), never by the name shown for it (poller.GuestOf)
+			if n, ok := nodes[model.Deref(x.ParentID)]; ok && poller.GuestOf(x, n) && out[n.ID].Site != "" {
+				def, from = out[n.ID].Site, fromNode
 			} else if c, ok := p.ClusterCfg(model.Deref(x.ClusterID)); ok {
 				def = c.Site
 			}
@@ -186,16 +188,16 @@ func (v *view) powerVisible(st model.PowerSourceState) bool {
 // changed reports whether anything was removed.
 func (v *view) clean(x model.System) (model.System, bool) {
 	changed := false
-	if x.Parent != nil && (x.Kind == "qemu" || x.Kind == "lxc") {
+	if (x.Parent != nil || x.ParentID != nil) && (x.Kind == "qemu" || x.Kind == "lxc") {
 		seen := false
 		for _, n := range v.snap {
-			if n.Kind == "node" && n.Name == *x.Parent && model.Deref(n.ClusterID) == model.Deref(x.ClusterID) {
+			if poller.GuestOf(x, n) {
 				seen = v.vis[n.ID]
 				break
 			}
 		}
 		if !seen {
-			x.Parent, changed = nil, true
+			x.Parent, x.ParentID, changed = nil, nil, true
 		}
 	}
 	if slices.ContainsFunc(x.UPS, func(id string) bool { return !v.upsVis[id] }) {

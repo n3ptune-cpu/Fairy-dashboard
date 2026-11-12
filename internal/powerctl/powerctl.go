@@ -101,7 +101,7 @@ func KillsPanel(p *poller.Poller, s model.System) bool {
 	}
 	if s.Kind == "node" {
 		for _, g := range p.Snapshot() {
-			if slices.Contains(p.Cfg.PanelHosts, g.ID) && sameString(g.ClusterID, s.ClusterID) && g.Parent != nil && *g.Parent == s.Name {
+			if slices.Contains(p.Cfg.PanelHosts, g.ID) && poller.GuestOf(g, s) {
 				return true
 			}
 		}

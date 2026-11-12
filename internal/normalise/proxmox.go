@@ -112,6 +112,11 @@ type ProxmoxOpts struct {
 	Group, Owner     *string
 }
 
+// NodeID is the system id of the Proxmox node with this name in a cluster with this prefix. A guest row names
+// its node the same way a node row names itself, so a guest's ParentID is its node's ID whatever name the
+// panel shows for the node (a `systems:` entry may give it another one, and two nodes may be given the same).
+func NodeID(prefix, node string) string { return prefix + "node-" + Slug(node) }
+
 var guestStatus = map[string]string{"running": "online", "stopped": "stopped", "paused": "stopped", "suspended": "stopped"}
 
 // NormaliseProxmox converts cluster/resources rows (nodes, VMs, containers) into systems; storage and, unless
@@ -128,7 +133,7 @@ func NormaliseProxmox(resources []jsonx.M, now time.Time, ts float64, rates *Rat
 		}
 		statusRaw := jsonx.S(r, "status")
 		var sid, name, status string
-		var parent *string
+		var parent, parentID *string
 		var vmid *int
 		if rtype == "node" {
 			node := jsonx.S(r, "node")
@@ -140,7 +145,7 @@ func NormaliseProxmox(resources []jsonx.M, now time.Time, ts float64, rates *Rat
 			if statusRaw == "online" {
 				status = "online"
 			}
-			sid, name = o.Prefix+"node-"+Slug(node), node
+			sid, name = NodeID(o.Prefix, node), node
 		} else {
 			if vmid = VMID(r); vmid == nil { // no id, or one Proxmox itself would not accept
 				continue
@@ -156,13 +161,16 @@ func NormaliseProxmox(resources []jsonx.M, now time.Time, ts float64, rates *Rat
 				name = fmt.Sprintf("%s %d", rtype, v)
 			}
 			parent = clipP(jsonx.Str(r, "node"), maxName)
+			if parent != nil && *parent != "" {
+				parentID = model.P(NodeID(o.Prefix, *parent))
+			}
 		}
 		live := status == "online"
 		var rx, tx *float64
 		if live {
 			rx, tx = rates.Update(sid, ts, counter(r, "netin"), counter(r, "netout"), 15)
 		}
-		s := model.System{ID: sid, Name: name, Kind: rtype, Source: "proxmox", Parent: parent, VMID: vmid,
+		s := model.System{ID: sid, Name: name, Kind: rtype, Source: "proxmox", Parent: parent, ParentID: parentID, VMID: vmid,
 			Status: status, ClusterID: o.ClusterID, Cluster: o.Cluster, Group: o.Group, Owner: o.Owner,
 			MemTotal: size(r, "maxmem"), DiskUsed: size(r, "disk"), DiskTotal: size(r, "maxdisk"),
 			NetRxBps: rx, NetTxBps: tx, Tags: splitTags(jsonx.S(r, "tags")), PollMode: "default"}

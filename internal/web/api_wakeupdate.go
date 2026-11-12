@@ -299,7 +299,7 @@ func (o runOps) Guests(id string, since time.Time) (int, bool, string) {
 	}
 	var names []string
 	for _, g := range o.s.Poller.Snapshot() {
-		if (g.Kind != "qemu" && g.Kind != "lxc") || g.Parent == nil || *g.Parent != x.Name || model.Deref(g.ClusterID) != model.Deref(x.ClusterID) {
+		if !poller.GuestOf(g, x) { // by the node's id, not by the name shown for it
 			continue
 		}
 		if g.Status != "stopped" && g.Status != "offline" { // running, or the panel cannot say that it is not

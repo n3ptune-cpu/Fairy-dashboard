@@ -137,12 +137,16 @@ type PowerPending struct {
 }
 
 // System is one host, node or guest as the API and UI show it.
+//
+// ParentID is a guest's node, as that node's system id. A guest is matched to its node by this, never by Parent
+// (the node's name in Proxmox, for people) or by the name the panel shows for the node.
 type System struct {
 	ID                 string          `json:"id"`
 	Name               string          `json:"name"`
 	Kind               string          `json:"kind"`   // node | qemu | lxc | agent
 	Source             string          `json:"source"` // proxmox | agent
 	Parent             *string         `json:"parent"`
+	ParentID           *string         `json:"parent_id"`
 	ClusterID          *string         `json:"cluster_id"`
 	Cluster            *string         `json:"cluster"`
 	VMID               *int            `json:"vmid"`

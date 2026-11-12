@@ -148,6 +148,17 @@ func (p *Poller) forgetSystemsLocked(ids []string) {
 	p.rates.Forget(ids...)
 }
 
+// GuestOf reports whether g is a guest (VM or container) of the Proxmox node n. A guest is matched to its node
+// by the node's identity: the node's system id, which the guest row carries as ParentID, in the same cluster.
+// It is never matched by the node's name: the name the panel shows is the one a `systems:` entry may have
+// given the node, which need not be its name in Proxmox and need not be unique. Everything that asks "is
+// this a guest of that node" asks here (the run's "guests on it", "the panel itself runs on it", a guest's
+// site, what a grant may see).
+func GuestOf(g, n model.System) bool {
+	return (g.Kind == "qemu" || g.Kind == "lxc") && n.Kind == "node" && g.ParentID != nil && *g.ParentID == n.ID &&
+		model.Deref(g.ClusterID) == model.Deref(n.ClusterID)
+}
+
 // recordPVERefsLocked remembers which cluster, node and vmid each system id maps to (for power actions), and
 // returns the ids it recorded: the caller forgets the cluster's other ones. Caller holds p.mu.
 func (p *Poller) recordPVERefsLocked(clusterID, prefix string, data []jsonx.M) map[string]bool {

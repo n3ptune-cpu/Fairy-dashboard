@@ -161,7 +161,7 @@ func errorEntry(s model.System, err error) model.System {
 	case err != nil:
 		why = normalise.ClipText(err.Error(), 160)
 	}
-	e := model.System{ID: s.ID, Name: s.Name, Kind: s.Kind, Source: s.Source, Parent: s.Parent, ClusterID: s.ClusterID,
+	e := model.System{ID: s.ID, Name: s.Name, Kind: s.Kind, Source: s.Source, Parent: s.Parent, ParentID: s.ParentID, ClusterID: s.ClusterID,
 		Cluster: s.Cluster, VMID: s.VMID, Status: StatusError,
 		Error: model.P("this system sent data the panel cannot show (" + why + ")"),
 		Group: s.Group, Owner: s.Owner, Tags: s.Tags, DWServiceURL: s.DWServiceURL, UPS: s.UPS, CustomModel: s.CustomModel,

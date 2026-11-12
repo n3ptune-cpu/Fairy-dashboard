@@ -499,8 +499,8 @@ const hostsBySite = () => {  // [[site, hosts]], sites A-Z, "Other" last
   return Object.entries(groups).sort(([a], [b]) => (a === "Other") - (b === "Other") || a.localeCompare(b));
 };
 const clusterName = (s) => (s.kind === "node" && s.cluster && nodesOf().filter((n) => n.cluster_id === s.cluster_id).length > 1 ? s.cluster : "");
-const guestsOf = (node) => state.systems.filter((g) => (g.kind === "qemu" || g.kind === "lxc") && g.parent === node.name && g.cluster_id === node.cluster_id);
-const parentOf = (g) => (g.parent ? nodesOf().find((n) => n.name === g.parent && n.cluster_id === g.cluster_id) : null);
+const guestsOf = (node) => state.systems.filter((g) => (g.kind === "qemu" || g.kind === "lxc") && g.parent_id === node.id && g.cluster_id === node.cluster_id);
+const parentOf = (g) => (g.parent ? nodesOf().find((n) => n.id === g.parent_id && n.cluster_id === g.cluster_id) : null);
 const guestCount = (s) => {
   const gs = s.kind === "node" ? guestsOf(s) : [];
   return gs.length ? `<span class="guest-count"><b>${gs.length}</b> guest${gs.length === 1 ? "" : "s"} · ${gs.filter((g) => g.status === "online").length} running</span>` : "";
