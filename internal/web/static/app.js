@@ -1760,7 +1760,7 @@ function wakeUpdateBox() {
   const row = (h) => `<tr class="row" data-key="wum-${esc(h.id)}"><td class="namecell"><b title="${esc(h.name)}">${state.byId[h.id] ? `<a href="#/system/${enc(h.id)}">${esc(h.name)}</a>` : esc(h.name)}</b></td>
     <td><span class="chip ${h.power === "on" ? "ok" : h.power === "off" ? "" : "warn"}"${h.asleep ? ' title="Sent to sleep from the panel. Asleep and off look the same from here."' : ""}>${esc(h.asleep ? "asleep or off" : h.power)}</span></td>
     <td>${h.can_wake ? `via ${esc(h.relay)}` : `<span class="note" title="Fairy cannot wake this machine: in a run it is only updated while it is on">${esc(h.no_wake || h.why_not)}</span>`}</td>
-    <td>${h.opted_in ? '<span class="chip ok">switched on</span>' : '<span class="note">off</span>'}${h.opted_in && !h.choice ? `<div class="note">${esc(h.why)}</div>` : ""}</td>
+    <td>${h.opted_in ? '<span class="chip ok">switched on</span>' : '<span class="note">off</span>'}${(h.opted_in && !h.choice) || h.approval ? `<div class="note">${esc(h.why)}</div>` : ""}</td>
     <td class="num"><button class="btn sm" type="button" data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"
       ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
   const earlier = d.active ? d.last : d.last.slice(1), showEarlier = !!wu.open.earlier;

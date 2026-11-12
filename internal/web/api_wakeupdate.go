@@ -494,14 +494,15 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	switch {
 	case !h.CanJoin:
 		h.Why = h.WhyNot
+	case h.Approval != "":
+		// said before it is switched on for runs too: the switch does not make it choosable (audit 5, r1-b2-05)
+		h.Why = strings.TrimPrefix(h.approvalWhy, "is ")
 	case !h.OptedIn:
 		h.Why = "not switched on for this (on the machine's page: the ⋯ menu)"
 	case s.Poller.Admin.PowerDisabled(x.ID):
 		h.Why = "power control for this host is disabled by an administrator"
 	case o.Paused:
 		h.Why = "polling is paused for it"
-	case h.Approval != "":
-		h.Why = strings.TrimPrefix(h.approvalWhy, "is ")
 	case o.Online:
 		h.Choice = wakerun.ModeUpdateOnly
 	case h.Power == "on":
@@ -849,12 +850,24 @@ func (s *Server) wakeUpdateSwitch(c *reqCtx) error {
 	msg := x.Name + " is no longer part of \"Update unpowered hosts\""
 	if *b.Enabled {
 		msg = x.Name + " can now be chosen for \"Update unpowered hosts\""
-		if !h.CanWake {
+		switch {
+		case h.Approval != "": // the row says why it cannot be chosen: the message must not say it can
+			msg = x.Name + " is switched on, but no run can take it: " + wuSwitchWhy(h)
+		case !h.CanWake:
 			msg += " (only to be updated while it is on: " + h.NoWake + ")"
 		}
 	}
 	c.json(200, map[string]any{"ok": true, "message": msg, "host": h})
 	return nil
+}
+
+// wuSwitchWhy is the short reason a machine that was just switched on for runs is in none: the start of what
+// its row says.
+func wuSwitchWhy(h wuHost) string {
+	if h.Approval == "alarm" {
+		return "see its page"
+	}
+	return "it checks a passkey approval itself"
 }
 
 // wakeUpdateSwitchDetail says which way a kept switch request goes.

@@ -214,3 +214,41 @@ func TestAMachineWithAnAlarmIsInNoRun(t *testing.T) {
 		t.Fatalf("a start with a flagged machine: %d %s", r.code, r.raw)
 	}
 }
+
+// r1-b2-05 (audit 5): "Switch on" for a machine with the check answered "can now be chosen for Update
+// unpowered hosts" while its row said that it cannot. The answer now says what the row says, and the row says
+// it before the switch too.
+func TestSwitchOnForRunsSaysWhatTheRowSays(t *testing.T) {
+	a := signedIn(t)
+	e := a.e
+	f := newFarm(t, e)
+	f.checksItself("pc-a", "farm-machine-id-of-pc-a-01")
+	e.b.Mu.Lock()
+	f.on["pc-a"], f.on["pc-b"] = true, true
+	e.b.Mu.Unlock()
+	f.tick()
+	page := func() resp { return e.do("GET", "/api/admin/wake-update", nil, "Cookie", a.sess) }
+	if h := wuHostRow(t, page(), "pc-a"); h["opted_in"] != false || !strings.HasPrefix(h["why"].(string), "needs approval: not supported in runs yet") {
+		t.Fatalf("pc-a before the switch: %v", h)
+	}
+	put := func(id string) resp {
+		return e.do("PUT", "/api/systems/"+id+"/wake-update", map[string]any{"enabled": true}, append([]string{"Cookie", a.sess}, wuWrite...)...)
+	}
+	r := put("pc-a")
+	if cb := a.confirm(pendingID(r), false); !stepUpRequired(r) || cb.code != 303 {
+		t.Fatalf("the confirmation: %d %s", r.code, r.raw)
+	}
+	r = put("pc-a") // inside the window now
+	if msg, _ := r.body["message"].(string); r.code != 200 || msg != "PC-A is switched on, but no run can take it: it checks a passkey approval itself" || strings.Contains(msg, "can now be chosen") {
+		t.Fatalf("pc-a: %d %s", r.code, r.raw)
+	}
+	if h := wuHostRow(t, page(), "pc-a"); h["opted_in"] != true || h["choice"] != "" || !strings.HasPrefix(h["why"].(string), "needs approval: not supported in runs yet") {
+		t.Fatalf("pc-a after the switch: %v", h)
+	}
+	if r := put("pc-b"); r.code != 200 || !strings.HasPrefix(r.body["message"].(string), "PC-B can now be chosen for \"Update unpowered hosts\"") {
+		t.Fatalf("pc-b: %d %s", r.code, r.raw)
+	}
+	if js := appJS(t); !strings.Contains(js, "${(h.opted_in && !h.choice) || h.approval ? `<div class=\"note\">${esc(h.why)}</div>` : \"\"}") {
+		t.Error("the row shows the reason only after the switch")
+	}
+}
