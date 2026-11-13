@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -255,15 +256,31 @@ func TestRunSwitchSetUnderTheAgentIDAppliesToTheNodeRowAndBack(t *testing.T) {
 	if got := wakeUpdateHosts(t, e); got != `["lab-b-agent"]` {
 		t.Fatalf("the file was rewritten by reading it: %s", got)
 	}
-	// switched off on the node's row: off for the machine, under both ids
+	// switched off on the node's row: off for the machine, under both ids, and the audit entry names both
 	put("lab-b-node-pve-b", false)
 	if got := wakeUpdateHosts(t, e); got != `[]` || opted("lab-b-node-pve-b") != false {
 		t.Fatalf("switched off under the node's id: file %s, opted in %v", got, opted("lab-b-node-pve-b"))
+	}
+	lastSwitch := func(e *env) (string, map[string]any) {
+		t.Helper()
+		all := auditOf(e, "wakeupdate.switch") // newest first
+		if len(all) == 0 {
+			t.Fatal("no audit entry")
+		}
+		return fmt.Sprint(all[0]["target"]), all[0]["params"].(map[string]any)
+	}
+	if target, params := lastSwitch(e); target != "lab-b-node-pve-b" || params["enabled"] != false || params["also"] != "lab-b-agent" {
+		t.Fatalf("the audit entry of a switch that was taken out under the machine's other id: %s %v", target, params)
 	}
 	// switched on on the node's row: the file has the node's id, as build 12 writes and reads it
 	put("lab-b-node-pve-b", true)
 	if got := wakeUpdateHosts(t, e); got != `["lab-b-node-pve-b"]` || opted("lab-b-node-pve-b") != true {
 		t.Fatalf("switched on under the node's id: file %s", got)
+	}
+	// ... and off again there: nothing was kept under the other id, and the entry names none
+	put("lab-b-node-pve-b", false)
+	if _, params := lastSwitch(e); params["enabled"] != false || len(params) != 1 {
+		t.Fatalf("the audit entry of a plain switch off: %v", params)
 	}
 
 	// and back: the panel restarts while the machine is off. The switch under the node's id counts for the host
@@ -285,6 +302,9 @@ func TestRunSwitchSetUnderTheAgentIDAppliesToTheNodeRowAndBack(t *testing.T) {
 	}
 	if got := wakeUpdateHosts(t, h2.e); got != `[]` {
 		t.Fatalf("switched off under the agent's id: file %s", got)
+	}
+	if target, params := lastSwitch(h2.e); target != "lab-b-agent" || params["also"] != "lab-b-node-pve-b" {
+		t.Fatalf("the audit entry: %s %v", target, params)
 	}
 	if info, _ := (runOps{h2.e.s}).Host("lab-b-agent"); info.OptedIn {
 		t.Fatal("still switched on for the run")
@@ -346,10 +366,11 @@ func TestRunAcrossTheIDChangeLeavesANodeWithGuestsOn(t *testing.T) {
 	}
 }
 
-// A run never switches off a machine it did not wake, across the id change too: the node's row stands for the
-// run's machine only while the requests for that row go to the very agent the run woke. With two agents
-// linked to one node (a configuration mistake) the row's requests go to the first of them; the run that knows
-// the second one lets go of it and sends nothing.
+// A run never switches off a machine it did not wake, across the id change too. With two agents linked to one
+// node (a configuration mistake) the configuration names that node for neither of them (the rule's guard: no
+// other agent's entry may mean the same node), so the node's row stands for neither agent's machine: a run
+// that knows one of them by its agent's id lets go of it and sends nothing. (That the row's requests must go
+// to the run's own agent is another check: TestARunDoesNotFollowItsMachineToANodeTheConfigurationDoesNotName.)
 func TestTheNodesRowStandsForARunsMachineOnlyWithItsOwnAgent(t *testing.T) {
 	e := setupSystems(t, nil) // pve-agent is linked to node-srv-pvea and is part of that row
 	ops := runOps{e.s}
@@ -370,11 +391,13 @@ func TestTheNodesRowStandsForARunsMachineOnlyWithItsOwnAgent(t *testing.T) {
 	if a, ok := e.s.Poller.AgentFor("node-srv-pvea"); !ok || a.ID != "pve-agent" {
 		t.Fatalf("the fixture: the node's requests go to %s", a.ID)
 	}
-	if x, ok := ops.system("second-agent"); ok {
-		t.Fatalf("a row for the second agent: %s", x.ID)
-	}
-	if _, ok := ops.Host("second-agent"); ok {
-		t.Fatal("the run takes the node's row for the second agent's machine")
+	for _, id := range []string{"pve-agent", "second-agent"} {
+		if x, ok := ops.system(id); ok {
+			t.Fatalf("a row for %s: %s", id, x.ID)
+		}
+		if _, ok := ops.Host(id); ok {
+			t.Fatalf("the run takes the node's row for the machine of %s", id)
+		}
 	}
 	// an id that is no agent's and no row's is nobody
 	if _, ok := ops.system("nobody"); ok {
@@ -412,6 +435,25 @@ func TestARunDoesNotFollowItsMachineToANodeTheConfigurationDoesNotName(t *testin
 	}
 	if x, ok := ops.system("lab-b-agent"); ok {
 		t.Fatalf("the run takes %s for its machine", x.ID)
+	}
+	if _, ok := ops.Host("lab-b-agent"); ok {
+		t.Fatal("the run still knows the machine")
+	}
+	// Now the node the configuration names answers as well. Its row is there, but the agent is a part of the
+	// other one, and the requests for this row go to nobody: it is not the run's machine either.
+	e.b.Mu.Lock()
+	e.b.PVEOf = func(string) ([]jsonx.M, error) { return testutil.HostResources("PVE-B", "stopped"), nil }
+	e.b.Mu.Unlock()
+	h.f.tick()
+	rows = map[string]string{}
+	for _, x := range e.s.Poller.Snapshot() {
+		rows[x.ID] = x.Kind
+	}
+	if _, ok := e.s.Poller.AgentFor("lab-b-node-pve-b"); rows["lab-a-node-pve-b"] != "node" || rows["lab-b-node-pve-b"] != "node" || rows["lab-b-agent"] != "" || ok {
+		t.Fatalf("the fixture: both nodes called PVE-B are there, the agent a part of the first: %v", rows)
+	}
+	if x, ok := ops.system("lab-b-agent"); ok {
+		t.Fatalf("the run takes %s, whose requests go to nobody, for its machine", x.ID)
 	}
 	if _, ok := ops.Host("lab-b-agent"); ok {
 		t.Fatal("the run still knows the machine")

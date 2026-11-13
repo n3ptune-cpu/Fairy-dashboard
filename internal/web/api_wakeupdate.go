@@ -115,9 +115,10 @@ type runOps struct{ s *Server }
 // restart of the panel with the machine off), and under the node's id from the first answer of the node's
 // Proxmox API on. A run that woke such a machine knows it by its agent's id, and the machine's row changes its
 // id while it starts. It is still the same machine: the row of the node its agent is now part of. That row is
-// taken only when three things agree: the configuration alone names it as this agent's node (poller.NodeOf),
-// it is the row the snapshot made the agent a part of (poller.LinkOf), and the requests for it go to this very
-// agent (poller.AgentFor). Anything else is as before: the run lets go of the machine and sends it nothing.
+// taken only when two things agree: the configuration alone names it as this agent's node (poller.NodeOf), and
+// the requests for it go to this very agent (poller.AgentFor: the agent the snapshot made a part of the row,
+// which the panel links by the node's name; so this also says that the row is the one the agent's own row
+// went into). Anything else is as before: the run lets go of the machine and sends it nothing.
 // (Without this the run let go of a machine it had just woken, "It is no longer in the panel", and left it on.)
 func (o runOps) system(id string) (model.System, bool) {
 	snap := o.s.Poller.Snapshot()
@@ -131,7 +132,7 @@ func (o runOps) system(id string) (model.System, bool) {
 		return model.System{}, false
 	}
 	nodeID, _, decided := o.s.Poller.NodeOf(id)
-	if !decided || o.s.Poller.LinkOf(a) != nodeID { // LinkOf: where the snapshot put the agent's row
+	if !decided {
 		return model.System{}, false
 	}
 	for _, x := range snap {
@@ -915,19 +916,23 @@ func (s *Server) wakeUpdateSwitch(c *reqCtx) error {
 	if err := s.Poller.Admin.SetWakeUpdate(id, *b.Enabled); err != nil {
 		return err
 	}
+	params := map[string]any{"enabled": *b.Enabled}
 	if !*b.Enabled {
 		// Off is off for the machine: also where the switch was pressed while the machine was shown under its
-		// other id (wuOptedIn). Switching on writes the shown id only, as before.
+		// other id (wuOptedIn). Switching on writes the shown id only, as before. The audit entry names the
+		// other id too when the switch was taken out there ("also").
 		for _, other := range s.Poller.SameMachine(id) {
 			if other == id || !s.Poller.Admin.WakeUpdateEnabled(other) {
 				continue
 			}
 			if err := s.Poller.Admin.SetWakeUpdate(other, false); err != nil {
+				c.audit(u, "wakeupdate.switch", id, params, "error: switched off under "+id+", not under "+other+": "+err.Error())
 				return err
 			}
+			params["also"] = other
 		}
 	}
-	c.audit(u, "wakeupdate.switch", id, map[string]any{"enabled": *b.Enabled}, "ok")
+	c.audit(u, "wakeupdate.switch", id, params, "ok")
 	h, _ = s.wuHostOf(x)
 	msg := x.Name + " is no longer part of \"Update unpowered hosts\""
 	if *b.Enabled {

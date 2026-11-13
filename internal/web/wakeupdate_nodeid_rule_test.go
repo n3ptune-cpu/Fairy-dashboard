@@ -1,11 +1,14 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/scheduler"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
 )
@@ -208,5 +211,69 @@ func TestTheUpdatesPageKnowsThePowerSwitchUnderTheMachinesOtherID(t *testing.T) 
 	}
 	if _, err := e.s.wuCheck(wuStartBody{Hosts: []string{"lab-b-agent"}}); err != nil {
 		t.Errorf("the start's own check is about what the machine can do, not about its switch today: %v", err)
+	}
+}
+
+// What a run is told about a machine it knows by its agent's id, once the row is the node's: a pause of
+// polling that an admin set for the row counts as one for the machine (the panel would not see it change).
+func TestARunSeesAPauseOfPollingOnTheRowItsMachineIsShownUnder(t *testing.T) {
+	h := setupTwoHosts(t)
+	ops := runOps{h.e.s}
+	h.start()
+	for i := 0; i < 30; i++ {
+		h.f.tick()
+	}
+	if got := h.shown(); got != "lab-b-node-pve-b" {
+		t.Fatalf("shown as %s", got)
+	}
+	if o := ops.Observe("lab-b-agent"); o.Paused || !o.Online {
+		t.Fatalf("before the pause: %+v", o)
+	}
+	if err := h.e.s.Poller.SetPoll("lab-b-node-pve-b", &scheduler.Override{Paused: true}); err != nil {
+		t.Fatal(err)
+	}
+	if h.e.s.Poller.Scheduler.IsPaused("lab-b-agent") {
+		t.Fatal("the fixture: the pause is kept under the node's id only")
+	}
+	if o := ops.Observe("lab-b-agent"); !o.Paused {
+		t.Error("the run does not see that polling is paused for the row its machine is shown under")
+	}
+}
+
+// While a run waits for a node's host that is shown under its agent's id, its kick of the agent's poll asks
+// the node's Proxmox API too: the node's row, and with it the node's guests, is there as soon as the node
+// answers, however seldom that API is polled. A host that is no node's has no such poll to ask for.
+func TestARunsKickAlsoAsksTheProxmoxAPIOfAHostShownUnderItsAgentsID(t *testing.T) {
+	h := setupTwoHosts(t)
+	p := h.e.s.Poller
+	asked := map[string]int{}
+	h.e.b.Mu.Lock()
+	inner := h.e.b.PVEOf
+	h.e.b.PVEOf = func(cluster string) ([]jsonx.M, error) { asked[cluster]++; return inner(cluster) }
+	h.e.b.Mu.Unlock()
+	p.Scheduler.Clock = func() float64 { return 1000 } // a clock that stands still: nothing becomes due by itself
+	tick := func() map[string]int {
+		p.Scheduler.Tick(context.Background())
+		p.Scheduler.Wait()
+		h.e.b.Mu.Lock()
+		defer h.e.b.Mu.Unlock()
+		got := map[string]int{"lab-a": asked["lab-a"], "lab-b": asked["lab-b"]}
+		asked["lab-a"], asked["lab-b"] = 0, 0
+		return got
+	}
+	tick() // everything once; from here on nothing is due
+	if got := tick(); got["lab-a"] != 0 || got["lab-b"] != 0 {
+		t.Fatalf("the fixture: polls without a kick: %v", got)
+	}
+	if h.shown() != "lab-b-agent" {
+		t.Fatal("the fixture: PVE-B is shown under its agent's id")
+	}
+	runOps{h.e.s}.Kick("lab-b-agent")
+	if got := tick(); got["lab-b"] != 1 || got["lab-a"] != 0 {
+		t.Errorf("after the run's kick for lab-b-agent the Proxmox APIs were asked %v, want lab-b once", got)
+	}
+	runOps{h.e.s}.Kick("pc-a") // the farm's PC: an agent that names no node
+	if got := tick(); got["lab-a"] != 0 || got["lab-b"] != 0 {
+		t.Errorf("after a kick for a host that is no node's: %v", got)
 	}
 }
