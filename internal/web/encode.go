@@ -67,7 +67,8 @@ func reduced(v any) (any, bool) {
 		for i, s := range x.Sources {
 			if !writable(s) {
 				s = model.PowerSourceState{ID: s.ID, Type: s.Type, Name: s.Name, Status: "unreachable",
-					IncludeInTotal: s.IncludeInTotal, Readings: []model.PowerReading{}, Error: model.P(cannotShow), Via: s.Via}
+					IncludeInTotal: s.IncludeInTotal, Readings: []model.PowerReading{}, Error: model.P(cannotShow), Via: s.Via,
+					SystemID: s.SystemID}
 			}
 			out[i] = s
 		}

@@ -29,6 +29,12 @@ type Manager struct {
 	remoteKeys []string
 	// remoteWarned: agents whose dropped rows were already logged (see UpdateRemote).
 	remoteWarned map[string]bool
+
+	// ShownID, when set, turns the system id a source is linked to into the id of the row that machine is
+	// shown as right now (the poller's: Poller.ShownID). One machine can have two ids, its agent's and its
+	// Proxmox node's, and is shown under one of them at a time; a link written with either must land on the
+	// row that is there. Set once, before the first poll; called without the manager's lock.
+	ShownID func(systemID string) string
 }
 
 // NewManager builds a Runner per config entry. interval is the history sample interval (s), historyS the
@@ -140,7 +146,35 @@ func (m *Manager) Overview() model.PowerOverview {
 		states = append(states, m.remote[k])
 	}
 	m.mu.Unlock()
+	if m.ShownID != nil { // after the lock: the poller's answer takes the poller's lock
+		for i, st := range states {
+			states[i].Readings = m.shown(st.Readings)
+			if st.SystemID != nil {
+				states[i].SystemID = model.P(m.ShownID(*st.SystemID))
+			}
+		}
+	}
 	return model.PowerOverview{GeneratedAt: time.Now().UTC(), Sources: states, TotalW: Total(states)}
+}
+
+// shown is readings with every link turned into the id of the row its machine is shown as (ShownID). The
+// readings that are kept are never written to: a reading whose link changes is copied.
+func (m *Manager) shown(readings []model.PowerReading) []model.PowerReading {
+	out := readings
+	for i, rd := range readings {
+		if rd.SystemID == nil {
+			continue
+		}
+		id := m.ShownID(*rd.SystemID)
+		if id == *rd.SystemID {
+			continue
+		}
+		if &out[0] == &readings[0] {
+			out = append([]model.PowerReading(nil), readings...)
+		}
+		out[i].SystemID = &id
+	}
+	return out
 }
 
 // Total is the wall power of the sources counted in the total (include_in_total, not unreachable); nil when

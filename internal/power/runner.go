@@ -99,6 +99,9 @@ func (r *Runner) State() model.PowerSourceState {
 	st := model.PowerSourceState{ID: b.ID, Type: b.Type, Name: b.DisplayName(), Status: status,
 		IncludeInTotal: b.IncludeInTotal == nil || *b.IncludeInTotal, Readings: []model.PowerReading{},
 		LastSuccess: r.lastSuccess, Error: r.err}
+	if b.System != "" { // its link, also while it has no reading
+		st.SystemID = model.P(b.System)
+	}
 	if status != "unreachable" && r.readings != nil {
 		st.Readings = r.readings
 	}

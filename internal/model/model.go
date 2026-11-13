@@ -316,6 +316,11 @@ type PowerSourceState struct {
 	Error          *string        `json:"error"`
 	NextAttemptInS *float64       `json:"next_attempt_in_s"`
 	Via            *string        `json:"via"`
+	// SystemID is the row the source is linked to (power_links, `system:`, system_hint: self), as the id of
+	// the row that machine is shown as right now. Its readings name the same row; this one is also there
+	// when the source has no reading (it failed for longer than offline_after), so that the link, and with
+	// it who may see the source and where its error is shown, does not go away with the last reading.
+	SystemID *string `json:"system_id,omitempty"`
 }
 
 // PowerOverview is GET /api/power.

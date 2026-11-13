@@ -570,10 +570,22 @@ window.addEventListener("scroll", () => { if (info.key) placeInfo(); }, true);
 window.addEventListener("resize", () => { if (info.key) placeInfo(); });
 window.addEventListener("hashchange", () => closeInfo(false));
 
+// The wall power of the row with this id: the sources that are linked to it. A source names its row itself
+// (system_id) and in each reading; the source's own link is also there while it has no reading, so a plug that
+// fails stays on its host's page, with why (wallPower). Watts: the sum of the readings there are, or none.
 const linkedPower = (id) => {
-  const srcs = (state.power?.sources || []).filter((s) => s.readings.some((r) => r.system_id === id));
-  const w = srcs.flatMap((s) => s.readings).filter((r) => r.system_id === id && r.watts != null).reduce((a, r) => a + r.watts, 0);
-  return { sources: srcs, watts: srcs.length ? w : null, history: state.history.map((h) => srcs.reduce((a, s) => a + (own(h.sources, s.id) || 0), 0) || null) };
+  const srcs = (state.power?.sources || []).filter((s) => s.system_id === id || s.readings.some((r) => r.system_id === id));
+  const rs = srcs.flatMap((s) => s.readings.filter((r) => (r.system_id ?? s.system_id) === id && r.watts != null));
+  return { sources: srcs, watts: rs.length ? rs.reduce((a, r) => a + r.watts, 0) : null, history: state.history.map((h) => srcs.reduce((a, s) => a + (own(h.sources, s.id) || 0), 0) || null) };
+};
+// The first lines of a host's "Power" panel: the watts with the sources' names, and one line for every linked
+// source that is not in order, with the words its reader gave (an agent that relays a Home Assistant sensor
+// says "home assistant refused the token (http 401)" for as long as that lasts).
+const wallPower = (lp) => {
+  const names = lp.sources.map((x) => esc(x.name)).join(", ");
+  const bad = lp.sources.filter((x) => x.status !== "ok").map((x) => `<div class="note wall-bad"><span class="chip ${x.status === "stale" ? "warn" : "bad"}">${esc(x.status)}</span> ${esc(x.name)}${x.via ? ` (via agent ${esc(x.via)})` : ""}${x.error ? `: ${esc(x.error)}` : ""}</div>`).join("");
+  if (lp.watts != null) return `<div class="big-w">${fmtW(lp.watts)} <small>wall · ${names}</small></div>${spark(lp.history)}${bad}`;
+  return lp.sources.length ? `<div class="note">No wall-power reading from ${names}.</div>${bad}` : '<div class="note">No wall-power source linked.</div>';
 };
 
 // ------------------------------------------------------------ grouping: hosts by site
@@ -1470,7 +1482,7 @@ function systemOverview(s) {
     <div class="list-row"><span>Last change</span><span data-ago="${esc(s.updated_at || s.last_seen)}">${ago(s.updated_at || s.last_seen)}</span></div></div>`;
   const ups = upsOf(s);
   const power = `<div class="panel glass pad"><h3>Power</h3>
-    ${lp.watts != null ? `<div class="big-w">${fmtW(lp.watts)} <small>wall · ${lp.sources.map((x) => esc(x.name)).join(", ")}</small></div>${spark(lp.history)}` : '<div class="note">No wall-power source linked.</div>'}
+    ${wallPower(lp)}
     ${ups.map((u) => `<div class="list-row"><span>${I.ups} UPS · <a href="#/ups">${esc(u.name)}</a></span><span class="${onBattery(u) ? "warn-t" : ""}">${esc(u.status.replace("_", " "))} · ${u.battery_charge?.toFixed(0) ?? "–"}% · ${fmtRuntime(u.battery_runtime_s)}</span></div>`).join("")}
     ${cp ? [["CPU package", cp.cpu_package_w], ["GPU", cp.gpu_w], ["Battery", cp.battery_w != null && !s.battery ? cp.battery_w : null], ["BMC (in-band)", cp.bmc_w]]
       .filter(([, v]) => v != null).map(([k, v]) => `<div class="list-row"><span>${k}${k === "Battery" && cp.battery_state ? ` · ${esc(cp.battery_state)}` : ""}</span><span>${fmtW(v)}</span></div>`).join("")
@@ -1590,14 +1602,19 @@ function pagePower() {
     <div class="section-title">Sources${infoBtn("power", "Sources", infoList([
       "Wall power: what plugs, UPSes and BMCs measure.",
       "CPU, GPU and battery readings on a system's page are component power reported by its agent, not wall power."]))}</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
-    <th class="num">Volts</th><th class="num">Amps</th><th class="num">kWh</th><th>Linked</th><th>Last hour</th></tr></thead><tbody>${p.sources.map((s) => {
-      const r = s.readings[0] || {};
-      const linked = state.systems.find((x) => x.id === r.system_id);
-      return `<tr class="row"><td><b>${esc(s.name)}</b>${s.via ? `<div class="note">via agent ${esc(s.via)}</div>` : ""}</td><td>${esc(s.type)}</td>
+    <th class="num">Volts</th><th class="num">Amps</th><th class="num">kWh</th><th>Linked</th><th>Last hour</th></tr></thead><tbody>${p.sources.map((s) => powerSourceRow(s, chip)).join("")}</tbody></table></div>`;
+}
+// One source of the Power page. "Linked" is the row the source is linked to, from the source itself (also
+// while it has no reading: a source that fails keeps its link and shows why under its status). A source that is
+// left out of the total (power_exclude_from_total, include_in_total: false) is marked "not in total".
+function powerSourceRow(s, chip) {
+  const r = s.readings[0] || {};
+  const linked = state.systems.find((x) => x.id === (s.system_id ?? r.system_id));
+  return `<tr class="row"><td><b>${esc(s.name)}</b>${s.via ? `<div class="note">via agent ${esc(s.via)}</div>` : ""}</td><td>${esc(s.type)}</td>
         <td>${chip(s.status)}${s.error ? `<div class="error">${esc(s.error)}</div>` : ""}</td><td class="num"><b class="value pwr">${fmtW(r.watts)}</b></td>
         <td class="num">${r.voltage?.toFixed(1) ?? "–"}</td><td class="num">${r.current?.toFixed(2) ?? "–"}</td><td class="num">${r.energy_kwh_total?.toFixed(2) ?? "–"}</td>
         <td>${linked ? `<a href="#/system/${enc(linked.id)}">${esc(linked.name)}</a>` : "–"}${s.include_in_total ? "" : ' <span class="chip">not in total</span>'}</td>
-        <td>${spark(state.history.map((h) => own(h.sources, s.id) ?? null))}</td></tr>`; }).join("")}</tbody></table></div>`;
+        <td>${spark(state.history.map((h) => own(h.sources, s.id) ?? null))}</td></tr>`;
 }
 
 // ------------------------------------------------------------ UPS page

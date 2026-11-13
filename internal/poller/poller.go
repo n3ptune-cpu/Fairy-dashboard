@@ -186,6 +186,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 	if err != nil {
 		return nil, err
 	}
+	p.Power.ShownID = p.ShownID // a link written with either id of a machine lands on the row that is there (nodeid.go)
 	p.UPS, err = ups.NewManager(cfg.UPS, iv.History, timeout, cfg.OfflineAfter, cfg.PowerHistoryS,
 		filepath.Join(cfg.DataDir, "ups-events.jsonl"))
 	if err != nil {

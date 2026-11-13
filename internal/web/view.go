@@ -169,6 +169,9 @@ func (v *view) powerLinks(st model.PowerSourceState) []string {
 			out = append(out, *r.SystemID)
 		}
 	}
+	if st.SystemID != nil { // its link while it has no reading: a source that fails stays with who saw it (and its reason with it)
+		out = append(out, *st.SystemID)
+	}
 	for _, raw := range v.s.Cfg.PowerSources {
 		if id, _ := raw["id"].(string); id == st.ID {
 			if sys, _ := raw["system"].(string); sys != "" {
@@ -296,6 +299,9 @@ func (v *view) cleanPower(st model.PowerSourceState) model.PowerSourceState {
 		rs[i] = r
 	}
 	st.Readings = rs
+	if st.SystemID != nil && !v.vis[*st.SystemID] {
+		st.SystemID = nil
+	}
 	if st.Via != nil && !v.agentVisible(*st.Via) {
 		st.Via = nil
 	}

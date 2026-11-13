@@ -265,6 +265,30 @@ func NodeInferred(cfg *config.Panel) []string {
 	return nodeInferred(cfg.Agents, links)
 }
 
+// NodeAgents says, for a configuration, whose machine each node id is: decided has the one agent the
+// configuration gives a node (nodeLinks), undecided the agents whose entry can mean a node id without the
+// configuration deciding it for any of them (an id that begins with no id_prefix, two agents with one node:).
+// For what is linked to a machine by its node's id (a plug's power_links): where the node is decided, the link
+// follows the machine to its agent's row while the node's row is not there; where it is not, it cannot.
+func NodeAgents(cfg *config.Panel) (decided map[string]string, undecided map[string][]string) {
+	links, _ := nodeLinks(cfg.Agents, cfg.Proxmox, cfg.Systems)
+	decided, undecided = map[string]string{}, map[string][]string{}
+	for agentID, l := range links {
+		decided[l.ID] = agentID
+	}
+	for _, a := range cfg.Agents {
+		if _, ok := links[a.ID]; ok {
+			continue
+		}
+		for _, c := range nodeCandidates(a, cfg.Proxmox) {
+			if _, ok := decided[c.ID]; !ok {
+				undecided[c.ID] = append(undecided[c.ID], a.ID)
+			}
+		}
+	}
+	return decided, undecided
+}
+
 // links is nodeLinks for the configuration as it is now (config.yaml and the hosts added in the panel).
 func (p *Poller) links() (map[string]nodeLink, []string) {
 	p.cfgMu.RLock()
@@ -335,6 +359,48 @@ func (p *Poller) SameMachine(id string) []string {
 		}
 	}
 	return []string{id}
+}
+
+// ShownID is the id of the row that the machine known under id is shown as right now: id itself when a row
+// has that id, else the machine's other id when that has a row, else id as it is.
+//
+// For what is LINKED to a machine by its id in a configuration file: the watts of a plug (`power_links` in an
+// agent's entry, `system:` of a power source, the `system_hint: self` of a device an agent relays). One
+// machine has two ids when it is a Proxmox node with an agent, and is shown under one of them at a time: its
+// node's while the node's row is there, its agent's after a restart of the panel with the machine off. The
+// watts were looked up by the shown row's id alone, so a link written with the agent's id showed nowhere
+// while the node's row was there (and `system_hint: self` of a node's agent never showed at all), and a link
+// written with the node's id showed nowhere while it was not.
+//
+//   - id is an agent's: the row the agent is shown as (ShownSystem: the node's row it is a part of, else its
+//     own).
+//   - id is a row's (a node that is there, a guest, an agent without a node): itself.
+//   - id is of a node whose row is not there: the row of the agent the configuration alone gives that node
+//     (SameMachine), when that agent has a row. Where the configuration does not decide whose node it is,
+//     nothing is guessed: the link shows on no row until the node's row is there (`fairy admin config check`
+//     has a note for such a link).
+func (p *Poller) ShownID(id string) string {
+	if _, isAgent := p.AgentByID(id); isAgent {
+		if s := p.ShownSystem(id); s != nil {
+			return s.ID
+		}
+		return id
+	}
+	has := func(x string) bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		_, ok := p.systems[x]
+		return ok
+	}
+	if has(id) {
+		return id
+	}
+	for _, x := range p.SameMachine(id) {
+		if x != id && has(x) {
+			return x
+		}
+	}
+	return id
 }
 
 // PowerOverride returns the `systems:` entry that holds the Wake-on-LAN and BMC power-on settings of the host

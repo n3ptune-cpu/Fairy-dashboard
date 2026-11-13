@@ -143,9 +143,14 @@ func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev
 	if typ == "" {
 		typ = "unknown"
 	}
+	// A row that fails for longer than offline_after has no reading any more, and it stays: for as long as the
+	// agent reports it, with the agent's words for why ("home assistant refused the token (http 401)", which an
+	// agent goes on reporting through the hour it waits before it asks Home Assistant again), and with its
+	// link (SystemID), which the readings carried alone until build 14. Without the link such a row was gone
+	// for everyone who saw it because of the machine it is linked to, and its reason showed on no host's page.
 	return model.PowerSourceState{ID: key, Type: typ, Name: name, Status: status,
 		IncludeInTotal: !slices.Contains(exclude, rid), Readings: readings, LastSuccess: last, Error: errp,
-		Via: model.P(agentID)}
+		Via: model.P(agentID), SystemID: link}
 }
 
 // dropUnreported forgets the agent's devices that were not in this report (removed from the agent's config).
