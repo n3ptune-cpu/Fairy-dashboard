@@ -472,9 +472,19 @@ What to know before the first real run:
   `<id_prefix>node-<node name in small letters>` (for example `lab-b-node-pve-b`), not under the agent's id.
   The panel also finds that entry after it was restarted while the machine is off, when the machine is shown
   under its agent's id until its Proxmox API answers again: **Power on** and a run can wake it then too (up
-  to build 12 they said that no Wake-on-LAN was set up). With several `proxmox:` entries this needs the
-  `systems:` entry to be the only one of that form for the node's name; otherwise the panel logs a warning
-  at start and waits for the Proxmox API.
+  to build 12 they said that no Wake-on-LAN was set up). For that the panel must know from config.yaml alone
+  which node is the agent's, and it only takes what leaves no doubt:
+  * `links_to: <the node's id>` in the agent's entry says it outright, and always counts first.
+  * With one `proxmox:` entry, `node:` is enough: the node is `<that entry's id_prefix>node-<name>`.
+  * With several `proxmox:` entries, the agent's own id must begin with the `id_prefix` of exactly one of
+    them (agent `lab-b-agent`, `id_prefix: lab-b-`); an empty `id_prefix` never counts. If the id begins
+    with none of them, or with more than one, give the agent `links_to:`.
+  * No other agent's entry may mean the same node (the same `node:` name, or a `links_to` to it): then
+    each of these agents needs its own `links_to:`.
+
+  Where the panel cannot tell, nothing is guessed: the machine has no Wake-on-LAN until its Proxmox API has
+  answered once, and when a `systems:` entry is written for such a node, the panel's log at start and
+  `fairy admin config check` (a WARN line) name the agent and say what to add.
 * The run paces itself: at most 8 control requests a minute to one agent (an agent accepts 12 a minute; the
   rest stays free for what you do in the page). With many machines behind one relay the wakes follow each
   other more slowly; nothing is lost.
