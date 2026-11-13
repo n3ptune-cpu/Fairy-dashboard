@@ -343,10 +343,10 @@ let page = "updates";
 const current = () => ({ page });
 const $ = () => null, closeModal = () => {};
 const localStorage = { getItem: () => null, setItem() {} }, window = { addEventListener() {} };
-const panelUpdateBox = () => "", fetchPanelUpdate = async () => {};
+const fetchPanelUpdate = async () => {};
 const safeHref = (u) => esc(u), secsSince = () => 100, fmtSpan = (s) => s + " s";
 let signedOut = false;
-` + jsLines(t, js, "dict", "table", "esc", "enc", "fmtRuntime") + js[from:to] + `
+` + jsLines(t, js, "dict", "table", "esc", "enc", "fmtRuntime", "pupd", "PANEL_STEPS") + jsFunc(t, js, "panelUpdateBox") + js[from:to] + `
 const agent = (id, o) => ({ id, system_id: id, name: id.toUpperCase(), version: "17-bbbbbbb", status: "online", configured: true, can_update: true, behind: true, self_update: { state: "idle" }, ...o });
 const updates = (agents, o) => ({ latest: { tag: "v0.8.0", version: "18-ccccccc", verified: true }, panel_version: "18-ccccccc", panel_latest: {}, agents, behind: agents.filter((r) => r.behind).length, ...o });
 (async () => {

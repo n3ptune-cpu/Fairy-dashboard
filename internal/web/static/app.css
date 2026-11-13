@@ -154,6 +154,13 @@ body.has-bg .sidebar-col { background: rgba(5, 5, 5, var(--card-alpha)); backdro
 .counts { display: flex; gap: 14px; color: var(--muted); font-size: 12.5px; align-items: center; }
 .counts span { display: inline-flex; align-items: center; gap: 6px; }
 .counts b { color: var(--text); }
+/* the Updates page's tiles: the Overview's, with the tile's one button under its counts; a count in red keeps its red number */
+.upd-tiles .counts { flex-wrap: wrap; gap: 6px 14px; min-height: 20px; }
+.upd-tiles .counts .bad-t b { color: var(--bad); }
+.upd-tiles .tile .value { font-size: 20px; }
+.upd-tiles .tile .value small { font-size: 13px; }
+.tile-act { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+.upd-tiles .tile .label .info-btn { margin-left: 6px; }
 
 .table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .table th { text-align: left; color: var(--faint); font-weight: 600; font-size: 12px;
@@ -750,6 +757,9 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .wu-more { background: none; border: 0; padding: 0; margin-top: 6px; color: var(--faint); font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .wu-more:hover, .wu-more:focus-visible { color: var(--text); }
 .wu > .wu-more { display: block; margin: 4px 0 0; }
+/* the folded section's line about the last run: its chip, when, and what needs a look */
+.wu-last { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 6px; }
+#upd-run .chip { margin-right: 6px; }
 .wu-log { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
 .wu-log li { margin: 4px 0; overflow-wrap: anywhere; }
 .table.wu-machines td .note { margin-top: 2px; max-width: 46ch; }

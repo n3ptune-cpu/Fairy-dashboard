@@ -35,7 +35,7 @@ func TestUIUpdatesPageTimesTick(t *testing.T) {
 	}
 	spans := 0
 	inSpan := regexp.MustCompile("<span data-ago=\"\\$\\{(?:esc\\()?([A-Za-z_.]+)\\)?\\}\">\\$\\{ago\\(([A-Za-z_.]+)\\)\\}</span>")
-	for _, name := range []string{"updState", "pageUpdates", "updCheckBtn", "updCheckLine", "wuSteps", "wuHostRow", "wuRunBox", "wakeUpdateBox", "panelUpdateBox"} {
+	for _, name := range []string{"updState", "pageUpdates", "updCheckBtn", "updCheckLine", "wuSteps", "wuHostRow", "wuRunBox", "wuLastLine", "wakeUpdateBox", "panelUpdateBox"} {
 		src := fn(name)
 		ticking := inSpan.FindAllStringSubmatch(src, -1)
 		for _, m := range ticking {

@@ -1831,6 +1831,11 @@ function updState(r) {
   const last = su.last ? `<div class="note" title="${esc(su.last.message)}">${su.last.ok ? "last update OK" : "last update failed"}${at ? `, <span data-ago="${at}">${ago(at)}</span>` : ""}</div>` : "";
   return `<span class="chip ${cls}">${esc(st)}</span>${su.message ? `<div class="note">${esc(su.message)}</div>` : ""}${last}`;
 }
+// A row that needs a look: its update failed or cannot be done, its last update failed (the agent rolled back),
+// or its own check of approvals is broken. Each of these is red in the row; the Agents tile counts them.
+const updBad = (r) => ["failed", "unavailable"].includes(r.self_update?.state) || (!!r.self_update?.last && !r.self_update.last.ok) || r.approval === "broken";
+// The page, in the Overview's order: a row of tiles (the agents with "Update all", the panel, the latest
+// release), the one table of machines, and "Update unpowered hosts" folded under it (wakeUpdateBox).
 function pageUpdates() {
   setTitle("Updates", "agent versions and self-update");
   if (!state.me?.can_control) return '<div class="empty">The Updates page is for admins only.</div>';
@@ -1838,9 +1843,13 @@ function pageUpdates() {
   if (!d) return upd.error ? `<div class="error">${esc(upd.error)}</div>` : '<div class="empty">Loading…</div>';
   const L = d.latest, why = controlWhyNot();
   const ready = d.agents.filter((r) => r.can_update);
-  const latest = L.tag ? `<b>${esc(L.version ? buildLabel(L.version) : L.tag)}</b> ${L.verified ? '<span class="chip ok" title="signature checked with this panel\'s release key">signed</span>' : '<span class="chip warn" title="this panel build has no release key, so the signature was not checked here (agents always check it)">unverified</span>'}
+  const latest = L.tag ? `${L.verified ? '<span class="chip ok" title="signature checked with this panel\'s release key">signed</span>' : '<span class="chip warn" title="this panel build has no release key, so the signature was not checked here (agents always check it)">unverified</span>'}
       ${L.published_at ? `<span class="note">published <span data-ago="${esc(L.published_at)}">${ago(L.published_at)}</span></span>` : ""}
-      ${L.url ? `<a href="${safeHref(L.url)}" target="_blank" rel="noopener noreferrer">${esc(L.tag)} ${I.ext}</a>` : ""}` : '<span class="note">unknown</span>';
+      ${L.url ? `<a href="${safeHref(L.url)}" target="_blank" rel="noopener noreferrer">${esc(L.tag)} ${I.ext}</a>` : ""}` : "";
+  // the tile's counts: each is the number of rows that show that word or that colour
+  const n = (f) => d.agents.filter(f).length, count = (dot, k, text, cls = "") => (k ? `<span class="${cls}"><span class="dot ${dot}"></span><b>${esc(k)}</b> ${text}</span>` : "");
+  const upToDate = n((r) => r.behind === false && !r.version_last_seen), behind = n((r) => r.behind === true && !r.version_last_seen);
+  const going = wu.data?.active;  // a run that is going is said above the table too: its section is under it
   const row = (r) => {
     const cur = r.version ? buildLabel(r.version) : "–";
     // version_last_seen: the agent does not answer; this is what it reported when the panel last reached it
@@ -1856,15 +1865,22 @@ function pageUpdates() {
         title="${esc(why || r.why || `Install the latest release on ${r.name}`)}">${I.update} ${busy ? "Sending…" : "Update"}</button></td></tr>`;
   };
   return `<div class="stack">
-    <div class="panel glass pad"><div class="row-gap"><span>Latest Fairy-agent release: ${latest}</span>
-      ${updCheckBtn(d)}
-      <button class="btn primary" data-act="upd-all" ${ready.length && !why && !upd.busy.all ? "" : "disabled"} title="${esc(why || (ready.length ? "Update every agent that can update itself" : "No agent can update right now"))}">${I.update} Update all (${ready.length})</button></div>
-      ${updCheckLine(d)}
-      ${L.error ? `<div class="note warn">${esc(L.error)}</div>` : ""}
-      ${d.panel_latest?.error && !d.panel_latest.disabled ? `<div class="note warn">Panel release: ${esc(d.panel_latest.error)}</div>` : ""}</div>
-    <div class="panel glass pad">${panelUpdateBox(d)}</div>
-    ${wakeUpdateBox()}
+    <div class="tiles upd-tiles">
+      <div class="panel glass tile" data-key="upt-agents"><div class="label">Agents</div>
+        <div class="value">${esc(upToDate)}<small> / ${esc(d.agents.length)} up to date</small></div>
+        <div class="counts">${count("stale", behind, "update available")}${count("error", n(updBad), "to look at", "bad-t")}${count("offline", n((r) => r.status !== "online"), "offline")}</div>
+        <div class="tile-act"><button class="btn primary" data-act="upd-all" ${ready.length && !why && !upd.busy.all ? "" : "disabled"} title="${esc(why || (ready.length ? "Update every agent that can update itself" : "No agent can update right now"))}">${I.update} Update all (${ready.length})</button></div></div>
+      <div class="panel glass tile" data-key="upt-panel">${panelUpdateBox(d)}</div>
+      <div class="panel glass tile" data-key="upt-latest"><div class="label">Latest agent release</div>
+        <div class="value">${L.tag ? esc(L.version ? buildLabel(L.version) : L.tag) : "<small>not known</small>"}</div>
+        <div class="counts">${latest}</div>
+        <div class="tile-act">${updCheckBtn(d)}</div>
+        ${updCheckLine(d)}
+        ${L.error ? `<div class="note warn">${esc(L.error)}</div>` : ""}
+        ${d.panel_latest?.error && !d.panel_latest.disabled ? `<div class="note warn">Panel release: ${esc(d.panel_latest.error)}</div>` : ""}</div>
+    </div>
     ${why ? `<div class="note warn">${esc(why)}</div>` : ""}
+    ${going ? `<div class="note" id="upd-run"><span class="chip warn">running</span> "Update unpowered hosts" is going for ${esc(going.hosts.length)} machine${going.hosts.length === 1 ? "" : "s"}: its progress is under the table.</div>` : ""}
     <div class="panel glass scroll"><table class="table updates"><thead><tr><th>Host</th><th>Version</th><th>Status</th><th>Self-update</th><th class="num"></th></tr></thead>
       <tbody>${d.agents.map(row).join("") || '<tr><td colspan="5" class="note">No agents in config.yaml.</td></tr>'}</tbody></table></div>
     ${d.agents.some((r) => r.approval === "required") ? '<div class="note" id="upd-appr">A machine with the check on asks for your passkey at every Update. <a href="#/approvals">Approvals</a></div>' : ""}
@@ -1873,7 +1889,8 @@ function pageUpdates() {
       "It installs the release and restarts: a few seconds offline.",
       "If the new version does not come up, the agent rolls back by itself.",
       "Only agents with <code>self_update: true</code> here and <code>self_update: enabled: true</code> in their own config.yaml can do this.",
-      "Every Update asks you to confirm it's you and is written to the Audit log."]))}</div></div>`;
+      "Every Update asks you to confirm it's you and is written to the Audit log."]))}</div>
+    ${wakeUpdateBox()}</div>`;
 }
 // ---- Check for updates: GitHub now instead of the next background check (every 10 min). Read-only, so no
 // step-up; at most once every 30 s for the whole panel (the server says how long to wait).
@@ -1881,7 +1898,7 @@ function updCheckBtn(d) {
   const busy = upd.checking || d.check_running, wait = d.check_retry_s || 0;
   const off = !!(d.latest?.disabled && d.panel_latest?.disabled);  // updates.check_latest: false: a press would only be refused
   const title = off ? "The release check is off (updates.check_latest: false in config.yaml)" : busy ? "Checking GitHub…" : wait ? `Checked just now: you can check again in ${wait} s` : "Look for new Fairy-agent and panel releases on GitHub now";
-  return `<button class="btn push" type="button" data-act="upd-check" ${busy || wait || off ? "disabled" : ""} aria-busy="${busy}" title="${esc(title)}">${busy
+  return `<button class="btn" type="button" data-act="upd-check" ${busy || wait || off ? "disabled" : ""} aria-busy="${busy}" title="${esc(title)}">${busy
     ? '<span class="spinner" aria-hidden="true"></span> Checking…' : `${I.recheck} Check for updates`}</button>`;
 }
 function updCheckLine(d) {
@@ -2041,6 +2058,7 @@ async function fetchWakeUpdate() {
 function wuSeen(d) {
   const was = wuLive;
   wuLive = d?.active?.id || "";
+  if (wuLive && wuLive !== was) delete wu.open.runs;  // a new run: the section is open while it goes and when it is over, whatever was chosen before
   if (!was || was === wuLive) return;
   const r = (d.last || []).find((x) => x.id === was);
   if (r) wuRunOver(r);
@@ -2103,6 +2121,24 @@ function wuRunBox(r, live) {
     ${r.approval === "needed" ? '<div class="warnbox wu-note">The woken machines wait for your approval of their update and shutdown.</div>' : ""}
     ${r.hosts.map((h) => wuHostRow(r, h)).join("")}</div>`;
 }
+// The section is folded: under its heading and its one sentence there is a line about the last run and the
+// button that shows the rest (the run's report and the table of machines). It is open by itself while a run is
+// going (there is no button to fold it then: a run that is going is never out of sight) and for 10 minutes after
+// a run ended; otherwise it is as the reader left it (wu.open.runs: true, false, or not chosen), for as long as the
+// page is loaded, like the page's other folds.
+const WU_JUST_OVER = 10 * 60 * 1000;
+const wuJustOver = (d) => { const end = d.last?.[0]?.ended_at; return !!end && Date.now() - new Date(end) < WU_JUST_OVER; };
+const wuOpen = (d) => !!d.active || (wu.open.runs ?? wuJustOver(d));
+// The folded section's line about the last run: how it ended and when, and in red and amber what the report
+// has to say that must not wait behind a fold: machines to look at, and machines nothing was sent to.
+function wuLastLine(r) {
+  if (!r) return "";
+  const [cls, label] = WU_RUN[r.state] || ["", r.state], hosts = r.hosts || [], look = hosts.filter(wuNeedsLook).length, out = hosts.filter((h) => h.state === "skipped").length;
+  return `<div class="wu-last" id="wu-last"><span class="chip ${cls}">${esc(label)}</span><span class="note">Last run${r.ended_at ? ` <span data-ago="${esc(r.ended_at)}">${ago(r.ended_at)}</span>` : ""} · ${esc(hosts.length)} machine${hosts.length === 1 ? "" : "s"}</span>${
+    look ? `<span class="chip bad">${esc(look)} to look at</span>` : ""}${out ? `<span class="chip warn" title="Nothing was sent to ${out === 1 ? "it" : "them"}: the report says why">${esc(out)} left out</span>` : ""}</div>`;
+}
+// "3 are switched on, 2 can be chosen right now." / "None is switched on yet.": over the table, and in the folded section.
+const wuJoinedNote = (d, joined, can) => (joined.length ? `${esc(joined.length)} ${joined.length === 1 ? "is" : "are"} switched on${wuCanNote(d, joined, can)}.` : "None is switched on yet.");
 // ", N can be chosen right now", behind "N are switched on". Not while a run is going: nothing can be chosen
 // then (one run at a time, the button is off), and the number is made from what each machine is doing at this
 // moment, so it changed every time a machine of the run came on or went off (3, then 1, then 0, then 2).
@@ -2120,7 +2156,7 @@ function wakeUpdateBox() {
     <td>${h.opted_in ? '<span class="chip ok">switched on</span>' : '<span class="note">off</span>'}${whyNot(h) ? `<div class="note wu-why-col">${esc(whyNot(h))}</div>` : ""}</td>
     <td class="num"><button class="btn sm" type="button" data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"
       ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.approval ? `No run can take it for now (${h.why || "it checks approvals itself"})` : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
-  const earlier = d.active ? d.last : d.last.slice(1), showEarlier = !!wu.open.earlier;
+  const earlier = d.active ? d.last : d.last.slice(1), showEarlier = !!wu.open.earlier, open = wuOpen(d);
   return `<div class="panel glass pad wu" data-key="wu">
     <div class="wu-top"><h3>Update unpowered hosts${infoBtn("wu", "Update unpowered hosts", infoList([
         "For machines that are normally switched off. You choose them and confirm once.",
@@ -2138,14 +2174,17 @@ function wakeUpdateBox() {
     <p class="note info-keep">Wakes the machines you choose, updates their agent and switches them off again.
       <b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.</p>
     ${d.problem ? `<div class="warnbox">${esc(d.problem)}</div>` : ""}
+    ${open ? "" : `${wuLastLine(d.last[0])}<p class="note wu-rule" id="wu-joined">${wuJoinedNote(d, joined, can)}</p>`}
+    ${d.active ? "" : `<button class="wu-more" type="button" data-act="wu-fold" aria-expanded="${open}">${open ? "Hide" : "Show"} the machines${d.last[0] ? " and the last run" : ""}</button>`}
+    ${open ? `
     ${d.active ? wuRunBox(d.active, true) : d.last[0] ? `<div class="wu-sub">Last run</div>${wuRunBox(d.last[0], false)}` : ""}
-    ${earlier.length ? `<button class="wu-more" type="button" data-act="wu-log" data-k="earlier" aria-expanded="${showEarlier}">${showEarlier ? "Hide" : "Show"} ${earlier.length} earlier run${earlier.length === 1 ? "" : "s"}</button>
-      ${showEarlier ? earlier.map((r) => wuRunBox(r, false)).join("") : ""}` : ""}
     <div class="wu-sub">Machines</div>
     <p class="note wu-rule info-keep">A machine takes part only after you switch it on here, one machine at a time.
-      ${joined.length ? `${esc(joined.length)} ${joined.length === 1 ? "is" : "are"} switched on${wuCanNote(d, joined, can)}.` : "None is switched on yet."}</p>
+      ${wuJoinedNote(d, joined, can)}</p>
     <div class="scroll"><table class="table wu-machines"><thead><tr><th>Machine</th><th>Now</th><th>Woken by</th><th>In these runs</th><th class="num"></th></tr></thead>
-      <tbody>${able.map(row).join("") || '<tr><td colspan="5" class="note">No machine with an agent that can update itself from the panel.</td></tr>'}</tbody></table></div>
+      <tbody>${able.map(row).join("") || '<tr><td colspan="5" class="note">No machine with an agent that can update itself from the panel.</td></tr>'}</tbody></table></div>` : ""}
+    ${earlier.length ? `<button class="wu-more" type="button" data-act="wu-log" data-k="earlier" aria-expanded="${showEarlier}">${showEarlier ? "Hide" : "Show"} ${earlier.length} earlier run${earlier.length === 1 ? "" : "s"}</button>
+      ${showEarlier ? earlier.map((r) => wuRunBox(r, false)).join("") : ""}` : ""}
     ${d.hosts.some((h) => h.approval) ? '<div class="note" id="wu-appr">A machine with the check on is in no run yet. <a href="#/approvals">Approvals</a></div>' : ""}</div>`;
 }
 // The per-host switch in the ⋯ menu of a machine's page (admins).
@@ -2257,8 +2296,9 @@ function openWakeCancel(id) {
   };
 }
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest('[data-act="wu-open"],[data-act="wu-cancel"],[data-act="wu-switch"],[data-act="wu-log"]');
+  const t = e.target.closest('[data-act="wu-open"],[data-act="wu-cancel"],[data-act="wu-switch"],[data-act="wu-log"],[data-act="wu-fold"]');
   if (!t || t.disabled) return;
+  if (t.dataset.act === "wu-fold") { wu.open.runs = !(wu.data && wuOpen(wu.data)); render(); return; }
   if (t.dataset.act === "wu-open") { openWakeUpdate(); return; }
   if (t.dataset.act === "wu-cancel") { openWakeCancel(t.dataset.id); return; }
   if (t.dataset.act === "wu-log") { const k = t.dataset.k; if (wu.open[k]) delete wu.open[k]; else wu.open[k] = true; render(); return; }
@@ -3496,17 +3536,21 @@ function panelUpdateBox(d) {
   const steps = st && (running || Date.now() - new Date(st.updated_at) < 3600e3) ? `<div class="steps">${PANEL_STEPS.map(([k, l], i) =>
     `<span class="${st.state === "done" || at > i ? "done" : at === i ? (st.finished ? "done" : "now") : ""}">${l}</span>`).join("")}${bad ? `<span class="bad">${esc(st.state.replace("_", " "))}</span>` : ""}</div>
     <div class="note">${pupd.restarting ? "The panel is restarting… this page reconnects by itself." : esc(st.message)}${st.started_at ? ` · started <span data-ago="${esc(st.started_at)}">${ago(st.started_at)}</span>` : ""}</div>` : "";
-  return `<div class="row-gap"><span>Panel: fairy <b>${esc(buildLabel(d.panel_version))}</b>${d.panel_latest?.tag ? ` · latest ${esc(d.panel_latest.version ? buildLabel(d.panel_latest.version) : d.panel_latest.tag)}` : ""}
-      ${d.panel_behind === false ? ' <span class="chip ok">up to date</span>' : ""}${d.panel_latest?.url ? ` <a href="${safeHref(d.panel_latest.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a>` : ""}</span>
-    <button class="btn push" type="button" data-act="panel-upd" ${canGo ? "" : "disabled"} title="${esc(title)}">${I.update} ${running ? "Updating…" : "Update panel"}</button></div>
-    ${steps}
-    ${p && !p.ready ? `<div class="note warn">${esc(p.why)}</div>` : ""}
-    <div class="note">Update panel installs the latest signed release and restarts the panel.${infoBtn("upd-panel", "Update panel", infoList([
+  // The Updates page's tile of the panel: its version, whether a newer release is known, and the button. What the
+  // button does is behind the info button next to the tile's name (it was a sentence under the button).
+  return `<div class="label">Panel${infoBtn("upd-panel", "Update panel", infoList([
+      "Update panel installs the latest signed release and restarts the panel.",
       "The release is installed on the panel's host.",
       "The panel restarts. If the new version does not come up, it rolls back.",
       "It never installs an older version.",
       "It needs a Pocket ID sign-in from the last 2 minutes.",
-      "By hand: <code>fairy update</code> on the panel's host (as root)."]))}</div>`;
+      "By hand: <code>fairy update</code> on the panel's host (as root)."]))}</div>
+    <div class="value">${esc(buildLabel(d.panel_version))}</div>
+    <div class="counts">${d.panel_behind === false ? '<span class="chip ok">up to date</span>' : d.panel_behind === true ? '<span class="chip warn">update available</span>' : ""}${d.panel_latest?.tag && d.panel_behind !== false ? `<span>latest ${esc(d.panel_latest.version ? buildLabel(d.panel_latest.version) : d.panel_latest.tag)}</span>` : ""}
+      ${d.panel_latest?.url ? `<a href="${safeHref(d.panel_latest.url)}" target="_blank" rel="noopener noreferrer">Release notes ${I.ext}</a>` : ""}</div>
+    <div class="tile-act"><button class="btn" type="button" data-act="panel-upd" ${canGo ? "" : "disabled"} title="${esc(title)}">${I.update} ${running ? "Updating…" : "Update panel"}</button></div>
+    ${steps}
+    ${p && !p.ready ? `<div class="note warn">${esc(p.why)}</div>` : ""}`;
 }
 document.addEventListener("click", async (e) => {
   const t = e.target.closest('[data-act="panel-upd"]');

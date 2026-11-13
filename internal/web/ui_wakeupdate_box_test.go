@@ -86,11 +86,18 @@ func runWuPageScript(t *testing.T, name, body string) {
 // is as it was.
 func TestUIWakeUpdateCanBeChosenIsNotCountedDuringARun(t *testing.T) {
 	runWuPageScript(t, "wu-can", `
+  // the line is over the table of machines, in the section when it is open (it is folded until it is opened, and open by itself during a run)
+  wu.open.runs = true;
   const line = () => words((wakeUpdateBox().match(/<p class="note wu-rule info-keep">.*?<\/p>/s) || [""])[0]);
   const LEAD = "A machine takes part only after you switch it on here, one machine at a time. ";
   // no run: the number is there when not every machine that is switched on can be chosen
   wu.data = data({ hosts: [host("pc-a"), host("pc-b"), host("pc-c", { choice: "", power: "unclear", why: "not sure that it is off" }), host("pc-d", { opted_in: false })] });
   if (line() !== LEAD + "3 are switched on, 2 can be chosen right now.") fail("no run, one of three cannot be chosen: " + line());
+  // folded, the count is said without the table (the same words, made once)
+  wu.open.runs = false;
+  const folded = words((wakeUpdateBox().match(/<p class="note wu-rule" id="wu-joined">.*?<\/p>/s) || [""])[0]);
+  if (folded !== "3 are switched on, 2 can be chosen right now." || line() !== "") fail("folded: " + folded + " / " + line());
+  wu.open.runs = true;
   wu.data = data({ hosts: [host("pc-a"), host("pc-b")] });
   if (line() !== LEAD + "2 are switched on.") fail("no run, all can be chosen: " + line());
   wu.data = data({ hosts: [host("pc-a", { choice: "" })] });
