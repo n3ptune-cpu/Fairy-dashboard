@@ -156,6 +156,26 @@ func TestTheAgentsOwn502OfAFanRouteStaysItsAnswer(t *testing.T) {
 	}
 }
 
+// Review of fix8, RF8-04: a good status without the agent's answer. It was "ok" on all five ("started. Its row
+// shows how it goes.", "helper stopped; the fans are on the BMC's own automatic control"), with the audit entry
+// "ok". On the power route the same answer is "no answer (http 200)": the agent's "yes" is a good status WITH
+// its answer, an object that is not empty.
+func TestAGoodStatusWithoutTheAgentsAnswerIsNoAnswer(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		st   int
+		body jsonx.M
+	}{{"200 {}", 200, jsonx.M{}}, {"200 null", 200, nil}, {"204", 204, nil}, {"202 {}", 202, jsonx.M{}}} {
+		for i, w := range writes {
+			r, outcome := write(t, i, c.st, c.body, nil)
+			want := fmt.Sprintf("no answer (http %d): it may have arrived", c.st)
+			if got := fmt.Sprint(r.body["detail"]); r.code != 502 || got != want || outcome != "error 502: "+want {
+				t.Errorf("%s, %s: %d %s, the audit entry %q; want 502 %q", w.name, c.name, r.code, r.raw, outcome, want)
+			}
+		}
+	}
+}
+
 // A timeout and a broken connection were "agent unreachable" already (502), and stay so, in the same words.
 func TestAWriteThatTimesOutIsAgentUnreachable(t *testing.T) {
 	for i, w := range writes {

@@ -41,11 +41,14 @@ func TestEmptyFanStatusAnswer(t *testing.T) {
 			t.Fatalf("%s: %d %s", name, r.code, r.raw)
 		}
 	}
-	// a fan write answered with null: still a result object, as for {}
-	set(nil)
-	r := e.do("POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, "Cookie", c, "X-Requested-With", "fairy")
-	if res, ok := r.body["result"].(map[string]any); r.code != 200 || !ok || len(res) != 0 {
-		t.Fatalf("fan write: %d %s", r.code, r.raw)
+	// a fan write answered with null or {}: not the agent's answer, so not "ok" (review of fix8, RF8-04; it was
+	// 200 with an empty result object). The agent answers a fan change with {"mode": ...}.
+	for name, a := range map[string]jsonx.M{"null": nil, "empty object": {}} {
+		set(a)
+		r := e.do("POST", "/api/systems/tower/fan/mode", map[string]any{"mode": "full"}, "Cookie", c, "X-Requested-With", "fairy")
+		if r.code != 502 || r.body["detail"] != "no answer (http 200): it may have arrived" {
+			t.Fatalf("fan write answered with %s: %d %s", name, r.code, r.raw)
+		}
 	}
 	// a real fan status still comes through
 	set(jsonx.M{"enabled": true, "vendor": "supermicro", "mode": "optimal", "duty": jsonx.M{}, "fans": []any{}, "events": []any{}})

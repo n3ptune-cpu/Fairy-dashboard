@@ -42,10 +42,16 @@ const maxAgentError = 300
 // What the answer said, if it said something, is added in brackets: the agent's 504 says what may have happened
 // ("... the fans may have been changed all the same: look at the fan status"), and its 502 to a helper's stop
 // says why. (The agent's own 502 on a fan route, with the reason of its BMC, is its answer and stays one:
-// powerctl, relaysOwn.) A good status is left to the caller as it was: a fan change answered with `null` is
-// still a result.
+// powerctl, relaysOwn.)
+//
+// A good status is the agent's "yes" only with the agent's answer, as on the power path: the agent answers each
+// of these requests with a JSON object that is not empty ({"mode":...}, {"zone":...,"percent":...},
+// {"state":...}). A 200 with `{}` or `null`, a 204: something else at its address answered, and the change may
+// or may not have been made. They were "ok", "started. Its row shows how it goes." and "helper stopped; the
+// fans are on the BMC's own automatic control" (review of fix8, RF8-04); they are "no answer (http 200): it
+// may have arrived" like everything else that is not the agent's.
 func unanswered(path string, status int, data jsonx.M, err error) error {
-	if err == nil && status >= 200 && status < 300 {
+	if err == nil && status >= 200 && status < 300 && len(data) > 0 {
 		return nil
 	}
 	e := powerctl.NoAnswer(path, status, data, err)
@@ -231,9 +237,6 @@ func (s *Server) fanWrite(c *reqCtx, action string, body any, params map[string]
 		return err
 	}
 	c.audit(u, action, id, params, "ok")
-	if data == nil { // the agent answered `null`: the result stays an object
-		data = map[string]any{}
-	}
 	c.json(200, model.ControlResult{OK: true, Result: data})
 	return nil
 }
