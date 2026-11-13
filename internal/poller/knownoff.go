@@ -17,8 +17,12 @@ import "github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 // "stale" in the same way and for the same minute.
 //
 // Nothing is marked for a machine whose agent answers, or whose node its cluster shows as online: MarkOff
-// only ever turns "stale" into "offline", it never contradicts an answer. An answer of the agent, or a good
-// poll of the node's Proxmox API, ends it.
+// only ever turns "stale" into "offline", it never contradicts an answer. A sign of life ends it for the
+// machine, under both of its ids: an answer of the agent ends the mark of its own entry and of its node's, and
+// a poll of the node's Proxmox API that shows the node online ends both too. (Until the review of build 14 an
+// answer of the agent left the node's mark standing: with the agent back and the node's API not yet, the
+// machine's row said "offline" for a machine that answered.) A good poll that lists the node as offline ends
+// the node's mark only: the cluster then says what the node is.
 
 // MarkOff is called for a machine that was seen to go off after a shutdown the panel asked for (id: the id it
 // is shown under, its agent's or its node's). It reports whether a row changed.

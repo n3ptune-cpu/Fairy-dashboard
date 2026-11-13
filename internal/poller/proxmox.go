@@ -107,6 +107,15 @@ func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout ti
 		fresh[s.ID] = s
 		ids = append(ids, s.ID)
 		delete(p.knownOff, s.ID) // the cluster says what it is now (knownoff.go)
+		if s.Kind == "node" && s.Status == "online" {
+			// A node that runs: its agent's machine is not off either. (A node its cluster lists as offline is
+			// no sign of life: the agent's mark stays.)
+			for _, a := range p.Agents() {
+				if p.linkOfLocked(a) == s.ID {
+					delete(p.knownOff, a.ID)
+				}
+			}
+		}
 	}
 	var gone []string
 	for sid, v := range p.systems { // drop deleted guests

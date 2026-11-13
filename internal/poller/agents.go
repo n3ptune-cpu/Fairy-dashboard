@@ -247,6 +247,16 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	delete(p.agentFailures, a.ID)
 	delete(p.agentQuiet, a.ID)
 	delete(p.knownOff, a.ID) // it answers: it is not off (knownoff.go)
+	if l := p.linkOfLocked(a); p.knownOff[l] {
+		// and neither is the node it runs on: the mark is the machine's, under both ids. The node's entry goes
+		// back to what it is without the mark (degrade: "stale" while its last answer is younger than
+		// offline_after), now and not with the next poll of its Proxmox API.
+		delete(p.knownOff, l)
+		if n, ok := p.systems[l]; ok && n.Status == "offline" && n.LastSeen != nil && now.Sub(*n.LastSeen).Seconds() < p.Cfg.OfflineAfter {
+			n.Status = "stale"
+			p.systems[l] = n
+		}
+	}
 	p.systems[a.ID] = p.stamp(sys, now)
 	// what it says about its own check of approvals, against the panel's record (machines.go)
 	p.queueMachinesLocked(append(p.noteMachineLocked(a.ID, sys.Approval, now), p.announceLocked()...))
