@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release/releasetest"
@@ -213,6 +214,43 @@ func TestTheUpdateStopsBeforeTheSwapOnAConfigTheNewVersionRefuses(t *testing.T) 
 	(&panelupdate.Writer{Path: path, From: "101-aaaaaaa"}).Step("failed", "102-bbbbbbb", long)
 	if st, _ := panelupdate.Read(path); st.Message != long || len(long) > 300 || !strings.HasSuffix(long, "then update again.") {
 		t.Fatalf("a long refusal is cut in the status (%d bytes): %q", len(long), st.Message)
+	}
+}
+
+// With a config file in a folder with a long name the reason was cut to what the path left of the 300 bytes:
+// "... refuses /srv/.../config.yaml: it is a test build (-tags fairytest), which has…. Nothing was changed."
+// (TestTheUpdateStopsOnATestBuildsAnswerToCheckConfig failed for that with a TMPDIR of 25 characters or more.)
+// The reason is what the admin does not know yet: the path gives way first, from its beginning, and its end
+// with the file's name stays.
+func TestTheReasonOfARefusalIsNotCutForALongPath(t *testing.T) {
+	const tail = ". Nothing was changed. Correct the file on the panel's host, then update again."
+	folder := "/srv/" + strings.Repeat("a-folder-with-a-long-näme/", 8)
+	for name, c := range map[string]struct {
+		file, problem string
+		whole         bool // the reason fits whole
+	}{
+		"a short path":                          {"/etc/fairy/config.yaml", testNeverInstalled, true},
+		"a long path":                           {folder + "config.yaml", testNeverInstalled, true},
+		"a long path and a refusal of the file": {folder + "config.yaml", "line 12: field wake_updates not found in type config.Panel", true},
+		"a long path and a very long reason":    {folder + "config.yaml", strings.Repeat("line 3: field ü not found in type config.Panel; ", 20), false},
+	} {
+		says := (&newVersion{file: c.file, to: "102-ccccccc", problem: c.problem}).stops()
+		if len(says) > 300 || !utf8.ValidString(says) || !strings.HasPrefix(says, "the new version (102-ccccccc) refuses ") || !strings.HasSuffix(says, tail) {
+			t.Errorf("%s: %d bytes: %q", name, len(says), says)
+		}
+		if c.whole && !strings.Contains(says, ": "+c.problem+tail) {
+			t.Errorf("%s: the reason is cut: %q", name, says)
+		}
+		if !c.whole && !strings.Contains(says, ": "+c.problem[:60]) {
+			t.Errorf("%s: the beginning of the reason is not there: %q", name, says)
+		}
+		// the file is named: whole when there is room, else by its end
+		if end := c.file[len(c.file)-min(len(c.file), 30):]; !strings.Contains(says, end+": ") {
+			t.Errorf("%s: the message does not name the file (%s): %q", name, end, says)
+		}
+		if len(c.file)+len(c.problem) < 150 && !strings.Contains(says, " refuses "+c.file+": ") {
+			t.Errorf("%s: a path that fits was cut: %q", name, says)
+		}
 	}
 }
 

@@ -178,9 +178,37 @@ func (n *newVersion) stops() string {
 	if n.test {
 		return lead + " was not installed: " + testNeverInstalled + ". Nothing was changed."
 	}
-	lead += " refuses " + n.file + ": "
+	lead += " refuses "
 	const tail = ". Nothing was changed. Correct the file on the panel's host, then update again."
-	return lead + clipTo(n.problem, 300-len(lead)-len(tail)) + tail // the status file keeps 300 bytes, and the way out must fit
+	// The status file keeps 300 bytes, and the way out must fit. What gives way first is the file's path, from
+	// its beginning: the reason is what the admin does not know yet. (It was the reason that was cut to what the
+	// path left: with a config file in a folder with a long name, "it is a test build (-tags fairytest), which
+	// has no sign-in and is never installed" ended at "which has…", and a refusal of the file lost the key and
+	// the line it names. Of a long path its end, with the file's name, is kept: pathEndKept bytes at least.)
+	room := 300 - len(lead) - len(": ") - len(tail)
+	file := n.file
+	if len(file)+len(n.problem) > room {
+		file = clipFront(file, max(room-len(n.problem), pathEndKept))
+	}
+	return lead + file + ": " + clipTo(n.problem, room-len(file)) + tail
+}
+
+// pathEndKept is how much of the end of a long path a message keeps at least when it has to cut (stops).
+const pathEndKept = 40
+
+// clipFront cuts s to at most room bytes by leaving out its beginning, with "…" for what is left out.
+func clipFront(s string, room int) string {
+	if len(s) <= room {
+		return s
+	}
+	from := len(s) - (room - len("…"))
+	if from > len(s) {
+		from = len(s)
+	}
+	for from < len(s) && !utf8.RuneStart(s[from]) {
+		from++
+	}
+	return "…" + s[from:]
 }
 
 // clipTo cuts s to at most room bytes at a character's start, with "…" for what is left out.
