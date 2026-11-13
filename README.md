@@ -442,6 +442,11 @@ The rules, in plain words:
   is left out, with one line in the log. Every request of a run is entered in the journal before it goes
   out. If the file cannot be written (a full disk), the run sends nothing further, stops and says so, the
   machines it has woken stay on and are reported, and no run starts until the file can be written again.)
+* **A machine the run lets go of during its countdown** (it was paired again, or switched off for these
+  runs, while the shutdown the run had asked for was counting down) has that countdown called off first, by
+  the same rule as below: the machine stays on and is reported so, and if the cancel does not get through,
+  the report says that the machine may switch off, and when. (Up to build 13 the run left the countdown
+  running with nobody watching the machine.)
 * **The kill switch stops a run**: nothing further is started, and what was woken stays on and is reported.
   A shutdown countdown the run had already started is called off (the one request a stopped run still sends,
   and only while that countdown can still be running: after its end the run sends nothing, so that an action
@@ -500,6 +505,13 @@ What to know before the first real run:
   * No other agent's entry may mean the same node (the same `node:` name, or a `links_to` to it): then
     each of these agents needs its own `links_to:`.
 
+  The rows follow the same decision (build 14): an agent is shown as a part of the node the configuration
+  names, and of no other. Up to build 13 the rows took the first node of that name that was there, in the
+  order of the `proxmox:` entries, so with two entries that both have a node `pve` an agent could be shown
+  inside the other host's row. Only where config.yaml does not decide (the cases above that need
+  `links_to:`) the rows still go by the node's name. The row of a node belongs to one agent, the first in
+  config.yaml that names it; a second agent that names the same node keeps a row of its own.
+
   Where the panel cannot tell, nothing is guessed: the machine has no Wake-on-LAN until its Proxmox API has
   answered once, and when a `systems:` entry is written for such a node, the panel's log at start and
   `fairy admin config check` (a WARN line) name the agent and say what to add.
@@ -524,9 +536,13 @@ What to know before the first real run:
   one counts. The run uses the machine's values for everything about that machine: when it counts as
   off (still the unbroken silence the panel counted itself, see above), the countdown its agent is given,
   how long the run waits for it to go off, and the sentences of the report. The dialog says them in the
-  machine's line when they are not the panel's. A machine added with "Add host" can take such an entry in
-  config.yaml under its id unless "Add host" already wrote a `systems:` entry for it (one with Wake-on-LAN):
-  two entries for one id are refused, as before.
+  machine's line when they are not the panel's. One machine has one `systems:` entry: two entries
+  with one id are refused when config.yaml is read ("systems: two entries with the id ..."; `fairy update`
+  asks the new version about the file first and stops before it replaces anything). Write the block into
+  the entry that has the machine's `wol:`. The one exception is a machine added with "Add host" with
+  Wake-on-LAN, whose `wol:` entry the panel makes: for it, write an entry in config.yaml with its id and
+  nothing but `wake_update:`; the panel puts the two together. An entry whose id is no machine's (a typing
+  mistake) is a `note` line of `fairy admin config check`.
 
 ### The check on the machine itself
 
@@ -1378,8 +1394,10 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   answered, written about once a minute while machines answer and when one stops answering, and read at
   start so that a machine that is off is shown with "last seen 3 h ago" instead of "never". Nothing but
   that line reads it ("Update unpowered hosts" still takes a machine for off only after 15 minutes without
-  an answer since the panel started). A damaged, empty or linked `last-seen.json` is not used and not
-  overwritten; the panel starts all the same and says so once in its log. Delete the file to start it over.
+  an answer since the panel started). A damaged or empty `last-seen.json` is not used: the panel
+  starts all the same, moves the file to `last-seen.json.bad` (one older copy is replaced), starts a new
+  one and says so once in its log. A symbolic link or a folder at that name is never touched: nothing is
+  read or kept until it is taken away.
 * State files fail closed: an unreadable `users.json`, `sessions.json`, `tokens.json` or `state.json`, and a
   corrupt `users.json` or `state.json`, stops the panel at start, and at run time such a file grants nothing
   (no sessions, control off) instead of being read as empty; it is never overwritten. A file that exists and
