@@ -186,12 +186,14 @@ func managedCheck(cfg *config.Panel, problems, notes []string) ([]string, []stri
 // what is wrong with their list itself, managedCheck has said.
 //
 // inferred is the other thing the start logs: one line for every agent whose node was worked out from an
-// id_prefix (poller.NodeInferred), so that no link is guessed without a word. They are notes, not warnings.
+// id_prefix (poller.NodeInferred), so that no link is guessed without a word, and one for every agent whose
+// node is not decided and for which there is no warning (poller.NodeUndecided: no `systems:` entry is written
+// for its node), which says where the rows put that agent. They are notes, not warnings.
 func nodeLinkCheck(cfg *config.Panel, problems []string) (out, inferred []string) {
 	c := *cfg
 	c.Agents, c.Systems, c.Proxmox = slices.Clone(cfg.Agents), slices.Clone(cfg.Systems), slices.Clone(cfg.Proxmox)
 	_, _, _ = managed.NewStore(cfg.DataDir).Merge(&c)
-	return append(problems, poller.NodeWarnings(&c)...), poller.NodeInferred(&c)
+	return append(problems, poller.NodeWarnings(&c)...), append(poller.NodeInferred(&c), poller.NodeUndecided(&c)...)
 }
 
 // systemIDCheck is one note for every `systems:` entry of config.yaml whose id is no machine's: not the id of

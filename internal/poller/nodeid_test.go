@@ -173,6 +173,8 @@ func TestTheNodeOfAnAgentIsDecidedByTheConfigurationOrNotAtAll(t *testing.T) {
 		want     map[string]string // agent id -> node id
 		cluster  map[string]string // agent id -> the proxmox: entry of that node (where the case asks)
 		warn     []string          // a part of each warning, in order
+		note     []string          // a part of each note (not decided, and no systems: entry for its node), in order
+		rows     map[string]string // agent id -> the node ids the rows choose among for it (rowNodes; where the case asks)
 	}{
 		// b. one proxmox: entry
 		{name: "one proxmox: entry: node: names the node", agents: []config.Agent{{ID: "x", Node: "PVE 1"}}, clusters: one,
@@ -194,8 +196,13 @@ func TestTheNodeOfAnAgentIsDecidedByTheConfigurationOrNotAtAll(t *testing.T) {
 		{name: "the same with an entry for each: not decided, one warning", clusters: two, systems: sys("site1-node-pve", "site2-node-pve"),
 			agents: []config.Agent{{ID: "host1-agent", Node: "pve"}},
 			want:   map[string]string{}, warn: []string{"systems: has an entry for site1-node-pve and site2-node-pve"}},
-		{name: "the same without a systems: entry: not decided, and nothing to warn about", clusters: two,
-			agents: []config.Agent{{ID: "host1-agent", Node: "pve"}}, want: map[string]string{}},
+		// CHANGED (second review of build 14, R1): this was "not decided, and nothing to warn about". The rows
+		// still place such an agent, by the node's name alone, so it is said: a note, and what that can get wrong.
+		{name: "the same without a systems: entry: not decided, and a note that says where the rows put it", clusters: two,
+			agents: []config.Agent{{ID: "host1-agent", Node: "pve"}}, want: map[string]string{},
+			note: []string{"agent host1-agent (node: pve): its id begins with the id_prefix of none of the proxmox: entries, so the configuration does not say which node is the agent's " +
+				"(it can be site1-node-pve or site2-node-pve). On the pages it is a part of the first of these nodes that is there, which can be another machine's"},
+			rows: map[string]string{"host1-agent": "site1-node-pve site2-node-pve"}},
 		// CHANGED (build 14): this was "not decided", with the warning "its id begins with the id_prefix of more
 		// than one proxmox: entry (yard-, yard-b-)". The longest id_prefix decides (TestTheLongestIDPrefixWins).
 		{name: "the agent's id begins with two id_prefixes (yard- and yard-b-): the longer one", systems: sys("yard-b-node-pve"),
@@ -223,9 +230,40 @@ func TestTheNodeOfAnAgentIsDecidedByTheConfigurationOrNotAtAll(t *testing.T) {
 		// d. the guards
 		{name: "two agents name the same node: none for either, a warning for each", agents: []config.Agent{{ID: "x", Node: "pve"}, {ID: "y", Node: "PVE"}}, clusters: one, systems: sys("node-pve"),
 			want: map[string]string{}, warn: []string{"agent x (node: pve): the entry of y can mean the same node, node-pve", "agent y (node: PVE): the entry of x can mean the same node, node-pve"}},
+		// Guard d is as wide as it was, on purpose (bb15214): the wol:, the switches and the timings under a
+		// node's id are given to an agent only where no other agent's entry can mean that id, and `node: pve`
+		// can mean the node "pve" of every entry. That stays. What the second review of build 14 changed (R1) is
+		// what the ROWS do for such a pair: each agent is a part of the node its own id names and of no other
+		// (rows, and TestTwoSitesWithANodeOfOneName), where both used to be put into the first node that was
+		// there. And each of the two is told so, also without a systems: entry (the next case).
 		{name: "the same node name under two entries, an agent for each: none for either, although each id begins with a prefix", clusters: two, systems: sys("site1-node-pve"),
 			agents: []config.Agent{{ID: "site1-agent", Node: "pve"}, {ID: "site2-agent", Node: "pve"}},
-			want:   map[string]string{}, warn: []string{"agent site1-agent (node: pve): the entry of site2-agent can mean the same node, site1-node-pve", "agent site2-agent (node: pve): the entry of site1-agent can mean the same node, site2-node-pve"}},
+			want:   map[string]string{}, warn: []string{"agent site1-agent (node: pve): the entry of site2-agent can mean the same node, site1-node-pve, so the configuration does not say which node is the agent's " +
+				"(it can be site1-node-pve or site2-node-pve). systems: has an entry for site1-node-pve: it is not used for this agent while it is shown under its own id " +
+				"(after a restart of the panel with the machine off, until the node's Proxmox API answers). On the pages it is a part of the row of site1-node-pve and of no other node",
+				"agent site2-agent (node: pve): the entry of site1-agent can mean the same node, site2-node-pve"},
+			rows: map[string]string{"site1-agent": "site1-node-pve", "site2-agent": "site2-node-pve"}},
+		{name: "... the same without a systems: entry: none for either, and a note for each that names the one node its id allows", clusters: two,
+			agents: []config.Agent{{ID: "site2-agent", Node: "pve"}, {ID: "site1-agent", Node: "pve"}},
+			want:   map[string]string{}, note: []string{"agent site2-agent (node: pve): the entry of site1-agent can mean the same node, site2-node-pve, so the configuration does not say which node is the agent's " +
+				"(it can be site1-node-pve or site2-node-pve). On the pages it is a part of the row of site2-node-pve and of no other node",
+				"agent site1-agent (node: pve): the entry of site2-agent can mean the same node, site1-node-pve, so the configuration does not say which node is the agent's " +
+					"(it can be site1-node-pve or site2-node-pve). On the pages it is a part of the row of site1-node-pve and of no other node"},
+			rows: map[string]string{"site1-agent": "site1-node-pve", "site2-agent": "site2-node-pve"}},
+		{name: "... and a third agent whose id begins with neither prefix: the two keep their own node, the third is placed by the name", clusters: two,
+			agents: []config.Agent{{ID: "other", Node: "pve"}, {ID: "site1-agent", Node: "pve"}, {ID: "site2-agent", Node: "pve"}},
+			want:   map[string]string{}, note: []string{"agent other (node: pve): its id begins with the id_prefix of none", "agent site1-agent (node: pve)", "agent site2-agent (node: pve)"},
+			rows: map[string]string{"other": "site1-node-pve site2-node-pve", "site1-agent": "site1-node-pve", "site2-agent": "site2-node-pve"}},
+		{name: "the rows and the longest id_prefix: an agent of yard-b- is never a part of yard-'s node, and one of yard- never of yard-b-'s",
+			clusters: []config.Proxmox{{ID: "yard", IDPrefix: px("yard-")}, {ID: "yard-b", IDPrefix: px("yard-b-")}},
+			agents:   []config.Agent{{ID: "yard-b-agent", Node: "pve"}, {ID: "yard-b-second", Node: "pve"}, {ID: "yard-agent", Node: "pve"}},
+			want:     map[string]string{}, note: []string{"agent yard-b-agent (node: pve)", "agent yard-b-second (node: pve)", "agent yard-agent (node: pve)"},
+			rows: map[string]string{"yard-b-agent": "yard-b-node-pve", "yard-b-second": "yard-b-node-pve", "yard-agent": "yard-node-pve"}},
+		{name: "the rows and an empty id_prefix: it names nothing, so an id that begins with no other prefix is placed by the name", systems: sys("node-pve"),
+			clusters: []config.Proxmox{{ID: "main", IDPrefix: px("")}, {ID: "b", IDPrefix: px("b-")}},
+			agents:   []config.Agent{{ID: "x", Node: "pve"}, {ID: "b-x", Node: "pve"}},
+			want:     map[string]string{}, warn: []string{"agent x (node: pve)", "agent b-x (node: pve)"},
+			rows: map[string]string{"x": "node-pve b-node-pve", "b-x": "b-node-pve"}},
 		{name: "... and with links_to on both: each has its own", clusters: two, systems: sys("site1-node-pve"),
 			agents: []config.Agent{{ID: "site1-agent", LinksTo: "site1-node-pve"}, {ID: "site2-agent", LinksTo: "site2-node-pve"}},
 			want:   map[string]string{"site1-agent": "site1-node-pve", "site2-agent": "site2-node-pve"}},
@@ -239,7 +277,7 @@ func TestTheNodeOfAnAgentIsDecidedByTheConfigurationOrNotAtAll(t *testing.T) {
 			want: map[string]string{}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			links, whys := nodeLinks(c.agents, c.clusters, c.systems)
+			links, whys, open := nodeLinks(c.agents, c.clusters, c.systems)
 			got := map[string]string{}
 			for id, l := range links {
 				got[id] = l.ID
@@ -265,6 +303,21 @@ func TestTheNodeOfAnAgentIsDecidedByTheConfigurationOrNotAtAll(t *testing.T) {
 					t.Errorf("warning %q lacks %q, or what to write", whys[i], part)
 				}
 			}
+			if len(open) != len(c.note) {
+				t.Fatalf("notes %q, want %d", open, len(c.note))
+			}
+			for i, part := range c.note {
+				if !strings.Contains(open[i], part) || !strings.Contains(open[i], "links_to: <the id of its") || strings.Contains(open[i], "systems: has an entry") {
+					t.Errorf("note %q lacks %q, or what to write", open[i], part)
+				}
+			}
+			for _, a := range c.agents {
+				if want, asked := c.rows[a.ID]; asked {
+					if got := strings.Join(rowNodes(a, c.clusters), " "); got != want {
+						t.Errorf("the rows choose for %s among %q, want %q", a.ID, got, want)
+					}
+				}
+			}
 		})
 	}
 }
@@ -273,12 +326,13 @@ func TestTheNodeOfAnAgentIsDecidedByTheConfigurationOrNotAtAll(t *testing.T) {
 // not used, and what to add.
 func TestTheWarningForAnAgentWhoseNodeIsNotDecided(t *testing.T) {
 	site1, site2 := "site1-", "site2-"
-	_, whys := nodeLinks([]config.Agent{{ID: "host1-agent", Node: "pve"}},
+	_, whys, _ := nodeLinks([]config.Agent{{ID: "host1-agent", Node: "pve"}},
 		[]config.Proxmox{{ID: "site1", IDPrefix: &site1}, {ID: "site2", IDPrefix: &site2}},
 		[]config.SystemOverride{{ID: "site2-node-pve", Wol: &config.Wol{MAC: "00:00:5e:00:53:02", Relay: "relay"}}})
 	want := "agent host1-agent (node: pve): its id begins with the id_prefix of none of the proxmox: entries, so the configuration does not say which node is the agent's " +
 		"(it can be site1-node-pve or site2-node-pve). systems: has an entry for site2-node-pve: it is not used for this agent while it is shown under its own id " +
-		"(after a restart of the panel with the machine off, until the node's Proxmox API answers). To say which node it is, write links_to: <the id of its node> " +
+		"(after a restart of the panel with the machine off, until the node's Proxmox API answers). On the pages it is a part of the first of these nodes that is there, " +
+		"which can be another machine's: what is pressed on that row and goes to an agent goes to this one. To say which node it is, write links_to: <the id of its node> " +
 		"in the agent's entry (links_to: site2-node-pve if that entry is this machine's)"
 	if len(whys) != 1 || whys[0] != want {
 		t.Errorf("warnings:\n%q\nwant\n%q", whys, want)

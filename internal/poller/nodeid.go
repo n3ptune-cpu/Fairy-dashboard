@@ -164,9 +164,55 @@ func nodeInferred(agents []config.Agent, links map[string]nodeLink) []string {
 	return out
 }
 
+// rowNodes is the node ids among which the rows choose for an agent with node: whose node the configuration
+// does not decide (linkOfLocked: the first of them that is there). One id means that there is no choice.
+//
+// Until build 13 it was every node of that name, of every proxmox: entry, in the order of the entries: the
+// first one that was there. Two sites, each with a node "pve" (the installer's name) and each with an agent
+// `node: pve` whose id begins with its own site's id_prefix: nodeLinks decides neither (step d: each entry can
+// mean the other's node too), so both agents were made a part of the first site's node, and that row belonged
+// to whichever of the two stood first in the configuration. With the second site's agent first, the first
+// site's row showed the second site's sensors, and shut down, restart, sleep, the fans and the update that
+// were pressed on it went to the second site's agent (review of build 14, second round, R1; build 13 did
+// the same).
+//
+// The agent's own id says more than that, also where step d does not let it decide the wol: and the switches:
+// an agent whose id begins with the id_prefix of a proxmox: entry is never made a part of a node of an entry
+// whose id_prefix its id does not begin with. The entries with the longest id_prefix the id begins with are the
+// only ones that count (one entry, unless two entries have the same id_prefix, which is refused when the
+// configuration is read); an empty id_prefix begins every id and names nothing, as in step c. Only an agent
+// whose id begins with no id_prefix is still placed by the node's name alone, among all the entries: such an
+// agent is named at the start and by `fairy admin config check` (nodeLinks, the sentences for an agent that is
+// not decided), with what that can get wrong.
+func rowNodes(a config.Agent, clusters []config.Proxmox) []string {
+	slug := normalise.Slug(a.Node)
+	var all, fit []string
+	longest := 0
+	for _, c := range clusters {
+		p, id := c.Prefix(), c.Prefix()+"node-"+slug // normalise.NodeID
+		if !slices.Contains(all, id) {
+			all = append(all, id)
+		}
+		if p == "" || !strings.HasPrefix(a.ID, p) {
+			continue
+		}
+		switch {
+		case len(p) > longest:
+			fit, longest = []string{id}, len(p)
+		case len(p) == longest && !slices.Contains(fit, id):
+			fit = append(fit, id)
+		}
+	}
+	if len(fit) > 0 {
+		return fit
+	}
+	return all
+}
+
 // nodeLinks returns, by agent id, the node each agent runs on where the configuration decides it, and one
-// sentence for every agent for which it does not although a `systems:` entry is written under an id its node
-// can have (for the log at the start, and for `fairy admin config check`).
+// sentence for every agent for which it does not (for the log at the start, and for `fairy admin config
+// check`): whys for an agent for which a `systems:` entry is written under an id its node can have (a
+// warning: that entry is not found for it), open for every other one (a note).
 //
 // The rule, from the configuration alone:
 //
@@ -180,11 +226,16 @@ func nodeInferred(agents []config.Agent, links map[string]nodeLink) []string {
 //	   (nodeInferred).
 //	d. Not decided either when that id is the id of an agent, or when another agent's entry can mean the same
 //	   id (nodeCandidates: the same node:, or a links_to to it).
-//	e. Not decided, and a `systems:` entry is written under one of the ids the agent's node can have: one
-//	   warning that names the agent and says what to add (links_to: <the node's id>).
+//	e. Not decided: one sentence that names the agent, says where the rows put it (rowNodes) and what to add
+//	   (links_to: <the node's id>). Until build 13 it was said only when a `systems:` entry was written under
+//	   one of the ids the agent's node can have; an agent without such an entry was placed by the rows without
+//	   a word.
 //
-// An agent that is not decided is as it was before this file: looked up by the id it is shown under.
-func nodeLinks(agents []config.Agent, clusters []config.Proxmox, systems []config.SystemOverride) (map[string]nodeLink, []string) {
+// An agent that is not decided is looked up by the id it is shown under: its wol:, its switches and its
+// timings are not taken from a node's id (a wrong MAC wakes somebody else's PC). The rows still make it a part
+// of a node: of the one node its id allows, or, when its id begins with no id_prefix, of the first node of
+// that name that is there (rowNodes, linkOfLocked).
+func nodeLinks(agents []config.Agent, clusters []config.Proxmox, systems []config.SystemOverride) (links map[string]nodeLink, whys, open []string) {
 	written := map[string]bool{}
 	for _, o := range systems {
 		written[o.ID] = true
@@ -199,8 +250,7 @@ func nodeLinks(agents []config.Agent, clusters []config.Proxmox, systems []confi
 			claims[c.ID] = append(claims[c.ID], a.ID)
 		}
 	}
-	links := map[string]nodeLink{}
-	var whys []string
+	links = map[string]nodeLink{}
 	for i, a := range agents {
 		cands := all[i]
 		if len(cands) == 0 {
@@ -225,7 +275,7 @@ func nodeLinks(agents []config.Agent, clusters []config.Proxmox, systems []confi
 			links[a.ID] = pick
 			continue
 		}
-		// e: not decided. Said only when something is written that would be looked for.
+		// e: not decided
 		var ids, found []string
 		for _, c := range cands {
 			ids = append(ids, c.ID)
@@ -233,35 +283,52 @@ func nodeLinks(agents []config.Agent, clusters []config.Proxmox, systems []confi
 				found = append(found, c.ID)
 			}
 		}
-		if len(found) == 0 {
-			continue
-		}
 		name := "node: " + a.Node
+		rows := []string{a.LinksTo}
 		if a.LinksTo != "" {
 			name = "links_to: " + a.LinksTo
+		} else {
+			rows = rowNodes(a, clusters)
+		}
+		// where the rows put it, which is what a person presses on (rowNodes)
+		shown := "On the pages it is a part of the row of " + rows[0] + " and of no other node (the row of a node is one agent's: the first of the configuration that names it). "
+		if len(rows) > 1 {
+			shown = "On the pages it is a part of the first of these nodes that is there, which can be another machine's: what is pressed on that row and goes to an agent goes to this one. "
+		}
+		head := fmt.Sprintf("agent %s (%s): %s, so the configuration does not say which node is the agent's (it can be %s). ", a.ID, name, why, strings.Join(ids, " or "))
+		if len(found) == 0 {
+			open = append(open, head+shown+"A wol:, the switches and the timings that are kept under the node's id are not used for it while it is shown under its own id. "+
+				"To say which node it is, "+advice)
+			continue
 		}
 		if plain && len(found) == 1 {
 			advice += " (links_to: " + found[0] + " if that entry is this machine's)"
 		}
-		whys = append(whys, fmt.Sprintf("agent %s (%s): %s, so the configuration does not say which node is the agent's (it can be %s). "+
-			"systems: has an entry for %s: it is not used for this agent while it is shown under its own id (after a restart of the panel with the machine off, "+
-			"until the node's Proxmox API answers). To say which node it is, %s",
-			a.ID, name, why, strings.Join(ids, " or "), strings.Join(found, " and "), advice))
+		whys = append(whys, head+fmt.Sprintf("systems: has an entry for %s: it is not used for this agent while it is shown under its own id (after a restart of the panel with the machine off, "+
+			"until the node's Proxmox API answers). ", strings.Join(found, " and "))+shown+"To say which node it is, "+advice)
 	}
-	return links, whys
+	return links, whys, open
 }
 
-// NodeWarnings is nodeLinks' sentences for a configuration: one for every agent whose node the configuration
+// NodeWarnings is nodeLinks' warnings for a configuration: one for every agent whose node the configuration
 // does not decide although a `systems:` entry is written under an id that node can have.
 func NodeWarnings(cfg *config.Panel) []string {
-	_, whys := nodeLinks(cfg.Agents, cfg.Proxmox, cfg.Systems)
+	_, whys, _ := nodeLinks(cfg.Agents, cfg.Proxmox, cfg.Systems)
 	return whys
+}
+
+// NodeUndecided is nodeLinks' other sentences for a configuration: one for every agent whose node the
+// configuration does not decide and for which NodeWarnings has none (no `systems:` entry is written under an
+// id that node can have). It says where the rows put the agent. A note, not a warning.
+func NodeUndecided(cfg *config.Panel) []string {
+	_, _, open := nodeLinks(cfg.Agents, cfg.Proxmox, cfg.Systems)
+	return open
 }
 
 // NodeInferred is nodeInferred for a configuration: one sentence for every agent whose node was worked out
 // from an id_prefix.
 func NodeInferred(cfg *config.Panel) []string {
-	links, _ := nodeLinks(cfg.Agents, cfg.Proxmox, cfg.Systems)
+	links, _, _ := nodeLinks(cfg.Agents, cfg.Proxmox, cfg.Systems)
 	return nodeInferred(cfg.Agents, links)
 }
 
@@ -271,7 +338,7 @@ func NodeInferred(cfg *config.Panel) []string {
 // For what is linked to a machine by its node's id (a plug's power_links): where the node is decided, the link
 // follows the machine to its agent's row while the node's row is not there; where it is not, it cannot.
 func NodeAgents(cfg *config.Panel) (decided map[string]string, undecided map[string][]string) {
-	links, _ := nodeLinks(cfg.Agents, cfg.Proxmox, cfg.Systems)
+	links, _, _ := nodeLinks(cfg.Agents, cfg.Proxmox, cfg.Systems)
 	decided, undecided = map[string]string{}, map[string][]string{}
 	for agentID, l := range links {
 		decided[l.ID] = agentID
@@ -291,6 +358,11 @@ func NodeAgents(cfg *config.Panel) (decided map[string]string, undecided map[str
 
 // links is nodeLinks for the configuration as it is now (config.yaml and the hosts added in the panel).
 func (p *Poller) links() (map[string]nodeLink, []string) {
+	links, whys, _ := p.linksAll()
+	return links, whys
+}
+
+func (p *Poller) linksAll() (links map[string]nodeLink, whys, open []string) {
 	p.cfgMu.RLock()
 	agents, systems := p.Cfg.Agents, p.Cfg.Systems
 	p.cfgMu.RUnlock()
@@ -327,6 +399,13 @@ func (p *Poller) relink() {
 func (p *Poller) NodeLinkWarnings() []string {
 	_, whys := p.links()
 	return whys
+}
+
+// NodeLinksUndecided is NodeUndecided for the configuration as it is now. The poller logs the sentences once
+// when it is made.
+func (p *Poller) NodeLinksUndecided() []string {
+	_, _, open := p.linksAll()
+	return open
 }
 
 // NodeLinksInferred is NodeInferred for the configuration as it is now. The poller logs the sentences once

@@ -209,6 +209,9 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 	for _, l := range p.NodeLinksInferred() { // a node that was worked out from an id_prefix: never in silence
 		slog.Info("config: " + l)
 	}
+	for _, l := range p.NodeLinksUndecided() { // every other agent whose node is not decided, and where the rows put it
+		slog.Info("config: " + l)
+	}
 	return p, nil
 }
 

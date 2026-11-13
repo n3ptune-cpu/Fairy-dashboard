@@ -574,18 +574,27 @@ What to know before the first real run:
     It is wrong for an agent of the entry with the shorter prefix whose id happens to begin with the longer
     one (an agent on the cluster `lab-` that is called `lab-b-2-agent`): give that agent `links_to:`.
   * No other agent's entry may mean the same node (the same `node:` name, or a `links_to` to it): then
-    each of these agents needs its own `links_to:`.
+    each of these agents needs its own `links_to:`. With several `proxmox:` entries a `node:` name can
+    mean the node of that name of every entry: two hosts whose node is called `pve`, each with an agent
+    `node: pve`, need `links_to:` on both agents.
 
   The rows follow the same decision (build 14): an agent is shown as a part of the node the configuration
   names, and of no other. Up to build 13 the rows took the first node of that name that was there, in the
   order of the `proxmox:` entries, so with two entries that both have a node `pve` an agent could be shown
-  inside the other host's row. Only where config.yaml does not decide (the cases above that need
-  `links_to:`) the rows still go by the node's name. The row of a node belongs to one agent, the first in
-  config.yaml that names it; a second agent that names the same node keeps a row of its own.
+  inside the other host's row, and what was pressed on that row (shut down, restart, fans, update) went to
+  that agent's machine. Where config.yaml does not decide (the cases above that need `links_to:`) the rows
+  go by the node's name, but never against the agent's id: an agent whose id begins with the `id_prefix`
+  of a `proxmox:` entry is a part of that entry's node (the longest `id_prefix` counts) or has a row of its
+  own, and is never shown inside a node of the same name of another entry. Only an agent whose id begins
+  with no `id_prefix` is put into the first node of that name that is there, which can be another
+  machine's: give it `links_to:`. The row of a node belongs to one agent, the first in config.yaml that
+  names it; a second agent that names the same node keeps a row of its own.
 
-  Where the panel cannot tell, nothing is guessed: the machine has no Wake-on-LAN until its Proxmox API has
-  answered once, and when a `systems:` entry is written for such a node, the panel's log at start and
-  `fairy admin config check` (a WARN line) name the agent and say what to add.
+  Where the panel cannot tell, nothing is guessed for Wake-on-LAN: the machine has none until its Proxmox
+  API has answered once. Every agent whose node config.yaml does not decide is named once in the panel's
+  log at start and by `fairy admin config check`, with the row it is shown in and what to add: a WARN line
+  when a `systems:` entry is written for such a node (that entry is not found for the agent), a `note`
+  line otherwise.
 * The run paces itself: at most 8 control requests a minute to one agent (an agent accepts 12 a minute; the
   rest stays free for what you do in the page). With many machines behind one relay the wakes follow each
   other more slowly; nothing is lost.

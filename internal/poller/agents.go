@@ -101,10 +101,15 @@ func (p *Poller) syncPresent() {
 // said: with entries alpha- and alpha-b- and a node of one name in both, the agent alpha-b-agent was shown
 // as a part of alpha-node-<name> while its wol: and its switches were looked up under alpha-b-node-<name>.
 //
-// Where the configuration does not decide (the agent's id begins with no id_prefix; two agents can mean one
-// node), the rows are as they always were: the first node of that name that is present. The configuration
-// cannot know which nodes a cluster has, so that is all there is to go by, and an agent that has always been
-// shown as a part of its node stays so.
+// Where the configuration does not decide (two agents can mean one node; the agent's id begins with no
+// id_prefix), the rows go by the node's name, as they always did: the first node of that name that is
+// present. The configuration cannot know which nodes a cluster has, and an agent that has always been shown
+// as a part of its node stays so. But only among the nodes the agent's own id allows (rowNodes): an agent
+// whose id begins with the id_prefix of a proxmox: entry is a part of that entry's node or of none, whether
+// that node's row is there or not, and never of a node of the same name of another entry. (Until build 13 it
+// was the first node of that name of ANY entry: with two sites that each have a node "pve" and an agent
+// `node: pve`, the row of the first site's node belonged to whichever agent stood first in the
+// configuration.)
 func (p *Poller) linkOfLocked(a config.Agent) string {
 	if a.LinksTo != "" {
 		return a.LinksTo
@@ -115,10 +120,7 @@ func (p *Poller) linkOfLocked(a config.Agent) string {
 				return id
 			}
 		}
-		var ids []string
-		for _, c := range p.Clusters() {
-			ids = append(ids, c.Prefix()+"node-"+normalise.Slug(a.Node))
-		}
+		ids := rowNodes(a, p.Clusters())
 		p.idsMu.Lock()
 		defer p.idsMu.Unlock()
 		for _, i := range ids {

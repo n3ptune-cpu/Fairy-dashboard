@@ -38,18 +38,24 @@ func TestConfigCheckWarnsAboutAnAgentWhoseNodeIsNotDecided(t *testing.T) {
 	const wol = "systems:\n  - {id: site2-node-pve, wol: {mac: \"00:00:5e:00:53:72\", relay: relay}}\n"
 	const line = "WARN  agent host1-agent (node: pve): its id begins with the id_prefix of none of the proxmox: entries, so the configuration does not say which node is the agent's " +
 		"(it can be site1-node-pve or site2-node-pve). systems: has an entry for site2-node-pve: it is not used for this agent while it is shown under its own id " +
-		"(after a restart of the panel with the machine off, until the node's Proxmox API answers). To say which node it is, write links_to: <the id of its node> " +
+		"(after a restart of the panel with the machine off, until the node's Proxmox API answers). On the pages it is a part of the first of these nodes that is there, " +
+		"which can be another machine's: what is pressed on that row and goes to an agent goes to this one. To say which node it is, write links_to: <the id of its node> " +
 		"in the agent's entry (links_to: site2-node-pve if that entry is this machine's)\n"
 	if out := check("node: pve", wol); !strings.Contains(out, line) || strings.Count(out, "host1-agent (node: pve)") != 1 {
 		t.Errorf("no line (or more than one) for the agent whose node is not decided:\n%s", out)
 	}
-	for name, out := range map[string]string{
-		"links_to names the node":        check("node: pve, links_to: site1-node-pve", wol),
-		"no systems: entry for the node": check("node: pve", ""),
-	} {
-		if strings.Contains(out, "does not say which node") {
-			t.Errorf("%s: a warning all the same:\n%s", name, out)
-		}
+	if out := check("node: pve, links_to: site1-node-pve", wol); strings.Contains(out, "does not say which node") {
+		t.Errorf("links_to names the node: a line all the same:\n%s", out)
+	}
+	// Without a systems: entry for the node there is nothing that is not found, so it is no warning. But the
+	// rows still place the agent, by the node's name alone, and until the second review of build 14 (R1)
+	// nothing said so: it is one note now, which says where the rows put the agent.
+	const note = "note  agent host1-agent (node: pve): its id begins with the id_prefix of none of the proxmox: entries, so the configuration does not say which node is the agent's " +
+		"(it can be site1-node-pve or site2-node-pve). On the pages it is a part of the first of these nodes that is there, which can be another machine's: " +
+		"what is pressed on that row and goes to an agent goes to this one. A wol:, the switches and the timings that are kept under the node's id are not used for it " +
+		"while it is shown under its own id. To say which node it is, write links_to: <the id of its node> in the agent's entry\n"
+	if out := check("node: pve", ""); !strings.Contains(out, note) || strings.Count(out, "host1-agent (node: pve)") != 1 || strings.Contains(out, "WARN  agent") {
+		t.Errorf("no systems: entry for the node: no note (or more than one line, or a warning) for the agent whose node is not decided:\n%s", out)
 	}
 }
 

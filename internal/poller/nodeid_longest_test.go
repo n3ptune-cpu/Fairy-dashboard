@@ -79,7 +79,7 @@ func TestTheLongestIDPrefixWins(t *testing.T) {
 			agents: []config.Agent{{ID: "alpha-b-agent", Node: "pve"}}, want: map[string]string{}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			links, _ := nodeLinks(c.agents, c.clusters, nil)
+			links, _, _ := nodeLinks(c.agents, c.clusters, nil)
 			got := map[string]string{}
 			for id, l := range links {
 				got[id] = l.ID
@@ -102,7 +102,7 @@ func TestTheLongestIDPrefixWins(t *testing.T) {
 // The warning for the one case that is still "more than one": it names the prefixes and what to write.
 func TestTheSameIDPrefixTwiceIsNotDecidedAndSaysSo(t *testing.T) {
 	a, b := "alpha-b-", "alpha-b-"
-	_, whys := nodeLinks([]config.Agent{{ID: "alpha-b-agent", Node: "pve"}},
+	_, whys, _ := nodeLinks([]config.Agent{{ID: "alpha-b-agent", Node: "pve"}},
 		[]config.Proxmox{{ID: "one", IDPrefix: &a}, {ID: "two", IDPrefix: &b}},
 		[]config.SystemOverride{{ID: "alpha-b-node-pve", Wol: &config.Wol{MAC: "00:00:5e:00:53:03", Relay: "relay"}}})
 	if len(whys) != 1 || !strings.Contains(whys[0], "its id begins with the id_prefix of more than one proxmox: entry, and none of them is the longest (alpha-b-, alpha-b-)") ||
