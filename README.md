@@ -166,6 +166,77 @@ point is in AGENT.md. Its Windows parts are listed there under "Not yet tested o
 * **Plugs and UPSes that report nonsense.** A value that cannot be a reading (not a number, a charge of
   250 %) is left out. The device stays in the list with its other values.
 
+### Plugs through Home Assistant
+
+A plug that neither the panel nor an agent can ask itself (a Tuya plug, a Zigbee plug) can still be read when
+a Home Assistant on the plug's network knows it. An **agent** on that network asks that Home Assistant for the
+plug's power sensor and relays the watts to the panel like every other plug it reads (Fairy-agent v0.8.0,
+`type: homeassistant`; the watts are read, nothing is switched). The whole of it, with the steps in Home
+Assistant, is in the agent's
+[AGENT.md](https://github.com/n3ptune-cpu/Fairy-agent/blob/main/AGENT.md#plugs-that-are-in-home-assistant-type-homeassistant).
+In short:
+
+1. **Update that agent to v0.8.0 first** (build 18; the Updates page, or "Add host" from this panel). An older
+   agent does not know the type and does not start with such an entry.
+2. **On the agent's machine**, the token goes into the agent's secrets file, never into config.yaml:
+   `sudo fairy-agent secret set HA_TOKEN` (Windows: `& "C:\Program Files\Fairy\fairy-agent.exe" secret set
+   HA_TOKEN` in an Administrator PowerShell). Then the entry in the agent's own config.yaml:
+
+   ```yaml
+   power_sources:
+     - id: corner-plug                      # the id the panel's links name
+       type: homeassistant
+       url: "http://192.168.1.10:8123"      # Home Assistant itself: http(s)://host[:port]
+       token_env: HA_TOKEN                  # the NAME of the variable, never the token
+       entity: sensor.corner_plug_power     # the plug's power sensor
+   ```
+
+   `fairy-agent check-config`, then restart the agent.
+3. **In the panel's config.yaml**, in the entry of the agent that reads the plug, say which machine the plug
+   feeds, and whether it counts:
+
+   ```yaml
+   agents:
+     - id: nas-agent
+       # ...
+       power_links: {pc-plug: lab-b-agent, rack-plug: lab-node-pve-a}   # <device id on the agent>: <system id>
+       power_exclude_from_total: [corner-plug]                          # shown, and in no total
+   ```
+
+   * `power_links` names the machine by its id, and the machine can be any machine of the panel, not only the
+     one the agent runs on (an agent on one site that reads the plugs of machines on another). For a Proxmox
+     node with an agent **either id works** (build 14): the node's id (`<id_prefix>node-<name>`) or its
+     agent's. The watts are on the row the machine is shown as, also after a restart of the panel with the
+     machine off, when it is shown under its agent's id. `system_hint: self` in the agent's entry of a plug
+     (the plug feeds the agent's own machine) now works for the agent of a node as well. Where config.yaml does
+     not decide which node is an agent's (see [Update unpowered hosts](#update-unpowered-hosts): `links_to:`),
+     a link written with the node's id shows only while the node's row is there; `fairy admin config check`
+     has a `note` line for such a link, and one for a link to an id that is no machine's.
+   * `power_exclude_from_total` is for a plug whose watts are already counted another way. The usual case is
+     **a plug at the input of a UPS**: the machines behind the UPS are counted through the UPS (its load, or
+     their own plugs), and the plug in front of it would count them a second time. Such a plug has its own
+     line on the Power page with its watts and the chip **not in total**, and is in neither the Power page's
+     total nor the Overview's.
+   * The device ids are the agent's own. When the agent reports no device with an id that is written here (a
+     typing mistake), nothing is linked or left out for it: the panel says so once in its log ("... names
+     devices the agent does not report"), and `fairy admin config check` lists what is set for each agent.
+   * Hosts added with **Add host** have no `power_links` (their entry is not in config.yaml): give such an
+     agent's plug `system_hint: self` in the agent's own config.yaml, or let an agent that is in config.yaml
+     read the plug and link it.
+4. A plug that cannot be read stays on the Power page and on its machine's page with the agent's words for
+   why (`home assistant refused the token`, `entity not found`, `the sensor is unavailable`), also after it
+   has had no reading for longer than `offline_after`.
+
+> **A Home Assistant token is never read-only.** Home Assistant's long-lived tokens carry no limits: the
+> token that reads one sensor can also switch every plug, light and lock of that Home Assistant. It is kept
+> on the agent's machine only (the panel never has it), readable by root / administrators and the agent. Use
+> a Home Assistant user made for this, and delete the token there when the agent no longer needs it.
+
+`type: homeassistant` is an agent's only: the panel's own `power_sources:` refuse it ("... is read by an
+agent, not by the panel"). After a refused token an agent waits before it asks Home Assistant again (5
+minutes, 15, then an hour), because Home Assistant counts such a request as a failed login; the panel's own
+poller has no such wait.
+
 ### Updates
 
 Nothing updates on its own. Every push to `main` makes a signed GitHub release (`.github/workflows/release.yml`:
@@ -1519,7 +1590,7 @@ Shared code imported from [Fairy-agent](https://github.com/n3ptune-cpu/Fairy-age
 | Package | What the panel uses it for |
 | --- | --- |
 | `pkg/devices` | Device protocols: Shelly/Tasmota/Redfish parsing, NUT client, HTTP helpers, digest auth, and `Describe`, which turns errors into short safe messages. |
-| `pkg/power` | One power source per device type (`shelly`, `tasmota`, `nut`, `redfish`/`ipmi`, `agent`), built from a `power_sources:` entry. `DropRemoved` takes out entries of a type that is no longer read (`tuya`). |
+| `pkg/power` | One power source per device type (`shelly`, `tasmota`, `nut`, `redfish`/`ipmi`, `agent`, and `homeassistant`, which only an agent reads), built from a `power_sources:` entry. `DropRemoved` takes out entries of a type that is no longer read (`tuya`). |
 | `pkg/ups` | NUT UPS sources built from an `ups:` entry, and which systems each UPS powers. |
 | `pkg/redact` | Removes passwords/tokens from process command lines (in the agent, and again in the panel). |
 | `pkg/configutil` | The id rule (`ValidID`) and secrets referenced by environment variable name (`EnvSecret`). |

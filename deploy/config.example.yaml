@@ -84,6 +84,13 @@ agents:
     # power_control: true                 # also needs power_control.enabled in the agent's config.yaml
     # control_token_env: AGENT_CONTROL_TOKEN_AGENT_1     # for power_control / wol_relay / self_update without fan_control
     # self_update: true                   # Update button on the Updates page; also needs self_update.enabled in the agent's config.yaml
+    # Plugs this agent reads on its own network and relays (power_sources in the AGENT's config.yaml; also a
+    # plug's power sensor in Home Assistant, type: homeassistant, Fairy-agent v0.8.0). The ids are the device
+    # ids on the agent. A link names any machine of the panel by its id; for a Proxmox node with an agent the
+    # node's id or the agent's (build 14). README: "Plugs through Home Assistant".
+    # power_links: {pc-plug: agent-2, rack-plug: node-pve1}
+    # power_exclude_from_total: [corner-plug]   # shown on the Power page, in no total: e.g. a plug at the input
+    #                                           # of a UPS, whose machines are already counted through the UPS
   # - {id: pve1-agent, url: "http://100.64.0.5:9101", token_env: AGENT_TOKEN_PVE1, node: PVE-NODE-1}
 # Hosts added with "Add host" in the panel are NOT written here: they live in <data_dir>/managed-hosts.yaml
 # (+ <data_dir>/secrets/agent-<id>.json, 0600) and are merged with this file at start; an id written here wins.
@@ -157,6 +164,7 @@ systems: []
 
 # Power sources and UPSes follow the hosts they are attached to (system: / powers:); one without a host gets
 # its site on the Users page. Anything without a site is visible to admins only.
+# (type: homeassistant is not for this list: only an agent reads it, see power_links above.)
 power_sources: []
   # - {id: plug-desk, type: shelly, url: "http://192.168.1.61", password_env: SHELLY_PW}
   # - {id: tasmota-1, type: tasmota, url: "http://192.168.1.62", password_env: TASMOTA_PW}
