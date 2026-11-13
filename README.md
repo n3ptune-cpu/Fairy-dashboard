@@ -310,7 +310,13 @@ The rules, in plain words:
     the report says: "Not sure that it is off, so nothing was sent to it: Fairy takes a machine for off
     only after 15 min without an answer (it may be restarting, or be on and out of reach)."
 
-  The 15 minutes are fixed; they are not a setting. They count from the machine's last sign of life: an
+  The 15 minutes are the default of a setting (build 14; they were fixed before): `wake_update.off_after_s`
+  in config.yaml, 900, allowed 300 to 3600, and one machine can have its own (the timings below). Wherever
+  this section says 15 minutes, read the value in force; the dialog and the report name it. 15 minutes is
+  the safe value: a machine that restarts is silent too and comes back by itself, and with a lower value a
+  restart that takes longer than it can be taken for "off" by a run, which then wakes the machine, updates
+  it and switches it off as a machine it woke (`fairy admin config check` says so in a `note` line for
+  every value below 900). The time counts from the machine's last sign of life: an
   answer from its agent, a refused connection, any other answer from its address (an error, a page that is
   not the agent's, an accepted connection that then gives nothing), or, for a Proxmox node, the Proxmox API
   showing it as online. Only "no route", or no answer at all to the attempt to connect, is silence.
@@ -501,9 +507,26 @@ What to know before the first real run:
   rest stays free for what you do in the page). With many machines behind one relay the wakes follow each
   other more slowly; nothing is lost.
 * The timings can be changed in config.yaml (`wake_update:`, see `deploy/config.example.yaml`): how long to
-  wait for a machine (default 300 s), the pause before the shutdown (60 s), the countdown (120 s) and the
-  pacing. A value outside its range stops the panel at start with the key and the line; that includes 0,
-  which does not mean "the default" here. For the default leave the key out.
+  wait for a machine (default 300 s), the pause before the shutdown (60 s), the countdown (120 s), the
+  pacing, and after how long without an answer a machine counts as off (`off_after_s`, 900, 300-3600). A
+  value outside its range stops the panel at start with the key and the line; that includes 0, which does
+  not mean "the default" here. For the default leave the key out.
+* One machine can have its own `off_after_s` and `shutdown_delay_s` (build 14): a `wake_update:` block in
+  its `systems:` entry, same ranges (300-3600 and 10-3600), any other key in the block is refused:
+
+  ```yaml
+  systems:
+    - {id: pc-a, wake_update: {off_after_s: 360, shutdown_delay_s: 30}}
+  ```
+
+  A key that is left out is the panel's. The entry is found under both ids of a machine (the Proxmox node's
+  row `<id_prefix>node-<name>` and its agent's id); written under both with different values, the larger
+  one counts. The run uses the machine's values for everything about that machine: when it counts as
+  off (still the unbroken silence the panel counted itself, see above), the countdown its agent is given,
+  how long the run waits for it to go off, and the sentences of the report. The dialog says them in the
+  machine's line when they are not the panel's. A machine added with "Add host" can take such an entry in
+  config.yaml under its id unless "Add host" already wrote a `systems:` entry for it (one with Wake-on-LAN):
+  two entries for one id are refused, as before.
 
 ### The check on the machine itself
 
@@ -1166,7 +1189,8 @@ the next update replaces that too. As root: `systemctl stop fairy`, `cp /usr/loc
 the older one.) The older panel reads the files this one writes (`users.json`, `notifications.json`,
 `managed-hosts.yaml`, `state.json`, `settings.json`, and `sessions.json`, where it ignores what this one adds).
 It does not start when config.yaml has a `wake_update:` block: take the block out first. The same goes for
-an `approval:` block ("field approval not found"). (They are the two keys that are new in this release; do
+an `approval:` block ("field approval not found"). Build 13 and older know the `wake_update:` block but not
+its `off_after_s`, and no `wake_update:` block in a `systems:` entry: take those out before going back to one. (They are the two keys that are new in this release; do
 it before you go back.) The older panel does not know `machines.json` and leaves it alone; a machine with
 the check on still refuses what comes without an approval, so the older panel cannot change its fans, switch
 it off or update it until the check is cleared on the machine (`fairy-agent helper-trust clear`). A panel older than
