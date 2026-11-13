@@ -10,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 )
 
 // secretEnv is an environment variable that must hold a secret, and what it is for.
@@ -85,6 +86,7 @@ func (c *cli) configCheck() int {
 	problems, notes = approvalCheck(cfg, problems, notes)
 	problems, notes = adminCheck(cfg, problems, notes)
 	problems, notes = managedCheck(cfg, problems, notes)
+	problems = nodeLinkCheck(cfg, problems)
 	for _, e := range secretEnvs(cfg) {
 		if os.Getenv(e.env) != "" {
 			notes = append(notes, fmt.Sprintf("%s (%s): present", e.env, e.what))
@@ -166,6 +168,18 @@ func managedCheck(cfg *config.Panel, problems, notes []string) ([]string, []stri
 		notes = append(notes, "managed hosts (Add host): none ("+st.Path()+")")
 	}
 	return append(problems, skipped...), notes
+}
+
+// nodeLinkCheck is the warning `fairy serve` logs at its start for an agent on a Proxmox node (node:) when the
+// configuration does not say which node that is although a `systems:` entry is written under an id the node
+// can have: after a restart of the panel while that machine is off, its wol: or bmc_power: is then not found
+// (poller.NodeWarnings has the rule). The hosts added in the panel are part of the question, as at the start;
+// what is wrong with their list itself, managedCheck has said.
+func nodeLinkCheck(cfg *config.Panel, problems []string) []string {
+	c := *cfg
+	c.Agents, c.Systems, c.Proxmox = slices.Clone(cfg.Agents), slices.Clone(cfg.Systems), slices.Clone(cfg.Proxmox)
+	_, _, _ = managed.NewStore(cfg.DataDir).Merge(&c)
+	return append(problems, poller.NodeWarnings(&c)...)
 }
 
 // adminCheck reports who can administer the panel. Roles live in users.json (Users page / `fairy admin users`);
