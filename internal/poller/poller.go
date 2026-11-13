@@ -118,6 +118,11 @@ type Poller struct {
 	// (flushMachines). Lock order: it is taken before mu, never while mu is held, and nothing but mu and the
 	// file's own lock is taken under it; it is never held while the panel waits for a machine.
 	machWrite sync.Mutex
+	// machEmit is held while the events about that record are sent to OnMachine (emitMachines), so that they
+	// arrive in the order they were decided. Lock order: taken without mu and without machWrite held; mu is
+	// taken under it only to take the queue. OnMachine runs under it and must not come back into a call
+	// that sends events (PinMachine, AcceptMachine, AddAgent, RemoveAgent, a poll).
+	machEmit sync.Mutex
 	// OnMachine, when set, hears what happens to that record: an id that came on record at first sight, a host
 	// whose binding became an alarm or is in order again. It is called outside the poller's locks.
 	OnMachine func(MachineEvent)
@@ -490,13 +495,12 @@ func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
 	// read then) is another machine's, and it is deleted here, before the new host is asked anything (audit 6,
 	// r4-x1-03; review of passkey-k, RK-01). The new host is "not on record" until an admin accepts its id.
 	p.mu.Lock()
-	var machineEvs []MachineEvent
 	if rec, had := p.forgetMachineLocked(a.ID, true); had {
-		machineEvs = append(machineEvs, MachineEvent{AgentID: a.ID, Kind: "gone", Binding: approval.Binding{Record: rec, Known: true}})
+		p.queueMachinesLocked([]MachineEvent{{AgentID: a.ID, Kind: "gone", Binding: approval.Binding{Record: rec, Known: true}}})
 		p.version++
 	}
 	p.mu.Unlock()
-	p.machinesChanged(machineEvs)
+	p.machinesChanged()
 	p.Scheduler.Add(p.agentJob(a))
 	p.Scheduler.Kick("agent:" + a.ID)
 	return nil
@@ -547,12 +551,12 @@ func (p *Poller) RemoveAgent(id string) {
 	delete(p.sourceMono, "agent:"+id)
 	p.sourceOrder = slices.DeleteFunc(p.sourceOrder, func(x string) bool { return x == "agent:"+id })
 	p.forgetMachineLocked(id, false) // a host added later under the same id starts without a machine id on record
-	machineEvs := p.announceLocked()
+	p.queueMachinesLocked(p.announceLocked())
 	p.syncPresent()
 	p.snapVer, p.snapJSONVer = -1, -1
 	p.version++
 	p.mu.Unlock()
-	p.machinesChanged(machineEvs)
+	p.machinesChanged()
 	if kept { // a host added later under the same id starts without a version
 		p.saveVersion(id, "", time.Time{})
 	}

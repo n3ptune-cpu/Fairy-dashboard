@@ -218,7 +218,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	delete(p.agentQuiet, a.ID)
 	p.systems[a.ID] = p.stamp(sys, now)
 	// what it says about its own check of approvals, against the panel's record (machines.go)
-	machineEvs := append(p.noteMachineLocked(a.ID, sys.Approval, now), p.announceLocked()...)
+	p.queueMachinesLocked(append(p.noteMachineLocked(a.ID, sys.Approval, now), p.announceLocked()...))
 	p.syncPresent()
 	p.agentPower[a.ID] = sys.ComponentPower
 	lat := time.Since(start)
@@ -227,7 +227,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	if newVersion {
 		p.saveVersion(a.ID, info.Version, now)
 	}
-	p.machinesChanged(machineEvs)
+	p.machinesChanged()
 	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)
 	p.UPS.UpdateFromAgent(a.ID, ups.AgentRows(payload["ups"]), false, a.UPSPowers, a.UPSNames)
 	return 0

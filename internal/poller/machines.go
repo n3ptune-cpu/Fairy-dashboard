@@ -76,6 +76,9 @@ type machineStore struct {
 	// aside are the records whose host is not in the configuration of this start (setAsideLocked). They do not
 	// count for anything and are in machines.json as they were.
 	aside map[string]approval.Record
+	// out are the events that were decided and are not sent yet, in the order they were decided
+	// (queueMachinesLocked, emitMachines).
+	out []MachineEvent
 	// forget are the ids whose record the panel must delete as soon as the file can be read: a host was removed
 	// or added in the panel under that id while machines.json could not be read (true: it was added).
 	forget map[string]bool
@@ -184,10 +187,10 @@ func (p *Poller) dropRecordLocked(id string) (approval.Record, bool) {
 // The server calls it once, when OnMachine is set. Without it that waits for the first answer of an agent.
 func (p *Poller) MachinesLoaded() {
 	p.mu.Lock()
-	evs := p.mach.gone
+	p.queueMachinesLocked(p.mach.gone)
 	p.mach.gone = nil
 	p.mu.Unlock()
-	p.machinesChanged(evs)
+	p.machinesChanged()
 }
 
 // demoteLocked takes every id off the record that did not come on record through a Turn on or an admin's
@@ -406,15 +409,39 @@ func (p *Poller) announceLocked() (evs []MachineEvent) {
 	return evs
 }
 
-// machinesChanged writes what is not written yet and sends the events. Never called with p.mu held.
-func (p *Poller) machinesChanged(evs []MachineEvent) {
-	if err := p.flushMachines(); err != nil {
-		evs = append(evs, MachineEvent{Kind: "store", Detail: err.Error()})
-	}
-	p.emitMachines(evs)
+// queueMachinesLocked takes events for OnMachine in the order they were decided. Caller holds p.mu, which is
+// what makes the order of the queue the order of the decisions; they are sent after the lock is released
+// (machinesChanged, emitMachines).
+func (p *Poller) queueMachinesLocked(evs []MachineEvent) {
+	p.mach.out = append(p.mach.out, evs...)
 }
 
-func (p *Poller) emitMachines(evs []MachineEvent) {
+// machinesChanged writes what is not written yet and sends the events that wait. Never called with p.mu held.
+func (p *Poller) machinesChanged() {
+	if err := p.flushMachines(); err != nil {
+		p.emitMachines(MachineEvent{Kind: "store", Detail: err.Error()})
+		return
+	}
+	p.emitMachines()
+}
+
+// emitMachines sends the events that wait (and then more, which are no decision about a machine: a write that
+// failed) to OnMachine, in the order they were decided. Never called with p.mu held.
+//
+// The order is the point. Events are decided under p.mu and sent without it, and two answers of one poll are
+// two goroutines: each used to send what it had decided itself, and the one that decided first could send
+// last. The audit log and the Notifications list then ended with an alarm that had already been replaced
+// ("Check gone" written after "One machine id on two hosts", which was the standing one), or with "cleared"
+// under an alarm that stood. Now a decision goes into one queue while p.mu is held, and whoever sends takes
+// the whole queue: one sender at a time (machEmit), so what a later decision's goroutine sends first is the
+// earlier decision.
+func (p *Poller) emitMachines(more ...MachineEvent) {
+	p.machEmit.Lock()
+	defer p.machEmit.Unlock()
+	p.mu.Lock()
+	evs := append(p.mach.out, more...)
+	p.mach.out = nil
+	p.mu.Unlock()
 	if p.OnMachine != nil {
 		for _, e := range evs {
 			p.OnMachine(e)
@@ -493,11 +520,11 @@ func (p *Poller) PinMachine(agentID, machineID, how, by string) error {
 	p.mach.seq++
 	p.mach.dirty[agentID] = p.mach.seq
 	delete(p.mach.drop, agentID)
-	evs := p.announceLocked()
+	p.queueMachinesLocked(p.announceLocked())
 	p.version++
 	p.mu.Unlock()
 	err := p.flushMachines()
-	p.emitMachines(evs)
+	p.emitMachines()
 	return err
 }
 
@@ -600,10 +627,11 @@ func (p *Poller) AcceptMachine(agentID, by string, want AcceptWant) (what string
 			}
 		}
 	}
+	p.queueMachinesLocked(evs)
 	p.version++
 	p.mu.Unlock()
 	err = p.flushMachines()
-	p.emitMachines(evs)
+	p.emitMachines()
 	return what, before, err
 }
 
