@@ -643,7 +643,8 @@ func (s *Server) sendTrust(c *reqCtx, a config.Agent, name string, in api.TrustI
 	status, data, err := s.Poller.AgentRequest(c.r.Context(), a, "POST", api.PathApprovalTrust, in)
 	code, text := jsonx.S(data, "code"), textsafe.Clip(jsonx.S(data, "error"), maxAgentError)
 	switch {
-	case powerctl.NoAnswer(api.PathApprovalTrust, status, data, err) != nil:
+	case powerctl.NoAnswer(api.PathApprovalTrust, status, data, err) != nil,
+		status >= 200 && status < 300 && (status != 200 || jsonx.S(data, "state") == ""):
 		// No answer of the agent came back, by the panel's one rule for that (powerctl.NoAnswer, the rule of
 		// the power, fan and update requests): a timeout, a broken connection, a gateway's page, a redirect, a
 		// good status without the agent's answer, and 502 and 504 whatever the body, which is also what the
@@ -651,6 +652,13 @@ func (s *Server) sendTrust(c *reqCtx, a config.Agent, name string, in api.TrustI
 		// "refused ... Nothing was written." for the two statuses, which nobody can know. The words stay this
 		// route's own ("it may have been written"), also for a request that never left the panel: nothing is
 		// said about it that needs to be known. The machine is asked for its state before anything final is said.
+		//
+		// And a good status is the agent's answer to the trust only as 200 with the state it is in now: the
+		// agent answers nothing else. Any other 2xx, and a 200 whose JSON has no "state" (a proxy's {"ok":true}),
+		// is something else at its address: it read "refused: it answered without saying that the check is on
+		// now (state: )" and "it answered HTTP 204. Nothing was written." for a machine that had taken the
+		// trust (review of passkey-k, RK-02; the rule fix8 made for the fan and update routes, RF8-04, with
+		// the one member this route can ask for).
 		if s.trustTaken(c, a, in) {
 			res.Outcome, res.Text = "accepted", "it gave no answer to the request, and its state shows that it took the trust: it checks approvals itself now. It is locked."
 			break

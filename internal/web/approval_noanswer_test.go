@@ -284,6 +284,82 @@ func TestTheApprovalRoutesUseThePanelsOneRuleForNoAnswer(t *testing.T) {
 	}
 }
 
+// RK-02 (review of passkey-k): the machine takes the trust, and what comes back to the panel is a good status
+// that is not the agent's answer: 200 with an empty object, 204, a proxy's own JSON. The row read "refused: it
+// answered without saying that the check is on now (state: )" or "it answered HTTP 204. Nothing was written.",
+// red, for a machine that checks approvals now. Such an answer is "no answer": the panel looks at the machine,
+// finds the check on with the id and the proposal of this Turn on, and says "accepted"; and when the look
+// shows nothing yet, "no answer: it may have been written".
+func TestATurnOnAnsweredWithAGoodStatusThatIsNotTheAgents(t *testing.T) {
+	for name, back := range map[string]func() (int, jsonx.M){
+		"200 with an empty object":   func() (int, jsonx.M) { return 200, jsonx.M{} },
+		"204":                        func() (int, jsonx.M) { return 204, nil },
+		"200 with a proxy's JSON":    func() (int, jsonx.M) { return 200, jsonx.M{"ok": true, "message": "forwarded"} },
+		"202 with the agent's words": func() (int, jsonx.M) { return 202, jsonx.M{"state": api.ApprovalRequired} },
+	} {
+		for _, taken := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, the machine took the trust: %v", name, taken), func(t *testing.T) {
+				a := newApprovalEnv(t)
+				var mu sync.Mutex
+				inside := false
+				row, pr := turnOnTower(t, a, func() {
+					a.gb.Relay("tower", func(path string, body any) (int, jsonx.M) {
+						mu.Lock()
+						again := inside
+						inside = true
+						mu.Unlock()
+						if path != api.PathApprovalTrust || again {
+							return 0, nil
+						}
+						if taken {
+							if st, _ := a.gb.Forward("tower", path, body); st != 200 {
+								t.Errorf("the machine did not take the trust: %d", st)
+							}
+						}
+						return back()
+					})
+				})
+				if all := fmt.Sprint(row, pr); strings.Contains(all, "Nothing was written") || strings.Contains(all, "refused") || strings.Contains(all, "without saying") {
+					t.Fatalf("it says more than anybody knows: %v | %v", row, pr)
+				}
+				on := a.tower.Gate.StatusNow().State == api.ApprovalRequired
+				switch {
+				case on != taken:
+					t.Fatalf("the machine's state: %v", a.tower.Gate.StatusNow())
+				case taken && (row["outcome"] != "accepted" || !strings.Contains(fmt.Sprint(row["text"]), "its state shows that it took the trust") || a.s.Poller.BindingOf("tower").Record.MachineID == ""):
+					t.Fatalf("the machine took the trust: row %v, on record %+v", row, a.s.Poller.BindingOf("tower").Record)
+				case !taken && (row["outcome"] != "no_answer" || row["text"] != trustNoAnswer || a.s.Poller.BindingOf("tower").Record.MachineID != ""):
+					t.Fatalf("the machine did not take it: row %v, on record %+v", row, a.s.Poller.BindingOf("tower").Record)
+				}
+			})
+		}
+	}
+	// the agent's own answers stay what they were: its 200 with a state that is not "required" is its word that
+	// the check is not on, and its error with its own body is its "no" ("Nothing was written" is the agent's
+	// then; a 500 with a JSON error is the agent's by the panel's rule for every route)
+	for name, c := range map[string]struct {
+		status int
+		body   jsonx.M
+		want   string
+	}{
+		"200 with the state off":    {200, jsonx.M{"state": api.ApprovalOff}, "it answered without saying that the check is on now (state: off)"},
+		"500 with the agent's JSON": {500, jsonx.M{"error": "could not write the trust file: disk full"}, "could not write the trust file: disk full. Nothing was written."},
+	} {
+		a := newApprovalEnv(t)
+		row, _ := turnOnTower(t, a, func() {
+			a.gb.Lie("tower", func(path string) (int, jsonx.M) {
+				if path == api.PathApprovalTrust {
+					return c.status, c.body
+				}
+				return 0, nil
+			})
+		})
+		if row["outcome"] != "refused" || row["text"] != c.want {
+			t.Errorf("%s: %v", name, row)
+		}
+	}
+}
+
 // A cancel that came too late (the agent's 409 since its fix batch: "too late to cancel: systemctl poweroff was
 // already run") is the machine's own "no" with its words, never "cancelled".
 func TestACancelThatTheAgentCallsTooLateIsNotCancelled(t *testing.T) {
