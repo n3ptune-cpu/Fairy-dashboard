@@ -74,3 +74,47 @@ func TestTheRowIsOfflineWhenTheRunsReportSaysOff(t *testing.T) {
 		}
 	}
 }
+
+// Only a report that says "off" moves the row. A machine that a run ends in any other way (here: it was on,
+// it was only to be updated, and it stopped answering as the run began) keeps the row it has: "stale" while
+// its last answer is younger than offline_after, because the panel does not know that it is off, and neither
+// does the run. (The review of build 14 made every end of a machine mark its row, and no test noticed.)
+func TestARunThatDoesNotSayOffLeavesTheRowAsItIs(t *testing.T) {
+	a := signedIn(t)
+	e := a.e
+	f := newFarm(t, e)
+	f.on["pc-a"], f.booted["pc-a"], f.ready["pc-a"] = true, f.now.Add(-time.Hour), f.now.Add(-time.Hour)
+	f.offline()
+	f.optIn("pc-a")
+	if st := snapOf(e, "pc-a").Status; st != "online" {
+		t.Fatalf("the fixture: pc-a is %s", st)
+	}
+	r := e.wuStart(a.sess, map[string]any{"update_only": []string{"pc-a"}})
+	e.b.Mu.Lock()
+	f.on["pc-a"] = false // it stops answering before the run's first step
+	e.b.Mu.Unlock()
+	if cb := a.confirm(pendingID(r), false); cb.code != 303 {
+		t.Fatal(cb.code)
+	}
+	var run *wakerun.Run
+	for i := 0; i < 50 && run == nil; i++ {
+		f.tick()
+		if act, hist := e.s.WakeRuns.Snapshot(); act == nil && len(hist) > 0 {
+			run = hist[0]
+		}
+	}
+	if run == nil {
+		t.Fatal("the fixture: the run is still going after 50 s, when the row is offline anyway")
+	}
+	h := hostOf(run, "pc-a")
+	if h.On == wakerun.OnNo {
+		t.Fatalf("the fixture: the run says off: [%s] %s", h.State, h.Text)
+	}
+	row := snapOf(e, "pc-a")
+	if row.LastSeen == nil || f.now.Sub(*row.LastSeen) >= time.Duration(e.s.Cfg.OfflineAfter)*time.Second {
+		t.Fatalf("the fixture: the row's last answer is %v", row.LastSeen)
+	}
+	if row.Status != "stale" {
+		t.Fatalf("the run ended the machine as [%s/%s] %s, and its row is %q, %s after its last answer: want stale", h.State, h.On, h.Text, row.Status, f.now.Sub(*row.LastSeen))
+	}
+}
