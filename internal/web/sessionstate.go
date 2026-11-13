@@ -31,6 +31,8 @@ type liveSessions struct {
 	// steps remembers the step-up round trips of the last two minutes, by the session id they started with and
 	// by the one they ended with (steprepeat.go).
 	steps map[string]*stepRun
+	// approvals remembers the approval round trips of the last two minutes, by their session (approvalrepeat.go).
+	approvals map[string]*stepRun
 
 	streams streamSlots // how many live-update streams are open (stream.go)
 }

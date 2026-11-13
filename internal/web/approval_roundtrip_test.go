@@ -151,9 +151,12 @@ func TestApprovalRoundTrip(t *testing.T) {
 	if id := a.shutdown(); id == "" {
 		t.Fatal("an approval must not open the panel's confirmation window for other actions")
 	}
-	// The same answer again, and the kept action's state at the sign-in's callback: nothing runs.
-	if r := a.approvalCallback(q.Get("state")); r.code != 400 || out.times != 1 {
-		t.Fatalf("a second callback: %d, ran %d times", r.code, out.times)
+	// The same answer again, and the kept action's state at the sign-in's callback: nothing runs. (Since the
+	// rebase onto fix8 the page says what came of the action, 409 "Already approved ... already sent", and no
+	// longer 400 "The approval was not accepted ... Nothing was done." for an action that ran: approvalrepeat.go.)
+	if r := a.approvalCallback(q.Get("state")); r.code != 409 || !strings.Contains(string(r.raw), "The action was already sent. It is not sent again.") ||
+		len(r.hdr.Values("Set-Cookie")) != 0 || out.times != 1 {
+		t.Fatalf("a second callback: %d %s, ran %d times", r.code, r.raw, out.times)
 	}
 	// The result is shown once; the token is in no answer to the browser, no log line and no audit entry.
 	me := a.e.do("GET", "/api/me", nil, "Cookie", a.sess)

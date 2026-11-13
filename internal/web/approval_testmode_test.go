@@ -184,11 +184,18 @@ func TestTestModeTheWayBackFromPocketID(t *testing.T) {
 	if ap := laptop.Gate.StatusNow(); ap.State != api.ApprovalRequired {
 		t.Fatalf("the machine after Turn on through the page: %+v", ap)
 	}
-	// 4. the same address once more, either form: nothing is waiting any more
+	// 4. the same address once more, either form: nothing is waiting any more and nothing runs. (Since the rebase
+	// onto fix8 the page says what came of the action, 409 "Already approved ... already sent", and no longer
+	// 400 "No action is waiting ... Nothing was done." for a Turn on that was carried out: approvalrepeat.go.)
+	sent := len(laptop.Asked())
 	for _, p := range []string{again.RequestURI(), back.RequestURI()} {
-		if cb := e.do("GET", p, nil, "Cookie", ck); cb.code != 400 || !strings.Contains(string(cb.raw), "No action is waiting") {
+		if cb := e.do("GET", p, nil, "Cookie", ck); cb.code != 409 || !strings.Contains(string(cb.raw), "<h1>Already approved</h1>") ||
+			!strings.Contains(string(cb.raw), "The action was already sent. It is not sent again.") || strings.Contains(string(cb.raw), "Nothing was done") {
 			t.Fatalf("a callback address used again: %d %s", cb.code, cb.raw)
 		}
+	}
+	if len(laptop.Asked()) != sent {
+		t.Fatalf("a callback address used again sent something to the machine: %q", sentPaths(laptop.Asked()[sent:]))
 	}
 
 	// 5. the page is for that one path and GET only, and it writes its address out again instead of repeating it

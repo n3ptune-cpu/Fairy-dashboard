@@ -1164,7 +1164,12 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   The panel asks for that token in a round trip of its own (`/auth/approval/callback`, PKCE, the kept
   action's id as state) and checks it too, for the audit log and to fail early; the token is kept in memory
   with the one kept action, passed to the machines it was asked for, and never logged, stored or sent to the
-  browser. An approval is not a sign-in: it opens no window and changes no session. The trust is set from
+  browser. An approval is not a sign-in: it opens no window and changes no session. Opening the address of
+  an accepted approval a second time (a reload, the Back button) runs nothing and sets no cookie: for 2
+  minutes the page says what came of the action (already sent; still on its way; or refused or ended with an
+  error, with the details in the message on the panel's page and in the audit log), and never "nothing was
+  done" for an action that was sent. Over the limit on sign-in attempts this address answers the same small
+  page as the sign-in's, with the seconds to wait. The trust is set from
   the panel once, with a proof, and after that only on the machine. An approval names the machine it is for
   (the machine id in its trust file), and the panel makes it with the id it has on record for the host
   (`machines.json`), never with one a host answers with a challenge: a host that hands the panel's question

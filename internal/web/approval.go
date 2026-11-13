@@ -247,12 +247,22 @@ func (s *Server) approvalCallback(c *reqCtx) error {
 	q := c.r.URL.Query()
 	var kept *pendingAction
 	var foreign bool
+	// round: this callback's record for a repeat of it (approvalrepeat.go). Only the callback that took the
+	// kept action has one; it is forgotten again when the approval is not accepted.
+	var round *stepRun
 	if sess.SID != "" {
 		kept, foreign = s.codec.live.takePending(sess.SID, q.Get("state"), c.client(), s.now())
+		if kept != nil && kept.Approval != nil {
+			round = s.codec.live.beginApproval(sess.SID, q.Get("state"), q.Get("code"), c.client(), s.now())
+			defer s.codec.live.endApproval(round)
+		}
 	}
 	if !s.login.allow(c.loginKey()) {
+		// The limit on sign-in attempts counts this way back from Pocket ID too. A browser comes here: it gets
+		// the page the sign-in's own callback gives over the same limit, with the time to wait and Retry-After
+		// (audit 6, r4-p1-04; this was the last line of JSON, "try again in a minute", without the header).
 		c.auditAnon("auth.login", "denied: rate limited", "", nil, nil)
-		return apierr.New(429, "too many login attempts; try again in a minute")
+		return callbackPage{c: c, title: "The approval was not used", back: "/"}.limited(s.login, c.loginKey())
 	}
 	u := c.sessionUser()
 	if u == nil {
@@ -276,6 +286,11 @@ func (s *Server) approvalCallback(c *reqCtx) error {
 		return fail("another client", "The answer from Pocket ID came back from another browser or address than the one that asked for it.")
 	case kept == nil || kept.Approval == nil:
 		kept = nil
+		// The repeat of a callback whose approval was accepted (a reload, the Back button): what came of the
+		// action, not "nothing was done" for an action that was carried out (approvalrepeat.go).
+		if run := s.codec.live.approvalRound(sess.SID, q.Get("state"), q.Get("code"), c.client()); run != nil && s.repeatedApproval(c, u, run) {
+			return nil
+		}
 		// the two causes people meet come first (audit 5, r1-b2-08): one action waits per session, and a
 		// restart of the panel forgets it
 		return fail("nothing waiting", "No action is waiting for this approval any more. Another tab of yours started an action meanwhile "+
@@ -325,7 +340,9 @@ func (s *Server) approvalCallback(c *reqCtx) error {
 	s.codec.live.touch(sess.SID, s.now()) // approving at Pocket ID is real use; it is no sign-in and opens no window
 	c.auditAnon("auth.approval", "ok", actorOf(u), &u.Sub, map[string]any{"runs": kept.Action, "machines": kept.Approval.machines(),
 		"entries": len(kept.Approval.plan.Entries()), "approver": idt.Subject})
-	s.resumePendingWith(c, kept, &approvalGrant{plan: kept.Approval, token: rawID, sub: idt.Subject})
+	// what came of the kept action is kept with the round trip, for a repeat of this callback (approvalrepeat.go)
+	s.codec.live.approvalAccepted(round, target, s.now())
+	s.codec.live.stepOutcome(round, s.resumePendingWith(c, kept, &approvalGrant{plan: kept.Approval, token: rawID, sub: idt.Subject}))
 	c.redirect(target)
 	return nil
 }
