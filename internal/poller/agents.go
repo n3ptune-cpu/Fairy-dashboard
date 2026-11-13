@@ -55,18 +55,23 @@ func (p *Poller) RelaySystem(agentID string) *model.System {
 // kind "node". Everything that tells a page "which row is this agent" asks here, so that the id it names is
 // the id of a row the browser has: with the node's row there, the node's id; after a restart of the panel
 // with the machine off (no node row until its Proxmox API answers), the agent's id.
+//
+// A node's row is ONE agent's (AgentFor: the first agent of the configuration whose link is that node). A
+// second agent that names the same node keeps its own row and is its own row here.
 func (p *Poller) ShownSystem(agentID string) *model.System {
 	a, ok := p.AgentByID(agentID)
 	if !ok {
 		return nil
 	}
+	link := p.linkOfLocked(a)
+	first, _ := p.AgentFor(link)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	own, okA := p.systems[agentID]
 	if !okA {
 		return nil
 	}
-	if node, okN := p.systems[p.linkOfLocked(a)]; okN && node.Kind == "node" {
+	if node, okN := p.systems[link]; okN && node.Kind == "node" && first.ID == agentID {
 		return &node
 	}
 	return &own

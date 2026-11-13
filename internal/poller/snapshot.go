@@ -244,9 +244,20 @@ func (p *Poller) buildSnapshot() []model.System {
 		systems[k] = v
 	}
 	// An agent running ON a Proxmox node (links_to node-…) enriches that node instead of being a second host.
+	// The row of a node is ONE agent's: the first agent of the configuration whose link is that node, which
+	// is the agent AgentFor names for the row and so the one every action on the row goes to. Until build 13
+	// a second agent that named the same node (two agents on one host, or one in a guest with the host's
+	// node:) was merged over the first, field by field, and its own row was taken away: the row then showed
+	// the second agent's approval block and version next to the first agent's record and buttons. The second
+	// agent now keeps its own row.
 	reps := p.reportsLocked()
 	clock, _ := p.now()
+	rowOf := map[string]string{} // node id -> the agent its row belongs to
 	for _, a := range p.Agents() {
+		link := p.linkOfLocked(a)
+		if _, taken := rowOf[link]; !taken && link != "" {
+			rowOf[link] = a.ID
+		}
 		var kept *time.Time             // when it was last seen, for a row that has no time of its own (lastseen.go)
 		if s, ok := systems[a.ID]; ok { // its approval block with the panel's decision; from the record when it is silent
 			s.Approval = p.shownApprovalLocked(a.ID, s.Approval, reps)
@@ -259,9 +270,9 @@ func (p *Poller) buildSnapshot() []model.System {
 			}
 			systems[a.ID] = s
 		}
-		node, okN := systems[p.linkOfLocked(a)]
+		node, okN := systems[link]
 		agent, okA := systems[a.ID]
-		if !okN || !okA || node.Kind != "node" {
+		if !okN || !okA || node.Kind != "node" || rowOf[link] != a.ID {
 			continue
 		}
 		merged := mergeAgentIntoNode(node, agent)

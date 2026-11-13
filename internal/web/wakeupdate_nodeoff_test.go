@@ -368,9 +368,10 @@ func TestRunAcrossTheIDChangeLeavesANodeWithGuestsOn(t *testing.T) {
 
 // A run never switches off a machine it did not wake, across the id change too. With two agents linked to one
 // node (a configuration mistake) the configuration names that node for neither of them (the rule's guard: no
-// other agent's entry may mean the same node), so the node's row stands for neither agent's machine: a run
-// that knows one of them by its agent's id lets go of it and sends nothing. (That the row's requests must go
-// to the run's own agent is another check: TestARunDoesNotFollowItsMachineToANodeTheConfigurationDoesNotName.)
+// other agent's entry may mean the same node), so the node's row stands for neither agent's machine in a run:
+// a run that knows the first of them by its agent's id lets go of it and sends nothing. The second agent has
+// a row of its own since build 14 (the node's row is ONE agent's: poller, TestTheRowOfANodeBelongsToOneAgent),
+// and that row, whose requests go to that very agent, is what a run knows it by: never the node's row.
 func TestTheNodesRowStandsForARunsMachineOnlyWithItsOwnAgent(t *testing.T) {
 	e := setupSystems(t, nil) // pve-agent is linked to node-srv-pvea and is part of that row
 	ops := runOps{e.s}
@@ -391,13 +392,17 @@ func TestTheNodesRowStandsForARunsMachineOnlyWithItsOwnAgent(t *testing.T) {
 	if a, ok := e.s.Poller.AgentFor("node-srv-pvea"); !ok || a.ID != "pve-agent" {
 		t.Fatalf("the fixture: the node's requests go to %s", a.ID)
 	}
-	for _, id := range []string{"pve-agent", "second-agent"} {
-		if x, ok := ops.system(id); ok {
-			t.Fatalf("a row for %s: %s", id, x.ID)
-		}
-		if _, ok := ops.Host(id); ok {
-			t.Fatalf("the run takes the node's row for the machine of %s", id)
-		}
+	if x, ok := ops.system("pve-agent"); ok {
+		t.Fatalf("a row for pve-agent: %s", x.ID)
+	}
+	if _, ok := ops.Host("pve-agent"); ok {
+		t.Fatal("the run takes the node's row for the machine of pve-agent")
+	}
+	if x, ok := ops.system("second-agent"); !ok || x.ID != "second-agent" || x.Kind != "agent" {
+		t.Fatalf("the row of second-agent: %s (%s) %v, want its own", x.ID, x.Kind, ok)
+	}
+	if a, ok := e.s.Poller.AgentFor("second-agent"); !ok || a.ID != "second-agent" {
+		t.Fatalf("the requests for the row of second-agent go to %s", a.ID)
 	}
 	// an id that is no agent's and no row's is nobody
 	if _, ok := ops.system("nobody"); ok {
