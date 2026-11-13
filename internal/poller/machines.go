@@ -254,6 +254,28 @@ func (p *Poller) reloadMachinesLocked() {
 	}
 }
 
+// clampMachineLocked makes sure the record of the agent is not newer than the panel's clock: asked is the
+// moment the panel is about to ask the agent, and a record whose id came on record "after" that moment is
+// counted as of that moment. Caller holds p.mu.
+//
+// The decision "the check is gone" (approval.BindVanished) takes an answer only when it was asked at or after
+// the time the id came on record: an answer from before a Turn on says nothing about the machine after it. With
+// the panel's clock BEHIND the record's time (a record written while the clock was ahead, a host restored to
+// an older time) no answer ever was, for as long as the clock stayed behind: a machine whose check was cleared
+// read "required", "already on", its accept answered "nothing to accept", and every request was refused with
+// "press Approval on the host's page", where there was nothing to press (review of passkey-k, RK-03). A
+// record cannot be newer than now, so its time is taken down to the moment of this question, in memory: the
+// answer that follows counts, the alarm and its button are there with it. The file is not written for that
+// alone (the next write of this record carries the time), and a clock that is right again changes nothing:
+// the record is then older than every answer, as every record is. A record that is not newer than the clock
+// is never touched, so an answer that was asked before an id came on record still says nothing about it.
+func (p *Poller) clampMachineLocked(id string, asked time.Time) {
+	if r, ok := p.mach.records[id]; ok && !asked.IsZero() && r.At.After(asked) {
+		r.At = asked.UTC()
+		p.mach.records[id] = r
+	}
+}
+
 // reportLocked is what the agent says now. Caller holds p.mu.
 func (p *Poller) reportLocked(id string) approval.Report {
 	info, heard := p.agentInfo[id]

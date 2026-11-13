@@ -92,6 +92,9 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		timeout = time.Duration(p.Cfg.RequestTimeout * float64(time.Second))
 	}
 	asked, _ := p.now()
+	p.mu.Lock()
+	p.clampMachineLocked(a.ID, asked) // a record is never newer than the panel's clock (machines.go)
+	p.mu.Unlock()
 	cctx, cancel := context.WithTimeout(ctx, timeout+500*time.Millisecond)
 	payload, err := p.Backend.FetchAgentMetrics(cctx, a, timeout)
 	cancel()

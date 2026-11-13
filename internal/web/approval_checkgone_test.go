@@ -5,10 +5,12 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
 
@@ -144,5 +146,45 @@ func TestATokenSendsNothingToAHostOnRecord(t *testing.T) {
 	}
 	if n := len(a.laptop.Asked()); n != 0 {
 		t.Fatalf("the machine was sent %q", sentPaths(a.laptop.Asked()))
+	}
+}
+
+// RK-03 (review of passkey-k): the panel's clock is BEHIND the time the id came on record (the record was written
+// while the clock was ahead, or the host was restored to an older time). "The check is gone" counts an answer
+// only when it was asked at or after the record's time, so no answer counted: the request was refused with
+// "press Approval on the host's page", the page said "required" and "already on" with no button, and the accept
+// answered "nothing to accept": a dead end for as long as the clock stayed behind. A record is never counted as
+// newer than the panel's clock now: the alarm and "Accept that its check is off" are there with the first answer.
+func TestACheckThatIsGoneWithThePanelsClockBehindCanBeAccepted(t *testing.T) {
+	a := newApprovalEnv(t)
+	a.require(t, a.laptop)
+	body := a.shutdownBody()
+	a.s.Poller.Clock = func() time.Time { return time.Now().Add(-2 * time.Hour) }
+	a.clearTrust(t, a.laptop)
+	a.poll()
+	if b := a.s.Poller.BindingOf("laptop"); b.Status != approval.BindVanished {
+		t.Fatalf("after one poll with the clock two hours behind: %+v", b)
+	}
+	fresh := []string{"Cookie", a.cookie(controller(), 0), "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	r := a.do("POST", "/api/systems/laptop/power", body, fresh...)
+	if r.code != 409 || !strings.Contains(fmt.Sprint(r.body["detail"]), "laptop had the check on and now shows none") || controlWrites(a.laptop) != 0 {
+		t.Fatalf("a shutdown while the check is gone: %d %s, sent %q", r.code, r.raw, sentPaths(a.laptop.Asked()))
+	}
+	// the page has the alarm and the button, and the accept is taken
+	_, ms := a.page(t)
+	if m := ms["laptop"]; m["can_accept"] != true || m["accept"] != "off" || m["binding"] != approval.BindVanished || strings.Contains(fmt.Sprint(m["why"]), "already on") {
+		t.Fatalf("laptop's row on the approval page: %v", m)
+	}
+	if what, _, err := a.s.Poller.AcceptMachine("laptop", "test admin", poller.AcceptWant{Off: true}); what != "off" || err != nil {
+		t.Fatalf("the accept: %q %v", what, err)
+	}
+	if b := a.s.Poller.BindingOf("laptop"); !b.OK() || b.Checks() {
+		t.Fatalf("after the accept: %+v", b)
+	}
+	// with the clock right again nothing comes back
+	a.s.Poller.Clock = time.Now
+	a.poll()
+	if b := a.s.Poller.BindingOf("laptop"); !b.OK() || b.Checks() {
+		t.Fatalf("with the clock right again: %+v", b)
 	}
 }
