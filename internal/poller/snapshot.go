@@ -245,9 +245,18 @@ func (p *Poller) buildSnapshot() []model.System {
 	}
 	// An agent running ON a Proxmox node (links_to node-…) enriches that node instead of being a second host.
 	reps := p.reportsLocked()
+	clock, _ := p.now()
 	for _, a := range p.Agents() {
+		var kept *time.Time             // when it was last seen, for a row that has no time of its own (lastseen.go)
 		if s, ok := systems[a.ID]; ok { // its approval block with the panel's decision; from the record when it is silent
 			s.Approval = p.shownApprovalLocked(a.ID, s.Approval, reps)
+			// An agent that has not answered since the panel started: the row that is shown says when it was
+			// last seen, from before the start. Only here, in the copy: the poller's own entry stays without a
+			// time, and nothing that decides on a machine's state reads this one.
+			if s.LastSeen == nil {
+				kept = p.keptSeenLocked(a.ID, clock)
+				s.LastSeen = kept
+			}
 			systems[a.ID] = s
 		}
 		node, okN := systems[p.linkOfLocked(a)]
@@ -255,7 +264,11 @@ func (p *Poller) buildSnapshot() []model.System {
 		if !okN || !okA || node.Kind != "node" {
 			continue
 		}
-		systems[node.ID] = mergeAgentIntoNode(node, agent)
+		merged := mergeAgentIntoNode(node, agent)
+		if merged.LastSeen == nil { // a node that the cluster shows as off since the start, with a silent agent
+			merged.LastSeen = kept
+		}
+		systems[node.ID] = merged
 		delete(systems, a.ID)
 	}
 	pend := p.freshPendingLocked()

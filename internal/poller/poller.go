@@ -110,6 +110,16 @@ type Poller struct {
 	// agent id -> when its version was last written to state.json, and whether a newer one waits to be written
 	versionSavedAt map[string]time.Time
 	versionUnsaved map[string]bool
+	// agent id -> the time of its last good answer, kept over a restart, and what state.json holds of it
+	// (lastseen.go). seenWriteAt: when the times were last written; seenDrop: entries to take out of the file.
+	lastSeen    map[string]time.Time
+	seenSaved   map[string]time.Time
+	seenWriteAt time.Time
+	seenDrop    []string
+	seenErr     string
+	// seenWrite is held for one write of the times, from the copy to the file (flushSeen). Taken before mu,
+	// never while mu is held.
+	seenWrite sync.Mutex
 	// agent id -> how often an agent was added in the panel under this id since the panel started (AgentEntry)
 	agentAdded map[string]int
 	// mach is the record of the machines that check approvals themselves (machines.go)
@@ -175,6 +185,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 	}
 	p.Admin = adminstate.New(cfg.DataDir)
 	p.loadLastVersions()
+	p.loadLastSeen()
 	p.loadMachines()
 	p.Scheduler = scheduler.New(filepath.Join(cfg.DataDir, "state.json"), cfg.Boost(), nil)
 	p.buildJobs()
@@ -499,8 +510,12 @@ func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
 		p.queueMachinesLocked([]MachineEvent{{AgentID: a.ID, Kind: "gone", Binding: approval.Binding{Record: rec, Known: true}}})
 		p.version++
 	}
+	seenGone := p.forgetSeenLocked(a.ID) // a host that is added was never seen, whatever state.json holds for its id
 	p.mu.Unlock()
 	p.machinesChanged()
+	if seenGone {
+		p.flushSeen()
+	}
 	p.Scheduler.Add(p.agentJob(a))
 	p.Scheduler.Kick("agent:" + a.ID)
 	return nil
@@ -551,6 +566,7 @@ func (p *Poller) RemoveAgent(id string) {
 	delete(p.sourceMono, "agent:"+id)
 	p.sourceOrder = slices.DeleteFunc(p.sourceOrder, func(x string) bool { return x == "agent:"+id })
 	p.forgetMachineLocked(id, false) // a host added later under the same id starts without a machine id on record
+	seenGone := p.forgetSeenLocked(id)
 	p.queueMachinesLocked(p.announceLocked())
 	p.syncPresent()
 	p.snapVer, p.snapJSONVer = -1, -1
@@ -559,6 +575,9 @@ func (p *Poller) RemoveAgent(id string) {
 	p.machinesChanged()
 	if kept { // a host added later under the same id starts without a version
 		p.saveVersion(id, "", time.Time{})
+	}
+	if seenGone { // and was never seen
+		p.flushSeen()
 	}
 	p.Power.UpdateRemote(id, nil, false, nil, nil)
 	p.UPS.UpdateFromAgent(id, nil, false, nil, nil)
@@ -615,8 +634,10 @@ func (p *Poller) Run(ctx context.Context) {
 			// stop waits for the poller only a few seconds, and a poll that hangs must not cost it), then what
 			// the polls that were on their way still brought.
 			p.FlushVersions()
+			p.FlushSeen() // and when each machine was last seen (lastseen.go), the same two times
 			p.Scheduler.Wait()
 			p.FlushVersions()
+			p.FlushSeen()
 			p.Power.Close()
 			return
 		case <-t.C:

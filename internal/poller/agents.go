@@ -130,8 +130,10 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		interval := p.agentInterval(a.ID) // before p.mu: it asks the scheduler
 		p.mu.Lock()
 		now, _ := p.now()
+		seenDue := false
 		if prev, ok := p.sources[name]; !ok || prev.OK {
 			slog.Info("agent poll failed", "agent", a.ID, "error", msg)
+			seenDue = ok && p.noteGoneLocked(a.ID, now) // it answered until now: when it was last seen is written soon (lastseen.go)
 		}
 		if prev, ok := p.systems[a.ID]; ok {
 			p.systems[a.ID] = p.degrade(prev, now, msg)
@@ -185,6 +187,9 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		p.agentQuiet[a.ID] = q
 		n := p.agentFailures[a.ID]
 		p.mu.Unlock()
+		if seenDue {
+			p.flushSeen()
+		}
 		p.Power.UpdateRemote(a.ID, nil, true, a.PowerLinks, a.PowerExcludeFromTotal)
 		p.UPS.UpdateFromAgent(a.ID, nil, true, a.UPSPowers, a.UPSNames)
 		if n >= 2 {
@@ -214,6 +219,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	}
 	p.agentInfo[a.ID] = info
 	newVersion := p.noteVersionLocked(a.ID, info.Version, now)
+	seenDue := p.noteSeenLocked(a.ID, now) // for the next start of the panel (lastseen.go)
 	delete(p.agentFailures, a.ID)
 	delete(p.agentQuiet, a.ID)
 	p.systems[a.ID] = p.stamp(sys, now)
@@ -226,6 +232,9 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	p.mu.Unlock()
 	if newVersion {
 		p.saveVersion(a.ID, info.Version, now)
+	}
+	if seenDue {
+		p.flushSeen()
 	}
 	p.machinesChanged()
 	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)

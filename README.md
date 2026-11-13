@@ -1345,6 +1345,12 @@ unpowered hosts", users, tokens, sessions and the sign-in picture.
   more), or with `fairy admin sessions list` and `fairy admin sessions revoke <id from the list>` for that one
   session. The browser that signed out no longer has the cookie, so signing out there once more is not
   possible.
+* `last-seen.json` in the data folder is the one file that decides nothing: the time each agent last
+  answered, written about once a minute while machines answer and when one stops answering, and read at
+  start so that a machine that is off is shown with "last seen 3 h ago" instead of "never". Nothing but
+  that line reads it ("Update unpowered hosts" still takes a machine for off only after 15 minutes without
+  an answer since the panel started). A damaged, empty or linked `last-seen.json` is not used and not
+  overwritten; the panel starts all the same and says so once in its log. Delete the file to start it over.
 * State files fail closed: an unreadable `users.json`, `sessions.json`, `tokens.json` or `state.json`, and a
   corrupt `users.json` or `state.json`, stops the panel at start, and at run time such a file grants nothing
   (no sessions, control off) instead of being read as empty; it is never overwritten. A file that exists and
@@ -1437,7 +1443,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/config` | Reads and checks `config.yaml` (`config.go`, `validate.go`) and secrets from `fairy.env` / the environment (`env.go`). |
 | `internal/admin` | The break-glass CLI `fairy admin`: one file per command (users and sites, tokens, sessions, control, audit, config check, health). |
 | `internal/access` | `users.json`: users (by OIDC subject) with a role and sites, the list of sites, and which site each host / power source / UPS is assigned to. |
-| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the hosts' custom model names (`hostmodel.go`), the session list. |
+| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the hosts' custom model names (`hostmodel.go`), the session list. Also `machines.json` (`machines.go`) and `last-seen.json` (`lastseen.go`: when each agent last answered, so that a machine that is off when the panel starts is shown with that time and not with "last seen never"). |
 | `internal/statefile` | Safe shared JSON files (state, sessions, tokens, users): lock, re-read, write to a temp file, rename (so CLI and server never lose changes). |
 | `internal/tokens` | Personal API tokens (`fy_...`), stored only as hashes in `tokens.json`. |
 | `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |
