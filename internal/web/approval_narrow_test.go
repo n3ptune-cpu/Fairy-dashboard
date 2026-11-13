@@ -19,6 +19,7 @@ func TestUINarrowTablesKeepAWordsWidth(t *testing.T) {
 	for _, want := range []string{
 		".table.audit td:nth-child(3), .table.audit th:nth-child(3) { min-width: 17ch; }", // "approval.turn_on" is 16 letters
 		".table.audit td:nth-child(4), .table.audit th:nth-child(4) { min-width: 12ch; }",
+		".table.audit td:nth-child(3) > code { white-space: nowrap; }", // the name itself is never broken (the browser run: "wakeupdate.switch" still was)
 		".table.notes td:nth-child(4), .table.notes th:nth-child(4) { min-width: 30ch; }",
 	} {
 		if !strings.Contains(css, want) {
@@ -30,6 +31,7 @@ func TestUINarrowTablesKeepAWordsWidth(t *testing.T) {
 	for _, want := range []string{
 		`<table class="table audit"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Result</th>`,
 		`<table class="table notes"><thead><tr><th>When</th><th>Severity</th><th>Host</th><th>What happened</th><th>Type</th>`,
+		"<td><code>${esc(e.action)}</code>${auditDetails(e)}</td>", // the action's name is the cell's first child, a code element
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js: the columns changed, the minimum widths in app.css go by their number: %q", want)

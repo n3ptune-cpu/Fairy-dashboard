@@ -496,6 +496,7 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
    "Result" had 234 px); the table scrolls sideways inside its box, as it did */
 .table.audit td:nth-child(3), .table.audit th:nth-child(3) { min-width: 17ch; }
 .table.audit td:nth-child(4), .table.audit th:nth-child(4) { min-width: 12ch; }
+.table.audit td:nth-child(3) > code { white-space: nowrap; }  /* an action's name is one word: never broken ("wakeupdate.switch" is wider than 17 ch of the cell's own font) */
 .audit-det { background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
 .audit-det:hover, .audit-det:focus-visible { color: var(--text); }
 
