@@ -21,6 +21,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/powerctl"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 )
 
@@ -619,14 +620,6 @@ func (s *Server) turnOnRun(c *reqCtx, u *model.User, g *approvalGrant, hosts []s
 // and not "nothing was written", because nobody knows.
 const trustNoAnswer = "no answer: it may have been written; look at the machine's Approval."
 
-// agentsOwn reports whether an answer with an error status is the agent's own "no": the agent answers every
-// refusal with a JSON object that has its reason in "error" or a "code". 502 and 504 are never that: they are
-// what a gateway answers after it passed the request on, and what the agent itself answers when its helper was
-// sent the request and did not answer in time (Fairy-agent, helperUnanswered: "it may be written all the same").
-func agentsOwn(status int, code, text string) bool {
-	return status >= 400 && status != 502 && status != 504 && (code != "" || text != "")
-}
-
 // trustTaken is the panel's own look at a machine that was sent its trust and gave no answer, before anything
 // final is said about it: it asks the machine for its state now. true only when the machine shows the check on
 // with the machine id the panel made up for it and with the hash of exactly this proposal: then it took the
@@ -650,11 +643,14 @@ func (s *Server) sendTrust(c *reqCtx, a config.Agent, name string, in api.TrustI
 	status, data, err := s.Poller.AgentRequest(c.r.Context(), a, "POST", api.PathApprovalTrust, in)
 	code, text := jsonx.S(data, "code"), textsafe.Clip(jsonx.S(data, "error"), maxAgentError)
 	switch {
-	case err != nil || status < 200 || (status >= 300 && !agentsOwn(status, code, text)):
-		// The request left the panel and no answer of the agent came back: a timeout, a broken connection, a
-		// gateway's page, or the agent's own 504 (its helper has the trust and did not answer in time). It used
-		// to read "refused ... Nothing was written." for the last two, which nobody can know. The machine is
-		// asked for its state before anything final is said.
+	case powerctl.NoAnswer(api.PathApprovalTrust, status, data, err) != nil:
+		// No answer of the agent came back, by the panel's one rule for that (powerctl.NoAnswer, the rule of
+		// the power, fan and update requests): a timeout, a broken connection, a gateway's page, a redirect, a
+		// good status without the agent's answer, and 502 and 504 whatever the body, which is also what the
+		// agent itself answers when its helper has the trust and did not answer in time. It used to read
+		// "refused ... Nothing was written." for the two statuses, which nobody can know. The words stay this
+		// route's own ("it may have been written"), also for a request that never left the panel: nothing is
+		// said about it that needs to be known. The machine is asked for its state before anything final is said.
 		if s.trustTaken(c, a, in) {
 			res.Outcome, res.Text = "accepted", "it gave no answer to the request, and its state shows that it took the trust: it checks approvals itself now. It is locked."
 			break

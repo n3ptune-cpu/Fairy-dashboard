@@ -90,7 +90,10 @@ func TestUpdateAllSaysWhatHappenedOnEachMachine(t *testing.T) {
 		t.Fatal("the broken machine was sent something")
 	}
 
-	// 4. a machine that stops answering between the dialog and the approval is "offline", not "refused"
+	// 4. a machine that stops answering between the dialog and the approval is not "refused". Its request left
+	// the panel and got no answer (a timeout): the update may have started, so it is "no answer", counted
+	// apart, and not "offline" under "1 not" (the rebase onto fix8: the panel's one rule for a request without
+	// an answer, powerctl.NoAnswer, R2)
 	a = newApprovalEnv(t)
 	a.selfUpdating(t)
 	a.require(t, a.laptop, a.tower)
@@ -104,8 +107,52 @@ func TestUpdateAllSaysWhatHappenedOnEachMachine(t *testing.T) {
 		t.Fatal(cb.code)
 	}
 	res = a.result(t)
-	if res["ok"] != false || res["message"] != "1 started, 1 not." || !strings.Contains(fmt.Sprint(res["items"]), "tower: offline (") {
-		t.Fatalf("one offline: %v", res)
+	if res["ok"] != false || res["message"] != "1 started, not known for 1 (no answer)." || !strings.Contains(fmt.Sprint(res["items"]), "tower: no answer (agent unreachable: timeout: the update may have started)") ||
+		strings.Contains(fmt.Sprint(res), "refused") || strings.Contains(fmt.Sprint(res["items"]), "offline") {
+		t.Fatalf("one without an answer: %v", res)
+	}
+
+	// 5. the agent's own 504 (its helper was handed the update and did not answer) and a gateway's 502: the same.
+	// And the approved set is what was sent: both machines were sent their update, each with its approval
+	for name, answer := range map[string]func() (int, jsonx.M){
+		"the agent's 504": func() (int, jsonx.M) {
+			return 504, jsonx.M{"error": "the helper was sent the update and did not answer in time"}
+		},
+		"a gateway's 502": func() (int, jsonx.M) { return 502, nil },
+	} {
+		a = newApprovalEnv(t)
+		a.selfUpdating(t)
+		a.require(t, a.laptop, a.tower)
+		r = a.post("/api/admin/updates", map[string]any{})
+		id, _, ok = approvalAsked(r)
+		if !ok {
+			t.Fatalf("%s: Update all: %d %s", name, r.code, r.raw)
+		}
+		sent := 0
+		a.gb.Relay("tower", func(path string, body any) (int, jsonx.M) {
+			if path != "/update" {
+				return 0, nil
+			}
+			if b, _ := body.(map[string]any); b["approval"] != nil {
+				sent++
+			}
+			return answer()
+		})
+		if cb := a.approve(t, id); cb.code != 303 {
+			t.Fatal(cb.code)
+		}
+		res = a.result(t)
+		items := fmt.Sprint(res["items"])
+		if res["ok"] != false || res["message"] != "1 started, not known for 1 (no answer)." || !strings.Contains(items, "laptop: started") ||
+			!strings.Contains(items, "tower: no answer (http 50") || !strings.Contains(items, " in place of an answer: the update may have started)") || strings.Contains(items, "refused") || strings.Contains(items, "offline") {
+			t.Fatalf("%s: %v", name, res)
+		}
+		if sent != 1 || len(a.laptop.Passed()) != 1 {
+			t.Fatalf("%s: tower was sent %d approved updates, laptop %d", name, sent, len(a.laptop.Passed()))
+		}
+		if got := auditOutcomes(a.s.Cfg.AuditLog); !strings.Contains(got, "update.agent error 502: no answer (http 50") || !strings.Contains(got, "update.agent ok") {
+			t.Fatalf("%s: the audit log:\n%s", name, got)
+		}
 	}
 }
 
@@ -178,13 +225,19 @@ func TestUpdateSummary(t *testing.T) {
 		res []updateResult
 		ok  bool
 	}{
-		"Update started on 1 agent.":            {r(updStarted), true},
-		"Update started on 3 agents.":           {r(updStarted, updStarted, updStarted), true},
-		"2 started, 1 not.":                     {r(updStarted, updRefused, updStarted), false},
-		"0 started, 3 not.":                     {r(updRefused, updNotSent, updOffline), false},
-		"Update started on 1 agent, 2 skipped.": {r(updStarted, updSkipped, updSkipped), true},
-		"1 started, 1 not, 1 skipped.":          {r(updStarted, updNotSent, updSkipped), false},
-		"No update was started: 2 skipped.":     {r(updSkipped, updSkipped), false},
+		"Update started on 1 agent.":  {r(updStarted), true},
+		"Update started on 3 agents.": {r(updStarted, updStarted, updStarted), true},
+		"2 started, 1 not.":           {r(updStarted, updRefused, updStarted), false},
+		"0 started, 3 not.":           {r(updRefused, updNotSent, updOffline), false},
+		// a request without an answer may have started: counted apart, never under "not"
+		"1 started, not known for 1 (no answer).":                   {r(updStarted, updNoAnswer), false},
+		"0 started, not known for 2 (no answer).":                   {r(updNoAnswer, updNoAnswer), false},
+		"1 started, 1 not, not known for 1 (no answer).":            {r(updStarted, updRefused, updNoAnswer), false},
+		"0 started, not known for 1 (no answer), 1 skipped.":        {r(updNoAnswer, updSkipped), false},
+		"1 started, 1 not, not known for 1 (no answer), 1 skipped.": {r(updStarted, updOffline, updNoAnswer, updSkipped), false},
+		"Update started on 1 agent, 2 skipped.":                     {r(updStarted, updSkipped, updSkipped), true},
+		"1 started, 1 not, 1 skipped.":                              {r(updStarted, updNotSent, updSkipped), false},
+		"No update was started: 2 skipped.":                         {r(updSkipped, updSkipped), false},
 	} {
 		msg, lines, ok := updateSummary(c.res)
 		if msg != want || ok != c.ok || len(lines) != len(c.res) || strings.Contains(msg, "done") {

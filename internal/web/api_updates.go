@@ -14,6 +14,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/powerctl"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/updates"
 )
@@ -273,9 +274,10 @@ type updateResult struct {
 	Result map[string]any `json:"result,omitempty"`
 	// Name is the machine's name; State what became of its update: started, refused (the machine said no),
 	// not_sent (the panel sent it nothing: its check cannot be used, its binding is an alarm, it was not part
-	// of the approval), offline (it did not answer the request, or stopped answering after the dialog listed
-	// it), skipped (it was not part of this press: up to date, busy, not answering when the button was pressed).
-	// Why says it in a few words.
+	// of the approval), offline (the request did not leave the panel: no connection to it could be had; or it
+	// stopped answering after the dialog listed it), no_answer (the request left and no answer of the agent
+	// came back: the update may have started), skipped (it was not part of this press: up to date, busy, not
+	// answering when the button was pressed). Why says it in a few words.
 	Name  string `json:"name"`
 	State string `json:"state"`
 	Why   string `json:"why,omitempty"`
@@ -288,6 +290,12 @@ const (
 	updNotSent = "not_sent"
 	updOffline = "offline"
 	updSkipped = "skipped"
+	// updNoAnswer: the request got no answer of the agent (powerctl.Unanswered: a timeout, a connection that
+	// broke, 502 and 504, an answer that is not the agent's). It may have arrived, so the machine is counted
+	// neither with the ones that started nor with the ones that did not: a row "offline" under "1 not" said
+	// that its update had not started, which nobody knows (R2; the single Update says "no answer (http 504):
+	// it may have arrived" for the same answer).
+	updNoAnswer = "no_answer"
 )
 
 // shortWhy is an error in a few words for a line of a list: its first sentence, without the machine's own words
@@ -340,17 +348,22 @@ func updateSummary(results []updateResult) (message string, lines []string, allO
 		}
 		lines = append(lines, line)
 	}
-	not := n[updRefused] + n[updNotSent] + n[updOffline]
-	allOK = not == 0 && n[updStarted] > 0
+	not, lost := n[updRefused]+n[updNotSent]+n[updOffline], n[updNoAnswer]
+	allOK = not == 0 && lost == 0 && n[updStarted] > 0
 	switch {
-	case not == 0 && n[updStarted] == 0:
+	case not == 0 && lost == 0 && n[updStarted] == 0:
 		message = fmt.Sprintf("No update was started: %d skipped.", n[updSkipped])
-	case not == 0:
+	case not == 0 && lost == 0:
 		message = fmt.Sprintf("Update started on %d %s.", n[updStarted], plural(n[updStarted], "agent"))
-	default:
+	case lost == 0:
 		message = fmt.Sprintf("%d started, %d not.", n[updStarted], not)
+	case not == 0:
+		// a machine that gave no answer may have started: the sentence does not claim a number nobody knows
+		message = fmt.Sprintf("%d started, not known for %d (no answer).", n[updStarted], lost)
+	default:
+		message = fmt.Sprintf("%d started, %d not, not known for %d (no answer).", n[updStarted], not, lost)
 	}
-	if n[updSkipped] > 0 && n[updStarted]+not > 0 {
+	if n[updSkipped] > 0 && n[updStarted]+not+lost > 0 {
 		message = strings.TrimSuffix(message, ".") + fmt.Sprintf(", %d skipped.", n[updSkipped])
 	}
 	return message, lines, allOK
@@ -434,9 +447,12 @@ func (s *Server) updateAll(c *reqCtx) error {
 			data, err := c.callUpdate(u, j.a, j.ap)
 			j.res, j.err = updateResult{ID: j.a.ID, OK: err == nil, Result: data, State: updStarted}, err
 			var ae *apierr.Error
+			var lost *powerctl.Unanswered
 			switch {
 			case err == nil:
-			case errors.As(err, &ae) && ae.Status == 502: // it did not answer (agentCall)
+			case errors.As(err, &lost): // no answer of the agent: it may have arrived (agentCall, unanswered)
+				j.res.State = updNoAnswer
+			case errors.As(err, &ae) && ae.Status == 502: // the request did not leave the panel (agentCall)
 				j.res.State = updOffline
 			default:
 				j.res.State = updRefused
@@ -450,6 +466,13 @@ func (s *Server) updateAll(c *reqCtx) error {
 		if j.err != nil {
 			outcome = errorOutcome(j.err)
 			j.res.Error, j.res.Why = outcome, shortWhy(j.err)
+			var lost *powerctl.Unanswered
+			if errors.As(j.err, &lost) { // the line says what is not known, not "no answer (no answer ...)"
+				if lost.Short != "" {
+					j.res.Why = lost.Short
+				}
+				j.res.Why += ": the update may have started"
+			}
 		}
 		c.audit(u, "update.agent", j.a.ID, j.params, outcome)
 		if j.err == nil {

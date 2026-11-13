@@ -314,7 +314,7 @@ func (c *reqCtx) challenge(t approvalTarget) (*approval.Bound, string, error) {
 	if err != nil {
 		return nil, "", apierr.New(502, "agent unreachable: "+devices.Describe(err))
 	}
-	if status != 200 {
+	if status != 200 || powerctl.NoAnswer(api.PathApprovalChallenge, status, data, nil) != nil {
 		return nil, "", challengeRefusal(t.name, status, data, c.s.unavailableWhy(t.agent.ID))
 	}
 	var ch api.ChallengeResponse
@@ -395,14 +395,22 @@ func isFanRequest(r api.ApprovalRequest) bool {
 // code is one of the protocol's.
 func challengeRefusal(name string, status int, data jsonx.M, why string) error {
 	code, text := jsonx.S(data, "code"), textsafe.Clip(jsonx.S(data, "error"), maxAgentError)
+	if powerctl.NoAnswer(api.PathApprovalChallenge, status, data, nil) != nil {
+		// No answer of the agent, by the panel's one rule for that (powerctl.NoAnswer, the rule of the power,
+		// fan and update requests): 502 and 504 whatever the body (a gateway's two statuses, and the agent's
+		// own when its helper was sent the question and did not answer in time), a redirect, an error status
+		// whose body is not the agent's, a good status without the agent's answer. A question changes nothing
+		// on the machine, and no request follows it: the words are this route's own.
+		if status == 404 {
+			// state said "ask", and there is no such route: what an agent from before the feature answers
+			return apierr.New(409, name+" says it checks approvals, but its agent does not know how to be asked (it answered \"not found\"). Nothing was sent.")
+		}
+		return apierr.New(502, fmt.Sprintf("%s gave no answer to the question about an approval (HTTP %d). No request was sent to it: try again.", name, status))
+	}
 	if msg, ok := approval.ErrorText(name, code, text, why); ok {
 		return apierr.New(409, msg)
 	}
 	switch {
-	case status == 502 || status == 504:
-		// No answer: a gateway's two statuses, and the agent's own when its helper was sent the question and
-		// did not answer in time. A question changes nothing on the machine, and no request follows it.
-		return apierr.New(502, fmt.Sprintf("%s gave no answer to the question about an approval (HTTP %d). No request was sent to it: try again.", name, status))
 	case status == 401:
 		return apierr.New(apierr.Upstream, "agent rejected the control token (check control_token_env)")
 	case status == 503 && (code == api.ReasonHelperStopped || code == api.ReasonHelperError):

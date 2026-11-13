@@ -228,6 +228,62 @@ func TestAQuestionWithoutAnAnswerIsNoAnswer(t *testing.T) {
 	}
 }
 
+// One rule says whether an answer is the agent's own: powerctl.NoAnswer, for the question about an approval and
+// for the trust of a Turn on as for the power, fan and update requests (they had a second one: "an error status
+// with a reason or a code, but not 502 or 504").
+func TestTheApprovalRoutesUseThePanelsOneRuleForNoAnswer(t *testing.T) {
+	for name, c := range map[string]struct {
+		status int
+		body   jsonx.M
+		own    bool // the agent's own answer
+	}{
+		"a gateway's 502":                       {502, nil, false},
+		"a gateway's 504 that answers in JSON":  {504, jsonx.M{"error": "upstream request timeout", "code": "approval_refused"}, false},
+		"a redirect":                            {302, nil, false},
+		"a proxy's login page, 401":             {401, nil, false},
+		"an error page that is not the agent's": {500, nil, false},
+		"a good status without an answer":       {200, nil, false},
+		"the agent's own 503":                   {503, jsonx.M{"error": "the approval trust file on this machine cannot be used", "code": api.CodeApprovalUnavailable}, true},
+		"the agent's own 401":                   {401, jsonx.M{"error": "unauthorized"}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// the question about an approval, for a shutdown
+			a := newApprovalEnv(t)
+			a.require(t, a.laptop)
+			a.gb.Lie("laptop", func(path string) (int, jsonx.M) {
+				if path == api.PathApprovalChallenge {
+					return c.status, c.body
+				}
+				return 0, nil
+			})
+			r := a.post("/api/systems/laptop/power", a.shutdownBody())
+			lost := fmt.Sprintf("laptop gave no answer to the question about an approval (HTTP %d). No request was sent to it: try again.", c.status)
+			if got := fmt.Sprint(r.body["detail"]); (got == lost && r.code == 502) == c.own {
+				t.Errorf("the question: %d %q", r.code, got)
+			}
+			if _, _, asked := approvalAsked(r); asked || controlWrites(a.laptop) != 0 {
+				t.Errorf("after such an answer to the question: asked %v, sent %q", asked, sentPaths(a.laptop.Asked()))
+			}
+			// the trust of a Turn on
+			b := newApprovalEnv(t)
+			row, _ := turnOnTower(t, b, func() {
+				b.gb.Lie("tower", func(path string) (int, jsonx.M) {
+					if path == api.PathApprovalTrust {
+						return c.status, c.body
+					}
+					return 0, nil
+				})
+			})
+			if (row["outcome"] == "no_answer") == c.own {
+				t.Errorf("Turn on: %v", row)
+			}
+			if all := fmt.Sprint(row); !c.own && (strings.Contains(all, "Nothing was written") || strings.Contains(all, "refused")) {
+				t.Errorf("Turn on says more than anybody knows: %v", row)
+			}
+		})
+	}
+}
+
 // A cancel that came too late (the agent's 409 since its fix batch: "too late to cancel: systemctl poweroff was
 // already run") is the machine's own "no" with its words, never "cancelled".
 func TestACancelThatTheAgentCallsTooLateIsNotCancelled(t *testing.T) {

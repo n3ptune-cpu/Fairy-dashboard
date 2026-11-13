@@ -615,7 +615,9 @@ not sent to (and why), and the ones without the check, which are updated on the 
 sent afterwards is that list: a machine that was not in it (it did not answer when you pressed the button)
 gets "not sent", and the next press is for it. The
 result is a count ("2 started, 1 not") with one line per machine behind **Details** (started, refused, not
-sent, offline), and it stays until you close it. The button's number, the dialog's list and that count are
+sent, offline, no answer), and it stays until you close it. A machine whose request got no answer of its
+agent (a timeout, 502, 504) may have started all the same: it is "no answer", counted apart ("1 started, not
+known for 1 (no answer)") and never under "not". The button's number, the dialog's list and that count are
 the same machines; one that was not answering when you pressed the button is "skipped", not counted.
 
 **Cancel** of a pending shutdown, restart or sleep needs no passkey and no "Confirm it's you", with or
