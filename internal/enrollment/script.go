@@ -38,7 +38,7 @@ import (
 // AgentModule is the Fairy-agent version in go.mod; AgentRelease is its GitHub release (tag build-<run>, VERSION
 // "<run>-<short commit>"). Bump both together (a test compares AgentModule with go.mod).
 const (
-	AgentModule         = "v0.6.0"
+	AgentModule         = "v0.7.0"
 	AgentReleaseTag     = "build-16"
 	AgentReleaseVersion = "16-a791c55"
 )

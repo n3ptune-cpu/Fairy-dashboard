@@ -53,8 +53,8 @@ Updates page and the start-up log say "TEST BUILD" too.
 
 ## What to click in zip 7
 
-Unpack the zip (folder `Fairy-dashboard-passkey-r3`) next to the folder `Fairy-agent-part1-r3` of agent zip 3
-(this package is built against that folder: part I, I2), open `cmd.exe` in it, then:
+Unpack the zip (folder `Fairy-dashboard-passkey-r3`), or take the folder of the released source, open `cmd.exe`
+in it, then (no agent folder is needed next to it: part I, I2):
 
 ```
 go build -tags fairytest -o fairy-test.exe .\cmd\fairy
@@ -103,8 +103,8 @@ keeps its files in a folder `.fairy-demo` where you started it. Stop either prog
 
 ## A. Build and start (dev VM, `cmd.exe`, Go installed)
 
-1. Unpack the zip into your test folder, next to the folder `Fairy-agent-part1-r3`. You get a folder
-   `Fairy-dashboard-passkey-r3`.
+1. Unpack the zip into your test folder. You get a folder `Fairy-dashboard-passkey-r3`. No agent folder is
+   needed next to it (I2 says why).
 2. Open `cmd.exe` and go into that folder (use your own path):
 
    ```
@@ -445,8 +445,9 @@ was simulated). The stand-in is on another site than the panel and shows a page 
 it sends the browser back, as Pocket ID does with its passkey prompt. If a step goes differently, stop there
 and send what I8 lists.
 
-You need: the dev VM with this zip and agent zip 3 (`Fairy-agent-part1-r3`) unpacked **next to each other**,
-the test VM `NSX-TEST-VM`, and your Pocket ID, reachable over https from the dev VM.
+You need: the dev VM with this zip unpacked, the test VM `NSX-TEST-VM`, and your Pocket ID, reachable over
+https from the dev VM. The folder of agent zip 3 (`Fairy-agent-part1-r3`) is needed only for its
+`TEST-ON-WINDOWS.md` and to build an agent yourself; the panel's build does not read it.
 
 This is the third version of this part (zip 3, folder `Fairy-dashboard-passkey-r3`). New since zip 2: a
 machine id comes on record only when this panel turned the check on or an admin accepts the id (I10, steps 7
@@ -465,8 +466,7 @@ The same as I1 to I5 in few words, for somebody who has done it before. Every st
    `https://<public_url>/auth/approval/callback`). Public Client **on** and PKCE **on**; or a client that is
    not public, with its secret given to the panel through the environment only (step 3; never type the secret
    into a chat). Requires Re-Authentication **on**. Save.
-2. **Build and start**, dev VM, `cmd.exe`. The folder of this panel and the folder `Fairy-agent-part1-r3`
-   must be next to each other:
+2. **Build and start**, dev VM, `cmd.exe` (no agent folder is needed next to this one: I2):
 
    ```
    cd /d E:\Projects\Fairy-dashboard-TEST\Fairy-dashboard-passkey-r3
@@ -550,10 +550,11 @@ browser's address bar. (If that is not how your Pocket ID shows it: I4, step 4 s
 
 ### I2. Dev VM: build and start
 
-Both folders must be in one folder (here `E:\Projects\Fairy-dashboard-TEST`): `Fairy-agent-part1-r3` (agent
-zip 3) and `Fairy-dashboard-passkey-r3` (this zip). This panel is built against that agent folder: with
-another folder name, or without it, `go build` stops with "replacement directory ../Fairy-agent-part1-r3 does
-not exist".
+The folder of this zip, `Fairy-dashboard-passkey-r3`, is here in `E:\Projects\Fairy-dashboard-TEST`. The
+build takes the agent's packages from the tagged Fairy-agent that `go.mod` names (v0.7.0 in this release): Go
+downloads them, as for every release build, and no agent folder has to be next to this one. (The test zips
+from before this release were built against a folder `Fairy-agent-part1-r3` next to them, and `go build`
+stopped without it.)
 In `cmd.exe`:
 
 ```
