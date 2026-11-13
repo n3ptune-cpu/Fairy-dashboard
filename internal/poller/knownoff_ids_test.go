@@ -187,3 +187,33 @@ func TestMarkOffMarksNothingWhileTheAgentAnswers(t *testing.T) {
 		t.Fatalf("the node's own entry after MarkOff: %q", own)
 	}
 }
+
+// What an answer of the agent does to its node's entry when it ends the mark (F8): the entry goes back to what
+// it is WITHOUT the mark, no more. A node whose own last answer is older than offline_after is "offline"
+// without any mark, and stays so: the agent's answer must not make it "stale" (which says "it answered less
+// than a minute ago").
+func TestAnAnswerOfTheAgentDoesNotMakeAnOldNodeEntryStale(t *testing.T) {
+	e := newOffEnv(t)
+	e.poll(0)
+	e.set(false, "")
+	e.poll(5 * time.Second)
+	e.poll(5 * time.Second)
+	if !e.p.MarkOff("lab-b-node-pve-b") {
+		t.Fatal("not marked")
+	}
+	e.poll(2 * time.Minute) // off for longer than offline_after (60 s)
+	e.set(true, "")         // the agent is back, the node's API is not
+	// Only the agent is polled here, not the whole round: a poll of the node's Proxmox API that fails in the
+	// same round would say "offline" again by itself (degrade) and hide what the agent's answer did.
+	e.b.Mu.Lock()
+	e.now = e.now.Add(5 * time.Second)
+	e.b.Mu.Unlock()
+	a, _ := e.p.AgentByID("lab-b-agent")
+	e.p.pollAgent(context.Background(), a, 0)
+	if n, a := e.marks(); n || a {
+		t.Fatalf("after the agent's answer: marks node %v, agent %v", n, a)
+	}
+	if got := snap(e.p)["lab-b-node-pve-b"].Status; got != "offline" {
+		t.Fatalf("the node's entry, more than two minutes after its last answer and with its agent answering: %s, want offline (it is older than offline_after)", got)
+	}
+}
