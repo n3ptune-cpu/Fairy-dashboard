@@ -2,8 +2,6 @@ package poller
 
 import (
 	"fmt"
-	"slices"
-	"sort"
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -50,22 +48,48 @@ func nodeCandidates(a config.Agent, clusters []config.Proxmox) []nodeLink {
 	return out
 }
 
+// nodeChoice picks, among the ids an agent's entry can mean (cands, from nodeCandidates), the one the
+// configuration names; why says why it names none. Steps a to c of the rule (nodeLinks).
+func nodeChoice(a config.Agent, cands []nodeLink, clusters []config.Proxmox) (pick nodeLink, why string) {
+	if len(cands) == 1 { // links_to, or node: with the one proxmox: entry there is
+		return cands[0], ""
+	}
+	// node: and several proxmox: entries. The entry is the one whose id_prefix the agent's own id begins with.
+	// An empty id_prefix begins every id and so names nothing: it never counts.
+	var match []nodeLink
+	var prefixes []string
+	for i, c := range clusters {
+		if p := c.Prefix(); p != "" && strings.HasPrefix(a.ID, p) {
+			match, prefixes = append(match, cands[i]), append(prefixes, p)
+		}
+	}
+	switch len(match) {
+	case 1:
+		return match[0], ""
+	case 0:
+		return nodeLink{}, "its id begins with the id_prefix of none of the proxmox: entries"
+	}
+	return nodeLink{}, "its id begins with the id_prefix of more than one proxmox: entry (" + strings.Join(prefixes, ", ") + ")"
+}
+
 // nodeLinks returns, by agent id, the node each agent runs on where the configuration decides it, and one
-// sentence for every agent whose entry names a node that it does not decide (for the log at the start).
+// sentence for every agent for which it does not although a `systems:` entry is written under an id its node
+// can have (for the log at the start, and for `fairy admin config check`).
 //
-// The rule:
+// The rule, from the configuration alone:
 //
-//  1. The ids an agent's entry can mean are nodeCandidates: one for links_to, one per proxmox: entry for node:.
-//  2. With one such id, that is the node. With several (several proxmox: entries, and node: does not say which
-//     of them has the node), it is the one that has a `systems:` entry, when exactly one of them has: writing
-//     that entry is how the configuration names the node's id. None has one: not decided (and nothing is
-//     written under a node id that could be looked for). Two or more have one: not decided, with a warning.
-//  3. The id must not be the id of an agent, and no other agent's entry may be able to mean the same id (two
-//     agents with the same node:, or one linked to the node the other names). Otherwise: not decided for
-//     either, with a warning.
+//	a. links_to with the id of a node (<id_prefix>node-... of a configured proxmox: entry): that id.
+//	b. node: and exactly one proxmox: entry: <its id_prefix>node-<name>.
+//	c. node: and several proxmox: entries: the entry whose id_prefix, which must not be empty, is the beginning
+//	   of the agent's own id (agent lab-b-agent, id_prefix lab-b-). Exactly one entry must fit; none or more
+//	   than one: not decided. Which ids have a `systems:` entry plays no part: an entry under another entry's
+//	   prefix is another machine's (two hosts whose node has the same name, the installer's "pve").
+//	d. Not decided either when that id is the id of an agent, or when another agent's entry can mean the same
+//	   id (nodeCandidates: the same node:, or a links_to to it).
+//	e. Not decided, and a `systems:` entry is written under one of the ids the agent's node can have: one
+//	   warning that names the agent and says what to add (links_to: <the node's id>).
 //
-// What it does not cover: an agent whose node: is found in several proxmox: entries by the panel's polls and
-// that has no `systems:` entry, or more than one. Such a host is as it was: looked up by the id it is shown under.
+// An agent that is not decided is as it was before this file: looked up by the id it is shown under.
 func nodeLinks(agents []config.Agent, clusters []config.Proxmox, systems []config.SystemOverride) (map[string]nodeLink, []string) {
 	written := map[string]bool{}
 	for _, o := range systems {
@@ -88,44 +112,56 @@ func nodeLinks(agents []config.Agent, clusters []config.Proxmox, systems []confi
 		if len(cands) == 0 {
 			continue
 		}
-		pick := cands
-		if len(cands) > 1 {
-			pick = nil
-			for _, c := range cands {
-				if written[c.ID] {
-					pick = append(pick, c)
+		pick, why := nodeChoice(a, cands, clusters)
+		advice, plain := "write links_to: <the id of its node> in the agent's entry", true
+		switch {
+		case why != "":
+		case agentIDs[pick.ID]:
+			why, advice, plain = "the id of its node, "+pick.ID+", is also the id of an agent", "give that agent another id", false
+		case len(claims[pick.ID]) > 1:
+			var others []string
+			for _, o := range claims[pick.ID] {
+				if o != a.ID {
+					others = append(others, o)
 				}
 			}
-		}
-		switch {
-		case len(pick) == 0:
+			why = "the entry of " + strings.Join(others, " and of ") + " can mean the same node, " + pick.ID
+			advice, plain = "write links_to: <the id of its own node> in the entry of each of these agents", false
+		default:
+			links[a.ID] = pick
 			continue
-		case len(pick) > 1:
-			ids := make([]string, len(pick))
-			for i, c := range pick {
-				ids[i] = c.ID
+		}
+		// e: not decided. Said only when something is written that would be looked for.
+		var ids, found []string
+		for _, c := range cands {
+			ids = append(ids, c.ID)
+			if written[c.ID] {
+				found = append(found, c.ID)
 			}
-			whys = append(whys, fmt.Sprintf("agent %s (node: %s): systems: has entries for %s, and the configuration does not say which of these nodes the agent runs on. "+
-				"While the node's Proxmox API has not answered, the host is shown under the agent's id without a wol: or bmc_power: of those entries. "+
-				"Write links_to: <the node's id> in the agent's entry in place of node:", a.ID, a.Node, strings.Join(ids, " and ")))
+		}
+		if len(found) == 0 {
 			continue
 		}
-		id := pick[0].ID
-		if agentIDs[id] {
-			whys = append(whys, fmt.Sprintf("agent %s: the id of its node, %s, is also the id of an agent, so the systems: entry %s is used for that agent only", a.ID, id, id))
-			continue
+		name := "node: " + a.Node
+		if a.LinksTo != "" {
+			name = "links_to: " + a.LinksTo
 		}
-		if others := claims[id]; len(others) > 1 {
-			names := slices.Clone(others)
-			sort.Strings(names)
-			whys = append(whys, fmt.Sprintf("agents %s: their entries can all mean the node %s, and the configuration does not say which of them runs on it. "+
-				"While the node's Proxmox API has not answered, none of them is given the wol: or bmc_power: of the systems: entry %s", strings.Join(names, " and "), id, id))
-			continue
+		if plain && len(found) == 1 {
+			advice += " (links_to: " + found[0] + " if that entry is this machine's)"
 		}
-		links[a.ID] = pick[0]
+		whys = append(whys, fmt.Sprintf("agent %s (%s): %s, so the configuration does not say which node is the agent's (it can be %s). "+
+			"systems: has an entry for %s: it is not used for this agent while it is shown under its own id (after a restart of the panel with the machine off, "+
+			"until the node's Proxmox API answers). To say which node it is, %s",
+			a.ID, name, why, strings.Join(ids, " or "), strings.Join(found, " and "), advice))
 	}
-	slices.Sort(whys)
-	return links, slices.Compact(whys)
+	return links, whys
+}
+
+// NodeWarnings is nodeLinks' sentences for a configuration: one for every agent whose node the configuration
+// does not decide although a `systems:` entry is written under an id that node can have.
+func NodeWarnings(cfg *config.Panel) []string {
+	_, whys := nodeLinks(cfg.Agents, cfg.Proxmox, cfg.Systems)
+	return whys
 }
 
 // links is nodeLinks for the configuration as it is now (config.yaml and the hosts added in the panel).
@@ -136,8 +172,8 @@ func (p *Poller) links() (map[string]nodeLink, []string) {
 	return nodeLinks(agents, p.Clusters(), systems)
 }
 
-// NodeLinkWarnings is one sentence for every agent whose entry names a Proxmox node that the configuration
-// does not decide (nodeLinks). The poller logs them once when it is made.
+// NodeLinkWarnings is NodeWarnings for the configuration as it is now. The poller logs the sentences once
+// when it is made.
 func (p *Poller) NodeLinkWarnings() []string {
 	_, whys := p.links()
 	return whys

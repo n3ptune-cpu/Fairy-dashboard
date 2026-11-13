@@ -105,3 +105,48 @@ func TestTheNodesPowerSwitchStopsTheWakeUnderTheAgentsID(t *testing.T) {
 		}
 	}
 }
+
+// Review of fix13, must-fix 1 (the reviewer's proof, as a test): two standalone Proxmox hosts whose node is
+// called pve. Host 1 has the agent (node: pve) and no wol:; host 2 has its wol: under site2-node-pve. Both are
+// off when the panel starts. On fix13's first rule ("the one candidate that has a systems: entry") host 1's
+// row offered Power on and sent host 2's MAC. Now the configuration does not say which node is the agent's
+// (its id begins with neither id_prefix): host 1 has no wol:, nothing is sent, and the start says what to add.
+func TestPowerOnOfAHostNeverSendsTheMACOfAnotherHostWithTheSameNodeName(t *testing.T) {
+	b := testutil.NewBackend()
+	b.PVEOf = func(string) ([]jsonx.M, error) { return nil, devices.Errf("connection failed") }
+	b.Metrics["relay"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	p, err := poller.New(testutil.SameNameConfig(t), config.Secrets{}, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.PollOnce(context.Background())
+	if id, _, ok := p.NodeOf("host1-agent"); ok {
+		t.Fatalf("the configuration is taken to name %s as host 1's node", id)
+	}
+	host := rowOf(t, p, "host1-agent")
+	if host.Kind != "agent" || host.Status != "offline" {
+		t.Fatalf("the fixture: %s %s", host.Kind, host.Status)
+	}
+	for _, a := range host.PowerActions {
+		if a == "wake" {
+			t.Errorf("host 1's row lists wake: %v", host.PowerActions)
+		}
+	}
+	if c := capOf(p, host, "wake"); c.Available || c.Via != nil || !strings.Contains(model.Deref(c.Reason), "no wol: configured for this host") {
+		t.Errorf("wake on host 1's row: %+v (reason %q)", c, model.Deref(c.Reason))
+	}
+	if _, err := Execute(context.Background(), p, host, Request{Action: "wake"}, "Ann"); err == nil {
+		t.Error("a wake of host 1 was carried out")
+	}
+	b.Mu.Lock()
+	reqs := strings.Join(b.Requests, "\n")
+	b.Mu.Unlock()
+	if strings.Contains(reqs, "/wol") || strings.Contains(reqs, "00:00:5e:00:53:72") {
+		t.Errorf("WRONG MACHINE: Power on of host 1 sent a wake packet:\n%s", reqs)
+	}
+	w := p.NodeLinkWarnings()
+	if len(w) != 1 || !strings.Contains(w[0], "agent host1-agent (node: pve)") || !strings.Contains(w[0], "systems: has an entry for site2-node-pve") ||
+		!strings.Contains(w[0], "write links_to: <the id of its node> in the agent's entry") {
+		t.Errorf("the warning at the start: %q", w)
+	}
+}

@@ -70,7 +70,7 @@ func TestPanelRestartWithTheNodeOffWolUnderTheNodeIDIsStillFound(t *testing.T) {
 	if id, cluster, ok := p.NodeOf("lab-b-agent"); !ok || id != "lab-b-node-pve-b" || cluster != "lab-b" {
 		t.Errorf("NodeOf = %q %q %v", id, cluster, ok)
 	}
-	// the relay's own host has no wol:, under either id, and is given none
+	// the relay's own host has no wol:, under either id, and is given none: PVE-B's entry is PVE-B's
 	if o := p.PowerOverride("lab-a-agent"); o != nil {
 		t.Errorf("PVE-A was given a systems: entry: %+v", o)
 	}
@@ -102,9 +102,9 @@ func TestSameMachine(t *testing.T) {
 	for id, want := range map[string]string{
 		"lab-b-agent":      "lab-b-agent lab-b-node-pve-b",
 		"lab-b-node-pve-b": "lab-b-node-pve-b lab-b-agent",
-		// PVE-A has no systems: entry, and with two proxmox: entries node: alone does not say which has it
-		"lab-a-agent":      "lab-a-agent",
-		"lab-a-node-pve-a": "lab-a-node-pve-a",
+		// PVE-A has no systems: entry: its agent's id begins with its entry's id_prefix, and that decides
+		"lab-a-agent":      "lab-a-agent lab-a-node-pve-a",
+		"lab-a-node-pve-a": "lab-a-node-pve-a lab-a-agent",
 		"lab-a-node-pve-b": "lab-a-node-pve-b", // the other entry's prefix with PVE-B's name: no machine
 		"lab-a-qemu-100":   "lab-a-qemu-100",
 		"nobody":           "nobody",
@@ -138,10 +138,17 @@ func TestThePowerSwitchOfANodeCountsUnderItsAgentsID(t *testing.T) {
 
 // The rule itself (nodeLinks), from the configuration alone. A wol: is never given to a host that the
 // configuration does not name as the one: a wrong MAC wakes somebody else's PC.
+//
+// Review of fix13, must-fix 1: with several proxmox: entries the first rule took "the one candidate that has a
+// systems: entry". Two hosts whose node is called pve, the agent on the first, the wol: of the second under
+// site2-node-pve: the agent's row offered Power on and sent the second host's MAC. Which ids have a systems:
+// entry decides nothing any more: the proxmox: entry is the one whose id_prefix the agent's own id begins with.
 func TestTheNodeOfAnAgentIsDecidedByTheConfigurationOrNotAtAll(t *testing.T) {
 	px := func(prefix string) *string { return &prefix }
 	one := []config.Proxmox{{ID: "main", IDPrefix: px("")}}
-	two := []config.Proxmox{{ID: "a", IDPrefix: px("a-")}, {ID: "b", IDPrefix: px("b-")}}
+	two := []config.Proxmox{{ID: "site1", IDPrefix: px("site1-")}, {ID: "site2", IDPrefix: px("site2-")}}
+	// the report's shape: a cluster without id_prefix and two standalone hosts with one each
+	three := []config.Proxmox{{ID: "main", IDPrefix: px("")}, {ID: "yard-a", IDPrefix: px("yard-a-")}, {ID: "yard-b", IDPrefix: px("yard-b-")}}
 	sys := func(ids ...string) (out []config.SystemOverride) {
 		for _, id := range ids {
 			out = append(out, config.SystemOverride{ID: id, Wol: &config.Wol{MAC: "00:00:5e:00:53:01", Relay: "relay"}})
@@ -154,33 +161,67 @@ func TestTheNodeOfAnAgentIsDecidedByTheConfigurationOrNotAtAll(t *testing.T) {
 		clusters []config.Proxmox
 		systems  []config.SystemOverride
 		want     map[string]string // agent id -> node id
+		cluster  map[string]string // agent id -> the proxmox: entry of that node (where the case asks)
 		warn     []string          // a part of each warning, in order
 	}{
+		// b. one proxmox: entry
 		{name: "one proxmox: entry: node: names the node", agents: []config.Agent{{ID: "x", Node: "PVE 1"}}, clusters: one,
 			want: map[string]string{"x": "node-pve-1"}},
-		{name: "one proxmox: entry with a prefix, and an entry under the node's id", agents: []config.Agent{{ID: "x", Node: "pve"}}, clusters: two[:1], systems: sys("a-node-pve"),
-			want: map[string]string{"x": "a-node-pve"}},
-		{name: "two proxmox: entries, one systems: entry of that form: that one", agents: []config.Agent{{ID: "x", Node: "pve"}}, clusters: two, systems: sys("b-node-pve", "x-node-pve", "b-node-other"),
-			want: map[string]string{"x": "b-node-pve"}},
-		{name: "two proxmox: entries, no systems: entry: not decided, and nothing to warn about", agents: []config.Agent{{ID: "x", Node: "pve"}}, clusters: two,
+		{name: "one proxmox: entry with a prefix the agent's id does not begin with: still that entry", agents: []config.Agent{{ID: "x", Node: "pve"}}, clusters: two[:1], systems: sys("site1-node-pve"),
+			want: map[string]string{"x": "site1-node-pve"}},
+		// c. several proxmox: entries: by the agent's own id
+		{name: "the report: three entries, the agent's id begins with one id_prefix", clusters: three, systems: sys("yard-b-node-box-b"),
+			agents:  []config.Agent{{ID: "yard-a-relay-agent", Node: "BOX-A"}, {ID: "yard-b-box-agent", Node: "BOX-B"}, {ID: "other-pc"}},
+			want:    map[string]string{"yard-b-box-agent": "yard-b-node-box-b", "yard-a-relay-agent": "yard-a-node-box-a"},
+			cluster: map[string]string{"yard-b-box-agent": "yard-b", "yard-a-relay-agent": "yard-a"}},
+		{name: "the same without any systems: entry: the entries play no part", clusters: three,
+			agents: []config.Agent{{ID: "yard-b-box-agent", Node: "BOX-B"}},
+			want:   map[string]string{"yard-b-box-agent": "yard-b-node-box-b"}},
+		{name: "the review's case: two nodes called pve, the wol: of the other host: not decided, a warning", clusters: two, systems: sys("site2-node-pve"),
+			agents: []config.Agent{{ID: "relay"}, {ID: "host1-agent", Node: "pve"}},
+			want:   map[string]string{},
+			warn:   []string{"agent host1-agent (node: pve): its id begins with the id_prefix of none of the proxmox: entries"}},
+		{name: "the same with an entry for each: not decided, one warning", clusters: two, systems: sys("site1-node-pve", "site2-node-pve"),
+			agents: []config.Agent{{ID: "host1-agent", Node: "pve"}},
+			want:   map[string]string{}, warn: []string{"systems: has an entry for site1-node-pve and site2-node-pve"}},
+		{name: "the same without a systems: entry: not decided, and nothing to warn about", clusters: two,
+			agents: []config.Agent{{ID: "host1-agent", Node: "pve"}}, want: map[string]string{}},
+		{name: "the agent's id begins with two id_prefixes (yard- and yard-b-): not decided", systems: sys("yard-b-node-pve"),
+			clusters: []config.Proxmox{{ID: "yard", IDPrefix: px("yard-")}, {ID: "yard-b", IDPrefix: px("yard-b-")}},
+			agents:   []config.Agent{{ID: "yard-b-agent", Node: "pve"}},
+			want:     map[string]string{}, warn: []string{"its id begins with the id_prefix of more than one proxmox: entry (yard-, yard-b-)"}},
+		{name: "an empty id_prefix never fits: with it and one other, an id that begins with neither is not decided", systems: sys("node-pve"),
+			clusters: []config.Proxmox{{ID: "main", IDPrefix: px("")}, {ID: "b", IDPrefix: px("b-")}},
+			agents:   []config.Agent{{ID: "x", Node: "pve"}},
+			want:     map[string]string{}, warn: []string{"agent x (node: pve): its id begins with the id_prefix of none of the proxmox: entries"}},
+		{name: "an empty id_prefix never fits: it is no second fit for an id that begins with the other", systems: sys("node-pve", "b-node-pve"),
+			clusters: []config.Proxmox{{ID: "main", IDPrefix: px("")}, {ID: "b", IDPrefix: px("b-")}},
+			agents:   []config.Agent{{ID: "b-x", Node: "pve"}},
+			want:     map[string]string{"b-x": "b-node-pve"}, cluster: map[string]string{"b-x": "b"}},
+		// a. links_to
+		{name: "links_to with a node's id", agents: []config.Agent{{ID: "x", LinksTo: "site2-node-pve"}}, clusters: two, systems: sys("site2-node-pve"),
+			want: map[string]string{"x": "site2-node-pve"}, cluster: map[string]string{"x": "site2"}},
+		{name: "links_to overrides node: and the agent's id", agents: []config.Agent{{ID: "site1-agent", LinksTo: "site2-node-pve", Node: "other"}}, clusters: two, systems: sys("site1-node-other"),
+			want: map[string]string{"site1-agent": "site2-node-pve"}},
+		{name: "links_to decides what the review's case left open", clusters: two, systems: sys("site2-node-pve"),
+			agents: []config.Agent{{ID: "host1-agent", Node: "pve", LinksTo: "site1-node-pve"}},
+			want:   map[string]string{"host1-agent": "site1-node-pve"}},
+		{name: "links_to a guest: an agent in a VM is no node", agents: []config.Agent{{ID: "x", LinksTo: "qemu-100"}, {ID: "y", LinksTo: "site2-lxc-7"}}, clusters: append(one, two...), systems: sys("qemu-100", "site2-lxc-7"),
 			want: map[string]string{}},
-		{name: "two proxmox: entries, an entry for each: none, and a warning", agents: []config.Agent{{ID: "x", Node: "pve"}}, clusters: two, systems: sys("a-node-pve", "b-node-pve"),
-			want: map[string]string{}, warn: []string{"agent x (node: pve): systems: has entries for a-node-pve and b-node-pve"}},
-		{name: "two agents name the same node: none for either, one warning", agents: []config.Agent{{ID: "x", Node: "pve"}, {ID: "y", Node: "PVE"}}, clusters: one, systems: sys("node-pve"),
-			want: map[string]string{}, warn: []string{"agents x and y: their entries can all mean the node node-pve"}},
-		{name: "the same node name in two clusters, an agent for each, one entry: none", agents: []config.Agent{{ID: "x", Node: "pve"}, {ID: "y", Node: "pve"}}, clusters: two, systems: sys("a-node-pve"),
-			want: map[string]string{}, warn: []string{"agents x and y: their entries can all mean the node a-node-pve"}},
-		{name: "links_to with a node's id", agents: []config.Agent{{ID: "x", LinksTo: "b-node-pve"}}, clusters: two, systems: sys("b-node-pve"),
-			want: map[string]string{"x": "b-node-pve"}},
-		{name: "links_to wins over node:", agents: []config.Agent{{ID: "x", LinksTo: "b-node-pve", Node: "other"}}, clusters: two, systems: sys("a-node-other"),
-			want: map[string]string{"x": "b-node-pve"}},
-		{name: "links_to a guest: an agent in a VM is no node", agents: []config.Agent{{ID: "x", LinksTo: "qemu-100"}, {ID: "y", LinksTo: "b-lxc-7"}}, clusters: append(one, two...), systems: sys("qemu-100", "b-lxc-7"),
-			want: map[string]string{}},
+		// d. the guards
+		{name: "two agents name the same node: none for either, a warning for each", agents: []config.Agent{{ID: "x", Node: "pve"}, {ID: "y", Node: "PVE"}}, clusters: one, systems: sys("node-pve"),
+			want: map[string]string{}, warn: []string{"agent x (node: pve): the entry of y can mean the same node, node-pve", "agent y (node: PVE): the entry of x can mean the same node, node-pve"}},
+		{name: "the same node name under two entries, an agent for each: none for either, although each id begins with a prefix", clusters: two, systems: sys("site1-node-pve"),
+			agents: []config.Agent{{ID: "site1-agent", Node: "pve"}, {ID: "site2-agent", Node: "pve"}},
+			want:   map[string]string{}, warn: []string{"agent site1-agent (node: pve): the entry of site2-agent can mean the same node, site1-node-pve", "agent site2-agent (node: pve): the entry of site1-agent can mean the same node, site2-node-pve"}},
+		{name: "... and with links_to on both: each has its own", clusters: two, systems: sys("site1-node-pve"),
+			agents: []config.Agent{{ID: "site1-agent", LinksTo: "site1-node-pve"}, {ID: "site2-agent", LinksTo: "site2-node-pve"}},
+			want:   map[string]string{"site1-agent": "site1-node-pve", "site2-agent": "site2-node-pve"}},
 		{name: "one linked to the node another names: none for either", agents: []config.Agent{{ID: "x", LinksTo: "node-pve"}, {ID: "y", Node: "pve"}}, clusters: one, systems: sys("node-pve"),
-			want: map[string]string{}, warn: []string{"agents x and y: their entries can all mean the node node-pve"}},
-		{name: "the node's id is an agent's own id: that agent's entry stays its own", agents: []config.Agent{{ID: "x", Node: "pve"}, {ID: "a-node-pve"}}, clusters: two[:1], systems: sys("a-node-pve"),
-			want: map[string]string{}, warn: []string{"agent x: the id of its node, a-node-pve, is also the id of an agent"}},
-		{name: "no node:, no links_to, a node name without a letter or digit, no proxmox: entry", agents: []config.Agent{{ID: "x"}, {ID: "y", Node: "--"}}, clusters: one,
+			want: map[string]string{}, warn: []string{"agent x (links_to: node-pve): the entry of y can mean the same node, node-pve", "agent y (node: pve): the entry of x can mean the same node, node-pve"}},
+		{name: "the node's id is an agent's own id: that agent's entry stays its own", agents: []config.Agent{{ID: "x", Node: "pve"}, {ID: "site1-node-pve"}}, clusters: two[:1], systems: sys("site1-node-pve"),
+			want: map[string]string{}, warn: []string{"agent x (node: pve): the id of its node, site1-node-pve, is also the id of an agent"}},
+		{name: "no node:, no links_to, a node name without a letter or digit", agents: []config.Agent{{ID: "x"}, {ID: "y", Node: "--"}}, clusters: one,
 			want: map[string]string{}},
 		{name: "node: without any proxmox: entry", agents: []config.Agent{{ID: "x", Node: "pve"}}, systems: sys("node-pve"),
 			want: map[string]string{}},
@@ -199,15 +240,36 @@ func TestTheNodeOfAnAgentIsDecidedByTheConfigurationOrNotAtAll(t *testing.T) {
 					t.Errorf("agent %s: node %q, want %q", id, got[id], want)
 				}
 			}
+			for id, want := range c.cluster {
+				if links[id].Cluster != want {
+					t.Errorf("agent %s: proxmox: entry %q, want %q", id, links[id].Cluster, want)
+				}
+			}
 			if len(whys) != len(c.warn) {
 				t.Fatalf("warnings %q, want %d", whys, len(c.warn))
 			}
 			for i, part := range c.warn {
-				if !strings.Contains(whys[i], part) {
-					t.Errorf("warning %q lacks %q", whys[i], part)
+				if !strings.Contains(whys[i], part) || !strings.Contains(whys[i], "links_to: <the id of its") && !strings.Contains(whys[i], "give that agent another id") {
+					t.Errorf("warning %q lacks %q, or what to write", whys[i], part)
 				}
 			}
 		})
+	}
+}
+
+// The warning of the review's case, whole: it names the agent, the ids its node can have, the entry that is
+// not used, and what to add.
+func TestTheWarningForAnAgentWhoseNodeIsNotDecided(t *testing.T) {
+	site1, site2 := "site1-", "site2-"
+	_, whys := nodeLinks([]config.Agent{{ID: "host1-agent", Node: "pve"}},
+		[]config.Proxmox{{ID: "site1", IDPrefix: &site1}, {ID: "site2", IDPrefix: &site2}},
+		[]config.SystemOverride{{ID: "site2-node-pve", Wol: &config.Wol{MAC: "00:00:5e:00:53:02", Relay: "relay"}}})
+	want := "agent host1-agent (node: pve): its id begins with the id_prefix of none of the proxmox: entries, so the configuration does not say which node is the agent's " +
+		"(it can be site1-node-pve or site2-node-pve). systems: has an entry for site2-node-pve: it is not used for this agent while it is shown under its own id " +
+		"(after a restart of the panel with the machine off, until the node's Proxmox API answers). To say which node it is, write links_to: <the id of its node> " +
+		"in the agent's entry (links_to: site2-node-pve if that entry is this machine's)"
+	if len(whys) != 1 || whys[0] != want {
+		t.Errorf("warnings:\n%q\nwant\n%q", whys, want)
 	}
 }
 
@@ -222,25 +284,21 @@ func TestTheNodeIDOfAnAgentIsTheIDOfTheNodesRow(t *testing.T) {
 	}
 }
 
-// Two candidates in the real poller: an entry under each prefix for the node's name. The host is given neither
-// wol:, the start says so once, and with its Proxmox API answering the node's own entry is its own as before.
-func TestAWolIsNotGuessedBetweenTwoNodeIDs(t *testing.T) {
+// An entry under the other proxmox: entry's prefix for the same node name is another machine's (review of
+// fix13, must-fix 1). PVE-B's agent, lab-b-agent, is given the wol: under lab-b-node-pve-b, its own entry's
+// prefix, and never the one under lab-a-node-pve-b, whatever is written there.
+func TestAWolUnderAnotherEntrysPrefixIsNeverTaken(t *testing.T) {
 	p, b, up := twoHosts(t, `  - id: lab-a-node-pve-b
     wol: {mac: "00:00:5e:00:53:99", relay: lab-a-agent}
 `)
-	if o := p.PowerOverride("lab-b-agent"); o != nil {
-		t.Fatalf("a wol: was picked from two candidates: %+v", o)
+	if o := p.PowerOverride("lab-b-agent"); o == nil || o.ID != "lab-b-node-pve-b" || o.Wol == nil || o.Wol.MAC != "00:00:5e:00:53:36" {
+		t.Fatalf("the wol: of PVE-B's agent: %+v", o)
 	}
-	if got := snap(p)["lab-b-agent"].PowerActions; slices.Contains(got, "wake") {
-		t.Errorf("the row lists wake: %v", got)
-	}
-	w := p.NodeLinkWarnings()
-	if len(w) != 1 || !strings.Contains(w[0], "agent lab-b-agent (node: PVE-B): systems: has entries for lab-a-node-pve-b and lab-b-node-pve-b") ||
-		!strings.Contains(w[0], "links_to: <the node's id>") {
+	if w := p.NodeLinkWarnings(); len(w) != 0 {
 		t.Errorf("warnings: %q", w)
 	}
-	if got := strings.Join(p.SameMachine("lab-b-agent"), " "); got != "lab-b-agent" {
-		t.Errorf("SameMachine: %q", got)
+	if got := strings.Join(p.SameMachine("lab-a-node-pve-b"), " "); got != "lab-a-node-pve-b" {
+		t.Errorf("SameMachine of the other entry's id: %q", got)
 	}
 	b.Mu.Lock()
 	*up = true

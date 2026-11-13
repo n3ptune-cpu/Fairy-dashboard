@@ -101,6 +101,45 @@ systems:
 	return cfg
 }
 
+// SameNameConfig is a panel with two standalone Proxmox hosts whose node has the same name, pve (the
+// installer's default), under the proxmox: entries site1 and site2. Host 1 has an agent, host1-agent (node:
+// pve, power control, self-update), and no wol:. Host 2 has no agent, and its wol: is written under its node's
+// id, site2-node-pve. The agent "relay" sends the wake packets. Nothing in the file says that host1-agent is
+// on site1: its id begins with neither id_prefix.
+func SameNameConfig(t *testing.T) *config.Panel {
+	t.Helper()
+	t.Setenv("TOK_RELAY", ReadToken)
+	t.Setenv("TOK_HOST1", ReadToken+"x")
+	t.Setenv("CTL_LAB", ControlToken)
+	t.Setenv("PVE_SECRET", "pve-secret-uuid")
+	dir := t.TempDir()
+	y := `
+public_url: https://panel.example.com
+request_timeout: 1
+offline_after: 60
+audit_log: ` + fmt.Sprintf("%q", dir+"/audit.log") + `
+data_dir: ` + fmt.Sprintf("%q", dir+"/data") + `
+oidc: {issuer: "https://id.example.com", client_id: cid, allowed_groups: [viewers], control_groups: [controllers]}
+proxmox:
+  - {id: site1, id_prefix: site1-, cluster_name: Site1, standalone: true, urls: ["https://pve1:8006"],
+     token_id: "fairy@pve!panel", token_secret_env: PVE_SECRET, verify_tls: false}
+  - {id: site2, id_prefix: site2-, cluster_name: Site2, standalone: true, urls: ["https://pve2:8006"],
+     token_id: "fairy@pve!panel", token_secret_env: PVE_SECRET, verify_tls: false}
+agents:
+  - {id: relay, name: Relay, url: "http://relay", token_env: TOK_RELAY, control_token_env: CTL_LAB, wol_relay: true}
+  - {id: host1-agent, name: Host1, url: "http://host1-agent", token_env: TOK_HOST1, control_token_env: CTL_LAB, node: pve,
+     power_control: true, self_update: true}
+systems:
+  - id: site2-node-pve
+    wol: {mac: "00:00:5e:00:53:72", relay: relay}
+`
+	cfg, err := config.Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
 // HostResources is what a standalone Proxmox host answers: its node (online) and one guest, win11, in the
 // given state.
 func HostResources(node, guestStatus string) []jsonx.M {

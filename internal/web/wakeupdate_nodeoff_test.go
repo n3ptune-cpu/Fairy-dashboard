@@ -29,29 +29,43 @@ import (
 // packets, PVE-B (agent lab-b-agent, node lab-b-node-pve-b) gives nothing. The farm's clock runs the poller
 // and the run; start() is what the wake packet does to PVE-B: its agent answers 20 s later, and its Proxmox
 // API answers from then on too (unless noAPI), showing its guest win11 in the state guest.
+//
+// The same panel with other names is setupNodeOff: the machine that is off (its agent, its node's id, its
+// proxmox: entry and its node's name), and the hosts that are on (their proxmox: entry and node name, and
+// their agents).
 type twoHosts struct {
 	e     *env
 	f     *farm
-	up    bool   // PVE-B's Proxmox API answers
+	up    bool   // the Proxmox API of the machine that is off answers
 	noAPI bool   // ... never, also when the machine is on
-	guest string // the state of PVE-B's guest
+	guest string // the state of that machine's guest
+
+	agent, node, cluster, name string            // the machine that is off
+	others                     map[string]string // proxmox: entry -> node name, of the hosts that are on
 }
 
 func setupTwoHosts(t *testing.T) *twoHosts {
 	t.Helper()
-	cfg := testutil.TwoHostsConfig(t, "")
+	return setupNodeOff(t, testutil.TwoHostsConfig(t, ""), &twoHosts{agent: "lab-b-agent", node: "lab-b-node-pve-b", cluster: "lab-b", name: "PVE-B",
+		others: map[string]string{"lab-a": "PVE-A"}}, "lab-a-agent")
+}
+
+func setupNodeOff(t *testing.T, cfg *config.Panel, h *twoHosts, agentsOn ...string) *twoHosts {
+	t.Helper()
 	b := testutil.NewBackend()
-	h := &twoHosts{guest: "stopped"}
+	h.guest = "stopped"
 	b.PVEOf = func(cluster string) ([]jsonx.M, error) { // (the backend's lock is held)
 		switch {
-		case cluster == "lab-a":
-			return testutil.HostResources("PVE-A", "stopped"), nil
-		case cluster == "lab-b" && h.up && !h.noAPI && h.f.on["lab-b-agent"] && !h.f.now.Before(h.f.ready["lab-b-agent"]):
-			return testutil.HostResources("PVE-B", h.guest), nil
+		case h.others[cluster] != "":
+			return testutil.HostResources(h.others[cluster], "stopped"), nil
+		case cluster == h.cluster && h.up && !h.noAPI && h.f.on[h.agent] && !h.f.now.Before(h.f.ready[h.agent]):
+			return testutil.HostResources(h.name, h.guest), nil
 		}
 		return nil, devices.Errf("connection failed")
 	}
-	b.Metrics["lab-a-agent"] = func() (jsonx.M, error) { m := testutil.AgentMetrics(); m["hostname"] = "pve-a"; return m, nil }
+	for _, id := range agentsOn {
+		b.Metrics[id] = func() (jsonx.M, error) { m := testutil.AgentMetrics(); m["hostname"] = id; return m, nil }
+	}
 	p, err := poller.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, b)
 	if err != nil {
 		t.Fatal(err)
@@ -62,9 +76,9 @@ func setupTwoHosts(t *testing.T) *twoHosts {
 	t.Cleanup(srv.Close)
 	h.e = &env{t: t, s: s, srv: srv, b: b}
 	h.f = newFarm(t, h.e)
-	h.f.version["lab-b-agent"] = "16-aaaaaaa"
+	h.f.version[h.agent] = "16-aaaaaaa"
 	b.Mu.Lock()
-	b.Metrics["lab-b-agent"] = func() (jsonx.M, error) { return h.f.metrics("lab-b-agent") }
+	b.Metrics[h.agent] = func() (jsonx.M, error) { return h.f.metrics(h.agent) }
 	b.Mu.Unlock()
 	b.Reply = func(agent, path string) (int, jsonx.M, error) {
 		if path == "/power" { // the agent's own answer: the countdown it scheduled
@@ -79,54 +93,67 @@ func setupTwoHosts(t *testing.T) *twoHosts {
 func (h *twoHosts) start() {
 	f := h.f
 	h.e.b.Mu.Lock()
-	f.on["lab-b-agent"], f.booted["lab-b-agent"], f.ready["lab-b-agent"] = true, f.now.Add(5*time.Second), f.now.Add(20*time.Second)
+	f.on[h.agent], f.booted[h.agent], f.ready[h.agent] = true, f.now.Add(5*time.Second), f.now.Add(20*time.Second)
 	h.up = true
 	h.e.b.Mu.Unlock()
 }
 
-// shown is the id PVE-B is shown under now.
+// shown is the id the machine is shown under now.
 func (h *twoHosts) shown() string {
 	h.e.t.Helper()
 	var ids []string
 	for _, x := range h.e.s.Poller.Snapshot() {
-		if x.ID == "lab-b-agent" || x.ID == "lab-b-node-pve-b" {
+		if x.ID == h.agent || x.ID == h.node {
 			ids = append(ids, x.ID)
 		}
 	}
 	if len(ids) != 1 {
-		h.e.t.Fatalf("PVE-B is shown as %v", ids)
+		h.e.t.Fatalf("%s is shown as %v", h.name, ids)
 	}
 	return ids[0]
 }
 
-// run starts a run for PVE-B under the id it is shown under while it is off (its agent's), lets the machine
-// start when the run's wake is out, and returns the machine's entry of the finished run and what was sent.
-func (h *twoHosts) run() (*wakerun.Host, []string) {
+// wake starts a run for the machine under the id it is shown under while it is off (its agent's) and returns
+// when the run's wake is out. The machine has not started yet.
+func (h *twoHosts) wake() {
 	t := h.e.t
 	t.Helper()
 	h.f.offline()
-	if got := h.shown(); got != "lab-b-agent" {
-		t.Fatalf("PVE-B is off and has no Proxmox answer since the start, but is shown as %s", got)
+	if got := h.shown(); got != h.agent {
+		t.Fatalf("%s is off and has no Proxmox answer since the start, but is shown as %s", h.name, got)
 	}
-	h.f.optIn("lab-b-agent")
-	if _, err := h.e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"lab-b-agent"}, By: "Alice", BySub: "u2"}); err != nil {
+	h.f.optIn(h.agent)
+	if _, err := h.e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{h.agent}, By: "Alice", BySub: "u2"}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 600; i++ {
-		if a, _ := h.e.s.WakeRuns.Snapshot(); a == nil || hostOf(a, "lab-b-agent").WakeSentAt != nil {
+		if a, _ := h.e.s.WakeRuns.Snapshot(); a == nil || hostOf(a, h.agent).WakeSentAt != nil {
 			break
 		}
 		h.f.tick()
 	}
+}
+
+// end lets the machine start, as the wake packet starts it, and the run finish. It returns the machine's entry
+// of the run and what the run sent (without the farm's own machines).
+func (h *twoHosts) end() (*wakerun.Host, []string) {
+	h.e.t.Helper()
 	h.start()
 	r := h.f.finish()
 	var sent []string
 	for _, q := range h.f.requests() {
-		if strings.HasPrefix(q, "lab-") {
+		if !strings.HasPrefix(q, "pc-") && !strings.HasPrefix(q, "nas ") {
 			sent = append(sent, q)
 		}
 	}
-	return hostOf(r, "lab-b-agent"), sent
+	return hostOf(r, h.agent), sent
+}
+
+// run is wake and end: the whole run.
+func (h *twoHosts) run() (*wakerun.Host, []string) {
+	h.e.t.Helper()
+	h.wake()
+	return h.end()
 }
 
 // panel restart with the node off: wol under the node id is still found. The Updates page lists the machine
