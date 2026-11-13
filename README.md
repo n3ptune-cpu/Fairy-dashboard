@@ -680,8 +680,9 @@ like the sign-in's. With `deploy/nginx.example.conf` that is at most 10 round tr
 **3. Turn it on.** The **Approvals** page (admins; in the menu, next to Updates) lists every machine with how
 its check stands (on, off, not supported, offline, needs accepting) and says "N machines are
 ready for the check on the machine itself", with the button **Turn on the check for N machines** (when no
-machine is ready there is no button, and one line says so). Each row has **Approval**, which opens that
-machine's own dialog, and **Accept** when the machine waits for one; a machine's own page has the button **Approval** in
+machine is ready there is no button, and one line says so). Each row has one button, **Approval**, which opens that
+machine's own dialog (it reads **Review**, in red, when the machine waits for an accept: nothing is accepted in
+the row); a machine's own page has the button **Approval** in
 its header, and the dialog behind it has **Turn on** for that machine. The Updates page keeps one line with a
 link where an update meets the check. Turn on is deliberate and proven:
 
@@ -746,7 +747,7 @@ Approvals page say which of these it is:
 * **a host that had the check shows none** any more.
 
 While a host is flagged, the panel asks it for no approval and sends it no fan, power or update request,
-and it is in no run. An admin resolves it in the host's row on the Approvals page, or on the host's page: press **Approval**, and in the dialog **Accept
+and it is in no run. An admin resolves it in the host's dialog: press **Review** in its row on the Approvals page, or **Approval** on the host's page, and in the dialog **Accept
 this machine's id** (not on record), **Accept this machine's new id** (changed) or "Accept that its check is
 off", in a browser, behind "Confirm it's you", with an entry in the Audit log. Before you accept an id,
 compare it with the machine's own: on the machine `fairy-agent helper-status`, line `machine id:`. A

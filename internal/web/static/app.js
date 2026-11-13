@@ -838,13 +838,10 @@ function approvalBinding(s, a) {
   // "Check gone" has one thing to accept, that the check is off, and the live data says so by itself: its button
   // is there as soon as the alarm is, not a moment later with the approval page (audit 6, r4-b1-07).
   const what = a.binding === "vanished" && m ? "off" : m?.can_accept ? m.accept : "";
-  const btn = what && !held ? `<div class="row-gap ap-accept">${apAcceptBtn(m, s.name, what, why)}</div>` : "";
+  const btn = what && !held ? `<div class="row-gap ap-accept"><button class="btn" type="button" data-act="ap-accept" data-id="${esc(m.id)}" data-name="${esc(s.name)}" data-what="${esc(what)}" data-shown="${esc(what === "off" ? "" : m.shown_id || "")}" ${why ? `disabled title="${esc(why)}"` : ""}>${esc(AP_ACCEPT[what]?.[0] || AP_ACCEPT.id[0])}</button></div>` : "";
   const todo = held ? `<div class="ap-todo" id="ap-todo">Give this machine a new id on the machine itself (<code>fairy-agent helper-trust set --new-machine-id</code>), then accept the new id here.</div>` : "";
   return [`<div class="warnbox bad ap-bind" id="ap-bind"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${todo}${btn}</div>`, more];
 }
-// The button itself, in the dialog and in the machine's row on the Approvals page: m is the approval page's
-// entry of the machine, what is one of AP_ACCEPT's names, why is why control is off ("": it is not).
-const apAcceptBtn = (m, name, what, why, cls = "btn") => `<button class="${cls}" type="button" data-act="ap-accept" data-id="${esc(m.id)}" data-name="${esc(name)}" data-what="${esc(what)}" data-shown="${esc(what === "off" ? "" : m.shown_id || "")}" ${why ? `disabled title="${esc(why)}"` : ""}>${esc(AP_ACCEPT[what]?.[0] || AP_ACCEPT.id[0])}</button>`;
 // What "Accept" is called, by what it accepts (the approval page's `accept`): the button, and the action's name.
 const AP_ACCEPT = table({
   first: ["Accept this machine's id", (name) => `Accept the machine id of ${name}`],
@@ -1080,9 +1077,12 @@ function turnOnResults(rep) {
     ${rep.results.map((r) => { const [cls, label] = TURN_ON_RESULT[r.outcome] || ["", r.outcome];
       return `<div class="list-row ap-res" data-key="apr-${esc(r.id)}"><span><b>${esc(r.name)}</b> <span class="chip ${cls}">${esc(label)}</span></span><span class="note">${esc(r.text)}${r.more ? infoBtn(`apr-${r.id}`, `What ${r.name} answered`, `<p>${esc(r.more)}</p>`) : ""}</span></div>`; }).join("")}`;
 }
-// ---- The Approvals page (admins): every machine with its check, "Turn on the check for N machines", Accept, and
-// the button that opens a machine's own Approval dialog. It was a box on the Updates page; the list is the same
+// ---- The Approvals page (admins): every machine with its check, "Turn on the check for N machines", and the
+// button that opens a machine's own Approval dialog. It was a box on the Updates page; the list is the same
 // GET /api/admin/approval (apv.data), asked for every 5 s while the page is open.
+// Nothing is accepted in a row. Accepting a machine id is a decision about which machine this is, and the dialog
+// is where the id stands in full with what to compare it with (fairy-agent helper-status on the machine): a
+// machine that waits for an accept has "needs accepting" in its row, and its one button, "Review", opens the dialog.
 async function loadApprovals() {
   await fetchApproval(true);
   if (current().page === "approvals") schedule(loadApprovals, 5000);
@@ -1091,9 +1091,9 @@ async function loadApprovals() {
 // nothing about the check: while it answers that is "not supported", and while it does not, nothing is known.
 const APV_CHECK = table({ required: ["ok", "on"], off: ["", "off"], broken: ["bad", "broken"], unknown: ["warn", "unknown"] });
 const APV_NOT_HEARD = "It has not answered since the panel started: Fairy does not know yet whether its agent has this check.";
-function apvRow(m, why) {
+function apvRow(m) {
   const sys = state.byId[m.system_id], b = m.binding ? AP_BINDING[m.binding] : null;
-  // what an admin can accept for it here: what the panel says (accept), never for a host whose id another host keeps
+  // what an admin can accept for it, in its dialog: what the panel says (accept), never for a host whose id another host keeps
   const what = m.can_accept && !(m.held_by || []).length ? m.accept || "id" : "";
   const [cls, label] = APV_CHECK[m.state] || ["", "–"];
   const alarm = b ? `${b[0]}: ${m.binding_text || b[1]}` : "";
@@ -1113,8 +1113,8 @@ function apvRow(m, why) {
     <td class="col-kind"${sys ? ' data-l="owner"' : ""}>${sys ? `<span class="note">${esc(sys.kind === "node" ? "Proxmox" : sys.owner || sys.group || "–")}</span>` : ""}</td>
     <td class="nw"${sys ? ' data-l="platform"' : ""}>${sys ? `<span class="ap-os">${hostIcon(sys)}</span>${esc(sys.kind === "node" ? "Proxmox node" : sys.platform || "–")}` : ""}</td>
     <td class="nw"${id ? ' data-l="machine id"' : ""}>${id}</td>
-    <td class="num">${what ? apAcceptBtn(m, m.name, what, why, "btn sm") : ""}${approvalOf(sys) ? `<button class="btn sm" type="button" data-act="ap-dlg" data-id="${esc(m.system_id)}" aria-haspopup="dialog"
-      title="${esc(`What ${m.name} checks and trusts`)}">${I.shield}${esc(AP_LABEL)}</button>` : ""}</td></tr>`;
+    <td class="num">${approvalOf(sys) ? `<button class="btn sm${what ? " ap-btn bad" : ""}" type="button" data-act="ap-dlg" data-id="${esc(m.system_id)}" aria-haspopup="dialog"
+      title="${esc(what ? `Compare and accept in the dialog of ${m.name}` : `What ${m.name} checks and trusts`)}">${I.shield}${what ? "Review" : esc(AP_LABEL)}</button>` : ""}</td></tr>`;
 }
 // The rows by site, as the Overview's host list has them: sites A-Z, "Other" last (and a machine this page has no host for).
 function apvGroups(machines) {
@@ -1141,7 +1141,7 @@ function pageApprovals() {
       "A machine with the check on verifies a Pocket ID approval (passkey) itself before it changes its fans, shuts down, restarts, sleeps or updates its agent.",
       "The panel, or someone with the panel's control token, cannot do these without you.",
       "Nothing is switched on by itself.",
-      "<b>Approval</b> in a machine's row opens what that machine checks and trusts."]))}</div>
+      "<b>Approval</b> in a machine's row opens what that machine checks and trusts. A machine id is accepted there, never in the row."]))}</div>
     ${apv.error ? `<div class="error">${esc(apv.error)}</div>` : ""}
     ${why ? `<div class="note warn">${esc(why)}</div>` : ""}
     ${d.configured ? "" : '<div class="warnbox">This panel has no <code>approval:</code> block in config.yaml (a separate Pocket ID client for PC actions), so it cannot switch the check on or get approvals.</div>'}
@@ -1154,7 +1154,7 @@ function pageApprovals() {
       "<p>A machine can be switched on from here when its agent knows the check, its check is off, it answers, and the panel has a control token for it. Each machine's row says why it is not ready.</p>")}</p>`}
     ${n || have ? `<p class="note" id="ap-ready">${n ? `<b>${esc(n)} machine${n === 1 ? " is" : "s are"} ready for the check on the machine itself.</b> ` : ""}${have ? `${have}.` : ""}</p>` : ""}
     ${machines.length ? `<div class="panel glass scroll"><table class="table ap-machines"><thead><tr><th>Machine</th><th>Check</th><th class="col-kind">Owner</th><th>Platform</th><th>Machine id</th><th class="num"></th></tr></thead>
-      <tbody>${apvGroups(machines).map(([site, rows]) => `<tr class="group" data-key="apg-${esc(site)}"><td colspan="6">${esc(site)}</td></tr>${rows.map((m) => apvRow(m, why)).join("")}`).join("")}</tbody></table></div>`
+      <tbody>${apvGroups(machines).map(([site, rows]) => `<tr class="group" data-key="apg-${esc(site)}"><td colspan="6">${esc(site)}</td></tr>${rows.map(apvRow).join("")}`).join("")}</tbody></table></div>`
       : '<div class="empty">No machines with an agent yet.</div>'}
     ${d.last && (d.last.results || []).length ? `<div class="panel glass pad">${turnOnResults(d.last)}</div>` : ""}
     <div class="note ap-facts"><div id="ap-fact-lock">After Turn on a machine is locked: only <code>fairy-agent helper-trust clear</code>, on the machine itself, removes the check.</div>

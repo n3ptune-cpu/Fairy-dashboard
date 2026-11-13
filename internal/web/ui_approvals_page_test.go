@@ -122,6 +122,10 @@ const rowOf = (html, key) => (html.match(new RegExp('<tr class="row" data-key="a
 
 // One row per machine, and the row says in one or two words how its check stands: on, off, not supported (an
 // agent that knows no check), offline, needs accepting. The id on record is shown while the check is on.
+//
+// A row accepts nothing. Accepting a machine id is a decision about which machine this is, and it is made in
+// the machine's own dialog, where the id stands in full with what to compare it with: the row of a machine
+// that waits for an accept has "needs accepting" and one button, "Review", which opens that dialog.
 func TestUIApprovalsPageHasARowForEveryMachine(t *testing.T) {
 	js := appJS(t)
 	runPageScript(t, "approvals-rows", approvalsPageScript(t, js, `
@@ -150,7 +154,7 @@ func TestUIApprovalsPageHasARowForEveryMachine(t *testing.T) {
     bravo: ["BRAVO", "off ready", "nora", "linux", "", "Approval"],
     charlie: ["CHARLIE", "not supported", "nora", "windows", "", ""],
     delta: ["DELTA", "off offline", "nora", "linux", "", "Approval"],
-    echo: ["ECHO", "on needs accepting", "nora", "linux", "shows " + MID("echo").slice(0, 8) + "…" + MID("echo").slice(-6), "Accept this machine's id Approval"],
+    echo: ["ECHO", "on needs accepting", "nora", "linux", "shows " + MID("echo").slice(0, 8) + "…" + MID("echo").slice(-6), "Review"],
     foxtrot: ["FOXTROT", "offline", "", "", "", ""],
     golf: ["GOLF", "on One machine id on two hosts", "nora", "linux", "", "Approval"],
     hotel: ["<b>HOTEL</b>", "off the panel has no control token for it <b>x</b>", "<i>o</i>", "<u>p</u>", "", "Approval"],
@@ -166,8 +170,11 @@ func TestUIApprovalsPageHasARowForEveryMachine(t *testing.T) {
   if (!rowOf(html, "echo").includes('<span class="chip bad" title="Not on record: ECHO is not on record.">needs accepting</span>')) fail("echo: " + rowOf(html, "echo"));
   // the id in full is the tooltip of the short one
   if (!rowOf(html, "alfa").includes('<code title="' + MID("alfa") + '">')) fail("alfa: the id in full");
-  // a host whose id another host keeps has nothing to accept here
-  if (rowOf(html, "golf").includes("ap-accept")) fail("golf has an Accept button");
+  // no row accepts anything: the page has no Accept button at all, and one button per row at most
+  if (html.includes("ap-accept") || /Accept (this|that)/.test(html)) fail("the page has an Accept button");
+  for (const key of Object.keys(want)) if ((rowOf(html, key).match(/<button/g) || []).length > 1) fail(key + " has more than one button");
+  // a host whose id another host keeps has nothing to accept: its button is the plain one
+  if (words(rowOf(html, "golf")).includes("Review")) fail("golf: " + words(rowOf(html, "golf")));
   // by site, A-Z, "Other" last (a machine this page has no host for)
   const sites = [...html.matchAll(/<tr class="group"[^>]*><td colspan="6">(.*?)<\/td>/g)].map((m) => unesc(m[1]));
   if (JSON.stringify(sites) !== JSON.stringify(["<Yard>", "Attic", "Cellar", "Other"])) fail("sites: " + JSON.stringify(sites));
@@ -175,31 +182,31 @@ func TestUIApprovalsPageHasARowForEveryMachine(t *testing.T) {
   const line = (id) => words((html.match(new RegExp('<div id="' + id + '">.*?</div>')) || [""])[0]);
   if (line("ap-fact-lock") !== "After Turn on a machine is locked: only fairy-agent helper-trust clear , on the machine itself, removes the check.") fail("the lock: " + line("ap-fact-lock"));
   if (line("ap-fact-run") !== 'A machine with the check on is in no "Update unpowered hosts" run yet.') fail("the runs: " + line("ap-fact-run"));
-  // Accept: the row's button asks for exactly what the row shows, behind "Confirm it's you", with the dialog's handler
-  answer = () => ({ message: "done" });
-  await click(tag(rowOf(html, "echo"), 'data-act="ap-accept"'), '[data-act="ap-accept"]');
-  const c = calls[0] || {};
-  if (calls.length !== 1 || c.path !== "/api/admin/approval/accept/echo" || c.method !== "POST" || c.label !== "Accept the machine id of ECHO" || JSON.stringify(c.body) !== JSON.stringify({ machine_id: MID("echo") })) fail("Accept: " + JSON.stringify(calls));
-  // the row's Approval button opens that machine's own dialog (the one its page has)
+  // the row's button opens that machine's own dialog (the one its page has): "Approval", and "Review" in red
+  // for the machine that waits for an accept. Nothing is sent to the panel by either.
   const opened = [];
   openApproval = (id) => { opened.push(id); };
+  const review = tag(rowOf(html, "echo"), 'data-act="ap-dlg"');
+  if (!review || review.disabled || !review.html.includes('class="btn sm ap-btn bad"') || !review.html.includes('title="Compare and accept in the dialog of ECHO"') || tag(rowOf(html, "delta"), 'data-act="ap-dlg"').html.includes("ap-btn")) fail("Review: " + (review && review.html));
+  await click(review, '[data-act="ap-dlg"]');
   await click(tag(rowOf(html, "delta"), 'data-act="ap-dlg"'), '[data-act="ap-dlg"]');
-  if (JSON.stringify(opened) !== '["delta"]') fail("Approval: " + JSON.stringify(opened));
+  if (JSON.stringify(opened) !== '["echo","delta"]' || calls.length || asked.length) fail("the rows' buttons: " + JSON.stringify(opened) + " " + JSON.stringify(calls) + " " + JSON.stringify(asked));
   // on a host's own page the header's button (no id of its own) opens that host's, as before
   page = "system"; opened.length = 0;
   await click({ dataset: { act: "ap-dlg" }, closest: () => null }, '[data-act="ap-dlg"]');
   if (JSON.stringify(opened) !== '["alfa"]') fail("the header's button: " + JSON.stringify(opened));
   page = "approvals";
-  // control switched off by an administrator: the buttons that change something are off and say why; Approval stays
+  // control switched off by an administrator: Turn on is off and says why; the rows' buttons only open a dialog, and stay
   off = "Control is disabled by an administrator";
   const offHtml = show(list);
-  if (!tag(rowOf(offHtml, "echo"), 'data-act="ap-accept"').disabled || tag(rowOf(offHtml, "echo"), 'data-act="ap-dlg"').disabled || !tag(offHtml, 'data-act="ap-open"').disabled) fail("control off: " + rowOf(offHtml, "echo"));
+  if (tag(rowOf(offHtml, "echo"), 'data-act="ap-dlg"').disabled || tag(rowOf(offHtml, "delta"), 'data-act="ap-dlg"').disabled || !tag(offHtml, 'data-act="ap-open"').disabled) fail("control off: " + rowOf(offHtml, "echo"));
   if (!offHtml.includes('<div class="note warn">Control is disabled by an administrator</div>')) fail("control off: not said");
 `))
 }
 
 // A machine on the row of a Proxmox node: the list names it by its agent's id and the row in system_id. The
-// row's name, link and dialog are the node's; what is sent to the panel (Accept) is the agent's id.
+// row's name, link and dialog are the node's (the dialog finds the agent's entry itself, and is where an id
+// is accepted); the row is kept apart by the agent's id.
 func TestUIApprovalsPageOnAProxmoxNodesRow(t *testing.T) {
 	js := appJS(t)
 	runPageScript(t, "approvals-node", approvalsPageScript(t, js, `
@@ -209,27 +216,25 @@ func TestUIApprovalsPageOnAProxmoxNodesRow(t *testing.T) {
   const row = rowOf(html, "agent-of-n1");
   if (!row) fail("no row for the node's agent: " + html);
   const cells = [...row.matchAll(/<td[^>]*>(.*?)<\/td>/gs)].map((m) => words(m[1]));
-  if (JSON.stringify(cells) !== JSON.stringify(["NODE-ONE", "on needs accepting", "Proxmox", "Proxmox node", "shows " + MID("new").slice(0, 8) + "…" + MID("new").slice(-6), "Accept this machine's new id Approval"])) fail("the row: " + JSON.stringify(cells));
+  if (JSON.stringify(cells) !== JSON.stringify(["NODE-ONE", "on needs accepting", "Proxmox", "Proxmox node", "shows " + MID("new").slice(0, 8) + "…" + MID("new").slice(-6), "Review"])) fail("the row: " + JSON.stringify(cells));
   if (!row.includes('<a href="#/system/node-n1">NODE-ONE</a>')) fail("the link is not the node's row: " + row);
   if (!html.includes('<td colspan="6">Rack</td>')) fail("the site is not the node's");
-  const dlg = tag(row, 'data-act="ap-dlg"'), acc = tag(row, 'data-act="ap-accept"');
-  if (dlg?.dataset.id !== "node-n1") fail("Approval opens " + dlg?.dataset.id);
-  if (acc?.dataset.id !== "agent-of-n1" || acc.dataset.shown !== MID("new") || acc.dataset.what !== "id" || acc.dataset.name !== "NODE-ONE") fail("Accept: " + JSON.stringify(acc?.dataset));
-  answer = () => ({ message: "done" });
-  await click(acc, '[data-act="ap-accept"]');
-  if (calls[0]?.path !== "/api/admin/approval/accept/agent-of-n1" || JSON.stringify(calls[0].body) !== JSON.stringify({ machine_id: MID("new") }) || calls[0].label !== "Accept the new machine id of NODE-ONE") fail("the request: " + JSON.stringify(calls));
+  const dlg = tag(row, 'data-act="ap-dlg"');
+  if (dlg?.dataset.id !== "node-n1" || row.includes("ap-accept") || (row.match(/<button/g) || []).length !== 1) fail("Review opens " + dlg?.dataset.id + ": " + row);
+  // the dialog it opens is the node's, and the dialog's own lookup finds the agent's entry there (the id an accept is sent for)
+  const opened = [];
+  openApproval = (id) => { opened.push(id); };
+  await click(dlg, '[data-act="ap-dlg"]');
+  if (JSON.stringify(opened) !== '["node-n1"]' || apvMachine(node)?.id !== "agent-of-n1" || calls.length) fail("the dialog: " + JSON.stringify(opened) + " " + apvMachine(node)?.id);
   // while the node's row is not there (its Proxmox API does not answer), the machine is listed under its agent's row
   const agent = sysRow("agent-of-n1", "PVE agent");
   state.systems = [agent]; state.byId = dict([[agent.id, agent]]); state.sites = dict();
   const alone = rowOf(show([mach("agent-of-n1", "PVE agent", { ready: true })]), "agent-of-n1");
   if (!alone.includes('<a href="#/system/agent-of-n1">PVE agent</a>') || tag(alone, 'data-act="ap-dlg"')?.dataset.id !== "agent-of-n1") fail("the agent's own row: " + alone);
-  // "check gone": what is accepted is that it is off, and no id is sent
-  calls.length = 0;
+  // "check gone": it waits for an accept too (that its check is off), and that is in the dialog as well
   state.systems = [node]; state.byId = dict([[node.id, node]]);
   const gone = rowOf(show([mach("agent-of-n1", "NODE-ONE", { system_id: "node-n1", state: "off", binding: "vanished", can_accept: true, accept: "off", machine_id: MID("old"), shown_id: "" })]), "agent-of-n1");
-  if (!words(gone).includes("off needs accepting") || !words(gone).includes("Accept that its check is off")) fail("check gone: " + words(gone));
-  await click(tag(gone, 'data-act="ap-accept"'), '[data-act="ap-accept"]');
-  if (JSON.stringify(calls[0]?.body) !== '{"off":true}' || calls[0].label !== "Accept that the check on NODE-ONE is off") fail("check gone, the request: " + JSON.stringify(calls));
+  if (!words(gone).includes("off needs accepting") || !words(gone).endsWith("Review") || gone.includes("ap-accept") || words(gone).includes("shows")) fail("check gone: " + words(gone));
 `))
 }
 
@@ -302,6 +307,7 @@ func TestUIApprovalsPageInTheMenuAndTheRouter(t *testing.T) {
 		`if (r.page === "approvals") loadApprovals();`,
 		`${me.can_control ? item("#/approvals", I.shield, "Approvals") : ""}`,
 		`if (!state.me?.can_control) return '<div class="empty">The Approvals page is for admins only.</div>';`,
+		`<button class="btn" type="button" data-act="ap-accept"`, // Accept is made in one place: the machine's dialog (approvalBinding)
 	} {
 		if strings.Count(js, want) != 1 {
 			t.Errorf("app.js lacks (or has twice) %q", want)

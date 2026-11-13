@@ -851,9 +851,8 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .approval .btn svg { width: 16px; height: 16px; }
 .approval .ap-bind { margin: 0 0 10px; }
 .approval .ap-accept, .approval .ap-todo { margin-top: 8px; }
-/* the Approvals page: a row's buttons (Accept, Approval) next to each other, the system's mark in line with its name */
+/* the Approvals page: a row's one button (Approval; "Review", in red, when the machine waits for an accept), the system's mark in line with its name */
 .table.ap-machines td.num .btn { vertical-align: middle; }
-.table.ap-machines td.num .btn + .btn { margin-left: 6px; }
 .table.ap-machines .namecell { white-space: nowrap; }
 .table.ap-machines .ap-why { margin-top: 4px; max-width: 30ch; }
 .table.ap-machines .ap-os svg { display: inline-block; width: 16px; height: 16px; vertical-align: -3px; margin-right: 6px; color: var(--muted); }
