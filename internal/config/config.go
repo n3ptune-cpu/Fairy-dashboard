@@ -203,6 +203,10 @@ type SystemOverride struct {
 	// WakeUpdate: this machine's own timings for "Update unpowered hosts", where they differ from the
 	// wake_update: block of the file.
 	WakeUpdate *SystemWakeUpdate `yaml:"wake_update"`
+	// ManagedBy is set for the entry "Add host" makes for a host added in the panel (its Wake-on-LAN, its BMC
+	// power-on): the id of that host. "": a hand-written entry of config.yaml. Remove and Re-pair take out the
+	// entries their host made and no other (poller.RemoveAgent).
+	ManagedBy string `yaml:"-" json:"-"`
 }
 
 // OnlyWakeUpdate reports whether the entry holds a wake_update: block and nothing else next to its id. Such an

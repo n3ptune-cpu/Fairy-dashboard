@@ -55,6 +55,11 @@ func TestAddHostWithWakeOnLANTakesItsOwnTimingsFromConfigYAML(t *testing.T) {
 		if len(got) != 1 || got[0].WakeUpdate == nil || *got[0].WakeUpdate != *timings || (got[0].Wol != nil) != withWol {
 			t.Fatalf("wol %v: the entries of srv-winpc after the merge: %+v", withWol, got)
 		}
+		// The entry "Add host" made says whose it is, so that the host's Remove takes it out and nothing else
+		// (poller.RemoveAgent); config.yaml's own entry, which is all there is without Wake-on-LAN, says nothing.
+		if by := map[bool]string{true: "srv-winpc", false: ""}[withWol]; got[0].ManagedBy != by {
+			t.Fatalf("wol %v: the entry of srv-winpc is marked as made by %q, want %q", withWol, got[0].ManagedBy, by)
+		}
 		if err := cfg.Validate(); err != nil { // one entry per id: the merged configuration is one the panel accepts
 			t.Fatalf("wol %v: the merged configuration: %v", withWol, err)
 		}

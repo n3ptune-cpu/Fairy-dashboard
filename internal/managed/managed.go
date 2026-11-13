@@ -139,7 +139,7 @@ func (h Host) Shown() string {
 
 // Override is the host's systems: entry (Wake-on-LAN, BMC power-on), nil without either.
 func (h Host) Override() *config.SystemOverride {
-	o := &config.SystemOverride{ID: h.Shown()}
+	o := &config.SystemOverride{ID: h.Shown(), ManagedBy: h.ID}
 	if h.Wol != nil && len(h.Wol.AllMACs()) > 0 {
 		w := *h.Wol
 		o.Wol = &w

@@ -519,6 +519,7 @@ func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
 		// The entry stands in the place of one with its id that is there already: that can only be the
 		// machine's own timings from config.yaml (managed.Check lets nothing else through), and they stay.
 		oo := *o
+		oo.ManagedBy = a.ID // this host's entry: the one its Remove takes out again (RemoveAgent)
 		systems := slices.Clone(p.Cfg.Systems)
 		if i := slices.IndexFunc(systems, func(x config.SystemOverride) bool { return x.ID == oo.ID }); i >= 0 {
 			if oo.WakeUpdate == nil {
@@ -568,20 +569,30 @@ func (p *Poller) RemoveAgent(id string) {
 	a, ok := p.agents[id]
 	delete(p.agents, id)
 	p.Cfg.Agents = slices.DeleteFunc(slices.Clone(p.Cfg.Agents), func(x config.Agent) bool { return x.ID == id })
-	shown := id
-	if ok {
-		if l := p.linkOfLocked(a); l != "" {
-			shown = l
+	// The systems: entries this host's "Add host" made (its Wake-on-LAN, its BMC power-on: ManagedBy) go with
+	// it, and no other entry. It used to be "the entry under the id the host is shown as": for a host that was
+	// added without Wake-on-LAN and is the agent of a node of config.yaml, that is the node's own hand-written
+	// entry, and Remove, which is also the first half of every Re-pair, took its wol: and everything else in
+	// it out of the running panel until the next restart (second review of build 14, R4). A hand-written entry
+	// is config.yaml's and stays as it is. So does the one part of a made entry that is config.yaml's: the
+	// machine's own timings (AddAgent, managed.Check), which stay for a Re-pair.
+	if ok && a.Managed {
+		var kept []config.SystemOverride
+		systems := slices.DeleteFunc(slices.Clone(p.Cfg.Systems), func(x config.SystemOverride) bool {
+			if x.ManagedBy != id {
+				return false
+			}
+			delete(p.overrides, x.ID)
+			if x.WakeUpdate != nil {
+				kept = append(kept, config.SystemOverride{ID: x.ID, WakeUpdate: x.WakeUpdate})
+			}
+			return true
+		})
+		for i := range kept {
+			systems = append(systems, kept[i])
+			p.overrides[kept[i].ID] = &kept[i]
 		}
-	}
-	if o := p.overrides[shown]; o != nil && ok && a.Managed {
-		delete(p.overrides, shown)
-		p.Cfg.Systems = slices.DeleteFunc(slices.Clone(p.Cfg.Systems), func(x config.SystemOverride) bool { return x.ID == shown })
-		if o.WakeUpdate != nil { // the machine's own timings are config.yaml's, not the host's: they stay for a Re-pair
-			kept := config.SystemOverride{ID: shown, WakeUpdate: o.WakeUpdate}
-			p.Cfg.Systems = append(p.Cfg.Systems, kept)
-			p.overrides[shown] = &kept
-		}
+		p.Cfg.Systems = systems
 	}
 	p.cfgMu.Unlock()
 	p.relink()
