@@ -2,6 +2,7 @@ package poller
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -349,8 +350,22 @@ func (p *Poller) PowerOverride(id string) *config.SystemOverride {
 // When both ids have a block that sets the same key, the larger value counts, whichever id was asked for: the
 // machine has one value however it is shown, and the larger one is the careful one (longer silence before it
 // counts as off, a longer countdown to cancel in).
+//
+// Where the configuration does not decide which node is the agent's (SameMachine knows one id only), the rows
+// still make the agent a part of the node that is there (linkOfLocked), and a run for that row talks to that
+// agent: so a block under the agent's own id also counts for the node's row it is shown as (AgentFor), and a
+// block under the node's id for the agent while it is shown as that node (ShownSystem). A block under a
+// node's id is not given to an agent that is not shown as that node: it may be another machine's.
 func (p *Poller) WakeUpdateOverride(id string) (offAfterS, shutdownDelayS int) {
-	for _, x := range p.SameMachine(id) {
+	ids := p.SameMachine(id)
+	if _, isAgent := p.AgentByID(id); isAgent {
+		if s := p.ShownSystem(id); s != nil && !slices.Contains(ids, s.ID) {
+			ids = append(ids, s.ID)
+		}
+	} else if a, ok := p.AgentFor(id); ok && !slices.Contains(ids, a.ID) {
+		ids = append(ids, a.ID)
+	}
+	for _, x := range ids {
 		o := p.Override(x)
 		if o == nil || o.WakeUpdate == nil {
 			continue
