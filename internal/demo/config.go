@@ -40,6 +40,11 @@ agents:
   - {id: mini-i7-agent, name: "MINI-i7 agent", url: "http://100.64.0.22:9101", token_env: DEMO_TOKEN,
      group: Bob, owner: bob, site: Bob, links_to: bob-node-mini-i7,
      ups_powers: {cyberpower: [bob-node-mini-i7, bob-pc]}, ups_names: {cyberpower: "Bob's CyberPower"},
+     # two plugs it reads through Bob's Home Assistant (type: homeassistant in the agent's own config): the
+     # host's own plug, linked with the AGENT's id (the watts are on the node's row, which is what is shown),
+     # and the plug in front of the UPS, which is shown and not counted (what is behind the UPS is counted
+     # through the UPS)
+     power_links: {mini-plug: mini-i7-agent}, power_exclude_from_total: [corner-plug],
      wol_relay: true, control_token_env: DEMO_CONTROL_TOKEN}
   - {id: bob-laptop, name: "Bob's laptop", url: "http://100.64.0.21:9101", token_env: DEMO_TOKEN,
      group: Bob, owner: bob, site: Bob, tags: [friend, laptop]}

@@ -111,6 +111,12 @@ func agentMetrics(id string) (map[string]any, error) {
 			"disks":  []any{}, "net": map[string]any{"bytes_recv": 0, "bytes_sent": 0},
 			"temps": []any{temp("coretemp", "Package id 0", r1(wave(60, 41, 58, 0)))}, "gpus": []any{},
 			"ups": []any{row},
+			// as an agent of v0.8.0 relays a Home Assistant power sensor: a row like every other plug's
+			"power_sources": []any{
+				map[string]any{"id": "mini-plug", "name": "MINI-i7 plug (Home Assistant)", "type": "homeassistant", "ok": true,
+					"watts": r1(wave(70, 38, 96, 2)), "voltage": nil, "current": nil, "energy_kwh_total": nil, "error": nil},
+				map[string]any{"id": "corner-plug", "name": "Bob's corner plug (Home Assistant)", "type": "homeassistant", "ok": true,
+					"watts": r1(wave(90, 310, 560, 1)), "voltage": nil, "current": nil, "energy_kwh_total": nil, "error": nil}},
 			"hardware": map[string]any{"system_vendor": "ASUS", "system_model": "All Series", "board_vendor": "ASUSTeK COMPUTER INC.",
 				"board_model": "Z97-A", "bios_version": "2801", "cpu_model": "Intel(R) Core(TM) i7-4790K CPU @ 4.00GHz"}})
 		feat["processes"], feat["cmdline"] = false, false // Bob keeps processes: {enabled: false}
