@@ -21,7 +21,7 @@ func TestUITurnOnButtonsSayWhatTheyDo(t *testing.T) {
 	}
 	for _, want := range []string{
 		"${I.shield}Turn on</button>", // a machine's own page
-		"${I.shield}Turn on the check for ${esc(n)} machine${n === 1 ? \"\" : \"s\"}</button>` : \"\"}</div>", // the Updates page: a real count, or no button
+		"${I.shield}Turn on the check for ${esc(n)} machine${n === 1 ? \"\" : \"s\"}</button>` : \"\"}</div>", // the Approvals page: a real count, or no button
 		"${n ? \"\" : `<p class=\"note\" id=\"ap-none\">No machine is waiting for the check.${infoBtn(\"ap-none\", \"No machine is waiting for the check\",",
 		"Each machine's row says why it is not ready.</p>",
 		"$(\"#ap-go\").textContent = n ? `Turn on for ${n} machine${n === 1 ? \"\" : \"s\"} (passkey)` : \"Turn on\";", // the dialog's own button, unchanged

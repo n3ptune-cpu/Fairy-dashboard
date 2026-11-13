@@ -103,7 +103,7 @@ func TestUISessionsPage(t *testing.T) {
 		`r.page === "sessions" ? pageSessions()`,
 		`if (r.page === "sessions") loadSessions();`,
 		`${item("#/sessions", I.sessions, "Sessions")}`, // the menu: not behind can_control or can_manage_users
-		`["settings", "sessions", "audit", "users", "updates"].includes(page)`,
+		`["settings", "sessions", "audit", "users", "updates", "approvals"].includes(page)`,
 		`await api("/api/me/sessions")`,
 		`if (state.me?.can_manage_users) {` + "\n" + `    try { sess.all = await api("/api/admin/sessions")`,
 		`<span class="chip ok">This session</span>`,
@@ -304,9 +304,10 @@ func TestUIWakeUpdate(t *testing.T) {
 	if n := strings.Count(sec, "innerHTML"); n != 2 { // the two dialogs; the section itself is rendered by the page's morph
 		t.Errorf("innerHTML is used %d times in the section, want 2 (the dialogs)", n)
 	}
-	// a link is only ever made from a machine id through enc(), never from a text of the run
+	// a link is only ever made from a machine id through enc(), never from a text of the run (the one fixed
+	// link is to the Approvals page, under the table: why a machine with the check on is in no run)
 	for _, m := range regexp.MustCompile(`href="[^"]*"`).FindAllString(sec, -1) {
-		if m != `href="#/system/${enc(h.id)}"` {
+		if m != `href="#/system/${enc(h.id)}"` && m != `href="#/approvals"` {
 			t.Errorf("unexpected link in the section: %s", m)
 		}
 	}

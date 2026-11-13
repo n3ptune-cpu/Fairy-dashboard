@@ -767,7 +767,7 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
   /* why a machine is in no run: under its name, where it wraps, instead of in a column that is scrolled out of view */
   .table.wu-machines .wu-why { display: block; max-width: 62vw; white-space: normal; overflow-wrap: anywhere; }
   .table.wu-machines .wu-why-col { display: none; }
-  /* "The check on the machine itself": each machine is a block, and its reason is a line of its own that wraps */
+  /* The Approvals page: each machine is a block, and its reason is a line of its own that wraps */
   .table.ap-machines, .table.ap-machines tbody { display: block; }
   .table.ap-machines thead { display: none; }
   .table.ap-machines tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--rule); }
@@ -775,7 +775,9 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
   .table.ap-machines td:nth-child(2) { text-align: right; }
   .table.ap-machines td[data-l] { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; }
   .table.ap-machines td[data-l]::before { content: attr(data-l) ": "; color: var(--faint); }
-  .table.ap-machines td.note { grid-column: 1 / -1; overflow-wrap: anywhere; }
+  .table.ap-machines .ap-why { overflow-wrap: anywhere; }
+  .table.ap-machines td:empty { display: none; }
+  .table.ap-machines tr.group td, .table.ap-machines td.num { grid-column: 1 / -1; text-align: left; white-space: normal; }
   /* Updates on a phone: both tables scroll sideways inside their box. The button of a row stays in the window
      while the other columns pass under it, and its shadow shows that there is more to the left and right. */
   .table.updates td.num:last-child, .table.wu-machines td.num:last-child { position: sticky; right: 0; background: var(--panel);
@@ -839,6 +841,16 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .approval .btn svg { width: 16px; height: 16px; }
 .approval .ap-bind { margin: 0 0 10px; }
 .approval .ap-accept, .approval .ap-todo { margin-top: 8px; }
+/* the Approvals page: a row's buttons (Accept, Approval) next to each other, the system's mark in line with its name */
+.table.ap-machines td.num .btn { vertical-align: middle; }
+.table.ap-machines td.num .btn + .btn { margin-left: 6px; }
+.table.ap-machines .namecell { white-space: nowrap; }
+.table.ap-machines .ap-why { margin-top: 4px; max-width: 30ch; }
+.table.ap-machines .ap-os svg { display: inline-block; width: 16px; height: 16px; vertical-align: -3px; margin-right: 6px; color: var(--muted); }
+.table.ap-machines td span.note { margin: 0; }
+.table.ap-machines td.nw { white-space: nowrap; }
+.ap-facts > div + div { margin-top: 4px; }
+.ap-page > p.note { margin: 0; }
 /* The machine's own check, opened from the host's header. The button's colour is the state, in the colours the
    chips have (green: on and in order; amber: off or not known; red: needs an action now, the red of .errcard). */
 .btn.ap-btn svg, .pending-strip .btn svg { width: 16px; height: 16px; }

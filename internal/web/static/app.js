@@ -838,10 +838,13 @@ function approvalBinding(s, a) {
   // "Check gone" has one thing to accept, that the check is off, and the live data says so by itself: its button
   // is there as soon as the alarm is, not a moment later with the approval page (audit 6, r4-b1-07).
   const what = a.binding === "vanished" && m ? "off" : m?.can_accept ? m.accept : "";
-  const btn = what && !held ? `<div class="row-gap ap-accept"><button class="btn" type="button" data-act="ap-accept" data-id="${esc(m.id)}" data-name="${esc(s.name)}" data-what="${esc(what)}" data-shown="${esc(what === "off" ? "" : m.shown_id || "")}" ${why ? `disabled title="${esc(why)}"` : ""}>${esc(AP_ACCEPT[what]?.[0] || AP_ACCEPT.id[0])}</button></div>` : "";
+  const btn = what && !held ? `<div class="row-gap ap-accept">${apAcceptBtn(m, s.name, what, why)}</div>` : "";
   const todo = held ? `<div class="ap-todo" id="ap-todo">Give this machine a new id on the machine itself (<code>fairy-agent helper-trust set --new-machine-id</code>), then accept the new id here.</div>` : "";
   return [`<div class="warnbox bad ap-bind" id="ap-bind"><b>${esc(b[0])}.</b> ${esc(apBindingText(a))}${todo}${btn}</div>`, more];
 }
+// The button itself, in the dialog and in the machine's row on the Approvals page: m is the approval page's
+// entry of the machine, what is one of AP_ACCEPT's names, why is why control is off ("": it is not).
+const apAcceptBtn = (m, name, what, why, cls = "btn") => `<button class="${cls}" type="button" data-act="ap-accept" data-id="${esc(m.id)}" data-name="${esc(name)}" data-what="${esc(what)}" data-shown="${esc(what === "off" ? "" : m.shown_id || "")}" ${why ? `disabled title="${esc(why)}"` : ""}>${esc(AP_ACCEPT[what]?.[0] || AP_ACCEPT.id[0])}</button>`;
 // What "Accept" is called, by what it accepts (the approval page's `accept`): the button, and the action's name.
 const AP_ACCEPT = table({
   first: ["Accept this machine's id", (name) => `Accept the machine id of ${name}`],
@@ -989,7 +992,9 @@ function openApproval(id) {
 }
 document.addEventListener("click", (e) => {
   const t = e.target.closest('[data-act="ap-dlg"]');
-  if (t && current().page === "system") openApproval(current().id);
+  if (!t) return;
+  const id = t.dataset.id || (current().page === "system" ? current().id : "");
+  if (id) openApproval(id);
 });
 // A link that leads to a host's check (the sign on the Overview and next to a host's name: "Details are on its
 // page"): the host's page, with the dialog open. On that page already, it only opens the dialog. route() opens it
@@ -1049,7 +1054,7 @@ function approvalTurnOn(s) {
     // good on the row of a Proxmox node, whose machine the list named by its agent's id): the list is here and
     // names none; the list could not be had; or it is on its way.
     if (apv.data && !apvStale(s, approvalOf(s))) return ['<div class="note" id="ap-on-note">It cannot be switched on from this dialog.</div>',
-      ["It cannot be switched on from this dialog: the panel's list of machines has no entry for this host. Its agent, if it has one, is on the Updates page, under The check on the machine itself."]];
+      ["It cannot be switched on from this dialog: the panel's list of machines has no entry for this host. Its agent, if it has one, is on the Approvals page."]];
     if (!apv.data && apv.error) { fetchApproval(); return [`<div class="note warn" id="ap-on-note">Could not check whether it can be switched on: ${esc(apv.error)}</div>`, []]; }
     fetchApproval(); return ['<div class="note">Checking whether it can be switched on…</div>', []];
   }
@@ -1075,38 +1080,85 @@ function turnOnResults(rep) {
     ${rep.results.map((r) => { const [cls, label] = TURN_ON_RESULT[r.outcome] || ["", r.outcome];
       return `<div class="list-row ap-res" data-key="apr-${esc(r.id)}"><span><b>${esc(r.name)}</b> <span class="chip ${cls}">${esc(label)}</span></span><span class="note">${esc(r.text)}${r.more ? infoBtn(`apr-${r.id}`, `What ${r.name} answered`, `<p>${esc(r.more)}</p>`) : ""}</span></div>`; }).join("")}`;
 }
-// Updates page: "N machines are ready for the check on the machine itself", with the button that says what it
+// ---- The Approvals page (admins): every machine with its check, "Turn on the check for N machines", Accept, and
+// the button that opens a machine's own Approval dialog. It was a box on the Updates page; the list is the same
+// GET /api/admin/approval (apv.data), asked for every 5 s while the page is open.
+async function loadApprovals() {
+  await fetchApproval(true);
+  if (current().page === "approvals") schedule(loadApprovals, 5000);
+}
+// A machine's check in one word, as the row's first chip. A machine without a state has an agent that sends
+// nothing about the check: while it answers that is "not supported", and while it does not, nothing is known.
+const APV_CHECK = table({ required: ["ok", "on"], off: ["", "off"], broken: ["bad", "broken"], unknown: ["warn", "unknown"] });
+const APV_NOT_HEARD = "It has not answered since the panel started: Fairy does not know yet whether its agent has this check.";
+function apvRow(m, why) {
+  const sys = state.byId[m.system_id], b = m.binding ? AP_BINDING[m.binding] : null;
+  // what an admin can accept for it here: what the panel says (accept), never for a host whose id another host keeps
+  const what = m.can_accept && !(m.held_by || []).length ? m.accept || "id" : "";
+  const [cls, label] = APV_CHECK[m.state] || ["", "–"];
+  const alarm = b ? `${b[0]}: ${m.binding_text || b[1]}` : "";
+  const chips = [m.state ? `<span class="chip ${cls}">${esc(label)}${m.last_known ? " · last known" : ""}</span>`
+      : m.online ? `<span class="chip" title="${esc(m.why || "")}">not supported</span>` : "",
+    what ? `<span class="chip bad" title="${esc(alarm)}">needs accepting</span>` : b ? `<span class="chip bad" title="${esc(alarm)}">${esc(b[0])}</span>` : "",
+    m.online ? "" : `<span class="chip" title="${esc(m.state ? "It does not answer right now." : APV_NOT_HEARD)}">offline</span>`,
+    m.stale_keys ? '<span class="chip bad" title="It pins a key Pocket ID no longer publishes: fairy-agent helper-trust set --fetch-keys on the machine">old key</span>' : "",
+    m.other_trust ? '<span class="chip warn" title="It trusts another Pocket ID, client, key or list of users than this panel would set for it now: set by somebody else, changed on the machine, or this panel\'s own list changed since">other trust</span>' : ""];
+  // the id: the one on record while the check is on; for a machine that waits for an accept, the one it shows
+  const id = what && what !== "off" && m.shown_id && m.shown_id !== m.machine_id ? `<span class="note">shows</span> <code title="${esc(m.shown_id)}">${esc(shortKey(m.shown_id))}</code>`
+    : m.state === "required" && m.machine_id ? `<code title="${esc(m.machine_id)}">${esc(shortKey(m.machine_id))}</code>` : "";
+  // under the chips: "ready", or why a machine whose check is off (or cannot be read) is not, in a few words (the whole sentence on hover)
+  const note = m.ready ? "ready" : !m.online || m.binding || !m.state || m.state === "required" ? "" : apShortWhy(m.why);
+  return `<tr class="row" data-key="apm-${esc(m.id)}"><td class="namecell"><b>${sys ? `<a href="#/system/${enc(m.system_id)}">${esc(m.name)}</a>` : esc(m.name)}</b></td>
+    <td>${chips.filter(Boolean).join(" ")}${note ? `<div class="note ap-why"${m.ready ? "" : ` title="${esc(m.why || "")}"`}>${esc(note)}</div>` : ""}</td>
+    <td class="col-kind"${sys ? ' data-l="owner"' : ""}>${sys ? `<span class="note">${esc(sys.kind === "node" ? "Proxmox" : sys.owner || sys.group || "–")}</span>` : ""}</td>
+    <td class="nw"${sys ? ' data-l="platform"' : ""}>${sys ? `<span class="ap-os">${hostIcon(sys)}</span>${esc(sys.kind === "node" ? "Proxmox node" : sys.platform || "–")}` : ""}</td>
+    <td class="nw"${id ? ' data-l="machine id"' : ""}>${id}</td>
+    <td class="num">${what ? apAcceptBtn(m, m.name, what, why, "btn sm") : ""}${approvalOf(sys) ? `<button class="btn sm" type="button" data-act="ap-dlg" data-id="${esc(m.system_id)}" aria-haspopup="dialog"
+      title="${esc(`What ${m.name} checks and trusts`)}">${I.shield}${esc(AP_LABEL)}</button>` : ""}</td></tr>`;
+}
+// The rows by site, as the Overview's host list has them: sites A-Z, "Other" last (and a machine this page has no host for).
+function apvGroups(machines) {
+  const groups = dict();
+  for (const m of machines) { const sys = state.byId[m.system_id]; (groups[sys ? siteOf(sys) : "Other"] ||= []).push(m); }
+  return Object.entries(groups).sort(([x], [y]) => (x === "Other") - (y === "Other") || x.localeCompare(y));
+}
+// "N machines are ready for the check on the machine itself", with the button that says what it
 // does and for how many ("Turn on the check for 2 machines"). With no machine ready there is no dead button: one
 // short line says so, and the info button what "ready" means.
-function approvalBanner() {
-  if (!state.me?.can_control) return "";
+function pageApprovals() {
+  setTitle("Approvals", "the passkey check on the machine itself");
+  if (!state.me?.can_control) return '<div class="empty">The Approvals page is for admins only.</div>';
   const d = apv.data;
   // The list is the approval page, fetched earlier. When a machine's check has changed in the live data since
   // (a Turn on a moment ago, a check that went), it is fetched again, as a host's dialog does (approvalFresh): it
   // was asked for again at most every 30 s, and showed a machine as "ready" under its "switched on · locked".
   if (d && Date.now() - apv.at > APV_AGAIN && state.systems.some((s) => (apv.sig[s.id] ?? "") !== apvSig(approvalOf(s)))) fetchApproval(true);
-  if (!d) return apv.error ? `<div class="panel glass pad approval"><h3>The check on the machine itself</h3><div class="error">${esc(apv.error)}</div></div>` : "";
-  const why = controlWhyNot(), known = d.machines.filter((m) => m.state), n = Number(d.ready) || 0;
-  if (!known.length && !d.configured) return "";
-  const row = (m) => { const [cls, label] = APPROVAL_STATE[m.state] || ["", "–"];
-    return `<tr class="row" data-key="apm-${esc(m.id)}"><td class="namecell"><b>${state.byId[m.system_id] ? `<a href="#/system/${enc(m.system_id)}">${esc(m.name)}</a>` : esc(m.name)}</b></td>
-      <td><span class="chip ${cls}">${esc(label)}${m.last_known ? " · last known" : ""}</span>${m.binding && AP_BINDING[m.binding] ? ` <span class="chip bad" title="${esc(m.binding_text || AP_BINDING[m.binding][1])}">${esc(AP_BINDING[m.binding][0])}</span>` : ""}${m.stale_keys ? ' <span class="chip bad" title="It pins a key Pocket ID no longer publishes: fairy-agent helper-trust set --fetch-keys on the machine">old key</span>' : ""}${m.other_trust ? ' <span class="chip warn" title="It trusts another Pocket ID, client, key or list of users than this panel would set for it now: set by somebody else, changed on the machine, or this panel\'s own list changed since">other trust</span>' : ""}</td>
-      <td data-l="checked by">${esc(m.enforced_by || "–")}</td><td class="note">${m.ready ? "ready" : esc(m.why || "")}</td></tr>`; };
-  return `<div class="panel glass pad approval" data-key="apv">
-    <div class="wu-top"><h3>The check on the machine itself</h3>
+  if (!d) return apv.error ? `<div class="error">${esc(apv.error)}</div>` : '<div class="empty">Loading…</div>';
+  const why = controlWhyNot(), n = Number(d.ready) || 0, machines = d.machines || [];
+  const have = [d.required ? `${esc(d.required)} already check${d.required === 1 ? "s" : ""}` : "", d.broken ? `<b class="bad-t">${esc(d.broken)} broken</b>` : ""].filter(Boolean).join(", ");
+  return `<div class="stack approval ap-page">
+    <div class="note users-help">A machine with the check on asks for your passkey itself before a fan, power or update action.${infoBtn("apv", "The check on the machine itself", infoList([
+      "A machine with the check on verifies a Pocket ID approval (passkey) itself before it changes its fans, shuts down, restarts, sleeps or updates its agent.",
+      "The panel, or someone with the panel's control token, cannot do these without you.",
+      "Nothing is switched on by itself.",
+      "<b>Approval</b> in a machine's row opens what that machine checks and trusts."]))}</div>
+    ${apv.error ? `<div class="error">${esc(apv.error)}</div>` : ""}
+    ${why ? `<div class="note warn">${esc(why)}</div>` : ""}
+    ${d.configured ? "" : '<div class="warnbox">This panel has no <code>approval:</code> block in config.yaml (a separate Pocket ID client for PC actions), so it cannot switch the check on or get approvals.</div>'}
+    ${d.keys_error ? `<div class="warnbox">${esc(d.keys_error)}</div>` : ""}
+    ${d.any_person ? '<div class="warnbox">Test build: this panel does not check that the person who approves is the person signed in (nobody is). The machines still check the approver against their own list, which comes from <code>approval.users</code>.</div>' : ""}
+    <div class="sess-head"><div class="section-title">Machines <span class="count">${esc(machines.length)}</span></div>
       ${n ? `<button class="btn primary" type="button" data-act="ap-open" ${why ? "disabled" : ""}
         title="${esc(why || "Choose the machines and switch the check on: one passkey for all of them")}">${I.shield}Turn on the check for ${esc(n)} machine${n === 1 ? "" : "s"}</button>` : ""}</div>
     ${n ? "" : `<p class="note" id="ap-none">No machine is waiting for the check.${infoBtn("ap-none", "No machine is waiting for the check",
       "<p>A machine can be switched on from here when its agent knows the check, its check is off, it answers, and the panel has a control token for it. Each machine's row says why it is not ready.</p>")}</p>`}
-    <p class="note" id="ap-ready">${n ? `<b>${esc(n)} machine${n === 1 ? " is" : "s are"} ready for the check on the machine itself.</b>` : ""}
-      A machine with the check on verifies a Pocket ID approval (passkey) itself before it changes its fans, shuts down, restarts, sleeps or updates its agent:
-      the panel, or someone with the panel's control token, cannot do these without you. ${esc(d.required)} already check${d.required === 1 ? "s" : ""}${d.broken ? `, <b class="bad-t">${esc(d.broken)} broken</b>` : ""}.
-      Nothing is switched on by itself. Once it is on, a machine is changed only on the machine (fairy-agent helper-trust).</p>
-    ${d.configured ? "" : '<div class="warnbox">This panel has no <code>approval:</code> block in config.yaml (a separate Pocket ID client for PC actions), so it cannot switch the check on or get approvals.</div>'}
-    ${d.keys_error ? `<div class="warnbox">${esc(d.keys_error)}</div>` : ""}
-    ${d.any_person ? '<div class="warnbox">Test build: this panel does not check that the person who approves is the person signed in (nobody is). The machines still check the approver against their own list, which comes from <code>approval.users</code>.</div>' : ""}
-    ${turnOnResults(d.last)}
-    ${known.length ? `<div class="scroll"><table class="table ap-machines"><thead><tr><th>Machine</th><th>Check</th><th>Checked by</th><th></th></tr></thead><tbody>${known.map(row).join("")}</tbody></table></div>` : ""}</div>`;
+    ${n || have ? `<p class="note" id="ap-ready">${n ? `<b>${esc(n)} machine${n === 1 ? " is" : "s are"} ready for the check on the machine itself.</b> ` : ""}${have ? `${have}.` : ""}</p>` : ""}
+    ${machines.length ? `<div class="panel glass scroll"><table class="table ap-machines"><thead><tr><th>Machine</th><th>Check</th><th class="col-kind">Owner</th><th>Platform</th><th>Machine id</th><th class="num"></th></tr></thead>
+      <tbody>${apvGroups(machines).map(([site, rows]) => `<tr class="group" data-key="apg-${esc(site)}"><td colspan="6">${esc(site)}</td></tr>${rows.map((m) => apvRow(m, why)).join("")}`).join("")}</tbody></table></div>`
+      : '<div class="empty">No machines with an agent yet.</div>'}
+    ${d.last && (d.last.results || []).length ? `<div class="panel glass pad">${turnOnResults(d.last)}</div>` : ""}
+    <div class="note ap-facts"><div id="ap-fact-lock">After Turn on a machine is locked: only <code>fairy-agent helper-trust clear</code>, on the machine itself, removes the check.</div>
+      <div id="ap-fact-run">A machine with the check on is in no "Update unpowered hosts" run yet.</div></div></div>`;
 }
 // The dialog: which machines, what each would trust from then on (shown before the passkey), and that it locks.
 // back: the host whose Approval dialog the button was pressed in; Cancel leads back to that dialog.
@@ -1167,7 +1219,7 @@ document.addEventListener("click", (e) => {
   openTurnOn(t.dataset.id || "", t.closest("#ap-dlg")?.dataset.sys || "");
 });
 // Escape in "Turn on" does what its Cancel does: back to the Approval dialog it was opened from (it closed
-// everything; audit 6, r4-b1-10). Opened from the Updates page, both close it, as before. Not when an info box
+// everything; audit 6, r4-b1-10). Opened from the Approvals page, both close it, as before. Not when an info box
 // took this Escape (its own handler comes first, and stops it).
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || e.cancelBubble || $("#modal").hidden || !$("#ap-form")?.dataset.back) return;
@@ -1758,7 +1810,6 @@ function updIndex() {  // after upd.data changed: the per-host lookup and the me
 }
 async function loadUpdates() {  // the Updates page: every 2 s while it is open
   await Promise.all([fetchPanelUpdate(), fetchUpdates(), fetchWakeUpdate()]);
-  fetchApproval();  // the machines' own check of approvals (at most every 30 s)
   if (current().page === "updates") schedule(loadUpdates, 2000);
 }
 // In the background (admins only): every minute, every 2 s while an agent is updating; feeds the banner, the
@@ -1800,8 +1851,7 @@ function pageUpdates() {
     return `<tr class="row" data-key="up-${esc(r.id)}"><td class="namecell"><b title="${esc(r.name)}">${state.byId[r.id] ? `<a href="#/system/${enc(r.id)}">${esc(r.name)}</a>` : esc(r.name)}</b><span class="sub" title="${esc(r.id)}">${esc(r.id)}</span></td>
       <td><span class="chip ${vcls}" title="${esc(r.version || "")}">${esc(cur)}</span>${vnote}</td>
       <td><span class="chip ${r.status === "online" ? "ok" : r.status === "offline" ? "bad" : ""}">${esc(r.status)}</span></td>
-      <td>${r.configured ? updState(r) : '<span class="note">off</span>'}${r.approval === "broken" ? '<div><span class="chip bad" title="This machine\'s own check of approvals is broken: it refuses the update until its trust file is repaired on the machine (fairy-agent helper-trust show)">approval broken</span></div>'
-        : r.approval === "required" ? '<div class="note" title="This machine verifies a Pocket ID approval itself: Update asks for your passkey, every time">passkey on the machine</div>' : ""}</td>
+      <td>${r.configured ? updState(r) : '<span class="note">off</span>'}${r.approval === "broken" ? `<div><a class="chip bad" href="${state.byId[r.system_id || r.id] ? `#/system/${enc(r.system_id || r.id)}" data-ap-go="${esc(r.system_id || r.id)}` : "#/approvals"}" title="This machine's own check of approvals is broken: it refuses the update until its trust file is repaired on the machine (fairy-agent helper-trust show)">approval broken</a></div>` : ""}</td>
       <td class="num"><button class="btn" data-act="upd-one" data-id="${esc(r.id)}" data-name="${esc(r.name)}" ${r.can_update && !why && !busy ? "" : "disabled"}
         title="${esc(why || r.why || `Install the latest release on ${r.name}`)}">${I.update} ${busy ? "Sending…" : "Update"}</button></td></tr>`;
   };
@@ -1814,10 +1864,10 @@ function pageUpdates() {
       ${d.panel_latest?.error && !d.panel_latest.disabled ? `<div class="note warn">Panel release: ${esc(d.panel_latest.error)}</div>` : ""}</div>
     <div class="panel glass pad">${panelUpdateBox(d)}</div>
     ${wakeUpdateBox()}
-    ${approvalBanner()}
     ${why ? `<div class="note warn">${esc(why)}</div>` : ""}
     <div class="panel glass scroll"><table class="table updates"><thead><tr><th>Host</th><th>Version</th><th>Status</th><th>Self-update</th><th class="num"></th></tr></thead>
       <tbody>${d.agents.map(row).join("") || '<tr><td colspan="5" class="note">No agents in config.yaml.</td></tr>'}</tbody></table></div>
+    ${d.agents.some((r) => r.approval === "required") ? '<div class="note" id="upd-appr">A machine with the check on asks for your passkey at every Update. <a href="#/approvals">Approvals</a></div>' : ""}
     <div class="note">Nothing updates by itself: <b>Update</b> installs the latest signed release on that agent.${infoBtn("upd-agents", "Update", infoList([
       "The agent downloads the latest release from GitHub and checks its signature.",
       "It installs the release and restarts: a few seconds offline.",
@@ -2096,7 +2146,7 @@ function wakeUpdateBox() {
       ${joined.length ? `${esc(joined.length)} ${joined.length === 1 ? "is" : "are"} switched on${wuCanNote(d, joined, can)}.` : "None is switched on yet."}</p>
     <div class="scroll"><table class="table wu-machines"><thead><tr><th>Machine</th><th>Now</th><th>Woken by</th><th>In these runs</th><th class="num"></th></tr></thead>
       <tbody>${able.map(row).join("") || '<tr><td colspan="5" class="note">No machine with an agent that can update itself from the panel.</td></tr>'}</tbody></table></div>
-    ${d.hosts.some((h) => h.approval) ? '<div class="note"><b>A machine that checks a passkey approval itself cannot be in a run yet</b>: update it and switch it off on its own page, where it asks for your passkey.</div>' : ""}</div>`;
+    ${d.hosts.some((h) => h.approval) ? '<div class="note" id="wu-appr">A machine with the check on is in no run yet. <a href="#/approvals">Approvals</a></div>' : ""}</div>`;
 }
 // The per-host switch in the ⋯ menu of a machine's page (admins).
 function wakeUpdateMenu(s) {
@@ -3492,6 +3542,7 @@ function current() {
   if (h.startsWith("#/audit")) return { page: "audit" };
   if (h.startsWith("#/users")) return { page: "users" };
   if (h.startsWith("#/updates")) return { page: "updates" };
+  if (h.startsWith("#/approvals")) return { page: "approvals" };
   if (h.startsWith("#/notifications")) return { page: "notifications" };
   return { page: "overview" };
 }
@@ -3499,7 +3550,7 @@ const routeKey = (r) => `${r.page}:${r.id || ""}:${r.tab || ""}`;
 function pageHtml(r) {
   return r.page === "system" ? pageSystem(r.id, r.tab) : r.page === "power" ? pagePower() : r.page === "ups" ? pageUps()
     : r.page === "settings" ? pageSettings() : r.page === "audit" ? pageAudit() : r.page === "users" ? pageUsers()
-    : r.page === "updates" ? pageUpdates() : r.page === "notifications" ? pageNotifications()
+    : r.page === "updates" ? pageUpdates() : r.page === "approvals" ? pageApprovals() : r.page === "notifications" ? pageNotifications()
     : r.page === "sessions" ? pageSessions() : pageOverview();
 }
 let renderQueued = false;
@@ -3534,6 +3585,7 @@ function route() {
   if (r.page === "audit") loadAudit(true);
   if (r.page === "users") loadAdmin();
   if (r.page === "updates") loadUpdates();
+  if (r.page === "approvals") loadApprovals();
   if (r.page === "notifications") loadNotes(true);
   if (r.page === "sessions") loadSessions();
   if (r.page === "system" && state.me?.can_manage_users) loadManaged();
@@ -3643,7 +3695,7 @@ document.addEventListener("change", async (e) => {
 });
 
 // ------------------------------------------------------------ account menu (top bar, hamburger)
-// The signed-in user, Settings / Sessions / Audit / Users and Sign out. Static DOM in the top bar (not morphed); the
+// The signed-in user, Settings / Sessions / Audit / Users / Updates / Approvals and Sign out. Static DOM in the top bar (not morphed); the
 // active page is marked on every route. Keyboard: arrows / Home / End move, Escape closes and refocuses the button.
 const demoViewLabel = (v) => (v === "admin" ? "Admin (everything)" : v === "pending" ? "Waiting for access" : `Viewer · ${v.slice(7)}`);
 function buildAcct() {
@@ -3659,7 +3711,8 @@ function buildAcct() {
     ${item("#/sessions", I.sessions, "Sessions")}
     ${me.can_control ? item("#/audit", I.audit, "Audit") : ""}
     ${me.can_manage_users ? item("#/users", I.users, "Users") : ""}
-    ${me.can_control ? item("#/updates", I.update, "Updates").replace("</span></a>", '</span><span class="upd-dot" id="upd-badge" hidden></span></a>') : ""}`;
+    ${me.can_control ? item("#/updates", I.update, "Updates").replace("</span></a>", '</span><span class="upd-dot" id="upd-badge" hidden></span></a>') : ""}
+    ${me.can_control ? item("#/approvals", I.shield, "Approvals") : ""}`;
   if (me.demo && (me.demo_views || []).length) {
     html += `<div class="menu-sep" role="separator"></div><div role="group" aria-labelledby="acct-demo-t"><div class="menu-title" id="acct-demo-t" role="none">Preview as · demo</div>
       ${me.demo_views.map((v) => `<button class="menu-item" type="button" role="menuitemradio" tabindex="-1" aria-checked="${v === me.demo_view}" data-demo-view="${esc(v)}">
@@ -3681,7 +3734,7 @@ function syncAcct() {
     a.classList.toggle("on", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
-  $("#acct-btn")?.classList.toggle("on", ["settings", "sessions", "audit", "users", "updates"].includes(page));
+  $("#acct-btn")?.classList.toggle("on", ["settings", "sessions", "audit", "users", "updates", "approvals"].includes(page));
 }
 const acctItems = () => [...document.querySelectorAll('#acct-menu [role^="menuitem"]')];
 const acctOpen = () => !$("#acct-menu").hidden;

@@ -40,7 +40,7 @@ func TestUIApproval(t *testing.T) {
 		`m = admin ? apvMachine(s) : null`,                                            // the record's details: admins only
 		`if (apvStale(s, a) && Date.now() - apv.at > APV_AGAIN) fetchApproval(true);`, // a block that changed after the approval page was fetched (audit 6, r4-b1-01 and -07: once a second, it was every 3 s)
 		`const apvStale = (s, a) => !!apv.data && (apv.sig[s.id] ?? "") !== apvSig(a);`, "const APV_AGAIN = 1000;",
-		// the Updates page's list follows the live data too (r4-b1-01)
+		// the Approvals page's list follows the live data too (r4-b1-01; it was a box on the Updates page)
 		`if (d && Date.now() - apv.at > APV_AGAIN && state.systems.some((s) => (apv.sig[s.id] ?? "") !== apvSig(approvalOf(s)))) fetchApproval(true);`,
 		`${bind ? "" : '<p id="ap-lead">This machine does not check approvals itself.`, // not under "Check gone"
 		`...(bind ? [] : ["The panel confirms these requests itself (Confirm it's you) and sends them with the panel's control token."])`,
