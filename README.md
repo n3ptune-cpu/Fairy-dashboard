@@ -625,6 +625,14 @@ without the check: an admin's session in a browser is enough, so a 10-second cou
 time. If the machine had already begun to switch off when the cancel reached it, the page says "Too late"
 and not "cancelled".
 
+A shutdown, restart or sleep request that got no answer of the machine's agent ("no answer (http 504): it may
+have arrived") may be counting down although the page shows no countdown yet. For the time such a request
+can still arrive (its delay plus 5 minutes) the Power menu offers **Cancel pending** for that machine, and
+the cancel is sent to its agent whatever the page shows. The agent's own answer is shown as it is ("... may
+still be scheduled: send the cancel again"); when it answers that nothing is pending, the page says exactly
+that and not "cancelled". Without such a request a cancel is sent only while a countdown shows, as before.
+The panel keeps this in memory: after a restart of the panel Cancel is there again once the countdown shows.
+
 **Update unpowered hosts** does not ask for approvals yet. A machine with the check on is not taken
 into a run: its row says "needs approval: not supported in runs yet", before and after "Switch on", also
 while the machine is off and after a restart of the panel (the panel has it on record). Update it and

@@ -1,7 +1,9 @@
 package web
 
 import (
+	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
@@ -17,6 +19,20 @@ func (s *Server) powerCaps(c *reqCtx) error {
 		return err
 	}
 	caps := powerctl.Capabilities(s.Poller, x)
+	if lost, ok := s.unseen.get(x.ID, s.now()); ok && x.PowerPending == nil {
+		// A shutdown, reboot or sleep request of this panel got no answer a moment ago and may have arrived:
+		// "Cancel pending" is on offer although no countdown shows (unseenPower). The same look at the routes
+		// as with a countdown that shows: to the system's own agent with power control, or not at all.
+		y := x
+		y.PowerPending = &model.PowerPending{Action: lost.action}
+		for _, a := range powerctl.Capabilities(s.Poller, y).Actions {
+			for i := range caps.Actions {
+				if a.Action == "cancel" && caps.Actions[i].Action == "cancel" {
+					caps.Actions[i] = a
+				}
+			}
+		}
+	}
 	if _, g, _ := c.grant(); !g.Admin() { // read-only: no actions, and no relay / panel-host details
 		why := "read-only: only admins can use power actions"
 		for i := range caps.Actions {
@@ -106,15 +122,88 @@ func (s *Server) powerAction(c *reqCtx) error {
 		if a, ok := s.Poller.AgentFor(x.ID); ok {
 			why = s.unavailableWhy(a.ID)
 		}
+		var lost *powerctl.Unanswered
+		if errors.As(err, &lost) && res.Via == "agent" && (req.Action == "shutdown" || req.Action == "reboot" || req.Action == "sleep") {
+			// no answer of the machine's agent: the request may have arrived, and until the countdown shows
+			// (or never does) a Cancel must be able to reach the agent (unseenPower)
+			s.unseen.note(x.ID, req.Action, s.now().Add(time.Duration(*req.DelayS)*time.Second+cancelUnseenFor))
+		}
 		err = approvalRefusal(x.Name, err, why)
 		c.audit(u, "power."+req.Action, id, params, errorOutcome(err))
 		return err
+	}
+	if res.Via == "agent" {
+		s.unseen.drop(x.ID) // the agent holds one action, and it is this one now: an earlier request that got no answer cannot start
 	}
 	params["via"] = res.Via
 	c.audit(u, "power."+req.Action, id, params, "ok")
 	s.powerEvent(x, req, res, who)
 	c.json(200, res)
 	return nil
+}
+
+// cancelUnseenFor is how long after the time a shutdown, reboot or sleep request without an answer would have
+// been due the panel still lets a Cancel through to the machine's agent while no countdown shows. It is the
+// time a wake / update / shut down run goes on asking for its own lost request to be called off (wakerun:
+// "until 5 minutes after it was due").
+const cancelUnseenFor = 5 * time.Minute
+
+// unseenPower remembers, per system and in memory, the panel's own shutdown, reboot and sleep requests that
+// got no answer of the agent (powerctl.Unanswered: a timeout, a connection that broke, 502 and 504, the
+// agent's own 504 for a helper that was handed the request and did not answer).
+//
+// Such a request may have arrived. The page then shows no countdown: the panel's view shows one only after a
+// poll that carries it, and an agent whose helper did not answer cannot tell what is pending. powerctl offers
+// a cancel only while a countdown shows, and answered the Cancel with "nothing pending" itself, so nothing
+// reached the agent: the agent's own answer in that minute ("... may still be scheduled: send the cancel
+// again", Fairy-agent f439fc0) could not be followed from the panel, and a machine whose countdown never showed
+// went off with no way to stop it from here. While such a request can still arrive (until cancelUnseenFor
+// after its due time) a Cancel for that system is sent to its agent whatever the view shows
+// (powerctl.Request.PendingUnseen, the rule a run already uses for its own lost request), and "Cancel pending"
+// is on offer in the Power menu. Nothing else changes about a cancel: an admin, the CSRF header, the cancels'
+// own budget, the kill switch as for every cancel (a browser session passes it, a token gets 423), and only
+// to the system's own agent with power control.
+//
+// The entry goes when the time is over, when a countdown that showed was cancelled, and when a later power
+// request to that agent was accepted. A restart of the panel forgets it: then a Cancel is possible again only
+// once the countdown shows.
+type unseenPower struct {
+	mu sync.Mutex
+	m  map[string]unseenReq
+}
+
+type unseenReq struct {
+	action string
+	until  time.Time
+}
+
+func (l *unseenPower) note(id, action string, until time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.m == nil {
+		l.m = map[string]unseenReq{}
+	}
+	if old, ok := l.m[id]; ok && old.until.After(until) {
+		until = old.until // an earlier lost request with a later time can still arrive too
+	}
+	l.m[id] = unseenReq{action: action, until: until}
+}
+
+func (l *unseenPower) get(id string, now time.Time) (unseenReq, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r, ok := l.m[id]
+	if ok && now.After(r.until) {
+		delete(l.m, id)
+		return unseenReq{}, false
+	}
+	return r, ok
+}
+
+func (l *unseenPower) drop(id string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.m, id)
 }
 
 // cancelLate is how long after the end of a countdown (by the panel's clock against the time the agent gave) a
@@ -146,6 +235,13 @@ func (s *Server) powerCancel(c *reqCtx, u *model.User, id string, req powerctl.R
 	}
 	who := actorOf(u)     // the same form as everywhere else the panel names who did something (audit 5, r1-b2-10)
 	was := x.PowerPending // what the page showed when Cancel was pressed
+	// No countdown shows, and a power request of this panel to this machine got no answer a moment ago: the
+	// cancel goes to the agent all the same (unseenPower).
+	lost, unseen := s.unseen.get(x.ID, s.now())
+	if unseen = unseen && was == nil; unseen {
+		req.PendingUnseen = true
+		params["pending"] = "not shown (a " + lost.action + " request got no answer)"
+	}
 	res, err := powerctl.Execute(c.r.Context(), s.Poller, x, req, who)
 	if err != nil {
 		why := ""
@@ -157,6 +253,18 @@ func (s *Server) powerCancel(c *reqCtx, u *model.User, id string, req powerctl.R
 		return err
 	}
 	params["via"] = res.Via
+	if unseen {
+		// The agent answered the cancel with "ok, nothing pending", which it also answers when it had nothing to
+		// stop: the panel saw no countdown and cannot say that one was cancelled. And the request that got no
+		// answer may still be on its way (a gateway that passed it on late): the entry stays for its time, so
+		// the cancel can be sent again. No "cancelled", in the answer, the audit log or the notifications.
+		res.Message = fmt.Sprintf("Cancel sent to %s, and its agent answered that nothing is pending there now. If the %s request that got no answer "+
+			"arrives after this, its countdown shows on this page: cancel it then.", x.Name, lost.action)
+		c.audit(u, "power.cancel", id, params, "ok (no countdown was shown; the agent answered that nothing is pending)")
+		c.json(200, res)
+		return nil
+	}
+	s.unseen.drop(x.ID) // a countdown showed and the agent took its cancel: nothing of an earlier request is left to wait for
 	what := "action"
 	if was != nil {
 		what = was.Action

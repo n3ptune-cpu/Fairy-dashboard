@@ -125,6 +125,7 @@ type Server struct {
 	approvalRL                       *rateLimiter // per user: control requests that ask machines for a challenge first
 	settingsRL, uploadRL             *rateLimiter // per user: settings changes, background uploads
 	stopRL                           *rateLimiter // per user: "Cancel run" and the cancel of a countdown (stopsPerMin)
+	unseen                           unseenPower  // power requests that got no answer and may have arrived (api_power.go)
 	mux                              *http.ServeMux
 	answerTimeout                    time.Duration  // how long a client may take over one answer (answerWriteTimeout; tests shorten it)
 	backgrounds                      streamSlots    // background downloads in flight (api_settings.go)
