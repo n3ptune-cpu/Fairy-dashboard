@@ -438,7 +438,9 @@ The rules, in plain words:
   someone asked for on the machine's page since is not called off; the same holds for **Cancel run**). The
   cancel is also sent when the run's shutdown request had got no answer: it may have arrived. When the agent
   answers "nothing is pending" to it, the request may still arrive later: the run asks again every 10 seconds
-  until the countdown's end, and calls off the countdown that shows.
+  for as long as it would itself wait for that request (until 5 minutes after the countdown's end, also when
+  the stop comes after that end), and calls off the countdown that shows. If none shows, the machine's line
+  says that the request may still arrive, with the power "on or off: not known".
   One case inside the countdown in which it is not sent: the machine's agent already shows another action
   than the run's shutdown as pending (someone called the shutdown off on the machine's page and asked for a
   reboot, say). The agent's cancel would call that one off, so the run sends none, and the machine's line

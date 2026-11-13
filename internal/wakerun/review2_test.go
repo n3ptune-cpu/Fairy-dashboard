@@ -261,8 +261,13 @@ func TestTheLastLookAfterAShutdownRequestWithoutAnAnswer(t *testing.T) {
 	h := host(r, "pc-a")
 	// (r3-p2-06: the run that the kill switch stops now tries to call the countdown off that its request may
 	// have started; the sentence held "... after its shutdown request got no answer (it would be due at ...).")
-	want := "the run stopped (control is disabled by an administrator), but its shutdown countdown (due at " + clock(due) + ") could not be called off " +
-		"(agent unreachable: connection failed). It does not answer now: not confirmed that it is on."
+	// (Review of fix8, RF8-02: for a request without an answer the cancel is asked for until 5 minutes after the due
+	// time, and the end does not say "its shutdown countdown (due at ...) could not be called off": the run
+	// knows of no countdown. It held "..., but its shutdown countdown (due at ...) could not be called off (agent
+	// unreachable: connection failed). It does not answer now: not confirmed that it is on.")
+	want := "the run stopped (control is disabled by an administrator): its shutdown request had got no answer, and the request to call a countdown off did not get through either " +
+		"(agent unreachable: connection failed). The request may still arrive: the machine then switches off 2 min later unless someone cancels that on its page. " +
+		"Fairy no longer watches it. It was updated to 17-bbbbbbb."
 	if h.State != StLeftOn || h.On != OnUnknown || h.Text != want || !pc.on {
 		t.Fatalf("%s/%s, really on %v: %s", h.State, h.On, pc.on, h.Text)
 	}

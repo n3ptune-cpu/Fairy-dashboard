@@ -95,9 +95,10 @@ func TestWakeUpdateTheRunsCancelIsSentWhenThePanelSeesNothingPending(t *testing.
 			}
 		}
 		// (audit 6, r4-p2-02: one cancel, until the request was seen to be able to arrive after it. The run never
-		// saw a countdown, so it asks again every 10 s until its own due time, 110 s after the first.)
-		if cancels < 11 || cancels > 12 || !f.on["pc-a"] {
-			t.Errorf("%s: %d cancel(s) reached the agent, want one every 10 s until the due time; the machine is on: %v; [%s] %q: %s", c.name, cancels, f.on["pc-a"], h.State, h.On, h.Text)
+		// saw a countdown, so it asks again every 10 s. Review of fix8, RF8-02: for as long as the request can
+		// still arrive, 5 minutes after its own due time; it was until the due time, 11 or 12 cancels.)
+		if cancels < 41 || cancels > 42 || !f.on["pc-a"] {
+			t.Errorf("%s: %d cancel(s) reached the agent, want one every 10 s until 5 min after the due time; the machine is on: %v; [%s] %q: %s", c.name, cancels, f.on["pc-a"], h.State, h.On, h.Text)
 		}
 		why := map[bool]string{true: "the run stopped (control is disabled by an administrator)", false: "The run was cancelled by Bob"}[c.kill]
 		// (Its agent answered the run's own request a moment ago: that is a machine that runs, whatever the polls

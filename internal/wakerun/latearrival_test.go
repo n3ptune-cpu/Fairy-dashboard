@@ -128,7 +128,8 @@ func TestAGuestStartsOnANodeWhoseShutdownRequestArrivedLate(t *testing.T) {
 // "Cancel run" and the kill switch while the run watches a request that has not arrived yet. The agent answers
 // the cancel with "nothing is pending", and the run used to let go on that: "... none is pending. It came
 // online after the wake and it is ON." The request arrived after it, and the machine went off. Now the cancel
-// is asked again every 10 s until the run's own due time, and the countdown that shows is called off.
+// is asked again every 10 s for as long as the request can still arrive, and the countdown that shows is called
+// off.
 func TestTheCancelIsAskedAgainWhileALostShutdownRequestCanStillArrive(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -168,10 +169,12 @@ func TestTheCancelIsAskedAgainWhileALostShutdownRequestCanStillArrive(t *testing
 			if h.State != StLeftOn || h.On != OnUnknown || h.Text != want || !pc.on {
 				t.Errorf("[%s] power %q, the machine on: %v: %s", h.State, h.On, pc.on, h.Text)
 			}
-			if d := w.mono - asked; d < 120*time.Second || d > 125*time.Second { // until the run's own due time, not longer
-				t.Errorf("the run let go %v after the request, want the countdown's time (2 min)", d)
+			// (Review of fix8, RF8-02: for as long as the request can still arrive, which is as long as the watch
+			// itself waits for it: 5 minutes after the run's own due time. It was until the due time, 11 or 12 cancels.)
+			if d := w.mono - asked; d < 7*time.Minute || d > 7*time.Minute+5*time.Second {
+				t.Errorf("the run let go %v after the request, want the countdown's time (2 min) and 5 min", d)
 			}
-			if n := strings.Count(w.callsFor("pc-a"), "cancel"); n < 11 || n > 12 { // every 10 s, six a minute
+			if n := strings.Count(w.callsFor("pc-a"), "cancel"); n < 41 || n > 42 { // every 10 s, six a minute
 				t.Errorf("%d cancels: %s", n, w.callsFor("pc-a"))
 			}
 			if w.limited != 0 {

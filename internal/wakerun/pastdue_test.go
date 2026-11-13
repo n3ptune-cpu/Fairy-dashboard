@@ -94,8 +94,12 @@ func TestCancelRunAroundTheEndOfTheCountdown(t *testing.T) {
 	}
 }
 
-// A shutdown request that got no answer, and "Cancel run" after the time it would have been due: nothing is
-// sent, and the sentence claims neither a countdown nor that one was called off.
+// A shutdown request that got no answer, and "Cancel run" after the time it would have been due. Nothing was
+// sent then, and the sentence ended "... so the run sent no cancel. ... not confirmed that it is on." But the
+// request can still arrive, for as long as the watch itself waits for it (5 minutes after the due time): the
+// cancel is asked for until then (review of fix8, RF8-02; latedue_test.go), here of a machine whose link stays
+// down, so none gets through. The sentence claims neither a countdown nor that one was called off, and the
+// power is "not known".
 func TestCancelRunAfterTheDueTimeOfAShutdownRequestWithoutAnAnswer(t *testing.T) {
 	w := newWorld(t)
 	pc := w.off("pc-a")
@@ -111,9 +115,16 @@ func TestCancelRunAfterTheDueTimeOfAShutdownRequestWithoutAnAnswer(t *testing.T)
 		t.Fatal(err)
 	}
 	h := host(w.finish(), "pc-a")
-	want := "The run was cancelled by Bob after the time its shutdown would have been due (" + clock(due) + "; the request got no answer), so the run sent no cancel. " +
-		"It was updated to 17-bbbbbbb. It does not answer now: not confirmed that it is on."
-	if h.State != StLeftOn || h.On != OnUnknown || h.Text != want || strings.Contains(w.callsFor("pc-a"), "cancel") {
+	want := "The run was cancelled by Bob: its shutdown request had got no answer, and the request to call a countdown off did not get through either " +
+		"(agent unreachable: connection failed). The request may still arrive: the machine then switches off 2 min later unless someone cancels that on its page. " +
+		"Fairy no longer watches it. It was updated to 17-bbbbbbb."
+	if h.State != StLeftOn || h.On != OnUnknown || h.Text != want {
 		t.Errorf("[%s] power %q, requests %s: %s", h.State, h.On, w.callsFor("pc-a"), h.Text)
+	}
+	if n := strings.Count(w.callsFor("pc-a"), "cancel"); n < 29 || n > 31 { // every 10 s for the 5 minutes
+		t.Errorf("%d cancels", n)
+	}
+	if end := w.now.Sub(due); end < offGrace || end > offGrace+5*time.Second {
+		t.Errorf("the run let go %v after the due time, want %v", end, offGrace)
 	}
 }
