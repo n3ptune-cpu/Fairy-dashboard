@@ -146,6 +146,7 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 		m.endOtherPending(r, h, now, why, o.Pending)
 		return
 	}
+	h.seeNone(o, after, mono)
 	if after && o.Pending != nil && o.Pending.Action == "shutdown" { // the countdown of a request without an answer may show only now
 		m.seeCountdown(r, h, o, mono, now)
 	}
@@ -1029,6 +1030,7 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	if !h.pendingSeen && h.noPendingAt.IsZero() && (gone || (lost && after && o.Pending == nil)) {
 		h.noPendingAt = o.SeenAt
 	}
+	h.seeNone(o, after, mono)
 	switch {
 	case lost && mono-h.dueMono > offGrace:
 		m.lostEnd(r, h, now, mono)
@@ -1069,11 +1071,27 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 // would stop asking about a node's guests, refuse to send a cancel ("after its countdown") and count silence as
 // "off" while the countdown still runs. The countdown was pending when this answer came, so it ends no later
 // than that moment plus the delay: dueMono is moved there when that is later, and with it the time of day in
-// the report's words. It is only ever moved later, and endMin, the earliest end, stays (the request may have
-// arrived at once): every proof of "off" gets harder by this, none easier. For a request that was answered
-// nothing moves.
+// the report's words. It is only ever moved later. For a request that was answered nothing moves.
+//
+// The earliest end, endMin, moves with it where the run knows that the request arrived late (review of fix8,
+// RF8-01). It stayed at "the moment before the request left, plus the delay", and "out of reach before the
+// countdown can have ended" (seeSilence) was measured against that: a link that dropped during the late
+// countdown, after that first endMin, was not "out of reach before the end", and when the shutdown then did
+// not happen two silent polls after the moved due time made "switched off again" for a machine that was on.
+// What the run knows: an answer from after the request showed no countdown (seeNone), so the countdown began
+// after that answer and ends no earlier than that answer plus the delay. endMin is raised there. Everything
+// that asks "can the countdown be over" follows: silence that began before it is "out of reach before the
+// end", an answer without the countdown before it is "cancelled" (a late countdown that a person calls off
+// read "the shutdown did not work" five minutes later), and "an answer from after the request"
+// (answeredAfter) is from then on one from after that answer. (That answer left the agent a moment before it
+// came, at most the time of one poll: endMin can be that much late, which is the side of "not confirmed".)
+// Where no answer came between the request and the countdown (the link was down until the request arrived),
+// nothing is known about when it arrived, and endMin stays: a stated limit.
 func (m *Manager) seeCountdown(r *Run, h *Host, o Observation, mono time.Duration, now time.Time) {
 	if h.ShutdownUnsure && !h.pendingSeen {
+		if e := h.noneMono + r.Settings.ShutdownDelay; h.noneSeen && e > h.endMin {
+			h.endMin = e
+		}
 		if due := mono - o.SeenAgo + r.Settings.ShutdownDelay; due > h.dueMono {
 			h.dueMono = due
 			at := now.Add(due - mono)
@@ -1086,6 +1104,15 @@ func (m *Manager) seeCountdown(r *Run, h *Host, o Observation, mono time.Duratio
 		}
 	}
 	h.pendingSeen, h.pendingAt = true, o.Pending.At
+}
+
+// seeNone keeps the moment of the latest answer that showed no countdown, from after a shutdown request that
+// got no answer and before any countdown of it showed: the request had not arrived when that answer was made
+// (seeCountdown). mono is the run's steady clock, read before the poller was asked.
+func (h *Host) seeNone(o Observation, after bool, mono time.Duration) {
+	if h.lostShutdown() && after && o.Pending == nil {
+		h.noneSeen, h.noneMono = true, mono-o.SeenAgo
+	}
 }
 
 // lostTail ends the sentence of a machine whose shutdown request got no answer, whose agent never showed a

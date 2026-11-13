@@ -485,11 +485,14 @@ type Host struct {
 	shutdownSent time.Time
 	// endMin, dueMono: the earliest and the latest end of the countdown the run asked for, on the steady clock:
 	// the moment before the shutdown request left, and the moment its answer was here (or the wait for it
-	// ended), each plus the delay. dueMono is the run's own due time.
+	// ended), each plus the delay. dueMono is the run's own due time. For a request without an answer whose
+	// countdown shows late both move later, to what the run then knows (seeCountdown).
 	endMin, dueMono time.Duration
 	pendingSeen     bool          // the agent reported the run's shutdown as pending
 	lateNoted       bool          // the history says that the countdown of a request without an answer showed late (seeCountdown)
 	noPendingAt     time.Time     // (SeenAt of) the first answer after the request that had no countdown in it (see stepShutting)
+	noneSeen        bool          // after a request without an answer, an answer from after it showed no countdown; noneMono: the steady moment the latest such answer came (seeNone, seeCountdown)
+	noneMono        time.Duration //
 	otherAt         time.Time     // (SeenAt of) the first answer after the request that showed another action than a shutdown as pending (otherPending)
 	pendingAt       time.Time     // the end of the run's countdown as its agent last gave it (by the machine's clock; stepShutting)
 	unpending       bool          // after its countdown was seen, an answer from after the run's due time showed nothing pending (stepShutting: another shutdown that shows after that is not the run's)

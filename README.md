@@ -383,7 +383,10 @@ The rules, in plain words:
   whose own request got no answer). An agent that answers and shows no countdown after such a request has not
   got it so far, and no more than that: a request can reach the agent after the panel stopped waiting for its
   answer. So the run goes on watching. A countdown that shows late is the run's own, counted from when it
-  showed; if none has shown 5 minutes after the time it would have ended, the report says "The shutdown request
+  showed, and its earliest end from the last answer that showed none: a machine that goes out of reach
+  during that countdown is "not confirmed that it is off", as with a request that was answered. (Where no
+  answer came between the request and the countdown, the run cannot know when it began: there a link that
+  drops in the countdown's last part, with a shutdown that then does not happen, can still read as off.) If none has shown 5 minutes after the time it would have ended, the report says "The shutdown request
   got no answer ... The request may still arrive: the machine then switches off ... later unless someone
   cancels that on its page", with the power "on or off: not known". And a machine that refuses the connection after its countdown (its agent stopped, the
   system hangs in its shutdown) is never "switched off": after 5 minutes it is reported as ON.
