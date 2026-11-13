@@ -115,24 +115,34 @@ func TestSameMachine(t *testing.T) {
 	}
 }
 
-// The switch `fairy admin host <node id> power-control disable` counts for the host while it is shown under
-// its agent's id: the Wake that is found there now must not pass it.
-func TestThePowerSwitchOfANodeCountsUnderItsAgentsID(t *testing.T) {
-	p, _, _ := twoHosts(t, "")
-	if as, off := p.PowerDisabledAs("lab-b-agent"); off {
-		t.Fatalf("off without a switch (%s)", as)
-	}
-	if err := p.Admin.SetPowerDisabled("lab-b-node-pve-b", true); err != nil {
-		t.Fatal(err)
-	}
-	if as, off := p.PowerDisabledAs("lab-b-agent"); !off || as != "lab-b-node-pve-b" {
-		t.Errorf("the node's switch for the host under its agent's id: %q %v", as, off)
-	}
-	if as, off := p.PowerDisabledAs("lab-b-node-pve-b"); !off || as != "lab-b-node-pve-b" {
-		t.Errorf("the node's switch for the node: %q %v", as, off)
-	}
-	if _, off := p.PowerDisabledAs("lab-a-agent"); off {
-		t.Error("the switch of PVE-B counts for PVE-A")
+// The switch `fairy admin host <id> power-control disable` is the machine's: set under the node's id it counts
+// for the host while that is shown under its agent's id (the Wake that is found there now must not pass it),
+// and set under the agent's id it counts for the node's row (review of fix13, must-fix 2: a run woke the
+// machine under its agent's id, an admin switched its power control off under that id, the only one it had on
+// the pages, the row became the node's, and the run's shutdown passed the switch).
+func TestThePowerSwitchOfAMachineCountsUnderBothOfItsIDs(t *testing.T) {
+	for _, set := range []string{"lab-b-node-pve-b", "lab-b-agent"} {
+		t.Run("set under "+set, func(t *testing.T) {
+			p, _, _ := twoHosts(t, "")
+			for _, id := range []string{"lab-b-agent", "lab-b-node-pve-b"} {
+				if as, off := p.PowerDisabledAs(id); off {
+					t.Fatalf("%s: off without a switch (%s)", id, as)
+				}
+			}
+			if err := p.Admin.SetPowerDisabled(set, true); err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []string{"lab-b-agent", "lab-b-node-pve-b"} {
+				if as, off := p.PowerDisabledAs(id); !off || as != set {
+					t.Errorf("the switch set under %s, asked for %s: %q %v", set, id, as, off)
+				}
+			}
+			for _, id := range []string{"lab-a-agent", "lab-a-node-pve-a", "lab-a-node-pve-b", "lab-b-qemu-100"} {
+				if _, off := p.PowerDisabledAs(id); off {
+					t.Errorf("the switch of PVE-B counts for %s", id)
+				}
+			}
+		})
 	}
 }
 

@@ -158,3 +158,55 @@ func TestARunForAHostNeverWakesAnotherHostWithTheSameNodeName(t *testing.T) {
 		}
 	}
 }
+
+// Review of fix13, must-fix 2 (the reviewer's proof, as a test): a run wakes the machine while it is shown
+// under its agent's id. An admin turns its power control off under that id, the only id it has on the pages
+// (`fairy admin host lab-b-agent power-control disable`). The machine starts, its row becomes the node's, and
+// the run goes on under that row. The switch was read from the agent's id to the node's only: the run's
+// shutdown passed it. It is the machine's switch under either id, and the run leaves the machine on.
+func TestAPowerSwitchSetUnderTheAgentsIDStopsTheRunsShutdownAfterTheIDChange(t *testing.T) {
+	h := setupTwoHosts(t)
+	h.wake()
+	if err := h.e.s.Poller.Admin.SetPowerDisabled("lab-b-agent", true); err != nil {
+		t.Fatal(err)
+	}
+	h.e.s.Poller.SyncAdminState()
+	host, sent := h.end()
+	if got := h.shown(); got != "lab-b-node-pve-b" {
+		t.Fatalf("after the run PVE-B is shown as %s", got)
+	}
+	for _, q := range sent {
+		if q == "lab-b-agent /power" {
+			t.Errorf("RULE BROKEN: the run's shutdown passed the power switch set for the machine under its agent's id: %v", sent)
+		}
+	}
+	if host.State != wakerun.StLeftOn || host.On != wakerun.OnYes || !strings.Contains(host.Text, "power control for this host is disabled by an administrator") {
+		t.Errorf("the machine ended as %s (%s): %s", host.State, host.On, host.Text)
+	}
+}
+
+// The page's line for a machine whose power control is off knows the switch under the machine's other id: set
+// for the node, it is said of the host that is shown under its agent's id, and that host cannot be ticked.
+func TestTheUpdatesPageKnowsThePowerSwitchUnderTheMachinesOtherID(t *testing.T) {
+	h := setupTwoHosts(t)
+	e := h.e
+	admin := e.cookie(controller(), 0)
+	h.f.offline()
+	h.f.optIn("lab-b-agent")
+	row := func() map[string]any {
+		t.Helper()
+		return wuHostRow(t, e.do("GET", "/api/admin/wake-update", nil, "Cookie", admin), "lab-b-agent")
+	}
+	if r := row(); r["choice"] != wakerun.ModeWake {
+		t.Fatalf("the fixture: %v", r)
+	}
+	if err := e.s.Poller.Admin.SetPowerDisabled("lab-b-node-pve-b", true); err != nil {
+		t.Fatal(err)
+	}
+	if r := row(); r["choice"] != "" || r["why"] != "power control for this host is disabled by an administrator" {
+		t.Errorf("with the node's power switch off: %v", r)
+	}
+	if _, err := e.s.wuCheck(wuStartBody{Hosts: []string{"lab-b-agent"}}); err != nil {
+		t.Errorf("the start's own check is about what the machine can do, not about its switch today: %v", err)
+	}
+}

@@ -150,3 +150,50 @@ func TestPowerOnOfAHostNeverSendsTheMACOfAnotherHostWithTheSameNodeName(t *testi
 		t.Errorf("the warning at the start: %q", w)
 	}
 }
+
+// The power switch counts the other way round too (review of fix13, must-fix 2): set under the agent's id,
+// the id the machine has on the pages while it is off after a restart, it takes the node's power actions away.
+func TestThePowerSwitchSetUnderTheAgentsIDCountsForTheNodesRow(t *testing.T) {
+	p, b := twoHosts(t)
+	if err := p.Admin.SetPowerDisabled("lab-b-agent", true); err != nil {
+		t.Fatal(err)
+	}
+	b.Mu.Lock()
+	b.PVEOf = func(cluster string) ([]jsonx.M, error) {
+		return testutil.HostResources(map[string]string{"lab-a": "PVE-A", "lab-b": "PVE-B"}[cluster], "stopped"), nil
+	}
+	b.Metrics["lab-b-agent"] = func() (jsonx.M, error) {
+		m := testutil.AgentMetrics()
+		m["power_control"] = jsonx.M{"enabled": true, "pending": nil, "min_delay_s": 10.0}
+		return m, nil
+	}
+	b.Mu.Unlock()
+	p.PollOnce(context.Background())
+	node := rowOf(t, p, "lab-b-node-pve-b")
+	if node.Kind != "node" || node.Status != "online" {
+		t.Fatalf("the fixture: %s %s", node.Kind, node.Status)
+	}
+	if got := ControlOff(p, node.ID); !strings.Contains(got, "fairy admin host lab-b-agent power-control enable") {
+		t.Fatalf("ControlOff for the node's row: %q", got)
+	}
+	for _, c := range Capabilities(p, node).Actions {
+		if c.Available && c.Action != "cancel" {
+			t.Errorf("%s is on offer for the node past the switch set under its agent's id", c.Action)
+		}
+	}
+	name := node.Name
+	if _, err := Execute(context.Background(), p, node, Request{Action: "shutdown", Confirm: &name, OnlyVia: "agent"}, "run"); err == nil {
+		t.Error("a shutdown of the node was carried out")
+	}
+	b.Mu.Lock()
+	defer b.Mu.Unlock()
+	for _, r := range b.Requests {
+		if strings.Contains(r, "POST /power") {
+			t.Errorf("sent: %s", r)
+		}
+	}
+	// the other host is not touched by it
+	if got := ControlOff(p, "lab-a-node-pve-a"); got != "" {
+		t.Errorf("PVE-A: %q", got)
+	}
+}

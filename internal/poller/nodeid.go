@@ -194,6 +194,13 @@ func (p *Poller) NodeOf(agentID string) (nodeID, clusterID string, ok bool) {
 // for such a node, the other of the two (nodeLinks). A setting an admin made for the machine while it was shown
 // under one of them is the machine's under the other too.
 func (p *Poller) SameMachine(id string) []string {
+	if a, isAgent := p.AgentByID(id); isAgent {
+		if a.Node == "" && a.LinksTo == "" {
+			return []string{id} // an agent that names no node
+		}
+	} else if !strings.Contains(id, "node-") {
+		return []string{id} // no agent's id and not of a node's form (a guest)
+	}
 	links, _ := p.links()
 	if l, ok := links[id]; ok {
 		return []string{id, l.ID}
@@ -224,15 +231,16 @@ func (p *Poller) PowerOverride(id string) *config.SystemOverride {
 }
 
 // PowerDisabledAs reports whether an administrator turned power control off for the host shown under id
-// (`fairy admin host <id> power-control disable`), and the id the switch is kept under. The switch of a node
-// counts for its host also while that is shown under its agent's id: Wake-on-LAN is on offer there now
-// (PowerOverride), and it must not be on offer past the switch.
+// (`fairy admin host <id> power-control disable`), and the id the switch is kept under. The switch is the
+// machine's: for the agent of a Proxmox node and for that node it counts under either id (SameMachine).
+// Wake-on-LAN is on offer under the agent's id now (PowerOverride) and must not pass the node's switch; and a
+// switch set under the agent's id, the only id the machine has on the pages while it is off after a restart,
+// must still hold when a run goes on under the node's row and asks for the shutdown there.
 func (p *Poller) PowerDisabledAs(id string) (string, bool) {
-	if p.Admin.PowerDisabled(id) {
-		return id, true
-	}
-	if nodeID, _, ok := p.NodeOf(id); ok && p.Admin.PowerDisabled(nodeID) {
-		return nodeID, true
+	for _, x := range p.SameMachine(id) {
+		if p.Admin.PowerDisabled(x) {
+			return x, true
+		}
 	}
 	return "", false
 }
