@@ -222,6 +222,7 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	seenDue := p.noteSeenLocked(a.ID, now) // for the next start of the panel (lastseen.go)
 	delete(p.agentFailures, a.ID)
 	delete(p.agentQuiet, a.ID)
+	delete(p.knownOff, a.ID) // it answers: it is not off (knownoff.go)
 	p.systems[a.ID] = p.stamp(sys, now)
 	// what it says about its own check of approvals, against the panel's record (machines.go)
 	p.queueMachinesLocked(append(p.noteMachineLocked(a.ID, sys.Approval, now), p.announceLocked()...))

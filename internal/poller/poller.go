@@ -110,6 +110,9 @@ type Poller struct {
 	// agent id -> when its version was last written to state.json, and whether a newer one waits to be written
 	versionSavedAt map[string]time.Time
 	versionUnsaved map[string]bool
+	// system id -> a run saw this machine go off after its shutdown: its row is "offline", not "stale", until it
+	// answers again (knownoff.go)
+	knownOff map[string]bool
 	// agent id -> the time of its last good answer, kept over a restart, and what state.json holds of it
 	// (lastseen.go). seenWriteAt: when the times were last written; seenDrop: entries to take out of the file.
 	lastSeen    map[string]time.Time
@@ -146,7 +149,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 		sources: map[string]model.SourceStatus{}, sourceMono: map[string]time.Duration{}, sourceAsked: map[string]time.Duration{}, agentPower: map[string]*model.ComponentPower{},
 		pveRefs: map[string]pveRef{}, nodeCPU: map[string]string{}, nodeInflight: map[string]string{}, pveOverLimit: map[string]bool{},
 		pending: map[string]pendingNote{}, asleep: map[string]time.Time{}, clusterIDs: map[string][]string{}, fingerprints: map[string]uint64{},
-		agentFailures: map[string]int{}, agentQuiet: map[string]quietRow{}, agentInfo: map[string]AgentInfo{}, helperSeen: map[string]map[string]time.Time{}, snapVer: -1, snapJSONVer: -1,
+		agentFailures: map[string]int{}, agentQuiet: map[string]quietRow{}, knownOff: map[string]bool{}, agentInfo: map[string]AgentInfo{}, helperSeen: map[string]map[string]time.Time{}, snapVer: -1, snapJSONVer: -1,
 		stateVersion: -1, StartedAt: time.Now().UTC(), present: map[string]bool{}}
 	for i := range cfg.Systems {
 		p.overrides[cfg.Systems[i].ID] = &cfg.Systems[i]
@@ -266,7 +269,8 @@ func (p *Poller) mono() time.Duration {
 }
 
 func (p *Poller) degrade(s model.System, now time.Time, err string) model.System {
-	fresh := s.LastSeen != nil && now.Sub(*s.LastSeen).Seconds() < p.Cfg.OfflineAfter
+	// (knownOff: a machine a run saw go off is not "stale" for a minute first, see knownoff.go)
+	fresh := s.LastSeen != nil && now.Sub(*s.LastSeen).Seconds() < p.Cfg.OfflineAfter && !p.knownOff[s.ID]
 	if fresh {
 		s.Status = "stale"
 	} else {
@@ -560,6 +564,7 @@ func (p *Poller) RemoveAgent(id string) {
 	delete(p.versionUnsaved, id)
 	delete(p.agentFailures, id)
 	delete(p.agentQuiet, id)
+	delete(p.knownOff, id)
 	delete(p.helperSeen, id)
 	delete(p.agentPower, id)
 	delete(p.sources, "agent:"+id)

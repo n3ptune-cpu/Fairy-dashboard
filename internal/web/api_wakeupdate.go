@@ -1030,6 +1030,12 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 	case wakerun.EvHostEnd:
 		h := e.Host
 		entry("wakeupdate.host", h.ID, map[string]any{"state": h.State, "power": h.On, "update": h.Update, "mode": h.Mode}, h.Text)
+		if h.On == wakerun.OnNo {
+			// The run saw it go off after its own shutdown. The machine's row says so with it: it was "stale"
+			// (amber) for up to a minute next to a report that said "is off" (poller.MarkOff has why the
+			// report is the one that is right).
+			s.Poller.MarkOff(h.ID)
+		}
 	case wakerun.EvLate:
 		h := e.Host
 		entry("wakeupdate.host", h.ID, map[string]any{"state": h.State, "power": h.On, "late": true}, h.Text)

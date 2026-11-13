@@ -106,6 +106,7 @@ func (p *Poller) pollProxmox(ctx context.Context, pve config.Proxmox, timeout ti
 		s = p.prepareProxmoxSystemLocked(pve, s, now)
 		fresh[s.ID] = s
 		ids = append(ids, s.ID)
+		delete(p.knownOff, s.ID) // the cluster says what it is now (knownoff.go)
 	}
 	var gone []string
 	for sid, v := range p.systems { // drop deleted guests
