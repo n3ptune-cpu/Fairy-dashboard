@@ -18,6 +18,8 @@ import (
 // compared with the machine ten minutes AFTER the run.
 //
 // 400 runs with every test run; FAIRY_RANDOM_RUNS=4500 for as many as the auditor made (two minutes).
+// FAIRY_RANDOM_FROM=50001 starts at another seed than 1 (the review of build 14 found seeds far from 1 that
+// the first 4,500 do not reach: randomFrom).
 const localCancel = false
 
 func TestRandomRunsWithLinkFlaps(t *testing.T) {
@@ -29,7 +31,7 @@ func TestRandomRunsWithLinkFlaps(t *testing.T) {
 		runs = 100
 	}
 	bad := 0
-	for seed := 1; seed <= runs && bad < 12; seed++ {
+	for seed := randomFrom(); seed < randomFrom()+runs && bad < 12; seed++ {
 		rng := rand.New(rand.NewSource(int64(seed)*7919 + 13))
 		// (build 14) a countdown of its own for about every second machine, 10 to 600 s, from a source of its
 		// own so that rng draws what it drew before: the countdown's arithmetic (when it is due, what counts
@@ -165,6 +167,14 @@ func TestRandomRunsWithLinkFlaps(t *testing.T) {
 			}
 		}
 	}
+}
+
+// randomFrom is the first seed of the randomized tests: 1, or FAIRY_RANDOM_FROM.
+func randomFrom() int {
+	if n, err := strconv.Atoi(os.Getenv("FAIRY_RANDOM_FROM")); err == nil && n > 0 {
+		return n
+	}
+	return 1
 }
 
 func logOf(h *Host) string {

@@ -172,7 +172,7 @@ func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 		runs = 60
 	}
 	total, shut := 0, map[string]int{}
-	for seed := 1; seed <= runs; seed++ {
+	for seed := randomFrom(); seed < randomFrom()+runs; seed++ { // FAIRY_RANDOM_FROM: random_test.go
 		rng := rand.New(rand.NewSource(int64(seed)))
 		lostRng := rand.New(rand.NewSource(int64(seed) + 1_000_000)) // its own, so that rng draws what it drew before
 		// (build 14) the timings a machine can have of its own, and the panel's off_after: drawn from a third

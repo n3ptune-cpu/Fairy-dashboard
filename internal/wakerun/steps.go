@@ -43,12 +43,28 @@ func (m *Manager) stepHost(ctx context.Context, r *Run, h *Host, now time.Time) 
 		m.endAsIs(r, h, now, "It is no longer in the panel, so the run let go of it")
 		return
 	}
-	if !info.OptedIn {
-		m.endAsIs(r, h, now, "It was switched off for \"Update unpowered hosts\" during the run, so the run let go of it")
-		return
+	letGo := ""
+	switch {
+	case !info.OptedIn:
+		letGo = "It was switched off for \"Update unpowered hosts\" during the run, so the run let go of it"
+	case info.Entry != h.entry: // removed and added again between two steps (Re-pair): what the run knows is about the old entry
+		letGo = "It was paired again during the run (its entry in the panel was replaced), so the run let go of it"
 	}
-	if info.Entry != h.entry { // removed and added again between two steps (Re-pair): what the run knows is about the old entry
-		m.endAsIs(r, h, now, "It was paired again during the run (its entry in the panel was replaced), so the run let go of it")
+	if letGo != "" {
+		// The run lets go of a machine whose shutdown IT asked for and whose countdown is running. Until build 14
+		// it only said so ("it switches off by itself unless someone cancels that") and went: with the run gone
+		// nobody watched the machine any more, and a node went off under a guest that had started minutes
+		// before, with all of its countdown left in which the run could have called it off (review of build 14,
+		// F4; found by TestRandomRunsWithLinkFlaps at seeds beyond the 4,500 that were run). A countdown the run
+		// started is the run's to call off before it goes, exactly as when the run is cancelled: the same
+		// request, tried again until the run's own due time (callOff), and the same sentences for what came of
+		// it, which say plainly "it may switch off at ..." when the cancel did not get through. The cancel goes
+		// to the agent the panel has under this id now; a cancel starts nothing on a machine.
+		if h.State == StShutting {
+			m.callOff(ctx, r, h, now, letGo)
+			return
+		}
+		m.endAsIs(r, h, now, letGo)
 		return
 	}
 	if c := h.calloff; c != nil { // the cancel of its countdown has not got through yet: only that is tried again
