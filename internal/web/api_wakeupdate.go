@@ -110,10 +110,34 @@ type wakeUpdatePage struct {
 // requests.
 type runOps struct{ s *Server }
 
+// system is the row of the machine a run knows as id. That is the row with that id, and for one case another
+// one: the agent of a Proxmox node is shown under its own id while the node's row is not there (after a
+// restart of the panel with the machine off), and under the node's id from the first answer of the node's
+// Proxmox API on. A run that woke such a machine knows it by its agent's id, and the machine's row changes its
+// id while it starts. It is still the same machine: the row of the node its agent is now part of. That row is
+// taken only when three things agree: the configuration alone names it as this agent's node (poller.NodeOf),
+// it is the row the snapshot made the agent a part of (poller.LinkOf), and the requests for it go to this very
+// agent (poller.AgentFor). Anything else is as before: the run lets go of the machine and sends it nothing.
+// (Without this the run let go of a machine it had just woken, "It is no longer in the panel", and left it on.)
 func (o runOps) system(id string) (model.System, bool) {
-	for _, x := range o.s.Poller.Snapshot() {
+	snap := o.s.Poller.Snapshot()
+	for _, x := range snap {
 		if x.ID == id {
 			return x, x.Kind == "node" || x.Kind == "agent"
+		}
+	}
+	a, ok := o.s.Poller.AgentByID(id)
+	if !ok {
+		return model.System{}, false
+	}
+	nodeID, _, decided := o.s.Poller.NodeOf(id)
+	if !decided || o.s.Poller.LinkOf(a) != nodeID { // LinkOf: where the snapshot put the agent's row
+		return model.System{}, false
+	}
+	for _, x := range snap {
+		if x.ID == nodeID && x.Kind == "node" {
+			own, ok := o.s.Poller.AgentFor(x.ID)
+			return x, ok && own.ID == a.ID
 		}
 	}
 	return model.System{}, false
@@ -156,6 +180,9 @@ func (o runOps) Observe(id string) wakerun.Observation {
 	info, sys, known := o.s.Poller.AgentSeen(a.ID)
 	obs := wakerun.Observation{Online: info.Online, SeenAt: info.SeenAt, SeenAgo: info.SeenAgo, QuietSince: info.QuietSince, Version: info.Version, UpdateEnabled: info.Enabled,
 		Paused: o.s.Poller.Scheduler.IsPaused(id) || o.s.Poller.Scheduler.IsPaused(a.ID)}
+	if x, ok := o.system(id); ok && o.s.Poller.Scheduler.IsPaused(x.ID) { // the row it is shown under now (system)
+		obs.Paused = true
+	}
 	if known {
 		obs.Status = sys.Status
 	}
@@ -217,6 +244,10 @@ func (o runOps) Kick(id string) {
 	// every five minutes for longer than the run waits to see a machine go.)
 	if x, ok := o.system(id); ok && x.Kind == "node" {
 		o.s.Poller.Scheduler.Kick("proxmox:" + model.Deref(x.ClusterID))
+	} else if _, cluster, isNode := o.s.Poller.NodeOf(id); isNode {
+		// The agent of a node whose row is not there yet (system): the node's Proxmox API is asked as well, so
+		// that the run has the node's row, and with it the node's guests, as soon as the node answers.
+		o.s.Poller.Scheduler.Kick("proxmox:" + cluster)
 	}
 }
 
@@ -329,6 +360,13 @@ func (o runOps) Guests(id string, since time.Time) (int, bool, string) {
 	}
 	if x.Kind != "node" {
 		a, _ := o.s.Poller.AgentFor(id)
+		if o.s.Poller.IsNodeAgent(a) {
+			// Its entry says that it runs on a Proxmox node (node:, or links_to with a node's id), and the panel
+			// has no row for that node: the node's Proxmox API has not answered since the panel started, or
+			// lists no node of that name. Which guests run on it, the panel cannot say. (Such a host was taken
+			// for a machine without guests, and a run that woke it switched it off again whatever ran on it.)
+			return 0, false, "its entry says that it is a Proxmox node, and no Proxmox API has shown the panel that node"
+		}
 		_, own, _ := o.s.Poller.AgentSeen(a.ID)
 		if strings.Contains(strings.ToLower(model.Deref(own.OS)), "proxmox") {
 			return 0, false, "it is a Proxmox host, and the panel has no Proxmox API for it"

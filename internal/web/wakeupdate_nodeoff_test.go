@@ -99,6 +99,36 @@ func (h *twoHosts) shown() string {
 	return ids[0]
 }
 
+// run starts a run for PVE-B under the id it is shown under while it is off (its agent's), lets the machine
+// start when the run's wake is out, and returns the machine's entry of the finished run and what was sent.
+func (h *twoHosts) run() (*wakerun.Host, []string) {
+	t := h.e.t
+	t.Helper()
+	h.f.offline()
+	if got := h.shown(); got != "lab-b-agent" {
+		t.Fatalf("PVE-B is off and has no Proxmox answer since the start, but is shown as %s", got)
+	}
+	h.f.optIn("lab-b-agent")
+	if _, err := h.e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"lab-b-agent"}, By: "Alice", BySub: "u2"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 600; i++ {
+		if a, _ := h.e.s.WakeRuns.Snapshot(); a == nil || hostOf(a, "lab-b-agent").WakeSentAt != nil {
+			break
+		}
+		h.f.tick()
+	}
+	h.start()
+	r := h.f.finish()
+	var sent []string
+	for _, q := range h.f.requests() {
+		if strings.HasPrefix(q, "lab-") {
+			sent = append(sent, q)
+		}
+	}
+	return hostOf(r, "lab-b-agent"), sent
+}
+
 // panel restart with the node off: wol under the node id is still found. The Updates page lists the machine
 // with its relay, offers it as "off" for a run once it is switched on, and its Power menu offers the wake.
 func TestPanelRestartWithTheNodeOffWolUnderTheNodeIDIsStillFoundOnThePages(t *testing.T) {
@@ -231,5 +261,132 @@ func TestRunSwitchSetUnderTheAgentIDAppliesToTheNodeRowAndBack(t *testing.T) {
 	}
 	if info, _ := (runOps{h2.e.s}).Host("lab-b-agent"); info.OptedIn {
 		t.Fatal("still switched on for the run")
+	}
+}
+
+// run survives the id change: a run wakes the machine under its agent's id, and while it starts its Proxmox
+// API answers and its row becomes the node's. The run sees it come online, updates it and switches it off
+// again, exactly as a machine whose id stays. (Before: "It is no longer in the panel, so the run let go of
+// it", and the machine it had just woken stayed on.)
+func TestRunSurvivesTheIDChange(t *testing.T) {
+	h := setupTwoHosts(t)
+	host, sent := h.run()
+	if got := h.shown(); got != "lab-b-node-pve-b" {
+		t.Fatalf("after the run PVE-B is shown as %s", got)
+	}
+	if host.State != wakerun.StOff || host.On != wakerun.OnNo || !strings.Contains(host.Text, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.") {
+		t.Fatalf("the machine ended as %s (%s): %s\n%+v", host.State, host.On, host.Text, host.Log)
+	}
+	if got := strings.Join(sent, ", "); got != "lab-a-agent /wol, lab-b-agent /update, lab-b-agent /power" {
+		t.Fatalf("what the run sent: %s", got)
+	}
+	if host.ID != "lab-b-agent" || host.Name != "PVE-B" {
+		t.Errorf("the run's entry: %s %s", host.ID, host.Name)
+	}
+}
+
+// The rules of a run hold across the id change. A Proxmox node with a running guest is left on; so is one
+// whose guest's state the panel cannot say, and one whose Proxmox API does not answer at all (the host then
+// stays under its agent's id, and its entry says that it is a node: nobody can say which guests run on it).
+func TestRunAcrossTheIDChangeLeavesANodeWithGuestsOn(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		guest string
+		noAPI bool
+		want  string
+		shown string
+	}{
+		{name: "a guest runs", guest: "running", want: "1 guest is running on it (win11)", shown: "lab-b-node-pve-b"},
+		{name: "a guest whose state is not known", guest: "unknown", want: "Fairy cannot see whether guests run on it (the Proxmox API does not show as stopped: win11 (unknown))", shown: "lab-b-node-pve-b"},
+		{name: "its Proxmox API never answers", noAPI: true, want: "Fairy cannot see whether guests run on it (its entry says that it is a Proxmox node, and no Proxmox API has shown the panel that node)", shown: "lab-b-agent"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := setupTwoHosts(t)
+			h.guest, h.noAPI = c.guest, c.noAPI
+			host, sent := h.run()
+			if got := h.shown(); got != c.shown {
+				t.Fatalf("after the run PVE-B is shown as %s", got)
+			}
+			if host.State != wakerun.StLeftOn || host.On != wakerun.OnYes || !strings.Contains(host.Text, c.want) {
+				t.Errorf("the node ended as %s (%s): %s", host.State, host.On, host.Text)
+			}
+			for _, q := range sent {
+				if q == "lab-b-agent /power" {
+					t.Errorf("RULE BROKEN: the node was asked to shut down: %v", sent)
+				}
+			}
+		})
+	}
+}
+
+// A run never switches off a machine it did not wake, across the id change too: the node's row stands for the
+// run's machine only while the requests for that row go to the very agent the run woke. With two agents
+// linked to one node (a configuration mistake) the row's requests go to the first of them; the run that knows
+// the second one lets go of it and sends nothing.
+func TestTheNodesRowStandsForARunsMachineOnlyWithItsOwnAgent(t *testing.T) {
+	e := setupSystems(t, nil) // pve-agent is linked to node-srv-pvea and is part of that row
+	ops := runOps{e.s}
+	if x, ok := ops.system("pve-agent"); !ok || x.ID != "node-srv-pvea" || x.Kind != "node" {
+		t.Fatalf("the row of the node's own agent: %s %v", x.ID, ok)
+	}
+	if _, ok := ops.Host("pve-agent"); !ok {
+		t.Fatal("the run does not know the node's own agent")
+	}
+	if err := e.s.Poller.AddAgent(config.Agent{ID: "second-agent", Name: "Second", LinksTo: "node-srv-pvea", Managed: true, Token: "read-word", ControlToken: "control-word",
+		URL: "http://second-agent", PowerControl: true, SelfUpdate: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.b.Mu.Lock()
+	e.b.Metrics["second-agent"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	e.b.Mu.Unlock()
+	e.s.Poller.PollOnce(context.Background())
+	if a, ok := e.s.Poller.AgentFor("node-srv-pvea"); !ok || a.ID != "pve-agent" {
+		t.Fatalf("the fixture: the node's requests go to %s", a.ID)
+	}
+	if x, ok := ops.system("second-agent"); ok {
+		t.Fatalf("a row for the second agent: %s", x.ID)
+	}
+	if _, ok := ops.Host("second-agent"); ok {
+		t.Fatal("the run takes the node's row for the second agent's machine")
+	}
+	// an id that is no agent's and no row's is nobody
+	if _, ok := ops.system("nobody"); ok {
+		t.Fatal("a row for nobody")
+	}
+}
+
+// The node's row stands for the run's machine only when the configuration names it too. Here the other
+// Proxmox entry lists a node with the same name, PVE-B: the panel's link by name makes the agent a part of
+// that row (the first that is there), and the configuration names lab-b-node-pve-b (the systems: entry). The
+// two do not agree, so the run does not take that row for its machine: it lets go and sends nothing.
+func TestARunDoesNotFollowItsMachineToANodeTheConfigurationDoesNotName(t *testing.T) {
+	h := setupTwoHosts(t)
+	e := h.e
+	ops := runOps{e.s}
+	if _, ok := ops.Host("lab-b-agent"); !ok {
+		t.Fatal("the fixture: the run knows the machine under its agent's id")
+	}
+	e.b.Mu.Lock()
+	e.b.PVEOf = func(cluster string) ([]jsonx.M, error) {
+		if cluster == "lab-a" {
+			return testutil.HostResources("PVE-B", "stopped"), nil // a node of that name in the other entry
+		}
+		return nil, devices.Errf("connection failed")
+	}
+	h.f.on["lab-b-agent"], h.f.booted["lab-b-agent"], h.f.ready["lab-b-agent"] = true, h.f.now, h.f.now
+	e.b.Mu.Unlock()
+	h.f.tick()
+	rows := map[string]string{}
+	for _, x := range e.s.Poller.Snapshot() {
+		rows[x.ID] = x.Kind
+	}
+	if a, ok := e.s.Poller.AgentFor("lab-a-node-pve-b"); rows["lab-a-node-pve-b"] != "node" || rows["lab-b-agent"] != "" || !ok || a.ID != "lab-b-agent" {
+		t.Fatalf("the fixture: the agent is part of the other entry's node of the same name: %v", rows)
+	}
+	if x, ok := ops.system("lab-b-agent"); ok {
+		t.Fatalf("the run takes %s for its machine", x.ID)
+	}
+	if _, ok := ops.Host("lab-b-agent"); ok {
+		t.Fatal("the run still knows the machine")
 	}
 }
