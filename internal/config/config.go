@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/netip"
 	"os"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -202,6 +203,14 @@ type SystemOverride struct {
 	// WakeUpdate: this machine's own timings for "Update unpowered hosts", where they differ from the
 	// wake_update: block of the file.
 	WakeUpdate *SystemWakeUpdate `yaml:"wake_update"`
+}
+
+// OnlyWakeUpdate reports whether the entry holds a wake_update: block and nothing else next to its id. Such an
+// entry in config.yaml can stand next to the entry "Add host" makes for the same machine (its Wake-on-LAN):
+// the two are put together (managed.Check). Every other hand-written entry with the id of a generated one is
+// refused as before, because of two entries only one could count.
+func (o SystemOverride) OnlyWakeUpdate() bool {
+	return o.WakeUpdate != nil && reflect.DeepEqual(o, SystemOverride{ID: o.ID, WakeUpdate: o.WakeUpdate})
 }
 
 // SystemWakeUpdate is the `wake_update:` block of a `systems:` entry: the two timings of "Update unpowered

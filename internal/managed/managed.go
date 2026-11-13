@@ -366,12 +366,10 @@ func Check(cfg *config.Panel, e Entry) error {
 	c.Agents = append(slices.Clone(cfg.Agents), e.Agent)
 	c.Systems = slices.Clone(cfg.Systems)
 	if e.Override != nil {
-		for _, o := range cfg.Systems {
-			if o.ID == e.Override.ID {
-				return fmt.Errorf("systems: in config.yaml already has an entry for %s", o.ID)
-			}
+		c.Systems = withOverride(c.Systems, *e.Override)
+		if c.Systems == nil {
+			return fmt.Errorf("systems: in config.yaml already has an entry for %s", e.Override.ID)
 		}
-		c.Systems = append(c.Systems, *e.Override)
 	}
 	c.Proxmox = slices.Clone(cfg.Proxmox)
 	if e.Proxmox != nil {
@@ -386,6 +384,31 @@ func Check(cfg *config.Panel, e Entry) error {
 		c.Proxmox = append(c.Proxmox, *e.Proxmox)
 	}
 	return c.Validate()
+}
+
+// withOverride returns systems with the entry "Add host" makes for a host (its Wake-on-LAN, its BMC power-on)
+// in it; nil when config.yaml has an entry with that id that the two cannot be put together with.
+//
+// They can when the hand-written entry holds nothing but the machine's own timings for "Update unpowered
+// hosts" ({id: x, wake_update: {...}}: config.SystemOverride.OnlyWakeUpdate): "Add host" has no place to set
+// those, and without this a host with Wake-on-LAN, the kind of host the timings are for, could not have them
+// (the host was skipped at the start: "systems: in config.yaml already has an entry"). The generated entry
+// then takes the block and stands in the hand-written entry's place. Anything else in the hand-written entry
+// (a name, a wol:, a site) is refused as before: of two entries only one could count.
+func withOverride(systems []config.SystemOverride, o config.SystemOverride) []config.SystemOverride {
+	out := slices.Clone(systems)
+	for i, x := range out {
+		if x.ID != o.ID {
+			continue
+		}
+		if !x.OnlyWakeUpdate() {
+			return nil
+		}
+		o.WakeUpdate = x.WakeUpdate
+		out[i] = o
+		return out
+	}
+	return append(out, o)
 }
 
 // Merge loads the managed hosts and adds the valid ones to cfg (config.yaml wins on id conflicts). It returns
@@ -425,7 +448,10 @@ func (s *Store) Merge(cfg *config.Panel) ([]Entry, []string, error) {
 		}
 		cfg.Agents = append(cfg.Agents, e.Agent)
 		if e.Override != nil {
-			cfg.Systems = append(cfg.Systems, *e.Override)
+			cfg.Systems = withOverride(cfg.Systems, *e.Override) // not nil: Check passed
+			i := slices.IndexFunc(cfg.Systems, func(x config.SystemOverride) bool { return x.ID == e.Override.ID })
+			o := cfg.Systems[i] // with the machine's own timings from config.yaml, if it has them
+			e.Override = &o
 		}
 		if e.Proxmox != nil {
 			cfg.Proxmox = append(cfg.Proxmox, *e.Proxmox)

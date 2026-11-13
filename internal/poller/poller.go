@@ -507,8 +507,19 @@ func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
 	p.agentAdded[a.ID]++
 	p.Cfg.Agents = append(slices.Clone(p.Cfg.Agents), a)
 	if o != nil {
+		// The entry stands in the place of one with its id that is there already: that can only be the
+		// machine's own timings from config.yaml (managed.Check lets nothing else through), and they stay.
 		oo := *o
-		p.Cfg.Systems = append(slices.Clone(p.Cfg.Systems), oo)
+		systems := slices.Clone(p.Cfg.Systems)
+		if i := slices.IndexFunc(systems, func(x config.SystemOverride) bool { return x.ID == oo.ID }); i >= 0 {
+			if oo.WakeUpdate == nil {
+				oo.WakeUpdate = systems[i].WakeUpdate
+			}
+			systems[i] = oo
+		} else {
+			systems = append(systems, oo)
+		}
+		p.Cfg.Systems = systems
 		p.overrides[oo.ID] = &oo
 	}
 	p.cfgMu.Unlock()
@@ -557,6 +568,11 @@ func (p *Poller) RemoveAgent(id string) {
 	if o := p.overrides[shown]; o != nil && ok && a.Managed {
 		delete(p.overrides, shown)
 		p.Cfg.Systems = slices.DeleteFunc(slices.Clone(p.Cfg.Systems), func(x config.SystemOverride) bool { return x.ID == shown })
+		if o.WakeUpdate != nil { // the machine's own timings are config.yaml's, not the host's: they stay for a Re-pair
+			kept := config.SystemOverride{ID: shown, WakeUpdate: o.WakeUpdate}
+			p.Cfg.Systems = append(p.Cfg.Systems, kept)
+			p.overrides[shown] = &kept
+		}
 	}
 	p.cfgMu.Unlock()
 	p.relink()
