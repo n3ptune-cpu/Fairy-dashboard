@@ -249,10 +249,11 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	delete(p.agentFailures, a.ID)
 	delete(p.agentQuiet, a.ID)
 	delete(p.knownOff, a.ID) // it answers: it is not off (knownoff.go)
-	if l := p.linkOfLocked(a); p.knownOff[l] {
+	if l := p.linkOfLocked(a); p.knownOff[l] && p.rowIsOf(l, a.ID) {
 		// and neither is the node it runs on: the mark is the machine's, under both ids. The node's entry goes
 		// back to what it is without the mark (degrade: "stale" while its last answer is younger than
-		// offline_after), now and not with the next poll of its Proxmox API.
+		// offline_after), now and not with the next poll of its Proxmox API. Only for the agent the node's row
+		// belongs to: the answer of a second agent that names the node is not the node's (rowIsOf).
 		delete(p.knownOff, l)
 		if n, ok := p.systems[l]; ok && n.Status == "offline" && n.LastSeen != nil && now.Sub(*n.LastSeen).Seconds() < p.Cfg.OfflineAfter {
 			n.Status = "stale"

@@ -18,7 +18,8 @@ import "github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 //
 // Nothing is marked for a machine whose agent answers, or whose node its cluster shows as online: MarkOff
 // only ever turns "stale" into "offline", it never contradicts an answer. A sign of life ends it for the
-// machine, under both of its ids: an answer of the agent ends the mark of its own entry and of its node's, and
+// machine, under both of its ids (the node's row is one agent's, rowIsOf: its ids are that agent's and the
+// node's): an answer of the agent ends the mark of its own entry and of its node's, and
 // a poll of the node's Proxmox API that shows the node online ends both too. (Until the review of build 14 an
 // answer of the agent left the node's mark standing: with the agent back and the node's API not yet, the
 // machine's row said "offline" for a machine that answered.) A good poll that lists the node as offline ends
@@ -35,7 +36,7 @@ func (p *Poller) MarkOff(id string) bool {
 	changed := false
 	if _, failing := p.agentFailures[a.ID]; failing { // its agent does not answer now
 		ids := []string{a.ID}
-		if n, okN := p.systems[p.linkOfLocked(a)]; okN && n.Kind == "node" && n.ID != a.ID {
+		if n, okN := p.systems[p.linkOfLocked(a)]; okN && n.Kind == "node" && n.ID != a.ID && p.rowIsOf(n.ID, a.ID) {
 			ids = append(ids, n.ID)
 		}
 		for _, sid := range ids {
@@ -55,6 +56,19 @@ func (p *Poller) MarkOff(id string) bool {
 	}
 	p.mu.Unlock()
 	return changed
+}
+
+// rowIsOf reports whether the row of the node with this id is this agent's (AgentFor: the first agent of the
+// configuration whose link is that node). The mark is the machine's under both of its ids, and only the
+// agent the node's row belongs to is that machine: a second agent that names the same node (one in a guest
+// with its host's node:, a second one on the host) has a row of its own, and what a run saw of IT says
+// nothing about the node. Until the second review of build 14 (R7) the node of ANY agent with that link was
+// marked, and unmarked by any such agent's answer: the node's row read "offline" when the guest's agent had
+// been switched off, and "stale" again when it answered while the host was off, until the next poll of the
+// node's Proxmox API or of its own agent. Safe with p.mu held (AgentFor takes cfgMu, clustersMu and idsMu).
+func (p *Poller) rowIsOf(nodeID, agentID string) bool {
+	first, ok := p.AgentFor(nodeID)
+	return ok && first.ID == agentID
 }
 
 // wentOff is what degrade makes of an entry that is not fresh any more: offline, without the values of a
