@@ -63,6 +63,55 @@ systems:
 	return cfg
 }
 
+// TwoHostsConfig is a panel with two standalone Proxmox hosts, each with a proxmox: entry and an id_prefix of
+// its own and each with an agent that names its node (node:). PVE-A is always on and sends the wake packets;
+// PVE-B is the machine that is normally off: power control, self-update, and its wol: written where the README
+// says, under its node's id (lab-b-node-pve-b). more is appended to the file as it is (further YAML).
+func TwoHostsConfig(t *testing.T, more string) *config.Panel {
+	t.Helper()
+	t.Setenv("TOK_LAB_A", ReadToken)
+	t.Setenv("TOK_LAB_B", ReadToken+"x")
+	t.Setenv("CTL_LAB", ControlToken)
+	t.Setenv("PVE_SECRET", "pve-secret-uuid")
+	dir := t.TempDir()
+	y := `
+public_url: https://panel.example.com
+request_timeout: 1
+offline_after: 60
+audit_log: ` + fmt.Sprintf("%q", dir+"/audit.log") + `
+data_dir: ` + fmt.Sprintf("%q", dir+"/data") + `
+oidc: {issuer: "https://id.example.com", client_id: cid, allowed_groups: [viewers], control_groups: [controllers]}
+proxmox:
+  - {id: lab-a, id_prefix: lab-a-, cluster_name: PVE-A, standalone: true, urls: ["https://pve-a:8006"],
+     token_id: "fairy@pve!panel", token_secret_env: PVE_SECRET, verify_tls: false}
+  - {id: lab-b, id_prefix: lab-b-, cluster_name: PVE-B, standalone: true, urls: ["https://pve-b:8006"],
+     token_id: "fairy@pve!panel", token_secret_env: PVE_SECRET, verify_tls: false}
+agents:
+  - {id: lab-a-agent, name: PVE-A, url: "http://lab-a-agent", token_env: TOK_LAB_A, control_token_env: CTL_LAB, node: PVE-A, wol_relay: true}
+  - {id: lab-b-agent, name: PVE-B, url: "http://lab-b-agent", token_env: TOK_LAB_B, control_token_env: CTL_LAB, node: PVE-B,
+     power_control: true, self_update: true}
+systems:
+  - id: lab-b-node-pve-b
+    wol: {mac: "00:00:5e:00:53:36", relay: lab-a-agent, broadcast: 192.0.2.255}
+` + more
+	cfg, err := config.Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// HostResources is what a standalone Proxmox host answers: its node (online) and one guest, win11, in the
+// given state.
+func HostResources(node, guestStatus string) []jsonx.M {
+	return []jsonx.M{
+		{"id": "node/" + node, "type": "node", "node": node, "status": "online", "cpu": 0.125,
+			"maxcpu": 8.0, "mem": float64(8 << 30), "maxmem": float64(32 << 30), "disk": float64(10 << 30), "maxdisk": float64(100 << 30), "uptime": 30.0},
+		{"id": "qemu/100", "type": "qemu", "vmid": 100.0, "name": "win11", "node": node, "status": guestStatus,
+			"cpu": 0.0, "maxcpu": 4.0, "mem": 0.0, "maxmem": float64(8 << 30), "disk": 0.0, "maxdisk": float64(64 << 30), "template": 0.0},
+	}
+}
+
 // PVEResources is a cluster/resources fixture.
 func PVEResources() []jsonx.M {
 	return []jsonx.M{
@@ -101,8 +150,10 @@ func AgentMetrics() jsonx.M {
 
 // Backend is a scriptable poller.Backend.
 type Backend struct {
-	Mu        sync.Mutex
-	PVE       func() ([]jsonx.M, error)
+	Mu  sync.Mutex
+	PVE func() ([]jsonx.M, error)
+	// PVEOf, when set, answers FetchProxmox for each proxmox: entry by its id (PVE is then not asked).
+	PVEOf     func(clusterID string) ([]jsonx.M, error)
 	Metrics   map[string]func() (jsonx.M, error)
 	Requests  []string
 	PVECalls  []string
@@ -124,9 +175,12 @@ func NewBackend() *Backend {
 }
 
 // FetchProxmox returns the fixture rows (or the configured error).
-func (b *Backend) FetchProxmox(context.Context, config.Proxmox, time.Duration) ([]jsonx.M, error) {
+func (b *Backend) FetchProxmox(_ context.Context, pve config.Proxmox, _ time.Duration) ([]jsonx.M, error) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()
+	if b.PVEOf != nil {
+		return b.PVEOf(pve.ID)
+	}
 	return b.PVE()
 }
 

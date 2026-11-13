@@ -403,7 +403,9 @@ func (p *Poller) powerActions(s model.System) []string {
 			out = append(out, "sleep")
 		}
 	}
-	if o := p.Override(s.ID); o != nil { // under cfgMu: Add host / Re-pair / Remove change the overrides
+	// under cfgMu: Add host / Re-pair / Remove change the overrides. For a host shown under its agent's id while
+	// its node's row is not there, the entry is the one under the node's id (PowerOverride).
+	if o := p.PowerOverride(s.ID); o != nil {
 		if o.Wol != nil {
 			out = append(out, "wake")
 		}

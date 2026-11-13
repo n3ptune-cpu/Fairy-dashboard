@@ -168,8 +168,8 @@ func ControlOff(p *poller.Poller, id string) string {
 	if p.Admin.ControlDisabled() != nil {
 		return "control is disabled by an administrator (fairy admin control enable)"
 	}
-	if p.Admin.PowerDisabled(id) {
-		return fmt.Sprintf("power control for this host is disabled by an administrator (fairy admin host %s power-control enable)", id)
+	if as, off := p.PowerDisabledAs(id); off { // the switch of a node also while its host is shown under its agent's id
+		return fmt.Sprintf("power control for this host is disabled by an administrator (fairy admin host %s power-control enable)", as)
 	}
 	return ""
 }
@@ -266,7 +266,7 @@ func hostCaps(p *poller.Poller, s model.System, pve config.Proxmox, hasPVE bool,
 	caps = append(caps,
 		mkcap("cancel", via == "agent" && s.PowerPending != nil && why == "", via, orElse(cancelBase, cancelWhy), "none", false),
 		wakeCap(p, s))
-	if o := p.Override(s.ID); o != nil && o.BMCPower != nil {
+	if o := p.PowerOverride(s.ID); o != nil && o.BMCPower != nil {
 		caps = append(caps, bmcCap(p, s, *o.BMCPower))
 	}
 	return caps
@@ -316,8 +316,11 @@ func sleepCap(s model.System, via, why, offline string) model.PowerActionCap {
 	return mkcap("sleep", why == "" && offline == "", via, orElse(why, offline), "typed", true)
 }
 
+// wakeCap: Wake-on-LAN through the relay of the host's wol: entry. The entry is looked up for the host, not
+// for the id it happens to be shown under (poller.PowerOverride): the agent of a Proxmox node is shown under
+// its own id until the node's Proxmox API has answered the panel once, and the node's wol: is its wol:.
 func wakeCap(p *poller.Poller, s model.System) model.PowerActionCap {
-	o := p.Override(s.ID)
+	o := p.PowerOverride(s.ID)
 	if o == nil || o.Wol == nil {
 		return mkcap("wake", false, "", "no wol: configured for this host (needs a relay agent on its LAN)", "none", false)
 	}
@@ -431,7 +434,10 @@ func ExecuteApproved(ctx context.Context, p *poller.Poller, s model.System, req 
 
 // executeWake asks the relay agent named in the system's `wol:` entry to send the magic packet.
 func executeWake(ctx context.Context, p *poller.Poller, s model.System, res model.PowerResult) (model.PowerResult, error) {
-	o := p.Override(s.ID)
+	o := p.PowerOverride(s.ID) // the entry wakeCap found
+	if o == nil || o.Wol == nil {
+		return res, apierr.New(409, "no wol: configured for this host (needs a relay agent on its LAN)")
+	}
 	relay, ok := p.AgentByID(o.Wol.Relay)
 	if !ok {
 		return res, apierr.New(409, "relay agent not configured")
@@ -475,7 +481,10 @@ func executeWake(ctx context.Context, p *poller.Poller, s model.System, res mode
 // executeBMC asks the relay agent named in the system's `bmc_power:` entry to power the machine on through its
 // BMC.
 func executeBMC(ctx context.Context, p *poller.Poller, s model.System, requestedBy string, res model.PowerResult) (model.PowerResult, error) {
-	o := p.Override(s.ID)
+	o := p.PowerOverride(s.ID) // the entry hostCaps found
+	if o == nil || o.BMCPower == nil {
+		return res, apierr.New(409, "no bmc_power: configured for this host")
+	}
 	relay, ok := p.AgentByID(o.BMCPower.Relay)
 	if !ok {
 		return res, apierr.New(409, "relay agent not configured")

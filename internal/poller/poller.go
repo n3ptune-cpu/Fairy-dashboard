@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"math"
 	"net/url"
 	"path/filepath"
@@ -172,6 +173,9 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 	p.loadMachines()
 	p.Scheduler = scheduler.New(filepath.Join(cfg.DataDir, "state.json"), cfg.Boost(), nil)
 	p.buildJobs()
+	for _, w := range p.NodeLinkWarnings() { // an agent's node that the configuration does not decide: said once (nodeid.go)
+		slog.Warn("config: " + w)
+	}
 	return p, nil
 }
 
