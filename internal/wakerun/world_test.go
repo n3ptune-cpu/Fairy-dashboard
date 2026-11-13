@@ -429,13 +429,13 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 		mc.busyDone["shutdown lost"] = true
 		switch mc.shutLost {
 		case "arrives":
-			mc.pending = &Pending{Action: "shutdown", At: w.now.Add(delay)}
+			mc.pending = &Pending{Action: "shutdown", At: w.now.Add(delay), DelayS: int(delay.Seconds())}
 		case "late":
 			mc.shutOnWay = &onWay{at: w.now.Add(mc.shutLate), delay: delay}
 		}
 		return time.Time{}, errLost
 	}
-	mc.pending = &Pending{Action: "shutdown", At: w.now.Add(delay)}
+	mc.pending = &Pending{Action: "shutdown", At: w.now.Add(delay), DelayS: int(delay.Seconds())}
 	return mc.pending.At, nil
 }
 
@@ -547,7 +547,7 @@ func (w *world) sim() {
 		if q := mc.shutOnWay; q != nil && !w.now.Before(q.at) && w.answers(mc) {
 			mc.shutOnWay = nil
 			if mc.pending == nil { // the agent holds one action at a time, and refuses this one otherwise
-				mc.pending = &Pending{Action: "shutdown", At: w.now.Add(q.delay)}
+				mc.pending = &Pending{Action: "shutdown", At: w.now.Add(q.delay), DelayS: int(q.delay.Seconds())}
 			}
 		}
 		if mc.pending != nil && !w.now.Before(mc.pending.At) {

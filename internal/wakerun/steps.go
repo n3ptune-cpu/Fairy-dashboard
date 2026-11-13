@@ -58,8 +58,11 @@ func (m *Manager) stepHost(ctx context.Context, r *Run, h *Host, now time.Time) 
 		// F4; found by TestRandomRunsWithLinkFlaps at seeds beyond the 4,500 that were run). A countdown the run
 		// started is the run's to call off before it goes, exactly as when the run is cancelled: the same
 		// request, tried again until the run's own due time (callOff), and the same sentences for what came of
-		// it, which say plainly "it may switch off at ..." when the cancel did not get through. The cancel goes
-		// to the agent the panel has under this id now; a cancel starts nothing on a machine.
+		// it, which say plainly "it may switch off at ..." when the cancel did not get through.
+		//
+		// The cancel goes to the agent the panel has under this id NOW, and after a Re-pair that can be another
+		// machine: callOff sends it only once that agent has shown the run's own countdown, and says "the run
+		// does not know" when it never does (ownCountdown; second review of build 14, R3).
 		if h.State == StShutting {
 			m.callOff(ctx, r, h, now, letGo)
 			return
@@ -147,12 +150,84 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 // certainly from after it took the run's shutdown, a pending action that is not a shutdown (otherPending).
 // Someone has called the run's shutdown off and asked for that one, and the run's cancel would call it off
 // (recheck of fix7r, RC-04). The machine then ends as it is, and its sentence says so (endOtherPending).
+//
+// Whose countdown is it (second review of build 14, R3). The agent's cancel names no action and no machine: it
+// calls off whatever is pending on the machine that has this id in the panel when it is sent. Two things the
+// run took for its own countdown were not:
+//
+//   - On the same machine, a shutdown a person asked for in the place of the run's, inside the countdown (they
+//     called the run's off on the machine's page and asked for their own, later one). When the machine was
+//     then switched off for runs, or the run was cancelled, the run's cancel called the person's shutdown off,
+//     and the report said "its shutdown countdown was called off".
+//   - After a Re-pair the id can be another machine. The cancel went to that machine and called off a shutdown
+//     somebody had asked for there, while the machine the run woke counted down out of the panel's sight and
+//     went off; the report said "its shutdown countdown was called off ... it is ON".
+//
+// What the run knows its own countdown by is the agent's own word about it, never a clock of the panel:
+//
+//   - its length (Pending.DelayS): the agent says for every pending action with which delay it was asked for,
+//     and the run knows what it asked for (Host.delay). A countdown keeps its length while it runs. So a
+//     pending shutdown of another length is another shutdown: it is not called off, the machine ends with what
+//     its agent shows, and the sentence says so (otherShutdown, endOtherPending).
+//   - its end (ownAt): the agent gives it in its answer to the run's request. The end alone does not decide on
+//     the same machine: the agent gives ANOTHER end for the same countdown when the machine's clock was
+//     corrected meanwhile (a machine that was off for weeks), and a countdown that is then not called off lets
+//     a node go off under a guest (TestCancelledAndCountingAreSeenWhenThePanelsClockWasSetBack). That is why
+//     the rule for the same machine is the length, and why a shutdown of the same length as the run's with
+//     another end is still taken for the run's: a person who asks, in the place of the run's shutdown, for one
+//     with exactly the run's countdown is not told apart (the Power menu offers 10 s, 1, 5 and 15 minutes; the
+//     run's countdown is 2 minutes unless it was set), nor is an agent that does not say the length.
+//   - After a Re-pair both must fit, the end and the length, and nothing is sent until the agent that has the
+//     id now shows exactly that (ownCountdown): then it is the machine the run woke (sameSeen), and everything
+//     goes on as without the Re-pair. The run waits for it until its own due time, looking at every step. If
+//     it never shows (the agent of the new entry does not answer, shows nothing, or shows something else), no
+//     cancel was sent and the machine ends as "not known": the run does not know whether the machine it woke
+//     switches off (endNotKnown). For a request that got no answer and whose countdown the run never saw
+//     there is nothing to know it by: that at once.
+//
+// Limit: an answer of the OLD entry's last poll that was on its way when the entry was replaced can still come
+// in under the id (the poller lets a poll in flight finish). It shows the run's countdown, and the cancel then
+// goes to the new entry's agent. It takes a Re-pair to another machine, within the seconds of one poll, with
+// an action pending on that machine.
 func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, why string) {
 	c := h.calloff
 	if c != nil { // a cancel that is being tried again keeps the reason it was first asked for
 		why = c.why
 	}
 	mono := m.mono()
+	if info, ok := m.Ops.Host(h.ID); ok && info.Entry != h.entry && !(h.sameSeen && info.Entry == h.sameEntry) {
+		// another entry than the one the run started with, whose agent has not shown the run's countdown yet
+		until, _ := h.cancelUntil()
+		if h.lostShutdown() || mono > until {
+			m.endNotKnown(r, h, now, why)
+			return
+		}
+		o := m.Ops.Observe(h.ID)
+		after := h.answeredAfter(o, mono, h.delay(r))
+		if !h.ownCountdown(o, after, h.delay(r)) {
+			if c == nil || !c.idWait {
+				c = &callingOff{why: why, idWait: true}
+				h.calloff = c
+				m.note(h, m.now(), fmt.Sprintf("its entry in the panel was replaced while its shutdown was counting down (due at %s): no cancel is sent until the agent that has this id now "+
+					"shows that countdown, since it may be another machine", when(*h.ShutdownAt, now)))
+			}
+			c.idAnswered = c.idAnswered || after
+			if c.idShown = nil; after && o.Pending != nil {
+				p := *o.Pending
+				c.idShown = &p
+			}
+			if h.kickMono == 0 || mono-h.kickMono >= kickEvery { // the new entry is polled soon: the countdown runs
+				h.kickMono = mono
+				m.Ops.Kick(h.ID)
+			}
+			m.say(h, "paired again during its countdown: waiting for its agent to show the run's countdown before a cancel is sent")
+			return
+		}
+		h.sameSeen, h.sameEntry = true, info.Entry // the machine the run woke
+		if c != nil && c.idWait {
+			c, h.calloff = nil, nil
+		}
+	}
 	switch until, _ := h.cancelUntil(); {
 	case c == nil && mono > until:
 		m.endPastDue(r, h, now, why)
@@ -167,6 +242,10 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 	after := h.answeredAfter(o, mono, h.delay(r))
 	if h.otherPending(o, after) != nil {
 		m.endOtherPending(r, h, now, why, o.Pending)
+		return
+	}
+	if p := h.otherShutdown(o, after, h.delay(r)); p != nil { // a shutdown that is not the run's: not called off
+		m.endOtherPending(r, h, now, why, p)
 		return
 	}
 	h.seeNone(o, after, mono)
@@ -298,6 +377,72 @@ type callingOff struct {
 	// how many tries were left out for it (callOff: the agent's cancel would have called that one off).
 	other   *Pending
 	skipped int
+	// idWait: no cancel was sent yet: the machine's entry in the panel was replaced, and the run waits for the
+	// agent that has the id now to show the run's own countdown (callOff). idAnswered: that agent answered
+	// meanwhile; idShown: what it showed as pending in its latest answer (nil: nothing).
+	idWait     bool
+	idAnswered bool
+	idShown    *Pending
+}
+
+// ownCountdown reports whether the machine's agent shows, in an answer from after the run's shutdown request
+// (after), exactly the countdown the run started: a pending shutdown whose end is within sameShutdown of the end
+// the agent gave for the run's own (ownAt; both are the agent's word, by the machine's clock), and whose length
+// is the one the run asked for (delay) where the agent says it. False when the run does not know the end of its
+// countdown. It is what tells, after a Re-pair, that the machine under the id is the one the run woke (callOff).
+func (h *Host) ownCountdown(o Observation, after bool, delay time.Duration) bool {
+	if h.ownAt.IsZero() || !after || o.Pending == nil || o.Pending.Action != "shutdown" {
+		return false
+	}
+	if s := o.Pending.DelayS; s != 0 && s != int(delay.Seconds()) {
+		return false
+	}
+	d := o.Pending.At.Sub(h.ownAt)
+	return d <= sameShutdown && d >= -sameShutdown
+}
+
+// otherShutdown reports whether the machine's agent shows, in an answer from after the run's shutdown request
+// (after), a pending shutdown that is not the run's, and returns it (nil: no): one whose length, as the agent
+// says it, is another than the run asked for (delay). The agent holds one action at a time, so the run's was
+// called off before that one was asked for. Not for a request that got no answer and whose countdown the run
+// never saw (lostShutdown): callOff and the watch have their own rules for that. See callOff for why the
+// length decides and not the end.
+func (h *Host) otherShutdown(o Observation, after bool, delay time.Duration) *Pending {
+	if h.lostShutdown() || !after || o.Pending == nil || o.Pending.Action != "shutdown" {
+		return nil
+	}
+	if s := o.Pending.DelayS; s == 0 || s == int(delay.Seconds()) {
+		return nil
+	}
+	p := *o.Pending
+	return &p
+}
+
+// endNotKnown ends a machine whose entry in the panel was replaced while the shutdown the run asked for was
+// counting down (Re-pair), when the agent that has the id now never showed the run's countdown: the run could
+// not make sure that it is the machine it woke, sent no cancel to it, and looks at nothing under that id for
+// its report. The machine's power is "not known", which the record and the notification list as a machine to
+// look at; the sentence says what may happen to the machine the run woke, and when.
+func (m *Manager) endNotKnown(r *Run, h *Host, now time.Time, why string) {
+	due := when(*h.ShutdownAt, now)
+	if h.lostShutdown() {
+		m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s after its shutdown request got no answer (it would be due at %s). The run never saw a countdown of it, so it cannot tell "+
+			"whether the machine that has this id in the panel now is the one it woke, and sent no cancel: it does not know whether the machine it woke switches off. "+
+			"If the request arrived, that machine switches off at about %s. Fairy no longer watches it.", why, due, due)+updateTail(h))
+		return
+	}
+	shown := "its agent did not answer under the new entry in that time"
+	if c := h.calloff; c != nil && c.idShown != nil {
+		shown = fmt.Sprintf("the agent that has this id now shows another action as pending (%s at %s, by its machine's own clock) and not the run's countdown", c.idShown.Action, when(c.idShown.At, now))
+	} else if c != nil && c.idAnswered {
+		shown = "the agent that has this id now shows no countdown"
+	}
+	may := "it may switch off at " + due
+	if !now.Before(*h.ShutdownAt) {
+		may = "it may have switched off at " + due
+	}
+	m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s while its shutdown was counting down (due at %s): %s, so the run could not make sure that it is the machine it woke, and sent no cancel. "+
+		"The run does not know whether the machine it woke switches off: %s. Fairy no longer watches it.", why, due, shown, may)+updateTail(h))
 }
 
 // notCalledOff ends a machine whose countdown the run could not call off before the run's own due time
@@ -412,14 +557,26 @@ func (h *Host) answeredAfter(o Observation, mono, delay time.Duration) bool {
 // endOtherPending ends a machine whose countdown the run was about to call off, and did not: its agent shows
 // another action than the run's shutdown as pending (otherPending). The run's countdown is gone, so the
 // machine is on; what becomes of it is that action's matter, and the sentence names it.
+//
+// The other action can be a shutdown too: one of another length than the run asked for (otherShutdown). The
+// machine is on, and it switches off when that one ends: the sentence says when, and that it is not the
+// run's doing.
 func (m *Manager) endOtherPending(r *Run, h *Host, now time.Time, why string, p *Pending) {
 	sent := "so the run sent no cancel"
 	if c := h.calloff; c != nil { // a cancel was being tried again
 		sent = fmt.Sprintf("so the run sent no further cancel (%d did not get through)", c.tries)
 	}
+	h.notPending = true
+	if p.Action == "shutdown" {
+		lead := fmt.Sprintf("%s: a shutdown is pending on it now that is not the one the run asked for (a countdown of %s that ends at %s, by the machine's own clock; the run asked for one of %s). "+
+			"Someone asked for it in the place of the run's, %s: its agent's cancel would call that one off.",
+			why, span(time.Duration(p.DelayS)*time.Second), when(p.At, now), span(h.delay(r)), sent)
+		m.endSeen(r, h, StLeftOn, OnYes, now, lead+" "+cameOnline(h)+" and it is ON now. Fairy no longer watches it: it switches off then unless someone cancels that on its page."+updateTail(h),
+			lead+" It switches off then unless someone cancels that on its page."+updateTail(h))
+		return
+	}
 	lead := fmt.Sprintf("%s: another power action is pending on it now (%s at %s, by the machine's own clock), not the shutdown the run asked for, %s: "+
 		"its agent's cancel would call that one off.", why, p.Action, when(p.At, now), sent)
-	h.notPending = true
 	m.endSeen(r, h, StLeftOn, OnYes, now, lead+" "+cameOnline(h)+" and it is ON now. Fairy no longer watches it."+updateTail(h), lead+updateTail(h))
 }
 
@@ -1206,6 +1363,9 @@ func (m *Manager) seeCountdown(r *Run, h *Host, o Observation, mono time.Duratio
 				m.note(h, now, fmt.Sprintf("its agent shows the countdown now, and showed none before: the shutdown request arrived late. It switches off by about %s", clock(at)))
 			}
 		}
+	}
+	if !h.pendingSeen && h.ownAt.IsZero() { // the request got no answer: the first countdown that shows names it (ownAt)
+		h.ownAt = o.Pending.At
 	}
 	h.pendingSeen, h.pendingAt = true, o.Pending.At
 }

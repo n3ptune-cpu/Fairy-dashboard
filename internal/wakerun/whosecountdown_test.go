@@ -1,0 +1,250 @@
+package wakerun
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Second review of build 14, R3. The agent's cancel names no action and no machine: it calls off whatever is
+// pending on the machine that has the id in the panel when it is sent. A run that lets go of a machine during
+// the countdown it started sends that cancel (review of build 14, F4), and two things it took for its own
+// countdown were not.
+
+const rePaired = "It was paired again during the run (its entry in the panel was replaced), so the run let go of it"
+
+// (a) After a Re-pair the id can be another machine. The reviewer's sequence: machine A is counting down; the
+// id is paired again to machine B, which has been on for days and on which an admin asked for a shutdown in 20
+// minutes; machine A counts on, out of the panel's sight. The run's cancel went to B and called the admin's
+// shutdown off, and the report said "its shutdown countdown was called off ... it is ON" while A went off.
+//
+// No cancel goes to an agent that has not shown the run's own countdown. When it never does, the report says
+// that the run does not know whether the machine it woke switches off, and when that would be.
+func TestAfterARePairNoCancelGoesToAnAgentThatDoesNotShowTheRunsCountdown(t *testing.T) {
+	for name, c := range map[string]struct {
+		other func(w *world, b *machine) // what the machine that has the id now is like
+		shown string
+	}{
+		"another machine with a shutdown somebody asked for": {func(w *world, b *machine) {
+			b.pending = &Pending{Action: "shutdown", At: w.now.Add(20 * time.Minute), DelayS: 1200}
+		}, "the agent that has this id now shows another action as pending (shutdown at "},
+		"another machine with a shutdown of the same length as the run's": {func(w *world, b *machine) {
+			b.pending = &Pending{Action: "shutdown", At: w.now.Add(10 * time.Minute), DelayS: 120} // the length alone is not enough here: the end must fit too
+		}, "the agent that has this id now shows another action as pending (shutdown at "},
+		"another machine with a reboot pending": {func(w *world, b *machine) {
+			b.pending = &Pending{Action: "reboot", At: w.now.Add(20 * time.Minute), DelayS: 1200}
+		}, "the agent that has this id now shows another action as pending (reboot at "},
+		"another machine with nothing pending": {func(*world, *machine) {}, "the agent that has this id now shows no countdown"},
+		"an agent that does not answer":        {func(_ *world, b *machine) { b.unreachable = true }, "its agent did not answer under the new entry in that time"},
+	} {
+		w := newWorld(t)
+		a := w.off("pc-a")
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StShutting)
+		w.tick()
+		if a.pending == nil || !host(active(w), "pc-a").pendingSeen {
+			t.Fatalf("%s: the fixture: no countdown, or the run has not seen it", name)
+		}
+		due := *host(active(w), "pc-a").ShutdownAt
+		before := len(w.calls)
+		// machine B takes the id; machine A counts on, where the panel does not see it
+		b := &machine{info: a.info, on: true, bootedAt: w.now.Add(-72 * time.Hour), agentReadyAt: w.now.Add(-71 * time.Hour),
+			version: "17-bbbbbbb", updState: "idle", shutMode: "ok", busyDone: map[string]bool{}}
+		b.info.Entry++
+		c.other(w, b)
+		was := b.pending
+		w.ms["pc-a"], w.ms["old-a"] = b, a
+		w.order = append(w.order, "old-a")
+		w.tick()
+		if row := host(mustActive(t, w), "pc-a"); !strings.Contains(row.Text, "waiting for its agent to show the run's countdown before a cancel is sent") ||
+			!logHas(row, "no cancel is sent until the agent that has this id now shows that countdown, since it may be another machine") {
+			t.Errorf("%s: the row does not say what the run waits for: %s / %v", name, row.Text, logTexts(row))
+		}
+		h := host(w.finish(), "pc-a")
+		if sent := w.calls[before:]; len(sent) != 0 {
+			t.Errorf("%s: WRONG MACHINE: sent to the agent that has the id now: %v", name, sent)
+		}
+		if b.pending != was {
+			t.Errorf("%s: what was pending on the machine that took the id was changed: %+v, was %+v", name, b.pending, was)
+		}
+		if !a.wentOff {
+			t.Fatalf("%s: the fixture: the machine the run woke should have gone off at the end of its countdown", name)
+		}
+		has(t, h, StLeftOn, rePaired+" while its shutdown was counting down (due at "+clock(due)+"): "+c.shown,
+			"so the run could not make sure that it is the machine it woke, and sent no cancel. The run does not know whether the machine it woke switches off: it may have switched off at "+clock(due)+".")
+		if h.On != OnUnknown || strings.Contains(h.Text, "it is ON") || strings.Contains(h.Text, "called off.") {
+			t.Errorf("%s: UNTRUE REPORT [%s]: %s", name, h.On, h.Text)
+		}
+	}
+}
+
+// The usual Re-pair is of the same machine: its agent is asked again some seconds later, under the new entry,
+// and shows the countdown the run started. The cancel is sent then, once, and the machine stays on, as before
+// (F4). Until then nothing is sent.
+func TestAfterARePairOfTheSameMachineItsCountdownIsCalledOffOnceItShows(t *testing.T) {
+	for _, silent := range []int{0, 1, 7} { // seconds until the agent of the new entry has answered
+		w, pc, before := letGoWhile(t, func(pc *machine) { pc.info.Entry++; pc.unreachable = true })
+		for i := 0; i < silent; i++ {
+			w.tick()
+			if len(w.calls) != before {
+				t.Fatalf("silent for %d s: a cancel was sent before the agent of the new entry showed the run's countdown: %v", silent, w.calls[before:])
+			}
+		}
+		pc.unreachable = false
+		h := host(w.finish(), "pc-a")
+		if got := strings.Join(w.calls[before:], ", "); got != "cancel pc-a" {
+			t.Fatalf("silent for %d s: sent after the Re-pair: %q, want one cancel", silent, got)
+		}
+		has(t, h, StLeftOn, rePaired+": its shutdown countdown was called off. It came online after the wake and it is ON.")
+		if h.On != OnYes || !pc.on || pc.pending != nil || pc.wentOff {
+			t.Fatalf("silent for %d s: reported %s; the machine is on: %v, a countdown is pending: %v", silent, h.On, pc.on, pc.pending != nil)
+		}
+	}
+}
+
+// A request that got no answer and whose countdown the run never saw: there is nothing the run could know its
+// machine by after a Re-pair. Nothing is sent, and the report says so at once.
+func TestAfterARePairARequestWithoutAnAnswerIsNotCalledOffBlind(t *testing.T) {
+	w := newWorld(t)
+	pc := w.off("pc-a")
+	pc.shutLost = "never"
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	before := len(w.calls)
+	pc.info.Entry++
+	h := host(w.finish(), "pc-a")
+	if sent := w.calls[before:]; len(sent) != 0 {
+		t.Errorf("sent after the Re-pair: %v", sent)
+	}
+	has(t, h, StLeftOn, rePaired+" after its shutdown request got no answer (it would be due at ",
+		"The run never saw a countdown of it, so it cannot tell whether the machine that has this id in the panel now is the one it woke, and sent no cancel: "+
+			"it does not know whether the machine it woke switches off. If the request arrived, that machine switches off at about ")
+	if h.On != OnUnknown {
+		t.Errorf("power %q: %s", h.On, h.Text)
+	}
+}
+
+// (b) On the same machine. A person calls the run's shutdown off on the machine's page, inside the countdown,
+// and asks for their own, 30 minutes on. Then the run has a reason to leave the machine on (it is switched off
+// for runs, the run is cancelled, the kill switch, a guest starts on the node): its cancel called the person's
+// shutdown off, and the report said "its shutdown countdown was called off".
+//
+// The agent says the length of every pending countdown, and the run knows the length of its own: a shutdown of
+// another length is not the run's. No cancel is sent, and the report says whose it is and when it ends.
+func TestAShutdownAPersonAskedForInThePlaceOfTheRunsIsNotCalledOff(t *testing.T) {
+	reasons := map[string]func(w *world, r *Run, pc *machine){
+		"It was switched off for \"Update unpowered hosts\" during the run, so the run let go of it": func(_ *world, _ *Run, pc *machine) { pc.info.OptedIn = false },
+		"The run was cancelled by Bob": func(w *world, r *Run, _ *machine) {
+			if _, err := w.m.CancelRun(r.ID, "Bob", false); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"the run stopped (control is disabled by an administrator)":                 func(w *world, _ *Run, _ *machine) { w.blocked = "control is disabled by an administrator" },
+		"Left ON: 1 guest is running on it (vm-1) since its shutdown was asked for": func(_ *world, _ *Run, pc *machine) { pc.guests, pc.guestNames = 1, "vm-1" },
+	}
+	for why, reason := range reasons {
+		for _, seen := range []bool{true, false} { // the run had a look at the person's shutdown before, or not
+			w := newWorld(t)
+			pc := w.off("pc-a")
+			r := w.start(StartRequest{Hosts: []string{"pc-a"}})
+			untilState(t, w, "pc-a", StShutting)
+			w.tick()
+			w.tick()
+			before := len(w.calls)
+			at := w.now.Add(30 * time.Minute)
+			mine := &Pending{Action: "shutdown", At: at, DelayS: 1800}
+			pc.pending = mine
+			if seen {
+				w.tick()
+			}
+			reason(w, r, pc)
+			h := host(w.finish(), "pc-a")
+			if sent := w.calls[before:]; len(sent) != 0 || pc.pending != mine {
+				t.Errorf("%s (seen before: %v): sent %v; the person's shutdown is still pending: %v", why, seen, sent, pc.pending == mine)
+			}
+			has(t, h, StLeftOn, why+": a shutdown is pending on it now that is not the one the run asked for (a countdown of 30 min that ends at "+clock(at)+
+				", by the machine's own clock; the run asked for one of 2 min). Someone asked for it in the place of the run's, so the run sent no cancel: its agent's cancel would call that one off.",
+				"It came online after the wake and it is ON now. Fairy no longer watches it: it switches off then unless someone cancels that on its page.")
+			if h.On != OnYes || strings.Contains(h.Text, "was called off") {
+				t.Errorf("%s (seen before: %v): UNTRUE REPORT [%s]: %s", why, seen, h.On, h.Text)
+			}
+			w.advance(31 * time.Minute) // and it goes off when the person asked for it, as the report says
+			if pc.on || !pc.wentOff {
+				t.Errorf("%s (seen before: %v): the person's shutdown did not happen", why, seen)
+			}
+		}
+	}
+}
+
+// What stays as it was, and why the END of a countdown does not decide on the same machine: the agent gives
+// another end for the same countdown after the machine's clock was corrected (setPanelClock moves both clocks
+// of this world). Such a countdown is still the run's and is still called off: a node must not go off under a
+// guest because its clock was set. So a shutdown of the run's own length is taken for the run's also when its
+// end is another; a person who asks for exactly that in the place of the run's is the limit of this rule.
+func TestACountdownOfTheRunsOwnLengthIsStillCalledOffWhenItsEndMoved(t *testing.T) {
+	w, pc, before := letGoWhile(t, func(*machine) {})
+	w.tick()
+	setPanelClock(w, pc, -time.Hour)
+	w.tick()
+	pc.info.OptedIn = false
+	h := host(w.finish(), "pc-a")
+	if got := strings.Join(w.calls[before:], ", "); got != "cancel pc-a" || !pc.on || pc.pending != nil {
+		t.Fatalf("after the machine's clock was set: sent %q, on %v", got, pc.on)
+	}
+	has(t, h, StLeftOn, "so the run let go of it: its shutdown countdown was called off. It came online after the wake and it is ON.")
+}
+
+// The run was calling its countdown off when the machine was taken out of the panel (Remove host, or the
+// moment between the Remove and the Add of a Re-pair). The reviewer's sequence: the first cancel ARRIVES and
+// its answer is lost, and before the next try the machine is gone. The report said "the run let go of it while
+// its shutdown was counting down (due at ...)", as if nothing had been sent, for a machine that then stayed on.
+// It says what was sent and what the run does not know.
+func TestAMachineRemovedWhileItsCountdownWasBeingCalledOff(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		break_ func(pc *machine)
+		stays  bool
+		want   string
+	}{
+		{"the cancel arrived, its answer did not", func(pc *machine) { pc.cancelLost = "always arrives" }, true,
+			"The run had asked its agent to call that countdown off, and the request got no answer (agent unreachable: timeout): it may have arrived, and then the machine stays ON; if it did not, it switches off at "},
+		{"no cancel arrived, and none was answered", func(pc *machine) { pc.cancelLost = "always" }, false,
+			"The run had asked its agent to call that countdown off, and the request got no answer (agent unreachable: timeout): it may have arrived, and then the machine stays ON; if it did not, it switches off at "},
+		{"the cancel was refused", func(pc *machine) { pc.unreachable = true }, false,
+			"The run had asked its agent to call that countdown off, and the request did not get through (agent unreachable: connection failed): it may switch off at "},
+	} {
+		w, pc, before := letGoWhile(t, func(pc *machine) {
+			pc.info.OptedIn = false
+			c.break_(pc)
+		})
+		due := *host(mustActive(t, w), "pc-a").ShutdownAt
+		w.tick() // the first cancel
+		if (pc.pending == nil) != c.stays {
+			t.Fatalf("%s: the fixture: the countdown is called off on the machine: %v", c.name, pc.pending == nil)
+		}
+		w.ms["gone"] = w.ms["pc-a"]
+		delete(w.ms, "pc-a")
+		w.m.Tick(context.Background())
+		_, hist := w.m.Snapshot()
+		if len(hist) != 1 {
+			t.Fatalf("%s: the run should be over", c.name)
+		}
+		h := host(hist[0], "pc-a")
+		if got := strings.Join(w.calls[before:], ", "); got != "cancel pc-a" {
+			t.Errorf("%s: sent: %q", c.name, got)
+		}
+		has(t, h, StLeftOn, "It is no longer in the panel, so the run let go of it while its shutdown was counting down (due at "+clock(due)+"). "+
+			c.want+clock(due)+".", "Fairy can no longer look at it.")
+		if h.On != OnUnknown || strings.Contains(h.Text, "it switches off by itself") {
+			t.Errorf("%s: [%s] %s", c.name, h.On, h.Text)
+		}
+		// what the machine then does is one of the two things the sentence names
+		w.ms["pc-a"], pc.unreachable = pc, false
+		delete(w.ms, "gone")
+		w.advance(20 * time.Minute)
+		if pc.on != c.stays {
+			t.Errorf("%s: 20 minutes later the machine is on: %v", c.name, pc.on)
+		}
+	}
+}

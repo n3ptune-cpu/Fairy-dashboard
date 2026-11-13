@@ -294,6 +294,10 @@ type HostInfo struct {
 type Pending struct {
 	Action string
 	At     time.Time
+	// DelayS: the length of its countdown in seconds, as the agent says it (the delay it was asked for with);
+	// 0: the agent did not say. A countdown keeps it for as long as it runs, whatever happens to the machine's
+	// clock: a pending shutdown with another length than the run asked for is not the run's (callOff).
+	DelayS int
 }
 
 // Observation is what the panel's poller last heard from a machine's agent.
@@ -600,10 +604,20 @@ type Host struct {
 	noneMono        time.Duration //
 	otherAt         time.Time     // (SeenAt of) the first answer after the request that showed another action than a shutdown as pending (otherPending)
 	pendingAt       time.Time     // the end of the run's countdown as its agent last gave it (by the machine's clock; stepShutting)
-	unpending       bool          // after its countdown was seen, an answer from after the run's due time showed nothing pending (stepShutting: another shutdown that shows after that is not the run's)
-	notPending      bool          // the run saw that its shutdown is no longer what is pending, and another action is: silence is never its "off" (look)
-	offQuiet        bool          // it gives nothing at all right now ...
-	offSince        time.Duration // ... since this moment on the steady clock
+	// ownAt: the end of the countdown the run started, as its agent gave it FIRST: in its answer to the run's
+	// shutdown request, or, for a request without an answer, in the first answer that showed a countdown (by
+	// the machine's clock). After a Re-pair it is what the run knows its own countdown by: no cancel is sent to
+	// the agent of the new entry before it shows a shutdown with this end (callOff, ownCountdown). pendingAt
+	// follows what the agent shows from look to look; this one never moves.
+	ownAt time.Time
+	// sameSeen, sameEntry: after the machine's entry in the panel was replaced during the run (Re-pair), the
+	// agent of the entry sameEntry has shown the run's own countdown: it is the machine the run woke (callOff).
+	sameSeen   bool
+	sameEntry  int
+	unpending  bool          // after its countdown was seen, an answer from after the run's due time showed nothing pending (stepShutting: another shutdown that shows after that is not the run's)
+	notPending bool          // the run saw that its shutdown is no longer what is pending, and another action is: silence is never its "off" (look)
+	offQuiet   bool          // it gives nothing at all right now ...
+	offSince   time.Duration // ... since this moment on the steady clock
 	// What the run has seen of the poller's row of silent polls while it watches the countdown (seeSilence):
 	silRow        uint64        // the row it is counting in
 	silN          int           // how many polls of that row it has looked at
@@ -1278,6 +1292,20 @@ func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
 		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s after its shutdown request got no answer (it would be due at %s). Fairy no longer watches it: "+
 			"if the request arrived, it switches off by itself unless someone cancels that.", why, when(*h.ShutdownAt, now)),
 			fmt.Sprintf("%s after its shutdown request got no answer (it would be due at %s).", why, when(*h.ShutdownAt, now)))
+	case h.State == StShutting && h.calloff != nil && h.calloff.tries > 0:
+		// The run was calling this countdown off when it had to stop here (the machine was taken out of the
+		// panel between two tries, the run was stopped): a cancel left, and it did not get through or got no
+		// answer. The sentence said "while its shutdown was counting down ... it switches off by itself", as if
+		// nothing had been sent: a cancel whose answer was lost had arrived, and the machine stayed on (second
+		// review of build 14, R3). It says what was sent and what the run does not know.
+		c, due := h.calloff, when(*h.ShutdownAt, now)
+		tried := fmt.Sprintf("%s while its shutdown was counting down (due at %s). The run had asked its agent to call that countdown off, and the request did not get through (%s): "+
+			"it may switch off at %s.", why, due, c.text, due)
+		if c.lost != "" {
+			tried = fmt.Sprintf("%s while its shutdown was counting down (due at %s). The run had asked its agent to call that countdown off, and the request got no answer (%s): "+
+				"it may have arrived, and then the machine stays ON; if it did not, it switches off at %s.", why, due, c.lost, due)
+		}
+		m.endSeen(r, h, StLeftOn, OnYes, now, tried+" Fairy no longer watches it.", tried)
 	case h.State == StShutting:
 		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s while its shutdown was counting down (it ends at %s). Fairy no longer watches it: "+
 			"it switches off by itself unless someone cancels that.", why, when(*h.ShutdownAt, now)),

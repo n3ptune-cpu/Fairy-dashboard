@@ -209,7 +209,7 @@ func (o runOps) Observe(id string) wakerun.Observation {
 	if info.Online {
 		obs.UptimeS = sys.UptimeS
 		if p := sys.PowerPending; p != nil {
-			obs.Pending = &wakerun.Pending{Action: p.Action, At: p.At}
+			obs.Pending = &wakerun.Pending{Action: p.Action, At: p.At, DelayS: p.DelayS}
 		}
 	}
 	if su := info.SelfUpdate; su != nil {

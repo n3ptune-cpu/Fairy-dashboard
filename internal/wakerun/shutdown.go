@@ -193,7 +193,8 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 	before, beforeMono := m.now(), m.mono()
 	// The agent's own time for the end of the countdown (the answer's "at") is by the machine's clock: the run
 	// does not count with it. It times the countdown by its own record of this request (stepShutting).
-	m.io(func() { _, err = m.Ops.Shutdown(ctx, id, delay, by, grant) })
+	var agentAt time.Time // ... but it names the countdown the agent started for this request (Host.ownAt)
+	m.io(func() { agentAt, err = m.Ops.Shutdown(ctx, id, delay, by, grant) })
 	m.done(h)
 	params := map[string]any{"delay_s": int(delay.Seconds())}
 	if err != nil {
@@ -227,7 +228,7 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 	// clock. ShutdownAt is the same end as a time of day by the panel's clock, for the words of the report.
 	sent := m.now()
 	at := sent.Add(delay)
-	h.ShutdownAt, h.shutdownSent = &at, sent
+	h.ShutdownAt, h.shutdownSent, h.ownAt = &at, sent, agentAt
 	h.endMin, h.dueMono = beforeMono+delay, m.mono()+delay
 	m.enter(h, StShutting, sent, fmt.Sprintf("shutting down at %s (it can be cancelled on its page until then)", clock(at)))
 }

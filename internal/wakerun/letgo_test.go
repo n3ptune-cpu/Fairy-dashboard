@@ -72,6 +72,12 @@ func TestALetGoWhoseCancelDoesNotGetThroughSaysWhatMayHappen(t *testing.T) {
 			{"no answer to any cancel", func(pc *machine) { pc.cancelLost = "always arrives" }, OnYes,
 				[]string{why + ", and the request to call its shutdown countdown off got no answer (", "): it may switch off at ", "Cancel it on the machine's page."}},
 		} {
+			if c.name == "out of reach" && strings.HasPrefix(why, "It was paired again") {
+				// Second review of build 14, R3: after a Re-pair no cancel is sent to an agent that has not shown
+				// the run's countdown, since it may be another machine. One that does not answer never shows it:
+				// TestAfterARePairNoCancelGoesToAnAgentThatDoesNotShowTheRunsCountdown.
+				continue
+			}
 			w, _, before := letGoWhile(t, func(pc *machine) {
 				do(pc)
 				c.break_(pc)

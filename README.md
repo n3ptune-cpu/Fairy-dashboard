@@ -518,6 +518,15 @@ The rules, in plain words:
   the same rule as below: the machine stays on and is reported so, and if the cancel does not get through,
   the report says that the machine may switch off, and when. (Up to build 13 the run left the countdown
   running with nobody watching the machine.)
+  The run calls off only its own countdown. A machine's cancel stops whatever is pending on it, so the run
+  looks first at what the agent shows: a shutdown with another countdown length than the run asked for was
+  asked for by someone in its place (on the machine's page: 10 s, 1, 5 or 15 minutes; the run's is
+  `shutdown_delay_s`, 2 minutes unless you set it) and is left alone; the report says so and when the machine
+  switches off. And after a **Re-pair** the id may be another machine: the run sends nothing until the agent
+  that has the id now shows the run's own countdown (the same end, the same length). If it never does, the
+  report says that the run does not know whether the machine it woke switches off, and when it would (power
+  "on or off: not known"); look at that machine. (A shutdown you ask for with exactly the run's countdown
+  length in the place of the run's cannot be told apart and is called off like the run's.)
 * **The kill switch stops a run**: nothing further is started, and what was woken stays on and is reported.
   A shutdown countdown the run had already started is called off (the one request a stopped run still sends,
   and only while that countdown can still be running: after its end the run sends nothing, so that an action
