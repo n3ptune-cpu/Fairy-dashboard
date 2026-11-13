@@ -375,10 +375,18 @@ func (c *Panel) validateAgents(errs *problems) map[string]*Agent {
 
 // validateSystems checks the `systems:` overrides, including Wake-on-LAN (default port 9, relay agent).
 func (c *Panel) validateSystems(errs *problems, agents map[string]*Agent) {
+	// One entry per id. Two entries with one id were accepted, and of the two only the LAST counted, whole:
+	// a second entry written for one more setting ({id: x, wake_update: {...}} under an entry that has the
+	// machine's wol:) took the machine's Wake-on-LAN away without a word.
+	seen := map[string]bool{}
 	for _, o := range c.Systems {
 		if !configutil.ValidID(o.ID) {
 			errs.add("systems: invalid id %q", o.ID)
 		}
+		if seen[o.ID] && o.ID != "" {
+			errs.add("systems: two entries with the id %s: write everything for that machine into one entry (of two, only the last one would count)", o.ID)
+		}
+		seen[o.ID] = true
 		if o.DWServiceURL != "" && !strings.HasPrefix(o.DWServiceURL, "https://") {
 			errs.add("system %s: dwservice_url must use https://", o.ID)
 		}

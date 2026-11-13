@@ -21,7 +21,9 @@ func TestConfigCheckListsTheRunTimingsThatAreNotTheDefault(t *testing.T) {
 	check := func(more string) (string, int) {
 		t.Helper()
 		y := "public_url: https://p.example\ndata_dir: " + dir + "/data\noidc: {issuer: \"https://id.example\", client_id: c, allowed_groups: [users], control_groups: [admins]}\n" +
-			"agents:\n  - {id: relay, url: \"http://relay:9101\", token_env: TOK_R, control_token_env: CTL_R, wol_relay: true}\n" + more
+			"agents:\n  - {id: relay, url: \"http://relay:9101\", token_env: TOK_R, control_token_env: CTL_R, wol_relay: true}\n" +
+			"  - {id: pc-a, url: \"http://pc-a:9101\", token_env: TOK_R}\n  - {id: pc-b, url: \"http://pc-b:9101\", token_env: TOK_R}\n" +
+			"  - {id: pc-c, url: \"http://pc-c:9101\", token_env: TOK_R}\n  - {id: pc-d, url: \"http://pc-d:9101\", token_env: TOK_R}\n" + more
 		if err := os.WriteFile(cfg, []byte(y), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -62,7 +64,7 @@ func TestConfigCheckListsTheRunTimingsThatAreNotTheDefault(t *testing.T) {
 	if n := strings.Count(out, "can be taken for off by a run"); n != 2 {
 		t.Errorf("%d notes about a short off_after_s, want 2 (not for pc-b, pc-c, pc-d)", n)
 	}
-	if strings.Contains(out, "pc-d") || strings.Contains(out, "WARN") || code != 0 {
+	if strings.Contains(out, "system pc-d") || strings.Contains(out, "WARN") || code != 0 {
 		t.Errorf("exit code %d, or a WARN, or a line for a machine without the block:\n%s", code, out)
 	}
 	// a value outside its range is no valid file at all
@@ -73,5 +75,52 @@ func TestConfigCheckListsTheRunTimingsThatAreNotTheDefault(t *testing.T) {
 	var o, eb bytes.Buffer
 	if code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &o, &eb); code == 0 || !strings.Contains(o.String()+eb.String(), "wake_update.off_after_s must be 300-3600") {
 		t.Errorf("off_after_s: 120: exit %d\n%s%s", code, o.String(), eb.String())
+	}
+}
+
+// A systems: entry whose id is no machine's (a typing mistake in the id) is read and counts for nothing: the
+// machine it was written for has the panel's own timings, and nothing said so. One note per such entry; an
+// entry under an agent's id, or under an id of the form a node or guest of a proxmox: entry has, has none.
+func TestConfigCheckNotesASystemsEntryThatIsNoMachines(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	t.Setenv("TOK_R", "r")
+	t.Setenv("CTL_R", "c")
+	t.Setenv("PVE_S", "s")
+	t.Setenv("FAIRY_SESSION_SECRET", strings.Repeat("no-secret-", 5)) // made here, for this test only
+	y := "public_url: https://p.example\ndata_dir: " + dir + "/data\noidc: {issuer: \"https://id.example\", client_id: c, allowed_groups: [users], control_groups: [admins]}\n" +
+		"proxmox:\n  - {id: lab, id_prefix: lab-, urls: [\"https://pve:8006\"], token_id: \"fairy@pve!panel\", token_secret_env: PVE_S}\n" +
+		"agents:\n  - {id: relay, url: \"http://relay:9101\", token_env: TOK_R, control_token_env: CTL_R, wol_relay: true}\n" +
+		"  - {id: lab-agent, url: \"http://lab:9101\", token_env: TOK_R, node: pve-b}\n" +
+		"systems:\n" +
+		"  - {id: lab-node-pve-b, wake_update: {off_after_s: 3600}}\n" + // the node of lab-agent
+		"  - {id: lab-node-pveb, wake_update: {off_after_s: 3600}}\n" + // of a node's form: it may be a node the panel has not seen
+		"  - {id: lab-nod-pve-b, wake_update: {off_after_s: 3600}}\n" + // a typing mistake
+		"  - {id: relay, name: Relay}\n" + // an agent
+		"  - {id: lab-qemu-100, name: Win}\n" + // a guest
+		"  - {id: old-pc, name: Old}\n" // nobody
+	if err := os.WriteFile(cfg, []byte(y), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb)
+	if !strings.Contains(out.String(), "config "+cfg+": valid") {
+		t.Fatalf("the fixture is not a valid config:\n%s%s", out.String(), errb.String())
+	}
+	for _, want := range []string{
+		"note  system lab-nod-pve-b: no agent has this id, and it is not the id of a node or a guest of a proxmox: entry (<id_prefix>node-<name>, <id_prefix>qemu-<vmid>, <id_prefix>lxc-<vmid>): " +
+			"the entry and its wake_update: block count for no machine (the machine it was written for has the panel's own timings). A typing mistake in the id?\n",
+		"note  system old-pc: no agent has this id, and it is not the id of a node or a guest of a proxmox: entry (<id_prefix>node-<name>, <id_prefix>qemu-<vmid>, <id_prefix>lxc-<vmid>): " +
+			"the entry counts for no machine. A typing mistake in the id?\n",
+	} {
+		if strings.Count(out.String(), want) != 1 {
+			t.Errorf("the output lacks (or has twice) %q", want)
+		}
+	}
+	if n := strings.Count(out.String(), "no agent has this id"); n != 2 {
+		t.Errorf("%d notes, want 2:\n%s", n, out.String())
+	}
+	if code != 0 || strings.Contains(out.String(), "WARN") {
+		t.Errorf("a note is no warning (exit %d):\n%s", code, out.String())
 	}
 }

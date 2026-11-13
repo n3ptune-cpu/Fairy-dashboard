@@ -89,6 +89,7 @@ func (c *cli) configCheck() int {
 	problems, inferred := nodeLinkCheck(cfg, problems)
 	okLines, said := wakeUpdateCheck(cfg)
 	notes, inferred = append(notes, okLines...), append(inferred, said...)
+	inferred = append(inferred, systemIDCheck(cfg)...)
 	for _, e := range secretEnvs(cfg) {
 		if os.Getenv(e.env) != "" {
 			notes = append(notes, fmt.Sprintf("%s (%s): present", e.env, e.what))
@@ -188,6 +189,42 @@ func nodeLinkCheck(cfg *config.Panel, problems []string) (out, inferred []string
 	c.Agents, c.Systems, c.Proxmox = slices.Clone(cfg.Agents), slices.Clone(cfg.Systems), slices.Clone(cfg.Proxmox)
 	_, _, _ = managed.NewStore(cfg.DataDir).Merge(&c)
 	return append(problems, poller.NodeWarnings(&c)...), poller.NodeInferred(&c)
+}
+
+// systemIDCheck is one note for every `systems:` entry of config.yaml whose id is no machine's: not the id of
+// an agent (config.yaml's or one added in the panel), and not of the form a node or a guest of one of the
+// proxmox: entries has (<id_prefix>node-<name>, <id_prefix>qemu-<vmid>, <id_prefix>lxc-<vmid>). Such an entry
+// is read and counts for nothing, which is what a typing mistake in the id looks like: the machine it was
+// written for runs with the panel's own values, and nothing else says so. A note, not a warning: whether a
+// node or guest of that name exists is only known once its Proxmox API has answered, and an entry may be
+// written before its machine is added.
+func systemIDCheck(cfg *config.Panel) []string {
+	c := *cfg
+	c.Agents, c.Systems, c.Proxmox = slices.Clone(cfg.Agents), slices.Clone(cfg.Systems), slices.Clone(cfg.Proxmox)
+	_, _, _ = managed.NewStore(cfg.DataDir).Merge(&c)
+	known := map[string]bool{}
+	for _, a := range c.Agents {
+		known[a.ID] = true
+	}
+	var out []string
+	for _, o := range cfg.Systems {
+		fits := known[o.ID]
+		for _, p := range c.Proxmox {
+			for _, kind := range []string{"node-", "qemu-", "lxc-"} {
+				fits = fits || (strings.HasPrefix(o.ID, p.Prefix()+kind) && len(o.ID) > len(p.Prefix()+kind))
+			}
+		}
+		if fits {
+			continue
+		}
+		what := "the entry counts for no machine"
+		if o.WakeUpdate != nil {
+			what = "the entry and its wake_update: block count for no machine (the machine it was written for has the panel's own timings)"
+		}
+		out = append(out, fmt.Sprintf("system %s: no agent has this id, and it is not the id of a node or a guest of a proxmox: entry "+
+			"(<id_prefix>node-<name>, <id_prefix>qemu-<vmid>, <id_prefix>lxc-<vmid>): %s. A typing mistake in the id?", o.ID, what))
+	}
+	return out
 }
 
 // wakeUpdateCheck lists the timings of "Update unpowered hosts" that are not the defaults a reader would
