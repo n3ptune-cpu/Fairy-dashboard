@@ -102,7 +102,14 @@ func TestTheRepeatPageForARefusedTypedNameAndARefusedCancel(t *testing.T) {
 		if name == "a wrong typed name" {
 			r = a.e.do("POST", "/api/systems/laptop/power", map[string]any{"action": "shutdown", "delay_s": 10, "confirm": "not-the-name"}, hdr(a)...)
 		} else {
-			r = a.e.do("POST", "/api/systems/laptop/power", map[string]any{"action": "cancel"}, hdr(a)...)
+			// The approval build: a cancel of a countdown is never kept for a confirmation (it asks for none:
+			// conflict 9 of the rebase onto fix7r, approval_cancel_test.go), so a cancel cannot meet a repeat
+			// page here, whatever its limit says. That is held first. The case itself, a kept request that its
+			// limit refuses when it runs, is made with a restart over the control limit.
+			if c := a.e.do("POST", "/api/systems/laptop/power", map[string]any{"action": "cancel"}, hdr(a)...); c.code == 401 || pendingID(c) != "" {
+				t.Fatalf("%s: a cancel was kept for a confirmation: %d %s", name, c.code, c.raw)
+			}
+			r = a.e.do("POST", "/api/systems/laptop/power", map[string]any{"action": "reboot", "delay_s": 10}, hdr(a)...)
 		}
 		id := pendingID(r)
 		if r.code != 401 || id == "" {
@@ -110,8 +117,8 @@ func TestTheRepeatPageForARefusedTypedNameAndARefusedCancel(t *testing.T) {
 		}
 		q, rt := a.idp.confirmStart(a.e, id, "/#/system/laptop", a.sess)
 		if name == "a cancel over its limit" {
-			a.e.s.stopRL = newRateLimiter(1)
-			a.e.s.stopRL.allow("u1") // the minute's cancels are used up
+			a.e.s.control = newRateLimiter(1)
+			a.e.s.control.allow("u1") // the minute's control requests are used up
 		}
 		a.idp.claims["auth_time"] = a.clk.now().Unix()
 		callback := "/auth/callback?code=c&state=" + q.Get("state")

@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
@@ -72,10 +72,12 @@ func TestTheAgentsApprovalAnswersAreItsOwnNo(t *testing.T) {
 			}
 			// the same body behind the two statuses a gateway gives after it passed the request on: not the
 			// agent's answer (the agent never answers these requests with 502 or 504), so "no answer"
+			// (the words are fix8's since the rebase onto it: "no answer (http 504): it may have arrived"; they
+			// were "agent unreachable: http 504, and not an answer of the agent")
 			for _, gw := range []int{502, 504} {
 				status = gw
 				_, err := agentCall(context.Background(), p, a, path, body)
-				if !errors.As(err, &lost) || errors.As(err, &no) || !strings.Contains(said(err), "not an answer of the agent") {
+				if !errors.As(err, &lost) || errors.As(err, &no) || said(err) != fmt.Sprintf("no answer (http %d): it may have arrived", gw) {
 					t.Errorf("%s, %s, with the status %d: %T %v; want \"no answer of the agent\"", c.name, path, gw, err, err)
 				}
 			}

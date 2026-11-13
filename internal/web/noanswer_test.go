@@ -210,6 +210,16 @@ func TestAWriteTheAgentRefusedStaysARefusalInItsWords(t *testing.T) {
 			if c.st == 401 {
 				want = "agent rejected the control token (check control_token_env)"
 			}
+			if c.st == 429 && w.name != "helper stop" {
+				// The approval half (51dd346, the agent's changes of 2026-11-12): on the fan and update routes an
+				// agent's 429 is said as the machine's own request budget, with when to ask again. It is still
+				// the agent's refusal with its status, which is what this test holds.
+				host := "laptop"
+				if strings.HasPrefix(w.name, "fan") {
+					host = "tower"
+				}
+				want = host + " has had its control requests for this minute. Nothing was done. Try again in 60 s."
+			}
 			if got := fmt.Sprint(r.body["detail"]); r.code != c.want || got != want {
 				t.Errorf("%s, %d: %d %q, want %d %q", w.name, c.st, r.code, got, c.want, want)
 			}
