@@ -594,8 +594,10 @@ in it. If it refuses to start, the line says which of the three values it does n
 ### I3. The test VM
 
 1. Add `NSX-TEST-VM` to this panel as in part B, with **power control** and **self-update** ticked.
-   (Add host installs the released agent, build 16. It does not know the check yet: its page has no
-   **Approval** button.)
+   (Add host installs the released agent, build 17, which is Fairy-agent v0.7.0. It knows the check: the VM's
+   page has the **Approval** button, and steps 2 and 3 are not needed. They are for an agent you built
+   yourself, as the test zips from before this release needed: the released agent was build 16 then, and
+   did not know the check.)
 2. Put the self-built agent of agent zip 3 on the VM over it: `TEST-ON-WINDOWS.md` in the agent folder,
    section 13, part A (steps 1 to 5). The script there installs it for both services and leaves the check
    **off**. If the VM still has the agent and the trust of zip 1 / agent zip 2: part H there (H1) says what
@@ -618,7 +620,8 @@ in it. If it refuses to start, the line says which of the three values it does n
    the dialog then says "Check gone", press **Accept that its check is off**, and go on with I4), or keep it
    and press **Accept this machine's id** (I10, steps 7 to 9) and go on with I5.
 
-From here on do **not** press Re-pair for the VM, and do not press Update: both can put build 16 back.
+If the VM runs an agent you built yourself (step 2): from here on do **not** press Re-pair for the VM, and do
+not press Update. Both put the released agent (build 17) in its place.
 
 ### I4. Turn on, with your passkey
 

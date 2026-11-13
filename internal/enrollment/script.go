@@ -39,8 +39,8 @@ import (
 // "<run>-<short commit>"). Bump both together (a test compares AgentModule with go.mod).
 const (
 	AgentModule         = "v0.7.0"
-	AgentReleaseTag     = "build-16"
-	AgentReleaseVersion = "16-a791c55"
+	AgentReleaseTag     = "build-17"
+	AgentReleaseVersion = "17-c4a938a"
 )
 
 // Installer file names in a Fairy-agent release.
