@@ -2087,6 +2087,7 @@ async function openWakeUpdate() {
       A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer. If Fairy is not sure that a machine is off, it leaves it alone and the report says so.
       Nobody is asked: a machine switched on by a person while the run waits for it is treated as woken by the run, and switched off after its update.</div>
     ${joined.length ? "" : '<div class="warnbox">No machine is switched on for this yet. Close this, and switch machines on in the table on the Updates page (or in the ⋯ menu on a machine\'s page).</div>'}
+    ${joined.length && !(off.length || asleep.length || on.length) ? '<div class="warnbox">No machine can be ticked right now, so no run can be started: the reason is next to each machine below.</div>' : ""}
     ${off.length ? `<div class="wu-sub">Off (no answer for ${esc(fmtSpan(d.off_after_s))} or more): wake, update, switch off again</div><div class="opts wu-list">${off.map((h) => tick(h, "wake", true)).join("")}</div>` : ""}
     ${asleep.length ? `<div class="wu-sub">Asleep or off (sent to sleep from the panel): woken; left on if it was asleep</div><div class="opts wu-list">${asleep.map((h) => tick(h, "wake", false)).join("")}</div>` : ""}
     ${off.length || asleep.length ? `<label class="check opt wu-ifon"><input type="checkbox" id="wu-ifon"><span>If one of these turns out to be on after all: update it too.

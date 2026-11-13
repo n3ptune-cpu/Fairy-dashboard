@@ -390,3 +390,21 @@ func TestARunDoesNotFollowItsMachineToANodeTheConfigurationDoesNotName(t *testin
 		t.Fatal("the run still knows the machine")
 	}
 }
+
+// The dialog says in one sentence why Start cannot be pressed when no machine can be ticked.
+func TestUIWakeUpdateDialogSaysWhenNoMachineCanBeTicked(t *testing.T) {
+	js := appJS(t)
+	want := `${joined.length && !(off.length || asleep.length || on.length) ? '<div class="warnbox">No machine can be ticked right now, so no run can be started: the reason is next to each machine below.</div>' : ""}`
+	if strings.Count(js, want) != 1 {
+		t.Errorf("app.js lacks (or has twice) %q", want)
+	}
+	// the three lists it speaks of are the ones that have tick boxes, and no other has
+	for _, box := range []string{`off.map((h) => tick(h, "wake", true))`, `asleep.map((h) => tick(h, "wake", false))`, `on.map((h) => tick(h, "update_only", false))`} {
+		if !strings.Contains(js, box) {
+			t.Errorf("app.js lacks the tick boxes %q", box)
+		}
+	}
+	if n := strings.Count(js, "tick(h, "); n != 3 {
+		t.Errorf("tick boxes are made in %d places, the sentence knows 3", n)
+	}
+}
