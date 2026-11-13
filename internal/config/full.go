@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
@@ -50,7 +51,7 @@ func (c *Panel) checkDevices(data []byte) error {
 		key   string
 		raws  []map[string]any
 		check func([]map[string]any) error
-	}{{"power_sources", c.PowerSources, power.ValidateConfigs}, {"ups", c.UPS, ups.ValidateConfigs}} {
+	}{{"power_sources", c.PowerSources, validatePanelPowerSources}, {"ups", c.UPS, ups.ValidateConfigs}} {
 		if list.check(list.raws) == nil {
 			continue
 		}
@@ -66,6 +67,42 @@ func (c *Panel) checkDevices(data []byte) error {
 		}
 	}
 	return nil
+}
+
+// AgentOnlyPowerTypes are the `type:` values of a power source that an AGENT reads and the panel itself does
+// not: they are refused in the panel's own power_sources.
+//
+// homeassistant (Fairy-agent v0.8.0). A Home Assistant token that is refused must not be sent again and again:
+// Home Assistant counts each such request as a failed login and bans the address after some of them
+// (ip_ban_enabled). The agent's relay loop therefore waits after a refusal, 5 minutes, then 15, then an hour
+// (power.RefusedWait). The panel's own poller has no such wait: a source that fails is asked again after at
+// most a minute, for good. So the type exists on agents only; an agent on that network reads the sensor and
+// relays the watts in its /metrics like every other plug.
+var AgentOnlyPowerTypes = []string{"homeassistant"}
+
+// PanelPowerSource refuses an entry of the panel's own power_sources whose type only an agent reads
+// (AgentOnlyPowerTypes), with what to do instead. nil: the panel reads this type (or it is no type at all,
+// which the device's own check says).
+func PanelPowerSource(raw map[string]any) error {
+	typ, _ := raw["type"].(string)
+	if !slices.Contains(AgentOnlyPowerTypes, typ) {
+		return nil
+	}
+	id, _ := raw["id"].(string)
+	return fmt.Errorf("power source %q: type %s is read by an agent, not by the panel: put it into the power_sources of an agent on that network "+
+		"(the agent's own config.yaml), and link it here with power_links in that agent's entry. "+
+		"The panel would send a refused token again every minute; an agent waits up to an hour", id, typ)
+}
+
+// validatePanelPowerSources is the check of the panel's power_sources: nothing that only an agent reads
+// (PanelPowerSource), then each device's own check.
+func validatePanelPowerSources(raws []map[string]any) error {
+	for _, raw := range raws {
+		if err := PanelPowerSource(raw); err != nil {
+			return err
+		}
+	}
+	return power.ValidateConfigs(raws)
 }
 
 var innerLine = regexp.MustCompile(`\s+line \d+: `)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	powersrc "github.com/n3ptune-cpu/Fairy-agent/pkg/power"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 )
@@ -37,6 +38,9 @@ func NewManager(configs []map[string]any, interval float64, timeout time.Duratio
 	m := &Manager{IntervalS: interval, Timeout: timeout, offlineAfter: offlineAfter,
 		maxHistory: max(1, int(float64(historyS)/interval)), remote: map[string]model.PowerSourceState{}}
 	for _, raw := range configs {
+		if err := config.PanelPowerSource(raw); err != nil { // a type that only an agent reads (homeassistant)
+			return nil, err
+		}
 		s, err := powersrc.Build(raw, agentPower.metric())
 		if err != nil {
 			return nil, err
