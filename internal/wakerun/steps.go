@@ -754,6 +754,7 @@ func (m *Manager) stepUpdating(ctx context.Context, r *Run, h *Host, info HostIn
 			// the request did not arrive, or changed nothing. The run cannot tell which and says so; no
 			// install is running. (An agent whose state or message changed did take the request: the cases
 			// below read its result as after a request that was answered.)
+			h.updateNotSeen = true
 			m.updateDone(r, h, now, UpdFailed, "the update request got no answer ("+h.UpdateText+"), and its agent reports no update running and no new result")
 			return
 		case o.UpdateState == "failed":
@@ -990,15 +991,27 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	if h.pendingSeen && after && o.Pending == nil && mono-o.SeenAgo > h.dueMono {
 		h.unpending = true
 	}
-	// An update request that got no answer can arrive late like a shutdown request (audit 6, r4-p2-02; the run
-	// took it for not arrived after a minute of answers without an update, and went on). mayShutDown looks at
-	// the agent's update state right before the shutdown request; an install that begins after that, while the
-	// countdown runs, would be cut off by the machine going off. The run calls its countdown off for it, and
-	// says of the update what it says of one that may still be running.
-	if h.UpdateUnsure && after && (o.UpdateState == "downloading" || o.UpdateState == "applying") {
-		h.Update, h.UpdateText = "", ""
-		m.callOff(ctx, r, h, now, "Left ON: its update request, which had got no answer, arrived after all, and its agent says that an update is being installed on it right now ("+
-			o.UpdateState+")")
+	// An install that begins while the countdown runs would be cut off by the machine going off. mayShutDown
+	// looks at the agent's update state right before the shutdown request and leaves a machine on that is
+	// installing; here the run looks again at every answer from after its request, and calls its countdown off
+	// when the agent says that an update is being installed.
+	//
+	// Whose update it is decides the words only. An update request of the run that got no answer can arrive
+	// late like a shutdown request (audit 6, r4-p2-02: the run took it for not arrived after a minute of answers
+	// without an update, updateNotSeen, and went on): then it "arrived after all", and the run says of the
+	// update what it says of one that may still be running. In every other case the run has seen what came of
+	// its own update, and this is another one, started by somebody else or by the agent itself: the row keeps
+	// the result of the run's update and says only what the agent says now. (It said "its update request, which
+	// had got no answer, arrived after all" for an update the run had seen finish, and lost "updated to ...":
+	// review of fix8, RF8-05. And after an update request that was answered the machine went off in the middle
+	// of such an install: nothing looked.)
+	if after && (o.UpdateState == "downloading" || o.UpdateState == "applying") {
+		why := "Left ON: its agent says that an update is being installed on it right now (" + o.UpdateState + ")"
+		if h.updateNotSeen {
+			h.Update, h.UpdateText = "", ""
+			why = "Left ON: its update request, which had got no answer, arrived after all, and its agent says that an update is being installed on it right now (" + o.UpdateState + ")"
+		}
+		m.callOff(ctx, r, h, now, why)
 		return
 	}
 	// The guests of a Proxmox node were asked about before the shutdown request (mayShutDown). One that starts

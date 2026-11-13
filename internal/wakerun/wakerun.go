@@ -481,8 +481,11 @@ type Host struct {
 	goodSince    time.Time // the agent has answered without a gap since
 	lastAtBefore float64   // the installer's last result before the run's update request
 	updBefore    string    // the agent's update state and message before that request (UpdateUnsure)
-	versionNewAt time.Time // when another version than VersionBefore was first seen
-	shutdownSent time.Time
+	// updateNotSeen: the update request got no answer, and the run went on after its agent showed neither an
+	// update nor a new result (stepUpdating). Such a request can still arrive, late (stepShutting).
+	updateNotSeen bool
+	versionNewAt  time.Time // when another version than VersionBefore was first seen
+	shutdownSent  time.Time
 	// endMin, dueMono: the earliest and the latest end of the countdown the run asked for, on the steady clock:
 	// the moment before the shutdown request left, and the moment its answer was here (or the wait for it
 	// ended), each plus the delay. dueMono is the run's own due time. For a request without an answer whose
