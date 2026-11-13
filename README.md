@@ -468,6 +468,13 @@ What to know before the first real run:
   to sleep from the panel is shown as "asleep or off" and is listed apart in the dialog, not ticked.
 * The wake needs what **Power on** needs: Wake-on-LAN enabled in the firmware and on the network card, and
   a relay agent in the same network that is on.
+  For a Proxmox node with an agent (`node:`), write its `wol:` in `systems:` under the node's id,
+  `<id_prefix>node-<node name in small letters>` (for example `lab-b-node-pve-b`), not under the agent's id.
+  The panel also finds that entry after it was restarted while the machine is off, when the machine is shown
+  under its agent's id until its Proxmox API answers again: **Power on** and a run can wake it then too (up
+  to build 12 they said that no Wake-on-LAN was set up). With several `proxmox:` entries this needs the
+  `systems:` entry to be the only one of that form for the node's name; otherwise the panel logs a warning
+  at start and waits for the Proxmox API.
 * The run paces itself: at most 8 control requests a minute to one agent (an agent accepts 12 a minute; the
   rest stays free for what you do in the page). With many machines behind one relay the wakes follow each
   other more slowly; nothing is lost.
