@@ -252,7 +252,7 @@ func nameOf(u access.User) string {
 // machineFor describes one agent for the approval page; keys are Pocket ID's current ones (nil: unknown).
 func (s *Server) machineFor(a config.Agent, keys []api.TrustKey) approvalMachine {
 	m := approvalMachine{ID: a.ID, SystemID: a.ID, Name: a.DisplayName(), Users: []approval.User{}}
-	if x := s.Poller.RelaySystem(a.ID); x != nil {
+	if x := s.Poller.ShownSystem(a.ID); x != nil {
 		m.SystemID, m.Name = x.ID, x.Name
 	}
 	info, _ := s.Poller.AgentInfo(a.ID)

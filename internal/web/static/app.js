@@ -1032,7 +1032,15 @@ function approvalTurnOn(s) {
   if (!state.me.approval_client) return ['<div class="note" id="ap-on-note">It cannot be switched on from this panel.</div>',
     ["It cannot be switched on from this panel: config.yaml has no <code>approval:</code> block (a separate Pocket ID client for PC actions)."]];
   const m = apvMachine(s), why = controlWhyNot();
-  if (!m) { fetchApproval(); return ['<div class="note">Checking whether it can be switched on…</div>', []]; }
+  if (!m) {
+    // No machine for this row. Three things it can mean, and each has its own words (it read "Checking…" for
+    // good on the row of a Proxmox node, whose machine the list named by its agent's id): the list is here and
+    // names none; the list could not be had; or it is on its way.
+    if (apv.data && !apvStale(s, approvalOf(s))) return ['<div class="note" id="ap-on-note">It cannot be switched on from this dialog.</div>',
+      ["It cannot be switched on from this dialog: the panel's list of machines has no entry for this host. Its agent, if it has one, is on the Updates page, under The check on the machine itself."]];
+    if (!apv.data && apv.error) { fetchApproval(); return [`<div class="note warn" id="ap-on-note">Could not check whether it can be switched on: ${esc(apv.error)}</div>`, []]; }
+    fetchApproval(); return ['<div class="note">Checking whether it can be switched on…</div>', []];
+  }
   // The approval page is older than what the live data says about this machine (its check went a moment ago): its
   // "Not ready: already on" is not said again; approvalFresh has asked for the page already (r4-b1-07).
   if (apvStale(s, approvalOf(s))) return ['<div class="note" id="ap-on-note">Checking whether it can be switched on…</div>', []];

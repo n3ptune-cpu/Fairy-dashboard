@@ -122,7 +122,11 @@ const base = { state: "required", enforced_by: "helper", issuer: "https://id.exa
 const host = (a) => ({ id: "h1", name: "ALPHA", approval: a });
 // the approval page's data (admins): it is there in both passes, so that a viewer's dialog is shown not to read it
 // (audit 6, r4-b1-07: fetched for the block as it is now, a: the page takes an older one for stale)
-const page = (m, a) => { apv.data = { machines: [{ id: "h1", system_id: "h1", ...m }] }; apv.at = Date.now(); apv.sig = dict([["h1", apvSig(a)]]); };
+// MACHINE is the machine's id in the list (its agent's id). For an agent that is a row of its own it is the row's
+// id; for the agent of a Proxmox node it is another one, and the list names the row in system_id. Both are run:
+// with the row's id everywhere, this test passed while a node's dialog had no button, no id and no Turn on.
+const MACHINE = process.argv[2];
+const page = (m, a) => { apv.data = { machines: [{ id: MACHINE, system_id: "h1", ...m }] }; apv.at = Date.now(); apv.sig = dict([["h1", apvSig(a)]]); };
 const as = (admin) => { state.me = { can_control: admin, approval_client: true }; };
 const words = (t) => t.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ").trim();
 const cases = [
@@ -198,6 +202,8 @@ for (const [name, a, m, admin, viewer, shown, more] of cases) {
     if ((v.html.match(/<p[ >]/g) || []).length > 1) fail(name + ", " + who + ": more than one paragraph above the rows");
     const html = words(v.html), behind = words(v.more.join(" "));
     if (isAdmin) {
+      // every button of the admin's dialog is sent with the machine's id, never with the row's
+      for (const b of v.html.match(/<button[^>]*data-act="ap-(?:accept|open)"[^>]*>/g) || []) if (!b.includes('data-id="' + MACHINE + '"')) fail(name + ": a button without the machine's id: " + b);
       for (const x of shown) if (!html.includes(x.replace(/^>|<$/g, "")) && !v.html.includes(x)) fail(name + ": the dialog lacks " + JSON.stringify(x) + " in " + JSON.stringify(html));
       for (const x of more) if (!behind.includes(x)) fail(name + ": More lacks " + JSON.stringify(x) + " in " + JSON.stringify(behind));
       // r4-b1-08: "More" does not say again what stands above it: no sentence of it, and not its three refrains
@@ -241,8 +247,10 @@ if (!process.exitCode) console.log("ok " + n + " states");
 	if err := os.WriteFile(file, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command(node, file).CombinedOutput()
-	if err != nil || !strings.HasPrefix(string(out), "ok 22 states") {
-		t.Fatalf("node: %v\n%s", err, out)
+	for _, machine := range []string{"h1", "agent-of-h1"} {
+		out, err := exec.Command(node, file, machine).CombinedOutput()
+		if err != nil || !strings.HasPrefix(string(out), "ok 22 states") {
+			t.Fatalf("the machine's id is %q: node: %v\n%s", machine, err, out)
+		}
 	}
 }

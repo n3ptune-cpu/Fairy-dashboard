@@ -97,7 +97,7 @@ func (c *reqCtx) requireAdmin(what string) (*model.User, error) {
 
 func (s *Server) updateRow(c *reqCtx, a config.Agent, latest updates.Latest) updateRow {
 	r := updateRow{ID: a.ID, SystemID: a.ID, Name: a.DisplayName(), Status: "offline", Configured: a.SelfUpdate}
-	if x := s.Poller.RelaySystem(a.ID); x != nil {
+	if x := s.Poller.ShownSystem(a.ID); x != nil {
 		r.SystemID = x.ID
 	}
 	info, seen := s.Poller.AgentInfo(a.ID)

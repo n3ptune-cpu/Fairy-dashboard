@@ -29,7 +29,10 @@ func (p *Poller) AgentByID(id string) (config.Agent, bool) {
 	return a, ok
 }
 
-// RelaySystem returns the system an agent reports as (itself, or the node it enriches).
+// RelaySystem returns the entry the poller keeps for an agent's own answers: the agent's OWN entry whenever it
+// was polled once (online or not), and only for an agent that was never polled the entry of the node it is
+// linked to. It is never the row a node's agent is shown as on the pages (ShownSystem). The Wake-on-LAN and
+// BMC relay lookups ask here: a relay's status is that of the agent that sends the packet.
 func (p *Poller) RelaySystem(agentID string) *model.System {
 	a, ok := p.AgentByID(agentID)
 	if !ok {
@@ -44,6 +47,29 @@ func (p *Poller) RelaySystem(agentID string) *model.System {
 		return &s
 	}
 	return nil
+}
+
+// ShownSystem returns the row an agent is shown as on the pages: the Proxmox node the snapshot makes it a part
+// of, else its own entry; nil when the agent has no entry yet (never polled) or is not configured. The rule is
+// buildSnapshot's, word for word: the agent has an entry of its own, and its link (linkOfLocked) is an entry of
+// kind "node". Everything that tells a page "which row is this agent" asks here, so that the id it names is
+// the id of a row the browser has: with the node's row there, the node's id; after a restart of the panel
+// with the machine off (no node row until its Proxmox API answers), the agent's id.
+func (p *Poller) ShownSystem(agentID string) *model.System {
+	a, ok := p.AgentByID(agentID)
+	if !ok {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	own, okA := p.systems[agentID]
+	if !okA {
+		return nil
+	}
+	if node, okN := p.systems[p.linkOfLocked(a)]; okN && node.Kind == "node" {
+		return &node
+	}
+	return &own
 }
 
 // LinkOf returns the Proxmox node (or guest) this agent runs on: links_to, or `node:` matched by node name.
