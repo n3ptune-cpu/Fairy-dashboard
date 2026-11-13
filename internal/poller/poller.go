@@ -256,13 +256,22 @@ func (p *Poller) proxmoxJob(c config.Proxmox) *scheduler.Job {
 		}}
 }
 
-// agentJob polls one agent.
+// agentJob polls one agent. The job is filed under the row the agent's readings are shown in: the row of
+// the node (or guest) it is linked to, when that row is this agent's, else the agent's own.
+//
+// The row of a node is one agent's (AgentFor: the first agent of the configuration whose link is that node),
+// and a second agent that names the same node keeps a row of its own (buildSnapshot). Its job was still filed
+// under the node's id: its own row had no poll job, so its interval could not be set and "Pause" on it showed
+// "paused" while the agent was polled as before, and pausing the node's row paused both agents (second review
+// of build 14, R6). (Systems is asked by the scheduler and must not take p.mu: AgentFor does not.)
 func (p *Poller) agentJob(a config.Agent) *scheduler.Job {
 	return &scheduler.Job{Key: "agent:" + a.ID, DefaultS: p.Cfg.Intervals.Agent, TimeoutCap: p.Cfg.RequestTimeout,
 		Fn: func(ctx context.Context, t time.Duration) float64 { return p.pollAgent(ctx, a, t) },
 		Systems: func() []string {
 			if l := p.LinkOf(a); l != "" {
-				return []string{l}
+				if first, ok := p.AgentFor(l); !ok || first.ID == a.ID {
+					return []string{l}
+				}
 			}
 			return []string{a.ID}
 		}}
