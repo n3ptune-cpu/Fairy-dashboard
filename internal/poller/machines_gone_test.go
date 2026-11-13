@@ -76,29 +76,63 @@ func (g *goneEnv) shows(id string) {
 	}
 }
 
-// A record does not outlive its host (audit 6, r4-x1-03). The record of a host that is not in the configuration
-// any more is dropped when the panel starts, said once, and taken out of the file; the record of a host that
-// is there stays as it is.
-func TestTheRecordOfAHostThatIsGoneIsDroppedAtTheStart(t *testing.T) {
+// A record does not count for a host that is gone (audit 6, r4-x1-03). The record of a host that is not in the
+// configuration at a start is set aside: it is not in the records that count, it is NOT taken out of the file
+// (review of passkey-k, RK-01: it was deleted, for good, also for a host that was only missing at one start),
+// and nothing is announced, because nothing was deleted. The record of a host that is there stays as it is.
+// (This test was TestTheRecordOfAHostThatIsGoneIsDroppedAtTheStart.)
+func TestTheRecordOfAHostThatIsGoneIsSetAsideAtTheStart(t *testing.T) {
 	g := newGoneEnv(t)
 	p := g.start(t)
-	if len(g.evs) != 1 || g.evs[0].Kind != "gone" || g.evs[0].AgentID != "old-box" || g.evs[0].Binding.Record.MachineID != goneID {
+	if len(g.evs) != 0 {
 		t.Fatalf("what was announced: %+v", g.evs)
 	}
-	if recs := g.file(); len(recs) != 1 || recs["tower"].MachineID == "" || recs["tower"].How != approval.PinAccepted {
+	if recs := g.file(); len(recs) != 2 || recs["old-box"].MachineID != goneID || recs["old-box"].How != approval.PinTurnOn ||
+		recs["tower"].MachineID == "" || recs["tower"].How != approval.PinAccepted {
 		t.Fatalf("machines.json after the start: %+v", recs)
 	}
 	if b := p.BindingOf("old-box"); b.Known {
-		t.Fatalf("the record is still in memory: %+v", b)
+		t.Fatalf("the record still counts: %+v", b)
 	}
 	if b := p.BindingOf("tower"); !b.Known || b.Record.MachineID == "" {
 		t.Fatalf("the record of a host that is there: %+v", b)
 	}
-	// said once: not again by the same poller, and not at the next start
+	// and at the next start, and after answers that write the record of another host: the same
+	g.shows("laptop")
+	p.PollOnce(context.Background())
 	loaded(p)
 	g.start(t)
-	if len(g.evs) != 1 {
-		t.Fatalf("announced again: %+v", g.evs)
+	for _, e := range g.evs { // (laptop's own "not on record" is announced; nothing about old-box is)
+		if e.Kind == "gone" || e.AgentID == "old-box" {
+			t.Fatalf("announced: %+v", g.evs)
+		}
+	}
+	if recs := g.file(); recs["old-box"].MachineID != goneID {
+		t.Fatalf("machines.json after a poll and another start: %+v", recs)
+	}
+}
+
+// RK-01: a host that is missing at one start (here: commented out in config.yaml for that start) has its record
+// again when it is back under the same id. It lost it for good.
+func TestAHostThatWasMissingAtOneStartHasItsRecordAgain(t *testing.T) {
+	g := newGoneEnv(t)
+	all := g.cfg.Agents
+	for i, a := range all {
+		if a.ID == "tower" {
+			g.cfg.Agents = append(append([]config.Agent{}, all[:i]...), all[i+1:]...)
+		}
+	}
+	p := g.start(t) // tower is not in the configuration of this start
+	if b := p.BindingOf("tower"); b.Known {
+		t.Fatalf("tower's record counts at a start without tower: %+v", b)
+	}
+	g.cfg.Agents = all
+	p = g.start(t) // and is back
+	if b := p.BindingOf("tower"); !b.Known || b.Record.MachineID != "dG93ZXItbWFjaGluZS1pZC0wMQ" || b.Record.How != approval.PinAccepted || b.Record.By != "nora" {
+		t.Fatalf("tower after it is back: %+v", b)
+	}
+	if len(g.evs) != 0 {
+		t.Fatalf("announced: %+v", g.evs)
 	}
 }
 
@@ -135,6 +169,14 @@ func TestAHostAddedUnderAnOldIDInheritsNothing(t *testing.T) {
 	if err := p.AddAgent(ghost, nil); err != nil {
 		t.Fatal(err)
 	}
+	// the old record is deleted there and then, from the file too, and that is said (it is the one place a
+	// record of a host that is not removed in the panel is deleted; RK-01)
+	if len(g.evs) != 1 || g.evs[0].Kind != "gone" || g.evs[0].AgentID != "old-box" || g.evs[0].Binding.Record.MachineID != goneID {
+		t.Fatalf("what was announced when the host was added: %+v", g.evs)
+	}
+	if recs := g.file(); recs["old-box"].MachineID != "" || recs["tower"].MachineID == "" {
+		t.Fatalf("machines.json after the host was added: %+v", recs)
+	}
 	p.PollOnce(context.Background())
 	b := p.BindingOf("old-box")
 	if b.Status != approval.BindNoRecord || b.Record.MachineID != "" || b.Record.How != "" || b.Record.By != "" {
@@ -149,8 +191,9 @@ func TestAHostAddedUnderAnOldIDInheritsNothing(t *testing.T) {
 }
 
 // The same when machines.json could not be read at the start and can be read later: the record of a host that
-// is gone is dropped then, and said with the next thing the poller announces.
-func TestTheRecordOfAHostThatIsGoneIsDroppedWhenTheFileCanBeReadAgain(t *testing.T) {
+// is gone is set aside then, not deleted and not announced. (This test was
+// TestTheRecordOfAHostThatIsGoneIsDroppedWhenTheFileCanBeReadAgain.)
+func TestTheRecordOfAHostThatIsGoneIsSetAsideWhenTheFileCanBeReadAgain(t *testing.T) {
 	g := newGoneEnv(t)
 	path := adminstate.MachinesPath(g.cfg.DataDir)
 	good, err := os.ReadFile(path)
@@ -169,6 +212,50 @@ func TestTheRecordOfAHostThatIsGoneIsDroppedWhenTheFileCanBeReadAgain(t *testing
 	}
 	g.shows("laptop")
 	p.PollOnce(context.Background())
+	for _, e := range g.evs {
+		if e.Kind == "gone" {
+			t.Fatalf("announced: %+v", g.evs)
+		}
+	}
+	if b := p.BindingOf("laptop"); b.Status != approval.BindNoRecord || len(b.Held) != 0 {
+		t.Fatalf("laptop: %+v", b)
+	}
+	if b := p.BindingOf("old-box"); b.Known {
+		t.Fatalf("the record of the host that is gone counts: %+v", b)
+	}
+	if recs := g.file(); recs["old-box"].MachineID != goneID {
+		t.Fatalf("machines.json: %+v", recs)
+	}
+}
+
+// A host that is added in the panel while machines.json cannot be read: the old record of its id is deleted as
+// soon as the file can be read, before it can count for the new host (the review's note to RK-01: the record
+// of an id that was added meanwhile was kept then).
+func TestAHostAddedWhileTheFileCannotBeReadInheritsNothing(t *testing.T) {
+	g := newGoneEnv(t)
+	path := adminstate.MachinesPath(g.cfg.DataDir)
+	good, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{ not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := g.start(t)
+	ghost := g.cfg.Agents[1]
+	ghost.ID, ghost.URL = "old-box", "http://old-box"
+	g.shows("old-box")
+	if err := p.AddAgent(ghost, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, good, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.PollOnce(context.Background())
+	p.PollOnce(context.Background())
+	if b := p.BindingOf("old-box"); b.Status != approval.BindNoRecord || b.Record.MachineID != "" || b.Record.How != "" {
+		t.Fatalf("the host added under the old id: %+v", b)
+	}
 	var gone []string
 	for _, e := range g.evs {
 		if e.Kind == "gone" {
@@ -178,10 +265,7 @@ func TestTheRecordOfAHostThatIsGoneIsDroppedWhenTheFileCanBeReadAgain(t *testing
 	if len(gone) != 1 || gone[0] != "old-box" {
 		t.Fatalf("announced: %+v", g.evs)
 	}
-	if b := p.BindingOf("laptop"); b.Status != approval.BindNoRecord || len(b.Held) != 0 {
-		t.Fatalf("laptop: %+v", b)
-	}
-	if recs := g.file(); recs["old-box"].MachineID != "" {
+	if recs := g.file(); recs["old-box"].MachineID != "" || recs["tower"].MachineID == "" {
 		t.Fatalf("machines.json: %+v", recs)
 	}
 }

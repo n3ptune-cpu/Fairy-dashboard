@@ -144,12 +144,14 @@ func (s *Server) machineEvent(e poller.MachineEvent) {
 	key := "approval:" + e.AgentID
 	switch e.Kind {
 	case "gone":
-		// the record of a host that is not in the configuration any more was dropped (audit 6, r4-x1-03)
+		// a host was added in the panel under an id that still had a record of an earlier host: that record
+		// was deleted (audit 6, r4-x1-03). Only a real deletion is written here; a record that is set aside
+		// at a start because its host is missing stays in the file and gets a line in the log (RK-01).
 		params := map[string]any{}
 		if b.Record.MachineID != "" {
 			params["on_record"], params["how"] = approval.ShortID(b.Record.MachineID), b.Record.How
 		}
-		entry("approval.record", e.AgentID, params, "dropped: the panel has no host with this id any more")
+		entry("approval.record", e.AgentID, params, "dropped: a host was added under this id, and the record of the host that had it before is not for it")
 	case "alarm":
 		params := map[string]any{"status": b.Status}
 		if len(b.With) > 0 {

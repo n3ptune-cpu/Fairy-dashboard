@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -477,6 +478,18 @@ func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
 		p.overrides[oo.ID] = &oo
 	}
 	p.cfgMu.Unlock()
+	// A host that is added starts with nothing on record, whatever machines.json holds for its id: the record
+	// of a host that had this id before (set aside at the start, or still counted when the file could not be
+	// read then) is another machine's, and it is deleted here, before the new host is asked anything (audit 6,
+	// r4-x1-03; review of passkey-k, RK-01). The new host is "not on record" until an admin accepts its id.
+	p.mu.Lock()
+	var machineEvs []MachineEvent
+	if rec, had := p.forgetMachineLocked(a.ID, true); had {
+		machineEvs = append(machineEvs, MachineEvent{AgentID: a.ID, Kind: "gone", Binding: approval.Binding{Record: rec, Known: true}})
+		p.version++
+	}
+	p.mu.Unlock()
+	p.machinesChanged(machineEvs)
 	p.Scheduler.Add(p.agentJob(a))
 	p.Scheduler.Kick("agent:" + a.ID)
 	return nil
@@ -526,7 +539,7 @@ func (p *Poller) RemoveAgent(id string) {
 	delete(p.sources, "agent:"+id)
 	delete(p.sourceMono, "agent:"+id)
 	p.sourceOrder = slices.DeleteFunc(p.sourceOrder, func(x string) bool { return x == "agent:"+id })
-	p.forgetMachineLocked(id) // a host added later under the same id starts without a machine id on record
+	p.forgetMachineLocked(id, false) // a host added later under the same id starts without a machine id on record
 	machineEvs := p.announceLocked()
 	p.syncPresent()
 	p.snapVer, p.snapJSONVer = -1, -1

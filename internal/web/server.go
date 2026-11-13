@@ -181,7 +181,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	if p.OnMachine == nil { // the record of machine ids: its alarms go to the audit log and the Notifications list
 		p.OnMachine = s.machineEvent
 	}
-	p.MachinesLoaded() // records of hosts that are gone from the configuration were dropped at the start: said once
+	p.MachinesLoaded() // what reading the record of machine ids at the start changed is written now
 	// A run that was going when the panel stopped is reported here, once (audit log and a notification), and
 	// never continued. A journal that cannot be read is logged; no run starts until it is fixed.
 	_ = s.WakeRuns.Load()

@@ -558,9 +558,13 @@ another machine has the same id, so the panel keeps the id it has **on record** 
 with that one, never with what a host answers at that moment. An id comes on record in two ways only: when you Turn on from the panel (the
 panel makes it up), or when an admin accepts the id a host shows (below). Never because a host shows it: a
 machine id is no secret, and a host that answers in another machine's name would show that machine's id.
-The record belongs to the host's entry: a host you remove loses it, and so does a host you take out of
-`config.yaml` or rename there (at the next start, with a line in the log and in the Audit log). Under its new
-name it is "Not on record" and needs one accept.
+The record belongs to the host's entry: a host you remove in the panel loses it, and a host you add in the
+panel starts with nothing on record, whatever was kept for its id before. The record of a host you take out
+of `config.yaml` or rename there does not count from the next start on (a line in the log says so): under its
+new name the machine is "Not on record" and needs one accept. Such a record is not deleted from
+`machines.json` for that. A host that is only missing at one start (an added host whose tokens file could not
+be read, a list of added hosts that was moved away, a typing mistake in an id) has its record again when it
+is back under the same id.
 In the panel, admins see it in the host's Approval dialog (the **Approval** button on the host's page; hover
 "Machine id"); other users and API tokens get no id from the panel. It is a name, not a secret: a machine shows its own id to whoever may read its `/metrics`,
 and the machines of one batch see each other's (Known limits, below).

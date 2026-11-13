@@ -29,8 +29,9 @@ import (
 //	      "alarm":      "changed" | "duplicate" | ... (optional) the alarm last written to the audit log for it
 //	} } }
 //
-// A record whose agent id the panel does not have (the host was taken out of config.yaml or renamed there) is
-// removed when the panel starts (poller, dropGoneLocked).
+// A record whose agent id the panel does not have at a start (the host was taken out of config.yaml or renamed
+// there, or an added host was skipped) does not count and stays in the file (poller, setAsideLocked). A record
+// is removed when its host is removed in the panel, and when a host is added in the panel under its id.
 //
 // Written like the other state files: under the file's lock, read again, changed, and put in place of the old
 // file in one step, mode 0600. It fails closed: a file that cannot be read or is not what it should be is an

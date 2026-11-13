@@ -381,20 +381,21 @@ func TestOnlyATurnOnOrAnAcceptInTheFileCountsAsOnRecord(t *testing.T) {
 		if b := s2.Poller.BindingOf("tower"); !b.OK() || b.Record.MachineID != machineIDOf("tower") || b.Record.How != approval.PinAccepted || b.Record.By != "nora@example.test" || !b.Record.At.Equal(at) || !b.Record.Holder {
 			t.Fatalf("tower (accepted, keeps): %+v", b)
 		}
-		// "nas" is in that file and not in this panel's configuration: its record does not outlive its host
-		// (audit 6, r4-x1-03; it was kept, with its first-sight id taken off). What a first-sight record of a
-		// host that IS there becomes is in the cases below.
+		// "nas" is in that file and not in this panel's configuration: its record does not count (audit 6,
+		// r4-x1-03). It is set aside and stays in the file as it was, and nothing is written to the audit log,
+		// because nothing was deleted (review of passkey-k, RK-01; it was deleted at the start). What a
+		// first-sight record of a host that IS there becomes is in the cases below.
 		if b := s2.Poller.BindingOf("nas"); b.Known || b.Checks() {
 			t.Fatalf("nas (not a host of this panel): %+v", b)
 		}
-		if gone := a.auditEntries("", "approval.record"); len(gone) != 1 || gone[0]["target"] != "nas" {
-			t.Fatalf("the audit log about the dropped record: %v", gone)
+		if gone := a.auditEntries("", "approval.record"); len(gone) != 0 {
+			t.Fatalf("the audit log about a record that was only set aside: %v", gone)
 		}
 		if al := a.auditEntries("", "approval.alarm"); len(al) != 0 {
 			t.Fatalf("alarms for machines that are on record: %v", al)
 		}
 		recs, err := adminstate.New(a.s.Cfg.DataDir).Machines()
-		if _, nas := recs["nas"]; err != nil || recs["laptop"].MachineID != machineIDOf("laptop") || recs["tower"].MachineID != machineIDOf("tower") || !recs["tower"].Holder || nas {
+		if _, nas := recs["nas"]; err != nil || recs["laptop"].MachineID != machineIDOf("laptop") || recs["tower"].MachineID != machineIDOf("tower") || !recs["tower"].Holder || !nas {
 			t.Fatalf("machines.json afterwards: %v %+v", err, recs)
 		}
 	})

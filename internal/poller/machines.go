@@ -25,10 +25,14 @@ import (
 //     earlier build made at first sight, and one that does not say how its id came.
 //   - What a host last said about its check is kept, so that a host that is silent, also after a restart of the
 //     panel, is still known to be one that checks approvals.
-//   - A record lives as long as its host is in the configuration. A host removed in the panel loses it at once
-//     (RemoveAgent); a host that was taken out of config.yaml, or renamed there, loses it when the panel starts
-//     (dropGoneLocked; audit 6, r4-x1-03). A record never counts for a host that is gone, and a host that comes
-//     under an id later starts with nothing on record.
+//   - A record counts only while its host is in the configuration (audit 6, r4-x1-03). A record whose host the
+//     panel does not have at a start is set aside in memory (setAsideLocked): it keeps no machine id, and
+//     nothing inherits it. It is NOT taken out of machines.json for that: a host can be missing at one start
+//     without being gone (an added host whose tokens file was damaged, a list of added hosts that was moved
+//     away, a typing mistake in config.yaml), and it has its record again when it is back (review of
+//     passkey-k, RK-01). A record is deleted where the panel itself takes a host out or puts one in: a host
+//     removed in the panel loses it at once (RemoveAgent), and a host added in the panel under an id starts
+//     with nothing on record, whatever the file held for that id (AddAgent).
 //   - Every time something changes, each host's binding is decided again (approval.Evaluate), and a host whose
 //     binding became an alarm, or stopped being one, is announced through OnMachine.
 //
@@ -40,8 +44,8 @@ import (
 type MachineEvent struct {
 	AgentID string
 	// Kind: "alarm" (the binding became Binding.Status), "clear" (it is in order again), "store" (machines.json
-	// could not be written or read: Detail says why), "gone" (the record of AgentID was dropped because the
-	// panel has no such host any more; Binding.Record is what was dropped).
+	// could not be written or read: Detail says why), "gone" (the record of AgentID was deleted because a host
+	// was added in the panel under that id: the old record is not for it; Binding.Record is what was deleted).
 	Kind    string
 	Binding approval.Binding
 	Detail  string
@@ -66,9 +70,15 @@ type machineStore struct {
 	// is announced. What one host shows can make another host's alarm, so before all of them were heard a
 	// standing alarm can look cleared, or like another one, for a moment.
 	settleBy time.Time
-	// gone are the records that were dropped when the file was read, because their host is not in the
-	// configuration any more: each is announced once (MachinesLoaded, announceLocked).
+	// gone are the records that were deleted when the file could be read again, because the panel itself had
+	// added a host under their id meanwhile (forget): each is announced once (announceLocked).
 	gone []MachineEvent
+	// aside are the records whose host is not in the configuration of this start (setAsideLocked). They do not
+	// count for anything and are in machines.json as they were.
+	aside map[string]approval.Record
+	// forget are the ids whose record the panel must delete as soon as the file can be read: a host was removed
+	// or added in the panel under that id while machines.json could not be read (true: it was added).
+	forget map[string]bool
 }
 
 // machineSettle is how long after the start the poller waits at most for every agent to be asked once before it
@@ -76,7 +86,8 @@ type machineStore struct {
 const machineSettle = 45 * time.Second
 
 func (p *Poller) loadMachines() {
-	p.mach = machineStore{dirty: map[string]uint64{}, drop: map[string]uint64{}, last: map[string]string{}}
+	p.mach = machineStore{dirty: map[string]uint64{}, drop: map[string]uint64{}, last: map[string]string{},
+		aside: map[string]approval.Record{}, forget: map[string]bool{}}
 	if now, _ := p.now(); !now.IsZero() {
 		p.mach.settleBy = now.Add(machineSettle)
 	}
@@ -87,23 +98,34 @@ func (p *Poller) loadMachines() {
 		return
 	}
 	p.mach.records = recs
-	p.dropGoneLocked()
+	p.setAsideLocked()
 	p.demoteLocked()
 	p.standingAlarmsLocked()
 }
 
-// dropGoneLocked drops every record whose host the panel does not have (audit 6, r4-x1-03): it was taken out of
-// config.yaml, or renamed there, while the panel was down. (A host removed IN the panel loses its record at
-// once, RemoveAgent.) Such a record did two things it must not do. It counted as the keeper of its machine id,
-// so the same machine under its new name could never be accepted: "kept by" a host that has no page and no
-// button. And a host that was added under the old id later had the old machine's id on record from its first
-// answer, without a Turn on and without an admin's accept.
+// setAsideLocked takes every record whose host the panel does not have out of the records that count (audit 6,
+// r4-x1-03): the host was taken out of config.yaml or renamed there while the panel was down, or it is missing
+// at this start for another reason. (A host removed IN the panel loses its record at once, RemoveAgent.) Such a
+// record did two things it must not do. It counted as the keeper of its machine id, so the same machine under
+// its new name could never be accepted: "kept by" a host that has no page and no button. And a host that was
+// added under the old id later had the old machine's id on record from its first answer, without a Turn on and
+// without an admin's accept.
 //
-// So the record goes, from memory now and from the file with the next write, with a line in the log and an
-// entry in the audit log (MachineEvent "gone"). The host under its new name is "not on record", and one accept
-// of the id it shows, behind "Confirm it's you", puts it on record again. Caller holds p.mu, or nobody else has
-// the poller yet.
-func (p *Poller) dropGoneLocked() {
+// The record is set aside in memory and nothing is written: it keeps no id, it is no host's record, and
+// machines.json holds it as before. It used to be deleted from the file at this point, for good (review of
+// passkey-k, RK-01): one start at which a host was not in the merged configuration was enough, and the host did
+// not have to be gone. An added host whose tokens file could not be read at that start is skipped, a missing
+// or emptied list of added hosts is "no hosts", an id can be mistyped in config.yaml for one start, and a
+// second "fairy serve" with another config file on the same data folder reads the same record. After each of
+// them every such machine was "Not on record" and needed an accept with the id compared on the machine.
+// Now a host that is back at a later start, under the same id, has its record again. The second half of the
+// finding is closed where the panel itself puts a host in: AddAgent deletes whatever is there for the id.
+// (Somebody who puts a host back into config.yaml under an old id gets the old record with it; whoever can do
+// that can edit machines.json.)
+//
+// A line in the log says it; the audit log gets an entry only when a record is deleted. Caller holds p.mu, or
+// nobody else has the poller yet.
+func (p *Poller) setAsideLocked() {
 	var ids []string
 	for id := range p.mach.records {
 		if _, ok := p.AgentByID(id); !ok {
@@ -113,20 +135,53 @@ func (p *Poller) dropGoneLocked() {
 	sort.Strings(ids)
 	for _, id := range ids {
 		r := p.mach.records[id]
-		slog.Warn("the record of a machine's check is dropped: the panel has no host with this id any more (taken out of config.yaml, or renamed). "+
+		slog.Warn("the record of a machine's check is set aside: the panel has no host with this id at this start (taken out of config.yaml, renamed, "+
+			"or an added host that was skipped). It does not count while that is so and stays in machines.json: the host has it again when it is back under this id. "+
 			"A host that shows the check under another id is \"not on record\" until an admin accepts its machine id",
 			"agent", id, "machine_id", approval.ShortID(r.MachineID), "pinned", r.How)
 		delete(p.mach.records, id)
 		delete(p.mach.dirty, id)
-		p.mach.seq++
-		p.mach.drop[id] = p.mach.seq
-		p.mach.gone = append(p.mach.gone, MachineEvent{AgentID: id, Kind: "gone", Binding: approval.Binding{Record: r, Known: true}})
+		p.mach.aside[id] = r
 	}
 }
 
-// MachinesLoaded announces the records that were dropped when the record was read at the start, and writes what
-// reading it changed (those records, and ids taken off the record: demoteLocked). The server calls it once,
-// when OnMachine is set. Without it both wait for the first answer of an agent.
+// forgetPendingLocked deletes the records the panel was to delete while machines.json could not be read
+// (forgetMachineLocked): of a host that was removed in the panel, and of an id a host was added under. Caller
+// holds p.mu.
+func (p *Poller) forgetPendingLocked() {
+	ids := make([]string, 0, len(p.mach.forget))
+	for id := range p.mach.forget {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		added := p.mach.forget[id]
+		delete(p.mach.forget, id)
+		if r, ok := p.dropRecordLocked(id); ok && added {
+			p.mach.gone = append(p.mach.gone, MachineEvent{AgentID: id, Kind: "gone", Binding: approval.Binding{Record: r, Known: true}})
+		}
+	}
+}
+
+// dropRecordLocked deletes the record of id, in memory (counted or set aside) and, with the next write, in the
+// file. It returns what was there. Caller holds p.mu.
+func (p *Poller) dropRecordLocked(id string) (approval.Record, bool) {
+	r, ok := p.mach.records[id]
+	if !ok {
+		if r, ok = p.mach.aside[id]; !ok {
+			return approval.Record{}, false
+		}
+	}
+	delete(p.mach.records, id)
+	delete(p.mach.aside, id)
+	delete(p.mach.dirty, id)
+	p.mach.seq++
+	p.mach.drop[id] = p.mach.seq
+	return r, true
+}
+
+// MachinesLoaded writes what reading the record at the start changed (ids taken off the record: demoteLocked).
+// The server calls it once, when OnMachine is set. Without it that waits for the first answer of an agent.
 func (p *Poller) MachinesLoaded() {
 	p.mu.Lock()
 	evs := p.mach.gone
@@ -192,7 +247,8 @@ func (p *Poller) reloadMachinesLocked() {
 	if recs, err := p.Admin.Machines(); err == nil {
 		slog.Warn("the record of machine ids can be read again")
 		p.mach.records, p.mach.err = recs, nil
-		p.dropGoneLocked()
+		p.forgetPendingLocked()
+		p.setAsideLocked()
 		p.demoteLocked()
 		p.standingAlarmsLocked()
 	}
@@ -289,7 +345,7 @@ func (p *Poller) noteMachineLocked(id string, ap *model.Approval, now time.Time)
 // alarm when it begins or becomes another one, its end when it ends. What was announced is kept with the
 // host's record (Record.Alarm), so a restart of the panel announces nothing that still holds. Caller holds p.mu.
 func (p *Poller) announceLocked() (evs []MachineEvent) {
-	gone := p.mach.gone // records dropped when the file could be read again (dropGoneLocked): said once
+	gone := p.mach.gone // records deleted when the file could be read again (forgetPendingLocked): said once
 	p.mach.gone = nil
 	defer func() { evs = append(gone, evs...) }()
 	settled := p.machinesSettledLocked()
@@ -548,17 +604,18 @@ func (p *Poller) ApprovalNow(ctx context.Context, agentID string) (ap *model.App
 	return normalise.AgentApproval(payload), true
 }
 
-// forgetMachineLocked drops the record of an agent that was removed from the panel. Caller holds p.mu; the
+// forgetMachineLocked deletes the record of an agent id because the panel itself took that host out
+// (RemoveAgent) or put a host in under that id (AddAgent, added true): whatever is there for the id, counted or
+// set aside, is not for the host that comes next. It returns what was deleted. While machines.json cannot be
+// read, the id is remembered and its record deleted when it can (forgetPendingLocked). Caller holds p.mu; the
 // caller calls machinesChanged afterwards.
-func (p *Poller) forgetMachineLocked(id string) {
+func (p *Poller) forgetMachineLocked(id string, added bool) (approval.Record, bool) {
 	delete(p.mach.last, id)
-	if _, ok := p.mach.records[id]; !ok {
-		return
+	if p.mach.err != nil {
+		p.mach.forget[id] = added || p.mach.forget[id]
+		return approval.Record{}, false
 	}
-	delete(p.mach.records, id)
-	delete(p.mach.dirty, id)
-	p.mach.seq++
-	p.mach.drop[id] = p.mach.seq
+	return p.dropRecordLocked(id)
 }
 
 // shownApprovalLocked is the agent's approval block as the pages get it: what the agent said (live, nil: no
