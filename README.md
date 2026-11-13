@@ -317,7 +317,8 @@ manual install per machine) is in Fairy-agent's
 ### Update unpowered hosts
 
 For machines that are normally switched off: a PC that is only on while someone uses it, a Proxmox node
-whose guests do not start by themselves. **Update unpowered hosts** on the Updates page (admins)
+whose guests do not start by themselves. **Update unpowered hosts** on the Updates page (admins; the
+section under the table of machines, folded until a run is going or just ended: **Show the machines** opens it)
 starts a **run**: you tick the machines, confirm once, and the panel does by itself what you would do by hand.
 For each ticked machine that is off:
 
@@ -337,7 +338,8 @@ online, up to 5 min"). The report stays there afterwards (the last 5 runs). A fi
 machines that need a look first (left on, given up on, not confirmed, not updated), each with its sentence,
 then the others. When a sentence for every machine does not fit (a notification holds 1500 characters), the
 others are counted and the machines that need a look are all still named; no sentence is cut. The full list
-is always in "Last run". A run that went well is no alert, so no pop-up shows that notification; the page
+is always in "Last run" (in the section; while it is folded, one line says how the last run ended and how
+many machines need a look). A run that went well is no alert, so no pop-up shows that notification; the page
 that watched the run says once that it is over, in the line at the bottom ("Update unpowered hosts: run
 finished · 3 machines", with each machine's sentence behind **Details**), and it stays until you close it.
 A machine the report calls "is off" is shown as offline at the same moment (its dot is grey, not amber for
@@ -347,7 +349,7 @@ switched on, not how many could be chosen: none can until the run is over.
 The rules, in plain words:
 
 * **Off by default, per machine.** A machine takes part only after an admin switched it on for this: in the
-  "Machines" table on the Updates page, or in the ⋯ menu on the machine's page. Switching it on asks "Confirm
+  "Machines" table on the Updates page (**Show the machines**), or in the ⋯ menu on the machine's page. Switching it on asks "Confirm
   it's you". It is kept in the panel (`state.json`, `wake_update_hosts`), not in config.yaml. The machine
   needs an agent with `self_update: true`; to be woken and switched off again it also needs
   `power_control: true` and `wol` with a relay ([Agents](#agents)). The machine the panel runs on cannot take

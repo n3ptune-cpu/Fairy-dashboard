@@ -325,7 +325,8 @@ The test VM is added as in part B, with **self-update** ticked.
    the newest release and installs it if it is newer, exactly as the Update button does. If the agent is
    already on the newest release, the report says "already runs the newest release". Either way the test VM
    **stays on**: look at it.
-6. Reload the page: the report is still there under "Last run". "Show its steps" lists what was sent and
+6. Reload the page: the report is still there under "Last run" (after 10 minutes the section folds: **Show
+   the machines and the last run**). "Show its steps" lists what was sent and
    when. Menu, **Notifications**: one entry for the finished run. Menu, **Audit**, filter "Update unpowered
    hosts": who started it, the machine, each step.
 7. Press **Switch off** in the "Machines" table when you are done: the test VM no longer takes part.
