@@ -119,6 +119,19 @@ func (o runOps) system(id string) (model.System, bool) {
 	return model.System{}, false
 }
 
+// wuOptedIn reports whether an admin switched the machine shown under id on for "Update unpowered hosts". The
+// switch is kept under the id the machine was shown under when it was pressed (state.json, wake_update_hosts),
+// and it is the machine's: for the agent of a Proxmox node and for that node it counts under either id
+// (poller.SameMachine), so it does not get lost when the machine's row changes its id.
+func (s *Server) wuOptedIn(id string) bool {
+	for _, x := range s.Poller.SameMachine(id) {
+		if s.Poller.Admin.WakeUpdateEnabled(x) {
+			return true
+		}
+	}
+	return false
+}
+
 func (o runOps) Host(id string) (wakerun.HostInfo, bool) {
 	x, ok := o.system(id)
 	if !ok {
@@ -128,8 +141,8 @@ func (o runOps) Host(id string) (wakerun.HostInfo, bool) {
 	if !ok {
 		return wakerun.HostInfo{}, false
 	}
-	info := wakerun.HostInfo{ID: id, Name: x.Name, AgentID: a.ID, OptedIn: o.s.Poller.Admin.WakeUpdateEnabled(id), Entry: o.s.Poller.AgentEntry(a.ID)}
-	if ov := o.s.Poller.Override(id); ov != nil && ov.Wol != nil {
+	info := wakerun.HostInfo{ID: id, Name: x.Name, AgentID: a.ID, OptedIn: o.s.wuOptedIn(id), Entry: o.s.Poller.AgentEntry(a.ID)}
+	if ov := o.s.Poller.PowerOverride(x.ID); ov != nil && ov.Wol != nil {
 		info.RelayID, info.MACs = ov.Wol.Relay, len(ov.Wol.AllMACs())
 	}
 	return info, true
@@ -451,7 +464,7 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	}
 	ops := runOps{s}
 	o := ops.Observe(x.ID)
-	h := wuHost{ID: x.ID, Name: x.Name, OptedIn: s.Poller.Admin.WakeUpdateEnabled(x.ID), Version: o.Version, Behind: o.Behind, Power: "unclear"}
+	h := wuHost{ID: x.ID, Name: x.Name, OptedIn: s.wuOptedIn(x.ID), Version: o.Version, Behind: o.Behind, Power: "unclear"}
 	switch {
 	case powerctl.KillsPanel(s.Poller, x):
 		h.WhyNot = "the panel itself runs on it"
@@ -460,7 +473,7 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	default:
 		h.CanJoin = true
 	}
-	ov := s.Poller.Override(x.ID)
+	ov := s.Poller.PowerOverride(x.ID) // also the wol: under its node's id while it is shown under its agent's
 	switch {
 	case ov == nil || ov.Wol == nil:
 		h.NoWake = "no Wake-on-LAN is set up for it"
@@ -499,7 +512,7 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 		h.Why = strings.TrimPrefix(h.approvalWhy, "is ")
 	case !h.OptedIn:
 		h.Why = "not switched on for this (on the machine's page: the ⋯ menu)"
-	case s.Poller.Admin.PowerDisabled(x.ID):
+	case powerOff(s.Poller, x.ID):
 		h.Why = "power control for this host is disabled by an administrator"
 	case o.Paused:
 		h.Why = "polling is paused for it"
@@ -519,6 +532,12 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 		}
 	}
 	return h, true
+}
+
+// powerOff reports whether an administrator turned power control off for the host shown under id.
+func powerOff(p *poller.Poller, id string) bool {
+	_, off := p.PowerDisabledAs(id)
+	return off
 }
 
 // notSureWhy says, on the page, why a machine that does not answer is not offered as "off".
@@ -857,6 +876,18 @@ func (s *Server) wakeUpdateSwitch(c *reqCtx) error {
 	}
 	if err := s.Poller.Admin.SetWakeUpdate(id, *b.Enabled); err != nil {
 		return err
+	}
+	if !*b.Enabled {
+		// Off is off for the machine: also where the switch was pressed while the machine was shown under its
+		// other id (wuOptedIn). Switching on writes the shown id only, as before.
+		for _, other := range s.Poller.SameMachine(id) {
+			if other == id || !s.Poller.Admin.WakeUpdateEnabled(other) {
+				continue
+			}
+			if err := s.Poller.Admin.SetWakeUpdate(other, false); err != nil {
+				return err
+			}
+		}
 	}
 	c.audit(u, "wakeupdate.switch", id, map[string]any{"enabled": *b.Enabled}, "ok")
 	h, _ = s.wuHostOf(x)
