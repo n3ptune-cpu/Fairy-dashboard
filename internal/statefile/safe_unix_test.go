@@ -49,6 +49,7 @@ func TestOnlyAPlainFileOfASaneSizeIsRead(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			done := make(chan error, 3)
+			byOwner := 0
 			go func() { _, err := Read(c.path); done <- err }()
 			go func() { done <- Check(c.path) }()
 			go func() { _, err := Update(c.path, func(d Data) error { d["x"] = 1; return nil }); done <- err }()
@@ -57,6 +58,14 @@ func TestOnlyAPlainFileOfASaneSizeIsRead(t *testing.T) {
 				case err := <-done:
 					var nf *NotAFileError
 					if !errors.As(err, &nf) || nf.What != c.what || !strings.Contains(err.Error(), "Fairy does not read it") {
+						// Not root (the release run's tests are not): Update looks first at who owns what the
+						// path leads to, and /dev/zero is root's. It refuses for that, before it looks at what
+						// kind of file it is. Refused all the same, and not replaced (the look below).
+						var oe *OwnerError
+						if name == "a link to /dev/zero" && os.Geteuid() != 0 && errors.As(err, &oe) && byOwner == 0 {
+							byOwner++
+							continue
+						}
 						t.Fatalf("the error: %v", err)
 					}
 				case <-time.After(10 * time.Second):
