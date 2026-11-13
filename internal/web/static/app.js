@@ -2012,6 +2012,10 @@ function wuRunBox(r, live) {
     ${r.approval === "needed" ? '<div class="warnbox wu-note">The woken machines wait for your approval of their update and shutdown.</div>' : ""}
     ${r.hosts.map((h) => wuHostRow(r, h)).join("")}</div>`;
 }
+// ", N can be chosen right now", behind "N are switched on". Not while a run is going: nothing can be chosen
+// then (one run at a time, the button is off), and the number is made from what each machine is doing at this
+// moment, so it changed every time a machine of the run came on or went off (3, then 1, then 0, then 2).
+const wuCanNote = (d, joined, can) => (!d.active && can.length !== joined.length ? `, ${esc(can.length)} can be chosen right now` : "");
 function wakeUpdateBox() {
   const d = wu.data;
   if (!d) return wu.error ? `<div class="panel glass pad wu"><h3>Update unpowered hosts</h3><div class="error">${esc(wu.error)}</div></div>` : "";
@@ -2048,7 +2052,7 @@ function wakeUpdateBox() {
       ${showEarlier ? earlier.map((r) => wuRunBox(r, false)).join("") : ""}` : ""}
     <div class="wu-sub">Machines</div>
     <p class="note wu-rule info-keep">A machine takes part only after you switch it on here, one machine at a time.
-      ${joined.length ? `${esc(joined.length)} ${joined.length === 1 ? "is" : "are"} switched on${can.length !== joined.length ? `, ${esc(can.length)} can be chosen right now` : ""}.` : "None is switched on yet."}</p>
+      ${joined.length ? `${esc(joined.length)} ${joined.length === 1 ? "is" : "are"} switched on${wuCanNote(d, joined, can)}.` : "None is switched on yet."}</p>
     <div class="scroll"><table class="table wu-machines"><thead><tr><th>Machine</th><th>Now</th><th>Woken by</th><th>In these runs</th><th class="num"></th></tr></thead>
       <tbody>${able.map(row).join("") || '<tr><td colspan="5" class="note">No machine with an agent that can update itself from the panel.</td></tr>'}</tbody></table></div>
     ${d.hosts.some((h) => h.approval) ? '<div class="note"><b>A machine that checks a passkey approval itself cannot be in a run yet</b>: update it and switch it off on its own page, where it asks for your passkey.</div>' : ""}</div>`;
