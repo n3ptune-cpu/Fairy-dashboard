@@ -23,6 +23,11 @@ import (
 type nodeLink struct {
 	ID      string // the node's system id
 	Cluster string // the id of the proxmox: entry it belongs to
+	// Prefix is set when the proxmox: entry was worked out from the agent's own id (step c of the rule): the
+	// id_prefix the id begins with. Fits lists every id_prefix the id begins with when there is more than one
+	// ("alpha-, alpha-b-"); the longest of them is Prefix. Both are empty for links_to and for the one
+	// proxmox: entry there is: nothing was inferred there.
+	Prefix, Fits string
 }
 
 // nodeCandidates is every node id the agent's entry can mean: links_to names one outright (when it has the
@@ -32,7 +37,7 @@ func nodeCandidates(a config.Agent, clusters []config.Proxmox) []nodeLink {
 	if a.LinksTo != "" {
 		for _, c := range clusters {
 			if strings.HasPrefix(a.LinksTo, c.Prefix()+"node-") {
-				return []nodeLink{{a.LinksTo, c.ID}}
+				return []nodeLink{{ID: a.LinksTo, Cluster: c.ID}}
 			}
 		}
 		return nil
@@ -43,33 +48,107 @@ func nodeCandidates(a config.Agent, clusters []config.Proxmox) []nodeLink {
 	}
 	out := make([]nodeLink, 0, len(clusters))
 	for _, c := range clusters {
-		out = append(out, nodeLink{c.Prefix() + "node-" + slug, c.ID}) // normalise.NodeID
+		out = append(out, nodeLink{ID: c.Prefix() + "node-" + slug, Cluster: c.ID}) // normalise.NodeID
 	}
 	return out
 }
 
 // nodeChoice picks, among the ids an agent's entry can mean (cands, from nodeCandidates), the one the
 // configuration names; why says why it names none. Steps a to c of the rule (nodeLinks).
+//
+// # The longest id_prefix wins: what can go wrong
+//
+// Until build 13 an id that begins with the id_prefix of two entries (entries alpha- and alpha-b-, agent
+// alpha-b-box-agent) was "not decided", and the agent needed links_to. An id_prefix that is the beginning of
+// another one is the usual shape of a site with a cluster and standalone hosts next to it (<site>- and
+// <site>-<host>-, which is also what "Add host" writes), so the usual naming needed links_to on every such
+// host. Now the entry with the longest id_prefix the id begins with is taken. Two id_prefixes that both begin
+// one id are equal only if they are the same text, and two entries with the same id_prefix are refused when
+// the configuration is read (config.validateProxmox, managed.Check); if it ever happens, it is not decided.
+//
+// The pick is wrong for exactly one shape: the agent belongs to the entry with the SHORTER prefix, and its
+// id happens to begin with the longer one. Entries alpha- (a cluster) and alpha-b- (a standalone host), and an
+// agent on the cluster's node B2 that somebody called alpha-b2-agent: no; alpha-b-2-agent: yes, it begins
+// with alpha-b-, and its node is taken to be alpha-b-node-<its node:> instead of alpha-node-<its node:>.
+// (An agent of the longer entry is never given to the shorter one, and an agent whose id begins with one
+// prefix only is as it was in build 13.)
+//
+// What a wrong pick can do. The link is asked for two things only, and neither sends anything to another
+// machine's agent: a shutdown, a restart, an update always go to the agent's own address with its own token.
+//
+//  1. Wake-on-LAN and bmc_power (PowerOverride): while the agent's host is shown under the agent's id, a
+//     wol:/bmc_power: written under the wrongly picked id is offered on its row, and "Update unpowered hosts"
+//     uses it. That needs a systems: entry under alpha-b-node-<name>, so the standalone host alpha-b must
+//     have a node of the SAME NAME as the agent's node, with a wol: of its own, and no agent of its own that
+//     names it (two agents that can mean one node id: not decided for either, step d). Then "Power on" on
+//     the agent's row wakes the other machine, and a run wakes it, waits for this agent, reports "did not
+//     start", and leaves the other machine on (a run switches off only a machine whose own agent answered
+//     after the wake). A machine is switched ON that should not be; nothing is switched off.
+//  2. The switches kept per machine count under both ids (SameMachine): `power-control disable` and the
+//     "Switch on" for runs set for alpha-b-node-<name> then also count for this agent's row. The first only
+//     takes power control away. The second lets a run choose the agent's machine although the switch was
+//     set for the other; it gets no further than 1., because the run's wake goes to the other machine.
+//
+// Without such a systems: entry and such a switch a wrong pick changes nothing that can be seen, except that
+// the agent's own wol: (under alpha-node-<name>) is not found while its node's row is not there: what build 13
+// did for every such agent.
+//
+// So that nothing is guessed in silence: every link that was worked out from an id_prefix is one line in the
+// panel's log at its start and one line of `fairy admin config check` (nodeInferred: agent, node, the
+// id_prefix, and that links_to overrides it). links_to (a) and the one proxmox: entry (b) come first, as before.
 func nodeChoice(a config.Agent, cands []nodeLink, clusters []config.Proxmox) (pick nodeLink, why string) {
 	if len(cands) == 1 { // links_to, or node: with the one proxmox: entry there is
 		return cands[0], ""
 	}
-	// node: and several proxmox: entries. The entry is the one whose id_prefix the agent's own id begins with.
-	// An empty id_prefix begins every id and so names nothing: it never counts.
-	var match []nodeLink
+	// node: and several proxmox: entries. The entry is the one whose id_prefix the agent's own id begins with,
+	// and of several the one with the longest. An empty id_prefix begins every id and so names nothing: it
+	// never counts.
 	var prefixes []string
+	longest, same := "", false
 	for i, c := range clusters {
-		if p := c.Prefix(); p != "" && strings.HasPrefix(a.ID, p) {
-			match, prefixes = append(match, cands[i]), append(prefixes, p)
+		p := c.Prefix()
+		if p == "" || !strings.HasPrefix(a.ID, p) {
+			continue
+		}
+		prefixes = append(prefixes, p)
+		switch {
+		case len(p) > len(longest):
+			pick, longest, same = cands[i], p, false
+		case len(p) == len(longest): // the same id_prefix in two entries (refused when the configuration is read)
+			same = true
 		}
 	}
-	switch len(match) {
-	case 1:
-		return match[0], ""
-	case 0:
+	switch {
+	case len(prefixes) == 0:
 		return nodeLink{}, "its id begins with the id_prefix of none of the proxmox: entries"
+	case same:
+		return nodeLink{}, "its id begins with the id_prefix of more than one proxmox: entry, and none of them is the longest (" + strings.Join(prefixes, ", ") + ")"
 	}
-	return nodeLink{}, "its id begins with the id_prefix of more than one proxmox: entry (" + strings.Join(prefixes, ", ") + ")"
+	pick.Prefix = longest
+	if len(prefixes) > 1 {
+		pick.Fits = strings.Join(prefixes, ", ")
+	}
+	return pick, ""
+}
+
+// nodeInferred is one sentence for every link that was worked out from an id_prefix (step c), in the order of
+// the agents: the agent, the node, the id_prefix that decided, and how to say it otherwise. For the log at the
+// start and for `fairy admin config check`; a link by links_to or by the one proxmox: entry has none.
+func nodeInferred(agents []config.Agent, links map[string]nodeLink) []string {
+	var out []string
+	for _, a := range agents {
+		l, ok := links[a.ID]
+		if !ok || l.Prefix == "" {
+			continue
+		}
+		how := ", which the agent's id begins with"
+		if l.Fits != "" {
+			how = " (the longest of " + l.Fits + ", which the agent's id begins with)"
+		}
+		out = append(out, fmt.Sprintf("agent %s (node: %s) -> node %s: inferred from id_prefix %s of the proxmox: entry %s%s; set links_to in the agent's entry to override",
+			a.ID, a.Node, l.ID, l.Prefix, l.Cluster, how))
+	}
+	return out
 }
 
 // nodeLinks returns, by agent id, the node each agent runs on where the configuration decides it, and one
@@ -81,9 +160,11 @@ func nodeChoice(a config.Agent, cands []nodeLink, clusters []config.Proxmox) (pi
 //	a. links_to with the id of a node (<id_prefix>node-... of a configured proxmox: entry): that id.
 //	b. node: and exactly one proxmox: entry: <its id_prefix>node-<name>.
 //	c. node: and several proxmox: entries: the entry whose id_prefix, which must not be empty, is the beginning
-//	   of the agent's own id (agent lab-b-agent, id_prefix lab-b-). Exactly one entry must fit; none or more
-//	   than one: not decided. Which ids have a `systems:` entry plays no part: an entry under another entry's
-//	   prefix is another machine's (two hosts whose node has the same name, the installer's "pve").
+//	   of the agent's own id (agent lab-b-agent, id_prefix lab-b-). When several fit (lab- and lab-b-), the
+//	   one with the longest id_prefix (nodeChoice says what that can get wrong). None fits: not decided. Which
+//	   ids have a `systems:` entry plays no part: an entry under another entry's prefix is another machine's
+//	   (two hosts whose node has the same name, the installer's "pve"). A link made by this step is said
+//	   (nodeInferred).
 //	d. Not decided either when that id is the id of an agent, or when another agent's entry can mean the same
 //	   id (nodeCandidates: the same node:, or a links_to to it).
 //	e. Not decided, and a `systems:` entry is written under one of the ids the agent's node can have: one
@@ -164,6 +245,13 @@ func NodeWarnings(cfg *config.Panel) []string {
 	return whys
 }
 
+// NodeInferred is nodeInferred for a configuration: one sentence for every agent whose node was worked out
+// from an id_prefix.
+func NodeInferred(cfg *config.Panel) []string {
+	links, _ := nodeLinks(cfg.Agents, cfg.Proxmox, cfg.Systems)
+	return nodeInferred(cfg.Agents, links)
+}
+
 // links is nodeLinks for the configuration as it is now (config.yaml and the hosts added in the panel).
 func (p *Poller) links() (map[string]nodeLink, []string) {
 	p.cfgMu.RLock()
@@ -177,6 +265,16 @@ func (p *Poller) links() (map[string]nodeLink, []string) {
 func (p *Poller) NodeLinkWarnings() []string {
 	_, whys := p.links()
 	return whys
+}
+
+// NodeLinksInferred is NodeInferred for the configuration as it is now. The poller logs the sentences once
+// when it is made.
+func (p *Poller) NodeLinksInferred() []string {
+	p.cfgMu.RLock()
+	agents := p.Cfg.Agents
+	p.cfgMu.RUnlock()
+	links, _ := p.links()
+	return nodeInferred(agents, links)
 }
 
 // NodeOf returns the id of the Proxmox node the agent with this id runs on and the id of that node's proxmox:

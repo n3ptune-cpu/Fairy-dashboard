@@ -476,9 +476,16 @@ What to know before the first real run:
   which node is the agent's, and it only takes what leaves no doubt:
   * `links_to: <the node's id>` in the agent's entry says it outright, and always counts first.
   * With one `proxmox:` entry, `node:` is enough: the node is `<that entry's id_prefix>node-<name>`.
-  * With several `proxmox:` entries, the agent's own id must begin with the `id_prefix` of exactly one of
-    them (agent `lab-b-agent`, `id_prefix: lab-b-`); an empty `id_prefix` never counts. If the id begins
-    with none of them, or with more than one, give the agent `links_to:`.
+  * With several `proxmox:` entries, the entry is the one whose `id_prefix` the agent's own id begins with
+    (agent `lab-b-agent`, `id_prefix: lab-b-`); an empty `id_prefix` never counts. When the id begins with
+    the `id_prefix` of more than one entry (`lab-` and `lab-b-`), the longest one counts, so a host whose
+    `id_prefix` begins with its site's needs no `links_to:` (up to build 13 it did). If the id begins with
+    none of them, give the agent `links_to:`.
+    A node worked out this way is said, so that you can see a wrong one: one line per agent in the panel's
+    log at start and a `note` line of `fairy admin config check`, "agent lab-b-agent (node: PVE-B) -> node
+    lab-b-node-pve-b: inferred from id_prefix lab-b- ...; set links_to in the agent's entry to override".
+    It is wrong for an agent of the entry with the shorter prefix whose id happens to begin with the longer
+    one (an agent on the cluster `lab-` that is called `lab-b-2-agent`): give that agent `links_to:`.
   * No other agent's entry may mean the same node (the same `node:` name, or a `links_to` to it): then
     each of these agents needs its own `links_to:`.
 

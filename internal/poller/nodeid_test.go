@@ -196,10 +196,12 @@ func TestTheNodeOfAnAgentIsDecidedByTheConfigurationOrNotAtAll(t *testing.T) {
 			want:   map[string]string{}, warn: []string{"systems: has an entry for site1-node-pve and site2-node-pve"}},
 		{name: "the same without a systems: entry: not decided, and nothing to warn about", clusters: two,
 			agents: []config.Agent{{ID: "host1-agent", Node: "pve"}}, want: map[string]string{}},
-		{name: "the agent's id begins with two id_prefixes (yard- and yard-b-): not decided", systems: sys("yard-b-node-pve"),
+		// CHANGED (build 14): this was "not decided", with the warning "its id begins with the id_prefix of more
+		// than one proxmox: entry (yard-, yard-b-)". The longest id_prefix decides (TestTheLongestIDPrefixWins).
+		{name: "the agent's id begins with two id_prefixes (yard- and yard-b-): the longer one", systems: sys("yard-b-node-pve"),
 			clusters: []config.Proxmox{{ID: "yard", IDPrefix: px("yard-")}, {ID: "yard-b", IDPrefix: px("yard-b-")}},
 			agents:   []config.Agent{{ID: "yard-b-agent", Node: "pve"}},
-			want:     map[string]string{}, warn: []string{"its id begins with the id_prefix of more than one proxmox: entry (yard-, yard-b-)"}},
+			want:     map[string]string{"yard-b-agent": "yard-b-node-pve"}, cluster: map[string]string{"yard-b-agent": "yard-b"}},
 		{name: "an empty id_prefix never fits: with it and one other, an id that begins with neither is not decided", systems: sys("node-pve"),
 			clusters: []config.Proxmox{{ID: "main", IDPrefix: px("")}, {ID: "b", IDPrefix: px("b-")}},
 			agents:   []config.Agent{{ID: "x", Node: "pve"}},

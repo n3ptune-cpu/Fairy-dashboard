@@ -86,7 +86,7 @@ func (c *cli) configCheck() int {
 	problems, notes = approvalCheck(cfg, problems, notes)
 	problems, notes = adminCheck(cfg, problems, notes)
 	problems, notes = managedCheck(cfg, problems, notes)
-	problems = nodeLinkCheck(cfg, problems)
+	problems, inferred := nodeLinkCheck(cfg, problems)
 	for _, e := range secretEnvs(cfg) {
 		if os.Getenv(e.env) != "" {
 			notes = append(notes, fmt.Sprintf("%s (%s): present", e.env, e.what))
@@ -104,6 +104,9 @@ func (c *cli) configCheck() int {
 		fmt.Fprintln(c.out, "ok    "+n)
 	}
 	for _, n := range cfg.Ignored() { // read, not used, and never a reason for exit code 1
+		fmt.Fprintln(c.out, "note  "+n)
+	}
+	for _, n := range inferred { // a node worked out from an id_prefix: said, and never a reason for exit code 1
 		fmt.Fprintln(c.out, "note  "+n)
 	}
 	for _, p := range problems {
@@ -175,11 +178,14 @@ func managedCheck(cfg *config.Panel, problems, notes []string) ([]string, []stri
 // can have: after a restart of the panel while that machine is off, its wol: or bmc_power: is then not found
 // (poller.NodeWarnings has the rule). The hosts added in the panel are part of the question, as at the start;
 // what is wrong with their list itself, managedCheck has said.
-func nodeLinkCheck(cfg *config.Panel, problems []string) []string {
+//
+// inferred is the other thing the start logs: one line for every agent whose node was worked out from an
+// id_prefix (poller.NodeInferred), so that no link is guessed without a word. They are notes, not warnings.
+func nodeLinkCheck(cfg *config.Panel, problems []string) (out, inferred []string) {
 	c := *cfg
 	c.Agents, c.Systems, c.Proxmox = slices.Clone(cfg.Agents), slices.Clone(cfg.Systems), slices.Clone(cfg.Proxmox)
 	_, _, _ = managed.NewStore(cfg.DataDir).Merge(&c)
-	return append(problems, poller.NodeWarnings(&c)...)
+	return append(problems, poller.NodeWarnings(&c)...), poller.NodeInferred(&c)
 }
 
 // adminCheck reports who can administer the panel. Roles live in users.json (Users page / `fairy admin users`);

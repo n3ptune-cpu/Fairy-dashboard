@@ -52,3 +52,59 @@ func TestConfigCheckWarnsAboutAnAgentWhoseNodeIsNotDecided(t *testing.T) {
 		}
 	}
 }
+
+// Build 14: an agent whose id begins with the id_prefix of several proxmox: entries is given the entry with
+// the longest one. `fairy admin config check` says every link that was worked out from an id_prefix, as a
+// note (never a reason for exit code 1), so that nothing is guessed without a word; an agent with links_to,
+// and a configuration with one proxmox: entry, have no such line.
+func TestConfigCheckSaysEveryLinkInferredFromAnIDPrefix(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	t.Setenv("PVE_S", "s")
+	t.Setenv("TOK_R", "r")
+	t.Setenv("CTL_R", "c")
+	t.Setenv("TOK_H", "h")
+	t.Setenv("FAIRY_SESSION_SECRET", strings.Repeat("no-secret-", 5)) // made here, for this test only
+	check := func(entries, agent string) (string, int) {
+		t.Helper()
+		y := "public_url: https://p.example\ndata_dir: " + dir + "/data\noidc: {issuer: \"https://id.example\", client_id: c, allowed_groups: [users], control_groups: [admins]}\n" +
+			"proxmox:\n" + entries +
+			"agents:\n" +
+			"  - {id: relay, url: \"http://relay:9101\", token_env: TOK_R, control_token_env: CTL_R, wol_relay: true}\n" +
+			"  - {id: alpha-b-box2-agent, url: \"http://box2:9101\", token_env: TOK_H, " + agent + "}\n" +
+			"systems:\n  - {id: alpha-b-node-box-2, wol: {mac: \"00:00:5e:00:53:72\", relay: relay}}\n"
+		if err := os.WriteFile(cfg, []byte(y), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb)
+		if !strings.Contains(out.String(), "config "+cfg+": valid") {
+			t.Fatalf("the fixture is not a valid config:\n%s%s", out.String(), errb.String())
+		}
+		return out.String(), code
+	}
+	entry := func(id, prefix string) string {
+		return "  - {id: " + id + ", id_prefix: " + prefix + ", standalone: true, urls: [\"https://" + id + ":8006\"], token_id: \"fairy@pve!panel\", token_secret_env: PVE_S}\n"
+	}
+	three := entry("beta", "beta-") + entry("alpha", "alpha-") + entry("alpha-b", "alpha-b-")
+	const line = "note  agent alpha-b-box2-agent (node: BOX-2) -> node alpha-b-node-box-2: inferred from id_prefix alpha-b- of the proxmox: entry alpha-b " +
+		"(the longest of alpha-, alpha-b-, which the agent's id begins with); set links_to in the agent's entry to override\n"
+	out, code := check(three, "node: BOX-2")
+	if strings.Count(out, line) != 1 || strings.Count(out, "inferred from id_prefix") != 1 {
+		t.Errorf("no line (or more than one) for the inferred link:\n%s", out)
+	}
+	if strings.Contains(out, "does not say which node") || strings.Contains(out, "WARN  agent") {
+		t.Errorf("build 13's warning for an id that begins with two id_prefixes is still there:\n%s", out)
+	}
+	if code != 0 || strings.Contains(out, "WARN") {
+		t.Errorf("a note made the exit code %d, or something else warns:\n%s", code, out)
+	}
+	for name, c := range map[string][2]string{
+		"links_to names the node": {three, "node: BOX-2, links_to: alpha-b-node-box-2"},
+		"one proxmox: entry":      {entry("alpha-b", "alpha-b-"), "node: BOX-2"},
+	} {
+		if out, _ := check(c[0], c[1]); strings.Contains(out, "inferred") {
+			t.Errorf("%s: a line all the same:\n%s", name, out)
+		}
+	}
+}
