@@ -79,6 +79,11 @@ type Poller struct {
 	// decided: agent id -> the id of the node the configuration gives it (nodeLinks), for linkOfLocked. Set by
 	// relink; an agent that is not in it is not decided.
 	decided atomic.Pointer[map[string]string]
+	// linkMu makes relink's reading of the configuration and its keeping of the answer one step. Taken with no
+	// other lock held; cfgMu and clustersMu are taken under it.
+	linkMu sync.Mutex
+	// relinkRead, when set, is called by relink between its reading and its keeping (tests).
+	relinkRead func()
 
 	mu            sync.Mutex
 	systems       map[string]model.System

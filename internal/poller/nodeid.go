@@ -300,9 +300,21 @@ func (p *Poller) links() (map[string]nodeLink, []string) {
 // relink works out again which node the configuration gives each agent (nodeLinks) and keeps the answer for
 // linkOfLocked, which is asked under every lock there is and so cannot read the configuration itself. Called
 // when the poller is made and after every change of the agents, the proxmox: entries or the systems: entries
-// (Add host, Re-pair, Remove); never with cfgMu or clustersMu held.
+// (Add host, Re-pair, Remove); never with p.mu, cfgMu or clustersMu held.
+//
+// Reading the configuration and keeping the answer is one step, under linkMu: without it two changes at once
+// (a host added while a Proxmox node is removed) each read, and the one that had read first could keep its
+// answer last, the answer to a configuration that no longer was, until the next change. With it the call
+// that keeps last has also read last, and every change is followed by its own call. Lock order: linkMu is
+// taken with no other lock held and only here; cfgMu and clustersMu are taken under it, for reading (links);
+// nothing is asked of a machine under it.
 func (p *Poller) relink() {
+	p.linkMu.Lock()
+	defer p.linkMu.Unlock()
 	links, _ := p.links()
+	if p.relinkRead != nil {
+		p.relinkRead()
+	}
 	d := make(map[string]string, len(links))
 	for agentID, l := range links {
 		d[agentID] = l.ID
