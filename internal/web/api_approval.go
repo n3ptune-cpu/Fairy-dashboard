@@ -836,7 +836,12 @@ func turnOnLines(asked []turnOnAsked, budget int) []string {
 func resultLine(results []turnOnResult) string {
 	var out []string
 	for _, r := range results {
-		out = append(out, r.Name+": "+strings.ReplaceAll(r.Outcome, "_", " "))
+		word := strings.ReplaceAll(r.Outcome, "_", " ")
+		if r.Outcome == "no_answer" {
+			// its chip's words: "offline" is a machine that was sent nothing, and the two read alike ("no answer")
+			word = "not known"
+		}
+		out = append(out, r.Name+": "+word)
 	}
 	return strings.Join(out, "; ")
 }

@@ -130,7 +130,7 @@ const cases = [
   ["required", base, { machine_id: MID, shown_id: MID, pinned: "turn-on" }, ["ok", "required"], ["ok", "required"],
     ["This machine checks a passkey approval itself before a fan, power or update action; the panel cannot skip it.", "Locked: it is changed only on the machine itself.", "Machine id", "Pinned key", "Allowed users"],
     // (audit 6, r4-b1-08: "More" says what the lines above do not; it said "The panel cannot skip it." and "Locked: ..." again)
-    ["The approval is a Pocket ID sign-in with your passkey, made for exactly one action: a shutdown, a restart, a sleep, a fan change or an update of its agent.", "verifies it.", "To change what it trusts: on the machine, as administrator, fairy-agent helper-trust (show, set, clear)."]],
+    ["The approval is a Pocket ID sign-in with your passkey, made for exactly one action: a shutdown, a restart, a sleep, a fan change or an update of its agent. It is verified by", "To change what it trusts: on the machine, as administrator, fairy-agent helper-trust (show, set, clear)."]],
   ["required, a key Pocket ID no longer publishes", base, { machine_id: MID, shown_id: MID, stale_keys: true }, ["warn", "required · old key"], ["ok", "required"],
     ["fairy-agent helper-trust set --fetch-keys"], []],
   ["required, not this panel's values", base, { machine_id: MID, shown_id: MID, other_trust: true }, ["warn", "required · other trust"], ["ok", "required"],

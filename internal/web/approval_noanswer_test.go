@@ -84,7 +84,7 @@ func TestATurnOnWithoutAnAnswerIsNotKnown(t *testing.T) {
 			if all := fmt.Sprint(row, pr); strings.Contains(all, "Nothing was written") || strings.Contains(all, "refused") || strings.Contains(all, "not switched on") {
 				t.Fatalf("it says more than anybody knows: %v | %v", row, pr)
 			}
-			if pr["ok"] != false || pr["message"] != "0 of 1 machines confirmed that they check approvals themselves now; not known for 1 (no answer). tower: no answer" {
+			if pr["ok"] != false || pr["message"] != "0 of 1 machines confirmed that they check approvals themselves now; not known for 1 (no answer). tower: not known" {
 				t.Fatalf("the result: %v", pr)
 			}
 			if b := a.s.Poller.BindingOf("tower"); b.Record.MachineID != "" {
@@ -118,7 +118,7 @@ func TestATurnOnForTwoCountsWhatItKnows(t *testing.T) {
 	if cb := a.approve(t, id); cb.code != 303 {
 		t.Fatalf("callback: %d %s", cb.code, cb.raw)
 	}
-	if pr := a.result(t); pr["ok"] != true || pr["message"] != "1 of 2 machines confirmed that they check approvals themselves now; not known for 1 (no answer). laptop: accepted; tower: no answer" {
+	if pr := a.result(t); pr["ok"] != true || pr["message"] != "1 of 2 machines confirmed that they check approvals themselves now; not known for 1 (no answer). laptop: accepted; tower: not known" {
 		t.Fatalf("the result: %v", pr)
 	}
 }
@@ -208,7 +208,7 @@ func TestAQuestionWithoutAnAnswerIsNoAnswer(t *testing.T) {
 		return 0, nil
 	})
 	r := a.post("/api/systems/laptop/power", a.shutdownBody())
-	if r.code != 502 || r.body["detail"] != "laptop gave no answer to the question about an approval (HTTP 504). No request was sent to it: try again." {
+	if r.code != 502 || r.body["detail"] != "laptop gave no answer to the question about an approval (HTTP 504). Nothing else was sent to it: try again." {
 		t.Fatalf("a shutdown: %d %s", r.code, r.raw)
 	}
 	if controlWrites(a.laptop) != 0 || keptID(a.env, a.admin) != "" {
@@ -257,7 +257,7 @@ func TestTheApprovalRoutesUseThePanelsOneRuleForNoAnswer(t *testing.T) {
 				return 0, nil
 			})
 			r := a.post("/api/systems/laptop/power", a.shutdownBody())
-			lost := fmt.Sprintf("laptop gave no answer to the question about an approval (HTTP %d). No request was sent to it: try again.", c.status)
+			lost := fmt.Sprintf("laptop gave no answer to the question about an approval (HTTP %d). Nothing else was sent to it: try again.", c.status)
 			if got := fmt.Sprint(r.body["detail"]); (got == lost && r.code == 502) == c.own {
 				t.Errorf("the question: %d %q", r.code, got)
 			}

@@ -405,7 +405,7 @@ func challengeRefusal(name string, status int, data jsonx.M, why string) error {
 			// state said "ask", and there is no such route: what an agent from before the feature answers
 			return apierr.New(409, name+" says it checks approvals, but its agent does not know how to be asked (it answered \"not found\"). Nothing was sent.")
 		}
-		return apierr.New(502, fmt.Sprintf("%s gave no answer to the question about an approval (HTTP %d). No request was sent to it: try again.", name, status))
+		return apierr.New(502, fmt.Sprintf("%s gave no answer to the question about an approval (HTTP %d). Nothing else was sent to it: try again.", name, status))
 	}
 	if msg, ok := approval.ErrorText(name, code, text, why); ok {
 		return apierr.New(409, msg)

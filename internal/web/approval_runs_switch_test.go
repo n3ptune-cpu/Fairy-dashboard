@@ -41,7 +41,7 @@ func TestSwitchOnForRunsAsksOnceAndSaysTheTruth(t *testing.T) {
 	for _, want := range []string{
 		"const inNoRun = !!(wu.data?.hosts || []).find((h) => h.id === t.dataset.id)?.approval;",
 		"if (on && !inNoRun && !confirm(`Switch \"Update unpowered hosts\" on for ${name}?",
-		"h.approval ? `No run can take it for now: ${h.why || \"it checks approvals itself\"}`",
+		"h.approval ? `No run can take it for now (${h.why || \"it checks approvals itself\"})`", // (RK-08: it had two colons in a row)
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %q", want)

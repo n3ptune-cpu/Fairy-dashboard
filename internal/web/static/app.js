@@ -754,6 +754,8 @@ const APPROVAL_STATE = table({ off: ["", "off"], required: ["ok", "required"], b
 const APPROVAL_VERB = table({ fan_set: "fan speed", fan_mode: "fan mode", power: "shutdown / restart / sleep", apply_update: "agent update" });
 const approvalOf = (s) => (s?.approval && typeof s.approval === "object" ? s.approval : null);
 const approvalBy = (a) => (a.enforced_by === "helper" ? "the elevated helper (LocalSystem)" : a.enforced_by === "agent" ? "the agent itself" : "–");
+// a machine's own words inside a sentence of the panel: without the full stop they may end with (the sentence has its own)
+const noStop = (t) => String(t ?? "").replace(/[.\s]+$/, "");
 const shortKey = (t) => (typeof t === "string" && t.length > 16 ? `${t.slice(0, 8)}…${t.slice(-6)}` : String(t ?? ""));
 // The panel's own decision about which machine a host is (a.binding; absent: in order): a name and one sentence.
 // While one of these holds, Fairy asks the machine for no approval and sends it no fan, power or update request.
@@ -879,9 +881,9 @@ function approvalBox(s) {
       ${row("Checked by", esc(approvalBy(a)))}${proto}${agentErr}`,
       // behind "More": what the lines above do not say (they said the lead again: audit 6, r4-b1-08)
       [a.state === "broken"
-        ? `${a.error ? `The machine says: <b>${esc(a.error)}</b>. ` : ""}<code>fairy-agent helper-trust show</code> is run on the machine, as administrator, and names what is wrong with the file.`
+        ? `${a.error ? `The machine says: <b>${esc(noStop(a.error))}</b>. ` : ""}<code>fairy-agent helper-trust show</code> is run on the machine, as administrator, and names what is wrong with the file.`
         : old ? "Nothing on the machine can check an approval until then. Stop helper and Start helper are under Elevated helper, next to the host name."
-        : a.error ? `The machine says: ${esc(a.error)}.` : "Its elevated helper is not answering."]);
+        : a.error ? `The machine says: ${esc(noStop(a.error))}.` : "Its elevated helper is not answering."]);
   }
   const keys = (a.keys || []).map((k) => `<span class="chip key" title="${esc(`${k.alg} · thumbprint ${k.thumbprint}`)}">${esc(k.kid)} · <code>${esc(shortKey(k.thumbprint))}</code></span>`).join(" ") || "–";
   const checks = (a.agent_checks || []).map((v) => APPROVAL_VERB[v]).filter(Boolean);
@@ -900,7 +902,7 @@ function approvalBox(s) {
       rec?.other_trust ? "It trusts another Pocket ID, client, key or list of users than this panel would set for it now: set by somebody else, changed on the machine, or this panel's own list changed since" : "How this machine's trust came to be: a first-time set over the network (Turn on), or helper-trust set on the machine") : ""}
     ${row("Shutdown after boot", a.boot_shutdown_s == null ? "–" : a.boot_shutdown_s === 0 ? "off" : `one within ${esc(a.boot_shutdown_s)} s`, "One shutdown without approval shortly after the machine started (for \"Update unpowered hosts\")")}
     ${proto}${agentErr}${approvalPinNote(a, s)}`,
-    [`The approval is a Pocket ID sign-in with your passkey, made for exactly one action: a shutdown, a restart, a sleep, a fan change or an update of its agent. <b>${esc(approvalBy(a))}</b> verifies it.`,
+    [`The approval is a Pocket ID sign-in with your passkey, made for exactly one action: a shutdown, a restart, a sleep, a fan change or an update of its agent. ${a.enforced_by === "helper" || a.enforced_by === "agent" ? `It is verified by <b>${esc(approvalBy(a))}</b>.` : "It is verified on the machine."}`,
       "To change what it trusts: on the machine, as administrator, <code>fairy-agent helper-trust</code> (show, set, clear)."]);
 }
 // Host header: the button that opens the machine's check. It is there wherever the check has something to show
@@ -1045,7 +1047,7 @@ function approvalPinNote(a, s) {
   if (state.me?.can_control && state.me.approval_client && !apv.data) fetchApproval();
   return m?.stale_keys ? `<div class="warnbox" id="ap-stale">This machine pins a key that Pocket ID no longer publishes: it will refuse every approval. On the machine, as administrator: <code>fairy-agent helper-trust set --fetch-keys</code></div>` : "";
 }
-const TURN_ON_RESULT = table({ accepted: ["ok", "switched on · locked"], proof_refused: ["bad", "proof refused"], already_set: ["warn", "already on"], offline: ["bad", "no answer"],
+const TURN_ON_RESULT = table({ accepted: ["ok", "switched on · locked"], proof_refused: ["bad", "proof refused"], already_set: ["warn", "already on"], offline: ["bad", "offline"],
   refused: ["bad", "not switched on"], not_asked: ["", "not asked"], no_answer: ["warn", "not known"] });
 function turnOnResults(rep) {
   if (!rep || !(rep.results || []).length) return "";
@@ -2014,7 +2016,7 @@ function wakeUpdateBox() {
     <td>${h.can_wake ? `via ${esc(h.relay)}` : `<span class="note" title="Fairy cannot wake this machine: in a run it is only updated while it is on">${esc(h.no_wake || h.why_not)}</span>`}</td>
     <td>${h.opted_in ? '<span class="chip ok">switched on</span>' : '<span class="note">off</span>'}${whyNot(h) ? `<div class="note wu-why-col">${esc(whyNot(h))}</div>` : ""}</td>
     <td class="num"><button class="btn sm" type="button" data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"
-      ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.approval ? `No run can take it for now: ${h.why || "it checks approvals itself"}` : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
+      ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.approval ? `No run can take it for now (${h.why || "it checks approvals itself"})` : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
   const earlier = d.active ? d.last : d.last.slice(1), showEarlier = !!wu.open.earlier;
   return `<div class="panel glass pad wu" data-key="wu">
     <div class="wu-top"><h3>Update unpowered hosts${infoBtn("wu", "Update unpowered hosts", infoList([
