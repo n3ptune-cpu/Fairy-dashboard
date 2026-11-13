@@ -313,7 +313,7 @@ func (w *world) Wake(_ context.Context, id, _ string) error {
 		// the judge (build 14): a machine is woken only after ITS time without any sign of life: its own
 		// off_after where it has one, else the panel's
 		need := w.m.Settings.offAfter()
-		if mc.info.OffAfter > 0 {
+		if mc.info.OffAfter >= 5*time.Minute { // the least a machine can have of its own; anything below is not used (OffAfterFloor)
 			need = mc.info.OffAfter
 		}
 		if quiet < need {
@@ -384,8 +384,8 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 	w.arrived("shutdown " + id)
 	mc.shutdowns++
 	// the judge
-	want := w.m.Settings.ShutdownDelay // (build 14) the countdown is the machine's own where it has one
-	if mc.info.ShutdownDelay > 0 {
+	want := w.m.Settings.ShutdownDelay           // (build 14) the countdown is the machine's own where it has one
+	if mc.info.ShutdownDelay >= 10*time.Second { // the least a machine can have of its own (DelayFloor)
 		want = mc.info.ShutdownDelay
 	}
 	if delay != want {

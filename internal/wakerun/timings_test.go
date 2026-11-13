@@ -179,3 +179,57 @@ func TestTheProofOfOffAtTheStartUsesTheMachinesOwnTime(t *testing.T) {
 		t.Errorf("mayShutDown: %v %q", ok, why)
 	}
 }
+
+// The run's own floor. The configuration refuses an off_after_s below 300 and a shutdown_delay_s below 10 when
+// it is read; the run does not rely on that. A time below the floor that reaches a run all the same (a
+// mistake between the file and the run) is never used: the panel's value counts for that machine, and for the
+// panel's own off_after the default. Nothing can make a machine count as off after a minute of silence (a
+// restart), or switch it off with a countdown too short to cancel.
+func TestATimeBelowTheRunsFloorIsNeverUsed(t *testing.T) {
+	w := newWorld(t)
+	short := off7(w, "pc-short") // silent for seven minutes
+	short.info.OffAfter = time.Minute
+	edge := off7(w, "pc-edge")
+	edge.info.OffAfter = OffAfterFloor - time.Second
+	ok := off7(w, "pc-ok")
+	ok.info.OffAfter = OffAfterFloor // the least that is the machine's own
+	ok.info.ShutdownDelay = DelayFloor - time.Second
+	w.start(StartRequest{Hosts: []string{"pc-short", "pc-edge", "pc-ok"}})
+	r := w.finish()
+	const notSure = "Not sure that it is off, so nothing was sent to it: Fairy takes a machine for off only after 15 min without an answer"
+	has(t, host(r, "pc-short"), StSkipped, notSure)
+	has(t, host(r, "pc-edge"), StSkipped, notSure)
+	has(t, host(r, "pc-ok"), StOff, "switched off again")
+	if got := strings.Join(w.calls, ", "); got != "wake pc-ok, update pc-ok, shutdown pc-ok 120" {
+		t.Fatalf("requests: %s", got)
+	}
+	if short.wakes != 0 || edge.wakes != 0 {
+		t.Fatalf("a machine that had been silent for less than the panel's time was woken")
+	}
+	if h := host(r, "pc-short"); h.OffAfterS != nil {
+		t.Errorf("the report has the time that was not used: %d", *h.OffAfterS)
+	}
+	if h := host(r, "pc-ok"); h.OffAfterS == nil || *h.OffAfterS != 300 || h.ShutdownDelayS != nil {
+		t.Errorf("pc-ok: off_after_s %v, shutdown_delay_s %v", h.OffAfterS, h.ShutdownDelayS)
+	}
+
+	// the panel's own setting below the floor: the default counts
+	w = newWorld(t)
+	w.m.Settings.OffAfter, w.m.Settings.OffAfterS = time.Minute, 60
+	off7(w, "pc-a")
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	has(t, host(w.finish(), "pc-a"), StSkipped, notSure)
+	if len(w.calls) != 0 {
+		t.Fatalf("requests: %v", w.calls)
+	}
+	for _, c := range []struct {
+		after time.Duration
+		want  bool
+	}{{0, false}, {time.Minute, false}, {OffAfterFloor - 1, false}, {OffAfterFloor, true}, {7 * time.Minute, true}, {8 * time.Minute, false}} {
+		now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+		o := Observation{Status: "offline", QuietSince: now.Add(-7 * time.Minute)}
+		if got := OffNowAfter(o, now, c.after); got != c.want {
+			t.Errorf("silent for 7 min, off after %s: %v, want %v", c.after, got, c.want)
+		}
+	}
+}

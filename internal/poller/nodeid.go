@@ -74,8 +74,9 @@ func nodeCandidates(a config.Agent, clusters []config.Proxmox) []nodeLink {
 // (An agent of the longer entry is never given to the shorter one, and an agent whose id begins with one
 // prefix only is as it was in build 13.)
 //
-// What a wrong pick can do. The link is asked for two things only, and neither sends anything to another
-// machine's agent: a shutdown, a restart, an update always go to the agent's own address with its own token.
+// What a wrong pick can do. The link is asked for four things. Nothing of it makes the panel send a request
+// by itself to another machine's agent: a run's shutdown, restart and update go to the agent the run started
+// with, at its own address with its own token. The fourth is about what a person sees and presses.
 //
 //  1. Wake-on-LAN and bmc_power (PowerOverride): while the agent's host is shown under the agent's id, a
 //     wol:/bmc_power: written under the wrongly picked id is offered on its row, and "Update unpowered hosts"
@@ -89,10 +90,21 @@ func nodeCandidates(a config.Agent, clusters []config.Proxmox) []nodeLink {
 //     "Switch on" for runs set for alpha-b-node-<name> then also count for this agent's row. The first only
 //     takes power control away. The second lets a run choose the agent's machine although the switch was
 //     set for the other; it gets no further than 1., because the run's wake goes to the other machine.
+//  3. The machine's own timings for runs (WakeUpdateOverride): a wake_update: block written under
+//     alpha-b-node-<name> counts for this agent's machine. Both values are within the ranges the
+//     configuration allows for any machine.
+//  4. The rows (linkOfLocked, since build 14 the same decision): when the row of alpha-b-node-<name> is
+//     there, the agent is shown as a part of it. That row then has this agent's sensors and its check, and
+//     what an admin presses on that row that goes to an agent (shut down, restart, sleep, fans, update)
+//     goes to THIS agent: a person who means the standalone host acts on the cluster's node. (What goes
+//     through the Proxmox API for that row goes to the right host.) Same conditions as 1.: a node of the
+//     same name in the other entry and no agent of its own that names it. Until build 13 the rows took the
+//     first node of that name that was present, whatever the ids said, which made the same mistake for more
+//     shapes (every agent whose node's name exists in an earlier entry) and said nothing.
 //
-// Without such a systems: entry and such a switch a wrong pick changes nothing that can be seen, except that
-// the agent's own wol: (under alpha-node-<name>) is not found while its node's row is not there: what build 13
-// did for every such agent.
+// Without a node of the same name in the other entry a wrong pick changes nothing that can be seen, except
+// that the agent's own wol: (under alpha-node-<name>) is not found and the agent is not shown as a part of
+// its node: links_to puts both right, and the line below says so.
 //
 // So that nothing is guessed in silence: every link that was worked out from an id_prefix is one line in the
 // panel's log at its start and one line of `fairy admin config check` (nodeInferred: agent, node, the

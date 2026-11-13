@@ -254,9 +254,20 @@ func (s Settings) WithOffAfter(seconds int) Settings {
 	return s
 }
 
-// offAfter is OffAfter, and MinOff for Settings that were made without one.
+// OffAfterFloor and DelayFloor are the run's own floors for the two timings a machine can have of its own:
+// the least the configuration allows (wake_update: off_after_s 300, shutdown_delay_s 10). The configuration
+// refuses anything below them when it is read; the run does not rely on that. A time below the floor that
+// reaches it all the same (a mistake somewhere between the file and here) is never used: the value above it
+// counts instead (for a machine the panel's, for the panel's off_after the default), so that no mistake
+// elsewhere can make a machine count as off after seconds, or switch off without a countdown to cancel in.
+const (
+	OffAfterFloor = 5 * time.Minute
+	DelayFloor    = 10 * time.Second
+)
+
+// offAfter is OffAfter, and MinOff for Settings that were made without one or with one below the floor.
 func (s Settings) offAfter() time.Duration {
-	if s.OffAfter > 0 {
+	if s.OffAfter >= OffAfterFloor {
 		return s.OffAfter
 	}
 	return MinOff
@@ -358,10 +369,10 @@ func QuietFor(o Observation, now time.Time) time.Duration {
 // has them, else the run's settings. What differs from the run's is also written into the report.
 func (h *Host) setTimings(info HostInfo, s Settings) {
 	h.offAfter, h.shutDelay = s.offAfter(), s.ShutdownDelay
-	if info.OffAfter > 0 {
+	if info.OffAfter >= OffAfterFloor { // below the floor: not the machine's, the panel's (OffAfterFloor)
 		h.offAfter = info.OffAfter
 	}
-	if info.ShutdownDelay > 0 {
+	if info.ShutdownDelay >= DelayFloor {
 		h.shutDelay = info.ShutdownDelay
 	}
 	if h.offAfter != s.offAfter() {
@@ -376,7 +387,7 @@ func (h *Host) setTimings(info HostInfo, s Settings) {
 
 // minOff is how long this machine must have given nothing at all to count as off (MinOff has what that is).
 func (h *Host) minOff() time.Duration {
-	if h.offAfter > 0 {
+	if h.offAfter >= OffAfterFloor {
 		return h.offAfter
 	}
 	return MinOff
@@ -392,7 +403,7 @@ func (h *Host) delay(r *Run) time.Duration {
 
 // OffNowAfter is OffNow for a machine (or a panel) with its own time after which a machine counts as off.
 func OffNowAfter(o Observation, now time.Time, after time.Duration) bool {
-	if after <= 0 {
+	if after < OffAfterFloor {
 		after = MinOff
 	}
 	return o.Status == "offline" && o.OnBy == "" && QuietFor(o, now) >= after
