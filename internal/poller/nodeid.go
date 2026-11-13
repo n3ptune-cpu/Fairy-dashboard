@@ -260,6 +260,19 @@ func (p *Poller) links() (map[string]nodeLink, []string) {
 	return nodeLinks(agents, p.Clusters(), systems)
 }
 
+// relink works out again which node the configuration gives each agent (nodeLinks) and keeps the answer for
+// linkOfLocked, which is asked under every lock there is and so cannot read the configuration itself. Called
+// when the poller is made and after every change of the agents, the proxmox: entries or the systems: entries
+// (Add host, Re-pair, Remove); never with cfgMu or clustersMu held.
+func (p *Poller) relink() {
+	links, _ := p.links()
+	d := make(map[string]string, len(links))
+	for agentID, l := range links {
+		d[agentID] = l.ID
+	}
+	p.decided.Store(&d)
+}
+
 // NodeLinkWarnings is NodeWarnings for the configuration as it is now. The poller logs the sentences once
 // when it is made.
 func (p *Poller) NodeLinkWarnings() []string {

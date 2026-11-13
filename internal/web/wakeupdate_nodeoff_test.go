@@ -405,11 +405,13 @@ func TestTheNodesRowStandsForARunsMachineOnlyWithItsOwnAgent(t *testing.T) {
 	}
 }
 
-// The node's row stands for the run's machine only when the configuration names it too. Here the other
-// Proxmox entry lists a node with the same name, PVE-B: the panel's link by name makes the agent a part of
-// that row (the first that is there), and the configuration names lab-b-node-pve-b (the systems: entry). The
-// two do not agree, so the run does not take that row for its machine: it lets go and sends nothing.
-func TestARunDoesNotFollowItsMachineToANodeTheConfigurationDoesNotName(t *testing.T) {
+// The node's row stands for the run's machine only when it is the node the configuration names. Here the
+// other Proxmox entry lists a node with the same name, PVE-B. Until build 13 the panel's link by name made
+// the agent a part of that row (the first of that name that was there) although the configuration names
+// lab-b-node-pve-b, and the run had to let go of the machine. The rows follow the configuration now
+// (poller.linkOfLocked): the agent is never a part of the other entry's node, it keeps its own row until its
+// own node's row is there, and the run knows its machine all the time, under a row whose requests go to it.
+func TestARunsMachineIsNeverAPartOfAnotherEntrysNodeOfTheSameName(t *testing.T) {
 	h := setupTwoHosts(t)
 	e := h.e
 	ops := runOps{e.s}
@@ -430,17 +432,17 @@ func TestARunDoesNotFollowItsMachineToANodeTheConfigurationDoesNotName(t *testin
 	for _, x := range e.s.Poller.Snapshot() {
 		rows[x.ID] = x.Kind
 	}
-	if a, ok := e.s.Poller.AgentFor("lab-a-node-pve-b"); rows["lab-a-node-pve-b"] != "node" || rows["lab-b-agent"] != "" || !ok || a.ID != "lab-b-agent" {
-		t.Fatalf("the fixture: the agent is part of the other entry's node of the same name: %v", rows)
+	if a, ok := e.s.Poller.AgentFor("lab-a-node-pve-b"); rows["lab-a-node-pve-b"] != "node" || rows["lab-b-agent"] != "agent" || ok {
+		t.Fatalf("the agent is a part of the other entry's node of the same name (its requests go to %q): %v", a.ID, rows)
 	}
-	if x, ok := ops.system("lab-b-agent"); ok {
-		t.Fatalf("the run takes %s for its machine", x.ID)
+	if x, ok := ops.system("lab-b-agent"); !ok || x.ID != "lab-b-agent" {
+		t.Fatalf("the run takes %s for its machine (%v), want the agent's own row", x.ID, ok)
 	}
-	if _, ok := ops.Host("lab-b-agent"); ok {
-		t.Fatal("the run still knows the machine")
+	if _, ok := ops.Host("lab-b-agent"); !ok {
+		t.Fatal("the run let go of the machine")
 	}
-	// Now the node the configuration names answers as well. Its row is there, but the agent is a part of the
-	// other one, and the requests for this row go to nobody: it is not the run's machine either.
+	// Now the node the configuration names answers as well: the agent is a part of that row, the row's
+	// requests go to it, and it is the run's machine.
 	e.b.Mu.Lock()
 	e.b.PVEOf = func(string) ([]jsonx.M, error) { return testutil.HostResources("PVE-B", "stopped"), nil }
 	e.b.Mu.Unlock()
@@ -449,14 +451,17 @@ func TestARunDoesNotFollowItsMachineToANodeTheConfigurationDoesNotName(t *testin
 	for _, x := range e.s.Poller.Snapshot() {
 		rows[x.ID] = x.Kind
 	}
-	if _, ok := e.s.Poller.AgentFor("lab-b-node-pve-b"); rows["lab-a-node-pve-b"] != "node" || rows["lab-b-node-pve-b"] != "node" || rows["lab-b-agent"] != "" || ok {
-		t.Fatalf("the fixture: both nodes called PVE-B are there, the agent a part of the first: %v", rows)
+	if a, ok := e.s.Poller.AgentFor("lab-b-node-pve-b"); rows["lab-a-node-pve-b"] != "node" || rows["lab-b-node-pve-b"] != "node" || rows["lab-b-agent"] != "" || !ok || a.ID != "lab-b-agent" {
+		t.Fatalf("both nodes called PVE-B are there; the agent must be a part of its own (requests of lab-b-node-pve-b go to %q): %v", a.ID, rows)
 	}
-	if x, ok := ops.system("lab-b-agent"); ok {
-		t.Fatalf("the run takes %s, whose requests go to nobody, for its machine", x.ID)
+	if _, ok := e.s.Poller.AgentFor("lab-a-node-pve-b"); ok {
+		t.Fatal("the requests of the other entry's node go to an agent")
 	}
-	if _, ok := ops.Host("lab-b-agent"); ok {
-		t.Fatal("the run still knows the machine")
+	if x, ok := ops.system("lab-b-agent"); !ok || x.ID != "lab-b-node-pve-b" {
+		t.Fatalf("the run takes %s for its machine (%v), want its node's row", x.ID, ok)
+	}
+	if _, ok := ops.Host("lab-b-agent"); !ok {
+		t.Fatal("the run let go of the machine")
 	}
 }
 

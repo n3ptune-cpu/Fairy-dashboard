@@ -85,12 +85,31 @@ func (p *Poller) syncPresent() {
 	}
 }
 
-// linkOfLocked only takes idsMu (safe with or without p.mu held).
+// linkOfLocked only takes idsMu (safe with or without p.mu, cfgMu or clustersMu held: what the configuration
+// decides is read from p.decided, which relink keeps).
+//
+// One rule for "which node is this agent's", for the rows (buildSnapshot merges the agent into that node's
+// row) and for everything that is looked up for the machine (NodeOf, SameMachine, PowerOverride): where the
+// configuration decides it (nodeLinks: links_to, the one proxmox: entry, or the longest id_prefix the agent's
+// id begins with), that node and no other, whether its row is there or not. Until build 13 the rows took
+// the first node of that name that was present, in the order of the proxmox: entries, whatever nodeLinks
+// said: with entries alpha- and alpha-b- and a node of one name in both, the agent alpha-b-agent was shown
+// as a part of alpha-node-<name> while its wol: and its switches were looked up under alpha-b-node-<name>.
+//
+// Where the configuration does not decide (the agent's id begins with no id_prefix; two agents can mean one
+// node), the rows are as they always were: the first node of that name that is present. The configuration
+// cannot know which nodes a cluster has, so that is all there is to go by, and an agent that has always been
+// shown as a part of its node stays so.
 func (p *Poller) linkOfLocked(a config.Agent) string {
 	if a.LinksTo != "" {
 		return a.LinksTo
 	}
 	if a.Node != "" {
+		if d := p.decided.Load(); d != nil {
+			if id, ok := (*d)[a.ID]; ok {
+				return id
+			}
+		}
 		var ids []string
 		for _, c := range p.Clusters() {
 			ids = append(ids, c.Prefix()+"node-"+normalise.Slug(a.Node))

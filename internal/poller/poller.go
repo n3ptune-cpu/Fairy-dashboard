@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
@@ -75,6 +76,9 @@ type Poller struct {
 	// taking another lock.
 	clustersMu sync.RWMutex
 	present    map[string]bool
+	// decided: agent id -> the id of the node the configuration gives it (nodeLinks), for linkOfLocked. Set by
+	// relink; an agent that is not in it is not decided.
+	decided atomic.Pointer[map[string]string]
 
 	mu            sync.Mutex
 	systems       map[string]model.System
@@ -161,6 +165,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 		p.clusters[c.ID] = c
 		p.clusterIDs[c.ID] = []string{}
 	}
+	p.relink()
 	if backend == nil {
 		hb, err := newHTTPBackend(p)
 		if err != nil {
@@ -368,6 +373,7 @@ func (p *Poller) AddProxmox(c config.Proxmox) error {
 	p.clusters[c.ID] = c
 	p.Cfg.Proxmox = append(slices.Clone(p.Cfg.Proxmox), c)
 	p.clustersMu.Unlock()
+	p.relink()
 	p.idsMu.Lock()
 	p.clusterIDs[c.ID] = []string{}
 	p.idsMu.Unlock()
@@ -387,6 +393,7 @@ func (p *Poller) RemoveProxmox(id string) {
 	delete(p.clusters, id)
 	p.Cfg.Proxmox = slices.DeleteFunc(slices.Clone(p.Cfg.Proxmox), func(x config.Proxmox) bool { return x.ID == id })
 	p.clustersMu.Unlock()
+	p.relink()
 	p.Scheduler.Remove("proxmox:" + id)
 	if ps, ok := p.Backend.(ProxmoxSetter); ok {
 		ps.ForgetProxmox(id)
@@ -505,6 +512,7 @@ func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
 		p.overrides[oo.ID] = &oo
 	}
 	p.cfgMu.Unlock()
+	p.relink()
 	// A host that is added starts with nothing on record, whatever machines.json holds for its id: the record
 	// of a host that had this id before (set aside at the start, or still counted when the file could not be
 	// read then) is another machine's, and it is deleted here, before the new host is asked anything (audit 6,
@@ -551,6 +559,7 @@ func (p *Poller) RemoveAgent(id string) {
 		p.Cfg.Systems = slices.DeleteFunc(slices.Clone(p.Cfg.Systems), func(x config.SystemOverride) bool { return x.ID == shown })
 	}
 	p.cfgMu.Unlock()
+	p.relink()
 	p.Scheduler.Remove("agent:" + id)
 	if ts, ok := p.Backend.(TokenSetter); ok {
 		ts.ForgetAgent(id)
