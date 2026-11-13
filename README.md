@@ -266,7 +266,12 @@ online, up to 5 min"). The report stays there afterwards (the last 5 runs). A fi
 machines that need a look first (left on, given up on, not confirmed, not updated), each with its sentence,
 then the others. When a sentence for every machine does not fit (a notification holds 1500 characters), the
 others are counted and the machines that need a look are all still named; no sentence is cut. The full list
-is always in "Last run".
+is always in "Last run". A run that went well is no alert, so no pop-up shows that notification; the page
+that watched the run says once that it is over, in the line at the bottom ("Update unpowered hosts: run
+finished · 3 machines", with each machine's sentence behind **Details**), and it stays until you close it.
+A machine the report calls "is off" is shown as offline at the same moment (its dot is grey, not amber for
+another minute): the run saw it go off. While a run is going, the line under "Machines" says how many are
+switched on, not how many could be chosen: none can until the run is over.
 
 The rules, in plain words:
 
