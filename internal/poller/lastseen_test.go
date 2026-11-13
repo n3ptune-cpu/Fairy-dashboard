@@ -3,6 +3,7 @@ package poller
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -341,10 +342,15 @@ func TestAKeptTimeFromTheFutureIsNotShown(t *testing.T) {
 }
 
 // A last-seen.json that cannot be used does not keep the panel from starting, and nothing in it is shown:
-// empty, cut off, not an object, larger than a state file may be, a link, a list of agents that is no object
-// or holds more entries than the panel ever writes. The machines are polled and shown as never seen. A file
-// that is damaged is left as it is (like every state file); that the times cannot be written is logged once,
-// not with every poll. state.json is another file and is not touched.
+// empty, cut off, not an object, larger than a state file may be, a link, a folder, a list of agents that is
+// no object or holds more entries than the panel ever writes. The machines are polled and shown as never seen.
+// state.json is another file and is not touched.
+//
+// What becomes of the file (review of build 14, F10). A PLAIN file that is damaged was left as it was for
+// good, like every state file, and so the times were not kept until somebody deleted it: the feature stayed
+// off without a word after the one line at the start. It is moved aside once, to last-seen.json.bad (an older
+// one is replaced), and a new file is started, with one warning. A link or a folder at that name is never
+// moved, read or written; that the times cannot be written is then logged once, not with every poll.
 func TestALastSeenFileThatCannotBeUsedIsIgnored(t *testing.T) {
 	big := func(path string) error { // a sparse file one byte over the limit of a state file
 		f, err := os.Create(path)
@@ -366,20 +372,40 @@ func TestALastSeenFileThatCannotBeUsedIsIgnored(t *testing.T) {
 	text := func(s string) func(string) error {
 		return func(path string) error { return os.WriteFile(path, []byte(s), 0o600) }
 	}
+	// a kept copy from an earlier start, or something else of that name
+	oldBad := func(write func(path string) error) func(string) error {
+		return func(path string) error {
+			if err := os.WriteFile(path+".bad", []byte("an older one"), 0o600); err != nil {
+				return err
+			}
+			return write(path)
+		}
+	}
+	badIsAFolder := func(path string) error {
+		if err := os.Mkdir(path+".bad", 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(path, nil, 0o600)
+	}
 	for name, c := range map[string]struct {
 		write    func(path string) error
-		writable bool // the panel can write the file afterwards (it is a state file in order, with other content)
+		writable bool // the panel can write the file afterwards (it is a state file in order, or it was started over)
 		said     bool // the start says that the file is not used
+		aside    bool // the start moved it to last-seen.json.bad and says so instead
 	}{
-		"empty":                          {text(""), false, true},
-		"cut off":                        {text(`{"agents": {"laptop": "2026-11-13T12:0`), false, true},
-		"not an object":                  {text(`["laptop"]`), false, true},
-		"larger than a state file":       {big, false, true},
-		"a link to another file":         {func(path string) error { return os.Symlink("/dev/zero", path) }, false, true},
-		"agents is a list":               {text(`{"agents": ["2026-11-13T12:00:00Z"]}`), true, false},
-		"agents is a text":               {text(`{"agents": "2026-11-13T12:00:00Z"}`), true, false},
-		"entries that are no times":      {text(`{"agents": {"laptop": 17, "tower": {"at": "2026-11-13T12:00:00Z"}}}`), true, false},
-		"more entries than ever written": {many, true, true},
+		"empty":                               {text(""), true, false, true},
+		"cut off":                             {text(`{"agents": {"laptop": "2026-11-13T12:0`), true, false, true},
+		"not an object":                       {text(`["laptop"]`), true, false, true},
+		"larger than a state file":            {big, true, false, true},
+		"cut off, and an older .bad is there": {oldBad(text(`{"agents": {"lap`)), true, false, true},
+		"empty, and .bad is a folder":         {badIsAFolder, false, true, false},
+		"a link to another file":              {func(path string) error { return os.Symlink("/dev/zero", path) }, false, true, false},
+		"a link to nothing":                   {func(path string) error { return os.Symlink(path+".nowhere", path) }, false, true, false},
+		"a folder":                            {func(path string) error { return os.Mkdir(path, 0o700) }, false, true, false},
+		"agents is a list":                    {text(`{"agents": ["2026-11-13T12:00:00Z"]}`), true, false, false},
+		"agents is a text":                    {text(`{"agents": "2026-11-13T12:00:00Z"}`), true, false, false},
+		"entries that are no times":           {text(`{"agents": {"laptop": 17, "tower": {"at": "2026-11-13T12:00:00Z"}}}`), true, false, false},
+		"more entries than ever written":      {many, true, true, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
@@ -390,6 +416,7 @@ func TestALastSeenFileThatCannotBeUsedIsIgnored(t *testing.T) {
 			if err := c.write(path); err != nil {
 				t.Skipf("the file cannot be made here: %v", err)
 			}
+			badBefore, _ := os.Lstat(path + ".bad")
 			before, err := os.Lstat(path)
 			if err != nil {
 				t.Fatal(err)
@@ -408,6 +435,20 @@ func TestALastSeenFileThatCannotBeUsedIsIgnored(t *testing.T) {
 			if n := count("the file is not used"); (n == 1) != c.said || n > 1 {
 				t.Fatalf("the start said %d times that the file is not used", n)
 			}
+			if n := count("the file could not be used and was moved aside, a new one is started"); (n == 1) != c.aside || n > 1 {
+				t.Fatalf("the start said %d times that the file was moved aside", n)
+			}
+			if c.aside { // the file that was found is the kept copy now, as it was; at its name there is nothing until the first write
+				kept, err := os.Lstat(path + ".bad")
+				if err != nil || !os.SameFile(before, kept) || kept.Size() != before.Size() || !kept.Mode().IsRegular() {
+					t.Fatalf("last-seen.json.bad is not the file that was found: %v %v", kept, err)
+				}
+				if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("after the move there is still something at the file's name: %v", err)
+				}
+			} else if after, _ := os.Lstat(path + ".bad"); (after == nil) != (badBefore == nil) || (after != nil && !os.SameFile(after, badBefore)) {
+				t.Fatalf("last-seen.json.bad was made or replaced although nothing was moved")
+			}
 			e.poll(0)
 			if got := shownSeen(e.p, "laptop"); got != "never" || snap(e.p)["laptop"].Status != "offline" {
 				t.Fatalf("the laptop, off: last seen %s, %s", got, snap(e.p)["laptop"].Status)
@@ -425,6 +466,9 @@ func TestALastSeenFileThatCannotBeUsedIsIgnored(t *testing.T) {
 					t.Fatalf("the file can be written: %d warnings, laptop %q", n, e.file("laptop"))
 				}
 				return
+			}
+			if _, err := os.Lstat(path + ".nowhere"); !errors.Is(err, os.ErrNotExist) { // nothing was written through a link to nothing
+				t.Fatalf("the target of the link to nothing: %v", err)
 			}
 			if n != 1 {
 				t.Fatalf("%d warnings for a file that cannot be written, want one", n)

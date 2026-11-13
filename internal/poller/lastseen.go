@@ -3,6 +3,8 @@ package poller
 import (
 	"log/slog"
 	"time"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/statefile"
 )
 
 // When a machine was last seen, over a restart of the panel. The time of an agent's last good answer was in
@@ -21,7 +23,9 @@ import (
 //     (agentQuiet, the steady clock of this process) starts with the panel as before: a time read from the
 //     file never makes a machine "off for 15 minutes" for "Update unpowered hosts", and never makes it "on".
 //   - A file that cannot be used is not used: the panel starts, says so once in its log, and shows "never" as
-//     it did before there was a file.
+//     it did before there was a file. A plain file that is damaged is moved aside at that start
+//     (last-seen.json.bad), so that the times are kept again from the first answer on; a link or a folder at
+//     that name is never touched, and then nothing is kept until it is taken away.
 //
 // Writing. An agent that answers has a new time with every poll, and no file is rewritten with every poll
 // (lastversion.go has what that costs). So:
@@ -47,6 +51,15 @@ const (
 func (p *Poller) loadLastSeen() {
 	p.lastSeen, p.seenSaved = map[string]time.Time{}, map[string]time.Time{}
 	seen, err := p.Admin.AgentSeen()
+	if err != nil && (statefile.IsDamaged(err) || statefile.IsNotAFile(err)) {
+		// damaged, or not a file of a state file's size: when it is a plain file, it is moved out of the way
+		// once and the file is started over (adminstate.SetAgentSeenAside; anything else is left alone)
+		if aside, moveErr := p.Admin.SetAgentSeenAside(); moveErr == nil {
+			slog.Warn("when the machines were last seen is not known from before this start: the file could not be used and was moved aside, a new one is started",
+				"error", err, "moved_to", aside)
+			err = nil
+		}
+	}
 	if err != nil {
 		slog.Warn("when the machines were last seen is not known from before this start: the file is not used", "error", err)
 	}

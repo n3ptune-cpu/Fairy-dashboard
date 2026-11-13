@@ -3,6 +3,7 @@ package adminstate
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -24,7 +25,8 @@ import (
 // that is only shown: THIS file never stops anything. A file that cannot be read, is empty, is not what the
 // panel writes, is a link or belongs to another user is not used and not written (statefile: it is never
 // overwritten, like every other state file); the panel starts and runs, and shows "never" as it did before
-// the file existed. An entry that is not of the form is skipped. The file is written like the other state
+// the file existed. A plain file that is damaged is moved out of the way when the panel starts, so that the
+// times are kept again from then on (SetAgentSeenAside). An entry that is not of the form is skipped. The file is written like the other state
 // files (under its lock, read again, put in place of the old file in one step, mode 0600) and never read
 // through a symbolic link (statefile.ReadFile).
 //
@@ -38,7 +40,39 @@ const LastSeenFile = "last-seen.json"
 // written by this panel, and none of its entries is used.
 const MaxAgentSeen = 1000
 
+// LastSeenAside is the name a last-seen.json that cannot be used is moved to, in the same folder.
+const LastSeenAside = LastSeenFile + ".bad"
+
 func (a *State) lastSeenPath() string { return filepath.Join(filepath.Dir(a.StatePath), LastSeenFile) }
+
+// SetAgentSeenAside moves a last-seen.json that cannot be used out of the way, to last-seen.json.bad in the
+// same folder, so that the panel can start the file over; it returns the new name. It is for the one case of
+// a PLAIN file that is damaged (empty, cut off, other content, far too large): such a file was never
+// overwritten and never repaired itself, so the times were not kept until somebody deleted it by hand (review
+// of build 14, F10). Unlike every other state file this one holds nothing that is lost with it: the times
+// come back with the next answers.
+//
+// Only a plain file is moved, and it is moved as it is (a rename): never read, never followed. A symbolic
+// link, a folder, a pipe at that name is an error and stays where it is. One older last-seen.json.bad is
+// replaced, if that is a plain file too; anything else of that name is in the way, and then nothing is moved.
+func (a *State) SetAgentSeenAside() (string, error) {
+	path := a.lastSeenPath()
+	aside := filepath.Join(filepath.Dir(path), LastSeenAside)
+	st, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if !st.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is not a plain file: it is left alone", path)
+	}
+	if old, err := os.Lstat(aside); err == nil && !old.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is in the way and is not a plain file: nothing is moved", aside)
+	}
+	if err := os.Rename(path, aside); err != nil {
+		return "", err
+	}
+	return aside, nil
+}
 
 // AgentSeen returns the kept times, by agent id. The error says why the file cannot be used (the result is
 // then empty); a file that does not exist is no error. An entry that is not of the form (no RFC 3339 time, a
