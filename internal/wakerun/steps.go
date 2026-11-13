@@ -148,7 +148,7 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 		return
 	}
 	o := m.Ops.Observe(h.ID)
-	after := h.answeredAfter(o, mono, r.Settings.ShutdownDelay)
+	after := h.answeredAfter(o, mono, h.delay(r))
 	if h.otherPending(o, after) != nil {
 		m.endOtherPending(r, h, now, why, o.Pending)
 		return
@@ -303,7 +303,7 @@ func (m *Manager) notCalledOff(r *Run, h *Host, now time.Time) {
 				clock(untilAt), c.none, c.skipped, c.tries))
 			m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s: its shutdown request had got no answer, and no countdown of it showed. Another power action was pending on the machine meanwhile "+
 				"(%s at %s, by the machine's own clock), which is not the run's: the run sent no cancel while it showed, since its agent's cancel would have called that one off. ",
-				c.why, p.Action, when(p.At, now))+lostMay(r)+" Fairy no longer watches it."+updateTail(h))
+				c.why, p.Action, when(p.At, now))+lostMay(r, h)+" Fairy no longer watches it."+updateTail(h))
 			return
 		}
 		if c.none > 0 && !c.failed {
@@ -315,7 +315,7 @@ func (m *Manager) notCalledOff(r *Run, h *Host, now time.Time) {
 		}
 		m.note(h, now, fmt.Sprintf("the request to call a countdown off did not get through: %d tries until %s", c.tries, clock(untilAt)))
 		m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s: its shutdown request had got no answer, and the request to call a countdown off did not get through either (%s). ", c.why, c.text)+
-			lostMay(r)+" Fairy no longer watches it."+updateTail(h))
+			lostMay(r, h)+" Fairy no longer watches it."+updateTail(h))
 		return
 	}
 	if c.tries > 1 {
@@ -444,7 +444,7 @@ func (m *Manager) endPastDue(r *Run, h *Host, now time.Time, why string) {
 		// (cancelUntil). The request has not arrived so far; it still can. Not "it is ON now" with the power "on"
 		// (review of fix8, RF8-02): the same words and the same "not known" as when the watch lets go (lostEnd).
 		m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s more than %s after the time its shutdown would have been due (%s; the request got no answer), so the run sent no cancel. ",
-			why, span(offGrace), when(*h.ShutdownAt, now))+lostMay(r)+" Fairy no longer watches it."+updateTail(h))
+			why, span(offGrace), when(*h.ShutdownAt, now))+lostMay(r, h)+" Fairy no longer watches it."+updateTail(h))
 		return
 	}
 	m.endSeen(r, h, StLeftOn, OnYes, now, lead+" "+cameOnline(h)+" and it is ON now. Fairy no longer watches it: if the shutdown is still under way, it switches off by itself."+
@@ -481,7 +481,7 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		m.enter(h, StOnline, now, "is on: it is only updated and stays on")
 		return
 	}
-	// The panel's own view first. Off is: shown as offline, and no answer for MinOff, when the run started and
+	// The panel's own view first. Off is: shown as offline, and no answer for MinOff (Host.minOff), when the run started and
 	// now. On is: its agent answers, or something else shows it as on. Everything between is "not sure", and a
 	// machine the run is not sure about is left alone: it may be restarting.
 	switch {
@@ -495,8 +495,8 @@ func (m *Manager) stepQueued(ctx context.Context, r *Run, h *Host, info HostInfo
 		h.AlreadyOn = true
 		m.end(r, h, StSkipped, OnYes, now, fmt.Sprintf(onByText, o.OnBy))
 		return
-	case h.StartStatus != "offline" || !offAtStart(h) || !OffNow(o, now):
-		m.end(r, h, StSkipped, OnUntouched, now, NotSure)
+	case h.StartStatus != "offline" || !offAtStart(h) || !OffNowAfter(o, now, h.minOff()):
+		m.end(r, h, StSkipped, OnUntouched, now, NotSureAfter(h.minOff()))
 		return
 	}
 	if !m.pace.fits(info.RelayID, info.MACs, m.paceNow()) {
@@ -947,7 +947,7 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	mono := m.mono() // before the poller is asked: what it says "ago" is then never placed later than it was
 	o := m.Ops.Observe(h.ID)
 	// after: the latest answer is from after the run's request, by the steady clock (answeredAfter)
-	after := h.answeredAfter(o, mono, r.Settings.ShutdownDelay)
+	after := h.answeredAfter(o, mono, h.delay(r))
 	// counting: an answer from after the request, in which its agent shows the countdown
 	counting := after && o.Pending != nil && o.Pending.Action == "shutdown"
 	// The run's shutdown is no longer what is pending on the machine, and another action is: the run lets go
@@ -1138,7 +1138,7 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	case mono-h.dueMono > offGrace && counting:
 		// The run's own countdown is long over, and its agent still shows a shutdown as pending: the agent
 		// counts another, longer one (an agent that took the request with a delay of its own; one that rounds
-		// up is covered by offGrace). The run asked for a countdown of Settings.ShutdownDelay and watched that
+		// up is covered by offGrace). The run asked for a countdown of its own length (Host.delay) and watched that
 		// one: no agent decides how long the one run slot is taken (r1-p2-07). The machine is on now; whether
 		// and when it goes off is the agent's word, and the report says exactly that. The time is the agent's,
 		// by the machine's clock, and is only repeated here.
@@ -1177,10 +1177,10 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 // nothing is known about when it arrived, and endMin stays: a stated limit.
 func (m *Manager) seeCountdown(r *Run, h *Host, o Observation, mono time.Duration, now time.Time) {
 	if h.ShutdownUnsure && !h.pendingSeen {
-		if e := h.noneMono + r.Settings.ShutdownDelay; h.noneSeen && e > h.endMin {
+		if e := h.noneMono + h.delay(r); h.noneSeen && e > h.endMin {
 			h.endMin = e
 		}
-		if due := mono - o.SeenAgo + r.Settings.ShutdownDelay; due > h.dueMono {
+		if due := mono - o.SeenAgo + h.delay(r); due > h.dueMono {
 			h.dueMono = due
 			at := now.Add(due - mono)
 			h.ShutdownAt = &at
@@ -1206,12 +1206,12 @@ func (h *Host) seeNone(o Observation, after bool, mono time.Duration) {
 // lostTail ends the sentence of a machine whose shutdown request got no answer, whose agent never showed a
 // countdown, and that the run lets go of while it is on: what may still happen.
 func lostTail(r *Run, h *Host) string {
-	return lostMay(r) + " It is on now, and Fairy no longer watches it."
+	return lostMay(r, h) + " It is on now, and Fairy no longer watches it."
 }
 
 // lostMay is the same without "it is on now", for an end at which the machine has not just answered.
-func lostMay(r *Run) string {
-	return fmt.Sprintf("The request may still arrive: the machine then switches off %s later unless someone cancels that on its page.", span(r.Settings.ShutdownDelay))
+func lostMay(r *Run, h *Host) string {
+	return fmt.Sprintf("The request may still arrive: the machine then switches off %s later unless someone cancels that on its page.", span(h.delay(r)))
 }
 
 // lostEnd ends a machine that still shows as on offGrace after the shutdown the run asked for would have been
@@ -1225,7 +1225,7 @@ func lostMay(r *Run) string {
 // of a closed connection again 8 times), and the agent reads a request within 10 s and answers it within 45 s.
 // What can be later than that is a proxy in front of the agent that holds requests back.
 func (m *Manager) lostEnd(r *Run, h *Host, now time.Time, mono time.Duration) {
-	since := mono - (h.endMin - r.Settings.ShutdownDelay) // since the moment before the request left, by the steady clock
+	since := mono - (h.endMin - h.delay(r)) // since the moment before the request left, by the steady clock
 	m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("The shutdown request got no answer, and its agent has shown no countdown since (%s). ", span(since))+
 		lostTail(r, h)+updateTail(h))
 }

@@ -87,6 +87,8 @@ func (c *cli) configCheck() int {
 	problems, notes = adminCheck(cfg, problems, notes)
 	problems, notes = managedCheck(cfg, problems, notes)
 	problems, inferred := nodeLinkCheck(cfg, problems)
+	okLines, said := wakeUpdateCheck(cfg)
+	notes, inferred = append(notes, okLines...), append(inferred, said...)
 	for _, e := range secretEnvs(cfg) {
 		if os.Getenv(e.env) != "" {
 			notes = append(notes, fmt.Sprintf("%s (%s): present", e.env, e.what))
@@ -106,7 +108,7 @@ func (c *cli) configCheck() int {
 	for _, n := range cfg.Ignored() { // read, not used, and never a reason for exit code 1
 		fmt.Fprintln(c.out, "note  "+n)
 	}
-	for _, n := range inferred { // a node worked out from an id_prefix: said, and never a reason for exit code 1
+	for _, n := range inferred { // a node worked out from an id_prefix, a short off_after_s: said, and never a reason for exit code 1
 		fmt.Fprintln(c.out, "note  "+n)
 	}
 	for _, p := range problems {
@@ -186,6 +188,49 @@ func nodeLinkCheck(cfg *config.Panel, problems []string) (out, inferred []string
 	c.Agents, c.Systems, c.Proxmox = slices.Clone(cfg.Agents), slices.Clone(cfg.Systems), slices.Clone(cfg.Proxmox)
 	_, _, _ = managed.NewStore(cfg.DataDir).Merge(&c)
 	return append(problems, poller.NodeWarnings(&c)...), poller.NodeInferred(&c)
+}
+
+// wakeUpdateCheck lists the timings of "Update unpowered hosts" that are not the defaults a reader would
+// expect: the panel's off_after_s when it is not 900, and every machine that has timings of its own (the
+// wake_update: block of its systems: entry). ok lines are what is set; said is one note for every time
+// below the default after which a machine counts as off, with what that risks. A note is no warning: the
+// value is allowed, it is the owner's decision, and it does not change the exit code.
+func wakeUpdateCheck(cfg *config.Panel) (ok, said []string) {
+	const def = 900
+	mins := func(s int) string {
+		if s%60 == 0 {
+			return fmt.Sprintf("%d min", s/60)
+		}
+		return fmt.Sprintf("%d s", s)
+	}
+	risk := func(what string, s int) string {
+		return fmt.Sprintf("%s is %d (the default is %d): a machine that restarts for longer than %s can be taken for off by a run, "+
+			"which then wakes it, updates it and switches it off as a machine it woke", what, s, def, mins(s))
+	}
+	if v := cfg.WakeUpdate.OffAfterS; v != 0 && v != def {
+		ok = append(ok, fmt.Sprintf("wake_update.off_after_s: %d (a machine counts as off after %s without an answer; without the line it is %d)", v, mins(v), def))
+		if v < def {
+			said = append(said, risk("wake_update.off_after_s", v))
+		}
+	}
+	for _, o := range cfg.Systems {
+		w := o.WakeUpdate
+		if w == nil || (w.OffAfterS == 0 && w.ShutdownDelayS == 0) {
+			continue
+		}
+		var parts []string
+		if w.OffAfterS != 0 {
+			parts = append(parts, fmt.Sprintf("off_after_s %d (it counts as off after %s without an answer)", w.OffAfterS, mins(w.OffAfterS)))
+		}
+		if w.ShutdownDelayS != 0 {
+			parts = append(parts, fmt.Sprintf("shutdown_delay_s %d (the countdown of its shutdown in a run)", w.ShutdownDelayS))
+		}
+		ok = append(ok, fmt.Sprintf("system %s: wake_update of its own: %s", o.ID, strings.Join(parts, ", ")))
+		if w.OffAfterS != 0 && w.OffAfterS < def {
+			said = append(said, risk("system "+o.ID+": wake_update.off_after_s", w.OffAfterS))
+		}
+	}
+	return ok, said
 }
 
 // adminCheck reports who can administer the panel. Roles live in users.json (Users page / `fairy admin users`);

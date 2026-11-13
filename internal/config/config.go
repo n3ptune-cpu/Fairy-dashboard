@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/power"
@@ -198,6 +199,31 @@ type SystemOverride struct {
 	DWServiceURL string    `yaml:"dwservice_url"`
 	Wol          *Wol      `yaml:"wol"`
 	BMCPower     *BMCPower `yaml:"bmc_power"`
+	// WakeUpdate: this machine's own timings for "Update unpowered hosts", where they differ from the
+	// wake_update: block of the file.
+	WakeUpdate *SystemWakeUpdate `yaml:"wake_update"`
+}
+
+// SystemWakeUpdate is the `wake_update:` block of a `systems:` entry: the two timings of "Update unpowered
+// hosts" that can be set for one machine. A key that is left out (0 here) is the value of the file's own
+// wake_update: block. For the agent of a Proxmox node the block counts under the node's id and under the
+// agent's (poller.WakeUpdateOverride), like the entry's wol:.
+type SystemWakeUpdate struct {
+	// OffAfterS: this machine counts as off after this long without an answer (300-3600; see
+	// WakeUpdate.OffAfterS for what a short time risks).
+	OffAfterS int `yaml:"off_after_s"`
+	// ShutdownDelayS: the countdown of the shutdown a run asks this machine for (10-3600).
+	ShutdownDelayS int `yaml:"shutdown_delay_s"`
+}
+
+// UnmarshalYAML reads the block as strictly as the file's own wake_update: block (WakeUpdate.UnmarshalYAML):
+// no other key, whole numbers, and a number that is written must be in its range (0 is not "the default").
+func (w *SystemWakeUpdate) UnmarshalYAML(n *yaml.Node) error {
+	if err := wakeUpdateKeys(n, "a systems: entry's wake_update", "off_after_s", "shutdown_delay_s"); err != nil {
+		return err
+	}
+	type plain SystemWakeUpdate
+	return n.Decode((*plain)(w))
 }
 
 // BMCPower powers a machine on through its BMC, by an always-on agent that can reach the BMC (Fairy-agent
@@ -258,42 +284,57 @@ type WakeUpdate struct {
 	// An agent accepts 12 a minute for everything (its control_rate_per_min); the rest stays free for the
 	// buttons of the page.
 	AgentRequestsPerMin int `yaml:"agent_requests_per_min"`
+	// OffAfterS: a machine counts as off after this long without any sign of life (default 900, 300-3600).
+	// The default is the safe value, and a lower one is the owner's decision: a machine that restarts (for
+	// Windows Update, or because its owner restarted it) is silent too, comes back by itself with a fresh
+	// uptime, and a run that had taken it for off treats it as a machine it woke, and switches it off. With
+	// 900 a restart would have to take a quarter of an hour for that; with 300, five minutes. It was a fixed
+	// 15 minutes up to build 13 (wakerun.MinOff).
+	OffAfterS int `yaml:"off_after_s"`
 }
 
 // wakeUpdateRanges: lowest, highest and default value of each key of the block (Validate has the same limits).
 var wakeUpdateRanges = map[string][3]int{"online_timeout_s": {60, 1800, 300}, "settle_s": {10, 600, 60},
-	"shutdown_delay_s": {10, 3600, 120}, "agent_requests_per_min": {1, 30, 8}}
+	"shutdown_delay_s": {10, 3600, 120}, "agent_requests_per_min": {1, 30, 8}, "off_after_s": {300, 3600, 900}}
 
 // UnmarshalYAML reads the block as the plain fields above, with two things the plain way does not do: a
 // number with a fraction is refused (YAML's decoder cuts it off: settle_s: 30.5 became 30 without a word; the
 // session timings refuse one too), and a key this block does not have is refused here, because the strict
 // mode of the whole file does not reach into a block that reads itself.
 func (w *WakeUpdate) UnmarshalYAML(n *yaml.Node) error {
-	if n.Kind == yaml.MappingNode {
-		for i := 0; i+1 < len(n.Content); i += 2 {
-			k, v := n.Content[i], n.Content[i+1]
-			switch k.Value {
-			case "online_timeout_s", "settle_s", "shutdown_delay_s", "agent_requests_per_min":
-			default:
-				return fmt.Errorf("line %d: field %s not found in wake_update", k.Line, k.Value)
-			}
-			var f float64
-			if v.Kind == yaml.ScalarNode && v.Decode(&f) == nil && f != math.Trunc(f) {
-				return fmt.Errorf("line %d: wake_update.%s: %s is not a whole number", v.Line, k.Value, v.Value)
-			}
-			// A number that is written must be in its range, 0 included: here 0 is not "the default" (the
-			// example gives ranges that begin at 1, 10 and 60, and a 0 that silently ran as 120 seconds is
-			// not what was written; r2-p4-13). For the default the key is left out; a key with no value
-			// (YAML's null) counts as left out.
-			var i int
-			if v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null" && v.Decode(&i) == nil && i == 0 {
-				r := wakeUpdateRanges[k.Value]
-				return fmt.Errorf("line %d: wake_update.%s: %s is not in %d-%d (leave the key out for the default, %d)", v.Line, k.Value, v.Value, r[0], r[1], r[2])
-			}
-		}
+	if err := wakeUpdateKeys(n, "wake_update", "online_timeout_s", "settle_s", "shutdown_delay_s", "agent_requests_per_min", "off_after_s"); err != nil {
+		return err
 	}
 	type plain WakeUpdate
 	return n.Decode((*plain)(w))
+}
+
+// wakeUpdateKeys checks a wake_update: block (the file's own, or the one of a systems: entry) before it is
+// decoded: only the keys named, whole numbers, and no 0.
+func wakeUpdateKeys(n *yaml.Node, block string, keys ...string) error {
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		if !slices.Contains(keys, k.Value) {
+			return fmt.Errorf("line %d: field %s not found in %s", k.Line, k.Value, block)
+		}
+		var f float64
+		if v.Kind == yaml.ScalarNode && v.Decode(&f) == nil && f != math.Trunc(f) {
+			return fmt.Errorf("line %d: %s.%s: %s is not a whole number", v.Line, block, k.Value, v.Value)
+		}
+		// A number that is written must be in its range, 0 included: here 0 is not "the default" (the
+		// example gives ranges that begin at 1, 10 and 60, and a 0 that silently ran as 120 seconds is
+		// not what was written; r2-p4-13). For the default the key is left out; a key with no value
+		// (YAML's null) counts as left out.
+		var i int
+		if v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null" && v.Decode(&i) == nil && i == 0 {
+			r := wakeUpdateRanges[k.Value]
+			return fmt.Errorf("line %d: %s.%s: %s is not in %d-%d (leave the key out for the default, %d)", v.Line, block, k.Value, v.Value, r[0], r[1], r[2])
+		}
+	}
+	return nil
 }
 
 // Approval is the `approval:` block: the Pocket ID client "Fairy PC actions", with which a person approves a fan,

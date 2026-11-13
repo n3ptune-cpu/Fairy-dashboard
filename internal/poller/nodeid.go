@@ -328,6 +328,26 @@ func (p *Poller) PowerOverride(id string) *config.SystemOverride {
 	return o
 }
 
+// WakeUpdateOverride returns the timings of "Update unpowered hosts" that the configuration sets for the one
+// machine shown under id (the wake_update: block of its systems: entry), in seconds; 0: not set, the panel's
+// own setting counts. The block is the machine's: for the agent of a Proxmox node and for that node it is
+// found under either id (SameMachine), whichever of the two the machine is shown under right now, so a
+// machine does not change its timings when its row changes its id (the mistake build 12 made with wol:).
+// When both ids have a block that sets the same key, the larger value counts, whichever id was asked for: the
+// machine has one value however it is shown, and the larger one is the careful one (longer silence before it
+// counts as off, a longer countdown to cancel in).
+func (p *Poller) WakeUpdateOverride(id string) (offAfterS, shutdownDelayS int) {
+	for _, x := range p.SameMachine(id) {
+		o := p.Override(x)
+		if o == nil || o.WakeUpdate == nil {
+			continue
+		}
+		offAfterS = max(offAfterS, o.WakeUpdate.OffAfterS)
+		shutdownDelayS = max(shutdownDelayS, o.WakeUpdate.ShutdownDelayS)
+	}
+	return offAfterS, shutdownDelayS
+}
+
 // PowerDisabledAs reports whether an administrator turned power control off for the host shown under id
 // (`fairy admin host <id> power-control disable`), and the id the switch is kept under. The switch is the
 // machine's: for the agent of a Proxmox node and for that node it counts under either id (SameMachine).

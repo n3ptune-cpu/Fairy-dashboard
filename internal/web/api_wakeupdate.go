@@ -63,7 +63,7 @@ type wuHost struct {
 	NoWake  string `json:"no_wake,omitempty"`
 	Relay   string `json:"relay,omitempty"` // the name of the machine that sends its wake packets
 	// Power is what the panel can say now: "on" (its agent answers, or the machine shows as on another way),
-	// "off" (no answer for wakerun.MinOff), "unclear" (anything between: it may be restarting). The run decides
+	// "off" (no answer for the machine's off_after: wuOffAfter), "unclear" (anything between: it may be restarting). The run decides
 	// again by itself, with the same rule; this is only what the page offers.
 	Power string `json:"power"`
 	// Choice is how it can be in a run right now: "wake" (it is off), "update_only" (it is on), or "" with Why.
@@ -71,6 +71,11 @@ type wuHost struct {
 	Why    string `json:"why,omitempty"`
 	// NotSure: it does not answer, and not for long enough to be taken for off. The dialog lists it apart.
 	NotSure bool `json:"not_sure,omitempty"`
+	// OffAfterS, ShutdownDelayS: this machine's own timings where its systems: entry sets them (wake_update:)
+	// and they are not the panel's (the page's off_after_s and settings.shutdown_delay_s): after how long
+	// without an answer it counts as off, and the countdown of the shutdown a run asks it for.
+	OffAfterS      *int `json:"off_after_s,omitempty"`
+	ShutdownDelayS *int `json:"shutdown_delay_s,omitempty"`
 	// Asleep: the panel itself sent it to sleep, and it has not answered since. For the panel "off" and
 	// "asleep" look the same (nothing at all), so the page says "asleep or off" and the dialog lists it apart,
 	// unticked: a machine that resumes from sleep does not look freshly started, and a run leaves it on.
@@ -101,7 +106,8 @@ type wakeUpdatePage struct {
 	Last     []*wakerun.Run   `json:"last"`
 	Now      time.Time        `json:"now"`
 	Problem  string           `json:"problem,omitempty"` // why no run can start at all
-	// OffAfterS: a machine counts as off after this long without an answer (wakerun.MinOff; not a setting).
+	// OffAfterS: a machine counts as off after this long without an answer (wake_update.off_after_s; default
+	// wakerun.MinOff). A machine with a time of its own has it in its row (wuHost.OffAfterS).
 	OffAfterS int `json:"off_after_s"`
 	MaxHosts  int `json:"max_hosts"`
 }
@@ -167,6 +173,7 @@ func (o runOps) Host(id string) (wakerun.HostInfo, bool) {
 		return wakerun.HostInfo{}, false
 	}
 	info := wakerun.HostInfo{ID: id, Name: x.Name, AgentID: a.ID, OptedIn: o.s.wuOptedIn(id), Entry: o.s.Poller.AgentEntry(a.ID)}
+	info.OffAfter, info.ShutdownDelay = o.s.wuTimings(x.ID) // the machine's own, under either of its ids
 	if ov := o.s.Poller.PowerOverride(x.ID); ov != nil && ov.Wol != nil {
 		info.RelayID, info.MACs = ov.Wol.Relay, len(ov.Wol.AllMACs())
 	}
@@ -495,6 +502,30 @@ func (o runOps) Blocked() string {
 	return ""
 }
 
+// wuTimings returns the timings the configuration sets for the one machine shown under id (the wake_update:
+// block of its systems: entry; 0: not set, the panel's own count).
+func (s *Server) wuTimings(id string) (offAfter, shutdownDelay time.Duration) {
+	a, d := s.Poller.WakeUpdateOverride(id)
+	return time.Duration(a) * time.Second, time.Duration(d) * time.Second
+}
+
+// wuPanelOffAfter is the panel's own time after which a machine counts as off (wake_update.off_after_s).
+func (s *Server) wuPanelOffAfter() time.Duration {
+	if d := s.WakeRuns.Settings.OffAfter; d > 0 {
+		return d
+	}
+	return wakerun.MinOff
+}
+
+// wuOffAfter is how long the machine shown under id must have given nothing at all to count as off: its own
+// time, else the panel's.
+func (s *Server) wuOffAfter(id string) time.Duration {
+	if own, _ := s.wuTimings(id); own > 0 {
+		return own
+	}
+	return s.wuPanelOffAfter()
+}
+
 // wuHostOf describes one machine for the page and for the checks of a start.
 func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	a, ok := s.Poller.AgentFor(x.ID)
@@ -526,10 +557,20 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 		}
 	}
 	now := s.Poller.Clock().UTC()
+	offAfter := s.wuOffAfter(x.ID)
+	if own, delay := s.wuTimings(x.ID); own > 0 || delay > 0 { // its own timings, said where they are not the panel's
+		set := s.WakeRuns.Settings
+		if v := int(own / time.Second); own > 0 && own != s.wuPanelOffAfter() {
+			h.OffAfterS = &v
+		}
+		if v := int(delay / time.Second); delay > 0 && delay != set.ShutdownDelay {
+			h.ShutdownDelayS = &v
+		}
+	}
 	switch {
 	case o.Online || o.OnBy != "":
 		h.Power = "on"
-	case wakerun.OffNow(o, now):
+	case wakerun.OffNowAfter(o, now, offAfter):
 		h.Power = "off"
 		h.Asleep = x.Asleep
 	}
@@ -560,7 +601,7 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	case h.Power == "on":
 		h.Why = "it is on (" + o.OnBy + "), and its agent does not answer"
 	case h.Power == "unclear":
-		h.Why, h.NotSure = notSureWhy(o, now), true
+		h.Why, h.NotSure = notSureWhy(o, now, offAfter), true
 	case !h.CanWake:
 		h.Why = "it is off, and Fairy cannot wake it: " + h.NoWake
 	default:
@@ -580,8 +621,8 @@ func powerOff(p *poller.Poller, id string) bool {
 }
 
 // notSureWhy says, on the page, why a machine that does not answer is not offered as "off".
-func notSureWhy(o wakerun.Observation, now time.Time) string {
-	need := spanWords(wakerun.MinOff)
+func notSureWhy(o wakerun.Observation, now time.Time, offAfter time.Duration) string {
+	need := spanWords(offAfter)
 	if !o.QuietSince.IsZero() && !o.Paused {
 		q := max(wakerun.QuietFor(o, now), time.Second)
 		return fmt.Sprintf("not sure that it is off: no answer for %s so far, and Fairy takes a machine for off only after %s (it may be restarting)", spanWords(q), need)
@@ -606,7 +647,7 @@ func spanWords(d time.Duration) string {
 
 func (s *Server) wakeUpdatePageData() wakeUpdatePage {
 	p := wakeUpdatePage{Hosts: []wuHost{}, Settings: s.WakeRuns.Settings, Last: []*wakerun.Run{}, Now: time.Now().UTC(), MaxHosts: wakerun.MaxHosts,
-		OffAfterS: int(wakerun.MinOff / time.Second)}
+		OffAfterS: int(s.wuPanelOffAfter() / time.Second)}
 	if l := s.latest(); l.Version != "" {
 		p.Latest = l.Version
 	} else {

@@ -103,7 +103,8 @@ type machine struct {
 	wakeAccepted  bool // the relay accepted a wake request of the run for it (a request without an answer is not that)
 	wakes         int
 	shutdowns     int
-	wentOff       bool // a countdown ran out and switched it off
+	wentOff       bool      // a countdown ran out and switched it off
+	offAt         time.Time // ... and when
 	busyDone      map[string]bool
 }
 
@@ -228,6 +229,13 @@ func (w *world) Observe(id string) Observation {
 	return Observation{}
 }
 
+func (w *world) quietWords(mc *machine) string {
+	if mc.quietSince.IsZero() {
+		return "no time at all"
+	}
+	return w.now.Sub(mc.quietSince).String()
+}
+
 func (w *world) answers(mc *machine) bool {
 	return mc.on && !w.now.Before(mc.agentReadyAt) && !mc.unreachable && !mc.agentDown
 }
@@ -286,6 +294,10 @@ var errLost = &OpError{Code: CodeNoAnswer, Text: "agent unreachable: timeout"}
 func (w *world) Wake(_ context.Context, id, _ string) error {
 	mc := w.ms[id]
 	w.calls = append(w.calls, "wake "+id)
+	quiet, words := time.Duration(-1), w.quietWords(mc) // as the request leaves (a request can take a while: w.during)
+	if !mc.quietSince.IsZero() {
+		quiet = w.now.Sub(mc.quietSince)
+	}
 	w.arrived("wake " + id)
 	if mc.relayDown != "" {
 		return &OpError{Text: mc.relayDown}
@@ -298,6 +310,15 @@ func (w *world) Wake(_ context.Context, id, _ string) error {
 	if mc.onAtFirstWake == nil {
 		on := mc.on
 		mc.onAtFirstWake = &on
+		// the judge (build 14): a machine is woken only after ITS time without any sign of life: its own
+		// off_after where it has one, else the panel's
+		need := w.m.Settings.offAfter()
+		if mc.info.OffAfter > 0 {
+			need = mc.info.OffAfter
+		}
+		if quiet < need {
+			w.t.Errorf("RULE BROKEN: wake sent to %s, which counts as off after %s without an answer and had given nothing for %s", id, need, words)
+		}
 	}
 	if mc.wakeLost != "" && (!mc.busyDone["wake lost"] || mc.wakeLost == "always") { // a timeout: the panel does not learn whether the packet went out
 		mc.busyDone["wake lost"] = true
@@ -363,6 +384,13 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 	w.arrived("shutdown " + id)
 	mc.shutdowns++
 	// the judge
+	want := w.m.Settings.ShutdownDelay // (build 14) the countdown is the machine's own where it has one
+	if mc.info.ShutdownDelay > 0 {
+		want = mc.info.ShutdownDelay
+	}
+	if delay != want {
+		w.t.Errorf("RULE BROKEN: shutdown sent to %s with a countdown of %s, and its countdown is %s", id, delay, want)
+	}
 	if mc.onAtStart {
 		w.t.Errorf("RULE BROKEN: shutdown sent to %s, which was running when the run started", id)
 	}
@@ -527,7 +555,7 @@ func (w *world) sim() {
 			case mc.pending.Action == "shutdown" && mc.shutMode == "hang":
 				mc.agentDown, mc.onBy = true, OnByRefused // the system hangs in its shutdown: it runs, its agent is gone
 			case mc.pending.Action == "shutdown" && mc.shutMode != "ignore":
-				mc.on, mc.wentOff = false, true
+				mc.on, mc.wentOff, mc.offAt = false, true, w.now
 			}
 			mc.pending = nil
 		}
@@ -693,7 +721,15 @@ func (w *world) wellReported(r *Run) {
 		mc := w.ms[h.ID]
 		// (since r2-p2-05 without an exception: "on" for a machine that is off, or "off" for one that is on, in
 		// whatever state it ended, fails the test)
-		if mc != nil && ((h.On == OnNo && (!mc.wentOff || h.State != StOff)) || (h.State == StOff && h.On != OnNo) ||
+		//
+		// (build 14) One case is no wrong report, and can be reached now that machines of one run have
+		// countdowns of different lengths: the run let go of a machine whose countdown was still running and
+		// said so ("it is ON ... it switches off by itself unless someone cancels that"), and went on with
+		// another machine for longer than that countdown. The machine was on when the sentence was written
+		// (h.Since) and went off after it, as the sentence says. TestRandomRunsWithLinkFlaps has the same
+		// allowance (saysItGoes).
+		saidItGoes := mc != nil && h.On == OnYes && !mc.on && mc.wentOff && mc.offAt.After(h.Since) && strings.Contains(h.Text, "switches off")
+		if mc != nil && !saidItGoes && ((h.On == OnNo && (!mc.wentOff || h.State != StOff)) || (h.State == StOff && h.On != OnNo) ||
 			(h.On == OnYes && !mc.on) || (h.On == OnNo && mc.on) || (h.On == OnUntouched && (mc.wakes > 0 || mc.shutdowns > 0))) {
 			w.t.Errorf("%s: the run says it is %q, the machine is on=%v (%s: %s)", h.ID, h.On, mc.on, h.State, h.Text)
 		}

@@ -222,11 +222,12 @@ func TestLoadSecretsRefusesTheExampleAndRepeatedCharacters(t *testing.T) {
 // range stops the panel at start instead of making a run wait for a day or hammer an agent.
 func TestWakeUpdateTimings(t *testing.T) {
 	c, err := Parse([]byte(base))
-	if err != nil || c.WakeUpdate != (WakeUpdate{OnlineTimeoutS: 300, SettleS: 60, ShutdownDelayS: 120, AgentRequestsPerMin: 8}) {
+	// (off_after_s, 900: build 14. Its own cases are in TestWakeUpdateOffAfterAndPerMachineTimings.)
+	if err != nil || c.WakeUpdate != (WakeUpdate{OnlineTimeoutS: 300, SettleS: 60, ShutdownDelayS: 120, AgentRequestsPerMin: 8, OffAfterS: 900}) {
 		t.Fatal("defaults:", c.WakeUpdate, err)
 	}
 	c, err = Parse([]byte(base + "wake_update: {online_timeout_s: 60, settle_s: 10, shutdown_delay_s: 10, agent_requests_per_min: 1}\n"))
-	if err != nil || c.WakeUpdate != (WakeUpdate{OnlineTimeoutS: 60, SettleS: 10, ShutdownDelayS: 10, AgentRequestsPerMin: 1}) {
+	if err != nil || c.WakeUpdate != (WakeUpdate{OnlineTimeoutS: 60, SettleS: 10, ShutdownDelayS: 10, AgentRequestsPerMin: 1, OffAfterS: 900}) {
 		t.Fatal("the smallest values:", c.WakeUpdate, err)
 	}
 	for _, bad := range []string{"online_timeout_s: 59", "online_timeout_s: 1801", "settle_s: 9", "settle_s: 601", "shutdown_delay_s: 9",
@@ -311,7 +312,7 @@ func TestWakeUpdateTimings(t *testing.T) {
 		}
 	}
 	c, err = Parse([]byte(base + "wake_update: {shutdown_delay_s: 1.2e1, agent_requests_per_min: 8.0, settle_s: 0x1e}\n"))
-	if err != nil || c.WakeUpdate != (WakeUpdate{OnlineTimeoutS: 300, SettleS: 30, ShutdownDelayS: 12, AgentRequestsPerMin: 8}) {
+	if err != nil || c.WakeUpdate != (WakeUpdate{OnlineTimeoutS: 300, SettleS: 30, ShutdownDelayS: 12, AgentRequestsPerMin: 8, OffAfterS: 900}) {
 		t.Fatal("whole numbers written another way:", c.WakeUpdate, err)
 	}
 }
@@ -580,5 +581,81 @@ func TestOldTuyaEntryIsIgnored(t *testing.T) {
 	}
 	if _, err := Parse([]byte(base + "tuya: {id: x}\n")); err == nil {
 		t.Fatal("an unknown top-level key is still refused")
+	}
+}
+
+// Build 14. wake_update.off_after_s: after how long without an answer a machine counts as off (default 900,
+// 300-3600: it was a fixed 15 minutes). And a systems: entry can have a wake_update: block of its own with
+// off_after_s and shutdown_delay_s for that one machine, in the same ranges, read as strictly as the file's
+// block: no other key, whole numbers, and no 0.
+func TestWakeUpdateOffAfterAndPerMachineTimings(t *testing.T) {
+	for v, want := range map[string]int{"300": 300, "360": 360, "900": 900, "3600": 3600} {
+		c, err := Parse([]byte(base + "wake_update: {off_after_s: " + v + "}\n"))
+		if err != nil || c.WakeUpdate.OffAfterS != want || c.WakeUpdate.ShutdownDelayS != 120 {
+			t.Errorf("off_after_s: %s: %+v %v", v, c, err)
+		}
+	}
+	for bad, want := range map[string]string{
+		"off_after_s: 299":   "wake_update.off_after_s must be 300-3600",
+		"off_after_s: 3601":  "wake_update.off_after_s must be 300-3600",
+		"off_after_s: -900":  "wake_update.off_after_s must be 300-3600",
+		"off_after_s: 0":     "wake_update.off_after_s: 0 is not in 300-3600 (leave the key out for the default, 900)",
+		"off_after_s: 360.5": "wake_update.off_after_s: 360.5 is not a whole number",
+		"off_after_s: soon":  "cannot unmarshal",
+		"off_after: 360":     "field off_after not found in wake_update",
+	} {
+		if c, err := Parse([]byte(base + "wake_update: {" + bad + "}\n")); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("wake_update: {%s}: want an error with %q, got %v (%+v)", bad, want, err, c)
+		}
+	}
+
+	// one machine's own
+	entry := func(block string) string { return base + "systems:\n  - id: pc-a\n    wake_update: " + block + "\n" }
+	c, err := Parse([]byte(entry("{off_after_s: 360, shutdown_delay_s: 30}")))
+	if err != nil || len(c.Systems) != 1 || c.Systems[0].WakeUpdate == nil || *c.Systems[0].WakeUpdate != (SystemWakeUpdate{OffAfterS: 360, ShutdownDelayS: 30}) {
+		t.Fatalf("a machine's own timings: %+v %v", c, err)
+	}
+	if c.WakeUpdate.OffAfterS != 900 || c.WakeUpdate.ShutdownDelayS != 120 { // the file's own are not touched by it
+		t.Fatalf("the panel's timings: %+v", c.WakeUpdate)
+	}
+	for ok, want := range map[string]SystemWakeUpdate{
+		"{off_after_s: 300}":                        {OffAfterS: 300},
+		"{off_after_s: 3600, shutdown_delay_s: 10}": {OffAfterS: 3600, ShutdownDelayS: 10},
+		"{shutdown_delay_s: 3600}":                  {ShutdownDelayS: 3600},
+		"{shutdown_delay_s: ~}":                     {},
+		"{}":                                        {},
+	} {
+		c, err := Parse([]byte(entry(ok)))
+		if err != nil || c.Systems[0].WakeUpdate == nil || *c.Systems[0].WakeUpdate != want {
+			t.Errorf("wake_update: %s: %+v %v", ok, c.Systems[0].WakeUpdate, err)
+		}
+	}
+	if c, err := Parse([]byte(base + "systems:\n  - {id: pc-a}\n")); err != nil || c.Systems[0].WakeUpdate != nil {
+		t.Errorf("an entry without the block: %+v %v", c.Systems[0].WakeUpdate, err)
+	}
+	for bad, want := range map[string]string{
+		"{off_after_s: 299}":                   "system pc-a: wake_update.off_after_s must be 300-3600",
+		"{off_after_s: 3601}":                  "system pc-a: wake_update.off_after_s must be 300-3600",
+		"{shutdown_delay_s: 9}":                "system pc-a: wake_update.shutdown_delay_s must be 10-3600",
+		"{shutdown_delay_s: 3601}":             "system pc-a: wake_update.shutdown_delay_s must be 10-3600",
+		"{off_after_s: 0}":                     "a systems: entry's wake_update.off_after_s: 0 is not in 300-3600 (leave the key out for the default, 900)",
+		"{shutdown_delay_s: 0}":                "a systems: entry's wake_update.shutdown_delay_s: 0 is not in 10-3600 (leave the key out for the default, 120)",
+		"{shutdown_delay_s: 30.5}":             "a systems: entry's wake_update.shutdown_delay_s: 30.5 is not a whole number",
+		"{settle_s: 30}":                       "field settle_s not found in a systems: entry's wake_update",
+		"{online_timeout_s: 300}":              "field online_timeout_s not found in a systems: entry's wake_update",
+		"{off_after: 360}":                     "field off_after not found in a systems: entry's wake_update",
+		"{shutdown_delay_s: '30'}":             "cannot unmarshal !!str",
+		"[360, 30]":                            "cannot unmarshal !!seq",
+		"{off_after_s: 360, off_after_s: 400}": "already defined",
+	} {
+		c, err := Parse([]byte(entry(bad)))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("wake_update: %s: want an error with %q, got %v (%+v)", bad, want, err, c)
+		}
+	}
+	// the block is the entry's, at the entry's level: under wol: it is refused like any unknown key there
+	if _, err := Parse([]byte(base + "agents:\n  - {id: relay, url: \"http://relay:9101\", token_env: T, control_token_env: C, wol_relay: true}\n" +
+		"systems:\n  - id: pc-a\n    wol: {mac: \"00:00:5e:00:53:01\", relay: relay, wake_update: {off_after_s: 360}}\n")); err == nil {
+		t.Error("a wake_update: block inside wol: was accepted")
 	}
 }

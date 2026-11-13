@@ -6,7 +6,9 @@
 // The rules it keeps (README, "Wake, update, shut down"):
 //
 //   - It only ever switches off a machine that was off before the run and that this run woke: no sign of life
-//     from it for MinOff (15 minutes) when the run started, online only after the run's own wake. That is decided in
+//     from it when the run started for as long as a machine must be silent to count as off (the setting
+//     wake_update.off_after_s, MinOff = 15 minutes unless set; a machine can have its own), online only after
+//     the run's own wake. That is decided in
 //     one function, mayShutDown (shutdown.go), which is the only way to the shutdown request. A machine that was
 //     on is never switched off; it is updated only if the admin asked. A machine the run is not sure about (it
 //     stopped answering a few minutes ago: it may be restarting) is left alone: nothing is sent to it.
@@ -92,19 +94,33 @@ const (
 const MaxHosts = 16
 
 // MinOff is how long the panel must have asked a machine's agent, poll after poll, and got nothing at all
-// before a run takes the machine for off. It counts from the last sign of life: an answer, a refused
-// connection (the machine runs, only its agent is stopped), any other answer from its address (an HTTP error,
-// a body that is not the agent's, a connection that was taken and then gave nothing) or a Proxmox node shown
-// as online each start it again, so a machine that refused for 14 minutes and is silent for one is not off.
+// before a run takes the machine for off, unless the configuration says otherwise (wake_update.off_after_s,
+// 300-3600 s, and for one machine the wake_update: block of its systems: entry): it is the default, and what
+// a Settings or a Host without a value of its own uses. It counts from the last sign of life: an answer, a
+// refused connection (the machine runs, only its agent is stopped), any other answer from its address (an
+// HTTP error, a body that is not the agent's, a connection that was taken and then gave nothing) or a Proxmox
+// node shown as online each start it again, so a machine that refused for 14 minutes and is silent for one is
+// not off.
 // One minute without an answer (offline_after) is also what a machine looks like
 // while it restarts, for Windows Update or because its owner restarted it, and such a machine comes back by
 // itself with a fresh uptime: a run would take it for a machine it woke, and switch it off. Fifteen minutes is
-// longer than a restart takes. It is not a setting: a shorter time would bring that mistake back.
+// longer than a restart takes, and that is why it is the default. It was not a setting up to build 13, for
+// that reason: a shorter time brings that mistake back for every restart that takes longer than it. It is a
+// setting now because the owner of the machines is the one who knows how long theirs take: the default is the
+// safe value, a lower one is their decision, never below five minutes, and `fairy admin config check` says
+// what it risks. The clock is the panel's own, in memory: it starts with the panel, and nothing that was
+// written down before a restart counts (poller: agentQuiet).
 const MinOff = 15 * time.Minute
 
-// NotSure is the one sentence for a machine of which the run cannot say that it is off. Nothing is sent to it.
-var NotSure = "Not sure that it is off, so nothing was sent to it: Fairy takes a machine for off only after " + span(MinOff) +
-	" without an answer (it may be restarting, or be on and out of reach)."
+// NotSure is the one sentence for a machine of which the run cannot say that it is off, with the default time
+// (NotSureAfter for a machine or a panel with another one). Nothing is sent to it.
+var NotSure = NotSureAfter(MinOff)
+
+// NotSureAfter is NotSure for a machine that counts as off after d.
+func NotSureAfter(d time.Duration) string {
+	return "Not sure that it is off, so nothing was sent to it: Fairy takes a machine for off only after " + span(d) +
+		" without an answer (it may be restarting, or be on and out of reach)."
+}
 
 // notFreshText is the sentence for a machine that answered after the run's wake without looking freshly
 // started (Host.NotFresh).
@@ -209,18 +225,41 @@ type Settings struct {
 	OnlineTimeout time.Duration `json:"-"`
 	Settle        time.Duration `json:"-"`
 	ShutdownDelay time.Duration `json:"-"`
-	PerAgentMin   int           `json:"agent_requests_per_min"`
-	// the same three in seconds, for the journal and the page
+	// OffAfter: a machine counts as off after this long without any sign of life (MinOff has what that means
+	// and why 15 minutes is the default). One machine can have its own (HostInfo.OffAfter).
+	OffAfter    time.Duration `json:"-"`
+	PerAgentMin int           `json:"agent_requests_per_min"`
+	// the same in seconds, for the journal and the page
 	OnlineTimeoutS int `json:"online_timeout_s"`
 	SettleS        int `json:"settle_s"`
 	ShutdownDelayS int `json:"shutdown_delay_s"`
+	OffAfterS      int `json:"off_after_s"`
 }
 
-// NewSettings makes Settings from whole seconds.
+// NewSettings makes Settings from whole seconds, with the default time after which a machine counts as off
+// (MinOff; WithOffAfter sets another).
 func NewSettings(onlineTimeoutS, settleS, shutdownDelayS, perAgentMin int) Settings {
 	return Settings{OnlineTimeout: time.Duration(onlineTimeoutS) * time.Second, Settle: time.Duration(settleS) * time.Second,
 		ShutdownDelay: time.Duration(shutdownDelayS) * time.Second, PerAgentMin: perAgentMin,
-		OnlineTimeoutS: onlineTimeoutS, SettleS: settleS, ShutdownDelayS: shutdownDelayS}
+		OnlineTimeoutS: onlineTimeoutS, SettleS: settleS, ShutdownDelayS: shutdownDelayS,
+		OffAfter: MinOff, OffAfterS: int(MinOff / time.Second)}
+}
+
+// WithOffAfter is s with another time after which a machine counts as off (wake_update.off_after_s; 0 or
+// less: s as it is).
+func (s Settings) WithOffAfter(seconds int) Settings {
+	if seconds > 0 {
+		s.OffAfter, s.OffAfterS = time.Duration(seconds)*time.Second, seconds
+	}
+	return s
+}
+
+// offAfter is OffAfter, and MinOff for Settings that were made without one.
+func (s Settings) offAfter() time.Duration {
+	if s.OffAfter > 0 {
+		return s.OffAfter
+	}
+	return MinOff
 }
 
 // HostInfo is a machine as the panel's configuration knows it now.
@@ -234,6 +273,10 @@ type HostInfo struct {
 	// Entry names the panel's entry for the machine's agent: another value means the agent was taken out and
 	// added again (Re-pair) since. A run lets go of a machine whose entry changed under it.
 	Entry int
+	// OffAfter, ShutdownDelay: this machine's own values of Settings.OffAfter and Settings.ShutdownDelay, where
+	// the configuration gives it some (the wake_update: block of its systems: entry); 0: the run's. They are
+	// read once, when the run starts.
+	OffAfter, ShutdownDelay time.Duration
 }
 
 // Pending is a power action an agent has scheduled.
@@ -311,11 +354,55 @@ func QuietFor(o Observation, now time.Time) time.Duration {
 	return now.Sub(o.QuietSince)
 }
 
+// setTimings fixes the two timings that one machine can have of its own, for the whole run: info's where it
+// has them, else the run's settings. What differs from the run's is also written into the report.
+func (h *Host) setTimings(info HostInfo, s Settings) {
+	h.offAfter, h.shutDelay = s.offAfter(), s.ShutdownDelay
+	if info.OffAfter > 0 {
+		h.offAfter = info.OffAfter
+	}
+	if info.ShutdownDelay > 0 {
+		h.shutDelay = info.ShutdownDelay
+	}
+	if h.offAfter != s.offAfter() {
+		v := int(h.offAfter / time.Second)
+		h.OffAfterS = &v
+	}
+	if h.shutDelay != s.ShutdownDelay {
+		v := int(h.shutDelay / time.Second)
+		h.ShutdownDelayS = &v
+	}
+}
+
+// minOff is how long this machine must have given nothing at all to count as off (MinOff has what that is).
+func (h *Host) minOff() time.Duration {
+	if h.offAfter > 0 {
+		return h.offAfter
+	}
+	return MinOff
+}
+
+// delay is the countdown of the shutdown the run asks this machine for.
+func (h *Host) delay(r *Run) time.Duration {
+	if h.shutDelay > 0 {
+		return h.shutDelay
+	}
+	return r.Settings.ShutdownDelay
+}
+
+// OffNowAfter is OffNow for a machine (or a panel) with its own time after which a machine counts as off.
+func OffNowAfter(o Observation, now time.Time, after time.Duration) bool {
+	if after <= 0 {
+		after = MinOff
+	}
+	return o.Status == "offline" && o.OnBy == "" && QuietFor(o, now) >= after
+}
+
 // OffNow reports whether the panel's own view is "off": shown as offline, and no answer for MinOff. It is the
 // first of the things a run asks for (the direct question right before the wake is the next), and what the
 // page offers as "off".
 func OffNow(o Observation, now time.Time) bool {
-	return o.Status == "offline" && o.OnBy == "" && QuietFor(o, now) >= MinOff
+	return OffNowAfter(o, now, MinOff)
 }
 
 // OpError is why a request to a machine was not carried out.
@@ -408,11 +495,15 @@ type Host struct {
 	Text  string    `json:"text"`  // what is happening, or how it ended, in a sentence
 
 	// What the run knows about "this run woke it" (mayShutDown reads these).
-	StartStatus string     `json:"start_status"`           // the agent's state when the run started
-	QuietForS   *int64     `json:"quiet_for_s,omitempty"`  // how long it had gone without an answer then (nil: not known)
-	ProbedOff   bool       `json:"probed_off,omitempty"`   // asked directly right before the wake, nothing answered
-	WakeSentAt  *time.Time `json:"wake_sent_at,omitempty"` // the run's first wake for it
-	Wakes       int        `json:"wakes,omitempty"`        // wake requests the relay accepted
+	StartStatus string `json:"start_status"`          // the agent's state when the run started
+	QuietForS   *int64 `json:"quiet_for_s,omitempty"` // how long it had gone without an answer then (nil: not known)
+	// OffAfterS, ShutdownDelayS: this machine's own timings (seconds), where they are not the run's
+	// (Settings.OffAfterS, Settings.ShutdownDelayS): for the report and the journal. nil: the run's count.
+	OffAfterS      *int       `json:"off_after_s,omitempty"`
+	ShutdownDelayS *int       `json:"shutdown_delay_s,omitempty"`
+	ProbedOff      bool       `json:"probed_off,omitempty"`   // asked directly right before the wake, nothing answered
+	WakeSentAt     *time.Time `json:"wake_sent_at,omitempty"` // the run's first wake for it
+	Wakes          int        `json:"wakes,omitempty"`        // wake requests the relay accepted
 	// WakeUnsure: the run's first wake request for it left the panel and got no answer (CodeNoAnswer): the
 	// packet may have gone out. WakeSentAt is then the moment before that request left, and the run waits for
 	// the machine exactly as after a wake the relay accepted. It is switched off again only if a wake request
@@ -521,8 +612,12 @@ type Host struct {
 	listWanted    bool          // the run asked for a new list of its guests before the shutdown request (guestsCurrent) ...
 	listWantMono  time.Duration // ... first at this moment on the steady clock
 	entry         int           // HostInfo.Entry when the run started
-	verdict       *verdict      // how the run would end it: the last look (look) is going on
-	askedAt       time.Time     // when the run's own direct question to it got an answer of any kind (it runs)
+	// offAfter, shutDelay: the two timings as they count for this machine, fixed when the run starts
+	// (setTimings): its own where the configuration gives it some, else the run's. 0: not set (a Host that was
+	// not made by Start), and minOff / delay then give the run's or the default.
+	offAfter, shutDelay time.Duration
+	verdict             *verdict  // how the run would end it: the last look (look) is going on
+	askedAt             time.Time // when the run's own direct question to it got an answer of any kind (it runs)
 }
 
 // Final reports whether the machine has ended in this run.
@@ -741,6 +836,7 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 			}
 			o := m.Ops.Observe(id)
 			h := &Host{ID: id, Name: info.Name, Mode: mode, State: StQueued, Since: now, Text: "waiting for its turn", StartStatus: o.Status, Log: []LogLine{}, entry: info.Entry}
+			h.setTimings(info, m.Settings)
 			if q := QuietFor(o, now); q > 0 && o.OnBy == "" {
 				s := int64(q / time.Second)
 				h.QuietForS = &s
@@ -1139,8 +1235,12 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 // run to wait for its turn at the relay.
 func (m *Manager) maxRun(r *Run) time.Duration {
 	s := r.Settings
+	delay := s.ShutdownDelay // the longest countdown of the run's machines: one of them may have its own
+	for _, h := range r.Hosts {
+		delay = max(delay, h.delay(r))
+	}
 	return time.Duration(len(r.Hosts))*2*time.Minute + 2*s.OnlineTimeout + approvalTimeout + updateStart + updateTimeout + verdictWait +
-		agentBack + s.Settle + s.ShutdownDelay + offGrace + 10*time.Minute
+		agentBack + s.Settle + delay + offGrace + 10*time.Minute
 }
 
 func (m *Manager) finish(r *Run, now time.Time, state string) {

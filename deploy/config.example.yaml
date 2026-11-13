@@ -102,7 +102,7 @@ agents:
 # switches off again the ones this run woke. A machine takes part only after an admin switched it on for this in
 # the panel (the Updates page, or the "..." menu on its page); that is not set in this file. A machine counts as
 # off only after 15 minutes without any answer from its address: no refused connection and no error answer
-# either (one that restarts is silent for less); that time is fixed, not a setting. These are the timings (the
+# either (one that restarts is silent for less); that time is off_after_s below. These are the timings (the
 # defaults; whole numbers in the range given, a fraction is refused, and so is 0: 0 is refused here, it does not
 # mean "the default". For the default leave the key out).
 # NEW in this release, and a panel older than it refuses the block ("field wake_update not found") and does
@@ -115,6 +115,16 @@ agents:
 #   shutdown_delay_s: 120                 # the countdown of that shutdown; Cancel in the panel stops it (10-3600)
 #   agent_requests_per_min: 8             # control requests a run sends to one agent per minute (1-30); an agent
 #                                         # accepts 12 a minute for everything, the rest stays free for the page
+#   off_after_s: 900                      # a machine counts as off after this long without any answer (300-3600).
+#                                         # NEW in build 14 (it was a fixed 15 minutes; build 13 and older refuse
+#                                         # the key). 900 is the safe value. A machine that restarts is silent
+#                                         # too and comes back by itself: with a lower value, a restart that takes
+#                                         # longer than it can be taken for "off" by a run, which then treats the
+#                                         # machine as one it woke and switches it off after its update
+# One machine can have its own off_after_s and shutdown_delay_s: a wake_update: block in its systems: entry
+# (below), same ranges, e.g. a PC that starts and stops fast:
+#   systems:
+#     - {id: pc-a, wake_update: {off_after_s: 360, shutdown_delay_s: 30}}
 
 # The check on the machine itself (README: "The check on the machine itself"). With this block, a fan, power or
 # update action on a machine that has the check switched on asks for a passkey at Pocket ID under the name of
@@ -140,6 +150,10 @@ systems: []
   # - {id: agent-1, bmc_power: {relay: agent-2, target: server-bmc}}
   # a machine with two network cards (Wake sends a packet to each):
   # - {id: agent-3, wol: {macs: ["00:00:5e:00:53:02", "00:00:5e:00:53:03"], relay: pve1-agent}}
+  # its own timings for "Update unpowered hosts" (build 14; the keys that are left out are the wake_update:
+  # block's): it counts as off after 6 minutes without an answer, and its shutdown counts down 30 seconds.
+  # For a Proxmox node with an agent the block may be under the node's id or under the agent's.
+  # - {id: agent-1, wol: {mac: "00:00:5e:00:53:01", relay: pve1-agent}, wake_update: {off_after_s: 360, shutdown_delay_s: 30}}
 
 # Power sources and UPSes follow the hosts they are attached to (system: / powers:); one without a host gets
 # its site on the Users page. Anything without a site is visible to admins only.

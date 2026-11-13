@@ -116,6 +116,7 @@ func (c *Panel) applyDefaults() {
 	defi(&c.WakeUpdate.SettleS, 60)
 	defi(&c.WakeUpdate.ShutdownDelayS, 120)
 	defi(&c.WakeUpdate.AgentRequestsPerMin, 8)
+	defi(&c.WakeUpdate.OffAfterS, 900)
 	defi(&c.Approval.RunApprovalWaitS, 900)
 	defi(&c.AuditMaxMB, 100)
 	defi(&c.AuditKeep, 5)
@@ -189,7 +190,8 @@ func (c *Panel) validateGeneral(errs *problems) {
 		v      int
 		lo, hi int
 	}{{"online_timeout_s", w.OnlineTimeoutS, 60, 1800}, {"settle_s", w.SettleS, 10, 600},
-		{"shutdown_delay_s", w.ShutdownDelayS, 10, 3600}, {"agent_requests_per_min", w.AgentRequestsPerMin, 1, 30}} {
+		{"shutdown_delay_s", w.ShutdownDelayS, 10, 3600}, {"agent_requests_per_min", w.AgentRequestsPerMin, 1, 30},
+		{"off_after_s", w.OffAfterS, 300, 3600}} {
 		if f.v < f.lo || f.v > f.hi {
 			errs.add("wake_update.%s must be %d-%d", f.name, f.lo, f.hi)
 		}
@@ -379,6 +381,14 @@ func (c *Panel) validateSystems(errs *problems, agents map[string]*Agent) {
 		}
 		if o.DWServiceURL != "" && !strings.HasPrefix(o.DWServiceURL, "https://") {
 			errs.add("system %s: dwservice_url must use https://", o.ID)
+		}
+		if w := o.WakeUpdate; w != nil { // this machine's own timings: the ranges of the file's wake_update: block (0: not set)
+			if w.OffAfterS != 0 && (w.OffAfterS < 300 || w.OffAfterS > 3600) {
+				errs.add("system %s: wake_update.off_after_s must be 300-3600", o.ID)
+			}
+			if w.ShutdownDelayS != 0 && (w.ShutdownDelayS < 10 || w.ShutdownDelayS > 3600) {
+				errs.add("system %s: wake_update.shutdown_delay_s must be 10-3600", o.ID)
+			}
 		}
 		if b := o.BMCPower; b != nil {
 			if !bmcTargetRe.MatchString(b.Target) {

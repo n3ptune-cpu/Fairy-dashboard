@@ -17,7 +17,8 @@ import (
 //
 //	Mode         the admin chose it as a machine that is off
 //	StartStatus  "offline" when the run started: its agent had not answered for at least offline_after
-//	QuietForS    how long the panel had asked it without an answer when the run started: at least MinOff
+//	QuietForS    how long the panel had asked it without an answer when the run started: at least MinOff (or the
+//	             time the configuration sets for the panel or for this machine: Host.minOff)
 //	             (15 minutes). A machine that restarts is quiet for a few minutes and then comes back by
 //	             itself with a fresh uptime; without this it would look like a machine the run woke.
 //	ProbedOff    asked directly right before the wake, and nothing answered (the panel's view can be stale)
@@ -74,7 +75,7 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 	case h.StartStatus != "offline":
 		return false, "the panel did not show it as off when the run started"
 	case !offAtStart(h):
-		return false, "Fairy is not sure that it was off before the run: it had not gone " + span(MinOff) + " without an answer"
+		return false, "Fairy is not sure that it was off before the run: it had not gone " + span(h.minOff()) + " without an answer"
 	case !h.ProbedOff:
 		return false, "the run did not confirm that it was off right before the wake"
 	case h.WakeSentAt == nil || (h.Wakes < 1 && !h.WakeUnsure):
@@ -154,9 +155,10 @@ const maxUptimeS = 50 * 365 * 24 * 3600
 // longer than maxUptimeS.
 func uptimeUsable(s int64) bool { return s >= 0 && s <= maxUptimeS }
 
-// offAtStart: the panel had asked the machine without an answer for at least MinOff when the run started.
+// offAtStart: the panel had asked the machine without an answer for at least as long as this machine needs to
+// count as off (Host.minOff: MinOff, the panel's setting or the machine's own) when the run started.
 func offAtStart(h *Host) bool {
-	return h.QuietForS != nil && time.Duration(*h.QuietForS)*time.Second >= MinOff
+	return h.QuietForS != nil && time.Duration(*h.QuietForS)*time.Second >= h.minOff()
 }
 
 func guestNames(names string) string {
@@ -185,7 +187,7 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 		m.done(h)
 		return
 	}
-	delay := r.Settings.ShutdownDelay
+	delay := h.delay(r) // this machine's own countdown where it has one
 	var err error
 	id, by, grant := h.ID, r.By, h.grant // read under the lock; the request goes out without it
 	before, beforeMono := m.now(), m.mono()

@@ -3,6 +3,8 @@ package wakerun
 import (
 	"fmt"
 	"math/rand"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +165,9 @@ func TestMayShutDownNeedsEveryPartOfTheProof(t *testing.T) {
 // run must end with every machine reported.
 func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 	runs := 400
+	if n, err := strconv.Atoi(os.Getenv("FAIRY_RANDOM_RUNS")); err == nil && n > 0 { // as TestRandomRunsWithLinkFlaps
+		runs = n
+	}
 	if testing.Short() {
 		runs = 60
 	}
@@ -170,7 +175,13 @@ func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 	for seed := 1; seed <= runs; seed++ {
 		rng := rand.New(rand.NewSource(int64(seed)))
 		lostRng := rand.New(rand.NewSource(int64(seed) + 1_000_000)) // its own, so that rng draws what it drew before
+		// (build 14) the timings a machine can have of its own, and the panel's off_after: drawn from a third
+		// source, for the same reason. Every third seed has the panel's own off_after too.
+		timeRng := rand.New(rand.NewSource(int64(seed) + 2_000_000))
 		w := newWorld(t)
+		if seed%3 == 0 {
+			w.m.Settings = w.m.Settings.WithOffAfter(300 + timeRng.Intn(3301))
+		}
 		pick := func(xs ...string) string { return xs[rng.Intn(len(xs))] }
 		secs := func(lo, hi int) time.Duration { return time.Duration(lo+rng.Intn(hi-lo+1)) * time.Second }
 		n := 1 + rng.Intn(5)
@@ -184,6 +195,23 @@ func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 		for i := 0; i < n; i++ {
 			id := fmt.Sprintf("m%d", i)
 			var mc *machine
+			// its own off_after (300-3600 s) and its own countdown (10-3600 s, mostly short ones so that the runs
+			// stay short), each for about every second machine
+			var ownOff, ownDelay time.Duration
+			if timeRng.Intn(2) == 0 {
+				ownOff = time.Duration(300+timeRng.Intn(3301)) * time.Second
+			}
+			switch timeRng.Intn(6) {
+			case 0, 1:
+				ownDelay = time.Duration(10+timeRng.Intn(291)) * time.Second
+			case 2:
+				ownDelay = time.Duration(10+timeRng.Intn(3591)) * time.Second
+			}
+			// offAfter: after how long without a sign of life THIS machine counts as off
+			offAfter := w.m.Settings.offAfter()
+			if ownOff > 0 {
+				offAfter = ownOff
+			}
 			switch pick("off", "off", "off", "off", "on", "unreachable", "unreachable for long", "restarting", "agent down", "quiet") {
 			case "off":
 				mc = w.off(id)
@@ -205,7 +233,14 @@ func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 			case "restarting": // on, restarting: no answer for less than MinOff, then it is back with a fresh uptime
 				mc = w.running(id)
 				mc.unreachable = true
-				w.silentFor(mc, secs(0, 780))
+				// (build 14) ... for less than the time after which THIS machine counts as off, with the two
+				// minutes to spare the fixed 15 minutes had here (780 of 900 s). A restart that takes longer than
+				// a machine's off_after is what a short off_after risks, and what `fairy admin config check` says.
+				silent := secs(0, 780)
+				if most := offAfter - 2*time.Minute; silent > most {
+					silent = most
+				}
+				w.silentFor(mc, silent)
 				back, up := secs(0, 500), secs(0, 120)
 				plan = append(plan, later{back, func() { mc.unreachable, mc.bootedAt, mc.agentReadyAt = false, w.now.Add(-up), w.now }})
 			case "agent down": // on, and its agent does not listen: the machine refuses the connection
@@ -219,6 +254,7 @@ func TestNoRunEverSwitchesOffAMachineItDidNotWake(t *testing.T) {
 				mc.on = false
 				w.silentFor(mc, secs(0, 1500))
 			}
+			mc.info.OffAfter, mc.info.ShutdownDelay = ownOff, ownDelay
 			mc.wakeBoots = rng.Intn(5) > 0
 			mc.bootTakes = secs(5, 420)
 			mc.post = time.Duration(rng.Int63n(int64(mc.bootTakes)))

@@ -173,10 +173,10 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	s.Enroll.AllowNonTailscale = cfg.Enroll.AllowNonTailscale
 	wu := cfg.WakeUpdate
 	if wu.OnlineTimeoutS == 0 { // a configuration that was not made by config.Parse: the defaults
-		wu = config.WakeUpdate{OnlineTimeoutS: 300, SettleS: 60, ShutdownDelayS: 120, AgentRequestsPerMin: 8}
+		wu = config.WakeUpdate{OnlineTimeoutS: 300, SettleS: 60, ShutdownDelayS: 120, AgentRequestsPerMin: 8, OffAfterS: 900}
 	}
 	s.WakeRuns = wakerun.New(filepath.Join(cfg.DataDir, "wake-update.json"),
-		wakerun.NewSettings(wu.OnlineTimeoutS, wu.SettleS, wu.ShutdownDelayS, wu.AgentRequestsPerMin), runOps{s})
+		wakerun.NewSettings(wu.OnlineTimeoutS, wu.SettleS, wu.ShutdownDelayS, wu.AgentRequestsPerMin).WithOffAfter(wu.OffAfterS), runOps{s})
 	s.WakeRuns.Event = s.wakeRunEvent
 	if p.OnMachine == nil { // the record of machine ids: its alarms go to the audit log and the Notifications list
 		p.OnMachine = s.machineEvent

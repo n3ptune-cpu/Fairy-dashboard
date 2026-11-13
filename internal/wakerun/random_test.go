@@ -31,6 +31,10 @@ func TestRandomRunsWithLinkFlaps(t *testing.T) {
 	bad := 0
 	for seed := 1; seed <= runs && bad < 12; seed++ {
 		rng := rand.New(rand.NewSource(int64(seed)*7919 + 13))
+		// (build 14) a countdown of its own for about every second machine, 10 to 600 s, from a source of its
+		// own so that rng draws what it drew before: the countdown's arithmetic (when it is due, what counts
+		// as an answer after it, the request that arrives late) with other lengths than the panel's 120 s
+		timeRng := rand.New(rand.NewSource(int64(seed) + 3_000_000))
 		w := newWorld(t)
 		secs := func(lo, hi int) time.Duration { return time.Duration(lo+rng.Intn(hi-lo+1)) * time.Second }
 		pick := func(xs ...string) string { return xs[rng.Intn(len(xs))] }
@@ -50,6 +54,9 @@ func TestRandomRunsWithLinkFlaps(t *testing.T) {
 		for i := 0; i < n; i++ {
 			id := fmt.Sprintf("m%d", i)
 			mc := w.off(id)
+			if timeRng.Intn(2) == 0 {
+				mc.info.ShutdownDelay = time.Duration(10+timeRng.Intn(591)) * time.Second
+			}
 			mc.bootTakes = secs(9, 200)
 			mc.post = time.Duration(rng.Int63n(int64(mc.bootTakes)))
 			mc.updMode = pick("ok", "ok", "ok", "current", "fail", "noverdict", "rollback")

@@ -2093,6 +2093,10 @@ function wakeUpdateMenu(s) {
     <button class="menu-item ${h.opted_in ? "on" : ""}" type="button" data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"
       ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${about}">${h.opted_in ? "Switched on for this machine" : "Switch on for this machine"}<span class="note">${h.opted_in ? "click: off" : h.can_join ? "off" : "Not available"}</span></button>`;
 }
+// A machine with timings of its own (the wake_update: block of its systems: entry in config.yaml): said in its
+// line of the dialog, because the dialog's sentences above name the panel's. Only what is not the panel's
+// value is in the machine's row at all.
+const wuOwnTimings = (h) => `${h.off_after_s ? ` · counts as off after ${esc(fmtSpan(h.off_after_s))} without an answer` : ""}${h.shutdown_delay_s ? ` · its countdown: ${esc(fmtSpan(h.shutdown_delay_s))}` : ""}`;
 // The dialog: which machines, in plain words what happens, then "Confirm it's you" for exactly that list.
 async function openWakeUpdate() {
   let d;
@@ -2106,7 +2110,7 @@ async function openWakeUpdate() {
   const unsure = joined.filter((h) => !h.choice && h.not_sure), rest = joined.filter((h) => !h.choice && !h.not_sure);
   const cannot = (l) => l.map((h) => `<div class="list-row"><span>${esc(h.name)}</span><span class="note">${esc(h.why)}</span></div>`).join("");
   const tick = (h, kind, checked) => `<label class="check opt"><input type="checkbox" data-wu="${kind}" value="${esc(h.id)}" ${checked ? "checked" : ""}><span>${esc(h.name)}
-    <span class="note">${kind === "wake" ? `woken by ${esc(h.relay)}` : "is on"}${h.version ? ` · runs ${esc(buildLabel(h.version))}` : ""}${h.behind === false ? " · already on the newest release" : ""}</span></span></label>`;
+    <span class="note">${kind === "wake" ? `woken by ${esc(h.relay)}` : "is on"}${h.version ? ` · runs ${esc(buildLabel(h.version))}` : ""}${h.behind === false ? " · already on the newest release" : ""}${kind === "wake" ? wuOwnTimings(h) : ""}</span></span></label>`;
   const m = $("#modal");
   m.innerHTML = `<form class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="wu-t" id="wu-form">
     <h3 id="wu-t">Update unpowered hosts</h3>
