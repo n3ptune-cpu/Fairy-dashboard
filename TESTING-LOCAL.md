@@ -551,7 +551,7 @@ browser's address bar. (If that is not how your Pocket ID shows it: I4, step 4 s
 ### I2. Dev VM: build and start
 
 The folder of this zip, `Fairy-dashboard-passkey-r3`, is here in `E:\Projects\Fairy-dashboard-TEST`. The
-build takes the agent's packages from the tagged Fairy-agent that `go.mod` names (v0.7.0 in this release): Go
+build takes the agent's packages from the tagged Fairy-agent that `go.mod` names (v0.8.0 in this release): Go
 downloads them, as for every release build, and no agent folder has to be next to this one. (The test zips
 from before this release were built against a folder `Fairy-agent-part1-r3` next to them, and `go build`
 stopped without it.)
@@ -594,7 +594,7 @@ in it. If it refuses to start, the line says which of the three values it does n
 ### I3. The test VM
 
 1. Add `NSX-TEST-VM` to this panel as in part B, with **power control** and **self-update** ticked.
-   (Add host installs the released agent, build 17, which is Fairy-agent v0.7.0. It knows the check: the VM's
+   (Add host installs the released agent, build 18, which is Fairy-agent v0.8.0. It knows the check: the VM's
    page has the **Approval** button, and steps 2 and 3 are not needed. They are for an agent you built
    yourself, as the test zips from before this release needed: the released agent was build 16 then, and
    did not know the check.)
