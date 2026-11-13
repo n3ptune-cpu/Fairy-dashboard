@@ -134,9 +134,14 @@ func TestGroupsThatCouldNotBeReadEndNoSession(t *testing.T) {
 			if len(all) != 2 {
 				t.Errorf("R7B-04: %d sessions are registered, want the 2 there were", len(all))
 			}
+			// (review of fix8, RF8-10: an answer about another subject is said as that, not as "the groups could not be read")
+			said := "failed: the groups could not be read from Pocket ID (userinfo)"
+			if how == "another subject" {
+				said = "failed: the sign-in answer of Pocket ID (userinfo) was for another account"
+			}
 			var entry map[string]any
 			for _, x := range a.e.auditEntries("u1", "auth.login") {
-				if strings.HasPrefix(fmt.Sprint(x["outcome"]), "failed: the groups could not be read from Pocket ID (userinfo)") {
+				if strings.HasPrefix(fmt.Sprint(x["outcome"]), said) {
 					entry = x
 				}
 				if strings.HasPrefix(fmt.Sprint(x["outcome"]), "denied") {
@@ -144,7 +149,7 @@ func TestGroupsThatCouldNotBeReadEndNoSession(t *testing.T) {
 				}
 			}
 			if p, _ := entry["params"].(map[string]any); entry == nil || p["sessions_revoked"] != nil {
-				t.Errorf("the audit entry must say that the groups could not be read, and name no ended session: %v", entry)
+				t.Errorf("the audit entry must say %q, and name no ended session: %v", said, entry)
 			}
 			// the same at a plain sign-in: a page, no session
 			a.idp.mu.Lock()

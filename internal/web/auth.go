@@ -546,9 +546,14 @@ func (s *Server) authCallback(c *reqCtx) error {
 			// fails and this browser's cookie is cleared (as it was before r3-p1-12), but no session is ended
 			// on the server: a userinfo endpoint that is down for a moment must not sign the account out
 			// everywhere.
-			slog.Warn("login not decided: the groups could not be read from userinfo", "sub", u.Sub)
-			c.auditAnon("auth.login", "failed: the groups could not be read from Pocket ID (userinfo); not decided, no session ended",
-				actorOf(&u), &u.Sub, nil)
+			// What happened is said as it is in the log and in the audit entry (review of fix8, RF8-10: an answer
+			// about another account was written down as "the groups could not be read"). The page stays general.
+			logged, outcome := "login not decided: the groups could not be read from userinfo", "failed: the groups could not be read from Pocket ID (userinfo); not decided, no session ended"
+			if otherSub {
+				logged, outcome = "login not decided: userinfo answered about another account", "failed: the sign-in answer of Pocket ID (userinfo) was for another account; not decided, no session ended"
+			}
+			slog.Warn(logged, "sub", u.Sub)
+			c.auditAnon("auth.login", outcome, actorOf(&u), &u.Sub, nil)
 			c.clearSession()
 			return page.refuse(502, cbNoGroups)
 		}

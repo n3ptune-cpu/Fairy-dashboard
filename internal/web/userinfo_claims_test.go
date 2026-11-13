@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +108,15 @@ func TestUserinfoAboutAnotherAccountRefusesTheSignIn(t *testing.T) {
 	r := e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
 	if r.code != 502 || cookieAfter(e, rt, r.hdr) != "" {
 		t.Errorf("userinfo about another account, no allowed groups set: callback %d, a session cookie: %v; want 502 and none", r.code, cookieAfter(e, rt, r.hdr) != "")
+	}
+	// the audit entry says what happened (review of fix8, RF8-10: it said "the groups could not be read from
+	// Pocket ID (userinfo)", which is another failure)
+	outcome := ""
+	for _, a := range e.auditEntries("", "auth.login") {
+		outcome = fmt.Sprint(a["outcome"])
+	}
+	if outcome != "failed: the sign-in answer of Pocket ID (userinfo) was for another account; not decided, no session ended" {
+		t.Errorf("the audit entry of a userinfo answer about another account: %q", outcome)
 	}
 	// the control: userinfo about this account
 	idp.userinfo = map[string]any{"sub": "u1", "groups": []string{"viewers"}}
