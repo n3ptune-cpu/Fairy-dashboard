@@ -266,7 +266,12 @@ func TestSwitchOnForRunsSaysWhatTheRowSays(t *testing.T) {
 	if cb := a.confirm(pendingID(r), false); !stepUpRequired(r) || cb.code != 303 {
 		t.Fatalf("the confirmation: %d %s", r.code, r.raw)
 	}
-	r = put("pc-a") // inside the window now
+	// inside the window now: the page asks first (review of passkey-k, RK-04: nothing asked here, and the switch
+	// was recorded; approval_runs_switch_test.go), and the answer to the request that says so is the message
+	if r = put("pc-a"); r.code != 409 {
+		t.Fatalf("pc-a inside the window, not asked: %d %s", r.code, r.raw)
+	}
+	r = e.do("PUT", "/api/systems/pc-a/wake-update", map[string]any{"enabled": true, "asked": true}, append([]string{"Cookie", a.sess}, wuWrite...)...)
 	if msg, _ := r.body["message"].(string); r.code != 200 || msg != "PC-A is switched on, but no run can take it: it checks a passkey approval itself" || strings.Contains(msg, "can now be chosen") {
 		t.Fatalf("pc-a: %d %s", r.code, r.raw)
 	}

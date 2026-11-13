@@ -2159,7 +2159,17 @@ document.addEventListener("click", async (e) => {
   if (on && !inNoRun && !confirm(`Switch "Update unpowered hosts" on for ${name}? In a run that you start on the Updates page, Fairy may then wake this machine, update its agent and switch it off again.`)) return;
   const label = `${on ? "Switch on" : "Switch off"} "Update unpowered hosts" for ${name}`;
   try {
-    const r = await controlCall({ kind: "request", label, method: "PUT", path, body }, () => api(path, { method: "PUT", body: JSON.stringify(body) }));
+    let r;
+    try {
+      r = await controlCall({ kind: "request", label, method: "PUT", path, body }, () => api(path, { method: "PUT", body: JSON.stringify(body) }));
+    } catch (x) {
+      // A machine that checks approvals itself is asked about once. Outside the confirmation window "Confirm it's you" was that
+      // question. Inside it the server records nothing before the question was put ("ask_first", with the sentence): it is
+      // asked here, and the request is sent again saying so.
+      if (x.status !== 409 || x.detail?.code !== "ask_first") throw x;
+      const asked = { ...body, asked: true };
+      if (confirm(x.detail.message)) r = await controlCall({ kind: "request", label, method: "PUT", path, body: asked }, () => api(path, { method: "PUT", body: JSON.stringify(asked) }));
+    }
     if (r) flash(r.message || `${label}: done`);
   } catch (x) { flash(x.message, true); }
   fetchWakeUpdate();

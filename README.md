@@ -640,7 +640,10 @@ The panel keeps this in memory: after a restart of the panel Cancel is there aga
 **Update unpowered hosts** does not ask for approvals yet. A machine with the check on is not taken
 into a run: its row says "needs approval: not supported in runs yet", before and after "Switch on", also
 while the machine is off and after a restart of the panel (the panel has it on record). Update it and
-switch it off on its own page.
+switch it off on its own page. "Switch on" for such a machine asks one question, and it says both things: no
+run can take it for now, and once that is over a run you start may wake, update and switch it off. Nothing
+is switched on before that question was answered (the API refuses the switch with `ask_first` until the
+request says `"asked": true`, or comes back from "Confirm it's you").
 
 **When something is wrong** the page says which thing, not "failed":
 

@@ -818,6 +818,8 @@ func (s *Server) wakeUpdateSwitch(c *reqCtx) error {
 	}
 	var b struct {
 		Enabled *bool `json:"enabled"`
+		// Asked: the page put the question of wuAskFirst to the admin and the answer was yes (see below).
+		Asked bool `json:"asked"`
 	}
 	if err := c.decodeBody(&b); err != nil {
 		return err
@@ -841,6 +843,17 @@ func (s *Server) wakeUpdateSwitch(c *reqCtx) error {
 	if *b.Enabled && !h.CanJoin {
 		c.audit(u, "wakeupdate.switch", id, map[string]any{"enabled": true}, "error 409: "+h.WhyNot)
 		return apierr.New(409, x.Name+" cannot take part: "+h.WhyNot)
+	}
+	if *b.Enabled && h.Approval != "" && !b.Asked && !c.resumed() {
+		// A machine that checks approvals itself is asked about ONCE, with words that are true of it (review of
+		// passkey-k, RK-04). Outside the confirmation window that question is "Confirm it's you", whose dialog
+		// says them (wakeUpdateSwitchDetail), and this request is then the kept one (resumed). Inside the
+		// window nothing asked at all: the page leaves its own question out for such a machine (r4-b1-04: it
+		// was the untrue one), and the switch was recorded, to count for runs as soon as the check is accepted
+		// as off, without the admin ever having been told what it allows. So inside the window the switch is
+		// not recorded until the request says that the question was put ("asked": the page asks with the
+		// sentence of this answer and sends the request again). Nothing is recorded here.
+		return apierr.New(409, map[string]any{"code": "ask_first", "message": wuAskFirst(x.Name, h)})
 	}
 	if err := s.Poller.Admin.SetWakeUpdate(id, *b.Enabled); err != nil {
 		return err
@@ -870,10 +883,20 @@ func wuSwitchWhy(h wuHost) string {
 	return "it checks a passkey approval itself"
 }
 
+// wuCountsLater is what the switch of a machine that is in no run allows all the same: the second half of the
+// one question such a machine is asked about. Short: "Confirm it's you" cuts the line of a kept action.
+const wuCountsLater = "After that, a run you start may wake, update and switch it off"
+
+// wuAskFirst is the page's question for a machine that checks approvals itself, inside the confirmation window.
+func wuAskFirst(name string, h wuHost) string {
+	return "Switch \"Update unpowered hosts\" on for " + name + "? No run can take it for now: " + wuSwitchWhy(h) + ". " + wuCountsLater + "."
+}
+
 // wakeUpdateSwitchDetail says which way a kept switch request goes.
 func (c *reqCtx) wakeUpdateSwitchDetail(*model.User) string {
 	var b struct {
 		Enabled *bool `json:"enabled"`
+		Asked   bool  `json:"asked"`
 	}
 	if !decodeStrictly(c.body, &b) || b.Enabled == nil {
 		return ""
@@ -881,10 +904,12 @@ func (c *reqCtx) wakeUpdateSwitchDetail(*model.User) string {
 	if *b.Enabled {
 		// A machine that checks approvals itself is in no run. "Confirm it's you" said the opposite ("a run you
 		// start may then wake, update and switch off this machine"), after the page had asked the same, and
-		// the result then said that no run can take it (audit 6, r4-b1-04). The truth is said here, up front.
+		// the result then said that no run can take it (audit 6, r4-b1-04). The truth is said here, up front,
+		// and all of it: what the switch allows once the machine is one a run can take (RK-04: this dialog is
+		// the one question such a machine is asked about).
 		if x, err := c.find(c.r.PathValue("id")); err == nil {
 			if h, ok := c.s.wuHostOf(x); ok && h.Approval != "" {
-				return "switch it on; no run can take it for now: " + wuSwitchWhy(h)
+				return "switch it on; no run can take it for now: " + wuSwitchWhy(h) + ". " + wuCountsLater
 			}
 		}
 		return "switch it on: a run you start may then wake, update and switch off this machine"
