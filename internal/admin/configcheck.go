@@ -3,6 +3,7 @@ package admin
 import (
 	"errors"
 	"fmt"
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
 	"os"
 	"slices"
 	"strings"
@@ -90,6 +91,8 @@ func (c *cli) configCheck() int {
 	okLines, said := wakeUpdateCheck(cfg)
 	notes, inferred = append(notes, okLines...), append(inferred, said...)
 	inferred = append(inferred, systemIDCheck(cfg)...)
+	okLines, said = powerLinkCheck(cfg)
+	notes, inferred = append(notes, okLines...), append(inferred, said...)
 	for _, e := range secretEnvs(cfg) {
 		if os.Getenv(e.env) != "" {
 			notes = append(notes, fmt.Sprintf("%s (%s): present", e.env, e.what))
@@ -225,6 +228,95 @@ func systemIDCheck(cfg *config.Panel) []string {
 			"(<id_prefix>node-<name>, <id_prefix>qemu-<vmid>, <id_prefix>lxc-<vmid>): %s. A typing mistake in the id?", o.ID, what))
 	}
 	return out
+}
+
+// powerLinkCheck is about the plugs an agent relays, as the panel's entry of that agent links them
+// (power_links: {<device id on the agent>: <system id>}) and leaves them out of the total
+// (power_exclude_from_total: [<device id>]). One ok line per agent says what is set, and notes say what cannot
+// work:
+//
+//   - a device id that no device can have (not an id as the agent's own power_sources take them);
+//   - power_links to an id that is no machine's (no agent's id, not of the form a node or a guest has);
+//   - power_links to the id of a node whose agent the configuration does not decide: the watts are on the
+//     node's row while that row is there, and on no row after a restart of the panel with the machine off
+//     (poller.ShownID follows a machine to its agent's row only where the configuration says whose it is).
+//
+// Whether the agent has a device with that id is not known here: this command reads files and asks no
+// machine. The running panel knows it from the agent's answers and says it once in its log (power.Manager,
+// UpdateRemote: "... names devices the agent does not report"); the ok line says where to look.
+//
+// Notes, not warnings: nothing is refused, and the exit code stays as it is.
+func powerLinkCheck(cfg *config.Panel) (ok, said []string) {
+	c := *cfg
+	c.Agents, c.Systems, c.Proxmox = slices.Clone(cfg.Agents), slices.Clone(cfg.Systems), slices.Clone(cfg.Proxmox)
+	_, _, _ = managed.NewStore(cfg.DataDir).Merge(&c)
+	agents := map[string]bool{}
+	for _, a := range c.Agents {
+		agents[a.ID] = true
+	}
+	upsEntries := map[string]bool{}
+	for _, raw := range cfg.UPS {
+		if id, _ := raw["id"].(string); id != "" {
+			upsEntries[id] = true
+		}
+	}
+	_, undecided := poller.NodeAgents(&c)
+	form := func(id string, kinds ...string) bool {
+		for _, p := range c.Proxmox {
+			for _, kind := range kinds {
+				if strings.HasPrefix(id, p.Prefix()+kind) && len(id) > len(p.Prefix()+kind) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	sorted := func(m map[string]string) []string {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		return keys
+	}
+	for _, a := range cfg.Agents {
+		if len(a.PowerLinks)+len(a.PowerExcludeFromTotal) == 0 {
+			continue
+		}
+		var parts []string
+		for _, dev := range sorted(a.PowerLinks) {
+			parts = append(parts, dev+" -> "+a.PowerLinks[dev])
+		}
+		line := "agent " + a.ID + ": devices it relays"
+		if len(parts) > 0 {
+			line += ": linked " + strings.Join(parts, ", ")
+		}
+		if ex := slices.Sorted(slices.Values(a.PowerExcludeFromTotal)); len(ex) > 0 {
+			line += "; not in the total: " + strings.Join(ex, ", ")
+		}
+		ok = append(ok, line+" (the device ids are the agent's own: the running panel says in its log when the agent reports no device with such an id)")
+		for _, dev := range slices.Sorted(slices.Values(append(sorted(a.PowerLinks), a.PowerExcludeFromTotal...))) {
+			if !configutil.ValidID(dev) {
+				said = append(said, fmt.Sprintf("agent %s: %q in power_links / power_exclude_from_total is not an id a device can have "+
+					"(lowercase letters, digits and dashes, as in the agent's own power_sources): nothing is linked or left out for it", a.ID, dev))
+			}
+		}
+		for _, dev := range sorted(a.PowerLinks) {
+			to := a.PowerLinks[dev]
+			switch {
+			case to == "" || agents[to]:
+			case len(undecided[to]) > 0:
+				said = append(said, fmt.Sprintf("agent %s: power_links: device %s is linked to the node %s, and the configuration does not say which agent's machine that node is "+
+					"(it can be the node of %s): the watts are on the node's row while it is there, and on no row after a restart of the panel with the machine off. "+
+					"To say whose node it is, write links_to: %s in that agent's entry", a.ID, dev, to, strings.Join(undecided[to], " or of "), to))
+			case form(to, "node-", "qemu-", "lxc-"):
+			default:
+				said = append(said, fmt.Sprintf("agent %s: power_links: device %s is linked to %s, which is no agent's id and not the id of a node or a guest of a proxmox: entry: "+
+					"its watts are on no row. A typing mistake in the id?", a.ID, dev, to))
+			}
+		}
+	}
+	return ok, said
 }
 
 // wakeUpdateCheck lists the timings of "Update unpowered hosts" that are not the defaults a reader would

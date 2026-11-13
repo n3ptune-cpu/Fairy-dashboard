@@ -29,6 +29,9 @@ type Manager struct {
 	remoteKeys []string
 	// remoteWarned: agents whose dropped rows were already logged (see UpdateRemote).
 	remoteWarned map[string]bool
+	// unreported: per agent, the device ids its entry in the panel names (power_links,
+	// power_exclude_from_total) that the agent's last answer did not have, as they were logged (UpdateRemote).
+	unreported map[string]string
 
 	// ShownID, when set, turns the system id a source is linked to into the id of the row that machine is
 	// shown as right now (the poller's: Poller.ShownID). One machine can have two ids, its agent's and its

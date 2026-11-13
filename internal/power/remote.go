@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
@@ -58,6 +59,7 @@ func (m *Manager) UpdateRemote(agentID string, rows []map[string]any, unreachabl
 		m.remote[key] = m.remoteState(agentID, key, rid, row, prev, hasPrev, now, links, exclude)
 	}
 	m.dropUnreported(agentID, seen)
+	m.noteUnreported(agentID, rows, links, exclude)
 	switch {
 	case dropped > 0 && !m.remoteWarned[agentID]:
 		if m.remoteWarned == nil {
@@ -69,6 +71,45 @@ func (m *Manager) UpdateRemote(agentID string, rows []map[string]any, unreachabl
 	case dropped == 0:
 		delete(m.remoteWarned, agentID)
 	}
+}
+
+// noteUnreported says once in the log when the panel's entry of an agent names a device (in power_links or in
+// power_exclude_from_total) that the agent's answer does not have: a typing mistake in the device's id, or a
+// device that was taken out of the agent's own power_sources. Nothing is linked and nothing is left out of the
+// total for such an id, and nothing else would say so: a plug that was meant to be left out of the total is
+// then counted. Said again only when the list of such ids changes; an agent that could not be reached is not
+// judged. (`fairy admin config check` cannot know this: it reads files and asks no machine.)
+func (m *Manager) noteUnreported(agentID string, rows []map[string]any, links map[string]string, exclude []string) {
+	reported := map[string]bool{}
+	for _, row := range rows {
+		reported[jsonString(row["id"])] = true
+	}
+	var missing []string
+	for dev := range links {
+		if !reported[dev] {
+			missing = append(missing, dev)
+		}
+	}
+	for _, dev := range exclude {
+		if !reported[dev] && !slices.Contains(missing, dev) {
+			missing = append(missing, dev)
+		}
+	}
+	slices.Sort(missing)
+	said := strings.Join(missing, ", ")
+	if said == m.unreported[agentID] {
+		return
+	}
+	if m.unreported == nil {
+		m.unreported = map[string]string{}
+	}
+	if said == "" {
+		delete(m.unreported, agentID)
+		return
+	}
+	m.unreported[agentID] = said
+	slog.Warn("config: the panel's entry of an agent names devices the agent does not report (power_links / power_exclude_from_total): nothing is linked or left out of the total for them",
+		"agent", agentID, "devices", textsafe.Cut(said, 400))
 }
 
 // agedStatus is "stale" while the last good reading is younger than offline_after, then "unreachable".
