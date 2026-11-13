@@ -157,6 +157,28 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 	if after && o.Pending != nil && o.Pending.Action == "shutdown" { // the countdown of a request without an answer may show only now
 		m.seeCountdown(r, h, o, mono, now)
 	}
+	if h.lostShutdown() && after && o.Pending != nil {
+		// A request without an answer, no countdown of it has shown, and the machine's agent shows another
+		// action as pending (a shutdown would be the run's: seeCountdown). Somebody asked for that one on the
+		// machine's page. The agent's cancel names no action: it would call that one off, and the cancel that
+		// is repeated for such a request did, within 10 s, up to 12 times in a countdown and many more with a
+		// long one, while the row said "none is pending" (review of fix8, RF8-03). No cancel is sent while it
+		// shows. The agent holds one action at a time and refuses a second, so the run's request cannot start a
+		// countdown while it is there; when it is gone the cancels go on. (otherPending is the same rule for a
+		// request that was answered; it ends the machine, this one waits, because the request can still come.)
+		if c == nil {
+			c = &callingOff{why: why}
+			h.calloff = c
+		}
+		p := *o.Pending
+		if c.other == nil {
+			m.note(h, m.now(), fmt.Sprintf("another power action is pending on it now (%s at %s, by the machine's own clock), which is not the run's shutdown: "+
+				"no cancel is sent while it shows, since its agent's cancel would call that one off", p.Action, when(p.At, now)))
+		}
+		c.other, c.lastMono, c.skipped = &p, mono, c.skipped+1
+		m.say(h, "another power action is pending on it ("+p.Action+"): no cancel is sent while it shows")
+		return
+	}
 	began := m.mono()
 	var err error
 	id, by := h.ID, r.By
@@ -256,6 +278,10 @@ type callingOff struct {
 	// while the run knew of no countdown ("nothing is pending"), failed whether the latest try failed.
 	none   int
 	failed bool
+	// other: another action than a shutdown that the agent showed as pending meanwhile (the latest); skipped:
+	// how many tries were left out for it (callOff: the agent's cancel would have called that one off).
+	other   *Pending
+	skipped int
 }
 
 // notCalledOff ends a machine whose countdown the run could not call off before the run's own due time
@@ -270,6 +296,16 @@ func (m *Manager) notCalledOff(r *Run, h *Host, now time.Time) {
 		// machine stays on: the request has not arrived so far, and if it still does, nobody calls its countdown
 		// off. The machine's power goes into the record as not known, whatever came of the cancels.
 		_, untilAt := h.cancelUntil()
+		if p := c.other; p != nil {
+			// Another action was pending on it for some or all of that time, and the run left its cancel out
+			// while it showed. Not "none is pending": one was.
+			m.note(h, now, fmt.Sprintf("until %s: %d cancel(s) answered with nothing pending, %d left out while another action was pending, %d that did not get through",
+				clock(untilAt), c.none, c.skipped, c.tries))
+			m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s: its shutdown request had got no answer, and no countdown of it showed. Another power action was pending on the machine meanwhile "+
+				"(%s at %s, by the machine's own clock), which is not the run's: the run sent no cancel while it showed, since its agent's cancel would have called that one off. ",
+				c.why, p.Action, when(p.At, now))+lostMay(r)+" Fairy no longer watches it."+updateTail(h))
+			return
+		}
 		if c.none > 0 && !c.failed {
 			// its agent answered every cancel with "nothing is pending" (callOff)
 			m.note(h, now, fmt.Sprintf("its agent answered %d cancel(s) until %s: nothing is pending", c.none, clock(untilAt)))
@@ -310,7 +346,8 @@ func (m *Manager) notCalledOff(r *Run, h *Host, now time.Time) {
 //     seen its countdown in an answer before, or with the next answer: the poller's polls of one machine never
 //     overlap, so that one began after the run's request was answered.
 //   - Not for a shutdown request that got no answer and whose countdown was never seen (lostShutdown): the run
-//     does not know that it arrived, nor when; it can still arrive. The cancel is sent then, as since R7A-09.
+//     does not know that it arrived, nor when; it can still arrive. The machine is not let go of then. callOff
+//     has a rule of its own for it: no cancel while another action shows (review of fix8, RF8-03).
 //
 // In every other case (nothing pending, a shutdown pending, no answer since the request, the latest poll
 // failed) it says no, and the cancel goes out as before: a cancel too many loses an action a person asked for,

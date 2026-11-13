@@ -154,8 +154,13 @@ func TestOneAnswerWithAnotherActionIsNotEnoughBeforeTheCountdownWasSeen(t *testi
 }
 
 // A shutdown request that got no answer, and whose countdown the run never saw: the run does not know that it
-// arrived, nor when, and it can still arrive. Its cancel is sent whatever its agent shows (R7A-09).
-func TestAfterAShutdownRequestWithoutAnAnswerTheCancelIsSentWhateverIsPending(t *testing.T) {
+// arrived, nor when, and it can still arrive. Its cancel was sent whatever its agent showed (R7A-09), and since
+// audit 6 it was sent again every 10 s: a reboot that somebody had asked for on the machine's page was called
+// off by it, and the row said "none is pending". While another action than a shutdown shows, no cancel is sent
+// (review of fix8, RF8-03; lostother_test.go), and the row says which action was pending. The agent holds one
+// action at a time, so the run's request cannot start its countdown while that one is there.
+// (This test was TestAfterAShutdownRequestWithoutAnAnswerTheCancelIsSentWhateverIsPending.)
+func TestAfterAShutdownRequestWithoutAnAnswerNoCancelIsSentWhileAnotherActionShows(t *testing.T) {
 	w := newWorld(t)
 	pc := w.off("pc-a")
 	pc.shutLost = "never"
@@ -167,8 +172,9 @@ func TestAfterAShutdownRequestWithoutAnAnswerTheCancelIsSentWhateverIsPending(t 
 		t.Fatal(err)
 	}
 	h := host(over(t, w), "pc-a")
-	if !strings.Contains(w.callsFor("pc-a"), "cancel") || !strings.Contains(h.Text, "its shutdown request had got no answer, so its agent was asked to call off a countdown") {
-		t.Errorf("requests %s: %s", w.callsFor("pc-a"), h.Text)
+	if strings.Contains(w.callsFor("pc-a"), "cancel") || pc.pending == nil || h.On != OnUnknown ||
+		!strings.Contains(h.Text, "its shutdown request had got no answer, and no countdown of it showed. Another power action was pending on the machine meanwhile (reboot at ") {
+		t.Errorf("requests %s, the reboot still pending: %v, power %q: %s", w.callsFor("pc-a"), pc.pending != nil, h.On, h.Text)
 	}
 }
 
