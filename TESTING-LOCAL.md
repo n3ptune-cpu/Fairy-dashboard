@@ -625,7 +625,7 @@ not press Update. Both put the released agent (build 17) in its place.
 
 ### I4. Turn on, with your passkey
 
-1. On the VM's page press **Approval**, and in the dialog **Turn on**. (The same is on the Updates page: "1
+1. On the VM's page press **Approval**, and in the dialog **Turn on**. (The same is on the Approvals page, in the menu: "1
    machine is ready for the check on the machine itself", with the button **Turn on the check for 1 machine**.)
 2. The dialog "Turn on the check on the machine itself" lists what the VM will trust: your Pocket ID's
    address, the **Client ID** (compare it with the Client ID of `Fairy PC actions` in Pocket ID: the panel

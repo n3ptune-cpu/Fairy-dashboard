@@ -3,7 +3,7 @@ package config
 import "net/url"
 
 // ApprovalIssuerMustBeHTTPS is the short reason no machine is ready to be switched on while the approval issuer
-// is not an https address (the Approval dialog, the Updates page, the config check and the log at start).
+// is not an https address (the Approval dialog, the Approvals page, the config check and the log at start).
 const ApprovalIssuerMustBeHTTPS = "the issuer must be https"
 
 // ApprovalIssuerProblem is "" or ApprovalIssuerMustBeHTTPS: a machine takes an https issuer and nothing else

@@ -675,10 +675,13 @@ config check, and every machine is "Not ready: the issuer must be https". nginx 
 like the sign-in's. With `deploy/nginx.example.conf` that is at most 10 round trips a minute per address
 (burst 10), sign-ins included.
 
-**3. Turn it on.** The Updates page (admins) gets a box, **The check on the machine itself**: "N machines are
+**3. Turn it on.** The **Approvals** page (admins; in the menu, next to Updates) lists every machine with how
+its check stands (on, off, not supported, offline, needs accepting) and says "N machines are
 ready for the check on the machine itself", with the button **Turn on the check for N machines** (when no
-machine is ready there is no button, and one line says so); a machine's own page has the button **Approval** in
-its header, and the dialog behind it has **Turn on** for that machine. Turn on is deliberate and proven:
+machine is ready there is no button, and one line says so). Each row has **Approval**, which opens that
+machine's own dialog, and **Accept** when the machine waits for one; a machine's own page has the button **Approval** in
+its header, and the dialog behind it has **Turn on** for that machine. The Updates page keeps one line with a
+link where an update meets the check. Turn on is deliberate and proven:
 
 * The dialog shows exactly what each machine will trust: the Pocket ID address, the client id, the signing
   key(s) Pocket ID publishes right now (key id and thumbprint) and the list of people who may approve there,
@@ -728,7 +731,7 @@ and the machines of one batch see each other's (Known limits, below).
 
 From then on the record counts. The Overview shows a red key sign behind the host's name; on the host's page
 the **Approval** button is red, with a red line under the header; and the dialog behind that button and the
-Updates page say which of these it is:
+Approvals page say which of these it is:
 
 * **the host has the check on and no id is on record for it** ("Not on record": the check was set on the
   machine itself or from another panel; or its id came on record "at first sight" in an earlier build of
@@ -741,7 +744,7 @@ Updates page say which of these it is:
 * **a host that had the check shows none** any more.
 
 While a host is flagged, the panel asks it for no approval and sends it no fan, power or update request,
-and it is in no run. An admin resolves it on the host's page: press **Approval**, and in the dialog **Accept
+and it is in no run. An admin resolves it in the host's row on the Approvals page, or on the host's page: press **Approval**, and in the dialog **Accept
 this machine's id** (not on record), **Accept this machine's new id** (changed) or "Accept that its check is
 off", in a browser, behind "Confirm it's you", with an entry in the Audit log. Before you accept an id,
 compare it with the machine's own: on the machine `fairy-agent helper-status`, line `machine id:`. A
