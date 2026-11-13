@@ -112,3 +112,72 @@ func TestUIWakeUpdateCanBeChosenIsNotCountedDuringARun(t *testing.T) {
   if (line() !== LEAD + "3 are switched on, 0 can be chosen right now.") fail("after the run: " + line());
 `)
 }
+
+// Seen in a real run (13 Nov): when the run was over, nothing said so. The run's end makes a notification, of
+// severity info, and pop-ups show critical events and warnings only; the page itself only changed the boxes.
+//
+// The page that saw a run going says once that it is over, with the line every result of an action is said
+// with (flash): how it ended, how many machines, how many need a look, and each machine's sentence behind
+// "Details" (so the line stays until it is closed). A run that ended while no page watched is not announced
+// when a page loads, like every pop-up: it is the "Last run" on the Updates page and in Notifications.
+func TestUIWakeUpdateSaysOnceThatTheRunIsOver(t *testing.T) {
+	js := appJS(t)
+	// on another page than Updates the page asks when a notification came (the end of a run makes one)
+	if want := `if (changed && wuLive && current().page !== "updates") fetchWakeUpdate();`; strings.Count(js, want) != 1 {
+		t.Errorf("app.js lacks (or has twice) %q", want)
+	}
+	runWuPageScript(t, "wu-over", `
+  const off = (id) => runHost(id, { state: "off", on: "off", update: "ok", text: "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again." });
+  const going = run("r1", "running", [runHost("pc-a"), runHost("pc-b"), runHost("<b>pc-c</b>")]);
+  const over = run("r1", "done", [off("pc-a"), off("pc-b"), off("<b>pc-c</b>")], { ended_at: "2026-11-13T16:25:00Z" });
+  const get = async (d) => { answer = () => d; await fetchWakeUpdate(); await settle(); };
+  // the page opens while nothing runs, and an older run is on it: nothing is announced
+  await get(data({ last: [run("r0", "done", [off("pc-a")])] }));
+  if (flashes.length || wuLive !== "") fail("a run that was over when the page loaded: " + JSON.stringify(flashes));
+  // a run is going: nothing yet, however often the page asks
+  for (let i = 0; i < 3; i++) await get(data({ active: going, last: [run("r0", "done", [off("pc-a")])] }));
+  if (flashes.length || wuLive !== "r1") fail("while it runs: " + JSON.stringify(flashes) + " live " + wuLive);
+  // it is over: said once
+  for (let i = 0; i < 3; i++) await get(data({ last: [over, run("r0", "done", [off("pc-a")])] }));
+  if (flashes.length !== 1) fail("the run is over: said " + flashes.length + " times");
+  let f = flashes[0] || {};
+  if (f.msg !== "Update unpowered hosts: run finished · 3 machines" || f.bad !== false) fail("the line: " + JSON.stringify(f));
+  if (JSON.stringify(f.details) !== JSON.stringify(["PC-A: " + off("pc-a").text, "PC-B: " + off("pc-b").text, "<B>PC-C</B>: " + off("x").text])) fail("Details: " + JSON.stringify(f.details));
+  if (wuLive !== "") fail("the run is still taken for going: " + wuLive);
+  // a run that needs a look: said as that, in red
+  flashes.length = 0;
+  const bad = run("r2", "done", [off("pc-a"), runHost("pc-b", { state: "left_on", on: "on", text: "It is still on 5 minutes after its shutdown was due: the shutdown did not work. It is ON." }),
+    runHost("pc-c", { state: "off", on: "off", update: "failed", text: "Came online after the wake, was not updated, and switched off again." }), runHost("pc-d", { state: "gave_up", on: "unknown", text: "It did not come online." })]);
+  await get(data({ active: run("r2", "running", [runHost("pc-a")]) }));
+  await get(data({ last: [bad, over] }));
+  f = flashes[0] || {};
+  if (flashes.length !== 1 || f.msg !== "Update unpowered hosts: run finished · 4 machines · 3 to look at" || f.bad !== true || f.details.length !== 4) fail("a run with machines to look at: " + JSON.stringify(flashes));
+  // cancelled, stopped: the word of the run's chip; one machine
+  for (const [state, msg, red] of [["cancelled", "Update unpowered hosts: run cancelled · 1 machine", false], ["stopped", "Update unpowered hosts: run stopped · 1 machine", true], ["interrupted", "Update unpowered hosts: run interrupted · 1 machine", true]]) {
+    flashes.length = 0;
+    await get(data({ active: run("r-" + state, "running", [runHost("pc-a")]) }));
+    await get(data({ last: [run("r-" + state, state, [runHost("pc-a", { state: "skipped", on: "untouched", text: "Not started." })])] }));
+    if (flashes.length !== 1 || flashes[0].msg !== msg || flashes[0].bad !== red) fail(state + ": " + JSON.stringify(flashes));
+  }
+  // the next run was started before the page asked again: the one that ended is said, the new one is the one going
+  flashes.length = 0;
+  await get(data({ active: run("r5", "running", [runHost("pc-a")]) }));
+  await get(data({ active: run("r6", "running", [runHost("pc-b")]), last: [run("r5", "done", [off("pc-a")])] }));
+  if (flashes.length !== 1 || flashes[0].msg !== "Update unpowered hosts: run finished · 1 machine" || wuLive !== "r6") fail("two runs: " + JSON.stringify(flashes) + " live " + wuLive);
+  // a run that is in no list any more: nothing to say, and nothing breaks
+  flashes.length = 0;
+  await get(data({}));
+  if (flashes.length || wuLive !== "") fail("a run that is gone: " + JSON.stringify(flashes));
+  // an answer that failed changes nothing about what the page has seen
+  await get(data({ active: run("r7", "running", [runHost("pc-a")]) }));
+  answer = () => { throw Object.assign(new Error("502"), { status: 502 }); };
+  await fetchWakeUpdate(); await settle();
+  if (flashes.length || wuLive !== "r7") fail("a failed answer: " + JSON.stringify(flashes) + " live " + wuLive);
+  await get(data({ last: [run("r7", "done", [off("pc-a")])] }));
+  if (flashes.length !== 1) fail("after a failed answer the end is not said");
+  // someone who is no admin asks for nothing and is told nothing
+  flashes.length = 0; asked.length = 0; state.me = { can_control: false };
+  await fetchWakeUpdate();
+  if (asked.length || flashes.length) fail("a viewer: " + asked.length + " requests");
+`)
+}

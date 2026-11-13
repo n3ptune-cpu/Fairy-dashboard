@@ -1955,11 +1955,35 @@ function updBanner() {
 // dialog, its live progress and its report. Everything shown here that comes from the panel (machine names,
 // the sentences of a run, an agent's own error text inside them) goes through esc().
 const wu = { data: null, error: null, open: dict() };
+let wuLive = "";  // the id of the run this page has seen going (wuSeen)
 async function fetchWakeUpdate() {
   if (!state.me?.can_control) return;
-  try { wu.data = await api("/api/admin/wake-update"); wu.error = null; }
+  try { wu.data = await api("/api/admin/wake-update"); wu.error = null; wuSeen(wu.data); }
   catch (e) { wu.error = e.message; if (e.status === 403) wu.data = null; }
   render();
+}
+// "The run is over", said once by the page that watched it. A run takes minutes and ends by itself, and
+// nothing said so: the row of boxes changed, and a notification of severity info went to the bell, which no
+// pop-up shows (pop-ups are for critical events and warnings). wuLive is the id of the run this page has seen
+// going; when the panel's answer no longer has that run as the one going and lists it as ended, the page says
+// so with the line every other result of an action is said with (flash): how it ended, how many machines, how
+// many of them need a look, and behind "Details" each machine's last sentence. With details the line stays
+// until it is closed: nobody watches a run to its end.
+// Like the pop-ups, it is for what happens while the page is open: a run that ended while no page watched it
+// is on the Updates page as "Last run" and in Notifications, and is not announced when a page loads.
+function wuSeen(d) {
+  const was = wuLive;
+  wuLive = d?.active?.id || "";
+  if (!was || was === wuLive) return;
+  const r = (d.last || []).find((x) => x.id === was);
+  if (r) wuRunOver(r);
+}
+const wuNeedsLook = (h) => ["left_on", "gave_up", "interrupted"].includes(h.state) || h.on === "unknown" || wuUpdateBad(h);
+function wuRunOver(r) {
+  const hosts = r.hosts || [], n = hosts.length, look = hosts.filter(wuNeedsLook).length;
+  const how = (WU_RUN[r.state] || ["", r.state])[1];
+  flash(`Update unpowered hosts: run ${how} · ${n} machine${n === 1 ? "" : "s"}${look ? ` · ${look} to look at` : ""}`,
+    look > 0 || r.state === "stopped" || r.state === "interrupted", hosts.map((h) => [h.name, h.text].join(": ")));  // flash writes each line through esc()
 }
 const WU_STATE = table({ queued: ["", "waiting"], waking: ["warn", "waking"], online: ["warn", "online"], awaiting_approval: ["warn", "needs your approval"],
   updating: ["warn", "updating"], settling: ["warn", "pause before shutdown"], shutting_down: ["warn", "switching off"], off: ["ok", "done · off again"],
@@ -2073,7 +2097,7 @@ function wakeUpdateMenu(s) {
 async function openWakeUpdate() {
   let d;
   try { d = await api("/api/admin/wake-update"); } catch (e) { flash(e.message, true); return; }
-  wu.data = d;
+  wu.data = d; wuSeen(d);
   if (d.active) { flash("A run is going: one run at a time", true); render(); return; }
   const joined = d.hosts.filter((h) => h.opted_in);
   // A machine the panel itself sent to sleep is "asleep or off": listed apart and not ticked (it does not look freshly started when it wakes)
@@ -2838,6 +2862,9 @@ function updateBell() {
 function onNotesCounts(n) {
   const changed = n.unread !== state.notes.unread || n.active_alerts !== state.notes.active_alerts;
   state.notes = n; updateBell();
+  // A run this page has seen going, and the page is not the Updates page (which asks every 2 s): the end of a
+  // run makes a notification, so a new one is the moment to ask whether the run is over (wuSeen says it).
+  if (changed && wuLive && current().page !== "updates") fetchWakeUpdate();
   if (changed && current().page === "notifications" && !notes.loading) loadNotes(true);
   else render();
 }
