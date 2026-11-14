@@ -29,12 +29,12 @@ func TestAMachineSeenUpAfterItsCountdownIsNotOffByItsSilenceLater(t *testing.T) 
 	}{
 		"called off on the machine while it was out of reach, as in run 3904": {
 			calledOff: -18 * time.Second, down: []at{{-30 * time.Second, 61 * time.Second}, {194 * time.Second, 0}},
-			want: " after its countdown's time, with no shutdown pending: the shutdown was called off on the machine, or did not happen. It does not answer now: not known whether it is on."},
+			want: " after its countdown's time, with no shutdown pending: the shutdown was called off on the machine, did not happen, or was still under way. It does not answer now: not known whether it is on."},
 		"the same for a machine that checks approvals": {checked: true,
 			calledOff: -18 * time.Second, down: []at{{-30 * time.Second, 61 * time.Second}, {194 * time.Second, 0}},
-			want: " after its countdown's time, with no shutdown pending: the shutdown was called off on the machine, or did not happen. It does not answer now: not known whether it is on."},
+			want: " after its countdown's time, with no shutdown pending: the shutdown was called off on the machine, did not happen, or was still under way. It does not answer now: not known whether it is on."},
 		"the shutdown did not happen, and two minutes later the link drops": {ignore: true, down: []at{{120 * time.Second, 0}},
-			want: " after its countdown's time, with no shutdown pending: the shutdown was called off on the machine, or did not happen. It does not answer now: not known whether it is on."},
+			want: " after its countdown's time, with no shutdown pending: the shutdown was called off on the machine, did not happen, or was still under way. It does not answer now: not known whether it is on."},
 		"the same, and the run is stopped before it has looked twice": {ignore: true, down: []at{{120 * time.Second, 0}}, stop: 125 * time.Second,
 			want: " Asked to switch off, not confirmed: it does not answer now."},
 	} {
@@ -223,5 +223,59 @@ func TestAnArmedMachineWhoseLastAnswerShowedArmedIsOffByItsSilence(t *testing.T)
 	}
 	if h := host(r, "pc-a"); h.State != StOff || h.On != OnNo || !strings.HasSuffix(h.Text, "It switched itself off again.") || pc.on {
 		t.Fatalf("[%s] power %q: %s (the machine is on: %v)", h.State, h.On, h.Text, pc.on)
+	}
+}
+
+// A shutdown that takes longer than a minute from the countdown's time (final review of build 16, J1-B). The
+// run asked for it, saw its countdown, and the machine goes down by it, slowly: its agent shows the shutdown
+// for the minute after its time, as every agent does, answers with nothing pending after that, and is gone 80
+// s after the time. The run cannot tell that from a shutdown that was called off or did not happen, and the
+// row is "not known", as before. Its sentence said "the shutdown was called off on the machine, or did not
+// happen", which is neither here: it names the third possibility now. A machine that is down within that
+// minute is "switched off again", as before.
+func TestASlowShutdownIsNotKnownAndTheSentenceSaysWhatItCanBe(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		takes time.Duration // from the countdown's time until the machine is down
+		state string
+		on    string
+		want  string
+	}{
+		{"down 30 s after its countdown's time", 30 * time.Second, StOff, OnNo, "and switched off again."},
+		{"down 80 s after its countdown's time", 80 * time.Second, StLeftOn, OnUnknown,
+			", after its countdown's time, with no shutdown pending: the shutdown was called off on the machine, did not happen, or was still under way. It does not answer now: not known whether it is on."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			pc := w.off("pc-a")
+			pc.shutMode = "ignore" // the model keeps it on at the countdown's time: when it is down is this test's
+			w.start(StartRequest{Hosts: []string{"pc-a"}, Latest: "17-bbbbbbb"})
+			untilState(t, w, "pc-a", StShutting)
+			due := *host(active(w), "pc-a").ShutdownAt
+			var r *Run
+			for i := 0; i < 1800 && r == nil; i++ {
+				if pc.on && w.now.Add(time.Second).Sub(due) >= c.takes {
+					pc.on, pc.wentOff, pc.offAt = false, true, w.now.Add(time.Second)
+				}
+				tickShown(w, func() {
+					if since := w.now.Sub(due); pc.obs.Online && since >= 0 && since <= time.Minute { // on record for the minute after its time
+						pc.obs.Pending = &Pending{Action: "shutdown", At: due, DelayS: 120}
+					}
+				})
+				if a, hist := w.m.Snapshot(); a == nil {
+					r = hist[0]
+				}
+			}
+			if r == nil {
+				t.Fatalf("the run did not end: %s", describe(active(w)))
+			}
+			h := host(r, "pc-a")
+			if pc.on || h.State != c.state || h.On != c.on || !strings.HasSuffix(h.Text, c.want) {
+				t.Fatalf("[%s] power %q (the machine is on: %v): %s", h.State, h.On, pc.on, h.Text)
+			}
+			if strings.Contains(h.Text, "or did not happen.") {
+				t.Fatalf("the sentence names two causes, and it was neither: %s", h.Text)
+			}
+		})
 	}
 }

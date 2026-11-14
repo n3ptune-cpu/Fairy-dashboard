@@ -559,8 +559,9 @@ The rules, in plain words:
   its countdown was still running, or whose polling is paused, is "not confirmed that it is off", with the
   power "on or off: not known": the run cannot tell a machine that went off from a connection that dropped.
   The same for a machine whose agent still answered after the countdown's time with no shutdown pending (the
-  shutdown was called off on the machine, or did not happen) and that stops answering later: the report says
-  when it last answered and "not known whether it is on", never "switched off again".
+  shutdown was called off on the machine, did not happen, or was still under way: an agent shows a shutdown
+  for a minute after its time, and a machine can take longer than that to go down) and that stops answering
+  later: the report says when it last answered and "not known whether it is on", never "switched off again".
   A machine whose polling is paused when its shutdown would be asked for is not asked: it is left on.
   (For a Proxmox node "out of reach" begins with the first poll of its agent that got nothing, also while the
   Proxmox API still listed the node as online: that list is a little behind when a node drops out. While it
@@ -1862,8 +1863,10 @@ Build 16:
    happen), the machine answered once more after the countdown's time with no shutdown pending, and the
    link then dropped within the 5 minutes the run still watches: that silence was read as the machine
    going off. The report now says "Its agent still answered at HH:MM, after its countdown's time, with no
-   shutdown pending ... It does not answer now: not known whether it is on". A machine that stops
-   answering at its countdown's time, with no answer after it, is off as before.
+   shutdown pending ... It does not answer now: not known whether it is on". A machine that takes longer
+   than a minute from its countdown's time to go down, and answers until then, gets the same report (the
+   sentence names that too: the run cannot tell the two apart). A machine that stops answering at its
+   countdown's time, with no answer after it, is off as before.
 
 ### 3. From a build older than 13
 

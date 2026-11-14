@@ -1297,13 +1297,15 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 		h.unpending = true
 	}
 	// The same answer, whether or not the countdown was seen before, for a shutdown the run knows of: after
-	// the countdown's time the machine is up and nothing is pending on it. The countdown did not switch it off:
-	// it was called off on the machine (while the panel could not reach it, or in its last seconds), or the
-	// shutdown did not happen. From here on its silence is not "switched off again": a link that drops in the
-	// minutes the run still watches made exactly that of a machine that was on (the silence branch below, and
-	// look). An agent shows a shutdown for a minute after its time, so a machine that is going off by the run's
-	// countdown does not answer like this; one that still answers longer than that minute while it goes down
-	// is, from then on, reported as "not known", not as off.
+	// the countdown's time the machine is up and nothing is pending on it. The countdown has not switched it
+	// off: it was called off on the machine (while the panel could not reach it, or in its last seconds), the
+	// shutdown did not happen, or it is still under way. From here on its silence is not "switched off again":
+	// a link that drops in the minutes the run still watches made exactly that of a machine that was on (the
+	// silence branch below, and look). An agent shows a shutdown for a minute after its time, so a machine
+	// that is going off by the run's countdown does not answer like this in that minute; one that still
+	// answers longer than that while it goes down is, from then on, reported as "not known", not as off, and
+	// the run cannot tell it from the other two: the sentence names all three (final review of build 16, J1-B:
+	// it named two, of a machine that went off 80 s after its countdown's time).
 	if after && o.Pending == nil && mono-o.SeenAgo > h.dueMono && !h.lostShutdown() {
 		h.upAfter, h.upAfterAt = true, o.SeenAt
 	}
@@ -1395,10 +1397,11 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 		case lost:
 		case h.upAfter && h.seenOff(mono):
 			// It was up after its countdown, with nothing pending, and gives nothing now (the same proof of
-			// silence as for "off"): out of reach, or switched off by somebody or something else. Not the run's
-			// "switched off again", and not known.
+			// silence as for "off"): out of reach, switched off by somebody or something else, or gone down by
+			// the run's shutdown later than the minute its agent shows that for. Not the run's "switched off
+			// again", and not known: the sentence gives no one cause for it.
 			m.end(r, h, StLeftOn, OnUnknown, now, asked+"Its agent still answered at "+when(h.upAfterAt, now)+", after its countdown's time, with no shutdown pending: "+
-				"the shutdown was called off on the machine, or did not happen. It does not answer now: not known whether it is on.")
+				"the shutdown was called off on the machine, did not happen, or was still under way. It does not answer now: not known whether it is on.")
 		case h.seenOff(mono):
 			// Off: after the run's own due time the machine gave nothing at all for offConfirm, as seen by at
 			// least offPolls polls in a row that were made after that time, and it had not gone out of reach

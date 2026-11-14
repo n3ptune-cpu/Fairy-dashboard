@@ -394,6 +394,7 @@ func TestReadmeUpgradeTextsMatchThisRelease(t *testing.T) {
 		"**Re-pair** keeps the graphs of the plugs a host relays, **Remove** empties them",
 		"**The report of a run no longer says \"switched off again\" of a machine that is on** (builds 12 to 15 could)",
 		"\"Its agent still answered at HH:MM, after its countdown's time, with no shutdown pending ... It does not answer now: not known whether it is on\"",
+		"A machine that takes longer than a minute from its countdown's time to go down, and answers until then, gets the same report",
 	} {
 		if !strings.Contains(section, want) {
 			t.Errorf("the section lacks %q", want)
