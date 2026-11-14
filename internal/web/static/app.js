@@ -2070,7 +2070,7 @@ function dayAt(e) {
 // A click in the row that means something else opens nothing: one on a link or a control; one with Ctrl, Shift,
 // Alt or the command key; the end of a drag that marked text; and a double click, which marks a word. A mouse's
 // click in the row therefore waits DAY_ROW_WAIT for the second one before it opens (a finger's does not: a double
-// tap marks nothing).
+// tap marks nothing). If the address changes in that wait, nothing opens: the row's page is not shown any more.
 const DAY_ROW_WAIT = 250;
 const daySelected = () => String(window.getSelection?.() ?? "") !== "";
 function dayRowClick(e) {
@@ -2083,7 +2083,8 @@ document.addEventListener("click", (e) => {
   if (btn) { if (!btn.disabled) openPowerDay(btn.dataset.source); return; }
   const t = dayRowClick(e);
   if (!t || t.disabled || e.detail > 1) return;
-  const open = () => { pday.row = null; if (!daySelected()) openPowerDay(t.dataset.source); };  // marked by this click's drag, or since
+  // not when text is marked (by this click's drag, or since), and not over another page than the click was on
+  const at = location.hash, open = () => { pday.row = null; if (!daySelected() && location.hash === at) openPowerDay(t.dataset.source); };
   if (e.pointerType === "touch" || e.pointerType === "pen") open(); else pday.row = setTimeout(open, DAY_ROW_WAIT);
 });
 document.addEventListener("visibilitychange", () => {  // shown again: what the dialog has is older than a minute

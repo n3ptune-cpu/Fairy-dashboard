@@ -61,6 +61,7 @@ const answer = async (i, d) => { calls[i].res(d); await settle(); };
 const refuse = async (i, status, message) => { const e = new Error(message); e.status = status; calls[i].rej(e); await settle(); };
 // ---- what the dialog uses of the rest of the page
 let stepUpOpen = false;
+const location = { hash: "#/power" };
 const focused = [];
 const focusAtTop = (sel) => { focused.push(sel); $(sel)?.focus(); };
 const closeModal = () => { modal.innerHTML = ""; modal.hidden = true; };
@@ -290,6 +291,12 @@ if (opened() !== 0) fail("a click opened the dialog although text was marked bef
 click(cell, { pointerType: "touch" });
 if (pending() !== 0 || opened() !== 0) fail("a tap in the row opened the dialog while text was marked");
 selection = "";
+// the page changed while the click was waiting (a key, the browser's Back): nothing opens over the other page
+click(cell); location.hash = "#/system/pc-b"; runTimers(false);
+if (opened() !== 0) fail("a click in the row opened the dialog over another page, which the address had changed to within the wait");
+location.hash = "#/power";
+click(cell); location.hash = "#/power/x"; location.hash = "#/power"; runTimers(false);
+if (opened() !== 1) fail("a click in the row does not open the dialog when the address is the one it was made on");
 // a click outside of any row
 click(on({})); runTimers(false);
 if (opened() !== 0) fail("a click outside of a row opened a dialog");
