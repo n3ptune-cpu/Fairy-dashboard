@@ -155,6 +155,53 @@ func TestEditHostWhoMay(t *testing.T) {
 	}
 }
 
+// Who may is asked before what was sent is looked at. A request that can never be taken (422) is answered so
+// only to an admin's browser session that sent the page's header: everybody else gets the answer about who
+// they are (401, 403), whatever the body is, and learns nothing about the form of the API from it. The form
+// is still checked before an admin is asked to confirm (TestEditHostWhoMay).
+func TestEditHostWhoMayIsAskedBeforeWhatWasSent(t *testing.T) {
+	a := signedIn(t)
+	e := a.e
+	const path = "/api/admin/hosts/laptop/options"
+	v := model.User{Sub: "u7", Name: model.P("Vee"), Email: model.P("v@example.com"), Groups: []string{"viewers"}}
+	vc := e.cookie(v, 0)
+	tok, _, err := e.s.Tokens.Create("t-control", "system", "control", "cli:test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := []string{"X-Requested-With", "fairy"}
+	for name, body := range map[string]string{
+		"nothing to change":   `{}`,
+		"an unknown field":    `{"url": "http://elsewhere"}`,
+		"a name misspelled":   `{"ups": [{"ID": "laptop/rack", "on": true}]}`,
+		"not JSON":            `{"ups": [`,
+		"a reset of no field": `{"reset": [{"id": "laptop/desk", "field": "url"}]}`,
+	} {
+		if r := e.doRaw("PUT", path, body, append([]string{"Cookie", a.sess}, csrf...)...); r.code != 422 && r.code != 400 {
+			t.Fatalf("the rig: %s is refused for its form when an admin sends it: %d %s", name, r.code, r.raw)
+		}
+		denied := len(e.auditEntries("", "auth.denied"))
+		for who, c := range map[string]struct {
+			hdr    []string
+			code   int
+			detail string
+		}{
+			"nobody":                               {csrf, 401, ""},
+			"a viewer":                             {append([]string{"Cookie", vc}, csrf...), 403, "only admins can edit a host"},
+			"an admin's cookie without the header": {[]string{"Cookie", a.sess}, 403, "missing X-Requested-With: fairy header"},
+			"a token":                              {[]string{"Authorization", "Bearer " + tok}, 403, "API tokens are not accepted on this endpoint"},
+		} {
+			r := e.doRaw("PUT", path, body, c.hdr...)
+			if got := string(r.raw); r.code != c.code || !strings.Contains(got, c.detail) || strings.Contains(got, "nothing to change") || strings.Contains(got, "invalid request body") || strings.Contains(got, "no such field") {
+				t.Errorf("%s, sent by %s: %d %s (want %d %q, and nothing about the body)", name, who, r.code, r.raw, c.code, c.detail)
+			}
+		}
+		if n := len(e.auditEntries("", "auth.denied")) - denied; n != 2 {
+			t.Errorf("%s: %d auth.denied entries for the viewer and the missing header, want 2", name, n)
+		}
+	}
+}
+
 // Trap (b). A line that was changed in the panel is used INSTEAD of what config.yaml says about that line: when
 // config.yaml is edited afterwards, its word about that line does not count while the change is there. The
 // dialog says where the value comes from and what config.yaml says now; Reset makes config.yaml's (new) word

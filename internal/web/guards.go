@@ -270,18 +270,29 @@ func (c *reqCtx) adminGuard() (*model.User, error) {
 // host"): denied is what somebody who is no admin is told, what names the changes in "Confirm it's you: <what>
 // need a Pocket ID sign-in ...". The checks are adminGuard's, all of them, in its order.
 func (c *reqCtx) adminGuardFor(denied, what string) (*model.User, error) {
-	u, err := c.sessionCSRF()
+	u, err := c.adminSession(denied)
 	if err != nil {
 		return nil, err
-	}
-	if _, g, _ := c.grant(); !g.Admin() {
-		return nil, c.deny(u, 403, denied, "not an admin")
 	}
 	if err := c.stepUp(u, what); err != nil {
 		return nil, err
 	}
 	if !c.s.adminRL.allow(u.Sub) {
 		return nil, c.limited(u, c.s.adminRL, "too many changes")
+	}
+	return u, nil
+}
+
+// adminSession is the first checks of adminGuardFor, for a route that looks at its request between them and
+// the confirmation: a browser session, the page's header (CSRF), an admin. It asks for no confirmation and
+// counts nothing; adminGuardFor does the rest.
+func (c *reqCtx) adminSession(denied string) (*model.User, error) {
+	u, err := c.sessionCSRF()
+	if err != nil {
+		return nil, err
+	}
+	if _, g, _ := c.grant(); !g.Admin() {
+		return nil, c.deny(u, 403, denied, "not an admin")
 	}
 	return u, nil
 }

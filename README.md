@@ -1168,7 +1168,8 @@ about that one line of this machine; `leftovers` removes the changes about machi
 `unrelayed` removes the changes about the named devices, `kind` `ups` or `plug`, each only if its machine
 does not relay it right now). Any other field, and a field under another spelling (`"On"` for `"on"`, also inside an
 entry), is refused (422); so is a request that says nothing or names a line twice, before any confirmation
-is asked for.
+is asked for. Who may is checked before the request is looked at: only an admin's browser session gets such
+an answer about what was sent.
 
 ### Notifications
 

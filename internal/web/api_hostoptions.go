@@ -106,8 +106,9 @@ type hoAwayReq struct {
 }
 
 // check is everything about a request that can be said without looking at any machine: is there anything in
-// it, is each entry whole, is no line named twice. A request that fails here can never be taken, whoever sends
-// it and whatever is stored, so it is refused (422) before anybody is asked to confirm it with a passkey.
+// it, is each entry whole, is no line named twice. A request that fails here can never be taken, whatever is
+// stored, so the admin who sent it is told so (422) before being asked to confirm it with a passkey. Only an
+// admin is: who may is asked first (hostOptionsPut).
 func (r hostOptionsReq) check() error {
 	bad := func(msg string) error { return apierr.New(422, msg) }
 	if len(r.UPS)+len(r.Plugs)+len(r.Reset)+len(r.Unrelayed) == 0 && (r.Leftovers == nil || !*r.Leftovers) {
@@ -1112,14 +1113,17 @@ func (c *reqCtx) hostOptionsItems(*model.User) []string {
 }
 
 func (s *Server) hostOptionsPut(c *reqCtx) error {
-	if _, err := c.requireSession(); err != nil { // before the body is read (the guard checks the rest after it)
+	const denied = "only admins can edit a host"
+	// Who asks comes first: a browser session, the page's header, an admin. Nobody else is told anything about
+	// what they sent.
+	if _, err := c.adminSession(denied); err != nil {
 		return err
 	}
 	var req hostOptionsReq
-	if err := c.hostOptionsBody(&req); err != nil { // its form, before anybody is asked to confirm it
+	if err := c.hostOptionsBody(&req); err != nil { // its form, before the admin is asked to confirm it
 		return err
 	}
-	u, err := c.adminGuardFor("only admins can edit a host", "changes to a host")
+	u, err := c.adminGuardFor(denied, "changes to a host") // the same checks again, then the confirmation and the rate limit
 	if err != nil {
 		return err
 	}
