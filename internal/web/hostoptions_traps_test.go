@@ -430,7 +430,13 @@ func TestEditHostRepairKeepsAndRemoveForgets(t *testing.T) {
 		t.Fatalf("after Re-pair the host's own override: %v", e.storedAgent("srv-winpc"))
 	}
 
-	// (c) Remove: its own overrides and every link to it are gone; what is about other machines stays
+	// (c) Remove: its own overrides and every link to it are gone; what is about other machines stays. (Before
+	// it, the host's own plug is given to the laptop: a link kept with the host itself, about a device that
+	// goes with it.)
+	put("laptop", map[string]any{"plugs": []any{map[string]any{"id": "srv-winpc/desk", "linked": true}}})
+	if fmt.Sprint(e.storedAgent("srv-winpc")["power_links"]) != "map[desk:laptop]" {
+		t.Fatalf("the rig: the host's own plug is linked to the laptop: %v", e.storedAgent("srv-winpc"))
+	}
 	if r := e.do("DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "SRV-WINPC"}, hdr...); r.code != 200 {
 		t.Fatal("remove", r.code, string(r.raw))
 	}
@@ -452,6 +458,12 @@ func TestEditHostRepairKeepsAndRemoveForgets(t *testing.T) {
 	}
 	if got := strs(forgot["removed"]); !slices.Equal(got, []string{"the overrides of srv-winpc", "laptop: UPS rack no longer powers it", "laptop: device spare is no longer linked to it"}) {
 		t.Fatalf("the audit entry of what Remove took out: %v", forgot)
+	}
+	// ... and whose view of a device that stays it moved: the host was of the site Alice, and the laptop's UPS
+	// and spare plug were seen by Alice's viewers through their links to it. Nothing is said about the host's
+	// own plug: it goes with the host
+	if got := strs(forgot["visibility"]); !slices.Equal(got, []string{"Viewers of Alice will no longer see UPS Rack UPS", "Viewers of Alice will no longer see plug Spare plug"}) {
+		t.Fatalf("the audit entry of what Remove took out, who sees what: %q", got)
 	}
 	// the same name again (another machine, for all the panel knows): it inherits nothing
 	add()
@@ -724,6 +736,10 @@ func TestEditHostStoredChangesWithoutALineCanBeRemoved(t *testing.T) {
 		p := r.ok(ehNodeB, map[string]any{"leftovers": true})
 		if got := strs(p.body["changed"]); len(got) != 21 || got[20] != "Removed: 10 more of the same kind" || len(r.storedOptions()["agents"].(map[string]any)) != 0 {
 			t.Fatalf("removed: %q", got)
+		}
+		// the audit entry has the same twenty-one lines, and the number of all that went
+		if en := r.auditEntries("", "host.options")[0]["params"].(map[string]any); len(strs(en["lines"])) != 21 || en["removed_count"] != 30.0 {
+			t.Fatalf("the audit entry of thirty removed changes: %d lines, removed_count %v", len(strs(en["lines"])), en["removed_count"])
 		}
 	})
 }

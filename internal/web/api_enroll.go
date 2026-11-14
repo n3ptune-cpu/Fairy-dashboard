@@ -65,14 +65,14 @@ func (s *Server) enrollHooks() enrollment.Hooks {
 			if by == "" {
 				by = "fairy"
 			}
-			gone, err := s.forgetHostOptions(by, h.ID, rowsOf(h)...)
+			gone, notes, err := s.forgetHostOptions(by, h.ID, rowsOf(h)...)
 			if err != nil {
 				slog.Warn("Add host: what \"Edit host\" kept under the new host's id could not be taken out: the host is not added", "host", h.ID, "error", err)
 				s.writeAudit(audit.Entry{Actor: by, Action: "host.options", Target: h.ID, Source: "fairy", Params: map[string]any{"because": "host added"}, Outcome: "error: " + err.Error()})
 				return fmt.Errorf("what \"Edit host\" still keeps under this host's id could not be taken out (%v)", err)
 			}
 			if len(gone) > 0 {
-				s.writeAudit(audit.Entry{Actor: by, Action: "host.options", Target: h.ID, Source: "fairy", Params: map[string]any{"removed": gone, "because": "host added"}, Outcome: "ok"})
+				s.writeAudit(audit.Entry{Actor: by, Action: "host.options", Target: h.ID, Source: "fairy", Params: forgotParams(gone, notes, "host added"), Outcome: "ok"})
 			}
 			return nil
 		},
@@ -388,13 +388,13 @@ func (s *Server) hostRemove(c *reqCtx) error {
 	}
 	// What "Edit host" changed goes with it too, for the same reason: the overrides of its own agent, and every
 	// change about one of the rows that go away with it in the overrides of other agents (api_hostoptions.go).
-	gone, err := s.forgetHostOptions(actorOf(u), h.ID, rowsOf(h)...)
+	gone, notes, err := s.forgetHostOptions(actorOf(u), h.ID, rowsOf(h)...)
 	if err != nil {
 		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
 		return err
 	}
 	if len(gone) > 0 {
-		c.audit(u, "host.options", h.ID, map[string]any{"removed": gone, "because": "host removed"}, "ok")
+		c.audit(u, "host.options", h.ID, forgotParams(gone, notes, "host removed"), "ok")
 	}
 	s.Enroll.CancelHost(h.ID) // a Re-pair still pairing must not bring the host back
 	s.unpoll(h.ID)            // before the store forgets which node is the host's

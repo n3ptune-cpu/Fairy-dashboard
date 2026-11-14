@@ -1128,7 +1128,8 @@ them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads 
 * **Who may:** admins, from a browser session (no API token), with "Confirm it's you" inside the usual
   window. Every change is in the audit log (`host.options`, with before and after) and in the bell.
 * **Remove** of a host takes what was changed for it with it, and every changed line about it that is kept
-  with other machines; **Re-pair** keeps them. A host that is **added** starts with nothing: whatever the panel
+  with other machines (the audit entry lists them, and says whose view of a UPS or plug that stays this
+  moves); **Re-pair** keeps them. A host that is **added** starts with nothing: whatever the panel
   still kept under its id (from a machine of that name that was taken out of config.yaml, say) is taken out
   when it is paired, before anything of the host is stored, with an entry in the audit log. When that cannot
   be done (state.json cannot be written), the host is not added and the Add host dialog says why: nothing

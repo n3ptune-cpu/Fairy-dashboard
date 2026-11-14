@@ -286,7 +286,8 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 	if row.Kind != "node" && row.Kind != "agent" {
 		return nil, apierr.New(409, "only hosts can be edited here (not a VM or a container)")
 	}
-	m := &hoMachine{row: row, plugTo: row.ID, base: map[string]config.Links{}, names: map[string]string{}, shown: p.ShownID}
+	m := c.s.hostOptionsDevices()
+	m.row, m.plugTo = row, row.ID
 	// The agent this row is: the agent with this id, or the one a node's row belongs to. Asked both ways, so
 	// that a second agent that names the same node (it keeps a row of its own) is never taken for the node's.
 	if a, ok := p.AgentFor(row.ID); ok && p.ShownID(a.ID) == row.ID {
@@ -301,6 +302,16 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 			m.ids = append(m.ids, x)
 		}
 	}
+	return m, nil
+}
+
+// hostOptionsDevices is the part of a hoMachine that is about no machine in particular: every UPS and plug an
+// agent relays, the links of config.yaml, who sees what, and what the leftovers need. A request's machine is
+// made of it (hostOptionsMachine); Remove and Add host use it as it is, to say whose view of a device moves
+// when a host's changes are taken out (forgetHostOptions).
+func (s *Server) hostOptionsDevices() *hoMachine {
+	p := s.Poller
+	m := &hoMachine{base: map[string]config.Links{}, names: map[string]string{}, shown: p.ShownID}
 	rows := map[string]string{}
 	for _, x := range p.Snapshot() {
 		rows[x.ID] = x.Name
@@ -342,8 +353,8 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 	}
 	// Who sees a UPS or a plug follows its links (view.go: followsLinks). The sites are read once, here.
 	m.site, m.fixed = map[string]string{}, map[string]string{}
-	grants := c.s.Access.Load()
-	for id, ref := range c.s.sites(grants, p.Snapshot()) {
+	grants := s.Access.Load()
+	for id, ref := range s.sites(grants, p.Snapshot()) {
 		m.site[id] = ref.Site
 	}
 	for _, u := range m.ups {
@@ -363,7 +374,7 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 	// A host added in the panel is a machine of it for as long as it is in managed-hosts.yaml, also at a start
 	// that left it out. Its changes are not used meanwhile (the poller knows no such agent and no such row),
 	// and they are never called gone: Re-pair brings the host back with them.
-	hosts, err := c.s.Managed.Load()
+	hosts, err := s.Managed.Load()
 	m.waiting, m.unlisted = map[string]bool{}, err != nil
 	for _, h := range hosts {
 		m.waiting[h.ID], m.waiting[h.Shown()] = true, true
@@ -382,7 +393,7 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 	}
 	slices.SortFunc(m.ups, func(a, b hoUPS) int { return strings.Compare(a.label+"\x00"+a.id, b.label+"\x00"+b.id) })
 	slices.SortFunc(m.plugs, func(a, b hoPlug) int { return strings.Compare(a.label+"\x00"+a.id, b.label+"\x00"+b.id) })
-	return m, nil
+	return m
 }
 
 // mine reports whether id is one of this machine's ids.
@@ -734,9 +745,9 @@ func hoTotalWords(in bool) string {
 // A tick becomes one decision in the entry of the agent that reads the device, about this machine's line
 // only. A tick that puts a line back to what config.yaml says takes the decision out instead: what is stored
 // is where the panel differs from config.yaml, and nothing else.
-func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines []string, changes []hoChange, err error) {
+func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines []string, changes []hoChange, removed int, err error) {
 	if err := req.check(); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if o.Agents == nil {
 		o.Agents = map[string]adminstate.HostOption{}
@@ -766,9 +777,11 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	}
 	// 0. the leftovers go first: nothing below is about them (they have no line)
 	if all := req.Leftovers != nil && *req.Leftovers; all || len(req.Unrelayed) > 0 {
-		for _, l := range m.leftovers(o, all, req.Unrelayed).removed {
+		left := m.leftovers(o, all, req.Unrelayed)
+		for _, l := range left.removed {
 			lines = append(lines, "Removed: "+l)
 		}
+		removed = left.removedN // the lines name at most twenty; this is how many changes went
 	}
 	// 1. resets: the decision of one line goes, config.yaml counts for it again
 	for _, r := range req.Reset {
@@ -776,7 +789,7 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 		if field == config.FieldUPSPowers {
 			i := slices.IndexFunc(m.ups, func(u hoUPS) bool { return u.id == r.ID })
 			if i < 0 {
-				return nil, nil, gone("UPS", r.ID)
+				return nil, nil, 0, gone("UPS", r.ID)
 			}
 			u := m.ups[i]
 			e := entry(u.agent)
@@ -798,7 +811,7 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 		}
 		i := slices.IndexFunc(m.plugs, func(p hoPlug) bool { return p.id == r.ID })
 		if i < 0 {
-			return nil, nil, gone("plug", r.ID)
+			return nil, nil, 0, gone("plug", r.ID)
 		}
 		p := m.plugs[i]
 		e := entry(p.agent)
@@ -821,7 +834,7 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 			continue
 		}
 		if !isMine(p, links(p.agent)) {
-			return nil, nil, notMine(p)
+			return nil, nil, 0, notMine(p)
 		}
 		was := slices.Contains(links(p.agent).PowerExcludeFromTotal, p.dev)
 		if !e.DropExclude(p.dev) {
@@ -837,7 +850,7 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	for _, r := range req.UPS {
 		i := slices.IndexFunc(m.ups, func(u hoUPS) bool { return u.id == r.ID })
 		if i < 0 {
-			return nil, nil, gone("UPS", r.ID)
+			return nil, nil, 0, gone("UPS", r.ID)
 		}
 		u := m.ups[i]
 		e, base := entry(u.agent), m.base[u.agent].UPSPowers[u.name]
@@ -869,7 +882,7 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	for _, r := range req.Plugs {
 		i := slices.IndexFunc(m.plugs, func(p hoPlug) bool { return p.id == r.ID })
 		if i < 0 {
-			return nil, nil, gone("plug", r.ID)
+			return nil, nil, 0, gone("plug", r.ID)
 		}
 		p := m.plugs[i]
 		e, base := entry(p.agent), m.base[p.agent]
@@ -894,14 +907,14 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 				}
 				lines = append(lines, who+hoLinkWords(false, m.row.Name, "", ""))
 			case !*r.Linked && selfMine:
-				return nil, nil, bad("%s is linked by the machine itself (system_hint: self in the agent's config): it cannot be unlinked here", p.label)
+				return nil, nil, 0, bad("%s is linked by the machine itself (system_hint: self in the agent's config): it cannot be unlinked here", p.label)
 			}
 		}
 		if r.InTotal != nil {
 			// only for a plug of this machine: one it is linked to (after this request), or one its own agent reads
 			l := links(p.agent)
 			if !isMine(p, l) {
-				return nil, nil, notMine(p)
+				return nil, nil, 0, notMine(p)
 			}
 			if out := slices.Contains(l.PowerExcludeFromTotal, p.dev); out == *r.InTotal {
 				if slices.Contains(base.PowerExcludeFromTotal, p.dev) == !*r.InTotal {
@@ -928,7 +941,7 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 			})
 		}
 		if len(problems) > 0 {
-			return nil, nil, bad("%s: %s", m.names[agent], problems[0].Text)
+			return nil, nil, 0, bad("%s: %s", m.names[agent], problems[0].Text)
 		}
 		if e.Empty() {
 			delete(o.Agents, agent)
@@ -948,7 +961,7 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 				Stored: hoStored(is, field)})
 		}
 	}
-	return lines, changes, nil
+	return lines, changes, removed, nil
 }
 
 func hoFrom(panel bool) string {
@@ -1105,7 +1118,7 @@ func (c *reqCtx) hostOptionsItems(*model.User) []string {
 	}
 	o := c.s.Poller.Admin.HostOptions().Clone()
 	before := o.Clone()
-	lines, _, err := m.apply(&o, req)
+	lines, _, _, err := m.apply(&o, req)
 	if err != nil {
 		return nil
 	}
@@ -1135,11 +1148,12 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	}
 	var lines, notes []string
 	var changes []hoChange
+	var removed int
 	// One locked read-modify-write: the ticks are applied to what state.json holds at that moment.
 	after, changed, err := s.Poller.Admin.EditHostOptions(actorOf(u), func(o *adminstate.HostOptions) error {
 		before := o.Clone()
 		var err error
-		if lines, changes, err = m.apply(o, req); err == nil {
+		if lines, changes, removed, err = m.apply(o, req); err == nil {
 			notes = m.visibility(before, *o)
 		}
 		return err
@@ -1161,6 +1175,9 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		return nil
 	}
 	params["lines"], params["changes"], params["rev"] = lines, changes, after.Rev
+	if removed > 0 { // stored changes without a line that were taken out: all of them, however many lines name them
+		params["removed_count"] = removed
+	}
 	if len(notes) > 0 {
 		params["visibility"], out["visibility"] = notes, notes // whose view of a device the change moves
 	}
@@ -1188,13 +1205,30 @@ func rowsOf(h managed.Host) []string {
 	return nil
 }
 
-// forgetHostOptions is the "Edit host" part of Remove (api_enroll.go): the overrides of the removed host's
-// agent go, and so does every decision about one of its rows in the overrides of other agents. gone is what
-// was taken out (nil: there was nothing).
-func (s *Server) forgetHostOptions(by, agentID string, ids ...string) (gone []string, err error) {
+// forgetHostOptions is the "Edit host" part of Remove and of Add host (api_enroll.go): the overrides of the
+// host's agent go, and so does every decision about one of its rows in the overrides of other agents. gone is
+// what was taken out (nil: there was nothing), notes whose view of a device that moved (visibility).
+func (s *Server) forgetHostOptions(by, agentID string, ids ...string) (gone, notes []string, err error) {
+	// Whose view of a device moves with it (hoMachine.visibility), for the audit entry. Only of the devices that
+	// stay: what the host's own agent reads goes with the host.
+	m := s.hostOptionsDevices()
+	m.ups = slices.DeleteFunc(m.ups, func(u hoUPS) bool { return u.agent == agentID })
+	m.plugs = slices.DeleteFunc(m.plugs, func(p hoPlug) bool { return p.agent == agentID })
 	_, _, err = s.Poller.Admin.EditHostOptions(by, func(o *adminstate.HostOptions) error {
+		before := o.Clone()
 		gone = o.Forget(agentID, ids...)
+		notes = m.visibility(before, *o)
 		return nil
 	})
-	return gone, err
+	return gone, notes, err
+}
+
+// forgotParams is the audit entry's params for what forgetHostOptions took out: the lines, why, and whose
+// view of a device it moved (when it moved any).
+func forgotParams(gone, notes []string, because string) map[string]any {
+	p := map[string]any{"removed": gone, "because": because}
+	if len(notes) > 0 {
+		p["visibility"] = notes
+	}
+	return p
 }
