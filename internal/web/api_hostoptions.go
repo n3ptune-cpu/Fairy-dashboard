@@ -238,6 +238,11 @@ type hoMachine struct {
 	agents   map[string]string
 	answered map[string]bool
 	rowKnown map[string]bool
+	// ... and the hosts added in the panel that this start left out (their tokens file is damaged: "Re-pair
+	// it"), by their ids and the ids of their rows: they are machines of this panel, and nothing kept for
+	// them is a leftover. unlisted: the list of added hosts cannot be read, so which ids are theirs is not known.
+	waiting  map[string]bool
+	unlisted bool
 	// for who sees a device (seenBy): the site of each row ("": none, admins only), and the UPSes and plugs
 	// that have a site of their own (the Users page), by their ids
 	site  map[string]string
@@ -335,6 +340,14 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 		}
 		info, _ := p.AgentInfo(a.ID)
 		m.answered[a.ID] = info.Online
+	}
+	// A host added in the panel is a machine of it for as long as it is in managed-hosts.yaml, also at a start
+	// that left it out. Its changes are not used meanwhile (the poller knows no such agent and no such row),
+	// and they are never called gone: Re-pair brings the host back with them.
+	hosts, err := c.s.Managed.Load()
+	m.waiting, m.unlisted = map[string]bool{}, err != nil
+	for _, h := range hosts {
+		m.waiting[h.ID], m.waiting[h.Shown()] = true, true
 	}
 	for _, e := range p.Admin.HostOptions().Agents {
 		for _, decided := range e.UPS {
@@ -451,11 +464,12 @@ const maxLeftoverLines = 20
 
 // leftovers finds the stored changes that have no line in any machine's dialog, and so could never be reset:
 //
-//   - everything kept with an id that is no agent's (a host that was taken out of config.yaml);
+//   - everything kept with an id that is no agent's (a host that was taken out of config.yaml). A host added
+//     in the panel is not among them while it is in managed-hosts.yaml, also when this start left it out;
 //   - a change about a UPS or a plug that its reading agent does not relay any more, when that agent answered
 //     its last poll. While it is silent nothing is known about its devices, and its changes are left alone;
 //     they have their lines again when it answers;
-//   - a change that names a row which is no machine of this panel.
+//   - a change that names a row which is no machine of this panel (the rows of an added host are, as above).
 //
 // lines says what they are (at most maxLeftoverLines, then how many more), n is how many changes they are.
 // With remove they are taken out of o. Nothing the running panel uses is among them: the poller reads none
@@ -475,11 +489,17 @@ func (m *hoMachine) leftovers(o *adminstate.HostOptions, remove bool) (lines []s
 	for _, p := range m.plugs {
 		relays["plug\x00"+p.agent+"\x00"+p.dev], labels["plug\x00"+p.agent+"\x00"+p.dev] = true, p.label
 	}
-	noRow := func(id string) bool { known, asked := m.rowKnown[id]; return asked && !known }
+	noRow := func(id string) bool {
+		known, asked := m.rowKnown[id]
+		return asked && !known && !m.waiting[id] && !m.unlisted
+	}
 	var late []string // the ids that are no agent's: after the others, which name machines the admin knows
 	for _, agent := range slices.Sorted(maps.Keys(o.Agents)) {
 		e := o.Agents[agent].Clone()
 		name, isAgent := m.agents[agent]
+		if !isAgent && (m.waiting[agent] || m.unlisted) {
+			continue // an added host that waits for Re-pair (or may be one): kept as it is
+		}
 		if !isAgent {
 			if k := e.Count(); k > 0 {
 				n += k

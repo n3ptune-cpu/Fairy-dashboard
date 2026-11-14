@@ -1136,7 +1136,9 @@ them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads 
   id, cannot be seen or reset on any line. Every Edit host dialog says how many of them there are ("3 stored
   changes are about machines or devices that are gone.") and **Remove** takes them out, with the same
   confirmation and audit entry as every change. They are never used meanwhile. While a machine is only
-  silent, its changes are not counted as such: they have their lines again when it answers.
+  silent, its changes are not counted as such: they have their lines again when it answers. A host added
+  with Add host that the panel left out at its start (its tokens file is damaged; the Add host dialog says
+  "Re-pair it") is not gone either: what was changed for it is kept, and counts again after the Re-pair.
 * **A damaged override never stops the panel.** Whatever is under `host_options` that is not what Fairy
   writes is ignored with one warning in the log (and a WARN line of `fairy admin config check`);
   config.yaml's value counts for it. `fairy update` is not affected: its check reads config.yaml only.
