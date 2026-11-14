@@ -29,21 +29,27 @@ import (
 )
 
 type httpBackend struct {
-	p             *Poller
-	tokMu         sync.RWMutex // agentTokens / controlTokens change when hosts are added in the panel
-	pveMu         sync.RWMutex // pve / pveSecrets / powerSecrets change when Proxmox nodes are added in the panel
-	pve           map[string]*http.Client
-	pveSecrets    map[string]string
-	powerSecrets  map[string]string
-	agentTokens   map[string]string
-	controlTokens map[string]string
-	agents        *http.Client
+	p            *Poller
+	tokMu        sync.RWMutex // agentTokens changes when hosts are added in the panel
+	pveMu        sync.RWMutex // pve / pveSecrets / powerSecrets change when Proxmox nodes are added in the panel
+	pve          map[string]*http.Client
+	pveSecrets   map[string]string
+	powerSecrets map[string]string
+	agentTokens  map[string]agentTokens
+	agents       *http.Client
+}
+
+// agentTokens is what the backend keeps for one agent id: the tokens of the entry the panel has under that id
+// now, and the address they belong to (tokensFor). control is "" for an agent without a control token.
+type agentTokens struct {
+	url           string // config.Agent.URL of the entry, as it stands there
+	read, control string
 }
 
 func newHTTPBackend(p *Poller) (*httpBackend, error) {
 	cfg := p.Cfg
 	b := &httpBackend{p: p, pve: map[string]*http.Client{}, pveSecrets: map[string]string{},
-		powerSecrets: map[string]string{}, agentTokens: map[string]string{}, controlTokens: map[string]string{},
+		powerSecrets: map[string]string{}, agentTokens: map[string]agentTokens{},
 		agents: agentClient()}
 	// Resolve every agent token at startup: a missing/short token is a config error.
 	for _, a := range cfg.Agents {
@@ -499,12 +505,7 @@ func (b *httpBackend) SetAgentTokens(a config.Agent) error {
 	}
 	b.tokMu.Lock()
 	defer b.tokMu.Unlock()
-	b.agentTokens[a.ID] = t
-	if ct != "" {
-		b.controlTokens[a.ID] = ct
-	} else {
-		delete(b.controlTokens, a.ID)
-	}
+	b.agentTokens[a.ID] = agentTokens{url: a.URL, read: t, control: ct}
 	return nil
 }
 
@@ -513,19 +514,36 @@ func (b *httpBackend) ForgetAgent(id string) {
 	b.tokMu.Lock()
 	defer b.tokMu.Unlock()
 	delete(b.agentTokens, id)
-	delete(b.controlTokens, id)
 }
 
-func (b *httpBackend) readToken(id string) string {
-	b.tokMu.RLock()
-	defer b.tokMu.RUnlock()
-	return b.agentTokens[id]
-}
+// errNotThisEntry is the error of a request that was not made: the backend has no tokens for the entry it was
+// to go to (tokensFor).
+var errNotThisEntry = devices.Errf("this host's entry in the panel was removed or replaced: nothing was sent")
 
-func (b *httpBackend) controlToken(id string) string {
+// tokensFor returns the tokens for a request to the agent entry a, and whether there are any: only when the
+// entry the backend has under a's id is the one a's address belongs to.
+//
+// The tokens were looked up by the agent's id alone, when the request was made, and the request went to the
+// address in the entry the caller had in hand. A host can be removed or paired again at any moment (Re-pair:
+// Remove, then Add, and the id may then be another machine at another address), and a caller can still have
+// the entry of before: the scheduler lets a poll job that was picked run, and a handler reads the entry and
+// sends a moment later. Such a request carried the NEW entry's token to the OLD address: the read token with
+// a poll, and the control token with a control request (fourth review of build 14, F4). The machine at the old
+// address is one the admin has just taken out of the panel.
+//
+// So a token goes only to the address it was stored with. A request for an entry whose address is another
+// than the one on record, or whose id has no tokens any more (between the two halves of a Re-pair; it used to
+// leave with an empty token), is not made at all (errNotThisEntry; for a control request NotSent: it never
+// left the panel). A Re-pair of the same machine keeps its address: a request made with the entry of before
+// then carries the tokens the machine has now.
+func (b *httpBackend) tokensFor(a config.Agent) (agentTokens, bool) {
 	b.tokMu.RLock()
 	defer b.tokMu.RUnlock()
-	return b.controlTokens[id]
+	t, ok := b.agentTokens[a.ID]
+	if !ok || t.url != a.URL {
+		return agentTokens{}, false
+	}
+	return t, true
 }
 
 func (b *httpBackend) agentURL(a config.Agent, path string) string {
@@ -546,7 +564,11 @@ func (b *httpBackend) FetchAgentMetrics(ctx context.Context, a config.Agent, tim
 		},
 		GotFirstResponseByte: func() { answered.Store(true) },
 	})
-	d, _, err := getJSON(ctx, b.agents, b.agentURL(a, "/metrics"), map[string]string{"Authorization": "Bearer " + b.readToken(a.ID)}, timeout, maxAgentBody)
+	tok, ok := b.tokensFor(a)
+	if !ok {
+		return nil, errNotThisEntry
+	}
+	d, _, err := getJSON(ctx, b.agents, b.agentURL(a, "/metrics"), map[string]string{"Authorization": "Bearer " + tok.read}, timeout, maxAgentBody)
 	if err == nil && !agentMetrics(d) {
 		d, err = nil, devices.Errf("invalid response")
 	}
@@ -570,9 +592,13 @@ func agentMetrics(d jsonx.M) bool {
 }
 
 func (b *httpBackend) FetchProcesses(ctx context.Context, a config.Agent, sid string, limit int, sortBy string) (model.ProcessList, error) {
+	tok, ok := b.tokensFor(a)
+	if !ok {
+		return model.ProcessList{}, errNotThisEntry
+	}
 	q := url.Values{"limit": {strconv.Itoa(limit)}, "sort": {sortBy}}
 	d, code, err := getJSON(ctx, b.agents, b.agentURL(a, "/processes?"+q.Encode()),
-		map[string]string{"Authorization": "Bearer " + b.readToken(a.ID)}, time.Duration((b.p.Cfg.RequestTimeout+2)*float64(time.Second)), maxAgentBody)
+		map[string]string{"Authorization": "Bearer " + tok.read}, time.Duration((b.p.Cfg.RequestTimeout+2)*float64(time.Second)), maxAgentBody)
 	if code == 403 && jsonx.S(d, "code") == "processes_disabled" {
 		return model.ProcessList{SystemID: sid, DisabledByHost: true, Sort: sortBy, Processes: []model.Process{}}, nil
 	}
@@ -651,9 +677,13 @@ func (e *NotSent) Error() string { return e.Err.Error() }
 func (e *NotSent) Unwrap() error { return e.Err }
 
 func (b *httpBackend) AgentRequest(ctx context.Context, a config.Agent, method, path string, body any) (int, jsonx.M, error) {
-	tok := b.readToken(a.ID)
+	toks, ok := b.tokensFor(a)
+	if !ok {
+		return 0, nil, &NotSent{Err: errNotThisEntry}
+	}
+	tok := toks.read
 	if method == http.MethodPost {
-		tok = b.controlToken(a.ID)
+		tok = toks.control
 	}
 	var rd io.Reader
 	if body != nil {

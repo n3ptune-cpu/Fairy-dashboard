@@ -164,6 +164,13 @@ func (p *Poller) pollEntry(ctx context.Context, a config.Agent, entry int, timeo
 	if timeout <= 0 {
 		timeout = time.Duration(p.Cfg.RequestTimeout * float64(time.Second))
 	}
+	if p.entryGone(a.ID, entry) {
+		// The entry was removed or replaced before this poll began (a job the scheduler had already picked): it
+		// asks nothing. Its answer would be dropped below, and its request is not the panel's to send any more.
+		// (A Re-pair in the instant after this look: the backend sends a token only to the address it belongs
+		// to, httpBackend.tokensFor; fourth review of build 14, F4.)
+		return 0
+	}
 	asked, _ := p.now()
 	p.mu.Lock()
 	p.clampMachineLocked(a.ID, asked) // a record is never newer than the panel's clock (machines.go)

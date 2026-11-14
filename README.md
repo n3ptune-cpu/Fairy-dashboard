@@ -1008,6 +1008,10 @@ ranges: they are plain HTTP to wherever the name leads at that moment, the read 
 and the control token with every action, and an answer is not signed. This is the same as for every agent in
 config.yaml and it has not changed in this release. Keep the names of your hosts on the tailnet (MagicDNS
 names or 100.x addresses); a name that a local DNS server can answer is only as safe as that network.
+A host's tokens go only to the address they were stored with: when a host is removed or paired again, a
+request that was still to be made for the entry of before is not sent, so after a **Re-pair** to another
+machine the old address never gets the new tokens. (Up to build 14 a poll that started in that instant
+could carry the new read token to the old address.)
 
 The two refusals that are on by default, and how each is changed:
 
