@@ -102,6 +102,8 @@ type hostOptionsReq struct {
 	Name *string   `json:"name"`
 	Site *string   `json:"site"`
 	Wol  *hoWolReq `json:"wol"`
+	// ... and its own two timings of "Update unpowered hosts" (api_hostedit_run.go).
+	WakeUpdate *hoRunReq `json:"wake_update"`
 }
 
 // hoAwayReq names a UPS (kind "ups") or a plug (kind "plug") by its id, "<reading agent>/<name>".
@@ -139,14 +141,14 @@ func (r hostOptionsReq) check() error {
 		}
 	}
 	for _, e := range r.Reset {
-		if e.Field == "name" || e.Field == "wol" { // the machine's own: no device is named
+		if e.Field == "name" || e.Field == "wol" || hoRunField(e.Field) { // the machine's own: no device is named
 			if e.ID != "" || !once(e.Field, "") {
 				return bad("reset: " + e.Field + " takes no id, and is there once")
 			}
 			continue
 		}
 		if _, ok := hoFields[e.Field]; !ok {
-			return bad("reset: no such field (ups, plugs, total, name or wol)")
+			return bad("reset: no such field (ups, plugs, total, name, wol, off_after_s or shutdown_delay_s)")
 		}
 		if !once(e.Field, e.ID) {
 			return bad("reset: an entry is there twice")
@@ -241,7 +243,8 @@ type hoPlugReq struct {
 // hoResetReq: what the panel changed about this UPS or plug FOR THIS MACHINE is taken out; config.yaml counts
 // for that line again. field: "ups" (does the UPS with this id power the machine), "plugs" (is the plug with
 // this id linked to it) or "total" (does the plug count in the total); or, without an id, "name" and "wol"
-// (the machine's own name and Wake-on-LAN details, api_hostedit.go).
+// (the machine's own name and Wake-on-LAN details, api_hostedit.go), "off_after_s" and "shutdown_delay_s"
+// (its own run timings, api_hostedit_run.go).
 type hoResetReq struct {
 	ID    string `json:"id"`
 	Field string `json:"field"`
@@ -825,7 +828,7 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	}
 	// 1. resets: the decision of one line goes, config.yaml counts for it again
 	for _, r := range req.Reset {
-		if r.Field == "name" || r.Field == "wol" {
+		if r.Field == "name" || r.Field == "wol" || hoRunField(r.Field) {
 			continue // the machine's own: applyHost, below
 		}
 		field := hoFields[r.Field]
@@ -1198,15 +1201,16 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		return err
 	}
 	// The same checks again, then the confirmation and the rate limit (adminGuardFor). Anything about
-	// Wake-on-LAN needs a confirmation of its own, whatever was confirmed a minute ago (api_hostedit.go).
+	// Wake-on-LAN needs a confirmation of its own, whatever was confirmed a minute ago (api_hostedit.go), and
+	// so does anything about the machine's own run timings (api_hostedit_run.go).
 	u, err := c.adminSession(denied)
 	if err != nil {
 		return err
 	}
-	if req.touchesWol() {
-		err = c.stepUpEach(u, "changes to a host's Wake-on-LAN")
+	if what, each := req.stepUpWhat(); each {
+		err = c.stepUpEach(u, what)
 	} else {
-		err = c.stepUp(u, "changes to a host")
+		err = c.stepUp(u, what)
 	}
 	if err != nil {
 		return err
@@ -1260,6 +1264,7 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	var lines, notes []string
 	var changes []hoChange
 	var removed int
+	runGoing := false // a run is going while one of the machine's own run timings is changed
 	// One locked read-modify-write: the ticks are applied to what state.json holds at that moment.
 	after, changed, err := s.Poller.Admin.EditHostOptions(actorOf(u), func(o *adminstate.HostOptions) error {
 		before := o.Clone()
@@ -1301,6 +1306,11 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		if len(notes) > 0 {
 			params["visibility"] = notes // whose view of a machine or a device the change moves
 		}
+		if changesRun(changes) {
+			if active, _ := s.WakeRuns.Snapshot(); active != nil {
+				params[hoRunAuditKey], runGoing = active.ID, true // that run keeps the numbers it started with
+			}
+		}
 		c.audit(u, "host.options", m.row.ID, params, "ok")
 		if site != nil {
 			// ... and a site change also as the entry the Users page writes for one (same action, target and
@@ -1331,6 +1341,9 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		out["visibility"] = notes
 	}
 	out["message"], out["changed"] = what+" saved", lines
+	if runGoing {
+		out["message"] = what + " saved" + hoRunGoing
+	}
 	c.json(200, out)
 	return nil
 }

@@ -22,6 +22,8 @@ import (
 //	                                         "wol": {"macs": [...], "relay": "<agent id>", "port": 7 | 9} | {"off": true},
 //	                                         "reset": [{"field": "name"}, {"field": "wol"}]
 //
+// (and the machine's own run timings, "wake_update": api_hostedit_run.go)
+//
 // Where each is kept:
 //
 //   - name and wol: decisions in state.json next to the link decisions (adminstate.HostEdit), laid over the
@@ -50,7 +52,9 @@ type hoWolReq struct {
 }
 
 // hostSet reports whether the request says anything about the machine itself.
-func (r hostOptionsReq) hostSet() bool { return r.Name != nil || r.Site != nil || r.Wol != nil }
+func (r hostOptionsReq) hostSet() bool {
+	return r.Name != nil || r.Site != nil || r.Wol != nil || r.WakeUpdate != nil
+}
 
 func (r hostOptionsReq) resets(field string) bool {
 	return slices.ContainsFunc(r.Reset, func(e hoResetReq) bool { return e.Field == field })
@@ -100,7 +104,7 @@ func (r hostOptionsReq) checkHost() error {
 			return bad("wol: the port must be 7 or 9")
 		}
 	}
-	return nil
+	return r.checkRun() // its own run timings (api_hostedit_run.go)
 }
 
 // hoHost is what is known about the machine of a request itself, collected before the store is locked.
@@ -113,6 +117,7 @@ type hoHost struct {
 	guests   []hoOther                                                                   // ... and the guests (their names are typed to confirm a shutdown or a stop too)
 	mine     func(id string) bool                                                        // whether something kept under id is about this machine
 	wolWith  func(base *config.Wol, e adminstate.WolEdit) (w *config.Wol, unused string) // poller.WolWith for this machine
+	run      map[string]hoRunBase                                                        // its two run timings without a decision of the panel (api_hostedit_run.go)
 }
 
 // hoOther is another host (or a guest) as far as its name goes: the row it is shown as, the ids under which
@@ -136,7 +141,7 @@ type hoRelay struct {
 func (s *Server) hostOptionsHost(m *hoMachine) *hoHost {
 	p := s.Poller
 	row := m.row.ID
-	h := &hoHost{key: p.HostKey(row), baseName: p.BaseName(row), baseWol: p.ConfigWol(row),
+	h := &hoHost{key: p.HostKey(row), baseName: p.BaseName(row), baseWol: p.ConfigWol(row), run: s.hostRunBases(row),
 		wolWith: func(base *config.Wol, e adminstate.WolEdit) (*config.Wol, string) { return p.WolWith(row, base, e) }}
 	if h.baseName == "" {
 		h.baseName = m.row.Name
@@ -390,12 +395,12 @@ func (h *hoHost) wolDecision(req hoWolReq, cur *adminstate.WolEdit) (*adminstate
 	return &d, nil
 }
 
-// applyHost makes the changes of req about the machine itself in o: its name and its Wake-on-LAN (the site
-// is not kept here: hoSite). It returns one line for each thing that changes and the changes for the audit
-// log. An error is a refusal (422).
+// applyHost makes the changes of req about the machine itself in o: its name, its Wake-on-LAN and its own run
+// timings (the site is not kept here: hoSite). It returns one line for each thing that changes and the
+// changes for the audit log. An error is a refusal (422).
 func (m *hoMachine) applyHost(o *adminstate.HostOptions, req hostOptionsReq) (lines []string, changes []hoChange, err error) {
 	h := m.host
-	if h == nil || (!req.hostSet() && !req.resets("name") && !req.resets("wol")) {
+	if h == nil || (!req.hostSet() && !req.resets("name") && !req.resets("wol") && !req.touchesRun()) {
 		return nil, nil, nil
 	}
 	bad := func(format string, a ...any) error { return apierr.New(422, fmt.Sprintf(format, a...)) }
@@ -467,6 +472,8 @@ func (m *hoMachine) applyHost(o *adminstate.HostOptions, req hostOptionsReq) (li
 		}
 		changes = append(changes, hoChange{Host: h.key, Field: "wol", Before: h.wolValue(wolWas), After: h.wolValue(wolIs), BeforeFrom: from(was.Wol != nil), AfterFrom: from(e.Wol != nil), Stored: stored})
 	}
+	runLines, runChanges := h.applyRun(req, was, &e, nameIs)
+	lines, changes = append(lines, runLines...), append(changes, runChanges...)
 	o.SetHost(h.key, e)
 	return lines, changes, nil
 }
@@ -505,7 +512,8 @@ func (m *hoMachine) hostView(o adminstate.HostOptions, sites *hoSites) map[strin
 	return map[string]any{"key": h.key,
 		"name": map[string]any{"value": name, "from": nfrom, "by": nby, "at": nat, "config": h.baseName},
 		"site": sites.view(),
-		"wol":  w}
+		"wol":  w,
+		"run":  h.runView(e)}
 }
 
 // hoSites is the site of a request's machine and what a change of it would move.

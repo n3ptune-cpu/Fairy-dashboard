@@ -77,7 +77,8 @@ type wuHost struct {
 	Why    string `json:"why,omitempty"`
 	// NotSure: it does not answer, and not for long enough to be taken for off. The dialog lists it apart.
 	NotSure bool `json:"not_sure,omitempty"`
-	// OffAfterS, ShutdownDelayS: this machine's own timings where its systems: entry sets them (wake_update:)
+	// OffAfterS, ShutdownDelayS: this machine's own timings where it has them (the wake_update: block of its
+	// systems: entry, or what "Edit host" changed them to)
 	// and they are not the panel's (the page's off_after_s and settings.shutdown_delay_s): after how long
 	// without an answer it counts as off, and the countdown of the shutdown a run asks it for.
 	OffAfterS      *int `json:"off_after_s,omitempty"`
@@ -560,8 +561,9 @@ func (o runOps) Blocked() string {
 	return ""
 }
 
-// wuTimings returns the timings the configuration sets for the one machine shown under id (the wake_update:
-// block of its systems: entry; 0: not set, the panel's own count).
+// wuTimings returns the timings that count for the one machine shown under id as its own: the wake_update:
+// block of its systems: entry, with what "Edit host" changed for it laid over that (0: it has none, the
+// panel's own count).
 func (s *Server) wuTimings(id string) (offAfter, shutdownDelay time.Duration) {
 	a, d := s.Poller.WakeUpdateOverride(id)
 	return time.Duration(a) * time.Second, time.Duration(d) * time.Second

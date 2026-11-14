@@ -711,7 +711,9 @@ func TestEditHostWakeOnLAN(t *testing.T) {
 
 // A name and a site move nothing a machine is asked: the same panel with and without them sends the same
 // requests for a wake and a shutdown. A Wake-on-LAN decision changes the wake packet's MAC, relay and port,
-// and nothing else that goes to a machine.
+// and nothing else that goes to a machine. A machine's own run timings are read by a run of "Update unpowered
+// hosts" and by nothing else (hostedit_run_test.go): a person's wake and a person's shutdown, with the
+// countdown that person chose, are the same requests with them.
 func TestEditHostWolIsTheOneThingAControlPathReads(t *testing.T) {
 	look := func(change func(r *hedRig)) (requests string) {
 		r := hedSetup(t)
@@ -747,6 +749,16 @@ func TestEditHostWolIsTheOneThingAControlPathReads(t *testing.T) {
 	})
 	if want := strings.Replace(plain, "relay-a POST /wol map[broadcast:<nil> mac:02:00:00:00:00:A1 port:9]", "relay-b POST /wol map[broadcast:<nil> mac:02:00:00:00:00:ee port:7]", 1); decided != want {
 		t.Errorf("with a Wake-on-LAN decision:\n%s\nwant\n%s", decided, want)
+	}
+	timings := look(func(r *hedRig) {
+		for _, id := range []string{"pc-a", "pc-b", "relay-a"} {
+			if res := r.confirmed(id, map[string]any{"wake_update": map[string]any{"off_after_s": 300, "shutdown_delay_s": 10}}); res["ok"] != true {
+				t.Fatalf("the run timings of %s: %v", id, res)
+			}
+		}
+	})
+	if timings != plain {
+		t.Errorf("with run timings of their own the machines are asked something else by a person's wake and shutdown:\n%s\n%s", plain, timings)
 	}
 }
 
