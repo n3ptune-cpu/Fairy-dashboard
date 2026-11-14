@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 )
 
 // `fairy admin config check` and a machine's own run timings changed in "Edit host": the host's line names
@@ -91,5 +94,28 @@ func TestConfigCheckAndAMachinesOwnRunTimingsOfEditHost(t *testing.T) {
 	)
 	if code == 0 || strings.Contains(out, "ok    host pc-a") || strings.Contains(out, "NOT in force") {
 		t.Errorf("numbers below the floors: exit %d\n%s", code, out)
+	}
+}
+
+// Whatever reaches the check, a number its key cannot have is no decision there: it is not listed as one, it
+// does not take the note of config.yaml's own value away, and a machine with two ids has one answer.
+func TestConfigCheckTakesNoNumberBelowAFloorForADecision(t *testing.T) {
+	c := &config.Panel{Systems: []config.SystemOverride{{ID: "pc-a", WakeUpdate: &config.SystemWakeUpdate{OffAfterS: 600, ShutdownDelayS: 90}}}}
+	o := adminstate.HostOptions{Hosts: map[string]adminstate.HostEdit{
+		"pc-a": {Run: adminstate.RunEdit{OffAfterS: 60, ShutdownDelayS: 5}},
+		"pc-b": {Run: adminstate.RunEdit{OffAfterS: 3601, ShutdownDelayS: 45}},
+	}}
+	m := newMachineRuns(c, o)
+	if parts, notes := m.hostRunCheck("pc-a", o.Hosts["pc-a"]); len(parts) != 0 || len(notes) != 0 {
+		t.Errorf("numbers below the floors are listed as decisions: %q %q", parts, notes)
+	}
+	if parts, _ := m.hostRunCheck("pc-b", o.Hosts["pc-b"]); len(parts) != 1 || parts[0] != "wake_update.shutdown_delay_s 45 (config.yaml: none of its own, the panel's counts)" {
+		t.Errorf("one number above its range and one good one: %q", parts)
+	}
+	if m.decision("pc-a", config.KeyOffAfter) != 0 || m.decision("pc-a", config.KeyShutdownDelay) != 0 || m.decision("pc-b", config.KeyOffAfter) != 0 || m.decision("pc-b", config.KeyShutdownDelay) != 45 {
+		t.Error("a number its key cannot have counts as a decision")
+	}
+	if m.block("pc-a", config.KeyOffAfter) != 600 || m.block("pc-a", config.KeyShutdownDelay) != 90 || m.block("pc-b", config.KeyOffAfter) != 0 {
+		t.Error("config.yaml's block is not read as it is")
 	}
 }
