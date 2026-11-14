@@ -246,3 +246,23 @@ func TestDayEnergyLabels(t *testing.T) {
 		t.Errorf("99 minutes of counter in 4900 and in 5000 minutes: %s, %s; want mixed, estimated", withTail(4800), withTail(4900))
 	}
 }
+
+// The minutes between the counter's last step and its restart are the device's too. A counter that stood
+// still for an hour and then started again at 0: the hour counts with its watts (it used to be the counter's
+// last stretch that was open at the restart, and a change that dropped it went unnoticed).
+func TestDayEnergyTheMinutesBeforeARestartCount(t *testing.T) {
+	// 60 W for four hours: 0.240 kWh. The counter moves in steps of 0.01 kWh, one every ten minutes; it stands
+	// still from 0:50 on, starts again at 0 at 2:00 and counts from there.
+	k := func(i int) float64 {
+		if i < 120 {
+			return 7 + math.Floor(math.Min(float64(i), 50)/10)*0.01
+		}
+		return math.Floor(float64(i-120)/10) * 0.01
+	}
+	kwh, est, label := en(240, flat(60), k)
+	// the counter's: 5 steps before and 11 after the restart. From the watts: the first minute, the 69 minutes
+	// it stood still and the minute of the restart, and the 9 minutes after its last step.
+	if !near(kwh, 0.240, 1e-6) || !near(est, 0.080, 1e-6) || label != "mixed" {
+		t.Errorf("%.4f kWh, %.4f of them estimated (%s); want 0.2400, 0.0800 (mixed)", kwh, est, label)
+	}
+}
