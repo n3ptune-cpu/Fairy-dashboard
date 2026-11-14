@@ -19,6 +19,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
@@ -395,6 +396,108 @@ func TestEditHostRepairKeepsAndRemoveForgets(t *testing.T) {
 	}
 	if len(e.auditEntries("", "host.options")) != n {
 		t.Fatal("a Remove with nothing to forget wrote a host.options entry")
+	}
+}
+
+// Remove takes out what was about the host, and only that. A host that was added on a Proxmox node the panel
+// already had (a `proxmox:` entry of config.yaml) is shown as that node's row, and that row stays when the
+// host is removed: the UPS that powers the node still powers it. What goes is what names the host's own id (a
+// plug's link is written with it) and the changes kept with the host's own agent.
+func TestEditHostRemoveKeepsWhatIsAboutARowThatStays(t *testing.T) {
+	e := setup(t)
+	e.s.Enroll.Interval = 10 * time.Millisecond
+	e.s.control, e.s.adminRL = newRateLimiter(1000), newRateLimiter(1000)
+	e.s.Enroll.PanelAddr = "100.64.0.10"
+	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
+		return 200, enroll.Response{AgentVersion: "42-abc", Platform: "linux", Token: "boxa-read-token-xxxxxxxxxxxxxxxxx",
+			ControlToken: "boxa-control-token-yyyyyyyyyyyyyyy"}, "", nil
+	}
+	e.b.Mu.Lock()
+	e.b.Metrics["box-a"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil } // it relays a plug of its own, "desk"
+	e.b.Metrics["laptop"] = func() (jsonx.M, error) {
+		m := testutil.AgentMetrics()
+		m["ups"] = []any{jsonx.M{"name": "rack", "state": "online", "description": "Rack UPS"}}
+		m["power_sources"] = append(m["power_sources"].([]any), jsonx.M{"id": "spare", "name": "Spare plug", "type": "shelly", "ok": true, "watts": 55.0})
+		return m, nil
+	}
+	e.b.Mu.Unlock()
+	c := e.cookie(controller(), 0)
+	hdr := []string{"Cookie", c, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	const node = "node-srv-pvea" // a node of the config.yaml proxmox: entry of this fixture
+	p := e.do("POST", "/api/admin/hosts", map[string]any{"name": "BOX-A", "os": "linux", "site": "Alice", "node": "SRV-PVEA"}, hdr...)
+	if p.code != 201 {
+		t.Fatal(p.code, string(p.raw))
+	}
+	for i := 0; ; i++ {
+		time.Sleep(10 * time.Millisecond)
+		e.s.Poller.PollOnce(context.Background())
+		if g := e.do("GET", "/api/admin/enrollments/"+p.body["id"].(string), nil, "Cookie", c); g.body["done"] == true && g.body["state"] == "online" {
+			break
+		} else if i > 300 {
+			t.Fatal("the enrollment never finished", g.body["state"], g.body["message"])
+		}
+	}
+	h, ok := e.s.managedHost("box-a")
+	if !ok || h.Shown() != node || h.Proxmox != nil {
+		t.Fatalf("the rig: BOX-A is not a host on the node of config.yaml: %+v", h)
+	}
+	put := func(id string, body any) {
+		t.Helper()
+		if r := e.do("PUT", "/api/admin/hosts/"+id+"/options", body, hdr...); r.code != 200 || r.body["ok"] != true || r.body["id"] != node {
+			t.Fatalf("PUT %s %v: %d %s", id, body, r.code, r.raw)
+		}
+	}
+	// on the host's page (its node's row): the laptop's UPS powers it, the laptop's spare plug is its plug, its own
+	// plug is left out of the total
+	put("box-a", map[string]any{"ups": []any{ehUPS("laptop/rack", true)},
+		"plugs": []any{map[string]any{"id": "laptop/spare", "linked": true}, map[string]any{"id": "box-a/desk", "in_total": false}}})
+	if lap := e.storedAgent("laptop"); fmt.Sprint(lap["ups_powers"]) != "map[rack:map["+node+":true]]" || fmt.Sprint(lap["power_links"]) != "map[spare:box-a]" || e.storedAgent("box-a") == nil {
+		t.Fatalf("stored before the removal: %v", e.storedOptions())
+	}
+	e.s.Poller.PollOnce(context.Background())
+	if r := e.do("DELETE", "/api/admin/hosts/box-a", map[string]any{"confirm": "BOX-A"}, hdr...); r.code != 200 {
+		t.Fatal("remove", r.code, string(r.raw))
+	}
+	lap := e.storedAgent("laptop")
+	if fmt.Sprint(lap["ups_powers"]) != "map[rack:map["+node+":true]]" {
+		t.Errorf("the UPS link of the node's row, which stays, was taken out with the host: %v", e.storedOptions())
+	}
+	if lap["power_links"] != nil || e.storedAgent("box-a") != nil {
+		t.Errorf("what names the removed host's own id is still there: %v", e.storedOptions())
+	}
+	var forgot []string
+	for _, en := range e.auditEntries("", "host.options") {
+		if p, _ := en["params"].(map[string]any); p["because"] == "host removed" && en["target"] == "box-a" {
+			forgot = strs(p["removed"])
+		}
+	}
+	if !slices.Equal(forgot, []string{"the overrides of box-a", "laptop: device spare is no longer linked to it"}) {
+		t.Errorf("the audit entry of what Remove took out: %q", forgot)
+	}
+	// the node's row is there as before, and on the UPS with the next poll
+	e.s.Poller.PollOnce(context.Background())
+	if x := e.do("GET", "/api/systems/"+node, nil, "Cookie", c); x.code != 200 || x.body["kind"] != "node" || !slices.Equal(strs(x.body["ups"]), []string{"laptop/rack"}) {
+		t.Errorf("the node's row after the removal: %d kind %v ups %v", x.code, x.body["kind"], x.body["ups"])
+	}
+}
+
+// rowsOf: which rows go away with a host. Its own node's row (the proxmox: entry came with the host), never
+// the row of a node the panel had before, and nothing while the node's token is lost (the host is then shown
+// under its agent's id, which Forget takes anyway).
+func TestEditHostRowsThatGoWithAHost(t *testing.T) {
+	own := &managed.PVE{ID: "site-box", IDPrefix: "site-box-", Node: "box"}
+	for name, c := range map[string]struct {
+		h    managed.Host
+		want []string
+	}{
+		"a plain host":                    {managed.Host{ID: "box-a"}, nil},
+		"a host on a node of config.yaml": {managed.Host{ID: "box-a", Node: "SRV-PVEA", SystemID: "node-srv-pvea"}, nil},
+		"a node added with Add host":      {managed.Host{ID: "box-a", Node: "box", SystemID: "site-box-node-box", Proxmox: own, ProxmoxWanted: true}, []string{"site-box-node-box"}},
+		"a node whose token is lost":      {managed.Host{ID: "box-a", SystemID: "site-box-node-box", ProxmoxWanted: true}, nil},
+	} {
+		if got := rowsOf(c.h); !slices.Equal(got, c.want) {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
 	}
 }
 

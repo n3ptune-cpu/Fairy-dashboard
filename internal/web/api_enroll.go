@@ -365,8 +365,8 @@ func (s *Server) hostRemove(c *reqCtx) error {
 		}
 	}
 	// What "Edit host" changed goes with it too, for the same reason: the overrides of its own agent, and every
-	// link to one of its rows in the overrides of other agents (api_hostoptions.go).
-	gone, err := s.forgetHostOptions(actorOf(u), h.ID, h.Shown())
+	// change about one of the rows that go away with it in the overrides of other agents (api_hostoptions.go).
+	gone, err := s.forgetHostOptions(actorOf(u), h.ID, rowsOf(h)...)
 	if err != nil {
 		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
 		return err

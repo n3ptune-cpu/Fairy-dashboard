@@ -10,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
 )
@@ -731,6 +732,18 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	s.Poller.Bump()
 	out["message"], out["changed"] = "links saved", lines
 	c.json(200, out)
+	return nil
+}
+
+// rowsOf is the rows that come and go with a host added with Add host, besides the row of its agent's own
+// id: its node's row, when the node's proxmox: entry is the host's own (Add host "a new node"; Remove takes
+// that entry out). The row of a node the panel had before the host (a proxmox: entry of config.yaml, on which
+// the host was added) is not the host's: it stays when the host is removed, and what was changed about it
+// (the UPS that powers the node) stays with it.
+func rowsOf(h managed.Host) []string {
+	if h.Proxmox != nil && h.Shown() != h.ID {
+		return []string{h.Shown()}
+	}
 	return nil
 }
 
