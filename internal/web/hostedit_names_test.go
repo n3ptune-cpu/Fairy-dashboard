@@ -204,3 +204,38 @@ func TestEditHostNameKeptForAHostThatIsNotShownRightNow(t *testing.T) {
 		t.Errorf("its own name sent again with a link: %s", p.raw)
 	}
 }
+
+// A name that is not changed is never refused: the name a host has, sent again with something else, is no
+// change, whoever else is called the same (a host called like a guest by a file from before these checks
+// could save nothing while its name was in the request).
+func TestEditHostUnchangedNameIsNeverRefused(t *testing.T) {
+	r := ehSetup(t)
+	guest, _ := r.row("lab-a-qemu-100")["name"].(string)
+	give := func(id, name string) {
+		t.Helper()
+		if _, _, err := r.s.Poller.Admin.EditHostOptions("test", func(o *adminstate.HostOptions) error {
+			o.SetHost(id, adminstate.HostEdit{Name: name})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		r.s.Poller.Bump()
+	}
+	give(ehNAS, guest)
+	if p := r.ok(ehNAS, map[string]any{"name": guest}); p.body["message"] != "nothing to change" {
+		t.Errorf("its own name sent again: %s", p.raw)
+	}
+	if p := r.ok(ehNAS, map[string]any{"name": guest, "plugs": []any{map[string]any{"id": "nas-agent/corner", "in_total": true}}}); len(strs(p.body["changed"])) != 1 {
+		t.Errorf("its own name with a link: %s", p.raw)
+	}
+	// another spelling of it is a change, and is asked like any other
+	if p := r.put(ehNAS, map[string]any{"name": strings.ToUpper(guest)}); p.code != 422 || !strings.Contains(string(p.raw), "a guest is called "+guest+" already") {
+		t.Errorf("another spelling of the guest's name: %d %s", p.code, p.raw)
+	}
+	// the same for two hosts a file gave one name: each keeps saving with its name in the request
+	give("lab-b-agent", "Twin")
+	give(ehNAS, "Twin")
+	if p := r.ok(ehNAS, map[string]any{"name": "Twin"}); p.body["message"] != "nothing to change" {
+		t.Errorf("one of two hosts with one name, its name sent again: %s", p.raw)
+	}
+}

@@ -415,6 +415,9 @@ func (m *hoMachine) applyHost(o *adminstate.HostOptions, req hostOptionsReq) (li
 		switch {
 		case name == h.baseName:
 			e.Name = "" // config.yaml's own name: nothing to keep (and the same as a Reset: below)
+		case name == was.Name:
+			// The name it has, sent again: nothing changes, and nothing is asked. (A host that is called like a
+			// guest, by a file from before these checks, could not save anything else with its name in the request.)
 		default:
 			shown, config := h.names(*o)
 			if why := nameRefusal(name, shown, config); why != "" {
