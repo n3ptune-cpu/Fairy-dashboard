@@ -1132,6 +1132,8 @@ them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads 
 * **A damaged override never stops the panel.** Whatever is under `host_options` that is not what Fairy
   writes is ignored with one warning in the log (and a WARN line of `fairy admin config check`);
   config.yaml's value counts for it. `fairy update` is not affected: its check reads config.yaml only.
+  What is merely under a name this version does not know (a newer version wrote it, and the panel was rolled
+  back) is not used either, and it is left in the file as it is: a save in the older panel does not lose it.
 
 **Never editable here**, whatever is sent: `id`, `url`, `token_env`, `control_token_env`, `verify_tls`, `node`,
 `links_to`, `fan_control`, `power_control`, `self_update`, `wol_relay`, `owner`, `site`, `name`. They say where

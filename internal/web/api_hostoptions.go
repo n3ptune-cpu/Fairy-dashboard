@@ -280,7 +280,7 @@ func (m *hoMachine) leftovers(o *adminstate.HostOptions, remove bool) (lines []s
 				late = append(late, fmt.Sprintf("%s kept with %s, which is no machine of this panel", count(k), agent))
 			}
 			if remove {
-				delete(o.Agents, agent)
+				o.Drop(agent) // the entry whole: also what this build does not know in it
 			}
 			continue
 		}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -238,16 +239,23 @@ func TestHostOptionsReaderIsTolerant(t *testing.T) {
 			enc, _ := json.Marshal(map[string]any{hostOptionsKey: o.encode()})
 			back := statefile.Data{}
 			_ = json.Unmarshal(enc, &back)
-			if o2, ig := hostOptions(back); len(ig) != 0 || !o2.Agents[id].Same(e) || o2.Rev != o.Rev {
-				t.Errorf("%s: %s is not read back as it was written: %s (ignored %q)", name, id, enc, ig)
+			o2, ig := hostOptions(back)
+			if !o2.Agents[id].Same(e) || o2.Rev != o.Rev {
+				t.Errorf("%s: %s is not read back as it was written: %s", name, id, enc)
+			}
+			for _, line := range ig { // what is written back and still ignored is what is under an unknown key, and nothing else
+				if !strings.Contains(line, "(and left in the file as it is)") {
+					t.Errorf("%s: written back, and ignored at the next read: %q", name, line)
+				}
 			}
 		}
-		// the overrides that are read hold the three link fields and nothing else
+		// the overrides that are read hold the three link fields and nothing else: what is under another key is
+		// kept apart (to be written back as it was), and is no part of what anything is given to use
 		for id, e := range o.Agents {
-			enc, _ := json.Marshal(HostOptions{Agents: map[string]HostOption{id: e}}.encode())
+			enc, _ := json.Marshal(e.encode())
 			for _, k := range []string{"url", "token_env", "power_control", "wol_relay", "node", "owner", "site", "wake_update"} {
 				if strings.Contains(string(enc), `"`+k+`"`) {
-					t.Errorf("%s: what is written back holds %q: %s", name, k, enc)
+					t.Errorf("%s: what is read for %s holds %q: %s", name, id, k, enc)
 				}
 			}
 		}
@@ -349,8 +357,10 @@ func TestHostOptionsRoundTrip(t *testing.T) {
 	}
 }
 
-// What the reader leaves out is said once per change of the file, however often the panel asks, and the next
-// write drops it from the file. A state.json that cannot be read gives no overrides (config.yaml counts).
+// What the reader leaves out is said once, however often the panel asks and however often the file is written,
+// and the next write drops from the file what is not of the form Fairy writes. (What is under a key this
+// build does not know is kept: TestHostOptionsKeysOfANewerBuildSurviveASaveAndAReset.) A state.json that
+// cannot be read gives no overrides (config.yaml counts).
 func TestHostOptionsIgnoredIsSaidOnceAndDroppedByTheNextWrite(t *testing.T) {
 	var logs bytes.Buffer
 	var mu sync.Mutex
@@ -381,7 +391,7 @@ func TestHostOptionsIgnoredIsSaidOnceAndDroppedByTheNextWrite(t *testing.T) {
 	if !strings.Contains(said, `an \"Edit host\" override is ignored`) || !strings.Contains(said, "state.json") || strings.Contains(said, "http://x") {
 		t.Fatalf("the WARN lines: %s", said)
 	}
-	// the next write keeps what was good and drops the rest
+	// the next write keeps what was good and what is under an unknown key, and drops what is broken
 	if _, _, err := a.EditHostOptions("nora", func(o *HostOptions) error {
 		e := o.Agents["nas"]
 		e.SetExclude("corner", true)
@@ -391,11 +401,26 @@ func TestHostOptionsIgnoredIsSaidOnceAndDroppedByTheNextWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "state.json"))
-	if _, ignored := a.HostOptionsRead(); len(ignored) != 0 || strings.Contains(string(raw), "http://x") || strings.Contains(string(raw), "BAD") || !strings.Contains(string(raw), `"rack"`) || a.HostOptions().Rev != 4 {
+	if _, ignored := a.HostOptionsRead(); len(ignored) != 1 || !strings.Contains(ignored[0], `"url" cannot be set in the panel`) || !strings.Contains(string(raw), `"url": "http://x"`) ||
+		strings.Contains(string(raw), "BAD") || strings.Contains(string(raw), `"power_links"`) || !strings.Contains(string(raw), `"rack"`) || a.HostOptions().Rev != 4 {
 		t.Fatalf("after the next write: %s", raw)
 	}
+	for i := 0; i < 3; i++ { // more writes, to this key and to another one of the file
+		if err := a.SetWakeUpdate(fmt.Sprintf("pc-%d", i), true); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := a.EditHostOptions("nora", func(o *HostOptions) error {
+			e := o.Agents["nas"]
+			e.SetExclude("corner", i%2 == 0)
+			o.Agents["nas"] = e
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_ = a.HostOptions()
+	}
 	if n := warns(); n != 3 {
-		t.Fatalf("%d WARN lines after the file was put right, want still 3", n)
+		t.Fatalf("%d WARN lines after the file was written again and again, want still 3 (the key that stays is said once):\n%s", n, logs.String())
 	}
 	// unreadable: no overrides, no error for the caller (the start of the panel refuses such a file itself)
 	writeState(t, dir, `{"host_options": {"agents": {"nas": {"ups_powers": {"rack": {"pc": true}}}}}`) // cut off
@@ -424,6 +449,116 @@ func TestHostOptionsIgnoredIsSaidOnceAndDroppedByTheNextWrite(t *testing.T) {
 type writerFunc func(p []byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// Keys under "host_options" that this build does not know (a newer build wrote them, and the panel was rolled
+// back) are not used, and they are not lost either: a save and a Reset write them back as they were, at the
+// top of the key and in every agent's entry, also in an entry that has nothing else. Before, the first Edit
+// host save after a rollback silently dropped them for every agent.
+func TestHostOptionsKeysOfANewerBuildSurviveASaveAndAReset(t *testing.T) {
+	dir := t.TempDir()
+	const top = `"format": 2, "notes": {"a": [1, 2.5, null, true, "x", {"deep": []}], "b": {"c": "d"}}`
+	const nas = `"wake_update": {"off_after_s": 600, "shutdown_delay_s": 120}, "label": "Rack room", "n": 12345678`
+	const pc = `"wake_update": {"off_after_s": 300}, "names": ["a", "b"]`
+	writeState(t, dir, `{"host_models": {"x": "y"}, "host_options": {"rev": 4, `+top+`, "agents": {
+		"nas": {"ups_powers": {"rack": {"pc": true}}, `+nas+`, "by": "nora", "at": "2026-11-13T23:40:00Z"},
+		"pc": {`+pc+`},
+		"tower": {"power_links": {"plug": "pc"}}}}}`)
+	canon := func(v any) string { b, _ := json.Marshal(v); return string(b) }
+	want := func(obj string) string {
+		var v map[string]any
+		if err := json.Unmarshal([]byte("{"+obj+"}"), &v); err != nil {
+			t.Fatal(err)
+		}
+		return canon(v)
+	}
+	// unknown is the keys of m that are none of known, as they are in the file now
+	unknown := func(m map[string]any, known ...string) string {
+		out := map[string]any{}
+		for k, v := range m {
+			if !slices.Contains(known, k) {
+				out[k] = v
+			}
+		}
+		return canon(out)
+	}
+	check := func(step string, rev float64, agentsWant string) {
+		t.Helper()
+		raw := readOptions(t, dir)
+		agents, _ := raw["agents"].(map[string]any)
+		nasNow, _ := agents["nas"].(map[string]any)
+		pcNow, _ := agents["pc"].(map[string]any)
+		if got := unknown(raw, "rev", "agents"); got != want(top) {
+			t.Errorf("%s: the unknown keys at the top:\n%s\nwant\n%s", step, got, want(top))
+		}
+		if got := unknown(nasNow, "ups_powers", "power_links", "power_exclude_from_total", "by", "at"); got != want(nas) {
+			t.Errorf("%s: the unknown keys of nas:\n%s\nwant\n%s", step, got, want(nas))
+		}
+		if got := canon(pcNow); got != want(pc) {
+			t.Errorf("%s: the entry of pc, which has unknown keys only:\n%s\nwant\n%s", step, got, want(pc))
+		}
+		if got := strings.Join(slices.Sorted(maps.Keys(agents)), " "); raw["rev"] != rev || got != agentsWant {
+			t.Errorf("%s: rev %v, entries %q; want rev %v, entries %q", step, raw["rev"], got, rev, agentsWant)
+		}
+		// they are still not used, and still said
+		o, ignored := New(dir).HostOptionsRead()
+		if _, has := o.Agents["pc"]; has || len(ignored) != 7 {
+			t.Errorf("%s: read: agents %v, ignored %q", step, slices.Sorted(maps.Keys(o.Agents)), ignored)
+		}
+	}
+	a := New(dir)
+	check("as written by the newer build", 4, "nas pc tower")
+	// an Edit host save for another agent
+	if _, changed, err := a.EditHostOptions("bea", func(o *HostOptions) error {
+		e := o.Agents["tower"]
+		e.SetExclude("plug", true)
+		o.Agents["tower"] = e
+		return nil
+	}); err != nil || !changed {
+		t.Fatal(changed, err)
+	}
+	check("after a save", 5, "nas pc tower")
+	// a Reset of the one thing this build knows in the entry of nas: the entry stays, with what it does not know
+	after, _, err := a.EditHostOptions("bea", func(o *HostOptions) error {
+		e := o.Agents["nas"]
+		e.DropUPS("rack", "pc")
+		o.Agents["nas"] = e
+		return nil
+	})
+	if _, has := after.Agents["nas"]; err != nil || has {
+		t.Fatalf("after the Reset nas has no change this build knows: %+v %v", after.Agents, err)
+	}
+	check("after a Reset", 6, "nas pc tower")
+	if raw := readOptions(t, dir)["agents"].(map[string]any)["nas"].(map[string]any); raw["ups_powers"] != nil || raw["by"] != nil {
+		t.Errorf("the entry of nas after the Reset: %v", raw)
+	}
+	// an entry without unknown keys goes when its last change goes, as before
+	if _, _, err := a.EditHostOptions("bea", func(o *HostOptions) error { delete(o.Agents, "tower"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	check("after the last change of tower was taken out", 7, "nas pc")
+	// a change for an agent that had unknown keys only: both are in its entry
+	if _, _, err := a.EditHostOptions("bea", func(o *HostOptions) error {
+		o.Agents["pc"] = HostOption{Links: map[string]string{"own": "tower"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if raw := readOptions(t, dir)["agents"].(map[string]any)["pc"].(map[string]any); unknown(raw, "power_links", "by", "at") != want(pc) || fmt.Sprint(raw["power_links"]) != "map[own:tower]" || raw["by"] != "bea" {
+		t.Errorf("the entry of pc with a change of this build next to the unknown keys: %v", raw)
+	}
+	// Remove of a host forgets its entry whole, what this build does not know in it too (it was about that machine)
+	if _, _, err := a.EditHostOptions("bea", func(o *HostOptions) error { o.Forget("pc"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	raw := readOptions(t, dir)
+	if agents := raw["agents"].(map[string]any); agents["pc"] != nil || unknown(agents["nas"].(map[string]any)) != want(nas) || unknown(raw, "rev", "agents") != want(top) {
+		t.Errorf("after Forget of pc: %v", raw)
+	}
+	// the rest of state.json was never touched
+	if d, _ := statefile.Read(filepath.Join(dir, "state.json")); fmt.Sprint(d["host_models"]) != "map[x:y]" {
+		t.Errorf("host_models: %v", d["host_models"])
+	}
+}
 
 // Many writers at once, each changing its own thing in the entry of the same agent: every change is there
 // afterwards, the counter counted every write, and the file is whole after each of them. (The lock is the

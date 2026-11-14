@@ -38,8 +38,11 @@ import (
 // these three fields exist here: nothing that says where an agent is, which token it has or what the panel may
 // do to a machine can be in the overlay, and a key with another name is not read.
 //
+// A key this build does not know (at the top, or in an agent's entry) is not used either, and it is kept: a
+// newer build wrote it, and a save by this one writes it back as it was (HostOptions.unknown).
+//
 // The reader never fails. Whatever is not what Fairy writes is left out, config.yaml's value counts for it,
-// and one WARN line says so (per change of the file): the panel always starts. `fairy check-config`, which a
+// and one WARN line says so (once): the panel always starts. `fairy check-config`, which a
 // `fairy update` asks before it installs a version, does not read state.json at all.
 
 // hostOptionsKey is the name of the object in state.json.
@@ -222,15 +225,31 @@ func (o HostOption) Named() config.Links {
 type HostOptions struct {
 	Rev    int
 	Agents map[string]HostOption
+	// unknown is what the file holds under keys this build does not know: at the top of "host_options" (top),
+	// and in the entries of agents (agents: agent id -> key -> value; also of an agent that has nothing else).
+	// None of it is ever used. It is carried from the read to the write as it is, never looked into and never
+	// changed, so that a save by this build does not drop what a newer build wrote.
+	unknown struct {
+		top    map[string]any
+		agents map[string]map[string]any
+	}
 }
 
-// Clone returns a copy that shares nothing with o.
+// Clone returns a copy that shares nothing with o (the unknown keys, which nothing changes, are the same).
 func (o HostOptions) Clone() HostOptions {
-	out := HostOptions{Rev: o.Rev, Agents: make(map[string]HostOption, len(o.Agents))}
+	out := HostOptions{Rev: o.Rev, Agents: make(map[string]HostOption, len(o.Agents)), unknown: o.unknown}
+	out.unknown.agents = maps.Clone(o.unknown.agents)
 	for id, e := range o.Agents {
 		out.Agents[id] = e.Clone()
 	}
 	return out
+}
+
+// Drop takes the entry of an agent out whole: its changes, and what this build does not know in it. For an
+// id that is no agent's any more, and for a host that is removed: all of the entry was about that machine.
+func (o *HostOptions) Drop(agentID string) {
+	delete(o.Agents, agentID)
+	delete(o.unknown.agents, agentID)
 }
 
 // For returns the overrides of one agent (the zero value: none).
@@ -244,12 +263,10 @@ func (o HostOptions) For(agentID string) HostOption { return o.Agents[agentID] }
 // each.
 func (o *HostOptions) Forget(agentID string, ids ...string) []string {
 	var gone []string
-	if e, ok := o.Agents[agentID]; ok {
-		delete(o.Agents, agentID)
-		if !e.Empty() {
-			gone = append(gone, "the overrides of "+agentID)
-		}
+	if e := o.Agents[agentID]; !e.Empty() {
+		gone = append(gone, "the overrides of "+agentID)
 	}
+	o.Drop(agentID)
 	ids = append(ids, agentID)
 	for _, other := range slices.Sorted(maps.Keys(o.Agents)) {
 		e := o.Agents[other].Clone()
@@ -303,7 +320,11 @@ func hostOptions(d statefile.Data) (o HostOptions, ignored []string) {
 	}
 	for _, k := range slices.Sorted(maps.Keys(top)) {
 		if k != "rev" && k != "agents" {
-			say("%q: the key %q is not one Fairy writes: it is not used", hostOptionsKey, clipKey(k))
+			say("%q: the key %q is not one Fairy writes: it is not used (and left in the file as it is)", hostOptionsKey, clipKey(k))
+			if o.unknown.top == nil {
+				o.unknown.top = map[string]any{}
+			}
+			o.unknown.top[k] = top[k]
 		}
 	}
 	rawAgents, present := top["agents"]
@@ -350,8 +371,16 @@ func hostOptions(d statefile.Data) (o HostOptions, ignored []string) {
 				e.At, _ = time.Parse(time.RFC3339, s)
 				continue
 			default:
-				// url, token_env, power_control, ...: no such thing can be set from the panel, whatever the file says
-				say("agent %s: %q cannot be set in the panel: it is not used", id, clipKey(k))
+				// url, token_env, power_control, ...: no such thing can be set from the panel, whatever the file says.
+				// Nothing reads it; it stays in the file (a newer build may have written it).
+				say("agent %s: %q cannot be set in the panel: it is not used (and left in the file as it is)", id, clipKey(k))
+				if o.unknown.agents == nil {
+					o.unknown.agents = map[string]map[string]any{}
+				}
+				if o.unknown.agents[id] == nil {
+					o.unknown.agents[id] = map[string]any{}
+				}
+				o.unknown.agents[id][k] = v
 				continue
 			}
 			if !shape {
@@ -459,7 +488,8 @@ func upsDecisionsOf(v any) (map[string]map[string]bool, bool) {
 	return out, true
 }
 
-// encode is the overlay as it is written to state.json.
+// encode is the overlay as it is written to state.json: what this build knows, and next to it, untouched,
+// what it read under keys it does not know.
 func (o HostOptions) encode() map[string]any {
 	agents := map[string]any{}
 	for id, e := range o.Agents {
@@ -468,7 +498,22 @@ func (o HostOptions) encode() map[string]any {
 		}
 		agents[id] = e.encode()
 	}
-	return map[string]any{"rev": o.Rev, "agents": agents}
+	for id, keys := range o.unknown.agents {
+		entry, _ := agents[id].(map[string]any)
+		if entry == nil {
+			entry = map[string]any{}
+			agents[id] = entry
+		}
+		for k, v := range keys { // never one of the keys encode writes: the reader takes those as its own
+			entry[k] = v
+		}
+	}
+	out := map[string]any{}
+	for k, v := range o.unknown.top {
+		out[k] = v
+	}
+	out["rev"], out["agents"] = o.Rev, agents
+	return out
 }
 
 func (e HostOption) encode() map[string]any {
@@ -530,7 +575,9 @@ func (a *State) HostOptionsRead() (HostOptions, []string) {
 	return o, ignored
 }
 
-// hostOptionsWarn logs the ignored lines once for each version of the file.
+// hostOptionsWarn logs each ignored line once. A line is said again only after the panel was started again:
+// what is under a key this build does not know stays in the file through every save (and every other write
+// to state.json), and would otherwise be said again each time.
 func (a *State) hostOptionsWarn(ignored []string) {
 	a.shapeMu.Lock()
 	defer a.shapeMu.Unlock()
@@ -541,7 +588,17 @@ func (a *State) hostOptionsWarn(ignored []string) {
 		a.shapeLog = map[string]int{}
 	}
 	a.shapeLog[hostOptionsKey] = a.state.Version
+	if len(a.hostOptionsSaid) > 1024 { // a file that changes its broken parts for ever: the memory of it stays small
+		a.hostOptionsSaid = nil
+	}
 	for _, line := range ignored {
+		if a.hostOptionsSaid[line] {
+			continue
+		}
+		if a.hostOptionsSaid == nil {
+			a.hostOptionsSaid = map[string]bool{}
+		}
+		a.hostOptionsSaid[line] = true
 		slog.Warn("state.json: an \"Edit host\" override is ignored: "+line, "path", a.StatePath, "key", hostOptionsKey)
 	}
 }
@@ -552,8 +609,10 @@ func (a *State) hostOptionsWarn(ignored []string) {
 // later one counts. fn's error stops the write and is returned as it is.
 //
 // by is who changes it; it and the time are put on every agent's entry that differs afterwards. after is the
-// stored state as it is after the call, changed reports whether anything was written. Entries of the file
-// that the reader leaves out are dropped by the same write (as SetHostModel does).
+// stored state as it is after the call, changed reports whether anything was written. What the reader leaves
+// out because it is not of the form Fairy writes (an entry that is no object, a field of another form) is
+// dropped by the same write, as SetHostModel does; what is under a key this build does not know is written
+// back as it was.
 func (a *State) EditHostOptions(by string, fn func(o *HostOptions) error) (after HostOptions, changed bool, err error) {
 	_, err = statefile.Update(a.StatePath, func(d statefile.Data) error {
 		cur, _ := hostOptions(d)

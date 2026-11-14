@@ -1063,10 +1063,30 @@ func TestEditHostABrokenOverlayIsIgnoredNotRefused(t *testing.T) {
 			if want := max(c.ignored, 1); warns != want {
 				t.Errorf("%d WARN lines about it, want %d (one for each thing, once):\n%s", warns, want, logs.String())
 			}
-			// the next change is stored, and what was broken is gone from the file with it
+			// the next change is stored, and what was broken is gone from the file with it. What is under a key this
+			// build does not know is not broken: it stays in the file, unused, and is still said
 			r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", !slices.Contains(got, "nas-agent/rack"))}})
-			if ig := strs(r.options(ehNodeB).body["ignored"]); len(ig) != 0 {
-				t.Errorf("after the next change: %v", ig)
+			kept := map[string]int{"fields that cannot be set": 7, "what Fairy writes, and a tail": 1}[name]
+			ig := strs(r.options(ehNodeB).body["ignored"])
+			if len(ig) != kept {
+				t.Errorf("after the next change: %d ignored lines, want %d: %v", len(ig), kept, ig)
+			}
+			for _, line := range ig {
+				if !strings.Contains(line, "it is not used (and left in the file as it is)") {
+					t.Errorf("after the next change, still ignored: %q", line)
+				}
+			}
+			if kept > 0 {
+				raw := fmt.Sprint(r.storedOptions())
+				if name == "fields that cannot be set" && (!strings.Contains(raw, "url:http://198.51.100.7:9101") || !strings.Contains(raw, "token_env:FAIRY_SESSION_SECRET")) || name != "fields that cannot be set" && !strings.Contains(raw, "more:1") {
+					t.Errorf("the unknown keys after the next change: %s", raw)
+				}
+				// ... and never used: the agent's entry is config.yaml's
+				for _, a := range r.s.Poller.Agents() {
+					if a.ID == "lab-b-agent" && (a.URL != "http://lab-b-agent" || a.TokenEnv != "TOK_LAB_B" || !a.PowerControl || a.WolRelay) {
+						t.Errorf("the agent's entry: %+v", a)
+					}
+				}
 			}
 		})
 	}

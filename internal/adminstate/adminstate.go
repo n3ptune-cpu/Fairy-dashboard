@@ -57,6 +57,8 @@ type State struct {
 
 	shapeMu  sync.Mutex
 	shapeLog map[string]int // key of state.json -> the version of the file whose odd value was logged (badShape)
+	// hostOptionsSaid: the lines about ignored "Edit host" overrides that were logged (hostoptions.go; under shapeMu)
+	hostOptionsSaid map[string]bool
 }
 
 // New returns the state files of dataDir.

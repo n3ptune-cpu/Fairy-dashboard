@@ -90,7 +90,7 @@ func TestConfigCheckAndTheOverridesOfEditHost(t *testing.T) {
 		"gone-agent": {"power_exclude_from_total": {"x": true}},
 		"pc-a": {"power_links": {"own": "lab-node-"}}}}}`)
 	for _, want := range []string{
-		"WARN  Edit host: an override in state.json is ignored: agent nas-agent: \"url\" cannot be set in the panel: it is not used\n",
+		"WARN  Edit host: an override in state.json is ignored: agent nas-agent: \"url\" cannot be set in the panel: it is not used (and left in the file as it is)\n",
 		"WARN  Edit host: an override in state.json is ignored: agent nas-agent: power_links is not of the form Fairy writes (found a number): config.yaml's value counts\n",
 		"WARN  Edit host: state.json has overrides for gone-agent, which is no agent's id (config.yaml and the hosts added in the panel): they are ignored\n",
 		"WARN  Edit host: an override of agent nas-agent names the row old-pc, which is no agent's id and not the id of a node or a guest of a proxmox: entry: it is ignored (a host that was removed?)\n",
