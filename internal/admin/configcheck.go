@@ -92,7 +92,7 @@ func (c *cli) configCheck() int {
 	problems, notes = adminCheck(cfg, problems, notes)
 	problems, notes = managedCheck(cfg, problems, notes)
 	problems, inferred := nodeLinkCheck(cfg, problems)
-	okLines, said := wakeUpdateCheck(cfg, rt)
+	okLines, said := wakeUpdateCheck(cfg, rt, hostRuns(cfg))
 	notes, inferred = append(notes, okLines...), append(inferred, said...)
 	notes, problems, inferred = append(notes, rtOK...), append(problems, rtWarn...), append(inferred, rtSaid...)
 	inferred = append(inferred, systemIDCheck(cfg)...)
@@ -343,13 +343,12 @@ func powerLinkCheck(cfg *config.Panel) (ok, said []string) {
 //
 // (build 16) The notes are about the values IN FORCE: a timing that was changed in the panel ("Run timings",
 // rt) is named as that, and config.yaml's own line about off_after_s is left to runTimingsCheck, which says
-// both values.
-func wakeUpdateCheck(cfg *config.Panel, rt adminstate.RunTimings) (ok, said []string) {
+// both values. A machine's own timing that was changed in "Edit host" (runs) is said in the line of its
+// systems: entry, and the note about its value is the one of the host's line of "Edit host"
+// (hostrun_check.go).
+func wakeUpdateCheck(cfg *config.Panel, rt adminstate.RunTimings, runs machineRuns) (ok, said []string) {
 	const def = 900
-	same := func(what string, s int) string {
-		return fmt.Sprintf("%s is %d, which is also a countdown a person can choose in the Power menu of a machine's page (10 s, 1 min, 5 min, 15 min; 60 s is what a power request without a delay gets): "+
-			"a shutdown somebody asks for with that countdown in the place of the run's cannot be told from the run's own, and a run that is cancelled, or lets go of the machine, calls it off", what, s)
-	}
+	same := countdownSame
 	if v := inForce(cfg, rt, config.KeyShutdownDelay); personCountdown[v] {
 		said = append(said, same("wake_update.shutdown_delay_s"+fromPanel(cfg, rt, config.KeyShutdownDelay), v))
 	}
@@ -359,10 +358,7 @@ func wakeUpdateCheck(cfg *config.Panel, rt adminstate.RunTimings) (ok, said []st
 		}
 		return fmt.Sprintf("%d s", s)
 	}
-	risk := func(what string, s int) string {
-		return fmt.Sprintf("%s is %d (the default is %d): a machine that restarts for longer than %s can be taken for off by a run, "+
-			"which then wakes it, updates it and switches it off as a machine it woke", what, s, def, mins(s))
-	}
+	risk := offAfterRisk
 	_, changed := rt.Value(config.KeyOffAfter)
 	if v := cfg.WakeUpdate.OffAfterS; v != 0 && v != def && !changed {
 		ok = append(ok, fmt.Sprintf("wake_update.off_after_s: %d (a machine counts as off after %s without an answer; without the line it is %d)", v, mins(v), def))
@@ -375,18 +371,26 @@ func wakeUpdateCheck(cfg *config.Panel, rt adminstate.RunTimings) (ok, said []st
 		if w == nil || (w.OffAfterS == 0 && w.ShutdownDelayS == 0) {
 			continue
 		}
+		// a key the panel decided otherwise for this machine ("Edit host") is not in force: said here, and the
+		// note about a value is made from the one in force (the host's line has it)
+		panel := func(key string) string {
+			if v := runs.decision(o.ID, key); v != 0 {
+				return fmt.Sprintf("; NOT in force: changed in the panel (\"Edit host\") to %d", v)
+			}
+			return ""
+		}
 		var parts []string
 		if w.OffAfterS != 0 {
-			parts = append(parts, fmt.Sprintf("off_after_s %d (it counts as off after %s without an answer)", w.OffAfterS, mins(w.OffAfterS)))
+			parts = append(parts, fmt.Sprintf("off_after_s %d (it counts as off after %s without an answer%s)", w.OffAfterS, mins(w.OffAfterS), panel(config.KeyOffAfter)))
 		}
 		if w.ShutdownDelayS != 0 {
-			parts = append(parts, fmt.Sprintf("shutdown_delay_s %d (the countdown of its shutdown in a run)", w.ShutdownDelayS))
+			parts = append(parts, fmt.Sprintf("shutdown_delay_s %d (the countdown of its shutdown in a run%s)", w.ShutdownDelayS, panel(config.KeyShutdownDelay)))
 		}
 		ok = append(ok, fmt.Sprintf("system %s: wake_update of its own: %s", o.ID, strings.Join(parts, ", ")))
-		if w.OffAfterS != 0 && w.OffAfterS < def {
+		if w.OffAfterS != 0 && w.OffAfterS < def && panel(config.KeyOffAfter) == "" {
 			said = append(said, risk("system "+o.ID+": wake_update.off_after_s", w.OffAfterS))
 		}
-		if personCountdown[w.ShutdownDelayS] {
+		if personCountdown[w.ShutdownDelayS] && panel(config.KeyShutdownDelay) == "" {
 			said = append(said, same("system "+o.ID+": wake_update.shutdown_delay_s", w.ShutdownDelayS))
 		}
 	}

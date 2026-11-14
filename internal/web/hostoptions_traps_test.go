@@ -1650,10 +1650,16 @@ func TestEditHostChangesNoControlPath(t *testing.T) {
 	// snapshot and the two functions that hand a row to other pages ask it for the name (snapshot.go,
 	// agents.go), PowerOverride for the Wake-on-LAN (nodeid.go). Nowhere else; what a wake does with it is held
 	// by TestEditHostWolIsTheOneThingAControlPathReads.
+	// It also holds a machine's own two run timings: WakeUpdateOverride (nodeid.go, already in the list) lays
+	// them over config.yaml's for "Update unpowered hosts", and the config check has a second file that reads
+	// the overlay for its lines about them (admin/hostrun_check.go). What a run does with the two is held by
+	// TestARunKeepsAMachinesOwnTimingsFromItsStart; that a person's wake and shutdown do nothing with them, by
+	// TestEditHostWolIsTheOneThingAControlPathReads.
 	allowed := map[string]bool{
 		"adminstate/hostoptions.go": true, "adminstate/hostoptions_read.go": true, "poller/hostoptions.go": true, "poller/agents.go": true,
 		"web/api_hostoptions.go": true, "web/api_enroll.go": true, "admin/hostoptions_check.go": true,
 		"poller/hostedit.go": true, "poller/snapshot.go": true, "poller/nodeid.go": true, "web/api_hostedit.go": true,
+		"admin/hostrun_check.go": true,
 	}
 	// every way to get at the overlay or at what is made with it (a call; a comment that names one is none)
 	word := regexp.MustCompile(`\b(HostOptions|HostOptionsRead|ReadHostOptions|EditHostOptions|hostOptions|forgetHostOptions|LinksOf|BaseLinks|HostEdit|hostEditIn|HostKey|panelWol|WolWith)\(|hostOptionsKey\]`)

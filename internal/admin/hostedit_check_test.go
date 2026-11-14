@@ -70,7 +70,7 @@ func TestConfigCheckAndTheMachinesOfEditHost(t *testing.T) {
 		"WARN  Edit host: the Wake-on-LAN details changed in the panel for pc-b are not used (no relay is set for it): config.yaml's count (none)\n",
 		"WARN  Edit host: the Wake-on-LAN details changed in the panel for box-c are not used (config.yaml sets a target address for this machine's wake packet: it belongs to the relay written there)",
 		"WARN  Edit host: the Wake-on-LAN details changed in the panel for relay-a are not used (a machine cannot send its own wake packet): config.yaml's count (none)\n",
-		"WARN  Edit host: state.json has changes about old-pc itself (name, Wake-on-LAN), which is no agent's id and not the id of a node of a proxmox: entry: they are ignored (a host that was removed?)\n",
+		"WARN  Edit host: state.json has changes about old-pc itself (name, Wake-on-LAN, run timings), which is no agent's id and not the id of a node of a proxmox: entry: they are ignored (a host that was removed?)\n",
 		"WARN  Edit host: an override in state.json is ignored: host pc-a-x: \"wol\": \"broadcast\" cannot be set in the panel: the configuration's Wake-on-LAN counts\n",
 	} {
 		if strings.Count(out, want) != 1 {

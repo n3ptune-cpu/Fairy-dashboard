@@ -99,8 +99,8 @@ func hostOptionsCheck(cfg *config.Panel) (ok, warn, notes []string) {
 	}
 	warn = append(warn, firstLines(strangers, "Edit host: and %d more ids with overrides that are no agent's")...)
 	warn = append(warn, firstLines(noRows, "Edit host: and %d more rows that overrides name and that are no row of this panel")...)
-	hostOK, hostWarn := hostEditsCheck(&c, o) // the machines themselves: names, Wake-on-LAN (hostedit_check.go)
-	return append(ok, hostOK...), append(warn, hostWarn...), notes
+	hostOK, hostWarn, hostNotes := hostEditsCheck(&c, o) // the machines themselves: names, Wake-on-LAN, run timings (hostedit_check.go)
+	return append(ok, hostOK...), append(warn, hostWarn...), append(notes, hostNotes...)
 }
 
 // firstLines is the first adminstate.MaxIgnoredLines of lines, and one line (more, with the number) for the rest.

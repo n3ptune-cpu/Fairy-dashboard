@@ -11,18 +11,21 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 )
 
-// hostEditsCheck is the part of hostOptionsCheck about the machines themselves: the names and the
-// Wake-on-LAN details an admin changed in the panel (state.json, "host_options", "hosts":
-// adminstate.HostEdit). They are not in config.yaml either, so this lists them:
+// hostEditsCheck is the part of hostOptionsCheck about the machines themselves: the names, the Wake-on-LAN
+// details and the machine's own run timings an admin changed in the panel (state.json, "host_options",
+// "hosts": adminstate.HostEdit). They are not in config.yaml either, so this lists them:
 //
 //   - ok: one line per machine with decisions: who made the last one and when, the name with config.yaml's,
-//     and the Wake-on-LAN that counts with config.yaml's;
+//     the Wake-on-LAN that counts with config.yaml's, and each run timing of its own with config.yaml's;
+//   - notes: a run timing changed here that is below the default after which a machine counts as off, or a
+//     countdown a person can also choose (hostrun_check.go): said, never a reason for exit code 1;
 //   - warn: Wake-on-LAN decisions the panel does not use (the relay is no agent with wol_relay: true, no MAC
 //     or no relay is left, a relay decision next to a target address or password of config.yaml), and
 //     decisions kept under an id that is no machine of this panel.
 //
 // A machine's site is not here: it is the assignment of the Users page (`fairy admin sites`).
-func hostEditsCheck(c *config.Panel, o adminstate.HostOptions) (ok, warn []string) {
+func hostEditsCheck(c *config.Panel, o adminstate.HostOptions) (ok, warn, notes []string) {
+	runs := newMachineRuns(c, o)
 	agents, systems, nodeOf := map[string]config.Agent{}, map[string]config.SystemOverride{}, map[string]string{}
 	for _, a := range c.Agents {
 		agents[a.ID] = a
@@ -48,7 +51,7 @@ func hostEditsCheck(c *config.Panel, o adminstate.HostOptions) (ok, warn []strin
 	for _, key := range slices.Sorted(maps.Keys(o.Hosts)) {
 		e := o.Hosts[key]
 		if !poller.PossibleRow(key, c.Agents, c.Proxmox) {
-			strangers = append(strangers, fmt.Sprintf("Edit host: state.json has changes about %s itself (name, Wake-on-LAN), which is no agent's id and not the id of a node of a proxmox: entry: "+
+			strangers = append(strangers, fmt.Sprintf("Edit host: state.json has changes about %s itself (name, Wake-on-LAN, run timings), which is no agent's id and not the id of a node of a proxmox: entry: "+
 				"they are ignored (a host that was removed?)", key))
 			continue
 		}
@@ -91,9 +94,11 @@ func hostEditsCheck(c *config.Panel, o adminstate.HostOptions) (ok, warn []strin
 				parts = append(parts, fmt.Sprintf("Wake-on-LAN %s (config.yaml: %s)", wolText(w, "off"), wolText(base, "none")))
 			}
 		}
+		runParts, runNotes := runs.hostRunCheck(key, e)
+		parts, notes = append(parts, runParts...), append(notes, runNotes...)
 		if len(parts) > 0 {
 			ok = append(ok, fmt.Sprintf("host %s: %s, used INSTEAD of what config.yaml says about the same thing until Reset: %s", key, who, cell(strings.Join(parts, "; "))))
 		}
 	}
-	return ok, append(warn, firstLines(strangers, "Edit host: and %d more ids with changes about a machine itself that are no machine's")...)
+	return ok, append(warn, firstLines(strangers, "Edit host: and %d more ids with changes about a machine itself that are no machine's")...), notes
 }
