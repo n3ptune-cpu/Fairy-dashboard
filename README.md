@@ -468,7 +468,11 @@ The rules, in plain words:
   got it so far, and no more than that: a request can reach the agent after the panel stopped waiting for its
   answer. So the run goes on watching. A countdown that shows late is the run's own, counted from when it
   showed, and its earliest end from the last answer that showed none: a machine that goes out of reach
-  during that countdown is "not confirmed that it is off", as with a request that was answered. (Where no
+  during that countdown is "not confirmed that it is off", as with a request that was answered. (The run's
+  own is one with the run's countdown length, or one whose agent does not say the length. A shutdown with
+  another length that shows in that time was asked for by someone on the machine's page: the run does not
+  take it for its own, goes on waiting for its request, and names that shutdown in the machine's history,
+  and in its line when it is still pending at the end. Up to build 14 the run took it for its own.) (Where no
   answer came between the request and the countdown, the run cannot know when it began: there a link that
   drops in the countdown's last part, with a shutdown that then does not happen, can still read as off.) If none has shown 5 minutes after the time it would have ended, the report says "The shutdown request
   got no answer ... The request may still arrive: the machine then switches off ... later unless someone

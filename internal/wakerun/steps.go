@@ -1196,8 +1196,29 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	o := m.Ops.Observe(h.ID)
 	// after: the latest answer is from after the run's request, by the steady clock (answeredAfter)
 	after := h.answeredAfter(o, mono, h.delay(r))
-	// counting: an answer from after the request, in which its agent shows the countdown
-	counting := after && o.Pending != nil && o.Pending.Action == "shutdown"
+	// counting: an answer from after the request, in which its agent shows the countdown.
+	//
+	// After a request that got no answer, and before any countdown of it has shown (lostShutdown), that is a
+	// shutdown of the run's own length, or one whose agent does not say its length: the run's request, arrived
+	// late (ownLength; callOff, "Whose countdown is it"). Every pending shutdown counted here, so one that a
+	// person asked for on the machine's page in that time, with another length, was taken for the run's
+	// countdown, and from then on the run believed that it had seen its own. The person took theirs back: the
+	// run read "cancelled", wrote "Its shutdown was cancelled ... so it is ON" and let go, and the run's own
+	// request, which arrived after that, switched the machine off with nobody watching. A stop in that time
+	// found "a shutdown that is not the run's in the place of the run's" and sent no cancel, for good (fourth
+	// review of build 14, F1). A shutdown of another length is not the run's request: the run goes on waiting
+	// for that (other), its history says once what shows, and callOff keeps its cancel back while it shows.
+	// (A request that was answered is not touched by this: its countdown is known by its end, see below.)
+	counting := after && o.Pending != nil && o.Pending.Action == "shutdown" && (!h.lostShutdown() || ownLength(o.Pending, h.delay(r)))
+	var other *Pending // a shutdown that is pending now and is not the run's request (only after a request without an answer)
+	if after && !counting && o.Pending != nil && o.Pending.Action == "shutdown" {
+		other = o.Pending
+		if !h.otherNoted {
+			h.otherNoted = true
+			m.note(h, now, fmt.Sprintf("a shutdown is pending on it now that is not the one the run asked for (%s): "+
+				"the run goes on waiting for its own request, which got no answer and may still arrive", otherLength(other, h.delay(r), now)))
+		}
+	}
 	// The run's shutdown is no longer what is pending on the machine, and another action is: the run lets go
 	// of it here, and never reads what comes after as its own shutdown. A person called the run's shutdown off
 	// on the machine's page and asked for a reboot; it started after the run's own due time, the machine gave
@@ -1347,7 +1368,7 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 		switch {
 		case mono-h.dueMono <= offGrace:
 		case lost: // no shutdown that the run knows of: it does not say that one "did not finish"
-			m.lostEnd(r, h, now, mono)
+			m.lostEnd(r, h, now, mono, nil) // its agent does not answer: what is pending on it now, the run does not see
 		default:
 			m.end(r, h, StLeftOn, OnYes, now, fmt.Sprintf("It still shows as on %s after its shutdown was due (%s), and its agent does not answer: the shutdown did not finish. It is ON.",
 				span(offGrace), o.OnBy)+updateTail(h))
@@ -1369,7 +1390,7 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 	h.seeNone(o, after, mono)
 	switch {
 	case lost && mono-h.dueMono > offGrace:
-		m.lostEnd(r, h, now, mono)
+		m.lostEnd(r, h, now, mono, other)
 	case lost:
 		// A shutdown request that got no answer, and an agent that answers without a countdown: the request has
 		// not arrived yet. That is all it shows. The run used to end here, after two such answers, with "the
@@ -1475,8 +1496,19 @@ func lostMay(r *Run, h *Host) string {
 // request in a send queue is given up by the panel's system after about one to two minutes (Linux sends data
 // of a closed connection again 8 times), and the agent reads a request within 10 s and answers it within 45 s.
 // What can be later than that is a proxy in front of the agent that holds requests back.
-func (m *Manager) lostEnd(r *Run, h *Host, now time.Time, mono time.Duration) {
+//
+// other: a shutdown of another length than the run asked for that the machine's agent shows as pending now
+// (stepShutting; nil: none). Somebody asked for it on the machine's page. It is not the run's, the run sent
+// nothing to it, and it switches the machine off at its own time: the sentence names it, and does not say that
+// the agent has shown no countdown.
+func (m *Manager) lostEnd(r *Run, h *Host, now time.Time, mono time.Duration, other *Pending) {
 	since := mono - (h.endMin - h.delay(r)) // since the moment before the request left, by the steady clock
+	if other != nil {
+		m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("The shutdown request got no answer, and no countdown of it has shown since (%s). A shutdown is pending on the machine now "+
+			"that is not the one the run asked for (%s): it switches the machine off unless someone cancels it on its page. ", span(since), otherLength(other, h.delay(r), now))+
+			lostTail(r, h)+updateTail(h))
+		return
+	}
 	m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("The shutdown request got no answer, and its agent has shown no countdown since (%s). ", span(since))+
 		lostTail(r, h)+updateTail(h))
 }

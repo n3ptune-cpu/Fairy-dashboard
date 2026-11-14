@@ -606,6 +606,7 @@ type Host struct {
 	noneSeen        bool          // after a request without an answer, an answer from after it showed no countdown; noneMono: the steady moment the latest such answer came (seeNone, seeCountdown)
 	noneMono        time.Duration //
 	otherAt         time.Time     // (SeenAt of) the first answer after the request that showed another action than a shutdown as pending (otherPending)
+	otherNoted      bool          // the history says that a shutdown showed, after a request without an answer, that is not the run's (stepShutting)
 	pendingAt       time.Time     // the end of the run's countdown as its agent last gave it (by the machine's clock; stepShutting)
 	// ownAt: the end of the countdown the run started, as its agent gave it FIRST: in its answer to the run's
 	// shutdown request, or, for a request without an answer, in the first answer that showed a countdown (by
