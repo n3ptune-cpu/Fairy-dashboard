@@ -482,6 +482,12 @@ func (w *world) CancelShutdown(_ context.Context, id, _ string) error {
 	mc := w.ms[id]
 	w.calls = append(w.calls, "cancel "+id)
 	w.arrived("cancel " + id)
+	if !mc.chk.downAt.IsZero() { // Windows is going down by the PC's own switch-off: nothing stops that now
+		if !w.answers(mc) {
+			return &OpError{Text: "agent unreachable: connection failed"}
+		}
+		return &OpError{Text: "the elevated helper is stopped: nothing was cancelled"}
+	}
 	if mc.cancelLost != "" && (!mc.busyDone["cancel lost"] || strings.HasPrefix(mc.cancelLost, "always")) { // a timeout: the panel does not learn whether the agent got it
 		mc.busyDone["cancel lost"] = true
 		if strings.HasSuffix(mc.cancelLost, "arrives") {
@@ -600,9 +606,19 @@ func (w *world) sim() {
 			case mc.pending.Action == "shutdown" && mc.shutMode == "hang":
 				mc.agentDown, mc.onBy = true, OnByRefused // the system hangs in its shutdown: it runs, its agent is gone
 			case mc.pending.Action == "shutdown" && mc.shutMode != "ignore":
-				mc.on, mc.wentOff, mc.offAt = false, true, w.now
+				if c := &mc.chk; c.on && c.winOff != nil && c.winOff.downTakes > 0 && c.state == BlockOffPending {
+					c.downAt = w.now.Add(c.winOff.downTakes) // its own switch-off: Windows is stopping its services
+				} else {
+					mc.on, mc.wentOff, mc.offAt = false, true, w.now
+				}
 			}
 			mc.pending = nil
+		}
+		if at := mc.chk.downAt; !at.IsZero() && !w.now.Before(at) {
+			mc.chk.downAt = time.Time{}
+			if mc.on {
+				mc.on, mc.wentOff, mc.offAt = false, true, w.now
+			}
 		}
 	}
 }
@@ -789,7 +805,12 @@ func (w *world) wellReported(r *Run) {
 		// (h.Since) and went off after it, as the sentence says. TestRandomRunsWithLinkFlaps has the same
 		// allowance (saysItGoes).
 		saidItGoes := mc != nil && h.On == OnYes && !mc.on && mc.wentOff && mc.offAt.After(h.Since) && (strings.Contains(h.Text, "switches off") || saysItMayGo(h.Text))
-		if mc != nil && !saidItGoes && ((h.On == OnNo && (!mc.wentOff || h.State != StOff)) || (h.State == StOff && h.On != OnNo) ||
+		// (build 16) And one more, with the PCs that take their time to go down (winOff): the countdown of the
+		// PC's own switch-off is over, Windows is stopping it, which nothing calls off, and the link dropped in
+		// that time: its silence is "off" while it is still going down. It is off when Windows is done, and
+		// TestRandomRunsWithMachinesThatCheckApprovals looks again half an hour later (1.).
+		goingDown := mc != nil && h.On == OnNo && h.State == StOff && mc.on && !mc.chk.downAt.IsZero()
+		if mc != nil && !saidItGoes && !goingDown && ((h.On == OnNo && (!mc.wentOff || h.State != StOff)) || (h.State == StOff && h.On != OnNo) ||
 			(h.On == OnYes && !mc.on) || (h.On == OnNo && mc.on) || (h.On == OnUntouched && (mc.wakes > 0 || mc.shutdowns > 0))) {
 			w.t.Errorf("%s: the run says it is %q, the machine is on=%v (%s: %s)", h.ID, h.On, mc.on, h.State, h.Text)
 		}

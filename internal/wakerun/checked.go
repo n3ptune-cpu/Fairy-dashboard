@@ -86,6 +86,17 @@ const (
 	lateArm = 60 * time.Second
 	// The longest countdown a confirmation can name (the agent's limit for shutdown_delay_s).
 	maxRunDelay = 10 * time.Minute
+	// An answer that says nothing about runs, read in the watch of a machine's own switch-off (seeSelfWord), is
+	// the answer of that machine going down by its countdown only in this time: from selfOffStop before the
+	// earliest end of the countdown the run can tell (a PC stops its helper in the last seconds, and the agent's
+	// answer is of the moment it was made, not of the moment it arrived) until selfOffStill after the latest
+	// (the agent's own rule: a machine that still runs a minute after its countdown's end was kept on).
+	selfOffStop  = 10 * time.Second
+	selfOffStill = 60 * time.Second
+	// sameBoot: two answers are of the same start of the machine when their uptimes place that start within
+	// this of each other on the run's steady clock. A machine that says that it counts down has been up for
+	// the ticket's wait (two minutes at the very least), so a start after that answer is further away than this.
+	sameBoot = 30 * time.Second
 )
 
 // checked is the working state of a machine with the check (in memory; a run is never continued).
@@ -127,11 +138,19 @@ type checked struct {
 	goEnd   time.Duration
 	goRead  bool
 	// The watch of its own switch-off (stepSelfOff): selfWord: what the latest answer of its agent that was
-	// read in the watch said about this run (runWord); selfAt: its SeenAt, for the report. (Silence that
-	// counts as "off" began after the earliest end of its countdown, so an answer was read in the watch.)
+	// read in the watch said about this run (runWord), or the word "counting down" from before it when that
+	// answer said nothing and is the answer of a machine that is going down (seeSelfWord); selfAt: the SeenAt
+	// of the answer selfWord is from, for the report. (Silence that counts as "off" began after the earliest
+	// end of its countdown, so an answer was read in the watch.) selfUp, selfBoot: that answer gave a usable
+	// uptime, and when the machine started by it, steady.
 	selfWord string
 	selfAt   time.Time
-	byWord   bool // it is confirmed by its agent's word, not by an answer to the panel's confirmation (wordConfirmed)
+	selfUp   bool
+	selfBoot time.Duration
+	// armedMono: steady, the moment of the latest answer of its agent that showed this run as armed (0: none):
+	// its countdown had not begun then, so it ends no earlier than the notice after that.
+	armedMono time.Duration
+	byWord    bool // it is confirmed by its agent's word, not by an answer to the panel's confirmation (wordConfirmed)
 }
 
 // disarming is a cancel of a machine's self-switch-off that the run is at (disarm).
@@ -1042,6 +1061,9 @@ func (m *Manager) stepAwaiting(ctx context.Context, r *Run, h *Host, info HostIn
 	mono := m.mono() // before the poller is asked
 	o := m.Ops.Observe(h.ID)
 	word := h.runWord(r, o, mono, c.armBefore)
+	if word == BlockArmed {
+		c.armedMono = mono - o.SeenAgo
+	}
 	if c.confirming {
 		if mono-c.confirmMono <= confirmingMax {
 			return
@@ -1248,8 +1270,11 @@ func (m *Manager) stepSelfOff(ctx context.Context, r *Run, h *Host, now time.Tim
 		return
 	}
 	none := h.seeNoRun(o, word)
+	if word == BlockArmed {
+		c.armedMono = mono - o.SeenAgo
+	}
 	if o.Online && mono-o.SeenAgo > c.armBefore {
-		c.selfWord, c.selfAt = word, o.SeenAt
+		h.seeSelfWord(o, word, mono, t)
 	}
 	lead := cameOnline(h) + ". " + leadWhy(r, h) + ": not confirmed, not updated."
 	switch {
@@ -1301,7 +1326,9 @@ func (m *Manager) stepSelfOff(ctx context.Context, r *Run, h *Host, now time.Tim
 			// or counting down. One answer that shows no run (the machine was started again, the run was ended
 			// on it) is not enough for "not armed any more" (two are asked for, above), and it takes back "out
 			// of reach before the end": the silence after it was "It switched itself off again" for a machine
-			// that was on. What that silence is, the run does not know.
+			// that was on. What that silence is, the run does not know. (An answer that says nothing about runs
+			// is such an answer too, unless it is the last answer of a machine that is going down by the
+			// countdown it showed: seeSelfWord.)
 			said := "showed no run on it"
 			switch c.selfWord {
 			case "":
@@ -1342,6 +1369,51 @@ func (m *Manager) stepSelfOff(ctx context.Context, r *Run, h *Host, now time.Tim
 		text := fmt.Sprintf("%s It was to switch itself off and is still on %s after that; %s.%s", lead, span(offGrace), shows, stopped)
 		m.endSeen(r, h, StLeftOn, OnYes, now, text+" It is ON.", text)
 	}
+}
+
+// seeSelfWord takes in an answer of the machine's agent that is read in the watch of its own switch-off: what
+// it says about this run (word: runWord) is what the silence after it is judged by (stepSelfOff).
+//
+// An answer that says nothing about runs ("": on Windows the helper is what keeps the run, and the agent
+// answers without the helper's word while the helper does not answer it) used to take the word before it away
+// like every other answer. It is also the last answer of a PC that switches itself off exactly as its ticket
+// says: Windows counts the countdown down itself and, at its end, stops its services one after the other,
+// the helper before the agent, which answers one more poll. The silence after that was "said nothing about
+// the run ... not confirmed that it is off", Left ON, for a machine that had switched itself off (final
+// review of build 16, J1-A).
+//
+// So an answer that says nothing leaves the word "counting down" in place (BlockOffPending, and only that
+// word: an armed machine needs its helper to begin the switch-off at all) when all of this holds:
+//
+//   - it came under the entry the run knows;
+//   - the machine was not started again since it said that it counts down: both answers give a usable uptime,
+//     and both uptimes place the machine's start at the same moment of the run's steady clock (sameBoot). On
+//     a machine that was started again the run is gone, its agent answers without the helper for a while,
+//     and it is ON: that answer says nothing either;
+//   - it was made in the time in which a machine that goes down by this countdown answers like that: no
+//     earlier than selfOffStop before the earliest end of the countdown the run can tell (the wait and the
+//     notice after the arm request left, and the notice after the latest answer that still showed the run as
+//     armed), and no later than selfOffStill after the latest end (dueMono). A helper that stopped earlier is
+//     not the machine going down, and the run does not take the rest of the countdown on trust; a machine
+//     that still answers later was not switched off by its countdown. A run that has no moment of its own
+//     for the arming (offMax is 0) cannot tell the first, and keeps nothing.
+//
+// Every other answer that says nothing takes the word away as before, and it stays away until an answer says
+// something again: the silence after it is "not confirmed that it is off".
+func (h *Host) seeSelfWord(o Observation, word string, mono time.Duration, t *Ticket) {
+	c := &h.chk
+	at := mono - o.SeenAgo
+	up := o.UptimeS != nil && uptimeUsable(*o.UptimeS)
+	var boot time.Duration
+	if up {
+		boot = at - time.Duration(*o.UptimeS)*time.Second
+	}
+	if word == "" && c.selfWord == BlockOffPending && o.Entry == h.entry &&
+		up && c.selfUp && boot-c.selfBoot <= sameBoot && c.selfBoot-boot <= sameBoot &&
+		c.offMax != 0 && at >= max(c.offMin, c.armedMono)+t.notice()-selfOffStop && at <= h.dueMono+selfOffStill {
+		return
+	}
+	c.selfWord, c.selfAt, c.selfUp, c.selfBoot = word, o.SeenAt, up, boot
 }
 
 // endCalledOff ends a machine whose own word is that the run was called off on it: a cancel (Keep on in the

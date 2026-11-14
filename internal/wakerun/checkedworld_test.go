@@ -38,6 +38,16 @@ type modelCheck struct {
 	lied          bool   // its agent showed this run as confirmed when it was not (the test says so: the judge allows what follows from that word)
 	goTwice       bool   // the confirmation reaches it twice: it takes the first copy, and the panel holds its answer to the second
 	cancelSays    string // its agent answers a cancel with this error (500 / 503): nothing is cancelled
+	// winOff: Windows: how the PC goes down by its own switch-off (nil: it is down at the countdown's end, and
+	// its last answer has the helper's word). downAt: it is going down, and is down then (zero: it is not).
+	winOff *winOff
+	downAt time.Time
+	// muteStopped: while the helper is stopped the agent's answers say nothing about runs. helperLate: after a
+	// start of the machine that is not the one it was armed in, the helper answers the agent only this much
+	// later (muteUntil): until then the agent's answers say nothing about runs.
+	muteStopped bool
+	helperLate  time.Duration
+	muteUntil   time.Time
 
 	// its run record
 	boot       time.Time // the boot the record's live part and its mark are of
@@ -58,6 +68,16 @@ type modelCheck struct {
 	gos     int
 	goTaken map[string]bool // runs whose confirmation it accepted
 	goOpen  bool            // a confirmation request for it got no answer
+}
+
+// winOff is the order in which a Windows PC goes down by its own switch-off. Windows counts the countdown down
+// itself and, at its end, stops its services one after the other. The helper is stopped helperStops before
+// the end (negative: after it), and from then on the agent's answers say nothing about runs. The PC is down
+// downTakes after the end, and its agent answers until then. Nothing stops it once the countdown is over: a
+// cancel is answered with an error.
+type winOff struct {
+	helperStops time.Duration
+	downTakes   time.Duration
 }
 
 // modelTickets is the panel's keeper of a run's tickets and the judge's count of confirmations.
@@ -108,7 +128,13 @@ func (w *world) checkedStart(req *StartRequest) {
 func (w *world) bootOf(mc *machine) *modelCheck {
 	c := &mc.chk
 	if !c.boot.Equal(mc.bootedAt) || !mc.on {
-		c.boot, c.run, c.state, c.closed, c.last, c.armOnWay = mc.bootedAt, "", "", false, nil, 0
+		if mc.on && c.helperLate > 0 && len(c.used) > 0 { // started again after a run was on it
+			c.muteUntil = mc.bootedAt.Add(c.helperLate)
+		}
+		if c.winOff != nil { // the helper starts with the machine
+			c.noRuns = false
+		}
+		c.boot, c.run, c.state, c.closed, c.last, c.armOnWay, c.downAt = mc.bootedAt, "", "", false, nil, 0, time.Time{}
 	}
 	return c
 }
@@ -223,6 +249,14 @@ func (w *world) runTick(mc *machine) {
 	end := func(state string) {
 		c.last, c.run, c.state = &RunBlock{ID: c.run, State: state}, "", ""
 	}
+	if wo := c.winOff; wo != nil { // Windows stops the helper around the end of the countdown
+		switch {
+		case c.state == BlockOffPending && mc.pending != nil && mc.pending.At.Sub(w.now) <= wo.helperStops:
+			c.noRuns = true
+		case !c.downAt.IsZero() && w.now.Sub(c.downAt.Add(-wo.downTakes)) >= -wo.helperStops:
+			c.noRuns = true
+		}
+	}
 	switch {
 	case c.state == BlockArmed && w.mono >= c.waitEnds:
 		switch {
@@ -239,7 +273,7 @@ func (w *world) runTick(mc *machine) {
 			c.state, c.offAt = BlockOffPending, w.now.Add(notice)
 			mc.pending = &Pending{Action: "shutdown", At: w.now.Add(notice), DelayS: w.tk.t.NoticeS}
 		}
-	case c.state == BlockOffPending && mc.pending == nil: // its countdown was stopped on the machine itself
+	case c.state == BlockOffPending && mc.pending == nil && c.downAt.IsZero(): // its countdown was stopped on the machine itself
 		end(BlockCancelled)
 	case c.state == BlockConfirmed && w.mono >= c.withinEnds:
 		end(BlockDone)
@@ -264,7 +298,7 @@ func (w *world) runShown(mc *machine, o *Observation) {
 	}
 	c := w.bootOf(mc)
 	o.HelperStopped = c.helperStopped
-	if c.noRuns {
+	if c.noRuns || (c.helperStopped && c.muteStopped) || w.now.Before(c.muteUntil) {
 		return
 	}
 	o.Runs = true

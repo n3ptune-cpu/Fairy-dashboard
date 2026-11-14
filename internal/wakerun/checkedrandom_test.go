@@ -23,7 +23,18 @@ import (
 //  3. a machine with the check that accepted no confirmation runs the version it had (nothing updated it);
 //  4. after "Cancel run" with the machines left on, nothing but cancels is sent to any machine;
 //  5. after such a cancel with a working link, no machine with the check goes off;
-//  6. every machine ends with a sentence, and the run ends.
+//  6. every machine ends with a sentence, and the run ends;
+//  7. a machine with the check that its own countdown switched off, with nothing between the panel and it and
+//     nothing else happening on it, is not reported as "not confirmed that it is off" by the watch of that
+//     switch-off (final review of build 16, J1-A: the opposite error to 1).
+//
+// Every second seed (the odd ones: the others' runs stay what they were) the machines with the check are
+// Windows PCs, from a source of their own: most of them go down by their own switch-off in the order Windows
+// has (winOff: the helper is stopped within five seconds of the countdown's end, the agent answers without
+// it until the PC is down, up to half a minute later; one in four takes one to three minutes, and 7. does
+// not ask about those); on half of them the agent says nothing about runs while the helper is stopped; and
+// on half of them the helper answers only up to a minute and a half after the agent when the PC was started
+// again.
 //
 // 300 runs with every test run; FAIRY_RANDOM_RUNS and FAIRY_RANDOM_FROM as for the other random runs.
 func TestRandomRunsWithMachinesThatCheckApprovals(t *testing.T) {
@@ -48,6 +59,9 @@ func TestRandomRunsWithMachinesThatCheckApprovals(t *testing.T) {
 		}
 		var plan []later
 		clean := map[string]bool{} // nothing stands between the panel and this machine, and nothing happens on it
+		slow := map[string]bool{}  // a PC whose own switch-off takes longer than a minute from its countdown's end
+		winRng := rand.New(rand.NewSource(int64(seed) + 4_000_000))
+		wsecs := func(lo, hi int) time.Duration { return time.Duration(lo+winRng.Intn(hi-lo+1)) * time.Second }
 		n := 1 + rng.Intn(3)
 		req := StartRequest{UpdateIfOn: rng.Intn(2) == 0, Latest: "17-bbbbbbb"}
 		for i := 0; i < n; i++ {
@@ -98,7 +112,7 @@ func TestRandomRunsWithMachinesThatCheckApprovals(t *testing.T) {
 				}
 				if rng.Intn(10) == 0 { // the machine is started again
 					plan = append(plan, later{secs(60, 1300), func() {
-						if mc.on {
+						if mc.on && mc.chk.downAt.IsZero() {
 							mc.bootedAt, mc.agentReadyAt, mc.pending, mc.updating = w.now, w.now.Add(secs(5, 60)), nil, false
 						}
 					}})
@@ -111,12 +125,25 @@ func TestRandomRunsWithMachinesThatCheckApprovals(t *testing.T) {
 				}
 				if rng.Intn(8) == 0 { // somebody keeps it on at the machine itself
 					plan = append(plan, later{secs(60, 1300), func() {
-						if mc.on {
+						if mc.on && mc.chk.downAt.IsZero() {
 							mc.pending = nil
 							w.runCancelled(mc)
 						}
 					}})
 					dirty()
+				}
+			}
+			if mc.chk.on && seed%2 == 1 { // a Windows PC
+				switch winRng.Intn(4) {
+				case 1, 2:
+					mc.chk.winOff = &winOff{helperStops: wsecs(-5, 5), downTakes: wsecs(0, 30)}
+				case 3:
+					mc.chk.winOff = &winOff{helperStops: wsecs(-5, 5), downTakes: wsecs(61, 200)}
+					slow[id] = true
+				}
+				mc.chk.muteStopped = winRng.Intn(2) == 0
+				if winRng.Intn(2) == 0 {
+					mc.chk.helperLate = wsecs(1, 90)
 				}
 			}
 			for k := rng.Intn(4); k > 1; k-- { // the link drops and comes back
@@ -252,6 +279,9 @@ func TestRandomRunsWithMachinesThatCheckApprovals(t *testing.T) {
 			}
 			if mc.chk.on && cancelAt >= 0 && leaveOn && clean[h.ID] && mc.wentOff && mc.offAt.Sub(t0) > cancelAt+30*time.Second { // 5.
 				fail("it went off after \"Cancel run\" with the machines left on, with a working link")
+			}
+			if mc.chk.on && clean[h.ID] && !slow[h.ID] && !mc.on && mc.wentOff && h.On == OnUnknown && strings.Contains(h.Text, "It was switching itself off") { // 7.
+				fail("nothing stood between the panel and it, its own countdown switched it off, and the report does not know")
 			}
 			if mc.chk.on && (mc.chk.arms > 1 || mc.chk.gos > 1) {
 				fail("%d tickets and %d confirmations were sent to it", mc.chk.arms, mc.chk.gos)
