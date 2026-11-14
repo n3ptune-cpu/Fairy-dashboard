@@ -1153,7 +1153,9 @@ API: `GET` and `PUT /api/admin/hosts/{id}/options`. The request names only what 
 `{"ups": [{"id": "nas-agent/rack", "on": true}], "plugs": [{"id": "nas-agent/pc-plug", "linked": true,
 "in_total": false}], "reset": [{"id": "nas-agent/desk", "field": "ups"}], "leftovers": true}` (`field`: `ups`,
 `plugs` or `total`; a reset is about that one line of this machine; `leftovers` removes the changes that have
-no line any more). Any other field is refused (422).
+no line any more). Any other field, and a field under another spelling (`"On"` for `"on"`, also inside an
+entry), is refused (422); so is a request that says nothing or names a line twice, before any confirmation
+is asked for.
 
 ### Notifications
 

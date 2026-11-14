@@ -89,6 +89,34 @@ func TestEditHostWhoMay(t *testing.T) {
 	if e.storedOptions() != nil {
 		t.Fatal("stored before it was confirmed")
 	}
+	// a request that can never be taken is refused for what it is, before anybody is asked to confirm anything:
+	// the admin with the old sign-in is not sent to Pocket ID for a request the panel then answers with 422
+	asked := len(e.auditEntries("", stepUpAction))
+	var many []any
+	for i := 0; i <= maxHostOptionEntries; i++ {
+		many = append(many, map[string]any{"id": fmt.Sprintf("laptop/u%d", i), "on": true})
+	}
+	for name, c := range map[string]struct {
+		body map[string]any
+		want string
+	}{
+		"nothing":                                {map[string]any{}, "nothing to change"},
+		"empty lists":                            {map[string]any{"ups": []any{}, "plugs": []any{}, "reset": []any{}, "leftovers": false}, "nothing to change"},
+		"a UPS without on":                       {map[string]any{"ups": []any{map[string]any{"id": "laptop/rack"}}}, `ups: "on" is missing`},
+		"a plug with nothing to do":              {map[string]any{"plugs": []any{map[string]any{"id": "laptop/desk"}}}, "neither"},
+		"a plug twice":                           {map[string]any{"plugs": []any{map[string]any{"id": "laptop/desk", "linked": true}, map[string]any{"id": "laptop/desk", "in_total": true}}}, "twice"},
+		"a reset of no field":                    {map[string]any{"reset": []any{map[string]any{"id": "laptop/desk", "field": "url"}}}, "no such field"},
+		"a reset and a tick of a line":           {map[string]any{"reset": []any{map[string]any{"id": "laptop/desk", "field": "total"}}, "plugs": []any{map[string]any{"id": "laptop/desk", "in_total": true}}}, "twice"},
+		"more entries than one request may have": {map[string]any{"ups": many}, "too many entries in one request"},
+	} {
+		r := e.do("PUT", path, c.body, append([]string{"Cookie", a.sess}, csrf...)...)
+		if d, _ := r.body["detail"].(string); r.code != 422 || !strings.Contains(d, c.want) {
+			t.Errorf("%s, with an old sign-in: %d %s (want 422 with %q, and no confirmation)", name, r.code, r.raw, c.want)
+		}
+	}
+	if n := len(e.auditEntries("", stepUpAction)); n != asked || e.storedOptions() != nil {
+		t.Errorf("a request that cannot be taken asked for a confirmation: %d step-up entries, before %d", n, asked)
+	}
 	// a body with two readings is refused before anything is kept or described
 	if r := e.doRaw("PUT", path, `{"plugs":[{"id":"laptop/desk","in_total":true}],"PLUGS":[{"id":"laptop/desk","in_total":false}]}`,
 		append([]string{"Cookie", a.sess}, csrf...)...); r.code != 422 {

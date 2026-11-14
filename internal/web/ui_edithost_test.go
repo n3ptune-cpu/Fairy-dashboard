@@ -429,6 +429,13 @@ func TestUIEditHostDialogFlow(t *testing.T) {
   answer = async () => ({ ok: true, message: "links saved" });
   await submit(); await settle();
   if (JSON.stringify(asked[asked.length - 1].body) !== JSON.stringify({ leftovers: true }) || closed !== 1) fail("the PUT for the leftovers: " + JSON.stringify(asked[asked.length - 1]));
+  // an answer that is not what the panel's API gives (a proxy's page, another version): said, never "Loading…" for ever
+  for (const bad of [null, {}, "x", [], 7, { ups: null, plugs: null }, { ups: [], plugs: {} }, { ups: [null], plugs: [] }, { ups: [], plugs: [1] }, { ups: [{ name: "no id" }], plugs: [] }]) {
+    let threw = "";
+    try { await open(async () => bad); await settle(); } catch (x) { threw = String(x); }
+    if (threw || $("#eh-err").textContent !== "The panel's answer is not what this page expects. Reload the page and try again." || $("#eh-body").innerHTML !== "" || $("#eh-form").onsubmit || eh.d !== null)
+      fail("an answer " + JSON.stringify(bad) + ": " + (threw || $("#eh-err").textContent + " | " + $("#eh-body").innerHTML));
+  }
   // Cancel closes it
   await open(async () => d());
   $("#eh-x").onclick();

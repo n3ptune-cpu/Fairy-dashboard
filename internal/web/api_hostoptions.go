@@ -1,8 +1,11 @@
 package web
 
 import (
+	"bytes"
 	"cmp"
+	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
@@ -88,9 +91,103 @@ type hostOptionsReq struct {
 	Leftovers *bool `json:"leftovers"`
 }
 
-// empty reports whether the request asks for nothing.
-func (r hostOptionsReq) empty() bool {
-	return len(r.UPS)+len(r.Plugs)+len(r.Reset) == 0 && (r.Leftovers == nil || !*r.Leftovers)
+// check is everything about a request that can be said without looking at any machine: is there anything in
+// it, is each entry whole, is no line named twice. A request that fails here can never be taken, whoever sends
+// it and whatever is stored, so it is refused (422) before anybody is asked to confirm it with a passkey.
+func (r hostOptionsReq) check() error {
+	bad := func(msg string) error { return apierr.New(422, msg) }
+	if len(r.UPS)+len(r.Plugs)+len(r.Reset) == 0 && (r.Leftovers == nil || !*r.Leftovers) {
+		return bad("nothing to change")
+	}
+	if len(r.UPS) > maxHostOptionEntries || len(r.Plugs) > maxHostOptionEntries || len(r.Reset) > maxHostOptionEntries {
+		return bad("too many entries in one request")
+	}
+	// a line is a field and a device: it can be reset or ticked once
+	seen := map[string]bool{}
+	once := func(field, id string) bool {
+		k := field + "\x00" + id
+		was := seen[k]
+		seen[k] = true
+		return !was
+	}
+	for _, e := range r.Reset {
+		if _, ok := hoFields[e.Field]; !ok {
+			return bad("reset: no such field (ups, plugs or total)")
+		}
+		if !once(e.Field, e.ID) {
+			return bad("reset: an entry is there twice")
+		}
+	}
+	for _, e := range r.UPS {
+		if e.On == nil {
+			return bad("ups: \"on\" is missing")
+		}
+		if !once("ups", e.ID) {
+			return bad("ups: an entry is there twice")
+		}
+	}
+	plugs := map[string]bool{}
+	for _, e := range r.Plugs {
+		if e.Linked == nil && e.InTotal == nil {
+			return bad("plugs: neither \"linked\" nor \"in_total\" is given")
+		}
+		if plugs[e.ID] || (e.Linked != nil && !once("plugs", e.ID)) || (e.InTotal != nil && !once("total", e.ID)) {
+			return bad("plugs: an entry is there twice")
+		}
+		plugs[e.ID] = true
+	}
+	return nil
+}
+
+// exactNames reports whether every name in a JSON body, in every object at every depth, is spelled as this
+// API spells its fields (lower-case letters, digits, "_"). The decoder takes a field under any spelling of
+// its name ("ID" for "id", "On" for "on"); strictBody refuses that for the outermost object of every route
+// that can be kept for a step-up, and leaves the inner ones alone because other routes have free names there
+// (a host's id as a key). This API has none: its ids are values.
+func exactNames(b []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	var value func() bool
+	value = func() bool {
+		tok, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		d, open := tok.(json.Delim)
+		if !open {
+			return true
+		}
+		for dec.More() {
+			if d == '{' {
+				name, err := dec.Token()
+				if s, ok := name.(string); err != nil || !ok || !apiFieldRe.MatchString(s) {
+					return false
+				}
+			}
+			if !value() {
+				return false
+			}
+		}
+		_, err = dec.Token()
+		return err == nil
+	}
+	return value()
+}
+
+// hostOptionsBody reads the request of a PUT: strict JSON that says each thing once (decodeBody), every name
+// in it spelled exactly (exactNames), and a request that can be meant (check).
+func (c *reqCtx) hostOptionsBody(req *hostOptionsReq) error {
+	b, err := io.ReadAll(io.LimitReader(c.r.Body, 64<<10))
+	if err != nil {
+		return apierr.New(400, "unreadable body")
+	}
+	c.r.Body = io.NopCloser(bytes.NewReader(b))
+	if err := c.decodeBody(req); err != nil {
+		return err
+	}
+	if !exactNames(b) {
+		return apierr.New(422, "invalid request body: a field is not spelled exactly as the API names it")
+	}
+	return req.check()
 }
 
 // hoUPSReq: the UPS with this id (as GET /api/ups names it, "<agent>/<name>") powers this machine, or not.
@@ -532,8 +629,8 @@ func hoTotalWords(in bool) string {
 // only. A tick that puts a line back to what config.yaml says takes the decision out instead: what is stored
 // is where the panel differs from config.yaml, and nothing else.
 func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines []string, changes []hoChange, err error) {
-	if len(req.UPS) > maxHostOptionEntries || len(req.Plugs) > maxHostOptionEntries || len(req.Reset) > maxHostOptionEntries {
-		return nil, nil, apierr.New(422, "too many entries in one request")
+	if err := req.check(); err != nil {
+		return nil, nil, err
 	}
 	if o.Agents == nil {
 		o.Agents = map[string]adminstate.HostOption{}
@@ -557,14 +654,6 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 		return &e
 	}
 	links := func(agent string) config.Links { return entry(agent).Apply(m.base[agent]) }
-	seen := map[string]bool{}
-	once := func(kind, id string) bool {
-		if seen[kind+"\x00"+id] {
-			return false
-		}
-		seen[kind+"\x00"+id] = true
-		return true
-	}
 	isMine := func(p hoPlug, l config.Links) bool {
 		byLink, _, selfMine, _ := m.plugState(p, l)
 		return byLink || selfMine || (m.agent != "" && p.agent == m.agent)
@@ -578,13 +667,7 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	}
 	// 1. resets: the decision of one line goes, config.yaml counts for it again
 	for _, r := range req.Reset {
-		field, ok := hoFields[r.Field]
-		if !ok {
-			return nil, nil, bad("reset: no such field (ups, plugs or total)")
-		}
-		if !once(r.Field, r.ID) {
-			return nil, nil, bad("reset: an entry is there twice")
-		}
+		field := hoFields[r.Field]
 		if field == config.FieldUPSPowers {
 			i := slices.IndexFunc(m.ups, func(u hoUPS) bool { return u.id == r.ID })
 			if i < 0 {
@@ -648,14 +731,8 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	// 2. ticks
 	for _, r := range req.UPS {
 		i := slices.IndexFunc(m.ups, func(u hoUPS) bool { return u.id == r.ID })
-		if r.On == nil {
-			return nil, nil, bad("ups: \"on\" is missing")
-		}
 		if i < 0 {
 			return nil, nil, gone("UPS", r.ID)
-		}
-		if !once("ups", r.ID) {
-			return nil, nil, bad("ups: an entry is there twice")
 		}
 		u := m.ups[i]
 		e, base := entry(u.agent), m.base[u.agent].UPSPowers[u.name]
@@ -686,14 +763,8 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	}
 	for _, r := range req.Plugs {
 		i := slices.IndexFunc(m.plugs, func(p hoPlug) bool { return p.id == r.ID })
-		if r.Linked == nil && r.InTotal == nil {
-			return nil, nil, bad("plugs: neither \"linked\" nor \"in_total\" is given")
-		}
 		if i < 0 {
 			return nil, nil, gone("plug", r.ID)
-		}
-		if !once("plug", r.ID) || (r.Linked != nil && seen["plugs\x00"+r.ID]) || (r.InTotal != nil && seen["total\x00"+r.ID]) {
-			return nil, nil, bad("plugs: an entry is there twice")
 		}
 		p := m.plugs[i]
 		e, base := entry(p.agent), m.base[p.agent]
@@ -916,7 +987,7 @@ func (s *Server) hostOptionsGet(c *reqCtx) error {
 // you" (pending.go: actionList): the lines apply makes, on a copy of what is stored now.
 func (c *reqCtx) hostOptionsItems(*model.User) []string {
 	var req hostOptionsReq
-	if !decodeStrictly(c.body, &req) {
+	if !decodeStrictly(c.body, &req) || !exactNames(c.body) {
 		return nil
 	}
 	m, err := c.hostOptionsMachine(c.r.PathValue("id"))
@@ -937,7 +1008,7 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		return err
 	}
 	var req hostOptionsReq
-	if err := c.decodeBody(&req); err != nil {
+	if err := c.hostOptionsBody(&req); err != nil { // its form, before anybody is asked to confirm it
 		return err
 	}
 	u, err := c.adminGuardFor("only admins can edit a host", "changes to a host")
@@ -949,9 +1020,6 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	if err != nil {
 		c.audit(u, "host.options", id, nil, errorOutcome(err))
 		return err
-	}
-	if req.empty() {
-		return apierr.New(422, "nothing to change")
 	}
 	var lines, notes []string
 	var changes []hoChange

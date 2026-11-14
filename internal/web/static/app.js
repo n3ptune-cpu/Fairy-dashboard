@@ -3639,6 +3639,9 @@ const EH_INFO = () => infoBtn("edit-host", "Edit host", infoList([
   "A link also decides who can see a UPS or plug: the viewers of the site of a machine it is linked to or, linked to nothing, of the machine that reads it. Before you save, the list says when a change shows a device to another site's viewers or hides it from them.",
   "Stored changes about a device nobody relays any more, or about a machine that is gone, have no line here. The dialog says how many there are; Remove takes them out.",
   "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]));
+// Is d what GET .../options gives: the two lists, each entry with its id? Everything else is read with a default.
+const ehValid = (d) => !!d && typeof d === "object" && Array.isArray(d.ups) && Array.isArray(d.plugs)
+  && [...d.ups, ...d.plugs].every((x) => !!x && typeof x === "object" && typeof x.id === "string");
 // The sections are drawn anew after every tick and Reset. The control that was used keeps the focus: the same
 // tick is found again by its section and its device; a Reset button is gone once it was pressed, and the tick
 // of its line stands for it. Without this the focus fell out of the dialog at every tick made with the
@@ -3674,11 +3677,17 @@ async function openEditHost(s) {
   const path = `/api/admin/hosts/${enc(s.id)}/options`;
   // The answer has a time limit: a dialog that says "Loading…" for ever says nothing.
   const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 15000);
+  let why = "";
   try { eh.d = await api(path, { signal: stop.signal }); }
-  catch (x) {
-    if (mine()) { $("#eh-body").innerHTML = ""; fail(x?.name === "AbortError" ? "The panel did not answer. Close this and try again." : x.message); }
+  catch (x) { why = x?.name === "AbortError" ? "The panel did not answer. Close this and try again." : x.message; }
+  finally { clearTimeout(timer); }
+  // An answer that is not the panel's (another version, something in between that answered for it): said, not drawn.
+  if (!why && !ehValid(eh.d)) why = "The panel's answer is not what this page expects. Reload the page and try again.";
+  if (why) {
+    eh.d = null;
+    if (mine()) { $("#eh-body").innerHTML = ""; fail(why); }
     return;
-  } finally { clearTimeout(timer); }
+  }
   if (!mine()) return;
   ehDraw();
   $("#eh-body").onchange = (e) => {

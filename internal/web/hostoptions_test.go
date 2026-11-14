@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -629,6 +630,23 @@ func TestEditHostNeverEditable(t *testing.T) {
 		got := r.doRaw("PUT", "/api/admin/hosts/"+ehNodeB+"/options", raw, append([]string{"Content-Type", "application/json"}, r.hdr...)...)
 		if got.code != 422 || r.storedOptions() != nil {
 			t.Errorf("%s: %d %s", name, got.code, got.raw)
+		}
+	}
+	// ... also inside an entry: this API has no field under another spelling at any depth (the decoder alone
+	// would take "ID" for "id" and "On" for "on")
+	for name, raw := range map[string]string{
+		"ID and On in a UPS entry":       `{"ups":[{"ID":"nas-agent/rack","On":true}]}`,
+		"On in a UPS entry":              `{"ups":[{"id":"nas-agent/rack","On":true}]}`,
+		"Linked in a plug entry":         `{"plugs":[{"id":"nas-agent/b-plug","Linked":true}]}`,
+		"IN_TOTAL in a plug entry":       `{"plugs":[{"id":"nas-agent/a-plug","IN_TOTAL":false}]}`,
+		"Field in a reset entry":         `{"reset":[{"id":"nas-agent/rack","Field":"ups"}]}`,
+		"a good entry and one like that": `{"ups":[{"id":"nas-agent/desk","on":true},{"Id":"nas-agent/rack","on":true}]}`,
+	} {
+		for who, cookie := range map[string]string{"inside the window": r.hdr[1], "with an old sign-in": r.staleCookie(controller(), time.Hour)} {
+			got := r.doRaw("PUT", "/api/admin/hosts/"+ehNodeB+"/options", raw, "Content-Type", "application/json", "Cookie", cookie, "X-Requested-With", "fairy")
+			if got.code != 422 || r.storedOptions() != nil || !strings.Contains(string(got.raw), "not spelled exactly as the API names it") {
+				t.Errorf("%s, %s: %d %s", name, who, got.code, got.raw)
+			}
 		}
 	}
 	// and the one thing that is taken: the same UPS entry without anything else
