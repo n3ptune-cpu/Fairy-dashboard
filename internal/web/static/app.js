@@ -2129,7 +2129,7 @@ function wuSeen(d) {
   const r = (d.last || []).find((x) => x.id === was);
   if (r) wuRunOver(r);
 }
-const wuNeedsLook = (h) => ["left_on", "gave_up", "interrupted"].includes(h.state) || h.on === "unknown" || wuUpdateBad(h);
+const wuNeedsLook = (h) => ["left_on", "gave_up", "interrupted"].includes(h.state) || h.on === "unknown" || wuNotUpdated(h);
 function wuRunOver(r) {
   const hosts = r.hosts || [], n = hosts.length, look = hosts.filter(wuNeedsLook).length;
   const how = (WU_RUN[r.state] || ["", r.state])[1];
@@ -2143,9 +2143,12 @@ const WU_RUN = table({ running: ["warn", "running"], done: ["ok", "finished"], c
 const WU_POWER = table({ on: ["warn", "is ON"], off: ["", "is off"], unknown: ["warn", "on or off: not known"], untouched: ["", "not touched"] });
 const wuEnded = (h) => ["off", "stayed_on", "left_on", "gave_up", "skipped", "interrupted"].includes(h.state);
 const wuUpdateBad = (h) => !!h.update && !["ok", "up_to_date"].includes(h.update);
+// Not updated: its update did not work, or (a machine with the check) it ended as planned with no update at all:
+// nobody confirmed it. The row's sentence says which; the chip, the Update step and "to look at" say that it was not updated.
+const wuNotUpdated = (h) => wuUpdateBad(h) || (!!h.checked && !h.update && ["off", "stayed_on"].includes(h.state));
 // The steps of one machine as a row of boxes: done, now, failed.
 function wuSteps(h) {
-  const upd = h.update ? (wuUpdateBad(h) ? "bad" : "done") : h.state === "updating" ? "now" : "";
+  const upd = h.update ? (wuUpdateBad(h) ? "bad" : "done") : h.state === "updating" ? "now" : wuNotUpdated(h) ? "bad" : "";
   if (h.mode !== "wake" || (h.already_on && !h.not_fresh)) {  // not_fresh: the run sent its wake, so it keeps the wake's row of steps
     const on = h.state !== "queued" && h.state !== "skipped";
     return `<div class="steps">${[["Is on", on ? "done" : ""], ["Update", upd], ["Stays on", h.state === "stayed_on" ? "done" : ""]]
@@ -2164,7 +2167,7 @@ function wuHostRow(r, h) {
   const [cls, said] = WU_STATE[h.state] || ["", h.state], end = wuEnded(h), key = r.id + "/" + h.id;
   // "LEFT ON" is for a machine the run saw as on. When its last look could not see the machine, the chip says that.
   const label = h.state === "left_on" && h.on === "unknown" ? "not confirmed" : said;
-  const warnEnd = end && cls === "ok" && wuUpdateBad(h);  // off again or left on as planned, but the update did not work
+  const warnEnd = end && cls === "ok" && wuNotUpdated(h);  // off again or left on as planned, but not updated
   const pw = end && WU_POWER[h.on] ? `<span class="chip ${WU_POWER[h.on][0]}">${WU_POWER[h.on][1]}</span>` : "";
   const count = h.state === "shutting_down" && h.shutdown_at ? ` <span class="note">in <b data-countdown="${esc(h.shutdown_at)}">${fmtRuntime(Math.max(0, (new Date(h.shutdown_at) - Date.now()) / 1000))}</b> · cancel it on <a href="#/system/${enc(h.id)}">its page</a></span>`
     : h.state === "waking" && h.wake_sent_at ? ` <span class="note">· sent <span data-ago="${esc(h.wake_sent_at)}">${ago(h.wake_sent_at)}</span></span>` : "";

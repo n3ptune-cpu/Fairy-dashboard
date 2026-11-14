@@ -29,3 +29,30 @@ func TestUIRunRowHasKeepOnWhileTheMachineMaySwitchItselfOff(t *testing.T) {
   if (/strip at the top/.test(wuRunBox(r, true))) fail("the run's box repeats the strip");
 `)
 }
+
+// A machine with the check that nobody confirmed ends as planned (off again, or it stays on) but was not
+// updated: its chip says so in amber, its Update step is red, and the run counts it as one to look at, like a
+// machine whose update failed. A machine without the check, and one that was updated, are as before.
+func TestUIRunRowSaysNotUpdatedForAMachineNobodyConfirmed(t *testing.T) {
+	runWuPageScript(t, "notupdated", `
+  const at = "2026-11-13T16:20:00Z";
+  const woke = { state: "off", on: "off", wake_sent_at: at, online_at: at, shutdown_at: at };
+  const r = run("00000000000000aa", "done", [
+    runHost("pc-a", { ...woke, checked: true, text: "It came online after the wake. Nobody confirmed within 10 min: not confirmed, not updated. It switched itself off again." }),
+    runHost("pc-b", { ...woke, update: "ok", text: "Came online after the wake, updated, and switched off again." }),
+    runHost("pc-c", { ...woke, checked: true, update: "ok", text: "Came online after the wake, confirmed, updated, and switched off again." }),
+    runHost("pc-d", { mode: "update_only", already_on: true, state: "stayed_on", on: "on", checked: true, text: "It was on. Nobody confirmed: not confirmed, not updated. It stays on." }),
+    runHost("pc-e", { state: "skipped", on: "untouched", checked: true, text: "Left out." }),
+  ], { ended_at: at });
+  const rows = wuRunBox(r, false).split('data-key="wuh-').slice(1);
+  const chip = (row) => (row.match(/<span class="chip ([a-z]*)">([^<]*)<\/span>/) || []).slice(1).join("|");
+  const want = ["warn|done · off again · not updated", "ok|done · off again", "ok|done · off again", "warn|done · stays on · not updated", "|skipped"];
+  rows.forEach((row, i) => { if (chip(row) !== want[i]) fail("row " + i + ": " + chip(row)); });
+  if (!rows[0].includes('<span class="bad">Update</span>') || !rows[1].includes('<span class="done">Update</span>') || !rows[3].includes('<span class="bad">Update</span>')) fail("the Update step: " + rows[0]);
+  if (r.hosts.filter(wuNeedsLook).length !== 2) fail("to look at: " + r.hosts.filter(wuNeedsLook).map((h) => h.id));
+  if (!/2 to look at/.test(words(wuLastLine(r)))) fail("the folded line: " + words(wuLastLine(r)));
+  // a machine with the check that is still in its run is not "not updated" yet
+  const live = run("00000000000000bb", "running", [runHost("pc-a", { state: "awaiting_approval", checked: true, wake_sent_at: at, online_at: at })]);
+  if (/not updated/.test(wuRunBox(live, true)) || wuRunBox(live, true).includes('<span class="bad">Update</span>')) fail("a machine that still waits: " + wuRunBox(live, true));
+`)
+}
