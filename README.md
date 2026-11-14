@@ -878,9 +878,11 @@ such machines takes two passkeys:
 Nobody confirms: **not confirmed, not updated.** A machine that took its ticket (it is *armed*) switches
 itself off again by itself, with a notice of 2 minutes on its screen; the run's report says "It switched
 itself off again" only when the run saw it go. A machine that was not armed stays ON, and the report says
-so and why. **Keep on** (in the strip, next to the machine's name) calls a machine's switch-off off: it is
-the cancel of the Power menu, and after it Fairy reads what the machine itself says. Only "cancelled" is
-reported as "stays ON"; anything else is "NOT cancelled ... it may switch itself off at HH:MM".
+so and why. **Keep on** calls a machine's switch-off off. It is in the machine's row of the run on the
+Updates page, and, once nobody is asked any more, in a strip of the machine's own on every page with the
+time it switches itself off. It is the cancel of the Power menu, and after it Fairy reads what the machine
+itself says. Only "cancelled" is reported as "stays ON"; anything else is "NOT cancelled ... it may switch
+itself off at HH:MM". In the report, a machine nobody confirmed has the chip "... · not updated".
 
 What the panel holds, and for how long: the approval of the start (the ticket) is kept **in the panel's
 memory only**, for at most 7 minutes after the passkey (`valid_s` 420; the machines refuse it after that),
