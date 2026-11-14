@@ -86,7 +86,7 @@ type DayStore struct {
 	writeFile func(path string, data []byte, perm os.FileMode) error
 	saving    chan struct{} // not nil while a write is on its way; closed when it has ended
 	savedAt   time.Time     // when the last write was started (or the file was read)
-	saveErr   string        // the last write's error, as it was logged
+	saveErr   string        // how the last write failed (failure), as it was logged
 }
 
 // NewDayStore returns an empty store that keeps nothing on disk until Load names its file.

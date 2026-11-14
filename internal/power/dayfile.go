@@ -42,7 +42,7 @@ import (
 //     clock and starts a goroutine; that goroutine copies the buckets (under the lock, a memory copy), encodes
 //     and writes them (statefile.WriteAtomic: a temporary file, synced, renamed). At most one write is on its
 //     way: while one hangs on a dead disk no other is started, and nothing waits for it. A write that fails is
-//     logged once per error text and tried again with the next one.
+//     tried again with the next one, and logged once for as long as it fails the same way (failure).
 //   - When: every daySaveEvery while something changed, and when the panel stops and when a host is removed
 //     (Flush, which waits for the write, with an end: neither is the poller's own time). A write that nobody
 //     waits for is started only by the history tick, and only after daySaveEvery: a program that runs for
@@ -289,7 +289,7 @@ func (d *DayStore) start(now time.Time) chan struct{} {
 		d.mu.Lock()
 		if err != nil {
 			d.dirty = true // what this write held is still not in the file
-			if msg := err.Error(); msg != d.saveErr {
+			if msg := failure(err); msg != d.saveErr {
 				d.saveErr = msg
 				slog.Warn("power: could not keep the last 24 hours for the next start (it is tried again; the graphs go on from memory)",
 					"file", path, "error", err)
@@ -302,6 +302,21 @@ func (d *DayStore) start(now time.Time) chan struct{} {
 		close(done)
 	}()
 	return done
+}
+
+// failure is what went wrong in err without the name of the file it went wrong with: a write's error names
+// its temporary file, and that name is new with every write. Two writes that fail the same way (a full disk, a
+// folder that cannot be written) have the same failure, and the log says it once.
+func failure(err error) string {
+	var pe *fs.PathError
+	var le *os.LinkError
+	switch {
+	case errors.As(err, &le):
+		return le.Op + ": " + le.Err.Error()
+	case errors.As(err, &pe):
+		return pe.Op + ": " + pe.Err.Error()
+	}
+	return err.Error()
 }
 
 // putDayFile encodes the file and puts it in place. Whatever is at that name and is not a plain file stays.
