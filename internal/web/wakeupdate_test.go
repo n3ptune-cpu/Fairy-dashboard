@@ -508,7 +508,8 @@ func TestWakeUpdateStartAlwaysAsksAndIsBoundToItsList(t *testing.T) {
 		t.Fatalf("inside the window it must still ask, with the panel's description: %d %s", r.code, r.raw)
 	}
 	items := fmt.Sprint(d["items"])
-	if items != "[PC-A: wake, update, switch off again (only updated if it turns out to be on) laptop: update only; it is on and is never switched off]" {
+	if items != "[PC-A: wake, update, switch off again (only updated if it turns out to be on) laptop: update only; it is on and is never switched off "+
+		"A machine counts as off after 15 minutes without an answer; shutdown countdown 2 minutes]" { // the last line: the two timings that decide what is switched off
 		t.Fatalf("the dialog's lines: %s", items)
 	}
 	if a, _ := e.s.WakeRuns.Snapshot(); a != nil || len(f.requests()) != 0 {

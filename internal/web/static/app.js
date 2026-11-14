@@ -2613,6 +2613,9 @@ function wakeUpdateMenu(s) {
 // line of the dialog, because the dialog's sentences above name the panel's. Only what is not the panel's
 // value is in the machine's row at all.
 const wuOwnTimings = (h) => `${h.off_after_s ? ` · counts as off after ${esc(fmtSpan(h.off_after_s))} without an answer` : ""}${h.shutdown_delay_s ? ` · its countdown: ${esc(fmtSpan(h.shutdown_delay_s))}` : ""}`;
+// The stamps of the timings a start dialog showed, drawn from the page's answer d: the panel's, then the own
+// ones of each listed machine, as the panel made them (runtimes.go: wuShown). Sent with the start.
+const wuShown = (d, body) => [d.timings_stamp, ...[...body.hosts, ...body.update_only].map((id) => d.hosts.find((h) => h.id === id)?.timings_stamp)].map((x) => x || "?").join(".");
 // The dialog: which machines, in plain words what happens, then "Confirm it's you" for exactly that list.
 async function openWakeUpdate() {
   let d;
@@ -2669,6 +2672,7 @@ async function openWakeUpdate() {
   $("#wu-form").onsubmit = async (e) => {
     e.preventDefault();
     const body = { hosts: picked("wake"), update_only: picked("update_only"), update_if_on: !!$("#wu-ifon")?.checked };
+    body.timings = wuShown(d, body);  // the numbers this dialog showed: the panel starts nothing when they are no longer in force
     const n = body.hosts.length + body.update_only.length, path = "/api/admin/wake-update";
     $("#wu-go").disabled = true;
     try {

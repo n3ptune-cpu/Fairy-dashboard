@@ -37,7 +37,10 @@ func TestREADMESaysTheRunTimingsAsThePanelHasThem(t *testing.T) {
 		"nothing below 300 s for \"counts as off\" or below 10 s for the countdown can be stored, typed or come into force through an edited `state.json`",
 		"(\"" + rtConsequence(config.KeyOffAfter, 360) + "\")", // the sentence of the confirmation, as the panel makes it
 		"**A change counts from the next run.** A run that is going keeps the numbers it started with",
-		"when a timing is changed between your click on Start and your passkey, nothing is started",
+		"**A run uses the timings its start dialog showed.** The dialog sends what it showed with the start.",
+		"nothing is started and nobody is asked to confirm (\"The run timings are not the ones this dialog showed any more ...\")",
+		"The same when a timing is changed between your click on Start and your passkey",
+		"(\"A machine counts as off after 15 minutes without an answer; shutdown countdown 2 minutes\")",
 		"(`wakeupdate.timings`, each timing with its old and its new value)",
 		"API tokens cannot read or change the timings.",
 		"The same goes for the timings changed with **Run timings** (`run_timings` in `state.json`), back to build 15 or older: the older panel runs with config.yaml's timings, says nothing about the key and leaves it in the file as it is",
@@ -49,6 +52,9 @@ func TestREADMESaysTheRunTimingsAsThePanelHasThem(t *testing.T) {
 	if !strings.HasPrefix(rtNotShown, "The run timings were changed by somebody else after you pressed Save") ||
 		!strings.Contains(readme, "nothing is saved (\"The run timings were changed by somebody else after you pressed Save ...\")") {
 		t.Errorf("the README quotes the refusal of a confirmed change in other words than the panel's: %q", rtNotShown)
+	}
+	if !strings.HasPrefix(wuTimingsNotShown, "The run timings are not the ones this dialog showed any more") {
+		t.Errorf("the README quotes the refusal of a start whose dialog is out of date in other words than the panel's: %q", wuTimingsNotShown)
 	}
 	if !strings.Contains(wuTimingsChanged, "The run timings were changed after you pressed the button") || !strings.Contains(readme, "(\"The run timings were changed after you pressed the button ...\")") {
 		t.Errorf("the README quotes the refusal of a start in other words than the panel's: %q", wuTimingsChanged)

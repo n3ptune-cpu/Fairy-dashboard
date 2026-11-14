@@ -774,9 +774,14 @@ What to know before the first real run:
     changed by somebody else after you pressed Save ..."): look at the dialog again and press Save.
   * **A change counts from the next run.** A run that is going keeps the numbers it started with, to its
     end: its countdowns, its waits, its pacing and what its passkeys signed. The page shows the run's own
-    numbers in the run and the new ones in the dialog. And a start is confirmed for the timings its dialog
-    showed: when a timing is changed between your click on Start and your passkey, nothing is started
-    ("The run timings were changed after you pressed the button ..."), and you press the button again.
+    numbers in the run and the new ones in the dialog.
+  * **A run uses the timings its start dialog showed.** The dialog sends what it showed with the start.
+    When a timing (the panel's, or a listed machine's own) was changed while the dialog was open, nothing
+    is started and nobody is asked to confirm ("The run timings are not the ones this dialog showed any
+    more ..."): open the dialog again. The same when a timing is changed between your click on Start and
+    your passkey ("The run timings were changed after you pressed the button ..."). "Confirm it's you"
+    names the two timings that decide what is switched off ("A machine counts as off after 15 minutes
+    without an answer; shutdown countdown 2 minutes"), and a listed machine's own where it has them.
   * Every change is in the audit log (`wakeupdate.timings`, each timing with its old and its new value)
     and in the bell. API tokens cannot read or change the timings.
   * One machine's own two timings are changed in **Edit host** on the machine's page (group

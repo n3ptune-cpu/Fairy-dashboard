@@ -1,6 +1,8 @@
 package web
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -155,6 +157,71 @@ func (s *Server) wuStamp(t wuTimes, b wuStartBody) string {
 		fmt.Fprintf(&sb, "%q=%d/%d;", id, int(own/time.Second), int(delay/time.Second))
 	}
 	return sb.String()
+}
+
+// What the page SHOWED. The page of "Update unpowered hosts" gets two kinds of short stamps with its data:
+// one of the panel's six timings (timings_stamp of the page) and one for every machine, of its own two
+// (timings_stamp of its row). The start dialog is drawn from one answer of the page's data; with the start it
+// sends the stamps of that answer for the machines it lists (wuStartBody.Timings: the panel's, then each
+// listed machine's, joined with "."). The start makes the same text from its one reading of what is in force
+// and starts nothing when it is another one (wuTimingsNotShown): the numbers a run uses are the numbers its
+// start dialog showed, also when somebody changed them while the dialog was open. A stamp is a hash cut to
+// 12 hex digits: it says nothing, and it only has to differ when a number differs.
+func shownStamp(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:6])
+}
+
+// shown is the stamp of the panel's six timings as t has them.
+func (t wuTimes) shown() string {
+	var sb strings.Builder
+	for _, tm := range config.RunTimings() {
+		fmt.Fprintf(&sb, "%s=%d;", tm.Key, t.value(tm.Key))
+	}
+	return shownStamp(sb.String())
+}
+
+// wuHostShown is the stamp of the own two timings of the machine shown under id (0: it has none).
+func (s *Server) wuHostShown(id string) string {
+	own, delay := s.wuTimings(id)
+	return shownStamp(fmt.Sprintf("%q=%d/%d;", id, int(own/time.Second), int(delay/time.Second)))
+}
+
+// wuShown is what a start dialog that showed the timings t and the machines of b sends as "timings".
+func (s *Server) wuShown(t wuTimes, b wuStartBody) string {
+	parts := []string{t.shown()}
+	for _, id := range slices.Concat(b.Hosts, b.UpdateOnly) {
+		parts = append(parts, s.wuHostShown(id))
+	}
+	return strings.Join(parts, ".")
+}
+
+// wuTimingsNotShown is the answer to a start whose dialog showed other timings than the ones in force.
+const wuTimingsNotShown = "The run timings are not the ones this dialog showed any more: somebody changed them. Nothing was started: close this, open it again and look at the numbers."
+
+// wuTimingLines is the lines of a start's "Confirm it's you" about the two timings that decide what a run
+// switches off: the panel's, and for every machine of the wake list that has its own, its own.
+func (s *Server) wuTimingLines(b wuStartBody, hosts map[string]wuHost, t wuTimes) []string {
+	if len(b.Hosts) == 0 {
+		return nil // nothing is woken, so nothing is taken for off or switched off
+	}
+	panelOff, panelDelay := t.value(config.KeyOffAfter), t.value(config.KeyShutdownDelay)
+	lines := []string{fmt.Sprintf("A machine counts as off after %s without an answer; shutdown countdown %s", rtSpan(panelOff), rtSpan(panelDelay))}
+	for _, id := range b.Hosts {
+		own, delay := s.wuTimings(id)
+		off, d := int(own/time.Second), int(delay/time.Second)
+		if (off == 0 || off == panelOff) && (d == 0 || d == panelDelay) {
+			continue
+		}
+		if off == 0 {
+			off = panelOff
+		}
+		if d == 0 {
+			d = panelDelay
+		}
+		lines = append(lines, fmt.Sprintf("%s, its own: counts as off after %s; shutdown countdown %s", hosts[id].Name, rtSpan(off), rtSpan(d)))
+	}
+	return lines
 }
 
 // wakeUpdateStamp is the stamp of a start request as it is kept (pending.go: actionStamp): made from the

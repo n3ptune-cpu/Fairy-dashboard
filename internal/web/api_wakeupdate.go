@@ -83,6 +83,9 @@ type wuHost struct {
 	// without an answer it counts as off, and the countdown of the shutdown a run asks it for.
 	OffAfterS      *int `json:"off_after_s,omitempty"`
 	ShutdownDelayS *int `json:"shutdown_delay_s,omitempty"`
+	// TimingsStamp: the stamp of this machine's own two timings (runtimes.go: wuHostShown), which a start
+	// dialog sends back for the machines it lists.
+	TimingsStamp string `json:"timings_stamp"`
 	// Asleep: the panel itself sent it to sleep, and it has not answered since. For the panel "off" and
 	// "asleep" look the same (nothing at all), so the page says "asleep or off" and the dialog lists it apart,
 	// unticked: a machine that resumes from sleep does not look freshly started, and a run leaves it on.
@@ -126,6 +129,9 @@ type wakeUpdatePage struct {
 	// wakerun.MinOff). A machine with a time of its own has it in its row (wuHost.OffAfterS).
 	OffAfterS int `json:"off_after_s"`
 	MaxHosts  int `json:"max_hosts"`
+	// TimingsStamp: the stamp of the panel's six timings as this answer has them (runtimes.go: shown), which
+	// a start dialog sends back.
+	TimingsStamp string `json:"timings_stamp"`
 }
 
 // runOps is the run's view of the panel (wakerun.Ops): the poller, the configuration, and the existing four
@@ -595,7 +601,7 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	}
 	ops := runOps{s}
 	o := ops.Observe(x.ID)
-	h := wuHost{ID: x.ID, Name: x.Name, OptedIn: s.wuOptedIn(x.ID), Version: o.Version, Behind: o.Behind, Power: "unclear", agentID: a.ID}
+	h := wuHost{ID: x.ID, Name: x.Name, OptedIn: s.wuOptedIn(x.ID), Version: o.Version, Behind: o.Behind, Power: "unclear", agentID: a.ID, TimingsStamp: s.wuHostShown(x.ID)}
 	switch {
 	case powerctl.KillsPanel(s.Poller, x):
 		h.WhyNot = "the panel itself runs on it"
@@ -701,8 +707,9 @@ func spanWords(d time.Duration) string {
 }
 
 func (s *Server) wakeUpdatePageData() wakeUpdatePage {
-	p := wakeUpdatePage{Hosts: []wuHost{}, Settings: s.wuTimesNow().set, Last: []*wakerun.Run{}, Now: time.Now().UTC(), MaxHosts: wakerun.MaxHosts,
-		OffAfterS: int(s.wuPanelOffAfter() / time.Second)}
+	t := s.wuTimesNow()
+	p := wakeUpdatePage{Hosts: []wuHost{}, Settings: t.set, Last: []*wakerun.Run{}, Now: time.Now().UTC(), MaxHosts: wakerun.MaxHosts,
+		OffAfterS: int(t.set.OffAfter / time.Second), TimingsStamp: t.shown()}
 	if l := s.latest(); l.Version != "" {
 		p.Latest = l.Version
 	} else {
@@ -741,6 +748,10 @@ type wuStartBody struct {
 	Hosts      []string `json:"hosts"`        // machines that are off: wake, update, switch off again
 	UpdateOnly []string `json:"update_only"`  // machines that are on: update, never switch off
 	UpdateIfOn bool     `json:"update_if_on"` // a machine of hosts that turns out to be on is updated, not skipped
+	// Timings: the stamps of the timings the start dialog showed (runtimes.go: wuShown). The page always sends
+	// it; a start is refused when it is not the one of the timings in force. "" (a request that is not the
+	// page's): not compared; the stamp that is kept with the request still holds from then on.
+	Timings string `json:"timings"`
 }
 
 // wuCheck checks a start request against what the panel knows now and returns the machines by id. Every id
@@ -793,6 +804,7 @@ func (s *Server) wuCheck(b wuStartBody) (map[string]wuHost, error) {
 // is one line per machine, saying what happens to it. t is the start's one reading of the timings in force.
 func (s *Server) wuDescribe(b wuStartBody, hosts map[string]wuHost, t wuTimes) (text string, items []string) {
 	text, items = wuDescribe(b, hosts)
+	defer func() { items = append(items, s.wuTimingLines(b, hosts, t)...) }() // after the machines' lines
 	i := 0
 	for _, id := range slices.Concat(b.Hosts, b.UpdateOnly) {
 		h := hosts[id]
@@ -931,6 +943,12 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	if kept, ok := c.keptStamp(); ok && kept != stamp {
 		c.audit(u, "wakeupdate.start", "run", params, "error 409: the run timings were changed after the start was asked for; nothing was started")
 		return apierr.New(409, wuTimingsChanged)
+	}
+	// ... and they must be the ones the start dialog showed, when the request says which those were: for the
+	// first request (nobody is asked to confirm a run with other numbers than the dialog's) and for the replay.
+	if b.Timings != "" && b.Timings != s.wuShown(times, b) {
+		c.audit(u, "wakeupdate.start", "run", params, "error 409: the run timings are not the ones the start dialog showed; nothing was started")
+		return apierr.New(409, wuTimingsNotShown)
 	}
 	s.wuStartAt("checked")
 	// The limit on control requests is looked at before a passkey is asked for (switching six machines on for
