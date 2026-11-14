@@ -73,6 +73,9 @@ func NewPlan(bound []Bound) (*Plan, error) {
 		}
 		p.entries = append(p.entries, api.MachineEntry{MachineID: b.MachineID, Challenge: b.Challenge, Request: canon})
 	}
+	if err := checkTickets(bound); err != nil { // run tickets: one per machine id (ticket.go)
+		return nil, err
+	}
 	nonce, err := api.ApprovalNonce(p.entries)
 	if err != nil {
 		return nil, err
