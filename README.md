@@ -684,9 +684,12 @@ like the sign-in's. With `deploy/nginx.example.conf` that is at most 10 round tr
 **3. Turn it on.** The **Approvals** page (admins; in the menu, next to Updates) lists every machine with how
 its check stands (on, off, not supported, offline, needs accepting) and says "N machines are
 ready for the check on the machine itself", with the button **Turn on the check for N machines** (when no
-machine is ready there is no button, and one line says so). Each row has one button, **Approval**, which opens that
+machine is ready there is no button, and one line says so). A row has one button, **Approval**, which opens that
 machine's own dialog (it reads **Review**, in red, when the machine waits for an accept: nothing is accepted in
-the row); a machine's own page has the button **Approval** in
+the row). A row has no button while the panel has nothing of the check to open for its machine: an agent that
+says nothing about the check and has no record in the panel ("not supported", or one the panel has not heard
+from since it started), or a machine that has no row on the Overview right now (its dialog is its row's; when
+it waits for an accept, the row says "needs accepting", and the button comes with the machine's row). A machine's own page has the button **Approval** in
 its header, and the dialog behind it has **Turn on** for that machine. The Updates page keeps one line with a
 link where an update meets the check. Turn on is deliberate and proven:
 

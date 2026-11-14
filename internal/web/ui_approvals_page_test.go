@@ -120,6 +120,35 @@ const rowOf = (html, key) => (html.match(new RegExp('<tr class="row" data-key="a
 `
 }
 
+// Third review of build 14, S6: the README said "Each row has one button". A row has its button when the panel
+// has something of the machine's check to open: the dialog is the one of the machine's row in the live data
+// (openApproval), so a row without that has none, also when its machine waits for an accept. The row then still
+// says "needs accepting"; the button comes with the machine's row. (The README says so now.) No row has a
+// button that would open nothing.
+func TestUIApprovalsPageARowHasItsButtonOnlyWithSomethingToOpen(t *testing.T) {
+	js := appJS(t)
+	if !strings.Contains(js, `if (!s || !approvalOf(s) || stepUpOpen) return;`) {
+		t.Error("openApproval no longer needs the machine's row with its check: the rule of this test is another one now")
+	}
+	runPageScript(t, "approvals-nobutton", approvalsPageScript(t, js, `
+  const rows = [sysRow("alfa", "ALFA", { approval: { state: "required", binding: "changed" } }), sysRow("bravo", "BRAVO", { approval: undefined })];
+  state.systems = rows; state.byId = dict(rows.map((s) => [s.id, s]));
+  const waits = { state: "required", binding: "changed", binding_text: "It shows another machine id.", can_accept: true, accept: "id", shown_id: MID("b"), machine_id: MID("a") };
+  const html = show([mach("alfa", "ALFA", waits), mach("bravo", "BRAVO", waits), mach("ghost", "GHOST", { ...waits, system_id: "ghost-row" }), mach("kilo", "KILO", { ...waits, system_id: undefined })]);
+  const cell = (key) => { const c = [...rowOf(html, key).matchAll(/<td[^>]*>(.*?)<\/td>/gs)].map((m) => words(m[1])); return [c[1], c[5]]; };
+  // with its row and its check in the live data: "needs accepting" and Review
+  if (JSON.stringify(cell("alfa")) !== '["on needs accepting","Review"]' || tag(rowOf(html, "alfa"), 'data-act="ap-dlg"').dataset.id !== "alfa") fail("alfa: " + JSON.stringify(cell("alfa")));
+  // a row in the live data that shows nothing of a check, no row under its system_id, no system_id at all:
+  // "needs accepting" is said, and there is no button (and no link to a page that is not there)
+  for (const key of ["bravo", "ghost", "kilo"]) {
+    if (JSON.stringify(cell(key)) !== '["on needs accepting",""]' || /<button|data-act=/.test(rowOf(html, key))) fail(key + ": " + JSON.stringify(cell(key)) + " " + rowOf(html, key));
+  }
+  if (rowOf(html, "ghost").includes("<a ") || rowOf(html, "kilo").includes("<a ") || !rowOf(html, "bravo").includes('<a href="#/system/bravo">')) fail("the names' links");
+  // every button of the page that opens a dialog names a row that has one
+  for (const m of html.matchAll(/data-act="ap-dlg" data-id="([^"]*)"/g)) if (!approvalOf(state.byId[unesc(m[1])])) fail("a button for " + m[1] + " would open nothing");
+`))
+}
+
 // One row per machine, and the row says in one or two words how its check stands: on, off, not supported (an
 // agent that knows no check), offline, needs accepting. The id on record is shown while the check is on.
 //
