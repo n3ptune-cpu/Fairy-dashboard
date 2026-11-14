@@ -33,6 +33,9 @@ type Manager struct {
 	// power_exclude_from_total) that the agent's last answer did not have, as they were logged (UpdateRemote).
 	unreported map[string]string
 
+	// Day is the last 24 hours of every source, a bucket a minute (day.go). SampleHistory feeds it.
+	Day *DayStore
+
 	// ShownID, when set, turns the system id a source is linked to into the id of the row that machine is
 	// shown as right now (the poller's: Poller.ShownID). One machine can have two ids, its agent's and its
 	// Proxmox node's, and is shown under one of them at a time; a link written with either must land on the
@@ -45,7 +48,7 @@ type Manager struct {
 func NewManager(configs []map[string]any, interval float64, timeout time.Duration, offlineAfter float64,
 	historyS int, agentPower AgentPowerFn, clock func() float64) (*Manager, error) {
 	m := &Manager{IntervalS: interval, Timeout: timeout, offlineAfter: offlineAfter,
-		maxHistory: max(1, int(float64(historyS)/interval)), remote: map[string]model.PowerSourceState{}}
+		maxHistory: max(1, int(float64(historyS)/interval)), remote: map[string]model.PowerSourceState{}, Day: NewDayStore()}
 	for _, raw := range configs {
 		if err := config.PanelPowerSource(raw); err != nil { // a type that only an agent reads (homeassistant)
 			return nil, err
@@ -124,6 +127,7 @@ func (m *Manager) SampleHistory() {
 		return
 	}
 	ov := m.Overview()
+	m.recordDay(ov)
 	// Only real numbers go into the history (sumW and Total check their sums): one bad sample would otherwise
 	// stay in every answer for the whole history length.
 	p := model.PowerPoint{T: ov.GeneratedAt, TotalW: ov.TotalW, Sources: map[string]*float64{}}
@@ -136,6 +140,72 @@ func (m *Manager) SampleHistory() {
 		m.history = m.history[len(m.history)-m.maxHistory:]
 	}
 	m.mu.Unlock()
+}
+
+// recordDay gives the day history (day.go) one sample of every source that has a reading now, and lets it
+// write its file when that is due (which never waits: DayStore.SaveIfDue).
+//
+// Only a source that is "ok" gives a sample. "stale" is a source that fails and still shows its last reading,
+// and "unreachable" has none: the minutes of both stay without a bucket, which is what the graph shows as a
+// gap. An "ok" source whose reading is old (its polling is paused) gives none either (dayMaxAge).
+func (m *Manager) recordDay(ov model.PowerOverview) {
+	if m.Day == nil {
+		return
+	}
+	present := make(map[string]bool, len(ov.Sources))
+	samples := make([]DaySample, 0, len(ov.Sources))
+	for _, s := range ov.Sources {
+		present[s.ID] = true
+		if smp, ok := daySample(s, ov.GeneratedAt); ok {
+			samples = append(samples, smp)
+		}
+	}
+	m.Day.Record(ov.GeneratedAt, samples, present)
+	m.Day.SaveIfDue(ov.GeneratedAt)
+}
+
+// daySample is the source's sample for the day history: the sum of its readings' watts (as everywhere else a
+// source with several readings is one number), the first reading's volts, the sum of the amperes, and the sum
+// of the kWh counters when every reading that counts has one. ok is false when the source is not "ok", has no
+// reading with watts, or a reading that is older than dayMaxAge.
+func daySample(s model.PowerSourceState, now time.Time) (DaySample, bool) {
+	out := DaySample{ID: s.ID}
+	if s.Status != "ok" {
+		return out, false
+	}
+	n, kwh, amps := 0, 0.0, 0.0
+	hasK, hasA := true, false
+	for _, r := range s.Readings {
+		if r.Watts == nil {
+			continue
+		}
+		if now.Sub(r.Timestamp) > dayMaxAge {
+			return out, false
+		}
+		n++
+		out.W += *r.Watts
+		if out.V == nil && r.Voltage != nil {
+			out.V = model.P(*r.Voltage)
+		}
+		if r.Current != nil {
+			amps, hasA = amps+*r.Current, true
+		}
+		if r.EnergyKWhTotal != nil {
+			kwh += *r.EnergyKWhTotal
+		} else {
+			hasK = false
+		}
+	}
+	if n == 0 || finiteW(out.W) == nil {
+		return out, false
+	}
+	if hasA {
+		out.A = &amps
+	}
+	if hasK {
+		out.KWh = &kwh
+	}
+	return out, true
 }
 
 // Overview is GET /api/power: every source, and the total of the sources counted in it.

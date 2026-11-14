@@ -197,6 +197,8 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 		return nil, err
 	}
 	p.Power.ShownID = p.ShownID // a link written with either id of a machine lands on the row that is there (nodeid.go)
+	// the last 24 hours of every power source, from before this start (power/dayfile.go: never an error)
+	p.Power.Day.Load(filepath.Join(cfg.DataDir, power.DayFile), time.Now())
 	p.UPS, err = ups.NewManager(cfg.UPS, iv.History, timeout, cfg.OfflineAfter, cfg.PowerHistoryS,
 		filepath.Join(cfg.DataDir, "ups-events.jsonl"))
 	if err != nil {
@@ -658,8 +660,13 @@ func (p *Poller) RemoveAgent(id string) {
 		p.flushSeen()
 	}
 	p.Power.UpdateRemote(id, nil, false, nil, nil)
+	p.Power.Day.Forget(id + "/") // and their last 24 hours: a host added later under the same id starts with empty graphs
 	p.UPS.UpdateFromAgent(id, nil, false, nil, nil)
 }
+
+// dayFlushWait is how long a stop waits for the power sources' last 24 hours to be written (Run). The stop
+// as a whole waits a few seconds for the poller (cmd/fairy: pollerStopWait); this is a part of that.
+const dayFlushWait = 2 * time.Second
 
 // Bump records that the poller's data changed, so the cached snapshots are rebuilt on the next read.
 func (p *Poller) Bump() {
@@ -713,6 +720,9 @@ func (p *Poller) Run(ctx context.Context) {
 			// the polls that were on their way still brought.
 			p.FlushVersions()
 			p.FlushSeen() // and when each machine was last seen (lastseen.go), the same two times
+			// and the power sources' last 24 hours, once: with an end, so a disk that hangs costs the stop
+			// no more than this (power/dayfile.go)
+			p.Power.Day.Flush(time.Now(), dayFlushWait)
 			p.Scheduler.Wait()
 			p.FlushVersions()
 			p.FlushSeen()
