@@ -384,6 +384,12 @@ func TestReadmeUpgradeTextsMatchThisRelease(t *testing.T) {
 		"**Edit host changes the machine itself too**: its **name**, its **site** and its **Wake-on-LAN**", "(`host_options`, `hosts`)",
 		"Every change to Wake-on-LAN asks you to confirm it by itself",
 		"**A machine's own run timings in Edit host.**", "Every change of the two asks you to confirm it's you, by itself",
+		// build 16, after the review of the run timings: what a start is held to, and three sentences that changed
+		"**a run uses the timings its start dialog showed**", "(\"The run timings are not the ones this dialog showed any more ...\"; the API answers 409)",
+		"(\"A machine counts as off after 15 minutes without an answer; shutdown countdown 2 minutes\")",
+		"(one that was only out of reach or asleep is left on)",
+		"The shutdown countdown of such a machine is at most 10 minutes in a run that wakes it",
+		"the panel then says so once in its log when it starts (a WARN with the machine, both numbers and \"press Reset in Edit host\")",
 		"**Last 24 hours.** Every power source has a graph of its last day", "a new file in the data folder, `power-day.json`, written every five minutes and when the panel stops",
 		"**Re-pair** keeps the graphs of the plugs a host relays, **Remove** empties them",
 		"**The report of a run no longer says \"switched off again\" of a machine that is on** (builds 12 to 15 could)",

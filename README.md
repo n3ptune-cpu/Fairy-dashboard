@@ -1796,17 +1796,28 @@ Build 16:
    you wrote there counts). One click and one passkey confirm all machines that wait, and only then does
    the run send their update and their shutdown. Nobody confirms: not confirmed, not updated, and an armed
    machine switches itself off again. **Keep on** calls that off: it is in the machine's row of the run on
-   the Updates page and, once nobody is asked any more, in a strip on every page. Machines without the
-   check are in the same run as they always were. See
+   the Updates page and, once nobody is asked any more, in a strip on every page. The shutdown countdown
+   of such a machine is at most 10 minutes in a run that wakes it: with a longer one the start starts
+   nothing and its message names where the number comes from (config.yaml, Run timings or Edit host), and
+   those two dialogs say it in one line under their fields while it is so. Machines without the check are
+   in the same run as they always were. See
    [Machines with the check in a run](#machines-with-the-check-in-a-run).
 2. **Run timings in the browser.** The Updates page has the button **Run timings**, next to the start
    button of "Update unpowered hosts" (admins): the six timings of a run, each with where its value comes
    from. What you change there is kept by the panel (`state.json`, `run_timings`) and used instead of
    config.yaml's value until **Reset**; config.yaml is not written. Three changes ask you to confirm it's
    you by themselves, also right after another confirmation: "Counts as off after" every time it is
-   changed, "Wait for a woken machine" when it gets longer, "Shutdown countdown" when it gets shorter. A
-   change counts from the next run; a run that is going keeps the numbers it started with. See
-   [Update unpowered hosts](#update-unpowered-hosts).
+   changed, "Wait for a woken machine" when it gets longer, "Shutdown countdown" when it gets shorter.
+   "Counts as off after" is the time after which a silent machine counts as off: a machine that was
+   restarting for longer than that and comes up while a run waits for it looks like one the run woke, and
+   the run switches it off after its update (one that was only out of reach or asleep is left on). A
+   change counts from the next run; a run that is going keeps the numbers it started with. And **a run
+   uses the timings its start dialog showed**: when a timing was changed while the dialog was open,
+   nothing is started and nobody is asked to confirm ("The run timings are not the ones this dialog
+   showed any more ..."; the API answers 409), and the same when one is changed between your click on
+   Start and your passkey. Open the dialog again. "Confirm it's you" of a start names the two timings that
+   decide what is switched off ("A machine counts as off after 15 minutes without an answer; shutdown
+   countdown 2 minutes"). See [Update unpowered hosts](#update-unpowered-hosts).
 3. **Edit host changes the machine itself too**: its **name**, its **site** and its **Wake-on-LAN** (the
    MAC addresses, which machine sends the wake packet, the port; or no Wake-on-LAN at all). A name and
    Wake-on-LAN details are kept in `state.json` (`host_options`, `hosts`) and used instead of
@@ -1821,7 +1832,9 @@ Build 16:
    machine can have of its own, "Counts as off after" and "Shutdown countdown": what was a `wake_update:`
    block in the machine's `systems:` entry only (build 14). What is changed there lies over the block, or
    over the panel's timing where the machine has no block, until **Reset**. Every change of the two asks
-   you to confirm it's you, by itself. See
+   you to confirm it's you, by itself. A number changed there goes on counting when config.yaml gets a
+   higher one for the machine later: the panel then says so once in its log when it starts (a WARN with
+   the machine, both numbers and "press Reset in Edit host"). See
    [The machine's own run timings](#the-machines-own-run-timings).
 5. **Last 24 hours.** Every power source has a graph of its last day: on the **Power** page, click the
    source's row (or the small chart at its end); on a machine's page it is in the **Power** box, on the
