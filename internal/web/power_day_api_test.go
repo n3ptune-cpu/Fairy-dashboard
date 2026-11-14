@@ -151,7 +151,7 @@ func TestPowerDayAnswerForAWholeDay(t *testing.T) {
 		if m >= 600 && m < 900 { // five hours without readings
 			continue
 		}
-		at := now.Add(-time.Duration(m) * time.Minute)
+		at := now.Truncate(time.Minute).Add(-time.Duration(m) * time.Minute) // the start of the minute: both samples are in it
 		w := 123.4 + 40*math.Sin(float64(m)/50)
 		step := (w + 450) / 60000 // a minute at the average of its two samples, in kWh
 		switch m {
