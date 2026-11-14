@@ -1130,7 +1130,9 @@ them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads 
 * **Remove** of a host takes what was changed for it with it, and every changed line about it that is kept
   with other machines; **Re-pair** keeps them. A host that is **added** starts with nothing: whatever the panel
   still kept under its id (from a machine of that name that was taken out of config.yaml, say) is taken out
-  when it is paired, with an entry in the audit log.
+  when it is paired, before anything of the host is stored, with an entry in the audit log. When that cannot
+  be done (state.json cannot be written), the host is not added and the Add host dialog says why: nothing
+  was stored, and a new code tries again.
 * **Changes that have no line any more can still be removed.** Two kinds of change cannot be seen or reset
   on any line, and every Edit host dialog says how many of each there are:
   * about **machines that are gone**: a change kept with an id that is no machine of the panel any more, or

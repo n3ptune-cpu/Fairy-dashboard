@@ -152,9 +152,11 @@ type Hooks struct {
 	// Add starts polling a new host; Remove stops polling one (Re-pair replaces).
 	Add    func(managed.Entry) error
 	Remove func(id string)
-	// Fresh, when set, is told about a host that is ADDED (not re-paired), after it was stored and before its
-	// polling starts: what the panel still keeps under its id is from another machine and is not its own.
-	Fresh func(h managed.Host)
+	// Fresh, when set, is asked about a host that is ADDED (not re-paired), before anything of it is stored:
+	// what the panel still keeps under its id is from another machine, is not its own, and is taken out. An
+	// error refuses the add (its text is the reason, for the Add host dialog): nothing is stored, and the
+	// host is not polled.
+	Fresh func(h managed.Host) error
 	// Online reports whether the host answered its last poll (and the error if not).
 	Online func(id string) (bool, string)
 	// Event is told about results (audit log, notifications): kind is paired, online, failed, expired, cancelled.
@@ -638,6 +640,12 @@ func (m *Manager) commit(e *Enrollment, h managed.Host, sec managed.Secret, entr
 	} else if err := managed.Check(m.Hooks.Config(), entry); err != nil {
 		fail("cannot add it: " + err.Error())
 		return false
+	} else if m.Hooks.Fresh != nil {
+		// before the first thing is stored: a host that cannot start clean does not start
+		if err := m.Hooks.Fresh(h); err != nil {
+			fail("cannot add it: " + err.Error() + ". Nothing was stored on the panel; make a new code to try again")
+			return false
+		}
 	}
 	if caPEM != nil {
 		if err := m.Store.PutCA(h.ID, caPEM); err != nil {
@@ -655,9 +663,6 @@ func (m *Manager) commit(e *Enrollment, h managed.Host, sec managed.Secret, entr
 	if err := m.Store.Put(h, sec); err != nil {
 		fail("cannot save it: " + err.Error())
 		return false
-	}
-	if !e.Repair && m.Hooks.Fresh != nil {
-		m.Hooks.Fresh(h)
 	}
 	if err := m.Hooks.Add(entry); err != nil {
 		fail("saved, but polling did not start (" + err.Error() + "): restart the panel")

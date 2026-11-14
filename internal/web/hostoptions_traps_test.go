@@ -773,6 +773,105 @@ func TestEditHostAHostAddedUnderAnIdWithStoredChangesStartsClean(t *testing.T) {
 	}
 }
 
+// When what is kept under the new host's id cannot be taken out (state.json cannot be written), the host is
+// not added: it would start with links that were made for another machine, and nothing would say so. The
+// pairing ends with a sentence that says why, nothing of the host is stored or polled, the audit log has the
+// failure, and what was kept is still there, used by nothing.
+func TestEditHostAnAddIsRefusedWhenWhatIsKeptForItsIdCannotBeTakenOut(t *testing.T) {
+	e := setup(t)
+	e.s.Enroll.Interval = 10 * time.Millisecond
+	e.s.control, e.s.adminRL = newRateLimiter(1000), newRateLimiter(1000)
+	e.s.Enroll.PanelAddr = "100.64.0.10"
+	answer := make(chan struct{})
+	var once sync.Once
+	letItAnswer := func() { once.Do(func() { close(answer) }) }
+	t.Cleanup(letItAnswer)
+	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
+		<-answer
+		return 200, enroll.Response{AgentVersion: "42-abc", Platform: "linux", Token: "boxa-read-token-xxxxxxxxxxxxxxxxx"}, "", nil
+	}
+	e.b.Mu.Lock()
+	e.b.Metrics["box-a"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	e.b.Mu.Unlock()
+	if _, _, err := e.s.Poller.Admin.EditHostOptions("earlier", func(o *adminstate.HostOptions) error {
+		o.Agents["box-a"] = adminstate.HostOption{Exclude: map[string]bool{"desk": true}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	kept := fmt.Sprint(e.storedOptions())
+	c := e.cookie(controller(), 0)
+	p := e.do("POST", "/api/admin/hosts", map[string]any{"name": "BOX-A", "os": "linux", "site": "Alice"}, "Cookie", c, "X-Requested-With", "fairy", "Content-Type", "application/json")
+	if p.code != 201 {
+		t.Fatal(p.code, string(p.raw))
+	}
+	// state.json cannot be written from now on (it can still be read): a folder is where its lock file was
+	lock := filepath.Join(e.s.Cfg.DataDir, "state.json.lock")
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	letItAnswer()
+	var g resp
+	for i := 0; ; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if g = e.do("GET", "/api/admin/enrollments/"+p.body["id"].(string), nil, "Cookie", c); g.body["done"] == true {
+			break
+		} else if i > 300 {
+			t.Fatal("the enrollment never finished", g.body["state"], g.body["message"])
+		}
+	}
+	msg, _ := g.body["message"].(string)
+	if g.body["state"] != "failed" || !strings.HasPrefix(msg, "cannot add it: what \"Edit host\" still keeps under this host's id could not be taken out (") ||
+		!strings.HasSuffix(msg, "). Nothing was stored on the panel; make a new code to try again") {
+		t.Errorf("the enrollment: state %v, message %q", g.body["state"], msg)
+	}
+	if hosts, err := e.s.Managed.Load(); err != nil || len(hosts) != 0 {
+		t.Errorf("the refused host is in the list of added hosts: %v %v", hosts, err)
+	}
+	if _, err := e.s.Managed.Secret("box-a"); err == nil {
+		t.Error("the refused host's tokens were stored")
+	}
+	if _, polled := e.s.Poller.AgentByID("box-a"); polled {
+		t.Error("the refused host is polled")
+	}
+	var failure map[string]any
+	for _, en := range e.auditEntries("", "host.options") {
+		if p, _ := en["params"].(map[string]any); p["because"] == "host added" && en["target"] == "box-a" {
+			failure = en
+		}
+	}
+	if out, _ := failure["outcome"].(string); !strings.HasPrefix(out, "error: ") {
+		t.Errorf("the audit entry of the clean-up that failed: %v", failure)
+	}
+	// what was kept is as it was, and is used by nothing (there is no such machine)
+	if now := fmt.Sprint(e.storedOptions()); now != kept {
+		t.Errorf("state.json afterwards:\nbefore %s\nnow    %s", kept, now)
+	}
+	// state.json can be written again: the same Add host, with a new code, works and starts clean
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	p = e.do("POST", "/api/admin/hosts", map[string]any{"name": "BOX-A", "os": "linux", "site": "Alice"}, "Cookie", c, "X-Requested-With", "fairy", "Content-Type", "application/json")
+	if p.code != 201 {
+		t.Fatal("a second Add host:", p.code, string(p.raw))
+	}
+	for i := 0; ; i++ {
+		time.Sleep(10 * time.Millisecond)
+		e.s.Poller.PollOnce(context.Background())
+		if g = e.do("GET", "/api/admin/enrollments/"+p.body["id"].(string), nil, "Cookie", c); g.body["done"] == true {
+			break
+		} else if i > 300 {
+			t.Fatal("the second enrollment never finished", g.body["state"], g.body["message"])
+		}
+	}
+	if g.body["state"] != "online" || e.storedAgent("box-a") != nil {
+		t.Errorf("the second Add host: state %v (%v), kept under its id: %v", g.body["state"], g.body["message"], e.storedAgent("box-a"))
+	}
+}
+
 // A link decides who can SEE a UPS or a plug: the viewers of the site of a machine it is linked to, else of
 // the machine that reads it (view.go). The API says so before a change is stored: "Confirm it's you", the
 // answer and the audit entry carry one note for each site whose viewers get to see a device or lose it.

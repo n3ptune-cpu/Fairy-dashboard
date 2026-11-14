@@ -57,20 +57,24 @@ func (s *Server) enrollHooks() enrollment.Hooks {
 		Remove: s.unpoll,
 		// Add host starts clean: what "Edit host" still keeps under the new host's id (its own entry, and changes
 		// about its rows kept with other agents) was made for another machine. Remove takes it out already; this
-		// is for what is there all the same (a host taken out of config.yaml, a state.json from a backup).
-		Fresh: func(h managed.Host) {
+		// is for what is there all the same (a host taken out of config.yaml, a state.json from a backup). It is
+		// asked before anything of the host is stored, and when it cannot be done the host is not added: with
+		// those changes it would show another machine's UPS and plugs as its own, and nothing would say so.
+		Fresh: func(h managed.Host) error {
 			by := h.AddedBy
 			if by == "" {
 				by = "fairy"
 			}
 			gone, err := s.forgetHostOptions(by, h.ID, rowsOf(h)...)
-			switch {
-			case err != nil:
-				slog.Warn("Add host: what \"Edit host\" kept under the new host's id could not be taken out; look at its links", "host", h.ID, "error", err)
+			if err != nil {
+				slog.Warn("Add host: what \"Edit host\" kept under the new host's id could not be taken out: the host is not added", "host", h.ID, "error", err)
 				s.writeAudit(audit.Entry{Actor: by, Action: "host.options", Target: h.ID, Source: "fairy", Params: map[string]any{"because": "host added"}, Outcome: "error: " + err.Error()})
-			case len(gone) > 0:
+				return fmt.Errorf("what \"Edit host\" still keeps under this host's id could not be taken out (%v)", err)
+			}
+			if len(gone) > 0 {
 				s.writeAudit(audit.Entry{Actor: by, Action: "host.options", Target: h.ID, Source: "fairy", Params: map[string]any{"removed": gone, "because": "host added"}, Outcome: "ok"})
 			}
+			return nil
 		},
 		Online: func(id string) (bool, string) {
 			info, _ := s.Poller.AgentInfo(id)
