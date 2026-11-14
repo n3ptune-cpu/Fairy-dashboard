@@ -104,6 +104,8 @@ func TestUIEditHostIsInTheMenuOfAHostForAdmins(t *testing.T) {
 		"const path = `/api/admin/hosts/${enc(s.id)}/options`;",
 		"controlCall({ kind: \"request\", label: `Edit host ${s.name}`, system: s.id, method: \"PUT\", path, body: plan.body },", // "Confirm it's you" when the window has run out
 		`const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 15000);`,                                     // no "Loading…" for ever
+		// the sections are drawn anew after a tick: the tick that was used keeps the focus (found again by section and device)
+		`ticks.find((x) => x.dataset.eh === had.eh && x.value === had.value))?.focus();`,
 	} {
 		if strings.Count(js, want) != 1 {
 			t.Errorf("app.js lacks (or has twice) %q", want)

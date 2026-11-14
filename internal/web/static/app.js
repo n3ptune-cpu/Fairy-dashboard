@@ -3596,11 +3596,20 @@ const EH_INFO = () => infoBtn("edit-host", "Edit host", infoList([
   "A link belongs to the machine that reads the device. Reset puts back all links of that kind read by that machine.",
   "A change counts from the next poll of the machine that reads the device.",
   "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]));
+// The sections are drawn anew after every tick and Reset. The control that was used keeps the focus: the same
+// tick is found again by its section and its device; a Reset button is gone once it was pressed, and the first
+// tick of what it reset stands for it. Without this the focus fell out of the dialog at every tick made with
+// the keyboard.
 function ehDraw() {
   const body = $("#eh-body");
   if (!body || !eh.d) return;
+  const a = document.activeElement, had = a && body.contains?.(a) ? { eh: a.dataset.eh, value: a.value, reset: a.dataset.ehReset } : null;
   body.innerHTML = ehView(eh.d, eh.draft);
   $("#eh-save").disabled = eh.busy || !ehPlan(eh.d, eh.draft).lines.length;
+  if (!had) return;
+  const ticks = [...body.querySelectorAll("input[data-eh]")], resets = [...body.querySelectorAll("[data-eh-reset]")];
+  const field = had.reset ? had.reset.slice(had.reset.lastIndexOf("/") + 1) : "";
+  (had.reset ? resets.find((x) => x.dataset.ehReset === had.reset) || ticks.find((x) => x.dataset.eh === field && !x.disabled) : ticks.find((x) => x.dataset.eh === had.eh && x.value === had.value))?.focus();
 }
 async function openEditHost(s) {
   state.menu = null; render();
