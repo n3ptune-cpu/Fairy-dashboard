@@ -202,3 +202,45 @@ func TestAConfirmationNoMachineAcceptsDoesNotUseTheRunUp(t *testing.T) {
 	}
 	r.noTokenAnywhere(t)
 }
+
+// The notification that ends the question says why it ended (independent review of 270e7ab, P5): "nobody
+// confirmed in time ... switches itself off again" was also said when the only waiting machine had been kept
+// on by an admin seconds after it was armed.
+func TestTheNotificationThatEndsTheQuestionSaysWhy(t *testing.T) {
+	over := func(r *runRig) string {
+		t.Helper()
+		for _, e := range r.s.Notes.List("", func(notifications.Event) bool { return true }, notifications.Filter{Limit: 200}).Events {
+			if e.Kind == wuConfirmNote+"_over" {
+				return e.Text
+			}
+		}
+		t.Fatal("no notification ended the question")
+		return ""
+	}
+	t.Run("kept on", func(t *testing.T) {
+		r := newRunRig(t, "pc-a")
+		if _, res := r.approved(t, "POST", "/api/admin/wake-update", map[string]any{"hosts": []string{"pc-a"}}); res["ok"] != true {
+			t.Fatal(res)
+		}
+		r.until(t, "asked", 300, func() bool { a, _ := r.s.WakeRuns.Snapshot(); return a != nil && a.Approval == "needed" })
+		r.admin = r.cookie(controller(), 0)
+		r.csrf = []string{"Cookie", r.admin, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+		if yes := r.req("POST", "/api/systems/pc-a/wake-update/keep-on", map[string]any{}); yes.code != 200 || yes.body["stays_on"] != true {
+			t.Fatalf("keep on: %d %s", yes.code, yes.raw)
+		}
+		r.until(t, "the run over", 300, func() bool { a, _ := r.s.WakeRuns.Snapshot(); return a == nil })
+		if got := over(r); got != "no machine waits for the confirmation any more (kept on, or ended): nothing was confirmed; see the run's report" {
+			t.Fatalf("the notification: %q", got)
+		}
+	})
+	t.Run("nobody confirmed in time", func(t *testing.T) {
+		r := newRunRig(t, "pc-a")
+		if _, res := r.approved(t, "POST", "/api/admin/wake-update", map[string]any{"hosts": []string{"pc-a"}}); res["ok"] != true {
+			t.Fatal(res)
+		}
+		r.until(t, "the question over", 1200, func() bool { a, _ := r.s.WakeRuns.Snapshot(); return a != nil && a.Approval == "over" })
+		if got := over(r); got != "nobody confirmed in time: not confirmed, not updated. A machine that is armed switches itself off again; see the run's report" {
+			t.Fatalf("the notification: %q", got)
+		}
+	})
+}

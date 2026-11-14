@@ -131,3 +131,65 @@ func TestNoSecondConfirmationWhileOneIsOnItsWay(t *testing.T) {
 		t.Fatalf("after Ann's was accepted: %q by %q, tried %q", cur.Approval, cur.ConfirmedBy, cur.Tried)
 	}
 }
+
+// Why the question ended is on record (independent review of 270e7ab, P5): "nobody confirmed in time" is said
+// only when time was the reason.
+func TestWhyTheQuestionEndedIsOnRecord(t *testing.T) {
+	t.Run("its time was over", func(t *testing.T) {
+		w := newWorld(t)
+		w.checkedOff("pc-a")
+		w.start(StartRequest{Hosts: []string{"pc-a"}, Latest: "17-bbbbbbb"})
+		act := w.waitFor(30*time.Minute, "the question over", func(r *Run) bool { return r.Approval == "over" })
+		if act.ApprovalEnd != EndTime {
+			t.Fatalf("approval_end %q", act.ApprovalEnd)
+		}
+	})
+	t.Run("nobody waits any more: the machine was kept on", func(t *testing.T) {
+		w := newWorld(t)
+		w.checkedOff("pc-a")
+		w.start(StartRequest{Hosts: []string{"pc-a"}, Latest: "17-bbbbbbb"})
+		w.waitFor(10*time.Minute, "the run asks", func(r *Run) bool { return r.Approval == "needed" })
+		if !w.m.KeepOn("pc-a", "Ann") {
+			t.Fatal("Keep on")
+		}
+		w.tick()
+		w.tick()
+		act, hist := w.m.Snapshot()
+		if act == nil {
+			act = hist[0]
+		}
+		if act.Approval != "over" || act.ApprovalEnd != EndNobodyWaits {
+			t.Fatalf("approval %q, approval_end %q", act.Approval, act.ApprovalEnd)
+		}
+	})
+	t.Run("the run was cancelled", func(t *testing.T) {
+		w := newWorld(t)
+		w.checkedOff("pc-a")
+		run := w.start(StartRequest{Hosts: []string{"pc-a"}, Latest: "17-bbbbbbb"})
+		w.waitFor(10*time.Minute, "the run asks", func(r *Run) bool { return r.Approval == "needed" })
+		if _, err := w.m.CancelRun(run.ID, "Ann", false); err != nil {
+			t.Fatal(err)
+		}
+		w.tick()
+		w.tick()
+		act, hist := w.m.Snapshot()
+		if act == nil {
+			act = hist[0]
+		}
+		if act.Approval != "over" || act.ApprovalEnd != EndCancelled {
+			t.Fatalf("approval %q, approval_end %q", act.Approval, act.ApprovalEnd)
+		}
+	})
+	t.Run("confirmed: no reason for an end without an answer", func(t *testing.T) {
+		w := newWorld(t)
+		w.checkedOff("pc-a")
+		w.start(StartRequest{Hosts: []string{"pc-a"}, Latest: "17-bbbbbbb"})
+		w.waitFor(10*time.Minute, "the run asks", func(r *Run) bool { return r.Approval == "needed" })
+		if _, err := w.confirm("Ann"); err != nil {
+			t.Fatal(err)
+		}
+		if act, _ := w.m.Snapshot(); act.Approval != "given" || act.ApprovalEnd != "" {
+			t.Fatalf("approval %q, approval_end %q", act.Approval, act.ApprovalEnd)
+		}
+	})
+}

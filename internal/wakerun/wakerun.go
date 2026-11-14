@@ -760,9 +760,11 @@ type Run struct {
 	// Tried: who gave the latest confirmation that no machine accepted (the question stays open after it).
 	// Trying: who gave the confirmation that is on its way to the machines right now ("": none); the journal
 	// knows it before the first request leaves.
-	Approval string `json:"approval,omitempty"`
-	Tried    string `json:"confirm_tried,omitempty"`
-	Trying   string `json:"confirm_trying,omitempty"`
+	// ApprovalEnd: why the question ended without a confirmation (End...; set with "over").
+	Approval    string `json:"approval,omitempty"`
+	ApprovalEnd string `json:"approval_end,omitempty"`
+	Tried       string `json:"confirm_tried,omitempty"`
+	Trying      string `json:"confirm_trying,omitempty"`
 	// Ticket: the numbers of the run's tickets (nil: no machine with the check is in the run). ConfirmBy: until
 	// when the confirmation is asked for, by the panel's clock (set with "needed"). ConfirmedBy: who gave it.
 	Ticket    *Ticket    `json:"ticket,omitempty"`
@@ -1287,7 +1289,7 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 		// Its sentence says that the machine switches off by itself, and the page's Cancel is there for it.
 		r.stopped, r.Note = stop, "stopped: "+stop
 		m.dirty = true
-		m.confirmationOver(r) // a run that stopped asks for no confirmation any more
+		m.confirmationOver(r, EndStopped) // a run that stopped asks for no confirmation any more
 		for _, h := range r.Hosts {
 			switch {
 			case h.Final() || h.verdict != nil:
@@ -1365,7 +1367,7 @@ func (m *Manager) maxRun(r *Run) time.Duration {
 func (m *Manager) finish(r *Run, now time.Time, state string) {
 	r.State, r.EndedAt = state, &now
 	if r.Approval == "needed" {
-		r.Approval = "over"
+		r.Approval, r.ApprovalEnd = "over", EndStopped
 	}
 	var lines []string
 	for _, h := range r.Hosts {

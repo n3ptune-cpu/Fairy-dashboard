@@ -567,16 +567,33 @@ func (m *Manager) askConfirmation(r *Run, now time.Time) {
 	case r.Approval == "needed" && r.Trying != "" && r.Cancel == nil && r.stopped == "":
 		// a confirmation is on its way to the machines: what comes of it is taken in first
 	case r.Approval == "needed" && (waiting == 0 || r.Cancel != nil || r.stopped != "" || mono > r.confirmMono):
-		m.confirmationOver(r)
+		why := EndTime
+		switch {
+		case r.Cancel != nil:
+			why = EndCancelled
+		case r.stopped != "":
+			why = EndStopped
+		case waiting == 0:
+			why = EndNobodyWaits
+		}
+		m.confirmationOver(r, why)
 	}
 }
 
+// Why a run's question ended without a confirmation (Run.ApprovalEnd).
+const (
+	EndTime        = "time"         // nobody confirmed in time
+	EndNobodyWaits = "nobody_waits" // no machine waits for it any more: kept on, ended, or no longer confirmable
+	EndCancelled   = "cancelled"    // the run was cancelled
+	EndStopped     = "stopped"      // the run stopped or ended
+)
+
 // confirmationOver ends the question without an answer.
-func (m *Manager) confirmationOver(r *Run) {
+func (m *Manager) confirmationOver(r *Run, why string) {
 	if r.Approval != "needed" {
 		return
 	}
-	r.Approval = "over"
+	r.Approval, r.ApprovalEnd = "over", why
 	m.dirty = true
 	m.emit(EvApprovalEnd, r, nil, "", nil, "")
 }
@@ -696,7 +713,7 @@ func (m *Manager) BeginConfirm(id, by string, hosts []string) ([]string, error) 
 			for _, h := range marked {
 				h.chk.confirming, h.chk.inTry, h.Asking = false, false, ""
 			}
-			m.confirmationOver(r)
+			m.confirmationOver(r, EndStopped)
 		}
 		m.mu.Unlock()
 		return nil, &StartError{Msg: "the run journal cannot be written, so the confirmation was not sent to any machine: " + journalErrText(err)}

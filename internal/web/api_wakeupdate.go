@@ -1197,13 +1197,17 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 				Key: wuConfirmNote + ":" + r.ID, Alarm: true, Text: clipText(wuConfirmText(r), wuNoteMax)})
 		}
 	case wakerun.EvApprovalEnd:
-		text := "nobody confirmed in time: not confirmed, not updated. A machine that was armed switches itself off again; see the run's report"
+		text := "nobody confirmed in time: not confirmed, not updated. A machine that is armed switches itself off again; see the run's report"
 		outcome := "over"
 		switch {
 		case r.Approval == "given":
 			outcome, text = "given", "confirmed by "+r.ConfirmedBy
 		case r.Cancel != nil:
 			text = "the run was cancelled by " + r.Cancel.By + ": no confirmation is asked for any more"
+		case r.ApprovalEnd == wakerun.EndNobodyWaits: // not time: the machines were kept on, or ended otherwise
+			text = "no machine waits for the confirmation any more (kept on, or ended): nothing was confirmed; see the run's report"
+		case r.ApprovalEnd == wakerun.EndStopped:
+			text = "the run stopped: no confirmation is asked for any more; see the run's report"
 		}
 		entry("wakeupdate.approval", r.ID, nil, outcome)
 		if s.Notes != nil {
