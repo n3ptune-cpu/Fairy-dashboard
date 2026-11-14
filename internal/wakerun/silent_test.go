@@ -6,7 +6,7 @@ import (
 )
 
 // What the panel says a short "counts as off after" means ("A machine that is silent for longer than 6
-// minutes counts as off. If it was restarting and comes up during the run, the run switches it off after its
+// minutes counts as off. If it was restarting and comes up during the run, the run can switch it off after its
 // update.", internal/web: rtConsequence) is what a run does. Two machines that were silent for seven
 // minutes in a run that takes six for off:
 //

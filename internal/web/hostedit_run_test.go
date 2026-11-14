@@ -122,7 +122,7 @@ func TestEditHostRunTimingsAreDecisionsOverWhatCountsAnyway(t *testing.T) {
 	}
 	// pc-a has no block: 360 s is its own from now on
 	lines := []string{"Counts as off after: 360 s = 6 minutes (was 900 s = 15 minutes)",
-		"If PC-A is silent for longer than 6 minutes, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update."}
+		"If PC-A is silent for longer than 6 minutes, it counts as off. If it was restarting and comes up during a run, the run can switch it off after its update."}
 	items, res := a.ehConfirmed("pc-a", map[string]any{"wake_update": map[string]any{"off_after_s": 360}})
 	if !slices.Equal(items, lines) || res["ok"] != true || res["message"] != "changes saved" {
 		t.Fatalf("the first decision: confirmed %q, answered %v", items, res)
@@ -152,7 +152,7 @@ func TestEditHostRunTimingsAreDecisionsOverWhatCountsAnyway(t *testing.T) {
 	// the panel's own value typed for it: the decision goes, and the lines say where the value comes from now
 	items, _ = a.ehConfirmed("pc-a", map[string]any{"wake_update": map[string]any{"off_after_s": 900}})
 	if !slices.Equal(items, []string{"Counts as off after: back to Run timings: 900 s = 15 minutes (was 360 s = 6 minutes)",
-		"If PC-A is silent for longer than 15 minutes, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update."}) {
+		"If PC-A is silent for longer than 15 minutes, it counts as off. If it was restarting and comes up during a run, the run can switch it off after its update."}) {
 		t.Fatalf("the panel's own value typed: %q", items)
 	}
 	if e.storedHost("pc-a") != nil {
@@ -164,7 +164,7 @@ func TestEditHostRunTimingsAreDecisionsOverWhatCountsAnyway(t *testing.T) {
 	// pc-b has a block: both timings, each with its sentence (the countdown gets shorter)
 	items, _ = a.ehConfirmed("pc-b", map[string]any{"wake_update": map[string]any{"off_after_s": 420, "shutdown_delay_s": 20}})
 	if !slices.Equal(items, []string{"Counts as off after: 420 s = 7 minutes (was 600 s = 10 minutes)",
-		"If PC-B is silent for longer than 7 minutes, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update.",
+		"If PC-B is silent for longer than 7 minutes, it counts as off. If it was restarting and comes up during a run, the run can switch it off after its update.",
 		"Shutdown countdown: 20 s (was 30 s)", "Somebody at PC-B has 20 seconds to cancel a run's shutdown."}) {
 		t.Fatalf("two timings: %q", items)
 	}
@@ -181,7 +181,7 @@ func TestEditHostRunTimingsAreDecisionsOverWhatCountsAnyway(t *testing.T) {
 	// Reset: config.yaml's own value counts again
 	items, _ = a.ehConfirmed("pc-b", map[string]any{"reset": []any{map[string]any{"field": "off_after_s"}}})
 	if !slices.Equal(items, []string{"Counts as off after: back to config.yaml: 600 s = 10 minutes (was 420 s = 7 minutes)",
-		"If PC-B is silent for longer than 10 minutes, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update."}) || e.storedRun("pc-b") != "shutdown_delay_s=45" {
+		"If PC-B is silent for longer than 10 minutes, it counts as off. If it was restarting and comes up during a run, the run can switch it off after its update."}) || e.storedRun("pc-b") != "shutdown_delay_s=45" {
 		t.Fatalf("Reset: %q, stored %q", items, e.storedRun("pc-b"))
 	}
 	if c := changeOf(e.auditEntries("", "host.options")[0]["params"].(map[string]any), "off_after_s"); c["after_from"] != "config.yaml" || c["after"] != 600.0 {
@@ -205,7 +205,7 @@ func TestEditHostRunTimingsAreDecisionsOverWhatCountsAnyway(t *testing.T) {
 	// next to a name: one request, one entry, and the sentence has the new name
 	items, _ = a.ehConfirmed("pc-a", map[string]any{"name": "Den PC", "wake_update": map[string]any{"off_after_s": 300}})
 	if !slices.Equal(items, []string{"Name: Den PC (was PC-A)", "Counts as off after: 300 s = 5 minutes (was 900 s = 15 minutes)",
-		"If Den PC is silent for longer than 5 minutes, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update."}) {
+		"If Den PC is silent for longer than 5 minutes, it counts as off. If it was restarting and comes up during a run, the run can switch it off after its update."}) {
 		t.Fatalf("a name and a timing: %q", items)
 	}
 	if h := e.storedHost("pc-a"); h["name"] != "Den PC" || e.storedRun("pc-a") != "off_after_s=300" || h["wol"] != nil {

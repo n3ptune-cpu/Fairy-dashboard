@@ -140,7 +140,7 @@ func rtSpan(v int) string {
 func rtConsequence(key string, v int) string {
 	switch key {
 	case config.KeyOffAfter:
-		return fmt.Sprintf("A machine that is silent for longer than %s counts as off. If it was restarting and comes up during the run, the run switches it off after its update.", rtSpan(v))
+		return fmt.Sprintf("A machine that is silent for longer than %s counts as off. If it was restarting and comes up during the run, the run can switch it off after its update.", rtSpan(v))
 	case config.KeyShutdownDelay:
 		return fmt.Sprintf("Somebody at a machine has %s to cancel the run's shutdown.", rtSpan(v))
 	case config.KeyOnlineTimeout:

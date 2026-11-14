@@ -2778,7 +2778,7 @@ const rtSpan = (v) => (v < 60 ? `${v} second${v === 1 ? "" : "s"}` : rtReading("
 // What a change means for the machines, for the three timings whose change can switch a machine off or shorten
 // the time to stop that. The panel says the same sentence in "Confirm it's you" (rtConsequence).
 function rtConsequence(key, v) {
-  if (key === "off_after_s") return `A machine that is silent for longer than ${rtSpan(v)} counts as off. If it was restarting and comes up during the run, the run switches it off after its update.`;
+  if (key === "off_after_s") return `A machine that is silent for longer than ${rtSpan(v)} counts as off. If it was restarting and comes up during the run, the run can switch it off after its update.`;
   if (key === "shutdown_delay_s") return `Somebody at a machine has ${rtSpan(v)} to cancel the run's shutdown.`;
   if (key === "online_timeout_s") return `A machine somebody switches on while the run waits for it (up to ${rtSpan(v)}) is treated as woken by the run, and switched off after its update.`;
   return "";
@@ -4353,7 +4353,7 @@ function ehRunPanel(t, draft) {
 const ehRunBase = (t) => (t.base_from === "run" ? "Run timings" : "config.yaml");
 // What a change means for this machine. The panel says the same sentence in "Confirm it's you" (hoRunConsequence).
 const ehRunConsequence = (key, name, v) => (key === "off_after_s"
-  ? `If ${name} is silent for longer than ${rtSpan(v)}, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update.`
+  ? `If ${name} is silent for longer than ${rtSpan(v)}, it counts as off. If it was restarting and comes up during a run, the run can switch it off after its update.`
   : `Somebody at ${name} has ${rtSpan(v)} to cancel a run's shutdown.`);
 // What Save will change about the machine's own run timings: the panel's own lines, the part of the request,
 // and what is wrong with what was typed. name: what the machine is called once this dialog is saved.
