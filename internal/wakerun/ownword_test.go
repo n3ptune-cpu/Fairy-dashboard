@@ -183,3 +183,61 @@ func TestAMachineOnWhichAnotherRunIsArmedIsNotSaidToStayOn(t *testing.T) {
 		t.Fatalf("after the run the strip's list no longer names it: %+v", a)
 	}
 }
+
+// What the run learned from the machine's own word is in the journal (independent review of 270e7ab, P6): it
+// was in memory only, so after a restart of the panel a machine the run had already seen NOT armed any more
+// (it was started again) was reported as "It was armed: it switches itself off at about ...", and the strip
+// offered Keep on for a machine that stays on.
+func TestAfterARestartAMachineThatIsNoLongerArmedIsNotSaidToSwitchItselfOff(t *testing.T) {
+	w, pc, _ := armedRun(t, nil)
+	w.advance(time.Minute)
+	pc.bootedAt, pc.agentReadyAt = w.now, w.now.Add(20*time.Second) // started again: a new boot, no run on it
+	w.waitFor(2*time.Minute, "the run sees that", func(r *Run) bool { return strings.Contains(logOf(host(r, "pc-a")), "not armed any more") })
+	w.tick()
+	w.tick()
+	m2, r := restarted(w)
+	h := host(r, "pc-a")
+	has(t, h, StInterrupted, "The panel restarted while it waited for the run's second confirmation. It was armed, and its agent no longer shows the run (the machine was started again, or the run was ended on it): it is not armed any more. It was ON: nothing of this run switches it off.")
+	if h.MayGoOff || strings.Contains(h.Text, "it switches itself off at") {
+		t.Fatalf("after the restart: %q (may_go_off=%v)", h.Text, h.MayGoOff)
+	}
+	if a := named(m2.MayGoOff(w.now), "pc-a"); a != nil {
+		t.Fatalf("the strip's list names it: %+v", a)
+	}
+	w.advance(40 * time.Minute)
+	if !pc.on {
+		t.Fatal("the model: it went off")
+	}
+}
+
+// And the other way round: a machine whose arming was answered with a refusal and whose agent then showed the
+// run as armed is, after a restart, a machine that was armed.
+func TestAfterARestartAMachineItsAgentShowedAsArmedIsSaidToSwitchItselfOff(t *testing.T) {
+	w := newWorld(t)
+	w.checkedOff("pc-a")
+	w.m.Ops = armTwice{w, "already_armed"}
+	w.start(StartRequest{Hosts: []string{"pc-a"}, Latest: "17-bbbbbbb"})
+	w.waitFor(8*time.Minute, "it waits", func(r *Run) bool { return stateOf(r, "pc-a") == StApproval })
+	w.advance(30 * time.Second)
+	m2, r := restarted(w)
+	h := host(r, "pc-a")
+	has(t, h, StInterrupted, "The panel restarted while it waited for the run's second confirmation. It was armed: it switches itself off at ")
+	if a := named(m2.MayGoOff(w.now), "pc-a"); !h.MayGoOff || !h.ArmSeen || a == nil || !a.Sure {
+		t.Fatalf("after the restart: may_go_off=%v arm_seen=%v, the strip's list: %+v", h.MayGoOff, h.ArmSeen, a)
+	}
+}
+
+// restarted is the panel after a restart: a manager that has read the journal, and the run it found going.
+func restarted(w *world) (*Manager, *Run) {
+	w.t.Helper()
+	m2 := New(w.m.path, w.m.Settings, w)
+	m2.Now = w.m.Now
+	if err := m2.Load(); err != nil {
+		w.t.Fatal(err)
+	}
+	_, hist := m2.Snapshot()
+	if len(hist) == 0 {
+		w.t.Fatal("the journal holds no run")
+	}
+	return m2, hist[0]
+}

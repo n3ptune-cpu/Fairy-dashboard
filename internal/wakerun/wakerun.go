@@ -649,6 +649,11 @@ type Host struct {
 	MayGoOff    bool   `json:"may_go_off,omitempty"`
 	Confirm     string `json:"confirm,omitempty"`
 	ConfirmText string `json:"confirm_text,omitempty"`
+	// ArmSeen, Disarmed: what the run learned from the machine's own word, for the report after a restart of
+	// the panel (the journal's copy of the working state): its agent showed this run as armed or counting
+	// down; and: it does not switch itself off (any more) by this run's ticket.
+	ArmSeen  bool `json:"arm_seen,omitempty"`
+	Disarmed bool `json:"disarmed,omitempty"`
 	// ConfirmTried: a confirmation it did not accept, after which it could be confirmed again ("by Bob was
 	// not accepted (...)"): for its sentence when nobody confirmed after that.
 	ConfirmTried string `json:"confirm_tried,omitempty"`
@@ -796,6 +801,9 @@ func (r *Run) clone() *Run {
 	c.Hosts = make([]*Host, len(r.Hosts))
 	for i, h := range r.Hosts {
 		hc := *h
+		if h.Checked && !h.Final() { // (an ended machine keeps what it ended with)
+			hc.ArmSeen, hc.Disarmed = h.chk.armSeen, h.chk.disarmed
+		}
 		hc.Log = slices.Clone(h.Log)
 		c.Hosts[i] = &hc
 	}

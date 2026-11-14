@@ -102,13 +102,13 @@ func interrupt(r *Run, now time.Time) {
 			h.On, h.MayGoOff = OnUnknown, true
 			h.Text = "The panel restarted while your confirmation was being handed to it. Fairy does not know whether it arrived: if it did, the machine is confirmed and stays ON " +
 				"(a run is never continued, so nothing more is sent to it); if not, " + interruptedOff(r, h) + " " + notConfirmed
-		case h.Checked && !h.confirmed() && (h.Arm == ArmArmed || h.Arm == ArmUnanswered || asking == "arm") && (was == StOnline || was == StApproval || was == StSelfOff):
+		case h.Checked && !h.confirmed() && !h.Disarmed && (h.Arm == ArmArmed || h.Arm == ArmUnanswered || h.ArmSeen || asking == "arm") && (was == StOnline || was == StApproval || was == StSelfOff):
 			// A machine with the check that the run's ticket armed, or may have: it switches itself off without the
 			// panel, and nobody can confirm it any more (the run is not continued). The report says when, and how
 			// to keep it on.
 			h.On, h.MayGoOff = OnUnknown, true
 			switch {
-			case h.Arm == ArmArmed:
+			case h.Arm == ArmArmed || h.ArmSeen: // it took the ticket, or its agent showed the run as armed
 				h.Text = "The panel restarted while it waited for the run's second confirmation. It was armed: " + interruptedOff(r, h) + " " +
 					"A run is never continued, so it can no longer be confirmed. " + notConfirmed
 			default:

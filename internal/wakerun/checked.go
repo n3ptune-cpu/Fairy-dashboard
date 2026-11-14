@@ -1452,7 +1452,7 @@ func (m *Manager) MayGoOff(now time.Time) []ArmedHost {
 
 // letGo is MayGoOff's entry for a machine the run no longer watches (nil: its time is over).
 func letGo(r *Run, h *Host, now time.Time) []ArmedHost {
-	a := ArmedHost{RunID: r.ID, ID: h.ID, Name: h.Name, ByMachine: h.SelfOffByMachine, Sure: h.Arm == ArmArmed || h.chk.armSeen || h.chk.other != nil}
+	a := ArmedHost{RunID: r.ID, ID: h.ID, Name: h.Name, ByMachine: h.SelfOffByMachine, Sure: h.Arm == ArmArmed || h.ArmSeen || h.chk.armSeen || h.chk.other != nil}
 	at := r.StartedAt.Add(r.Ticket.valid() + lateArm + r.Ticket.wait())
 	if h.SelfOffAt != nil {
 		at = *h.SelfOffAt
