@@ -1376,21 +1376,27 @@ function rwTick() {
   if (rwLeft() === 0) fetchRunWait();
 }
 const rwClock = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// One short line each. While the run asks, its machines are in the question's line and have no strip of their
+// own (Keep on for one of them is in the run's rows on the Updates page); a machine that may switch itself off
+// while nobody is asked (the question is over, the panel was restarted, another run's machine) has its own.
 function runWaitStrips() {
   const d = rw.data, out = [];
   if (!d || state.me?.role !== "admin") return out;
   if (d.run) {
     const names = d.hosts || [], n = names.length;
-    out.push(`<div class="alert-strip bad static" data-key="rw-confirm" role="alert">${I.shield}<b>Your passkey is needed</b>
-      <span>${esc(names.join(", "))} ${n === 1 ? "was woken and waits" : "were woken and wait"} to be updated and switched off again</span>
-      <span>time left <b id="rw-left">${fmtRuntime(rwLeft())}</b></span>
-      <span class="note">not confirmed: not updated, and a machine that is armed switches itself off again</span>
+    const who = n > 3 ? `${names.slice(0, 2).join(", ")} and ${n - 2} more` : names.join(", ");
+    out.push(`<div class="alert-strip bad static rw" data-key="rw-confirm" role="alert">${I.shield}<span class="rw-text"><b>Your passkey is needed</b>
+      <span>${esc(who)} ${n === 1 ? "waits" : "wait"} to be updated</span>
+      <span><b id="rw-left">${fmtRuntime(rwLeft())}</b> left</span>
+      <span class="note">not confirmed: not updated; armed machines switch themselves off</span></span>
       <button class="btn push" type="button" data-act="rw-confirm" data-id="${esc(d.run)}" ${state.me?.can_control ? "" : "disabled"}>Confirm it's you</button></div>`);
   }
   for (const a of d.armed || []) {
+    if (d.run && a.run === d.run) continue;
     const when = a.at ? `${a.latest ? "by " : "at "}${rwClock(a.at)}${a.latest ? " at the latest" : ""}${a.by_machine ? " (by its own clock)" : ""}` : "at a time Fairy does not know";
-    out.push(`<div class="alert-strip warn static" data-key="rw-armed-${esc(a.id)}">${I.onoff}<b>${esc(a.name)}</b>
-      <span>${a.sure ? "is armed by a run: it switches itself off" : "may be armed by a run (its arming got no answer): if it is, it switches itself off"} ${esc(when)} unless ${d.run ? "you confirm, or keep it on" : "it is kept on"}</span>
+    out.push(`<div class="alert-strip warn static rw" data-key="rw-armed-${esc(a.id)}">${I.onoff}<span class="rw-text"><b>${esc(a.name)}</b>
+      <span>${a.sure ? "switches itself off" : "may switch itself off"} ${esc(when)}</span>
+      <span class="note">${a.sure ? "armed by a run" : "its arming got no answer"}</span></span>
       <button class="btn push" type="button" data-act="rw-keep" data-id="${esc(a.id)}" data-name="${esc(a.name)}">Keep on</button></div>`);
   }
   return out;

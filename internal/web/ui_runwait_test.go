@@ -11,7 +11,9 @@ import (
 
 // The strip that asks for a run's second passkey, run with node: the page's own functions (runWaitStrips,
 // fetchRunWait, the click handler, paintTitle), nothing of them copied. It is on every page, counts down,
-// one click asks for one confirmation, and Keep on is the cancel for one machine.
+// one click asks for one confirmation, and Keep on is the cancel for one machine. It is one short line: while
+// the run asks, its machines are in that line and have no strip of their own (their Keep on is in the run's rows
+// on the Updates page); a machine that may switch itself off while nobody is asked has its own strip.
 func TestUIRunWaitStrip(t *testing.T) {
 	js := appJS(t)
 	var parts []string
@@ -67,24 +69,31 @@ const click = (dataset) => listeners.click({ target: { closest: () => ({ dataset
   setTitle("Overview");
   if (runWaitStrips().length !== 0 || document.title !== "Overview · Fairy") fail("something is shown before anything waits: " + document.title);
   const run = "00000000000000aa", at = new Date(Date.UTC(2026, 10, 14, 21, 42)).toISOString();
-  const waiting = { run, by: "admin", left_s: 600, hosts: ["PC-A", "PC-B"], armed: [{ run, id: "pc-a", name: "PC-A", at, sure: true, active: true }, { run, id: "pc-b", name: "PC-B", at, latest: true, sure: false, active: true }] };
+  const mine = [{ run, id: "pc-a", name: "PC-A", at, sure: true, active: true }, { run, id: "pc-b", name: "PC-B", at, latest: true, sure: false, active: true }];
+  const other = { run: "00000000000000bb", id: "pc-c", name: "PC-C", at, sure: true };
+  const waiting = { run, by: "admin", left_s: 600, hosts: ["PC-A", "PC-B"], armed: [...mine, other] };
   answer = () => waiting;
   await fetchRunWait();
   if (asked.join() !== "GET /api/admin/wake-update/waiting" || renders !== 1) fail("the fetch: " + asked.join() + " " + renders);
   for (const p of ["overview", "updates", "system", "settings", "audit"]) {
     page = p;
     const s = runWaitStrips();
-    if (s.length !== 3) { fail(p + ": " + s.length + " strips"); continue; }
+    if (s.length !== 2) { fail(p + ": " + s.length + " strips"); continue; }
     const w = words(s[0]);
-    if (w !== "Your passkey is needed PC-A, PC-B were woken and wait to be updated and switched off again time left 10:00 not confirmed: not updated, and a machine that is armed switches itself off again Confirm it's you") fail(p + ": " + w);
+    if (w !== "Your passkey is needed PC-A, PC-B wait to be updated 10:00 left not confirmed: not updated; armed machines switch themselves off Confirm it's you") fail(p + ": " + w);
     if (!s[0].includes('data-act="rw-confirm" data-id="' + run + '"') || !s[0].includes('role="alert"')) fail(p + ": the button: " + s[0]);
   }
   const clock = new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const [, a, b] = runWaitStrips();
-  if (words(a) !== "PC-A is armed by a run: it switches itself off at " + clock + " unless you confirm, or keep it on Keep on") fail("the armed machine: " + words(a));
-  if (words(b) !== "PC-B may be armed by a run (its arming got no answer): if it is, it switches itself off by " + clock + " at the latest unless you confirm, or keep it on Keep on") fail("the machine whose arming is not known: " + words(b));
-  if (!a.includes('data-act="rw-keep" data-id="pc-a" data-name="PC-A"')) fail("Keep on: " + a);
+  // a machine of another run that may switch itself off has its own strip, also while this run asks
+  const c = runWaitStrips()[1];
+  if (words(c) !== "PC-C switches itself off at " + clock + " armed by a run Keep on" || !c.includes('data-act="rw-keep" data-id="pc-c" data-name="PC-C"')) fail("the other run's machine: " + c);
   if (document.title !== "Passkey needed · Overview · Fairy") fail("the tab's title: " + document.title);
+  // one machine waits; more than three are counted, not listed
+  waiting.hosts = ["PC-A"];
+  if (!words(runWaitStrips()[0]).startsWith("Your passkey is needed PC-A waits to be updated 10:00 left")) fail("one machine: " + words(runWaitStrips()[0]));
+  waiting.hosts = ["PC-A", "PC-B", "PC-C", "PC-D", "PC-E"];
+  if (!words(runWaitStrips()[0]).startsWith("Your passkey is needed PC-A, PC-B and 3 more wait to be updated 10:00 left")) fail("five machines: " + words(runWaitStrips()[0]));
+  waiting.hosts = ["PC-A", "PC-B"];
   // the time left counts down on the page's steady clock
   tick += 61000;
   if (rwLeft() !== 539 || !runWaitStrips()[0].includes('<b id="rw-left">8:59</b>')) fail("a minute later: " + rwLeft());
@@ -115,11 +124,18 @@ const click = (dataset) => listeners.click({ target: { closest: () => ({ dataset
   await click({ act: "rw-keep", id: "pc-a", name: "PC-A" });
   await new Promise((r) => setTimeout(r, 5));
   if (flashes.length !== 1 || !flashes[0].msg.startsWith("NOT cancelled") || flashes[0].bad !== true) fail("a failed Keep on: " + JSON.stringify(flashes));
-  // after a restart of the panel no run asks, and the armed machine is still named, with Keep on
-  answer = () => ({ now: at, armed: [{ run, id: "pc-a", name: "PC-A", at, sure: true }] });
+  // nobody is asked any more (the question is over, or the panel was restarted): every machine that may still
+  // switch itself off is named, each with its time and Keep on
+  answer = () => ({ now: at, armed: mine.map((m) => ({ ...m, by_machine: m.sure })) });
   await fetchRunWait();
-  const only = runWaitStrips();
-  if (only.length !== 1 || words(only[0]) !== "PC-A is armed by a run: it switches itself off at " + clock + " unless it is kept on Keep on" || document.title !== "Overview · Fairy") fail("after a restart: " + only.map(words).join(" | "));
+  const [a, b, ...more] = runWaitStrips();
+  if (more.length || document.title !== "Overview · Fairy") fail("after the question: " + more.length + " more strips, " + document.title);
+  if (words(a) !== "PC-A switches itself off at " + clock + " (by its own clock) armed by a run Keep on") fail("the armed machine: " + words(a));
+  if (words(b) !== "PC-B may switch itself off by " + clock + " at the latest its arming got no answer Keep on") fail("the machine whose arming is not known: " + words(b));
+  if (!a.includes('data-act="rw-keep" data-id="pc-a" data-name="PC-A"')) fail("Keep on: " + a);
+  answer = () => ({ now: at, armed: [{ run, id: "pc-a", name: "PC-A", sure: true }] });
+  await fetchRunWait();
+  if (words(runWaitStrips()[0]) !== "PC-A switches itself off at a time Fairy does not know armed by a run Keep on") fail("no time known: " + words(runWaitStrips()[0]));
   // nobody but an admin
   state.me.role = "viewer";
   if (runWaitStrips().length !== 0) fail("a viewer sees the strip");
