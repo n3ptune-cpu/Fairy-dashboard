@@ -28,8 +28,7 @@ func TestPowerDayRepairKeepsItAndRemoveForgetsIt(t *testing.T) {
 	e.s.control, e.s.adminRL = newRateLimiter(1000), newRateLimiter(1000)
 	e.s.Enroll.PanelAddr = "100.64.0.10"
 	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
-		return 200, enroll.Response{AgentVersion: "42-abc", Platform: "linux", Token: "pcz-read-token-xxxxxxxxxxxxxxxxxx",
-			ControlToken: "pcz-control-token-yyyyyyyyyyyyyyyy"}, "", nil
+		return 200, enroll.Response{AgentVersion: "42-abc", Platform: "linux", Token: strings.Repeat("r", 32), ControlToken: strings.Repeat("c", 32)}, "", nil
 	}
 	e.b.Mu.Lock()
 	e.b.Metrics["pc-z"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil } // it relays a plug, "desk"
