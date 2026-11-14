@@ -5,6 +5,8 @@
 //	               sessions_revoked_before (epoch), wake_update_hosts [system ids] (set in the panel only),
 //	               agent_versions {agent id: {version, recorded}} (written by the poller, see AgentVersions)
 //	               host_models {system id: custom model name} (set in the panel only, hostmodel.go)
+//	               host_options {rev, agents: {agent id: link overrides}} ("Edit host", set in the panel only,
+//	               hostoptions.go)
 //	sessions.json  sessions {sid: {sub, name, email, ip, created, created_ts, gen}}: a signed cookie is only valid
 //	               while its sid is here, for the account (sub) it names. For the Sessions page an entry also
 //	               has ua, login_ts, login_ip, seen_ts and seen_ip (see Session); an entry written before
