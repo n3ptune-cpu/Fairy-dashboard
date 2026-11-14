@@ -2783,8 +2783,9 @@ function rtConsequence(key, v) {
   if (key === "online_timeout_s") return `A machine somebody switches on while the run waits for it (up to ${rtSpan(v)}) is treated as woken by the run, and switched off after its update.`;
   return "";
 }
-// Is d what GET /api/admin/run-timings gives: the list, each entry with its key, its whole numbers and where its value comes from?
-const rtValid = (d) => !!d && typeof d === "object" && Array.isArray(d.timings) && d.timings.length > 0
+// Is d what GET /api/admin/run-timings gives: the list, each entry with its key, its whole numbers and where its value comes from,
+// and a count of ignored values that is a whole number (or none)?
+const rtValid = (d) => !!d && typeof d === "object" && Array.isArray(d.timings) && d.timings.length > 0 && (d.ignored_count == null || Number.isInteger(d.ignored_count))
   && d.timings.every((t) => !!t && typeof t === "object" && own(RT_ROWS, t.key) && [t.value, t.config, t.min, t.max].every(Number.isInteger) && (t.from === "panel" || t.from === "config"));
 // What a field shows: what was typed, config.yaml's value after a Reset, else the value in force.
 const rtText = (t, draft) => (draft.reset[t.key] ? String(t.config) : draft.text[t.key] ?? String(t.value));
@@ -2841,12 +2842,13 @@ function rtRead(t, draft) {
 const rtHint = (t, draft) => RT_ROWS[t.key].hint(rtParse(t, rtText(t, draft)) ?? t.value);
 // What is under the fields: the lines Save will change, and what the admin has to know before pressing it.
 function rtFoot(d, draft) {
-  const plan = rtPlan(d, draft), ignored = d.ignored?.length ? d.ignored_count || d.ignored.length : 0;
+  const plan = rtPlan(d, draft);
+  const count = Array.isArray(d.ignored) && d.ignored.length ? (Number.isInteger(d.ignored_count) && d.ignored_count > 0 ? d.ignored_count : d.ignored.length) : 0;  // a whole number, whatever the answer holds
   const any = d.timings.some((t) => t.from === "panel" && !draft.reset[t.key]) || Object.keys(plan.body).some((k) => k !== "reset" && plan.body[k] !== d.timings.find((t) => t.key === k)?.config);
   return `<p class="note eh-hint" id="rt-own-note">A machine with its own time or countdown (Edit host, or config.yaml) keeps it.</p>
     ${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
     ${d.active ? '<p class="note warn eh-ignored" id="rt-active">A run is going: it keeps its numbers. A change counts from the next run.</p>' : ""}
-    ${ignored ? `<p class="note warn eh-ignored">${ignored === 1 ? "1 stored value is" : `${ignored} stored values are`} ignored: see the panel's log.</p>` : ""}
+    ${count ? `<p class="note warn eh-ignored">${esc(count === 1 ? "1 stored value is" : count + " stored values are")} ignored: see the panel's log.</p>` : ""}
     ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="rt-lines">${plan.lines.map((l) => `<li${plan.means.includes(l) ? ' class="eh-sees"' : ""}>${esc(l)}</li>`).join("")}</ul>
       ${plan.own ? '<p class="note warn" id="rt-own">Asks you to confirm it\'s you, by itself, every time.</p>' : ""}` : ""}`;
 }

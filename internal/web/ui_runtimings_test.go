@@ -118,7 +118,7 @@ func TestUIRunTimingsIsAButtonOfTheUpdateUnpoweredHostsBox(t *testing.T) {
 	for _, m := range regexp.MustCompile(`\$\{[^{}]*\}`).FindAllString(part, -1) {
 		ok := false
 		for _, fine := range []string{"${esc(", "${rtTag(", "${rtFoot(", "${RT_INFO()", "${v}", "${words}", "${n}", "${p[0]}", "${rtSpan(v)}", "${t.min} to ${t.max}", "${label}", "${keep ?", "${rtReading(",
-			"${panel ?", "${stored", "${any ?", "${d.active ?", "${ignored", "${plan.", "${d.timings.map", "${t.confirm ===", "${row.key}", "${r.message", "${unit}", "${v === 1 ?", "${t.min}", "${t.max}", "${p[1]}",
+			"${panel ?", "${stored", "${any ?", "${d.active ?", "${count ? `<p", "${plan.", "${d.timings.map", "${t.confirm ===", "${row.key}", "${r.message", "${unit}", "${v === 1 ?", "${t.min}", "${t.max}", "${p[1]}",
 			"${t.by}" /* inside esc(`Changed here by ...`) */} {
 			ok = ok || strings.HasPrefix(m, fine)
 		}
@@ -346,6 +346,17 @@ func TestUIRunTimingsDialog(t *testing.T) {
 
   // nothing the panel sends is markup
   const evil = '<img src=x onerror=alert(1)>"\'';
+  // ... the count of ignored values too: an answer with anything but a whole number there is not the panel's,
+  // and a foot that is drawn from one all the same writes a number it counted itself
+  for (const bad of [evil, "7", 1.5, {}, [3]]) {
+    if (rtValid({ ...data(), ignored: ["x"], ignored_count: bad })) fail("rtValid takes ignored_count " + JSON.stringify(bad));
+    const foot = rtFoot({ ...data(), ignored: ["x", "y"], ignored_count: bad }, rtDraft());
+    if (foot.includes("<img") || !words(foot).includes("2 stored values are ignored")) fail("the foot with ignored_count " + JSON.stringify(bad) + ": " + foot);
+  }
+  if (!rtValid({ ...data(), ignored: [], ignored_count: 0 }) || !rtValid(data())) fail("rtValid refuses the panel's own answer");
+  d = set(set(data(), "off_after_s", { from: "panel", value: 360, by: evil, at: evil }), "settle_s", { confirm: evil });
+  d.rev = evil; d.active = evil; d.confirm_wait_s = evil; d.ignored = [evil]; d.ignored_count = 1;
+  if (rtView(d, rtDraft()).includes("<img")) fail("a value of the answer is put into the page as markup: " + rtView(d, rtDraft()));
   d = set(data(), "off_after_s", { value: 360, from: "panel", by: evil });
   html = rtView(d, rtDraft());
   if (html.includes("<img") || html.includes('onerror=alert(1)>"')) fail("the panel's text is put into the page as markup: " + html);
