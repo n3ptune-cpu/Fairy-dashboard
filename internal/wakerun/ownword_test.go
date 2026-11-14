@@ -306,3 +306,45 @@ func TestAfterARestartARefusedArmIsNotSaidToStayOnBeforeItsAgentWasRead(t *testi
 		}
 	})
 }
+
+// The run reads the machine's agent before it ends a machine on a refused arming alone. The question is over
+// seconds after the arm request (the machine refused its confirmation for good): the machine is not ended at
+// once as "its agent did not say afterwards whether a run is on it". Its agent gets lookFor from the arm
+// request to say; what it says then decides, and only its silence ends the machine with that sentence.
+func TestARefusedArmIsNotEndedBeforeItsAgentCouldSay(t *testing.T) {
+	const waiting = "awake; its arming was refused (run refused (limits)): waiting for its agent to show whether a run is on it all the same"
+	over := func(t *testing.T) (*world, *machine, time.Duration) {
+		t.Helper()
+		w := newWorld(t)
+		pc := w.checkedOff("pc-a")
+		pc.chk.armSays, pc.chk.noRuns, pc.chk.goSays = "limits", true, "run_over"
+		w.start(StartRequest{Hosts: []string{"pc-a"}, Latest: "17-bbbbbbb"})
+		w.waitFor(8*time.Minute, "the run asks", func(r *Run) bool { return r.Approval == "needed" })
+		asked := w.mono // the arm request left a moment before
+		if _, err := w.confirm("Ann"); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 3; i++ {
+			w.tick()
+			cur, _ := w.m.Snapshot()
+			if cur == nil || cur.Approval != "over" || host(cur, "pc-a").State != StApproval || host(cur, "pc-a").Text != waiting {
+				t.Fatalf("%d s after the question was over: %s", i+1, describe(cur))
+			}
+		}
+		return w, pc, asked
+	}
+	t.Run("its agent does not say", func(t *testing.T) {
+		w, _, asked := over(t)
+		done := w.waitFor(5*time.Minute, "pc-a ended", func(r *Run) bool { return host(r, "pc-a").Final() })
+		if d := w.mono - asked; d < lookFor-2*time.Second || d > lookFor+3*time.Second {
+			t.Fatalf("its agent was waited for for %s from the arm request, want %s", d, lookFor)
+		}
+		has(t, host(done, "pc-a"), StLeftOn, "Its arming was refused (run refused (limits)), and its agent did not say afterwards whether a run is on it. It was ON when Fairy last saw it")
+	})
+	t.Run("its agent says in that time that no run is on it", func(t *testing.T) {
+		w, pc, _ := over(t)
+		pc.chk.noRuns = false
+		done := w.waitFor(lookFor, "pc-a ended", func(r *Run) bool { return host(r, "pc-a").Final() })
+		has(t, host(done, "pc-a"), StLeftOn, "It could not be armed (run refused (limits)). It is ON: nothing of this run switches it off.")
+	})
+}
