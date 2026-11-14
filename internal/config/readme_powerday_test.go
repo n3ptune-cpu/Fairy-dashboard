@@ -27,7 +27,7 @@ func TestReadmeHasTheLast24Hours(t *testing.T) {
 		"a counter that starts again at 0 after an outage is not counted backwards", "**estimated**", "**partly estimated**",
 		"voltage_entity: sensor.corner_plug_voltage", "current_entity:", "energy_entity:", "an agent up to v0.8.0 does not start with one of these lines",
 		"`power-day.json`", "every five minutes and when the panel stops", "no key in config.yaml", "At most 64 sources",
-		"takes its whole day along", "**Remove** of a host added with Add host (and **Re-pair**, which removes it first)",
+		"takes its whole day along", "**Remove** of a host added with Add host empties the graphs of the plugs that host relays", "**Re-pair** does not",
 		"`GET /api/power/day?source=<id>`",
 	} {
 		if !strings.Contains(flat(sec), want) && !strings.Contains(sec, want) {

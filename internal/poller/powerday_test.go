@@ -60,10 +60,24 @@ func TestPowerDayIsKeptOverARestart(t *testing.T) {
 		t.Fatalf("after the restart: %+v, before it: %+v", after.Summary, before.Summary)
 	}
 
-	// Remove of the host: the days of the devices it relayed go with it, at once, in memory and in the file.
-	// The file is written by the Remove itself, before it returns: nothing is left to be written behind it.
+	// The agent is taken out of the poller: that is a Remove's and a Re-pair's first half alike. The plug is
+	// not listed any more; its day stays, in memory and in the file, for the host that comes back.
 	old, _ := os.Stat(file)
 	q.RemoveAgent("laptop")
+	if !q.Power.Day.Has("laptop/desk", time.Now()) {
+		t.Fatal("taking the agent out of the poller (a Re-pair does that) emptied the graph of the plug it relays")
+	}
+	for _, s := range q.Power.Overview().Sources {
+		if s.ID == "laptop/desk" {
+			t.Error("the plug of an agent that is out of the poller is still listed")
+		}
+	}
+	if now, _ := os.Stat(file); !os.SameFile(old, now) {
+		t.Error("taking the agent out wrote the day file")
+	}
+	// Remove of the host: the days of the devices it relayed go with it, at once, in memory and in the file.
+	// The file is written by the Remove itself, before it returns: nothing is left to be written behind it.
+	q.ForgetPowerDay("laptop")
 	if q.Power.Day.Has("laptop/desk", time.Now()) {
 		t.Error("the day of a removed host's plug is still there")
 	}
@@ -76,6 +90,7 @@ func TestPowerDayIsKeptOverARestart(t *testing.T) {
 	// a Remove of a host that relays nothing writes nothing
 	old, _ = os.Stat(file)
 	q.RemoveAgent("tower")
+	q.ForgetPowerDay("tower")
 	if now, _ := os.Stat(file); !os.SameFile(old, now) {
 		t.Error("the Remove of a host without a relayed device wrote the day file")
 	}

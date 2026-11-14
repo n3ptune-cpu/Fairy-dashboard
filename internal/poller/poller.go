@@ -659,17 +659,26 @@ func (p *Poller) RemoveAgent(id string) {
 	if seenGone { // and was never seen
 		p.flushSeen()
 	}
+	// The power sources it relayed go out of the list. Their last 24 hours stay (power.DayStore): this is also
+	// the first half of every Re-pair, after which the same plugs are relayed again under the same ids, and
+	// their graphs go on. A Remove takes them out (ForgetPowerDay).
 	p.Power.UpdateRemote(id, nil, false, nil, nil)
-	// and their last 24 hours, in memory and in the file (written here and waited for, with an end, like the
-	// last-seen time above): a host added later under the same id starts with empty graphs
-	if p.Power.Day.Forget(id+"/", time.Now()) {
-		p.Power.Day.Flush(time.Now(), dayFlushWait)
-	}
 	p.UPS.UpdateFromAgent(id, nil, false, nil, nil)
 }
 
-// dayFlushWait is how long a stop waits for the power sources' last 24 hours to be written (Run). The stop
-// as a whole waits a few seconds for the poller (cmd/fairy: pollerStopWait); this is a part of that.
+// ForgetPowerDay drops the last 24 hours of the power sources the agent relayed, in memory and in the file:
+// the host was removed from the panel (not re-paired), and a host added later under the same id starts with
+// empty graphs. The file is written here and waited for, with an end (dayFlushWait), so that nothing is
+// written behind the caller's back.
+func (p *Poller) ForgetPowerDay(id string) {
+	if p.Power.Day.Forget(id+"/", time.Now()) {
+		p.Power.Day.Flush(time.Now(), dayFlushWait)
+	}
+}
+
+// dayFlushWait is how long a stop waits for the power sources' last 24 hours to be written (Run), and a
+// Remove of a host (ForgetPowerDay). The stop as a whole waits a few seconds for the poller (cmd/fairy:
+// pollerStopWait); this is a part of that.
 const dayFlushWait = 2 * time.Second
 
 // Bump records that the poller's data changed, so the cached snapshots are rebuilt on the next read.

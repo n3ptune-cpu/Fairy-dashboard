@@ -287,7 +287,9 @@ of each plug that is linked to the machine.
   that is linked to another machine ([Edit host](#edit-host), `power_links`) takes its whole day along, and
   whoever may see the plug now may see that day. A plug whose id was changed starts empty. A plug an agent no
   longer reports is gone from the pages at once and from the file a day later. **Remove** of a host added
-  with Add host (and **Re-pair**, which removes it first) empties the graphs of the plugs that host relays.
+  with Add host empties the graphs of the plugs that host relays, at once, so that a machine added later
+  under the same name starts with empty ones. **Re-pair** does not: it is the same machine with new tokens,
+  and its plugs' graphs go on.
 * **Who sees it.** Whoever sees the source on the Power page. For scripts: `GET /api/power/day?source=<id>`
   (the id as `/api/power` gives it), a list of numbers per minute with `null` for a minute without readings.
 

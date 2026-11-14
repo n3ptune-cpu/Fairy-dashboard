@@ -507,7 +507,14 @@ func (s *Server) hostRemove(c *reqCtx) error {
 		}
 	}
 	s.Enroll.CancelHost(h.ID) // a Re-pair still pairing must not bring the host back
-	s.unpoll(h.ID)            // before the store forgets which node is the host's; config.yaml's agent of the id stays
+	a, polled := s.Poller.AgentByID(h.ID)
+	s.unpoll(h.ID) // before the store forgets which node is the host's; config.yaml's agent of the id stays
+	if polled && a.Managed {
+		// The last 24 hours of the plugs it relayed go with it (not with a Re-pair, which takes the host out of
+		// the poller the same way and puts it in again): the next machine added under this name starts with
+		// empty graphs. Not for the unused copy of a machine that config.yaml has: its agent stays, and its day.
+		s.Poller.ForgetPowerDay(h.ID)
+	}
 	if err := s.Managed.Remove(h.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
 		return err
