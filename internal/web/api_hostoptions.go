@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"slices"
@@ -23,7 +24,7 @@ import (
 //
 //	GET /api/admin/hosts/{id}/options    what is set for this machine, where each value comes from, the choices
 //	PUT /api/admin/hosts/{id}/options    {"ups": [{"id", "on"}], "plugs": [{"id", "linked", "in_total"}],
-//	                                      "reset": [{"id", "field"}]}
+//	                                      "reset": [{"id", "field"}], "leftovers": true}
 //
 // The request is about ONE machine, the one whose page is open, and says only what the admin changed (ticks),
 // never a whole list: two admins who save at the same moment each change their own ticks on what the other
@@ -69,7 +70,7 @@ func init() {
 	actionList[hostOptionsRoute] = (*reqCtx).hostOptionsItems
 	apiDoc = append(apiDoc,
 		struct{ method, path, summary string }{"GET", "/api/admin/hosts/{id}/options", "Edit host: which UPS powers this machine, which plugs are linked to it and which count in the total, with where each value comes from (config.yaml or changed in the panel) and the agent that reads the device (admins, browser session only)"},
-		struct{ method, path, summary string }{"PUT", "/api/admin/hosts/{id}/options", "Edit host: change the links of one machine: {ups: [{id, on}], plugs: [{id, linked, in_total}], reset: [{id, field: ups|plugs|total}]}; only what is named changes, for this machine. Stored as single decisions laid over config.yaml in state.json (config.yaml is not written; reset takes the decision of one line out), counts with the reading agent's next poll. Admins, browser session only (API tokens get 403), CSRF header, step-up. 422: an unknown field, UPS or plug; 409: not a host. Audited as host.options"})
+		struct{ method, path, summary string }{"PUT", "/api/admin/hosts/{id}/options", "Edit host: change the links of one machine: {ups: [{id, on}], plugs: [{id, linked, in_total}], reset: [{id, field: ups|plugs|total}], leftovers: true}; only what is named changes, for this machine (leftovers: the stored changes that have no line in any machine's dialog any more are removed). Stored as single decisions laid over config.yaml in state.json (config.yaml is not written; reset takes the decision of one line out), counts with the reading agent's next poll. Admins, browser session only (API tokens get 403), CSRF header, step-up. 422: an unknown field, UPS or plug; 409: not a host. Audited as host.options"})
 }
 
 func (s *Server) hostOptionsRoutes() {
@@ -82,6 +83,13 @@ type hostOptionsReq struct {
 	UPS   []hoUPSReq   `json:"ups"`
 	Plugs []hoPlugReq  `json:"plugs"`
 	Reset []hoResetReq `json:"reset"`
+	// Leftovers (true): the stored changes that have no line in any machine's dialog are taken out (leftovers).
+	Leftovers *bool `json:"leftovers"`
+}
+
+// empty reports whether the request asks for nothing.
+func (r hostOptionsReq) empty() bool {
+	return len(r.UPS)+len(r.Plugs)+len(r.Reset) == 0 && (r.Leftovers == nil || !*r.Leftovers)
 }
 
 // hoUPSReq: the UPS with this id (as GET /api/ups names it, "<agent>/<name>") powers this machine, or not.
@@ -123,6 +131,11 @@ type hoMachine struct {
 	names  map[string]string       // reading agent -> the name of the row it is shown as
 	shown  func(id string) string  // poller.ShownID
 	rowOf  func(id string) string  // the name of the row with this id ("": none)
+	// for leftovers: every agent of the panel with the name it is shown under; the agents that answered their
+	// last poll; whether a row id that the stored changes name can be a row of this panel
+	agents   map[string]string
+	answered map[string]bool
+	rowKnown map[string]bool
 }
 
 type hoUPS struct{ id, agent, name, label string }
@@ -197,6 +210,26 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 		}
 		m.plugs = append(m.plugs, hoPlug{id: st.ID, agent: *st.Via, dev: dev, label: st.Name, own: st.OwnHint})
 	}
+	m.agents, m.answered, m.rowKnown = map[string]string{}, map[string]bool{}, map[string]bool{}
+	for _, a := range p.Agents() {
+		if m.agents[a.ID] = rows[p.ShownID(a.ID)]; m.agents[a.ID] == "" {
+			m.agents[a.ID] = a.ID
+		}
+		info, _ := p.AgentInfo(a.ID)
+		m.answered[a.ID] = info.Online
+	}
+	for _, e := range p.Admin.HostOptions().Agents {
+		for _, decided := range e.UPS {
+			for id := range decided {
+				m.rowKnown[id] = p.KnownRow(id)
+			}
+		}
+		for _, to := range e.Links {
+			if to != "" {
+				m.rowKnown[to] = p.KnownRow(to)
+			}
+		}
+	}
 	slices.SortFunc(m.ups, func(a, b hoUPS) int { return strings.Compare(a.label+"\x00"+a.id, b.label+"\x00"+b.id) })
 	slices.SortFunc(m.plugs, func(a, b hoPlug) int { return strings.Compare(a.label+"\x00"+a.id, b.label+"\x00"+b.id) })
 	return m, nil
@@ -205,6 +238,103 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 // mine reports whether id is one of this machine's ids.
 func (m *hoMachine) mine(id string) bool {
 	return id != "" && (slices.Contains(m.ids, id) || m.shown(id) == m.row.ID)
+}
+
+// maxLeftoverLines is how many leftovers are said one by one; the rest is counted ("N more of the same kind").
+const maxLeftoverLines = 20
+
+// leftovers finds the stored changes that have no line in any machine's dialog, and so could never be reset:
+//
+//   - everything kept with an id that is no agent's (a host that was taken out of config.yaml);
+//   - a change about a UPS or a plug that its reading agent does not relay any more, when that agent answered
+//     its last poll. While it is silent nothing is known about its devices, and its changes are left alone;
+//     they have their lines again when it answers;
+//   - a change that names a row which is no machine of this panel.
+//
+// lines says what they are (at most maxLeftoverLines, then how many more), n is how many changes they are.
+// With remove they are taken out of o. Nothing the running panel uses is among them: the poller reads none
+// of these (poller.LinksOf), `fairy admin config check` has a WARN for the first and the last kind.
+func (m *hoMachine) leftovers(o *adminstate.HostOptions, remove bool) (lines []string, n int) {
+	count := func(k int) string {
+		if k == 1 {
+			return "1 stored change"
+		}
+		return fmt.Sprintf("%d stored changes", k)
+	}
+	relays := map[string]bool{}
+	labels := map[string]string{}
+	for _, u := range m.ups {
+		relays["ups\x00"+u.agent+"\x00"+u.name], labels["ups\x00"+u.agent+"\x00"+u.name] = true, u.label
+	}
+	for _, p := range m.plugs {
+		relays["plug\x00"+p.agent+"\x00"+p.dev], labels["plug\x00"+p.agent+"\x00"+p.dev] = true, p.label
+	}
+	noRow := func(id string) bool { known, asked := m.rowKnown[id]; return asked && !known }
+	var late []string // the ids that are no agent's: after the others, which name machines the admin knows
+	for _, agent := range slices.Sorted(maps.Keys(o.Agents)) {
+		e := o.Agents[agent].Clone()
+		name, isAgent := m.agents[agent]
+		if !isAgent {
+			if k := e.Count(); k > 0 {
+				n += k
+				late = append(late, fmt.Sprintf("%s kept with %s, which is no machine of this panel", count(k), agent))
+			}
+			if remove {
+				delete(o.Agents, agent)
+			}
+			continue
+		}
+		gone := func(kind, id string) bool { return m.answered[agent] && !relays[kind+"\x00"+agent+"\x00"+id] }
+		for _, ups := range slices.Sorted(maps.Keys(e.UPS)) {
+			if gone("ups", ups) {
+				n += len(e.UPS[ups])
+				lines = append(lines, fmt.Sprintf("%s about the UPS %s, which %s does not relay any more", count(len(e.UPS[ups])), ups, name))
+				delete(e.UPS, ups)
+				continue
+			}
+			for _, row := range slices.Sorted(maps.Keys(e.UPS[ups])) {
+				if noRow(row) {
+					n++
+					lines = append(lines, fmt.Sprintf("UPS %s (read by %s): a stored change about %s, which is no machine of this panel", cmp.Or(labels["ups\x00"+agent+"\x00"+ups], ups), name, row))
+					e.DropUPS(ups, row)
+				}
+			}
+		}
+		devs := map[string]int{}
+		for _, dev := range slices.Sorted(maps.Keys(e.Links)) {
+			switch to := e.Links[dev]; {
+			case gone("plug", dev):
+				devs[dev]++
+				e.DropLink(dev)
+			case to != "" && noRow(to):
+				n++
+				lines = append(lines, fmt.Sprintf("Plug %s (read by %s): a stored link to %s, which is no machine of this panel", cmp.Or(labels["plug\x00"+agent+"\x00"+dev], dev), name, to))
+				e.DropLink(dev)
+			}
+		}
+		for _, dev := range slices.Sorted(maps.Keys(e.Exclude)) {
+			if gone("plug", dev) {
+				devs[dev]++
+				e.DropExclude(dev)
+			}
+		}
+		for _, dev := range slices.Sorted(maps.Keys(devs)) {
+			n += devs[dev]
+			lines = append(lines, fmt.Sprintf("%s about the plug %s, which %s does not relay any more", count(devs[dev]), dev, name))
+		}
+		if remove {
+			if e.Empty() {
+				delete(o.Agents, agent)
+			} else {
+				o.Agents[agent] = e
+			}
+		}
+	}
+	lines = append(lines, late...)
+	if more := len(lines) - maxLeftoverLines; more > 0 {
+		lines = append(lines[:maxLeftoverLines:maxLeftoverLines], fmt.Sprintf("%d more of the same kind", more))
+	}
+	return lines, n
 }
 
 // plugState is how a plug stands to this machine under the links l of its reading agent.
@@ -333,6 +463,13 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	isMine := func(p hoPlug, l config.Links) bool {
 		byLink, _, selfMine, _ := m.plugState(p, l)
 		return byLink || selfMine || (m.agent != "" && p.agent == m.agent)
+	}
+	// 0. the leftovers go first: nothing below is about them (they have no line)
+	if req.Leftovers != nil && *req.Leftovers {
+		left, _ := m.leftovers(o, true)
+		for _, l := range left {
+			lines = append(lines, "Removed: "+l)
+		}
 	}
 	// 1. resets: the decision of one line goes, config.yaml counts for it again
 	for _, r := range req.Reset {
@@ -623,8 +760,12 @@ func (m *hoMachine) view(o adminstate.HostOptions, ignored []string) map[string]
 	if ignored == nil {
 		ignored = []string{}
 	}
+	left, n := m.leftovers(&o, false)
+	if left == nil {
+		left = []string{}
+	}
 	return map[string]any{"id": m.row.ID, "name": m.row.Name, "agent": strOrNil(m.agent), "rev": o.Rev,
-		"ups": ups, "plugs": plugs, "ignored": ignored}
+		"ups": ups, "plugs": plugs, "ignored": ignored, "leftovers": left, "leftover_count": n}
 }
 
 func strOrNil(s string) any {
@@ -696,7 +837,7 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		c.audit(u, "host.options", id, nil, errorOutcome(err))
 		return err
 	}
-	if len(req.UPS)+len(req.Plugs)+len(req.Reset) == 0 {
+	if req.empty() {
 		return apierr.New(422, "nothing to change")
 	}
 	var lines []string

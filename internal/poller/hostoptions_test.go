@@ -191,8 +191,8 @@ func TestLinksOfIsTheEntryWithThePanelsChanges(t *testing.T) {
 	// a node's or a guest's id is known by its form, also while its row is not there (the Proxmox API is down)
 	for id, want := range map[string]bool{"laptop": true, "tower": true, "qemu-100": true, "node-srv-pvea": true, "lxc-9999": true, "node-": false, "qemu": false,
 		"old-pc": false, "": false, "gone-agent": false} {
-		if got := p.knownRow(id); got != want {
-			t.Errorf("knownRow(%q) = %v, want %v", id, got, want)
+		if got := p.KnownRow(id); got != want {
+			t.Errorf("KnownRow(%q) = %v, want %v", id, got, want)
 		}
 	}
 	// Reset of everything: config.yaml's links again, with the next poll

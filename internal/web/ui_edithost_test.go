@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 )
 
 // "Edit host" on the page: an entry in the ⋯ menu of a host's page (admins), and a dialog with three short
@@ -63,7 +65,7 @@ const settle = () => new Promise((r) => setImmediate(r));
 const ups = (id, o) => ({ id: "nas-agent/" + id, name: id.toUpperCase() + " UPS", agent: "nas-agent", agent_name: "NAS", on: false, from: "config", by: null, at: null, config_on: false, ...o });
 const plug = (id, o) => ({ id: "nas-agent/" + id, name: id + " plug", agent: "nas-agent", agent_name: "NAS", linked: false, self: false, other: null, from: "config", by: null, at: null,
   config_linked: false, config_other: null, in_total: true, total_from: "config", total_by: null, total_at: null, config_in_total: true, mine: false, ...o });
-const data = (o) => ({ id: "h1", name: "PC-B", agent: "pc-b", rev: 3, ups: [], plugs: [], ignored: [], ...o });
+const data = (o) => ({ id: "h1", name: "PC-B", agent: "pc-b", rev: 3, ups: [], plugs: [], ignored: [], leftovers: [], leftover_count: 0, ...o });
 (async () => {
 ` + body + `
   if (!process.exitCode) console.log("ok");
@@ -267,6 +269,23 @@ func TestUIEditHostDialogSections(t *testing.T) {
   text = words(ehView(data({ ignored: ["x"] }), ehDraft()));
   if (!text.includes("UPS No agent relays a UPS. Plugs No agent relays a plug. Total No plug of this machine.") || !text.includes("1 stored change is ignored: see the panel's log.")) fail("empty: " + text);
   if (!words(ehView(data({ ignored: ["x", "y"] }), ehDraft())).includes("2 stored changes are ignored: see the panel's log.")) fail("two ignored");
+  // stored changes that have no line in any dialog: how many, and Remove; pressed, Save's list says what goes
+  const lo = data({ ups: [ups("rack")], leftovers: ["2 stored changes about the plug b, which NAS does not relay any more", "1 stored change kept with old-pc, which is no machine of this panel"], leftover_count: 3 });
+  draft = ehDraft();
+  html = ehView(lo, draft); text = words(html);
+  if (!text.includes("3 stored changes are about machines or devices that are gone. Remove") || !html.includes('<button class="btn sm" type="button" data-eh-left>Remove</button>') || text.includes("This will change")) fail("leftovers: " + html);
+  if (JSON.stringify(ehPlan(lo, draft)) !== JSON.stringify({ lines: [], body: {} })) fail("leftovers are removed without being asked: " + JSON.stringify(ehPlan(lo, draft)));
+  draft.leftovers = true;
+  ehTick(lo, draft, "ups", "nas-agent/rack", true);
+  plan = ehPlan(lo, draft);
+  if (JSON.stringify(plan.lines) !== JSON.stringify(["Removed: 2 stored changes about the plug b, which NAS does not relay any more", "Removed: 1 stored change kept with old-pc, which is no machine of this panel", "UPS RACK UPS (read by NAS): powers PC-B"])
+    || JSON.stringify(plan.body) !== JSON.stringify({ ups: [{ id: "nas-agent/rack", on: true }], leftovers: true })) fail("leftovers, the plan: " + JSON.stringify(plan));
+  html = ehView(lo, draft); text = words(html);
+  if (!text.includes("3 stored changes are about machines or devices that are gone. Save removes them.") || html.includes("data-eh-left") || !text.includes("This will change Removed: 2 stored changes about the plug b")) fail("leftovers after Remove: " + text);
+  if (!words(ehView(data({ leftovers: ["x"], leftover_count: 1 }), ehDraft())).includes("1 stored change is about machines or devices that are gone. Remove")) fail("one leftover");
+  if (words(ehView(data({}), ehDraft())).includes("gone")) fail("no leftovers, and the dialog speaks of them");
+  draft = ehDraft(); draft.leftovers = true;  // nothing to remove: nothing is asked
+  if (JSON.stringify(ehPlan(data({}), draft).body) !== "{}") fail("leftovers asked for with none there");
   // a machine without an agent of its own: only the plugs linked to it are under Total
   text = words(ehView(data({ agent: null, plugs: [plug("a", { agent: "", agent_name: "?" }), plug("b", { linked: true })] }), ehDraft()));
   if ((text.match(/a plug/g) || []).length !== 1 || (text.match(/b plug/g) || []).length !== 2) fail("a node without an agent: " + text);
@@ -288,6 +307,7 @@ func TestUIEditHostDialogSections(t *testing.T) {
     "A changed line is used instead of what config.yaml says about it until Reset, also when config.yaml is edited later. Every other line follows config.yaml.",
     "A link is kept with the machine that reads the device (\"read by …\"). Reset puts back that one line.",
     "A change counts from the next poll of the machine that reads the device.",
+    "Stored changes about a device nobody relays any more, or about a machine that is gone, have no line here. The dialog says how many there are; Remove takes them out.",
     "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]) if (!info.includes(s)) fail("the info button lacks: " + s);
 `)
 }
@@ -372,7 +392,16 @@ func TestUIEditHostDialogFlow(t *testing.T) {
   if ($("#eh-err").textContent !== "" || !timers[0]?.on) fail("before the time limit: " + $("#eh-err").textContent);
   timers[0].fn(); await p1; await settle();
   if ($("#eh-err").textContent !== "The panel did not answer. Close this and try again." || $("#eh-body").innerHTML !== "") fail("no answer: " + $("#eh-err").textContent + " | " + $("#eh-body").innerHTML);
+  // "Remove" of the stored changes without a line: one click, the list says what goes, Save sends it
+  await open(async () => ({ ...d(), leftovers: ["1 stored change kept with old-pc, which is no machine of this panel"], leftover_count: 1 }));
+  if (!$("#eh-save").disabled) fail("leftovers alone make Save pressable before Remove was pressed");
+  $("#eh-body").onclick({ target: { closest: (sel) => (sel === "[data-eh-reset], [data-eh-left]" ? { dataset: { ehLeft: "" } } : null) } });
+  if ($("#eh-save").disabled || !words($("#eh-body").innerHTML).includes("This will change Removed: 1 stored change kept with old-pc, which is no machine of this panel")) fail("after Remove: " + words($("#eh-body").innerHTML));
+  answer = async () => ({ ok: true, message: "links saved" });
+  await submit(); await settle();
+  if (JSON.stringify(asked[asked.length - 1].body) !== JSON.stringify({ leftovers: true }) || closed !== 1) fail("the PUT for the leftovers: " + JSON.stringify(asked[asked.length - 1]));
   // Cancel closes it
+  await open(async () => d());
   $("#eh-x").onclick();
   if (closed !== 1) fail("Cancel");
   // an answer that comes after the dialog was closed draws nothing
@@ -405,7 +434,7 @@ func TestUIEditHostListsTheChangesInThePanelsWords(t *testing.T) {
 		}
 		out := runEhPageScript(t, "eh-words", `
   const d = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8")), draft = ehDraft();
-  for (const [kind, key, v] of JSON.parse(process.argv[3])) { if (kind === "reset") ehReset(d, draft, key); else ehTick(d, draft, kind, key, v); }
+  for (const [kind, key, v] of JSON.parse(process.argv[3])) { if (kind === "reset") ehReset(d, draft, key); else if (kind === "left") draft.leftovers = true; else ehTick(d, draft, kind, key, v); }
   console.log(JSON.stringify(ehPlan(d, draft)));
 `, file, ticks)
 		var plan struct {
@@ -420,6 +449,19 @@ func TestUIEditHostListsTheChangesInThePanelsWords(t *testing.T) {
 			t.Errorf("%s on %s:\nthe page lists %q\nthe panel says %q", ticks, id, plan.Lines, got)
 		}
 		r.poll()
+	}
+	// stored changes without a line (an id that is no agent's, a row that is no machine's), removed with a tick
+	if _, _, err := r.s.Poller.Admin.EditHostOptions("earlier", func(o *adminstate.HostOptions) error {
+		o.Agents["gone-pc"] = adminstate.HostOption{Exclude: map[string]bool{"x": true, "y": false}}
+		o.Agents[ehNAS] = adminstate.HostOption{UPS: map[string]map[string]bool{"rack": {"gone-pc": true}}, Links: map[string]string{"corner": "gone-pc"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	step(ehNodeA, `[["left"], ["ups", "nas-agent/desk", true]]`)
+	step(ehNodeA, `[["ups", "nas-agent/desk", false]]`)
+	if r.storedOptions()["agents"].(map[string]any)["gone-pc"] != nil || r.storedAgent(ehNAS) != nil {
+		t.Fatalf("the leftovers after the page removed them: %v", r.storedOptions())
 	}
 	step(ehNodeB, `[["ups", "nas-agent/rack", true], ["ups", "nas-agent/desk", true]]`)
 	step(ehNodeB, `[["plugs", "nas-agent/b-plug", true], ["total", "nas-agent/b-plug", false]]`)

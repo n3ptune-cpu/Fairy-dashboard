@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -54,6 +55,23 @@ func (s *Server) enrollHooks() enrollment.Hooks {
 			return nil
 		},
 		Remove: s.unpoll,
+		// Add host starts clean: what "Edit host" still keeps under the new host's id (its own entry, and changes
+		// about its rows kept with other agents) was made for another machine. Remove takes it out already; this
+		// is for what is there all the same (a host taken out of config.yaml, a state.json from a backup).
+		Fresh: func(h managed.Host) {
+			by := h.AddedBy
+			if by == "" {
+				by = "fairy"
+			}
+			gone, err := s.forgetHostOptions(by, h.ID, rowsOf(h)...)
+			switch {
+			case err != nil:
+				slog.Warn("Add host: what \"Edit host\" kept under the new host's id could not be taken out; look at its links", "host", h.ID, "error", err)
+				s.writeAudit(audit.Entry{Actor: by, Action: "host.options", Target: h.ID, Source: "fairy", Params: map[string]any{"because": "host added"}, Outcome: "error: " + err.Error()})
+			case len(gone) > 0:
+				s.writeAudit(audit.Entry{Actor: by, Action: "host.options", Target: h.ID, Source: "fairy", Params: map[string]any{"removed": gone, "because": "host added"}, Outcome: "ok"})
+			}
+		},
 		Online: func(id string) (bool, string) {
 			info, _ := s.Poller.AgentInfo(id)
 			if h, ok := s.managedHost(id); ok && h.Proxmox != nil { // a node: its Proxmox API must answer too

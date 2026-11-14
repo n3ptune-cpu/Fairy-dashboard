@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
@@ -498,6 +499,212 @@ func TestEditHostRowsThatGoWithAHost(t *testing.T) {
 		if got := rowsOf(c.h); !slices.Equal(got, c.want) {
 			t.Errorf("%s: %v, want %v", name, got, c.want)
 		}
+	}
+}
+
+// Stored changes that have no line in any machine's dialog can still be taken out. A change is such a leftover
+// when the machine that reads the device answers and does not relay the device any more, when it is kept
+// with an id that is no agent's (a host that was taken out of config.yaml), or when it names a row that is
+// no machine of this panel. Every dialog says how many there are and what they are, and removes them, behind
+// the same guard as every other change, with its lines in "Confirm it's you" and in the audit log. The
+// changes of a machine that is only silent are not leftovers: they have their lines again when it answers.
+func TestEditHostStoredChangesWithoutALineCanBeRemoved(t *testing.T) {
+	left := func(r *ehRig, id string) ([]string, any) {
+		t.Helper()
+		g := r.options(id)
+		return strs(g.body["leftovers"]), g.body["leftover_count"]
+	}
+	t.Run("the reading machine relays the devices no more", func(t *testing.T) {
+		r := ehSetup(t)
+		r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}, "plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true, "in_total": false}}})
+		if l, n := left(r, ehNodeA); len(l) != 0 || n != 0.0 {
+			t.Fatalf("changes that have their lines: %v %v", l, n)
+		}
+		// silent: its devices are not gone
+		r.b.Mu.Lock()
+		r.b.Metrics[ehNAS] = func() (jsonx.M, error) { return nil, fmt.Errorf("down") }
+		r.b.Mu.Unlock()
+		r.poll()
+		if l, n := left(r, ehNodeA); len(l) != 0 || n != 0.0 {
+			t.Fatalf("while the NAS is silent: %v %v", l, n)
+		}
+		// it answers, without a UPS and without a plug
+		r.b.Mu.Lock()
+		r.b.Metrics[ehNAS] = func() (jsonx.M, error) {
+			m := testutil.AgentMetrics()
+			delete(m, "power_sources")
+			delete(m, "ups")
+			return m, nil
+		}
+		r.b.Mu.Unlock()
+		r.poll()
+		g := r.options(ehNodeB)
+		want := []string{"1 stored change about the UPS rack, which NAS does not relay any more", "2 stored changes about the plug b-plug, which NAS does not relay any more"}
+		if len(g.body["ups"].([]any)) != 0 || len(g.body["plugs"].([]any)) != 0 || !slices.Equal(strs(g.body["leftovers"]), want) || g.body["leftover_count"] != 3.0 {
+			t.Fatalf("the dialog when the NAS relays nothing (no lines, and what is stored said): %s", g.raw)
+		}
+		if l, _ := left(r, ehNodeA); !slices.Equal(l, want) {
+			t.Fatalf("the same on another machine's page: %v", l)
+		}
+		removed := []string{"Removed: " + want[0], "Removed: " + want[1]}
+		old := r.do("PUT", "/api/admin/hosts/"+ehNodeA+"/options", map[string]any{"leftovers": true}, "Cookie", r.staleCookie(controller(), time.Hour), "X-Requested-With", "fairy", "Content-Type", "application/json")
+		if d, _ := old.body["detail"].(map[string]any); !stepUpRequired(old) || !slices.Equal(strs(d["items"]), removed) || r.storedAgent(ehNAS) == nil {
+			t.Fatalf("an old sign-in is asked to confirm, with the lines: %d %s", old.code, old.raw)
+		}
+		if x := r.put(ehNodeA, map[string]any{"leftovers": false}); x.code != 422 {
+			t.Fatalf("leftovers: false: %d %s", x.code, x.raw)
+		}
+		p := r.ok(ehNodeA, map[string]any{"leftovers": true})
+		if !slices.Equal(strs(p.body["changed"]), removed) || p.body["message"] != "links saved" || r.storedAgent(ehNAS) != nil || len(strs(p.body["leftovers"])) != 0 {
+			t.Fatalf("removed: %s\nstate.json: %v", p.raw, r.storedOptions())
+		}
+		en := r.auditEntries("", "host.options")[0]
+		if lines := strs(en["params"].(map[string]any)["lines"]); !slices.Equal(lines, removed) || en["target"] != ehNodeA || en["outcome"] != "ok" {
+			t.Fatalf("the audit entry: %v", en)
+		}
+		if p := r.ok(ehNodeA, map[string]any{"leftovers": true}); p.body["message"] != "nothing to change" {
+			t.Fatalf("nothing left: %s", p.raw)
+		}
+	})
+	t.Run("an id that is no agent's, a row that is no machine's", func(t *testing.T) {
+		cfg := ehConfig(t, ehNASLinks)
+		if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cfg.DataDir, "state.json"), []byte(`{"host_options": {"rev": 1, "agents": {
+			"old-pc": {"power_exclude_from_total": {"desk": true}, "ups_powers": {"attic": {"old-pc": true}}},
+			"nas-agent": {"ups_powers": {"rack": {"old-pc": true, "older-pc": false, "lab-b-node-pve-b": true}}, "power_links": {"b-plug": "old-pc", "corner": "lab-b-agent"}}}}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		r := ehSetupWith(t, cfg, true)
+		want := []string{"UPS Rack UPS (read by NAS): a stored change about old-pc, which is no machine of this panel",
+			"UPS Rack UPS (read by NAS): a stored change about older-pc, which is no machine of this panel",
+			"Plug B plug (read by NAS): a stored link to old-pc, which is no machine of this panel",
+			"2 stored changes kept with old-pc, which is no machine of this panel"}
+		if l, n := left(r, ehNodeB); !slices.Equal(l, want) || n != 5.0 {
+			t.Fatalf("leftovers: %q %v", l, n)
+		}
+		// a save for a machine does not touch them, and does not drop them
+		r.ok(ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})
+		if l, n := left(r, ehNodeA); !slices.Equal(l, want) || n != 5.0 || r.storedAgent("old-pc") == nil {
+			t.Fatalf("after another save: %q %v", l, n)
+		}
+		// removed together with a change of this machine, in one request
+		p := r.ok(ehNodeB, map[string]any{"leftovers": true, "ups": []any{ehUPS("nas-agent/desk", true)}})
+		if got := strs(p.body["changed"]); len(got) != 5 || got[0] != "Removed: "+want[0] || got[3] != "Removed: "+want[3] || got[4] != "UPS Desk UPS (read by NAS): powers PVE-B" {
+			t.Fatalf("changed: %q", got)
+		}
+		nas := r.storedAgent(ehNAS)
+		if r.storedAgent("old-pc") != nil || fmt.Sprint(nas["ups_powers"]) != "map[desk:map["+ehNodeA+":true "+ehNodeB+":true] rack:map["+ehNodeB+":true]]" || fmt.Sprint(nas["power_links"]) != "map[corner:lab-b-agent]" {
+			t.Fatalf("state.json afterwards (what has a line stays): %v", r.storedOptions())
+		}
+		if l, n := left(r, ehNodeB); len(l) != 0 || n != 0.0 {
+			t.Fatalf("leftovers afterwards: %q %v", l, n)
+		}
+	})
+	t.Run("many", func(t *testing.T) {
+		cfg := ehConfig(t, ehNASLinks)
+		_ = os.MkdirAll(cfg.DataDir, 0o700)
+		var agents []string
+		for i := 0; i < 30; i++ {
+			agents = append(agents, fmt.Sprintf(`"gone-%02d": {"power_exclude_from_total": {"x": true}}`, i))
+		}
+		if err := os.WriteFile(filepath.Join(cfg.DataDir, "state.json"), []byte(`{"host_options": {"agents": {`+strings.Join(agents, ",")+`}}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		r := ehSetupWith(t, cfg, true)
+		l, n := left(r, ehNodeB)
+		if len(l) != 21 || n != 30.0 || l[0] != "1 stored change kept with gone-00, which is no machine of this panel" || l[20] != "10 more of the same kind" {
+			t.Fatalf("thirty leftovers are said as twenty lines and how many more: %d lines, count %v: %q", len(l), n, l)
+		}
+		p := r.ok(ehNodeB, map[string]any{"leftovers": true})
+		if got := strs(p.body["changed"]); len(got) != 21 || got[20] != "Removed: 10 more of the same kind" || len(r.storedOptions()["agents"].(map[string]any)) != 0 {
+			t.Fatalf("removed: %q", got)
+		}
+	})
+}
+
+// A host that is ADDED under an id the panel still has stored changes for starts with none of them: they were
+// about another machine (a host's id is made from its name). Remove forgets them already; this is for what
+// is there all the same: a host that was taken out of config.yaml, a state.json from a backup. Re-pair is
+// not an Add: it keeps what was changed for the machine (TestEditHostRepairKeepsAndRemoveForgets).
+func TestEditHostAHostAddedUnderAnIdWithStoredChangesStartsClean(t *testing.T) {
+	e := setup(t)
+	e.s.Enroll.Interval = 10 * time.Millisecond
+	e.s.control, e.s.adminRL = newRateLimiter(1000), newRateLimiter(1000)
+	e.s.Enroll.PanelAddr = "100.64.0.10"
+	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
+		return 200, enroll.Response{AgentVersion: "42-abc", Platform: "linux", Token: "boxa-read-token-xxxxxxxxxxxxxxxxx",
+			ControlToken: "boxa-control-token-yyyyyyyyyyyyyyy"}, "", nil
+	}
+	e.b.Mu.Lock()
+	e.b.Metrics["box-a"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil } // it relays a plug of its own, "desk"
+	e.b.Metrics["laptop"] = func() (jsonx.M, error) {
+		m := testutil.AgentMetrics()
+		m["ups"] = []any{jsonx.M{"name": "rack", "state": "online", "description": "Rack UPS"}}
+		m["power_sources"] = append(m["power_sources"].([]any), jsonx.M{"id": "spare", "name": "Spare plug", "type": "shelly", "ok": true, "watts": 55.0})
+		return m, nil
+	}
+	e.b.Mu.Unlock()
+	// what an earlier machine called BOX-A left behind: its own plug out of the total, the laptop's UPS and spare
+	// plug given to it; and one change that is about the laptop alone
+	if _, _, err := e.s.Poller.Admin.EditHostOptions("earlier", func(o *adminstate.HostOptions) error {
+		o.Agents["box-a"] = adminstate.HostOption{Exclude: map[string]bool{"desk": true}}
+		o.Agents["laptop"] = adminstate.HostOption{UPS: map[string]map[string]bool{"rack": {"box-a": true, "laptop": true}}, Links: map[string]string{"spare": "box-a"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := e.cookie(controller(), 0)
+	hdr := []string{"Cookie", c, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	p := e.do("POST", "/api/admin/hosts", map[string]any{"name": "BOX-A", "os": "linux", "site": "Alice"}, hdr...)
+	if p.code != 201 {
+		t.Fatal(p.code, string(p.raw))
+	}
+	if e.storedAgent("box-a") == nil {
+		t.Fatal("a join code alone (no machine has answered) took the stored changes out")
+	}
+	for i := 0; ; i++ {
+		time.Sleep(10 * time.Millisecond)
+		e.s.Poller.PollOnce(context.Background())
+		if g := e.do("GET", "/api/admin/enrollments/"+p.body["id"].(string), nil, "Cookie", c); g.body["done"] == true && g.body["state"] == "online" {
+			break
+		} else if i > 300 {
+			t.Fatal("the enrollment never finished", g.body["state"], g.body["message"])
+		}
+	}
+	e.s.Poller.PollOnce(context.Background())
+	if x := e.do("GET", "/api/systems/box-a", nil, "Cookie", c); len(strs(x.body["ups"])) != 0 || x.body["power_w"] != 80.0 {
+		t.Errorf("the new host: ups %v, power_w %v (want no UPS, and its own plug alone, counted)", x.body["ups"], x.body["power_w"])
+	}
+	lap := e.storedAgent("laptop")
+	if raw := fmt.Sprint(e.storedOptions()); strings.Contains(raw, "box-a") || fmt.Sprint(lap["ups_powers"]) != "map[rack:map[laptop:true]]" {
+		t.Errorf("state.json after the host was added (nothing about box-a; the laptop's own change stays): %s", raw)
+	}
+	var forgot map[string]any
+	for _, en := range e.auditEntries("", "host.options") {
+		if p, _ := en["params"].(map[string]any); p["because"] == "host added" && en["target"] == "box-a" {
+			forgot = en
+		}
+	}
+	if forgot == nil || forgot["outcome"] != "ok" || !slices.Equal(strs(forgot["params"].(map[string]any)["removed"]), []string{"the overrides of box-a", "laptop: UPS rack no longer powers it", "laptop: device spare is no longer linked to it"}) {
+		t.Errorf("the audit entry of what Add host took out: %v", forgot)
+	}
+	// a second host, with nothing stored under its id: no entry about it
+	n := len(e.auditEntries("", "host.options"))
+	e.b.Mu.Lock()
+	e.b.Metrics["box-c"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	e.b.Mu.Unlock()
+	p = e.do("POST", "/api/admin/hosts", map[string]any{"name": "BOX-C", "os": "linux", "site": "Alice"}, hdr...)
+	for i := 0; p.code == 201; i++ {
+		time.Sleep(10 * time.Millisecond)
+		e.s.Poller.PollOnce(context.Background())
+		if g := e.do("GET", "/api/admin/enrollments/"+p.body["id"].(string), nil, "Cookie", c); g.body["done"] == true || i > 300 {
+			break
+		}
+	}
+	if len(e.auditEntries("", "host.options")) != n {
+		t.Error("an Add host with nothing to forget wrote a host.options entry")
 	}
 }
 

@@ -152,6 +152,9 @@ type Hooks struct {
 	// Add starts polling a new host; Remove stops polling one (Re-pair replaces).
 	Add    func(managed.Entry) error
 	Remove func(id string)
+	// Fresh, when set, is told about a host that is ADDED (not re-paired), after it was stored and before its
+	// polling starts: what the panel still keeps under its id is from another machine and is not its own.
+	Fresh func(h managed.Host)
 	// Online reports whether the host answered its last poll (and the error if not).
 	Online func(id string) (bool, string)
 	// Event is told about results (audit log, notifications): kind is paired, online, failed, expired, cancelled.
@@ -652,6 +655,9 @@ func (m *Manager) commit(e *Enrollment, h managed.Host, sec managed.Secret, entr
 	if err := m.Store.Put(h, sec); err != nil {
 		fail("cannot save it: " + err.Error())
 		return false
+	}
+	if !e.Repair && m.Hooks.Fresh != nil {
+		m.Hooks.Fresh(h)
 	}
 	if err := m.Hooks.Add(entry); err != nil {
 		fail("saved, but polling did not start (" + err.Error() + "): restart the panel")

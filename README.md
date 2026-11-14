@@ -1120,7 +1120,15 @@ them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads 
 * **Who may:** admins, from a browser session (no API token), with "Confirm it's you" inside the usual
   window. Every change is in the audit log (`host.options`, with before and after) and in the bell.
 * **Remove** of a host takes what was changed for it with it, and every changed line about it that is kept
-  with other machines; **Re-pair** keeps them.
+  with other machines; **Re-pair** keeps them. A host that is **added** starts with nothing: whatever the panel
+  still kept under its id (from a machine of that name that was taken out of config.yaml, say) is taken out
+  when it is paired, with an entry in the audit log.
+* **Changes that have no line any more can still be removed.** A change about a UPS or plug that its machine
+  no longer relays, one kept with an id that is no machine of the panel any more, or one that names such an
+  id, cannot be seen or reset on any line. Every Edit host dialog says how many of them there are ("3 stored
+  changes are about machines or devices that are gone.") and **Remove** takes them out, with the same
+  confirmation and audit entry as every change. They are never used meanwhile. While a machine is only
+  silent, its changes are not counted as such: they have their lines again when it answers.
 * **A damaged override never stops the panel.** Whatever is under `host_options` that is not what Fairy
   writes is ignored with one warning in the log (and a WARN line of `fairy admin config check`);
   config.yaml's value counts for it. `fairy update` is not affected: its check reads config.yaml only.
@@ -1133,8 +1141,9 @@ able to send a token to another address or switch on power control. Those stay i
 
 API: `GET` and `PUT /api/admin/hosts/{id}/options`. The request names only what changes:
 `{"ups": [{"id": "nas-agent/rack", "on": true}], "plugs": [{"id": "nas-agent/pc-plug", "linked": true,
-"in_total": false}], "reset": [{"id": "nas-agent/desk", "field": "ups"}]}` (`field`: `ups`, `plugs` or `total`;
-a reset is about that one line of this machine). Any other field is refused (422).
+"in_total": false}], "reset": [{"id": "nas-agent/desk", "field": "ups"}], "leftovers": true}` (`field`: `ups`,
+`plugs` or `total`; a reset is about that one line of this machine; `leftovers` removes the changes that have
+no line any more). Any other field is refused (422).
 
 ### Notifications
 

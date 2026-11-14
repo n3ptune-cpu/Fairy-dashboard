@@ -3494,7 +3494,7 @@ document.addEventListener("click", (e) => {
 // eh.d is the panel's answer (GET .../options); eh.draft holds what was changed in the dialog and nothing else.
 // Everything that is drawn or sent is made from the two by the functions below, which touch no page.
 const eh = { d: null, draft: null, seq: 0, busy: false };
-const ehDraft = () => ({ ups: dict(), linked: dict(), total: dict(), reset: dict() });
+const ehDraft = () => ({ ups: dict(), linked: dict(), total: dict(), reset: dict(), leftovers: false });
 function editHostMenu(s) {
   if (!isHost(s) || !state.me?.can_manage_users) return "";
   return `<button class="menu-item" type="button" data-act="edit-host">Edit host</button>`;
@@ -3530,6 +3530,8 @@ const ehTotalWords = (inTotal) => (inTotal ? "in the total again" : "not in the 
 // and in the audit log), and the request that says exactly that.
 function ehPlan(d, draft) {
   const lines = [], body = { ups: [], plugs: [], reset: [] };
+  const left = draft.leftovers && d.leftovers?.length ? d.leftovers : [];
+  for (const l of left) lines.push(`Removed: ${l}`);
   const back = (x, field, what, words) => {
     body.reset.push({ id: x.id, field });
     lines.push(`${what} ${x.name} (read by ${x.agent_name}): back to config.yaml: ${ehConfig(x, field) === ehWas(x, field) ? "nothing changes now" : words}`);
@@ -3559,6 +3561,7 @@ function ehPlan(d, draft) {
     if ("linked" in e || "in_total" in e) body.plugs.push(e);
   }
   for (const k of Object.keys(body)) if (!body[k].length) delete body[k];
+  if (left.length) body.leftovers = true;
   return { lines, body };
 }
 // The dialog's sections. Every name in them is the panel's data and goes through esc().
@@ -3578,12 +3581,15 @@ function ehView(d, draft) {
   const mine = d.plugs.filter((p) => ehMine(d, p, draft));
   const sect = (title, hint, rows, none) => `<div class="wu-sub">${title}</div>${rows.length ? `<p class="note eh-hint">${hint}</p>${rows.join("")}` : `<p class="note eh-hint">${none}</p>`}`;
   const plan = ehPlan(d, draft);
+  const left = d.leftovers?.length ? d.leftover_count || d.leftovers.length : 0;  // stored changes that have no line in any dialog
   const any = [...d.ups.map((u) => ehFrom(u, "ups", draft)), ...d.plugs.map((p) => ehFrom(p, "plugs", draft)), ...mine.map((p) => ehFrom(p, "total", draft))].includes("panel");
   return `${sect("UPS", "Ticked: this machine is on that UPS.", d.ups.map((u) => row(u, "ups")), "No agent relays a UPS.")}
     ${sect("Plugs", "Ticked: the plug's watts are this machine's.", d.plugs.map((p) => row(p, "plugs", p.self ? { fixed: true, note: "set on the machine itself" } : !ehNow(p, "plugs", draft) && where(p) ? { note: `now on ${esc(where(p))}` } : {})), "No agent relays a plug.")}
     ${sect("Total", "Ticked: the plug counts in the total.", mine.map((p) => row(p, "total")), "No plug of this machine.")}
     ${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
     ${d.ignored?.length ? `<p class="note warn eh-ignored">${d.ignored.length === 1 ? "1 stored change is" : `${d.ignored.length} stored changes are`} ignored: see the panel's log.</p>` : ""}
+    ${left ? `<p class="note warn eh-ignored">${left === 1 ? "1 stored change is" : `${left} stored changes are`} about machines or devices that are gone.${draft.leftovers ? " Save removes them."
+      : ' <button class="btn sm" type="button" data-eh-left>Remove</button>'}</p>` : ""}
     ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}`;
 }
 // A tick or a Reset in the dialog changes the draft, never the panel. Each is about one line; the later of the
@@ -3607,6 +3613,7 @@ const EH_INFO = () => infoBtn("edit-host", "Edit host", infoList([
   "A changed line is used instead of what config.yaml says about it until Reset, also when config.yaml is edited later. Every other line follows config.yaml.",
   "A link is kept with the machine that reads the device (\"read by …\"). Reset puts back that one line.",
   "A change counts from the next poll of the machine that reads the device.",
+  "Stored changes about a device nobody relays any more, or about a machine that is gone, have no line here. The dialog says how many there are; Remove takes them out.",
   "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]));
 // The sections are drawn anew after every tick and Reset. The control that was used keeps the focus: the same
 // tick is found again by its section and its device; a Reset button is gone once it was pressed, and the tick
@@ -3615,10 +3622,11 @@ const EH_INFO = () => infoBtn("edit-host", "Edit host", infoList([
 function ehDraw() {
   const body = $("#eh-body");
   if (!body || !eh.d) return;
-  const a = document.activeElement, had = a && body.contains?.(a) ? { eh: a.dataset.eh, value: a.value, reset: a.dataset.ehReset } : null;
+  const a = document.activeElement, had = a && body.contains?.(a) ? { eh: a.dataset.eh, value: a.value, reset: a.dataset.ehReset, left: a.dataset.ehLeft !== undefined } : null;
   body.innerHTML = ehView(eh.d, eh.draft);
   $("#eh-save").disabled = eh.busy || !ehPlan(eh.d, eh.draft).lines.length;
   if (!had) return;
+  if (had.left) { $("#eh-save").focus(); return; }  // "Remove" is gone once it was pressed: Save is what comes next
   const ticks = [...body.querySelectorAll("input[data-eh]")], resets = [...body.querySelectorAll("[data-eh-reset]")];
   const cut = had.reset ? had.reset.indexOf(":") : -1;
   (had.reset ? resets.find((x) => x.dataset.ehReset === had.reset) || ticks.find((x) => x.dataset.eh === had.reset.slice(0, cut) && x.value === had.reset.slice(cut + 1) && !x.disabled) : ticks.find((x) => x.dataset.eh === had.eh && x.value === had.value))?.focus();
@@ -3655,9 +3663,10 @@ async function openEditHost(s) {
     ehTick(eh.d, eh.draft, t.dataset.eh, t.value, t.checked); $("#eh-err").textContent = ""; ehDraw();
   };
   $("#eh-body").onclick = (e) => {
-    const t = e.target.closest("[data-eh-reset]");
+    const t = e.target.closest("[data-eh-reset], [data-eh-left]");
     if (!t) return;
-    ehReset(eh.d, eh.draft, t.dataset.ehReset); $("#eh-err").textContent = ""; ehDraw();
+    if (t.dataset.ehLeft !== undefined) eh.draft.leftovers = true; else ehReset(eh.d, eh.draft, t.dataset.ehReset);
+    $("#eh-err").textContent = ""; ehDraw();
   };
   $("#eh-form").onsubmit = async (e) => {
     e.preventDefault();

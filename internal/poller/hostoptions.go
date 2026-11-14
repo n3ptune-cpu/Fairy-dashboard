@@ -63,7 +63,7 @@ func (p *Poller) LinksOf(a config.Agent) config.Links {
 	keep := func(id string) bool {
 		k, seen := known[id]
 		if !seen {
-			k = p.knownRow(id)
+			k = p.KnownRow(id)
 			known[id] = k
 		}
 		if !k && !slices.Contains(dropped, id) {
@@ -94,11 +94,11 @@ func (p *Poller) BaseLinks(agentID string) (config.Links, bool) {
 	return a.Links(), ok
 }
 
-// knownRow reports whether id can be a row of this panel: an agent's id, or an id of the form a node or a
+// KnownRow reports whether id can be a row of this panel: an agent's id, or an id of the form a node or a
 // guest of one of the configured Proxmox entries has (such a row comes and goes with its Proxmox API's
 // answers, and after a restart with the machine off it is not there yet). Every row there can be has one of
 // the two; a row that is there now counts whatever its id.
-func (p *Poller) knownRow(id string) bool {
+func (p *Poller) KnownRow(id string) bool {
 	if _, ok := p.AgentByID(id); ok {
 		return true
 	}
@@ -108,7 +108,7 @@ func (p *Poller) knownRow(id string) bool {
 	return has || PossibleRow(id, nil, p.Clusters())
 }
 
-// PossibleRow is the rule of knownRow for a configuration that is not running (`fairy admin config check`):
+// PossibleRow is the rule of KnownRow for a configuration that is not running (`fairy admin config check`):
 // id is the id of one of agents, or has the form of a node's or guest's id under one of the Proxmox entries
 // (<id_prefix>node-<name>, <id_prefix>qemu-<vmid>, <id_prefix>lxc-<vmid>).
 func PossibleRow(id string, agents []config.Agent, clusters []config.Proxmox) bool {
