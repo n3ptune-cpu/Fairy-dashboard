@@ -1338,8 +1338,9 @@ that build 14 started with.)
    node it worked out by itself: nothing to do when it is the right one.
 
 Nothing has to be done on the agents: every agent build 13 worked with works with this panel. **Add host**
-and **Re-pair** now install Fairy-agent v0.8.0 (build 18). One thing needs that agent on the machine that
-does it: reading a plug through Home Assistant ([Plugs through Home Assistant](#plugs-through-home-assistant)).
+and **Re-pair** now install Fairy-agent v0.9.0 (build 19). One thing needs an agent of v0.8.0 or newer on
+the machine that does it: reading a plug through Home Assistant
+([Plugs through Home Assistant](#plugs-through-home-assistant)).
 The **Update panel** button's unit and `fairy.service` are as build 13 had them: no second run, nothing by
 hand.
 
