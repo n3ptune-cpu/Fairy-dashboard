@@ -77,7 +77,10 @@ func TestRandomRunsWithMachinesThatCheckApprovals(t *testing.T) {
 					mc.chk.goLost = pick("arrives", "never")
 					dirty()
 				case 3:
-					mc.chk.goSays = pick("too_late", "run_over", "other_run", "limits", "already_confirmed")
+					mc.chk.goSays = pick("too_late", "run_over", "other_run", "limits", "already_confirmed", "twice")
+					if mc.chk.goSays == "twice" { // the confirmation reaches it twice: confirmed, and the panel is told "already_confirmed"
+						mc.chk.goSays, mc.chk.goTwice = "", true
+					}
 				case 4:
 					mc.cancelLost = pick("arrives", "never", "always", "always arrives")
 					dirty()
