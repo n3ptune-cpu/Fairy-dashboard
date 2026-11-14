@@ -931,8 +931,8 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	// confirmation (its lines, its stamp) is made from the same reading (c.wu).
 	times := s.wuTimesNow()
 	c.wu = &times
-	stamp := s.wuStamp(times, b)
 	s.wuStartAt("read")
+	stamp := s.wuStamp(times, b) // of the same reading: what the replay compares with the kept stamp
 	text, _ := s.wuDescribe(b, hosts, times)
 	req := wakerun.StartRequest{Hosts: b.Hosts, UpdateOnly: b.UpdateOnly, UpdateIfOn: b.UpdateIfOn, By: actorOf(u), BySub: u.Sub, Latest: latest.Version,
 		Settings: &times.set}

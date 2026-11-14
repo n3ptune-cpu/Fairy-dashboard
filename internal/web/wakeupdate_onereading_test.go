@@ -63,30 +63,34 @@ func TestAKeptStartsStampIsOfTheReadingItsLinesWereMadeFrom(t *testing.T) {
 	}
 }
 
-// The timings change in the instant after the replay compared them with what was confirmed. The run has the
-// numbers that were compared: the start does not read them a second time.
+// The timings change in the instant after the replay read them, or after it compared them with what was
+// confirmed. The run has the numbers that were read and compared: the start does not read them a second
+// time, neither for the stamp it compares nor for the run.
 func TestAStartDoesNotReadTheTimingsAgainAfterTheyWereCompared(t *testing.T) {
-	a := signedIn(t)
-	e := a.e
-	f := newFarm(t, e)
-	f.optIn("pc-a")
-	f.offline()
-	e.rtSet(map[string]int{config.KeyShutdownDelay: 45})
-	checked := 0
-	e.s.wuStartStep = func(step string) {
-		if step == "checked" {
-			if checked++; checked == 2 { // the replay
-				e.rtSet(map[string]int{config.KeyOffAfter: 300, config.KeyShutdownDelay: 10, config.KeySettle: 10, config.KeyRequestsPerMin: 30, config.KeyOnlineTimeout: 60})
+	for _, at := range []string{"read", "checked"} {
+		a := signedIn(t)
+		e := a.e
+		f := newFarm(t, e)
+		f.optIn("pc-a")
+		f.offline()
+		e.rtSet(map[string]int{config.KeyShutdownDelay: 45})
+		seen := 0
+		e.s.wuStartStep = func(step string) {
+			if step == at {
+				if seen++; seen == 2 { // the replay
+					e.rtSet(map[string]int{config.KeyOffAfter: 300, config.KeyShutdownDelay: 10, config.KeySettle: 10, config.KeyRequestsPerMin: 30, config.KeyOnlineTimeout: 60})
+				}
 			}
 		}
+		r := e.wuStart(a.sess, map[string]any{"hosts": []string{"pc-a"}})
+		if cb := a.confirm(pendingID(r), false); cb.code != 303 || seen != 2 {
+			t.Fatal(at, cb.code, seen)
+		}
+		act, _ := e.s.WakeRuns.Snapshot()
+		if act == nil || act.Settings.OffAfterS != 900 || act.Settings.ShutdownDelayS != 45 || act.Settings.SettleS != 60 || act.Settings.PerAgentMin != 8 || act.Settings.OnlineTimeoutS != 300 {
+			res, _ := e.do("GET", "/api/me", nil, "Cookie", a.sess).body["pending_result"].(map[string]any)
+			t.Fatalf("changed after %q: the run's settings are not the ones that were read and compared with the confirmation: %+v (answered %v)", at, act, res)
+		}
+		f.finish()
 	}
-	r := e.wuStart(a.sess, map[string]any{"hosts": []string{"pc-a"}})
-	if cb := a.confirm(pendingID(r), false); cb.code != 303 || checked != 2 {
-		t.Fatal(cb.code, checked)
-	}
-	act, _ := e.s.WakeRuns.Snapshot()
-	if act == nil || act.Settings.OffAfterS != 900 || act.Settings.ShutdownDelayS != 45 || act.Settings.SettleS != 60 || act.Settings.PerAgentMin != 8 || act.Settings.OnlineTimeoutS != 300 {
-		t.Fatalf("the run's settings are not the ones that were compared with the confirmation: %+v", act)
-	}
-	f.finish()
 }
