@@ -3301,17 +3301,29 @@ async function openAddHost(typed = null, problem = "") {
     } catch (x) { $("#ah-err").textContent = x.message; $("#ah-go").disabled = false; }
   };
 }
-// Hosts added here that the panel does not poll right now: it left them out when it started (the tokens file is
-// damaged, or the entry no longer passes the check), and says why in d.skipped. Such a host has no page, and
-// Re-pair and Remove are on a host's page (managedBox): here they are for these hosts. An Add under the name of
-// one of them is refused and names the two (the panel: enrollment idFree), so they must be within reach.
+// Hosts added here (Add host) that are not what the panel polls right now, as GET /api/admin/hosts gives them
+// when the dialog opens (managed[].active false, with why): a host the panel left out when it started (its
+// tokens file is damaged, or its entry no longer passes the check), and a copy that config.yaml's entry of the
+// same id shadows (shadowed: the machine is polled, as config.yaml's entry).
+// A host that was left out has no page, and Re-pair and Remove are on a host's page (managedBox): here they
+// are for these hosts. An Add under the name of one of them is refused and names the two (the panel:
+// enrollment idFree), so they must be within reach.
+// A shadowed copy has Remove only, and its row says what that takes: the copy, nothing of the machine. It is
+// not paired again (the panel refuses it: it would refuse what the machine answers).
 function addHostWaiting(d) {
   const out = (d.managed || []).filter((h) => h.active === false), lines = d.skipped || [], why = controlWhyNot();
   if (!out.length && !lines.length) return "";
-  return `<div class="warnbox" id="ah-out">${out.length ? "<b>Added here, and not polled right now.</b> Re-pair makes a new join code for the machine; what was changed for it in Edit host is kept. An Add under the same name is refused." : ""}
-    ${out.map((h) => `<div class="list-row"><span>${esc(h.name)} <code>${esc(h.id)}</code></span><span class="row-gap">
-      <button class="btn" type="button" data-act="mh-repair" data-host="${esc(h.id)}" ${why ? "disabled" : ""} title="${esc(why || "A new join code, when the panel lost this host's tokens")}">Re-pair</button>
-      <button class="btn danger" type="button" data-act="mh-remove" data-host="${esc(h.id)}" ${why ? "disabled" : ""} title="${esc(why)}">Remove from the panel</button></span></div>`).join("")}
+  const off = why ? ` disabled title="${esc(why)}"` : "";
+  const row = (h) => (h.shadowed
+    ? `<div class="list-row"><span>${esc(h.name)} <code>${esc(h.id)}</code></span><span class="row-gap">
+      <button class="btn danger" type="button" data-act="mh-remove" data-host="${esc(h.id)}"${off}>Remove the unused copy</button></span></div>
+    <div class="note">Polled, as config.yaml's entry: config.yaml has the id <code>${esc(h.id)}</code> too, and config.yaml wins. The copy made by Add host is not used. Remove takes only that copy away (its entry in the list of added hosts and its tokens): the machine stays, and so does what Edit host and the panel store for it. The copy is not paired again: the panel would refuse what the machine answers.</div>`
+    : `<div class="list-row"><span>${esc(h.name)} <code>${esc(h.id)}</code></span><span class="row-gap">
+      <button class="btn" type="button" data-act="mh-repair" data-host="${esc(h.id)}"${off}>Re-pair</button>
+      <button class="btn danger" type="button" data-act="mh-remove" data-host="${esc(h.id)}"${off}>Remove from the panel</button></span></div>
+    <div class="note">Not polled right now: ${esc(h.why || "the panel's log says why")}. Re-pair makes a new join code for the machine; what was changed for it in Edit host is kept. An Add under the same name is refused.</div>`);
+  return `<div class="warnbox" id="ah-out">${out.length ? "<b>Added with Add host, and not what the panel polls right now:</b>" : ""}
+    ${out.map(row).join("")}
     ${lines.map((x) => `<div class="note">${esc(x)}</div>`).join("")}</div>`;
 }
 const groupCode = (c) => String(c || "");  // the panel sends it grouped (ABCD-EFGH-...)
@@ -3387,6 +3399,11 @@ function managedBox(s) {
   const h = state.managed[s.id];
   if (!h || !state.me?.can_manage_users) return "";
   const why = controlWhyNot();
+  // config.yaml has this machine's id too: the machine on this page is config.yaml's entry, not the host Add
+  // host made. That copy is not used; Remove takes only the copy, and it is not paired again (addHostWaiting).
+  if (h.shadowed) return `<div class="panel glass pad"><h3>An unused copy from Add host</h3>
+    <div class="note info-keep">This machine is polled as config.yaml's entry. The list of hosts added with Add host has one with the same id (<code>${esc(h.id)}</code>) too: config.yaml wins, and that copy is not used. Remove takes only the copy away (its entry in that list and its tokens); nothing that is stored for this machine is changed.</div>
+    <div class="row-gap"><button class="btn danger" type="button" data-act="mh-remove" ${why ? "disabled" : ""}>Remove the unused copy</button></div></div>`;
   return `<div class="panel glass pad"><h3>Added with Add host${infoBtn("managed", "Added with Add host", infoList([
       "Remove from the panel stops polling the host and deletes the panel's tokens for it.",
       "Re-pair makes a new join code: for when the panel lost this host's tokens."]))}</h3>
@@ -3425,6 +3442,15 @@ document.addEventListener("click", (e) => {
   const h = t.dataset.host ? (enr.page?.managed || []).find((x) => x.id === t.dataset.host) : s && state.managed[s.id];
   if (!h) return;
   const path = `/api/admin/hosts/${enc(h.id)}`;
+  if (h.shadowed) {  // the unused copy of a machine that config.yaml has: only the copy goes, and the machine's page stays
+    if (t.dataset.act !== "mh-remove") return;
+    typedDialog(`Remove the unused Add host copy of ${h.name}?`, `Only the copy goes: its entry in the panel's list of added hosts and its tokens. ${esc(h.name)} stays in the panel as config.yaml's entry, and nothing that is stored for it is changed.`, h.name, "Remove the copy", async (v) => {
+      const r = await controlCall({ kind: "request", label: `Remove the unused Add host copy of ${h.name}` }, () => api(path, { method: "DELETE", body: JSON.stringify({ confirm: v }) }));
+      if (!r) return;
+      loadManaged(); closeModal(); flash(r.message || `The unused copy of ${h.name} was removed`);
+    });
+    return;
+  }
   if (t.dataset.act === "mh-repair") {
     // A host that is its own Proxmox node must answer with the node name it was added as, unless the admin says it was renamed.
     const renamedBox = h.proxmox ? `<label class="note"><input type="checkbox" id="td-renamed"> The node was renamed: accept another Proxmox node name than <b>${esc(h.proxmox.node)}</b></label>` : "";

@@ -1012,11 +1012,19 @@ Their page has
 **Re-pair** (a new code, e.g. after the panel lost the tokens) and **Remove** (stops polling, deletes the tokens;
 the agent stays installed until uninstalled on the machine); both ask for the host's name to be typed and a
 step-up sign-in, and are audited. A host that the panel left out when it started (its tokens file is damaged,
-or its entry no longer passes the check) has no page: the Add host dialog lists it, with the line that says
-why and with its own **Re-pair** and **Remove**. An Add host under the name of such a host is refused ("the
-panel already has a host with the id box-a (BOX-A, added with Add host) that is not polled right now ...
-Re-pair that host, or Remove it first"): it would take that host's place in the list, and with it what was
-changed for it in [Edit host](#edit-host). Hosts in config.yaml are not changed by the panel. What a machine answers on
+or its entry no longer passes the check) has no page: the Add host dialog lists it, says what is the matter
+as it is now ("its tokens file agent-box-a.json is not valid JSON": the file's name and the kind of thing
+that is wrong; the log and `fairy admin config check` have the whole of it), and has its **Re-pair** and
+**Remove**. It is out of that list as soon as it is removed, or paired again. An Add host under the name of
+such a host is refused ("the panel already has a host with the id box-a (BOX-A, added with Add host) that is
+not polled right now ... Re-pair that host, or Remove it first"): it would take that host's place in the
+list, and with it what was changed for it in [Edit host](#edit-host).
+An added host whose id config.yaml has too is listed there as what it is: the machine is polled, as
+config.yaml's entry, and the copy Add host made is not used. **Remove the unused copy**, there and on the
+machine's page, takes only the copy away (its entry in the list and its tokens): what Edit host changed for
+the machine, its model name and its switch for "Update unpowered hosts" stay. (Up to build 14 that Remove
+took the model name and the switch with it.) Such a copy is not paired again: the panel would refuse what
+the machine answers. Hosts in config.yaml are not changed by the panel. What a machine answers on
 Re-pair is checked like a new host's, against everything else the panel has: an answer that would collide with
 another host or Proxmox node is refused and the host stays as it was. A host that is its own Proxmox node must
 answer with the node name it was added as, unless **The node was renamed** is ticked in the Re-pair dialog.
@@ -1384,10 +1392,12 @@ Build 15:
 6. **Remove** of a host leaves no version and no last-seen time of it behind in the data folder. (A
    Remove in the instant of a poll's write could; after the next start of the panel a host added later
    under the same id was then shown with them until it answered.)
-7. **Add host**: a host added here that the panel left out when it started (its tokens file is damaged)
-   is listed on the Add host dialog, with the line that says why and with its own **Re-pair** and
-   **Remove**. An Add under its name is refused and names those two; it used to be accepted, and took that
-   host's place.
+7. **Add host**: the dialog lists the hosts added there that are not what the panel polls right now, each
+   with what is the matter. A host the panel left out when it started (its tokens file is damaged) has its
+   **Re-pair** and **Remove** there; an Add under its name is refused and names those two (it used to be
+   accepted, and took that host's place). An added host whose id config.yaml has too is polled as
+   config.yaml's entry: **Remove the unused copy** takes only that copy away, and no longer the machine's
+   model name and its switch for "Update unpowered hosts"; such a copy is not paired again.
 
 ### 3. From a build older than 13
 
