@@ -266,3 +266,44 @@ func TestDayEnergyTheMinutesBeforeARestartCount(t *testing.T) {
 		t.Errorf("%.4f kWh, %.4f of them estimated (%s); want 0.2400, 0.0800 (mixed)", kwh, est, label)
 	}
 }
+
+// A counter that counts in large steps (whole kWh, or tenths) makes a step that is more than a device could
+// use in the one minute it shows up in. It is no jump when the watts measured since the counter's last step
+// account for it (it is at most twice of them): the counter is coarse, not wrong. Its steps were all taken for
+// jumps, and a day with a good coarse counter was "estimated" from the watts alone.
+func TestDayEnergyACoarseCounterIsNotAJump(t *testing.T) {
+	// a 1 kW heater for ten hours; the counter shows whole kWh and steps 20 minutes into every hour
+	whole := func(i int) float64 { return 40 + math.Floor(float64(i+40)/60) }
+	kwh, est, label := en(600, flat(1000), whole)
+	// the counter's: nine whole steps. From the watts: the 20 minutes before its first step (a step after a
+	// third of an hour is not accounted for by the watts: it is left out), and the 40 minutes after its last.
+	if !near(kwh, 10.0, 0.002) || !near(est, 1.0, 0.002) || label != "mixed" {
+		t.Errorf("whole kWh on a 1 kW heater: %.3f kWh, %.3f estimated (%s); want 10.000, 1.000 (mixed)", kwh, est, label)
+	}
+	// 300 W with a counter in tenths: a step every 20 minutes
+	tenths := func(i int) float64 { return math.Floor(float64(i)/20) / 10 }
+	if kwh, est, label := en(600, flat(300), tenths); !near(kwh, 3.0, 0.002) || est > 0.11 || label == "estimated" {
+		t.Errorf("tenths of a kWh at 300 W: %.3f kWh, %.3f estimated (%s); want 3.000 from the counter", kwh, est, label)
+	}
+	// where that ends: a step of more than twice the watts since the last one, and more than a device could
+	// use in that minute, is a jump as before. 60 W, the counter stands still for five hours WITH readings
+	// (0.3 kWh measured) and then shows 0.55 more (taken: under twice) or 0.65 more (a jump: over twice)
+	stuck := func(up float64) func(int) float64 {
+		return func(i int) float64 {
+			if i < 300 {
+				return 5
+			}
+			return 5 + up + float64(i-300)*0.001
+		}
+	}
+	if kwh, _, _ := en(360, flat(60), stuck(0.55)); !near(kwh, 0.001+0.55+0.059, 0.002) {
+		t.Errorf("a step of 0.55 kWh after 0.3 kWh of watts: %.3f kWh, want it counted (0.610)", kwh)
+	}
+	if kwh, est, _ := en(360, flat(60), stuck(0.65)); !near(kwh, 0.360, 0.002) || est < 0.3 {
+		t.Errorf("a step of 0.65 kWh after 0.3 kWh of watts: %.3f kWh, %.3f estimated; want the watts of those hours (0.360 in all)", kwh, est)
+	}
+	// and the review's case stays: 19 kWh after five hours of standing still is no coarse counter
+	if kwh, _, _ := en(360, flat(60), stuck(19)); !near(kwh, 0.360, 0.002) {
+		t.Errorf("a step of 19 kWh after 0.3 kWh of watts: %.3f kWh", kwh)
+	}
+}

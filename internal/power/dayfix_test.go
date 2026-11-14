@@ -712,3 +712,19 @@ func TestDayHoldAfterAStartEndsAlsoWhenTheClockWentBack(t *testing.T) {
 		t.Error("a quarter of an hour after the clock went back by five hours, a new source still has no place (the hold would last five hours)")
 	}
 }
+
+// saved_at is only looked at to see whether the file is from a later time. A file whose saved_at is missing or
+// is no time at all (a hand-made one, another writer) is read as ever: its minutes decide what is taken.
+func TestDayFileWithoutAUsableSavedAtIsStillRead(t *testing.T) {
+	for name, savedAt := range map[string]string{"missing": "", "not a time": `"saved_at":"x",`, "a number": `"saved_at":17,`, "null": `"saved_at":null,`, "an object": `"saved_at":{"a":1},`} {
+		path := dayPath(t)
+		file := fmt.Sprintf(`{"version":1,"step_s":60,%s"devices":{"plug-a":{"start":%d,"open_n":1,"min":[10,20],"avg":[10,20],"max":[10,20]}}}`, savedAt, at(0, 0, 0).Unix()/60)
+		if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		d := loaded(path, at(0, 1, 30))
+		if n := minutes(d, "plug-a", at(0, 1, 30)); n != 2 || !d.heldUntil.IsZero() {
+			t.Errorf("saved_at %s: %d minutes read, want 2 (held: %v)", name, n, !d.heldUntil.IsZero())
+		}
+	}
+}

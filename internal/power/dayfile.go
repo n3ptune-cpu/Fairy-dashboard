@@ -102,8 +102,23 @@ func (v dayCounter) MarshalJSON() ([]byte, error) {
 type dayFileIn struct {
 	Version int                        `json:"version"`
 	StepS   int                        `json:"step_s"`
-	SavedAt time.Time                  `json:"saved_at"`
+	SavedAt daySavedAt                 `json:"saved_at"`
 	Devices map[string]dayFileDeviceIn `json:"devices"`
+}
+
+// daySavedAt is the file's saved_at as it is read: a time, or the zero time for anything else (missing, not a
+// time). It is only looked at to see whether the file is from a later time than the clock has; a file is not
+// thrown away for it.
+type daySavedAt struct{ time.Time }
+
+func (t *daySavedAt) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		if at, err := time.Parse(time.RFC3339, s); err == nil {
+			t.Time = at
+		}
+	}
+	return nil
 }
 
 type dayFileDeviceIn struct {
@@ -267,7 +282,7 @@ func readDayFile(path string, now time.Time) (devs map[string]*dayDevice, savedA
 		return nil, savedAt, fmt.Errorf("it holds %d sources, more than the %d this panel ever writes", len(f.Devices), MaxDayDevices)
 	}
 	if f.SavedAt.After(now) {
-		return nil, f.SavedAt, nil
+		return nil, f.SavedAt.Time, nil
 	}
 	out := map[string]*dayDevice{}
 	for id, in := range f.Devices {
@@ -275,7 +290,7 @@ func readDayFile(path string, now time.Time) (devs map[string]*dayDevice, savedA
 			out[id] = dv
 		}
 	}
-	return out, f.SavedAt, nil
+	return out, f.SavedAt.Time, nil
 }
 
 // device is one source of the file as a ring, or nil when nothing of it can be used: a bad id, lists that do

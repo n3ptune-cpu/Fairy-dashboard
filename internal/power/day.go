@@ -602,6 +602,10 @@ const (
 	// energyLateKWh: a counter value that is lower than the one before by at most this much is a late value
 	// (a plug's cloud hands out an older total now and then), not a restart: it is left out.
 	energyLateKWh = 0.05
+	// energyCoarse: an increase over those limits is still the counter's when it is at most this many times
+	// the watts measured since the counter last changed: a counter that counts in whole kWh shows one more in
+	// a single minute, after an hour in which the device was seen to use it.
+	energyCoarse = 2.0
 	// energyCounted: a stretch counts with the counter's increase when that is at least this part of the
 	// stretch's watts, less energySteps of the counter's own steps (a counter moves in steps, and the watts
 	// and the counter never agree to the last digit).
@@ -631,8 +635,9 @@ const (
 //     after an outage and then counts is not, for those five hours.
 //   - A value lower than the one before by at most energyLateKWh is a late value and is left out. A larger
 //     drop is a restart, and an increase no device can have made (energyFloorW, energyGapFloorW; maxW is the
-//     day's highest watts) is a jump: both end the stretch, whose minutes then count with their watts, and
-//     the counter goes on from the new value. Never negative energy, and never the new value as an increase.
+//     day's highest watts) and that the watts since the counter's last change do not account for either
+//     (energyCoarse) is a jump: both end the stretch, whose minutes then count with their watts, and the
+//     counter goes on from the new value. Never negative energy, and never the new value as an increase.
 //   - Minutes with watts that no stretch covers count with their watts: before the first counter value and in
 //     its own minute (a counter value says nothing about the time before it), after the counter's last
 //     change, and all of them for a device without a counter or with one that never moved.
@@ -674,7 +679,8 @@ func dayEnergy(bs []dayBucket, maxW float64) (total, est float64) {
 			continue
 		}
 		gap := i - prevI - since // minutes without readings since the last counter value
-		if up < 0 || up > (float64(since+1)*capKW+float64(gap)*gapKW)*stepH {
+		jump := up > (float64(since+1)*capKW+float64(gap)*gapKW)*stepH && up > energyCoarse*(open+e)
+		if up < 0 || jump {
 			est += open + e // a restart or a jump: the counter says nothing about these minutes
 			prevK, prevI, since, open = b.kwh, i, 0, 0
 			continue
