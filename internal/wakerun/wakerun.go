@@ -822,7 +822,9 @@ func (r *Run) clone() *Run {
 	return &c
 }
 
-// Event is something the audit log and the notifications are told. Run and Host are copies.
+// Event is something the audit log and the notifications are told. Run and Host are copies. An EvApprovalEnd
+// that ends the question without a confirmation names in Params["open"] ([]string) the machines for which a
+// confirmation that left the panel is not settled yet.
 type Event struct {
 	Kind    string // EvStep, EvHostEnd, EvRunEnd, EvInterrupted, EvApproval, EvApprovalEnd, EvLate
 	Run     *Run
@@ -1301,7 +1303,7 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 		// Its sentence says that the machine switches off by itself, and the page's Cancel is there for it.
 		r.stopped, r.Note = stop, "stopped: "+stop
 		m.dirty = true
-		m.confirmationOver(r, EndStopped) // a run that stopped asks for no confirmation any more
+		m.confirmationOver(r, EndStopped, nil) // a run that stopped asks for no confirmation any more
 		for _, h := range r.Hosts {
 			switch {
 			case h.Final() || h.verdict != nil:

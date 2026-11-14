@@ -878,7 +878,12 @@ such machines takes two passkeys:
    for 26 minutes. A run is confirmed once: by the first confirmation a machine accepts. If no machine
    accepts (the person who confirmed is not on the machines' own list of people who may approve), the run is
    not confirmed: the strip stays, with its time and "*name* tried: no machine accepted", and an admin whose
-   passkey the machines take can still confirm.
+   passkey the machines take can still confirm. Whether a machine is confirmed is, like "armed", what the
+   machine itself shows: a confirmation that reached it twice is refused the second time ("this run is
+   confirmed already"), and one whose answer was lost may have arrived. Such a machine is not sent another
+   confirmation. When its agent shows this run as confirmed, it is confirmed, and it is updated and switched
+   off; until its agent was read, or the time to confirm is over, the panel does not say that nothing was
+   confirmed, and a notification at the end of that time says that a confirmation is still open.
 
 Nobody confirms: **not confirmed, not updated.** A machine that took its ticket (it is *armed*) switches
 itself off again by itself, with a notice of 2 minutes on its screen. Whether a machine is armed is what the

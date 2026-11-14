@@ -118,10 +118,14 @@ type checked struct {
 	guestsUnseen   bool
 	// goSent: a confirmation of this run left the panel for this machine (it was answered, or got no answer).
 	// Only then does its agent's word "confirmed" count (showsConfirmed). goBy: who gave the latest of them;
-	// goSince: steady, the moment before the first of them left.
+	// goSince: steady, the moment before the first of them left. goEnd: steady, when the panel learned what
+	// came of the latest of them (or stopped waiting for that); goRead: an answer of its agent from after goEnd
+	// was read, and did not show the run as confirmed.
 	goSent  bool
 	goBy    string
 	goSince time.Duration
+	goEnd   time.Duration
+	goRead  bool
 }
 
 // disarming is a cancel of a machine's self-switch-off that the run is at (disarm).
@@ -177,12 +181,35 @@ func (m *Manager) wordConfirmed(r *Run, h *Host, now time.Time, tail string) {
 }
 
 // left takes in that a confirmation of the run by by left the panel for the machine at since (steady: the
-// moment before it left).
-func (c *checked) left(by string, since time.Duration) {
+// moment before it left), and that the panel learned at end what came of it.
+func (c *checked) left(by string, since, end time.Duration) {
 	if !c.goSent {
 		c.goSent, c.goSince = true, since
 	}
-	c.goBy = by
+	c.goBy, c.goEnd, c.goRead = by, end, false
+}
+
+// confirmUnsure: what came of its confirmation is for its agent to show. The request got no answer, or the
+// machine answered that the run is confirmed already (the answer to the second copy of a confirmation that
+// arrived twice).
+func (h *Host) confirmUnsure() bool {
+	return h.Confirm == ConfirmUnanswered || (h.Confirm == ConfirmRefused && h.chk.goSent && h.chk.goReason == api.RunReasonConfirmed)
+}
+
+// confirmOpen: such a confirmation is open: the machine still waits, and its agent has not been read since
+// the panel learned what it was answered. Until then the run does not know that nothing was confirmed.
+func (h *Host) confirmOpen() bool {
+	c := &h.chk
+	return h.State == StApproval && h.confirmUnsure() && !c.goRead && c.disarm == nil && h.verdict == nil
+}
+
+// unsureWords begin the row of a machine whose confirmation is for its agent to settle (confirmUnsure), and
+// name that confirmation.
+func unsureWords(h *Host) (lead, which string) {
+	if h.Confirm == ConfirmUnanswered {
+		return "Its confirmation got no answer (" + h.ConfirmText + ")", "the confirmation"
+	}
+	return "Its confirmation was not accepted (" + h.ConfirmText + ")", "a confirmation"
 }
 
 // armedSure: it took the ticket, or its agent showed this run as armed.
@@ -468,20 +495,36 @@ func awaitingText(r *Run, h *Host, now time.Time, mono time.Duration) string {
 	// No confirmation of the run can reach it any more (the question is over, the run was confirmed without it,
 	// or it was cancelled), and it is still up and armed, or may be: its row does not go on saying "unless
 	// you confirm". It says that it was not confirmed, when it switches itself off, and what keeps it on.
-	if over := r.Approval == "given" || r.Approval == "over" || r.Cancel != nil; over && h.armedMaybe() {
+	//
+	// A machine whose confirmation is for its agent to settle (it got no answer, or was answered "confirmed
+	// already") says so from the moment the panel was answered, also while the run still asks: it is not sent
+	// another confirmation, so "unless you confirm" is not its sentence.
+	unsure := h.confirmUnsure()
+	if over := r.Approval == "given" || r.Approval == "over" || r.Cancel != nil; (over || unsure) && h.armedMaybe() {
+		lead, which := unsureWords(h)
 		switch {
-		case h.armedSure() && h.Confirm == ConfirmUnanswered:
-			return fmt.Sprintf("Its confirmation got no answer (%s), and its agent does not show the run as confirmed so far: not updated. It is armed: unless the confirmation did arrive, it switches itself off at %s (Keep on cancels that)",
-				h.ConfirmText, offWords(r, h, now, mono))
+		case h.armedSure() && unsure:
+			return fmt.Sprintf("%s, and its agent does not show the run as confirmed so far: not updated. It is armed: unless %s did arrive, it switches itself off at %s (Keep on cancels that)",
+				lead, which, offWords(r, h, now, mono))
 		case h.armedSure():
 			return fmt.Sprintf("%s: not confirmed, not updated. It is armed: it switches itself off at %s (Keep on cancels that)", leadWhy(r, h), offWords(r, h, now, mono))
 		case h.Confirm == ConfirmUnanswered:
 			return fmt.Sprintf("Neither its arming nor its confirmation (%s) got an answer, and its agent does not show the run so far: not updated. If it is armed and not confirmed, it switches itself off at %s (Keep on cancels that)",
 				h.ConfirmText, offWords(r, h, now, mono))
+		case unsure:
+			return fmt.Sprintf("%s, its arming got no answer, and its agent does not show the run so far: not updated. If it is armed and not confirmed, it switches itself off at %s (Keep on cancels that)",
+				lead, offWords(r, h, now, mono))
 		default:
 			return fmt.Sprintf("%s: not confirmed, not updated. Its arming got no answer, so Fairy does not know yet whether it is armed: if it is, it switches itself off at %s (Keep on cancels that)",
 				leadWhy(r, h), offWords(r, h, now, mono))
 		}
+	}
+	unless := "unless you confirm"
+	switch {
+	case h.Confirm == ConfirmUnanswered:
+		unless = "unless its confirmation, which got no answer (" + h.ConfirmText + "), did arrive: what its agent shows decides"
+	case unsure:
+		unless = "unless a confirmation did arrive (its confirmation was not accepted: " + h.ConfirmText + "): what its agent shows decides"
 	}
 	switch {
 	case h.armedSure():
@@ -491,15 +534,15 @@ func awaitingText(r *Run, h *Host, now time.Time, mono time.Duration) string {
 	case c.other != nil:
 		return fmt.Sprintf("awake; not armed by this run (%s), but its agent shows another run (%s) as %s: by that run %s. Keep on cancels that", h.ArmText, c.other.ID, blockWords(c.other.State), otherOff(c.other, now))
 	case c.disarmed && (h.Arm == ArmArmed || c.armSeen):
-		return "awake; it is not armed any more (its agent no longer shows the run): it stays ON unless you confirm"
+		return "awake; it is not armed any more (its agent no longer shows the run): it stays ON " + unless
 	case c.disarmed:
-		return "awake; it is not armed (the arming, which got no answer, never arrived): it stays ON unless you confirm"
+		return "awake; it is not armed (the arming, which got no answer, never arrived): it stays ON " + unless
 	case h.Arm == ArmRefused && !c.noRun:
 		return "awake; its arming was refused (" + h.ArmText + "): waiting for its agent to show whether a run is on it all the same"
 	case h.Arm == ArmRefused:
-		return "awake; it could not be armed (" + h.ArmText + "): it stays ON unless you confirm"
+		return "awake; it could not be armed (" + h.ArmText + "): it stays ON " + unless
 	}
-	return "awake; it was not armed (" + h.ArmText + "): it stays ON unless you confirm"
+	return "awake; it was not armed (" + h.ArmText + "): it stays ON " + unless
 }
 
 // blockWords says a run's state on a machine for a sentence.
@@ -582,6 +625,7 @@ func (m *Manager) askConfirmation(r *Run, now time.Time) {
 	// for their wake, so the first machine of a long run can be due before the configured wait is over; the
 	// time the strip counts is one in which every waiting machine can still be confirmed.
 	waiting, early, can := 0, 0, 0
+	var open []string // the machines with a confirmation that left for them and is not settled (confirmOpen)
 	until := mono + time.Duration(r.Ticket.ConfirmWaitS)*time.Second
 	for _, h := range r.Hosts {
 		if !h.Checked || h.Mode != ModeWake {
@@ -591,6 +635,9 @@ func (m *Manager) askConfirmation(r *Run, now time.Time) {
 		case StApproval:
 			if h.Confirm == "" && h.chk.disarm == nil {
 				waiting++
+			}
+			if h.confirmOpen() {
+				open = append(open, h.Name)
 			}
 			if h.offerable(r, mono) {
 				can++
@@ -617,10 +664,15 @@ func (m *Manager) askConfirmation(r *Run, now time.Time) {
 			why = EndCancelled
 		case r.stopped != "":
 			why = EndStopped
-		case waiting == 0:
+		case waiting == 0 && len(open) == 0:
 			why = EndNobodyWaits
+		case mono <= r.confirmMono:
+			// Nobody waits, and a confirmation that left for a machine is open: "nothing was confirmed" is not
+			// known. The question is not ended on that; it ends when that machine's agent was read, or with
+			// its time.
+			return
 		}
-		m.confirmationOver(r, why)
+		m.confirmationOver(r, why, open)
 	}
 }
 
@@ -632,14 +684,20 @@ const (
 	EndStopped     = "stopped"      // the run stopped or ended
 )
 
-// confirmationOver ends the question without an answer.
-func (m *Manager) confirmationOver(r *Run, why string) {
+// confirmationOver ends the question without an answer. open: the machines for which a confirmation that left
+// is not settled at this moment (confirmOpen); the event names them, so that nobody is told "nothing was
+// confirmed" of them.
+func (m *Manager) confirmationOver(r *Run, why string, open []string) {
 	if r.Approval != "needed" {
 		return
 	}
 	r.Approval, r.ApprovalEnd = "over", why
 	m.dirty = true
-	m.emit(EvApprovalEnd, r, nil, "", nil, "")
+	var params map[string]any
+	if len(open) > 0 {
+		params = map[string]any{"open": open}
+	}
+	m.emit(EvApprovalEnd, r, nil, "", params, "")
 }
 
 // offerable reports whether the machine can still be offered for the run's confirmation at mono.
@@ -770,7 +828,7 @@ func (m *Manager) BeginConfirm(id, by string, hosts []string) ([]string, error) 
 			for _, h := range marked {
 				h.chk.confirming, h.chk.inTry, h.Asking = false, false, ""
 			}
-			m.confirmationOver(r, EndStopped)
+			m.confirmationOver(r, EndStopped, nil)
 		}
 		m.mu.Unlock()
 		return nil, &StartError{Msg: "the run journal cannot be written, so the confirmation was not sent to any machine: " + journalErrText(err)}
@@ -819,7 +877,7 @@ func (m *Manager) Confirmed(id, hostID string, res ConfirmResult) {
 		c.confirming = false
 		m.done(h)
 		if res.OK || res.Unanswered || res.Sent {
-			c.left(r.Trying, c.confirmMono)
+			c.left(r.Trying, c.confirmMono, m.mono())
 		}
 		switch {
 		case res.OK:
@@ -906,6 +964,8 @@ func toWords(to string) string {
 // leadWhy begins the result of a machine the confirmation did not reach: why not.
 func leadWhy(r *Run, h *Host) string {
 	switch {
+	case h.Confirm == ConfirmRefused && h.confirmUnsure():
+		return "Its confirmation was not accepted (" + h.ConfirmText + "), and its agent did not show the run as confirmed"
 	case h.Confirm == ConfirmRefused:
 		return "Its confirmation was not accepted (" + h.ConfirmText + ")"
 	case h.Confirm == ConfirmUnanswered:
@@ -941,7 +1001,7 @@ func (m *Manager) stepAwaiting(ctx context.Context, r *Run, h *Host, info HostIn
 		}
 		c.confirming = false
 		m.done(h)
-		c.left(r.Trying, c.confirmMono) // it may have left
+		c.left(r.Trying, c.confirmMono, mono) // it may have left
 		h.Confirm, h.ConfirmText = ConfirmUnanswered, "the panel did not learn what came of it"
 		m.note(h, now, "the panel did not learn what came of its confirmation: what its agent shows decides")
 		m.tryOver(r, now)
@@ -952,6 +1012,11 @@ func (m *Manager) stepAwaiting(ctx context.Context, r *Run, h *Host, info HostIn
 	if h.confirmed() {
 		m.afterConfirm(r, h, o, now)
 		return
+	}
+	if h.confirmUnsure() && !c.goRead && word != "" && mono-o.SeenAgo > c.goEnd {
+		// its agent's word from after the panel was answered: the confirmation is no longer open (confirmOpen)
+		c.goRead = true
+		m.note(h, now, "its agent was read after the confirmation and does not show the run as confirmed")
 	}
 	none := h.seeNoRun(o, word)
 	if word != "" && c.noRun != (none >= 2) {

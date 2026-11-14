@@ -1217,6 +1217,7 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 	case wakerun.EvApprovalEnd:
 		text := "nobody confirmed in time: not confirmed, not updated. A machine that is armed switches itself off again; see the run's report"
 		outcome := "over"
+		open, _ := e.Params["open"].([]string) // the machines with a confirmation that is not settled (wakerun.Event)
 		switch {
 		case r.Approval == "given":
 			outcome, text = "given", "confirmed by "+r.ConfirmedBy
@@ -1226,8 +1227,14 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 			text = "no machine waits for the confirmation any more (kept on, or ended): nothing was confirmed; see the run's report"
 		case r.ApprovalEnd == wakerun.EndStopped:
 			text = "the run stopped: no confirmation is asked for any more; see the run's report"
+		case len(open) > 0:
+			// Its time is over, and a confirmation that left for a machine is not settled (it got no answer, or
+			// the machine answered "confirmed already", and its agent was not read since): "nobody confirmed,
+			// not confirmed" is not known, and is not said.
+			text = "the time to confirm is over, but a confirmation that got no answer the panel can go by is still open for " + strings.Join(open, ", ") +
+				": it is not known yet whether it arrived. What the machine's agent shows decides; see the run's report"
 		}
-		entry("wakeupdate.approval", r.ID, nil, outcome)
+		entry("wakeupdate.approval", r.ID, e.Params, outcome)
 		if s.Notes != nil {
 			s.Notes.Add(notifications.Event{Kind: wuConfirmNote + "_over", Type: "update", Severity: notifications.Info, Host: wuNoteHost,
 				Key: wuConfirmNote + ":" + r.ID, Text: text})
