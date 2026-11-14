@@ -23,6 +23,16 @@ func newPacer(limit int) *pacer {
 	return &pacer{limit: limit, sent: map[string][]time.Time{}}
 }
 
+// setLimit sets the limit for the run that starts now. Only one run is active at a time, and the limit is
+// changed nowhere else: a run paces itself by the number it started with. The requests of the last minute
+// stay counted (an agent's own minute does not start anew with a run).
+func (p *pacer) setLimit(limit int) {
+	if limit < 1 {
+		limit = 1
+	}
+	p.limit = limit
+}
+
 // used drops what is older than the window and returns how many requests are left in it.
 func (p *pacer) used(agent string, now time.Time) int {
 	l := p.sent[agent]

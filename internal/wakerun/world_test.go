@@ -106,8 +106,11 @@ type machine struct {
 	chk modelCheck
 
 	// for the judge
-	knownLimit    bool // this machine is the documented limit (r1-p2-01): the judge does not fail the test for it
-	onAtStart     bool
+	knownLimit bool // this machine is the documented limit (r1-p2-01): the judge does not fail the test for it
+	onAtStart  bool
+	// ownAtStart: the machine's own timings when the run started (HostInfo.OffAfter, ShutdownDelay): what the
+	// judge holds the run to, whatever info is changed to while the run is going
+	ownAtStart    struct{ offAfter, delay time.Duration }
 	onAtFirstWake *bool
 	wakeAccepted  bool // the relay accepted a wake request of the run for it (a request without an answer is not that)
 	wakes         int
@@ -148,6 +151,9 @@ type world struct {
 	limited   int // requests an agent refused for that reason
 	maxInMin  int // the most requests any one agent got in a minute
 	started   bool
+	// runSet: the timings the latest run was started with (its snapshot, or the manager's settings at that
+	// moment): what the judge holds that run to. nil before the first start of this world.
+	runSet *Settings
 	// afterTick is called at the end of every second of the world (a test that changes a machine at a set time)
 	afterTick   func()
 	guestsAsked int            // how often the run asked about a machine's guests
@@ -275,6 +281,15 @@ func (w *world) Kick(id string) {
 	}
 }
 
+// judged is what the judge holds a run to for one machine: the panel's timings and the machine's own, as
+// they were when the run started (a world whose run was started elsewhere: as they are now).
+func (w *world) judged(mc *machine) (Settings, HostInfo) {
+	if w.runSet == nil {
+		return w.m.Settings, mc.info
+	}
+	return *w.runSet, HostInfo{OffAfter: mc.ownAtStart.offAfter, ShutdownDelay: mc.ownAtStart.delay}
+}
+
 func (w *world) arrived(call string) {
 	if w.during != nil {
 		w.during(call)
@@ -325,9 +340,11 @@ func (w *world) Wake(_ context.Context, id, _ string) error {
 		mc.onAtFirstWake = &on
 		// the judge (build 14): a machine is woken only after ITS time without any sign of life: its own
 		// off_after where it has one, else the panel's
-		need := w.m.Settings.offAfter()
-		if mc.info.OffAfter >= 5*time.Minute { // the least a machine can have of its own; anything below is not used (OffAfterFloor)
-			need = mc.info.OffAfter
+		// (build 16) as they were when the run started: a run keeps the timings it started with
+		set, own := w.judged(mc)
+		need := set.offAfter()
+		if own.OffAfter >= 5*time.Minute { // the least a machine can have of its own; anything below is not used (OffAfterFloor)
+			need = own.OffAfter
 		}
 		if quiet < need {
 			w.t.Errorf("RULE BROKEN: wake sent to %s, which counts as off after %s without an answer and had given nothing for %s", id, need, words)
@@ -401,9 +418,10 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 	w.arrived("shutdown " + id)
 	mc.shutdowns++
 	// the judge
-	want := w.m.Settings.ShutdownDelay           // (build 14) the countdown is the machine's own where it has one
-	if mc.info.ShutdownDelay >= 10*time.Second { // the least a machine can have of its own (DelayFloor)
-		want = mc.info.ShutdownDelay
+	set, own := w.judged(mc)
+	want := set.ShutdownDelay                // (build 14) the countdown is the machine's own where it has one
+	if own.ShutdownDelay >= 10*time.Second { // the least a machine can have of its own (DelayFloor)
+		want = own.ShutdownDelay
 	}
 	if delay != want {
 		w.t.Errorf("RULE BROKEN: shutdown sent to %s with a countdown of %s, and its countdown is %s", id, delay, want)
@@ -688,7 +706,13 @@ func (w *world) start(req StartRequest) *Run {
 	}
 	for _, mc := range w.ms {
 		mc.onAtStart, mc.onAtFirstWake, mc.wakeAccepted, mc.wentOff = mc.on, nil, false, false
+		mc.ownAtStart.offAfter, mc.ownAtStart.delay = mc.info.OffAfter, mc.info.ShutdownDelay
 	}
+	set := w.m.Settings
+	if req.Settings != nil {
+		set = *req.Settings
+	}
+	w.runSet = &set
 	w.checkedStart(&req)
 	r, err := w.m.Start(req)
 	if err != nil {

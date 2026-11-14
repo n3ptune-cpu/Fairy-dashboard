@@ -868,6 +868,12 @@ type StartRequest struct {
 	Checked       map[string]bool
 	StartApproved map[string]bool
 	Ticket        *Ticket
+	// Settings: the timings of THIS run (nil: the manager's own, Manager.Settings). The panel hands over the
+	// values in force at the start (config.yaml with what was changed in the panel, "Run timings") as one
+	// snapshot. Start reads it once: the run, each machine's timings and the run's pacing are made from it,
+	// and nothing of a run reads the manager's settings, or the panel's, again. A change of a timing while a
+	// run is going counts from the next run.
+	Settings *Settings
 }
 
 // ListHash names a list of machines and options with eight hex digits: the dialog, the audit log and the run
@@ -979,6 +985,10 @@ func (m *Manager) JournalWriteError() error {
 // keeping or queueing anything.
 func (m *Manager) Start(req StartRequest) (*Run, error) {
 	now := m.now()
+	set := m.Settings // the one reading of the timings for this run
+	if req.Settings != nil {
+		set = *req.Settings
+	}
 	seen := map[string]bool{}
 	var hosts []*Host
 	add := func(ids []string, mode string) error {
@@ -996,7 +1006,7 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 			}
 			o := m.Ops.Observe(id)
 			h := &Host{ID: id, Name: info.Name, Mode: mode, State: StQueued, Since: now, Text: "waiting for its turn", StartStatus: o.Status, Log: []LogLine{}, entry: info.Entry}
-			h.setTimings(info, m.Settings)
+			h.setTimings(info, set)
 			if h.Checked = req.Checked[id]; h.Checked && mode == ModeUpdateOnly && req.StartApproved[id] {
 				h.StartApproved = true
 			}
@@ -1039,7 +1049,8 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 			a.By, a.StartedAt.Format("15:04 UTC"))}
 	}
 	r := &Run{ID: id, State: RunRunning, StartedAt: now, By: req.By, BySub: req.BySub, UpdateIfOn: req.UpdateIfOn,
-		ListHash: ListHash(req.Hosts, req.UpdateOnly, req.UpdateIfOn), Settings: m.Settings, Latest: req.Latest, Hosts: hosts, startMono: m.mono(), Ticket: ticket}
+		ListHash: ListHash(req.Hosts, req.UpdateOnly, req.UpdateIfOn), Settings: set, Latest: req.Latest, Hosts: hosts, startMono: m.mono(), Ticket: ticket}
+	m.pace.setLimit(set.PerAgentMin) // the run's own pacing; what was sent in the last minute still counts
 	for _, h := range hosts {
 		if h.StartApproved {
 			h.grant = &Grant{Run: id, Start: true}
