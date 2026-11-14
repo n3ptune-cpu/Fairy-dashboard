@@ -531,7 +531,8 @@ The rules, in plain words:
   "on or off: not known"); look at that machine. If the run had already sent a cancel before the Re-pair, the
   report says so too: one that got no answer may have arrived, and then that machine stays on. (A shutdown
   you ask for with exactly the run's countdown length in the place of the run's cannot be told apart and is
-  called off like the run's.)
+  called off like the run's. So is any shutdown on a machine whose agent does not say the length of its
+  countdown, which an agent from before that field does not: the run takes it for its own.)
 * **The kill switch stops a run**: nothing further is started, and what was woken stays on and is reported.
   A shutdown countdown the run had already started is called off (the one request a stopped run still sends,
   and only while that countdown can still be running: after its end the run sends nothing, so that an action

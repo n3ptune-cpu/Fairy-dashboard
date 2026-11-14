@@ -244,6 +244,13 @@ func TestUIApprovalsPageHasARowForEveryMachine(t *testing.T) {
   for (const key of Object.keys(want)) if ((rowOf(html, key).match(/<button/g) || []).length > 1) fail(key + " has more than one button");
   // a host whose id another host keeps has nothing to accept: its button is the plain one
   if (words(rowOf(html, "golf")).includes("Review")) fail("golf: " + words(rowOf(html, "golf")));
+  // ... whatever the panel's list says it could accept: held_by decides in the row, as in the dialog (a copy of
+  // the page that did not look at held_by got past the tests)
+  const held = show([mach("golf", "GOLF", { state: "required", binding: "duplicate", binding_text: "ALFA keeps this machine id.", held_by: ["ALFA"], can_accept: true, accept: "id", shown_id: MID("alfa"), machine_id: MID("golf") }),
+    mach("echo", "ECHO", { state: "required", binding: "no_record", binding_text: "ECHO is not on record.", held_by: [], can_accept: true, accept: "first", shown_id: MID("echo") })]);
+  const heldRow = [...rowOf(held, "golf").matchAll(/<td[^>]*>(.*?)<\/td>/gs)].map((m) => words(m[1]));
+  if (heldRow[1] !== "on One machine id on two hosts" || heldRow[5] !== "Approval" || /needs accepting|ap-btn bad|shows/.test(rowOf(held, "golf"))) fail("an id another host keeps, with can_accept: " + JSON.stringify(heldRow));
+  if (!words(rowOf(held, "echo")).includes("needs accepting") || !words(rowOf(held, "echo")).endsWith("Review")) fail("an empty held_by: " + words(rowOf(held, "echo")));
   // by site, A-Z, "Other" last (a machine this page has no host for)
   const sites = [...html.matchAll(/<tr class="group"[^>]*><td colspan="6">(.*?)<\/td>/g)].map((m) => unesc(m[1]));
   if (JSON.stringify(sites) !== JSON.stringify(["<Yard>", "Attic", "Cellar", "Other"])) fail("sites: " + JSON.stringify(sites));

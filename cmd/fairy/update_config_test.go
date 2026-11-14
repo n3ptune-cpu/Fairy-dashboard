@@ -251,6 +251,16 @@ func TestTheReasonOfARefusalIsNotCutForALongPath(t *testing.T) {
 		if len(c.file)+len(c.problem) < 150 && !strings.Contains(says, " refuses "+c.file+": ") {
 			t.Errorf("%s: a path that fits was cut: %q", name, says)
 		}
+		// a path that is cut gives way only as far as the reason needs: the message uses its 300 bytes (a
+		// character of several bytes at the cut can leave a few unused), and is not cut down to pathEndKept
+		if strings.Contains(says, " refuses …") && len(says) < 300-len("…")-utf8.UTFMax {
+			t.Errorf("%s: the path was cut further than the reason needs (%d of 300 bytes used): %q", name, len(says), says)
+		}
+		if c.whole && len(c.file) > 200 {
+			if kept := strings.TrimSuffix(strings.TrimPrefix(says, "the new version (102-ccccccc) refuses "), ": "+c.problem+tail); len(kept) <= pathEndKept+len("…") {
+				t.Errorf("%s: of a path of %d bytes only %d are left, and there was room for more: %q", name, len(c.file), len(kept), says)
+			}
+		}
 	}
 }
 

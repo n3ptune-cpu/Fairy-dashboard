@@ -113,6 +113,12 @@ func TestAfterARePairARequestWithoutAnAnswerIsNotCalledOffBlind(t *testing.T) {
 	untilState(t, w, "pc-a", StShutting)
 	before := len(w.calls)
 	pc.info.Entry++
+	// at once: there is nothing to wait for, so the run does not wait for "its countdown" under the new entry
+	w.tick()
+	w.tick()
+	if a, hist := w.m.Snapshot(); a != nil || len(hist) != 1 || logHas(host(hist[0], "pc-a"), "until the agent that has this id now shows that countdown") {
+		t.Fatalf("the run waited for a countdown it has never seen (still going: %v)", a != nil)
+	}
 	h := host(w.finish(), "pc-a")
 	if sent := w.calls[before:]; len(sent) != 0 {
 		t.Errorf("sent after the Re-pair: %v", sent)
@@ -437,5 +443,163 @@ func TestAnAnswerThatCameUnderTheOldEntryDoesNotRecogniseTheMachine(t *testing.T
 		"so the run could not make sure that it is the machine it woke, and sent no cancel.")
 	if h.On != OnUnknown || !a.wentOff {
 		t.Errorf("[%s] the machine the run woke went off: %v: %s", h.On, a.wentOff, h.Text)
+	}
+}
+
+// Tests for changed copies of the program that the second and third review of build 14 got past the tests
+// (each was applied by hand, seen to fail one of these, and taken out again).
+
+// An agent that does not say the length of its countdown (delay_s missing or 0: an agent from before the
+// field). What the run does with it, decided and held here: a pending shutdown without a length cannot be told
+// from the run's own, and it is taken for the run's own, as every shutdown was before the length was looked
+// at. So the run's cancel is sent, also when a person has asked for that shutdown in the place of the run's:
+// a cancel too many loses a shutdown somebody asked for, a cancel too few lets a machine go off that was to
+// stay on (a node under a guest). The README says so with the other limit of this rule.
+func TestAShutdownOfAnAgentThatDoesNotSayItsLengthIsTakenForTheRuns(t *testing.T) {
+	w := newWorld(t)
+	pc := w.off("pc-a")
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	w.tick()
+	w.tick()
+	before := len(w.calls)
+	pc.pending = &Pending{Action: "shutdown", At: w.now.Add(30 * time.Minute)} // no DelayS
+	w.tick()
+	pc.info.OptedIn = false
+	h := host(w.finish(), "pc-a")
+	if got := strings.Join(w.calls[before:], ", "); got != "cancel pc-a" || pc.pending != nil || !pc.on {
+		t.Errorf("sent %q; pending %v, on %v", got, pc.pending, pc.on)
+	}
+	has(t, h, StLeftOn, "so the run let go of it: its shutdown countdown was called off. It came online after the wake and it is ON.")
+	if strings.Contains(h.Text, "not the one the run asked for") {
+		t.Errorf("a shutdown without a length was taken for somebody else's: %s", h.Text)
+	}
+}
+
+// The length that is compared is the machine's own where it has one (wake_update.shutdown_delay_s of its
+// systems: entry), not the panel's: on a machine whose countdown is 30 s a person's shutdown of 2 minutes (the
+// panel's length) is not the run's, and one of 30 s cannot be told from it.
+func TestTheLengthThatIsComparedIsTheMachinesOwn(t *testing.T) {
+	for personS, theirs := range map[int]bool{120: true, 30: false} {
+		w := newWorld(t)
+		pc := w.off("pc-a")
+		pc.info.ShutdownDelay = 30 * time.Second
+		w.start(StartRequest{Hosts: []string{"pc-a"}})
+		untilState(t, w, "pc-a", StShutting)
+		w.tick()
+		w.tick()
+		if pc.pending == nil || pc.pending.DelayS != 30 {
+			t.Fatalf("the fixture: %+v", pc.pending)
+		}
+		before := len(w.calls)
+		mine := &Pending{Action: "shutdown", At: w.now.Add(time.Duration(personS) * time.Second), DelayS: personS}
+		pc.pending = mine
+		w.tick()
+		pc.info.OptedIn = false
+		h := host(w.finish(), "pc-a")
+		if sent := len(w.calls[before:]); (sent == 0) != theirs || (pc.pending == mine) != theirs {
+			t.Errorf("a person's shutdown of %d s on a machine whose own countdown is 30 s: %d cancel(s), still pending: %v: %s", personS, sent, pc.pending == mine, h.Text)
+		}
+		if theirs {
+			has(t, h, StLeftOn, "(a countdown of 2 min that ends at ", "; the run asked for one of 30 s)")
+		}
+	}
+}
+
+// The run waits for the agent of a new entry to show its countdown, and the machine is taken out of the panel
+// in that time. No cancel was sent, and the sentence does not say that one was: "The run had asked its agent to
+// call that countdown off, and the request did not get through ()" is for a cancel that left.
+func TestAMachineRemovedWhileTheRunWaitedForItsCountdownSaysNothingOfACancel(t *testing.T) {
+	w, pc, before := letGoWhile(t, func(pc *machine) { pc.info.Entry++; pc.unreachable = true })
+	due := *host(mustActive(t, w), "pc-a").ShutdownAt
+	w.tick()
+	w.tick()
+	if c := host(mustActive(t, w), "pc-a").calloff; c == nil || !c.idWait || c.tries != 0 || len(w.calls) != before {
+		t.Fatalf("the fixture: the run waits, and has sent nothing: %+v, %v", c, w.calls[before:])
+	}
+	w.ms["gone"] = pc
+	delete(w.ms, "pc-a")
+	w.m.Tick(context.Background())
+	_, hist := w.m.Snapshot()
+	if len(hist) != 1 {
+		t.Fatal("the run should be over")
+	}
+	h := host(hist[0], "pc-a")
+	has(t, h, StLeftOn, "It is no longer in the panel, so the run let go of it while its shutdown was counting down (due at "+clock(due)+").", "Fairy can no longer look at it.")
+	if strings.Contains(h.Text, "had asked its agent") || strings.Contains(h.Text, "did not get through") || len(w.calls) != before {
+		t.Errorf("UNTRUE: no cancel was sent (%v): %s", w.calls[before:], h.Text)
+	}
+}
+
+// A shutdown request whose answer was lost and whose countdown the run then saw: the end of that countdown is
+// what the agent showed first (the request's answer never gave one). After a Re-pair of the same machine the
+// run knows its countdown by it, calls it off, and the machine stays on. (Without it the run would wait for a
+// countdown it could not recognise, and the machine would go off as "not known".)
+func TestAfterARePairACountdownThatShowedAfterALostAnswerIsKnownByWhatTheAgentShowed(t *testing.T) {
+	w := newWorld(t)
+	pc := w.off("pc-a")
+	pc.shutLost = "arrives"
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	w.tick()
+	w.tick()
+	if h := host(mustActive(t, w), "pc-a"); pc.pending == nil || !h.ShutdownUnsure || !h.pendingSeen {
+		t.Fatalf("the fixture: a countdown that runs after an answer that was lost, seen by the run: %+v", pc.pending)
+	}
+	before := len(w.calls)
+	pc.info.Entry++
+	h := host(w.finish(), "pc-a")
+	if got := strings.Join(w.calls[before:], ", "); got != "cancel pc-a" || !pc.on || pc.pending != nil || pc.wentOff {
+		t.Fatalf("sent %q; the machine is on: %v, a countdown is pending: %v", got, pc.on, pc.pending != nil)
+	}
+	has(t, h, StLeftOn, rePaired+": its shutdown countdown was called off. It came online after the wake and it is ON.")
+}
+
+// While the run waits for the agent of the new entry, it asks the poller to poll that agent every few seconds:
+// a new entry is polled at its own pace (once a minute, or put off after failed polls), and the countdown runs.
+func TestWhileTheRunWaitsAfterARePairThePollerIsAskedToPoll(t *testing.T) {
+	w, pc, before := letGoWhile(t, func(pc *machine) { pc.info.Entry++; pc.unreachable = true })
+	asked := w.kicks["pc-a"]
+	for i := 0; i < 21; i++ {
+		w.tick()
+	}
+	if n := w.kicks["pc-a"] - asked; n < 4 || n > 6 || len(w.calls) != before { // every kickEvery (5 s)
+		t.Fatalf("in 21 s of waiting the poller was asked %d times to poll the new entry; sent %v", n, w.calls[before:])
+	}
+	pc.unreachable = false
+	if h := host(w.finish(), "pc-a"); h.On != OnYes || !pc.on {
+		t.Errorf("[%s] %s", h.On, h.Text)
+	}
+}
+
+// After a Re-pair both must fit, the end and the length. The end alone is not enough either: another machine
+// under the id shows a shutdown that ends at the second the run's does, asked for with another countdown (20
+// minutes ago, for 20 minutes). It is not the run's: nothing is sent to that machine.
+func TestAfterARePairAShutdownWithTheRunsEndAndAnotherLengthIsNotTheRuns(t *testing.T) {
+	w := newWorld(t)
+	a := w.off("pc-a")
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	w.tick()
+	if a.pending == nil || !host(active(w), "pc-a").pendingSeen {
+		t.Fatal("the fixture: no countdown, or the run has not seen it")
+	}
+	before := len(w.calls)
+	b := &machine{info: a.info, on: true, bootedAt: w.now.Add(-72 * time.Hour), agentReadyAt: w.now.Add(-71 * time.Hour),
+		version: "17-bbbbbbb", updState: "idle", shutMode: "ok", busyDone: map[string]bool{}}
+	b.info.Entry++
+	theirs := &Pending{Action: "shutdown", At: a.pending.At, DelayS: 1200}
+	b.pending = theirs
+	w.ms["pc-a"], w.ms["old-a"] = b, a
+	w.order = append(w.order, "old-a")
+	for i := 0; i < 30; i++ { // well inside both countdowns
+		w.tick()
+		if len(w.calls) != before || b.pending != theirs {
+			t.Fatalf("WRONG MACHINE: %d s after the Re-pair: sent %v; its shutdown is still pending: %v", i+1, w.calls[before:], b.pending == theirs)
+		}
+	}
+	h := host(w.finish(), "pc-a")
+	if len(w.calls) != before || h.On != OnUnknown || !strings.Contains(h.Text, "so the run could not make sure that it is the machine it woke, and sent no cancel.") {
+		t.Errorf("sent %v; [%s] %s", w.calls[before:], h.On, h.Text)
 	}
 }
