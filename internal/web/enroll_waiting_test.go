@@ -61,7 +61,6 @@ func TestAddHostUnderTheIdOfAnAddedHostThatWaitsForRepairIsRefused(t *testing.T)
 	if len(skipped) != 1 || !strings.Contains(skipped[0], "Re-pair it") {
 		t.Fatal("the fixture: the host is not left out:", skipped)
 	}
-	e2.s.ManagedSkipped = skipped
 	e2.s.Enroll.Interval = 10 * time.Millisecond
 	e2.s.control, e2.s.adminRL = newRateLimiter(1000), newRateLimiter(1000)
 	e2.s.Enroll.PanelAddr, e2.s.Enroll.Scripts = "100.64.0.10", testInstallers
@@ -73,10 +72,8 @@ func TestAddHostUnderTheIdOfAnAddedHostThatWaitsForRepairIsRefused(t *testing.T)
 	list, _ := os.ReadFile(st.Path())
 
 	// the page is told that the host is there and not polled, and why (the Add host dialog lists it)
-	page := e2.do("GET", "/api/admin/hosts", nil, "Cookie", c)
-	rows, _ := page.body["managed"].([]any)
-	if len(rows) != 1 || rows[0].(map[string]any)["id"] != "box-a" || rows[0].(map[string]any)["active"] != false || len(strs(page.body["skipped"])) != 1 {
-		t.Fatalf("GET /api/admin/hosts: %s", page.raw)
+	if row := hostRow(t, e2, c, "box-a"); row == nil || row["active"] != false || row["shadowed"] != false || row["why"] != "its tokens file agent-box-a.json is not valid JSON" {
+		t.Fatalf("GET /api/admin/hosts: the row of box-a: %v", row)
 	}
 
 	// 1. the Add under its name

@@ -174,7 +174,9 @@ type hostsPage struct {
 	Sites        []string                `json:"sites"`
 	Managed      []managedRow            `json:"managed"`
 	Enrollments  []enrollment.Enrollment `json:"enrollments"`
-	Skipped      []string                `json:"skipped,omitempty"`
+	// Skipped: what is to be said about the list as a whole (it holds no host although tokens of added hosts
+	// are there: managed.Store.ListNote). What is to be said about one host is in its row (managedRow.Why).
+	Skipped []string `json:"skipped,omitempty"`
 	// OutsideTailscale: enroll.allow_non_tailscale is on, so the dialog must not say that the machine has to be
 	// in the Tailscale network (the test build's config has it on).
 	OutsideTailscale bool `json:"outside_tailscale"`
@@ -195,7 +197,49 @@ type managedRow struct {
 	managed.Host
 	SystemID string `json:"system_id"`
 	Online   bool   `json:"online"`
-	Active   bool   `json:"active"` // polled now (false: skipped at start, see the log)
+	Active   bool   `json:"active"` // polled now, as the host Add host made
+	// Shadowed: config.yaml has an entry with this id, and it wins. The machine is polled as that entry, and
+	// this one, the copy Add host made, is not used. What the panel stores under the id (what "Edit host"
+	// changed, the model name, the switch for "Update unpowered hosts") is that entry's, not the copy's.
+	Shadowed bool `json:"shadowed"`
+	// Why, for a host that is not Active: what is the matter, as it is now (managedState).
+	Why string `json:"why,omitempty"`
+}
+
+// managedState says what an added host is right now: polled as itself (active), a copy that config.yaml's
+// entry of the same id shadows, or neither, and for the last two why, in words for the page.
+//
+// It is asked when the page asks, not kept from the start of the panel: the lines the start logs about the
+// hosts it left out (Server.ManagedSkipped) stayed the same until the next start, so a host that had been
+// removed or paired again since was still listed as left out; and they are written for the log, with the
+// tokens file's full path and, from a file that is not JSON, the character the decoder stopped at. The page
+// is told which file and what kind of thing is wrong with it (managed.Store.TokensProblem), no more.
+func (s *Server) managedState(h managed.Host) (active, shadowed bool, why string) {
+	a, polled := s.Poller.AgentByID(h.ID)
+	switch {
+	case polled && a.Managed:
+		return true, false, ""
+	case polled:
+		return false, true, "config.yaml has an entry with the id " + h.ID + ", and config.yaml wins: the machine is polled as that entry, and this copy from Add host is not used"
+	}
+	if why = s.Managed.TokensProblem(h.ID); why != "" {
+		return false, false, why
+	}
+	sec, err := s.Managed.Secret(h.ID)
+	if err != nil { // it changed between the two looks
+		return false, false, "its tokens file cannot be read"
+	}
+	if err := managed.Check(s.Poller.ConfigSnapshot(), s.Managed.EntryOf(h, sec)); err != nil {
+		return false, false, "its entry does not pass the panel's check: " + strings.Join(strings.Fields(strings.ReplaceAll(err.Error(), "config invalid:\n  -", "")), " ")
+	}
+	return false, false, "nothing is wrong with its files any more: it is polled from the next start of the panel, or after a Re-pair"
+}
+
+// shadowedCopy reports whether the added host h is a copy that config.yaml's entry of the same id shadows
+// (managedRow.Shadowed).
+func (s *Server) shadowedCopy(h managed.Host) bool {
+	_, shadowed, _ := s.managedState(h)
+	return shadowed
 }
 
 func (s *Server) nodeSystemID(name string) string {
@@ -212,7 +256,7 @@ func (s *Server) hostsPage(c *reqCtx) error {
 		return err
 	}
 	p := hostsPage{PanelAddress: s.Enroll.PanelAddr, PanelSource: s.Enroll.PanelSource, PanelVia: s.Enroll.PanelVia, AgentRelease: s.Enroll.ReleaseLabel(), Nodes: []nodeChoice{}, Relays: []idName{}, BMCRelays: []idName{},
-		Sites: []string{}, Managed: []managedRow{}, Enrollments: s.Enroll.List(), Skipped: s.ManagedSkipped, OutsideTailscale: s.Cfg.Enroll.AllowNonTailscale}
+		Sites: []string{}, Managed: []managedRow{}, Enrollments: s.Enroll.List(), OutsideTailscale: s.Cfg.Enroll.AllowNonTailscale}
 	for _, x := range s.Poller.Snapshot() {
 		if x.Kind == "node" {
 			cl := ""
@@ -238,8 +282,11 @@ func (s *Server) hostsPage(c *reqCtx) error {
 	}
 	for _, h := range hosts {
 		info, _ := s.Poller.AgentInfo(h.ID)
-		a, ok := s.Poller.AgentByID(h.ID)
-		p.Managed = append(p.Managed, managedRow{Host: h, SystemID: h.Shown(), Online: info.Online, Active: ok && a.Managed})
+		active, shadowed, why := s.managedState(h)
+		p.Managed = append(p.Managed, managedRow{Host: h, SystemID: h.Shown(), Online: info.Online, Active: active, Shadowed: shadowed, Why: why})
+	}
+	if note := s.Managed.ListNote(); note != "" {
+		p.Skipped = []string{note}
 	}
 	c.json(200, p)
 	return nil
@@ -301,6 +348,17 @@ func (s *Server) hostRepair(c *reqCtx) error {
 	if !ok {
 		return apierr.New(404, "only hosts added with Add host can be re-paired here")
 	}
+	if s.shadowedCopy(h) {
+		// A copy that config.yaml's entry shadows is not paired again. The pairing itself would go through: the
+		// machine takes the code and answers. Only then is the answer checked against everything the panel has
+		// (enrollment.commit), and refused, because config.yaml has the id. By then the machine has made its
+		// side of a pairing the panel does not keep. So no code is made at all.
+		why := h.Name + " is polled as config.yaml's entry (config.yaml has the id " + h.ID + ", and config.yaml wins): the copy made by Add host is not used, and it is not paired again. " +
+			"The panel would refuse what the machine answers, and the machine may then hold tokens that config.yaml's entry does not have. " +
+			"Remove the unused copy; or take the entry out of config.yaml, restart the panel, and Re-pair then"
+		c.audit(u, "host.repair", h.ID, nil, "refused: "+why)
+		return apierr.New(409, why)
+	}
 	renamed, err := c.typedRepair(h.Name)
 	if err != nil {
 		c.audit(u, "host.repair", h.ID, nil, "refused: "+err.Error())
@@ -357,11 +415,23 @@ func (s *Server) hostRemove(c *reqCtx) error {
 		c.audit(u, "host.remove", h.ID, nil, "refused: "+err.Error())
 		return err
 	}
+	// A copy that config.yaml's entry of the same id shadows (managedRow.Shadowed) is removed as what it is: an
+	// entry in the list of added hosts and a tokens file. The machine stays in the panel, as config.yaml's
+	// entry, and everything the panel stores under its id is that entry's: its switch for "Update unpowered
+	// hosts", its model name, what "Edit host" changed for it. None of the three clean-ups below is for it.
+	// They ran for such a copy too, each with the audit entry "host removed": a Remove of the unused copy
+	// (offered on the machine's own page, and since this build in the Add host dialog) took the model name and
+	// the Edit host changes of a machine that was not removed (check of the build 15 candidate, K1).
+	copyOnly := s.shadowedCopy(h)
+	cleaned := []string{h.ID, h.Shown()}
+	if copyOnly {
+		cleaned = nil
+	}
 	// A machine that is removed is no longer switched on for "Update unpowered hosts". A host's id is
 	// made from its name, so without this the next machine added under the same name would take part in
 	// runs without anybody having switched it on. First, so that a host is never gone with the switch left on.
 	wasOn := false
-	for _, sid := range []string{h.ID, h.Shown()} {
+	for _, sid := range cleaned {
 		if !s.Poller.Admin.WakeUpdateEnabled(sid) {
 			continue
 		}
@@ -375,7 +445,7 @@ func (s *Server) hostRemove(c *reqCtx) error {
 	// Its custom model name goes with it, for the same reason: the next machine added under this name starts
 	// with the model it reports itself. Also before the host is gone: a host is never removed with its name left.
 	hadModel := false
-	for _, sid := range []string{h.ID, h.Shown()} {
+	for _, sid := range cleaned {
 		prev, err := s.Poller.Admin.SetHostModel(sid, "")
 		if err != nil {
 			c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
@@ -388,26 +458,36 @@ func (s *Server) hostRemove(c *reqCtx) error {
 	}
 	// What "Edit host" changed goes with it too, for the same reason: the overrides of its own agent, and every
 	// change about one of the rows that go away with it in the overrides of other agents (api_hostoptions.go).
-	gone, notes, err := s.forgetHostOptions(actorOf(u), h.ID, rowsOf(h)...)
-	if err != nil {
-		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
-		return err
-	}
-	if len(gone) > 0 {
-		c.audit(u, "host.options", h.ID, forgotParams(gone, notes, "host removed"), "ok")
+	if !copyOnly {
+		gone, notes, err := s.forgetHostOptions(actorOf(u), h.ID, rowsOf(h)...)
+		if err != nil {
+			c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
+			return err
+		}
+		if len(gone) > 0 {
+			c.audit(u, "host.options", h.ID, forgotParams(gone, notes, "host removed"), "ok")
+		}
 	}
 	s.Enroll.CancelHost(h.ID) // a Re-pair still pairing must not bring the host back
-	s.unpoll(h.ID)            // before the store forgets which node is the host's
+	s.unpoll(h.ID)            // before the store forgets which node is the host's; config.yaml's agent of the id stays
 	if err := s.Managed.Remove(h.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
 		return err
 	}
-	c.audit(u, "host.remove", h.ID, map[string]any{"name": h.Name, "wake_update_was_on": wasOn, "custom_model_removed": hadModel}, "ok")
-	if s.Notes != nil {
-		s.Notes.Add(notifications.Event{Kind: "host_removed", Type: "enroll", Severity: notifications.Info, Host: h.Name,
-			Text: fmt.Sprintf("removed from the panel by %s (the agent on the machine keeps running until you uninstall it)", actorOf(u))})
+	params := map[string]any{"name": h.Name, "wake_update_was_on": wasOn, "custom_model_removed": hadModel}
+	if copyOnly {
+		params["copy_only"] = true // the unused copy of a machine that config.yaml has: the machine stays
 	}
+	c.audit(u, "host.remove", h.ID, params, "ok")
+	text := fmt.Sprintf("removed from the panel by %s (the agent on the machine keeps running until you uninstall it)", actorOf(u))
 	msg := h.Name + " removed from the panel"
+	if copyOnly {
+		text = fmt.Sprintf("its unused Add host copy was removed by %s (the machine stays in the panel, as config.yaml's entry)", actorOf(u))
+		msg = "the unused Add host copy of " + h.Name + " was removed. " + h.Name + " stays in the panel as config.yaml's entry, and nothing that is stored for it was changed"
+	}
+	if s.Notes != nil {
+		s.Notes.Add(notifications.Event{Kind: "host_removed", Type: "enroll", Severity: notifications.Info, Host: h.Name, Text: text})
+	}
 	if h.Proxmox != nil {
 		msg += fmt.Sprintf(". Its read-only Proxmox token still exists on the node; to delete it, run there: pveum user token remove fairy@pve %s",
 			h.Proxmox.TokenName())

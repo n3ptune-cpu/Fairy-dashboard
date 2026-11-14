@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -340,9 +341,51 @@ func (s *Store) Secret(id string) (Secret, error) {
 		return sec, fmt.Errorf("%s: %w", s.secretPath(id), err)
 	}
 	if len(sec.Token) < 24 || (sec.ControlToken != "" && (len(sec.ControlToken) < 24 || sec.ControlToken == sec.Token)) {
-		return sec, fmt.Errorf("%s: tokens too short or equal", s.secretPath(id))
+		return sec, fmt.Errorf("%s: %w", s.secretPath(id), errTokensUnusable)
 	}
 	return sec, nil
+}
+
+// errTokensUnusable: a tokens file that is JSON and does not hold tokens the panel can use.
+var errTokensUnusable = errors.New("tokens too short or equal")
+
+// TokensProblem says what is wrong with a host's tokens file, for the page ("": nothing): in fixed words, with
+// the file's name and without its folder, and never with anything that is in the file. The error of Secret
+// has both (the full path, and from a file that is not JSON the character the decoder stopped at): that is
+// for the log and for `fairy admin config check`, which the admin reads on the panel host itself; a page in a
+// browser is told no more than which file to look at and what kind of thing is wrong with it.
+func (s *Store) TokensProblem(id string) string {
+	_, err := s.Secret(id)
+	if err == nil {
+		return ""
+	}
+	if !configutil.ValidID(id) {
+		return "its id is not one a host can have"
+	}
+	file := "its tokens file " + filepath.Base(s.secretPath(id))
+	var syntax *json.SyntaxError
+	var kind *json.UnmarshalTypeError
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return file + " is missing"
+	case statefile.IsNotAFile(err):
+		return file + " is not a plain file"
+	case errors.Is(err, errTokensUnusable):
+		return file + " does not hold usable tokens"
+	case errors.As(err, &syntax), errors.As(err, &kind), errors.Is(err, io.ErrUnexpectedEOF):
+		return file + " is not valid JSON"
+	}
+	return file + " cannot be read"
+}
+
+// ListNote is the one line about a list that holds no host although it looks as if it should (emptyList), for
+// the page: the same words, with the names of the files and without the folder they are in. "" for a list
+// that holds a host, and for one that cannot be read (the page says that by itself).
+func (s *Store) ListNote() string {
+	if hosts, err := s.Load(); err != nil || len(hosts) > 0 {
+		return ""
+	}
+	return strings.ReplaceAll(s.emptyList(), s.dir+string(filepath.Separator), "")
 }
 
 // Entry is a host ready to be added to the configuration: the agent, (with Wake-on-LAN / BMC power-on) its

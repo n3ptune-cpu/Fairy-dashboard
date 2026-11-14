@@ -76,9 +76,12 @@ type Server struct {
 	// ConfigCheck checks the config file this panel was started with, as the next start will ("": fine; else
 	// why not, in one line). Asked before the panel's update is started; nil = not asked.
 	ConfigCheck func() string
-	// Add host: the managed hosts, the pending enrollments, and the managed hosts skipped at start (and why).
-	Managed        *managed.Store
-	Enroll         *enrollment.Manager
+	// Add host: the managed hosts and the pending enrollments.
+	Managed *managed.Store
+	Enroll  *enrollment.Manager
+	// ManagedSkipped: the lines the start logged about the added hosts it left out, as `fairy serve` hands
+	// them over. No page is sent them: they are of that moment and written for the log (full paths). What the
+	// Add host dialog is told about a host is asked when it asks (managedState).
 	ManagedSkipped []string
 	// Notifications page: the events and the watcher that makes them from the poller's snapshots.
 	Notes *notifications.Store
