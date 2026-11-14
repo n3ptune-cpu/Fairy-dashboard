@@ -3,6 +3,7 @@ package poller
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
@@ -201,6 +202,29 @@ func TestLinksOfIsTheEntryWithThePanelsChanges(t *testing.T) {
 	if powers, on, total := state(); !slices.Equal(powers, []string{"laptop"}) || on != "tower" || total {
 		t.Fatalf("after the overrides were taken out: powers %v, spare on %q, in the total %v", powers, on, total)
 	}
+	// An agent that does not answer: both managers only age what they have and read no link, so what is changed
+	// meanwhile shows with the agent's next answer, not before (pollAgent hands them none of LinksOf then).
+	b.Mu.Lock()
+	answers := b.Metrics["laptop"]
+	b.Metrics["laptop"] = func() (jsonx.M, error) { return nil, errors.New("down") }
+	b.Mu.Unlock()
+	p.PollOnce(context.Background())
+	edit(set(func(e *adminstate.HostOption) { e.SetUPS("rack", "tower", true); e.SetLink("spare", "laptop") }))
+	p.PollOnce(context.Background())
+	if powers, on, _ := state(); !slices.Equal(powers, []string{"laptop"}) || on != "tower" {
+		t.Fatalf("changed while the agent is silent: powers %v, spare on %q (want the picture of its last answer)", powers, on)
+	}
+	if l := p.LinksOf(laptop); !slices.Equal(l.UPSPowers["rack"], []string{"laptop", "tower"}) || l.PowerLinks["spare"] != "laptop" {
+		t.Fatalf("what counts for it meanwhile: %+v", l)
+	}
+	b.Mu.Lock()
+	b.Metrics["laptop"] = answers
+	b.Mu.Unlock()
+	p.PollOnce(context.Background())
+	if powers, on, _ := state(); !slices.Equal(powers, []string{"laptop", "tower"}) || on != "laptop" {
+		t.Fatalf("with its next answer: powers %v, spare on %q", powers, on)
+	}
+	edit(func(o *adminstate.HostOptions) { delete(o.Agents, "laptop") })
 	// a second poller on the same folder (a restart): the same answer from its first poll
 	edit(set(func(e *adminstate.HostOption) { e.SetUPS("rack", "tower", true); e.SetUPS("rack", "laptop", false) }))
 	p2, err := New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, b)

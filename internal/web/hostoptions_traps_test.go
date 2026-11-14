@@ -1235,6 +1235,34 @@ func TestEditHostABrokenOverlayIsIgnoredNotRefused(t *testing.T) {
 	}
 }
 
+// What the panel ignores under "host_options" is said in the log when the panel starts, also when no agent
+// answers then (a poll without an answer asks nothing of the overlay): once.
+func TestEditHostABrokenOverlayIsSaidAtTheStartAlsoWhenNoAgentAnswers(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&lockedWriter{w: &logs}, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	cfg := ehConfig(t, ehNASLinks)
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.DataDir, "state.json"), []byte(`{"host_options": {"agents": {"nas-agent": {"power_links": 7}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := testutil.NewBackend()
+	b.PVEOf = func(string) ([]jsonx.M, error) { return nil, fmt.Errorf("down") }
+	for _, id := range []string{ehNAS, "lab-a-agent", "lab-b-agent"} {
+		b.Metrics[id] = func() (jsonx.M, error) { return nil, fmt.Errorf("down") }
+	}
+	e := ehStart(t, cfg, b)
+	for i := 0; i < 3; i++ {
+		e.s.Poller.PollOnce(context.Background())
+	}
+	if n := strings.Count(logs.String(), `an \"Edit host\" override is ignored: agent nas-agent: power_links is not of the form Fairy writes`); n != 1 {
+		t.Fatalf("%d WARN lines about the ignored override on a panel none of whose agents answers, want 1:\n%s", n, logs.String())
+	}
+}
+
 type lockedWriter struct {
 	mu sync.Mutex
 	w  *bytes.Buffer
@@ -1328,8 +1356,8 @@ func TestEditHostChangesNoControlPath(t *testing.T) {
 	// in the poll, the links go to the two managers and nowhere else; the run of "Update unpowered hosts",
 	// power control and the wake are other files and are not in the list above
 	agents := string(must(os.ReadFile("../poller/agents.go")))
-	if n := strings.Count(agents, "p.LinksOf(a)"); n != 2 {
-		t.Errorf("poller/agents.go asks LinksOf %d times, want 2 (an agent's answer, and its silence)", n)
+	if n := strings.Count(agents, "p.LinksOf(a)"); n != 1 {
+		t.Errorf("poller/agents.go asks LinksOf %d times, want 1: when an agent's answer is handed to the two managers (its silence hands them no links: they read none then)", n)
 	}
 	for _, use := range regexp.MustCompile(`(?m)^.*\bl\.(PowerLinks|PowerExcludeFromTotal|UPSPowers)\b.*$`).FindAllString(agents, -1) {
 		if !strings.Contains(use, "p.Power.UpdateRemote(") && !strings.Contains(use, "p.UPS.UpdateFromAgent(") {

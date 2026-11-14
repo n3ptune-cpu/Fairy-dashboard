@@ -15,15 +15,22 @@ import (
 // an overlay in state.json (adminstate.HostOptions); the agent's entry (config.yaml's, or the one "Add host"
 // made) is the base and is never changed.
 //
-// LinksOf is the ONE place where the two meet. It is asked by pollAgent, each time an agent's answer (or its
-// silence) is handed to the power and the UPS manager, so that
+// LinksOf is the ONE place where the two meet. It is asked by pollAgent, each time an agent's ANSWER is
+// handed to the power and the UPS manager, so that
 //
-//   - a change counts with the agent's next poll, without a restart, and
+//   - a change counts with the agent's next answer, without a restart, and
 //   - the start of the panel and a running panel cannot differ: there is no copy of the overlay in the poll
 //     job or anywhere else, the value is worked out when it is used.
 //
+// A poll WITHOUT an answer asks nothing here: both managers then only age what they have and read no link
+// at all (power.Manager.UpdateRemote and ups.Manager.UpdateFromAgent with unreachable), so pollAgent hands
+// them the entry's own fields there, as it always did. The picture of a silent agent's devices is the one of
+// its last answer until it answers again (TestLinksOfIsTheEntryWithThePanelsChanges); the dialog's API does
+// not read that picture for what it says about a link (internal/web: plugState).
+//
 // Nothing else reads the overlay to decide anything. No power action, no wake, no run of "Update unpowered
-// hosts" and no off-clock asks here: the links say what is SHOWN where (TestNoControlPathReadsTheOverlay).
+// hosts" and no off-clock asks here: the links say what is SHOWN where (internal/web:
+// TestEditHostChangesNoControlPath, which also holds that agents.go asks LinksOf in that one place).
 
 // linkNotes remembers what was said in the log about the overlay, so that each thing is said once and again
 // only when it changes.

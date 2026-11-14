@@ -252,9 +252,8 @@ func (p *Poller) pollEntry(ctx context.Context, a config.Agent, entry int, timeo
 		if p.entryGone(a.ID, entry) {
 			return 0
 		}
-		l := p.LinksOf(a) // the entry's links with what an admin changed in the panel (hostoptions.go)
-		p.Power.UpdateRemote(a.ID, nil, true, l.PowerLinks, l.PowerExcludeFromTotal)
-		p.UPS.UpdateFromAgent(a.ID, nil, true, l.UPSPowers, a.UPSNames)
+		p.Power.UpdateRemote(a.ID, nil, true, a.PowerLinks, a.PowerExcludeFromTotal)
+		p.UPS.UpdateFromAgent(a.ID, nil, true, a.UPSPowers, a.UPSNames)
 		if n >= 2 {
 			return math.Min(agentBackoffMax, math.Pow(2, float64(n-2)))
 		}

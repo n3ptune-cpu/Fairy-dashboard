@@ -78,6 +78,10 @@ func init() {
 }
 
 func (s *Server) hostOptionsRoutes() {
+	// What the reader leaves out of state.json is said in the log (once) when the panel starts: here, because
+	// the poller asks for the overlay only when an agent answers, and on a panel none of whose agents answers
+	// at the start nothing would say it until one does.
+	_, _ = s.Poller.Admin.HostOptionsRead()
 	s.mux.HandleFunc("GET /api/admin/hosts/{id}/options", s.h(s.hostOptionsGet))
 	s.mux.HandleFunc("PUT /api/admin/hosts/{id}/options", s.h(s.hostOptionsPut))
 }
