@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
@@ -84,12 +85,16 @@ func (c *cli) configCheck() int {
 		limit += fmt.Sprintf(" (set in config.yaml; without the line it is %d)", config.DefaultControlRatePerMin)
 	}
 	notes = append(notes, limit)
-	problems, notes = approvalCheck(cfg, problems, notes)
+	// "Run timings": what an admin changed in the panel about the timings of "Update unpowered hosts"
+	// (state.json). The lines below about a timing are about the value in force.
+	rt, rtOK, rtWarn, rtSaid := runTimingsCheck(cfg)
+	problems, notes = approvalCheck(cfg, rt, problems, notes)
 	problems, notes = adminCheck(cfg, problems, notes)
 	problems, notes = managedCheck(cfg, problems, notes)
 	problems, inferred := nodeLinkCheck(cfg, problems)
-	okLines, said := wakeUpdateCheck(cfg)
+	okLines, said := wakeUpdateCheck(cfg, rt)
 	notes, inferred = append(notes, okLines...), append(inferred, said...)
+	notes, problems, inferred = append(notes, rtOK...), append(problems, rtWarn...), append(inferred, rtSaid...)
 	inferred = append(inferred, systemIDCheck(cfg)...)
 	okLines, said = powerLinkCheck(cfg)
 	notes, inferred = append(notes, okLines...), append(inferred, said...)
@@ -129,7 +134,7 @@ func (c *cli) configCheck() int {
 // approvalCheck explains the approval: block: the Pocket ID client "Fairy PC actions", with which a person
 // approves a fan, power or update action for the machine itself to verify (README: "The check on the machine
 // itself"). The block is optional. Its secret is reported as present / not set only.
-func approvalCheck(cfg *config.Panel, problems, notes []string) ([]string, []string) {
+func approvalCheck(cfg *config.Panel, rt adminstate.RunTimings, problems, notes []string) ([]string, []string) {
 	if !cfg.ApprovalOn() {
 		return problems, append(notes, "approval: not set. Machines that check a passkey approval themselves cannot be switched on "+
 			"for that check or controlled from this panel (approval: {client_id: ...}, the Client ID of a separate client for PC actions in Pocket ID)")
@@ -153,9 +158,9 @@ func approvalCheck(cfg *config.Panel, problems, notes []string) ([]string, []str
 	notes = append(notes, fmt.Sprintf("approval.users: %d more than the panel's admins and a host's owner; approval.owners: %d owner labels "+
 		"with a Pocket ID user (they may approve on a machine that is switched on for the check from now on; a machine that already has "+
 		"its list is changed only on the machine)", len(cfg.Approval.Users), len(cfg.Approval.Owners)),
-		fmt.Sprintf("approval.run_approval_wait_s: %d (how long a run of \"Update unpowered hosts\" asks for its second passkey once the woken machines that check approvals are up; "+
+		fmt.Sprintf("approval.run_approval_wait_s: %d%s (how long a run of \"Update unpowered hosts\" asks for its second passkey once the woken machines that check approvals are up; "+
 			"not confirmed in that time: not updated, and a machine that was armed switches itself off again)",
-			cfg.Approval.RunApprovalWaitS))
+			inForce(cfg, rt, config.KeyRunApprovalWait), fromPanel(cfg, rt, config.KeyRunApprovalWait)))
 	return problems, notes
 }
 
@@ -335,14 +340,18 @@ func powerLinkCheck(cfg *config.Panel) (ok, said []string) {
 // gets 60 s. A run knows its own countdown from a shutdown somebody asked for in its place by the length
 // alone (internal/wakerun, callOff), so with such a value the two cannot be told apart, and a run that is
 // cancelled or lets go of the machine calls the person's shutdown off (third review of build 14, S7).
-func wakeUpdateCheck(cfg *config.Panel) (ok, said []string) {
+//
+// (build 16) The notes are about the values IN FORCE: a timing that was changed in the panel ("Run timings",
+// rt) is named as that, and config.yaml's own line about off_after_s is left to runTimingsCheck, which says
+// both values.
+func wakeUpdateCheck(cfg *config.Panel, rt adminstate.RunTimings) (ok, said []string) {
 	const def = 900
 	same := func(what string, s int) string {
 		return fmt.Sprintf("%s is %d, which is also a countdown a person can choose in the Power menu of a machine's page (10 s, 1 min, 5 min, 15 min; 60 s is what a power request without a delay gets): "+
 			"a shutdown somebody asks for with that countdown in the place of the run's cannot be told from the run's own, and a run that is cancelled, or lets go of the machine, calls it off", what, s)
 	}
-	if v := cfg.WakeUpdate.ShutdownDelayS; personCountdown[v] {
-		said = append(said, same("wake_update.shutdown_delay_s", v))
+	if v := inForce(cfg, rt, config.KeyShutdownDelay); personCountdown[v] {
+		said = append(said, same("wake_update.shutdown_delay_s"+fromPanel(cfg, rt, config.KeyShutdownDelay), v))
 	}
 	mins := func(s int) string {
 		if s%60 == 0 {
@@ -354,11 +363,12 @@ func wakeUpdateCheck(cfg *config.Panel) (ok, said []string) {
 		return fmt.Sprintf("%s is %d (the default is %d): a machine that restarts for longer than %s can be taken for off by a run, "+
 			"which then wakes it, updates it and switches it off as a machine it woke", what, s, def, mins(s))
 	}
-	if v := cfg.WakeUpdate.OffAfterS; v != 0 && v != def {
+	_, changed := rt.Value(config.KeyOffAfter)
+	if v := cfg.WakeUpdate.OffAfterS; v != 0 && v != def && !changed {
 		ok = append(ok, fmt.Sprintf("wake_update.off_after_s: %d (a machine counts as off after %s without an answer; without the line it is %d)", v, mins(v), def))
-		if v < def {
-			said = append(said, risk("wake_update.off_after_s", v))
-		}
+	}
+	if v := inForce(cfg, rt, config.KeyOffAfter); v != 0 && v < def {
+		said = append(said, risk("wake_update.off_after_s"+fromPanel(cfg, rt, config.KeyOffAfter), v))
 	}
 	for _, o := range cfg.Systems {
 		w := o.WakeUpdate
@@ -381,6 +391,65 @@ func wakeUpdateCheck(cfg *config.Panel) (ok, said []string) {
 		}
 	}
 	return ok, said
+}
+
+// inForce is the value of a run timing that counts: what was changed in the panel (rt), else config.yaml's.
+func inForce(cfg *config.Panel, rt adminstate.RunTimings, key string) int {
+	if v, ok := rt.Value(key); ok {
+		return v
+	}
+	return cfg.RunTiming(key)
+}
+
+// fromPanel is " (changed in the panel; config.yaml: N)" behind the name of a timing whose value in force is
+// not config.yaml's, "" otherwise.
+func fromPanel(cfg *config.Panel, rt adminstate.RunTimings, key string) string {
+	if _, ok := rt.Value(key); ok {
+		return fmt.Sprintf(" (changed in the panel; config.yaml: %d)", cfg.RunTiming(key))
+	}
+	return ""
+}
+
+// runTimingsCheck is about "Run timings": the timings of "Update unpowered hosts" that an admin changed in
+// the panel (state.json, "run_timings": adminstate.RunTimings). They are not in config.yaml, so a reader of
+// config.yaml alone would not know that a line of it is not used; this says it:
+//
+//   - ok: one line per timing that is changed: the value in force, config.yaml's value, who changed it and
+//     when. It is used INSTEAD of config.yaml's until Reset;
+//   - warn: one line for everything the running panel ignores: a value that is no whole number in its key's
+//     range, a key that is no timing. The panel starts with all of them, and config.yaml's value counts;
+//   - said: nothing yet (the notes about a short off_after_s and a countdown that is also the Power menu's
+//     are wakeUpdateCheck's, made from the values in force).
+//
+// rt is the overlay, for the other checks (empty when state.json cannot be read: the panel does not start
+// then). `fairy check-config`, which an update asks before it installs a version, reads config.yaml only.
+func runTimingsCheck(cfg *config.Panel) (rt adminstate.RunTimings, ok, warn, said []string) {
+	rt, ignored, err := adminstate.ReadRunTimings(cfg.DataDir)
+	if err != nil {
+		return rt, ok, warn, append(said, "Run timings: state.json cannot be read, so the timings changed in the panel were not looked at")
+	}
+	for _, line := range ignored {
+		warn = append(warn, "Run timings: a timing in state.json is ignored: "+cell(line))
+	}
+	for _, tm := range config.RunTimings() {
+		v, changed := rt.Value(tm.Key)
+		if !changed {
+			continue
+		}
+		who := "changed in the panel (\"Run timings\")"
+		if m := rt.Marks[tm.Key]; m.By != "" {
+			who += " by " + cell(m.By)
+		}
+		if m := rt.Marks[tm.Key]; !m.At.IsZero() {
+			who += ", " + m.At.UTC().Format("2006-01-02 15:04 UTC")
+		}
+		unit := "s"
+		if tm.Key == config.KeyRequestsPerMin {
+			unit = "a minute"
+		}
+		ok = append(ok, fmt.Sprintf("%s.%s: %d %s, %s, used INSTEAD of config.yaml's %d until Reset", tm.Block, tm.Key, v, unit, who, cfg.RunTiming(tm.Key)))
+	}
+	return rt, ok, warn, said
 }
 
 // personCountdown: the countdowns, in seconds, of a shutdown a person asks for in the panel: the Power menu's
