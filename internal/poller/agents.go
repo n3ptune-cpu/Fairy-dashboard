@@ -311,7 +311,7 @@ func (p *Poller) pollEntry(ctx context.Context, a config.Agent, entry int, timeo
 	p.source(name, true, now, &lat, nil)
 	p.mu.Unlock()
 	if newVersion {
-		p.saveVersion(a.ID, info.Version, now)
+		p.saveVersion(a.ID, now)
 	}
 	if seenDue {
 		p.flushSeen()

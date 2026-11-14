@@ -155,8 +155,14 @@ func (p *Poller) flushSeen() {
 	}
 	p.seenErr = ""
 	for id, t := range set {
-		if _, still := p.lastSeen[id]; still { // not removed meanwhile
+		if _, still := p.lastSeen[id]; still {
 			p.seenSaved[id] = t
+		} else {
+			// Removed while the write was on its way: its time is in the file now. The Remove found nothing of
+			// it there when it looked (forgetSeenLocked: an agent whose first time this write carried) and took
+			// nothing out, so the time of a host that was gone stayed in the file (fourth review of build 14,
+			// F3). It goes out with the next write, which the Remove itself asks for right after this one.
+			p.seenDrop = append(p.seenDrop, id)
 		}
 	}
 }

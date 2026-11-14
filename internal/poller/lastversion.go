@@ -74,15 +74,32 @@ func (p *Poller) FlushVersions() {
 	p.mu.Unlock()
 	for id, v := range waiting {
 		if v != "" {
-			p.saveVersion(id, v, now)
+			p.saveVersion(id, now)
 		}
 	}
 }
 
-// saveVersion writes one agent's last known version ("": the agent was removed). A failure is logged and not
-// tried again before the version changes: state.json is then unreadable or not the panel's to write, which
-// the panel reports in other places.
-func (p *Poller) saveVersion(id, version string, now time.Time) {
+// saveVersion writes what the panel knows of one agent's last version at the moment of the write: the version
+// in memory, or, when there is none (the agent was removed), nothing: the agent's entry is taken out. A
+// failure is logged and not tried again before the version changes: state.json is then unreadable or not the
+// panel's to write, which the panel reports in other places. Never called with p.mu held.
+//
+// It used to write the version its caller handed it, and the callers decide under p.mu and write after they
+// have released it: a poll that had taken a new version in, and a Remove of that host in the same instant
+// (also the first half of every Re-pair), wrote one after the other in either order. When the poll's write
+// came last, state.json kept a version for a host that was gone, and after the next start a host added under
+// that id later was shown with it (fourth review of build 14, F3). Now one write is made at a time
+// (versionWrite), and each reads what is true under p.mu while it holds that lock: the later write is never
+// older than the one before it, whoever asked for it. (flushSeen does the same for the times.)
+func (p *Poller) saveVersion(id string, now time.Time) {
+	p.versionWrite.Lock()
+	defer p.versionWrite.Unlock()
+	p.mu.Lock()
+	version := p.lastVersion[id]
+	p.mu.Unlock()
+	if version != "" && now.IsZero() { // asked for by a Remove, and a host added under the id since has answered
+		now, _ = p.now()
+	}
 	if err := p.Admin.SetAgentVersion(id, version, now); err != nil {
 		slog.Warn("could not keep the agent's version for the next start", "agent", id, "error", err)
 	}

@@ -119,6 +119,9 @@ type Poller struct {
 	// agent id -> when its version was last written to state.json, and whether a newer one waits to be written
 	versionSavedAt map[string]time.Time
 	versionUnsaved map[string]bool
+	// versionWrite is held for one write of an agent's version, from reading it to the file (saveVersion).
+	// Taken before mu, never while mu is held.
+	versionWrite sync.Mutex
 	// system id -> a run saw this machine go off after its shutdown: its row is "offline", not "stale", until it
 	// answers again (knownoff.go)
 	knownOff map[string]bool
@@ -647,7 +650,7 @@ func (p *Poller) RemoveAgent(id string) {
 	p.mu.Unlock()
 	p.machinesChanged()
 	if kept { // a host added later under the same id starts without a version
-		p.saveVersion(id, "", time.Time{})
+		p.saveVersion(id, time.Time{})
 	}
 	if seenGone { // and was never seen
 		p.flushSeen()
