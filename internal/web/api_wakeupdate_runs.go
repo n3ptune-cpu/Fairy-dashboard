@@ -57,10 +57,7 @@ func (s *Server) runTimings() wakerun.Ticket { return s.wuTimesNow().ticket() }
 
 // wuShutdownDelay is the countdown of the shutdown a run asks the machine shown under id for.
 func (s *Server) wuShutdownDelay(id string) time.Duration {
-	if _, own := s.wuTimings(id); own > 0 {
-		return own
-	}
-	return s.wuTimesNow().set.ShutdownDelay
+	return s.shutdownDelayWith(s.wuTimesNow(), id)
 }
 
 // wuChecked decides, for a machine that checks approvals itself, whether a run can take it (h.Checked) or why
@@ -97,14 +94,15 @@ func (s *Server) wuChecked(h *wuHost, x model.System, agentID string, ap *model.
 
 // wuTicketWords is the dialog's line for a machine of the wake list that checks approvals itself: what the
 // passkey of the start signs for it, with the numbers.
-func (s *Server) wuTicketWords(h wuHost, tm wakerun.Ticket) string {
+func (s *Server) wuTicketWords(h wuHost, t wuTimes) string {
+	tm := t.ticket()
 	to := "update to " + s.latest().Version
 	if !runVersionOK(s.latest().Version) {
 		to = "no update (Fairy does not know the newest signed release)"
 	}
 	// short: the dialog cuts a line at 240 characters, and the numbers come first
 	return fmt.Sprintf("wake; signs its ticket: once up it switches itself off after %d s (notice %d s) unless a second passkey confirms: "+
-		"%s, shut down in %d s. Found on: nothing is sent", tm.WaitS, tm.NoticeS, to, int(s.wuShutdownDelay(h.ID)/time.Second))
+		"%s, shut down in %d s. Found on: nothing is sent", tm.WaitS, tm.NoticeS, to, int(s.shutdownDelayWith(t, h.ID)/time.Second))
 }
 
 // runVersionOK reports whether v is a version a run's confirmation can name (the machines' rule for "to").

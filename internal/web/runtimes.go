@@ -157,11 +157,38 @@ func (s *Server) wuStamp(t wuTimes, b wuStartBody) string {
 	return sb.String()
 }
 
-// wakeUpdateStamp is the stamp of a start request as it is kept (pending.go: actionStamp).
+// wakeUpdateStamp is the stamp of a start request as it is kept (pending.go: actionStamp): made from the
+// handler's one reading of the timings (reqCtx.wu), which the lines of the confirmation and the numbers of a
+// ticket are made from too.
 func (c *reqCtx) wakeUpdateStamp() string {
 	var b wuStartBody
 	if !decodeStrictly(c.body, &b) {
 		return ""
 	}
-	return c.s.wuStamp(c.s.wuTimesNow(), b)
+	return c.s.wuStamp(c.wuRead(), b)
+}
+
+// wuRead is the start handler's one reading of the timings in force; for a request the handler has not read
+// them for (none today), what is in force now.
+func (c *reqCtx) wuRead() wuTimes {
+	if c.wu != nil {
+		return *c.wu
+	}
+	return c.s.wuTimesNow()
+}
+
+// wuStartAt tells a test where a start stands (Server.wuStartStep). Nothing listens in the running panel.
+func (s *Server) wuStartAt(step string) {
+	if s.wuStartStep != nil {
+		s.wuStartStep(step)
+	}
+}
+
+// shutdownDelayWith is the countdown of the shutdown a run with the timings t asks the machine shown under id
+// for: its own, else t's.
+func (s *Server) shutdownDelayWith(t wuTimes, id string) time.Duration {
+	if _, own := s.wuTimings(id); own > 0 {
+		return own
+	}
+	return t.set.ShutdownDelay
 }

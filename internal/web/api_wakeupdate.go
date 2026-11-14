@@ -790,16 +790,15 @@ func (s *Server) wuCheck(b wuStartBody) (map[string]wuHost, error) {
 
 // wuDescribe is the panel's own description of a start request for "Confirm it's you" and the audit log: how
 // many machines, the value that names the list, and the machines by the names the panel has for them. items
-// is one line per machine, saying what happens to it.
-func (s *Server) wuDescribe(b wuStartBody, hosts map[string]wuHost) (text string, items []string) {
+// is one line per machine, saying what happens to it. t is the start's one reading of the timings in force.
+func (s *Server) wuDescribe(b wuStartBody, hosts map[string]wuHost, t wuTimes) (text string, items []string) {
 	text, items = wuDescribe(b, hosts)
-	tm := s.runTimings()
 	i := 0
 	for _, id := range slices.Concat(b.Hosts, b.UpdateOnly) {
 		h := hosts[id]
 		if h.Checked && i < len(items) {
 			if i < len(b.Hosts) {
-				items[i] = h.Name + ": " + s.wuTicketWords(h, tm)
+				items[i] = h.Name + ": " + s.wuTicketWords(h, t)
 			} else {
 				items[i] = h.Name + ": update only, with this passkey (it checks the approval itself); it is on and is never switched off"
 			}
@@ -849,7 +848,7 @@ func (c *reqCtx) wakeUpdateKept() (string, []string) {
 	if err != nil {
 		return "", nil
 	}
-	return c.s.wuDescribe(b, hosts)
+	return c.s.wuDescribe(b, hosts, c.wuRead())
 }
 
 // wakeUpdateDetail and wakeUpdateItems describe a kept start request (pending.go: actionDetail, actionList).
@@ -912,12 +911,16 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	if a, _ := s.WakeRuns.Snapshot(); a != nil { // before a passkey is asked for; Start checks again
 		return apierr.Errf(409, "a run started by %s at %s is still going: one run at a time. Wait for it, or cancel it.", a.By, a.StartedAt.Format("15:04 UTC"))
 	}
-	text, _ := s.wuDescribe(b, hosts)
 	latest := s.latest()
 	// The timings of this run: ONE reading of what is in force now (config.yaml with what was changed in the
 	// panel). The ticket numbers are made from it, the run gets it as its settings, and nothing of the run
-	// reads the timings again: a change while the run is going counts from the next run.
+	// reads the timings again: a change while the run is going counts from the next run. What is kept for the
+	// confirmation (its lines, its stamp) is made from the same reading (c.wu).
 	times := s.wuTimesNow()
+	c.wu = &times
+	stamp := s.wuStamp(times, b)
+	s.wuStartAt("read")
+	text, _ := s.wuDescribe(b, hosts, times)
 	req := wakerun.StartRequest{Hosts: b.Hosts, UpdateOnly: b.UpdateOnly, UpdateIfOn: b.UpdateIfOn, By: actorOf(u), BySub: u.Sub, Latest: latest.Version,
 		Settings: &times.set}
 	params := map[string]any{"hosts": b.Hosts, "update_only": b.UpdateOnly, "update_if_on": b.UpdateIfOn,
@@ -925,10 +928,11 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	// The panel's replay of a kept start: the timings must be the ones in force when it was kept, which the
 	// dialog and "Confirm it's you" showed. Otherwise nothing is started (and no passkey was wasted on other
 	// numbers than the run's: a ticket's numbers are checked against them again in wuStartApproved).
-	if kept, ok := c.keptStamp(); ok && kept != s.wuStamp(times, b) {
+	if kept, ok := c.keptStamp(); ok && kept != stamp {
 		c.audit(u, "wakeupdate.start", "run", params, "error 409: the run timings were changed after the start was asked for; nothing was started")
 		return apierr.New(409, wuTimingsChanged)
 	}
+	s.wuStartAt("checked")
 	// The limit on control requests is looked at before a passkey is asked for (switching six machines on for
 	// these runs uses up a minute's worth): a start that would be refused is refused now, not after "Confirm
 	// it's you". The audit log gets a line for it.

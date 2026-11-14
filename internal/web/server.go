@@ -93,6 +93,10 @@ type Server struct {
 	WakeRuns *wakerun.Manager
 	// rtBeforeWrite: for tests of "Run timings": called between a change's plan and its write (nil: nothing).
 	rtBeforeWrite func()
+	// wuStartStep: for tests of a start of "Update unpowered hosts": called where the start stands ("read":
+	// the timings in force were read; "checked": they were compared with what was shown and kept, and nothing
+	// is asked or started yet). nil: nothing.
+	wuStartStep func(step string)
 	// tickets keeps the passkey approval of a run's start, in memory only, for the machines that check
 	// approvals themselves (runtickets.go).
 	tickets *runTickets

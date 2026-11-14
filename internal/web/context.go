@@ -34,6 +34,10 @@ type reqCtx struct {
 	tokDone bool
 	tokUser *model.User
 	tokErr  error
+	// wu: for a start of "Update unpowered hosts", the handler's one reading of the timings in force
+	// (wakeUpdateStart). What is kept for the confirmation (its lines, its stamp) is made from it, not from a
+	// second reading.
+	wu *wuTimes
 }
 
 func (c *reqCtx) session() *sessionData {
