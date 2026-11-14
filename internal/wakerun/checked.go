@@ -131,6 +131,7 @@ type checked struct {
 	selfSaid bool
 	selfWord string
 	selfAt   time.Time
+	byWord   bool // it is confirmed by its agent's word, not by an answer to the panel's confirmation (wordConfirmed)
 }
 
 // disarming is a cancel of a machine's self-switch-off that the run is at (disarm).
@@ -181,10 +182,43 @@ func (m *Manager) wordConfirmed(r *Run, h *Host, now time.Time, tail string) {
 		how = "its agent shows the run as confirmed, although the panel was answered that its confirmation was not accepted: a confirmation did arrive"
 	}
 	h.Confirm, h.ConfirmText, h.ConfirmTried, h.grant = ConfirmOK, "", "", &Grant{Run: r.ID}
+	h.chk.byWord = true
 	m.note(h, now, how+tail)
 	m.given(r, h.chk.goBy)
 	// the audit log is told as for a confirmation the machine accepted, with whose it was and how the run knows
 	m.emit(EvStep, r, h, "confirm", map[string]any{"to": h.To, "by": h.chk.goBy, "by_own_word": true}, "ok")
+}
+
+// armedAfterAll looks once more at a machine the run took for confirmed by its agent's word (wordConfirmed)
+// when that machine does not let the run's shutdown through (refused: its words). If the latest answer of its
+// agent shows this run as armed or counting down, the word "confirmed" did not hold, and the machine switches
+// itself off by its ticket: it is ended as an armed machine the run lets go of, with the time it goes and how
+// to keep it on, and stays in the strip with Keep on (Host.MayGoOff), instead of "Left ON" with no strip. It
+// reports whether it ended the machine.
+func (m *Manager) armedAfterAll(r *Run, h *Host, now time.Time, refused string) bool {
+	c := &h.chk
+	if !c.byWord {
+		return false
+	}
+	mono := m.mono()
+	o := m.Ops.Observe(h.ID)
+	word := h.runWord(r, o, mono, c.goSince)
+	if word != BlockArmed && word != BlockOffPending {
+		return false
+	}
+	h.Confirm, h.ConfirmText, h.grant = ConfirmRefused, "its agent showed the run as confirmed, and then as "+blockWords(word), nil
+	c.armSeen, c.disarmed = true, false
+	if !o.Run.OffAt.IsZero() {
+		at := o.Run.OffAt
+		h.SelfOffAt, h.SelfOffByMachine = &at, true
+	}
+	if c.offMax == 0 { // no request of the run that could have armed it: its own word is all there is
+		c.offMin, c.offMax = mono, mono+r.Ticket.wait()
+	}
+	m.note(h, now, "its agent does not let the run's shutdown through and shows the run as "+blockWords(word)+" now: it is not confirmed")
+	text := "Its agent did not let the run's shutdown through (" + refused + "), and shows the run as " + blockWords(word) + " now, not as confirmed. " + armedTail(r, h, now, mono)
+	m.endSeen(r, h, StLeftOn, OnYes, now, text, text)
+	return true
 }
 
 // left takes in that a confirmation of the run by by left the panel for the machine at since (steady: the

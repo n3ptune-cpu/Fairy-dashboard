@@ -35,6 +35,7 @@ type modelCheck struct {
 	armSays       string // it refuses the ticket with this reason, whatever its rules say
 	goLost        string // the answer to the confirmation is lost: "arrives" | "never"
 	goSays        string // it refuses the confirmation with this reason
+	lied          bool   // its agent showed this run as confirmed when it was not (the test says so: the judge allows what follows from that word)
 	goTwice       bool   // the confirmation reaches it twice: it takes the first copy, and the panel holds its answer to the second
 	cancelSays    string // its agent answers a cancel with this error (500 / 503): nothing is cancelled
 
@@ -296,6 +297,9 @@ func (w *world) judgeGrant(mc *machine, what string, grant any, delay time.Durat
 	case g.Start && (what != "update" || !mc.chk.startApproved):
 		w.t.Errorf("RULE BROKEN: %s sent to %s on the start's approval, which does not cover it", what, mc.info.ID)
 	case g.Start:
+	case g.Run == w.tk.run() && mc.chk.lied:
+		// its agent showed the run as confirmed after a confirmation left for it: the panel goes by that word,
+		// and the machine itself refuses what the panel then sends
 	case g.Run != w.tk.run() || !mc.chk.goTaken[g.Run]:
 		w.t.Errorf("RULE BROKEN: %s sent to %s without a confirmation that machine accepted for this run", what, mc.info.ID)
 	case what == "shutdown" && delay != mc.chk.delay && mc.chk.goTaken[g.Run] && mc.chk.delay != 0:

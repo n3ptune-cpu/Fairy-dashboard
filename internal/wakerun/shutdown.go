@@ -222,6 +222,9 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 		case opCode(err) == CodeApproval && h.Checked:
 			// The run's one shutdown was not let through: the time the confirmation named is over, or the run
 			// was ended on the machine (a cancel, a restart). It is not asked for again.
+			if m.armedAfterAll(r, h, now, opText(err)) { // confirmed by its agent's word only, and armed after all
+				return
+			}
 			m.end(r, h, StLeftOn, OnYes, now, "Left ON: its agent did not let the run's shutdown through ("+opText(err)+"). The confirmation covers one shutdown, for "+
 				span(time.Duration(r.Ticket.WithinS)*time.Second)+" and until the machine is started again."+updateTail(h))
 		case opCode(err) == CodeApproval:
