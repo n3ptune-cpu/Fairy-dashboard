@@ -54,7 +54,8 @@ func (s *Server) enrollHooks() enrollment.Hooks {
 			}
 			return nil
 		},
-		Remove: s.unpoll,
+		Remove:   s.unpoll,
+		NameFree: s.addHostNameFree,
 		// Add host starts clean: what "Edit host" still keeps under the new host's id (its own entry, and changes
 		// about its rows kept with other agents) was made for another machine. Remove takes it out already; this
 		// is for what is there all the same (a host taken out of config.yaml, a state.json from a backup). It is
@@ -252,6 +253,22 @@ func (s *Server) nodeSystemID(name string) string {
 		}
 	}
 	return ""
+}
+
+// addHostNameFree is Add host's question whether the name of a new host is free (enrollment.Hooks.NameFree):
+// the same comparison "Edit host" makes for a name (adminstate.NameKey: look-alikes are one name), against
+// the names the other hosts are shown under, the names config.yaml has for them, and the names given in the
+// panel, also for hosts that are not shown right now. The row the new host becomes a part of (a Proxmox node
+// the panel has already) is its own, whatever it is called. The names of guests are not asked here: a
+// machine that is a guest of a node and gets an agent of its own is added under its name.
+func (s *Server) addHostNameFree(h managed.Host) error {
+	mine := func(id string) bool { return id != "" && (id == h.ID || id == h.Shown()) }
+	others, _ := s.otherNames(mine)
+	shown, config := (&hoHost{others: others, mine: mine}).names(s.Poller.Admin.HostOptions())
+	if why := nameRefusal(h.Name, shown, config); why != "" {
+		return errors.New("name: " + why + ". Give the new host a name of its own (a host's name is typed to confirm a power action on it)")
+	}
+	return nil
 }
 
 func (s *Server) hostsPage(c *reqCtx) error {

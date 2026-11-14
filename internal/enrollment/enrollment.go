@@ -157,6 +157,12 @@ type Hooks struct {
 	// error refuses the add (its text is the reason, for the Add host dialog): nothing is stored, and the
 	// host is not polled.
 	Fresh func(h managed.Host) error
+	// NameFree, when set, is asked about a host that is ADDED (not re-paired): whether its name can be told
+	// from the name of every other host the panel has (the names shown, config.yaml's, and the names given in
+	// "Edit host"). A host's name is typed to confirm a power action on it. An error refuses the add, with its
+	// text as the reason. It is asked before the join code is made, and again when the machine has paired,
+	// before anything is stored: a host can be renamed in between.
+	NameFree func(h managed.Host) error
 	// Online reports whether the host answered its last poll (and the error if not).
 	Online func(id string) (bool, string)
 	// Event is told about results (audit log, notifications): kind is paired, online, failed, expired, cancelled.
@@ -332,6 +338,9 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 		}
 		if err := m.idFree(h.ID); err != nil { // an added host the running configuration does not have (stored)
 			return Created{}, err
+		}
+		if err := m.nameFree(h); err != nil {
+			return Created{}, invalid("%s. Nothing was stored", err.Error())
 		}
 	}
 	// One Add host per host at a time, decided here in one step (N4): the host is either waiting already, or
@@ -648,6 +657,10 @@ func (m *Manager) commit(e *Enrollment, h managed.Host, sec managed.Secret, entr
 		// would take out what is kept for the host that has the id
 		fail("cannot add it: " + err.Error() + "; make a new code after that")
 		return false
+	} else if err := m.nameFree(h); err != nil {
+		// the name was given to another host after the code was made (Edit host, another Add host)
+		fail("cannot add it: " + err.Error() + ". Nothing was stored on the panel; make a new code under another name")
+		return false
 	} else if m.Hooks.Fresh != nil {
 		// before the first thing is stored: a host that cannot start clean does not start
 		if err := m.Hooks.Fresh(h); err != nil {
@@ -677,6 +690,14 @@ func (m *Manager) commit(e *Enrollment, h managed.Host, sec managed.Secret, entr
 		return false
 	}
 	return true
+}
+
+// nameFree asks the panel whether the name of a host that is added is free (Hooks.NameFree; nil: not asked).
+func (m *Manager) nameFree(h managed.Host) error {
+	if m.Hooks.NameFree == nil {
+		return nil
+	}
+	return m.Hooks.NameFree(h)
 }
 
 // idFree refuses an Add host under an id that the list of added hosts (managed-hosts.yaml) already has.
