@@ -358,3 +358,47 @@ func TestEditHostManyDevicesThatAreNotRelayedRightNow(t *testing.T) {
 		t.Fatalf("the audit entry: removed_count %v", en["removed_count"])
 	}
 }
+
+// What a removal answers (and writes to the audit log, and shows in "Confirm it's you") is what the dialog
+// listed, line for line, also when both kinds go in one request and one of them is longer than twenty lines:
+// each kind is shortened by itself, as the dialog's data has it.
+func TestEditHostARemovalSaysTheLinesThatWereListed(t *testing.T) {
+	cfg := ehConfig(t, ehNASLinks)
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var agents []string
+	for i := 0; i < 25; i++ {
+		agents = append(agents, fmt.Sprintf(`"gone-%02d": {"power_exclude_from_total": {"x": true}}`, i))
+	}
+	if err := os.WriteFile(filepath.Join(cfg.DataDir, "state.json"), []byte(`{"host_options": {"rev": 1, "agents": {`+strings.Join(agents, ",")+`,
+		"nas-agent": {"ups_powers": {"attic": {"lab-b-node-pve-b": true}}, "power_exclude_from_total": {"shed": true}}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := ehSetupWith(t, cfg, true)
+	g := r.options(ehNodeA)
+	var want []string
+	for _, l := range strs(g.body["leftovers"]) {
+		want = append(want, "Removed: "+l)
+	}
+	var named []any
+	list, _ := g.body["unrelayed"].([]any)
+	for _, x := range list {
+		m := x.(map[string]any)
+		want = append(want, "Removed: "+fmt.Sprint(m["text"]))
+		named = append(named, map[string]any{"id": m["id"], "kind": m["kind"]})
+	}
+	if len(want) != 23 || want[20] != "Removed: 5 more of the same kind" || len(named) != 2 {
+		t.Fatalf("the rig: 25 changes about machines that are gone (20 lines and how many more) and 2 devices that are not relayed: %q", want)
+	}
+	p := r.ok(ehNodeA, map[string]any{"leftovers": true, "unrelayed": named})
+	if got := strs(p.body["changed"]); !slices.Equal(got, want) {
+		t.Fatalf("the removal says\n%q\nthe dialog listed\n%q", got, want)
+	}
+	if en := r.auditEntries("", "host.options")[0]["params"].(map[string]any); !slices.Equal(strs(en["lines"]), want) || en["removed_count"] != 27.0 {
+		t.Fatalf("the audit entry: removed_count %v, lines %q", en["removed_count"], strs(en["lines"]))
+	}
+	if r.storedOptions()["agents"] != nil && len(r.storedOptions()["agents"].(map[string]any)) != 0 {
+		t.Fatalf("state.json afterwards: %v", r.storedOptions())
+	}
+}

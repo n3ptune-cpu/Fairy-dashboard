@@ -644,12 +644,12 @@ func (m *hoMachine) leftovers(o *adminstate.HostOptions, gone bool, forget []hoA
 			o.Agents[agent] = e
 		}
 	}
-	lines = append(lines, late...)
+	// Each kind is shortened by itself, so that what a removal says is what the dialog listed, line for line.
+	left.gone, left.removed = capLines(append(lines, late...)), capLines(left.removed)
 	if gone { // they were taken out above: first in what was removed, and no longer there
-		left.removed, left.removedN = append(lines, left.removed...), left.removedN+left.n
-		lines, left.n = nil, 0
+		left.removed, left.removedN = append(left.gone, left.removed...), left.removedN+left.n
+		left.gone, left.n = nil, 0
 	}
-	left.gone, left.removed = capLines(lines), capLines(left.removed)
 	if len(left.away) > maxLeftoverLines {
 		left.away = left.away[:maxLeftoverLines:maxLeftoverLines]
 	}
