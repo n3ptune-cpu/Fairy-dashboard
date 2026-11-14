@@ -1011,7 +1011,12 @@ not stop the start, but it is said: one WARN line at the start, on the Add host 
 Their page has
 **Re-pair** (a new code, e.g. after the panel lost the tokens) and **Remove** (stops polling, deletes the tokens;
 the agent stays installed until uninstalled on the machine); both ask for the host's name to be typed and a
-step-up sign-in, and are audited. Hosts in config.yaml are not changed by the panel. What a machine answers on
+step-up sign-in, and are audited. A host that the panel left out when it started (its tokens file is damaged,
+or its entry no longer passes the check) has no page: the Add host dialog lists it, with the line that says
+why and with its own **Re-pair** and **Remove**. An Add host under the name of such a host is refused ("the
+panel already has a host with the id box-a (BOX-A, added with Add host) that is not polled right now ...
+Re-pair that host, or Remove it first"): it would take that host's place in the list, and with it what was
+changed for it in [Edit host](#edit-host). Hosts in config.yaml are not changed by the panel. What a machine answers on
 Re-pair is checked like a new host's, against everything else the panel has: an answer that would collide with
 another host or Proxmox node is refused and the host stays as it was. A host that is its own Proxmox node must
 answer with the node name it was added as, unless **The node was renamed** is ticked in the Re-pair dialog.
@@ -1379,6 +1384,10 @@ Build 15:
 6. **Remove** of a host leaves no version and no last-seen time of it behind in the data folder. (A
    Remove in the instant of a poll's write could; after the next start of the panel a host added later
    under the same id was then shown with them until it answered.)
+7. **Add host**: a host added here that the panel left out when it started (its tokens file is damaged)
+   is listed on the Add host dialog, with the line that says why and with its own **Re-pair** and
+   **Remove**. An Add under its name is refused and names those two; it used to be accepted, and took that
+   host's place.
 
 ### 3. From a build older than 13
 

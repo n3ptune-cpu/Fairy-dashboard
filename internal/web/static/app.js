@@ -3258,6 +3258,7 @@ async function openAddHost(typed = null, problem = "") {
     </div>
     ${d.panel_address ? `<p class="note" id="ah-panel">Panel address: <code>${esc(d.panel_address)}</code> (${esc(d.panel_address_source || "config")})${d.panel_address_via ? ` <span title="how the panel found its own Tailscale address">· ${esc(d.panel_address_via)}</span>` : ""}${d.panel_address.includes(":") ? ' <b>IPv6 only: agents need the panel\'s Tailscale IPv4; set <code>enroll: {panel_address: 100.x.y.z}</code></b>' : ""}</p>`
       : '<div class="warnbox">The panel does not know its own Tailscale address (no Tailscale interface or tailscaled status found): set <code>enroll: {panel_address: 100.x.y.z}</code> in config.yaml.</div>'}
+    ${addHostWaiting(d)}
     <div class="error" id="ah-err" role="alert"></div>
     <div class="row-gap end"><button class="btn" type="button" id="ah-cancel">Cancel</button><button class="btn primary" type="submit" id="ah-go">Make the code</button></div></form>`;
   m.hidden = false;
@@ -3299,6 +3300,19 @@ async function openAddHost(typed = null, problem = "") {
       if (r) openEnrollDialog(r); else keepAddHost(body);  // "Confirm it's you" took the dialog's place: see showPendingResult
     } catch (x) { $("#ah-err").textContent = x.message; $("#ah-go").disabled = false; }
   };
+}
+// Hosts added here that the panel does not poll right now: it left them out when it started (the tokens file is
+// damaged, or the entry no longer passes the check), and says why in d.skipped. Such a host has no page, and
+// Re-pair and Remove are on a host's page (managedBox): here they are for these hosts. An Add under the name of
+// one of them is refused and names the two (the panel: enrollment idFree), so they must be within reach.
+function addHostWaiting(d) {
+  const out = (d.managed || []).filter((h) => h.active === false), lines = d.skipped || [], why = controlWhyNot();
+  if (!out.length && !lines.length) return "";
+  return `<div class="warnbox" id="ah-out">${out.length ? "<b>Added here, and not polled right now.</b> Re-pair makes a new join code for the machine; what was changed for it in Edit host is kept. An Add under the same name is refused." : ""}
+    ${out.map((h) => `<div class="list-row"><span>${esc(h.name)} <code>${esc(h.id)}</code></span><span class="row-gap">
+      <button class="btn" type="button" data-act="mh-repair" data-host="${esc(h.id)}" ${why ? "disabled" : ""} title="${esc(why || "A new join code, when the panel lost this host's tokens")}">Re-pair</button>
+      <button class="btn danger" type="button" data-act="mh-remove" data-host="${esc(h.id)}" ${why ? "disabled" : ""} title="${esc(why)}">Remove from the panel</button></span></div>`).join("")}
+    ${lines.map((x) => `<div class="note">${esc(x)}</div>`).join("")}</div>`;
 }
 const groupCode = (c) => String(c || "");  // the panel sends it grouped (ABCD-EFGH-...)
 const ENR_STEPS = [["waiting", "Waiting for the machine"], ["paired", "Paired"], ["online", "Online"]];
@@ -3406,7 +3420,9 @@ document.addEventListener("click", (e) => {
   const t = e.target.closest('[data-act="add-host"],[data-act="mh-repair"],[data-act="mh-remove"]');
   if (!t || t.disabled) return;
   if (t.dataset.act === "add-host") { openAddHost(); return; }
-  const s = state.byId[current().id], h = s && state.managed[s.id];
+  // on a host's page it is that host; in the Add host dialog (addHostWaiting) the button names its host
+  const s = state.byId[current().id];
+  const h = t.dataset.host ? (enr.page?.managed || []).find((x) => x.id === t.dataset.host) : s && state.managed[s.id];
   if (!h) return;
   const path = `/api/admin/hosts/${enc(h.id)}`;
   if (t.dataset.act === "mh-repair") {
