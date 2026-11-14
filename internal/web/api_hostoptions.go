@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -74,6 +75,7 @@ func init() {
 	// in one file.
 	actionText[hostOptionsRoute] = "edit the host {id}"
 	actionList[hostOptionsRoute] = (*reqCtx).hostOptionsItems
+	actionStamp[hostOptionsRoute] = func(_ *reqCtx, p *pendingAction) string { return rtShown(p.Items) }
 	apiDoc = append(apiDoc,
 		struct{ method, path, summary string }{"GET", "/api/admin/hosts/{id}/options", "Edit host: which UPS powers this machine, which plugs are linked to it and which count in the total, with where each value comes from (config.yaml or changed in the panel) and the agent that reads the device; under \"host\" the machine's name, its site and its Wake-on-LAN details, each with its source, the choices (sites, relays) and what is shown read-only (admins, browser session only)"},
 		struct{ method, path, summary string }{"PUT", "/api/admin/hosts/{id}/options", "Edit host: change the links of one machine: {ups: [{id, on}], plugs: [{id, linked, in_total}], reset: [{id, field: ups|plugs|total}], leftovers: true, unrelayed: [{id, kind: ups|plug}]}; only what is named changes, for this machine (leftovers: the stored changes about machines that are gone are removed; unrelayed: the stored changes about these devices are removed, each only if its reading machine does not relay it right now). Also the machine itself: name: \"...\"; site: \"<a site>\" or \"\" (the default; stored as the Users page stores it); wol: {macs: [..], relay: \"<an agent with wol_relay>\", port: 7|9} or {off: true}; reset: [{field: name|wol}]. Anything about Wake-on-LAN needs its own confirmation every time; a target address or a password of a wake packet cannot be sent. Stored as single decisions laid over config.yaml in state.json (config.yaml is not written; reset takes the decision of one line out), counts with the reading agent's next poll. Admins, browser session only (API tokens get 403), CSRF header, step-up. 422: an unknown field, UPS or plug; 409: not a host. Audited as host.options"})
@@ -1177,17 +1179,32 @@ func (c *reqCtx) hostOptionsItems(*model.User) []string {
 	if err != nil {
 		return nil
 	}
-	if req.Site != nil { // the site, and whose view of the machine and of its devices it moves
-		sc, err := m.sites.plan(*req.Site)
-		if err != nil {
+	var site *hoSiteChange
+	if req.Site != nil {
+		if site, err = m.sites.plan(*req.Site); err != nil {
 			return nil
 		}
-		if sc != nil {
-			return append(append([]string{sc.line}, lines...), sc.notes(m, before, o)...)
-		}
 	}
-	return append(lines, m.visibility(before, o)...) // and whose view of a device it moves
+	return m.confirmLines(site, lines, before, o)
 }
+
+// confirmLines is every line "Confirm it's you" shows for a request: the site's line first (site: the change
+// of the site, nil: none), then the lines apply made, then whose view of the machine or of a device the
+// change moves (before, after: the overlay before and after apply). A kept request carries these lines as
+// its stamp, and the panel's replay saves only when the same request makes the same lines from what is
+// stored at the moment of the write (hostOptionsPut).
+func (m *hoMachine) confirmLines(site *hoSiteChange, lines []string, before, after adminstate.HostOptions) []string {
+	if site != nil {
+		return append(append([]string{site.line}, lines...), site.notes(m, before, after)...)
+	}
+	return append(append([]string{}, lines...), m.visibility(before, after)...)
+}
+
+// hoNotShown is the answer to a confirmed change of "Edit host" that would not do any more what its
+// confirmation showed (errHoNotShown inside the locked write).
+const hoNotShown = "This host, or a setting its values come from, was changed by somebody else after you pressed Save, so what you confirmed is not what would be saved now. Nothing was saved: open Edit host again and press Save."
+
+var errHoNotShown = errors.New("not the change that was confirmed")
 
 func (s *Server) hostOptionsPut(c *reqCtx) error {
 	const denied = "only admins can edit a host"
@@ -1233,6 +1250,18 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		}
 		return err
 	}
+	// The panel's replay of a kept request saves only what its confirmation showed. The lines are made again,
+	// from what is stored now, and when they are not the lines the admin confirmed (the stamp of the kept
+	// action), nothing is written and the answer says to look again: a name, a site, a Wake-on-LAN detail, a
+	// link or a run timing is never changed on a confirmation that said something else ("back to Run timings:
+	// 900 s" when Run timings says 300 s by now). It is asked twice: here, before either file is written, and
+	// inside the locked write below, against what state.json holds at that moment.
+	shown, replay := c.keptStamp()
+	notShown := func() error {
+		params["confirmed"] = strings.Split(shown, "\n")
+		c.audit(u, "host.options", m.row.ID, params, "error 409: the host was changed after the confirmation was asked for; nothing was saved")
+		return apierr.New(409, hoNotShown)
+	}
 	// The site is kept in another file than the rest (users.json: the Users page's own store). So the whole
 	// request is looked at first, on a copy: what is refused is refused before either file is written.
 	var site *hoSiteChange
@@ -1240,9 +1269,16 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		if site, err = m.sites.plan(*req.Site); err != nil {
 			return refuse(err)
 		}
+	}
+	if req.Site != nil || replay {
 		probe := s.Poller.Admin.HostOptions().Clone()
-		if _, _, _, err := m.apply(&probe, req); err != nil {
+		was := probe.Clone()
+		planned, _, _, err := m.apply(&probe, req)
+		if err != nil {
 			return refuse(err)
+		}
+		if replay && rtShown(shownItems(m.confirmLines(site, planned, was, probe))) != shown {
+			return notShown()
 		}
 	}
 	s.hostEditAt("planned")
@@ -1276,6 +1312,9 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 			if notes = m.visibility(before, *o); site != nil {
 				notes = site.notes(m, before, *o)
 			}
+			if replay && rtShown(shownItems(m.confirmLines(site, lines, before, *o))) != shown {
+				return errHoNotShown
+			}
 		}
 		return err
 	})
@@ -1284,6 +1323,9 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 			if _, back := s.Access.Assign(m.row.ID, prev); back != nil {
 				params["site_not_put_back"] = prev
 			}
+		}
+		if err == errHoNotShown {
+			return notShown()
 		}
 		return refuse(err)
 	}

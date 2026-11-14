@@ -1386,6 +1386,13 @@ decides who can see the UPS and its notifications. The dialog's info button says
 
   Neither kind is used meanwhile. While a machine is silent, nothing is known about its devices: its changes
   are in neither count, and they have their lines again when it answers.
+* **What you confirm is what is saved.** When a save asks you to confirm it's you, the confirmation lists
+  every line it will change, with the value before and after. When somebody else changes this host, or a
+  setting one of its values comes from (Run timings, the site on the Users page), before you confirm, so
+  that your request would now do something else than that list said, nothing is saved ("This host, or a
+  setting its values come from, was changed by somebody else after you pressed Save ..."): open Edit host
+  again and press Save. A Reset that said "back to Run timings: 900 s" never leaves the machine with
+  another number.
 * **A damaged override never stops the panel.** Whatever is under `host_options` that is not what Fairy
   writes is ignored with one warning in the log (and a WARN line of `fairy admin config check`);
   config.yaml's value counts for it. `fairy update` is not affected: its check reads config.yaml only.

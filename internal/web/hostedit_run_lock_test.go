@@ -8,22 +8,25 @@ import (
 
 // Whether a machine's own run timing is stored ("a decision") or not ("what counts anyway") is decided
 // against the panel's timing that state.json holds at the moment of the write, inside the write's own lock.
-// Another admin changes "Run timings" after this admin's request was looked at and confirmed, and before it
-// is written:
+// Another admin changes "Run timings" in the instant after this admin's confirmed request was looked at and
+// before it is written:
 //
-//   - the number typed was the panel's and is not any more: it is stored, and it is what counts for the
-//     machine afterwards ("the number you save is the number that counts");
-//   - the number typed was another one and is the panel's now: nothing is stored, the machine follows the
-//     panel, as it does for everybody who types a number that counts anyway.
+//   - the number typed was the panel's (nothing to change, the confirmation had no line) and is not any
+//     more: the write would now store it as a decision;
+//   - the number typed was another one (the confirmation said so) and is the panel's now: the write would
+//     now store nothing.
+//
+// Either way the write would not do what was confirmed, and it is seen inside the lock: nothing is saved,
+// and the admin is told to look again. A save that made its base before the lock stored the number that
+// counted anyway in the one case and dropped the decision in the other, without a word.
 func TestEditHostComparesARunTimingWithThePanelsAtTheMomentOfTheWrite(t *testing.T) {
 	for _, c := range []struct {
 		what        string
 		typed, then int // the countdown typed for pc-a; what the other admin sets the panel's to meanwhile
-		wantStored  string
-		wantMessage string
+		wantItems   int
 	}{
-		{"typed the panel's, which then changes", 90, 30, "shutdown_delay_s=90", "changes saved"},
-		{"typed another, which the panel's then becomes", 45, 45, "", "nothing to change"},
+		{"typed the panel's, which then changes", 90, 30, 0},
+		{"typed another, which the panel's then becomes", 45, 45, 2},
 	} {
 		a := signedIn(t)
 		e := a.e
@@ -40,26 +43,22 @@ func TestEditHostComparesARunTimingWithThePanelsAtTheMomentOfTheWrite(t *testing
 			}
 		}
 		how, r := a.ehAsk("pc-a", map[string]any{"wake_update": map[string]any{"shutdown_delay_s": c.typed}})
-		if how != "each" || steps != 0 {
+		d, _ := r.body["detail"].(map[string]any)
+		if how != "each" || steps != 0 || len(strs(d["items"])) != c.wantItems {
 			t.Fatalf("%s: answered %q (%d writes begun): %s", c.what, how, steps, r.raw)
 		}
 		if cb := a.confirm(pendingID(r), false); cb.code != 303 || steps != 1 {
 			t.Fatalf("%s: the confirmation: %d, %d writes begun", c.what, cb.code, steps)
 		}
-		res, _ := e.do("GET", "/api/me", nil, "Cookie", a.sess).body["pending_result"].(map[string]any)
-		if res["ok"] != true || res["message"] != c.wantMessage {
+		if res := a.rtResult(); !hoRefused(res) {
 			t.Errorf("%s: answered %v", c.what, res)
 		}
-		if got := e.storedRun("pc-a"); got != c.wantStored {
-			t.Errorf("%s: stored %q, want %q", c.what, got, c.wantStored)
+		if got := e.storedRun("pc-a"); got != "" {
+			t.Errorf("%s: stored %q, want nothing", c.what, got)
 		}
-		// what counts for pc-a afterwards is the number that was typed, in both cases
 		e.s.hostEditStep = nil
-		if row := a.ehRun("pc-a", config.KeyShutdownDelay); row["value"] != float64(c.typed) || row["base"] != float64(c.then) {
+		if row := a.ehRun("pc-a", config.KeyShutdownDelay); !ehRunIs(row, c.then, "run", c.then, "run") {
 			t.Errorf("%s: the dialog afterwards: %v", c.what, row)
-		}
-		if _, delay := e.s.Poller.WakeUpdateOverride("pc-a"); (c.wantStored != "") != (delay == c.typed) || (c.wantStored == "" && delay != 0) {
-			t.Errorf("%s: pc-a's own countdown in force: %d", c.what, delay)
 		}
 	}
 }

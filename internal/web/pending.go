@@ -197,6 +197,7 @@ func shownItems(lines []string) []string {
 // made). A start of "Update unpowered hosts" rests on the run timings in force: a run must not start with
 // other timings than the ones its dialog and its confirmation showed (runtimes.go). A change of the run
 // timings rests on the lines its confirmation shows: what is confirmed is what is saved (api_runtimings.go).
+// A change of "Edit host" does too (api_hostoptions.go).
 var actionStamp = map[string]func(c *reqCtx, p *pendingAction) string{
 	"POST /api/admin/wake-update": func(c *reqCtx, _ *pendingAction) string { return c.wakeUpdateStamp() },
 }
