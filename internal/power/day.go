@@ -387,14 +387,13 @@ func daySummary(start uint32, bs []dayBucket) *model.PowerDaySummary {
 	s.AvgW = normalise.Round(sum/float64(n), 2)
 	s.MinW, s.MaxW = normalise.Round(s.MinW, 2), normalise.Round(s.MaxW, 2)
 	s.EnergyKWh, s.EnergyEstKWh = normalise.Round(total, 3), normalise.Round(est, 3)
-	switch {
-	case total-est <= 1e-9:
-		s.Energy, s.EnergyEstKWh = "estimated", s.EnergyKWh
-	case est <= 1e-9:
-		s.Energy, s.EnergyEstKWh = "counter", 0
-	case est <= energyMixedFrom*total:
-		// a few minutes of watts in a day of counter (the minute a counter starts again in is such a part
-		// until the counter moves): the number is the counter's, and the page does not call it estimated
+	switch whole := math.Abs(total); {
+	case math.Abs(total-est) <= energyMixedFrom*whole:
+		// all of it from the watts, or all but a step or two of a counter that hardly moved
+		s.Energy = "estimated"
+	case math.Abs(est) <= energyMixedFrom*whole:
+		// a few minutes of watts in a day of counter (the counter's first minute, and the minute it starts
+		// again in): the number is the counter's, and the page does not call it estimated
 		s.Energy = "counter"
 	default:
 		s.Energy = "mixed"
@@ -409,83 +408,116 @@ func daySummary(start uint32, bs []dayBucket) *model.PowerDaySummary {
 	return &s
 }
 
+// What dayEnergy takes a counter's behaviour for.
 const (
-	// energyFloorW: a counter increase that would need more than this many watts for the whole time between
-	// two values (or ten times the day's highest watts, if that is more) is not an increase a device behind
-	// a plug can have had: the counter jumped.
+	// energyFloorW: between two counter values with readings in every minute between them, an increase that
+	// would need more than this many watts for the whole time (or ten times the day's highest watts, if that
+	// is more) is not an increase a device behind a plug can have had: the counter jumped.
 	energyFloorW = 4000.0
-	// energySlackKWh is how far a counter may lag behind half of the watts of the same time and still count:
-	// counters have coarse steps (0.001 kWh and worse).
-	energySlackKWh = 0.1
-	// energyMixedFrom: the energy is called "mixed" when more than this part of it is estimated.
+	// energyGapFloorW is the same for the minutes between two counter values that have no readings: there
+	// nothing says what the device did, so the limit is ten times the day's highest watts and at least this.
+	// (4 kW for five hours without readings would let a counter that was set to another base add 20 kWh to
+	// the day of a 60 W device.)
+	energyGapFloorW = 200.0
+	// energyLateKWh: a counter value that is lower than the one before by at most this much is a late value
+	// (a plug's cloud hands out an older total now and then), not a restart: it is left out.
+	energyLateKWh = 0.05
+	// energyCounted: a stretch counts with the counter's increase when that is at least this part of the
+	// stretch's watts, less energySteps of the counter's own steps (a counter moves in steps, and the watts
+	// and the counter never agree to the last digit).
+	energyCounted = 0.5
+	energySteps   = 3
+	// energyStill: two counter values closer than this are the same value.
+	energyStill = 1e-6
+	// energyMixedFrom: the energy is called "mixed" when more than this part of it is estimated, and
+	// "estimated" when less than this part of it is the counter's.
 	energyMixedFrom = 0.02
 )
 
 // dayEnergy is the energy of the day's buckets in kWh, and the part of it that is estimated from the watts
 // (average watts of a minute x one minute) and not read from the device's counter.
 //
-// A plug's counter is not a clean number that only grows. It restarts at 0 after an outage, it can stay at 0
-// for hours, and it moves in coarse steps. So nothing is ever taken as "last value minus first value":
+// A plug's counter is not a clean number that only grows. It restarts at 0 after an outage, it can stand
+// still for hours while the plug measures power, it moves in steps, and its cloud hands out a late value now
+// and then. So nothing is ever taken as "last value minus first value", and nothing is judged for the day as
+// a whole: the day is cut into stretches, each from one change of the counter to the next, and each stretch
+// is judged by itself.
 //
-//   - The minutes that have a counter value form runs: values that follow each other and do not go down. A
-//     value that is lower than the one before ends the run and starts the next (the counter restarted: never
-//     negative energy, and the new value itself is not counted as an increase). So does an increase no device
-//     can have had in that time (maxW is the day's highest watts; see energyFloorW).
-//   - A run counts with its increase when the counter moved and is not far below the watts of the same
-//     minutes. A counter that did not move, or that shows far less than the watts (stuck at 0 and counting
-//     again later), counts with those watts instead: estimated.
-//   - Minutes with watts and no counter value count with their watts: before the first counter value, after
-//     the last, between two runs, and all of them for a device without a counter.
+//   - A stretch counts with the counter's increase when the counter counted it: the increase is at least half
+//     of the watts of the stretch's minutes, less three of the counter's steps (its smallest increase of the
+//     day). Otherwise the counter stood still for a time in which the plug measured power: the stretch counts
+//     with its watts, and what the counter did not show of them is estimated. A counter that hands out its
+//     total every half hour is counted (its step makes up for the half hour); one that read 0 for five hours
+//     after an outage and then counts is not, for those five hours.
+//   - A value lower than the one before by at most energyLateKWh is a late value and is left out. A larger
+//     drop is a restart, and an increase no device can have made (energyFloorW, energyGapFloorW; maxW is the
+//     day's highest watts) is a jump: both end the stretch, whose minutes then count with their watts, and
+//     the counter goes on from the new value. Never negative energy, and never the new value as an increase.
+//   - Minutes with watts that no stretch covers count with their watts: before the first counter value and in
+//     its own minute (a counter value says nothing about the time before it), after the counter's last
+//     change, and all of them for a device without a counter or with one that never moved.
 //
-// A minute without a bucket adds nothing to the watts part: it is not zero watts, it is not known. Inside a
-// run the counter's increase does include what the device used while nobody could ask it.
+// A minute without a bucket adds nothing to the watts: it is not zero watts, it is not known. A stretch the
+// counter counted does include what the device used while nobody could ask it.
 func dayEnergy(bs []dayBucket, maxW float64) (total, est float64) {
 	const stepH = DayStepS / 3600.0
-	capKW := math.Max(energyFloorW, 10*maxW) / 1000
+	capKW, gapKW := math.Max(energyFloorW, 10*maxW)/1000, math.Max(energyGapFloorW, 10*maxW)/1000
+	type stretch struct{ up, watts float64 } // the counter's increase over it, and the watts of its minutes
 	var (
-		inRun      bool
-		runC, runW float64 // the run's increase of the counter, and the watts of its minutes, in kWh
-		tail       float64 // the watts of the minutes since the run's last counter value
-		prevK      float64
-		prevI      int
+		stretches []stretch
+		base      bool    // a counter value to compare the next one with
+		prevK     float64 // that value
+		prevI     int     // and its minute
+		since     int     // minutes with readings after prevI
+		open      float64 // the watts of the minutes since the counter last changed
 	)
-	closeRun := func() {
-		if !inRun {
-			return
-		}
-		if runC > 0 && runC >= 0.5*runW-energySlackKWh {
-			total += runC
-		} else {
-			total, est = total+runW, est+runW
-		}
-		total, est = total+tail, est+tail
-		inRun, runC, runW, tail = false, 0, 0, 0
-	}
 	for i, b := range bs {
 		if b.n == 0 {
 			continue
 		}
 		e := float64(b.avg) * stepH / 1000
-		if math.IsNaN(b.kwh) {
-			if inRun {
-				tail += e
-			} else {
-				total, est = total+e, est+e
+		if !base {
+			est += e // before the first counter value, and its own minute
+			if !math.IsNaN(b.kwh) {
+				base, prevK, prevI, since, open = true, b.kwh, i, 0, 0
 			}
 			continue
 		}
-		if inRun {
-			if d := b.kwh - prevK; d < 0 || d > float64(i-prevI+1)*stepH*capKW {
-				closeRun()
-			} else {
-				runC, runW, tail = runC+d, runW+tail+e, 0
-			}
+		since++
+		if math.IsNaN(b.kwh) {
+			open += e
+			continue
 		}
-		if !inRun {
-			inRun, runC, runW, tail = true, 0, e, 0
+		up := b.kwh - prevK
+		if up < 0 && -up <= energyLateKWh {
+			open += e // a late value: this minute is the stretch's, the value is nobody's
+			continue
 		}
-		prevK, prevI = b.kwh, i
+		gap := i - prevI - since // minutes without readings since the last counter value
+		if up < 0 || up > (float64(since+1)*capKW+float64(gap)*gapKW)*stepH {
+			est += open + e // a restart or a jump: the counter says nothing about these minutes
+			prevK, prevI, since, open = b.kwh, i, 0, 0
+			continue
+		}
+		open += e
+		if up >= energyStill {
+			stretches = append(stretches, stretch{up, open})
+			prevK, open = b.kwh, 0
+		}
+		prevI, since = i, 0
 	}
-	closeRun()
+	est += open // since the counter's last change
+	step := math.Inf(1)
+	for _, s := range stretches {
+		step = math.Min(step, s.up)
+	}
+	total = est
+	for _, s := range stretches {
+		if s.up >= energyCounted*s.watts-energySteps*step {
+			total += s.up
+		} else {
+			total, est = total+s.watts, est+s.watts-s.up
+		}
+	}
 	return total, est
 }

@@ -156,8 +156,9 @@ func TestPowerDayAnswerForAWholeDay(t *testing.T) {
 		step := (w + 450) / 60000 // a minute at the average of its two samples, in kWh
 		switch m {
 		case power.DaySlots - 1: // the first minute: the counter's value there is where the day starts
+			want += step // (the minute itself counts with its watts)
 		case 599:
-			k = 0 // the plug lost its power in the gap: the counter starts again
+			k, want = 0, want+step // the plug lost its power in the gap: the counter starts again (and this minute counts with its watts)
 		default:
 			k, want = k+step, want+step
 		}
@@ -202,7 +203,7 @@ func TestPowerDayAnswerForAWholeDay(t *testing.T) {
 		t.Errorf("covered_s %v, want about 19 h", got)
 	}
 	// the counter's increases before the gap and after it: not minus 500 kWh, and not the watts of a day
-	if kwh := sum["energy_kwh"].(float64); sum["energy"] != "counter" || math.Abs(kwh-want) > 0.002 || sum["energy_est_kwh"] != 0.0 {
+	if kwh := sum["energy_kwh"].(float64); sum["energy"] != "counter" || math.Abs(kwh-want) > 0.002 || sum["energy_est_kwh"].(float64) > 0.02 {
 		t.Errorf("energy over a day with a counter that restarted: %v kWh (%v), want %.3f from the counter", sum["energy_kwh"], sum["energy"], want)
 	}
 	if sum["avg_w"].(float64) < 500 || sum["min_w"].(float64) > 124 || sum["max_w"].(float64) < 1050 {

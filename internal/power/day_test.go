@@ -396,12 +396,13 @@ func TestDayEnergyWithoutACounterIsEstimated(t *testing.T) {
 }
 
 // A counter that works: its increase is the energy, whatever the watts say in between (within reason), and a
-// gap inside it is covered by the counter.
+// gap inside it is covered by the counter. The minute of the counter's first value counts with its watts (a
+// counter value says nothing about the time before it): 0.002 kWh of such a day.
 func TestDayEnergyFromTheCounter(t *testing.T) {
 	// 120 W for a day = 2.88 kWh; the counter has steps of 0.001 kWh and starts at 512.300
 	k := func(i int) float64 { return 512.3 + math.Floor(float64(i)*0.002*1000)/1000 }
 	s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 120 }, k))
-	if s.Energy != "counter" || !near(s.EnergyKWh, 2.878, 1e-9) || s.EnergyEstKWh != 0 {
+	if s.Energy != "counter" || !near(s.EnergyKWh, 2.88, 1e-9) || s.EnergyEstKWh != 0.002 {
 		t.Errorf("a counter over the whole day: %+v", s)
 	}
 	// the same day with five hours in which nobody could ask the plug: the counter went on counting
@@ -411,12 +412,13 @@ func TestDayEnergyFromTheCounter(t *testing.T) {
 		}
 		return 120
 	}, k)
-	if s := daySummary(1000, gap); s.Energy != "counter" || !near(s.EnergyKWh, 2.878, 1e-9) || s.CoveredS != 19*3600 {
+	if s := daySummary(1000, gap); s.Energy != "counter" || !near(s.EnergyKWh, 2.88, 1e-9) || s.EnergyEstKWh != 0.002 || s.CoveredS != 19*3600 {
 		t.Errorf("a counter over a gap: %+v", s)
 	}
-	// a counter with coarse steps (0.1 kWh): still the counter
+	// a counter with coarse steps (0.1 kWh): its 28 steps are the counter's, and the 39 minutes since the last
+	// step, which no step has counted yet, count with their watts (0.078 kWh): the whole day, 2.88
 	coarse := func(i int) float64 { return math.Floor(float64(i)*0.002*10) / 10 }
-	if s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 120 }, coarse)); s.Energy != "counter" || !near(s.EnergyKWh, 2.8, 1e-9) {
+	if s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 120 }, coarse)); s.Energy != "mixed" || !near(s.EnergyKWh, 2.88, 1e-9) || !near(s.EnergyEstKWh, 0.08, 1e-9) {
 		t.Errorf("a counter with steps of 0.1 kWh: %+v", s)
 	}
 }
@@ -433,7 +435,8 @@ func TestDayEnergyCounterRestartsMidDay(t *testing.T) {
 		return float64(i-720) * 0.0025
 	}
 	s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 150 }, k))
-	if want := 2 * 719 * 0.0025; s.Energy != "counter" || !near(s.EnergyKWh, want, 1e-3) || s.EnergyKWh < 0 || s.EnergyEstKWh != 0 {
+	// (the counter's first minute and the minute of the restart count with their watts: 0.005 kWh)
+	if want := 2*719*0.0025 + 0.005; s.Energy != "counter" || !near(s.EnergyKWh, want, 1e-3) || s.EnergyKWh < 0 || s.EnergyEstKWh != 0.005 {
 		t.Errorf("a restart at noon: %+v, want %.4f kWh from the counter", s, want)
 	}
 	// the restart happens in a gap of five hours (the site was unreachable), and the counter comes back with
@@ -451,12 +454,11 @@ func TestDayEnergyCounterRestartsMidDay(t *testing.T) {
 		return 150
 	}
 	s = daySummary(1000, bucketsOf(1440, w, k))
-	if want := 599*0.0025 + 539*0.0025; s.Energy != "counter" || !near(s.EnergyKWh, want, 1e-3) {
+	if want := 599*0.0025 + 539*0.0025 + 0.005; s.Energy != "counter" || !near(s.EnergyKWh, want, 1e-3) {
 		t.Errorf("a restart in a gap: %+v, want %.4f kWh", s, want)
 	}
 	// a counter that goes down by its last digits and up again (a late value from the cloud) is neither
-	// negative energy nor a jump: the step down is not counted, the step up again is (0.004 kWh each time,
-	// 14 times that day)
+	// negative energy nor a restart: the late value is left out, and the day is what the counter went up by
 	k = func(i int) float64 {
 		v := 40 + float64(i)*0.0025
 		if i%100 == 50 {
@@ -464,8 +466,8 @@ func TestDayEnergyCounterRestartsMidDay(t *testing.T) {
 		}
 		return v
 	}
-	if s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 150 }, k)); s.Energy != "counter" || s.EnergyKWh < 3.59 || s.EnergyKWh > 3.66 {
-		t.Errorf("a counter that steps back by a digit now and then: %+v, want 3.6 kWh and at most 0.056 more", s)
+	if s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 150 }, k)); s.Energy != "counter" || !near(s.EnergyKWh, 3.6, 0.001) {
+		t.Errorf("a counter that steps back by a digit now and then: %+v, want 3.6 kWh", s)
 	}
 }
 
@@ -480,9 +482,10 @@ func TestDayEnergyCounterStuckAtZero(t *testing.T) {
 	if s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 80 }, func(int) float64 { return 0.004 })); s.Energy != "estimated" || !near(s.EnergyKWh, 1.92, 1e-6) {
 		t.Errorf("a counter stuck at 0.004: %+v", s)
 	}
-	// stuck for most of the day and counting for the last hour: far below the watts, so the watts count
+	// stuck for most of the day and counting for the last hour: the 23 hours count with their watts, the last
+	// hour is the counter's
 	k := func(i int) float64 { return math.Max(0, float64(i-1380)) * 0.00133 }
-	if s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 80 }, k)); s.Energy != "estimated" || !near(s.EnergyKWh, 1.92, 1e-6) {
+	if s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 80 }, k)); s.Energy != "mixed" || !near(s.EnergyKWh, 1.92, 2e-3) || !near(s.EnergyEstKWh, 1.841, 2e-3) {
 		t.Errorf("a counter that was stuck for 23 hours: %+v", s)
 	}
 	// a device that really uses next to nothing with a counter that does not move: the watts, which are small
@@ -501,8 +504,9 @@ func TestDayEnergyCounterAppearsMidDay(t *testing.T) {
 		return 5 + float64(i-720)*0.004 // 240 W
 	}
 	s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 240 }, k))
-	// before noon: 12 h x 240 W = 2.88 kWh estimated; after: 719 x 0.004 = 2.876 from the counter
-	if s.Energy != "mixed" || !near(s.EnergyEstKWh, 2.88, 1e-6) || !near(s.EnergyKWh, 2.88+2.876, 1e-6) {
+	// before noon: 12 h x 240 W = 2.88 kWh estimated, and the minute of the counter's first value; after it:
+	// 719 x 0.004 = 2.876 from the counter
+	if s.Energy != "mixed" || !near(s.EnergyEstKWh, 2.884, 1e-6) || !near(s.EnergyKWh, 2.88+2.88, 1e-6) {
 		t.Errorf("a counter from noon on: %+v", s)
 	}
 	// and one that goes away at noon (the sensor became unavailable; the watts go on)
@@ -513,7 +517,7 @@ func TestDayEnergyCounterAppearsMidDay(t *testing.T) {
 		return 5 + float64(i)*0.004
 	}
 	s = daySummary(1000, bucketsOf(1440, func(int) float64 { return 240 }, k))
-	if s.Energy != "mixed" || !near(s.EnergyEstKWh, 2.88, 1e-6) || !near(s.EnergyKWh, 2.88+2.876, 1e-6) {
+	if s.Energy != "mixed" || !near(s.EnergyEstKWh, 2.884, 1e-6) || !near(s.EnergyKWh, 2.88+2.88, 1e-6) {
 		t.Errorf("a counter until noon: %+v", s)
 	}
 }
@@ -533,7 +537,7 @@ func TestDayEnergyIgnoresAJumpNoDeviceCanMake(t *testing.T) {
 	}
 	// a big consumer is not a glitch: 3 kW for two hours through the counter
 	k = func(i int) float64 { return float64(i) * 0.05 }
-	if s := daySummary(1000, bucketsOf(120, func(int) float64 { return 3000 }, k)); s.Energy != "counter" || !near(s.EnergyKWh, 5.95, 1e-6) {
+	if s := daySummary(1000, bucketsOf(120, func(int) float64 { return 3000 }, k)); s.Energy != "counter" || !near(s.EnergyKWh, 6, 1e-6) || s.EnergyEstKWh != 0.05 {
 		t.Errorf("3 kW for two hours: %+v", s)
 	}
 }
@@ -550,7 +554,7 @@ func TestDayEnergyThroughTheStore(t *testing.T) {
 	if a.Energy != "estimated" || !near(a.EnergyKWh, 0.18, 1e-9) {
 		t.Errorf("stuck at 0: %+v", a)
 	}
-	if b.Energy != "counter" || !near(b.EnergyKWh, 0.1785, 1e-3) {
+	if b.Energy != "counter" || !near(b.EnergyKWh, 0.18, 1e-3) {
 		t.Errorf("a counter: %+v", b)
 	}
 	if c.Energy != "estimated" || !near(c.EnergyKWh, 0.18, 1e-9) {
@@ -558,9 +562,9 @@ func TestDayEnergyThroughTheStore(t *testing.T) {
 	}
 }
 
-// A counter that starts again leaves one minute behind that has no increase yet (the first value of the new
-// run), and that minute counts with its watts. A few such minutes in a day do not make the day's energy
-// "mixed": the page would say "partly estimated" for a thousandth of it. Above 2 % it does.
+// A counter's first minute, and the minute it starts again in, have no increase yet and count with their
+// watts. A few such minutes in a day do not make the day's energy "mixed": the page would say "partly
+// estimated" for a thousandth of it. Above 2 % it does.
 func TestDayEnergyIsTheCountersWhenOnlyMinutesOfItAreEstimated(t *testing.T) {
 	k := func(i int) float64 {
 		if i == 1439 { // the panel was restarted a minute ago, and the counter with it
@@ -569,8 +573,8 @@ func TestDayEnergyIsTheCountersWhenOnlyMinutesOfItAreEstimated(t *testing.T) {
 		return 40 + float64(i)*0.002
 	}
 	s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 120 }, k))
-	if s.Energy != "counter" || s.EnergyEstKWh != 0.002 || !near(s.EnergyKWh, 1438*0.002+0.002, 1e-9) {
-		t.Errorf("one estimated minute in a day: %+v", s)
+	if s.Energy != "counter" || s.EnergyEstKWh != 0.004 || !near(s.EnergyKWh, 1438*0.002+0.004, 1e-9) {
+		t.Errorf("two estimated minutes in a day: %+v", s)
 	}
 	k = func(i int) float64 { // the last hour without a counter value: 4 % of the day
 		if i >= 1380 {
@@ -578,7 +582,7 @@ func TestDayEnergyIsTheCountersWhenOnlyMinutesOfItAreEstimated(t *testing.T) {
 		}
 		return 40 + float64(i)*0.002
 	}
-	if s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 120 }, k)); s.Energy != "mixed" || !near(s.EnergyEstKWh, 0.12, 1e-9) {
+	if s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 120 }, k)); s.Energy != "mixed" || !near(s.EnergyEstKWh, 0.122, 1e-9) {
 		t.Errorf("an estimated hour in a day: %+v", s)
 	}
 }
