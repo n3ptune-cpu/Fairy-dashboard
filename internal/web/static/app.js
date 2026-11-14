@@ -2268,7 +2268,12 @@ function wakeUpdateBox() {
     ${earlier.length ? `<button class="wu-more" type="button" data-act="wu-log" data-k="earlier" aria-expanded="${showEarlier}">${showEarlier ? "Hide" : "Show"} ${earlier.length} earlier run${earlier.length === 1 ? "" : "s"}</button>
       ${showEarlier ? earlier.map((r) => wuRunBox(r, false)).join("") : ""}` : ""}
     ${d.hosts.some((h) => h.no_run) ? '<div class="note" id="wu-appr">A machine with the check on needs Fairy-agent v0.9.0 or newer to be in a run; its row says what stands in the way. <a href="#/approvals">Approvals</a></div>' : ""}
-    ${d.hosts.some((h) => h.checked) ? '<div class="note" id="wu-chk">A machine with the check on is woken with a ticket and asks for a second passkey once it is up (the strip on every page, 10 minutes). Not confirmed: not updated, and it switches itself off again. <a href="#/approvals">Approvals</a></div>' : ""}</div>`;
+    ${d.hosts.some((h) => h.checked) ? `<div class="note" id="wu-chk">A machine with the check on asks for a second passkey once it is up. <a href="#/approvals">Approvals</a>${infoBtn("wu-chk", "Machines with the check in a run", infoList([
+        "Your passkey at the start signs a ticket for each such machine that is off. Woken by the run, the machine takes the ticket and is armed: it switches itself off again by itself unless you confirm.",
+        "When the woken machines are up, a strip on every page asks for the second passkey and counts the time you have. The bell, the tab's title and (if set up) ntfy or Discord say it too.",
+        "Confirmed: the machine lets one update and one shutdown of this run through.",
+        "Not confirmed: not updated. An armed machine switches itself off again; Keep on, in the strip or in its row of the run, keeps it on.",
+        "The dialog at the start shows the times each passkey signs."]))}</div>` : ""}</div>`;
 }
 // The per-host switch in the ⋯ menu of a machine's page (admins).
 function wakeUpdateMenu(s) {
@@ -2299,7 +2304,7 @@ async function openWakeUpdate() {
   const unsure = joined.filter((h) => !h.choice && h.not_sure), rest = joined.filter((h) => !h.choice && !h.not_sure);
   const cannot = (l) => l.map((h) => `<div class="list-row"><span>${esc(h.name)}</span><span class="note">${esc(h.why)}</span></div>`).join("");
   const tick = (h, kind, checked) => `<label class="check opt"><input type="checkbox" data-wu="${kind}" value="${esc(h.id)}" ${checked ? "checked" : ""}><span>${esc(h.name)}
-    <span class="note">${kind === "wake" ? `woken by ${esc(h.relay)}` : "is on"}${h.version ? ` · runs ${esc(buildLabel(h.version))}` : ""}${h.behind === false ? " · already on the newest release" : ""}${kind === "wake" ? wuOwnTimings(h) : ""}</span></span></label>`;
+    <span class="note">${kind === "wake" ? `woken by ${esc(h.relay)}` : "is on"}${h.version ? ` · runs ${esc(buildLabel(h.version))}` : ""}${h.behind === false ? " · already on the newest release" : ""}${kind === "wake" && h.checked ? " · asks for a second passkey once it is up" : ""}${kind === "wake" ? wuOwnTimings(h) : ""}</span></span></label>`;
   const m = $("#modal");
   m.innerHTML = `<form class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="wu-t" id="wu-form">
     <h3 id="wu-t">Update unpowered hosts</h3>

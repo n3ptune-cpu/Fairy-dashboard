@@ -1,6 +1,9 @@
 package web
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Keep on where an admin looks for it: in the row of the machine in its run, for as long as the machine may
 // switch itself off by that run's ticket (the strip's data says which). The page's own functions, run with node.
@@ -55,4 +58,37 @@ func TestUIRunRowSaysNotUpdatedForAMachineNobodyConfirmed(t *testing.T) {
   const live = run("00000000000000bb", "running", [runHost("pc-a", { state: "awaiting_approval", checked: true, wake_sent_at: at, online_at: at })]);
   if (/not updated/.test(wuRunBox(live, true)) || wuRunBox(live, true).includes('<span class="bad">Update</span>')) fail("a machine that still waits: " + wuRunBox(live, true));
 `)
+}
+
+// What the Updates page says about machines with the check before a run: one short line under the section (the
+// rest behind its info button, with no number the configuration may have changed), and in the run's dialog a
+// few words on the line of each such machine that would be woken.
+func TestUIRunsOfCheckedMachinesAreSaidShortly(t *testing.T) {
+	js := appJS(t)
+	runWuPageScript(t, "checkednote", `
+  const note = () => words((wakeUpdateBox().match(/<div class="note" id="wu-chk">.*?<\/div>/s) || [""])[0]);
+  wu.data = data({ hosts: [host("pc-a", { checked: true }), host("pc-b")] });
+  if (note() !== "A machine with the check on asks for a second passkey once it is up. Approvals") fail("the line: " + note());
+  wu.data = data({ hosts: [host("pc-b")] });
+  if (note() !== "") fail("the line without such a machine: " + note());
+`)
+	i := strings.Index(js, `infoBtn("wu-chk", "Machines with the check in a run", infoList([`)
+	if i < 0 {
+		t.Fatal("the line about machines with the check has no info button")
+	}
+	more := js[i : i+strings.Index(js[i:], "]))")]
+	for _, want := range []string{"signs a ticket", "switches itself off again by itself unless you confirm", "strip on every page", "one update and one shutdown",
+		"Not confirmed: not updated", "Keep on"} {
+		if !strings.Contains(more, want) {
+			t.Errorf("behind the info button nothing says %q", want)
+		}
+	}
+	if strings.Contains(more, "10 minutes") || strings.Contains(more, "600") {
+		t.Error("the info text has a time of its own: the time to confirm is the configuration's, and the strip counts it")
+	}
+	dlg := js[strings.Index(js, `async function openWakeUpdate()`):]
+	dlg = dlg[:strings.Index(dlg, "m.hidden = false;")]
+	if !strings.Contains(dlg, `${kind === "wake" && h.checked ? " · asks for a second passkey once it is up" : ""}`) {
+		t.Error("the dialog's line of a machine with the check that is woken does not say that a second passkey is asked for")
+	}
 }
