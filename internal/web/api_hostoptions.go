@@ -124,7 +124,7 @@ type hoUPS struct{ id, agent, name, label string }
 
 type hoPlug struct {
 	id, agent, dev, label string
-	on                    string // the row the panel shows it on right now ("": none)
+	own                   bool // its agent says the device is its own machine's (system_hint: self), at its last answer
 }
 
 // hostOptionsMachine finds the machine a request is about and collects what can be linked to it. id is a
@@ -190,7 +190,7 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 		if !ok {
 			continue
 		}
-		m.plugs = append(m.plugs, hoPlug{id: st.ID, agent: *st.Via, dev: dev, label: st.Name, on: model.Deref(st.SystemID)})
+		m.plugs = append(m.plugs, hoPlug{id: st.ID, agent: *st.Via, dev: dev, label: st.Name, own: st.OwnHint})
 	}
 	slices.SortFunc(m.ups, func(a, b hoUPS) int { return strings.Compare(a.label+"\x00"+a.id, b.label+"\x00"+b.id) })
 	slices.SortFunc(m.plugs, func(a, b hoPlug) int { return strings.Compare(a.label+"\x00"+a.id, b.label+"\x00"+b.id) })
@@ -204,14 +204,18 @@ func (m *hoMachine) mine(id string) bool {
 
 // plugState is how a plug stands to this machine under the links l of its reading agent.
 //
-// byLink: power_links names this machine. self: no link is set and the panel shows the plug on a row all the
+// byLink: power_links names this machine. self: no link is set and the plug is its reading agent's all the
 // same: the agent itself says the device is its own machine's (system_hint: self in the agent's own
 // config), which the panel's entry cannot take away, only replace by a link to another machine. selfMine:
 // and that machine is this one. to: the row it is linked to by power_links ("": none).
+//
+// It is made from the links (config.yaml with the panel's changes) and from what the agent says about the
+// device, never from the row the panel shows the plug on: that row is the link as it was at the reading
+// agent's last answer, and stays so for as long as that agent is silent or its polling is paused.
 func (m *hoMachine) plugState(p hoPlug, l config.Links) (byLink, self, selfMine bool, to string) {
 	to = l.PowerLinks[p.dev]
 	byLink = m.mine(to)
-	self = to == "" && p.on != ""
+	self = to == "" && p.own
 	selfMine = self && m.agent != "" && p.agent == m.agent
 	return byLink, self, selfMine, to
 }

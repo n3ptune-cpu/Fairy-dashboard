@@ -139,9 +139,11 @@ func (m *Manager) markAgentUnreachable(agentID string, now time.Time) {
 func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev model.PowerSourceState, hasPrev bool,
 	now time.Time, links map[string]string, exclude []string) model.PowerSourceState {
 	var link *string
+	h := jsonString(row["system_hint"])
+	own := h == "self" || h == agentID
 	if l, ok := links[rid]; ok && l != "" {
 		link = model.P(l)
-	} else if h := jsonString(row["system_hint"]); h == "self" || h == agentID {
+	} else if own {
 		link = model.P(agentID)
 	}
 	name := clipText(jsonString(row["name"]), maxRemoteName)
@@ -191,7 +193,7 @@ func (m *Manager) remoteState(agentID, key, rid string, row map[string]any, prev
 	// for everyone who saw it because of the machine it is linked to, and its reason showed on no host's page.
 	return model.PowerSourceState{ID: key, Type: typ, Name: name, Status: status,
 		IncludeInTotal: !slices.Contains(exclude, rid), Readings: readings, LastSuccess: last, Error: errp,
-		Via: model.P(agentID), SystemID: link}
+		Via: model.P(agentID), SystemID: link, OwnHint: own}
 }
 
 // dropUnreported forgets the agent's devices that were not in this report (removed from the agent's config).

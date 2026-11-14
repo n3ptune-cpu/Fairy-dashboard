@@ -463,6 +463,98 @@ func TestEditHostOnANodeRowAndOnItsAgentsRow(t *testing.T) {
 	}
 }
 
+// "Linked by the machine itself" is what the AGENT says about a device (system_hint: self), not where the
+// panel showed the plug at the reading agent's last answer. While that agent is silent or its polling is
+// paused the old picture stays for as long as the silence lasts, and the dialog, the refusals and the lines
+// must not be made from it: a plug that was unlinked from another machine in that time is linked to nothing,
+// on every page; and a plug the agent calls its own is its own again.
+func TestEditHostPlugStateWhileTheReadingAgentIsSilent(t *testing.T) {
+	plug := func(id string, linked bool) map[string]any {
+		return map[string]any{"plugs": []any{map[string]any{"id": id, "linked": linked}}}
+	}
+	silent := func(r *ehRig) {
+		r.b.Mu.Lock()
+		r.b.Metrics[ehNAS] = func() (jsonx.M, error) { return nil, fmt.Errorf("down") }
+		r.b.Mu.Unlock()
+		r.poll()
+	}
+	state := func(r *ehRig, page, id string) string {
+		t.Helper()
+		e := ehEntry(t, r.options(page), "plugs", id)
+		return fmt.Sprintf("linked=%v self=%v other=%v mine=%v", e["linked"], e["self"], e["other"], e["mine"])
+	}
+	t.Run("a plug unlinked from another machine", func(t *testing.T) {
+		r := ehSetup(t)
+		r.ok(ehNodeB, plug("nas-agent/b-plug", true))
+		r.poll()
+		silent(r)
+		if got := strs(r.ok(ehNodeB, plug("nas-agent/b-plug", false)).body["changed"]); !slices.Equal(got, []string{"Plug B plug (read by NAS): no longer linked to PVE-B"}) {
+			t.Fatalf("unlinked while the NAS is silent: %v", got)
+		}
+		r.poll()
+		for page, want := range map[string]string{
+			ehNodeB: "linked=false self=false other=<nil> mine=false",
+			ehNodeA: "linked=false self=false other=<nil> mine=false",
+			ehNAS:   "linked=false self=false other=<nil> mine=true", // its own agent reads it: its total can be changed there
+		} {
+			if got := state(r, page, "nas-agent/b-plug"); got != want {
+				t.Errorf("the dialog of %s: %s, want %s", page, got, want)
+			}
+		}
+		// on the reading machine's page: nothing to unlink (and no refusal for a reason that is not true) ...
+		if x := r.put(ehNAS, plug("nas-agent/b-plug", false)); x.code != 200 || x.body["message"] != "nothing to change" {
+			t.Errorf("unlink on the NAS's page: %d %s", x.code, x.raw)
+		}
+		// ... and it can be linked there
+		if x := r.put(ehNAS, plug("nas-agent/b-plug", true)); x.code != 200 || !slices.Equal(strs(x.body["changed"]), []string{"Plug B plug (read by NAS): linked to NAS"}) {
+			t.Errorf("link on the NAS's page: %d %s", x.code, x.raw)
+		}
+		if state(r, ehNAS, "nas-agent/b-plug") != "linked=true self=false other=<nil> mine=true" {
+			t.Errorf("after the link on the NAS's page: %s", state(r, ehNAS, "nas-agent/b-plug"))
+		}
+		// taken out again there, still without an answer of the NAS: linked to nothing, and not "set on the machine itself"
+		if x := r.put(ehNAS, plug("nas-agent/b-plug", false)); x.code != 200 || !slices.Equal(strs(x.body["changed"]), []string{"Plug B plug (read by NAS): no longer linked to NAS"}) {
+			t.Errorf("unlink on the NAS's page after the link: %d %s", x.code, x.raw)
+		}
+		if got := state(r, ehNAS, "nas-agent/b-plug"); got != "linked=false self=false other=<nil> mine=true" {
+			t.Errorf("after that: %s", got)
+		}
+		// another machine takes it: from nowhere, so the line names no machine it "was on"
+		x := r.put(ehNodeA, plug("nas-agent/b-plug", true))
+		if x.code != 200 || !slices.Equal(strs(x.body["changed"]), []string{"Plug B plug (read by NAS): linked to PVE-A"}) {
+			t.Errorf("link on PVE-A's page: %d %s", x.code, x.raw)
+		}
+		en := r.auditEntries("", "host.options")
+		if lines := strs(en[0]["params"].(map[string]any)["lines"]); !slices.Equal(lines, []string{"Plug B plug (read by NAS): linked to PVE-A"}) {
+			t.Errorf("the audit entry's line: %v", lines)
+		}
+	})
+	t.Run("the plug the agent calls its own", func(t *testing.T) {
+		r := ehSetup(t)
+		r.ok(ehNodeB, plug("nas-agent/own", true)) // a link wins over what the agent says
+		r.poll()
+		if got := state(r, ehNAS, "nas-agent/own"); got != "linked=false self=false other=PVE-B mine=true" {
+			t.Fatalf("given to PVE-B, on the NAS's page: %s", got)
+		}
+		silent(r)
+		r.ok(ehNodeB, plug("nas-agent/own", false))
+		r.poll()
+		// no link any more: it is the NAS's own again, as its agent said when it last answered
+		if got := state(r, ehNAS, "nas-agent/own"); got != "linked=true self=true other=<nil> mine=true" {
+			t.Errorf("the NAS's page: %s", got)
+		}
+		if got := state(r, ehNodeB, "nas-agent/own"); got != "linked=false self=false other=NAS mine=false" {
+			t.Errorf("PVE-B's page: %s", got)
+		}
+		if x := r.put(ehNAS, plug("nas-agent/own", false)); x.code != 422 || !strings.Contains(fmt.Sprint(x.body["detail"]), "NAS plug is linked by the machine itself") {
+			t.Errorf("unlink of its own plug on the NAS's page: %d %s", x.code, x.raw)
+		}
+		if x := r.put(ehNodeA, plug("nas-agent/own", true)); x.code != 200 || !slices.Equal(strs(x.body["changed"]), []string{"Plug NAS plug (read by NAS): linked to PVE-A (was on NAS)"}) {
+			t.Errorf("link on PVE-A's page: %d %s", x.code, x.raw)
+		}
+	})
+}
+
 // A state.json that holds something else under "host_options" never stops a start and never changes what an
 // agent's entry says: every broken part is left out, config.yaml's value counts for it, the rest is used, and
 // the dialog and the log say what was ignored. Whatever the file says, nothing but the three link fields is

@@ -321,6 +321,11 @@ type PowerSourceState struct {
 	// when the source has no reading (it failed for longer than offline_after), so that the link, and with
 	// it who may see the source and where its error is shown, does not go away with the last reading.
 	SystemID *string `json:"system_id,omitempty"`
+	// OwnHint: the agent that relays the source says it is its own machine's (system_hint: self in the agent's
+	// config), at its last answer. It is what the agent SAYS, whatever the source is linked to (a link in the
+	// panel's entry wins over it): "Edit host" asks it, so that it need not guess it from SystemID, which is
+	// the link as it was at that answer. Not part of any answer of the API.
+	OwnHint bool `json:"-"`
 }
 
 // PowerOverview is GET /api/power.

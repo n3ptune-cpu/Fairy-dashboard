@@ -1,6 +1,8 @@
 package power
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,4 +102,50 @@ func TestLinksAreGivenAsTheRowTheMachineIsShownAs(t *testing.T) {
 	check("agent-x")
 	shownAs = "node-x"
 	check("node-x")
+}
+
+// OwnHint is what the agent says about a device ("it is my own machine's"), kept apart from what the device
+// is linked to: a link of the panel's entry wins over it and does not unsay it, an agent that is silent has
+// not unsaid it, and a later answer without the hint has. It is in no answer of the API.
+func TestOwnHintIsWhatTheAgentSaysWhateverTheLink(t *testing.T) {
+	pm, err := NewManager(nil, 5, time.Second, 60, 3600, nil, func() float64 { return 0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := func(id, hint string) map[string]any {
+		m := map[string]any{"id": id, "name": id, "type": "shelly", "ok": true, "watts": 10.0}
+		if hint != "" {
+			m["system_hint"] = hint
+		}
+		return m
+	}
+	rows := []map[string]any{row("own", "self"), row("by-id", "relay"), row("plain", ""), row("other", "pc-z")}
+	look := func(want map[string]string) {
+		t.Helper()
+		got := byID(pm.Overview())
+		for id, w := range want {
+			st := got["relay/"+id]
+			on := "-"
+			if st.SystemID != nil {
+				on = *st.SystemID
+			}
+			if is := on + " " + map[bool]string{true: "own", false: "not"}[st.OwnHint]; is != w {
+				t.Errorf("%s: %s, want %s", id, is, w)
+			}
+		}
+	}
+	pm.UpdateRemote("relay", rows, false, nil, nil)
+	look(map[string]string{"own": "relay own", "by-id": "relay own", "plain": "- not", "other": "- not"})
+	// a link wins over the hint, and the hint is still what the agent says
+	pm.UpdateRemote("relay", rows, false, map[string]string{"own": "pc-b", "plain": "relay"}, nil)
+	look(map[string]string{"own": "pc-b own", "by-id": "relay own", "plain": "relay not", "other": "- not"})
+	// the agent is silent: nothing it said is unsaid
+	pm.UpdateRemote("relay", nil, true, nil, nil)
+	look(map[string]string{"own": "pc-b own", "plain": "relay not"})
+	// it answers without the hint: it is no longer its own
+	pm.UpdateRemote("relay", []map[string]any{row("own", ""), row("plain", "self")}, false, nil, nil)
+	look(map[string]string{"own": "- not", "plain": "relay own"})
+	if b, _ := json.Marshal(pm.Overview()); strings.Contains(strings.ToLower(string(b)), "hint") {
+		t.Fatalf("the hint is in the answer of GET /api/power: %s", b)
+	}
 }
