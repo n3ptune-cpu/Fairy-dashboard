@@ -96,7 +96,7 @@ func TestEditHostWhoMay(t *testing.T) {
 	if cb := a.confirm(pendingID(r), false); cb.code != 303 {
 		t.Fatal("the confirmation:", cb.code)
 	}
-	if ex := strs(e.storedAgent("laptop")["power_exclude_from_total"]); !slices.Equal(ex, []string{"desk"}) {
+	if ex := fmt.Sprint(e.storedAgent("laptop")["power_exclude_from_total"]); ex != "map[desk:true]" {
 		t.Fatalf("after the confirmation the change is stored: %v", e.storedOptions())
 	}
 	if n := len(e.auditEntries("", "host.options")); n != 1 {
@@ -124,30 +124,155 @@ func TestEditHostWhoMay(t *testing.T) {
 	}
 }
 
-// Trap (b). A field that was changed in the panel is used INSTEAD of config.yaml's: a line of config.yaml that
-// is edited afterwards does not count while the override is there. The dialog says where the value comes from
-// and what config.yaml says now; Reset makes config.yaml's (new) value count.
-func TestEditHostOverrideShadowsALaterEditOfConfigYAML(t *testing.T) {
+// Trap (b). A line that was changed in the panel is used INSTEAD of what config.yaml says about that line: when
+// config.yaml is edited afterwards, its word about that line does not count while the change is there. The
+// dialog says where the value comes from and what config.yaml says now; Reset makes config.yaml's (new) word
+// count. Everything nobody changed in the panel follows config.yaml, also for the same reading agent, the same
+// UPS and another machine: a change made on PVE-B's page freezes nothing of what config.yaml says about PVE-A.
+func TestEditHostAChangedLineShadowsConfigYAMLAndEveryOtherLineFollowsIt(t *testing.T) {
 	r := ehSetup(t)
-	r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})
-	// config.yaml is edited: the desk UPS is given to PVE-A, the rack UPS to nobody; and the panel restarted
-	r2 := r.again(ehConfig(t, `ups_powers: {desk: [lab-a-node-pve-a]}, power_links: {a-plug: lab-a-agent}`))
-	if a, b := strs(r2.row(ehNodeA)["ups"]), strs(r2.row(ehNodeB)["ups"]); !slices.Equal(a, []string{"nas-agent/rack"}) || !slices.Equal(b, []string{"nas-agent/desk"}) {
-		t.Fatalf("with the override, after config.yaml changed: PVE-A %v, PVE-B %v (the panel's value counts: rack for A, desk for B)", a, b)
+	r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})  // PVE-B's page: on the desk UPS
+	r.ok(ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/rack", false)}}) // PVE-A's page: off the rack UPS, where config.yaml has it
+	if got := fmt.Sprint(r.storedAgent(ehNAS)["ups_powers"]); got != "map[desk:map["+ehNodeB+":true] rack:map["+ehNodeA+":false]]" {
+		t.Fatalf("state.json holds the two decisions and nothing else: %v", got)
+	}
+	// config.yaml is edited, and the panel restarted: the desk UPS is given to PVE-A, the rack UPS to PVE-A (as
+	// before) and to the NAS itself
+	r2 := r.again(ehConfig(t, `ups_powers: {desk: [lab-a-node-pve-a], rack: [lab-a-node-pve-a, nas-agent]}, power_links: {a-plug: lab-a-agent}`))
+	ups := func(id string) []string { return slices.Sorted(slices.Values(strs(r2.row(id)["ups"]))) }
+	if a, b, n := ups(ehNodeA), ups(ehNodeB), ups(ehNAS); !slices.Equal(a, []string{"nas-agent/desk"}) || !slices.Equal(b, []string{"nas-agent/desk"}) || !slices.Equal(n, []string{"nas-agent/rack"}) {
+		t.Fatalf("after config.yaml changed: PVE-A %v, PVE-B %v, NAS %v\n(want PVE-A on desk by config.yaml's new line and still off rack by the panel's change; "+
+			"PVE-B on desk by the panel's change; the NAS on rack by config.yaml's new line)", a, b, n)
 	}
 	g := r2.options(ehNodeA)
 	rack, desk := ehEntry(t, g, "ups", "nas-agent/rack"), ehEntry(t, g, "ups", "nas-agent/desk")
-	if rack["on"] != true || rack["from"] != "panel" || rack["config_on"] != false || desk["on"] != false || desk["from"] != "panel" || desk["config_on"] != true {
-		t.Fatalf("PVE-A's dialog (what counts, and what config.yaml says now): rack %v, desk %v", rack, desk)
+	if rack["on"] != false || rack["from"] != "panel" || rack["config_on"] != true {
+		t.Fatalf("PVE-A's dialog, the line that was changed (what counts, and what config.yaml says now): %v", rack)
 	}
-	// the plug links were not changed in the panel: config.yaml's value counts for that field
+	if desk["on"] != true || desk["from"] != "config" || desk["by"] != nil {
+		t.Fatalf("PVE-A's dialog, a line nobody changed for PVE-A: it follows config.yaml and says so: %v", desk)
+	}
+	// the plug links were not changed in the panel: config.yaml's value counts for them
 	if ap := ehEntry(t, g, "plugs", "nas-agent/a-plug"); ap["from"] != "config" || ap["linked"] != true {
-		t.Fatalf("a field without an override: %v", ap)
+		t.Fatalf("a line without a change: %v", ap)
 	}
-	r2.ok(ehNodeA, map[string]any{"reset": []any{map[string]any{"agent": ehNAS, "field": "ups"}}})
+	// Reset of PVE-A's line: config.yaml's word about PVE-A and the rack UPS counts; PVE-B's change is not touched
+	p := r2.ok(ehNodeA, map[string]any{"reset": []any{map[string]any{"id": "nas-agent/rack", "field": "ups"}}})
+	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"UPS Rack UPS (read by NAS): back to config.yaml: powers PVE-A"}) {
+		t.Fatalf("changed: %v", got)
+	}
 	r2.poll()
-	if a, b := strs(r2.row(ehNodeA)["ups"]), strs(r2.row(ehNodeB)["ups"]); !slices.Equal(a, []string{"nas-agent/desk"}) || len(b) != 0 {
-		t.Fatalf("after Reset: PVE-A %v, PVE-B %v (config.yaml as it is now: desk for A)", a, b)
+	if a, b := ups(ehNodeA), ups(ehNodeB); !slices.Equal(a, []string{"nas-agent/desk", "nas-agent/rack"}) || !slices.Equal(b, []string{"nas-agent/desk"}) {
+		t.Fatalf("after Reset of PVE-A's line: PVE-A %v, PVE-B %v", a, b)
+	}
+	if got := fmt.Sprint(r2.storedAgent(ehNAS)["ups_powers"]); got != "map[desk:map["+ehNodeB+":true]]" {
+		t.Fatalf("state.json after the Reset: %v", got)
+	}
+}
+
+// A Reset is about one line of one machine's page, and says what it does. On PVE-B's page it changes nothing
+// of PVE-A's links, whatever was changed for PVE-A with the same UPS of the same reading agent; the dialog's
+// lines, the lines of "Confirm it's you", the answer and the audit entry all say the same one thing. The one
+// change that reaches another machine is a plug's: it has one place, and the line names the machine it goes
+// to or comes back from.
+func TestEditHostResetIsAboutOneLineOfOneMachine(t *testing.T) {
+	r := ehSetup(t)
+	reset := func(id, field string) map[string]any {
+		return map[string]any{"reset": []any{map[string]any{"id": id, "field": field}}}
+	}
+	// PVE-A's page: off the rack UPS (config.yaml has it on), on the desk UPS. PVE-B's page: on the desk UPS.
+	r.ok(ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/rack", false), ehUPS("nas-agent/desk", true)}})
+	r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})
+	want := []string{"UPS Desk UPS (read by NAS): back to config.yaml: no longer powers PVE-B"}
+	// what an admin with an old sign-in is shown before the Reset is kept
+	old := r.do("PUT", "/api/admin/hosts/"+ehNodeB+"/options", reset("nas-agent/desk", "ups"), "Cookie", r.staleCookie(controller(), time.Hour), "X-Requested-With", "fairy", "Content-Type", "application/json")
+	if d, _ := old.body["detail"].(map[string]any); !stepUpRequired(old) || !slices.Equal(strs(d["items"]), want) {
+		t.Fatalf("the lines of \"Confirm it's you\": %d %s", old.code, old.raw)
+	}
+	p := r.ok(ehNodeB, reset("nas-agent/desk", "ups"))
+	if got := strs(p.body["changed"]); !slices.Equal(got, want) {
+		t.Fatalf("changed: %v", got)
+	}
+	r.poll()
+	if a, b := strs(r.row(ehNodeA)["ups"]), strs(r.row(ehNodeB)["ups"]); !slices.Equal(a, []string{"nas-agent/desk"}) || len(b) != 0 {
+		t.Fatalf("after the Reset on PVE-B's page: PVE-A %v (want its own two changes untouched: desk, not rack), PVE-B %v", a, b)
+	}
+	if got := fmt.Sprint(r.storedAgent(ehNAS)["ups_powers"]); got != "map[desk:map["+ehNodeA+":true] rack:map["+ehNodeA+":false]]" {
+		t.Fatalf("state.json: %v", got)
+	}
+	en := r.auditEntries("", "host.options")[0]["params"].(map[string]any)
+	ch := en["changes"].([]any)
+	if c := ch[0].(map[string]any); !slices.Equal(strs(en["lines"]), want) || len(ch) != 1 || c["agent"] != ehNAS || c["field"] != "ups_powers" ||
+		!slices.Equal(strs(c["before"].(map[string]any)["desk"]), []string{ehNodeA, ehNodeB}) || !slices.Equal(strs(c["after"].(map[string]any)["desk"]), []string{ehNodeA}) {
+		t.Fatalf("the audit entry: %v", en)
+	}
+	// a line PVE-B's page did not change cannot be reset there: PVE-A's change of the rack UPS stays
+	if p := r.ok(ehNodeB, reset("nas-agent/rack", "ups")); p.body["message"] != "nothing to change" || len(strs(r.row(ehNodeA)["ups"])) != 1 {
+		t.Fatalf("a Reset of PVE-A's line asked on PVE-B's page: %s", p.raw)
+	}
+	// a tick that says what config.yaml says takes the change out: nothing is left in state.json for that line
+	r.ok(ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true), ehUPS("nas-agent/desk", false)}})
+	if r.storedAgent(ehNAS) != nil {
+		t.Fatalf("every line is as config.yaml has it again, and state.json still holds: %v", r.storedOptions())
+	}
+	if rack := ehEntry(t, r.options(ehNodeA), "ups", "nas-agent/rack"); rack["on"] != true || rack["from"] != "config" {
+		t.Fatalf("the line after a tick back to config.yaml's value: %v", rack)
+	}
+
+	// a plug: config.yaml links a-plug to PVE-A. PVE-B's page takes it; both pages show the line as changed
+	r.ok(ehNodeB, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/a-plug", "linked": true}}})
+	onA, onB := ehEntry(t, r.options(ehNodeA), "plugs", "nas-agent/a-plug"), ehEntry(t, r.options(ehNodeB), "plugs", "nas-agent/a-plug")
+	if onA["linked"] != false || onA["other"] != "PVE-B" || onA["from"] != "panel" || onA["config_linked"] != true || onA["config_other"] != nil {
+		t.Fatalf("a-plug on PVE-A's page: %v", onA)
+	}
+	if onB["linked"] != true || onB["from"] != "panel" || onB["config_linked"] != false || onB["config_other"] != "PVE-A" {
+		t.Fatalf("a-plug on PVE-B's page: %v", onB)
+	}
+	// Reset on PVE-B's page: the line says where the plug goes back to
+	p = r.ok(ehNodeB, reset("nas-agent/a-plug", "plugs"))
+	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"Plug A plug (read by NAS): back to config.yaml: no longer linked to PVE-B (on PVE-A again)"}) {
+		t.Fatalf("changed: %v", got)
+	}
+	// ... and the same Reset made on PVE-A's page says where it comes back from
+	r.ok(ehNodeB, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/a-plug", "linked": true}}})
+	p = r.ok(ehNodeA, reset("nas-agent/a-plug", "plugs"))
+	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"Plug A plug (read by NAS): back to config.yaml: linked to PVE-A (was on PVE-B)"}) {
+		t.Fatalf("changed: %v", got)
+	}
+	r.poll()
+	if a, b := r.row(ehNodeA)["power_w"], r.row(ehNodeB)["power_w"]; a != 100.0 || b != nil || r.storedAgent(ehNAS) != nil {
+		t.Fatalf("after the Reset: PVE-A %v, PVE-B %v, state.json %v", a, b, r.storedOptions())
+	}
+	// a decision about a plug that is neither given to this machine nor taken from it is not this page's: PVE-B's
+	// page shows b-plug, which the NAS's page gave to the NAS, as "from config.yaml", and cannot reset it
+	r.ok(ehNAS, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true}}})
+	if bp := ehEntry(t, r.options(ehNodeB), "plugs", "nas-agent/b-plug"); bp["linked"] != false || bp["other"] != "NAS" || bp["from"] != "config" {
+		t.Fatalf("b-plug on PVE-B's page: %v", bp)
+	}
+	if p := r.ok(ehNodeB, reset("nas-agent/b-plug", "plugs")); p.body["message"] != "nothing to change" {
+		t.Fatalf("a Reset of the NAS's line asked on PVE-B's page: %s", p.raw)
+	}
+	// the total: one plug's place in it
+	r.ok(ehNAS, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/corner", "in_total": true}, map[string]any{"id": "nas-agent/b-plug", "in_total": false}}})
+	p = r.ok(ehNAS, reset("nas-agent/corner", "total"))
+	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"Plug Corner plug (read by NAS): back to config.yaml: not in the total"}) {
+		t.Fatalf("changed: %v", got)
+	}
+	if got := fmt.Sprint(r.storedAgent(ehNAS)["power_exclude_from_total"]); got != "map[b-plug:true]" {
+		t.Fatalf("state.json after the Reset of one plug's total: %v", got)
+	}
+	// a change that says what config.yaml says by now: config.yaml is edited to leave b-plug out of the total and
+	// to link it to the NAS itself. The lines stay "changed here" until Reset, which then changes nothing that shows.
+	r2 := r.again(ehConfig(t, `ups_powers: {rack: [lab-a-node-pve-a]}, power_links: {a-plug: lab-a-agent, b-plug: nas-agent}, power_exclude_from_total: [corner, b-plug]`))
+	bp := ehEntry(t, r2.options(ehNAS), "plugs", "nas-agent/b-plug")
+	if bp["in_total"] != false || bp["total_from"] != "panel" || bp["config_in_total"] != false || bp["linked"] != true || bp["from"] != "panel" || bp["config_linked"] != true {
+		t.Fatalf("b-plug after config.yaml caught up: %v", bp)
+	}
+	n := len(r2.auditEntries("", "host.options"))
+	p = r2.ok(ehNAS, map[string]any{"reset": []any{map[string]any{"id": "nas-agent/b-plug", "field": "plugs"}, map[string]any{"id": "nas-agent/b-plug", "field": "total"}}})
+	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"Plug B plug (read by NAS): back to config.yaml: nothing changes now", "Plug B plug (read by NAS): back to config.yaml: nothing changes now"}) ||
+		p.body["message"] != "links saved" || r2.storedAgent(ehNAS) != nil || len(r2.auditEntries("", "host.options")) != n+1 {
+		t.Fatalf("a Reset of changes that say what config.yaml says: %s", p.raw)
 	}
 }
 
@@ -223,7 +348,7 @@ func TestEditHostRepairKeepsAndRemoveForgets(t *testing.T) {
 	if ups, w := has(); !slices.Equal(ups, []string{"laptop/rack"}) || w != 135.0 {
 		t.Fatalf("after Re-pair: ups %v, power_w %v", ups, w)
 	}
-	if ex := strs(e.storedAgent("srv-winpc")["power_exclude_from_total"]); !slices.Equal(ex, []string{"desk"}) {
+	if ex := fmt.Sprint(e.storedAgent("srv-winpc")["power_exclude_from_total"]); ex != "map[desk:true]" {
 		t.Fatalf("after Re-pair the host's own override: %v", e.storedAgent("srv-winpc"))
 	}
 
@@ -238,9 +363,7 @@ func TestEditHostRepairKeepsAndRemoveForgets(t *testing.T) {
 	if raw := fmt.Sprint(e.storedOptions()); strings.Contains(raw, "srv-winpc") {
 		t.Fatalf("state.json still names the removed host: %s", raw)
 	}
-	ups, _ := lap["ups_powers"].(map[string]any)
-	links, _ := lap["power_links"].(map[string]any)
-	if !slices.Equal(strs(ups["rack"]), []string{"laptop"}) || len(links) != 0 || !slices.Equal(strs(lap["power_exclude_from_total"]), []string{"desk"}) {
+	if fmt.Sprint(lap["ups_powers"]) != "map[rack:map[laptop:true]]" || lap["power_links"] != nil || fmt.Sprint(lap["power_exclude_from_total"]) != "map[desk:true]" {
 		t.Fatalf("the laptop's overrides after the removal (its own UPS link and total stay): %v", lap)
 	}
 	var forgot map[string]any
@@ -326,14 +449,10 @@ func TestEditHostTwoAdminsAtOnce(t *testing.T) {
 		t.Fatalf("the revs of eight changes at once: %v (each write is one step after another)", revs)
 	}
 	nas := r.storedAgent(ehNAS)
-	ups, links := nas["ups_powers"].(map[string]any), nas["power_links"].(map[string]any)
-	rack, desk := strs(ups["rack"]), strs(ups["desk"])
-	sort.Strings(rack)
-	sort.Strings(desk)
-	if !slices.Equal(rack, []string{ehNodeA, ehNodeB, ehNAS}) || !slices.Equal(desk, []string{ehNodeA, ehNodeB}) ||
-		links["a-plug"] != "lab-a-agent" || links["b-plug"] != "lab-b-agent" || links["corner"] != "lab-a-agent" || len(links) != 3 ||
-		!slices.Equal(strs(nas["power_exclude_from_total"]), []string{"a-plug", "corner", "own"}) || r.storedOptions()["rev"] != 8.0 {
-		t.Fatalf("after eight changes at once, one is missing: %v", r.storedOptions())
+	if fmt.Sprint(nas["ups_powers"]) != "map[desk:map["+ehNodeA+":true "+ehNodeB+":true] rack:map["+ehNodeB+":true "+ehNAS+":true]]" ||
+		fmt.Sprint(nas["power_links"]) != "map[b-plug:lab-b-agent corner:lab-a-agent]" ||
+		fmt.Sprint(nas["power_exclude_from_total"]) != "map[a-plug:true own:true]" || r.storedOptions()["rev"] != 8.0 {
+		t.Fatalf("after eight changes at once, one is missing (or state.json holds more than the eight): %v", r.storedOptions())
 	}
 	if n := len(r.auditEntries("", "host.options")); n != 8 {
 		t.Fatalf("%d audit entries, want 8", n)
@@ -364,13 +483,13 @@ func TestEditHostTwoAdminsAtOnce(t *testing.T) {
 				top, last = rev, on
 			}
 		}
-		stored := slices.Contains(strs(r.storedAgent(ehNAS)["ups_powers"].(map[string]any)["rack"]), ehNodeB)
+		stored := r.storedAgent(ehNAS)["ups_powers"].(map[string]any)["rack"].(map[string]any)[ehNodeB] == true
 		if stored != last || r.storedOptions()["rev"] != top {
 			t.Fatalf("round %d: the file says %v at rev %v, the last answer said %v at rev %v", round, stored, r.storedOptions()["rev"], last, top)
 		}
 	}
 	// what the two did not touch is as it was
-	if got := strs(r.storedAgent(ehNAS)["ups_powers"].(map[string]any)["desk"]); len(got) != 2 {
+	if got := r.storedAgent(ehNAS)["ups_powers"].(map[string]any)["desk"].(map[string]any); len(got) != 2 {
 		t.Fatalf("desk after the rounds: %v", got)
 	}
 }
@@ -399,11 +518,11 @@ func TestEditHostOnANodeRowAndOnItsAgentsRow(t *testing.T) {
 	}
 	r.ok("lab-b-agent", map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}, "plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true}}})
 	nas := r.storedAgent(ehNAS)
-	if got := strs(nas["ups_powers"].(map[string]any)["rack"]); !slices.Equal(got, []string{ehNodeA, "lab-b-agent"}) {
+	if got := fmt.Sprint(nas["ups_powers"]); got != "map[rack:map[lab-b-agent:true]]" {
 		t.Fatalf("ups_powers (the row shown now): %v", got)
 	}
-	if nas["power_links"].(map[string]any)["b-plug"] != "lab-b-agent" {
-		t.Fatalf("power_links (the agent's id): %v", nas["power_links"])
+	if got := fmt.Sprint(nas["power_links"]); got != "map[b-plug:lab-b-agent]" {
+		t.Fatalf("power_links (the agent's id): %v", got)
 	}
 	en := r.auditEntries("", "host.options")[0]
 	if p := en["params"].(map[string]any); en["target"] != "lab-b-agent" || p["agent"] != "lab-b-agent" || p["changes"].([]any)[0].(map[string]any)["agent"] != ehNAS {
@@ -436,7 +555,7 @@ func TestEditHostOnANodeRowAndOnItsAgentsRow(t *testing.T) {
 	}
 	// a tick on the node's row: the node's id is added, and the chip is there
 	r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}})
-	if got := strs(r.storedAgent(ehNAS)["ups_powers"].(map[string]any)["rack"]); !slices.Equal(got, []string{ehNodeA, "lab-b-agent", ehNodeB}) {
+	if got := fmt.Sprint(r.storedAgent(ehNAS)["ups_powers"]); got != "map[rack:map[lab-b-agent:true "+ehNodeB+":true]]" {
 		t.Fatalf("ups_powers after the tick on the node's row: %v", got)
 	}
 	r.poll()
@@ -448,17 +567,17 @@ func TestEditHostOnANodeRowAndOnItsAgentsRow(t *testing.T) {
 	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"UPS Rack UPS (read by NAS): no longer powers PVE-B", "Plug B plug (read by NAS): no longer linked to PVE-B"}) {
 		t.Fatalf("changed: %v", got)
 	}
-	nas = r.storedAgent(ehNAS)
-	if got := strs(nas["ups_powers"].(map[string]any)["rack"]); !slices.Equal(got, []string{ehNodeA}) {
-		t.Fatalf("ups_powers after the tick was taken out: %v", got)
+	if nas = r.storedAgent(ehNAS); nas != nil {
+		t.Fatalf("after the ticks were taken out (every line is config.yaml's again): %v", nas)
 	}
-	if l := nas["power_links"].(map[string]any); len(l) != 1 || l["a-plug"] != "lab-a-agent" {
-		t.Fatalf("power_links: %v", l)
+	r.poll()
+	if a := r.row(ehNodeA); !slices.Equal(strs(a["ups"]), []string{"nas-agent/rack"}) || a["power_w"] != 100.0 {
+		t.Fatalf("PVE-A, which nobody changed: ups %v, power_w %v", a["ups"], a["power_w"])
 	}
 	// PVE-A, on its node's row from the start: the plug with its agent's id, the UPS with its node's id
 	r.ok(ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}, "plugs": []any{map[string]any{"id": "nas-agent/corner", "linked": true}}})
 	nas = r.storedAgent(ehNAS)
-	if got := strs(nas["ups_powers"].(map[string]any)["desk"]); !slices.Equal(got, []string{ehNodeA}) || nas["power_links"].(map[string]any)["corner"] != "lab-a-agent" {
+	if fmt.Sprint(nas["ups_powers"]) != "map[desk:map["+ehNodeA+":true]]" || fmt.Sprint(nas["power_links"]) != "map[corner:lab-a-agent]" {
 		t.Fatalf("PVE-A: %v", nas)
 	}
 }
@@ -569,21 +688,23 @@ func TestEditHostABrokenOverlayIsIgnoredNotRefused(t *testing.T) {
 		ignored int      // lines in the dialog
 		upsB    []string // PVE-B's UPSes afterwards
 	}{
-		"a text":                        {`"links"`, 1, nil},
-		"a list":                        {`[{"nas-agent": {}}]`, 1, nil},
-		"null":                          {`null`, 1, nil},
-		"agents is a list":              {`{"rev": 3, "agents": []}`, 1, nil},
-		"a rev that is no number":       {`{"rev": "seven", "agents": {"nas-agent": {"ups_powers": {"desk": ["lab-b-node-pve-b"]}}}}`, 1, []string{"nas-agent/desk"}},
-		"an entry that is no object":    {`{"agents": {"nas-agent": "x", "lab-a-agent": 7}}`, 2, nil},
-		"an id no agent can have":       {`{"agents": {"NAS Agent!": {"ups_powers": {"desk": ["lab-b-node-pve-b"]}}}}`, 1, nil},
-		"a field of the wrong form":     {`{"agents": {"nas-agent": {"ups_powers": ["lab-b-node-pve-b"], "power_links": {"b-plug": 5}, "power_exclude_from_total": "corner"}}}`, 3, nil},
-		"a row id no row can have":      {`{"agents": {"nas-agent": {"ups_powers": {"desk": ["Lab B!"]}}}}`, 1, nil},
-		"seventeen devices":             {`{"agents": {"nas-agent": {"power_exclude_from_total": ["d1","d2","d3","d4","d5","d6","d7","d8","d9","d10","d11","d12","d13","d14","d15","d16","d17"]}}}`, 1, nil},
-		"one bad field, one good":       {`{"agents": {"nas-agent": {"power_links": 7, "ups_powers": {"rack": ["lab-b-node-pve-b"]}}}}`, 1, []string{"nas-agent/rack"}},
-		"fields that cannot be set":     {`{"agents": {"lab-b-agent": {"url": "http://198.51.100.7:9101", "token_env": "FAIRY_SESSION_SECRET", "power_control": true, "wol_relay": true, "verify_tls": false, "node": "PVE-A", "name": "x"}}}`, 7, nil},
-		"an agent there is not":         {`{"agents": {"gone-agent": {"ups_powers": {"desk": ["lab-b-node-pve-b"]}}}}`, 0, nil},
-		"a row there is not":            {`{"agents": {"nas-agent": {"ups_powers": {"desk": ["lab-b-node-pve-b", "old-pc"]}, "power_links": {"a-plug": "lab-a-agent", "b-plug": "old-pc"}}}}`, 0, []string{"nas-agent/desk"}},
-		"what Fairy writes, and a tail": {`{"rev": 4, "agents": {"nas-agent": {"ups_powers": {"desk": ["lab-b-node-pve-b"]}, "by": "x", "at": "2026-11-13T23:40:00Z"}}, "more": 1}`, 1, []string{"nas-agent/desk"}},
+		"a text":                          {`"links"`, 1, nil},
+		"a list":                          {`[{"nas-agent": {}}]`, 1, nil},
+		"null":                            {`null`, 1, nil},
+		"agents is a list":                {`{"rev": 3, "agents": []}`, 1, nil},
+		"a rev that is no number":         {`{"rev": "seven", "agents": {"nas-agent": {"ups_powers": {"desk": {"lab-b-node-pve-b": true}}}}}`, 1, []string{"nas-agent/desk"}},
+		"an entry that is no object":      {`{"agents": {"nas-agent": "x", "lab-a-agent": 7}}`, 2, nil},
+		"an id no agent can have":         {`{"agents": {"NAS Agent!": {"ups_powers": {"desk": {"lab-b-node-pve-b": true}}}}}`, 1, nil},
+		"a field of the wrong form":       {`{"agents": {"nas-agent": {"ups_powers": ["lab-b-node-pve-b"], "power_links": {"b-plug": 5}, "power_exclude_from_total": "corner"}}}`, 3, nil},
+		"a row id no row can have":        {`{"agents": {"nas-agent": {"ups_powers": {"desk": {"Lab B!": true}}}}}`, 1, nil},
+		"lists, as config.yaml has them":  {`{"agents": {"nas-agent": {"ups_powers": {"desk": ["lab-b-node-pve-b"]}, "power_exclude_from_total": ["a-plug"]}}}`, 2, nil},
+		"a decision that is no yes or no": {`{"agents": {"nas-agent": {"ups_powers": {"desk": {"lab-b-node-pve-b": "yes"}}, "power_exclude_from_total": {"a-plug": 1}}}}`, 2, nil},
+		"seventeen devices":               {`{"agents": {"nas-agent": {"power_exclude_from_total": {"d1":true,"d2":true,"d3":true,"d4":true,"d5":true,"d6":true,"d7":true,"d8":true,"d9":true,"d10":true,"d11":true,"d12":true,"d13":true,"d14":true,"d15":true,"d16":true,"d17":true}}}}`, 1, nil},
+		"one bad field, one good":         {`{"agents": {"nas-agent": {"power_links": 7, "ups_powers": {"rack": {"lab-b-node-pve-b": true}}}}}`, 1, []string{"nas-agent/rack"}},
+		"fields that cannot be set":       {`{"agents": {"lab-b-agent": {"url": "http://198.51.100.7:9101", "token_env": "FAIRY_SESSION_SECRET", "power_control": true, "wol_relay": true, "verify_tls": false, "node": "PVE-A", "name": "x"}}}`, 7, nil},
+		"an agent there is not":           {`{"agents": {"gone-agent": {"ups_powers": {"desk": {"lab-b-node-pve-b": true}}}}}`, 0, nil},
+		"a row there is not":              {`{"agents": {"nas-agent": {"ups_powers": {"desk": {"lab-b-node-pve-b": true, "old-pc": true}}, "power_links": {"a-plug": "lab-a-agent", "b-plug": "old-pc"}}}}`, 0, []string{"nas-agent/desk"}},
+		"what Fairy writes, and a tail":   {`{"rev": 4, "agents": {"nas-agent": {"ups_powers": {"desk": {"lab-b-node-pve-b": true}}, "by": "x", "at": "2026-11-13T23:40:00Z"}}, "more": 1}`, 1, []string{"nas-agent/desk"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := ehConfig(t, ehNASLinks)
@@ -749,10 +870,12 @@ func TestEditHostChangesNoControlPath(t *testing.T) {
 	}
 }
 
-// What the API stores is checked by the same check that reads it back (config.LinkProblems): a change whose
-// result the reader would leave out is refused, with the reason, and nothing is stored. An override begins as
-// a copy of config.yaml's value of its field, so a field of config.yaml that the check does not take cannot
-// be changed here until it is put right there; the sentence says so. The other fields of that agent can.
+// What the API stores is checked by the same check that reads it back (config.LinkProblems): the names and ids
+// of the decisions, and what counts with them laid over config.yaml. A change whose result an agent could not
+// have (a 33rd row for one UPS, a 17th device) is refused, with the reason, and nothing is stored. What that
+// check finds in config.yaml itself stops nothing here: a decision is about one line and copies no line of
+// config.yaml, so a line of config.yaml that is wrong stays config.yaml's to put right, and the other lines
+// can be changed.
 func TestEditHostRefusesWhatTheSharedCheckWouldIgnore(t *testing.T) {
 	var rows, devs []string
 	for i := 0; i < config.MaxLinkRows; i++ {
@@ -769,8 +892,6 @@ func TestEditHostRefusesWhatTheSharedCheckWouldIgnore(t *testing.T) {
 		"a 33rd row for one UPS": {map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}}, "NAS: ups_powers: UPS rack powers 33 rows, at most 32 are taken"},
 		"a 17th device left out of the total": {map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/own", "in_total": false}}},
 			"NAS: power_exclude_from_total: 17 devices, and an agent relays at most 16"},
-		"a link next to one of config.yaml that no device can have": {map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true}}},
-			`NAS: power_links: "Bad_ID" is not an id a device can have (lowercase letters, digits and dashes) (config.yaml has it in the entry of nas-agent: correct it there first)`},
 	} {
 		id := ehNodeB
 		if strings.Contains(name, "17th") {
@@ -790,10 +911,21 @@ func TestEditHostRefusesWhatTheSharedCheckWouldIgnore(t *testing.T) {
 			t.Errorf("audit: %v", en)
 		}
 	}
-	// a field that is in order can be changed for the same agent: the desk UPS has room
+	// a line that is in order can be changed for the same agent: the desk UPS has room ...
 	p := r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})
 	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"UPS Desk UPS (read by NAS): powers PVE-B"}) {
 		t.Fatalf("changed: %v", got)
+	}
+	// ... and so can a plug's link, next to the link of config.yaml that names a device no agent can have
+	// (Bad_ID): that line is config.yaml's own, and is not copied into what the panel stores
+	p = r.ok(ehNodeB, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true}}})
+	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"Plug B plug (read by NAS): linked to PVE-B"}) || fmt.Sprint(r.storedAgent(ehNAS)["power_links"]) != "map[b-plug:lab-b-agent]" {
+		t.Fatalf("a link next to config.yaml's Bad_ID: %s", p.raw)
+	}
+	// the limit holds for that plug too, now that it is PVE-B's: a 17th device cannot be left out of the total
+	if x := r.put(ehNodeB, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/b-plug", "in_total": false}}}); x.code != 422 ||
+		x.body["detail"] != "NAS: power_exclude_from_total: 17 devices, and an agent relays at most 16" {
+		t.Fatalf("a 17th device on PVE-B's page: %d %s", x.code, x.raw)
 	}
 	// and what was stored is read back without anything ignored
 	if ig := strs(r.options(ehNodeB).body["ignored"]); len(ig) != 0 {

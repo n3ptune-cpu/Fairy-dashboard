@@ -20,16 +20,23 @@ import (
 // never written. The overlay is kept in state.json, next to the model names (hostmodel.go), under
 //
 //	"host_options": {"rev": 7, "agents": {"<agent id>": {
-//	    "ups_powers": {"<UPS name>": ["<row id>", ...]},
-//	    "power_links": {"<device id>": "<row id>"},
-//	    "power_exclude_from_total": ["<device id>", ...],
+//	    "ups_powers": {"<UPS name>": {"<row id>": true | false}},
+//	    "power_links": {"<device id>": "<row id>" | ""},
+//	    "power_exclude_from_total": {"<device id>": true | false},
 //	    "by": "<who>", "at": "<RFC 3339>"}}}
 //
-// Keyed by the id of the agent that READS the devices: that is where config.yaml has these fields. A field
-// that is there REPLACES config.yaml's value of that field for that agent, whole; a field that is not there
-// leaves config.yaml's value. "Reset" takes a field out. Only these three fields exist here: nothing that
-// says where an agent is, which token it has or what the panel may do to a machine can be in the overlay,
-// and a key with another name is not read.
+// Keyed by the id of the agent that READS the devices: that is where config.yaml has these fields. What is
+// stored is not a copy of a field but single DECISIONS, each about one line of the dialog, laid over
+// config.yaml's value of that line:
+//
+//   - ups_powers: this UPS powers this row (true), or does not (false), whatever config.yaml says about the two;
+//   - power_links: this device is linked to this row, or to none (""), whatever config.yaml says about the device;
+//   - power_exclude_from_total: this device is left out of the total (true), or counted (false).
+//
+// Everything no decision is about follows config.yaml, also when config.yaml is edited later: a change made
+// for one machine does not freeze what config.yaml says about another. "Reset" takes one decision out. Only
+// these three fields exist here: nothing that says where an agent is, which token it has or what the panel may
+// do to a machine can be in the overlay, and a key with another name is not read.
 //
 // The reader never fails. Whatever is not what Fairy writes is left out, config.yaml's value counts for it,
 // and one WARN line says so (per change of the file): the panel always starts. `fairy check-config`, which a
@@ -42,80 +49,172 @@ const hostOptionsKey = "host_options"
 // not something Fairy wrote, and none of it is used.
 const MaxHostOptionAgents = 256
 
-// HostOption is the overrides of one agent's entry. Has* says which fields are overridden; the value of a
-// field that is not overridden is nil and means nothing.
+// HostOption is what was changed about the devices one agent reads: the decisions, by field. A nil map and
+// an empty one are the same: no decision.
 type HostOption struct {
-	Links                                   config.Links
-	HasUPSPowers, HasPowerLinks, HasExclude bool
-	By                                      string // who changed it last (the audit log's name for them)
-	At                                      time.Time
+	UPS     map[string]map[string]bool // UPS name -> row id -> the UPS powers that row (true) or does not (false)
+	Links   map[string]string          // device id -> the row it is linked to ("": to none)
+	Exclude map[string]bool            // device id -> left out of the total (true) or counted (false)
+	By      string                     // who changed it last (the audit log's name for them)
+	At      time.Time
 }
 
-// Empty reports whether no field is overridden.
-func (o HostOption) Empty() bool { return !o.HasUPSPowers && !o.HasPowerLinks && !o.HasExclude }
+// Empty reports whether there is no decision.
+func (o HostOption) Empty() bool { return o.Count() == 0 }
 
-// Has reports whether the named field (config.Field...) is overridden.
+// Count is the number of decisions.
+func (o HostOption) Count() int {
+	n := len(o.Links) + len(o.Exclude)
+	for _, rows := range o.UPS {
+		n += len(rows)
+	}
+	return n
+}
+
+// Has reports whether there is a decision in the named field (config.Field...).
 func (o HostOption) Has(field string) bool {
 	switch field {
 	case config.FieldUPSPowers:
-		return o.HasUPSPowers
+		for _, rows := range o.UPS {
+			if len(rows) > 0 {
+				return true
+			}
+		}
 	case config.FieldPowerLinks:
-		return o.HasPowerLinks
+		return len(o.Links) > 0
 	case config.FieldExclude:
-		return o.HasExclude
+		return len(o.Exclude) > 0
 	}
 	return false
 }
 
-// Apply returns the links that count for an agent whose entry says base: base, with every overridden field
-// replaced. The result shares nothing with base or o.
-func (o HostOption) Apply(base config.Links) config.Links {
-	out, over := base.Clone(), o.Links.Clone()
-	if o.HasUPSPowers {
-		out.UPSPowers = over.UPSPowers
+// Clone returns a copy that shares nothing with o.
+func (o HostOption) Clone() HostOption {
+	out := HostOption{By: o.By, At: o.At}
+	for name, rows := range o.UPS {
+		if len(rows) == 0 {
+			continue
+		}
+		if out.UPS == nil {
+			out.UPS = map[string]map[string]bool{}
+		}
+		out.UPS[name] = maps.Clone(rows)
 	}
-	if o.HasPowerLinks {
-		out.PowerLinks = over.PowerLinks
+	if len(o.Links) > 0 {
+		out.Links = maps.Clone(o.Links)
 	}
-	if o.HasExclude {
-		out.PowerExcludeFromTotal = over.PowerExcludeFromTotal
+	if len(o.Exclude) > 0 {
+		out.Exclude = maps.Clone(o.Exclude)
 	}
 	return out
 }
 
-// Set overrides the named field with l's value of it (a nil value is stored as an empty one: "set here to
-// nothing").
-func (o *HostOption) Set(field string, l config.Links) {
-	l = l.Clone()
-	switch field {
-	case config.FieldUPSPowers:
-		if o.HasUPSPowers, o.Links.UPSPowers = true, l.UPSPowers; o.Links.UPSPowers == nil {
-			o.Links.UPSPowers = map[string][]string{}
-		}
-	case config.FieldPowerLinks:
-		if o.HasPowerLinks, o.Links.PowerLinks = true, l.PowerLinks; o.Links.PowerLinks == nil {
-			o.Links.PowerLinks = map[string]string{}
-		}
-	case config.FieldExclude:
-		if o.HasExclude, o.Links.PowerExcludeFromTotal = true, l.PowerExcludeFromTotal; o.Links.PowerExcludeFromTotal == nil {
-			o.Links.PowerExcludeFromTotal = []string{}
+// Apply returns the links that count for an agent whose entry says base: base, with every decision laid
+// over it. What no decision is about is base's. The result shares nothing with base or o.
+func (o HostOption) Apply(base config.Links) config.Links {
+	out := base.Clone()
+	for _, name := range slices.Sorted(maps.Keys(o.UPS)) {
+		rows := o.UPS[name]
+		for _, id := range slices.Sorted(maps.Keys(rows)) {
+			switch has := slices.Contains(out.UPSPowers[name], id); {
+			case rows[id] && !has:
+				if out.UPSPowers == nil {
+					out.UPSPowers = map[string][]string{}
+				}
+				out.UPSPowers[name] = append(out.UPSPowers[name], id)
+			case !rows[id] && has:
+				out.UPSPowers[name] = slices.DeleteFunc(out.UPSPowers[name], func(x string) bool { return x == id })
+			}
 		}
 	}
+	for dev, to := range o.Links {
+		if to == "" {
+			delete(out.PowerLinks, dev)
+			continue
+		}
+		if out.PowerLinks == nil {
+			out.PowerLinks = map[string]string{}
+		}
+		out.PowerLinks[dev] = to
+	}
+	for _, dev := range slices.Sorted(maps.Keys(o.Exclude)) {
+		switch has := slices.Contains(out.PowerExcludeFromTotal, dev); {
+		case o.Exclude[dev] && !has:
+			out.PowerExcludeFromTotal = append(out.PowerExcludeFromTotal, dev)
+		case !o.Exclude[dev] && has:
+			out.PowerExcludeFromTotal = slices.DeleteFunc(out.PowerExcludeFromTotal, func(x string) bool { return x == dev })
+		}
+	}
+	return out
 }
 
-// Reset takes the override of the named field away (config.yaml's value counts again). It reports whether
-// there was one.
-func (o *HostOption) Reset(field string) bool {
-	had := o.Has(field)
-	switch field {
-	case config.FieldUPSPowers:
-		o.HasUPSPowers, o.Links.UPSPowers = false, nil
-	case config.FieldPowerLinks:
-		o.HasPowerLinks, o.Links.PowerLinks = false, nil
-	case config.FieldExclude:
-		o.HasExclude, o.Links.PowerExcludeFromTotal = false, nil
+// SetUPS decides that the UPS powers the row (on) or does not, whatever config.yaml says.
+func (o *HostOption) SetUPS(name, row string, on bool) {
+	if o.UPS == nil {
+		o.UPS = map[string]map[string]bool{}
+	}
+	if o.UPS[name] == nil {
+		o.UPS[name] = map[string]bool{}
+	}
+	o.UPS[name][row] = on
+}
+
+// DropUPS takes the decision about the UPS and the row out (config.yaml counts for the two again). It
+// reports whether there was one.
+func (o *HostOption) DropUPS(name, row string) bool {
+	_, had := o.UPS[name][row]
+	delete(o.UPS[name], row)
+	if len(o.UPS[name]) == 0 {
+		delete(o.UPS, name)
 	}
 	return had
+}
+
+// SetLink decides that the device is linked to the row to ("": to none), whatever config.yaml says.
+func (o *HostOption) SetLink(dev, to string) {
+	if o.Links == nil {
+		o.Links = map[string]string{}
+	}
+	o.Links[dev] = to
+}
+
+// DropLink takes the decision about the device's link out. It reports whether there was one.
+func (o *HostOption) DropLink(dev string) bool {
+	_, had := o.Links[dev]
+	delete(o.Links, dev)
+	return had
+}
+
+// SetExclude decides that the device is left out of the total (out) or counted, whatever config.yaml says.
+func (o *HostOption) SetExclude(dev string, out bool) {
+	if o.Exclude == nil {
+		o.Exclude = map[string]bool{}
+	}
+	o.Exclude[dev] = out
+}
+
+// DropExclude takes the decision about the device's place in the total out. It reports whether there was one.
+func (o *HostOption) DropExclude(dev string) bool {
+	_, had := o.Exclude[dev]
+	delete(o.Exclude, dev)
+	return had
+}
+
+// Named is every UPS, row and device the decisions name, in the form of an agent's link fields: for the one
+// check of those fields (config.LinkProblems), which then checks the names, the ids and how many there are.
+func (o HostOption) Named() config.Links {
+	var l config.Links
+	for name, rows := range o.UPS {
+		if l.UPSPowers == nil {
+			l.UPSPowers = map[string][]string{}
+		}
+		l.UPSPowers[name] = slices.Sorted(maps.Keys(rows))
+	}
+	if len(o.Links) > 0 {
+		l.PowerLinks = maps.Clone(o.Links)
+	}
+	l.PowerExcludeFromTotal = slices.Sorted(maps.Keys(o.Exclude))
+	return l
 }
 
 // HostOptions is the whole overlay. Rev counts the writes (it only ever grows): two answers with the same
@@ -129,8 +228,7 @@ type HostOptions struct {
 func (o HostOptions) Clone() HostOptions {
 	out := HostOptions{Rev: o.Rev, Agents: make(map[string]HostOption, len(o.Agents))}
 	for id, e := range o.Agents {
-		e.Links = e.Links.Clone()
-		out.Agents[id] = e
+		out.Agents[id] = e.Clone()
 	}
 	return out
 }
@@ -139,10 +237,11 @@ func (o HostOptions) Clone() HostOptions {
 func (o HostOptions) For(agentID string) HostOption { return o.Agents[agentID] }
 
 // Forget is what "Remove" of a host does to the overlay: the overrides of the host's own agent go, and so
-// does every reference to one of the host's rows in the overrides of OTHER agents (a UPS that powers it, a
-// plug that is linked to it). A host's id is made from its name, so without this the next machine added
-// under the same name would be shown on a UPS, and with a plug's watts, that nobody linked to it. ids are the
-// ids the host is shown under (its agent's and its node's). It reports what was taken out, one line each.
+// does every decision about one of the host's rows in the overrides of OTHER agents (a UPS that powers it or
+// not, a plug that is linked to it). A host's id is made from its name, so without this the next machine
+// added under the same name would be shown on a UPS, and with a plug's watts, that nobody linked to it. ids
+// are the rows that go away with the host, besides its agent's own. It reports what was taken out, one line
+// each.
 func (o *HostOptions) Forget(agentID string, ids ...string) []string {
 	var gone []string
 	if e, ok := o.Agents[agentID]; ok {
@@ -153,18 +252,25 @@ func (o *HostOptions) Forget(agentID string, ids ...string) []string {
 	}
 	ids = append(ids, agentID)
 	for _, other := range slices.Sorted(maps.Keys(o.Agents)) {
-		e := o.Agents[other]
-		for _, name := range slices.Sorted(maps.Keys(e.Links.UPSPowers)) {
-			rows := e.Links.UPSPowers[name]
-			kept := slices.DeleteFunc(slices.Clone(rows), func(id string) bool { return slices.Contains(ids, id) })
-			if len(kept) != len(rows) {
-				e.Links.UPSPowers[name] = kept
+		e := o.Agents[other].Clone()
+		for _, name := range slices.Sorted(maps.Keys(e.UPS)) {
+			powered, changed := false, false
+			for _, id := range ids {
+				on := e.UPS[name][id]
+				if e.DropUPS(name, id) {
+					powered, changed = powered || on, true
+				}
+			}
+			switch {
+			case powered:
 				gone = append(gone, fmt.Sprintf("%s: UPS %s no longer powers it", other, name))
+			case changed: // "does not power it, whatever config.yaml says": nothing that shows goes, but it was about the host
+				gone = append(gone, fmt.Sprintf("%s: what was changed about UPS %s and it", other, name))
 			}
 		}
-		for _, dev := range slices.Sorted(maps.Keys(e.Links.PowerLinks)) {
-			if slices.Contains(ids, e.Links.PowerLinks[dev]) {
-				delete(e.Links.PowerLinks, dev)
+		for _, dev := range slices.Sorted(maps.Keys(e.Links)) {
+			if slices.Contains(ids, e.Links[dev]) {
+				e.DropLink(dev)
 				gone = append(gone, fmt.Sprintf("%s: device %s is no longer linked to it", other, dev))
 			}
 		}
@@ -226,15 +332,15 @@ func hostOptions(d statefile.Data) (o HostOptions, ignored []string) {
 		e := HostOption{}
 		for _, k := range slices.Sorted(maps.Keys(entry)) {
 			v := entry[k]
-			var l config.Links
+			var part HostOption
 			shape := true
 			switch k {
 			case config.FieldUPSPowers:
-				l.UPSPowers, shape = upsPowersOf(v)
+				part.UPS, shape = upsDecisionsOf(v)
 			case config.FieldPowerLinks:
-				l.PowerLinks, shape = textMapOf(v)
+				part.Links, shape = textMapOf(v)
 			case config.FieldExclude:
-				l.PowerExcludeFromTotal, shape = textListOf(v)
+				part.Exclude, shape = boolMapOf(v, 4*config.MaxLinkDevices)
 			case "by":
 				s, _ := v.(string)
 				e.By = clipKey(s)
@@ -252,13 +358,20 @@ func hostOptions(d statefile.Data) (o HostOptions, ignored []string) {
 				say("agent %s: %s is not of the form Fairy writes (found %s): config.yaml's value counts", id, k, kindOf(v))
 				continue
 			}
-			if p := config.LinkProblems(l); len(p) > 0 {
+			if p := config.LinkProblems(part.Named()); len(p) > 0 {
 				say("agent %s: %s: config.yaml's value counts", id, p[0].Text)
 				continue
 			}
-			e.Set(k, l)
+			switch k {
+			case config.FieldUPSPowers:
+				e.UPS = part.UPS
+			case config.FieldPowerLinks:
+				e.Links = part.Links
+			case config.FieldExclude:
+				e.Exclude = part.Exclude
+			}
 		}
-		if !e.Empty() {
+		if e = e.Clone(); !e.Empty() {
 			o.Agents[id] = e
 		}
 	}
@@ -298,25 +411,9 @@ func clipKey(s string) string {
 	return s
 }
 
-func textListOf(v any) ([]string, bool) {
-	l, ok := v.([]any)
-	if !ok || len(l) > 4*config.MaxLinkRows { // far over every limit: not looked at entry by entry
-		return nil, false
-	}
-	out := make([]string, 0, len(l))
-	for _, x := range l {
-		s, ok := x.(string)
-		if !ok {
-			return nil, false
-		}
-		out = append(out, s)
-	}
-	return out, true
-}
-
 func textMapOf(v any) (map[string]string, bool) {
 	m, ok := v.(map[string]any)
-	if !ok || len(m) > 4*config.MaxLinkDevices {
+	if !ok || len(m) > 4*config.MaxLinkDevices { // far over every limit: not looked at entry by entry
 		return nil, false
 	}
 	out := make(map[string]string, len(m))
@@ -330,18 +427,34 @@ func textMapOf(v any) (map[string]string, bool) {
 	return out, true
 }
 
-func upsPowersOf(v any) (map[string][]string, bool) {
+func boolMapOf(v any, limit int) (map[string]bool, bool) {
+	m, ok := v.(map[string]any)
+	if !ok || len(m) > limit {
+		return nil, false
+	}
+	out := make(map[string]bool, len(m))
+	for k, x := range m {
+		b, ok := x.(bool)
+		if !ok {
+			return nil, false
+		}
+		out[k] = b
+	}
+	return out, true
+}
+
+func upsDecisionsOf(v any) (map[string]map[string]bool, bool) {
 	m, ok := v.(map[string]any)
 	if !ok || len(m) > 4*config.MaxLinkUPS {
 		return nil, false
 	}
-	out := make(map[string][]string, len(m))
+	out := make(map[string]map[string]bool, len(m))
 	for k, x := range m {
-		l, ok := textListOf(x)
+		rows, ok := boolMapOf(x, 4*config.MaxLinkRows)
 		if !ok {
 			return nil, false
 		}
-		out[k] = l
+		out[k] = rows
 	}
 	return out, true
 }
@@ -353,39 +466,45 @@ func (o HostOptions) encode() map[string]any {
 		if e.Empty() {
 			continue
 		}
-		m := map[string]any{}
-		if e.HasUPSPowers {
-			ups := map[string]any{}
-			for name, rows := range e.Links.UPSPowers {
-				ups[name] = toAny(rows)
-			}
-			m[config.FieldUPSPowers] = ups
-		}
-		if e.HasPowerLinks {
-			links := map[string]any{}
-			for dev, to := range e.Links.PowerLinks {
-				links[dev] = to
-			}
-			m[config.FieldPowerLinks] = links
-		}
-		if e.HasExclude {
-			m[config.FieldExclude] = toAny(e.Links.PowerExcludeFromTotal)
-		}
-		if e.By != "" {
-			m["by"] = e.By
-		}
-		if !e.At.IsZero() {
-			m["at"] = e.At.UTC().Format(time.RFC3339)
-		}
-		agents[id] = m
+		agents[id] = e.encode()
 	}
 	return map[string]any{"rev": o.Rev, "agents": agents}
 }
 
-func toAny(l []string) []any {
-	out := make([]any, len(l))
-	for i, s := range l {
-		out[i] = s
+func (e HostOption) encode() map[string]any {
+	m := map[string]any{}
+	if e.Has(config.FieldUPSPowers) {
+		ups := map[string]any{}
+		for name, rows := range e.UPS {
+			if len(rows) > 0 {
+				ups[name] = boolsToAny(rows)
+			}
+		}
+		m[config.FieldUPSPowers] = ups
+	}
+	if len(e.Links) > 0 {
+		links := map[string]any{}
+		for dev, to := range e.Links {
+			links[dev] = to
+		}
+		m[config.FieldPowerLinks] = links
+	}
+	if len(e.Exclude) > 0 {
+		m[config.FieldExclude] = boolsToAny(e.Exclude)
+	}
+	if e.By != "" {
+		m["by"] = e.By
+	}
+	if !e.At.IsZero() {
+		m["at"] = e.At.UTC().Format(time.RFC3339)
+	}
+	return m
+}
+
+func boolsToAny(m map[string]bool) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
 	}
 	return out
 }
@@ -444,14 +563,14 @@ func (a *State) EditHostOptions(by string, fn func(o *HostOptions) error) (after
 		}
 		now := time.Now().UTC().Truncate(time.Second)
 		for id, e := range cur.Agents {
-			if e.Empty() {
+			if e = e.Clone(); e.Empty() { // Clone: without the UPSes no decision is left about
 				delete(cur.Agents, id)
 				continue
 			}
 			if !sameOption(before.Agents[id], e) {
 				e.By, e.At = clipKey(by), now
-				cur.Agents[id] = e
 			}
+			cur.Agents[id] = e
 		}
 		same := len(before.Agents) == len(cur.Agents)
 		for id, e := range cur.Agents {
@@ -477,13 +596,21 @@ func (a *State) EditHostOptions(by string, fn func(o *HostOptions) error) (after
 	return after, true, nil
 }
 
-// sameOption reports whether two entries override the same fields with the same values (who and when aside).
-func sameOption(a, b HostOption) bool {
-	if a.HasUPSPowers != b.HasUPSPowers || a.HasPowerLinks != b.HasPowerLinks || a.HasExclude != b.HasExclude {
+// Same reports whether two entries hold the same decisions (who and when aside).
+func (o HostOption) Same(b HostOption) bool {
+	a, b := o.Clone(), b.Clone() // Clone: a UPS no decision is left about does not count
+	if len(a.UPS) != len(b.UPS) {
 		return false
 	}
-	return SameLinks(a.Links, b.Links)
+	for name, rows := range a.UPS {
+		if !maps.Equal(rows, b.UPS[name]) {
+			return false
+		}
+	}
+	return maps.Equal(a.Links, b.Links) && maps.Equal(a.Exclude, b.Exclude)
 }
+
+func sameOption(a, b HostOption) bool { return a.Same(b) }
 
 // SameLinks reports whether two sets of link fields say the same: the same UPSes with the same rows in the
 // same order, the same devices linked to the same rows, the same devices left out of the total (in any

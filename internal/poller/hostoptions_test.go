@@ -40,8 +40,9 @@ func (s *syncBuf) warns(about string) int {
 }
 
 // LinksOf is where an agent's entry and what an admin changed in the panel meet: the entry's links, with
-// every overridden field replaced, asked at every poll. A change counts with the next poll and needs no
-// restart; an override the panel cannot use is left out and said once; the entry itself is never changed.
+// every decision laid over the line it is about, asked at every poll. A change counts with the next poll and
+// needs no restart; what no decision is about stays the entry's; a decision the panel cannot use links nothing
+// and is said once; the entry itself is never changed.
 func TestLinksOfIsTheEntryWithThePanelsChanges(t *testing.T) {
 	logs := &syncBuf{}
 	old := slog.Default()
@@ -95,35 +96,46 @@ func TestLinksOfIsTheEntryWithThePanelsChanges(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	set := func(id string, l config.Links, fields ...string) func(o *adminstate.HostOptions) {
+	// set changes the laptop's entry of the overlay
+	set := func(fn func(e *adminstate.HostOption)) func(o *adminstate.HostOptions) {
 		return func(o *adminstate.HostOptions) {
-			e := o.Agents[id]
-			for _, f := range fields {
-				e.Set(f, l)
-			}
-			o.Agents[id] = e
+			e := o.Agents["laptop"]
+			fn(&e)
+			o.Agents["laptop"] = e
 		}
 	}
-	// one field is overridden: that field is the panel's, whole; the other two stay config.yaml's
-	edit(set("laptop", config.Links{UPSPowers: map[string][]string{"rack": {"tower", "qemu-100"}}}, config.FieldUPSPowers))
+	// two decisions about the UPS: it powers the tower and a guest too. The row config.yaml names (the laptop)
+	// stays, and so do the other two fields
+	edit(set(func(e *adminstate.HostOption) { e.SetUPS("rack", "tower", true); e.SetUPS("rack", "qemu-100", true) }))
 	l := p.LinksOf(laptop)
-	if !slices.Equal(l.UPSPowers["rack"], []string{"tower", "qemu-100"}) || l.PowerLinks["spare"] != "tower" || !slices.Equal(l.PowerExcludeFromTotal, []string{"spare"}) {
-		t.Fatalf("with ups_powers overridden: %+v", l)
+	if !slices.Equal(l.UPSPowers["rack"], []string{"laptop", "qemu-100", "tower"}) || l.PowerLinks["spare"] != "tower" || !slices.Equal(l.PowerExcludeFromTotal, []string{"spare"}) {
+		t.Fatalf("with two decisions about the UPS: %+v", l)
 	}
 	// ... and nothing changed before the next poll, everything with it, without a restart
 	if powers, _, _ := state(); !slices.Equal(powers, []string{"laptop"}) {
 		t.Fatalf("before the next poll: %v", powers)
 	}
 	p.PollOnce(context.Background())
-	if powers, on, total := state(); !slices.Equal(powers, []string{"tower", "qemu-100"}) || on != "tower" || total {
+	if powers, on, total := state(); !slices.Equal(powers, []string{"laptop", "qemu-100", "tower"}) || on != "tower" || total {
 		t.Fatalf("after the next poll: powers %v, spare on %q, in the total %v", powers, on, total)
 	}
-	// the other two fields: a link to another row, and the plug back in the total
-	edit(set("laptop", config.Links{PowerLinks: map[string]string{"spare": "laptop"}, PowerExcludeFromTotal: []string{}}, config.FieldPowerLinks, config.FieldExclude))
+	// a row config.yaml names is taken off; the plug is linked to another row and put back into the total
+	edit(set(func(e *adminstate.HostOption) {
+		e.SetUPS("rack", "laptop", false)
+		e.SetLink("spare", "laptop")
+		e.SetExclude("spare", false)
+	}))
 	p.PollOnce(context.Background())
-	if powers, on, total := state(); !slices.Equal(powers, []string{"tower", "qemu-100"}) || on != "laptop" || !total {
-		t.Fatalf("all three overridden: powers %v, spare on %q, in the total %v", powers, on, total)
+	if powers, on, total := state(); !slices.Equal(powers, []string{"qemu-100", "tower"}) || on != "laptop" || !total {
+		t.Fatalf("all three fields changed: powers %v, spare on %q, in the total %v", powers, on, total)
 	}
+	// a link to none: the plug is on no row, whatever config.yaml says
+	edit(set(func(e *adminstate.HostOption) { e.SetLink("spare", "") }))
+	p.PollOnce(context.Background())
+	if _, on, _ := state(); on != "" {
+		t.Fatalf("linked to none: spare on %q", on)
+	}
+	edit(set(func(e *adminstate.HostOption) { e.SetLink("spare", "laptop") }))
 	// the agent's entry is what it was: the overlay is never written into it
 	if now, _ := p.AgentByID("laptop"); !adminstate.SameLinks(now.Links(), laptop.Links()) || !adminstate.SameLinks(laptop.Links(),
 		config.Links{UPSPowers: map[string][]string{"rack": {"laptop"}}, PowerLinks: map[string]string{"spare": "tower"}, PowerExcludeFromTotal: []string{"spare"}}) {
@@ -135,17 +147,22 @@ func TestLinksOfIsTheEntryWithThePanelsChanges(t *testing.T) {
 	if logs.warns("Edit host") != 0 {
 		t.Fatalf("a WARN for overrides that are in order:\n%s", logs.b.String())
 	}
-	// rows the panel does not have are left out of what the managers get, and said once, however often it is asked
-	edit(set("laptop", config.Links{UPSPowers: map[string][]string{"rack": {"tower", "old-pc", "laptop", "nodee-x"}}, PowerLinks: map[string]string{"spare": "old-pc"}},
-		config.FieldUPSPowers, config.FieldPowerLinks))
+	// rows the panel does not have get nothing: they are left out of what the managers get, and said once,
+	// however often it is asked. "Does not power" a row there is not needs no word.
+	edit(set(func(e *adminstate.HostOption) {
+		e.SetUPS("rack", "old-pc", true)
+		e.SetUPS("rack", "nodee-x", true)
+		e.SetUPS("rack", "long-gone", false)
+		e.SetLink("spare", "old-pc")
+	}))
 	for i := 0; i < 5; i++ {
 		p.PollOnce(context.Background())
 	}
 	l = p.LinksOf(laptop)
-	if _, linked := l.PowerLinks["spare"]; !slices.Equal(l.UPSPowers["rack"], []string{"tower", "laptop"}) || linked {
+	if _, linked := l.PowerLinks["spare"]; !slices.Equal(l.UPSPowers["rack"], []string{"qemu-100", "tower"}) || linked {
 		t.Fatalf("rows there are not: %+v", l)
 	}
-	if powers, on, _ := state(); !slices.Equal(powers, []string{"tower", "laptop"}) || on != "" {
+	if powers, on, _ := state(); !slices.Equal(powers, []string{"qemu-100", "tower"}) || on != "" {
 		t.Fatalf("the managers got: powers %v, spare on %q", powers, on)
 	}
 	if n := logs.warns("names rows the panel does not have"); n != 1 {
@@ -155,14 +172,16 @@ func TestLinksOfIsTheEntryWithThePanelsChanges(t *testing.T) {
 		t.Fatalf("the WARN names the agent and the rows:\n%s", logs.b.String())
 	}
 	// said again when the list changes, and not when it does not
-	edit(set("laptop", config.Links{UPSPowers: map[string][]string{"rack": {"old-pc"}}}, config.FieldUPSPowers))
+	edit(set(func(e *adminstate.HostOption) { e.DropUPS("rack", "nodee-x") }))
 	p.PollOnce(context.Background())
 	p.PollOnce(context.Background())
 	if n := logs.warns("names rows the panel does not have"); n != 2 { // nodee-x is gone from the list: one more line, once
 		t.Fatalf("%d WARN lines after the list changed, want 2:\n%s", n, logs.b.String())
 	}
 	// an override for an id that is no agent's: never read, said once
-	edit(set("gone-agent", config.Links{UPSPowers: map[string][]string{"rack": {"laptop"}}}, config.FieldUPSPowers))
+	edit(func(o *adminstate.HostOptions) {
+		o.Agents["gone-agent"] = adminstate.HostOption{UPS: map[string]map[string]bool{"rack": {"laptop": true}}}
+	})
 	for i := 0; i < 4; i++ {
 		p.PollOnce(context.Background())
 	}
@@ -183,7 +202,7 @@ func TestLinksOfIsTheEntryWithThePanelsChanges(t *testing.T) {
 		t.Fatalf("after the overrides were taken out: powers %v, spare on %q, in the total %v", powers, on, total)
 	}
 	// a second poller on the same folder (a restart): the same answer from its first poll
-	edit(set("laptop", config.Links{UPSPowers: map[string][]string{"rack": {"tower"}}}, config.FieldUPSPowers))
+	edit(set(func(e *adminstate.HostOption) { e.SetUPS("rack", "tower", true); e.SetUPS("rack", "laptop", false) }))
 	p2, err := New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, b)
 	if err != nil {
 		t.Fatal(err)

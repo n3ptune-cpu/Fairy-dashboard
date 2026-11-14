@@ -22,12 +22,19 @@ import (
 //
 //	GET /api/admin/hosts/{id}/options    what is set for this machine, where each value comes from, the choices
 //	PUT /api/admin/hosts/{id}/options    {"ups": [{"id", "on"}], "plugs": [{"id", "linked", "in_total"}],
-//	                                      "reset": [{"agent", "field"}]}
+//	                                      "reset": [{"id", "field"}]}
 //
 // The request is about ONE machine, the one whose page is open, and says only what the admin changed (ticks),
 // never a whole list: two admins who save at the same moment each change their own ticks on what the other
 // left (adminstate.EditHostOptions), and a dialog that was open for an hour cannot put back what somebody
 // else took out in the meantime.
+//
+// What is stored is as small as what is asked: one decision for each line that was changed ("Rack UPS powers
+// PC-B", "the plug is linked to PC-B", "the plug is not in the total"), laid over config.yaml. A change made
+// on the page of one machine says nothing about another machine: the lines nobody changed follow config.yaml,
+// also when config.yaml is edited later. "Reset" takes the decision of one line out. The one way a change for
+// this machine changes another is a plug: it has one place, so linking it here takes it from where it was, and
+// the line says where that was.
 //
 // Where it is stored is not where it is edited. The link fields are in the entry of the agent that READS the
 // device: "Rack UPS powers PC-B" is a line in the entry of the NAS that reads the UPS. The API takes the
@@ -61,7 +68,7 @@ func init() {
 	actionList[hostOptionsRoute] = (*reqCtx).hostOptionsItems
 	apiDoc = append(apiDoc,
 		struct{ method, path, summary string }{"GET", "/api/admin/hosts/{id}/options", "Edit host: which UPS powers this machine, which plugs are linked to it and which count in the total, with where each value comes from (config.yaml or changed in the panel) and the agent that reads the device (admins, browser session only)"},
-		struct{ method, path, summary string }{"PUT", "/api/admin/hosts/{id}/options", "Edit host: change the links of one machine: {ups: [{id, on}], plugs: [{id, linked, in_total}], reset: [{agent, field: ups|plugs|total}]}; only what is named changes. Stored as an overlay in state.json (config.yaml is not written; reset takes an override out), counts with the reading agent's next poll. Admins, browser session only (API tokens get 403), CSRF header, step-up. 422: an unknown field, UPS or plug; 409: not a host. Audited as host.options"})
+		struct{ method, path, summary string }{"PUT", "/api/admin/hosts/{id}/options", "Edit host: change the links of one machine: {ups: [{id, on}], plugs: [{id, linked, in_total}], reset: [{id, field: ups|plugs|total}]}; only what is named changes, for this machine. Stored as single decisions laid over config.yaml in state.json (config.yaml is not written; reset takes the decision of one line out), counts with the reading agent's next poll. Admins, browser session only (API tokens get 403), CSRF header, step-up. 422: an unknown field, UPS or plug; 409: not a host. Audited as host.options"})
 }
 
 func (s *Server) hostOptionsRoutes() {
@@ -90,19 +97,16 @@ type hoPlugReq struct {
 	InTotal *bool  `json:"in_total"`
 }
 
-// hoResetReq: what the panel changed in this field of this agent's entry is taken out; config.yaml's value
-// counts again. field: "ups" (ups_powers), "plugs" (power_links) or "total" (power_exclude_from_total).
+// hoResetReq: what the panel changed about this UPS or plug FOR THIS MACHINE is taken out; config.yaml counts
+// for that line again. field: "ups" (does the UPS with this id power the machine), "plugs" (is the plug with
+// this id linked to it) or "total" (does the plug count in the total).
 type hoResetReq struct {
-	Agent string `json:"agent"`
+	ID    string `json:"id"`
 	Field string `json:"field"`
 }
 
-// hoFields maps the API's names of the three fields to config.yaml's, and to the words of a line.
-var hoFields = map[string]struct{ field, words string }{
-	"ups":   {config.FieldUPSPowers, "UPS links read by %s: back to config.yaml"},
-	"plugs": {config.FieldPowerLinks, "Plug links read by %s: back to config.yaml"},
-	"total": {config.FieldExclude, "Total of the plugs read by %s: back to config.yaml"},
-}
+// hoFields maps the API's names of the three fields to config.yaml's.
+var hoFields = map[string]string{"ups": config.FieldUPSPowers, "plugs": config.FieldPowerLinks, "total": config.FieldExclude}
 
 // hoMachine is the machine of one request and what can be linked to it: the row it is shown as, the agent
 // that row is, and every UPS and plug an agent relays. It is made from the poller's state before the store
@@ -220,7 +224,30 @@ func (m *hoMachine) plugState(p hoPlug, l config.Links) (byLink, self, selfMine 
 	return byLink, self, selfMine, to
 }
 
-// hoChange is one field of one agent's entry that a request changed: for the audit log.
+// where is the machine a plug is on under the links l, as a line names it: "" when that is this machine, or
+// none.
+func (m *hoMachine) where(p hoPlug, l config.Links) string {
+	switch byLink, self, selfMine, to := m.plugState(p, l); {
+	case byLink || selfMine:
+		return ""
+	case self:
+		return m.names[p.agent]
+	default:
+		return m.rowOf(m.shown(to))
+	}
+}
+
+// concerns reports whether the decision about a plug's link (there is one: to) is about this machine: it
+// gives the plug to this machine, or takes it from it (config.yaml links it here). Only such a decision is
+// "changed here" on this machine's page, and only such a one can be reset there.
+func (m *hoMachine) concerns(p hoPlug, to string) bool {
+	byLink, _, selfMine, _ := m.plugState(p, m.base[p.agent])
+	return m.mine(to) || byLink || selfMine
+}
+
+// hoChange is one field of one agent's entry that a request changed: for the audit log. Before and After
+// are what counts for that agent (config.yaml with the decisions), BeforeFrom and AfterFrom whether a
+// decision of the panel is part of it ("panel") or it is config.yaml's alone.
 type hoChange struct {
 	Agent      string `json:"agent"`
 	Field      string `json:"field"`
@@ -228,12 +255,46 @@ type hoChange struct {
 	After      any    `json:"after"`
 	BeforeFrom string `json:"before_from"` // "config.yaml" or "panel"
 	AfterFrom  string `json:"after_from"`
+	Stored     any    `json:"stored"` // the panel's decisions in this field afterwards (nil: none)
+}
+
+// The words of a line, which the dialog makes the same way (app.js: ehPlan; a test holds the two together).
+const hoBack = "back to config.yaml: "
+
+func hoUPSWords(on bool, machine string) string {
+	if on {
+		return "powers " + machine
+	}
+	return "no longer powers " + machine
+}
+
+func hoLinkWords(linked bool, machine, was, then string) string {
+	switch {
+	case linked && was != "":
+		return "linked to " + machine + " (was on " + was + ")"
+	case linked:
+		return "linked to " + machine
+	case then != "":
+		return "no longer linked to " + machine + " (on " + then + " again)"
+	}
+	return "no longer linked to " + machine
+}
+
+func hoTotalWords(in bool) string {
+	if in {
+		return "in the total again"
+	}
+	return "not in the total"
 }
 
 // apply makes the changes of req in o, for this machine, and returns one line for each thing that changes
 // (the words of the dialog, of "Confirm it's you" and of the audit entry) and the changed fields. A tick that
 // is already as asked changes nothing and has no line. An error is a refusal (422) and o is then not to be
 // used.
+//
+// A tick becomes one decision in the entry of the agent that reads the device, about this machine's line
+// only. A tick that puts a line back to what config.yaml says takes the decision out instead: what is stored
+// is where the panel differs from config.yaml, and nothing else.
 func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines []string, changes []hoChange, err error) {
 	if len(req.UPS) > maxHostOptionEntries || len(req.Plugs) > maxHostOptionEntries || len(req.Reset) > maxHostOptionEntries {
 		return nil, nil, apierr.New(422, "too many entries in one request")
@@ -243,73 +304,142 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	}
 	first := o.Clone()
 	bad := func(format string, a ...any) error { return apierr.New(422, fmt.Sprintf(format, a...)) }
-	// 1. resets: an override goes, config.yaml's value counts again
-	seen := map[string]bool{}
-	for _, r := range req.Reset {
-		f, ok := hoFields[r.Field]
-		if _, reads := m.base[r.Agent]; !ok || !reads {
-			return nil, nil, bad("reset: no such field of a machine that reads devices")
+	gone := func(what, id string) error {
+		return bad("no agent relays the %s %q (any more): close this and open it again", what, truncate(safeTarget(id), 80))
+	}
+	notMine := func(p hoPlug) error {
+		return bad("%s is not a plug of %s: link it first, or change it on the page of the machine it belongs to", p.label, m.row.Name)
+	}
+	// the entry of a reading agent, as this request leaves it (a copy until the end)
+	work := map[string]*adminstate.HostOption{}
+	entry := func(agent string) *adminstate.HostOption {
+		if e, ok := work[agent]; ok {
+			return e
 		}
-		if seen["reset\x00"+r.Agent+"\x00"+r.Field] {
+		e := o.For(agent).Clone()
+		work[agent] = &e
+		return &e
+	}
+	links := func(agent string) config.Links { return entry(agent).Apply(m.base[agent]) }
+	seen := map[string]bool{}
+	once := func(kind, id string) bool {
+		if seen[kind+"\x00"+id] {
+			return false
+		}
+		seen[kind+"\x00"+id] = true
+		return true
+	}
+	isMine := func(p hoPlug, l config.Links) bool {
+		byLink, _, selfMine, _ := m.plugState(p, l)
+		return byLink || selfMine || (m.agent != "" && p.agent == m.agent)
+	}
+	// 1. resets: the decision of one line goes, config.yaml counts for it again
+	for _, r := range req.Reset {
+		field, ok := hoFields[r.Field]
+		if !ok {
+			return nil, nil, bad("reset: no such field (ups, plugs or total)")
+		}
+		if !once(r.Field, r.ID) {
 			return nil, nil, bad("reset: an entry is there twice")
 		}
-		seen["reset\x00"+r.Agent+"\x00"+r.Field] = true
-		e := o.Agents[r.Agent]
-		if e.Reset(f.field) {
-			o.Agents[r.Agent] = e
-			lines = append(lines, fmt.Sprintf(f.words, m.names[r.Agent]))
+		if field == config.FieldUPSPowers {
+			i := slices.IndexFunc(m.ups, func(u hoUPS) bool { return u.id == r.ID })
+			if i < 0 {
+				return nil, nil, gone("UPS", r.ID)
+			}
+			u := m.ups[i]
+			e := entry(u.agent)
+			was, had := slices.Contains(links(u.agent).UPSPowers[u.name], m.row.ID), false
+			for _, id := range slices.Sorted(maps.Keys(e.UPS[u.name])) {
+				if m.mine(id) {
+					had = e.DropUPS(u.name, id) || had
+				}
+			}
+			if !had {
+				continue
+			}
+			words := "nothing changes now"
+			if is := slices.Contains(links(u.agent).UPSPowers[u.name], m.row.ID); is != was {
+				words = hoUPSWords(is, m.row.Name)
+			}
+			lines = append(lines, fmt.Sprintf("UPS %s (read by %s): %s%s", u.label, m.names[u.agent], hoBack, words))
+			continue
 		}
+		i := slices.IndexFunc(m.plugs, func(p hoPlug) bool { return p.id == r.ID })
+		if i < 0 {
+			return nil, nil, gone("plug", r.ID)
+		}
+		p := m.plugs[i]
+		e := entry(p.agent)
+		who := fmt.Sprintf("Plug %s (read by %s): %s", p.label, m.names[p.agent], hoBack)
+		if field == config.FieldPowerLinks {
+			to, has := e.Links[p.dev]
+			if !has || !m.concerns(p, to) {
+				continue
+			}
+			before := links(p.agent)
+			wasLinked, _, wasSelf, _ := m.plugState(p, before)
+			e.DropLink(p.dev)
+			after := links(p.agent)
+			isLinked, _, isSelf, _ := m.plugState(p, after)
+			words := "nothing changes now"
+			if was, is := wasLinked || wasSelf, isLinked || isSelf; was != is {
+				words = hoLinkWords(is, m.row.Name, m.where(p, before), m.where(p, after))
+			}
+			lines = append(lines, who+words)
+			continue
+		}
+		if !isMine(p, links(p.agent)) {
+			return nil, nil, notMine(p)
+		}
+		was := slices.Contains(links(p.agent).PowerExcludeFromTotal, p.dev)
+		if !e.DropExclude(p.dev) {
+			continue
+		}
+		words := "nothing changes now"
+		if is := slices.Contains(links(p.agent).PowerExcludeFromTotal, p.dev); is != was {
+			words = hoTotalWords(!is)
+		}
+		lines = append(lines, who+words)
 	}
-	// 2. ticks, on a working copy of what counts for each reading agent after the resets
-	work := map[string]*config.Links{}
-	links := func(agent string) *config.Links {
-		if l, ok := work[agent]; ok {
-			return l
-		}
-		l := o.For(agent).Apply(m.base[agent])
-		if l.UPSPowers == nil {
-			l.UPSPowers = map[string][]string{}
-		}
-		if l.PowerLinks == nil {
-			l.PowerLinks = map[string]string{}
-		}
-		work[agent] = &l
-		return &l
-	}
-	dirty := map[string]map[string]bool{}
-	touch := func(agent, field string) {
-		if dirty[agent] == nil {
-			dirty[agent] = map[string]bool{}
-		}
-		dirty[agent][field] = true
-	}
+	// 2. ticks
 	for _, r := range req.UPS {
 		i := slices.IndexFunc(m.ups, func(u hoUPS) bool { return u.id == r.ID })
 		if r.On == nil {
 			return nil, nil, bad("ups: \"on\" is missing")
 		}
 		if i < 0 {
-			return nil, nil, bad("no agent relays the UPS %q (any more): close this and open it again", truncate(safeTarget(r.ID), 80))
+			return nil, nil, gone("UPS", r.ID)
 		}
-		if seen["ups\x00"+r.ID] {
+		if !once("ups", r.ID) {
 			return nil, nil, bad("ups: an entry is there twice")
 		}
-		seen["ups\x00"+r.ID] = true
 		u := m.ups[i]
-		l := links(u.agent)
-		rows := l.UPSPowers[u.name]
+		e, base := entry(u.agent), m.base[u.agent].UPSPowers[u.name]
+		// decide is the decision about one of this machine's ids, or none where config.yaml says the same
+		decide := func(id string, on bool) {
+			if slices.Contains(base, id) == on {
+				e.DropUPS(u.name, id)
+			} else {
+				e.SetUPS(u.name, id, on)
+			}
+		}
+		rows := links(u.agent).UPSPowers[u.name]
 		switch {
 		case *r.On && !slices.Contains(rows, m.row.ID):
 			// A UPS's rows are matched by their exact id (ups.Manager.SystemsMap), so the id of the row the machine
-			// is shown as right now is written, as a hand-written config.yaml has it.
-			l.UPSPowers[u.name] = append(slices.Clone(rows), m.row.ID)
-			lines = append(lines, fmt.Sprintf("UPS %s (read by %s): powers %s", u.label, m.names[u.agent], m.row.Name))
-			touch(u.agent, config.FieldUPSPowers)
+			// is shown as right now is decided about, as a hand-written config.yaml has it.
+			decide(m.row.ID, true)
 		case !*r.On && slices.ContainsFunc(rows, m.mine):
-			l.UPSPowers[u.name] = slices.DeleteFunc(slices.Clone(rows), m.mine) // under every id of the machine
-			lines = append(lines, fmt.Sprintf("UPS %s (read by %s): no longer powers %s", u.label, m.names[u.agent], m.row.Name))
-			touch(u.agent, config.FieldUPSPowers)
+			for _, id := range rows {
+				if m.mine(id) { // under every id of the machine
+					decide(id, false)
+				}
+			}
+		default:
+			continue
 		}
+		lines = append(lines, fmt.Sprintf("UPS %s (read by %s): %s", u.label, m.names[u.agent], hoUPSWords(*r.On, m.row.Name)))
 	}
 	for _, r := range req.Plugs {
 		i := slices.IndexFunc(m.plugs, func(p hoPlug) bool { return p.id == r.ID })
@@ -317,97 +447,89 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 			return nil, nil, bad("plugs: neither \"linked\" nor \"in_total\" is given")
 		}
 		if i < 0 {
-			return nil, nil, bad("no agent relays the plug %q (any more): close this and open it again", truncate(safeTarget(r.ID), 80))
+			return nil, nil, gone("plug", r.ID)
 		}
-		if seen["plug\x00"+r.ID] {
+		if !once("plug", r.ID) || (r.Linked != nil && seen["plugs\x00"+r.ID]) || (r.InTotal != nil && seen["total\x00"+r.ID]) {
 			return nil, nil, bad("plugs: an entry is there twice")
 		}
-		seen["plug\x00"+r.ID] = true
 		p := m.plugs[i]
-		l := links(p.agent)
-		byLink, self, selfMine, to := m.plugState(p, *l)
-		who := fmt.Sprintf("Plug %s (read by %s)", p.label, m.names[p.agent])
+		e, base := entry(p.agent), m.base[p.agent]
+		who := fmt.Sprintf("Plug %s (read by %s): ", p.label, m.names[p.agent])
 		if r.Linked != nil {
-			switch {
+			before := links(p.agent)
+			switch byLink, _, selfMine, _ := m.plugState(p, before); {
 			case *r.Linked && !byLink && !selfMine:
-				was := m.rowOf(m.shown(to))
-				if self {
-					was = m.names[p.agent]
+				// where config.yaml (or, with no link in it, the agent itself) already gives the plug to this machine,
+				// that counts again; else the link is decided here
+				if cfgLink, _, cfgSelf, _ := m.plugState(p, base); cfgLink || cfgSelf {
+					e.DropLink(p.dev)
+				} else {
+					e.SetLink(p.dev, m.plugTo)
 				}
-				line := fmt.Sprintf("%s: linked to %s", who, m.row.Name)
-				if was != "" {
-					line += " (was on " + was + ")"
-				}
-				l.PowerLinks[p.dev] = m.plugTo
-				lines = append(lines, line)
-				touch(p.agent, config.FieldPowerLinks)
-				byLink = true
+				lines = append(lines, who+hoLinkWords(true, m.row.Name, m.where(p, before), ""))
 			case !*r.Linked && byLink:
-				delete(l.PowerLinks, p.dev)
-				lines = append(lines, fmt.Sprintf("%s: no longer linked to %s", who, m.row.Name))
-				touch(p.agent, config.FieldPowerLinks)
-				byLink = false
+				if base.PowerLinks[p.dev] == "" {
+					e.DropLink(p.dev)
+				} else {
+					e.SetLink(p.dev, "") // linked to none, whatever config.yaml says
+				}
+				lines = append(lines, who+hoLinkWords(false, m.row.Name, "", ""))
 			case !*r.Linked && selfMine:
 				return nil, nil, bad("%s is linked by the machine itself (system_hint: self in the agent's config): it cannot be unlinked here", p.label)
 			}
 		}
 		if r.InTotal != nil {
 			// only for a plug of this machine: one it is linked to (after this request), or one its own agent reads
-			if !byLink && !selfMine && (m.agent == "" || p.agent != m.agent) {
-				return nil, nil, bad("%s is not a plug of %s: link it first, or change it on the page of the machine it belongs to", p.label, m.row.Name)
+			l := links(p.agent)
+			if !isMine(p, l) {
+				return nil, nil, notMine(p)
 			}
-			switch out := slices.Contains(l.PowerExcludeFromTotal, p.dev); {
-			case !*r.InTotal && !out:
-				l.PowerExcludeFromTotal = append(slices.Clone(l.PowerExcludeFromTotal), p.dev)
-				lines = append(lines, who+": not in the total")
-				touch(p.agent, config.FieldExclude)
-			case *r.InTotal && out:
-				l.PowerExcludeFromTotal = slices.DeleteFunc(slices.Clone(l.PowerExcludeFromTotal), func(d string) bool { return d == p.dev })
-				lines = append(lines, who+": in the total again")
-				touch(p.agent, config.FieldExclude)
+			if out := slices.Contains(l.PowerExcludeFromTotal, p.dev); out == *r.InTotal {
+				if slices.Contains(base.PowerExcludeFromTotal, p.dev) == !*r.InTotal {
+					e.DropExclude(p.dev)
+				} else {
+					e.SetExclude(p.dev, !*r.InTotal)
+				}
+				lines = append(lines, who+hoTotalWords(*r.InTotal))
 			}
 		}
 	}
-	// 3. what changed becomes the override of that field in the reading agent's entry, checked like every link
-	for _, agent := range slices.Sorted(maps.Keys(dirty)) {
-		e := o.Agents[agent]
-		for _, field := range config.LinkFields {
-			if dirty[agent][field] {
-				e.Set(field, tidyLinks(*work[agent]))
-			}
+	// 3. what was decided is checked like every link: the names and ids of the decisions themselves, and what
+	// counts with them (config.yaml's own findings aside: those are config.yaml's, and stop nothing here)
+	for _, agent := range slices.Sorted(maps.Keys(work)) {
+		e := work[agent].Clone()
+		if o.For(agent).Same(e) {
+			continue
 		}
-		if p := config.LinkProblems(e.Links); len(p) > 0 {
-			// an override begins as a copy of config.yaml's value: what the check finds can be config.yaml's own
-			if slices.ContainsFunc(config.LinkProblems(m.base[agent]), func(b config.LinkProblem) bool { return b.Text == p[0].Text }) {
-				return nil, nil, bad("%s: %s (config.yaml has it in the entry of %s: correct it there first)", m.names[agent], p[0].Text, agent)
-			}
-			return nil, nil, bad("%s: %s", m.names[agent], p[0].Text)
+		problems := config.LinkProblems(e.Named())
+		if len(problems) == 0 {
+			own := config.LinkProblems(m.base[agent])
+			problems = slices.DeleteFunc(config.LinkProblems(e.Apply(m.base[agent])), func(p config.LinkProblem) bool {
+				return slices.ContainsFunc(own, func(b config.LinkProblem) bool { return b.Text == p.Text })
+			})
 		}
-		o.Agents[agent] = e
+		if len(problems) > 0 {
+			return nil, nil, bad("%s: %s", m.names[agent], problems[0].Text)
+		}
+		if e.Empty() {
+			delete(o.Agents, agent)
+		} else {
+			o.Agents[agent] = e
+		}
 	}
 	// what differs from the start, field by field: for the audit log
 	for _, agent := range slices.Sorted(maps.Keys(m.base)) {
 		was, is := first.For(agent), o.For(agent)
 		for _, field := range config.LinkFields {
 			a, b := hoValue(was.Apply(m.base[agent]), field), hoValue(is.Apply(m.base[agent]), field)
-			if was.Has(field) == is.Has(field) && fmt.Sprint(a) == fmt.Sprint(b) {
+			if fmt.Sprint(hoStored(was, field)) == fmt.Sprint(hoStored(is, field)) {
 				continue
 			}
-			changes = append(changes, hoChange{Agent: agent, Field: field, Before: a, After: b, BeforeFrom: hoFrom(was.Has(field)), AfterFrom: hoFrom(is.Has(field))})
+			changes = append(changes, hoChange{Agent: agent, Field: field, Before: a, After: b, BeforeFrom: hoFrom(was.Has(field)), AfterFrom: hoFrom(is.Has(field)),
+				Stored: hoStored(is, field)})
 		}
 	}
 	return lines, changes, nil
-}
-
-// tidyLinks is l as an override is stored: without the entries that say nothing (a UPS that powers no row, a
-// device linked to ""), and with the devices left out of the total in order.
-func tidyLinks(l config.Links) config.Links {
-	l = l.Clone()
-	maps.DeleteFunc(l.UPSPowers, func(_ string, rows []string) bool { return len(rows) == 0 })
-	maps.DeleteFunc(l.PowerLinks, func(_, to string) bool { return to == "" })
-	slices.Sort(l.PowerExcludeFromTotal)
-	l.PowerExcludeFromTotal = slices.Compact(l.PowerExcludeFromTotal)
-	return l
 }
 
 func hoFrom(panel bool) string {
@@ -415,6 +537,19 @@ func hoFrom(panel bool) string {
 		return "panel"
 	}
 	return "config.yaml"
+}
+
+// hoStored is the decisions of one field as the audit log shows them (nil: none).
+func hoStored(e adminstate.HostOption, field string) any {
+	switch e = e.Clone(); {
+	case !e.Has(field):
+		return nil
+	case field == config.FieldUPSPowers:
+		return e.UPS
+	case field == config.FieldPowerLinks:
+		return e.Links
+	}
+	return e.Exclude
 }
 
 // hoValue is one field of l as the audit log shows it.
@@ -438,13 +573,14 @@ func hoValue(l config.Links, field string) any {
 }
 
 // view is the answer of GET, and of PUT after the change: what counts for this machine under o, and where
-// each value comes from. from "config": config.yaml's value counts. from "panel": the field was changed
-// in the panel for that reading agent, and config.yaml's value of it (config_...) is not used until Reset,
-// whatever is written there later.
+// each line's value comes from. from "config": config.yaml's value counts for the line. from "panel": the
+// line was changed in the panel, and what config.yaml says about it (config_...) is not used until Reset,
+// whatever is written there later. by and at are who last changed something about the devices that agent
+// reads, and when (they are kept for each reading agent, not for each line).
 func (m *hoMachine) view(o adminstate.HostOptions, ignored []string) map[string]any {
-	from := func(agent, field string) (string, any, any) {
+	who := func(agent string, panel bool) (string, any, any) {
 		e := o.For(agent)
-		if !e.Has(field) {
+		if !panel {
 			return "config", nil, nil
 		}
 		var at any
@@ -455,30 +591,31 @@ func (m *hoMachine) view(o adminstate.HostOptions, ignored []string) map[string]
 	}
 	ups := []map[string]any{}
 	for _, u := range m.ups {
-		eff, base := o.For(u.agent).Apply(m.base[u.agent]), m.base[u.agent]
-		src, by, at := from(u.agent, config.FieldUPSPowers)
+		e, base := o.For(u.agent), m.base[u.agent]
+		eff := e.Apply(base)
+		decided := false
+		for id := range e.UPS[u.name] {
+			decided = decided || m.mine(id)
+		}
+		src, by, at := who(u.agent, decided)
 		ups = append(ups, map[string]any{"id": u.id, "name": u.label, "agent": u.agent, "agent_name": m.names[u.agent],
 			"on": slices.Contains(eff.UPSPowers[u.name], m.row.ID), "from": src, "by": by, "at": at,
 			"config_on": slices.Contains(base.UPSPowers[u.name], m.row.ID)})
 	}
 	plugs := []map[string]any{}
 	for _, p := range m.plugs {
-		eff, base := o.For(p.agent).Apply(m.base[p.agent]), m.base[p.agent]
-		byLink, self, selfMine, to := m.plugState(p, eff)
-		other := ""
-		switch {
-		case byLink || selfMine:
-		case self:
-			other = m.names[p.agent]
-		case to != "":
-			other = m.rowOf(m.shown(to))
-		}
-		src, by, at := from(p.agent, config.FieldPowerLinks)
-		tsrc, tby, tat := from(p.agent, config.FieldExclude)
+		e, base := o.For(p.agent), m.base[p.agent]
+		eff := e.Apply(base)
+		byLink, _, selfMine, _ := m.plugState(p, eff)
+		cfgLink, _, cfgSelf, _ := m.plugState(p, base)
+		to, decided := e.Links[p.dev]
+		src, by, at := who(p.agent, decided && m.concerns(p, to))
+		_, decided = e.Exclude[p.dev]
+		tsrc, tby, tat := who(p.agent, decided)
 		plugs = append(plugs, map[string]any{"id": p.id, "name": p.label, "agent": p.agent, "agent_name": m.names[p.agent],
-			"linked": byLink || selfMine, "self": selfMine, "other": strOrNil(other), "from": src, "by": by, "at": at,
-			"config_linked": m.mine(base.PowerLinks[p.dev]),
-			"in_total":      !slices.Contains(eff.PowerExcludeFromTotal, p.dev), "total_from": tsrc, "total_by": tby, "total_at": tat,
+			"linked": byLink || selfMine, "self": selfMine, "other": strOrNil(m.where(p, eff)), "from": src, "by": by, "at": at,
+			"config_linked": cfgLink || cfgSelf, "config_other": strOrNil(m.where(p, base)),
+			"in_total": !slices.Contains(eff.PowerExcludeFromTotal, p.dev), "total_from": tsrc, "total_by": tby, "total_at": tat,
 			"config_in_total": !slices.Contains(base.PowerExcludeFromTotal, p.dev),
 			"mine":            byLink || selfMine || (m.agent != "" && p.agent == m.agent)})
 	}
@@ -580,7 +717,7 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	}
 	out := m.view(after, nil)
 	out["ok"], out["changed"] = true, []string{}
-	if !changed || len(changes) == 0 { // every tick was already as asked
+	if !changed { // every tick was already as asked
 		out["message"] = "nothing to change"
 		c.json(200, out)
 		return nil
@@ -598,8 +735,8 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 }
 
 // forgetHostOptions is the "Edit host" part of Remove (api_enroll.go): the overrides of the removed host's
-// agent go, and so does every reference to one of its rows in the overrides of other agents. gone is what was
-// taken out (nil: there was nothing).
+// agent go, and so does every decision about one of its rows in the overrides of other agents. gone is what
+// was taken out (nil: there was nothing).
 func (s *Server) forgetHostOptions(by, agentID string, ids ...string) (gone []string, err error) {
 	_, _, err = s.Poller.Admin.EditHostOptions(by, func(o *adminstate.HostOptions) error {
 		gone = o.Forget(agentID, ids...)

@@ -223,8 +223,9 @@ In short:
    * Hosts added with **Add host** have no `power_links` in config.yaml (their entry is not in it): link such
      an agent's plugs in the panel ([Edit host](#edit-host)), or give the plug `system_hint: self` in the
      agent's own config.yaml.
-   * All three can also be changed in the panel, without a restart: [Edit host](#edit-host). A field that was
-     changed there is used instead of config.yaml's until it is reset there.
+   * All three can also be changed in the panel, without a restart: [Edit host](#edit-host). A line that was
+     changed there is used instead of what config.yaml says about it until it is reset there; everything else
+     keeps following config.yaml.
 4. A plug that cannot be read stays on the Power page and on its machine's page with the agent's words for
    why (`home assistant refused the token`, `entity not found`, `the sensor is unavailable`), also after it
    has had no reading for longer than `offline_after`.
@@ -1090,19 +1091,26 @@ These are fields of an agent's entry in config.yaml, and they decide what is **s
 them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads them.
 
 * **config.yaml stays the base.** The panel does not write config.yaml (it cannot: the service has no write
-  access to it). What you change is kept by the panel as an override (`state.json`, `host_options`) and laid
-  over the agent's entry each time the agent is polled. Each line of the dialog says where its value comes
-  from: **from config.yaml**, or **changed here** with **Reset**, which takes the override out so that
-  config.yaml's value shows again. The same works for a host added with **Add host**, whose entry has no
-  such fields: this is how such a host gets its links.
+  access to it). What you change is kept by the panel (`state.json`, `host_options`) as one decision for each
+  line you changed, and laid over the agent's entry each time the agent is polled. Each line of the dialog
+  says where its value comes from: **from config.yaml**, or **changed here** with **Reset**, which takes the
+  decision of that line out so that config.yaml's value shows again. The same works for a host added with
+  **Add host**, whose entry has no such fields: this is how such a host gets its links.
 * **A link belongs to the machine that reads the device.** "Rack UPS powers PC-B" is a line in the entry of
   the NAS whose agent reads the UPS, not in PC-B's. You tick it on PC-B's page; the panel stores it with the
   NAS and says so ("read by NAS"), in the dialog, in "Confirm it's you" and in the audit log.
-* **A changed field replaces config.yaml's, whole.** Once the UPS links read by the NAS are changed here, the
-  `ups_powers:` of the NAS's entry in config.yaml is not used until Reset, also when you edit that line later.
-  The dialog says "Changed here: used instead of config.yaml until Reset.", and `fairy admin config check`
-  lists every override with what of config.yaml it replaces. Reset is per field and per reading machine: it
-  puts back all links of that kind read by that machine.
+* **A changed line is used instead of config.yaml's word about that line, and nothing else is.** "Rack UPS
+  powers PC-B", ticked here, stays so until Reset, also when you later edit `ups_powers:` of the NAS's entry
+  in config.yaml to say otherwise about PC-B and the rack UPS. Everything you did not change here follows
+  config.yaml, as before: the same UPS and another machine, the other plugs. So a change made on PC-B's page
+  never changes or freezes what config.yaml says about PC-A, and a Reset on PC-B's page puts back that one
+  line of PC-B. The dialog says "Changed here: used instead of config.yaml until Reset.", and `fairy admin
+  config check` lists every changed line with what config.yaml says about it. A tick that puts a line back to
+  what config.yaml says is the same as Reset.
+* **A plug has one place.** Linking a plug here takes it from the machine it was on, and the line says so
+  ("linked to PC-B (was on PC-A)"); that is the one way a change on one machine's page changes another's.
+  Unticking it here links it to nothing (it does not go back by itself); PC-A's page then shows the line as
+  changed, and Reset there, or a tick, gives it back.
 * **It counts with the next poll** of the machine that reads the device (seconds; no restart). While that
   machine's polling is paused or it does not answer, the old links stay.
 * **A Proxmox node with an agent has two ids.** A plug's link is stored with the agent's id and follows the
@@ -1111,8 +1119,8 @@ them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads 
   of the panel with the machine off), it is not on the node's row afterwards. Tick it again there.
 * **Who may:** admins, from a browser session (no API token), with "Confirm it's you" inside the usual
   window. Every change is in the audit log (`host.options`, with before and after) and in the bell.
-* **Remove** of a host takes its overrides with it, and every link to it in the overrides of other machines;
-  **Re-pair** keeps them.
+* **Remove** of a host takes what was changed for it with it, and every changed line about it that is kept
+  with other machines; **Re-pair** keeps them.
 * **A damaged override never stops the panel.** Whatever is under `host_options` that is not what Fairy
   writes is ignored with one warning in the log (and a WARN line of `fairy admin config check`);
   config.yaml's value counts for it. `fairy update` is not affected: its check reads config.yaml only.
@@ -1125,8 +1133,8 @@ able to send a token to another address or switch on power control. Those stay i
 
 API: `GET` and `PUT /api/admin/hosts/{id}/options`. The request names only what changes:
 `{"ups": [{"id": "nas-agent/rack", "on": true}], "plugs": [{"id": "nas-agent/pc-plug", "linked": true,
-"in_total": false}], "reset": [{"agent": "nas-agent", "field": "ups"}]}` (`field`: `ups`, `plugs` or `total`).
-Any other field is refused (422).
+"in_total": false}], "reset": [{"id": "nas-agent/desk", "field": "ups"}]}` (`field`: `ups`, `plugs` or `total`;
+a reset is about that one line of this machine). Any other field is refused (422).
 
 ### Notifications
 

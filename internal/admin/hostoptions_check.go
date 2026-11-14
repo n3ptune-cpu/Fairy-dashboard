@@ -13,14 +13,14 @@ import (
 )
 
 // hostOptionsCheck is about "Edit host": what an admin changed in the panel about the links of the devices an
-// agent reads (state.json, "host_options": adminstate.HostOptions). The overrides are not in config.yaml, so
+// agent reads (state.json, "host_options": adminstate.HostOptions). The changes are not in config.yaml, so
 // a reader of config.yaml alone would not know that a line of it is not used; this says it:
 //
-//   - ok: one line per agent with overrides: who changed them and when, each overridden field with its
-//     value, and for each that it is used INSTEAD of config.yaml's value of that field (which is shown, or
-//     "config.yaml has none");
+//   - ok: one line per agent with changes: who made the last one and when, and every decision with what
+//     config.yaml says about the same thing ("rack powers pc-b (config.yaml: not)"). A decision is used
+//     INSTEAD of config.yaml's word about that one thing until Reset; everything else follows config.yaml;
 //   - warn: one line for everything the running panel ignores: an entry or a field that is not what Fairy
-//     writes, an override for an id that is no agent's, a row id that no row of this panel can have. The
+//     writes, changes for an id that is no agent's, a row id that no row of this panel can have. The
 //     panel starts with all of them, config.yaml's value counts for what is ignored;
 //   - notes: what the shared check of the link fields (config.LinkProblems) finds in config.yaml itself and
 //     no other part of this command says already: the UPS links, and lists longer than an agent can relay.
@@ -37,7 +37,7 @@ func hostOptionsCheck(cfg *config.Panel) (ok, warn, notes []string) {
 			if p.Field != config.FieldUPSPowers && p.Kind != "count" && p.Kind != "twice" {
 				continue // powerLinkCheck has a note for a device id or a link that cannot work
 			}
-			notes = append(notes, fmt.Sprintf("agent %s: %s: nothing is refused for it, and \"Edit host\" cannot change this field until it is put right", a.ID, cell(p.Text)))
+			notes = append(notes, fmt.Sprintf("agent %s: %s: nothing is refused for it", a.ID, cell(p.Text)))
 		}
 	}
 	o, ignored, err := adminstate.ReadHostOptions(cfg.DataDir)
@@ -66,33 +66,28 @@ func hostOptionsCheck(cfg *config.Panel) (ok, warn, notes []string) {
 			who += ", " + e.At.UTC().Format("2006-01-02 15:04 UTC")
 		}
 		base := a.Links()
-		var parts []string
-		for _, field := range config.LinkFields {
-			if !e.Has(field) {
-				continue
+		var parts, rows []string
+		for _, name := range slices.Sorted(maps.Keys(e.UPS)) {
+			for _, row := range slices.Sorted(maps.Keys(e.UPS[name])) {
+				on, was := e.UPS[name][row], slices.Contains(base.UPSPowers[name], row)
+				parts = append(parts, fmt.Sprintf("%s: %s %s %s (config.yaml: %s)", config.FieldUPSPowers, name, pick(on, "powers", "does not power"), row, pick(was, "it does", "not")))
+				if on {
+					rows = append(rows, row)
+				}
 			}
-			was := linkText(base, field)
-			if was == "" {
-				was = "config.yaml has none"
-			} else {
-				was = "config.yaml's " + field + " of this agent is NOT used until Reset: " + was
-			}
-			now := linkText(e.Links, field)
-			if now == "" {
-				now = "nothing"
-			}
-			parts = append(parts, fmt.Sprintf("%s: %s (%s)", field, now, was))
 		}
-		ok = append(ok, fmt.Sprintf("agent %s: %s: %s", id, who, strings.Join(parts, "; ")))
-		var rows []string
-		for _, name := range slices.Sorted(maps.Keys(e.Links.UPSPowers)) {
-			rows = append(rows, e.Links.UPSPowers[name]...)
-		}
-		for _, dev := range slices.Sorted(maps.Keys(e.Links.PowerLinks)) {
-			if to := e.Links.PowerLinks[dev]; to != "" {
+		for _, dev := range slices.Sorted(maps.Keys(e.Links)) {
+			to := e.Links[dev]
+			parts = append(parts, fmt.Sprintf("%s: %s -> %s (config.yaml: %s)", config.FieldPowerLinks, dev, pick(to != "", to, "none"), pick(base.PowerLinks[dev] != "", base.PowerLinks[dev], "none")))
+			if to != "" {
 				rows = append(rows, to)
 			}
 		}
+		for _, dev := range slices.Sorted(maps.Keys(e.Exclude)) {
+			parts = append(parts, fmt.Sprintf("%s: %s %s (config.yaml: %s)", config.FieldExclude, dev, pick(e.Exclude[dev], "left out", "counted"),
+				pick(slices.Contains(base.PowerExcludeFromTotal, dev), "left out", "counted")))
+		}
+		ok = append(ok, fmt.Sprintf("agent %s: %s, used INSTEAD of what config.yaml says about the same thing until Reset (the rest follows config.yaml): %s", id, who, cell(strings.Join(parts, "; "))))
 		slices.Sort(rows)
 		for _, row := range slices.Compact(rows) {
 			if !poller.PossibleRow(row, c.Agents, c.Proxmox) {
@@ -104,21 +99,9 @@ func hostOptionsCheck(cfg *config.Panel) (ok, warn, notes []string) {
 	return ok, warn, notes
 }
 
-// linkText is one link field of l in one line ("": it says nothing).
-func linkText(l config.Links, field string) string {
-	var parts []string
-	switch field {
-	case config.FieldUPSPowers:
-		for _, name := range slices.Sorted(maps.Keys(l.UPSPowers)) {
-			parts = append(parts, name+" -> "+strings.Join(l.UPSPowers[name], ", "))
-		}
-		return cell(strings.Join(parts, "; "))
-	case config.FieldPowerLinks:
-		for _, dev := range slices.Sorted(maps.Keys(l.PowerLinks)) {
-			parts = append(parts, dev+" -> "+l.PowerLinks[dev])
-		}
-	case config.FieldExclude:
-		parts = slices.Sorted(slices.Values(l.PowerExcludeFromTotal))
+func pick(c bool, yes, no string) string {
+	if c {
+		return yes
 	}
-	return cell(strings.Join(parts, ", "))
+	return no
 }

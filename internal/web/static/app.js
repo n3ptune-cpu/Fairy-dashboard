@@ -3487,10 +3487,10 @@ document.addEventListener("click", (e) => {
 
 // ------------------------------------------------------------ Edit host (admins, the ⋯ menu of a host's page)
 // Which UPS a machine is on, which plugs are its plugs, which of them count in the total: the three link fields
-// of config.yaml, changed here. The panel keeps a change as its own override (state.json); config.yaml is not
-// written and stays the base, and Reset takes an override out again. A link is part of the entry of the machine
-// that READS the device, so every line names that machine ("read by NAS"), and Reset is about all links of
-// that kind read by it. The dialog sends only the ticks that were changed, for this one machine.
+// of config.yaml, changed here. The panel keeps a change as its own decision about that one line (state.json);
+// config.yaml is not written and stays the base for every line nobody changed, and Reset takes the decision of
+// a line out again. A link is kept with the machine that READS the device, so every line names that machine
+// ("read by NAS"). The dialog sends only the lines that were changed, for this one machine.
 // eh.d is the panel's answer (GET .../options); eh.draft holds what was changed in the dialog and nothing else.
 // Everything that is drawn or sent is made from the two by the functions below, which touch no page.
 const eh = { d: null, draft: null, seq: 0, busy: false };
@@ -3499,55 +3499,62 @@ function editHostMenu(s) {
   if (!isHost(s) || !state.me?.can_manage_users) return "";
   return `<button class="menu-item" type="button" data-act="edit-host">Edit host</button>`;
 }
-// a field: its name in the API, its words in a line of changes, and what its Reset is about
-const EH_FIELDS = [["ups", "UPS links", "all UPS links"], ["plugs", "Plug links", "all plug links"], ["total", "Total of the plugs", "the total of all plugs"]];
-const ehKey = (agent, field) => `${agent}/${field}`;
-// What an entry is without the ticks made in this dialog: the panel's value, or config.yaml's when Reset was pressed for it.
-const ehWas = (x, field, draft) => {
-  const reset = !!draft.reset[ehKey(x.agent, field)];
-  if (field === "ups") return reset ? !!x.config_on : !!x.on;
-  if (field === "plugs") return reset ? !!x.config_linked || !!x.self : !!x.linked;
-  return reset ? !!x.config_in_total : !!x.in_total;
-};
+// A line of the dialog is a field ("ups", "plugs", "total") and the id of a UPS or plug; a Reset is kept under both.
+const ehKey = (field, id) => `${field}:${id}`;
+// What a line is as the panel has it now, what config.yaml says about it, and whether it was changed here before.
+const ehWas = (x, field) => (field === "ups" ? !!x.on : field === "plugs" ? !!x.linked : !!x.in_total);
+const ehConfig = (x, field) => (field === "ups" ? !!x.config_on : field === "plugs" ? !!x.config_linked : !!x.config_in_total);
+const ehStored = (x, field) => (field === "total" ? x.total_from : x.from) === "panel";
+const ehIsReset = (x, field, draft) => !!draft.reset[ehKey(field, x.id)];
+const ehTicks = (field, draft) => (field === "ups" ? draft.ups : field === "plugs" ? draft.linked : draft.total);
 const ehNow = (x, field, draft) => {
-  const v = (field === "ups" ? draft.ups : field === "plugs" ? draft.linked : draft.total)[x.id];
-  return v === undefined ? ehWas(x, field, draft) : v;
+  if (ehIsReset(x, field, draft)) return ehConfig(x, field);
+  const v = ehTicks(field, draft)[x.id];
+  return v === undefined ? ehWas(x, field) : v;
 };
-// "from config.yaml" or "changed here": where the value of a line comes from once this dialog is saved
+// "from config.yaml" or "changed here": where the value of a line comes from once this dialog is saved. A tick
+// that says what config.yaml says is no change of the panel's: the line follows config.yaml again.
 const ehFrom = (x, field, draft) => {
-  const from = field === "total" ? x.total_from : x.from;
-  if (draft.reset[ehKey(x.agent, field)]) return "config";
-  return from === "panel" || ehNow(x, field, draft) !== ehWas(x, field, draft) ? "panel" : "config";
+  if (ehIsReset(x, field, draft)) return "config";
+  const now = ehNow(x, field, draft);
+  if (now === ehWas(x, field)) return ehStored(x, field) ? "panel" : "config";
+  return now === ehConfig(x, field) ? "config" : "panel";
 };
 // A plug is this machine's when it is linked to it (with this dialog's ticks) or read by its own agent.
 const ehMine = (d, p, draft) => ehNow(p, "plugs", draft) || (!!d.agent && p.agent === d.agent);
+// The words of a line: the panel makes the same ones (api_hostoptions.go; a test holds the two together).
+const ehUPSWords = (d, on) => `${on ? "powers" : "no longer powers"} ${d.name}`;
+const ehLinkWords = (d, linked, was, then) => (linked ? `linked to ${d.name}${was ? ` (was on ${was})` : ""}` : `no longer linked to ${d.name}${then ? ` (on ${then} again)` : ""}`);
+const ehTotalWords = (inTotal) => (inTotal ? "in the total again" : "not in the total");
 // One line for each thing Save will change, in the panel's own words (the same lines are in "Confirm it's you"
 // and in the audit log), and the request that says exactly that.
 function ehPlan(d, draft) {
   const lines = [], body = { ups: [], plugs: [], reset: [] };
-  const readers = dict();
-  [...d.ups, ...d.plugs].forEach((x) => { readers[x.agent] = x.agent_name; });
-  for (const agent of Object.keys(readers)) for (const [field, words] of EH_FIELDS) {
-    if (!draft.reset[ehKey(agent, field)]) continue;
-    body.reset.push({ agent, field });
-    lines.push(`${words} read by ${readers[agent]}: back to config.yaml`);
+  const back = (x, field, what, words) => {
+    body.reset.push({ id: x.id, field });
+    lines.push(`${what} ${x.name} (read by ${x.agent_name}): back to config.yaml: ${ehConfig(x, field) === ehWas(x, field) ? "nothing changes now" : words}`);
+  };
+  for (const u of d.ups) if (ehIsReset(u, "ups", draft)) back(u, "ups", "UPS", ehUPSWords(d, ehConfig(u, "ups")));
+  for (const p of d.plugs) {
+    if (ehIsReset(p, "plugs", draft)) back(p, "plugs", "Plug", ehLinkWords(d, ehConfig(p, "plugs"), p.other, p.config_other));
+    if (ehIsReset(p, "total", draft) && ehMine(d, p, draft)) back(p, "total", "Plug", ehTotalWords(ehConfig(p, "total")));
   }
   for (const u of d.ups) {
     const on = ehNow(u, "ups", draft);
-    if (on === ehWas(u, "ups", draft)) continue;
+    if (ehIsReset(u, "ups", draft) || on === ehWas(u, "ups")) continue;
     body.ups.push({ id: u.id, on });
-    lines.push(`UPS ${u.name} (read by ${u.agent_name}): ${on ? "powers" : "no longer powers"} ${d.name}`);
+    lines.push(`UPS ${u.name} (read by ${u.agent_name}): ${ehUPSWords(d, on)}`);
   }
   for (const p of d.plugs) {
     const linked = ehNow(p, "plugs", draft), inTotal = ehNow(p, "total", draft), who = `Plug ${p.name} (read by ${p.agent_name})`;
     const e = { id: p.id };
-    if (linked !== ehWas(p, "plugs", draft)) {
+    if (!ehIsReset(p, "plugs", draft) && linked !== ehWas(p, "plugs")) {
       e.linked = linked;
-      lines.push(linked ? `${who}: linked to ${d.name}${p.other ? ` (was on ${p.other})` : ""}` : `${who}: no longer linked to ${d.name}`);
+      lines.push(`${who}: ${ehLinkWords(d, linked, p.other, null)}`);
     }
-    if (ehMine(d, p, draft) && inTotal !== ehWas(p, "total", draft)) {
+    if (!ehIsReset(p, "total", draft) && ehMine(d, p, draft) && inTotal !== ehWas(p, "total")) {
       e.in_total = inTotal;
-      lines.push(inTotal ? `${who}: in the total again` : `${who}: not in the total`);
+      lines.push(`${who}: ${ehTotalWords(inTotal)}`);
     }
     if ("linked" in e || "in_total" in e) body.plugs.push(e);
   }
@@ -3557,49 +3564,54 @@ function ehPlan(d, draft) {
 // The dialog's sections. Every name in them is the panel's data and goes through esc().
 function ehView(d, draft) {
   const src = (x, field) => {
-    const from = ehFrom(x, field, draft), reset = !!draft.reset[ehKey(x.agent, field)];
-    const stored = (field === "total" ? x.total_from : x.from) === "panel" && !reset;
+    const from = ehFrom(x, field, draft);
+    const stored = ehStored(x, field) && !ehIsReset(x, field, draft);
     const by = field === "total" ? x.total_by : x.by;
-    return `<span class="eh-src${from === "panel" ? " on" : ""}"${stored && by ? ` title="${esc(`Changed here by ${by}`)}"` : ""}>${from === "panel" ? "changed here" : "from config.yaml"}</span>${stored
-      ? `<button class="btn sm" type="button" data-eh-reset="${esc(ehKey(x.agent, field))}" title="${esc(`Back to config.yaml for ${EH_FIELDS.find((f) => f[0] === field)[2]} read by ${x.agent_name}`)}">Reset</button>` : ""}`;
+    return `<span class="eh-src${from === "panel" ? " on" : ""}"${stored && by ? ` title="${esc(`Changed here. Last change to what ${x.agent_name} reads: ${by}`)}"` : ""}>${from === "panel" ? "changed here" : "from config.yaml"}</span>${stored
+      ? `<button class="btn sm" type="button" data-eh-reset="${esc(ehKey(field, x.id))}" title="Back to config.yaml for this line">Reset</button>` : ""}`;
   };
   // o.note is markup (fixed words, or a name through esc)
   const row = (x, field, o = {}) => `<div class="eh-row"><label class="check opt"><input type="checkbox" data-eh="${field}" value="${esc(x.id)}"${ehNow(x, field, draft) ? " checked" : ""}${o.fixed ? " disabled" : ""}><span>${esc(x.name)}
     <span class="note">read by ${esc(x.agent_name)}${o.note ? ` · ${o.note}` : ""}</span></span></label>${o.fixed ? "" : src(x, field)}</div>`;
+  // where a plug that is not ticked is now (after a Reset: where config.yaml puts it)
+  const where = (p) => (ehIsReset(p, "plugs", draft) ? p.config_other : p.other);
   const mine = d.plugs.filter((p) => ehMine(d, p, draft));
   const sect = (title, hint, rows, none) => `<div class="wu-sub">${title}</div>${rows.length ? `<p class="note eh-hint">${hint}</p>${rows.join("")}` : `<p class="note eh-hint">${none}</p>`}`;
   const plan = ehPlan(d, draft);
   const any = [...d.ups.map((u) => ehFrom(u, "ups", draft)), ...d.plugs.map((p) => ehFrom(p, "plugs", draft)), ...mine.map((p) => ehFrom(p, "total", draft))].includes("panel");
   return `${sect("UPS", "Ticked: this machine is on that UPS.", d.ups.map((u) => row(u, "ups")), "No agent relays a UPS.")}
-    ${sect("Plugs", "Ticked: the plug's watts are this machine's.", d.plugs.map((p) => row(p, "plugs", p.self ? { fixed: true, note: "set on the machine itself" } : !ehNow(p, "plugs", draft) && p.other ? { note: `now on ${esc(p.other)}` } : {})), "No agent relays a plug.")}
+    ${sect("Plugs", "Ticked: the plug's watts are this machine's.", d.plugs.map((p) => row(p, "plugs", p.self ? { fixed: true, note: "set on the machine itself" } : !ehNow(p, "plugs", draft) && where(p) ? { note: `now on ${esc(where(p))}` } : {})), "No agent relays a plug.")}
     ${sect("Total", "Ticked: the plug counts in the total.", mine.map((p) => row(p, "total")), "No plug of this machine.")}
     ${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
     ${d.ignored?.length ? `<p class="note warn eh-ignored">${d.ignored.length === 1 ? "1 stored change is" : `${d.ignored.length} stored changes are`} ignored: see the panel's log.</p>` : ""}
     ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}`;
 }
-// A tick or a Reset in the dialog changes the draft, never the panel.
+// A tick or a Reset in the dialog changes the draft, never the panel. Each is about one line; the later of the
+// two on a line counts.
 function ehTick(d, draft, field, id, checked) {
   const x = (field === "ups" ? d.ups : d.plugs).find((y) => y.id === id);
   if (!x) return;
-  const m = field === "ups" ? draft.ups : field === "plugs" ? draft.linked : draft.total;
-  if (checked === ehWas(x, field, draft)) delete m[id]; else m[id] = checked;
+  delete draft.reset[ehKey(field, id)];
+  const m = ehTicks(field, draft);
+  if (checked === ehWas(x, field)) delete m[id]; else m[id] = checked;
 }
 function ehReset(d, draft, key) {
+  const i = key.indexOf(":"), field = key.slice(0, i), id = key.slice(i + 1);
+  const x = (field === "ups" ? d.ups : d.plugs).find((y) => y.id === id);
+  if (!x || !ehStored(x, field)) return;  // only a line that was changed here has something to put back
   draft.reset[key] = true;
-  const [agent, field] = [key.slice(0, key.lastIndexOf("/")), key.slice(key.lastIndexOf("/") + 1)];
-  const m = field === "ups" ? draft.ups : field === "plugs" ? draft.linked : draft.total;
-  for (const x of field === "ups" ? d.ups : d.plugs) if (x.agent === agent) delete m[x.id];  // the ticks made before go with it
+  delete ehTicks(field, draft)[id];  // the tick made before goes with it
 }
 const EH_INFO = () => infoBtn("edit-host", "Edit host", infoList([
   "What you change here is kept by the panel. config.yaml is not changed and stays the base.",
-  "A changed value is used instead of config.yaml's until Reset, also when config.yaml is edited later.",
-  "A link belongs to the machine that reads the device. Reset puts back all links of that kind read by that machine.",
+  "A changed line is used instead of what config.yaml says about it until Reset, also when config.yaml is edited later. Every other line follows config.yaml.",
+  "A link is kept with the machine that reads the device (\"read by …\"). Reset puts back that one line.",
   "A change counts from the next poll of the machine that reads the device.",
   "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]));
 // The sections are drawn anew after every tick and Reset. The control that was used keeps the focus: the same
-// tick is found again by its section and its device; a Reset button is gone once it was pressed, and the first
-// tick of what it reset stands for it. Without this the focus fell out of the dialog at every tick made with
-// the keyboard.
+// tick is found again by its section and its device; a Reset button is gone once it was pressed, and the tick
+// of its line stands for it. Without this the focus fell out of the dialog at every tick made with the
+// keyboard.
 function ehDraw() {
   const body = $("#eh-body");
   if (!body || !eh.d) return;
@@ -3608,8 +3620,8 @@ function ehDraw() {
   $("#eh-save").disabled = eh.busy || !ehPlan(eh.d, eh.draft).lines.length;
   if (!had) return;
   const ticks = [...body.querySelectorAll("input[data-eh]")], resets = [...body.querySelectorAll("[data-eh-reset]")];
-  const field = had.reset ? had.reset.slice(had.reset.lastIndexOf("/") + 1) : "";
-  (had.reset ? resets.find((x) => x.dataset.ehReset === had.reset) || ticks.find((x) => x.dataset.eh === field && !x.disabled) : ticks.find((x) => x.dataset.eh === had.eh && x.value === had.value))?.focus();
+  const cut = had.reset ? had.reset.indexOf(":") : -1;
+  (had.reset ? resets.find((x) => x.dataset.ehReset === had.reset) || ticks.find((x) => x.dataset.eh === had.reset.slice(0, cut) && x.value === had.reset.slice(cut + 1) && !x.disabled) : ticks.find((x) => x.dataset.eh === had.eh && x.value === had.value))?.focus();
 }
 async function openEditHost(s) {
   state.menu = null; render();

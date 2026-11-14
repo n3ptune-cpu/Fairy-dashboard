@@ -30,16 +30,16 @@ func TestCheckConfigAnswersOKWhateverHostOptionsHolds(t *testing.T) {
 	}
 	var agents []string
 	for i := 0; i < 400; i++ {
-		agents = append(agents, fmt.Sprintf(`"a%d": {"power_exclude_from_total": ["x"]}`, i))
+		agents = append(agents, fmt.Sprintf(`"a%d": {"power_exclude_from_total": {"x": true}}`, i))
 	}
 	manyAgents := strings.Join(agents, ", ")
 	for name, state := range map[string]string{
 		"no state.json":               "",
-		"overrides in order":          `{"host_options": {"rev": 3, "agents": {"relay": {"ups_powers": {"rack": ["relay"]}}}}}`,
+		"overrides in order":          `{"host_options": {"rev": 3, "agents": {"relay": {"ups_powers": {"rack": {"relay": true}}}}}}`,
 		"a text":                      `{"host_options": "x"}`,
 		"a list":                      `{"host_options": [1, 2]}`,
 		"null":                        `{"host_options": null}`,
-		"an agent there is not":       `{"host_options": {"agents": {"gone": {"power_exclude_from_total": ["x"]}}}}`,
+		"an agent there is not":       `{"host_options": {"agents": {"gone": {"power_exclude_from_total": {"x": true}}}}}`,
 		"fields that cannot be set":   `{"host_options": {"agents": {"relay": {"url": "http://198.51.100.7:9101", "power_control": true}}}}`,
 		"fields of the wrong form":    `{"host_options": {"agents": {"relay": {"ups_powers": 7, "power_links": [], "power_exclude_from_total": {}}}}}`,
 		"far too many agents":         `{"host_options": {"agents": {` + manyAgents + `}, "rev": "x"}}`,

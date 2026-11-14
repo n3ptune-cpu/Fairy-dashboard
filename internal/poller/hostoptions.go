@@ -35,18 +35,19 @@ type linkNotes struct {
 
 func (p *Poller) notes() *linkNotes { return &p.linkNotes }
 
-// LinksOf returns the links that count for an agent right now: its entry's, with every field an admin
-// changed in the panel replaced by the panel's value (adminstate.HostOption.Apply).
+// LinksOf returns the links that count for an agent right now: its entry's, with every decision an admin made
+// in the panel laid over them (adminstate.HostOption.Apply). What no decision is about is the entry's.
 //
-// An override is used only as far as it can mean something:
+// A decision is used only as far as it can mean something:
 //
-//   - an override for an id that is no agent's is never read (it is looked up by the agent's id), and is
+//   - the decisions for an id that is no agent's are never read (they are looked up by the agent's id), and are
 //     said once in the log;
-//   - a row id in an override that is no row's (no agent's id, no row the panel has, and not of the form a
-//     node or guest of one of its Proxmox entries has) is left out, and said once in the log. state.json can
-//     be edited by hand; a UPS that "powers" an id nobody has would show that id on the UPS page.
+//   - a decision that gives a UPS or a plug to a row id that is no row's (no agent's id, no row the panel has,
+//     and not of the form a node or guest of one of its Proxmox entries has) links nothing, and is said once in
+//     the log. state.json can be edited by hand; a UPS that "powers" an id nobody has would show that id on the
+//     UPS page.
 //
-// Neither stops anything: the panel always starts, and the rest of the override counts.
+// Neither stops anything: the panel always starts, and the other decisions count.
 func (p *Poller) LinksOf(a config.Agent) config.Links {
 	base := a.Links()
 	opts := p.Admin.HostOptions()
@@ -70,16 +71,16 @@ func (p *Poller) LinksOf(a config.Agent) config.Links {
 		}
 		return k
 	}
-	if o.HasUPSPowers {
-		for name, rows := range l.UPSPowers {
-			l.UPSPowers[name] = slices.DeleteFunc(rows, func(id string) bool { return !keep(id) })
+	for name, rows := range o.UPS {
+		for id, on := range rows {
+			if on && !keep(id) {
+				l.UPSPowers[name] = slices.DeleteFunc(l.UPSPowers[name], func(x string) bool { return x == id })
+			}
 		}
 	}
-	if o.HasPowerLinks {
-		for dev, to := range l.PowerLinks {
-			if to != "" && !keep(to) {
-				delete(l.PowerLinks, dev)
-			}
+	for dev, to := range o.Links {
+		if to != "" && !keep(to) {
+			delete(l.PowerLinks, dev)
 		}
 	}
 	p.noteRows(a.ID, dropped)

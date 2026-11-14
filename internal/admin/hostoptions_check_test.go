@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// `fairy admin config check` and "Edit host": the overrides an admin made in the panel are not in
-// config.yaml, so the command lists them: one ok line per agent, which says for every overridden field that
-// config.yaml's value of it is not used, a WARN for everything the panel ignores, and notes about config.yaml's
-// own UPS links (which nothing else looks at). config.yaml is never refused for its link fields.
+// `fairy admin config check` and "Edit host": what an admin changed in the panel is not in config.yaml, so
+// the command lists it: one ok line per agent with every decision and what config.yaml says about the same
+// thing (which is not used until Reset), a WARN for everything the panel ignores, and notes about
+// config.yaml's own UPS links (which nothing else looks at). config.yaml is never refused for its link fields.
 func TestConfigCheckAndTheOverridesOfEditHost(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.yaml")
@@ -53,34 +53,41 @@ func TestConfigCheckAndTheOverridesOfEditHost(t *testing.T) {
 		t.Fatalf("without overrides:\n%s", plain)
 	}
 	for _, want := range []string{
-		"note  agent nas-agent: ups_powers: \"bad name\" is not a name a UPS can have (letters, digits and _ . : -, at most 64): nothing is refused for it, and \"Edit host\" cannot change this field until it is put right\n",
-		"note  agent pc-b: power_exclude_from_total: x is there twice: nothing is refused for it, and \"Edit host\" cannot change this field until it is put right\n",
+		"note  agent nas-agent: ups_powers: \"bad name\" is not a name a UPS can have (letters, digits and _ . : -, at most 64): nothing is refused for it\n",
+		"note  agent pc-b: power_exclude_from_total: x is there twice: nothing is refused for it\n",
 	} {
 		if strings.Count(plain, want) != 1 {
 			t.Errorf("the output lacks (or has twice) %q:\n%s", want, plain)
 		}
 	}
-	// overrides in order: an ok line that names who, each field, and what of config.yaml is not used
+	// changes in order: an ok line that names who, every decision, and what config.yaml says about the same thing
 	got, code := run(`{"host_options": {"rev": 7, "agents": {
-		"nas-agent": {"ups_powers": {"rack": ["pc-b", "lab-node-pve-a"]}, "power_exclude_from_total": [], "by": "nora@example.com", "at": "2026-11-13T23:40:00Z"},
+		"nas-agent": {"ups_powers": {"rack": {"pc-b": true, "lab-node-pve-a": false}, "bad name": {"pc-b": true}}, "power_links": {"a-plug": ""}, "power_exclude_from_total": {"corner": false, "a-plug": true},
+			"by": "nora@example.com", "at": "2026-11-13T23:40:00Z"},
 		"pc-a": {"power_links": {"own": "lab-qemu-100"}}}}}`)
 	for _, want := range []string{
-		"ok    agent nas-agent: changed in the panel (\"Edit host\") by nora@example.com, 2026-11-13 23:40 UTC: " +
-			"ups_powers: rack -> pc-b, lab-node-pve-a (config.yaml's ups_powers of this agent is NOT used until Reset: bad name -> pc-b; rack -> lab-node-pve-a); " +
-			"power_exclude_from_total: nothing (config.yaml's power_exclude_from_total of this agent is NOT used until Reset: corner)\n",
-		"ok    agent pc-a: changed in the panel (\"Edit host\"): power_links: own -> lab-qemu-100 (config.yaml has none)\n",
+		"WARN  Edit host: an override in state.json is ignored: agent nas-agent: ups_powers: \"bad name\" is not a name a UPS can have (letters, digits and _ . : -, at most 64): config.yaml's value counts\n",
+		"ok    agent nas-agent: changed in the panel (\"Edit host\") by nora@example.com, 2026-11-13 23:40 UTC, used INSTEAD of what config.yaml says about the same thing until Reset (the rest follows config.yaml): " +
+			"power_links: a-plug -> none (config.yaml: pc-a); power_exclude_from_total: a-plug left out (config.yaml: counted); power_exclude_from_total: corner counted (config.yaml: left out)\n",
+		"ok    agent pc-a: changed in the panel (\"Edit host\"), used INSTEAD of what config.yaml says about the same thing until Reset (the rest follows config.yaml): power_links: own -> lab-qemu-100 (config.yaml: none)\n",
 	} {
 		if strings.Count(got, want) != 1 {
 			t.Errorf("the output lacks (or has twice) %q:\n%s", want, got)
 		}
+	}
+	got, code = run(`{"host_options": {"rev": 7, "agents": {
+		"nas-agent": {"ups_powers": {"rack": {"pc-b": true, "lab-node-pve-a": false, "pc-a": false}}, "by": "nora@example.com", "at": "2026-11-13T23:40:00Z"}}}}`)
+	if want := "ok    agent nas-agent: changed in the panel (\"Edit host\") by nora@example.com, 2026-11-13 23:40 UTC, used INSTEAD of what config.yaml says about the same thing until Reset (the rest follows config.yaml): " +
+		"ups_powers: rack does not power lab-node-pve-a (config.yaml: it does); ups_powers: rack does not power pc-a (config.yaml: not); ups_powers: rack powers pc-b (config.yaml: not)\n"; strings.Count(got, want) != 1 {
+		t.Errorf("the output lacks (or has twice) %q:\n%s", want, got)
 	}
 	if strings.Contains(got, "WARN  Edit host") || code != base {
 		t.Errorf("overrides in order: exit code %d (without them %d), or a WARN:\n%s", code, base, got)
 	}
 	// what the panel ignores: one WARN each, and the exit code says that something is to be looked at
 	got, code = run(`{"host_options": {"agents": {
-		"nas-agent": {"url": "http://198.51.100.7:9101", "power_links": 7, "ups_powers": {"rack": ["pc-b", "old-pc"]}},
-		"gone-agent": {"power_exclude_from_total": ["x"]},
+		"nas-agent": {"url": "http://198.51.100.7:9101", "power_links": 7, "ups_powers": {"rack": {"pc-b": true, "old-pc": true, "older-pc": false}}},
+		"gone-agent": {"power_exclude_from_total": {"x": true}},
 		"pc-a": {"power_links": {"own": "lab-node-"}}}}}`)
 	for _, want := range []string{
 		"WARN  Edit host: an override in state.json is ignored: agent nas-agent: \"url\" cannot be set in the panel: it is not used\n",
@@ -88,7 +95,8 @@ func TestConfigCheckAndTheOverridesOfEditHost(t *testing.T) {
 		"WARN  Edit host: state.json has overrides for gone-agent, which is no agent's id (config.yaml and the hosts added in the panel): they are ignored\n",
 		"WARN  Edit host: an override of agent nas-agent names the row old-pc, which is no agent's id and not the id of a node or a guest of a proxmox: entry: it is ignored (a host that was removed?)\n",
 		"WARN  Edit host: an override of agent pc-a names the row lab-node-, which is no agent's id and not the id of a node or a guest of a proxmox: entry: it is ignored (a host that was removed?)\n",
-		"ok    agent nas-agent: changed in the panel (\"Edit host\"): ups_powers: rack -> pc-b, old-pc (config.yaml's ups_powers of this agent is NOT used until Reset: bad name -> pc-b; rack -> lab-node-pve-a)\n",
+		"ok    agent nas-agent: changed in the panel (\"Edit host\"), used INSTEAD of what config.yaml says about the same thing until Reset (the rest follows config.yaml): " +
+			"ups_powers: rack powers old-pc (config.yaml: not); ups_powers: rack does not power older-pc (config.yaml: not); ups_powers: rack powers pc-b (config.yaml: not)\n",
 	} {
 		if strings.Count(got, want) != 1 {
 			t.Errorf("the output lacks (or has twice) %q:\n%s", want, got)

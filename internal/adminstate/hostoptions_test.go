@@ -41,62 +41,117 @@ func readOptions(t *testing.T, dir string) map[string]any {
 	return o
 }
 
-// An override replaces config.yaml's value of its field, whole, and only of its field; without one the
-// entry's value counts. "Set to nothing" is an override too.
+// A decision is about one line (this UPS and this row; this device) and is laid over what config.yaml says
+// about that line. Everything no decision is about is config.yaml's, whatever config.yaml says, now or later.
 func TestHostOptionApply(t *testing.T) {
-	base := config.Links{UPSPowers: map[string][]string{"rack": {"pc-a"}}, PowerLinks: map[string]string{"plug": "pc-a"}, PowerExcludeFromTotal: []string{"corner"}}
+	base := config.Links{UPSPowers: map[string][]string{"rack": {"pc-a", "pc-c"}}, PowerLinks: map[string]string{"plug": "pc-a", "other": "pc-c"}, PowerExcludeFromTotal: []string{"corner"}}
 	var o HostOption
-	if got := o.Apply(base); !SameLinks(got, base) || !o.Empty() {
-		t.Fatalf("no override: %+v", got)
+	if got := o.Apply(base); !SameLinks(got, base) || !o.Empty() || o.Count() != 0 {
+		t.Fatalf("no decision: %+v", got)
 	}
-	o.Set(config.FieldUPSPowers, config.Links{UPSPowers: map[string][]string{"desk": {"pc-b"}}, PowerLinks: map[string]string{"x": "y"}})
+	o.SetUPS("desk", "pc-b", true)  // a UPS config.yaml does not name
+	o.SetUPS("rack", "pc-a", false) // a row config.yaml has on the UPS
+	o.SetUPS("rack", "pc-b", true)
 	got := o.Apply(base)
-	if len(got.UPSPowers) != 1 || !slices.Equal(got.UPSPowers["desk"], []string{"pc-b"}) || got.PowerLinks["plug"] != "pc-a" || len(got.PowerLinks) != 1 || !slices.Equal(got.PowerExcludeFromTotal, []string{"corner"}) {
-		t.Fatalf("ups_powers overridden: %+v", got)
+	if !slices.Equal(got.UPSPowers["desk"], []string{"pc-b"}) || !slices.Equal(got.UPSPowers["rack"], []string{"pc-c", "pc-b"}) || len(got.UPSPowers) != 2 ||
+		got.PowerLinks["plug"] != "pc-a" || len(got.PowerLinks) != 2 || !slices.Equal(got.PowerExcludeFromTotal, []string{"corner"}) {
+		t.Fatalf("three decisions about UPSes: %+v", got)
 	}
-	if !o.Has(config.FieldUPSPowers) || o.Has(config.FieldPowerLinks) || o.Has(config.FieldExclude) || o.Has("url") || o.Empty() {
+	if !o.Has(config.FieldUPSPowers) || o.Has(config.FieldPowerLinks) || o.Has(config.FieldExclude) || o.Has("url") || o.Empty() || o.Count() != 3 {
 		t.Fatalf("Has: %+v", o)
 	}
-	// the result shares nothing with the entry or the override
-	got.UPSPowers["desk"][0], got.PowerLinks["plug"], got.PowerExcludeFromTotal[0] = "changed", "changed", "changed"
-	if o.Links.UPSPowers["desk"][0] != "pc-b" || base.PowerLinks["plug"] != "pc-a" || base.PowerExcludeFromTotal[0] != "corner" {
+	// the result shares nothing with the entry or the decisions
+	got.UPSPowers["rack"][0], got.PowerLinks["plug"], got.PowerExcludeFromTotal[0] = "changed", "changed", "changed"
+	if !slices.Equal(base.UPSPowers["rack"], []string{"pc-a", "pc-c"}) || base.PowerLinks["plug"] != "pc-a" || base.PowerExcludeFromTotal[0] != "corner" || !o.UPS["rack"]["pc-b"] {
 		t.Fatal("Apply shares with its inputs")
 	}
-	// set to nothing: an override that says "none", not "as config.yaml"
-	o.Set(config.FieldPowerLinks, config.Links{})
-	o.Set(config.FieldExclude, config.Links{})
-	if got := o.Apply(base); len(got.PowerLinks) != 0 || len(got.PowerExcludeFromTotal) != 0 || got.PowerLinks == nil || got.PowerExcludeFromTotal == nil {
-		t.Fatalf("set to nothing: %+v", got)
+	// config.yaml is edited afterwards: what no decision is about follows it, what a decision is about does not
+	later := config.Links{UPSPowers: map[string][]string{"rack": {"pc-a", "pc-d"}, "desk": {"pc-d"}}}
+	if got := o.Apply(later); !slices.Equal(got.UPSPowers["rack"], []string{"pc-d", "pc-b"}) || !slices.Equal(got.UPSPowers["desk"], []string{"pc-d", "pc-b"}) {
+		t.Fatalf("after config.yaml changed: %+v", got)
 	}
-	// Reset: the field is config.yaml's again
-	if !o.Reset(config.FieldPowerLinks) || o.Reset(config.FieldPowerLinks) || o.Reset("url") {
-		t.Fatal("Reset reports whether there was an override")
+	// a decision that says what config.yaml says changes nothing (and adds no row twice)
+	o.SetUPS("rack", "pc-c", true)
+	o.SetUPS("rack", "nobody", false)
+	if got := o.Apply(base); !slices.Equal(got.UPSPowers["rack"], []string{"pc-c", "pc-b"}) {
+		t.Fatalf("decisions that say the same: %+v", got)
 	}
-	if got := o.Apply(base); got.PowerLinks["plug"] != "pc-a" || len(got.PowerExcludeFromTotal) != 0 || len(got.UPSPowers["desk"]) != 1 {
-		t.Fatalf("after Reset of power_links: %+v", got)
+	// a link: to another row, or to none; the device no decision is about keeps config.yaml's
+	o.SetLink("plug", "pc-b")
+	o.SetLink("other", "")
+	o.SetLink("new", "pc-b")
+	o.SetLink("never", "")
+	if got := o.Apply(base); got.PowerLinks["plug"] != "pc-b" || got.PowerLinks["new"] != "pc-b" || len(got.PowerLinks) != 2 {
+		t.Fatalf("links: %+v", got.PowerLinks)
 	}
-	o.Reset(config.FieldUPSPowers)
-	o.Reset(config.FieldExclude)
-	if !o.Empty() || !SameLinks(o.Apply(base), base) {
-		t.Fatal("every field reset is no override")
+	if got := (HostOption{Links: map[string]string{"x": "pc"}}).Apply(config.Links{}); got.PowerLinks["x"] != "pc" {
+		t.Fatalf("a link over an entry without links: %+v", got)
 	}
-	// a field name that is none of the three sets nothing
-	o.Set("url", config.Links{PowerLinks: map[string]string{"a": "b"}})
-	if !o.Empty() {
-		t.Fatal("Set took a field that is no link field")
+	// the total: left out, or counted
+	o.SetExclude("corner", false)
+	o.SetExclude("plug", true)
+	o.SetExclude("plug", true)
+	if got := o.Apply(base); !slices.Equal(got.PowerExcludeFromTotal, []string{"plug"}) {
+		t.Fatalf("the total: %+v", got.PowerExcludeFromTotal)
+	}
+	// taken out one by one: config.yaml's word about each line counts again
+	if !o.DropLink("plug") || o.DropLink("plug") || o.DropLink("nope") || !o.DropExclude("corner") || o.DropExclude("corner") ||
+		!o.DropUPS("rack", "pc-a") || o.DropUPS("rack", "pc-a") || o.DropUPS("attic", "pc-a") {
+		t.Fatal("Drop... reports whether there was a decision")
+	}
+	if got := o.Apply(base); got.PowerLinks["plug"] != "pc-a" || !slices.Equal(got.PowerExcludeFromTotal, []string{"corner", "plug"}) || !slices.Equal(got.UPSPowers["rack"], []string{"pc-a", "pc-c", "pc-b"}) {
+		t.Fatalf("after three decisions were taken out: %+v", got)
+	}
+	for _, id := range []string{"pc-b", "pc-c", "nobody"} {
+		o.DropUPS("rack", id)
+	}
+	o.DropUPS("desk", "pc-b")
+	for _, dev := range []string{"other", "new", "never"} {
+		o.DropLink(dev)
+	}
+	o.DropExclude("plug")
+	if !o.Empty() || len(o.UPS) != 0 || !SameLinks(o.Apply(base), base) {
+		t.Fatalf("every decision taken out is no change: %+v", o)
+	}
+	// Named is what the decisions name, for the one check of the link fields; Same and Clone
+	o.SetUPS("rack", "pc-b", true)
+	o.SetUPS("rack", "pc-a", false)
+	o.SetLink("plug", "")
+	o.SetExclude("corner", false)
+	n := o.Named()
+	if !slices.Equal(n.UPSPowers["rack"], []string{"pc-a", "pc-b"}) || n.PowerLinks["plug"] != "" || len(n.PowerLinks) != 1 || !slices.Equal(n.PowerExcludeFromTotal, []string{"corner"}) || len(config.LinkProblems(n)) != 0 {
+		t.Fatalf("Named: %+v", n)
+	}
+	c := o.Clone()
+	if !c.Same(o) || !o.Same(c) {
+		t.Fatal("a copy is not the same")
+	}
+	c.SetUPS("rack", "pc-b", false)
+	if c.Same(o) || !o.UPS["rack"]["pc-b"] {
+		t.Fatal("a copy shares with what it was made from, or Same does not see a decision turned round")
+	}
+	o.UPS["attic"] = map[string]bool{} // a UPS no decision is left about says nothing
+	if !o.Clone().Same(o) || len(o.Clone().UPS) != 1 || o.Count() != 4 {
+		t.Fatalf("an empty UPS counts: %+v", o)
 	}
 }
 
 // The reader never fails and never takes more than the three link fields. Whatever is not what Fairy writes
 // is left out with one line; the rest is used.
 func TestHostOptionsReaderIsTolerant(t *testing.T) {
-	var seventeen []string
-	for i := 0; i < 17; i++ {
-		seventeen = append(seventeen, fmt.Sprintf(`"d%d"`, i))
+	var seventeen, many65, rows33 []string
+	for i := 0; i < 65; i++ {
+		if i < 17 {
+			seventeen = append(seventeen, fmt.Sprintf(`"d%d": true`, i))
+		}
+		if i < 33 {
+			rows33 = append(rows33, fmt.Sprintf(`"pc-%d": true`, i))
+		}
+		many65 = append(many65, fmt.Sprintf(`"d%d": false`, i))
 	}
 	many := map[string]any{}
 	for i := 0; i <= MaxHostOptionAgents; i++ {
-		many[fmt.Sprintf("a%d", i)] = map[string]any{"power_exclude_from_total": []any{"x"}}
+		many[fmt.Sprintf("a%d", i)] = map[string]any{"power_exclude_from_total": map[string]any{"x": true}}
 	}
 	manyJSON, _ := json.Marshal(map[string]any{"agents": many})
 	for name, c := range map[string]struct {
@@ -105,33 +160,36 @@ func TestHostOptionsReaderIsTolerant(t *testing.T) {
 		agents  string   // the agents with overrides and their fields: "nas:ups_powers+power_links ..."
 		rev     int
 	}{
-		"what Fairy writes": {`{"rev": 7, "agents": {"nas": {"ups_powers": {"rack": ["pc-a", "lab-node-pve-a"]}, "power_links": {"pc-plug": "pc-a"}, "power_exclude_from_total": ["corner"], "by": "nora", "at": "2026-11-13T23:40:00Z"}}}`,
+		"what Fairy writes": {`{"rev": 7, "agents": {"nas": {"ups_powers": {"rack": {"pc-a": true, "lab-node-pve-a": false}}, "power_links": {"pc-plug": "pc-a", "old": ""}, "power_exclude_from_total": {"corner": true, "pc-plug": false}, "by": "nora", "at": "2026-11-13T23:40:00Z"}}}`,
 			nil, "nas:ups_powers+power_links+power_exclude_from_total", 7},
-		"empty overrides are overrides": {`{"agents": {"nas": {"ups_powers": {}, "power_exclude_from_total": []}}}`, nil, "nas:ups_powers+power_exclude_from_total", 0},
-		"an entry with nothing in it":   {`{"agents": {"nas": {"by": "nora"}}}`, nil, "", 0},
-		"a text":                        {`"x"`, []string{"is not the object Fairy writes (found a text)"}, "", 0},
-		"a list":                        {`[]`, []string{"found a list"}, "", 0},
-		"null":                          {`null`, []string{"found null"}, "", 0},
-		"a number":                      {`7`, []string{"found a number"}, "", 0},
-		"true":                          {`true`, []string{"found true / false"}, "", 0},
-		"agents is a text":              {`{"rev": 2, "agents": "all"}`, []string{`"agents" is not an object (found a text)`}, "", 2},
-		"rev is a text":                 {`{"rev": "7", "agents": {"nas": {"power_exclude_from_total": ["x"]}}}`, []string{`"rev" is not a whole number`}, "nas:power_exclude_from_total", 0},
-		"rev is negative":               {`{"rev": -1}`, []string{`"rev" is not a whole number`}, "", 0},
-		"rev is a fraction":             {`{"rev": 1.5}`, []string{`"rev" is not a whole number`}, "", 0},
-		"rev is huge":                   {`{"rev": 1e300}`, []string{`"rev" is not a whole number`}, "", 0},
-		"another key at the top":        {`{"rev": 1, "hosts": {}, "agents": {}}`, []string{`the key "hosts" is not one Fairy writes`}, "", 1},
-		"an id no agent can have":       {`{"agents": {"NAS": {"power_exclude_from_total": ["x"]}, "": {}, "a/b": {}, "ok": {"power_exclude_from_total": ["x"]}}}`, []string{`"" is not an id`, `"NAS" is not an id`, `"a/b" is not an id`}, "ok:power_exclude_from_total", 0},
-		"an entry that is no object":    {`{"agents": {"nas": ["ups_powers"], "pc": null}}`, []string{"agent nas: its entry is not an object (found a list)", "agent pc: its entry is not an object (found null)"}, "", 0},
-		"fields of the wrong form":      {`{"agents": {"nas": {"ups_powers": {"rack": "pc-a"}, "power_links": ["a"], "power_exclude_from_total": {"a": true}}}}`, []string{"power_exclude_from_total is not of the form", "power_links is not of the form", "ups_powers is not of the form"}, "", 0},
-		"a list with a number in it":    {`{"agents": {"nas": {"power_exclude_from_total": ["a", 7], "ups_powers": {"rack": ["pc", null]}, "power_links": {"a": {}}}}}`, []string{"power_exclude_from_total is not of the form", "power_links is not of the form", "ups_powers is not of the form"}, "", 0},
-		"seventeen devices":             {`{"agents": {"nas": {"power_exclude_from_total": [` + strings.Join(seventeen, ",") + `], "power_links": {"plug": "pc"}}}}`, []string{"power_exclude_from_total: 17 devices"}, "nas:power_links", 0},
-		"a list far over every limit":   {`{"agents": {"nas": {"power_exclude_from_total": [` + strings.Repeat(`"x",`, 500) + `"x"]}}}`, []string{"power_exclude_from_total is not of the form"}, "", 0},
-		"ids no row or device can have": {`{"agents": {"nas": {"ups_powers": {"rack": ["PC A"]}, "power_links": {"Bad_ID": "pc"}, "power_exclude_from_total": ["ok"]}}}`, []string{"power_links:", "ups_powers:"}, "nas:power_exclude_from_total", 0},
-		"a UPS name no UPS can have":    {`{"agents": {"nas": {"ups_powers": {"rack ups": ["pc"]}}}}`, []string{"is not a name a UPS can have"}, "", 0},
-		"what cannot be set here": {`{"agents": {"nas": {"url": "http://198.51.100.7:9101", "token_env": "FAIRY_SESSION_SECRET", "control_token_env": "X", "verify_tls": false, "node": "pve", "links_to": "node-x", "fan_control": {"vendor": "supermicro"}, "power_control": true, "self_update": true, "wol_relay": true, "owner": "eve", "site": "Home", "name": "x", "id": "other", "wake_update": {"off_after_s": 300}, "power_exclude_from_total": ["corner"]}}}`,
+		"fields with no decision say nothing": {`{"agents": {"nas": {"ups_powers": {}, "power_exclude_from_total": {}}, "pc": {"ups_powers": {"rack": {}}, "power_links": {"a": "pc"}}}}`, nil, "pc:power_links", 0},
+		"an entry with nothing in it":         {`{"agents": {"nas": {"by": "nora"}}}`, nil, "", 0},
+		"a text":                              {`"x"`, []string{"is not the object Fairy writes (found a text)"}, "", 0},
+		"a list":                              {`[]`, []string{"found a list"}, "", 0},
+		"null":                                {`null`, []string{"found null"}, "", 0},
+		"a number":                            {`7`, []string{"found a number"}, "", 0},
+		"true":                                {`true`, []string{"found true / false"}, "", 0},
+		"agents is a text":                    {`{"rev": 2, "agents": "all"}`, []string{`"agents" is not an object (found a text)`}, "", 2},
+		"rev is a text":                       {`{"rev": "7", "agents": {"nas": {"power_exclude_from_total": {"x": true}}}}`, []string{`"rev" is not a whole number`}, "nas:power_exclude_from_total", 0},
+		"rev is negative":                     {`{"rev": -1}`, []string{`"rev" is not a whole number`}, "", 0},
+		"rev is a fraction":                   {`{"rev": 1.5}`, []string{`"rev" is not a whole number`}, "", 0},
+		"rev is huge":                         {`{"rev": 1e300}`, []string{`"rev" is not a whole number`}, "", 0},
+		"another key at the top":              {`{"rev": 1, "hosts": {}, "agents": {}}`, []string{`the key "hosts" is not one Fairy writes`}, "", 1},
+		"an id no agent can have":             {`{"agents": {"NAS": {"power_exclude_from_total": {"x": true}}, "": {}, "a/b": {}, "ok": {"power_exclude_from_total": {"x": true}}}}`, []string{`"" is not an id`, `"NAS" is not an id`, `"a/b" is not an id`}, "ok:power_exclude_from_total", 0},
+		"an entry that is no object":          {`{"agents": {"nas": ["ups_powers"], "pc": null}}`, []string{"agent nas: its entry is not an object (found a list)", "agent pc: its entry is not an object (found null)"}, "", 0},
+		"fields of the wrong form":            {`{"agents": {"nas": {"ups_powers": {"rack": "pc-a"}, "power_links": ["a"], "power_exclude_from_total": "a"}}}`, []string{"power_exclude_from_total is not of the form", "power_links is not of the form", "ups_powers is not of the form"}, "", 0},
+		"lists, as config.yaml has them":      {`{"agents": {"nas": {"ups_powers": {"rack": ["pc-a"]}, "power_exclude_from_total": ["a"], "power_links": {"a": "pc"}}}}`, []string{"power_exclude_from_total is not of the form", "ups_powers is not of the form"}, "nas:power_links", 0},
+		"a decision that is no yes or no":     {`{"agents": {"nas": {"power_exclude_from_total": {"a": "yes"}, "ups_powers": {"rack": {"pc": null}}, "power_links": {"a": {}}}}}`, []string{"power_exclude_from_total is not of the form", "power_links is not of the form", "ups_powers is not of the form"}, "", 0},
+		"seventeen devices":                   {`{"agents": {"nas": {"power_exclude_from_total": {` + strings.Join(seventeen, ",") + `}, "power_links": {"plug": "pc"}}}}`, []string{"power_exclude_from_total: 17 devices"}, "nas:power_links", 0},
+		"decisions far over every limit":      {`{"agents": {"nas": {"power_exclude_from_total": {` + strings.Join(many65, ",") + `}}}}`, []string{"power_exclude_from_total is not of the form"}, "", 0},
+		"thirty-three rows for one UPS":       {`{"agents": {"nas": {"ups_powers": {"rack": {` + strings.Join(rows33, ",") + `}}, "power_exclude_from_total": {"x": false}}}}`, []string{"ups_powers: UPS rack powers 33 rows"}, "nas:power_exclude_from_total", 0},
+		"ids no row or device can have":       {`{"agents": {"nas": {"ups_powers": {"rack": {"PC A": true}}, "power_links": {"Bad_ID": "pc"}, "power_exclude_from_total": {"ok": true}}}}`, []string{"power_links:", "ups_powers:"}, "nas:power_exclude_from_total", 0},
+		"a link to an id no row can have":     {`{"agents": {"nas": {"power_links": {"plug": "No Row"}}}}`, []string{"power_links: device plug"}, "", 0},
+		"a UPS name no UPS can have":          {`{"agents": {"nas": {"ups_powers": {"rack ups": {"pc": true}}}}}`, []string{"is not a name a UPS can have"}, "", 0},
+		"what cannot be set here": {`{"agents": {"nas": {"url": "http://198.51.100.7:9101", "token_env": "FAIRY_SESSION_SECRET", "control_token_env": "X", "verify_tls": false, "node": "pve", "links_to": "node-x", "fan_control": {"vendor": "supermicro"}, "power_control": true, "self_update": true, "wol_relay": true, "owner": "eve", "site": "Home", "name": "x", "id": "other", "wake_update": {"off_after_s": 300}, "power_exclude_from_total": {"corner": true}}}}`,
 			[]string{`"control_token_env" cannot be set`, `"fan_control" cannot`, `"id" cannot`, `"links_to" cannot`, `"name" cannot`, `"node" cannot`, `"owner" cannot`, `"power_control" cannot`, `"self_update" cannot`, `"site" cannot`, `"token_env" cannot`, `"url" cannot`, `"verify_tls" cannot`, `"wake_update" cannot`, `"wol_relay" cannot`}, "nas:power_exclude_from_total", 0},
 		"more agents than a panel has": {string(manyJSON), []string{"more than the 256 a panel can have"}, "", 0},
-		"a name that is not text":      {`{"agents": {"nas": {"power_exclude_from_total": ["x"], "by": 7, "at": "yesterday"}}}`, nil, "nas:power_exclude_from_total", 0},
+		"a name that is not text":      {`{"agents": {"nas": {"power_exclude_from_total": {"x": true}, "by": 7, "at": "yesterday"}}}`, nil, "nas:power_exclude_from_total", 0},
 	} {
 		d := statefile.Data{}
 		if err := json.Unmarshal([]byte(`{"host_options": `+c.overlay+`, "wake_update_hosts": ["pc-a"]}`), &d); err != nil {
@@ -172,6 +230,18 @@ func TestHostOptionsReaderIsTolerant(t *testing.T) {
 				t.Errorf("%s: a line holds a value from the file: %q", name, line)
 			}
 		}
+		// what is read passes the one check of the link fields, and is read back the same once it was written
+		for id, e := range o.Agents {
+			if p := config.LinkProblems(e.Named()); len(p) != 0 || e.Empty() {
+				t.Errorf("%s: %s was taken with %v", name, id, p)
+			}
+			enc, _ := json.Marshal(map[string]any{hostOptionsKey: o.encode()})
+			back := statefile.Data{}
+			_ = json.Unmarshal(enc, &back)
+			if o2, ig := hostOptions(back); len(ig) != 0 || !o2.Agents[id].Same(e) || o2.Rev != o.Rev {
+				t.Errorf("%s: %s is not read back as it was written: %s (ignored %q)", name, id, enc, ig)
+			}
+		}
 		// the overrides that are read hold the three link fields and nothing else
 		for id, e := range o.Agents {
 			enc, _ := json.Marshal(HostOptions{Agents: map[string]HostOption{id: e}}.encode())
@@ -196,18 +266,15 @@ func TestHostOptionsRoundTrip(t *testing.T) {
 	if o := a.HostOptions(); len(o.Agents) != 0 || o.Rev != 0 {
 		t.Fatalf("a new folder: %+v", o)
 	}
-	want := config.Links{UPSPowers: map[string][]string{"rack": {"lab-b-agent", "lab-node-pve-a"}, "APC_1.5:b": {"pc"}},
-		PowerLinks: map[string]string{"pc-plug": "lab-b-agent"}, PowerExcludeFromTotal: []string{"corner-plug", "a"}}
+	want := HostOption{UPS: map[string]map[string]bool{"rack": {"lab-b-agent": true, "lab-node-pve-a": false}, "APC_1.5:b": {"pc": true}},
+		Links: map[string]string{"pc-plug": "lab-b-agent", "old-plug": ""}, Exclude: map[string]bool{"corner-plug": true, "a": false}}
 	after, changed, err := a.EditHostOptions("nora", func(o *HostOptions) error {
-		e := o.Agents["nas-agent"]
-		for _, f := range config.LinkFields {
-			e.Set(f, want)
-		}
-		o.Agents["nas-agent"] = e
+		o.Agents["nas-agent"] = want.Clone()
 		e2 := o.Agents["pc"]
-		e2.Set(config.FieldExclude, config.Links{}) // set to nothing
+		e2.SetExclude("x", false) // "counted, whatever config.yaml says" is a decision too
 		o.Agents["pc"] = e2
-		o.Agents["empty"] = HostOption{} // an entry with no field is not stored
+		o.Agents["empty"] = HostOption{}                                             // an entry with no decision is not stored
+		o.Agents["hollow"] = HostOption{UPS: map[string]map[string]bool{"rack": {}}} // nor one with a UPS nothing is decided about
 		return nil
 	})
 	if err != nil || !changed || after.Rev != 1 || len(after.Agents) != 2 {
@@ -216,12 +283,12 @@ func TestHostOptionsRoundTrip(t *testing.T) {
 	for _, st := range []*State{a, New(dir)} {
 		o, ignored := st.HostOptionsRead()
 		e := o.For("nas-agent")
-		if len(ignored) != 0 || o.Rev != 1 || len(o.Agents) != 2 || !SameLinks(e.Links, want) || !e.HasUPSPowers || !e.HasPowerLinks || !e.HasExclude ||
+		if len(ignored) != 0 || o.Rev != 1 || len(o.Agents) != 2 || !e.Same(want) || e.Count() != 7 ||
 			e.By != "nora" || time.Since(e.At) > time.Minute || time.Since(e.At) < -time.Minute {
 			t.Fatalf("read back: %+v %v", o, ignored)
 		}
-		if pc := o.For("pc"); !pc.HasExclude || pc.HasPowerLinks || pc.Links.PowerExcludeFromTotal == nil || len(pc.Links.PowerExcludeFromTotal) != 0 {
-			t.Fatalf("\"set to nothing\" read back: %+v", pc)
+		if pc := o.For("pc"); !pc.Has(config.FieldExclude) || pc.Has(config.FieldPowerLinks) || pc.Exclude["x"] != false || len(pc.Exclude) != 1 {
+			t.Fatalf("\"counted\" read back: %+v", pc)
 		}
 		if !o.For("nobody").Empty() {
 			t.Fatal("an agent without an entry has overrides")
@@ -230,14 +297,16 @@ func TestHostOptionsRoundTrip(t *testing.T) {
 	// on the disk: the documented shape
 	raw := readOptions(t, dir)
 	nas := raw["agents"].(map[string]any)["nas-agent"].(map[string]any)
-	if raw["rev"] != 1.0 || nas["by"] != "nora" || nas["power_links"].(map[string]any)["pc-plug"] != "lab-b-agent" || len(nas["ups_powers"].(map[string]any)["rack"].([]any)) != 2 {
+	if raw["rev"] != 1.0 || nas["by"] != "nora" || fmt.Sprint(nas["power_links"]) != "map[old-plug: pc-plug:lab-b-agent]" ||
+		fmt.Sprint(nas["ups_powers"]) != "map[APC_1.5:b:map[pc:true] rack:map[lab-b-agent:true lab-node-pve-a:false]]" || fmt.Sprint(nas["power_exclude_from_total"]) != "map[a:false corner-plug:true]" {
 		t.Fatalf("state.json: %v", raw)
 	}
 	// the same again writes nothing: the rev, the file and who changed it stay
 	before, _ := os.ReadFile(filepath.Join(dir, "state.json"))
 	after, changed, err = a.EditHostOptions("someone else", func(o *HostOptions) error {
 		e := o.Agents["nas-agent"]
-		e.Set(config.FieldPowerLinks, want)
+		e.SetLink("pc-plug", "lab-b-agent")
+		e.SetUPS("rack", "lab-node-pve-a", false)
 		o.Agents["nas-agent"] = e
 		return nil
 	})
@@ -248,7 +317,7 @@ func TestHostOptionsRoundTrip(t *testing.T) {
 	// a change to one agent stamps that agent, not the other
 	after, changed, _ = a.EditHostOptions("bea", func(o *HostOptions) error {
 		e := o.Agents["pc"]
-		e.Set(config.FieldExclude, config.Links{PowerExcludeFromTotal: []string{"x"}})
+		e.SetExclude("x", true) // the same device, the other way round: a change
 		o.Agents["pc"] = e
 		return nil
 	})
@@ -294,11 +363,11 @@ func TestHostOptionsIgnoredIsSaidOnceAndDroppedByTheNextWrite(t *testing.T) {
 		return strings.Count(logs.String(), "level=WARN")
 	}
 	dir := t.TempDir()
-	writeState(t, dir, `{"host_options": {"rev": 3, "agents": {"nas": {"url": "http://x", "power_links": 7, "ups_powers": {"rack": ["pc"]}}, "BAD": {}}}}`)
+	writeState(t, dir, `{"host_options": {"rev": 3, "agents": {"nas": {"url": "http://x", "power_links": 7, "ups_powers": {"rack": {"pc": true}}}, "BAD": {}}}}`)
 	a := New(dir)
 	for i := 0; i < 50; i++ {
 		o, ignored := a.HostOptionsRead()
-		if len(ignored) != 3 || !o.For("nas").HasUPSPowers || o.For("nas").HasPowerLinks || len(o.Agents) != 1 {
+		if len(ignored) != 3 || !o.For("nas").Has(config.FieldUPSPowers) || o.For("nas").Has(config.FieldPowerLinks) || len(o.Agents) != 1 {
 			t.Fatalf("read: %+v %q", o, ignored)
 		}
 		_ = a.HostOptions()
@@ -315,7 +384,7 @@ func TestHostOptionsIgnoredIsSaidOnceAndDroppedByTheNextWrite(t *testing.T) {
 	// the next write keeps what was good and drops the rest
 	if _, _, err := a.EditHostOptions("nora", func(o *HostOptions) error {
 		e := o.Agents["nas"]
-		e.Set(config.FieldExclude, config.Links{PowerExcludeFromTotal: []string{"corner"}})
+		e.SetExclude("corner", true)
 		o.Agents["nas"] = e
 		return nil
 	}); err != nil {
@@ -329,7 +398,7 @@ func TestHostOptionsIgnoredIsSaidOnceAndDroppedByTheNextWrite(t *testing.T) {
 		t.Fatalf("%d WARN lines after the file was put right, want still 3", n)
 	}
 	// unreadable: no overrides, no error for the caller (the start of the panel refuses such a file itself)
-	writeState(t, dir, `{"host_options": {"agents": {"nas": {"ups_powers": {"rack": ["pc"]}}}}`) // cut off
+	writeState(t, dir, `{"host_options": {"agents": {"nas": {"ups_powers": {"rack": {"pc": true}}}}}`) // cut off
 	b := New(dir)
 	if o, ignored := b.HostOptionsRead(); len(o.Agents) != 0 || ignored != nil {
 		t.Fatalf("a state.json that is not JSON: %+v %v", o, ignored)
@@ -341,10 +410,10 @@ func TestHostOptionsIgnoredIsSaidOnceAndDroppedByTheNextWrite(t *testing.T) {
 		t.Fatal("ReadHostOptions of a state.json that is not JSON gave no error")
 	}
 	// ReadHostOptions (the CLI's reader) gives the same as the panel's, and logs nothing
-	writeState(t, dir, `{"host_options": {"rev": 3, "agents": {"nas": {"url": "http://x", "ups_powers": {"rack": ["pc"]}}}}}`)
+	writeState(t, dir, `{"host_options": {"rev": 3, "agents": {"nas": {"url": "http://x", "ups_powers": {"rack": {"pc": true}}}}}}`)
 	n := warns()
 	o, ignored, err := ReadHostOptions(dir)
-	if err != nil || len(ignored) != 1 || !o.For("nas").HasUPSPowers || o.Rev != 3 || warns() != n {
+	if err != nil || len(ignored) != 1 || !o.For("nas").UPS["rack"]["pc"] || o.Rev != 3 || warns() != n {
 		t.Fatalf("ReadHostOptions: %+v %q %v", o, ignored, err)
 	}
 	if o, ignored, err := ReadHostOptions(t.TempDir()); err != nil || len(o.Agents) != 0 || ignored != nil {
@@ -371,15 +440,10 @@ func TestHostOptionsWritersAtOnce(t *testing.T) {
 			st := New(dir) // each its own view of the file, as two processes have
 			after, changed, err := st.EditHostOptions(fmt.Sprintf("admin%d", i), func(o *HostOptions) error {
 				e := o.Agents["nas"]
-				l := e.Links.Clone()
-				if l.PowerLinks == nil {
-					l.PowerLinks = map[string]string{}
-				}
-				l.PowerLinks[fmt.Sprintf("plug%d", i%16)] = fmt.Sprintf("pc%d", i)
-				e.Set(config.FieldPowerLinks, l)
+				e.SetLink(fmt.Sprintf("plug%d", i%16), fmt.Sprintf("pc%d", i))
 				o.Agents["nas"] = e
 				if i%3 == 0 {
-					o.Agents[fmt.Sprintf("agent%d", i)] = HostOption{HasExclude: true, Links: config.Links{PowerExcludeFromTotal: []string{"x"}}}
+					o.Agents[fmt.Sprintf("agent%d", i)] = HostOption{Exclude: map[string]bool{"x": true}}
 				}
 				return nil
 			})
@@ -388,7 +452,7 @@ func TestHostOptionsWritersAtOnce(t *testing.T) {
 			}
 			revs[i] = after.Rev
 			// the answer is the state this write left: it holds this writer's own change
-			if after.For("nas").Links.PowerLinks[fmt.Sprintf("plug%d", i%16)] != fmt.Sprintf("pc%d", i) {
+			if after.For("nas").Links[fmt.Sprintf("plug%d", i%16)] != fmt.Sprintf("pc%d", i) {
 				t.Errorf("writer %d: its answer does not hold its change", i)
 			}
 		}()
@@ -401,52 +465,58 @@ func TestHostOptionsWritersAtOnce(t *testing.T) {
 		}
 	}
 	o, ignored := New(dir).HostOptionsRead()
-	if len(ignored) != 0 || o.Rev != n || len(o.For("nas").Links.PowerLinks) != 16 || len(o.Agents) != 1+n/3 {
-		t.Fatalf("after %d writes: rev %d, %d links, %d agents, ignored %v", n, o.Rev, len(o.For("nas").Links.PowerLinks), len(o.Agents), ignored)
+	if len(ignored) != 0 || o.Rev != n || len(o.For("nas").Links) != 16 || len(o.Agents) != 1+n/3 {
+		t.Fatalf("after %d writes: rev %d, %d links, %d agents, ignored %v", n, o.Rev, len(o.For("nas").Links), len(o.Agents), ignored)
 	}
 	if raw := readOptions(t, dir); raw["rev"] != float64(n) {
 		t.Fatalf("state.json: rev %v", raw["rev"])
 	}
 }
 
-// Forget is what Remove of a host does: its own overrides, and every link to one of its ids in the overrides
-// of the others. Nothing else is touched.
+// Forget is what Remove of a host does: its own overrides, and every decision about one of its ids in the
+// overrides of the others. Nothing else is touched.
 func TestHostOptionsForget(t *testing.T) {
 	mk := func() HostOptions {
 		o := HostOptions{Rev: 5, Agents: map[string]HostOption{}}
-		var nas, pc, other, bare HostOption
-		nas.Set(config.FieldUPSPowers, config.Links{UPSPowers: map[string][]string{"rack": {"pc", "node-pc", "keep"}, "desk": {"keep"}, "attic": {"pc"}}})
-		nas.Set(config.FieldPowerLinks, config.Links{PowerLinks: map[string]string{"a": "pc", "b": "node-pc", "c": "keep", "pc": "keep"}})
-		nas.Set(config.FieldExclude, config.Links{PowerExcludeFromTotal: []string{"pc", "a"}}) // device ids: a device called like the host is no link to it
-		pc.Set(config.FieldExclude, config.Links{PowerExcludeFromTotal: []string{"own"}})
-		other.Set(config.FieldUPSPowers, config.Links{UPSPowers: map[string][]string{"ups": {"keep"}}})
-		bare.Set(config.FieldPowerLinks, config.Links{PowerLinks: map[string]string{"x": "pc"}})
-		o.Agents["nas"], o.Agents["pc"], o.Agents["other"], o.Agents["bare"] = nas, pc, other, bare
+		o.Agents["nas"] = HostOption{
+			UPS:     map[string]map[string]bool{"rack": {"pc": true, "node-pc": true, "keep": true}, "desk": {"keep": true}, "attic": {"pc": false}},
+			Links:   map[string]string{"a": "pc", "b": "node-pc", "c": "keep", "pc": "keep", "d": ""},
+			Exclude: map[string]bool{"pc": true, "a": true}, // device ids: a device called like the host is no link to it
+		}
+		o.Agents["pc"] = HostOption{Exclude: map[string]bool{"own": true}}
+		o.Agents["other"] = HostOption{UPS: map[string]map[string]bool{"ups": {"keep": true}}}
+		o.Agents["bare"] = HostOption{Links: map[string]string{"x": "pc"}}
 		return o
 	}
 	o := mk()
 	gone := o.Forget("pc", "node-pc")
-	want := []string{"the overrides of pc", "bare: device x is no longer linked to it", "nas: UPS attic no longer powers it", "nas: UPS rack no longer powers it",
+	want := []string{"the overrides of pc", "bare: device x is no longer linked to it", "nas: what was changed about UPS attic and it", "nas: UPS rack no longer powers it",
 		"nas: device a is no longer linked to it", "nas: device b is no longer linked to it"}
 	if !slices.Equal(gone, want) {
 		t.Fatalf("gone:\n%q\nwant\n%q", gone, want)
 	}
 	nas := o.Agents["nas"]
-	if _, has := o.Agents["pc"]; has || !slices.Equal(nas.Links.UPSPowers["rack"], []string{"keep"}) || len(nas.Links.UPSPowers["attic"]) != 0 || !slices.Equal(nas.Links.UPSPowers["desk"], []string{"keep"}) ||
-		len(nas.Links.PowerLinks) != 2 || nas.Links.PowerLinks["c"] != "keep" || nas.Links.PowerLinks["pc"] != "keep" || !slices.Equal(nas.Links.PowerExcludeFromTotal, []string{"pc", "a"}) {
+	if _, has := o.Agents["pc"]; has || fmt.Sprint(nas.UPS) != "map[desk:map[keep:true] rack:map[keep:true]]" || fmt.Sprint(nas.Links) != "map[c:keep d: pc:keep]" || fmt.Sprint(nas.Exclude) != "map[a:true pc:true]" {
 		t.Fatalf("after Forget: %+v", o.Agents)
 	}
-	if !sameOption(o.Agents["other"], mk().Agents["other"]) || !o.Agents["bare"].HasPowerLinks || len(o.Agents["bare"].Links.PowerLinks) != 0 {
+	if !o.Agents["other"].Same(mk().Agents["other"]) || !o.Agents["bare"].Empty() {
 		t.Fatalf("the others: %+v", o.Agents)
 	}
 	// nothing about the host: nothing is said and nothing changes
 	o2 := mk()
-	if gone := o2.Forget("stranger", "node-stranger"); gone != nil || len(o2.Agents) != 4 || !sameOption(o2.Agents["nas"], mk().Agents["nas"]) {
+	if gone := o2.Forget("stranger", "node-stranger"); gone != nil || len(o2.Agents) != 4 || !o2.Agents["nas"].Same(mk().Agents["nas"]) {
 		t.Fatalf("a host nobody links to: %q", gone)
 	}
-	// the agent's own id counts as one of its rows, also when no other id is given
+	// the agent's own id counts as one of its rows, also when no other id is given; a row that is not named stays
 	o3 := mk()
-	if gone := o3.Forget("pc"); len(gone) != 5 || slices.Contains(o3.Agents["nas"].Links.UPSPowers["rack"], "pc") || !slices.Contains(o3.Agents["nas"].Links.UPSPowers["rack"], "node-pc") {
+	if gone := o3.Forget("pc"); len(gone) != 5 || fmt.Sprint(o3.Agents["nas"].UPS["rack"]) != "map[keep:true node-pc:true]" || o3.Agents["nas"].Links["b"] != "node-pc" {
 		t.Fatalf("Forget by the agent's id alone: %q %+v", gone, o3.Agents["nas"])
+	}
+	// what Forget changed is what is written: the entries of others are copies, not the caller's maps
+	o4 := mk()
+	keep := o4.Clone()
+	o4.Forget("stranger")
+	if !o4.Agents["nas"].Same(keep.Agents["nas"]) {
+		t.Fatal("Forget of a stranger changed an entry")
 	}
 }

@@ -62,7 +62,7 @@ const words = (t) => t.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/
 const settle = () => new Promise((r) => setImmediate(r));
 const ups = (id, o) => ({ id: "nas-agent/" + id, name: id.toUpperCase() + " UPS", agent: "nas-agent", agent_name: "NAS", on: false, from: "config", by: null, at: null, config_on: false, ...o });
 const plug = (id, o) => ({ id: "nas-agent/" + id, name: id + " plug", agent: "nas-agent", agent_name: "NAS", linked: false, self: false, other: null, from: "config", by: null, at: null,
-  config_linked: false, in_total: true, total_from: "config", total_by: null, total_at: null, config_in_total: true, mine: false, ...o });
+  config_linked: false, config_other: null, in_total: true, total_from: "config", total_by: null, total_at: null, config_in_total: true, mine: false, ...o });
 const data = (o) => ({ id: "h1", name: "PC-B", agent: "pc-b", rev: 3, ups: [], plugs: [], ignored: [], ...o });
 (async () => {
 ` + body + `
@@ -174,7 +174,7 @@ func TestUIEditHostDialogSections(t *testing.T) {
   const d = data({
     ups: [ups("rack", { on: true, from: "panel", by: "nora@example.com", config_on: false }), ups("desk", { from: "panel", by: "nora@example.com", config_on: true }),
       { ...ups("attic"), agent: "pc-b", agent_name: "PC-B" }],
-    plugs: [plug("a", { linked: true, mine: true, config_linked: true }), plug("b", { other: "PC-A" }), plug("own", { agent: "pc-b", agent_name: "PC-B", linked: true, self: true, mine: true }),
+    plugs: [plug("a", { linked: true, mine: true, config_linked: true }), plug("b", { other: "PC-A", config_other: "PC-A" }), plug("own", { agent: "pc-b", agent_name: "PC-B", linked: true, self: true, mine: true, config_linked: true }),
       plug("corner", { agent: "pc-b", agent_name: "PC-B", mine: true, in_total: false, total_from: "panel", total_by: "bea", config_in_total: true })] });
   let draft = ehDraft();
   let html = ehView(d, draft), text = words(html);
@@ -191,9 +191,10 @@ func TestUIEditHostDialogSections(t *testing.T) {
   if (JSON.stringify(ticked) !== JSON.stringify([true, false, false, true, false, true, false, true, true, false])) fail("the ticks: " + JSON.stringify(ticked));
   // the plug the machine itself links cannot be unticked here; nothing else is disabled
   if (rows.filter((r) => / disabled/.test(r.html)).map((r) => r.text).join("|") !== "own plug read by PC-B · set on the machine itself") fail("disabled: " + rows.filter((r) => / disabled/.test(r.html)).map((r) => r.text));
-  // Reset says what it is about (all links of that kind read by that machine), and who changed it is the source's tooltip
-  if (!html.includes('data-eh-reset="nas-agent/ups" title="Back to config.yaml for all UPS links read by NAS"') || !html.includes('<span class="eh-src on" title="Changed here by nora@example.com">changed here</span>')
-    || !html.includes('data-eh-reset="pc-b/total" title="Back to config.yaml for the total of all plugs read by PC-B"')) fail("Reset and its words: " + html);
+  // Reset is about its one line and says so; who last changed something that machine reads is the source's tooltip
+  if (!html.includes('data-eh-reset="ups:nas-agent/rack" title="Back to config.yaml for this line"') || !html.includes('data-eh-reset="ups:nas-agent/desk" title="Back to config.yaml for this line"')
+    || !html.includes('<span class="eh-src on" title="Changed here. Last change to what NAS reads: nora@example.com">changed here</span>')
+    || !html.includes('data-eh-reset="total:nas-agent/corner" title="Back to config.yaml for this line"') || (html.match(/data-eh-reset=/g) || []).length !== 3) fail("Reset and its words: " + html);
   // changed here shadows config.yaml: said in one visible line; nothing to save yet
   if (!text.includes("Changed here: used instead of config.yaml until Reset.") || !html.includes('class="note info-keep eh-shadow"')) fail("the line about config.yaml: " + text);
   if (text.includes("This will change") || ehPlan(d, draft).lines.length || JSON.stringify(ehPlan(d, draft).body) !== "{}") fail("nothing was changed, and the dialog lists changes: " + text);
@@ -210,6 +211,8 @@ func TestUIEditHostDialogSections(t *testing.T) {
   html = ehView(d, draft); text = words(html);
   if (!text.includes("This will change UPS DESK UPS (read by NAS): powers PC-B Plug a plug (read by NAS): not in the total Plug b plug (read by NAS): linked to PC-B (was on PC-A)")) fail("the list of changes: " + text);
   if (!/b plug read by NAS changed here(?! Reset)/.test(text)) fail("a line that was ticked in this dialog says where it will come from, without a Reset: " + text);
+  // a tick that says what config.yaml says is no change of the panel's: the desk UPS (changed here to off, config.yaml: on) follows config.yaml again
+  if (!/DESK UPS read by NAS from config.yaml Reset/.test(text)) fail("a tick back to config.yaml's value: " + text);
   if ((text.match(/b plug read by NAS/g) || []).length !== 2) fail("the plug that is linked here now has a line under Total: " + text);
   // a tick put back is no change
   ehTick(d, draft, "ups", "nas-agent/desk", false);
@@ -222,22 +225,43 @@ func TestUIEditHostDialogSections(t *testing.T) {
   plan = ehPlan(d, draft);
   if (JSON.stringify(plan.body) !== JSON.stringify({ plugs: [{ id: "nas-agent/a", linked: false }] }) || JSON.stringify(plan.lines) !== JSON.stringify(["Plug a plug (read by NAS): no longer linked to PC-B"])) fail("unlinked and its total: " + JSON.stringify(plan));
 
-  // Reset: the lines of that kind read by that machine show config.yaml's values, the ticks made before go, and Save says it
+  // Reset: that one line shows what config.yaml says, the tick made on it before goes, and Save says what it does
   draft = ehDraft();
   ehTick(d, draft, "ups", "nas-agent/rack", false);
-  ehReset(d, draft, "nas-agent/ups");
+  ehReset(d, draft, "ups:nas-agent/rack");
   plan = ehPlan(d, draft);
-  if (JSON.stringify(plan.lines) !== JSON.stringify(["UPS links read by NAS: back to config.yaml"]) || JSON.stringify(plan.body) !== JSON.stringify({ reset: [{ agent: "nas-agent", field: "ups" }] })) fail("Reset: " + JSON.stringify(plan));
+  if (JSON.stringify(plan.lines) !== JSON.stringify(["UPS RACK UPS (read by NAS): back to config.yaml: no longer powers PC-B"]) || JSON.stringify(plan.body) !== JSON.stringify({ reset: [{ id: "nas-agent/rack", field: "ups" }] })) fail("Reset: " + JSON.stringify(plan));
   html = ehView(d, draft); text = words(html);
   const after = [...html.matchAll(/<div class="eh-row">(.*?)<\/div>/gs)].slice(0, 3).map((m) => words(m[1]) + (/ checked/.test(m[1]) ? " [x]" : " [ ]"));
-  if (JSON.stringify(after) !== JSON.stringify(["RACK UPS read by NAS from config.yaml [ ]", "DESK UPS read by NAS from config.yaml [x]", "ATTIC UPS read by PC-B from config.yaml [ ]"])) fail("after Reset: " + JSON.stringify(after));
-  // a tick after the Reset is a change on top of config.yaml's value, sent after it
-  ehTick(d, draft, "ups", "nas-agent/desk", false);
+  // the other line that was changed here (the desk UPS) is not touched by it
+  if (JSON.stringify(after) !== JSON.stringify(["RACK UPS read by NAS from config.yaml [ ]", "DESK UPS read by NAS changed here Reset [ ]", "ATTIC UPS read by PC-B from config.yaml [ ]"])) fail("after Reset: " + JSON.stringify(after));
+  // a second Reset, of the desk UPS: config.yaml has it on
+  ehReset(d, draft, "ups:nas-agent/desk");
   plan = ehPlan(d, draft);
-  if (JSON.stringify(plan.body) !== JSON.stringify({ ups: [{ id: "nas-agent/desk", on: false }], reset: [{ agent: "nas-agent", field: "ups" }] })
-    || JSON.stringify(plan.lines) !== JSON.stringify(["UPS links read by NAS: back to config.yaml", "UPS DESK UPS (read by NAS): no longer powers PC-B"])) fail("Reset and a tick: " + JSON.stringify(plan));
-  ehReset(d, draft, "pc-b/total");
-  if (JSON.stringify(ehPlan(d, draft).lines.slice(0, 2)) !== JSON.stringify(["UPS links read by NAS: back to config.yaml", "Total of the plugs read by PC-B: back to config.yaml"])) fail("two resets: " + JSON.stringify(ehPlan(d, draft).lines));
+  if (JSON.stringify(plan.lines) !== JSON.stringify(["UPS RACK UPS (read by NAS): back to config.yaml: no longer powers PC-B", "UPS DESK UPS (read by NAS): back to config.yaml: powers PC-B"])
+    || JSON.stringify(plan.body) !== JSON.stringify({ reset: [{ id: "nas-agent/rack", field: "ups" }, { id: "nas-agent/desk", field: "ups" }] })) fail("two Resets: " + JSON.stringify(plan));
+  if (!/DESK UPS read by NAS from config.yaml(?! Reset)/.test(words(ehView(d, draft))) || !/value="nas-agent\/desk" checked/.test(ehView(d, draft))) fail("the desk UPS after its Reset: " + words(ehView(d, draft)));
+  // a tick on a line after its Reset is the tick alone: the later of the two counts, and only one of them is sent
+  ehTick(d, draft, "ups", "nas-agent/desk", true);
+  plan = ehPlan(d, draft);
+  if (JSON.stringify(plan.body) !== JSON.stringify({ ups: [{ id: "nas-agent/desk", on: true }], reset: [{ id: "nas-agent/rack", field: "ups" }] })
+    || JSON.stringify(plan.lines) !== JSON.stringify(["UPS RACK UPS (read by NAS): back to config.yaml: no longer powers PC-B", "UPS DESK UPS (read by NAS): powers PC-B"])) fail("Reset and then a tick: " + JSON.stringify(plan));
+  ehTick(d, draft, "ups", "nas-agent/desk", false);  // back to what the panel has: no change of that line
+  if (JSON.stringify(ehPlan(d, draft).body) !== JSON.stringify({ reset: [{ id: "nas-agent/rack", field: "ups" }] })) fail("a tick back after a Reset: " + JSON.stringify(ehPlan(d, draft)));
+  // the total of one plug
+  ehReset(d, draft, "total:nas-agent/corner");
+  if (JSON.stringify(ehPlan(d, draft).lines) !== JSON.stringify(["UPS RACK UPS (read by NAS): back to config.yaml: no longer powers PC-B", "Plug corner plug (read by PC-B): back to config.yaml: in the total again"])) fail("two resets: " + JSON.stringify(ehPlan(d, draft).lines));
+  // a plug: Reset says where the plug goes or comes from; a change that says what config.yaml says by now changes nothing
+  const moved = data({ plugs: [plug("here", { linked: true, mine: true, from: "panel", config_other: "PC-A" }), plug("away", { other: "PC-C", from: "panel", config_linked: true }),
+    plug("same", { linked: true, mine: true, from: "panel", config_linked: true, in_total: false, total_from: "panel", config_in_total: false })] });
+  draft = ehDraft();
+  for (const k of ["plugs:nas-agent/here", "plugs:nas-agent/away", "plugs:nas-agent/same", "total:nas-agent/same", "plugs:nas-agent/nope", "nonsense"]) ehReset(moved, draft, k);
+  plan = ehPlan(moved, draft);
+  if (JSON.stringify(plan.lines) !== JSON.stringify(["Plug here plug (read by NAS): back to config.yaml: no longer linked to PC-B (on PC-A again)", "Plug away plug (read by NAS): back to config.yaml: linked to PC-B (was on PC-C)",
+    "Plug same plug (read by NAS): back to config.yaml: nothing changes now", "Plug same plug (read by NAS): back to config.yaml: nothing changes now"])) fail("plug resets: " + JSON.stringify(plan.lines));
+  if (JSON.stringify(plan.body) !== JSON.stringify({ reset: [{ id: "nas-agent/here", field: "plugs" }, { id: "nas-agent/away", field: "plugs" }, { id: "nas-agent/same", field: "plugs" }, { id: "nas-agent/same", field: "total" }] })) fail("plug resets, the request: " + JSON.stringify(plan.body));
+  // after the Reset the plug that goes back is shown where config.yaml has it
+  if (!words(ehView(moved, draft)).includes("here plug read by NAS · now on PC-A from config.yaml")) fail("a plug after its Reset: " + words(ehView(moved, draft)));
 
   // nothing to choose from, and what the panel ignores
   text = words(ehView(data({ ignored: ["x"] }), ehDraft()));
@@ -261,8 +285,8 @@ func TestUIEditHostDialogSections(t *testing.T) {
   EH_INFO();
   const info = words(infos["edit-host"].html);
   for (const s of ["What you change here is kept by the panel. config.yaml is not changed and stays the base.",
-    "A changed value is used instead of config.yaml's until Reset, also when config.yaml is edited later.",
-    "A link belongs to the machine that reads the device. Reset puts back all links of that kind read by that machine.",
+    "A changed line is used instead of what config.yaml says about it until Reset, also when config.yaml is edited later. Every other line follows config.yaml.",
+    "A link is kept with the machine that reads the device (\"read by …\"). Reset puts back that one line.",
     "A change counts from the next poll of the machine that reads the device.",
     "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]) if (!info.includes(s)) fail("the info button lacks: " + s);
 `)
@@ -403,6 +427,8 @@ func TestUIEditHostListsTheChangesInThePanelsWords(t *testing.T) {
 	step(ehNodeB, `[["plugs", "nas-agent/own", true]]`)    // the NAS's own plug: "(was on NAS)"
 	step(ehNodeA, `[["ups", "nas-agent/rack", false], ["plugs", "nas-agent/a-plug", true]]`)
 	step(ehNAS, `[["total", "nas-agent/corner", true], ["ups", "nas-agent/desk", true]]`)
-	step(ehNodeB, `[["reset", "nas-agent/ups"], ["ups", "nas-agent/desk", true]]`)
-	step(ehNodeA, `[["reset", "nas-agent/plugs"], ["reset", "nas-agent/total"]]`)
+	step(ehNodeB, `[["reset", "ups:nas-agent/rack"], ["reset", "ups:nas-agent/desk"], ["reset", "plugs:nas-agent/own"], ["total", "nas-agent/b-plug", true]]`)
+	step(ehNodeA, `[["reset", "plugs:nas-agent/a-plug"], ["reset", "ups:nas-agent/rack"], ["ups", "nas-agent/desk", true]]`)
+	step(ehNAS, `[["reset", "total:nas-agent/corner"], ["reset", "ups:nas-agent/desk"], ["plugs", "nas-agent/b-plug", true]]`)
+	step(ehNodeB, `[["reset", "plugs:nas-agent/b-plug"], ["ups", "nas-agent/desk", true]]`) // b-plug: given to the NAS since; the Reset on PVE-B's page is not offered, and a page that asks it changes nothing
 }

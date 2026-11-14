@@ -335,9 +335,10 @@ func TestEditHostShowsWhatCountsAndWhereItComesFrom(t *testing.T) {
 }
 
 // Trap (a) and the round trip. "PVE-B is on the rack UPS" is a line of the entry of the NAS, which reads the
-// UPS: the change is made on PVE-B's page and stored under nas-agent, and the answer, the audit entry and the
-// bell name both. It counts with the NAS's next poll, without a restart, and it is the same after one. Reset
-// takes it out, and config.yaml's value counts again.
+// UPS: the change is made on PVE-B's page and stored under nas-agent, as one decision about that UPS and that
+// row and nothing else, and the answer, the audit entry and the bell name both. It counts with the NAS's next
+// poll, without a restart, and it is the same after one. Reset takes it out, and config.yaml's value counts
+// again.
 func TestEditHostUPSLinkIsStoredWithTheAgentThatReadsTheUPS(t *testing.T) {
 	r := ehSetup(t)
 	p := r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}})
@@ -348,10 +349,10 @@ func TestEditHostUPSLinkIsStoredWithTheAgentThatReadsTheUPS(t *testing.T) {
 	if rack := ehEntry(t, p, "ups", "nas-agent/rack"); rack["on"] != true || rack["from"] != "panel" || rack["config_on"] != false || rack["by"] != ehAdmin {
 		t.Fatalf("rack in the answer: %v", rack)
 	}
-	// stored under the agent that reads the UPS, with the id of the row PVE-B is shown as; nothing under PVE-B
+	// stored under the agent that reads the UPS, with the id of the row PVE-B is shown as: the one decision, and
+	// no word about PVE-A (which config.yaml puts on that UPS); nothing under PVE-B
 	nas := r.storedAgent(ehNAS)
-	ups, _ := nas["ups_powers"].(map[string]any)
-	if got := strs(ups["rack"]); !slices.Equal(got, []string{ehNodeA, ehNodeB}) || nas["by"] != ehAdmin || nas["at"] == nil {
+	if got := fmt.Sprint(nas["ups_powers"]); got != "map[rack:map["+ehNodeB+":true]]" || nas["by"] != ehAdmin || nas["at"] == nil {
 		t.Fatalf("state.json, nas-agent: %v", nas)
 	}
 	if _, has := nas["power_links"]; has || r.storedAgent("lab-b-agent") != nil || len(r.storedOptions()["agents"].(map[string]any)) != 1 {
@@ -366,7 +367,8 @@ func TestEditHostUPSLinkIsStoredWithTheAgentThatReadsTheUPS(t *testing.T) {
 	ch := params["changes"].([]any)[0].(map[string]any)
 	if params["machine"] != "PVE-B" || params["agent"] != "lab-b-agent" || len(params["changes"].([]any)) != 1 || !slices.Equal(strs(params["lines"]), []string{want}) ||
 		ch["agent"] != ehNAS || ch["field"] != "ups_powers" || ch["before_from"] != "config.yaml" || ch["after_from"] != "panel" ||
-		!slices.Equal(strs(ch["before"].(map[string]any)["rack"]), []string{ehNodeA}) || !slices.Equal(strs(ch["after"].(map[string]any)["rack"]), []string{ehNodeA, ehNodeB}) {
+		!slices.Equal(strs(ch["before"].(map[string]any)["rack"]), []string{ehNodeA}) || !slices.Equal(strs(ch["after"].(map[string]any)["rack"]), []string{ehNodeA, ehNodeB}) ||
+		fmt.Sprint(ch["stored"]) != "map[rack:map["+ehNodeB+":true]]" {
 		t.Fatalf("audit params: %v", params)
 	}
 	// one entry in the bell, on the machine
@@ -400,9 +402,10 @@ func TestEditHostUPSLinkIsStoredWithTheAgentThatReadsTheUPS(t *testing.T) {
 	if rack := ehEntry(t, g, "ups", "nas-agent/rack"); rack["on"] != true || rack["from"] != "panel" || g.body["rev"] != 1.0 {
 		t.Fatalf("the dialog after a restart: %v", rack)
 	}
-	// Reset: the override of that field of that agent goes; config.yaml's value shows again
-	p3 := r2.ok(ehNodeB, map[string]any{"reset": []any{map[string]any{"agent": ehNAS, "field": "ups"}}})
-	if got := strs(p3.body["changed"]); !slices.Equal(got, []string{"UPS links read by NAS: back to config.yaml"}) || p3.body["rev"] != 2.0 {
+	// Reset: the decision of that line goes; config.yaml's value shows again
+	reset := map[string]any{"reset": []any{map[string]any{"id": "nas-agent/rack", "field": "ups"}}}
+	p3 := r2.ok(ehNodeB, reset)
+	if got := strs(p3.body["changed"]); !slices.Equal(got, []string{"UPS Rack UPS (read by NAS): back to config.yaml: no longer powers PVE-B"}) || p3.body["rev"] != 2.0 {
 		t.Fatalf("reset: %s", p3.raw)
 	}
 	if rack := ehEntry(t, p3, "ups", "nas-agent/rack"); rack["on"] != false || rack["from"] != "config" || rack["by"] != nil {
@@ -419,18 +422,19 @@ func TestEditHostUPSLinkIsStoredWithTheAgentThatReadsTheUPS(t *testing.T) {
 		t.Fatalf("PVE-A after Reset: %v", got)
 	}
 	last := r2.auditEntries("", "host.options")[0]["params"].(map[string]any)["changes"].([]any)[0].(map[string]any)
-	if last["before_from"] != "panel" || last["after_from"] != "config.yaml" || !slices.Equal(strs(last["after"].(map[string]any)["rack"]), []string{ehNodeA}) {
+	if last["before_from"] != "panel" || last["after_from"] != "config.yaml" || !slices.Equal(strs(last["after"].(map[string]any)["rack"]), []string{ehNodeA}) || last["stored"] != nil {
 		t.Fatalf("the audit entry of the Reset: %v", last)
 	}
-	// a Reset of a field that has no override changes nothing
-	if p := r2.ok(ehNodeB, map[string]any{"reset": []any{map[string]any{"agent": ehNAS, "field": "ups"}}}); p.body["message"] != "nothing to change" || p.body["rev"] != 2.0 {
+	// a Reset of a line that was not changed here changes nothing
+	if p := r2.ok(ehNodeB, reset); p.body["message"] != "nothing to change" || p.body["rev"] != 2.0 {
 		t.Fatalf("a second Reset: %s", p.raw)
 	}
 }
 
 // Plugs and the total. A plug's link is written with the machine's agent id, which names the machine whether
 // its node's row is there or not (trap g); the watts move with the next poll. A plug can be moved from another
-// machine, taken out of the total and put back. What cannot be meant is refused.
+// machine, taken out of the total and put back. Each is one decision about that plug; what config.yaml says
+// about the other plugs is not copied. What cannot be meant is refused.
 func TestEditHostPlugLinksAndTheTotal(t *testing.T) {
 	r := ehSetup(t)
 	plug := func(id string, kv ...any) map[string]any {
@@ -445,9 +449,8 @@ func TestEditHostPlugLinksAndTheTotal(t *testing.T) {
 	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"Plug B plug (read by NAS): linked to PVE-B"}) {
 		t.Fatalf("changed: %v", got)
 	}
-	links, _ := r.storedAgent(ehNAS)["power_links"].(map[string]any)
-	if links["b-plug"] != "lab-b-agent" || links["a-plug"] != "lab-a-agent" || len(links) != 2 {
-		t.Fatalf("power_links of nas-agent in state.json (config.yaml's link stays, the new one is the agent's id): %v", links)
+	if links := fmt.Sprint(r.storedAgent(ehNAS)["power_links"]); links != "map[b-plug:lab-b-agent]" {
+		t.Fatalf("power_links of nas-agent in state.json (the one new link, with the agent's id; config.yaml's own link is not copied): %v", links)
 	}
 	if r.row(ehNodeB)["power_w"] != nil {
 		t.Fatal("the watts are there before the NAS was polled again")
@@ -466,7 +469,7 @@ func TestEditHostPlugLinksAndTheTotal(t *testing.T) {
 	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"Plug B plug (read by NAS): not in the total"}) {
 		t.Fatalf("changed: %v", got)
 	}
-	if ex := strs(r.storedAgent(ehNAS)["power_exclude_from_total"]); !slices.Equal(ex, []string{"b-plug", "corner"}) {
+	if ex := fmt.Sprint(r.storedAgent(ehNAS)["power_exclude_from_total"]); ex != "map[b-plug:true]" {
 		t.Fatalf("power_exclude_from_total in state.json: %v", ex)
 	}
 	r.poll()
@@ -482,10 +485,22 @@ func TestEditHostPlugLinksAndTheTotal(t *testing.T) {
 	if a, b := r.row(ehNodeA)["power_w"], r.row(ehNodeB)["power_w"]; a != nil || b != 300.0 {
 		t.Fatalf("after the move: PVE-A %v, PVE-B %v", a, b)
 	}
-	// unlinked again, and both in one request with the total
+	// unlinked again, and both in one request with the total. The plug is then linked to nothing: it does not
+	// go back to PVE-A (where config.yaml has it) behind the back of the admin who unlinked it; PVE-A's page
+	// shows the line as changed, and its Reset gives it back.
 	p = r.ok(ehNodeB, map[string]any{"plugs": []any{plug("nas-agent/a-plug", "linked", false), plug("nas-agent/b-plug", "in_total", true)}})
 	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"Plug A plug (read by NAS): no longer linked to PVE-B", "Plug B plug (read by NAS): in the total again"}) {
 		t.Fatalf("changed: %v", got)
+	}
+	if nas := r.storedAgent(ehNAS); fmt.Sprint(nas["power_links"]) != "map[a-plug: b-plug:lab-b-agent]" || nas["power_exclude_from_total"] != nil {
+		t.Fatalf("state.json after the unlink (a-plug: to none; b-plug's place in the total is config.yaml's again): %v", nas)
+	}
+	r.poll()
+	if ap := ehEntry(t, r.options(ehNodeA), "plugs", "nas-agent/a-plug"); r.row(ehNodeA)["power_w"] != nil || ap["linked"] != false || ap["from"] != "panel" || ap["config_linked"] != true {
+		t.Fatalf("a-plug on PVE-A's page after it was unlinked on PVE-B's: %v (watts %v)", ap, r.row(ehNodeA)["power_w"])
+	}
+	if ap := ehEntry(t, r.options(ehNodeB), "plugs", "nas-agent/a-plug"); ap["linked"] != false || ap["from"] != "config" {
+		t.Fatalf("a-plug on PVE-B's page (nothing about PVE-B is changed any more): %v", ap)
 	}
 	// what cannot be meant: 422, and nothing is stored for it
 	stored := fmt.Sprint(r.storedOptions())
@@ -503,8 +518,13 @@ func TestEditHostPlugLinksAndTheTotal(t *testing.T) {
 		"a UPS no agent relays":                          {ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/attic", true)}}, `no agent relays the UPS "nas-agent/attic" (any more): close this and open it again`},
 		"a UPS without on":                               {ehNodeB, map[string]any{"ups": []any{map[string]any{"id": "nas-agent/rack"}}}, `ups: "on" is missing`},
 		"a UPS twice":                                    {ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true), ehUPS("nas-agent/rack", true)}}, "twice"},
-		"a reset of a field there is not":                {ehNodeB, map[string]any{"reset": []any{map[string]any{"agent": ehNAS, "field": "url"}}}, "no such field"},
-		"a reset for an agent that reads nothing":        {ehNodeB, map[string]any{"reset": []any{map[string]any{"agent": "lab-a-agent", "field": "ups"}}}, "no such field"},
+		"a reset of a field there is not":                {ehNodeB, map[string]any{"reset": []any{map[string]any{"id": "nas-agent/rack", "field": "url"}}}, "no such field"},
+		"a reset of a UPS no agent relays":               {ehNodeB, map[string]any{"reset": []any{map[string]any{"id": "lab-a-agent/rack", "field": "ups"}}}, `no agent relays the UPS "lab-a-agent/rack"`},
+		"a reset of a plug no agent relays":              {ehNodeB, map[string]any{"reset": []any{map[string]any{"id": "nas-agent/rack", "field": "plugs"}}}, `no agent relays the plug "nas-agent/rack"`},
+		"a reset twice":                                  {ehNodeB, map[string]any{"reset": []any{map[string]any{"id": "nas-agent/rack", "field": "ups"}, map[string]any{"id": "nas-agent/rack", "field": "ups"}}}, "twice"},
+		"a reset and a tick of one line":                 {ehNodeB, map[string]any{"reset": []any{map[string]any{"id": "nas-agent/rack", "field": "ups"}}, "ups": []any{ehUPS("nas-agent/rack", true)}}, "twice"},
+		"a reset and a tick of one plug's link":          {ehNodeB, map[string]any{"reset": []any{map[string]any{"id": "nas-agent/b-plug", "field": "plugs"}}, "plugs": []any{plug("nas-agent/b-plug", "linked", false)}}, "twice"},
+		"the total reset for a plug of another machine":  {ehNodeB, map[string]any{"reset": []any{map[string]any{"id": "nas-agent/corner", "field": "total"}}}, "Corner plug is not a plug of PVE-B"},
 		"an empty request":                               {ehNodeB, map[string]any{}, "nothing to change"},
 	} {
 		got := r.put(c.id, c.body)
@@ -571,10 +591,10 @@ func TestEditHostNeverEditable(t *testing.T) {
 				"alone":               {f: v},
 				"in a UPS entry":      {"ups": []any{map[string]any{"id": "nas-agent/rack", "on": true, f: v}}},
 				"in a plug entry":     {"plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true, f: v}}},
-				"in a reset entry":    {"reset": []any{map[string]any{"agent": ehNAS, "field": "ups", f: v}}},
+				"in a reset entry":    {"reset": []any{map[string]any{"id": "nas-agent/rack", "field": "ups", f: v}}},
 				"under an agent's id": {"agents": map[string]any{ehNAS: map[string]any{f: v}}},
 			} {
-				if f == "id" && where != "at the top" && where != "alone" && where != "in a reset entry" && where != "under an agent's id" {
+				if f == "id" && where != "at the top" && where != "alone" && where != "under an agent's id" {
 					continue // "id" is the name of a UPS or plug there
 				}
 				n++

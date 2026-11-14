@@ -17,8 +17,9 @@ import (
 //	power_links               {<device id on the agent>: <row id>}
 //	power_exclude_from_total  [<device id on the agent>, ...]
 //
-// They are written in config.yaml and can be replaced, field by field, from the panel ("Edit host": state.json,
-// adminstate.HostOptions). One check, LinkProblems, is used for both.
+// They are written in config.yaml and can be changed, line by line, from the panel ("Edit host": state.json,
+// adminstate.HostOptions holds a decision for each changed line, laid over config.yaml's). One check,
+// LinkProblems, is used for both.
 type Links struct {
 	UPSPowers             map[string][]string
 	PowerLinks            map[string]string
