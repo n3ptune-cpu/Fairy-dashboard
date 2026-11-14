@@ -776,6 +776,15 @@ func (s *Server) wakeUpdateKeepOn(c *reqCtx) error {
 			if late.Active && s.WakeRuns.KeepOn(x.ID, actorOf(u)) {
 				return done(200, "not known until "+until+": the ticket may still arrive; the run keeps cancelling", lead+"The panel keeps cancelling until then, and the run's report says what came of it.", false)
 			}
+			if late.Active {
+				// The run is going and did not take the cancel over: a confirmation is on its way to the machine
+				// (what comes of it is taken in first), or the run is between two steps for it.
+				why := "The run did not take the cancel over at this moment"
+				if act, _ := s.WakeRuns.Snapshot(); act != nil && slices.ContainsFunc(act.Hosts, func(h *wakerun.Host) bool { return h.ID == x.ID && h.Asking == "confirm" }) {
+					why = "A confirmation of the run is on its way to " + x.Name + " at this moment, so the run did not take the cancel over"
+				}
+				return done(200, "not known until "+until+": the ticket may still arrive; the run did not take the cancel over", lead+why+": press Keep on again in a moment.", false)
+			}
 			return done(200, "not known until "+until+": the ticket may still arrive", lead+"The run it was in is not going any more, so nothing repeats the cancel: press Keep on again after "+until+", or cancel at the machine.", false)
 		}
 		if !live {
