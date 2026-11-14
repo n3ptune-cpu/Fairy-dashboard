@@ -124,6 +124,13 @@ func TestUIEditHostMachineGroups(t *testing.T) {
   html = ehView(d, ehDraft());
   if (!html.includes('data-eh-f="wol-on" disabled') || !words(html).includes("No machine is set up to send wake packets.")) fail("no relay at all: " + html);
 
+  // switched off here before, ticked again: the fields start from what config.yaml has, and that is what is sent
+  d = data({ host: host({ wol: { on: false, from: "panel", macs: [], relay: null, relay_name: null } }) }); draft = ehDraft();
+  ehField(d, draft, "wol-on", true);
+  plan = ehPlan(d, draft);
+  if (JSON.stringify(plan.body) !== JSON.stringify({ wol: { macs: ["02:00:00:00:00:b1"], port: 9, relay: "relay-a" } }) || plan.lines[0] !== "Wake-on-LAN: to 02:00:00:00:00:b1 through Relay A, port 9 (was off)"
+    || !ehView(d, draft).includes('value="02:00:00:00:00:b1"')) fail("ticked again after off: " + JSON.stringify(plan));
+
   // config.yaml sets where the packet goes, and a password: the relay is shown and cannot be chosen, the address
   // is shown, the password only as "with a password"; a change of the MAC sends no relay
   d = data({ host: host({ wol: { target: "10.20.30.255", password: true, relay_fixed: "config.yaml sets a target address and a password for this machine's wake packet: they belong to the relay written there" } }) }); draft = ehDraft();
@@ -202,6 +209,8 @@ func TestUIEditHostMachineLinesAreThePanelsWords(t *testing.T) {
 	step("pc-b", `[["site", "site-a"], ["wol-on", true], ["wol-macs", "02:00:00:00:00:b1"]]`) // a first site and a first Wake-on-LAN: the first relay
 	step("pc-b", `[["site", ""], ["wol-port", "7"], ["name", "Attic"]]`)
 	step("box-c", `[["wol-macs", "02:00:00:00:00:c9"]]`) // next to a target address: no relay is sent
+	step("box-d", `[["wol-on", false]]`)
+	step("box-d", `[["wol-on", true]]`) // ticked again: what config.yaml has, and the panel's line says the same
 	step("box-d", `[["wol-on", false]]`)
 	step("box-d", `[["reset", "wol:"]]`)
 	step("relay-a", `[["name", "Closet"], ["site", "site-b"]]`)

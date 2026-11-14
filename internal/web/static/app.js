@@ -3681,16 +3681,17 @@ const ehHost = (d) => (d.host && typeof d.host === "object" && d.host.name && d.
 const ehNameOf = (v) => String(v).trim().split(/\s+/).filter(Boolean).join(" ");
 const ehMACs = (v) => String(v).split(/[\s,;]+/).filter(Boolean).map((m) => m.toLowerCase().replace(/-/g, ":"));
 const EH_MAC = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;
-const ehRelayName = (w, id) => (w.relays || []).find((r) => r.id === id)?.name || (w.relay === id && w.relay_name) || id;
+const ehRelayName = (w, id) => (w.relays || []).find((r) => r.id === id)?.name || (w.relay === id && w.relay_name) || (w.config?.relay === id && w.config.relay_name) || id;
 const ehWolWords = (w) => (w && w.on ? `to ${w.macs.join(", ")} through ${w.relay_name}, port ${w.port}` : "off");
 // The site that is chosen in the dialog: "" is the default (config.yaml's site, or none).
 const ehSiteNow = (h, draft) => (draft.site !== undefined ? draft.site : h.site.from === "panel" ? h.site.value || "" : "");
 // What the Wake-on-LAN group says the machine's Wake-on-LAN shall be: the panel's, with what was changed here.
+// A machine whose Wake-on-LAN was switched off here starts from what config.yaml has when it is ticked again.
 function ehWolWant(h, draft) {
-  const w = h.wol, t = draft.wol || {};
-  const relay = w.relay_fixed ? w.relay : t.relay !== undefined ? t.relay : w.relay || w.relays?.[0]?.id || null;
-  return { on: t.on === undefined ? !!w.on : t.on, macs: t.macs === undefined ? w.macs || [] : ehMACs(t.macs), relay, relay_name: relay ? ehRelayName(w, relay) : null,
-    port: t.port === undefined ? w.port || 9 : t.port };
+  const w = h.wol, t = draft.wol || {}, b = w.on || !w.config ? w : w.config;
+  const relay = w.relay_fixed ? b.relay : t.relay !== undefined ? t.relay : b.relay || w.relays?.[0]?.id || null;
+  return { on: t.on === undefined ? !!w.on : t.on, macs: t.macs === undefined ? b.macs || [] : ehMACs(t.macs), relay, relay_name: relay ? ehRelayName(w, relay) : null,
+    port: t.port === undefined ? b.port || 9 : t.port };
 }
 // What Save will change about the machine itself: the panel's own lines, the parts of the request, the notes
 // about who will see the machine, and what is wrong with what was typed (problems: nothing of it is sent).
