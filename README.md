@@ -875,21 +875,32 @@ such machines takes two passkeys:
    and one passkey confirm all machines that wait: each is asked for a fresh question for exactly its update
    (to the version shown) and its shutdown (with the countdown shown), and each checks the answer itself.
    Only then does the run send the update and the shutdown, once each, and the machine lets them through
-   for 26 minutes.
+   for 26 minutes. A run is confirmed once: by the first confirmation a machine accepts. If no machine
+   accepts (the person who confirmed is not on the machines' own list of people who may approve), the run is
+   not confirmed: the strip stays, with its time and "*name* tried: no machine accepted", and an admin whose
+   passkey the machines take can still confirm.
 
 Nobody confirms: **not confirmed, not updated.** A machine that took its ticket (it is *armed*) switches
-itself off again by itself, with a notice of 2 minutes on its screen; the run's report says "It switched
+itself off again by itself, with a notice of 2 minutes on its screen. Whether a machine is armed is what the
+machine itself shows, whatever the panel was answered when it handed the ticket over: a ticket that reached
+the machine twice is refused the second time, and the machine is armed all the same. Fairy says "stays ON"
+of a machine only after its agent has shown that no run is on it; the run's report says "It switched
 itself off again" only when the run saw it go. A machine that was not armed stays ON, and the report says
 so and why. **Keep on** calls a machine's switch-off off. It is in the machine's row of the run on the
 Updates page, and, once nobody is asked any more, in a strip of the machine's own on every page with the
 time it switches itself off. It is the cancel of the Power menu, and after it Fairy reads what the machine
 itself says. Only "cancelled" is reported as "stays ON"; anything else is "NOT cancelled ... it may switch
-itself off at HH:MM". In the report, a machine nobody confirmed has the chip "... · not updated".
+itself off at HH:MM". Two things to know. Keep on is a control action: when your sign-in is not recent, the
+panel first asks you to confirm it's you (one passkey tap), and inside the 2-minute notice that tap comes
+out of the two minutes. And while a ticket whose request got no answer can still arrive (up to 8 minutes
+after the start), a cancel that finds no run has ended nothing: Keep on then answers "Not known until
+HH:MM ...", and the run repeats the cancel until that time and reports what the machine shows then. In the report, a machine nobody confirmed has the chip "... · not updated".
 
 What the panel holds, and for how long: the approval of the start (the ticket) is kept **in the panel's
 memory only**, for at most 7 minutes after the passkey (`valid_s` 420; the machines refuse it after that),
 handed to each machine once and never again, and dropped when every machine had its part, when it is 7
-minutes old, or when the run ends. It is never written to a file (not `wake-update.json`, not
+minutes old, or when the run ends. The same approval is also what answers the own question of a machine that
+was ON when the run started (update only): it is sent with that machine's one update request, once. It is never written to a file (not `wake-update.json`, not
 `state.json`, not the audit log), never logged and never sent to a browser. All a ticket lets its holder do
 is make a machine with the right id that *started after the ticket was signed* switch itself off again;
 Fairy hands it only to a machine that its own run woke, by the same evidence a run needs before it shuts a
