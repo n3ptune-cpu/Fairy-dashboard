@@ -266,6 +266,35 @@ func TestHostOptionsReaderIsTolerant(t *testing.T) {
 	}
 }
 
+// What is read is told by the shape of a field, not by who wrote it. An entry in the form config.yaml has
+// the three fields in (lists for the UPS's rows and for the total, an object of device and row for the
+// links): the two lists are left out, each with its line, and config.yaml's value counts for them. The
+// links are an object here too, so they are READ: one decision for each device named, and every other
+// device follows config.yaml. Nothing may say that such an entry is ignored whole.
+func TestHostOptionsALinkMapIsReadWhoeverWroteIt(t *testing.T) {
+	d := statefile.Data{}
+	if err := json.Unmarshal([]byte(`{"host_options": {"rev": 2, "agents": {"nas": {
+		"ups_powers": {"rack": ["pc-a", "pc-b"]},
+		"power_links": {"a-plug": "pc-b"},
+		"power_exclude_from_total": ["corner"], "by": "nora", "at": "2026-11-14T00:00:00Z"}}}}`), &d); err != nil {
+		t.Fatal(err)
+	}
+	o, ignored := hostOptions(d)
+	e := o.For("nas")
+	if len(e.UPS) != 0 || len(e.Exclude) != 0 || len(ignored) != 2 || !strings.Contains(ignored[0], "power_exclude_from_total is not of the form Fairy writes (found a list)") ||
+		!strings.Contains(ignored[1], "ups_powers is not of the form Fairy writes") {
+		t.Fatalf("the two lists are left out, each with its line: %+v\n%q", e, ignored)
+	}
+	if fmt.Sprint(e.Links) != "map[a-plug:pc-b]" {
+		t.Fatalf("the links are read as decisions: %v", e.Links)
+	}
+	base := config.Links{UPSPowers: map[string][]string{"rack": {"pc-c"}}, PowerLinks: map[string]string{"a-plug": "pc-a", "b-plug": "pc-a"}, PowerExcludeFromTotal: []string{"b-plug"}}
+	l := e.Apply(base)
+	if fmt.Sprint(l.PowerLinks) != "map[a-plug:pc-b b-plug:pc-a]" || fmt.Sprint(l.UPSPowers) != "map[rack:[pc-c]]" || fmt.Sprint(l.PowerExcludeFromTotal) != "[b-plug]" {
+		t.Fatalf("what counts: the one link that was read, and config.yaml for everything else: %+v", l)
+	}
+}
+
 // What is stored is read back as it was stored, by this State and by another one on the same folder (a
 // restart), and the three fields are kept apart from "not set".
 func TestHostOptionsRoundTrip(t *testing.T) {

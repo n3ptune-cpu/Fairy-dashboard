@@ -44,6 +44,12 @@ import (
 // The reader never fails. Whatever is not what Fairy writes is left out, config.yaml's value counts for it,
 // and one WARN line says so (once): the panel always starts. `fairy check-config`, which a
 // `fairy update` asks before it installs a version, does not read state.json at all.
+//
+// "What Fairy writes" is told by the shape of a field alone, not by who wrote it or when. A list under
+// ups_powers or power_exclude_from_total (config.yaml's own form of the two) is not that shape and is left
+// out. power_links is an object of device and row in config.yaml too, so {"<device id>": "<row id>"} is
+// READ, as one decision for each device it names, wherever it comes from (a file edited by hand, a copy of
+// config.yaml's field): it is not ignored. TestHostOptionsALinkMapIsReadWhoeverWroteIt holds both.
 
 // hostOptionsKey is the name of the object in state.json.
 const hostOptionsKey = "host_options"
