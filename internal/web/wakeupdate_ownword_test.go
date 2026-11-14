@@ -6,7 +6,11 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
 )
 
@@ -123,4 +127,78 @@ func TestKeepOnWhileTheTicketCanStillArriveIsNotSaidToHaveWorked(t *testing.T) {
 	if st := r.m["pc-a"].Gate.StatusNow().Run; !on || st == nil || st.State != api.RunCancelled {
 		t.Fatalf("after Keep on the machine is on: %v, its run: %+v", on, st)
 	}
+}
+
+// "A run is confirmed once" counts from the first machine that accepts (independent review of 270e7ab, P3).
+// A second admin of the panel who is not on the machine's own list of people who may approve presses "Confirm
+// it's you" and gives a passkey: the machine refuses (reason "user"). The run is not confirmed by that: the
+// strip stays, with who tried, the admin whose passkey the machine takes can still confirm, and no
+// notification says "confirmed by".
+func TestAConfirmationNoMachineAcceptsDoesNotUseTheRunUp(t *testing.T) {
+	r := newRunRig(t, "pc-a")
+	_, res := r.approved(t, "POST", "/api/admin/wake-update", map[string]any{"hosts": []string{"pc-a"}})
+	if res["ok"] != true {
+		t.Fatal(res)
+	}
+	r.until(t, "asked", 300, func() bool { a, _ := r.s.WakeRuns.Snapshot(); return a != nil && a.Approval == "needed" })
+	run, _ := r.s.WakeRuns.Snapshot()
+	ann, annCSRF := r.admin, r.csrf
+	other := controller()
+	other.Sub, other.Name, other.Email = "u7", model.P("Bob"), model.P("bob@example.com")
+	r.cookie(other, 0)
+	if _, _, err := r.s.Access.SetRole(other.Sub, access.RoleAdmin, nil, "test", true); err != nil {
+		t.Fatal(err)
+	}
+	r.admin = r.cookie(other, time.Hour)
+	r.csrf = []string{"Cookie", r.admin, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	r.iss.Set(func(i *testutil.Issuer) { i.Sub = other.Sub })
+	_, res = r.approved(t, "POST", "/api/admin/wake-update/"+run.ID+"/confirm", map[string]any{})
+	r.iss.Set(func(i *testutil.Issuer) { i.Sub = approvalAdminSub })
+	until := run.ConfirmBy.UTC().Format("15:04 UTC")
+	msg, _ := res["message"].(string)
+	if res["ok"] != false || !strings.HasPrefix(msg, "No machine accepted this confirmation (by ") || !strings.HasSuffix(msg, "). The run is not confirmed and still asks until "+until+": an admin whose passkey the machines take can confirm.") {
+		t.Fatalf("what the admin the machine does not take is told: %v", res)
+	}
+	if lines, _ := res["items"].([]any); len(lines) != 1 || lines[0] != "PC-A: NOT accepted (you are not on its list of people who may approve)" {
+		t.Fatalf("the lines: %v", res["items"])
+	}
+	if st := r.m["pc-a"].Gate.StatusNow().Run; st == nil || st.State != api.RunArmed {
+		t.Fatalf("the machine after that: %+v", st)
+	}
+	r.tick(2)
+	cur, _ := r.s.WakeRuns.Snapshot()
+	if cur.Approval != "needed" || cur.ConfirmedBy != "" || cur.Tried == "" {
+		t.Fatalf("the run: approval %q, confirmed by %q, tried %q", cur.Approval, cur.ConfirmedBy, cur.Tried)
+	}
+	// the strip still asks, and says who tried
+	r.admin, r.csrf = ann, annCSRF
+	w := r.req("GET", "/api/admin/wake-update/waiting", nil)
+	if w.body["run"] != run.ID || w.body["tried"] != cur.Tried {
+		t.Fatalf("the strip: %s", w.raw)
+	}
+	for _, e := range r.s.Notes.List("", func(notifications.Event) bool { return true }, notifications.Filter{Limit: 200}).Events {
+		if e.Kind == wuConfirmNote+"_over" {
+			t.Fatalf("the question was ended: %q", e.Text)
+		}
+	}
+	// the admin the machine takes confirms: the machine is asked for a fresh challenge and accepts
+	_, res = r.approved(t, "POST", "/api/admin/wake-update/"+run.ID+"/confirm", map[string]any{})
+	if res["ok"] != true || res["message"] != "confirmed on 1 of 1 machine" {
+		t.Fatalf("the second confirmation: %v", res)
+	}
+	if st := r.m["pc-a"].Gate.StatusNow().Run; st == nil || st.State != api.RunConfirmed {
+		t.Fatalf("the machine after it: %+v", st)
+	}
+	cur, _ = r.s.WakeRuns.Snapshot()
+	if cur.Approval != "given" || cur.ConfirmedBy == "" || cur.ConfirmedBy == cur.Tried || cur.Tried != "" {
+		t.Fatalf("the run: approval %q by %q, tried %q", cur.Approval, cur.ConfirmedBy, cur.Tried)
+	}
+	if again := r.req("POST", "/api/admin/wake-update/"+run.ID+"/confirm", map[string]any{}); again.code != 409 || !strings.Contains(string(again.raw), "confirmed already") {
+		t.Fatalf("a third confirmation: %d %s", again.code, again.raw)
+	}
+	r.until(t, "the run over", 1500, func() bool { a, _ := r.s.WakeRuns.Snapshot(); return a == nil })
+	if h := r.host("pc-a"); h.State != wakerun.StOff || !strings.Contains(h.Text, "updated from 16-aaaaaaa to 17-bbbbbbb") {
+		t.Fatalf("the report: %s %q", h.State, h.Text)
+	}
+	r.noTokenAnywhere(t)
 }

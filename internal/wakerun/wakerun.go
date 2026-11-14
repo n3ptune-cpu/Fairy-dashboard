@@ -649,7 +649,10 @@ type Host struct {
 	MayGoOff    bool   `json:"may_go_off,omitempty"`
 	Confirm     string `json:"confirm,omitempty"`
 	ConfirmText string `json:"confirm_text,omitempty"`
-	To          string `json:"to,omitempty"`
+	// ConfirmTried: a confirmation it did not accept, after which it could be confirmed again ("by Bob was
+	// not accepted (...)"): for its sentence when nobody confirmed after that.
+	ConfirmTried string `json:"confirm_tried,omitempty"`
+	To           string `json:"to,omitempty"`
 
 	// Working values of the run in memory. A run is never continued after a restart, so they are not kept.
 	wakeMono     time.Duration // the steady clock when the run's first wake was accepted
@@ -753,8 +756,13 @@ type Run struct {
 	Cancel     *Cancel    `json:"cancel,omitempty"`
 	Note       string     `json:"note,omitempty"` // why the run stopped itself
 	// Approval: where the run's second confirmation stands: "" (not asked for), "needed" (machines with the
-	// check are up and wait for it), "given" (it was given: once per run), "over" (nobody gave it in time).
+	// check are up and wait for it), "given" (a machine accepted one: once per run), "over" (it ended without).
+	// Tried: who gave the latest confirmation that no machine accepted (the question stays open after it).
+	// Trying: who gave the confirmation that is on its way to the machines right now ("": none); the journal
+	// knows it before the first request leaves.
 	Approval string `json:"approval,omitempty"`
+	Tried    string `json:"confirm_tried,omitempty"`
+	Trying   string `json:"confirm_trying,omitempty"`
 	// Ticket: the numbers of the run's tickets (nil: no machine with the check is in the run). ConfirmBy: until
 	// when the confirmation is asked for, by the panel's clock (set with "needed"). ConfirmedBy: who gave it.
 	Ticket      *Ticket    `json:"ticket,omitempty"`
@@ -772,6 +780,8 @@ type Run struct {
 	stopped string
 	// startMono: the steady clock when the run started (in memory only), for the run's own limit (maxRun).
 	startMono time.Duration
+	// lastBy: who gave the latest confirmation (in memory only).
+	lastBy string
 	// confirmMono: ConfirmBy on the steady clock (in memory only).
 	confirmMono time.Duration
 }

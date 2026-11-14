@@ -100,6 +100,8 @@ type checked struct {
 	none           int       // answers in a row in which its checker takes runs and names none, or another
 	noneAt         time.Time // SeenAt of the latest of them
 	confirming     bool      // BeginConfirm named it, and Confirmed has not said what came of it
+	inTry          bool      // it is part of the confirmation that is on its way
+	goReason       string    // the machine's word for refusing its latest confirmation
 	confirmMono    time.Duration
 	tooLate        bool   // its confirmation was refused as "too late": it is switching itself off
 	toResult       string // (To is "-") the result of its update step, and the words for it
@@ -550,6 +552,8 @@ func (m *Manager) askConfirmation(r *Run, now time.Time) {
 		r.Approval, r.ConfirmBy, r.confirmMono = "needed", &by, mono+time.Duration(r.Ticket.ConfirmWaitS)*time.Second
 		m.dirty = true
 		m.emit(EvApproval, r, nil, "", nil, "")
+	case r.Approval == "needed" && r.Trying != "" && r.Cancel == nil && r.stopped == "":
+		// a confirmation is on its way to the machines: what comes of it is taken in first
 	case r.Approval == "needed" && (waiting == 0 || r.Cancel != nil || r.stopped != "" || mono > r.confirmMono):
 		m.confirmationOver(r)
 	}
@@ -632,14 +636,20 @@ func (m *Manager) confirmable(id string) (*Run, error) {
 		return nil, &StartError{Msg: "this run has stopped: it is not confirmed any more"}
 	case r.Approval != "needed" || r.Ticket == nil || m.mono() > r.confirmMono:
 		return nil, &StartError{Msg: "this run does not ask for a confirmation (any more)"}
+	case r.Trying != "":
+		return nil, &StartError{Msg: "a confirmation by " + r.Trying + " is being handed to the machines right now: wait a moment for what comes of it"}
 	}
 	return r, nil
 }
 
 // BeginConfirm is called when a person has given the run's confirmation with a passkey, before anything of it
-// is sent to a machine: the run is confirmed from here on (once: a second call is refused), and the machines
-// of hosts that can still be confirmed are marked as "the confirmation is going out", which the journal
-// knows before the first request leaves. It returns those machines; nothing may be sent to any other.
+// is sent to a machine: the machines of hosts that can still be confirmed are marked as "the confirmation is
+// going out", which the journal knows before the first request leaves, and no other confirmation is begun
+// while this one is on its way. It returns those machines; nothing may be sent to any other.
+//
+// The run is confirmed (once) when the first machine accepts (Confirmed). A confirmation that no machine
+// accepted does not use the run up: the question stays open, with its time, for a person whose passkey the
+// machines take (tryOver).
 func (m *Manager) BeginConfirm(id, by string, hosts []string) ([]string, error) {
 	m.mu.Lock()
 	r, err := m.confirmable(id)
@@ -658,23 +668,23 @@ func (m *Manager) BeginConfirm(id, by string, hosts []string) ([]string, error) 
 		if !named || !h.offerable(r, mono) {
 			continue
 		}
-		h.chk.confirming, h.chk.confirmMono, h.Asking = true, mono, "confirm"
+		h.chk.confirming, h.chk.inTry, h.chk.confirmMono, h.Asking = true, true, mono, "confirm"
 		begun, marked = append(begun, h.ID), append(marked, h)
 	}
 	if len(begun) == 0 {
 		m.mu.Unlock()
 		return nil, &StartError{Msg: "no machine of this run can be confirmed any more: each is too close to the moment it switches itself off, or has ended"}
 	}
-	r.Approval, r.ConfirmedBy = "given", by
-	m.emit(EvApprovalEnd, r, nil, "", nil, "")
+	r.Trying, r.lastBy = by, by
 	m.mu.Unlock()
 	if err := m.save(); err != nil { // nothing goes out that the journal does not know of
 		m.mu.Lock()
 		if m.active == r {
-			r.Approval, r.ConfirmedBy = "over", ""
+			r.Trying = ""
 			for _, h := range marked {
-				h.chk.confirming, h.Asking = false, ""
+				h.chk.confirming, h.chk.inTry, h.Asking = false, false, ""
 			}
+			m.confirmationOver(r)
 		}
 		m.mu.Unlock()
 		return nil, &StartError{Msg: "the run journal cannot be written, so the confirmation was not sent to any machine: " + journalErrText(err)}
@@ -707,7 +717,8 @@ func (m *Manager) Confirmed(id, hostID string, res ConfirmResult) {
 		c := &h.chk
 		now := m.now()
 		if res.NotAsked {
-			if h.State == StApproval && h.Confirm == "" && !c.confirming {
+			// only once the run is confirmed: after a confirmation no machine accepted it can still be asked
+			if r.Approval == "given" && h.State == StApproval && h.Confirm == "" && !c.confirming {
 				h.Confirm, h.ConfirmText = ConfirmNotAsked, res.Text
 				m.note(h, now, "it was not part of the confirmation ("+res.Text+")")
 			}
@@ -722,6 +733,7 @@ func (m *Manager) Confirmed(id, hostID string, res ConfirmResult) {
 		case res.OK:
 			h.Confirm, h.ConfirmText = ConfirmOK, ""
 			h.grant = &Grant{Run: r.ID}
+			m.given(r)
 			m.emit(EvStep, r, h, "confirm", map[string]any{"to": h.To}, "ok")
 			m.note(h, now, fmt.Sprintf("confirmed by %s: its agent lets one update (%s) and one shutdown of this run through, for %s",
 				r.ConfirmedBy, toWords(h.To), span(time.Duration(r.Ticket.WithinS)*time.Second)))
@@ -731,13 +743,64 @@ func (m *Manager) Confirmed(id, hostID string, res ConfirmResult) {
 			m.note(h, now, "its confirmation got no answer ("+res.Text+"): it may have arrived. It is not sent again; what its agent shows decides")
 		default:
 			h.Confirm, h.ConfirmText = ConfirmRefused, res.Text
-			c.tooLate = res.Reason == "too_late"
+			c.tooLate, c.goReason = res.Reason == "too_late", res.Reason
 			m.emit(EvStep, r, h, "confirm", map[string]any{"to": h.To}, res.Text)
 			m.note(h, now, "its confirmation was not accepted ("+res.Text+")")
 		}
 		m.dirty = true
+		m.tryOver(r, now)
 		return
 	}
+}
+
+// given makes the run confirmed, by the first machine that accepted a confirmation: once.
+func (m *Manager) given(r *Run) {
+	if r.Approval == "given" {
+		return
+	}
+	r.Approval, r.ConfirmedBy, r.Tried = "given", r.lastBy, ""
+	m.dirty = true
+	m.emit(EvApprovalEnd, r, nil, "", nil, "")
+}
+
+// noUseAgain are the machines' reasons for refusing a confirmation after which no other confirmation can help
+// the machine: it is not offered again.
+var noUseAgain = map[string]bool{"too_late": true, "run_over": true, "other_run": true, "confirmed": true}
+
+// tryOver takes in the end of a confirmation that was on its way (every machine of it has answered, or the
+// run stopped waiting for its answer). If a machine accepted, the run is confirmed and the others stay as
+// they were answered. If none did, the confirmation did not use the run up: the question stays open with its
+// time, Run.Tried names who tried, and a machine that refused for a reason another person's passkey can change
+// is offered again when a person asks (never by itself). The caller holds m.mu.
+func (m *Manager) tryOver(r *Run, now time.Time) {
+	if r.Trying == "" {
+		return
+	}
+	for _, h := range r.Hosts {
+		if h.chk.confirming {
+			return
+		}
+	}
+	by := r.Trying
+	r.Trying = ""
+	accepted := r.Approval == "given"
+	for _, h := range r.Hosts {
+		c := &h.chk
+		if !c.inTry {
+			continue
+		}
+		c.inTry = false
+		if accepted || h.Confirm != ConfirmRefused || noUseAgain[c.goReason] {
+			continue
+		}
+		h.ConfirmTried = "by " + by + " was not accepted (" + h.ConfirmText + ")"
+		h.Confirm, h.ConfirmText = "", ""
+		m.note(h, now, "the confirmation "+h.ConfirmTried+": it can be confirmed again while the run asks")
+	}
+	if !accepted {
+		r.Tried = by
+	}
+	m.dirty = true
 }
 
 func toWords(to string) string {
@@ -760,6 +823,8 @@ func leadWhy(r *Run, h *Host) string {
 		return "The run was cancelled by " + r.Cancel.By
 	case r.Approval == "given":
 		return "The run was confirmed without it"
+	case h.ConfirmTried != "":
+		return "The confirmation " + h.ConfirmTried + ", and nobody confirmed after that"
 	case r.Approval == "over" && r.Ticket != nil:
 		return "Nobody confirmed within " + span(time.Duration(r.Ticket.ConfirmWaitS)*time.Second)
 	}
@@ -780,10 +845,12 @@ func (m *Manager) stepAwaiting(ctx context.Context, r *Run, h *Host, info HostIn
 		m.done(h)
 		h.Confirm, h.ConfirmText = ConfirmUnanswered, "the panel did not learn what came of it"
 		m.note(h, now, "the panel did not learn what came of its confirmation: what its agent shows decides")
+		m.tryOver(r, now)
 	}
 	if h.Confirm == ConfirmUnanswered && word == BlockConfirmed {
 		h.Confirm, h.grant = ConfirmOK, &Grant{Run: r.ID}
 		m.note(h, now, "its agent shows the run as confirmed: the confirmation did arrive")
+		m.given(r)
 	}
 	if h.confirmed() {
 		m.afterConfirm(r, h, o, now)
@@ -966,6 +1033,7 @@ func (m *Manager) stepSelfOff(ctx context.Context, r *Run, h *Host, now time.Tim
 	o := m.Ops.Observe(h.ID)
 	word := h.runWord(r, o, mono, c.armBefore)
 	if h.Confirm == ConfirmUnanswered && word == BlockConfirmed { // the confirmation arrived after all, in time
+		m.given(r)
 		h.Confirm, h.grant = ConfirmOK, &Grant{Run: r.ID}
 		m.note(h, now, "its agent shows the run as confirmed: the confirmation did arrive, and it is not switching itself off")
 		m.afterConfirm(r, h, o, now)

@@ -94,6 +94,10 @@ const click = (dataset) => listeners.click({ target: { closest: () => ({ dataset
   waiting.hosts = ["PC-A", "PC-B", "PC-C", "PC-D", "PC-E"];
   if (!words(runWaitStrips()[0]).startsWith("Your passkey is needed PC-A, PC-B and 3 more wait to be updated 10:00 left")) fail("five machines: " + words(runWaitStrips()[0]));
   waiting.hosts = ["PC-A", "PC-B"];
+  // somebody confirmed and no machine accepted: the strip still asks, and says who tried
+  waiting.tried = "Bob";
+  if (words(runWaitStrips()[0]) !== "Your passkey is needed PC-A, PC-B wait to be updated 10:00 left Bob tried: no machine accepted not confirmed: not updated; armed machines switch themselves off Confirm it's you") fail("after a try: " + words(runWaitStrips()[0]));
+  delete waiting.tried;
   // the time left counts down on the page's steady clock
   tick += 61000;
   if (rwLeft() !== 539 || !runWaitStrips()[0].includes('<b id="rw-left">8:59</b>')) fail("a minute later: " + rwLeft());

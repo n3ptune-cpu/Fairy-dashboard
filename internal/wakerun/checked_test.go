@@ -303,8 +303,10 @@ func TestAMachineThatIsUpAfterTheTicketsTimeIsNotArmed(t *testing.T) {
 	has(t, host(done, "pc-a"), StLeftOn, "It was not armed (the ticket of the start was older than 7 min when it was up). It is ON")
 }
 
-// R7: a run is confirmed once. Whatever came of the one confirmation for a machine, no second one is asked
-// for, and a machine it did not reach is not updated.
+// R7: a run is confirmed once: by the first confirmation a machine accepts. No second one is asked for by
+// itself, whatever came of the first, and a machine it did not reach is not updated. A confirmation that no
+// machine accepted leaves the question open for a person to try again (tryagain_test.go), except for a machine
+// whose answer says that no confirmation can help it any more (too late, the run is over on it, another run).
 func TestTheRunIsConfirmedOnce(t *testing.T) {
 	for name, c := range map[string]struct {
 		set   func(mc *machine)
@@ -334,8 +336,20 @@ func TestTheRunIsConfirmedOnce(t *testing.T) {
 			if _, err := w.confirm("Ann"); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := w.confirm("Ann"); err == nil || !strings.Contains(err.Error(), "this run was confirmed already (by Ann): a run is confirmed once") {
-				t.Fatalf("a second confirmation: %v", err)
+			if name == "limits" { // no machine accepted, and nothing says that a confirmation cannot help: the question is open
+				if act, _ := w.m.Snapshot(); act.Approval != "needed" || host(act, "pc-a").Confirm != "" {
+					t.Fatalf("after a confirmation no machine accepted: %q / %q", act.Approval, host(act, "pc-a").Confirm)
+				}
+				done := w.finish() // nobody tries again
+				has(t, host(done, "pc-a"), c.state, "The confirmation by Ann was not accepted (run refused (limits)), and nobody confirmed after that: not confirmed, not updated. It switched itself off again.")
+				if got := w.callsFor("pc-a"); got != c.calls || pc.chk.gos != 1 {
+					t.Fatalf("requests: %q, confirmations sent: %d", got, pc.chk.gos)
+				}
+				return
+			}
+			w.tick()
+			if _, err := w.confirm("Ann"); err == nil {
+				t.Fatal("a second confirmation was taken")
 			}
 			if _, err := w.m.BeginConfirm(w.runID(), "Bob", []string{"pc-a"}); err == nil {
 				t.Fatal("a second BeginConfirm")

@@ -468,9 +468,10 @@ func runGoWords(to string, delayS, withinS int) string {
 	return fmt.Sprintf("%s, then shut down in %d s (good for %s)", upd, delayS, spanWords(time.Duration(withinS)*time.Second))
 }
 
-// wuConfirmSend is the replay of a confirmation after the passkey: the run is told first (once: a second
-// confirmation of the same run is refused there), then every machine of the plan that can still be confirmed
-// gets its POST /run/go, once, and the run is told what each answered.
+// wuConfirmSend is the replay of a confirmation after the passkey: the run is told first (no second one is
+// begun while this one is on its way, and none after a machine has accepted one), then every machine of the
+// plan that can still be confirmed gets its POST /run/go, once, and the run is told what each answered. The
+// run is confirmed when the first machine accepts. If none does, the run goes on asking (wakerun, tryOver).
 func (s *Server) wuConfirmSend(c *reqCtx, u *model.User, id string, g *approvalGrant) error {
 	rc := g.plan.confirm
 	if rc == nil || rc.run != id {
@@ -517,7 +518,9 @@ func (s *Server) wuConfirmSend(c *reqCtx, u *model.User, id string, g *approvalG
 	}
 	wg.Wait()
 	// the machines that wait and were not part of it: said in their rows, so nobody takes them for confirmed
-	if active, _ := s.WakeRuns.Snapshot(); active != nil && active.ID == id {
+	// (once the run is confirmed: after a confirmation no machine accepted they can still be asked)
+	active, _ := s.WakeRuns.Snapshot()
+	if active != nil && active.ID == id && active.Approval == "given" {
 		for _, h := range active.Hosts {
 			if _, part := results[h.ID]; part || !h.Checked || h.State != wakerun.StApproval || h.Confirm != "" {
 				continue
@@ -551,6 +554,14 @@ func (s *Server) wuConfirmSend(c *reqCtx, u *model.User, id string, g *approvalG
 		}
 	}
 	msg := fmt.Sprintf("confirmed on %d of %d machine%s", okN, len(ids), map[bool]string{true: "", false: "s"}[len(ids) == 1])
+	if _, err := s.WakeRuns.Waiting(id); okN == 0 && err == nil && active != nil && active.ID == id && active.Approval == "needed" {
+		// the run's one confirmation was not used up, and a machine can still be asked: said, with until when
+		msg = "No machine accepted this confirmation (by " + by + "). The run is not confirmed and still asks"
+		if active.ConfirmBy != nil {
+			msg += " until " + active.ConfirmBy.UTC().Format("15:04 UTC")
+		}
+		msg += ": an admin whose passkey the machines take can confirm."
+	}
 	c.audit(u, "wakeupdate.confirm", id, map[string]any{"run": id, "machines": words, "approver": g.sub}, msg)
 	c.json(200, map[string]any{"ok": true, "message": msg, "lines": lines, "all_ok": okN == len(ids)})
 	return nil
@@ -605,6 +616,7 @@ type runWaiting struct {
 	ConfirmBy *time.Time `json:"confirm_by,omitempty"`
 	LeftS     int        `json:"left_s,omitempty"` // seconds left to confirm: confirm_by less the panel's clock. The run counts on its steady clock, and that decides
 	Hosts     []string   `json:"hosts,omitempty"`  // the names of the machines that wait
+	Tried     string     `json:"tried,omitempty"`  // who gave a confirmation that no machine accepted (the run still asks)
 	// Armed: machines that may switch themselves off, with the time as far as the panel knows it.
 	Armed []runArmed `json:"armed,omitempty"`
 	Now   time.Time  `json:"now"`
@@ -626,7 +638,7 @@ func (s *Server) runWaitingNow() runWaiting {
 	out := runWaiting{Now: now}
 	if a, _ := s.WakeRuns.Snapshot(); a != nil && a.Approval == "needed" {
 		if waiting, err := s.WakeRuns.Waiting(a.ID); err == nil {
-			out.Run, out.By, out.ConfirmBy = a.ID, a.By, a.ConfirmBy
+			out.Run, out.By, out.ConfirmBy, out.Tried = a.ID, a.By, a.ConfirmBy, a.Tried
 			if a.ConfirmBy != nil {
 				out.LeftS = max(0, int(a.ConfirmBy.Sub(now)/time.Second))
 			}

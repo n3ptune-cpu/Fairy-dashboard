@@ -268,8 +268,8 @@ func TestARestartWhileATicketOrAConfirmationGoesOut(t *testing.T) {
 	r, _ := w.restart()
 	has(t, host(r, "pc-a"), StInterrupted, "The panel restarted while your confirmation was being handed to it. Fairy does not know whether it arrived: if it did, the machine is confirmed and stays ON "+
 		"(a run is never continued, so nothing more is sent to it); if not, it switches itself off at about ")
-	if r.Approval != "given" || r.ConfirmedBy != "Ann" {
-		t.Fatalf("the journal: approval %q by %q", r.Approval, r.ConfirmedBy)
+	if r.Approval != "needed" || r.Trying != "Ann" || r.ConfirmedBy != "" { // confirmed is a run a machine has accepted for
+		t.Fatalf("the journal: approval %q, on its way by %q, confirmed by %q", r.Approval, r.Trying, r.ConfirmedBy)
 	}
 	// and the run that was not restarted: nobody says what came of the confirmation, so its agent's word decides
 	done := w.finish()

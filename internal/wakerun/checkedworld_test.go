@@ -3,6 +3,7 @@ package wakerun
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -54,6 +55,7 @@ type modelCheck struct {
 	arms    int
 	gos     int
 	goTaken map[string]bool // runs whose confirmation it accepted
+	goOpen  bool            // a confirmation request for it got no answer
 }
 
 // modelTickets is the panel's keeper of a run's tickets and the judge's count of confirmations.
@@ -339,8 +341,8 @@ func (w *world) goNow(mc *machine, run, to string, delay, within time.Duration) 
 	c := w.bootOf(mc)
 	w.calls = append(w.calls, "go "+mc.info.ID)
 	c.gos++
-	if c.gos > 1 {
-		w.t.Errorf("RULE BROKEN: a second confirmation request for %s", mc.info.ID)
+	if c.goTaken[run] || c.goOpen { // one it accepted, or one whose answer the panel never got: no other is sent
+		w.t.Errorf("RULE BROKEN: a confirmation request for %s after one it accepted, or one that got no answer", mc.info.ID)
 	}
 	if !w.answers(mc) {
 		return ConfirmResult{Text: "agent unreachable: connection failed"}
@@ -369,6 +371,7 @@ func (w *world) goNow(mc *machine, run, to string, delay, within time.Duration) 
 		return ""
 	}
 	if l := c.goLost; l != "" {
+		c.goOpen = true
 		if l == "arrives" {
 			accept()
 		}
@@ -397,20 +400,30 @@ func (w *world) confirm(by string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	w.tk.confirms++
-	if w.tk.confirms > 1 {
-		w.t.Errorf("RULE BROKEN: the run was confirmed %d times", w.tk.confirms)
-	}
+	accepted := false
 	for _, h := range ws {
 		sent := false
 		for _, b := range begun {
 			sent = sent || b == h.ID
 		}
 		if !sent {
-			w.m.Confirmed(id, h.ID, ConfirmResult{NotAsked: true, Text: "it was too close to its switch-off"})
 			continue
 		}
-		w.m.Confirmed(id, h.ID, w.goNow(w.ms[h.ID], id, h.To, time.Duration(h.ShutdownDelayS)*time.Second, time.Duration(h.WithinS)*time.Second))
+		res := w.goNow(w.ms[h.ID], id, h.To, time.Duration(h.ShutdownDelayS)*time.Second, time.Duration(h.WithinS)*time.Second)
+		accepted = accepted || res.OK
+		w.m.Confirmed(id, h.ID, res)
+	}
+	for _, h := range ws { // as the web package does: the machines that waited and were not part of it, afterwards
+		if !slices.Contains(begun, h.ID) {
+			w.m.Confirmed(id, h.ID, ConfirmResult{NotAsked: true, Text: "it was too close to its switch-off"})
+		}
+	}
+	// the judge: a run is confirmed once: after a confirmation a machine accepted, no other is begun
+	if w.tk.confirms > 0 {
+		w.t.Errorf("RULE BROKEN: a confirmation was begun after one that a machine had accepted")
+	}
+	if accepted {
+		w.tk.confirms++
 	}
 	return begun, nil
 }

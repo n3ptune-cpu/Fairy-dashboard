@@ -1387,7 +1387,8 @@ function runWaitStrips() {
     const who = n > 3 ? `${names.slice(0, 2).join(", ")} and ${n - 2} more` : names.join(", ");
     out.push(`<div class="alert-strip bad static rw" data-key="rw-confirm" role="alert">${I.shield}<span class="rw-text"><b>Your passkey is needed</b>
       <span>${esc(who)} ${n === 1 ? "waits" : "wait"} to be updated</span>
-      <span><b id="rw-left">${fmtRuntime(rwLeft())}</b> left</span>
+      <span><b id="rw-left">${fmtRuntime(rwLeft())}</b> left</span>${d.tried ? `
+      <span>${esc(d.tried)} tried: no machine accepted</span>` : ""}
       <span class="note">not confirmed: not updated; armed machines switch themselves off</span></span>
       <button class="btn push" type="button" data-act="rw-confirm" data-id="${esc(d.run)}" ${state.me?.can_control ? "" : "disabled"}>Confirm it's you</button></div>`);
   }
