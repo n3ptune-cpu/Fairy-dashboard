@@ -83,8 +83,8 @@ panel's log at start and `fairy admin config check` name a variable that looks l
 `127.0.0.1` with its own empty state, and no release contains it.
 
 **Updating a panel that already runs?** Read [Upgrading to this release](#upgrading-to-this-release) first.
-It is short, and it names what to look at in `config.yaml` before the update: the two session settings (one
-combination of them does not start any more) and the `wake_update:` block (write it only after the update).
+It is short, and it names what to look at in `config.yaml`: the one file build 13 started with that this
+release refuses (two `systems:` entries with one id) and the new keys (write them only after the update).
 
 ### Agents
 
@@ -267,22 +267,48 @@ manual install per machine) is in Fairy-agent's
   After "N", an error or a rollback nothing was written. If the button says what is missing, run
   `fairy update` once more.
   **A run that was stopped** (the host restarted during the update, or systemd ended the unit at its time
-  limit of 18 minutes; 10 minutes while the unit is still the one an older release wrote, see
-  [Upgrading to this release](#upgrading-to-this-release), step 3): the Updates page shows a red "stopped" with "stopped before it finished (while
+  limit of 18 minutes; 10 minutes while the unit is still the one a build older than 12 wrote, see
+  [Upgrading to this release](#upgrading-to-this-release), section 3): the Updates page shows a red "stopped" with "stopped before it finished (while
   downloading, <time>)" for an hour, and the button works again. Nothing has to be deleted by hand. What the
   stopped download left next to the program (`/usr/local/bin/.download-*`) is removed by the next
   `fairy update` or button run once it is older than 15 minutes. Details: `journalctl -u fairy-panel-update`.
   **One update at a time**: a second `fairy update` (or the button) while one runs ends with "an update is
   already running on this host" and changes nothing (the lock is `/usr/local/bin/.fairy-update.lock`; it
   stays there, empty).
-  **Before you update to this version**: one combination of the two session settings does not start any
-  more, and `fairy update` does not check that for you. Look at
-  [Upgrading to this release](#upgrading-to-this-release), step 2, first.
+  **Before you update to this version**: read [Upgrading to this release](#upgrading-to-this-release).
+  **config.yaml and an update**: `fairy update` asks the address the service really listens on (the unit's
+  `--listen`, `FAIRY_LISTEN`, `listen:`, also from a config.yaml it cannot use otherwise) and stops before
+  it replaces anything when the running panel does not answer at that address. When the installed version
+  refuses config.yaml (most likely a key of the release that is about to be installed), it says "update
+  first, then add new config keys, then restart", warns and goes on. The **Update panel** button stops
+  there, before it replaces anything ("config.yaml is not usable by the installed version: ..."), because
+  a file that the new version refuses too (a typing mistake) would end with the panel down and the page
+  gone.
+  The file all of this is about is the one the service starts with: the unit's `--config`, else
+  `FAIRY_CONFIG_FILE` from the unit's `EnvironmentFile=` / `Environment=` or from the env file the service
+  reads itself, else `/etc/fairy/config.yaml`. `fairy update --config FILE` names another file. When
+  systemd does not say how `fairy.service` is started, or shows a command line with a space or a quote in
+  an argument (systemd prints the arguments without quotes, so where a path with a space ends is not
+  certain), the update stops ("cannot tell which config file fairy.service starts with ...") and asks for
+  `--config`. The unit's `Environment=` is read the way systemd prints it (an assignment with a space or a
+  bracket in it stands in quotes: `"FAIRY_CONFIG_FILE=/etc/fairy/my dir/c.yaml"`,
+  `"FAIRY_LISTEN=[::1]:8080"`); a line that is not written like that stops the update in the same way. A
+  flag that stands twice in the unit counts where it stands last, as for `fairy serve`. The **Update
+  panel** button also looks at the file the running panel was started with before it starts anything, and
+  says on the page what is wrong with it.
+  The next check is made by both, after the download and before anything is replaced: the new version,
+  once its signature and hash are verified, checks the config file itself, with the check `fairy serve`
+  starts with and `fairy admin config check` reports (the entries of `ups:` and `power_sources:`
+  included). A file it refuses stops the update with the line: "the new version (...) refuses
+  /etc/fairy/config.yaml: config: line 131 (ups, entry 1): ... Nothing was changed." Correct the file and
+  update again. (A semantic mistake, such as an address that is not one, is named without a line.)
+  All of this is what `fairy update` does from build 12 on; the program that runs today does the update, so
+  an older build's has none of it ([Upgrading to this release](#upgrading-to-this-release), section 3).
   **What an update does not touch**: `fairy update` and the button never replace
   `/etc/systemd/system/fairy.service`. They replace the program; run by hand as root, `fairy update` also
   writes the update unit and the polkit rule named above. What `deploy/fairy.service` has gained since your
   install (the memory limit, the sandbox lines) is added once by hand: the memory limit as in
-  [Upgrading to this release](#upgrading-to-this-release), step 5; the whole unit as in SECURITY-FIXES.md,
+  [Upgrading to this release](#upgrading-to-this-release), section 4; the whole unit as in SECURITY-FIXES.md,
   to-do list, item 2.
 * **Agents**: admins see, in the panel, a banner when a newer Fairy-agent or Fairy-dashboard release exists
   (dismissed per release), an arrow next to each host's agent version when it is behind (click: release notes
@@ -1171,136 +1197,85 @@ page is black, with the same strip.
 
 ## Upgrading to this release
 
-From the release before it. This one adds pages and settings (Sessions, "Update unpowered hosts", pop-ups, the
-sign-in picture, model names) and shortens how long a sign-in lasts when config.yaml does not say. Nothing has
-to be converted and no file has to be deleted. The update itself signs nobody out.
+From build 13. Nothing has to be converted, no file has to be deleted, and the update signs nobody out.
+(From an older build: section 3 first.)
 
 ### 1. The order
 
-1. **Look at the two session settings**: section 2. One combination does not start any more.
-2. **Then the panel.** On the panel host, as root: `fairy update`.
-   Before it, `find /var/lib/fairy -maxdepth 1 -name '*.json' -size 0` (your data folder) must print nothing:
-   a `users.json` or `state.json` of 0 bytes, left by an old power cut, makes the update roll back until the
-   file is restored from a backup or moved away.
-   The state files must be plain files: `find /var/lib/fairy -maxdepth 2 -type l` must not list `users.json`,
-   `state.json`, `sessions.json`, `tokens.json`, `managed-hosts.yaml` or a file in `secrets/`. This release
-   does not read a state file through a symbolic link: it refuses to start, and the update rolls back. Put the
-   file itself there (`cp --remove-destination <target> <link>`). A data folder that is itself a link is fine.
-   **Update first, then add new config keys, then restart.** The one new key of this release is the
-   `wake_update:` block. The program you run today does the update, and it refuses a config.yaml that has the
-   block ("field wake_update not found"). So write the block only after the update, then
-   `systemctl restart fairy`. If the block is already in the file: take it out (or put `#` in front of its
-   lines), update, put it back, restart. What happens otherwise is in the paragraph after this list.
+1. **The panel.** On the panel host, as root: `fairy update`. The program you run today does the update,
+   and it has the new version check config.yaml before anything is replaced. One file that build 13
+   started with is refused now: **two `systems:` entries with the same id**. Build 13 took the last of the
+   two, whole, and said nothing (a second entry written for one more setting took the machine's
+   Wake-on-LAN away). The update then ends with "the new version (...) refuses /etc/fairy/config.yaml:
+   ... systems: two entries with the id pc-a: write everything for that machine into one entry ... Nothing
+   was changed." Write the two entries as one and update again.
+2. **Then the new config keys, then `systemctl restart fairy`.** Two keys are new, both optional:
+   `wake_update.off_after_s` (after how long without any sign of life a machine counts as off for "Update
+   unpowered hosts": 300 to 3600 seconds, 900 without the key, which is what it was) and a `wake_update:`
+   block in a machine's `systems:` entry with its own `off_after_s` and `shutdown_delay_s`. Build 13
+   refuses a config.yaml that has either ("field off_after_s not found in wake_update"), so write them
+   only after the update. See [Update unpowered hosts](#update-unpowered-hosts).
+3. **Then read the config check once**, as root: `sudo fairy admin config check`. Look for lines that say
+   "the configuration does not say which node is the agent's": each names an agent on a Proxmox node, the
+   row it is shown in and what to write in its entry (`links_to:`). It is a WARN line when a `systems:`
+   entry is written for that node (the entry is not found for the agent while it is shown under its own
+   id), a `note` line otherwise. A `note` line with "inferred from id_prefix" is the panel saying which
+   node it worked out by itself: nothing to do when it is the right one.
 
-3. **Then `fairy update` once more**, as root, and answer yes to "Set up the Update panel button now".
-   The first run was done by the program you had, and it wrote its own, older
-   `fairy-panel-update.service`: the one with a time limit of 10 minutes (`TimeoutStartSec=600`). This
-   release's unit has 18 minutes, which the **Update panel** button's run is planned for (15 minutes and a
-   rollback). The second run says "its files are older than this version" and writes the new unit after the
-   yes; nothing else is changed. Until then the button works with the older limit. The same holds after any
-   later release that changes the unit: the button never writes it, a run by hand does.
+Nothing has to be done on the agents: every agent build 13 worked with works with this panel. **Add host**
+and **Re-pair** now install Fairy-agent v0.8.0 (build 18). One thing needs that agent on the machine that
+does it: reading a plug through Home Assistant ([Plugs through Home Assistant](#plugs-through-home-assistant)).
+The **Update panel** button's unit and `fairy.service` are as build 13 had them: no second run, nothing by
+hand.
 
-If config.yaml already has the `wake_update:` block when you update: on a panel that listens on the default
-`127.0.0.1:8080` the update goes through. On a panel with another `listen:` address (the nginx layout) the
-old `fairy update` asks the wrong address after the restart, puts the old program back, and the old program
-does not start with the block: the panel is down until you take the block out and run
-`systemctl restart fairy`. From this release on `fairy update` asks the address the service really listens on
-(the unit's `--listen`, `FAIRY_LISTEN`, `listen:`, also from a config.yaml it cannot use otherwise), says
-"update first, then add new config keys, then restart" when the installed version refuses the file, and
-stops before it replaces anything when the running panel does not answer at that address. The **Update
-panel** button goes one step further: when the installed version refuses config.yaml it stops before it
-replaces anything ("config.yaml is not usable by the installed version: ..."), because a file that the new
-version refuses too (a typing mistake) would end with the panel down and the page gone. `fairy update` by
-hand warns and goes on.
-The file all of this is about is the one the service starts with: the unit's `--config`, else
-`FAIRY_CONFIG_FILE` from the unit's `EnvironmentFile=` / `Environment=` or from the env file the service
-reads itself, else `/etc/fairy/config.yaml` (before, `fairy update` always read the last one). `fairy update
---config FILE` names another file. When systemd does not say how `fairy.service` is started, or shows a
-command line with a space or a quote in an argument (systemd prints the arguments without quotes, so where
-a path with a space ends is not certain), the update stops ("cannot tell which config file fairy.service
-starts with ...") and asks for `--config`. The unit's `Environment=` is read the way systemd prints it (an
-assignment with a space or a bracket in it stands in quotes: `"FAIRY_CONFIG_FILE=/etc/fairy/my dir/c.yaml"`,
-`"FAIRY_LISTEN=[::1]:8080"`); a line that is not written like that stops the update in the same way. A flag
-that stands twice in the unit counts where it stands last, as for `fairy serve`. The **Update panel** button also looks at the file the running
-panel was started with before it starts anything, and says on the page what is wrong with it.
-The next check is made by both, after the download and before anything is replaced: the new version, once its
-signature and hash are verified, checks the config file itself, with the check `fairy serve` starts with
-and `fairy admin config check` reports (the entries of `ups:` and `power_sources:` included, which the
-update did not look at before). A file it refuses stops the update with the line: "the new version (...)
-refuses /etc/fairy/config.yaml: config: line 131 (ups, entry 1): ... Nothing was changed." Correct the file
-and update again. (A semantic mistake, such as an address that is not one, is named without a line.)
+### 2. What you will notice afterwards
 
-**The limit on control requests** is now 20 a minute for one admin when config.yaml does not say (it was 6).
-A config.yaml copied from the older example file has the line `control_rate_per_min: 6` and keeps 6: change
-the number or take the line out, then `systemctl restart fairy`. `fairy admin config check` shows the number
-in use.
+Build 14:
 
-Nothing has to be done on the agents for this panel: every agent the panel before it worked with works with
-this one, and it asks nothing new of them.
+1. **Approvals** is new in the menu (admins): every machine with its check of approvals, which was a part
+   of the Updates page. The check is turned on there and accepted in the machine's dialog (**Review** in
+   its row), and that dialog now also works on the row of a Proxmox node. See
+   [The check on the machine itself](#the-check-on-the-machine-itself).
+2. **The Updates page** is a row of tiles (the agents, the panel, the latest release), one table of
+   machines, and "Update unpowered hosts" folded under it: **Show the machines** opens it.
+3. **Last seen.** A machine that is off when the panel starts is shown with the time it was last seen,
+   not with "never". The times are kept in a new file in the data folder, `last-seen.json`; nothing but
+   that line reads it.
+4. **Update unpowered hosts** calls off only the countdown it started: a shutdown you ask for yourself on
+   the machine's page with another countdown is left alone, and a machine the run lets go of during its
+   countdown (it was paired again, or switched off for these runs) has that countdown called off first.
+   One machine can have its own timings (step 2 above).
+5. **Plugs.** The watts of a plug that an agent relays are on the row its machine is shown as, under
+   either id of a Proxmox node with an agent, and a plug that cannot be read keeps its link and says why.
 
-### 2. Before `fairy update`: the two session settings
+### 3. From a build older than 13
 
-When config.yaml sets neither `session_max_age` nor `session_idle_timeout`, a sign-in now ends after **one
-day**, and after **four hours** in which nobody used the page. Until this release that was 7 days and 12
-hours. Open `/etc/fairy/config.yaml` and look for the two keys:
+`fairy update` installs this release in one go. What the releases in between asked for still has to be
+done; the whole of it is in the README of build 12, in its section of this name (also what must be true
+of the state files before the update: none of 0 bytes, none a symbolic link). In short:
 
-| In config.yaml | After the update |
-| --- | --- |
-| neither key | 1 day and 4 hours |
-| both keys | your values, as before. The example file used to set `session_max_age: 604800` and `session_idle_timeout: 43200`: a config.yaml copied from it keeps those long values until you change or remove the two lines |
-| only `session_max_age` | your value; the idle timeout is 4 hours, or the whole session when that is shorter |
-| only `session_idle_timeout`, one day or less | your value; the session is one day |
-| only `session_idle_timeout`, **more than one day** | **the new panel does not start**: `session_idle_timeout (2d) must not be longer than session_max_age (1d)` |
+* **The two session settings**, before the update (from build 11 or older). When config.yaml sets neither
+  `session_max_age` nor `session_idle_timeout`, a sign-in now ends after one day, and after four hours in
+  which nobody used the page. A config.yaml with only `session_idle_timeout`, and more than one day in it,
+  does not start any more ("session_idle_timeout (2d) must not be longer than session_max_age (1d)"): add
+  a `session_max_age` that is at least as long first. The `fairy update` of build 11 and older does not
+  check config.yaml with the new version, and a panel that does not start is rolled back.
+* **New blocks only after the update**: `wake_update:` and `approval:` are refused by build 11 ("field
+  wake_update not found"). Update, write them, `systemctl restart fairy`.
+* **Then `fairy update` once more**, as root, and answer yes to "Set up the Update panel button now" (from
+  build 11 or older). The first run was done by the program you had, and it wrote its own, older
+  `fairy-panel-update.service` with a time limit of 10 minutes (`TimeoutStartSec=600`). This release's
+  unit has 18 minutes, which the **Update panel** button's run is planned for. The second run says "its
+  files are older than this version" and writes the new unit after the yes.
+* **Behind nginx**, for the picture of the sign-in page: `client_max_body_size 9m` for
+  `/api/admin/signin-wallpaper`, as in `deploy/nginx.example.conf`. See
+  [Sign-in wallpaper](#sign-in-wallpaper).
 
-In the last case, before the update: add a `session_max_age` that is at least as long, or make the idle
-timeout shorter.
+### 4. One step by hand: the memory limit (only an install made before build 11)
 
-### 3. Behind nginx: one more location
-
-Only when nginx is in front of the panel and an admin wants to upload a picture for the sign-in page: that
-upload needs the exception the background upload already has, `client_max_body_size 9m` for
-`/api/admin/signin-wallpaper`. The block is in `deploy/nginx.example.conf`. Without it nginx refuses a
-picture over 128 KiB and the Settings page says so. See [Sign-in wallpaper](#sign-in-wallpaper).
-
-### 4. What you will notice afterwards
-
-1. **Nobody is signed out by the update.** The session cookie and its signing key are the same as before.
-   What ends a sign-in is its age: with the new defaults (section 2) one that is older than a day, or a tab
-   nobody used for four hours, signs in again.
-2. **Sessions** is new in the menu: where you are signed in, and Sign out for the other places. Signing
-   another session out asks "Confirm it's you" every time. A session that was open before the update is
-   listed with "Unknown browser" until that browser signs in again or confirms an action ("Confirm it's
-   you"). See [Sessions](#sessions).
-3. **Update unpowered hosts** is new on the Updates page: it wakes machines that are normally off,
-   updates their agent and switches them off again. Nothing happens until an admin switches a machine on
-   for it and starts a run; a script with an API token can do neither. A machine counts as off for a run
-   only after 15 minutes without any sign of life (no answer, and no refused connection either), counted
-   by the panel since its own start: for the first 15
-   minutes after this update's restart no machine is offered as off. See
-   [Update unpowered hosts](#update-unpowered-hosts).
-4. **Pop-ups.** A critical event that is made while a page of the panel is open (a host goes offline, a
-   temperature passes its limit, a UPS goes on battery) also shows in the lower right corner, for 5
-   seconds. They are on for everyone; each person changes that in **Settings**, "Pop-ups": on or off, 3 to
-   30 seconds, critical only or warnings too. See [Notifications](#notifications).
-5. **Settings, "Sign-in page"** (admins): a picture behind the sign-in page. It is public: everyone who can
-   open the panel's address sees it before signing in. See [Sign-in wallpaper](#sign-in-wallpaper).
-6. **Set model name** (admins): a host's page, the ⋯ menu. The name is shown in place of the model the
-   machine reports; **Clear** brings that back.
-7. **The Overview is one line per host.** Under the name, small, the machine's model; in front the mark of
-   its system; behind the name small signs for the elevated helper, the battery and the UPS, where the host
-   has one (point at a sign, or click it). Threads, memory and the system are on the host's page.
-8. **"Panel not reachable".** When a page hears nothing from the panel for ten seconds and a knock gets no
-   answer, a strip says so on every page and the status dots turn grey, until the panel answers again.
-9. **Scripts that read `/api/notifications`**: the filter `severity=critical` now returns what the page
-   calls critical (every event that starts an alert, such as a host that goes offline, and every event
-   whose severity is critical), and `severity=warning` the other warnings. Before, both went by the stored
-   severity alone, where "host offline" is a warning. The `severity` field of each event is unchanged.
-
-### 5. One step by hand: the memory limit (only an install older than the release before this one)
-
-`fairy update` replaces the program, never `fairy.service`. An install made before the release before this
-one has no memory limit, unless it was added then. Check: `systemctl show fairy -p MemoryMax` (536870912
-means 512M: nothing to do). Otherwise add it once:
+`fairy update` replaces the program, never `fairy.service`. An install made before build 11 has no memory
+limit, unless it was added since. Check: `systemctl show fairy -p MemoryMax` (536870912 means 512M:
+nothing to do). Otherwise add it once:
 
 1. `sudo systemctl edit fairy`
 2. Write these two lines, then save:
@@ -1312,27 +1287,27 @@ means 512M: nothing to do). Otherwise add it once:
 3. `sudo systemctl restart fairy`
 4. Check again with the command above.
 
-What else the release before this one asked for (its order with the agents, three settings and the session
-secret) is in that release's own README.
-
 Going back to the older panel: the update kept the program it replaced as `/usr/local/bin/fairy.old`, until
 the next update replaces that too. As root: `systemctl stop fairy`, `cp /usr/local/bin/fairy
 /usr/local/bin/fairy.new` (to keep this one), `mv /usr/local/bin/fairy.old /usr/local/bin/fairy`,
 `systemctl start fairy`. (`fairy update --force` is not the way: it installs the latest release again, not
-the older one.) The older panel reads the files this one writes (`users.json`, `notifications.json`,
-`managed-hosts.yaml`, `state.json`, `settings.json`, and `sessions.json`, where it ignores what this one adds).
-It does not start when config.yaml has a `wake_update:` block: take the block out first. The same goes for
-an `approval:` block ("field approval not found"). Build 13 and older know the `wake_update:` block but not
-its `off_after_s`, and no `wake_update:` block in a `systems:` entry: take those out before going back to one. (They are the two keys that are new in this release; do
-it before you go back.) The older panel does not know `machines.json` and leaves it alone; a machine with
-the check on still refuses what comes without an approval, so the older panel cannot change its fans, switch
-it off or update it until the check is cleared on the machine (`fairy-agent helper-trust clear`). A panel older than
-the last release also does not start with `enroll: {allow_non_tailscale: ...}`, `step_up_per_action`, or a
-text such as `4h` in the two session settings: take those out as well (write the session settings as whole
-seconds). The older panel does not know the pop-up settings: when someone saves a setting there, that
-person's pop-up settings (on or off, seconds, events) are the defaults again after the next update.
-Everything else is kept in both directions: custom model names, the machines switched on for "Update
-unpowered hosts", users, tokens, sessions and the sign-in picture.
+the older one.) Build 13 reads the files this one writes (`users.json`, `notifications.json`,
+`managed-hosts.yaml`, `machines.json`, `state.json`, `settings.json`, `sessions.json`, `wake-update.json`);
+`last-seen.json` it does not know and leaves alone. It does not start when config.yaml has
+`wake_update.off_after_s` or a `wake_update:` block in a `systems:` entry: take those out first. (They are
+the two keys that are new in build 14.) Everything else is kept in both directions: custom model names, the
+machines switched on for "Update unpowered hosts", the machines' records for the check of approvals, users,
+tokens, sessions and the sign-in picture.
+Going back further than build 13 (the README of build 13 has the whole of it): a panel older than build 12
+does not start when config.yaml has a `wake_update:` block: take the block out first. The same goes for an
+`approval:` block ("field approval not found"). It does not know `machines.json` and leaves it alone; a
+machine with the check on still refuses what comes without an approval, so that panel cannot change its
+fans, switch it off or update it until the check is cleared on the machine
+(`fairy-agent helper-trust clear`). A panel older than build 11 also does not start with
+`enroll: {allow_non_tailscale: ...}`, `step_up_per_action`, or a text such as `4h` in the two session
+settings: take those out as well (write the session settings as whole seconds). And a panel older than
+build 12 does not know the pop-up settings: when someone saves a setting there, that person's pop-up
+settings (on or off, seconds, events) are the defaults again after the next update.
 
 ## Security model
 

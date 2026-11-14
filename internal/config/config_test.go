@@ -321,39 +321,91 @@ func TestWakeUpdateTimings(t *testing.T) {
 // pointer to the upgrade section still named "three settings ... and one line in fairy.env" (the release
 // before); "Going back" named no command; and the upgrade steps left the update unit of the older release in
 // place (10 minutes) while the README said 18.
+//
+// Build 15: the section "Upgrading to this release" still described the way from build 11 to build 12 in the
+// README of build 14. It is written for the way from build 13: the one config.yaml build 13 started with that
+// is refused now, the keys to write only after the update, and the config check to read once. What it says
+// about the keys is held against what Parse does, so that the two change together.
 func TestReadmeUpgradeTextsMatchThisRelease(t *testing.T) {
 	b, err := os.ReadFile("../../README.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	readme := strings.Join(strings.Fields(string(b)), " ")
-	if strings.Contains(readme, "names three settings in `config.yaml` and one line in `fairy.env`") {
-		t.Error("the pointer to \"Upgrading to this release\" still describes the release before")
-	}
-	for _, want := range []string{
+	for _, old := range []string{
+		"names three settings in `config.yaml` and one line in `fairy.env`",
 		"names what to look at in `config.yaml` before the update: the two session settings",
-		// going back: where the older program is, and the commands
+		"From the release before it. This one adds pages and settings (Sessions,",
+	} {
+		if strings.Contains(readme, old) {
+			t.Errorf("README.md still describes an older release: %q", old)
+		}
+	}
+	_, section, ok := strings.Cut(string(b), "\n## Upgrading to this release\n")
+	if !ok {
+		t.Fatal("README.md has no section \"Upgrading to this release\"")
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	section = strings.Join(strings.Fields(section), " ")
+	for _, want := range []string{
+		"From build 13.",
+		// the one file that started and is refused now, and how the update says so
+		"**two `systems:` entries with the same id**", "systems: two entries with the id pc-a: write everything for that machine into one entry",
+		// the new keys, their range and default, and the order
+		"`wake_update.off_after_s`", "300 to 3600 seconds, 900 without the key",
+		"a `wake_update:` block in a machine's `systems:` entry with its own `off_after_s` and `shutdown_delay_s`",
+		"(\"field off_after_s not found in wake_update\"), so write them only after the update",
+		// the check to read after it
+		"`sudo fairy admin config check`", "\"the configuration does not say which node is the agent's\"", "\"inferred from id_prefix\"",
+		// from an older build: the update unit after the upgrade
+		"**Then `fairy update` once more**, as root, and answer yes to \"Set up the Update panel button now\"",
+		"`TimeoutStartSec=600`", "This release's unit has 18 minutes",
+		"One step by hand: the memory limit", // SECURITY-FIXES.md names this heading
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("the section lacks %q", want)
+		}
+	}
+	if !strings.Contains(readme, "the one file build 13 started with that this release refuses (two `systems:` entries with one id) and the new keys (write them only after the update)") {
+		t.Error("the pointer to \"Upgrading to this release\" does not name what the section is about")
+	}
+	// going back: where the older program is, and the commands
+	for _, want := range []string{
 		"Going back to the older panel: the update kept the program it replaced as `/usr/local/bin/fairy.old`",
 		"`systemctl stop fairy`", "`mv /usr/local/bin/fairy.old /usr/local/bin/fairy`", "`systemctl start fairy`",
 		"`fairy update --force` is not the way",
-		// the update unit after the upgrade
-		"**Then `fairy update` once more**, as root, and answer yes to \"Set up the Update panel button now\"",
-		"`TimeoutStartSec=600`", "This release's unit has 18 minutes",
 	} {
-		if !strings.Contains(readme, want) {
-			t.Errorf("README.md lacks %q", want)
+		if !strings.Contains(section, want) {
+			t.Errorf("the section lacks %q", want)
 		}
 	}
-	// what the README says about this release's unit is what it holds (the release before: 600, read in its tree)
+	// what the section says about the keys is what this release does
+	one := "systems:\n  - {id: pc-a, dwservice_url: \"https://dw.example/a\"}\n"
+	if _, err := Parse([]byte(base + one + "  - {id: pc-a, wake_update: {off_after_s: 360}}\n")); err == nil ||
+		!strings.Contains(err.Error(), "systems: two entries with the id pc-a: write everything for that machine into one entry") {
+		t.Errorf("two systems: entries with one id: %v", err)
+	}
+	if c, err := Parse([]byte(base)); err != nil || c.WakeUpdate.OffAfterS != 900 {
+		t.Errorf("off_after_s without the key: %v", err)
+	}
+	for v, fine := range map[int]bool{299: false, 300: true, 3600: true, 3601: false} {
+		_, panel := Parse([]byte(fmt.Sprintf("%swake_update: {off_after_s: %d}\n", base, v)))
+		_, own := Parse([]byte(fmt.Sprintf("%ssystems:\n  - {id: pc-a, wake_update: {off_after_s: %d, shutdown_delay_s: 30}}\n", base, v)))
+		if (panel == nil) != fine || (own == nil) != fine {
+			t.Errorf("off_after_s %d: the panel's: %v; a machine's own: %v", v, panel, own)
+		}
+	}
+	// what the README says about this release's unit is what it holds (builds before 12: 600, read in their tree)
 	unit, err := os.ReadFile("../../deploy/fairy-panel-update.service")
 	if err != nil || !strings.Contains(string(unit), "\nTimeoutStartSec=1080\n") {
 		t.Errorf("deploy/fairy-panel-update.service: this release's limit is 18 minutes (1080 s): %v", err)
 	}
 }
 
-// r1-p4-02 and r1-p4-03 (audit 5): the last release refuses a config.yaml with a wake_update: block ("field
+// r1-p4-02 and r1-p4-03 (audit 5): a release before refuses a config.yaml with a wake_update: block ("field
 // wake_update not found"), and it stores a user's settings without the pop-up settings. The README's paragraph
-// about going back named neither. It names every block this release adds to config.yaml, and the pop-ups.
+// about going back named neither. It names every block and key a release before this one does not know, with
+// the release, and the pop-ups.
 func TestReadmeGoingBackNamesWhatTheOlderPanelRefuses(t *testing.T) {
 	b, err := os.ReadFile("../../README.md")
 	if err != nil {
@@ -366,7 +418,11 @@ func TestReadmeGoingBackNamesWhatTheOlderPanelRefuses(t *testing.T) {
 	para, _, _ = strings.Cut(para, "\n\n")
 	para = strings.Join(strings.Fields(para), " ")
 	for _, want := range []string{
-		"It does not start when config.yaml has a `wake_update:` block: take the block out first.",
+		// build 13, the release before: the two keys that are new, and the one file it does not know
+		"It does not start when config.yaml has `wake_update.off_after_s` or a `wake_update:` block in a `systems:` entry: take those out first.",
+		"`last-seen.json` it does not know and leaves alone",
+		// further back
+		"a panel older than build 12 does not start when config.yaml has a `wake_update:` block: take the block out first.",
 		"`enroll: {allow_non_tailscale: ...}`", "`step_up_per_action`", "`4h`",
 		"pop-up settings (on or off, seconds, events) are the defaults again",
 		"custom model names", "the machines switched on for \"Update unpowered hosts\"",
@@ -377,8 +433,11 @@ func TestReadmeGoingBackNamesWhatTheOlderPanelRefuses(t *testing.T) {
 			t.Errorf("the paragraph lacks %q:\n%s", want, para)
 		}
 	}
-	// the block is one this panel reads and an older one cannot: if it is ever renamed, the paragraph must follow
-	if _, err := Parse([]byte(base + "wake_update: {settle_s: 30}\n")); err != nil {
+	// the blocks and keys are ones this panel reads and an older one cannot: if one is ever renamed, the paragraph must follow
+	if _, err := Parse([]byte(base + "wake_update: {settle_s: 30, off_after_s: 360}\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse([]byte(base + "systems:\n  - {id: pc-a, wake_update: {off_after_s: 360, shutdown_delay_s: 30}}\n")); err != nil {
 		t.Fatal(err)
 	}
 	if c, err := Parse([]byte(base + "approval: {client_id: pc-actions}\n")); err != nil || !c.ApprovalOn() {

@@ -515,6 +515,24 @@ func TestCommandsPassTheVerifiedSumsHash(t *testing.T) {
 	}
 }
 
+// The README's "Upgrading to this release" says which agent "Add host" and Re-pair install: it is the pinned
+// one. A bump of the pin that is not made there fails here.
+func TestTheUpgradeSectionNamesTheAgentThatAddHostInstalls(t *testing.T) {
+	raw, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(string(raw), "\n## Upgrading to this release\n")
+	if !ok {
+		t.Fatal("README.md has no section \"Upgrading to this release\"")
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	want := "**Add host** and **Re-pair** now install Fairy-agent " + AgentModule + " (build " + strings.TrimPrefix(AgentReleaseTag, "build-") + ")."
+	if !strings.Contains(strings.Join(strings.Fields(section), " "), want) {
+		t.Errorf("the section lacks %q", want)
+	}
+}
+
 // The two lines in the guide are the lines the panel prints, value for value (README.md "Add host"; the
 // agent's guide shows the same two). A change to Command that is not made in the guide fails here.
 func TestGuideShowsTheLinesThePanelPrints(t *testing.T) {
