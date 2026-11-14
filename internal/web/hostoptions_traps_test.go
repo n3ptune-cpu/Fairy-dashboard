@@ -1728,6 +1728,52 @@ func TestEditHostARequestHasAtMost128EntriesInAList(t *testing.T) {
 	}
 }
 
+// The fourth list of a request, "unrelayed" (the devices whose stored changes are to be removed although their
+// machine does not relay them right now), has the same limit as the other three: the 129th entry is refused
+// for that, before anything is looked up, and nothing is asked for a confirmation. 128 entries are looked at
+// one by one: these name devices nothing is stored about, so there is nothing to change. The limit of this
+// list had no test: without it in the check, 129 entries (and 100 000) went on to be looked at one by one
+// (re-review of Edit host round 2, H2).
+func TestEditHostARequestNamesAtMost128DevicesThatAreNotRelayed(t *testing.T) {
+	r := ehSetup(t)
+	list := func(n int, kind string) []any {
+		var out []any
+		for i := 0; i < n; i++ {
+			out = append(out, map[string]any{"id": fmt.Sprintf("nas-agent/x%d", i), "kind": kind})
+		}
+		return out
+	}
+	for _, kind := range []string{"ups", "plug"} {
+		over := r.put(ehNodeB, map[string]any{"unrelayed": list(maxHostOptionEntries+1, kind)})
+		if over.code != 422 || over.body["detail"] != "too many entries in one request" {
+			t.Errorf("%d entries in unrelayed (%s): %d %s", maxHostOptionEntries+1, kind, over.code, over.raw)
+		}
+		at := r.put(ehNodeB, map[string]any{"unrelayed": list(maxHostOptionEntries, kind)})
+		if at.code != 200 || at.body["message"] != "nothing to change" {
+			t.Errorf("%d entries in unrelayed (%s): %d %s", maxHostOptionEntries, kind, at.code, at.raw)
+		}
+	}
+	// the limit is each list's own: 128 in this one next to 128 in another are a request that is looked at
+	both := r.put(ehNodeB, map[string]any{"unrelayed": list(maxHostOptionEntries, "ups"),
+		"reset": func() (out []any) {
+			for i := 0; i < maxHostOptionEntries; i++ {
+				out = append(out, map[string]any{"id": fmt.Sprintf("nas-agent/p%d", i), "field": "plugs"})
+			}
+			return out
+		}()})
+	if d := fmt.Sprint(both.body["detail"]); both.code != 422 || d == "too many entries in one request" || !strings.HasPrefix(d, "no agent relays the ") {
+		t.Errorf("128 entries in unrelayed and 128 in reset: %d %s", both.code, both.raw)
+	}
+	// and an old sign-in is told about the 129th without being asked to confirm anything
+	old := []string{"Cookie", r.staleCookie(controller(), time.Hour), "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	if p := r.do("PUT", "/api/admin/hosts/"+ehNodeB+"/options", map[string]any{"unrelayed": list(maxHostOptionEntries+1, "plug")}, old...); p.code != 422 || p.body["detail"] != "too many entries in one request" || stepUpRequired(p) {
+		t.Errorf("%d entries with an old sign-in: %d %s", maxHostOptionEntries+1, p.code, p.raw)
+	}
+	if maxHostOptionEntries != 128 || r.storedOptions() != nil {
+		t.Errorf("the limit is %d; stored: %v", maxHostOptionEntries, r.storedOptions())
+	}
+}
+
 // What the API stores is checked by the same check that reads it back (config.LinkProblems): the names and ids
 // of the decisions, and what counts with them laid over config.yaml. A change whose result an agent could not
 // have (a 33rd row for one UPS, a 17th device) is refused, with the reason, and nothing is stored. What that
