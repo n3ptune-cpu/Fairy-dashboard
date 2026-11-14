@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 )
 
@@ -202,6 +203,62 @@ func TestEditHostNameKeptForAHostThatIsNotShownRightNow(t *testing.T) {
 	r.ok("pc-a", map[string]any{"name": "Gaming PC"})
 	if p := r.ok("pc-a", map[string]any{"name": "Gaming PC", "plugs": []any{map[string]any{"id": "pc-a/desk", "in_total": false}}}); len(strs(p.body["changed"])) != 1 {
 		t.Errorf("its own name sent again with a link: %s", p.raw)
+	}
+}
+
+// The configuration's names of the OTHER hosts that are taken (second look of the review: neither had a test):
+// the name: of the agent of a node, which is not what the node's row shows, and the name: of an agent that is
+// a part of no row yet.
+func TestEditHostNameOfAnAgentOfANodeAndOfAnAgentWithoutARow(t *testing.T) {
+	cfg := ehConfig(t, ehNASLinks)
+	for i := range cfg.Agents {
+		if cfg.Agents[i].ID == "lab-a-agent" {
+			cfg.Agents[i].Name = "Hypervisor A" // the node's row is called PVE-A, as the node calls itself
+		}
+	}
+	r := ehSetupWith(t, cfg, true)
+	if got := r.row(ehNodeA)["name"]; got != "PVE-A" {
+		t.Fatalf("the rig: the node's row is called %v", got)
+	}
+	if p := r.put(ehNAS, map[string]any{"name": "hypervisor a"}); p.code != 422 || !strings.Contains(string(p.raw), "Hypervisor A is the name config.yaml has for another host (shown as PVE-A now)") {
+		t.Errorf("the NAS named like the agent of a node: %d %s", p.code, p.raw)
+	}
+	// an agent the panel has and that is on no row yet: added this moment, not polled once
+	if err := r.s.Poller.AddAgent(config.Agent{ID: "new-box", Name: "New Box", URL: "http://new-box", Token: strings.Repeat("n", 32)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if g := r.do("GET", "/api/systems/new-box", nil, r.hdr[:2]...); g.code == 200 {
+		t.Fatal("the rig: an agent that was just added has a row at once")
+	}
+	if p := r.put(ehNAS, map[string]any{"name": "NEW BOX"}); p.code != 422 || !strings.Contains(string(p.raw), "another host is called New Box already") {
+		t.Errorf("the NAS named like an agent without a row: %d %s", p.code, p.raw)
+	}
+	if r.storedHost(ehNAS) != nil {
+		t.Errorf("stored: %v", r.storedHost(ehNAS))
+	}
+}
+
+// Reset is refused only for a name that was GIVEN to another host in the panel. Two hosts that config.yaml
+// itself calls the same are config.yaml's: a Reset to such a name is made (and a typed confirmation then
+// names the row that was clicked).
+func TestEditHostResetToANameConfigYamlGivesTwoHosts(t *testing.T) {
+	cfg := hedConfig(t)
+	for i := range cfg.Agents {
+		if cfg.Agents[i].ID == "box-d" {
+			cfg.Agents[i].Name = "PC-A" // written by hand: two agents, one name
+		}
+	}
+	r := hedStart(t, cfg, hedBackend())
+	if a, d := r.row("pc-a")["name"], r.row("box-d")["name"]; a != "PC-A" || d != "PC-A" {
+		t.Fatalf("the rig: %v %v", a, d)
+	}
+	r.ok("pc-a", map[string]any{"name": "Den"})
+	if p := r.ok("pc-a", map[string]any{"reset": []any{map[string]any{"field": "name"}}}); r.row("pc-a")["name"] != "PC-A" || r.storedHost("pc-a") != nil {
+		t.Errorf("Reset to the name config.yaml gives two hosts: %s", p.raw)
+	}
+	r.ok("pc-a", map[string]any{"name": "Den"})
+	if p := r.ok("pc-a", map[string]any{"name": "PC-A"}); r.row("pc-a")["name"] != "PC-A" {
+		t.Errorf("config.yaml's name typed back: %s", p.raw)
 	}
 }
 

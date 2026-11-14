@@ -2,6 +2,8 @@ package web
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -126,5 +128,32 @@ func TestEditHostSiteChangeIsAuditedLikeTheUsersPages(t *testing.T) {
 	r.ok("pc-b", map[string]any{"name": "Attic"})
 	if got := len(r.auditEntries("", "site.assign")); got != n {
 		t.Errorf("%d entries site.assign for saves that changed no site", got-n)
+	}
+}
+
+// When the rest of a save fails, the site goes back to what was STORED before, which is not always "none": a
+// host that was given a site on the Users page keeps that site (second look of the review: the test of the
+// failure used a host without one, and putting back "" passed it).
+func TestEditHostSiteOfASaveThatFailsGoesBackToTheStoredOne(t *testing.T) {
+	r := hedSetup(t)
+	if _, err := r.s.Access.Assign("pc-b", "site-a"); err != nil {
+		t.Fatal(err)
+	}
+	// state.json cannot be written: its lock is a folder
+	if err := os.MkdirAll(filepath.Join(r.s.Cfg.DataDir, "state.json.lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := r.put("pc-b", map[string]any{"site": "site-b", "name": "Den"})
+	if p.code == 200 {
+		t.Fatalf("saved without state.json: %s", p.raw)
+	}
+	if got := r.s.Access.Load().Assign; len(got) != 1 || got["pc-b"] != "site-a" {
+		t.Errorf("the site after a save that failed: %v (it was site-a)", got)
+	}
+	if e, params := r.lastChange("pc-b"); e["outcome"] != "failed: not saved" || params["site_not_put_back"] != nil {
+		t.Errorf("audit: %v", e)
+	}
+	if l := r.auditEntries("", "site.assign"); len(l) != 0 {
+		t.Errorf("a site change that was not made is in the audit log: %v", l)
 	}
 }
