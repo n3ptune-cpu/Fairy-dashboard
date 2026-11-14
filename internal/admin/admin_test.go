@@ -276,7 +276,7 @@ func TestConfigCheckExplainsApproval(t *testing.T) {
 		"https://p.example/auth/approval/callback  (Requires Re-Authentication: ON, PKCE: ON)",
 		"ok    FAIRY_APPROVAL_CLIENT_SECRET: not set (public client: PKCE only)",
 		"ok    approval.users: 1 more than the panel's admins",
-		"ok    approval.run_approval_wait_s: 900",
+		"ok    approval.run_approval_wait_s: 600 (how long a run of \"Update unpowered hosts\" asks for its second passkey",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("config check lacks %q:\n%s", want, out)

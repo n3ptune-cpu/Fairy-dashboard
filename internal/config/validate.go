@@ -117,7 +117,7 @@ func (c *Panel) applyDefaults() {
 	defi(&c.WakeUpdate.ShutdownDelayS, 120)
 	defi(&c.WakeUpdate.AgentRequestsPerMin, 8)
 	defi(&c.WakeUpdate.OffAfterS, 900)
-	defi(&c.Approval.RunApprovalWaitS, 900)
+	defi(&c.Approval.RunApprovalWaitS, 600)
 	defi(&c.AuditMaxMB, 100)
 	defi(&c.AuditKeep, 5)
 	if c.DataDir == "" {

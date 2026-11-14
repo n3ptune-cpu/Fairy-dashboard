@@ -367,8 +367,10 @@ type Approval struct {
 	// agents: or systems: entry): owners: {Straw: "<Pocket ID user id>"}. That user may then approve on the
 	// machines with that owner label, in addition to the admins. The panel does not guess it from names.
 	Owners map[string]string `yaml:"owners"`
-	// RunApprovalWaitS is how long a run of "Update unpowered hosts" waits for the approval it asks for
-	// once the woken machines are online (default 900, 60-3600).
+	// RunApprovalWaitS is how long a run of "Update unpowered hosts" asks for its second passkey once the
+	// woken machines that check approvals themselves are online (default 600, 60-3600). A machine that was
+	// armed with the run's ticket waits this long, the time the other machines may need to come up
+	// (wake_update.online_timeout_s) and a minute before it switches itself off again, an hour at most.
 	RunApprovalWaitS int `yaml:"run_approval_wait_s"`
 }
 

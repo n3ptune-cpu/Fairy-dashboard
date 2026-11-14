@@ -548,7 +548,7 @@ func TestEnvProblemsNameACommentBehindAValue(t *testing.T) {
 // issuer defaults to the sign-in's, and the values the machines would refuse are refused here.
 func TestApprovalBlock(t *testing.T) {
 	c, err := Parse([]byte(base))
-	if err != nil || c.ApprovalOn() || c.Approval.RunApprovalWaitS != 900 {
+	if err != nil || c.ApprovalOn() || c.Approval.RunApprovalWaitS != 600 {
 		t.Fatalf("no approval block: on=%v wait=%d err=%v", c.ApprovalOn(), c.Approval.RunApprovalWaitS, err)
 	}
 	c, err = Parse([]byte(base + `approval: {client_id: "3f6c0c0e-0000-4000-8000-000000000000", users: [user-b], run_approval_wait_s: 120}`))
