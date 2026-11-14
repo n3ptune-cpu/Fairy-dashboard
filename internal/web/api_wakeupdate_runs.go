@@ -560,7 +560,12 @@ func (s *Server) wuConfirmSend(c *reqCtx, u *model.User, id string, g *approvalG
 		case o.res.Unanswered:
 			lines, words[hid] = append(lines, o.name+": no answer ("+o.res.Text+"): it may have arrived, and it is not sent again"), "no answer"
 		default:
-			lines, words[hid] = append(lines, o.name+": NOT accepted ("+o.res.Text+")"), "refused: "+orText(o.res.Reason, "refused")
+			line := o.name + ": NOT accepted (" + o.res.Text + ")"
+			if o.res.Sent && o.res.Reason == api.RunReasonConfirmed {
+				// the answer to the second copy of a confirmation that arrived twice: the machine's word decides
+				line += ": if a confirmation did arrive, it is confirmed; its row says what its agent shows"
+			}
+			lines, words[hid] = append(lines, line), "refused: "+orText(o.res.Reason, "refused")
 		}
 	}
 	msg := fmt.Sprintf("confirmed on %d of %d machine%s", okN, len(ids), map[bool]string{true: "", false: "s"}[len(ids) == 1])

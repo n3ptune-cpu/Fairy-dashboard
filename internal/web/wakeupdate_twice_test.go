@@ -54,7 +54,7 @@ func TestAConfirmationThatArrivesTwiceConfirmsTheMachineWhateverThePanelWasAnswe
 	if copies != 1 || jsonx.S(second, "reason") != api.RunReasonConfirmed {
 		t.Fatalf("the machine's answer to the second copy: %v (%d confirmations left the panel)", second, copies)
 	}
-	if lines, _ := res["items"].([]any); len(lines) != 1 || lines[0] != "PC-A: NOT accepted (it says this run is confirmed already)" {
+	if lines, _ := res["items"].([]any); len(lines) != 1 || lines[0] != "PC-A: NOT accepted (it says this run is confirmed already): if a confirmation did arrive, it is confirmed; its row says what its agent shows" {
 		t.Fatalf("what the admin is told at once: %v", res)
 	}
 	st := r.m["pc-a"].Gate.StatusNow().Run
