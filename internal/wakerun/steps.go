@@ -205,11 +205,23 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 		o := m.Ops.Observe(h.ID)
 		after := h.answeredAfter(o, mono, h.delay(r))
 		if !h.ownCountdown(o, after, h.delay(r)) {
-			if c == nil || !c.idWait {
-				c = &callingOff{why: why, idWait: true}
+			if c == nil {
+				c = &callingOff{why: why}
 				h.calloff = c
-				m.note(h, m.now(), fmt.Sprintf("its entry in the panel was replaced while its shutdown was counting down (due at %s): no cancel is sent until the agent that has this id now "+
-					"shows that countdown, since it may be another machine", when(*h.ShutdownAt, now)))
+			}
+			if !c.idWait {
+				// A cancel that was being tried again when the entry was replaced (or when it was replaced a second
+				// time, after the agent of the first new entry had been recognised) keeps what it sent: tries, lost
+				// and text stay, for the sentence at the end. The wait began with a fresh state, and the report
+				// then said "sent no cancel" for a machine a cancel had gone to, and had arrived at (third review
+				// of build 14, S2).
+				c.idWait, c.idAnswered, c.idShown = true, false, nil
+				no := "no cancel is sent"
+				if c.tries > 0 {
+					no = "no further cancel is sent (" + requests(c.tries) + " went out before)"
+				}
+				m.note(h, m.now(), fmt.Sprintf("its entry in the panel was replaced while its shutdown was counting down (due at %s): %s until the agent that has this id now "+
+					"shows that countdown, since it may be another machine", when(*h.ShutdownAt, now), no))
 			}
 			c.idAnswered = c.idAnswered || after
 			if c.idShown = nil; after && o.Pending != nil {
@@ -225,7 +237,11 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 		}
 		h.sameSeen, h.sameEntry = true, info.Entry // the machine the run woke
 		if c != nil && c.idWait {
-			c, h.calloff = nil, nil
+			if c.idWait, c.idAnswered, c.idShown = false, false, nil; c.tries == 0 { // nothing was sent before the wait
+				c, h.calloff = nil, nil
+			} else {
+				c.lastMono = mono - cancelRetry // the next try is this one: the countdown has run on meanwhile
+			}
 		}
 	}
 	switch until, _ := h.cancelUntil(); {
@@ -387,9 +403,10 @@ type callingOff struct {
 	// how many tries were left out for it (callOff: the agent's cancel would have called that one off).
 	other   *Pending
 	skipped int
-	// idWait: no cancel was sent yet: the machine's entry in the panel was replaced, and the run waits for the
-	// agent that has the id now to show the run's own countdown (callOff). idAnswered: that agent answered
-	// meanwhile; idShown: what it showed as pending in its latest answer (nil: nothing).
+	// idWait: no cancel is sent for now: the machine's entry in the panel was replaced, and the run waits for
+	// the agent that has the id now to show the run's own countdown (callOff). idAnswered: that agent answered
+	// meanwhile; idShown: what it showed as pending in its latest answer (nil: nothing). tries, text and lost
+	// are then what was sent before the entry was replaced.
 	idWait     bool
 	idAnswered bool
 	idShown    *Pending
@@ -446,27 +463,53 @@ func otherLength(p *Pending, delay time.Duration, now time.Time) string {
 // counting down (Re-pair), when the agent that has the id now never showed the run's countdown: the run could
 // not make sure that it is the machine it woke, sent no cancel to it, and looks at nothing under that id for
 // its report. The machine's power is "not known", which the record and the notification list as a machine to
-// look at; the sentence says what may happen to the machine the run woke, and when.
+// look at; the sentence says what may happen to the machine the run woke, and when. Cancels that went out
+// before the entry was replaced are in the sentence: how many, and what came of them (callOff keeps them).
 func (m *Manager) endNotKnown(r *Run, h *Host, now time.Time, why string) {
 	due := when(*h.ShutdownAt, now)
+	c := h.calloff
 	if h.lostShutdown() {
+		sent := "sent no cancel"
+		if c != nil && c.tries+c.none > 0 { // the cancels of a stopped run, repeated in case the request still arrives (callOff)
+			sent = fmt.Sprintf("sent no further cancel (%s had gone out before the entry was replaced, in case the shutdown request still arrives)", requests(c.tries+c.none))
+		}
 		m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s after its shutdown request got no answer (it would be due at %s). The run never saw a countdown of it, so it cannot tell "+
-			"whether the machine that has this id in the panel now is the one it woke, and sent no cancel: it does not know whether the machine it woke switches off. "+
-			"If the request arrived, that machine switches off at about %s. Fairy no longer watches it.", why, due, due)+updateTail(h))
+			"whether the machine that has this id in the panel now is the one it woke, and %s: it does not know whether the machine it woke switches off. "+
+			"If the request arrived, that machine switches off at about %s. Fairy no longer watches it.", why, due, sent, due)+updateTail(h))
 		return
 	}
 	shown := "its agent did not answer under the new entry in that time"
-	if c := h.calloff; c != nil && c.idShown != nil {
+	if c != nil && c.idShown != nil {
 		shown = fmt.Sprintf("the agent that has this id now shows another action as pending (%s at %s, by its machine's own clock) and not the run's countdown", c.idShown.Action, when(c.idShown.At, now))
 	} else if c != nil && c.idAnswered {
 		shown = "the agent that has this id now shows no countdown"
 	}
-	may := "it may switch off at " + due
+	may, ifNot := "it may switch off at "+due, "it switches off at "+due
 	if !now.Before(*h.ShutdownAt) {
-		may = "it may have switched off at " + due
+		may, ifNot = "it may have switched off at "+due, "it switched off at "+due
 	}
-	m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s while its shutdown was counting down (due at %s): %s, so the run could not make sure that it is the machine it woke, and sent no cancel. "+
-		"The run does not know whether the machine it woke switches off: %s. Fairy no longer watches it.", why, due, shown, may)+updateTail(h))
+	lead := fmt.Sprintf("%s while its shutdown was counting down (due at %s): %s, so the run could not make sure that it is the machine it woke, and ", why, due, shown)
+	switch {
+	case c != nil && c.tries > 0 && c.lost != "":
+		// Cancels went out before the entry was replaced, and one got no answer: it may have arrived, and then
+		// the machine the run woke is ON. "Sent no cancel" was untrue, and "it may have switched off" was half
+		// of what the run knows (third review of build 14, S2).
+		m.end(r, h, StLeftOn, OnUnknown, now, lead+fmt.Sprintf("sent no further cancel. Before the entry was replaced the run had asked its agent to call that countdown off (%s), "+
+			"and a request got no answer (%s): it may have arrived, and then the machine it woke stays ON; if it did not, %s. Fairy no longer watches it.", requests(c.tries), c.lost, ifNot)+updateTail(h))
+	case c != nil && c.tries > 0:
+		m.end(r, h, StLeftOn, OnUnknown, now, lead+fmt.Sprintf("sent no further cancel. Before the entry was replaced the run had asked its agent to call that countdown off (%s), "+
+			"and none got through (%s). The run does not know whether the machine it woke switches off: %s. Fairy no longer watches it.", requests(c.tries), c.text, may)+updateTail(h))
+	default:
+		m.end(r, h, StLeftOn, OnUnknown, now, lead+fmt.Sprintf("sent no cancel. The run does not know whether the machine it woke switches off: %s. Fairy no longer watches it.", may)+updateTail(h))
+	}
+}
+
+// requests is "1 request" or "n requests".
+func requests(n int) string {
+	if n == 1 {
+		return "1 request"
+	}
+	return fmt.Sprintf("%d requests", n)
 }
 
 // notCalledOff ends a machine whose countdown the run could not call off before the run's own due time
