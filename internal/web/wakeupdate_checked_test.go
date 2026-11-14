@@ -18,6 +18,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notify"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/updates"
@@ -956,5 +957,84 @@ func TestStartIsForTheMachineIDsTheDialogWasMadeFor(t *testing.T) {
 	}
 	if n := len(r.m["pc-a"].Passed()); n != 0 {
 		t.Fatalf("%d requests got through to the machine", n)
+	}
+}
+
+// Rule 10, the push: when a run asks for its second passkey, the panel's one channel for warnings (ntfy or
+// Discord: FAIRY_NOTIFY_URL, the owner's) gets one message for it: once for the run, however long it waits.
+// The message names the machines and the time; it holds no token, no machine id and nothing of the ticket.
+// With no channel set up nothing is sent.
+func TestConfirmNotificationIsPushedOncePerWaitingRun(t *testing.T) {
+	r := newRunRig(t, "pc-a")
+	type pushed struct{ title, message string }
+	var got []pushed
+	r.s.Notes.Push = func(title, message string) { got = append(got, pushed{title, message}) } // a channel is set up
+	asking := func() (out []pushed) {
+		for _, p := range got {
+			if strings.Contains(p.title, "for your passkey") {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	_, res := r.approved(t, "POST", "/api/admin/wake-update", map[string]any{"hosts": []string{"pc-a"}})
+	if res["ok"] != true {
+		t.Fatal(res)
+	}
+	r.tick(20) // the machine is waking: nobody is asked for anything yet
+	if len(asking()) != 0 {
+		t.Fatalf("pushed before the run asks: %+v", got)
+	}
+	r.until(t, "the run asking", 300, func() bool { a, _ := r.s.WakeRuns.Snapshot(); return a != nil && a.Approval == "needed" })
+	r.tick(2)
+	if len(asking()) != 1 {
+		t.Fatalf("%d messages when the run began to ask: %+v", len(asking()), got)
+	}
+	p := asking()[0]
+	if !strings.HasPrefix(p.title, "Fairy: Update unpowered hosts: Fairy woke PC-A for the run ") || !strings.Contains(p.title, "it waits for your passkey: confirm within 10 minutes until ") ||
+		!strings.Contains(p.message, "Not confirmed: not updated, and a machine that is armed switches itself off again.") || !strings.Contains(p.message, "(warning) at ") {
+		t.Fatalf("the message: %+v", p)
+	}
+	// the whole ten minutes of waiting, and the end of the question: no second message that asks
+	r.until(t, "the question over", 700, func() bool { a, _ := r.s.WakeRuns.Snapshot(); return a == nil || a.Approval == "over" })
+	r.tick(5)
+	if len(asking()) != 1 {
+		t.Fatalf("%d messages asked for the passkey of one run", len(asking()))
+	}
+	// what leaves the panel for the channel: no token, no machine id, nothing of the ticket; as ntfy and as Discord get it
+	all := ""
+	for _, p := range got {
+		for _, u := range []string{"https://ntfy.example/fairy", "https://discord.com/api/webhooks/1/x"} {
+			body, _, hdr := notify.BuildRequest(u, p.title, p.message)
+			all += string(body) + fmt.Sprint(hdr) + "\n"
+		}
+	}
+	r.noLeak(t, "a pushed message", all)
+	for _, secret := range []string{machineIDOf("pc-a"), "run_arm", "challenge", "control-word", "read-word"} {
+		if strings.Contains(all, secret) {
+			t.Errorf("a pushed message holds %q", secret)
+		}
+	}
+	if !strings.Contains(all, "PC-A") {
+		t.Errorf("the pushed messages do not name the machine:\n%s", all)
+	}
+	// nothing is set up: nothing is sent (the list in the panel has the entry all the same)
+	t.Setenv("FAIRY_NOTIFY_URL", "")
+	if notify.URL() != "" {
+		t.Fatal("a channel without FAIRY_NOTIFY_URL")
+	}
+	t.Setenv("FAIRY_NOTIFY_URL", "http://ntfy.example/fairy") // not https: not used either
+	if notify.URL() != "" {
+		t.Fatal("a channel that is not https")
+	}
+	r2 := newRunRig(t, "pc-a")
+	r2.s.Notes.Push = nil
+	if _, res := r2.approved(t, "POST", "/api/admin/wake-update", map[string]any{"hosts": []string{"pc-a"}}); res["ok"] != true {
+		t.Fatal(res)
+	}
+	r2.until(t, "the run asking", 400, func() bool { a, _ := r2.s.WakeRuns.Snapshot(); return a != nil && a.Approval == "needed" })
+	r2.tick(2)
+	if active, _, n := r2.confirmNote(); !active || n != 1 {
+		t.Fatalf("without a channel the list has the entry: %v %d", active, n)
 	}
 }
