@@ -276,6 +276,33 @@ func (s Settings) offAfter() time.Duration {
 	return MinOff
 }
 
+// The run's own range for the panel's countdown and for the pacing, and what counts for a number outside it:
+// config.yaml's ranges and defaults (wake_update: shutdown_delay_s 10 to 3600, default 120;
+// agent_requests_per_min 1 to 30, default 8).
+const (
+	DelayMax     = time.Hour
+	DefaultDelay = 2 * time.Minute
+	PaceMax      = 30
+	DefaultPace  = 8
+)
+
+// held is s as a run uses it, made once when the run starts. The panel hands a run the timings in force,
+// which it has checked; the run does not rely on that. A time after which a machine counts as off below the
+// floor, a countdown or a pacing outside its range (a mistake somewhere between the files and here) is never
+// used: the default counts instead. The seconds of the report are made from the times the run uses, so the
+// report never shows a number the run did not use.
+func (s Settings) held() Settings {
+	s.OffAfter = s.offAfter()
+	if s.ShutdownDelay < DelayFloor || s.ShutdownDelay > DelayMax {
+		s.ShutdownDelay = DefaultDelay
+	}
+	if s.PerAgentMin < 1 || s.PerAgentMin > PaceMax {
+		s.PerAgentMin = DefaultPace
+	}
+	s.OffAfterS, s.ShutdownDelayS = int(s.OffAfter/time.Second), int(s.ShutdownDelay/time.Second)
+	return s
+}
+
 // HostInfo is a machine as the panel's configuration knows it now.
 type HostInfo struct {
 	ID      string
@@ -989,6 +1016,7 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 	if req.Settings != nil {
 		set = *req.Settings
 	}
+	set = set.held() // the run's own ranges; the report and the journal get what the run uses
 	seen := map[string]bool{}
 	var hosts []*Host
 	add := func(ids []string, mode string) error {
