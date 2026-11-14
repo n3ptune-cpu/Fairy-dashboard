@@ -651,6 +651,19 @@ func (m *Manager) Waiting(id string) ([]WaitingHost, error) {
 	return out, nil
 }
 
+// ConfirmLeft is how long the run id still asks for its confirmation, on the run's steady clock: the clock the
+// question ends by (false: that run does not ask). A time of day is not counted with: the panel's clock can
+// be set while a run asks.
+func (m *Manager) ConfirmLeft(id string) (time.Duration, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.active
+	if r == nil || r.ID != id || r.Approval != "needed" {
+		return 0, false
+	}
+	return max(0, r.confirmMono-m.mono()), true
+}
+
 // confirmable returns the active run id if its confirmation is asked for right now. The caller holds m.mu.
 func (m *Manager) confirmable(id string) (*Run, error) {
 	r := m.active

@@ -103,6 +103,17 @@ const click = (dataset) => listeners.click({ target: { closest: () => ({ dataset
   if (rwLeft() !== 539 || !runWaitStrips()[0].includes('<b id="rw-left">8:59</b>')) fail("a minute later: " + rwLeft());
   tick += 3600000;
   if (rwLeft() !== 0) fail("never below zero: " + rwLeft());
+  // at zero the strip is read anew, and not once a second while the answer still names the run: every 5 s at most
+  const leftEl = { textContent: "" };
+  document.getElementById = (id) => (id === "rw-left" ? leftEl : null);
+  asked.length = 0;
+  waiting.left_s = 0; // the panel still names the run for a moment after its time
+  for (let i = 0; i < 4; i++) { rwTick(); await new Promise((r) => setTimeout(r, 2)); tick += 1000; }
+  if (asked.length !== 1 || leftEl.textContent !== "0:00") fail("four seconds at zero: " + asked.length + " fetches, " + leftEl.textContent);
+  tick += 2000; rwTick(); await new Promise((r) => setTimeout(r, 2));
+  if (asked.length !== 2) fail("after 5 s at zero: " + asked.length + " fetches");
+  waiting.left_s = 600;
+  await fetchRunWait();
   // one click, one confirmation: one request, kept for "Confirm it's you", and what came of it is said
   asked.length = 0;
   answer = (path) => (path.endsWith("/confirm") ? { ok: true, message: "confirmed on 1 of 2 machines", lines: ["PC-A: confirmed", "PC-B: NOT accepted (its wait was over: it is switching itself off)"], all_ok: false } : { now: at });

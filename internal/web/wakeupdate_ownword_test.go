@@ -244,3 +244,32 @@ func TestTheNotificationThatEndsTheQuestionSaysWhy(t *testing.T) {
 		}
 	})
 }
+
+// The strip's "time left" is counted on the run's steady clock, as the run itself ends its question
+// (independent review of 270e7ab, P7): it was confirm_by less the panel's clock of the day, so after that
+// clock was set back an hour (a time synchronisation of the panel's host) the strip said that more than an
+// hour was left while the run stopped asking after its ten minutes.
+func TestTheStripsTimeLeftDoesNotFollowThePanelsClockOfTheDay(t *testing.T) {
+	r := newRunRig(t, "pc-a")
+	if _, res := r.approved(t, "POST", "/api/admin/wake-update", map[string]any{"hosts": []string{"pc-a"}}); res["ok"] != true {
+		t.Fatal(res)
+	}
+	r.until(t, "asked", 300, func() bool { a, _ := r.s.WakeRuns.Snapshot(); return a != nil && a.Approval == "needed" })
+	left := func() float64 {
+		v, _ := r.req("GET", "/api/admin/wake-update/waiting", nil).body["left_s"].(float64)
+		return v
+	}
+	if got := left(); got < 598 || got > 600 {
+		t.Fatalf("right after the question: left_s %v", got)
+	}
+	r.tick(100)
+	f := r.f
+	clock := r.s.Poller.Clock
+	for _, shift := range []time.Duration{-time.Hour, time.Hour} {
+		r.s.Poller.Clock = func() time.Time { return f.now.Add(shift) } // the clock of the day, set
+		if got := left(); got < 497 || got > 500 {
+			t.Errorf("the clock of the day set by %s, 100 s into the question: left_s %v", shift, got)
+		}
+	}
+	r.s.Poller.Clock = clock
+}

@@ -615,7 +615,7 @@ type runWaiting struct {
 	Run       string     `json:"run,omitempty"` // the run that asks for a confirmation now ("": none)
 	By        string     `json:"by,omitempty"`  // who started it
 	ConfirmBy *time.Time `json:"confirm_by,omitempty"`
-	LeftS     int        `json:"left_s,omitempty"` // seconds left to confirm: confirm_by less the panel's clock. The run counts on its steady clock, and that decides
+	LeftS     int        `json:"left_s,omitempty"` // seconds left to confirm, on the run's steady clock (the one its question ends by)
 	Hosts     []string   `json:"hosts,omitempty"`  // the names of the machines that wait
 	Tried     string     `json:"tried,omitempty"`  // who gave a confirmation that no machine accepted (the run still asks)
 	// Armed: machines that may switch themselves off, with the time as far as the panel knows it.
@@ -640,8 +640,8 @@ func (s *Server) runWaitingNow() runWaiting {
 	if a, _ := s.WakeRuns.Snapshot(); a != nil && a.Approval == "needed" {
 		if waiting, err := s.WakeRuns.Waiting(a.ID); err == nil {
 			out.Run, out.By, out.ConfirmBy, out.Tried = a.ID, a.By, a.ConfirmBy, a.Tried
-			if a.ConfirmBy != nil {
-				out.LeftS = max(0, int(a.ConfirmBy.Sub(now)/time.Second))
+			if left, ok := s.WakeRuns.ConfirmLeft(a.ID); ok {
+				out.LeftS = int(left / time.Second)
 			}
 			for _, w := range waiting {
 				out.Hosts = append(out.Hosts, w.Name)

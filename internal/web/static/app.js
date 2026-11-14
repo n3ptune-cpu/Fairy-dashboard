@@ -1373,7 +1373,8 @@ function rwTick() {
   if (!left) return;
   const v = fmtRuntime(rwLeft());
   if (left.textContent !== v) left.textContent = v;
-  if (rwLeft() === 0) fetchRunWait();
+  // at zero the panel is asked what stands now; while its answer still names the run, again every 5 s, not every second
+  if (rwLeft() === 0 && (!rw.zeroAt || wuTick() - rw.zeroAt >= 5000)) { rw.zeroAt = wuTick(); fetchRunWait(); }
 }
 const rwClock = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 // One short line each. While the run asks, its machines are in the question's line and have no strip of their
