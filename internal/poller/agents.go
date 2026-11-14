@@ -252,8 +252,9 @@ func (p *Poller) pollEntry(ctx context.Context, a config.Agent, entry int, timeo
 		if p.entryGone(a.ID, entry) {
 			return 0
 		}
-		p.Power.UpdateRemote(a.ID, nil, true, a.PowerLinks, a.PowerExcludeFromTotal)
-		p.UPS.UpdateFromAgent(a.ID, nil, true, a.UPSPowers, a.UPSNames)
+		l := p.LinksOf(a) // the entry's links with what an admin changed in the panel (hostoptions.go)
+		p.Power.UpdateRemote(a.ID, nil, true, l.PowerLinks, l.PowerExcludeFromTotal)
+		p.UPS.UpdateFromAgent(a.ID, nil, true, l.UPSPowers, a.UPSNames)
 		if n >= 2 {
 			return math.Min(agentBackoffMax, math.Pow(2, float64(n-2)))
 		}
@@ -320,8 +321,9 @@ func (p *Poller) pollEntry(ctx context.Context, a config.Agent, entry int, timeo
 	if p.entryGone(a.ID, entry) {
 		return 0
 	}
-	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)
-	p.UPS.UpdateFromAgent(a.ID, ups.AgentRows(payload["ups"]), false, a.UPSPowers, a.UPSNames)
+	l := p.LinksOf(a) // the entry's links with what an admin changed in the panel (hostoptions.go)
+	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, l.PowerLinks, l.PowerExcludeFromTotal)
+	p.UPS.UpdateFromAgent(a.ID, ups.AgentRows(payload["ups"]), false, l.UPSPowers, a.UPSNames)
 	return 0
 }
 

@@ -84,6 +84,8 @@ type Poller struct {
 	linkMu sync.Mutex
 	// relinkRead, when set, is called by relink between its reading and its keeping (tests).
 	relinkRead func()
+	// linkNotes: what was said in the log about the "Edit host" overrides (hostoptions.go). It has its own lock.
+	linkNotes linkNotes
 
 	mu            sync.Mutex
 	systems       map[string]model.System
