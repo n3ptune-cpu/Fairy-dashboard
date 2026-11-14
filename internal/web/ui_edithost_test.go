@@ -1,0 +1,406 @@
+package web
+
+import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// "Edit host" on the page: an entry in the ⋯ menu of a host's page (admins), and a dialog with three short
+// sections. The dialog's own functions are run in node (nothing of them is copied here); what is around them
+// in the script is not the code under test.
+
+// ehPageScript is the "Edit host" part of app.js with what it needs around it. The page's `$` is a table of
+// stand-in elements (one per selector, made when first asked for), api answers with what the test set, and
+// the timers are kept in a list instead of running.
+func ehPageScript(t *testing.T, js, body string) string {
+	t.Helper()
+	var parts []string
+	for _, re := range []string{`(?m)^const dict = .*$`, `(?m)^const esc = .*$`, `(?m)^const enc = .*$`, `(?m)^const isHost = .*$`, `(?m)^const infoList = .*$`} {
+		m := regexp.MustCompile(re).FindString(js)
+		if m == "" {
+			t.Fatalf("app.js has no %s any more", re)
+		}
+		parts = append(parts, m)
+	}
+	from := strings.Index(js, "// ------------------------------------------------------------ Edit host (admins, the ⋯ menu of a host's page)")
+	to := strings.Index(js, "// ------------------------------------------------------------ elevated helper Stop / Start")
+	if from < 0 || to < from {
+		t.Fatal("app.js has no \"Edit host\" part any more")
+	}
+	return `"use strict";
+const listeners = [];
+const document = { addEventListener(type, fn) { listeners.push(type); }, querySelector: () => null };
+const state = { me: { can_manage_users: true }, byId: {}, menu: "poll" };
+const current = () => ({ id: "h1" });
+let renders = 0;
+const render = () => { renders++; };
+const flashes = [];
+const flash = (msg, bad = false) => { flashes.push({ msg, bad }); };
+let els = {}, detached = false; // detached: the dialog was closed, what it held is no longer on the page
+const $ = (sel) => (els[sel] ||= { innerHTML: "", textContent: "", hidden: true, disabled: false, isConnected: !detached, focus() {} });
+let closed = 0;
+const closeModal = () => { closed++; detached = true; for (const k of Object.keys(els)) els[k].isConnected = false; };
+const infos = {};
+const infoBtn = (key, about, html) => { infos[key] = { about, html }; return "[info " + key + "]"; };
+const asked = [];
+let answer = async () => ({});
+const api = (path, opts = {}) => { asked.push({ path, method: opts.method || "GET", body: opts.body ? JSON.parse(opts.body) : null, signal: opts.signal }); return answer(path, opts); };
+let confirming = null;
+const controlCall = async (pending, fn) => { try { return await fn(); } catch (e) { if (e.stepUp) { confirming = pending; return null; } throw e; } };
+const timers = [];
+const setTimeout = (fn, ms) => { timers.push({ fn, ms, on: true }); return timers.length; };
+const clearTimeout = (n) => { if (timers[n - 1]) timers[n - 1].on = false; };
+` + strings.Join(parts, "\n") + "\n" + js[from:to] + `
+const fail = (m) => { console.log("FAIL " + m); process.exitCode = 1; };
+const words = (t) => t.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+const settle = () => new Promise((r) => setImmediate(r));
+const ups = (id, o) => ({ id: "nas-agent/" + id, name: id.toUpperCase() + " UPS", agent: "nas-agent", agent_name: "NAS", on: false, from: "config", by: null, at: null, config_on: false, ...o });
+const plug = (id, o) => ({ id: "nas-agent/" + id, name: id + " plug", agent: "nas-agent", agent_name: "NAS", linked: false, self: false, other: null, from: "config", by: null, at: null,
+  config_linked: false, in_total: true, total_from: "config", total_by: null, total_at: null, config_in_total: true, mine: false, ...o });
+const data = (o) => ({ id: "h1", name: "PC-B", agent: "pc-b", rev: 3, ups: [], plugs: [], ignored: [], ...o });
+(async () => {
+` + body + `
+  if (!process.exitCode) console.log("ok");
+})();
+`
+}
+
+// runEhPageScript runs body in node and returns what it printed after "ok" lines are taken out; args are
+// handed to the script (process.argv[2] ...).
+func runEhPageScript(t *testing.T, name, body string, args ...string) string {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed: the page's own functions are not run here")
+	}
+	file := filepath.Join(t.TempDir(), name+".js")
+	if err := os.WriteFile(file, []byte(ehPageScript(t, appJS(t), body)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(node, append([]string{file}, args...)...).CombinedOutput()
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if err != nil || lines[len(lines)-1] != "ok" || strings.Contains(string(out), "FAIL ") {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	return strings.Join(lines[:len(lines)-1], "\n")
+}
+
+// Where it is on the page and how it is written: the menu entry, for admins and for hosts; a dialog whose
+// markup holds no value of the panel (the host's name is set as text); every name in the sections through
+// esc(); the styles in the stylesheet's own colours.
+func TestUIEditHostIsInTheMenuOfAHostForAdmins(t *testing.T) {
+	js, css := appJS(t), appCSS(t)
+	for _, want := range []string{
+		`${modelNameMenu(s)}${editHostMenu(s)}${wakeUpdateMenu(s)}</div>` + "`;", // in the ⋯ menu, under "Set model name"
+		"function editHostMenu(s) {\n  if (!isHost(s) || !state.me?.can_manage_users) return \"\";\n  return `<button class=\"menu-item\" type=\"button\" data-act=\"edit-host\">Edit host</button>`;\n}",
+		"$(\"#eh-t\").textContent = `Edit ${s.name}`;", // the title: the host's name as text
+		`const t = e.target.closest('[data-act="edit-host"]');`,
+		"const path = `/api/admin/hosts/${enc(s.id)}/options`;",
+		"controlCall({ kind: \"request\", label: `Edit host ${s.name}`, system: s.id, method: \"PUT\", path, body: plan.body },", // "Confirm it's you" when the window has run out
+		`const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 15000);`,                                     // no "Loading…" for ever
+	} {
+		if strings.Count(js, want) != 1 {
+			t.Errorf("app.js lacks (or has twice) %q", want)
+		}
+	}
+	from := strings.Index(js, "// ------------------------------------------------------------ Edit host (admins")
+	to := strings.Index(js, "// ------------------------------------------------------------ elevated helper Stop / Start")
+	if from < 0 || to < from {
+		t.Fatal("app.js has no \"Edit host\" part")
+	}
+	part := js[from:to]
+	// the dialog's frame is fixed text: the info button is the one thing put into it
+	i, j := strings.Index(part, "m.innerHTML = `"), strings.Index(part, "</form>`;")
+	if i < 0 || j < i {
+		t.Fatal("the dialog's frame is not where this test looks for it")
+	}
+	if frame := strings.ReplaceAll(part[i:j], "${EH_INFO()}", ""); strings.Contains(frame, "${") {
+		t.Errorf("the dialog's frame holds an inserted value: %s", frame)
+	}
+	// markup is written in three places: the frame, the sections (ehView, through esc), and the emptied body when loading failed
+	if n := strings.Count(part, "innerHTML"); n != 3 || strings.Contains(part, "insertAdjacentHTML") || strings.Contains(part, "outerHTML") {
+		t.Errorf("the Edit host part writes markup in %d places, want 3", n)
+	}
+	// every value of the panel that a template of the part inserts goes through esc(): no name, id or line as it is
+	view := part[strings.Index(part, "function ehView"):strings.Index(part, "function ehTick")]
+	view = regexp.MustCompile("esc\\(`[^`]*`\\)").ReplaceAllString(view, "esc()") // a sentence made of names, escaped as a whole
+	if m := regexp.MustCompile(`\$\{\s*((x|u|p|d|s|e|r)\.(name|agent_name|agent|id|other|by|total_by|message)|l|line|by)\s*\}`).FindAllString(view, -1); len(m) != 0 {
+		t.Errorf("ehView inserts a value without esc(): %v", m)
+	}
+	// the errors and the result are set as text
+	for _, want := range []string{`$("#eh-err").textContent = msg;`, "close(); flash(`${s.name}: ${r.message}`);"} {
+		if !strings.Contains(part, want) {
+			t.Errorf("the Edit host part lacks %q", want)
+		}
+	}
+	at := strings.Index(css, `/* "Edit host": one line per UPS or plug`)
+	end := strings.Index(css[max(at, 0):], "\n.modal-box .eh-shadow")
+	if at < 0 || end < 0 {
+		t.Fatal("app.css has no block for the Edit host dialog")
+	}
+	block := css[at : at+end+80]
+	rest := css[:at] + css[at+end+80:]
+	for _, c := range regexp.MustCompile(`#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|var\(--[a-z0-9-]+\)`).FindAllString(block, -1) {
+		if !strings.Contains(rest, c) {
+			t.Errorf("the block of the Edit host dialog brings a colour the stylesheet did not have: %s", c)
+		}
+	}
+}
+
+// The sections, as the page's own functions draw them: what counts and where it comes from ("from
+// config.yaml" / "changed here" with Reset), who reads each device, what a tick and a Reset change in the
+// dialog, the list of what Save will change, and the request that says exactly that. A viewer has no entry.
+func TestUIEditHostDialogSections(t *testing.T) {
+	runEhPageScript(t, "eh-view", `
+  // the menu entry: admins, hosts
+  const host = { id: "h1", name: "PC-B", kind: "agent" };
+  if (editHostMenu(host) !== '<button class="menu-item" type="button" data-act="edit-host">Edit host</button>') fail("the menu entry: " + editHostMenu(host));
+  if (editHostMenu({ ...host, kind: "node" }) === "") fail("a node has no entry");
+  if (editHostMenu({ ...host, kind: "qemu" }) !== "" || editHostMenu({ ...host, kind: "lxc" }) !== "") fail("a guest has an entry");
+  state.me = { can_manage_users: false, can_control: true };
+  if (editHostMenu(host) !== "") fail("someone who is no admin has the entry");
+  state.me = null;
+  if (editHostMenu(host) !== "") fail("before /api/me answered there is an entry");
+  state.me = { can_manage_users: true };
+
+  const d = data({
+    ups: [ups("rack", { on: true, from: "panel", by: "nora@example.com", config_on: false }), ups("desk", { from: "panel", by: "nora@example.com", config_on: true }),
+      { ...ups("attic"), agent: "pc-b", agent_name: "PC-B" }],
+    plugs: [plug("a", { linked: true, mine: true, config_linked: true }), plug("b", { other: "PC-A" }), plug("own", { agent: "pc-b", agent_name: "PC-B", linked: true, self: true, mine: true }),
+      plug("corner", { agent: "pc-b", agent_name: "PC-B", mine: true, in_total: false, total_from: "panel", total_by: "bea", config_in_total: true })] });
+  let draft = ehDraft();
+  let html = ehView(d, draft), text = words(html);
+  // three sections with one short line each, in this order
+  const at = ["UPS Ticked: this machine is on that UPS.", "Plugs Ticked: the plug's watts are this machine's.", "Total Ticked: the plug counts in the total."].map((x) => text.indexOf(x));
+  if (at.some((i) => i < 0) || at[0] > at[1] || at[1] > at[2]) fail("the three sections: " + text);
+  // every line: the tick, the name, who reads it, where its value comes from
+  const rows = [...html.matchAll(/<div class="eh-row">(.*?)<\/div>/gs)].map((m) => ({ html: m[1], text: words(m[1]) }));
+  const want = ["RACK UPS read by NAS changed here Reset", "DESK UPS read by NAS changed here Reset", "ATTIC UPS read by PC-B from config.yaml",
+    "a plug read by NAS from config.yaml", "b plug read by NAS · now on PC-A from config.yaml", "own plug read by PC-B · set on the machine itself", "corner plug read by PC-B from config.yaml",
+    "a plug read by NAS from config.yaml", "own plug read by PC-B from config.yaml", "corner plug read by PC-B changed here Reset"];
+  if (JSON.stringify(rows.map((r) => r.text)) !== JSON.stringify(want)) fail("the lines:\n" + rows.map((r) => r.text).join("\n"));
+  const ticked = rows.map((r) => / checked/.test(r.html));
+  if (JSON.stringify(ticked) !== JSON.stringify([true, false, false, true, false, true, false, true, true, false])) fail("the ticks: " + JSON.stringify(ticked));
+  // the plug the machine itself links cannot be unticked here; nothing else is disabled
+  if (rows.filter((r) => / disabled/.test(r.html)).map((r) => r.text).join("|") !== "own plug read by PC-B · set on the machine itself") fail("disabled: " + rows.filter((r) => / disabled/.test(r.html)).map((r) => r.text));
+  // Reset says what it is about (all links of that kind read by that machine), and who changed it is the source's tooltip
+  if (!html.includes('data-eh-reset="nas-agent/ups" title="Back to config.yaml for all ups links read by NAS"') || !html.includes('<span class="eh-src on" title="Changed here by nora@example.com">changed here</span>')
+    || !html.includes('data-eh-reset="pc-b/total" title="Back to config.yaml for all total of the plugs read by PC-B"')) fail("Reset and its words: " + html);
+  // changed here shadows config.yaml: said in one visible line; nothing to save yet
+  if (!text.includes("Changed here: used instead of config.yaml until Reset.") || !html.includes('class="note info-keep eh-shadow"')) fail("the line about config.yaml: " + text);
+  if (text.includes("This will change") || ehPlan(d, draft).lines.length || JSON.stringify(ehPlan(d, draft).body) !== "{}") fail("nothing was changed, and the dialog lists changes: " + text);
+  // nothing overridden: no such line
+  if (words(ehView(data({ ups: [ups("rack")], plugs: [plug("a")] }), ehDraft())).includes("Changed here")) fail("the line about config.yaml without any override");
+
+  // ticks: a UPS on, a plug moved here (its total row appears), another taken out of the total
+  ehTick(d, draft, "ups", "nas-agent/desk", true);
+  ehTick(d, draft, "plugs", "nas-agent/b", true);
+  ehTick(d, draft, "total", "nas-agent/a", false);
+  let plan = ehPlan(d, draft);
+  if (JSON.stringify(plan.lines) !== JSON.stringify(["UPS DESK UPS (read by NAS): powers PC-B", "Plug a plug (read by NAS): not in the total", "Plug b plug (read by NAS): linked to PC-B (was on PC-A)"])) fail("lines: " + JSON.stringify(plan.lines));
+  if (JSON.stringify(plan.body) !== JSON.stringify({ ups: [{ id: "nas-agent/desk", on: true }], plugs: [{ id: "nas-agent/a", in_total: false }, { id: "nas-agent/b", linked: true }] })) fail("body: " + JSON.stringify(plan.body));
+  html = ehView(d, draft); text = words(html);
+  if (!text.includes("This will change UPS DESK UPS (read by NAS): powers PC-B Plug a plug (read by NAS): not in the total Plug b plug (read by NAS): linked to PC-B (was on PC-A)")) fail("the list of changes: " + text);
+  if (!/b plug read by NAS changed here(?! Reset)/.test(text)) fail("a line that was ticked in this dialog says where it will come from, without a Reset: " + text);
+  if ((text.match(/b plug read by NAS/g) || []).length !== 2) fail("the plug that is linked here now has a line under Total: " + text);
+  // a tick put back is no change
+  ehTick(d, draft, "ups", "nas-agent/desk", false);
+  ehTick(d, draft, "plugs", "nas-agent/b", false);
+  ehTick(d, draft, "total", "nas-agent/a", true);
+  if (ehPlan(d, draft).lines.length || Object.keys(draft.ups).length + Object.keys(draft.linked).length + Object.keys(draft.total).length) fail("ticks put back are still changes: " + JSON.stringify(draft));
+  // the total of a plug that is no longer this machine's is not sent
+  ehTick(d, draft, "total", "nas-agent/a", false);
+  ehTick(d, draft, "plugs", "nas-agent/a", false);
+  plan = ehPlan(d, draft);
+  if (JSON.stringify(plan.body) !== JSON.stringify({ plugs: [{ id: "nas-agent/a", linked: false }] }) || JSON.stringify(plan.lines) !== JSON.stringify(["Plug a plug (read by NAS): no longer linked to PC-B"])) fail("unlinked and its total: " + JSON.stringify(plan));
+
+  // Reset: the lines of that kind read by that machine show config.yaml's values, the ticks made before go, and Save says it
+  draft = ehDraft();
+  ehTick(d, draft, "ups", "nas-agent/rack", false);
+  ehReset(d, draft, "nas-agent/ups");
+  plan = ehPlan(d, draft);
+  if (JSON.stringify(plan.lines) !== JSON.stringify(["UPS links read by NAS: back to config.yaml"]) || JSON.stringify(plan.body) !== JSON.stringify({ reset: [{ agent: "nas-agent", field: "ups" }] })) fail("Reset: " + JSON.stringify(plan));
+  html = ehView(d, draft); text = words(html);
+  const after = [...html.matchAll(/<div class="eh-row">(.*?)<\/div>/gs)].slice(0, 3).map((m) => words(m[1]) + (/ checked/.test(m[1]) ? " [x]" : " [ ]"));
+  if (JSON.stringify(after) !== JSON.stringify(["RACK UPS read by NAS from config.yaml [ ]", "DESK UPS read by NAS from config.yaml [x]", "ATTIC UPS read by PC-B from config.yaml [ ]"])) fail("after Reset: " + JSON.stringify(after));
+  // a tick after the Reset is a change on top of config.yaml's value, sent after it
+  ehTick(d, draft, "ups", "nas-agent/desk", false);
+  plan = ehPlan(d, draft);
+  if (JSON.stringify(plan.body) !== JSON.stringify({ ups: [{ id: "nas-agent/desk", on: false }], reset: [{ agent: "nas-agent", field: "ups" }] })
+    || JSON.stringify(plan.lines) !== JSON.stringify(["UPS links read by NAS: back to config.yaml", "UPS DESK UPS (read by NAS): no longer powers PC-B"])) fail("Reset and a tick: " + JSON.stringify(plan));
+  ehReset(d, draft, "pc-b/total");
+  if (JSON.stringify(ehPlan(d, draft).lines.slice(0, 2)) !== JSON.stringify(["UPS links read by NAS: back to config.yaml", "Total of the plugs read by PC-B: back to config.yaml"])) fail("two resets: " + JSON.stringify(ehPlan(d, draft).lines));
+
+  // nothing to choose from, and what the panel ignores
+  text = words(ehView(data({ ignored: ["x"] }), ehDraft()));
+  if (!text.includes("UPS No agent relays a UPS. Plugs No agent relays a plug. Total No plug of this machine.") || !text.includes("1 stored change is ignored: see the panel's log.")) fail("empty: " + text);
+  if (!words(ehView(data({ ignored: ["x", "y"] }), ehDraft())).includes("2 stored changes are ignored: see the panel's log.")) fail("two ignored");
+  // a machine without an agent of its own: only the plugs linked to it are under Total
+  text = words(ehView(data({ agent: null, plugs: [plug("a", { agent: "", agent_name: "?" }), plug("b", { linked: true })] }), ehDraft()));
+  if ((text.match(/a plug/g) || []).length !== 1 || (text.match(/b plug/g) || []).length !== 2) fail("a node without an agent: " + text);
+
+  // names are the panel's data: every one of them is text in the dialog, whatever it holds
+  const evil = '<img src=x onerror=alert(1)>"\'&';
+  const bad = data({ name: evil, ups: [ups("rack", { id: evil, name: evil, agent: evil, agent_name: evil, from: "panel", by: evil })],
+    plugs: [plug("b", { id: evil + "2", name: evil, agent: evil, agent_name: evil, other: evil, total_by: evil, total_from: "panel", linked: true, from: "panel", by: evil })] });
+  const bd = ehDraft();
+  ehTick(bad, bd, "ups", evil, true);
+  const out = ehView(bad, bd), plain = ehView(JSON.parse(JSON.stringify(bad).split(JSON.stringify(evil).slice(1, -1)).join("name")), ehDraft());
+  if (out.includes("<img") || out.includes('onerror=alert(1)>"') || /="[^"]*<|'&"/.test(out.replace(/&[a-z#0-9]+;/g, ""))) fail("a name is markup: " + out);
+  if ((out.match(/<[a-z]/g) || []).length < (plain.match(/<[a-z]/g) || []).length) fail("the markup broke");
+  if (!words(out).includes("UPS " + evil + " (read by " + evil + "): powers " + evil)) fail("the name is not shown as it is: " + words(out));
+  // what is behind the info button of the title
+  EH_INFO();
+  const info = words(infos["edit-host"].html);
+  for (const s of ["What you change here is kept by the panel. config.yaml is not changed and stays the base.",
+    "A changed value is used instead of config.yaml's until Reset, also when config.yaml is edited later.",
+    "A link belongs to the machine that reads the device. Reset puts back all links of that kind read by that machine.",
+    "A change counts from the next poll of the machine that reads the device.",
+    "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]) if (!info.includes(s)) fail("the info button lacks: " + s);
+`)
+}
+
+// The dialog from "Edit host" to Save: it loads, draws, sends only what was changed, says the result, shows
+// the panel's sentence when it refuses, hands over to "Confirm it's you" when the window has run out, and
+// never waits for ever.
+func TestUIEditHostDialogFlow(t *testing.T) {
+	runEhPageScript(t, "eh-flow", `
+  const s = { id: "h 1", name: "PC-B", kind: "agent" };
+  const d = () => data({ ups: [ups("rack")], plugs: [plug("a", { linked: true, mine: true })] });
+  const open = async (ans) => { els = {}; detached = false; asked.length = 0; flashes.length = 0; closed = 0; confirming = null; timers.length = 0; answer = ans; const p = openEditHost(s); await settle(); return p; };
+  const tick = (field, id, checked) => $("#eh-body").onchange({ target: { closest: (sel) => (sel === "input[data-eh]" ? { dataset: { eh: field }, value: id, checked } : null) } });
+  const submit = () => $("#eh-form").onsubmit({ preventDefault() {} });
+
+  // it opens at once, says the host's name as text, asks the panel, and closes the menu behind it
+  let hold;
+  const p0 = open(() => new Promise((res) => { hold = res; }));
+  await settle();
+  if ($("#modal").hidden || !$("#modal").innerHTML.includes('id="eh-form"') || $("#eh-t").textContent !== "Edit PC-B" || state.menu !== null) fail("opening: " + $("#modal").innerHTML);
+  if ($("#modal").innerHTML.includes("PC-B") || !$("#modal").innerHTML.includes("Loading…") || !$("#modal").innerHTML.includes('id="eh-save" disabled')) fail("the frame: " + $("#modal").innerHTML);
+  if (asked.length !== 1 || asked[0].path !== "/api/admin/hosts/h%201/options" || asked[0].method !== "GET" || !asked[0].signal) fail("the request: " + JSON.stringify(asked));
+  if (timers.length !== 1 || timers[0].ms !== 15000) fail("the time limit of the answer: " + JSON.stringify(timers.map((x) => x.ms)));
+  hold(d()); await p0; await settle();
+  if (timers[0].on) fail("the time limit is still running after the answer");
+  if (!$("#eh-body").innerHTML.includes("RACK UPS") || $("#eh-save").disabled !== true || $("#eh-err").textContent !== "") fail("drawn: " + $("#eh-body").innerHTML);
+  // a submit with nothing changed sends nothing
+  await submit();
+  if (asked.length !== 1) fail("Save with nothing changed sent a request");
+  // a tick: Save can be pressed, and the list of changes is in the dialog
+  tick("ups", "nas-agent/rack", true);
+  if ($("#eh-save").disabled || !words($("#eh-body").innerHTML).includes("This will change UPS RACK UPS (read by NAS): powers PC-B")) fail("after a tick: " + words($("#eh-body").innerHTML));
+  // Save: one PUT with only that; the result is said with the host's name, and the dialog closes
+  answer = async () => ({ ok: true, message: "links saved", changed: ["x"] });
+  await submit(); await settle();
+  const put = asked[1] || {};
+  if (asked.length !== 2 || put.method !== "PUT" || put.path !== "/api/admin/hosts/h%201/options" || JSON.stringify(put.body) !== JSON.stringify({ ups: [{ id: "nas-agent/rack", on: true }] })) fail("the PUT: " + JSON.stringify(asked));
+  if (closed !== 1 || JSON.stringify(flashes) !== JSON.stringify([{ msg: "PC-B: links saved", bad: false }])) fail("saved: closed " + closed + " " + JSON.stringify(flashes));
+
+  // the panel refuses: its sentence is in the dialog, which stays open and can be saved again; no pop-up
+  await open(async () => d());
+  tick("plugs", "nas-agent/a", false);
+  answer = async () => { throw Object.assign(new Error("a plug is linked by the machine itself: it cannot be unlinked here"), { status: 422 }); };
+  await submit(); await settle();
+  if (closed !== 0 || flashes.length || $("#eh-err").textContent !== "a plug is linked by the machine itself: it cannot be unlinked here" || $("#eh-save").disabled) fail("refused: " + $("#eh-err").textContent + " save " + $("#eh-save").disabled);
+  // a change in the dialog takes the old sentence away
+  tick("ups", "nas-agent/rack", true);
+  if ($("#eh-err").textContent !== "") fail("the sentence stays after a change");
+  // too many changes, the panel not reachable: said the same way
+  for (const msg of ["too many changes; try again in 42 s", "Panel not reachable. Nothing was sent."]) {
+    answer = async () => { throw Object.assign(new Error(msg), { status: 429 }); };
+    await submit(); await settle();
+    if ($("#eh-err").textContent !== msg || $("#eh-save").disabled || closed !== 0) fail("an error: " + $("#eh-err").textContent);
+  }
+  // while a Save is on its way a second one sends nothing
+  let finish;
+  answer = () => new Promise((res) => { finish = res; });
+  const n = asked.length;
+  const first = submit(); await settle();
+  if (!$("#eh-save").disabled) fail("Save can be pressed while it is saving");
+  await submit();
+  if (asked.length !== n + 1) fail("two requests for one Save");
+  finish({ ok: true, message: "links saved" }); await first; await settle();
+  if (closed !== 1) fail("not closed after the save");
+
+  // the sign-in is too old: "Confirm it's you" takes over with what was asked; the dialog shows no error and no result
+  await open(async () => d());
+  tick("ups", "nas-agent/rack", true);
+  answer = async () => { throw Object.assign(new Error("Confirm it's you"), { status: 401, stepUp: true, detail: { code: "step_up_required" } }); };
+  await submit(); await settle();
+  if (!confirming || confirming.label !== "Edit host PC-B" || confirming.kind !== "request" || confirming.method !== "PUT" || confirming.path !== "/api/admin/hosts/h%201/options"
+    || JSON.stringify(confirming.body) !== JSON.stringify({ ups: [{ id: "nas-agent/rack", on: true }] })) fail("handed to Confirm it's you: " + JSON.stringify(confirming));
+  if (flashes.length || $("#eh-err").textContent !== "" || closed !== 0) fail("after the hand-over: " + JSON.stringify(flashes) + $("#eh-err").textContent);
+
+  // the panel does not let this person look: its sentence, no sections, nothing to save
+  await open(async () => { throw Object.assign(new Error("only admins can edit a host"), { status: 403 }); });
+  if ($("#eh-err").textContent !== "only admins can edit a host" || $("#eh-body").innerHTML !== "" || $("#eh-save").disabled !== false && $("#modal").innerHTML.includes("Loading…") === false) fail("refused to look: " + $("#eh-err").textContent);
+  if ($("#eh-form").onsubmit) fail("a dialog that did not load can be submitted");
+  // no answer at all: after the time limit the request is given up and the dialog says so
+  const p1 = open((path, opts) => new Promise((res, rej) => { opts.signal.addEventListener("abort", () => rej(Object.assign(new Error("This operation was aborted"), { name: "AbortError" }))); }));
+  await settle();
+  if ($("#eh-err").textContent !== "" || !timers[0]?.on) fail("before the time limit: " + $("#eh-err").textContent);
+  timers[0].fn(); await p1; await settle();
+  if ($("#eh-err").textContent !== "The panel did not answer. Close this and try again." || $("#eh-body").innerHTML !== "") fail("no answer: " + $("#eh-err").textContent + " | " + $("#eh-body").innerHTML);
+  // Cancel closes it
+  $("#eh-x").onclick();
+  if (closed !== 1) fail("Cancel");
+  // an answer that comes after the dialog was closed draws nothing
+  let late;
+  const p2 = open(() => new Promise((res) => { late = res; }));
+  await settle();
+  $("#eh-x").onclick();
+  late(d()); await p2; await settle();
+  if ($("#eh-body").innerHTML.includes("RACK") || $("#eh-form").onsubmit) fail("a late answer drew into a closed dialog");
+  // the page drawing itself again (a new snapshot from the stream) does not touch an open dialog or its ticks
+  await open(async () => d());
+  tick("ups", "nas-agent/rack", true);
+  const drawn = $("#eh-body").innerHTML;
+  for (let i = 0; i < 3; i++) render();
+  if ($("#eh-body").innerHTML !== drawn || !eh.draft.ups["nas-agent/rack"]) fail("a redraw of the page changed the dialog");
+`)
+}
+
+// The lines the dialog shows before Save are the panel's own lines: for the same ticks, on the panel's real
+// answer, the page's list of changes and what the panel answers (and writes to the audit log, and shows in
+// "Confirm it's you") are the same sentences, and the request the page makes is taken as it is.
+func TestUIEditHostListsTheChangesInThePanelsWords(t *testing.T) {
+	r := ehSetup(t)
+	step := func(id, ticks string) {
+		t.Helper()
+		g := r.options(id)
+		file := filepath.Join(t.TempDir(), "d.json")
+		if err := os.WriteFile(file, g.raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out := runEhPageScript(t, "eh-words", `
+  const d = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8")), draft = ehDraft();
+  for (const [kind, key, v] of JSON.parse(process.argv[3])) { if (kind === "reset") ehReset(d, draft, key); else ehTick(d, draft, kind, key, v); }
+  console.log(JSON.stringify(ehPlan(d, draft)));
+`, file, ticks)
+		var plan struct {
+			Lines []string       `json:"lines"`
+			Body  map[string]any `json:"body"`
+		}
+		if err := json.Unmarshal([]byte(out), &plan); err != nil || len(plan.Lines) == 0 {
+			t.Fatalf("the page's plan for %s: %v\n%s", ticks, err, out)
+		}
+		p := r.ok(id, plan.Body)
+		if got := strs(p.body["changed"]); !slices.Equal(got, plan.Lines) {
+			t.Errorf("%s on %s:\nthe page lists %q\nthe panel says %q", ticks, id, plan.Lines, got)
+		}
+		r.poll()
+	}
+	step(ehNodeB, `[["ups", "nas-agent/rack", true], ["ups", "nas-agent/desk", true]]`)
+	step(ehNodeB, `[["plugs", "nas-agent/b-plug", true], ["total", "nas-agent/b-plug", false]]`)
+	step(ehNodeB, `[["plugs", "nas-agent/a-plug", true]]`) // moved from PVE-A: "(was on PVE-A)"
+	step(ehNodeB, `[["plugs", "nas-agent/own", true]]`)    // the NAS's own plug: "(was on NAS)"
+	step(ehNodeA, `[["ups", "nas-agent/rack", false], ["plugs", "nas-agent/a-plug", true]]`)
+	step(ehNAS, `[["total", "nas-agent/corner", true], ["ups", "nas-agent/desk", true]]`)
+	step(ehNodeB, `[["reset", "nas-agent/ups"], ["ups", "nas-agent/desk", true]]`)
+	step(ehNodeA, `[["reset", "nas-agent/plugs"], ["reset", "nas-agent/total"]]`)
+}

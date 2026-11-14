@@ -387,6 +387,16 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .mfield select { background: var(--well); color: var(--text); border: 1px solid var(--line2); padding: 7px 8px; font: inherit; width: 160px; }
 .mfield .input { min-width: 0; }
 .row-gap.end { justify-content: flex-end; margin-top: 16px; }
+/* "Edit host": one line per UPS or plug: the tick with its name and who reads it, where the value comes from, Reset */
+.eh-row { display: flex; align-items: flex-start; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--rule); }
+.eh-row .check { flex: 1; min-width: 0; align-items: flex-start; }
+.eh-row .check input { margin-top: 2px; flex: none; }
+.eh-row .check .note { display: block; }
+.eh-row .check:has(input:disabled) { opacity: .45; }
+.eh-src { font-size: 12px; color: var(--faint); white-space: nowrap; padding-top: 1px; }
+.eh-src.on { color: var(--warn); }
+.modal-box .eh-hint { margin: 0 0 4px; }
+.modal-box .eh-shadow, .modal-box .eh-ignored { margin: 12px 0 0; }
 .btn.danger-solid { background: #3a0d12; border-color: #7a1c26; color: #ffb3ba; }
 .btn.danger-solid:hover:not(:disabled) { background: #521219; }
 .flash { position: fixed; right: 20px; bottom: 20px; z-index: 60; background: #0d1a12; border: 1px solid rgba(61, 220, 151, .35); color: #b8f5d9;

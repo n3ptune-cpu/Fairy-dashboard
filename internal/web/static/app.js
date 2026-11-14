@@ -1443,7 +1443,7 @@ function pollMenu(s) {
     "Default is the rate from config.yaml."];
   return `<div class="menu poll" role="menu"><div class="menu-title">Polling rate${infoBtn("poll-menu", "Polling rate", infoList(more))}</div>
     ${POLL_CHOICES.map(([v, label]) => `<button class="menu-item ${String(cur) === String(v) ? "on" : ""}" data-act="poll" data-v="${v}" ${why ? `disabled title="${esc(why)}"` : ""}>${label}${v === "default" ? '<span class="note">config</span>' : ""}</button>`).join("")}
-    ${modelNameMenu(s)}${wakeUpdateMenu(s)}</div>`;
+    ${modelNameMenu(s)}${editHostMenu(s)}${wakeUpdateMenu(s)}</div>`;
 }
 const POWER_LABEL = table({ shutdown: "Shut down", reboot: "Reboot", sleep: "Sleep", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)", bmc_on: "Power on (via BMC)" });
 function powerMenu(s) {
@@ -3483,6 +3483,180 @@ document.addEventListener("click", (e) => {
   const t = e.target.closest('[data-act="model-name"]');
   const s = t && !t.disabled && state.byId[current().id];
   if (s) openModelName(s);
+});
+
+// ------------------------------------------------------------ Edit host (admins, the ⋯ menu of a host's page)
+// Which UPS a machine is on, which plugs are its plugs, which of them count in the total: the three link fields
+// of config.yaml, changed here. The panel keeps a change as its own override (state.json); config.yaml is not
+// written and stays the base, and Reset takes an override out again. A link is part of the entry of the machine
+// that READS the device, so every line names that machine ("read by NAS"), and Reset is about all links of
+// that kind read by it. The dialog sends only the ticks that were changed, for this one machine.
+// eh.d is the panel's answer (GET .../options); eh.draft holds what was changed in the dialog and nothing else.
+// Everything that is drawn or sent is made from the two by the functions below, which touch no page.
+const eh = { d: null, draft: null, seq: 0, busy: false };
+const ehDraft = () => ({ ups: dict(), linked: dict(), total: dict(), reset: dict() });
+function editHostMenu(s) {
+  if (!isHost(s) || !state.me?.can_manage_users) return "";
+  return `<button class="menu-item" type="button" data-act="edit-host">Edit host</button>`;
+}
+const EH_FIELDS = [["ups", "UPS links"], ["plugs", "Plug links"], ["total", "Total of the plugs"]];
+const ehKey = (agent, field) => `${agent}/${field}`;
+// What an entry is without the ticks made in this dialog: the panel's value, or config.yaml's when Reset was pressed for it.
+const ehWas = (x, field, draft) => {
+  const reset = !!draft.reset[ehKey(x.agent, field)];
+  if (field === "ups") return reset ? !!x.config_on : !!x.on;
+  if (field === "plugs") return reset ? !!x.config_linked || !!x.self : !!x.linked;
+  return reset ? !!x.config_in_total : !!x.in_total;
+};
+const ehNow = (x, field, draft) => {
+  const v = (field === "ups" ? draft.ups : field === "plugs" ? draft.linked : draft.total)[x.id];
+  return v === undefined ? ehWas(x, field, draft) : v;
+};
+// "from config.yaml" or "changed here": where the value of a line comes from once this dialog is saved
+const ehFrom = (x, field, draft) => {
+  const from = field === "total" ? x.total_from : x.from;
+  if (draft.reset[ehKey(x.agent, field)]) return "config";
+  return from === "panel" || ehNow(x, field, draft) !== ehWas(x, field, draft) ? "panel" : "config";
+};
+// A plug is this machine's when it is linked to it (with this dialog's ticks) or read by its own agent.
+const ehMine = (d, p, draft) => ehNow(p, "plugs", draft) || (!!d.agent && p.agent === d.agent);
+// One line for each thing Save will change, in the panel's own words (the same lines are in "Confirm it's you"
+// and in the audit log), and the request that says exactly that.
+function ehPlan(d, draft) {
+  const lines = [], body = { ups: [], plugs: [], reset: [] };
+  const readers = dict();
+  [...d.ups, ...d.plugs].forEach((x) => { readers[x.agent] = x.agent_name; });
+  for (const agent of Object.keys(readers)) for (const [field, words] of EH_FIELDS) {
+    if (!draft.reset[ehKey(agent, field)]) continue;
+    body.reset.push({ agent, field });
+    lines.push(`${words} read by ${readers[agent]}: back to config.yaml`);
+  }
+  for (const u of d.ups) {
+    const on = ehNow(u, "ups", draft);
+    if (on === ehWas(u, "ups", draft)) continue;
+    body.ups.push({ id: u.id, on });
+    lines.push(`UPS ${u.name} (read by ${u.agent_name}): ${on ? "powers" : "no longer powers"} ${d.name}`);
+  }
+  for (const p of d.plugs) {
+    const linked = ehNow(p, "plugs", draft), inTotal = ehNow(p, "total", draft), who = `Plug ${p.name} (read by ${p.agent_name})`;
+    const e = { id: p.id };
+    if (linked !== ehWas(p, "plugs", draft)) {
+      e.linked = linked;
+      lines.push(linked ? `${who}: linked to ${d.name}${p.other ? ` (was on ${p.other})` : ""}` : `${who}: no longer linked to ${d.name}`);
+    }
+    if (ehMine(d, p, draft) && inTotal !== ehWas(p, "total", draft)) {
+      e.in_total = inTotal;
+      lines.push(inTotal ? `${who}: in the total again` : `${who}: not in the total`);
+    }
+    if ("linked" in e || "in_total" in e) body.plugs.push(e);
+  }
+  for (const k of Object.keys(body)) if (!body[k].length) delete body[k];
+  return { lines, body };
+}
+// The dialog's sections. Every name in them is the panel's data and goes through esc().
+function ehView(d, draft) {
+  const src = (x, field) => {
+    const from = ehFrom(x, field, draft), reset = !!draft.reset[ehKey(x.agent, field)];
+    const stored = (field === "total" ? x.total_from : x.from) === "panel" && !reset;
+    const by = field === "total" ? x.total_by : x.by;
+    return `<span class="eh-src${from === "panel" ? " on" : ""}"${stored && by ? ` title="${esc(`Changed here by ${by}`)}"` : ""}>${from === "panel" ? "changed here" : "from config.yaml"}</span>${stored
+      ? `<button class="btn sm" type="button" data-eh-reset="${esc(ehKey(x.agent, field))}" title="${esc(`Back to config.yaml for all ${EH_FIELDS.find((f) => f[0] === field)[1].toLowerCase()} read by ${x.agent_name}`)}">Reset</button>` : ""}`;
+  };
+  // o.note is markup (fixed words, or a name through esc)
+  const row = (x, field, o = {}) => `<div class="eh-row"><label class="check opt"><input type="checkbox" data-eh="${field}" value="${esc(x.id)}"${ehNow(x, field, draft) ? " checked" : ""}${o.fixed ? " disabled" : ""}><span>${esc(x.name)}
+    <span class="note">read by ${esc(x.agent_name)}${o.note ? ` · ${o.note}` : ""}</span></span></label>${o.fixed ? "" : src(x, field)}</div>`;
+  const mine = d.plugs.filter((p) => ehMine(d, p, draft));
+  const sect = (title, hint, rows, none) => `<div class="wu-sub">${title}</div>${rows.length ? `<p class="note eh-hint">${hint}</p>${rows.join("")}` : `<p class="note eh-hint">${none}</p>`}`;
+  const plan = ehPlan(d, draft);
+  const any = [...d.ups.map((u) => ehFrom(u, "ups", draft)), ...d.plugs.map((p) => ehFrom(p, "plugs", draft)), ...mine.map((p) => ehFrom(p, "total", draft))].includes("panel");
+  return `${sect("UPS", "Ticked: this machine is on that UPS.", d.ups.map((u) => row(u, "ups")), "No agent relays a UPS.")}
+    ${sect("Plugs", "Ticked: the plug's watts are this machine's.", d.plugs.map((p) => row(p, "plugs", p.self ? { fixed: true, note: "set on the machine itself" } : !ehNow(p, "plugs", draft) && p.other ? { note: `now on ${esc(p.other)}` } : {})), "No agent relays a plug.")}
+    ${sect("Total", "Ticked: the plug counts in the total.", mine.map((p) => row(p, "total")), "No plug of this machine.")}
+    ${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
+    ${d.ignored?.length ? `<p class="note warn eh-ignored">${d.ignored.length === 1 ? "1 stored change is" : `${d.ignored.length} stored changes are`} ignored: see the panel's log.</p>` : ""}
+    ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}`;
+}
+// A tick or a Reset in the dialog changes the draft, never the panel.
+function ehTick(d, draft, field, id, checked) {
+  const x = (field === "ups" ? d.ups : d.plugs).find((y) => y.id === id);
+  if (!x) return;
+  const m = field === "ups" ? draft.ups : field === "plugs" ? draft.linked : draft.total;
+  if (checked === ehWas(x, field, draft)) delete m[id]; else m[id] = checked;
+}
+function ehReset(d, draft, key) {
+  draft.reset[key] = true;
+  const [agent, field] = [key.slice(0, key.lastIndexOf("/")), key.slice(key.lastIndexOf("/") + 1)];
+  const m = field === "ups" ? draft.ups : field === "plugs" ? draft.linked : draft.total;
+  for (const x of field === "ups" ? d.ups : d.plugs) if (x.agent === agent) delete m[x.id];  // the ticks made before go with it
+}
+const EH_INFO = () => infoBtn("edit-host", "Edit host", infoList([
+  "What you change here is kept by the panel. config.yaml is not changed and stays the base.",
+  "A changed value is used instead of config.yaml's until Reset, also when config.yaml is edited later.",
+  "A link belongs to the machine that reads the device. Reset puts back all links of that kind read by that machine.",
+  "A change counts from the next poll of the machine that reads the device.",
+  "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]));
+function ehDraw() {
+  const body = $("#eh-body");
+  if (!body || !eh.d) return;
+  body.innerHTML = ehView(eh.d, eh.draft);
+  $("#eh-save").disabled = eh.busy || !ehPlan(eh.d, eh.draft).lines.length;
+}
+async function openEditHost(s) {
+  state.menu = null; render();
+  const m = $("#modal");
+  const me = ++eh.seq;
+  Object.assign(eh, { d: null, draft: ehDraft(), busy: false });
+  m.innerHTML = `<form class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="eh-t" id="eh-form" novalidate>
+    <h3><span id="eh-t"></span>${EH_INFO()}</h3>
+    <div id="eh-body"><p class="note">Loading…</p></div>
+    <div class="error" id="eh-err" role="alert"></div>
+    <div class="row-gap end"><button class="btn" type="button" id="eh-x">Cancel</button><button class="btn primary" type="submit" id="eh-save" disabled>Save</button></div></form>`;
+  $("#eh-t").textContent = `Edit ${s.name}`;
+  m.hidden = false;
+  const close = () => { closeModal(); document.querySelector('[data-act="menu"][data-menu="poll"]')?.focus(); };
+  $("#eh-x").onclick = close;
+  const mine = () => eh.seq === me && !!$("#eh-form")?.isConnected;  // this dialog is still the one on the page
+  const fail = (msg) => { if (mine()) { $("#eh-err").textContent = msg; } };
+  const path = `/api/admin/hosts/${enc(s.id)}/options`;
+  // The answer has a time limit: a dialog that says "Loading…" for ever says nothing.
+  const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 15000);
+  try { eh.d = await api(path, { signal: stop.signal }); }
+  catch (x) {
+    if (mine()) { $("#eh-body").innerHTML = ""; fail(x?.name === "AbortError" ? "The panel did not answer. Close this and try again." : x.message); }
+    return;
+  } finally { clearTimeout(timer); }
+  if (!mine()) return;
+  ehDraw();
+  $("#eh-body").onchange = (e) => {
+    const t = e.target.closest("input[data-eh]");
+    if (!t) return;
+    ehTick(eh.d, eh.draft, t.dataset.eh, t.value, t.checked); $("#eh-err").textContent = ""; ehDraw();
+  };
+  $("#eh-body").onclick = (e) => {
+    const t = e.target.closest("[data-eh-reset]");
+    if (!t) return;
+    ehReset(eh.d, eh.draft, t.dataset.ehReset); $("#eh-err").textContent = ""; ehDraw();
+  };
+  $("#eh-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const plan = ehPlan(eh.d, eh.draft);
+    if (eh.busy || !plan.lines.length) return;
+    eh.busy = true; $("#eh-save").disabled = true; $("#eh-err").textContent = "";
+    try {
+      const r = await controlCall({ kind: "request", label: `Edit host ${s.name}`, system: s.id, method: "PUT", path, body: plan.body },
+        () => api(path, { method: "PUT", body: JSON.stringify(plan.body) }));
+      if (!r) return;  // "Confirm it's you" took over: the panel runs the kept change after the sign-in
+      close(); flash(`${s.name}: ${r.message}`);
+    } catch (x) {
+      if (!mine()) return;  // the dialog is gone (the session ended)
+      eh.busy = false; fail(x.message); ehDraw();
+    }
+  };
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="edit-host"]');
+  const s = t && !t.disabled && state.byId[current().id];
+  if (s) openEditHost(s);
 });
 
 // ------------------------------------------------------------ elevated helper Stop / Start
