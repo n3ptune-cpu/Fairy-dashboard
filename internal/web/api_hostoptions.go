@@ -367,7 +367,8 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 			}
 		}
 		if p := config.LinkProblems(e.Links); len(p) > 0 {
-			if len(config.LinkProblems(m.base[agent])) > 0 { // an override begins as a copy of config.yaml's value
+			// an override begins as a copy of config.yaml's value: what the check finds can be config.yaml's own
+			if slices.ContainsFunc(config.LinkProblems(m.base[agent]), func(b config.LinkProblem) bool { return b.Text == p[0].Text }) {
 				return nil, nil, bad("%s: %s (config.yaml has it in the entry of %s: correct it there first)", m.names[agent], p[0].Text, agent)
 			}
 			return nil, nil, bad("%s: %s", m.names[agent], p[0].Text)

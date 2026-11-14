@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
@@ -653,5 +654,57 @@ func TestEditHostChangesNoControlPath(t *testing.T) {
 		if _, err := os.Stat(f); err != nil {
 			t.Errorf("%s is not where this test looks for it: %v", f, err)
 		}
+	}
+}
+
+// What the API stores is checked by the same check that reads it back (config.LinkProblems): a change whose
+// result the reader would leave out is refused, with the reason, and nothing is stored. An override begins as
+// a copy of config.yaml's value of its field, so a field of config.yaml that the check does not take cannot
+// be changed here until it is put right there; the sentence says so. The other fields of that agent can.
+func TestEditHostRefusesWhatTheSharedCheckWouldIgnore(t *testing.T) {
+	var rows, devs []string
+	for i := 0; i < config.MaxLinkRows; i++ {
+		rows = append(rows, fmt.Sprintf("pc-%d", i))
+	}
+	for i := 0; i < config.MaxLinkDevices; i++ {
+		devs = append(devs, fmt.Sprintf("d%d", i))
+	}
+	r := ehSetupWith(t, ehConfig(t, `ups_powers: {rack: [`+strings.Join(rows, ", ")+`]}, power_links: {Bad_ID: lab-a-agent}, power_exclude_from_total: [`+strings.Join(devs, ", ")+`]`), true)
+	for name, c := range map[string]struct {
+		body map[string]any
+		want string
+	}{
+		"a 33rd row for one UPS": {map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}}, "NAS: ups_powers: UPS rack powers 33 rows, at most 32 are taken"},
+		"a 17th device left out of the total": {map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/own", "in_total": false}}},
+			"NAS: power_exclude_from_total: 17 devices, and an agent relays at most 16"},
+		"a link next to one of config.yaml that no device can have": {map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true}}},
+			`NAS: power_links: "Bad_ID" is not an id a device can have (lowercase letters, digits and dashes) (config.yaml has it in the entry of nas-agent: correct it there first)`},
+	} {
+		id := ehNodeB
+		if strings.Contains(name, "17th") {
+			id = ehNAS // its own plug
+		}
+		got := r.put(id, c.body)
+		if got.code != 422 || got.body["detail"] != c.want {
+			t.Errorf("%s: %d %s\nwant 422 %q", name, got.code, got.raw, c.want)
+		}
+		if r.storedOptions() != nil {
+			t.Fatalf("%s: refused, and stored: %v", name, r.storedOptions())
+		}
+	}
+	// a refusal is in the audit log as one, never as a change
+	for _, en := range r.auditEntries("", "host.options") {
+		if en["outcome"] == "ok" || !strings.HasPrefix(fmt.Sprint(en["outcome"]), "error 422: ") {
+			t.Errorf("audit: %v", en)
+		}
+	}
+	// a field that is in order can be changed for the same agent: the desk UPS has room
+	p := r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})
+	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"UPS Desk UPS (read by NAS): powers PVE-B"}) {
+		t.Fatalf("changed: %v", got)
+	}
+	// and what was stored is read back without anything ignored
+	if ig := strs(r.options(ehNodeB).body["ignored"]); len(ig) != 0 {
+		t.Fatalf("ignored: %v", ig)
 	}
 }
