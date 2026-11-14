@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -47,7 +48,68 @@ const MaxWolMACs = 8
 // HostName checks a host's display name as a person typed it and returns it as it is stored (the rules of a
 // custom model name: one line, no control or invisible characters, at most MaxHostName characters). "": no
 // name.
-func HostName(raw string) (string, error) { return labelText(raw, "name", MaxHostName) }
+//
+// One more rule than a model name has, because a host's name is typed to confirm a power action and must not
+// be taken for another host's: a word of it is written in ONE alphabet. A word with Latin letters and
+// Cyrillic or Greek ones ("PC-А" with a Cyrillic А) is refused; "Büro ПК", two words in two alphabets, is a
+// name. (Whether a name is another host's is not asked here: NameKey, and the API that knows the hosts.)
+func HostName(raw string) (string, error) {
+	name, err := labelText(raw, "name", MaxHostName)
+	if err != nil {
+		return "", err
+	}
+	for _, word := range strings.Fields(name) {
+		latin, other := false, false
+		for _, r := range word {
+			latin = latin || unicode.Is(unicode.Latin, r)
+			other = other || unicode.In(r, unicode.Cyrillic, unicode.Greek)
+		}
+		if latin && other {
+			return "", errors.New("name mixes Latin letters with Cyrillic or Greek ones in one word: write the word in one alphabet")
+		}
+	}
+	return name, nil
+}
+
+// nameLookalikes are the Cyrillic and Greek letters (in lower case) that are drawn like a Latin letter in one
+// of their two cases, with that Latin letter. The standard library has no table of look-alikes; this one is
+// the letters of the two alphabets a keyboard in Europe types, and it is used for one thing only: NameKey.
+var nameLookalikes = map[rune]rune{
+	'а': 'a', 'в': 'b', 'е': 'e', 'к': 'k', 'м': 'm', 'н': 'h', 'о': 'o', 'р': 'p', 'с': 'c', 'т': 't', 'у': 'y', 'х': 'x',
+	'і': 'i', 'ј': 'j', 'ѕ': 's', 'ԁ': 'd', 'ԛ': 'q', 'ԝ': 'w',
+	'α': 'a', 'β': 'b', 'ε': 'e', 'ζ': 'z', 'η': 'h', 'ι': 'i', 'κ': 'k', 'μ': 'm', 'ν': 'n', 'ο': 'o', 'ρ': 'p', 'τ': 't', 'υ': 'y', 'χ': 'x',
+}
+
+// NameKey is the form of a name under which two names count as ONE name: what a person reading a row, or
+// typing a name to confirm, cannot tell apart. Two hosts must not have names with the same key.
+//
+// Folded: upper and lower case; spaces at the ends and runs of spaces (every kind of space); every dash and
+// hyphen (the hyphen-minus, U+2010 to U+2015, the minus sign, the small and the full-width ones) to "-"; the
+// full-width forms of ASCII to ASCII; and the Cyrillic and Greek letters that are drawn like a Latin letter
+// to that letter (nameLookalikes), so that "РС-А" in Cyrillic is "PC-A".
+//
+// NOT folded, on purpose: an accent ("PC-Á" is another name than "PC-A": it is another word in the languages
+// that write it) and a dot or any other sign at the end ("PC-A." is another name). Both can be told apart on
+// the page, and typing one for the other does not confirm.
+func NameKey(name string) string {
+	var b strings.Builder
+	for _, r := range strings.Join(strings.FieldsFunc(name, unicode.IsSpace), " ") {
+		if r >= 0xff01 && r <= 0xff5e { // full-width ASCII
+			r -= 0xfee0
+		}
+		switch {
+		case unicode.Is(unicode.Pd, r), r == 0x2212, r == 0x2043, r == 0x02d7:
+			r = '-'
+		default:
+			r = unicode.ToLower(unicode.ToUpper(r)) // both ways: a letter whose lower case has two forms is one
+			if l, ok := nameLookalikes[r]; ok {
+				r = l
+			}
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
 
 var wolMACRe = regexp.MustCompile(`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`)
 

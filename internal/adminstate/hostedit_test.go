@@ -30,6 +30,55 @@ func TestHostName(t *testing.T) {
 	}
 }
 
+// A word of a host's name is written in one alphabet: a Latin word with a Cyrillic or Greek letter in it is
+// refused, because it reads as another host's name and is not that name. Names in other alphabets, and names
+// of several words in several alphabets, are names.
+func TestHostNameIsOneAlphabetAWord(t *testing.T) {
+	for what, raw := range map[string]string{"a Cyrillic А in a Latin word": "PC-А", "a Cyrillic о": "Den-bоx", "a Greek Α": "PC-Α", "a Greek ο in a word": "Dοn",
+		"in the second word": "Big PС", "Latin in a Cyrillic word": "Сервер-X1"} {
+		if got, err := HostName(raw); err == nil || !strings.Contains(err.Error(), "one alphabet") {
+			t.Errorf("%s: %q taken as %q (%v)", what, raw, got, err)
+		}
+	}
+	for _, raw := range []string{"Сервер", "Сервер 2", "Büro ПК", "Σπίτι PC", "机房-1", "サーバー A", "Ærø NAS", "PC-Á", "PC-A."} {
+		if got, err := HostName(raw); err != nil || got != raw {
+			t.Errorf("%q: %q, %v", raw, got, err)
+		}
+	}
+	// the reader does not take such a name from state.json either
+	dir := t.TempDir()
+	writeState(t, dir, `{"host_options": {"hosts": {"pc-b": {"name": "PC-А"}}}}`)
+	if o, ignored := New(dir).HostOptionsRead(); len(o.Hosts) != 0 || len(ignored) != 1 {
+		t.Errorf("a mixed name in state.json: %+v %q", o.Hosts, ignored)
+	}
+}
+
+// NameKey is the form under which two names are one name: what cannot be told apart on a row or when typed.
+// An accent and a sign at the end are told apart, and stay two names.
+func TestNameKey(t *testing.T) {
+	same := [][]string{
+		{"PC-A", "pc-a", " Pc-A ", "PC‑A" /* U+2011 */, "PC–A" /* en dash */, "PC—A" /* em dash */, "PC−A" /* minus */, "ＰＣ-Ａ" /* full width */, "ＰＣ－Ａ",
+			"РС-А" /* all Cyrillic */, "ΡC-Α" /* Greek Ρ and Α */, "PC‐A" /* U+2010 */},
+		{"Relay A", "relay  a", "RELAY A", "Relay　A", "relay	a"},
+		{"NAS", "ΝΑЅ", "nas"},
+	}
+	for _, group := range same {
+		for _, n := range group[1:] {
+			if NameKey(n) != NameKey(group[0]) {
+				t.Errorf("%q and %q are two names (%q, %q)", group[0], n, NameKey(group[0]), NameKey(n))
+			}
+		}
+	}
+	other := []string{"PC-A", "PC-A.", "PC-Á", "PC-B", "PC A", "PCA", "PC_A", "PC-A 2", "Сервер", "Сервер 2", "机房", "Relay A"}
+	for i, a := range other {
+		for _, b := range other[i+1:] {
+			if NameKey(a) == NameKey(b) {
+				t.Errorf("%q and %q are one name (%q)", a, b, NameKey(a))
+			}
+		}
+	}
+}
+
 // The MAC addresses of a decision: 1 to 8 addresses of network cards, each once, stored in one spelling.
 func TestWolMACs(t *testing.T) {
 	got, err := WolMACs([]string{"AA-BB-CC-DD-EE-01", " aa:bb:cc:dd:ee:02 "})
