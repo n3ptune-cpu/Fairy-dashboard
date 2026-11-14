@@ -1152,8 +1152,9 @@ func (m *Manager) end(r *Run, h *Host, state, on string, now time.Time, text str
 // a word about its power, to which the look adds what it sees.
 func (m *Manager) endSeen(r *Run, h *Host, state, on string, now time.Time, text, neutral string) {
 	h.verdict = &verdict{state: state, on: on, text: text, neutral: neutral, since: now, sinceMono: m.mono()}
-	h.MayGoOff = h.armedMaybe() && on != OnNo // the run lets go of a machine that may switch itself off: kept, for the banner
-	h.calloff = nil                           // its steps are over: no cancel is tried again
+	// the run lets go of a machine that may switch itself off (by its ticket, or by another run's that its agent shows): kept, for the banner
+	h.MayGoOff = (h.armedMaybe() || (h.chk.other != nil && h.chk.other.State != BlockConfirmed)) && on != OnNo
+	h.calloff = nil // its steps are over: no cancel is tried again
 	m.look(r, h, now)
 }
 

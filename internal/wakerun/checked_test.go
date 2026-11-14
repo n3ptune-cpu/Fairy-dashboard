@@ -197,7 +197,9 @@ func TestArmRefusedForEachReason(t *testing.T) {
 			pc := w.checkedOff("pc-a")
 			pc.chk.armSays = reason
 			w.start(StartRequest{Hosts: []string{"pc-a"}, Latest: "17-bbbbbbb"})
-			act := w.waitFor(8*time.Minute, "it waits", func(r *Run) bool { return stateOf(r, "pc-a") == StApproval })
+			w.waitFor(8*time.Minute, "it waits", func(r *Run) bool { return stateOf(r, "pc-a") == StApproval })
+			w.advance(30 * time.Second) // "stays ON" is said once its agent, asked after the refusal, has shown no run (ownword_test.go)
+			act, _ := w.m.Snapshot()
 			h := host(act, "pc-a")
 			if h.Arm != ArmRefused || h.Text != "awake; it could not be armed (run refused ("+reason+")): it stays ON unless you confirm" || h.SelfOffAt != nil {
 				t.Fatalf("refused: %q / %q", h.Arm, h.Text)

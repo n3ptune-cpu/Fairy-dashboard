@@ -297,6 +297,9 @@ func (o runOps) Arm(ctx context.Context, id, run string) (time.Duration, error) 
 		// an error of the machine's that is not one of the two "nothing was armed": it may have got as far as arming
 		return 0, &wakerun.OpError{Code: wakerun.CodeNoAnswer, Text: fmt.Sprintf("http %d from its agent", status)}
 	case status != 200:
+		// A "no" is the answer to this request. What is on the machine is what its approval block shows (a copy
+		// of the request may have arrived first): it is asked now, and the run goes by that (wakerun, armedMaybe).
+		s.Poller.Scheduler.Kick("agent:" + a.ID)
 		reason, words := runRefusal(status, data)
 		return 0, &wakerun.OpError{Code: wakerun.CodeRunRefused, Reason: reason, Text: words}
 	}

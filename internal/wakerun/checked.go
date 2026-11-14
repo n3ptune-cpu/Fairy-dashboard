@@ -95,6 +95,8 @@ type checked struct {
 	offMin, offMax time.Duration
 	lateUntil      time.Duration
 	armSeen        bool      // its agent showed this run as armed, or as counting down
+	noRun          bool      // answers of its agent from after the arm request showed no run of this run (two in a row)
+	other          *RunBlock // another run is live on it by its latest word (armed, counting down or confirmed)
 	none           int       // answers in a row in which its checker takes runs and names none, or another
 	noneAt         time.Time // SeenAt of the latest of them
 	confirming     bool      // BeginConfirm named it, and Confirmed has not said what came of it
@@ -127,14 +129,18 @@ type disarming struct {
 func (h *Host) confirmed() bool { return h.Confirm == ConfirmOK }
 
 // armedMaybe reports whether the machine may switch itself off by the run's ticket: it took the ticket, or
-// the request got no answer and can have arrived, and neither a confirmation nor the machine's own word has
-// ended that.
+// the request got no answer and can have arrived, or its agent showed this run as armed whatever the panel
+// was answered (the machine's own word decides: a ticket can arrive twice, and the panel then holds the
+// refusal of the second copy), and neither a confirmation nor the machine's own word has ended that.
 func (h *Host) armedMaybe() bool {
 	if !h.Checked || h.confirmed() || h.chk.disarmed {
 		return false
 	}
-	return h.Arm == ArmArmed || h.Arm == ArmUnanswered
+	return h.Arm == ArmArmed || h.Arm == ArmUnanswered || h.chk.armSeen
 }
+
+// armedSure: it took the ticket, or its agent showed this run as armed.
+func (h *Host) armedSure() bool { return h.armedMaybe() && (h.Arm == ArmArmed || h.chk.armSeen) }
 
 // checkedStart is Start's look at a request with machines that check approvals themselves: the run's id, the
 // ticket's numbers, and that every such machine of the wake list has a countdown a confirmation can name.
@@ -359,9 +365,14 @@ func (m *Manager) armStep(ctx context.Context, r *Run, h *Host, info HostInfo, o
 		m.emit(EvStep, r, h, "arm", params, opText(err))
 		m.note(h, m.now(), "not armed ("+opText(err)+"): it stays ON unless you confirm")
 	default:
+		// A refusal is the answer to the request the panel sent. If a copy of the request arrived before it (a
+		// proxy that repeats it), the machine is armed all the same: what its agent shows decides, and nothing
+		// says "stays ON" before that was read (stepAwaiting). The times are the ones of a request that may
+		// have arrived.
 		h.Arm, h.ArmText = ArmRefused, opText(err)
+		c.offMin, c.offMax = c.armBefore+t.wait(), c.lateUntil+t.wait()
 		m.emit(EvStep, r, h, "arm", params, opText(err))
-		m.note(h, m.now(), "it could not be armed ("+opText(err)+"): it stays ON unless you confirm")
+		m.note(h, m.now(), "its arming was refused ("+opText(err)+"): what its agent shows decides whether a run is on it all the same")
 	}
 	return true
 }
@@ -407,38 +418,77 @@ func armedTail(r *Run, h *Host, now time.Time, mono time.Duration) string {
 
 // awaitingText is what the row of a waiting machine says.
 func awaitingText(r *Run, h *Host, now time.Time, mono time.Duration) string {
+	c := &h.chk
 	// No confirmation of the run can reach it any more (the question is over, the run was confirmed without it,
 	// or it was cancelled), and it is still up and armed, or may be: its row does not go on saying "unless
 	// you confirm". It says that it was not confirmed, when it switches itself off, and what keeps it on.
-	if over := r.Approval == "given" || r.Approval == "over" || r.Cancel != nil; over && !h.chk.disarmed {
-		armed := h.Arm == ArmArmed || (h.Arm == ArmUnanswered && h.chk.armSeen)
+	if over := r.Approval == "given" || r.Approval == "over" || r.Cancel != nil; over && h.armedMaybe() {
 		switch {
-		case armed && h.Confirm == ConfirmUnanswered:
+		case h.armedSure() && h.Confirm == ConfirmUnanswered:
 			return fmt.Sprintf("Its confirmation got no answer (%s), and its agent does not show the run as confirmed so far: not updated. It is armed: unless the confirmation did arrive, it switches itself off at %s (Keep on cancels that)",
 				h.ConfirmText, offWords(r, h, now, mono))
-		case armed:
+		case h.armedSure():
 			return fmt.Sprintf("%s: not confirmed, not updated. It is armed: it switches itself off at %s (Keep on cancels that)", leadWhy(r, h), offWords(r, h, now, mono))
-		case h.Arm == ArmUnanswered && h.Confirm == ConfirmUnanswered:
+		case h.Confirm == ConfirmUnanswered:
 			return fmt.Sprintf("Neither its arming nor its confirmation (%s) got an answer, and its agent does not show the run so far: not updated. If it is armed and not confirmed, it switches itself off at %s (Keep on cancels that)",
 				h.ConfirmText, offWords(r, h, now, mono))
-		case h.Arm == ArmUnanswered:
+		default:
 			return fmt.Sprintf("%s: not confirmed, not updated. Its arming got no answer, so Fairy does not know yet whether it is armed: if it is, it switches itself off at %s (Keep on cancels that)",
 				leadWhy(r, h), offWords(r, h, now, mono))
 		}
 	}
 	switch {
-	case h.chk.disarmed && h.Arm == ArmArmed:
-		return "awake; it is not armed any more (its agent no longer shows the run): it stays ON unless you confirm"
-	case h.chk.disarmed:
-		return "awake; it is not armed (the arming, which got no answer, never arrived): it stays ON unless you confirm"
-	case h.Arm == ArmArmed || (h.Arm == ArmUnanswered && h.chk.armSeen):
+	case h.armedSure():
 		return fmt.Sprintf("awake and armed: it switches itself off at %s unless you confirm", offWords(r, h, now, mono))
-	case h.Arm == ArmUnanswered && !h.chk.disarmed:
+	case h.armedMaybe():
 		return "awake; the arming got no answer, so Fairy does not know yet whether it is armed: waiting for you to confirm"
+	case c.other != nil:
+		return fmt.Sprintf("awake; not armed by this run (%s), but its agent shows another run (%s) as %s: by that run %s. Keep on cancels that", h.ArmText, c.other.ID, blockWords(c.other.State), otherOff(c.other, now))
+	case c.disarmed && (h.Arm == ArmArmed || c.armSeen):
+		return "awake; it is not armed any more (its agent no longer shows the run): it stays ON unless you confirm"
+	case c.disarmed:
+		return "awake; it is not armed (the arming, which got no answer, never arrived): it stays ON unless you confirm"
+	case h.Arm == ArmRefused && !c.noRun:
+		return "awake; its arming was refused (" + h.ArmText + "): waiting for its agent to show whether a run is on it all the same"
 	case h.Arm == ArmRefused:
 		return "awake; it could not be armed (" + h.ArmText + "): it stays ON unless you confirm"
 	}
 	return "awake; it was not armed (" + h.ArmText + "): it stays ON unless you confirm"
+}
+
+// blockWords says a run's state on a machine for a sentence.
+func blockWords(state string) string {
+	switch state {
+	case BlockOffPending:
+		return "counting down to its switch-off"
+	case BlockConfirmed:
+		return "confirmed"
+	}
+	return state
+}
+
+// otherOff says what another run that is live on the machine does to it, with the machine's own time.
+func otherOff(b *RunBlock, now time.Time) string {
+	switch {
+	case b.State == BlockConfirmed:
+		return "an update and a shutdown are let through on it"
+	case b.OffAt.IsZero():
+		return "it switches itself off (its agent names no time)"
+	}
+	return "it switches itself off at " + when(b.OffAt, now) + " by the machine's own clock"
+}
+
+// otherRun is another run than r that is live on the machine by its latest answer, when that answer counts
+// (as for runWord): armed, counting down or confirmed. prev is kept while the latest answer says nothing.
+func (h *Host) otherRun(r *Run, o Observation, word string, prev *RunBlock) *RunBlock {
+	if word == "" {
+		return prev
+	}
+	if o.Run != nil && o.Run.ID != r.ID && (o.Run.State == BlockArmed || o.Run.State == BlockOffPending || o.Run.State == BlockConfirmed) {
+		b := *o.Run
+		return &b
+	}
+	return nil
 }
 
 // runWord is what the machine's latest answer says about THIS run, when that answer came after since (steady)
@@ -740,25 +790,47 @@ func (m *Manager) stepAwaiting(ctx context.Context, r *Run, h *Host, info HostIn
 		return
 	}
 	none := h.seeNoRun(o, word)
+	if word != "" {
+		c.noRun = none >= 2
+	}
+	if was := c.other; true {
+		c.other = h.otherRun(r, o, word, was)
+		if c.other != nil && (was == nil || was.ID != c.other.ID || was.State != c.other.State) {
+			m.note(h, now, fmt.Sprintf("its agent shows another run (%s) as %s: by that run %s", c.other.ID, blockWords(c.other.State), otherOff(c.other, now)))
+		}
+	}
 	switch {
 	case (word == BlockCancelled || word == BlockDone) && h.armedMaybe():
 		m.endCalledOff(r, h, now)
 		return
 	case word == BlockOffPending:
-		c.armSeen = true
+		c.armSeen, c.disarmed = true, false
 		m.enterSelfOff(r, h, o, mono, now)
 		return
-	case word == BlockArmed && h.Arm == ArmUnanswered && !c.armSeen:
-		// The request did arrive. When it switches itself off is the machine's own word from here on.
-		c.armSeen = true
+	case word == BlockArmed && h.Arm != ArmArmed && !c.armSeen:
+		// Its agent shows THIS run as armed: a ticket did arrive, whatever the panel was answered. When it
+		// switches itself off is the machine's own word from here on.
+		c.armSeen, c.disarmed = true, false
 		if !o.Run.OffAt.IsZero() {
 			at := o.Run.OffAt
 			h.SelfOffAt, h.SelfOffByMachine = &at, true
 		}
-		m.note(h, now, fmt.Sprintf("its agent shows that it is armed: the arming did arrive. It switches itself off at %s unless you confirm, or cancel that", offWords(r, h, now, mono)))
+		if c.offMax == 0 { // no request of the run that could have armed it: its own word is all there is
+			c.offMin, c.offMax = mono, mono+r.Ticket.wait()
+		}
+		how := "the arming did arrive"
+		switch h.Arm {
+		case ArmRefused:
+			how = "its agent shows that it is armed by this run, although its arming was answered with a refusal (" + h.ArmText + "): a ticket did arrive"
+		case ArmUnanswered:
+			how = "its agent shows that it is armed: the arming did arrive"
+		default:
+			how = "its agent shows that it is armed by this run, although the panel handed it no ticket (" + h.ArmText + ")"
+		}
+		m.note(h, now, fmt.Sprintf("%s. It switches itself off at %s unless you confirm, or cancel that", how, offWords(r, h, now, mono)))
 	case word == BlockArmed:
-		c.armSeen = true
-	case none >= 2 && h.Arm == ArmArmed && !c.disarmed:
+		c.armSeen, c.disarmed = true, false
+	case none >= 2 && (h.Arm == ArmArmed || c.armSeen) && !c.disarmed:
 		// It took the ticket, and its checker, which takes runs, names no run of this id in two answers: the
 		// machine was started again, or the run was ended on it. It does not switch itself off.
 		c.disarmed = true
@@ -784,9 +856,9 @@ func (m *Manager) stepAwaiting(ctx context.Context, r *Run, h *Host, info HostIn
 	}
 	over := r.Approval == "given" || r.Approval == "over" || r.Cancel != nil // no confirmation can reach it any more
 	switch {
-	case c.tooLate, (h.Arm == ArmArmed || c.armSeen) && h.armedMaybe() && mono >= c.offMin:
+	case c.tooLate, h.armedSure() && mono >= c.offMin:
 		m.enterSelfOff(r, h, o, mono, now)
-	case h.armedMaybe() && (h.Arm == ArmArmed || c.armSeen):
+	case h.armedSure():
 		m.say(h, awaitingText(r, h, now, mono)+helperWords(o))
 	case h.armedMaybe(): // the arming got no answer, and its agent has not shown the run
 		if over && mono > c.lateUntil+lookFor {
@@ -796,6 +868,21 @@ func (m *Manager) stepAwaiting(ctx context.Context, r *Run, h *Host, info HostIn
 			return
 		}
 		m.say(h, awaitingText(r, h, now, mono))
+	case over && c.other != nil:
+		// Not armed by this run, and another run is live on it by its own word: it is not said to stay on.
+		text := cameOnline(h) + ". " + leadWhy(r, h) + ": not confirmed, not updated. " + notArmedWords(h)
+		if b := c.other; b.State != BlockConfirmed && !b.OffAt.IsZero() {
+			at := b.OffAt
+			h.SelfOffAt, h.SelfOffByMachine = &at, true
+		}
+		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s It is ON, and its agent shows another run (%s) as %s: by that run %s unless that is cancelled (Keep on in the panel, or at the machine).",
+			text, c.other.ID, blockWords(c.other.State), otherOff(c.other, now)), text)
+	case over && h.Arm == ArmRefused && !c.noRun && mono-c.armBefore <= lookFor:
+		m.say(h, awaitingText(r, h, now, mono)) // its agent is read first
+	case over && h.Arm == ArmRefused && !c.noRun:
+		// The refusal is all the run has: no answer of its agent from after the request said that no run is on it.
+		text := cameOnline(h) + ". " + leadWhy(r, h) + ": not confirmed, not updated. Its arming was refused (" + h.ArmText + "), and its agent did not say afterwards whether a run is on it."
+		m.endSeen(r, h, StLeftOn, OnYes, now, text+" It was ON when Fairy last saw it; Fairy could not read that nothing of this run is on it.", text)
 	case over:
 		text := cameOnline(h) + ". " + leadWhy(r, h) + ": not confirmed, not updated. " + notArmedWords(h)
 		m.endSeen(r, h, StLeftOn, OnYes, now, text+" It is ON: nothing of this run switches it off.", text)
@@ -1185,10 +1272,20 @@ func (m *Manager) MayGoOff(now time.Time) []ArmedHost {
 				out = append(out, letGo(r, h, now)...)
 				continue
 			}
+			if b := h.chk.other; b != nil && !h.armedMaybe() && h.verdict == nil && !h.Final() && b.State != BlockConfirmed {
+				// another run's ticket armed it, by its own word: named with that time, Keep on is the same cancel
+				a := ArmedHost{RunID: r.ID, ID: h.ID, Name: h.Name, ByMachine: true, Sure: true, Active: true}
+				if !b.OffAt.IsZero() {
+					at := b.OffAt
+					a.At = &at
+				}
+				out = append(out, a)
+				continue
+			}
 			if !h.armedMaybe() || h.verdict != nil {
 				continue
 			}
-			a := ArmedHost{RunID: r.ID, ID: h.ID, Name: h.Name, ByMachine: h.SelfOffByMachine, Sure: h.Arm == ArmArmed || h.chk.armSeen, Active: true}
+			a := ArmedHost{RunID: r.ID, ID: h.ID, Name: h.Name, ByMachine: h.SelfOffByMachine, Sure: h.armedSure(), Active: true}
 			if h.SelfOffAt != nil {
 				at := *h.SelfOffAt
 				a.At = &at
@@ -1214,7 +1311,7 @@ func (m *Manager) MayGoOff(now time.Time) []ArmedHost {
 
 // letGo is MayGoOff's entry for a machine the run no longer watches (nil: its time is over).
 func letGo(r *Run, h *Host, now time.Time) []ArmedHost {
-	a := ArmedHost{RunID: r.ID, ID: h.ID, Name: h.Name, ByMachine: h.SelfOffByMachine, Sure: h.Arm == ArmArmed}
+	a := ArmedHost{RunID: r.ID, ID: h.ID, Name: h.Name, ByMachine: h.SelfOffByMachine, Sure: h.Arm == ArmArmed || h.chk.armSeen || h.chk.other != nil}
 	at := r.StartedAt.Add(r.Ticket.valid() + lateArm + r.Ticket.wait())
 	if h.SelfOffAt != nil {
 		at = *h.SelfOffAt
