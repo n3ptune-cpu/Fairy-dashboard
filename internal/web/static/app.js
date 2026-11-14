@@ -2157,6 +2157,9 @@ function wuSteps(h) {
     ["Off", h.state === "off" ? "done" : ""]];
   return `<div class="steps">${steps.map(([l, c]) => `<span class="${c}">${l}</span>`).join("")}</div>`;
 }
+// Keep on in a machine's row of its run: for as long as it may switch itself off by that run's ticket (the data
+// of the strip over every page says which machines; the strip's own handler takes the click).
+const wuKeepOn = (r, h) => ((typeof rw === "object" && rw.data?.armed) || []).some((a) => a.id === h.id && a.run === r.id);
 function wuHostRow(r, h) {
   const [cls, said] = WU_STATE[h.state] || ["", h.state], end = wuEnded(h), key = r.id + "/" + h.id;
   // "LEFT ON" is for a machine the run saw as on. When its last look could not see the machine, the chip says that.
@@ -2168,7 +2171,8 @@ function wuHostRow(r, h) {
   const log = h.log || [], open = !!wu.open[key];
   return `<div class="wu-host ${end ? "end" : ""}" data-key="wuh-${esc(key)}">
     <div class="wu-h1"><b>${state.byId[h.id] ? `<a href="#/system/${enc(h.id)}">${esc(h.name)}</a>` : esc(h.name)}</b>
-      <span class="chip ${warnEnd ? "warn" : cls}">${esc(warnEnd ? `${label} · not updated` : label)}</span>${pw}</div>
+      <span class="chip ${warnEnd ? "warn" : cls}">${esc(warnEnd ? `${label} · not updated` : label)}</span>${pw}${
+      wuKeepOn(r, h) ? `<button class="btn sm push" type="button" data-act="rw-keep" data-id="${esc(h.id)}" data-name="${esc(h.name)}">Keep on</button>` : ""}</div>
     ${wuSteps(h)}
     <div class="wu-text">${esc(h.text)}${count}</div>
     ${log.length ? `<button class="wu-more" type="button" data-act="wu-log" data-k="${esc(key)}" aria-expanded="${open}">${open ? "Hide" : "Show"} its ${log.length} step${log.length === 1 ? "" : "s"}</button>` : ""}
@@ -2184,7 +2188,6 @@ function wuRunBox(r, live) {
       ${live && !c ? `<button class="btn danger push" type="button" data-act="wu-cancel" data-id="${esc(r.id)}" ${state.me?.can_control ? "" : "disabled"} title="${esc(why || "Stop the run")}">Cancel run</button>` : ""}</div>
     ${c ? `<div class="note warn wu-note">Cancelled by ${esc(c.by)}: ${!r.hosts.some((h) => h.wake_sent_at) ? "nothing else is started." : c.switch_off ? "the machines it has woken are still switched off again; nothing else is started." : "the machines it has woken stay on."}</div>` : ""}
     ${r.note ? `<div class="note warn wu-note">${esc(r.note)}</div>` : ""}
-    ${r.approval === "needed" ? '<div class="warnbox wu-note">The woken machines wait for your passkey: "Confirm it\'s you" in the strip at the top of every page. Not confirmed in time: not updated, and a machine that is armed switches itself off again.</div>' : ""}
     ${r.hosts.map((h) => wuHostRow(r, h)).join("")}</div>`;
 }
 // The section is folded: under its heading and its one sentence there is a line about the last run and the
