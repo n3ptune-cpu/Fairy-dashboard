@@ -1995,8 +1995,8 @@ settings (on or off, seconds, events) are the defaults again after the next upda
   one and says so once in its log. A symbolic link or a folder at that name is never touched: nothing is
   read or kept until it is taken away.
 * `power-day.json` in the data folder is the other file that decides nothing: the last 24 hours of every
-  power source, a point a minute ([Last 24 hours](#last-24-hours)). Watts, volts, amperes and kWh counters
-  only; no name, no address, no token. It is written by the panel alone (mode 0600, in one step, every five
+  power source, a point a minute ([Last 24 hours](#last-24-hours)). The sources' ids with their watts, volts,
+  amperes and kWh counters; no name, no address, no token. It is written by the panel alone (mode 0600, in one step, every five
   minutes and at a stop, never while a poll waits for it), read once at start, and never through a symbolic
   link. A file that cannot be used is not used and is replaced by the next write; a link or a folder at its
   name is left alone, and then nothing is kept. Its content reaches a browser only through

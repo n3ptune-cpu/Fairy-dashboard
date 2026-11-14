@@ -291,6 +291,10 @@ func TestDayFileLeavesOutWhatIsWrongInIt(t *testing.T) {
 			t.Errorf("%q: has a day %v", id, d.Has(id, now))
 		}
 	}
+	// a source that has nothing in the last 24 hours takes no place among the MaxDayDevices
+	if d.Len() != 8 {
+		t.Errorf("%d sources were kept from the file, want the 8 that have a minute in the last 24 hours", d.Len())
+	}
 	s := seriesOf(t, d, "bad-extras", now)
 	if *s.Volts[0] != 230 || s.Volts[1] != nil || s.Volts[2] != nil || s.Amps[0] != nil || *s.Amps[1] != 0.2 {
 		t.Errorf("impossible volts and amperes: %v %v", s.Volts, s.Amps)
@@ -479,6 +483,7 @@ func TestDayFileWriteThatHangsHoldsNothingUp(t *testing.T) {
 	if took := time.Since(begin); took > 3*time.Second {
 		t.Fatalf("600 history ticks took %v while a write hangs", took)
 	}
+	time.Sleep(200 * time.Millisecond) // a second write would be on its way by now (ten periods have passed for the store)
 	if started.Load() != 1 {
 		t.Errorf("%d writes were started while the first one hangs, want 1", started.Load())
 	}
