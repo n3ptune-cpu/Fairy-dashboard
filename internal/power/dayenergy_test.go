@@ -302,6 +302,17 @@ func TestDayEnergyACoarseCounterIsNotAJump(t *testing.T) {
 	if kwh, est, _ := en(360, flat(60), stuck(0.65)); !near(kwh, 0.360, 0.002) || est < 0.3 {
 		t.Errorf("a step of 0.65 kWh after 0.3 kWh of watts: %.3f kWh, %.3f estimated; want the watts of those hours (0.360 in all)", kwh, est)
 	}
+	// the minute the step shows up in is one of the minutes it is for: 300 W, 40 minutes (0.200 kWh) to the
+	// step's own minute and 0.195 without it, and a step of 0.395
+	late := func(i int) float64 {
+		if i < 40 {
+			return 5
+		}
+		return 5.395 + float64(i-40)*0.001
+	}
+	if kwh, _, _ := en(100, flat(300), late); !near(kwh, 0.005+0.395+0.059, 0.002) {
+		t.Errorf("a step of 0.395 kWh after 0.200 kWh of watts with its own minute: %.3f kWh, want it counted (0.459)", kwh)
+	}
 	// and the review's case stays: 19 kWh after five hours of standing still is no coarse counter
 	if kwh, _, _ := en(360, flat(60), stuck(19)); !near(kwh, 0.360, 0.002) {
 		t.Errorf("a step of 19 kWh after 0.3 kWh of watts: %.3f kWh", kwh)
