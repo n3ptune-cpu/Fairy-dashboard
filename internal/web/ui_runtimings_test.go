@@ -103,7 +103,9 @@ func TestUIRunTimingsIsAButtonOfTheUpdateUnpoweredHostsBox(t *testing.T) {
 		`const t = e.target.closest('[data-act="rt-open"]');`,
 		`const path = "/api/admin/run-timings";`,
 		`controlCall({ kind: "request", label: "Run timings", method: "PUT", path, body: plan.body },`, // "Confirm it's you" when it is asked for
-		`const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 15000);`,           // no "Loading…" for ever
+		// no "Loading…" for ever: this dialog's own loader (Edit host has one of its own, in other names)
+		"const halt = new AbortController(), limit = setTimeout(() => halt.abort(), 15000);\n  let why = \"\";\n  try { rt.d = await api(path, { signal: halt.signal }); }",
+		`finally { clearTimeout(limit); }`,
 		`<h3><span id="rt-t">Run timings</span>${RT_INFO()}</h3>`,
 		`"The times above can be changed with Run timings, next to the button.",`, // the box's own info list says where
 	} {
@@ -384,6 +386,16 @@ func TestUIRunTimingsDialogFlow(t *testing.T) {
   await openRunTimings();
   if ($("#rt-err").textContent !== "The panel did not answer. Close this and try again.") fail("no answer: " + $("#rt-err").textContent);
   if (timers.filter((x) => x.ms === 15000).length !== 2) fail("no time limit on the dialog's question");
+  // the time limit is this dialog's own and does what it says: the question is asked with a signal, the
+  // timer of 15 s ends it, and the dialog then says that the panel did not answer
+  els = {}; detached = false; timers.length = 0; asked.length = 0;
+  answer = (path, opts) => new Promise((_, no) => opts.signal.addEventListener("abort", () => { const e = new Error("aborted"); e.name = "AbortError"; no(e); }));
+  const waiting = openRunTimings();
+  await settle();
+  if (timers.length !== 1 || timers[0].ms !== 15000 || !timers[0].on || !asked[0]?.signal || asked[0].signal.aborted || $("#rt-err").textContent) fail("the question and its time limit: " + JSON.stringify(timers) + " " + $("#rt-err").textContent);
+  timers[0].fn();
+  await waiting;
+  if (!asked[0].signal.aborted || $("#rt-err").textContent !== "The panel did not answer. Close this and try again." || timers[0].on) fail("after the time limit: " + $("#rt-err").textContent + " " + JSON.stringify(timers));
 
   // the dialog, a change, Save
   els = {}; detached = false; asked.length = 0;

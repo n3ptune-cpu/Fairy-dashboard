@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
@@ -100,12 +101,14 @@ func (t wuTimes) value(key string) int {
 // wuTimesNow reads the timings in force once. A decision of the panel's store counts only when it is a value
 // its key can have (the store's reader leaves out everything else; asked again here, so that a number below a
 // floor cannot come into force whatever the reader is changed to).
-func (s *Server) wuTimesNow() wuTimes {
+func (s *Server) wuTimesNow() wuTimes { return s.wuTimesWith(s.Poller.Admin.RunTimings()) }
+
+// wuTimesWith is the timings in force when the panel's store holds o.
+func (s *Server) wuTimesWith(o adminstate.RunTimings) wuTimes {
 	t := wuTimes{set: s.WakeRuns.Settings, confirmWait: s.rtConfig(config.KeyRunApprovalWait)}
 	if t.set.OffAfter <= 0 {
 		t.set.OffAfter, t.set.OffAfterS = wakerun.MinOff, int(wakerun.MinOff/time.Second)
 	}
-	o := s.Poller.Admin.RunTimings()
 	for _, tm := range config.RunTimings() {
 		if v, ok := o.Value(tm.Key); ok && tm.In(v) {
 			t = t.withTiming(tm.Key, v)
