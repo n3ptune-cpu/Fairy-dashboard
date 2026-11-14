@@ -567,9 +567,10 @@ func (s *Server) wuTimings(id string) (offAfter, shutdownDelay time.Duration) {
 	return time.Duration(a) * time.Second, time.Duration(d) * time.Second
 }
 
-// wuPanelOffAfter is the panel's own time after which a machine counts as off (wake_update.off_after_s).
+// wuPanelOffAfter is the panel's own time after which a machine counts as off (wake_update.off_after_s, or
+// what "Run timings" changed it to).
 func (s *Server) wuPanelOffAfter() time.Duration {
-	if d := s.WakeRuns.Settings.OffAfter; d > 0 {
+	if d := s.wuTimesNow().set.OffAfter; d > 0 {
 		return d
 	}
 	return wakerun.MinOff
@@ -617,7 +618,7 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	now := s.Poller.Clock().UTC()
 	offAfter := s.wuOffAfter(x.ID)
 	if own, delay := s.wuTimings(x.ID); own > 0 || delay > 0 { // its own timings, said where they are not the panel's
-		set := s.WakeRuns.Settings
+		set := s.wuTimesNow().set
 		if v := int(own / time.Second); own > 0 && own != s.wuPanelOffAfter() {
 			h.OffAfterS = &v
 		}
@@ -698,7 +699,7 @@ func spanWords(d time.Duration) string {
 }
 
 func (s *Server) wakeUpdatePageData() wakeUpdatePage {
-	p := wakeUpdatePage{Hosts: []wuHost{}, Settings: s.WakeRuns.Settings, Last: []*wakerun.Run{}, Now: time.Now().UTC(), MaxHosts: wakerun.MaxHosts,
+	p := wakeUpdatePage{Hosts: []wuHost{}, Settings: s.wuTimesNow().set, Last: []*wakerun.Run{}, Now: time.Now().UTC(), MaxHosts: wakerun.MaxHosts,
 		OffAfterS: int(s.wuPanelOffAfter() / time.Second)}
 	if l := s.latest(); l.Version != "" {
 		p.Latest = l.Version
@@ -911,9 +912,21 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	}
 	text, _ := s.wuDescribe(b, hosts)
 	latest := s.latest()
-	req := wakerun.StartRequest{Hosts: b.Hosts, UpdateOnly: b.UpdateOnly, UpdateIfOn: b.UpdateIfOn, By: actorOf(u), BySub: u.Sub, Latest: latest.Version}
+	// The timings of this run: ONE reading of what is in force now (config.yaml with what was changed in the
+	// panel). The ticket numbers are made from it, the run gets it as its settings, and nothing of the run
+	// reads the timings again: a change while the run is going counts from the next run.
+	times := s.wuTimesNow()
+	req := wakerun.StartRequest{Hosts: b.Hosts, UpdateOnly: b.UpdateOnly, UpdateIfOn: b.UpdateIfOn, By: actorOf(u), BySub: u.Sub, Latest: latest.Version,
+		Settings: &times.set}
 	params := map[string]any{"hosts": b.Hosts, "update_only": b.UpdateOnly, "update_if_on": b.UpdateIfOn,
 		"list": wakerun.ListHash(b.Hosts, b.UpdateOnly, b.UpdateIfOn), "latest": latest.Version}
+	// The panel's replay of a kept start: the timings must be the ones in force when it was kept, which the
+	// dialog and "Confirm it's you" showed. Otherwise nothing is started (and no passkey was wasted on other
+	// numbers than the run's: a ticket's numbers are checked against them again in wuStartApproved).
+	if kept, ok := c.keptStamp(); ok && kept != s.wuStamp(times, b) {
+		c.audit(u, "wakeupdate.start", "run", params, "error 409: the run timings were changed after the start was asked for; nothing was started")
+		return apierr.New(409, wuTimingsChanged)
+	}
 	// The limit on control requests is looked at before a passkey is asked for (switching six machines on for
 	// these runs uses up a minute's worth): a start that would be refused is refused now, not after "Confirm
 	// it's you". The audit log gets a line for it.
@@ -928,7 +941,7 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	// passes, right after the sign-in that was made for it. With a machine that checks approvals itself in
 	// the list the confirmation is the machines' own passkey approval (wuConfirmStart), which signs the
 	// tickets; rs is then what was signed.
-	rs, grant, err := s.wuConfirmStart(c, u, b, hosts)
+	rs, grant, err := s.wuConfirmStart(c, u, b, hosts, times.ticket())
 	if err != nil {
 		return err
 	}

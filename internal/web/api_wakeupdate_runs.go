@@ -41,45 +41,26 @@ import (
 //   - the cancel of POST /power for "Keep on", and after every one of them a look at what the machine itself
 //     says about its run (wakeUpdateKeepOn).
 
+// wuTimingsChanged is what a start is refused with when the run timings in force are not the ones it was
+// confirmed with (a timing was changed in the panel between the click on Start and the passkey).
+const wuTimingsChanged = "The run timings were changed after you pressed the button, so the run would not use the numbers you confirmed. Nothing was started: press the button again."
+
 // runMaxDelay is the longest shutdown countdown a run's confirmation can name (api.RunShutdownDelayMaxS).
 const runMaxDelay = api.RunShutdownDelayMaxS * time.Second
 
 // selfOffNoticeS is the countdown of a machine's self-switch-off, which a ticket names.
 const selfOffNoticeS = 120
 
-// runTimings are the numbers the two passkeys of a run sign, from the configuration:
-//
-//   - valid_s: approval.TicketValidS, always.
-//   - confirm wait: approval.run_approval_wait_s (default 600): how long the banner asks once the machines are up,
-//     at most (the run ends its question earlier when a machine that waits would switch itself off before that).
-//   - wait_s: how long an armed machine waits before it switches itself off: the longest another machine of
-//     the run may still need to come up (wake_update.online_timeout_s), the confirm wait, and a minute; the
-//     machines take at most an hour, and the confirm wait gives way to that.
-//   - notice_s: selfOffNoticeS.
-//   - within_s: how long a confirmed machine lets the run's one update and one shutdown through: 25 minutes
-//     and the settle time, at most the 30 minutes a machine takes.
-func (s *Server) runTimings() wakerun.Ticket {
-	confirm := s.Cfg.Approval.RunApprovalWaitS
-	if confirm < 60 || confirm > 3600 {
-		confirm = 600
-	}
-	set := s.WakeRuns.Settings
-	online := int(set.OnlineTimeout / time.Second)
-	wait := online + confirm + 60
-	if wait > api.RunWaitMaxS {
-		wait = api.RunWaitMaxS
-		confirm = max(60, min(confirm, wait-online-60))
-	}
-	return wakerun.Ticket{ValidS: approval.TicketValidS, WaitS: max(wait, api.RunWaitMinS), NoticeS: selfOffNoticeS,
-		WithinS: min(api.RunWithinMaxS, 1500+int(set.Settle/time.Second)), ConfirmWaitS: confirm}
-}
+// runTimings are the numbers the two passkeys of a run sign, from the timings in force (runtimes.go:
+// config.yaml's, with what was changed in the panel laid over them; wuTimes.ticket has the rules).
+func (s *Server) runTimings() wakerun.Ticket { return s.wuTimesNow().ticket() }
 
 // wuShutdownDelay is the countdown of the shutdown a run asks the machine shown under id for.
 func (s *Server) wuShutdownDelay(id string) time.Duration {
 	if _, own := s.wuTimings(id); own > 0 {
 		return own
 	}
-	return s.WakeRuns.Settings.ShutdownDelay
+	return s.wuTimesNow().set.ShutdownDelay
 }
 
 // wuChecked decides, for a machine that checks approvals itself, whether a run can take it (h.Checked) or why
@@ -147,14 +128,14 @@ type runStart struct {
 // wuStartPlan makes the approval plan of a start: a ticket for every machine of the wake list that checks
 // approvals itself, and the answer to its own update challenge for every such machine that is on. Any refusal
 // ends the start before anybody is asked for a passkey.
-func (s *Server) wuStartPlan(c *reqCtx, u *model.User, b wuStartBody, hosts map[string]wuHost) (*approvalPlan, error) {
+func (s *Server) wuStartPlan(c *reqCtx, u *model.User, b wuStartBody, hosts map[string]wuHost, numbers wakerun.Ticket) (*approvalPlan, error) {
 	if !s.Cfg.ApprovalOn() {
 		return nil, apierr.New(409, approvalNotConfigured)
 	}
 	if !s.approvalRL.allow(u.Sub) {
 		return nil, c.limited(u, s.approvalRL, "too many control requests")
 	}
-	rs := &runStart{id: wakerun.NewID(), list: wakerun.ListHash(b.Hosts, b.UpdateOnly, b.UpdateIfOn), numbers: s.runTimings(),
+	rs := &runStart{id: wakerun.NewID(), list: wakerun.ListHash(b.Hosts, b.UpdateOnly, b.UpdateIfOn), numbers: numbers,
 		arm: map[string]api.ApprovalRequest{}, update: map[string]api.ApprovalRequest{}}
 	tk := approval.Ticket{Run: rs.id, ValidS: rs.numbers.ValidS, WaitS: rs.numbers.WaitS, NoticeS: rs.numbers.NoticeS}
 	var bound []approval.Bound
@@ -205,14 +186,19 @@ func (s *Server) wuStartPlan(c *reqCtx, u *model.User, b wuStartBody, hosts map[
 
 // wuStartApproved checks the replay of a start against the plan the passkey approved: the same list, and for
 // every machine that checks approvals itself now exactly the entry that was signed for it, made for the
-// machine id that is on record for it now.
-func (s *Server) wuStartApproved(g *approvalGrant, b wuStartBody, hosts map[string]wuHost) (*runStart, error) {
+// machine id that is on record for it now. numbers are the ticket numbers of the timings this run starts
+// with: they must be the ones the tickets were signed with (a timing that was changed in the panel between
+// the dialog and the passkey: nothing is started).
+func (s *Server) wuStartApproved(g *approvalGrant, b wuStartBody, hosts map[string]wuHost, numbers wakerun.Ticket) (*runStart, error) {
 	changed := func(name string) error {
 		return apierr.New(409, "The machines of this run are not as they were when you confirmed ("+name+"). Nothing was started: press the button again.")
 	}
 	rs := g.plan.run
 	if rs == nil || rs.list != wakerun.ListHash(b.Hosts, b.UpdateOnly, b.UpdateIfOn) {
 		return nil, apierr.New(409, "This is not the request that was approved. Nothing was started: press the button again.")
+	}
+	if rs.numbers != numbers {
+		return nil, apierr.New(409, wuTimingsChanged)
 	}
 	arm, upd := 0, 0
 	for i, id := range slices.Concat(b.Hosts, b.UpdateOnly) {
@@ -239,7 +225,7 @@ func (s *Server) wuStartApproved(g *approvalGrant, b wuStartBody, hosts map[stri
 // wuConfirmStart is the confirmation of a start. Without a machine that checks approvals itself it is what it
 // always was: "Confirm it's you", every time. With one, the passkey is the machines' own approval: the request
 // is kept with its plan, and the replay after the round trip gets the plan's runStart and the approval.
-func (s *Server) wuConfirmStart(c *reqCtx, u *model.User, b wuStartBody, hosts map[string]wuHost) (*runStart, *approvalGrant, error) {
+func (s *Server) wuConfirmStart(c *reqCtx, u *model.User, b wuStartBody, hosts map[string]wuHost, numbers wakerun.Ticket) (*runStart, *approvalGrant, error) {
 	checked := false
 	for _, h := range hosts {
 		checked = checked || h.Checked
@@ -253,13 +239,13 @@ func (s *Server) wuConfirmStart(c *reqCtx, u *model.User, b wuStartBody, hosts m
 	case g == nil && c.resumed():
 		return nil, nil, apierr.New(409, "A machine of this run checks passkey approvals itself now (none did when you pressed the button). Nothing was started: press the button again.")
 	case g == nil:
-		plan, err := s.wuStartPlan(c, u, b, hosts)
+		plan, err := s.wuStartPlan(c, u, b, hosts, numbers)
 		if err != nil {
 			return nil, nil, err
 		}
 		return nil, nil, c.askApproval(u, plan)
 	}
-	rs, err := s.wuStartApproved(g, b, hosts)
+	rs, err := s.wuStartApproved(g, b, hosts, numbers)
 	return rs, g, err
 }
 

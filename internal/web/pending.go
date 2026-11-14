@@ -68,6 +68,10 @@ type pendingAction struct {
 	// after an ordinary "Confirm it's you". nil: an ordinary kept action.
 	Approval *approvalPlan
 	Next     string // where the page returns to after the approval's round trip (set when it starts)
+	// Stamp: for a route that has one (actionStamp), what the request rested on when it was kept and must
+	// still rest on when it runs: the run timings in force for a start of "Update unpowered hosts". The
+	// handler compares it in the replay (keptStamp). Never shown, never sent to a browser.
+	Stamp string
 }
 
 // wildcardRe finds the path parameters of a route pattern ("{id}", "{path...}").
@@ -97,9 +101,17 @@ const (
 	resumedKey  ctxKey = iota // the request is the panel's own replay of a stored pending action
 	sessionKey                // the session to use instead of the cookie (the replay's, fresh from the sign-in)
 	approvalKey               // the verified approval the replay runs with (*approvalGrant, approval.go)
+	stampKey                  // the kept action's Stamp, for a route that has one (keptStamp)
 )
 
 func (c *reqCtx) resumed() bool { return c.r.Context().Value(resumedKey) != nil }
+
+// keptStamp is the stamp the kept action of this replay was given when it was kept (ok false: the request is
+// no replay, or its route has no stamp).
+func (c *reqCtx) keptStamp() (stamp string, ok bool) {
+	stamp, ok = c.r.Context().Value(stampKey).(string)
+	return stamp, ok
+}
 
 // pendingKey is where this request's session keeps its pending action: the session id (demo mode has no
 // sessions: one key).
@@ -164,8 +176,19 @@ func (c *reqCtx) keepPending(u *model.User, plan *approvalPlan) (p *pendingActio
 			p.Items = append(p.Items, truncate(safeTarget(line), maxActionText))
 		}
 	}
+	if stamp := actionStamp[c.r.Pattern]; stamp != nil {
+		p.Stamp = stamp(c)
+	}
 	c.s.codec.live.keepPending(key, p, now)
 	return p, ""
+}
+
+// actionStamp is, per route, what a kept request rests on besides its own text: a value the handler works
+// out again in the replay and compares (pendingAction.Stamp). A start of "Update unpowered hosts" rests on
+// the run timings in force: a run must not start with other timings than the ones its dialog and its
+// confirmation showed (runtimes.go).
+var actionStamp = map[string]func(c *reqCtx) string{
+	"POST /api/admin/wake-update": (*reqCtx).wakeUpdateStamp,
 }
 
 // actionText says, per route, what a kept request does. describeAction fills in the path parameters.
@@ -349,6 +372,9 @@ func (s *Server) resumePendingWith(c *reqCtx, p *pendingAction, grant *approvalG
 	ctx := context.WithValue(context.WithValue(context.WithoutCancel(c.r.Context()), resumedKey, true), sessionKey, sess)
 	if grant != nil {
 		ctx = context.WithValue(ctx, approvalKey, grant)
+	}
+	if actionStamp[p.Pattern] != nil {
+		ctx = context.WithValue(ctx, stampKey, p.Stamp)
 	}
 	// The request is put together from what the router made of the original one. Nothing is parsed or routed a
 	// second time: the kept handler is called directly, with the kept path parameters.
