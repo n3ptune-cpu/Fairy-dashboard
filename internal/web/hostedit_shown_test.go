@@ -247,9 +247,12 @@ func TestEditHostAConfirmationSavesNoNameSiteOrWakeOnLANItDidNotShow(t *testing.
 	if _, err := r.s.Access.Assign("pc-b", "site-b"); err != nil {
 		t.Fatal(err)
 	}
-	if res := confirm(t, r); !hoRefused(res) {
-		t.Errorf("a site confirmed as \"was none\" over another admin's site: %v", res)
+	begun := 0 // it is refused on the look at the request: no write is begun, the site's file is not touched
+	r.s.hostEditStep = func(step string) { begun++ }
+	if res := confirm(t, r); !hoRefused(res) || begun != 0 {
+		t.Errorf("a site confirmed as \"was none\" over another admin's site: %v (%d steps of a write)", res, begun)
 	}
+	r.s.hostEditStep = nil
 	if got := r.s.Access.Load().Assign; len(got) != 1 || got["pc-b"] != "site-b" || len(r.auditEntries("", "site.assign")) != 0 {
 		t.Errorf("their site is not what is stored: %v (site.assign entries: %d)", got, len(r.auditEntries("", "site.assign")))
 	}
