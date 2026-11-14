@@ -29,6 +29,8 @@ func init() {
 	// laptop of the plain fixture relays one plug, "desk", which is its own.
 	matrixRoutes = append(matrixRoutes, writeRoute{pattern: "PUT /api/admin/hosts/{id}/options", path: "/api/admin/hosts/laptop/options",
 		body: map[string]any{"plugs": []any{map[string]any{"id": "laptop/desk", "in_total": false}}}, adminOnly: true, stepUp: true})
+	// ... and where app.js puts the action into words for "Confirm it's you" (ui_confirm_test.go)
+	confirmLabels["PUT /api/admin/hosts/{id}/options"] = []string{"controlCall({ kind: \"request\", label: `Edit host ${s.name}`, system: s.id, method: \"PUT\", path, body: plan.body },"}
 }
 
 // ehRig is a panel with two standalone Proxmox hosts, PVE-A and PVE-B, each with an agent that is its node's
