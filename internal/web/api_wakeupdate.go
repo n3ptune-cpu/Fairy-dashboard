@@ -860,6 +860,30 @@ func (c *reqCtx) wakeUpdateItems(*model.User) []string {
 	return items
 }
 
+// startRun keeps the token of a start with tickets and starts the run, as one step. The token is kept, in
+// memory, for what is left of the ticket's valid_s by its own "issued at" (runtickets.go), before the run
+// exists: the run's first step may ask for it. Keeping replaces whatever is kept, so it must not happen for a
+// start that then loses: of two starts in the same instant the second one finds the first one's run going
+// here and touches nothing. tooOld: the approval is older than a ticket may be; nothing was started.
+func (s *Server) startRun(req wakerun.StartRequest, rs *runStart, grant *approvalGrant) (r *wakerun.Run, tooOld bool, err error) {
+	s.wuStartMu.Lock()
+	defer s.wuStartMu.Unlock()
+	if rs != nil {
+		if a, _ := s.WakeRuns.Snapshot(); a != nil {
+			return nil, false, &wakerun.StartError{Busy: true, Msg: fmt.Sprintf("a run started by %s at %s is still going: one run at a time. Wait for it, or cancel it.", a.By, a.StartedAt.Format("15:04 UTC"))}
+		}
+		left := time.Duration(rs.numbers.ValidS)*time.Second - max(0, s.now().Sub(grant.issued))
+		if !s.tickets.put(rs.id, grant.token, grant.plan.plan, maps.Clone(rs.arm), maps.Clone(rs.update), left) {
+			return nil, true, nil
+		}
+	}
+	r, err = s.WakeRuns.Start(req)
+	if err != nil && rs != nil {
+		s.tickets.drop(rs.id)
+	}
+	return r, false, err
+}
+
 func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	if _, err := c.requireUser(); err != nil {
 		return err
@@ -924,19 +948,13 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 			}
 		}
 		params["run"], params["tickets"], params["ticket"] = rs.id, len(rs.arm), rs.numbers
-		// The token is kept from here on, in memory, for what is left of the ticket's valid_s by its own "issued
-		// at" (runtickets.go), before the run exists: the run's first step may ask for it.
-		left := time.Duration(rs.numbers.ValidS)*time.Second - max(0, s.now().Sub(grant.issued))
-		if !s.tickets.put(rs.id, grant.token, grant.plan.plan, maps.Clone(rs.arm), maps.Clone(rs.update), left) {
-			c.audit(u, "wakeupdate.start", "run", params, "error 409: the approval is older than a ticket may be; nothing was started")
-			return apierr.New(409, "The approval is older than a run's ticket may be (is the panel's clock right?). Nothing was started: press the button again.")
-		}
 	}
-	r, err := s.WakeRuns.Start(req)
+	r, tooOld, err := s.startRun(req, rs, grant)
+	if tooOld {
+		c.audit(u, "wakeupdate.start", "run", params, "error 409: the approval is older than a ticket may be; nothing was started")
+		return apierr.New(409, "The approval is older than a run's ticket may be (is the panel's clock right?). Nothing was started: press the button again.")
+	}
 	if err != nil {
-		if rs != nil {
-			s.tickets.drop(rs.id)
-		}
 		var se *wakerun.StartError
 		status := 400
 		if errors.As(err, &se) && se.Busy {

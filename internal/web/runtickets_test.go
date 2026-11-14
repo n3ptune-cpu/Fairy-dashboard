@@ -153,3 +153,42 @@ func TestTicketGoneAfterValidS(t *testing.T) {
 		t.Fatal("not dropped with its run")
 	}
 }
+
+// A new run's ticket replaces what was kept: the bytes of the earlier token are wiped, and nothing of the
+// earlier run can be taken any more.
+func TestANewTicketReplacesAndWipesTheOneThatWasKept(t *testing.T) {
+	k, _ := newTicketKeeper()
+	plan, arm := ticketPlan(t)
+	if !k.put(ticketRun, ticketToken, plan, arm, nil, 400*time.Second) {
+		t.Fatal("not kept")
+	}
+	first := k.cur.token
+	plan2, arm2 := ticketPlan(t)
+	if !k.put("00000000000000bb", ticketToken, plan2, arm2, nil, 400*time.Second) {
+		t.Fatal("the second one was not kept")
+	}
+	for _, b := range first {
+		if b != 0 {
+			t.Fatal("the bytes of the token that was replaced are still there")
+		}
+	}
+	if ap, _ := k.take(ticketRun, "arm", "pc-a", ticketIDA); ap != nil {
+		t.Fatal("the run that was replaced still hands out its ticket")
+	}
+	if run, open := k.held(); run != "00000000000000bb" || open != 2 {
+		t.Fatalf("held: %q %d", run, open)
+	}
+	// a put that keeps nothing (no time left) still wipes what was there
+	second := k.cur.token
+	if k.put("00000000000000cc", ticketToken, plan, arm, nil, 0) {
+		t.Fatal("kept with no time left")
+	}
+	for _, b := range second {
+		if b != 0 {
+			t.Fatal("a put that keeps nothing left the earlier token in memory")
+		}
+	}
+	if run, _ := k.held(); run != "" {
+		t.Fatalf("still held: %q", run)
+	}
+}

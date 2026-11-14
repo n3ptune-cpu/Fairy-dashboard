@@ -94,6 +94,8 @@ type Server struct {
 	// tickets keeps the passkey approval of a run's start, in memory only, for the machines that check
 	// approvals themselves (runtickets.go).
 	tickets *runTickets
+	// wuStartMu: keeping a start's token and starting its run are one step (startRun).
+	wuStartMu sync.Mutex
 
 	seenMu  sync.Mutex
 	seen    map[string]time.Time // subject -> last "last seen" write

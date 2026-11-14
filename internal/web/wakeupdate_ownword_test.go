@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -272,4 +273,41 @@ func TestTheStripsTimeLeftDoesNotFollowThePanelsClockOfTheDay(t *testing.T) {
 		}
 	}
 	r.s.Poller.Clock = clock
+}
+
+// Two starts in the same instant (independent review of 270e7ab, P8): the one that loses must not take the
+// winner's ticket with it. Keeping the token replaces what is kept, and that happened before the run decided
+// which start wins. Keeping and starting are one step now: a start that finds a run going touches nothing.
+func TestAStartThatLosesDoesNotWipeTheWinnersTicket(t *testing.T) {
+	r := newRunRig(t, "pc-a")
+	if _, res := r.approved(t, "POST", "/api/admin/wake-update", map[string]any{"hosts": []string{"pc-a"}}); res["ok"] != true {
+		t.Fatal(res)
+	}
+	run, _ := r.s.WakeRuns.Snapshot()
+	held, open := r.s.tickets.held()
+	if held != run.ID || open != 1 {
+		t.Fatalf("the winner's ticket: %q %d", held, open)
+	}
+	r.s.tickets.mu.Lock()
+	bytes := r.s.tickets.cur.token
+	r.s.tickets.mu.Unlock()
+	// the second start, past the checks before the passkey as it would be in the same instant
+	plan, arm := ticketPlan(t)
+	rs := &runStart{id: "00000000000000bb", numbers: r.s.runTimings(), arm: arm}
+	g := &approvalGrant{plan: newApprovalPlan(plan), token: ticketToken, issued: r.s.now()}
+	got, tooOld, err := r.s.startRun(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "x", BySub: "u9", ID: rs.id, Ticket: &rs.numbers, Checked: map[string]bool{"pc-a": true}}, rs, g)
+	var se *wakerun.StartError
+	if got != nil || tooOld || !errors.As(err, &se) || !se.Busy {
+		t.Fatalf("the second start: %v %v %v", got, tooOld, err)
+	}
+	if held, open := r.s.tickets.held(); held != run.ID || open != 1 {
+		t.Fatalf("after the start that lost, the keeper holds %q %d", held, open)
+	}
+	for _, b := range bytes[:8] {
+		if b == 0 {
+			t.Fatal("the winner's token was wiped")
+		}
+	}
+	// and the winner's machine gets its ticket
+	r.until(t, "pc-a armed", 300, func() bool { return r.host("pc-a").Arm == wakerun.ArmArmed })
 }
