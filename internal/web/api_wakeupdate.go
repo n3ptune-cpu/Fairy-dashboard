@@ -1221,6 +1221,7 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 		switch {
 		case r.Approval == "given":
 			outcome, text = "given", "confirmed by "+r.ConfirmedBy
+			e.Params = map[string]any{"confirmed_by": r.ConfirmedBy} // the entry is written under the name of who started the run
 		case r.Cancel != nil:
 			text = "the run was cancelled by " + r.Cancel.By + ": no confirmation is asked for any more"
 		case r.ApprovalEnd == wakerun.EndNobodyWaits: // not time: the machines were kept on, or ended otherwise

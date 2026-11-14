@@ -76,6 +76,21 @@ func TestAConfirmationThatArrivesTwiceConfirmsTheMachineWhateverThePanelWasAnswe
 	if got := r.overNotes(); len(got) != 1 || got[0] != "confirmed by "+cur.ConfirmedBy {
 		t.Fatalf("the notifications that ended the question: %q", got)
 	}
+	// the audit log: the machine is confirmed, by whose confirmation, by its own word; and who confirmed the run
+	var own, given map[string]any
+	for _, en := range r.auditEntries("", "wakeupdate.confirm_host") {
+		if p, _ := en["params"].(map[string]any); en["target"] == "pc-a" && en["outcome"] == "ok" {
+			own = p
+		}
+	}
+	for _, en := range r.auditEntries("", "wakeupdate.approval") {
+		if p, _ := en["params"].(map[string]any); en["outcome"] == "given" {
+			given = p
+		}
+	}
+	if own["by"] != cur.ConfirmedBy || own["by_own_word"] != true || given["confirmed_by"] != cur.ConfirmedBy {
+		t.Fatalf("the audit log: the machine's confirmation %v; the run's %v (confirmed by %q)", own, given, cur.ConfirmedBy)
+	}
 	if again := r.req("POST", "/api/admin/wake-update/"+run.ID+"/confirm", map[string]any{}); again.code != 409 || !strings.Contains(string(again.raw), "confirmed already") {
 		t.Fatalf("another confirmation: %d %s", again.code, again.raw)
 	}

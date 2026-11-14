@@ -1,6 +1,7 @@
 package wakerun
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -67,6 +68,16 @@ func TestAConfirmationThatArrivesTwiceIsSettledByTheMachinesOwnWord(t *testing.T
 	}
 	if a := named(w.m.MayGoOff(w.now), "pc-a"); a != nil {
 		t.Fatalf("a confirmed machine is named as one that may switch itself off: %+v", a)
+	}
+	// the audit log is told that the machine is confirmed, by whose confirmation, and that it is its own word
+	var steps []string
+	for _, e := range w.events {
+		if e.Kind == EvStep && e.Action == "confirm" {
+			steps = append(steps, fmt.Sprintf("%s %s by=%v own=%v", e.Host.ID, e.Outcome, e.Params["by"], e.Params["by_own_word"]))
+		}
+	}
+	if got := strings.Join(steps, "; "); got != "pc-a run refused (already_confirmed) by=<nil> own=<nil>; pc-a ok by=Ann own=true" {
+		t.Fatalf("the confirm steps the audit log is told: %s", got)
 	}
 	done := w.finish()
 	has(t, host(done, "pc-a"), StOff, "updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
@@ -198,6 +209,18 @@ func TestTheMachinesWordNamesTheOneWhoseConfirmationLeftForIt(t *testing.T) {
 	cur, _ := w.m.Snapshot()
 	if cur.Approval != "given" || cur.ConfirmedBy != "Bob" {
 		t.Fatalf("approval %q by %q, want given by Bob: it was Bob's confirmation that reached pc-a", cur.Approval, cur.ConfirmedBy)
+	}
+	// Ann's confirmation is accepted by pc-b: its history names Ann, whose passkey it took, not the run's Bob
+	b.chk.goSays = ""
+	x := host(cur, "pc-b")
+	res := w.goNow(b, act.ID, x.To, x.delay(cur), time.Duration(cur.Ticket.WithinS)*time.Second)
+	if !res.OK {
+		t.Fatalf("the model: pc-b did not accept: %+v", res)
+	}
+	w.m.Confirmed(act.ID, "pc-b", res)
+	cur, _ = w.m.Snapshot()
+	if h := host(cur, "pc-b"); !logHas(h, "confirmed by Ann: its agent lets one update") || logHas(h, "confirmed by Bob") || cur.ConfirmedBy != "Bob" {
+		t.Fatalf("pc-b's history (the run is confirmed by %q):%s", cur.ConfirmedBy, logOf(h))
 	}
 }
 

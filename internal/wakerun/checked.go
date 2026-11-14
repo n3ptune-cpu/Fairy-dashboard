@@ -183,6 +183,8 @@ func (m *Manager) wordConfirmed(r *Run, h *Host, now time.Time, tail string) {
 	h.Confirm, h.ConfirmText, h.ConfirmTried, h.grant = ConfirmOK, "", "", &Grant{Run: r.ID}
 	m.note(h, now, how+tail)
 	m.given(r, h.chk.goBy)
+	// the audit log is told as for a confirmation the machine accepted, with whose it was and how the run knows
+	m.emit(EvStep, r, h, "confirm", map[string]any{"to": h.To, "by": h.chk.goBy, "by_own_word": true}, "ok")
 }
 
 // left takes in that a confirmation of the run by by left the panel for the machine at since (steady: the
@@ -895,8 +897,9 @@ func (m *Manager) Confirmed(id, hostID string, res ConfirmResult) {
 			h.grant = &Grant{Run: r.ID}
 			m.given(r, r.lastBy)
 			m.emit(EvStep, r, h, "confirm", map[string]any{"to": h.To}, "ok")
+			// by the one whose confirmation this machine accepted (the run may be confirmed by another's already)
 			m.note(h, now, fmt.Sprintf("confirmed by %s: its agent lets one update (%s) and one shutdown of this run through, for %s",
-				r.ConfirmedBy, toWords(h.To), span(time.Duration(r.Ticket.WithinS)*time.Second)))
+				r.Trying, toWords(h.To), span(time.Duration(r.Ticket.WithinS)*time.Second)))
 		case res.Unanswered:
 			h.Confirm, h.ConfirmText = ConfirmUnanswered, res.Text
 			m.emit(EvStep, r, h, "confirm", map[string]any{"to": h.To}, res.Text)
