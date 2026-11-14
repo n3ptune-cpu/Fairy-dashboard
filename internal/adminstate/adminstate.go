@@ -7,6 +7,8 @@
 //	               host_models {system id: custom model name} (set in the panel only, hostmodel.go)
 //	               host_options {rev, agents: {agent id: link overrides}} ("Edit host", set in the panel only,
 //	               hostoptions.go)
+//	               run_timings {rev, values: {timing: seconds}, by} ("Run timings", set in the panel only,
+//	               runtimings.go)
 //	sessions.json  sessions {sid: {sub, name, email, ip, created, created_ts, gen}}: a signed cookie is only valid
 //	               while its sid is here, for the account (sub) it names. For the Sessions page an entry also
 //	               has ua, login_ts, login_ip, seen_ts and seen_ip (see Session); an entry written before
@@ -59,6 +61,8 @@ type State struct {
 	shapeLog map[string]int // key of state.json -> the version of the file whose odd value was logged (badShape)
 	// hostOptionsSaid: the lines about ignored "Edit host" overrides that were logged (hostoptions.go; under shapeMu)
 	hostOptionsSaid map[string]bool
+	// runTimingsSaid: the same for the run timings changed in the panel (runtimings.go; under shapeMu)
+	runTimingsSaid map[string]bool
 }
 
 // New returns the state files of dataDir.
