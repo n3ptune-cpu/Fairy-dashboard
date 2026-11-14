@@ -1135,3 +1135,77 @@ func (m *Manager) endNotCalledOff(r *Run, h *Host, now time.Time, how string) {
 	text += " Keep on for it in the panel, or cancel at the machine. " + notConfirmed
 	m.endSeen(r, h, StLeftOn, OnYes, now, text+" Fairy no longer watches it.", text)
 }
+
+// ArmedHost is a machine that may still switch itself off by a run's ticket: of the active run, or of a run
+// that is over (interrupted by a restart of the panel, stopped, or ended while the machine did not answer).
+type ArmedHost struct {
+	RunID, ID, Name string
+	// At: when it begins to switch itself off, as far as the panel knows (nil: not known). Latest: At is the
+	// latest moment, for a machine whose arming got no answer. ByMachine: At is the machine's own word.
+	At        *time.Time
+	Latest    bool
+	ByMachine bool
+	// Sure: it took the ticket, or its agent showed the run as armed (false: its arming got no answer).
+	Sure bool
+	// Active: it is a machine of the run that is going.
+	Active bool
+}
+
+// MayGoOff returns the machines that may still switch themselves off by a ticket at now: the banner names
+// them, Keep on is offered for them, and their helper is not stopped from the panel. For a run that is over
+// the panel no longer watches: a machine counts until the latest moment its self-switch-off can begin, plus
+// its notice.
+func (m *Manager) MayGoOff(now time.Time) []ArmedHost {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []ArmedHost
+	mono := m.mono()
+	if r := m.active; r != nil && r.Ticket != nil {
+		for _, h := range r.Hosts {
+			if h.MayGoOff && h.On != OnNo && (h.verdict != nil || h.Final()) { // the run let go of it already
+				out = append(out, letGo(r, h, now)...)
+				continue
+			}
+			if !h.armedMaybe() || h.verdict != nil {
+				continue
+			}
+			a := ArmedHost{RunID: r.ID, ID: h.ID, Name: h.Name, ByMachine: h.SelfOffByMachine, Sure: h.Arm == ArmArmed || h.chk.armSeen, Active: true}
+			if h.SelfOffAt != nil {
+				at := *h.SelfOffAt
+				a.At = &at
+			} else {
+				at := now.Add(h.chk.offMax - mono)
+				a.At, a.Latest = &at, true
+			}
+			out = append(out, a)
+		}
+	}
+	for _, r := range m.hist {
+		if r.Ticket == nil {
+			continue
+		}
+		for _, h := range r.Hosts {
+			if h.MayGoOff && h.On != OnNo {
+				out = append(out, letGo(r, h, now)...)
+			}
+		}
+	}
+	return out
+}
+
+// letGo is MayGoOff's entry for a machine the run no longer watches (nil: its time is over).
+func letGo(r *Run, h *Host, now time.Time) []ArmedHost {
+	a := ArmedHost{RunID: r.ID, ID: h.ID, Name: h.Name, ByMachine: h.SelfOffByMachine, Sure: h.Arm == ArmArmed}
+	at := r.StartedAt.Add(r.Ticket.valid() + lateArm + r.Ticket.wait())
+	if h.SelfOffAt != nil {
+		at = *h.SelfOffAt
+	} else {
+		a.Latest = true
+	}
+	// over; or the panel's clock was set far back since: not shown for ever
+	if now.After(at.Add(r.Ticket.notice()+selfOffLate+selfOffUpdate)) || now.Before(r.StartedAt.Add(-time.Hour)) {
+		return nil
+	}
+	a.At = &at
+	return []ArmedHost{a}
+}

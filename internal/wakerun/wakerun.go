@@ -644,6 +644,9 @@ type Host struct {
 	SelfOffByMachine bool       `json:"self_off_by_machine_clock,omitempty"`
 	// Confirm: what came of the run's confirmation for it (Confirm...; "": none yet). To: the version the
 	// confirmation names for its update ("-": none), fixed when it began to wait.
+	// MayGoOff: the run let go of it while it was armed, or may have been: it may still switch itself off
+	// (Manager.MayGoOff says until when).
+	MayGoOff    bool   `json:"may_go_off,omitempty"`
 	Confirm     string `json:"confirm,omitempty"`
 	ConfirmText string `json:"confirm_text,omitempty"`
 	To          string `json:"to,omitempty"`
@@ -900,6 +903,10 @@ func (m *Manager) mono() time.Duration {
 // time of day is set during a run (r3-p2-05).
 func (m *Manager) paceNow() time.Time { return time.Unix(0, 0).Add(m.mono()) }
 
+// NewID makes the id of a run before its start: the tickets the passkey of the start signs name it
+// (StartRequest.ID).
+func NewID() string { return newID() }
+
 func newID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
@@ -1145,7 +1152,8 @@ func (m *Manager) end(r *Run, h *Host, state, on string, now time.Time, text str
 // a word about its power, to which the look adds what it sees.
 func (m *Manager) endSeen(r *Run, h *Host, state, on string, now time.Time, text, neutral string) {
 	h.verdict = &verdict{state: state, on: on, text: text, neutral: neutral, since: now, sinceMono: m.mono()}
-	h.calloff = nil // its steps are over: no cancel is tried again
+	h.MayGoOff = h.armedMaybe() && on != OnNo // the run lets go of a machine that may switch itself off: kept, for the banner
+	h.calloff = nil                           // its steps are over: no cancel is tried again
 	m.look(r, h, now)
 }
 
