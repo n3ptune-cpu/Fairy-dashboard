@@ -173,3 +173,118 @@ func TestEditHostAnAddedHostThatIsLeftOutAtOneStartIsNotGone(t *testing.T) {
 		t.Errorf("state.json when BOX-A is back:\nbefore %s\nnow    %s", stored, now)
 	}
 }
+
+// A UPS or a plug that its machine does not relay at the moment is not gone. The panel cannot tell a device
+// that was taken away from one whose NUT or Home Assistant is down when the agent is asked: both are an
+// answer without the device. So it says what it knows ("does not relay right now"), counts such changes
+// apart from those about machines that are gone, leaves them alone when those are removed, and takes them out
+// only when a request names the device.
+func TestEditHostADeviceThatIsNotRelayedRightNowIsNotGone(t *testing.T) {
+	r := ehSetup(t)
+	r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)},
+		"plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true, "in_total": false}}})
+	r.ok(ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})
+	stored := fmt.Sprint(r.storedOptions()["agents"])
+	// the panel is started again while NUT on the NAS is down and its Home Assistant does not know b-plug: the
+	// agent answers, without the UPSes and without that plug
+	nutDown := func() (jsonx.M, error) {
+		m := nasMetrics()
+		m["ups"] = []any{jsonx.M{"name": "upsd", "ok": false, "error": "connection refused"}}
+		m["power_sources"] = slices.DeleteFunc(m["power_sources"].([]any), func(x any) bool { return x.(jsonx.M)["id"] == "b-plug" })
+		return m, nil
+	}
+	r.b.Mu.Lock()
+	r.b.Metrics[ehNAS] = nutDown
+	r.b.Mu.Unlock()
+	r = r.again(nil)
+	type away struct {
+		id, kind, text string
+		count          float64
+	}
+	unrelayed := func(g resp) (out []away) {
+		t.Helper()
+		l, _ := g.body["unrelayed"].([]any)
+		for _, x := range l {
+			m := x.(map[string]any)
+			out = append(out, away{fmt.Sprint(m["id"]), fmt.Sprint(m["kind"]), fmt.Sprint(m["text"]), m["count"].(float64)})
+		}
+		return out
+	}
+	want := []away{{"nas-agent/desk", "ups", "1 stored change about the UPS desk, which NAS does not relay right now", 1},
+		{"nas-agent/rack", "ups", "1 stored change about the UPS rack, which NAS does not relay right now", 1},
+		{"nas-agent/b-plug", "plug", "2 stored changes about the plug b-plug, which NAS does not relay right now", 2}}
+	for _, id := range []string{ehNodeA, ehNodeB, ehNAS} {
+		g := r.options(id)
+		if g.body["leftover_count"] != 0.0 || len(strs(g.body["leftovers"])) != 0 {
+			t.Errorf("%s: what is not relayed right now is counted as about machines that are gone: %v %v", id, g.body["leftover_count"], g.body["leftovers"])
+		}
+		if got := unrelayed(g); !slices.Equal(got, want) || g.body["unrelayed_count"] != 4.0 {
+			t.Errorf("%s: unrelayed %v (count %v), want %v (4)", id, got, g.body["unrelayed_count"], want)
+		}
+	}
+	// the Remove of what is gone does not touch them
+	if p := r.ok(ehNodeA, map[string]any{"leftovers": true}); p.body["message"] != "nothing to change" {
+		t.Errorf("leftovers: true: %s", p.raw)
+	}
+	if now := fmt.Sprint(r.storedOptions()["agents"]); now != stored {
+		t.Fatalf("state.json after a Remove of what is gone:\nbefore %s\nnow    %s", stored, now)
+	}
+	// only what a request names goes: the rack UPS, by its id and kind. A UPS id sent as a plug is no device
+	// with stored changes; a device that is relayed (it has its line) is not taken either
+	for _, body := range []map[string]any{
+		{"unrelayed": []any{map[string]any{"id": "nas-agent/rack", "kind": "plug"}}},
+		{"unrelayed": []any{map[string]any{"id": "nas-agent/a-plug", "kind": "plug"}}},
+		{"unrelayed": []any{map[string]any{"id": "nas-agent/attic", "kind": "ups"}}},
+	} {
+		if p := r.ok(ehNodeA, body); p.body["message"] != "nothing to change" {
+			t.Errorf("%v: %s", body, p.raw)
+		}
+	}
+	for body, why := range map[string]string{
+		`{"unrelayed": []}`:                                      "nothing to change",
+		`{"unrelayed": true}`:                                    "invalid request body",
+		`{"unrelayed": [{"id": "nas-agent/rack"}]}`:              "unrelayed: no such kind (ups or plug)",
+		`{"unrelayed": [{"id": "nas-agent/rack", "kind": "x"}]}`: "unrelayed: no such kind (ups or plug)",
+		`{"unrelayed": [{"id": "nas-agent/rack", "kind": "ups"}, {"id": "nas-agent/rack", "kind": "ups"}]}`: "unrelayed: an entry is there twice",
+	} {
+		if p := r.doRaw("PUT", "/api/admin/hosts/"+ehNodeA+"/options", body, append([]string{"Content-Type", "application/json"}, r.hdr...)...); p.code != 422 || !strings.Contains(string(p.raw), why) {
+			t.Errorf("%s: %d %s (want 422, %q)", body, p.code, p.raw, why)
+		}
+	}
+	if now := fmt.Sprint(r.storedOptions()["agents"]); now != stored {
+		t.Fatalf("state.json after requests that name nothing that is stored and not relayed:\nbefore %s\nnow    %s", stored, now)
+	}
+	// an old sign-in is asked to confirm, with the line
+	rack := map[string]any{"unrelayed": []any{map[string]any{"id": "nas-agent/rack", "kind": "ups"}}}
+	removed := []string{"Removed: 1 stored change about the UPS rack, which NAS does not relay right now"}
+	old := r.do("PUT", "/api/admin/hosts/"+ehNodeA+"/options", rack, "Cookie", r.staleCookie(controller(), time.Hour), "X-Requested-With", "fairy", "Content-Type", "application/json")
+	if d, _ := old.body["detail"].(map[string]any); !stepUpRequired(old) || !slices.Equal(strs(d["items"]), removed) {
+		t.Fatalf("an old sign-in is asked to confirm, with the line: %d %s", old.code, old.raw)
+	}
+	p := r.ok(ehNodeA, rack)
+	if !slices.Equal(strs(p.body["changed"]), removed) || p.body["unrelayed_count"] != 3.0 {
+		t.Fatalf("the rack UPS's change removed: %s", p.raw)
+	}
+	nas := r.storedAgent(ehNAS)
+	if fmt.Sprint(nas["ups_powers"]) != "map[desk:map["+ehNodeA+":true]]" || fmt.Sprint(nas["power_links"]) != "map[b-plug:lab-b-agent]" || fmt.Sprint(nas["power_exclude_from_total"]) != "map[b-plug:true]" {
+		t.Fatalf("state.json afterwards (the rack UPS's change alone is gone): %v", nas)
+	}
+	en := r.auditEntries("", "host.options")[0]
+	if lines := strs(en["params"].(map[string]any)["lines"]); !slices.Equal(lines, removed) || en["outcome"] != "ok" {
+		t.Fatalf("the audit entry: %v", en)
+	}
+	// NUT and the plug are back: the changes that were kept have their lines and count again; the one that was
+	// removed does not
+	r.b.Mu.Lock()
+	r.b.Metrics[ehNAS] = func() (jsonx.M, error) { return nasMetrics(), nil }
+	r.b.Mu.Unlock()
+	r.poll()
+	g := r.options(ehNodeA)
+	if len(unrelayed(g)) != 0 || g.body["unrelayed_count"] != 0.0 || ehEntry(t, g, "ups", "nas-agent/desk")["on"] != true || ehEntry(t, g, "ups", "nas-agent/desk")["from"] != "panel" {
+		t.Errorf("the devices are back: %s", g.raw)
+	}
+	a, b := r.row(ehNodeA), r.row(ehNodeB)
+	if on := strs(a["ups"]); !slices.Contains(on, "nas-agent/desk") || !slices.Contains(on, "nas-agent/rack") || len(strs(b["ups"])) != 0 || b["power_w"] != 200.0 {
+		t.Errorf("after the devices are back: PVE-A ups %v (want desk, by the change that was kept, and rack, by config.yaml), PVE-B ups %v (want none) power_w %v (want 200, its plug)", a["ups"], b["ups"], b["power_w"])
+	}
+}

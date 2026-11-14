@@ -1131,14 +1131,21 @@ them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads 
   with other machines; **Re-pair** keeps them. A host that is **added** starts with nothing: whatever the panel
   still kept under its id (from a machine of that name that was taken out of config.yaml, say) is taken out
   when it is paired, with an entry in the audit log.
-* **Changes that have no line any more can still be removed.** A change about a UPS or plug that its machine
-  no longer relays, one kept with an id that is no machine of the panel any more, or one that names such an
-  id, cannot be seen or reset on any line. Every Edit host dialog says how many of them there are ("3 stored
-  changes are about machines or devices that are gone.") and **Remove** takes them out, with the same
-  confirmation and audit entry as every change. They are never used meanwhile. While a machine is only
-  silent, its changes are not counted as such: they have their lines again when it answers. A host added
-  with Add host that the panel left out at its start (its tokens file is damaged; the Add host dialog says
-  "Re-pair it") is not gone either: what was changed for it is kept, and counts again after the Re-pair.
+* **Changes that have no line any more can still be removed.** Two kinds of change cannot be seen or reset
+  on any line, and every Edit host dialog says how many of each there are:
+  * about **machines that are gone**: a change kept with an id that is no machine of the panel any more, or
+    one that names such an id ("3 stored changes are about machines that are gone."). **Remove** takes them
+    out, with the same confirmation and audit entry as every change. A host added with Add host that the
+    panel left out at its start (its tokens file is damaged; the Add host dialog says "Re-pair it") is not
+    gone: what was changed for it is kept, and counts again after the Re-pair.
+  * about **a UPS or plug that its machine does not relay right now** ("2 stored changes are about a UPS or
+    plug that is not relayed right now. Kept: they count again when the device is back."). The panel cannot
+    tell a device that was taken away from one whose NUT or Home Assistant is down for a moment: both are
+    an answer without the device. So these are kept, and Remove does not touch them. **Remove anyway** lists
+    them by device, and Save then takes out exactly the listed ones (and none that is relayed again by then).
+
+  Neither kind is used meanwhile. While a machine is silent, nothing is known about its devices: its changes
+  are in neither count, and they have their lines again when it answers.
 * **A damaged override never stops the panel.** Whatever is under `host_options` that is not what Fairy
   writes is ignored with one warning in the log (and a WARN line of `fairy admin config check`);
   config.yaml's value counts for it. `fairy update` is not affected: its check reads config.yaml only.
@@ -1153,9 +1160,11 @@ able to send a token to another address or switch on power control. Those stay i
 
 API: `GET` and `PUT /api/admin/hosts/{id}/options`. The request names only what changes:
 `{"ups": [{"id": "nas-agent/rack", "on": true}], "plugs": [{"id": "nas-agent/pc-plug", "linked": true,
-"in_total": false}], "reset": [{"id": "nas-agent/desk", "field": "ups"}], "leftovers": true}` (`field`: `ups`,
-`plugs` or `total`; a reset is about that one line of this machine; `leftovers` removes the changes that have
-no line any more). Any other field, and a field under another spelling (`"On"` for `"on"`, also inside an
+"in_total": false}], "reset": [{"id": "nas-agent/desk", "field": "ups"}], "leftovers": true,
+"unrelayed": [{"id": "nas-agent/attic", "kind": "ups"}]}` (`field`: `ups`, `plugs` or `total`; a reset is
+about that one line of this machine; `leftovers` removes the changes about machines that are gone;
+`unrelayed` removes the changes about the named devices, `kind` `ups` or `plug`, each only if its machine
+does not relay it right now). Any other field, and a field under another spelling (`"On"` for `"on"`, also inside an
 entry), is refused (422); so is a request that says nothing or names a line twice, before any confirmation
 is asked for.
 

@@ -543,7 +543,14 @@ func TestEditHostStoredChangesWithoutALineCanBeRemoved(t *testing.T) {
 		g := r.options(id)
 		return strs(g.body["leftovers"]), g.body["leftover_count"]
 	}
-	t.Run("the reading machine relays the devices no more", func(t *testing.T) {
+	// away is what the dialog's data says about devices that are not relayed right now: how many entries, how many changes
+	away := func(r *ehRig, id string) (int, any) {
+		t.Helper()
+		g := r.options(id)
+		l, _ := g.body["unrelayed"].([]any)
+		return len(l), g.body["unrelayed_count"]
+	}
+	t.Run("the reading machine does not relay the devices", func(t *testing.T) {
 		r := ehSetup(t)
 		r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}, "plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true, "in_total": false}}})
 		if l, n := left(r, ehNodeA); len(l) != 0 || n != 0.0 {
@@ -557,16 +564,23 @@ func TestEditHostStoredChangesWithoutALineCanBeRemoved(t *testing.T) {
 		if l, n := left(r, ehNodeA); len(l) != 0 || n != 0.0 {
 			t.Fatalf("while the NAS is silent: %v %v", l, n)
 		}
+		if l, n := away(r, ehNodeA); l != 0 || n != 0.0 {
+			t.Fatalf("while the NAS is silent, not relayed: %v %v", l, n)
+		}
 		// ... also not after a restart of the panel, when it knows of no device of the NAS at all: what the NAS
 		// reads is not known then, and nothing is offered for removal
 		r = r.again(nil)
-		if g := r.options(ehNodeA); len(g.body["ups"].([]any)) != 0 || len(g.body["plugs"].([]any)) != 0 || len(strs(g.body["leftovers"])) != 0 || g.body["leftover_count"] != 0.0 {
+		if g := r.options(ehNodeA); len(g.body["ups"].([]any)) != 0 || len(g.body["plugs"].([]any)) != 0 || len(strs(g.body["leftovers"])) != 0 || g.body["leftover_count"] != 0.0 ||
+			len(g.body["unrelayed"].([]any)) != 0 || g.body["unrelayed_count"] != 0.0 {
 			t.Fatalf("after a restart with the NAS silent: %s", g.raw)
 		}
-		if p := r.ok(ehNodeA, map[string]any{"leftovers": true}); p.body["message"] != "nothing to change" || r.storedAgent(ehNAS) == nil {
-			t.Fatalf("a removal asked for while the NAS is silent: %s", p.raw)
+		for _, body := range []map[string]any{{"leftovers": true}, {"unrelayed": []any{map[string]any{"id": "nas-agent/rack", "kind": "ups"}, map[string]any{"id": "nas-agent/b-plug", "kind": "plug"}}}} {
+			if p := r.ok(ehNodeA, body); p.body["message"] != "nothing to change" || r.storedAgent(ehNAS) == nil {
+				t.Fatalf("a removal asked for while the NAS is silent (%v): %s", body, p.raw)
+			}
 		}
-		// it answers, without a UPS and without a plug
+		// it answers, without a UPS and without a plug: the lines are gone, and what is stored is said as what it
+		// is: about devices that are not relayed right now (TestEditHostADeviceThatIsNotRelayedRightNowIsNotGone)
 		r.b.Mu.Lock()
 		r.b.Metrics[ehNAS] = func() (jsonx.M, error) {
 			m := testutil.AgentMetrics()
@@ -577,30 +591,35 @@ func TestEditHostStoredChangesWithoutALineCanBeRemoved(t *testing.T) {
 		r.b.Mu.Unlock()
 		r.poll()
 		g := r.options(ehNodeB)
-		want := []string{"1 stored change about the UPS rack, which NAS does not relay any more", "2 stored changes about the plug b-plug, which NAS does not relay any more"}
-		if len(g.body["ups"].([]any)) != 0 || len(g.body["plugs"].([]any)) != 0 || !slices.Equal(strs(g.body["leftovers"]), want) || g.body["leftover_count"] != 3.0 {
+		texts := func(g resp) (out []string) {
+			l, _ := g.body["unrelayed"].([]any)
+			for _, x := range l {
+				out = append(out, fmt.Sprint(x.(map[string]any)["text"]))
+			}
+			return out
+		}
+		want := []string{"1 stored change about the UPS rack, which NAS does not relay right now", "2 stored changes about the plug b-plug, which NAS does not relay right now"}
+		if len(g.body["ups"].([]any)) != 0 || len(g.body["plugs"].([]any)) != 0 || !slices.Equal(texts(g), want) || g.body["unrelayed_count"] != 3.0 || g.body["leftover_count"] != 0.0 {
 			t.Fatalf("the dialog when the NAS relays nothing (no lines, and what is stored said): %s", g.raw)
 		}
-		if l, _ := left(r, ehNodeA); !slices.Equal(l, want) {
-			t.Fatalf("the same on another machine's page: %v", l)
-		}
-		removed := []string{"Removed: " + want[0], "Removed: " + want[1]}
-		old := r.do("PUT", "/api/admin/hosts/"+ehNodeA+"/options", map[string]any{"leftovers": true}, "Cookie", r.staleCookie(controller(), time.Hour), "X-Requested-With", "fairy", "Content-Type", "application/json")
-		if d, _ := old.body["detail"].(map[string]any); !stepUpRequired(old) || !slices.Equal(strs(d["items"]), removed) || r.storedAgent(ehNAS) == nil {
-			t.Fatalf("an old sign-in is asked to confirm, with the lines: %d %s", old.code, old.raw)
+		if got := texts(r.options(ehNodeA)); !slices.Equal(got, want) {
+			t.Fatalf("the same on another machine's page: %v", got)
 		}
 		if x := r.put(ehNodeA, map[string]any{"leftovers": false}); x.code != 422 {
 			t.Fatalf("leftovers: false: %d %s", x.code, x.raw)
 		}
-		p := r.ok(ehNodeA, map[string]any{"leftovers": true})
-		if !slices.Equal(strs(p.body["changed"]), removed) || p.body["message"] != "links saved" || r.storedAgent(ehNAS) != nil || len(strs(p.body["leftovers"])) != 0 {
+		// both named: both go
+		both := map[string]any{"unrelayed": []any{map[string]any{"id": "nas-agent/rack", "kind": "ups"}, map[string]any{"id": "nas-agent/b-plug", "kind": "plug"}}}
+		removed := []string{"Removed: " + want[0], "Removed: " + want[1]}
+		p := r.ok(ehNodeA, both)
+		if !slices.Equal(strs(p.body["changed"]), removed) || p.body["message"] != "links saved" || r.storedAgent(ehNAS) != nil || len(texts(p)) != 0 {
 			t.Fatalf("removed: %s\nstate.json: %v", p.raw, r.storedOptions())
 		}
 		en := r.auditEntries("", "host.options")[0]
 		if lines := strs(en["params"].(map[string]any)["lines"]); !slices.Equal(lines, removed) || en["target"] != ehNodeA || en["outcome"] != "ok" {
 			t.Fatalf("the audit entry: %v", en)
 		}
-		if p := r.ok(ehNodeA, map[string]any{"leftovers": true}); p.body["message"] != "nothing to change" {
+		if p := r.ok(ehNodeA, both); p.body["message"] != "nothing to change" {
 			t.Fatalf("nothing left: %s", p.raw)
 		}
 	})

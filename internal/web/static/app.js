@@ -3494,7 +3494,7 @@ document.addEventListener("click", (e) => {
 // eh.d is the panel's answer (GET .../options); eh.draft holds what was changed in the dialog and nothing else.
 // Everything that is drawn or sent is made from the two by the functions below, which touch no page.
 const eh = { d: null, draft: null, seq: 0, busy: false };
-const ehDraft = () => ({ ups: dict(), linked: dict(), total: dict(), reset: dict(), leftovers: false });
+const ehDraft = () => ({ ups: dict(), linked: dict(), total: dict(), reset: dict(), leftovers: false, unrelayed: false });
 function editHostMenu(s) {
   if (!isHost(s) || !state.me?.can_manage_users) return "";
   return `<button class="menu-item" type="button" data-act="edit-host">Edit host</button>`;
@@ -3554,6 +3554,9 @@ function ehPlan(d, draft) {
   const lines = [], body = { ups: [], plugs: [], reset: [] };
   const left = draft.leftovers && d.leftovers?.length ? d.leftovers : [];
   for (const l of left) lines.push(`Removed: ${l}`);
+  // ... and those about devices that are not relayed right now: only the ones the dialog lists, each by its id
+  const away = draft.unrelayed ? ehAway(d) : [];
+  for (const x of away) lines.push(`Removed: ${x.text}`);
   const back = (x, field, what, words) => {
     body.reset.push({ id: x.id, field });
     lines.push(`${what} ${x.name} (read by ${x.agent_name}): back to config.yaml: ${ehConfig(x, field) === ehWas(x, field) ? "nothing changes now" : words}`);
@@ -3584,8 +3587,12 @@ function ehPlan(d, draft) {
   }
   for (const k of Object.keys(body)) if (!body[k].length) delete body[k];
   if (left.length) body.leftovers = true;
+  if (away.length) body.unrelayed = away.map((x) => ({ id: x.id, kind: x.kind }));
   return { lines, body, notes: ehNotes(d, draft) };
 }
+// The stored changes about devices that are not relayed right now, as the panel lists them (each with its id,
+// kind and sentence; anything else in the list is left out).
+const ehAway = (d) => (Array.isArray(d.unrelayed) ? d.unrelayed : []).filter((x) => !!x && typeof x.id === "string" && typeof x.kind === "string" && typeof x.text === "string");
 // The dialog's sections. Every name in them is the panel's data and goes through esc().
 function ehView(d, draft) {
   const src = (x, field) => {
@@ -3603,7 +3610,8 @@ function ehView(d, draft) {
   const mine = d.plugs.filter((p) => ehMine(d, p, draft));
   const sect = (title, hint, rows, none) => `<div class="wu-sub">${title}</div>${rows.length ? `<p class="note eh-hint">${hint}</p>${rows.join("")}` : `<p class="note eh-hint">${none}</p>`}`;
   const plan = ehPlan(d, draft);
-  const left = d.leftovers?.length ? d.leftover_count || d.leftovers.length : 0;  // stored changes that have no line in any dialog
+  const left = d.leftovers?.length ? d.leftover_count || d.leftovers.length : 0;  // stored changes about machines that are gone
+  const away = ehAway(d).length ? d.unrelayed_count || ehAway(d).length : 0;       // ... and about devices that are not relayed right now
   const ignored = d.ignored?.length ? d.ignored_count || d.ignored.length : 0;    // the panel names the first twenty; the number is of all
   const any = [...d.ups.map((u) => ehFrom(u, "ups", draft)), ...d.plugs.map((p) => ehFrom(p, "plugs", draft)), ...mine.map((p) => ehFrom(p, "total", draft))].includes("panel");
   return `${sect("UPS", "Ticked: this machine is on that UPS.", d.ups.map((u) => row(u, "ups")), "No agent relays a UPS.")}
@@ -3611,8 +3619,10 @@ function ehView(d, draft) {
     ${sect("Total", "Ticked: the plug counts in the total.", mine.map((p) => row(p, "total")), "No plug of this machine.")}
     ${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
     ${ignored ? `<p class="note warn eh-ignored">${ignored === 1 ? "1 stored change is" : `${ignored} stored changes are`} ignored: see the panel's log.</p>` : ""}
-    ${left ? `<p class="note warn eh-ignored">${left === 1 ? "1 stored change is" : `${left} stored changes are`} about machines or devices that are gone.${draft.leftovers ? " Save removes them."
+    ${left ? `<p class="note warn eh-ignored">${left === 1 ? "1 stored change is" : `${left} stored changes are`} about machines that are gone.${draft.leftovers ? " Save removes them."
       : ' <button class="btn sm" type="button" data-eh-left>Remove</button>'}</p>` : ""}
+    ${away ? `<p class="note eh-ignored">${away === 1 ? "1 stored change is" : `${away} stored changes are`} about a UPS or plug that is not relayed right now. Kept: ${away === 1 ? "it counts" : "they count"} again when the device is back.${draft.unrelayed
+      ? " Save removes what is listed below." : ' <button class="btn sm" type="button" data-eh-away>Remove anyway</button>'}</p>` : ""}
     ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li>${esc(l)}</li>`).join("")}${plan.notes.map((l) => `<li class="eh-sees">${esc(l)}</li>`).join("")}</ul>` : ""}`;
 }
 // A tick or a Reset in the dialog changes the draft, never the panel. Each is about one line; the later of the
@@ -3637,7 +3647,8 @@ const EH_INFO = () => infoBtn("edit-host", "Edit host", infoList([
   "A link is kept with the machine that reads the device (\"read by …\"). Reset puts back that one line.",
   "A change counts from the next poll of the machine that reads the device.",
   "A link also decides who can see a UPS or plug: the viewers of the site of a machine it is linked to or, linked to nothing, of the machine that reads it. Before you save, the list says when a change shows a device to another site's viewers or hides it from them.",
-  "Stored changes about a device nobody relays any more, or about a machine that is gone, have no line here. The dialog says how many there are; Remove takes them out.",
+  "Stored changes about a machine that is gone have no line here. The dialog says how many there are; Remove takes them out.",
+  "Stored changes about a UPS or plug that its machine does not relay right now have no line either. They are kept and count again when the device is back; Remove anyway takes them out.",
   "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]));
 // Is d what GET .../options gives: the two lists, each entry with its id? Everything else is read with a default.
 const ehValid = (d) => !!d && typeof d === "object" && Array.isArray(d.ups) && Array.isArray(d.plugs)
@@ -3649,11 +3660,11 @@ const ehValid = (d) => !!d && typeof d === "object" && Array.isArray(d.ups) && A
 function ehDraw() {
   const body = $("#eh-body");
   if (!body || !eh.d) return;
-  const a = document.activeElement, had = a && body.contains?.(a) ? { eh: a.dataset.eh, value: a.value, reset: a.dataset.ehReset, left: a.dataset.ehLeft !== undefined } : null;
+  const a = document.activeElement, had = a && body.contains?.(a) ? { eh: a.dataset.eh, value: a.value, reset: a.dataset.ehReset, left: a.dataset.ehLeft !== undefined || a.dataset.ehAway !== undefined } : null;
   body.innerHTML = ehView(eh.d, eh.draft);
   $("#eh-save").disabled = eh.busy || !ehPlan(eh.d, eh.draft).lines.length;
   if (!had) return;
-  if (had.left) { $("#eh-save").focus(); return; }  // "Remove" is gone once it was pressed: Save is what comes next
+  if (had.left) { $("#eh-save").focus(); return; }  // "Remove" and "Remove anyway" are gone once pressed: Save is what comes next
   const ticks = [...body.querySelectorAll("input[data-eh]")], resets = [...body.querySelectorAll("[data-eh-reset]")];
   const cut = had.reset ? had.reset.indexOf(":") : -1;
   (had.reset ? resets.find((x) => x.dataset.ehReset === had.reset) || ticks.find((x) => x.dataset.eh === had.reset.slice(0, cut) && x.value === had.reset.slice(cut + 1) && !x.disabled) : ticks.find((x) => x.dataset.eh === had.eh && x.value === had.value))?.focus();
@@ -3696,9 +3707,11 @@ async function openEditHost(s) {
     ehTick(eh.d, eh.draft, t.dataset.eh, t.value, t.checked); $("#eh-err").textContent = ""; ehDraw();
   };
   $("#eh-body").onclick = (e) => {
-    const t = e.target.closest("[data-eh-reset], [data-eh-left]");
+    const t = e.target.closest("[data-eh-reset], [data-eh-left], [data-eh-away]");
     if (!t) return;
-    if (t.dataset.ehLeft !== undefined) eh.draft.leftovers = true; else ehReset(eh.d, eh.draft, t.dataset.ehReset);
+    if (t.dataset.ehLeft !== undefined) eh.draft.leftovers = true;
+    else if (t.dataset.ehAway !== undefined) eh.draft.unrelayed = true;
+    else ehReset(eh.d, eh.draft, t.dataset.ehReset);
     $("#eh-err").textContent = ""; ehDraw();
   };
   $("#eh-form").onsubmit = async (e) => {

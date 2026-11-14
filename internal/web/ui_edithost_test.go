@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 )
 
 // "Edit host" on the page: an entry in the ⋯ menu of a host's page (admins), and a dialog with three short
@@ -65,7 +67,7 @@ const settle = () => new Promise((r) => setImmediate(r));
 const ups = (id, o) => ({ id: "nas-agent/" + id, name: id.toUpperCase() + " UPS", agent: "nas-agent", agent_name: "NAS", on: false, from: "config", by: null, at: null, config_on: false, ...o });
 const plug = (id, o) => ({ id: "nas-agent/" + id, name: id + " plug", agent: "nas-agent", agent_name: "NAS", linked: false, self: false, other: null, from: "config", by: null, at: null,
   config_linked: false, config_other: null, in_total: true, total_from: "config", total_by: null, total_at: null, config_in_total: true, mine: false, ...o });
-const data = (o) => ({ id: "h1", name: "PC-B", agent: "pc-b", rev: 3, ups: [], plugs: [], ignored: [], leftovers: [], leftover_count: 0, ...o });
+const data = (o) => ({ id: "h1", name: "PC-B", agent: "pc-b", rev: 3, ups: [], plugs: [], ignored: [], leftovers: [], leftover_count: 0, unrelayed: [], unrelayed_count: 0, ...o });
 (async () => {
 ` + body + `
   if (!process.exitCode) console.log("ok");
@@ -271,23 +273,44 @@ func TestUIEditHostDialogSections(t *testing.T) {
   if (!words(ehView(data({ ignored: ["x", "y"] }), ehDraft())).includes("2 stored changes are ignored: see the panel's log.")) fail("two ignored");
   // the panel names the first twenty and says how many there are: the dialog says the number of all
   if (!words(ehView(data({ ignored: Array(21).fill("x"), ignored_count: 500 }), ehDraft())).includes("500 stored changes are ignored: see the panel's log.")) fail("five hundred ignored");
-  // stored changes that have no line in any dialog: how many, and Remove; pressed, Save's list says what goes
-  const lo = data({ ups: [ups("rack")], leftovers: ["2 stored changes about the plug b, which NAS does not relay any more", "1 stored change kept with old-pc, which is no machine of this panel"], leftover_count: 3 });
+  // stored changes about machines that are gone: how many, and Remove; pressed, Save's list says what goes
+  const lo = data({ ups: [ups("rack")], leftovers: ["UPS RACK UPS (read by NAS): a stored change about old-pc, which is no machine of this panel", "2 stored changes kept with old-pc, which is no machine of this panel"], leftover_count: 3 });
   draft = ehDraft();
   html = ehView(lo, draft); text = words(html);
-  if (!text.includes("3 stored changes are about machines or devices that are gone. Remove") || !html.includes('<button class="btn sm" type="button" data-eh-left>Remove</button>') || text.includes("This will change")) fail("leftovers: " + html);
+  if (!text.includes("3 stored changes are about machines that are gone. Remove") || !html.includes('<button class="btn sm" type="button" data-eh-left>Remove</button>') || text.includes("This will change")) fail("leftovers: " + html);
   if (JSON.stringify(ehPlan(lo, draft)) !== JSON.stringify({ lines: [], body: {}, notes: [] })) fail("leftovers are removed without being asked: " + JSON.stringify(ehPlan(lo, draft)));
   draft.leftovers = true;
   ehTick(lo, draft, "ups", "nas-agent/rack", true);
   plan = ehPlan(lo, draft);
-  if (JSON.stringify(plan.lines) !== JSON.stringify(["Removed: 2 stored changes about the plug b, which NAS does not relay any more", "Removed: 1 stored change kept with old-pc, which is no machine of this panel", "UPS RACK UPS (read by NAS): powers PC-B"])
+  if (JSON.stringify(plan.lines) !== JSON.stringify(["Removed: UPS RACK UPS (read by NAS): a stored change about old-pc, which is no machine of this panel", "Removed: 2 stored changes kept with old-pc, which is no machine of this panel", "UPS RACK UPS (read by NAS): powers PC-B"])
     || JSON.stringify(plan.body) !== JSON.stringify({ ups: [{ id: "nas-agent/rack", on: true }], leftovers: true })) fail("leftovers, the plan: " + JSON.stringify(plan));
   html = ehView(lo, draft); text = words(html);
-  if (!text.includes("3 stored changes are about machines or devices that are gone. Save removes them.") || html.includes("data-eh-left") || !text.includes("This will change Removed: 2 stored changes about the plug b")) fail("leftovers after Remove: " + text);
-  if (!words(ehView(data({ leftovers: ["x"], leftover_count: 1 }), ehDraft())).includes("1 stored change is about machines or devices that are gone. Remove")) fail("one leftover");
-  if (words(ehView(data({}), ehDraft())).includes("gone")) fail("no leftovers, and the dialog speaks of them");
-  draft = ehDraft(); draft.leftovers = true;  // nothing to remove: nothing is asked
+  if (!text.includes("3 stored changes are about machines that are gone. Save removes them.") || html.includes("data-eh-left") || !text.includes("This will change Removed: UPS RACK UPS (read by NAS): a stored change about old-pc")) fail("leftovers after Remove: " + text);
+  if (!words(ehView(data({ leftovers: ["x"], leftover_count: 1 }), ehDraft())).includes("1 stored change is about machines that are gone. Remove")) fail("one leftover");
+  if (words(ehView(data({}), ehDraft())).includes("gone") || words(ehView(data({}), ehDraft())).includes("relayed")) fail("no leftovers, and the dialog speaks of them");
+  draft = ehDraft(); draft.leftovers = true; draft.unrelayed = true;  // nothing to remove: nothing is asked
   if (JSON.stringify(ehPlan(data({}), draft).body) !== "{}") fail("leftovers asked for with none there");
+  // stored changes about a device that is not relayed right now: said as that, counted apart, kept unless "Remove
+  // anyway" is pressed; the Remove of what is gone does not take them; the request names each device
+  const aw = data({ leftovers: ["1 stored change kept with old-pc, which is no machine of this panel"], leftover_count: 1,
+    unrelayed: [{ id: "nas-agent/rack", kind: "ups", count: 1, text: "1 stored change about the UPS rack, which NAS does not relay right now" },
+      { id: "nas-agent/b", kind: "plug", count: 2, text: "2 stored changes about the plug b, which NAS does not relay right now" }, null, { id: 7 }], unrelayed_count: 3 });
+  draft = ehDraft();
+  html = ehView(aw, draft); text = words(html);
+  if (!text.includes("1 stored change is about machines that are gone. Remove 3 stored changes are about a UPS or plug that is not relayed right now. Kept: they count again when the device is back. Remove anyway")
+    || !html.includes('<button class="btn sm" type="button" data-eh-away>Remove anyway</button>') || text.includes("This will change")) fail("not relayed: " + text);
+  draft.leftovers = true;
+  plan = ehPlan(aw, draft);
+  if (JSON.stringify(plan.lines) !== JSON.stringify(["Removed: 1 stored change kept with old-pc, which is no machine of this panel"]) || JSON.stringify(plan.body) !== JSON.stringify({ leftovers: true })) fail("Remove took what is not relayed right now: " + JSON.stringify(plan));
+  if (!ehView(aw, draft).includes("data-eh-away")) fail("Remove anyway is gone after Remove");
+  draft = ehDraft(); draft.unrelayed = true;
+  plan = ehPlan(aw, draft);
+  if (JSON.stringify(plan.lines) !== JSON.stringify(["Removed: 1 stored change about the UPS rack, which NAS does not relay right now", "Removed: 2 stored changes about the plug b, which NAS does not relay right now"])
+    || JSON.stringify(plan.body) !== JSON.stringify({ unrelayed: [{ id: "nas-agent/rack", kind: "ups" }, { id: "nas-agent/b", kind: "plug" }] })) fail("Remove anyway, the plan: " + JSON.stringify(plan));
+  html = ehView(aw, draft); text = words(html);
+  if (!text.includes("Kept: they count again when the device is back. Save removes what is listed below.") || html.includes("data-eh-away") || !html.includes("data-eh-left") || !text.includes("This will change Removed: 1 stored change about the UPS rack")) fail("after Remove anyway: " + text);
+  text = words(ehView(data({ unrelayed: [{ id: "nas-agent/rack", kind: "ups", count: 1, text: "x" }], unrelayed_count: 1 }), ehDraft()));
+  if (!text.includes("1 stored change is about a UPS or plug that is not relayed right now. Kept: it counts again when the device is back. Remove anyway")) fail("one that is not relayed: " + text);
   // who will see a device: one note for each site whose viewers get to see it or lose it, under the lines of "This will change"
   const vd = data({ site: "Home",
     ups: [ups("rack", { sees: ["Away"], sees_on: ["Away", "Home"], sees_off: ["Away"] }), ups("desk", { on: true, from: "panel", sees: ["Home"], sees_on: ["Home"], sees_off: ["Away"] }),
@@ -336,7 +359,8 @@ func TestUIEditHostDialogSections(t *testing.T) {
     "A link is kept with the machine that reads the device (\"read by …\"). Reset puts back that one line.",
     "A change counts from the next poll of the machine that reads the device.",
     "A link also decides who can see a UPS or plug: the viewers of the site of a machine it is linked to or, linked to nothing, of the machine that reads it. Before you save, the list says when a change shows a device to another site's viewers or hides it from them.",
-    "Stored changes about a device nobody relays any more, or about a machine that is gone, have no line here. The dialog says how many there are; Remove takes them out.",
+    "Stored changes about a machine that is gone have no line here. The dialog says how many there are; Remove takes them out.",
+    "Stored changes about a UPS or plug that its machine does not relay right now have no line either. They are kept and count again when the device is back; Remove anyway takes them out.",
     "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]) if (!info.includes(s)) fail("the info button lacks: " + s);
 `)
 }
@@ -424,11 +448,18 @@ func TestUIEditHostDialogFlow(t *testing.T) {
   // "Remove" of the stored changes without a line: one click, the list says what goes, Save sends it
   await open(async () => ({ ...d(), leftovers: ["1 stored change kept with old-pc, which is no machine of this panel"], leftover_count: 1 }));
   if (!$("#eh-save").disabled) fail("leftovers alone make Save pressable before Remove was pressed");
-  $("#eh-body").onclick({ target: { closest: (sel) => (sel === "[data-eh-reset], [data-eh-left]" ? { dataset: { ehLeft: "" } } : null) } });
+  $("#eh-body").onclick({ target: { closest: (sel) => (sel === "[data-eh-reset], [data-eh-left], [data-eh-away]" ? { dataset: { ehLeft: "" } } : null) } });
   if ($("#eh-save").disabled || !words($("#eh-body").innerHTML).includes("This will change Removed: 1 stored change kept with old-pc, which is no machine of this panel")) fail("after Remove: " + words($("#eh-body").innerHTML));
   answer = async () => ({ ok: true, message: "links saved" });
   await submit(); await settle();
   if (JSON.stringify(asked[asked.length - 1].body) !== JSON.stringify({ leftovers: true }) || closed !== 1) fail("the PUT for the leftovers: " + JSON.stringify(asked[asked.length - 1]));
+  // "Remove anyway" of the changes about a device that is not relayed right now: the same, and the PUT names the device
+  await open(async () => ({ ...d(), unrelayed: [{ id: "nas-agent/attic", kind: "ups", count: 1, text: "1 stored change about the UPS attic, which NAS does not relay right now" }], unrelayed_count: 1 }));
+  if (!$("#eh-save").disabled) fail("changes about a device that is not relayed make Save pressable before Remove anyway was pressed");
+  $("#eh-body").onclick({ target: { closest: (sel) => (sel === "[data-eh-reset], [data-eh-left], [data-eh-away]" ? { dataset: { ehAway: "" } } : null) } });
+  if ($("#eh-save").disabled || !words($("#eh-body").innerHTML).includes("This will change Removed: 1 stored change about the UPS attic, which NAS does not relay right now")) fail("after Remove anyway: " + words($("#eh-body").innerHTML));
+  await submit(); await settle();
+  if (JSON.stringify(asked[asked.length - 1].body) !== JSON.stringify({ unrelayed: [{ id: "nas-agent/attic", kind: "ups" }] }) || closed !== 1) fail("the PUT for what is not relayed: " + JSON.stringify(asked[asked.length - 1]));
   // an answer that is not what the panel's API gives (a proxy's page, another version): said, never "Loading…" for ever
   for (const bad of [null, {}, "x", [], 7, { ups: null, plugs: null }, { ups: [], plugs: {} }, { ups: [null], plugs: [] }, { ups: [], plugs: [1] }, { ups: [{ name: "no id" }], plugs: [] }]) {
     let threw = "";
@@ -479,7 +510,7 @@ func TestUIEditHostListsTheChangesInThePanelsWords(t *testing.T) {
 		}
 		out := runEhPageScript(t, "eh-words", `
   const d = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8")), draft = ehDraft();
-  for (const [kind, key, v] of JSON.parse(process.argv[3])) { if (kind === "reset") ehReset(d, draft, key); else if (kind === "left") draft.leftovers = true; else ehTick(d, draft, kind, key, v); }
+  for (const [kind, key, v] of JSON.parse(process.argv[3])) { if (kind === "reset") ehReset(d, draft, key); else if (kind === "left") draft.leftovers = true; else if (kind === "away") draft.unrelayed = true; else ehTick(d, draft, kind, key, v); }
   console.log(JSON.stringify(ehPlan(d, draft)));
 `, file, ticks)
 		var plan struct {
@@ -525,5 +556,22 @@ func TestUIEditHostListsTheChangesInThePanelsWords(t *testing.T) {
 	step(ehNodeB, `[["reset", "plugs:nas-agent/b-plug"], ["ups", "nas-agent/desk", true]]`) // b-plug: given to the NAS since; the Reset on PVE-B's page is not offered, and a page that asks it changes nothing
 	if notes < 12 {
 		t.Errorf("the steps made %d notes about who sees what: too few to compare the page's with the panel's", notes)
+	}
+	// the NAS answers without the desk UPS: what is stored about it is said as not relayed right now, and
+	// "Remove anyway" takes it out in the panel's words
+	r.b.Mu.Lock()
+	r.b.Metrics[ehNAS] = func() (jsonx.M, error) {
+		m := nasMetrics()
+		m["ups"] = m["ups"].([]any)[:1]
+		return m, nil
+	}
+	r.b.Mu.Unlock()
+	r.poll()
+	if fmt.Sprint(r.storedAgent(ehNAS)["ups_powers"]) != "map[desk:map["+ehNodeA+":true "+ehNodeB+":true]]" {
+		t.Fatalf("the rig: two changes about the desk UPS are stored: %v", r.storedAgent(ehNAS))
+	}
+	step(ehNodeA, `[["away"]]`)
+	if nas := r.storedAgent(ehNAS); nas["ups_powers"] != nil || nas["power_links"] == nil {
+		t.Fatalf("after the page removed what is not relayed (and nothing else): %v", nas)
 	}
 }
