@@ -114,6 +114,9 @@ agents:
 # mean "the default". For the default leave the key out).
 # NEW in this release, and a panel older than it refuses the block ("field wake_update not found") and does
 # not start: update first, then add new config keys, then restart. Take the block out before going back.
+# Since build 16 an admin can also change these five, and approval.run_approval_wait_s below, in the panel
+# without a restart (Updates page, "Run timings"; same ranges). This file stays the default: what is changed
+# there is kept by the panel and used instead of the value here until "Reset" (fairy admin config check lists it).
 # wake_update:
 #   online_timeout_s: 300                 # give up on a woken machine whose agent has not answered by then (60-1800).
 #                                         # It has to start, get its network and bring Tailscale up first; the run
