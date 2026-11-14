@@ -712,6 +712,10 @@ func (s *Server) wakeUpdateKeepOn(c *reqCtx) error {
 	if !ok {
 		return apierr.New(409, "this is not a machine with an agent of its own")
 	}
+	if s.WakeRuns.Arming(x.ID) {
+		// a cancel now finds no run and ends nothing, and the ticket arrives a moment later: not sent, and said
+		return apierr.New(409, x.Name+" is being handed the run's ticket this very moment: nothing was cancelled. Press Keep on again in a few seconds.")
+	}
 	mayGo := ""
 	var late *wakerun.ArmedHost // its arming got no answer, and the ticket can still reach it
 	for _, h := range s.WakeRuns.MayGoOff(s.Poller.Clock()) {
@@ -788,10 +792,15 @@ func (s *Server) helperStopRefusal(x model.System) string {
 	for _, h := range s.WakeRuns.MayGoOff(s.Poller.Clock()) {
 		armed = armed || h.ID == x.ID
 	}
-	if !live && !armed {
+	arming := s.WakeRuns.Arming(x.ID) // from the moment the run decides to arm it: its ticket is on its way
+	if !live && !armed && !arming {
 		return ""
 	}
-	if state == "" {
+	switch {
+	case state != "":
+	case arming && !armed:
+		state = "its ticket is on its way to it"
+	default:
 		state = "armed, or may be"
 	}
 	return x.Name + " is in a run of \"Update unpowered hosts\" (" + state + "), and its helper is what counts the run's wait and switches this PC off again: " +

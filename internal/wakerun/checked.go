@@ -1323,6 +1323,25 @@ func (m *Manager) disarm(ctx context.Context, r *Run, h *Host, now time.Time, wh
 	m.say(h, "asked to stay on: waiting for its agent to show that its switch-off is called off")
 }
 
+// Arming reports whether the run that is going has decided to hand the machine its ticket and has not taken
+// in what came of it yet: from the moment the journal knows "asking: arm" until the answer is here. In those
+// seconds the machine is not "armed" for the run, and it may be for itself: its helper is not stopped from
+// the panel, and a cancel is not said to have kept it on.
+func (m *Manager) Arming(hostID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.active
+	if r == nil || r.Ticket == nil {
+		return false
+	}
+	for _, h := range r.Hosts {
+		if h.ID == hostID {
+			return h.Checked && !h.Final() && h.Arm == "" && (h.Asking == "arm" || h.chk.armTried)
+		}
+	}
+	return false
+}
+
 // KeepOn is the panel's "Keep on" for a machine of the run that is going, taken over by the run: it calls the
 // machine's self-switch-off off as its own cancel does (disarm), which repeats the cancel for as long as a
 // ticket whose request got no answer can still arrive, and ends the machine with what its agent shows then.

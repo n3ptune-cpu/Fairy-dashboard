@@ -311,3 +311,57 @@ func TestAStartThatLosesDoesNotWipeTheWinnersTicket(t *testing.T) {
 	// and the winner's machine gets its ticket
 	r.until(t, "pc-a armed", 300, func() bool { return r.host("pc-a").Arm == wakerun.ArmArmed })
 }
+
+// Rule 6 through the route, from the moment the run decides to arm (independent review of 270e7ab): "Stop
+// helper" was not refused in the seconds the arm request is on its way (the run had no answer yet, so the
+// machine was not "armed" for the panel). The helper is what takes the ticket's wait: it is not stopped from
+// the moment the request goes out. Keep on in that moment cancels nothing, and says so.
+func TestStopHelperIsRefusedFromTheMomentTheRunArms(t *testing.T) {
+	r := newRunRig(t, "pc-a")
+	r.b.Mu.Lock()
+	inner := r.b.Metrics["pc-a"]
+	r.b.Metrics["pc-a"] = func() (jsonx.M, error) { // a Windows PC with its elevated helper running
+		m, err := inner()
+		if err == nil {
+			m["helper"] = jsonx.M{"state": "running", "needed": true, "since": "2026-11-09T10:00:00Z", "features": []any{}}
+		}
+		return m, err
+	}
+	r.b.Mu.Unlock()
+	fresh := r.cookie(controller(), 0)
+	hdr := []string{"Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	stop := func() resp {
+		return r.do("POST", "/api/systems/pc-a/helper/stop", map[string]any{"confirm": "PC-A"}, hdr...)
+	}
+	var during, keep *resp
+	r.gb.Relay("pc-a", func(path string, body any) (int, jsonx.M) {
+		if path == api.PathRunArm && during == nil {
+			x, y := stop(), r.do("POST", "/api/systems/pc-a/wake-update/keep-on", map[string]any{}, hdr...)
+			during, keep = &x, &y
+		}
+		return 0, nil // the request goes on to the machine
+	})
+	if _, res := r.approved(t, "POST", "/api/admin/wake-update", map[string]any{"hosts": []string{"pc-a"}}); res["ok"] != true {
+		t.Fatal(res)
+	}
+	r.until(t, "pc-a armed", 300, func() bool { return r.host("pc-a").Arm == wakerun.ArmArmed })
+	if during == nil {
+		t.Fatal("no arm request went out")
+	}
+	if during.code != 409 || !strings.Contains(string(during.raw), "PC-A is in a run of \\\"Update unpowered hosts\\\" (its ticket is on its way to it)") || !strings.Contains(string(during.raw), "Nothing was sent.") {
+		t.Fatalf("Stop helper while the ticket is on its way: %d %s", during.code, during.raw)
+	}
+	if keep.code != 409 || !strings.Contains(string(keep.raw), "PC-A is being handed the run's ticket this very moment: nothing was cancelled. Press Keep on again in a few seconds.") {
+		t.Fatalf("Keep on while the ticket is on its way: %d %s", keep.code, keep.raw)
+	}
+	// armed: refused through the route as well
+	if x := stop(); x.code != 409 || !strings.Contains(string(x.raw), "(armed") {
+		t.Fatalf("Stop helper while it is armed: %d %s", x.code, x.raw)
+	}
+	if n := len(r.sent("pc-a", api.PathHelperStop)); n != 0 {
+		t.Fatalf("%d helper stops were sent", n)
+	}
+	if n := len(r.sent("pc-a", "/power")); n != 0 {
+		t.Fatalf("%d cancels were sent", n)
+	}
+}
