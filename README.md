@@ -1501,6 +1501,8 @@ Between "Wake-on-LAN" and the links the dialog has the group **Run timings**: th
   counts for this machine afterwards. A value that counts anyway (the block's, or the panel's where the
   machine has no block) is not stored: typing it is the same as Reset, and the machine then follows
   config.yaml or Run timings again, also when those are changed later. config.yaml is not written.
+  A value changed here goes on counting when config.yaml gets a higher one for the machine later: the
+  panel then says so once in its log when it starts (a WARN with the machine and both numbers).
 * **The ranges are config.yaml's**, checked before you are asked to confirm anything. Nothing below 300 s
   or below 10 s can be typed, stored, or come into force through a `state.json` edited by hand: such a
   value is ignored with a warning in the log and a WARN of `fairy admin config check`, and what counts

@@ -1,6 +1,7 @@
 package poller
 
 import (
+	"fmt"
 	"log/slog"
 	"slices"
 
@@ -103,6 +104,37 @@ func runWith(e adminstate.RunEdit, offAfterS, shutdownDelayS int) (int, int) {
 		}
 	}
 	return offAfterS, shutdownDelayS
+}
+
+// RunTimingWarnings is for the start of the panel: one line for every machine whose own run timing was
+// decided in "Edit host" and is BELOW what the wake_update: block of config.yaml sets for it now. The decision
+// was made over another value (the block is newer, or was raised since), and it goes on counting: what is
+// changed in the panel lies over config.yaml. Nobody is asked again when config.yaml changes, so it is said
+// here, with the machine and both numbers. A decision that is not below the block's value is what the admin
+// chose knowing a careful value; it is not named.
+func (p *Poller) RunTimingWarnings() []string {
+	opts := p.Admin.HostOptions()
+	keys := make([]string, 0, len(opts.Hosts))
+	for k := range opts.Hosts {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	var out []string
+	for _, key := range keys {
+		off, delay := p.ConfigWakeUpdate(key)
+		for _, t := range config.MachineRunTimings() {
+			v, block := opts.Hosts[key].Run.Value(t.Key), off
+			if t.Key == config.KeyShutdownDelay {
+				block = delay
+			}
+			if v == 0 || !t.In(v) || block == 0 || v >= block {
+				continue
+			}
+			out = append(out, fmt.Sprintf("host %s: %s is %d s, changed in \"Edit host\". config.yaml's wake_update: block for this machine says %d s. "+
+				"The %d s of the panel count. To use config.yaml's value, press Reset in Edit host.", key, t.Key, v, block, v))
+		}
+	}
+	return out
 }
 
 // named puts the name an admin gave a host on its row (a node or an agent; a guest has none).

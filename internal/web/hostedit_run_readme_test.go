@@ -34,6 +34,7 @@ func TestREADMESaysAMachinesOwnRunTimingsAsThePanelHasThem(t *testing.T) {
 		"**from config.yaml** (the machine's own block), **from Run timings** (the machine has none of its own and follows the panel's timing",
 		"(`state.json`, `host_options`, `hosts`, `<id>`, `wake_update`). The number you save is the number that counts for this machine afterwards.",
 		"A value that counts anyway (the block's, or the panel's where the machine has no block) is not stored: typing it is the same as Reset",
+		"A value changed here goes on counting when config.yaml gets a higher one for the machine later: the panel then says so once in its log when it starts (a WARN with the machine and both numbers).",
 		"Nothing below 300 s or below 10 s can be typed, stored, or come into force through a `state.json` edited by hand",
 		"**Every change of the two asks you to confirm it's you, by itself**, also right after you confirmed something else, and also a longer countdown and a Reset.",
 		"\"" + hoRunConsequence(config.KeyOffAfter, "PC-A", 360) + "\"", // the sentence of the confirmation, as the panel makes it

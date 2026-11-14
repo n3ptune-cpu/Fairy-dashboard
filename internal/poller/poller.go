@@ -213,6 +213,9 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 	for _, w := range p.NodeLinkWarnings() { // an agent's node that the configuration does not decide: said once (nodeid.go)
 		slog.Warn("config: " + w)
 	}
+	for _, w := range p.RunTimingWarnings() { // a machine's own run timing of "Edit host" below config.yaml's: said once (hostedit.go)
+		slog.Warn("state.json: " + w)
+	}
 	for _, l := range p.NodeLinksInferred() { // a node that was worked out from an id_prefix: never in silence
 		slog.Info("config: " + l)
 	}
