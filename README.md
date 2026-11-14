@@ -768,6 +768,10 @@ What to know before the first real run:
     time to cancel. A longer wait for a woken machine makes the time longer in which a machine that a
     person switches on is treated as woken by the run. A confirmation given for something else a minute
     ago does not count for these.
+  * **What you confirm is what is saved.** "Confirm it's you" lists the change with the value before and
+    after. When somebody else changes the timings between your Save and your confirmation, so that your
+    request would now do something else than that list said, nothing is saved ("The run timings were
+    changed by somebody else after you pressed Save ..."): look at the dialog again and press Save.
   * **A change counts from the next run.** A run that is going keeps the numbers it started with, to its
     end: its countdowns, its waits, its pacing and what its passkeys signed. The page shows the run's own
     numbers in the run and the new ones in the dialog. And a start is confirmed for the timings its dialog

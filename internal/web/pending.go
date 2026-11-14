@@ -69,8 +69,9 @@ type pendingAction struct {
 	Approval *approvalPlan
 	Next     string // where the page returns to after the approval's round trip (set when it starts)
 	// Stamp: for a route that has one (actionStamp), what the request rested on when it was kept and must
-	// still rest on when it runs: the run timings in force for a start of "Update unpowered hosts". The
-	// handler compares it in the replay (keptStamp). Never shown, never sent to a browser.
+	// still rest on when it runs: the run timings in force for a start of "Update unpowered hosts"; for a
+	// change of the run timings, the lines "Confirm it's you" shows for it (Items). The handler compares it in
+	// the replay (keptStamp). Never shown, never sent to a browser.
 	Stamp string
 }
 
@@ -169,26 +170,35 @@ func (c *reqCtx) keepPending(u *model.User, plan *approvalPlan) (p *pendingActio
 			p.Items = append(p.Items, truncate(safeTarget(line), maxActionText))
 		}
 	} else if list := actionList[c.r.Pattern]; list != nil {
-		for _, line := range list(c, u) {
-			if len(p.Items) == maxActionItems {
-				break
-			}
-			p.Items = append(p.Items, truncate(safeTarget(line), maxActionText))
-		}
+		p.Items = shownItems(list(c, u))
 	}
 	if stamp := actionStamp[c.r.Pattern]; stamp != nil {
-		p.Stamp = stamp(c)
+		p.Stamp = stamp(c, p)
 	}
 	c.s.codec.live.keepPending(key, p, now)
 	return p, ""
 }
 
+// shownItems is the lines of a kept action as "Confirm it's you" shows them: at most maxActionItems, each
+// cut and cleaned like every text of that dialog.
+func shownItems(lines []string) []string {
+	var out []string
+	for _, line := range lines {
+		if len(out) == maxActionItems {
+			break
+		}
+		out = append(out, truncate(safeTarget(line), maxActionText))
+	}
+	return out
+}
+
 // actionStamp is, per route, what a kept request rests on besides its own text: a value the handler works
-// out again in the replay and compares (pendingAction.Stamp). A start of "Update unpowered hosts" rests on
-// the run timings in force: a run must not start with other timings than the ones its dialog and its
-// confirmation showed (runtimes.go).
-var actionStamp = map[string]func(c *reqCtx) string{
-	"POST /api/admin/wake-update": (*reqCtx).wakeUpdateStamp,
+// out again in the replay and compares (pendingAction.Stamp). p is the action as it is kept (its Items are
+// made). A start of "Update unpowered hosts" rests on the run timings in force: a run must not start with
+// other timings than the ones its dialog and its confirmation showed (runtimes.go). A change of the run
+// timings rests on the lines its confirmation shows: what is confirmed is what is saved (api_runtimings.go).
+var actionStamp = map[string]func(c *reqCtx, p *pendingAction) string{
+	"POST /api/admin/wake-update": func(c *reqCtx, _ *pendingAction) string { return c.wakeUpdateStamp() },
 }
 
 // actionText says, per route, what a kept request does. describeAction fills in the path parameters.

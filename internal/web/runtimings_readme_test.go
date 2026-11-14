@@ -46,6 +46,10 @@ func TestREADMESaysTheRunTimingsAsThePanelHasThem(t *testing.T) {
 			t.Errorf("the README lacks %q", want)
 		}
 	}
+	if !strings.HasPrefix(rtNotShown, "The run timings were changed by somebody else after you pressed Save") ||
+		!strings.Contains(readme, "nothing is saved (\"The run timings were changed by somebody else after you pressed Save ...\")") {
+		t.Errorf("the README quotes the refusal of a confirmed change in other words than the panel's: %q", rtNotShown)
+	}
 	if !strings.Contains(wuTimingsChanged, "The run timings were changed after you pressed the button") || !strings.Contains(readme, "(\"The run timings were changed after you pressed the button ...\")") {
 		t.Errorf("the README quotes the refusal of a start in other words than the panel's: %q", wuTimingsChanged)
 	}
