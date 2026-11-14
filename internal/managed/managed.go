@@ -385,7 +385,20 @@ func (s *Store) ListNote() string {
 	if hosts, err := s.Load(); err != nil || len(hosts) > 0 {
 		return ""
 	}
-	return strings.ReplaceAll(s.emptyList(), s.dir+string(filepath.Separator), "")
+	return strings.ReplaceAll(s.emptyList(), folderPrefix(s.dir), "")
+}
+
+// folderPrefix is what the path of every file of a store in dir starts with, as filepath.Join writes it: dir
+// in its shortest form, and one separator. data_dir is taken as config.yaml has it, and "/var/lib/fairy/"
+// (a slash at its end) is as good a way to write the folder as "/var/lib/fairy": the paths are the same, so
+// what is taken out of a line for the page must be the same too. With dir and a separator put together as
+// they were written, "/var/lib/fairy//" was looked for, was in no path, and the page's line kept the folder.
+func folderPrefix(dir string) string {
+	dir = filepath.Clean(dir)
+	if strings.HasSuffix(dir, string(filepath.Separator)) { // a root: its separator is the one
+		return dir
+	}
+	return dir + string(filepath.Separator)
 }
 
 // Entry is a host ready to be added to the configuration: the agent, (with Wake-on-LAN / BMC power-on) its
