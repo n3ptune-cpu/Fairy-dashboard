@@ -276,7 +276,7 @@ func TestUIEditHostDialogSections(t *testing.T) {
   draft = ehDraft();
   html = ehView(lo, draft); text = words(html);
   if (!text.includes("3 stored changes are about machines or devices that are gone. Remove") || !html.includes('<button class="btn sm" type="button" data-eh-left>Remove</button>') || text.includes("This will change")) fail("leftovers: " + html);
-  if (JSON.stringify(ehPlan(lo, draft)) !== JSON.stringify({ lines: [], body: {} })) fail("leftovers are removed without being asked: " + JSON.stringify(ehPlan(lo, draft)));
+  if (JSON.stringify(ehPlan(lo, draft)) !== JSON.stringify({ lines: [], body: {}, notes: [] })) fail("leftovers are removed without being asked: " + JSON.stringify(ehPlan(lo, draft)));
   draft.leftovers = true;
   ehTick(lo, draft, "ups", "nas-agent/rack", true);
   plan = ehPlan(lo, draft);
@@ -288,6 +288,32 @@ func TestUIEditHostDialogSections(t *testing.T) {
   if (words(ehView(data({}), ehDraft())).includes("gone")) fail("no leftovers, and the dialog speaks of them");
   draft = ehDraft(); draft.leftovers = true;  // nothing to remove: nothing is asked
   if (JSON.stringify(ehPlan(data({}), draft).body) !== "{}") fail("leftovers asked for with none there");
+  // who will see a device: one note for each site whose viewers get to see it or lose it, under the lines of "This will change"
+  const vd = data({ site: "Home",
+    ups: [ups("rack", { sees: ["Away"], sees_on: ["Away", "Home"], sees_off: ["Away"] }), ups("desk", { on: true, from: "panel", sees: ["Home"], sees_on: ["Home"], sees_off: ["Away"] }),
+      ups("attic", { on: true, from: "panel", config_on: true, sees: ["Home", "Lab"], sees_on: ["Home", "Lab"], sees_off: ["Lab"] })],
+    plugs: [plug("b", { sees: ["Away"], sees_linked: ["Home"], sees_unlinked: ["Away"], sees_config: ["Away"] }),
+      plug("c", { linked: true, mine: true, from: "panel", config_other: "PC-A", sees: ["Home"], sees_linked: ["Home"], sees_unlinked: ["Away"], sees_config: ["Lab"] }),
+      plug("d", { linked: true, mine: true, sees: [], sees_linked: [], sees_unlinked: [], sees_config: [] })] });
+  draft = ehDraft();
+  if (ehPlan(vd, draft).notes.length) fail("notes without a change: " + JSON.stringify(ehPlan(vd, draft).notes));
+  ehTick(vd, draft, "ups", "nas-agent/rack", true);     // Home's viewers get to see it
+  ehTick(vd, draft, "ups", "nas-agent/desk", false);    // it goes back to the reading machine's site
+  ehReset(vd, draft, "ups:nas-agent/attic");            // config.yaml says the same: nothing moves
+  ehTick(vd, draft, "plugs", "nas-agent/b", true);
+  ehReset(vd, draft, "plugs:nas-agent/c");              // back to PC-A, of the site Lab
+  ehTick(vd, draft, "plugs", "nas-agent/d", false);     // nobody but admins saw it, nobody will
+  ehTick(vd, draft, "total", "nas-agent/b", false);     // the total moves nobody's view
+  plan = ehPlan(vd, draft);
+  const wantNotes = ["Viewers of Home will see UPS RACK UPS", "Viewers of Away will see UPS DESK UPS", "Viewers of Home will no longer see UPS DESK UPS",
+    "Viewers of Home will see plug b plug", "Viewers of Away will no longer see plug b plug", "Viewers of Lab will see plug c plug", "Viewers of Home will no longer see plug c plug"];
+  if (JSON.stringify(plan.notes) !== JSON.stringify(wantNotes)) fail("the notes: " + JSON.stringify(plan.notes));
+  html = ehView(vd, draft);
+  if ((html.match(/<li class="eh-sees">/g) || []).length !== 7 || !html.includes('<li class="eh-sees">Viewers of Home will see UPS RACK UPS</li>')
+    || html.indexOf('<li class="eh-sees">') < html.lastIndexOf("<li>")) fail("the notes in the dialog, after the lines: " + html.slice(html.indexOf("This will change")));
+  if (JSON.stringify(Object.keys(plan.body)) !== JSON.stringify(["ups", "plugs", "reset"])) fail("the notes are part of the request: " + JSON.stringify(plan.body));
+  // an answer of an older panel (no "sees"): no notes, and nothing breaks
+  if (ehPlan(data({ ups: [ups("rack")] }), (() => { const x = ehDraft(); x.ups["nas-agent/rack"] = true; return x; })()).notes.length) fail("notes from nothing");
   // a machine without an agent of its own: only the plugs linked to it are under Total
   text = words(ehView(data({ agent: null, plugs: [plug("a", { agent: "", agent_name: "?" }), plug("b", { linked: true })] }), ehDraft()));
   if ((text.match(/a plug/g) || []).length !== 1 || (text.match(/b plug/g) || []).length !== 2) fail("a node without an agent: " + text);
@@ -309,6 +335,7 @@ func TestUIEditHostDialogSections(t *testing.T) {
     "A changed line is used instead of what config.yaml says about it until Reset, also when config.yaml is edited later. Every other line follows config.yaml.",
     "A link is kept with the machine that reads the device (\"read by …\"). Reset puts back that one line.",
     "A change counts from the next poll of the machine that reads the device.",
+    "A link also decides who can see a UPS or plug: the viewers of the site of a machine it is linked to or, linked to nothing, of the machine that reads it. Before you save, the list says when a change shows a device to another site's viewers or hides it from them.",
     "Stored changes about a device nobody relays any more, or about a machine that is gone, have no line here. The dialog says how many there are; Remove takes them out.",
     "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]) if (!info.includes(s)) fail("the info button lacks: " + s);
 `)
@@ -427,6 +454,15 @@ func TestUIEditHostDialogFlow(t *testing.T) {
 // "Confirm it's you") are the same sentences, and the request the page makes is taken as it is.
 func TestUIEditHostListsTheChangesInThePanelsWords(t *testing.T) {
 	r := ehSetup(t)
+	// three sites, so that links move who sees a device: PVE-A is of Away, PVE-B of Home, the NAS (which reads
+	// every device) of Lab
+	_ = r.s.Access.EnsureSites([]string{"Home", "Away", "Lab"})
+	for id, site := range map[string]string{ehNodeB: "Home", ehNodeA: "Away", ehNAS: "Lab"} {
+		if _, err := r.s.Access.Assign(id, site); err != nil {
+			t.Fatal(err)
+		}
+	}
+	notes := 0
 	step := func(id, ticks string) {
 		t.Helper()
 		g := r.options(id)
@@ -442,6 +478,7 @@ func TestUIEditHostListsTheChangesInThePanelsWords(t *testing.T) {
 		var plan struct {
 			Lines []string       `json:"lines"`
 			Body  map[string]any `json:"body"`
+			Notes []string       `json:"notes"`
 		}
 		if err := json.Unmarshal([]byte(out), &plan); err != nil || len(plan.Lines) == 0 {
 			t.Fatalf("the page's plan for %s: %v\n%s", ticks, err, out)
@@ -450,6 +487,10 @@ func TestUIEditHostListsTheChangesInThePanelsWords(t *testing.T) {
 		if got := strs(p.body["changed"]); !slices.Equal(got, plan.Lines) {
 			t.Errorf("%s on %s:\nthe page lists %q\nthe panel says %q", ticks, id, plan.Lines, got)
 		}
+		if got := strs(p.body["visibility"]); !slices.Equal(got, plan.Notes) {
+			t.Errorf("%s on %s, who will see what:\nthe page notes %q\nthe panel says %q", ticks, id, plan.Notes, got)
+		}
+		notes += len(plan.Notes)
 		r.poll()
 	}
 	// stored changes without a line (an id that is no agent's, a row that is no machine's), removed with a tick
@@ -475,4 +516,7 @@ func TestUIEditHostListsTheChangesInThePanelsWords(t *testing.T) {
 	step(ehNodeA, `[["reset", "plugs:nas-agent/a-plug"], ["reset", "ups:nas-agent/rack"], ["ups", "nas-agent/desk", true]]`)
 	step(ehNAS, `[["reset", "total:nas-agent/corner"], ["reset", "ups:nas-agent/desk"], ["plugs", "nas-agent/b-plug", true]]`)
 	step(ehNodeB, `[["reset", "plugs:nas-agent/b-plug"], ["ups", "nas-agent/desk", true]]`) // b-plug: given to the NAS since; the Reset on PVE-B's page is not offered, and a page that asks it changes nothing
+	if notes < 12 {
+		t.Errorf("the steps made %d notes about who sees what: too few to compare the page's with the panel's", notes)
+	}
 }

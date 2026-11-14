@@ -1111,6 +1111,14 @@ them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads 
   ("linked to PC-B (was on PC-A)"); that is the one way a change on one machine's page changes another's.
   Unticking it here links it to nothing (it does not go back by itself); PC-A's page then shows the line as
   changed, and Reset there, or a tick, gives it back.
+* **A link decides who can see the device.** Someone who may see the machines of one site sees a UPS or a
+  plug when it is linked to a machine of that site; one that is linked to nothing is seen with the machine
+  that reads it (a UPS or plug with a site of its own on the Users page: by that site, whatever it is linked
+  to). So a tick here can show a device to another site's viewers, or take it from the site that saw it.
+  The dialog says so before you save ("Viewers of Home will see UPS Rack UPS"), and so do "Confirm it's you"
+  and the audit entry. What such a viewer is then shown is what a link written in config.yaml always showed:
+  the device, whose id begins with the id of the machine that reads it (`nas-agent/rack`), and nothing else
+  about that machine.
 * **It counts with the next poll** of the machine that reads the device (seconds; no restart). While that
   machine's polling is paused or it does not answer, the old links stay.
 * **A Proxmox node with an agent has two ids.** A plug's link is stored with the agent's id and follows the

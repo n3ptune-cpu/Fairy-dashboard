@@ -3526,8 +3526,30 @@ const ehMine = (d, p, draft) => ehNow(p, "plugs", draft) || (!!d.agent && p.agen
 const ehUPSWords = (d, on) => `${on ? "powers" : "no longer powers"} ${d.name}`;
 const ehLinkWords = (d, linked, was, then) => (linked ? `linked to ${d.name}${was ? ` (was on ${was})` : ""}` : `no longer linked to ${d.name}${then ? ` (on ${then} again)` : ""}`);
 const ehTotalWords = (inTotal) => (inTotal ? "in the total again" : "not in the total");
+// A link decides who can SEE a UPS or a plug (the viewers of the site of a machine it is linked to; linked to
+// nothing, of the machine that reads it). One note for each device and each way the dialog's changes move who
+// sees it, from what the panel says about each device (sees: now; sees_on / sees_off, sees_linked /
+// sees_unlinked: with this machine on it or off it; sees_config: after a Reset). The panel makes the same notes.
+function ehNotes(d, draft) {
+  const notes = [];
+  const note = (what, was, is) => {
+    const gain = is.filter((s) => !was.includes(s)), loss = was.filter((s) => !is.includes(s));
+    if (gain.length) notes.push(`Viewers of ${gain.join(", ")} will see ${what}`);
+    if (loss.length) notes.push(`Viewers of ${loss.join(", ")} will no longer see ${what}`);
+  };
+  for (const u of d.ups) {
+    const on = ehNow(u, "ups", draft);
+    if (on !== ehWas(u, "ups")) note(`UPS ${u.name}`, u.sees || [], (on ? u.sees_on : u.sees_off) || []);
+  }
+  for (const p of d.plugs) {
+    const linked = ehNow(p, "plugs", draft);
+    if (ehIsReset(p, "plugs", draft)) note(`plug ${p.name}`, p.sees || [], p.sees_config || []);
+    else if (linked !== ehWas(p, "plugs")) note(`plug ${p.name}`, p.sees || [], (linked ? p.sees_linked : p.sees_unlinked) || []);
+  }
+  return notes;
+}
 // One line for each thing Save will change, in the panel's own words (the same lines are in "Confirm it's you"
-// and in the audit log), and the request that says exactly that.
+// and in the audit log), the request that says exactly that, and the notes about who will see what (ehNotes).
 function ehPlan(d, draft) {
   const lines = [], body = { ups: [], plugs: [], reset: [] };
   const left = draft.leftovers && d.leftovers?.length ? d.leftovers : [];
@@ -3562,7 +3584,7 @@ function ehPlan(d, draft) {
   }
   for (const k of Object.keys(body)) if (!body[k].length) delete body[k];
   if (left.length) body.leftovers = true;
-  return { lines, body };
+  return { lines, body, notes: ehNotes(d, draft) };
 }
 // The dialog's sections. Every name in them is the panel's data and goes through esc().
 function ehView(d, draft) {
@@ -3591,7 +3613,7 @@ function ehView(d, draft) {
     ${ignored ? `<p class="note warn eh-ignored">${ignored === 1 ? "1 stored change is" : `${ignored} stored changes are`} ignored: see the panel's log.</p>` : ""}
     ${left ? `<p class="note warn eh-ignored">${left === 1 ? "1 stored change is" : `${left} stored changes are`} about machines or devices that are gone.${draft.leftovers ? " Save removes them."
       : ' <button class="btn sm" type="button" data-eh-left>Remove</button>'}</p>` : ""}
-    ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}`;
+    ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li>${esc(l)}</li>`).join("")}${plan.notes.map((l) => `<li class="eh-sees">${esc(l)}</li>`).join("")}</ul>` : ""}`;
 }
 // A tick or a Reset in the dialog changes the draft, never the panel. Each is about one line; the later of the
 // two on a line counts.
@@ -3614,6 +3636,7 @@ const EH_INFO = () => infoBtn("edit-host", "Edit host", infoList([
   "A changed line is used instead of what config.yaml says about it until Reset, also when config.yaml is edited later. Every other line follows config.yaml.",
   "A link is kept with the machine that reads the device (\"read by …\"). Reset puts back that one line.",
   "A change counts from the next poll of the machine that reads the device.",
+  "A link also decides who can see a UPS or plug: the viewers of the site of a machine it is linked to or, linked to nothing, of the machine that reads it. Before you save, the list says when a change shows a device to another site's viewers or hides it from them.",
   "Stored changes about a device nobody relays any more, or about a machine that is gone, have no line here. The dialog says how many there are; Remove takes them out.",
   "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]));
 // The sections are drawn anew after every tick and Reset. The control that was used keeps the focus: the same

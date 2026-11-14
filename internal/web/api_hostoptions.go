@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -136,6 +137,10 @@ type hoMachine struct {
 	agents   map[string]string
 	answered map[string]bool
 	rowKnown map[string]bool
+	// for who sees a device (seenBy): the site of each row ("": none, admins only), and the UPSes and plugs
+	// that have a site of their own (the Users page), by their ids
+	site  map[string]string
+	fixed map[string]string
 }
 
 type hoUPS struct{ id, agent, name, label string }
@@ -210,6 +215,18 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 		}
 		m.plugs = append(m.plugs, hoPlug{id: st.ID, agent: *st.Via, dev: dev, label: st.Name, own: st.OwnHint})
 	}
+	// Who sees a UPS or a plug follows its links (view.go: followsLinks). The sites are read once, here.
+	m.site, m.fixed = map[string]string{}, map[string]string{}
+	grants := c.s.Access.Load()
+	for id, ref := range c.s.sites(grants, p.Snapshot()) {
+		m.site[id] = ref.Site
+	}
+	for _, u := range m.ups {
+		m.fixed[u.id] = grants.Assign[access.UPSPrefix+u.id]
+	}
+	for _, pl := range m.plugs {
+		m.fixed[pl.id] = grants.Assign[access.PowerPrefix+pl.id]
+	}
 	m.agents, m.answered, m.rowKnown = map[string]string{}, map[string]bool{}, map[string]bool{}
 	for _, a := range p.Agents() {
 		if m.agents[a.ID] = rows[p.ShownID(a.ID)]; m.agents[a.ID] == "" {
@@ -238,6 +255,94 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 // mine reports whether id is one of this machine's ids.
 func (m *hoMachine) mine(id string) bool {
 	return id != "" && (slices.Contains(m.ids, id) || m.shown(id) == m.row.ID)
+}
+
+// A link decides who can SEE a device, and nothing else decides it for a device without a site of its own
+// (view.go: followsLinks): a UPS is seen by the viewers of the sites of the rows it powers, a plug by those of
+// the row it is linked to, and each, when it is linked to nothing, by those of the machine that reads it.
+// The functions below say it for one device, as it would be under a list of rows or a link, so that the
+// dialog and the API can say BEFORE a change is stored whose view it moves.
+
+// sitesOf is the sites in a list (sorted, each once; "" is no site: admins only).
+func sitesOf(sites ...string) []string {
+	out := []string{}
+	for _, s := range sites {
+		if s != "" && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// upsSeen is the sites whose viewers see a UPS that powers rows (the ids as the links have them).
+func (m *hoMachine) upsSeen(u hoUPS, rows []string) []string {
+	if own := m.fixed[u.id]; own != "" {
+		return sitesOf(own)
+	}
+	if len(rows) == 0 {
+		return sitesOf(m.site[m.shown(u.agent)])
+	}
+	var sites []string
+	for _, id := range rows {
+		sites = append(sites, m.site[id])
+	}
+	return sitesOf(sites...)
+}
+
+// plugSeen is the sites whose viewers see a plug that is linked to the row to ("": to none; it is then its
+// reading machine's, by what its agent says or as what relays it).
+func (m *hoMachine) plugSeen(p hoPlug, to string) []string {
+	if own := m.fixed[p.id]; own != "" {
+		return sitesOf(own)
+	}
+	if to == "" {
+		to = p.agent
+	}
+	return sitesOf(m.site[m.shown(to)])
+}
+
+// counted is the links of a reading agent under o as the poller hands them to the managers (poller.LinksOf):
+// config.yaml with the decisions, without what a decision gives to a row that is no row of this panel.
+func (m *hoMachine) counted(o adminstate.HostOptions, agent string) config.Links {
+	e := o.For(agent)
+	l := e.Apply(m.base[agent])
+	gone := func(id string) bool { known, asked := m.rowKnown[id]; return asked && !known }
+	for name, rows := range e.UPS {
+		for id, on := range rows {
+			if on && gone(id) {
+				l.UPSPowers[name] = slices.DeleteFunc(l.UPSPowers[name], func(x string) bool { return x == id })
+			}
+		}
+	}
+	for dev, to := range e.Links {
+		if to != "" && gone(to) {
+			delete(l.PowerLinks, dev)
+		}
+	}
+	return l
+}
+
+// visibility is one note for each device and each way a change from before to after moves who sees it: the
+// sites whose viewers will see it and did not, and those who saw it and will not. nil: nobody's view moves.
+func (m *hoMachine) visibility(before, after adminstate.HostOptions) (notes []string) {
+	note := func(what string, was, is []string) {
+		gain := slices.DeleteFunc(slices.Clone(is), func(s string) bool { return slices.Contains(was, s) })
+		loss := slices.DeleteFunc(slices.Clone(was), func(s string) bool { return slices.Contains(is, s) })
+		if len(gain) > 0 {
+			notes = append(notes, fmt.Sprintf("Viewers of %s will see %s", strings.Join(gain, ", "), what))
+		}
+		if len(loss) > 0 {
+			notes = append(notes, fmt.Sprintf("Viewers of %s will no longer see %s", strings.Join(loss, ", "), what))
+		}
+	}
+	for _, u := range m.ups {
+		note("UPS "+u.label, m.upsSeen(u, m.counted(before, u.agent).UPSPowers[u.name]), m.upsSeen(u, m.counted(after, u.agent).UPSPowers[u.name]))
+	}
+	for _, p := range m.plugs {
+		note("plug "+p.label, m.plugSeen(p, m.counted(before, p.agent).PowerLinks[p.dev]), m.plugSeen(p, m.counted(after, p.agent).PowerLinks[p.dev]))
+	}
+	return notes
 }
 
 // maxLeftoverLines is how many leftovers are said one by one; the rest is counted ("N more of the same kind").
@@ -736,9 +841,13 @@ func (m *hoMachine) view(o adminstate.HostOptions, ignored []string, ignoredCoun
 			decided = decided || m.mine(id)
 		}
 		src, by, at := who(u.agent, decided)
+		// who sees it now, and who would with this machine on it and off it
+		rows := m.counted(o, u.agent).UPSPowers[u.name]
+		others := slices.DeleteFunc(slices.Clone(rows), m.mine)
 		ups = append(ups, map[string]any{"id": u.id, "name": u.label, "agent": u.agent, "agent_name": m.names[u.agent],
 			"on": slices.Contains(eff.UPSPowers[u.name], m.row.ID), "from": src, "by": by, "at": at,
-			"config_on": slices.Contains(base.UPSPowers[u.name], m.row.ID)})
+			"config_on": slices.Contains(base.UPSPowers[u.name], m.row.ID),
+			"sees":      m.upsSeen(u, rows), "sees_on": m.upsSeen(u, append(slices.Clone(others), m.row.ID)), "sees_off": m.upsSeen(u, others)})
 	}
 	plugs := []map[string]any{}
 	for _, p := range m.plugs {
@@ -753,7 +862,10 @@ func (m *hoMachine) view(o adminstate.HostOptions, ignored []string, ignoredCoun
 		plugs = append(plugs, map[string]any{"id": p.id, "name": p.label, "agent": p.agent, "agent_name": m.names[p.agent],
 			"linked": byLink || selfMine, "self": selfMine, "other": strOrNil(m.where(p, eff)), "from": src, "by": by, "at": at,
 			"config_linked": cfgLink || cfgSelf, "config_other": strOrNil(m.where(p, base)),
-			"in_total": !slices.Contains(eff.PowerExcludeFromTotal, p.dev), "total_from": tsrc, "total_by": tby, "total_at": tat,
+			// who sees it now, and who would: linked to this machine, unlinked from it, and after a Reset of the line
+			"sees": m.plugSeen(p, m.counted(o, p.agent).PowerLinks[p.dev]), "sees_linked": m.plugSeen(p, m.plugTo), "sees_unlinked": m.plugSeen(p, ""),
+			"sees_config": m.plugSeen(p, base.PowerLinks[p.dev]),
+			"in_total":    !slices.Contains(eff.PowerExcludeFromTotal, p.dev), "total_from": tsrc, "total_by": tby, "total_at": tat,
 			"config_in_total": !slices.Contains(base.PowerExcludeFromTotal, p.dev),
 			"mine":            byLink || selfMine || (m.agent != "" && p.agent == m.agent)})
 	}
@@ -764,7 +876,7 @@ func (m *hoMachine) view(o adminstate.HostOptions, ignored []string, ignoredCoun
 	if left == nil {
 		left = []string{}
 	}
-	return map[string]any{"id": m.row.ID, "name": m.row.Name, "agent": strOrNil(m.agent), "rev": o.Rev,
+	return map[string]any{"id": m.row.ID, "name": m.row.Name, "agent": strOrNil(m.agent), "site": strOrNil(m.site[m.row.ID]), "rev": o.Rev,
 		"ups": ups, "plugs": plugs, "ignored": ignored, "ignored_count": ignoredCount, "leftovers": left, "leftover_count": n}
 }
 
@@ -812,11 +924,12 @@ func (c *reqCtx) hostOptionsItems(*model.User) []string {
 		return nil
 	}
 	o := c.s.Poller.Admin.HostOptions().Clone()
+	before := o.Clone()
 	lines, _, err := m.apply(&o, req)
 	if err != nil {
 		return nil
 	}
-	return lines
+	return append(lines, m.visibility(before, o)...) // and whose view of a device it moves
 }
 
 func (s *Server) hostOptionsPut(c *reqCtx) error {
@@ -840,12 +953,15 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	if req.empty() {
 		return apierr.New(422, "nothing to change")
 	}
-	var lines []string
+	var lines, notes []string
 	var changes []hoChange
 	// One locked read-modify-write: the ticks are applied to what state.json holds at that moment.
 	after, changed, err := s.Poller.Admin.EditHostOptions(actorOf(u), func(o *adminstate.HostOptions) error {
+		before := o.Clone()
 		var err error
-		lines, changes, err = m.apply(o, req)
+		if lines, changes, err = m.apply(o, req); err == nil {
+			notes = m.visibility(before, *o)
+		}
 		return err
 	})
 	params := map[string]any{"machine": m.row.Name, "agent": strOrNil(m.agent)}
@@ -858,13 +974,16 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		return err
 	}
 	out := m.view(after, nil, 0)
-	out["ok"], out["changed"] = true, []string{}
+	out["ok"], out["changed"], out["visibility"] = true, []string{}, []string{}
 	if !changed { // every tick was already as asked
 		out["message"] = "nothing to change"
 		c.json(200, out)
 		return nil
 	}
 	params["lines"], params["changes"], params["rev"] = lines, changes, after.Rev
+	if len(notes) > 0 {
+		params["visibility"], out["visibility"] = notes, notes // whose view of a device the change moves
+	}
 	c.audit(u, "host.options", m.row.ID, params, "ok")
 	if s.Notes != nil {
 		s.Notes.Add(notifications.Event{Kind: "host_options", Type: "host", Severity: notifications.Info, SystemID: m.row.ID, Host: m.row.Name,

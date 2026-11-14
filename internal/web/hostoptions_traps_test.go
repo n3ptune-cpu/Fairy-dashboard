@@ -708,6 +708,121 @@ func TestEditHostAHostAddedUnderAnIdWithStoredChangesStartsClean(t *testing.T) {
 	}
 }
 
+// A link decides who can SEE a UPS or a plug: the viewers of the site of a machine it is linked to, else of
+// the machine that reads it (view.go). The API says so before a change is stored: "Confirm it's you", the
+// answer and the audit entry carry one note for each site whose viewers get to see a device or lose it.
+//
+// And what such a viewer then sees is what a link written in config.yaml always showed: the same answers,
+// byte for byte. The id of a relayed device begins with the id of the agent that reads it ("nas-agent/rack"),
+// also for a viewer who may not see that agent's machine; that is so for config.yaml's links since before
+// "Edit host", and this feature shows no more of it.
+func TestEditHostALinkDecidesWhoSeesTheDevice(t *testing.T) {
+	// PVE-B is of the site Home; PVE-A and the NAS, which reads every device, of the site Away
+	sites := func(r *ehRig) (home, away string) {
+		t.Helper()
+		_ = r.s.Access.EnsureSites([]string{"Home", "Away"})
+		for id, site := range map[string]string{ehNodeB: "Home", ehNodeA: "Away", ehNAS: "Away"} {
+			if _, err := r.s.Access.Assign(id, site); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mk := func(sub, site string) string {
+			c := r.cookie(model.User{Sub: sub, Name: model.P(sub), Email: model.P(sub + "@example.com"), Groups: []string{"viewers"}}, 0)
+			if _, _, err := r.s.Access.SetRole(sub, "viewer", []string{site}, "test", false); err != nil {
+				t.Fatal(err)
+			}
+			return c
+		}
+		return mk("vh", "Home"), mk("va", "Away")
+	}
+	// what a viewer is given about UPSes, plugs and rows, without the times of day
+	times := regexp.MustCompile(`"(generated_at|last_success|last_seen|timestamp|at|since|[a-z_]*_at|[a-z_]*_s|[a-z_]*age[a-z_]*)":("[^"]*"|[0-9.e+-]+|null),?`)
+	seen := func(r *ehRig, cookie string) string {
+		t.Helper()
+		var out []string
+		for _, path := range []string{"/api/ups", "/api/power", "/api/systems"} {
+			g := r.do("GET", path, nil, "Cookie", cookie)
+			if g.code != 200 {
+				t.Fatalf("GET %s: %d", path, g.code)
+			}
+			raw := string(g.raw)
+			if i := strings.Index(raw, `,"history":`); i >= 0 { // the points of the UPS's chart: one for each poll there was
+				raw = raw[:i] + "}"
+			}
+			out = append(out, path+" "+times.ReplaceAllString(raw, ""))
+		}
+		return strings.Join(out, "\n")
+	}
+	r := ehSetup(t)
+	home, away := sites(r)
+	before := seen(r, home)
+	for _, hidden := range []string{"nas-agent", "Rack UPS", "B plug", "PVE-A", `"NAS"`} {
+		if strings.Contains(before, hidden) {
+			t.Fatalf("the rig: the Home viewer sees %q before anything is linked to PVE-B:\n%s", hidden, before)
+		}
+	}
+	// the dialog's data: this machine's site, and for each device who sees it now and who would
+	g := r.options(ehNodeB)
+	rack, bp := ehEntry(t, g, "ups", "nas-agent/rack"), ehEntry(t, g, "plugs", "nas-agent/b-plug")
+	if g.body["site"] != "Home" || fmt.Sprint(rack["sees"], rack["sees_on"], rack["sees_off"]) != "[Away] [Away Home] [Away]" ||
+		fmt.Sprint(bp["sees"], bp["sees_linked"], bp["sees_unlinked"], bp["sees_config"]) != "[Away] [Home] [Away] [Away]" {
+		t.Fatalf("who sees what, in the dialog's data: site %v, rack %v, b-plug %v", g.body["site"], rack, bp)
+	}
+	body := map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}, "plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true}}}
+	notes := []string{"Viewers of Home will see UPS Rack UPS", "Viewers of Home will see plug B plug", "Viewers of Away will no longer see plug B plug"}
+	lines := []string{"UPS Rack UPS (read by NAS): powers PVE-B", "Plug B plug (read by NAS): linked to PVE-B"}
+	// said before it is kept for the confirmation ...
+	old := r.do("PUT", "/api/admin/hosts/"+ehNodeB+"/options", body, "Cookie", r.staleCookie(controller(), time.Hour), "X-Requested-With", "fairy", "Content-Type", "application/json")
+	if d, _ := old.body["detail"].(map[string]any); !stepUpRequired(old) || !slices.Equal(strs(d["items"]), append(slices.Clone(lines), notes...)) {
+		t.Fatalf("the lines of \"Confirm it's you\": %d %s", old.code, old.raw)
+	}
+	// ... in the answer, and in the audit entry
+	p := r.ok(ehNodeB, body)
+	if !slices.Equal(strs(p.body["changed"]), lines) || !slices.Equal(strs(p.body["visibility"]), notes) {
+		t.Fatalf("the answer: changed %q, visibility %q", strs(p.body["changed"]), strs(p.body["visibility"]))
+	}
+	if en := r.auditEntries("", "host.options")[0]["params"].(map[string]any); !slices.Equal(strs(en["visibility"]), notes) {
+		t.Fatalf("the audit entry: %v", en)
+	}
+	r.poll()
+	linked := seen(r, home)
+	if !strings.Contains(linked, `"id":"nas-agent/rack"`) || !strings.Contains(linked, `"id":"nas-agent/b-plug"`) || strings.Contains(linked, "PVE-A") || strings.Contains(linked, `"NAS"`) {
+		t.Fatalf("after the link the Home viewer sees the two devices, and no machine of the other site:\n%s", linked)
+	}
+	// of the machine that reads them, which is of the other site, the viewer is given the id inside the devices'
+	// ids and nothing else: not who relays them ("via"), and of the rows a UPS powers only the ones they may see
+	if strings.Count(linked, "nas-agent") != strings.Count(linked, `"nas-agent/`) || !strings.Contains(linked, `"via":null`) || strings.Contains(linked, `"via":"`) ||
+		!strings.Contains(linked, `"powers":["`+ehNodeB+`"]`) {
+		t.Fatalf("what the Home viewer is given about the reading machine:\n%s", linked)
+	}
+	if a := seen(r, away); strings.Contains(a, "B plug") || !strings.Contains(a, "Rack UPS") {
+		t.Fatalf("the Away viewer after the link (the plug is gone for them, the UPS still powers PVE-A):\n%s", a)
+	}
+	// the same links written in config.yaml, on a panel without any change of "Edit host": the same answers
+	r2 := ehSetupWith(t, ehConfig(t, `ups_powers: {rack: [lab-a-node-pve-a, lab-b-node-pve-b]}, power_links: {a-plug: lab-a-agent, b-plug: lab-b-agent}, power_exclude_from_total: [corner]`), true)
+	home2, _ := sites(r2)
+	if byConfig := seen(r2, home2); byConfig != linked {
+		t.Errorf("a link made in the panel shows a viewer something else than the same link in config.yaml:\n--- config.yaml\n%s\n--- Edit host\n%s", byConfig, linked)
+	}
+	// taken back: said the other way round; a change that moves nobody's view has no note
+	p = r.ok(ehNodeB, map[string]any{"reset": []any{map[string]any{"id": "nas-agent/rack", "field": "ups"}, map[string]any{"id": "nas-agent/b-plug", "field": "plugs"}}})
+	if got := strs(p.body["visibility"]); !slices.Equal(got, []string{"Viewers of Home will no longer see UPS Rack UPS", "Viewers of Away will see plug B plug", "Viewers of Home will no longer see plug B plug"}) {
+		t.Fatalf("visibility of the Reset: %q", got)
+	}
+	p = r.ok(ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}, "plugs": []any{map[string]any{"id": "nas-agent/a-plug", "in_total": false}}})
+	if got := strs(p.body["visibility"]); len(got) != 0 {
+		t.Fatalf("a change inside one site: %q", got)
+	}
+	// a device with a site of its own (Users page) is seen by that site's viewers whatever it is linked to: no note
+	if _, err := r.s.Access.Assign("ups:nas-agent/desk", "Away"); err != nil {
+		t.Fatal(err)
+	}
+	p = r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})
+	if got := strs(p.body["visibility"]); len(got) != 0 || strings.Contains(seen(r, home), "Desk UPS") {
+		t.Fatalf("a UPS with a site of its own: notes %q", got)
+	}
+}
+
 // Trap (f). Two admins save at the same moment. Each request says only its own ticks and is applied, under
 // the lock of state.json, to what the other left: nothing is lost, the file is whole after every write, every
 // answer shows the stored state it left (its rev), and of two changes to the same tick the later one counts.

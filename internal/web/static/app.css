@@ -397,6 +397,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .eh-src.on { color: var(--warn); }
 .modal-box .eh-hint { margin: 0 0 4px; }
 .modal-box .eh-shadow, .modal-box .eh-ignored { margin: 12px 0 0; }
+.modal-box .eh-sees { color: var(--warn); }
 .btn.danger-solid { background: #3a0d12; border-color: #7a1c26; color: #ffb3ba; }
 .btn.danger-solid:hover:not(:disabled) { background: #521219; }
 .flash { position: fixed; right: 20px; bottom: 20px; z-index: 60; background: #0d1a12; border: 1px solid rgba(61, 220, 151, .35); color: #b8f5d9;
