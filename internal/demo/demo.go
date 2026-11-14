@@ -8,6 +8,7 @@ package demo
 import (
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -50,6 +51,7 @@ func Build(dir, publicURL string) (*config.Panel, config.Secrets, *poller.Poller
 	if err != nil {
 		return nil, config.Secrets{}, nil, err
 	}
+	SeedPowerDay(p, time.Now()) // a made-up day for "Last 24 hours" (powerday.go)
 	return cfg, secrets, p, nil
 }
 
