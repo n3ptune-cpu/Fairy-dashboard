@@ -31,6 +31,7 @@ func TestTheStartNamesARunTimingOfEditHostBelowConfigYAMLs(t *testing.T) {
 		{"one below, one above", block, "lab-b-agent", adminstate.RunEdit{OffAfterS: 1200, ShutdownDelayS: 119},
 			[]string{"shutdown_delay_s is 119 s|says 120 s"}},
 		{"not below", block, "lab-b-agent", adminstate.RunEdit{OffAfterS: 901, ShutdownDelayS: 3600}, nil},
+		{"equal to the block's", block, "lab-b-agent", adminstate.RunEdit{OffAfterS: 900, ShutdownDelayS: 120}, nil},
 		{"no block", "", "lab-b-agent", adminstate.RunEdit{OffAfterS: 300, ShutdownDelayS: 10}, nil},
 		{"a block with one key", "    wake_update: {shutdown_delay_s: 60}\n", "lab-b-agent", adminstate.RunEdit{OffAfterS: 300, ShutdownDelayS: 10},
 			[]string{"shutdown_delay_s is 10 s|says 60 s"}},
