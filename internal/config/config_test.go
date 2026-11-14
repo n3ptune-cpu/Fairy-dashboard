@@ -325,7 +325,9 @@ func TestWakeUpdateTimings(t *testing.T) {
 // Build 15: the section "Upgrading to this release" still described the way from build 11 to build 12 in the
 // README of build 14. It is written for the way from build 13: the one config.yaml build 13 started with that
 // is refused now, the keys to write only after the update, and the config check to read once. What it says
-// about the keys is held against what Parse does, so that the two change together.
+// about the keys is held against what Parse does, so that the two change together. With "Edit host" and the
+// fixes after the fourth review the section has a list "Build 15:" under "Build 14:", and says what the way
+// from build 14 is.
 func TestReadmeUpgradeTextsMatchThisRelease(t *testing.T) {
 	b, err := os.ReadFile("../../README.md")
 	if err != nil {
@@ -361,6 +363,12 @@ func TestReadmeUpgradeTextsMatchThisRelease(t *testing.T) {
 		"**Then `fairy update` once more**, as root, and answer yes to \"Set up the Update panel button now\"",
 		"`TimeoutStartSec=600`", "This release's unit has 18 minutes",
 		"One step by hand: the memory limit", // SECURITY-FIXES.md names this heading
+		// build 15: what is new has a list of its own under build 14's, and the way from build 14 is said
+		"Build 14:", "Build 15:", "From build 14: `fairy update` is the whole of it.",
+		"**Edit host** is new in the ⋯ menu of a host's page (admins)", "(`state.json`, under `host_options`)",
+		"laid over config.yaml line by line until **Reset** on that line",
+		"**a UPS link never shuts a machine down**",
+		"(\"this host's entry in the panel was removed or replaced: nothing was sent\")",
 	} {
 		if !strings.Contains(section, want) {
 			t.Errorf("the section lacks %q", want)
@@ -428,6 +436,8 @@ func TestReadmeGoingBackNamesWhatTheOlderPanelRefuses(t *testing.T) {
 		"custom model names", "the machines switched on for \"Update unpowered hosts\"",
 		// r1-b2-11 (audit 5): the older panel does not start with an approval: block either
 		"The same goes for an `approval:` block (\"field approval not found\").", "`machines.json`", "`fairy-agent helper-trust clear`",
+		// build 15: what "Edit host" stored is kept by the two builds before (they leave the key alone)
+		"What was changed with **Edit host** is kept when you go back to build 14 or build 13: neither knows `host_options` in `state.json`",
 	} {
 		if !strings.Contains(para, want) {
 			t.Errorf("the paragraph lacks %q:\n%s", want, para)

@@ -1298,7 +1298,9 @@ page is black, with the same strip.
 ## Upgrading to this release
 
 From build 13. Nothing has to be converted, no file has to be deleted, and the update signs nobody out.
-(From an older build: section 3 first.)
+(From an older build: section 3 first. From build 14: `fairy update` is the whole of it. Build 14 already
+refuses the file of step 1 and knows the keys of step 2, and build 15 has no new key and refuses no file
+that build 14 started with.)
 
 ### 1. The order
 
@@ -1347,6 +1349,36 @@ Build 14:
    One machine can have its own timings (step 2 above).
 5. **Plugs.** The watts of a plug that an agent relays are on the row its machine is shown as, under
    either id of a Proxmox node with an agent, and a plug that cannot be read keeps its link and says why.
+
+Build 15:
+
+1. **Edit host** is new in the ⋯ menu of a host's page (admins). It changes three things about a machine:
+   which UPS it is on, which plugs are its plugs, and which of those plugs are **not in total**. It never
+   changes anything else, whatever is sent: not a host's address or its tokens, not its node, owner or
+   site, and not what the panel may do to it (power control, fan control, updates, Wake-on-LAN relay).
+   Those stay in config.yaml, on the machine (Add host, Re-pair) or on the Users page. See
+   [Edit host](#edit-host).
+2. **What you change there is not written into config.yaml.** It is kept in the panel's state file
+   (`state.json`, under `host_options`) as one decision for each line you changed, and laid over
+   config.yaml line by line until **Reset** on that line. Everything you did not change keeps following
+   config.yaml, and `fairy admin config check` lists every changed line with what config.yaml says about
+   it. Nothing is there until you use the dialog, and nothing has to be done for it at the update.
+3. **A link also decides who can see a UPS or a plug**: someone who may see the machines of one site sees
+   the devices that are linked to a machine of that site. The dialog says whose view a change moves before
+   you save ("Viewers of Home will see UPS Rack UPS"). And **a UPS link never shuts a machine down**: it
+   shows the UPS on the machine's row, and nothing acts on it.
+4. **Update unpowered hosts**: a run whose shutdown request got no answer no longer takes a shutdown you
+   asked for yourself, with another countdown, for its own. It goes on waiting for its own request and
+   says so in the machine's history. (Before, when you took your shutdown back, the run ended with "Its
+   shutdown was cancelled ... so it is ON", and its own request, arriving late, switched the machine off
+   with nobody watching.)
+5. **A host's tokens are sent only to the address they belong to.** When a host is removed or paired
+   again, a request that was still to be made for the entry of before is not made at all ("this host's
+   entry in the panel was removed or replaced: nothing was sent"). Up to build 14 a poll in that instant
+   could carry the new token to the old address.
+6. **Remove** of a host leaves no version and no last-seen time of it behind in the data folder. (A
+   Remove in the instant of a poll's write could; after the next start of the panel a host added later
+   under the same id was then shown with them until it answered.)
 
 ### 3. From a build older than 13
 
@@ -1398,6 +1430,10 @@ the older one.) Build 13 reads the files this one writes (`users.json`, `notific
 the two keys that are new in build 14.) Everything else is kept in both directions: custom model names, the
 machines switched on for "Update unpowered hosts", the machines' records for the check of approvals, users,
 tokens, sessions and the sign-in picture.
+Build 14 starts with everything this release starts with, those two keys included. What was changed with
+**Edit host** is kept when you go back to build 14 or build 13: neither knows `host_options` in
+`state.json`, both show what config.yaml says, and both leave the key in the file as it is, also when they
+save the file themselves. The changes count again after the next update to this release.
 Going back further than build 13 (the README of build 13 has the whole of it): a panel older than build 12
 does not start when config.yaml has a `wake_update:` block: take the block out first. The same goes for an
 `approval:` block ("field approval not found"). It does not know `machines.json` and leaves it alone; a
