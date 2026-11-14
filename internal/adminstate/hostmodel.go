@@ -37,37 +37,41 @@ const hostModelsKey = "host_models"
 // characters, a name in which nothing shows (no letter, digit, punctuation or symbol: only combining marks),
 // and more than maxMarks combining marks in a row. The name is a label only: nothing is decided by it, and
 // the page escapes it like every text.
-func ModelName(raw string) (string, error) {
+func ModelName(raw string) (string, error) { return labelText(raw, "model name", MaxModelName) }
+
+// labelText is the check of ModelName for any one-line label a person types in the panel (a model name, a
+// host's name): what names it in the sentences, max how many characters it may have.
+func labelText(raw, what string, max int) (string, error) {
 	if !utf8.ValidString(raw) {
-		return "", errors.New("model name is not valid text")
+		return "", errors.New(what + " is not valid text")
 	}
 	picture := false // the character before this one is a picture (an emoji), or belongs to one
 	for _, r := range raw {
 		switch {
 		case r == utf8.RuneError:
-			return "", errors.New("model name is not valid text")
+			return "", errors.New(what + " is not valid text")
 		case unicode.Is(unicode.Cc, r), r == 0x2028, r == 0x2029:
-			return "", errors.New("model name must be one line, without control characters")
+			return "", errors.New(what + " must be one line, without control characters")
 		case picture && (r == 0x200d || r >= 0xe0020 && r <= 0xe007f):
 			// An emoji that is several joined into one (a family, a person with a tool, a flag of a region): the
 			// joiner between them is a format character and stays refused, but "type it again" would send the
 			// person in a circle, because the emoji keyboard types the same again. The sentence says what to do.
-			return "", errors.New("model name has an emoji made of several: use a simple one")
+			return "", errors.New(what + " has an emoji made of several: use a simple one")
 		case unicode.Is(unicode.Cf, r), unicode.Is(unicode.Co, r), blank(r):
-			return "", errors.New("model name has an invisible character: type it again")
+			return "", errors.New(what + " has an invisible character: type it again")
 		}
 		picture = r >= 0x1f000 && r <= 0x1faff || unicode.Is(unicode.So, r) || picture && r == 0xfe0f
 	}
 	name := strings.Join(strings.FieldsFunc(raw, unicode.IsSpace), " ")
-	if n := utf8.RuneCountInString(name); n > MaxModelName {
-		return "", fmt.Errorf("model name too long: at most %d characters", MaxModelName)
+	if n := utf8.RuneCountInString(name); n > max {
+		return "", fmt.Errorf("%s too long: at most %d characters", what, max)
 	}
 	shows, marks := false, 0
 	for _, r := range name {
 		switch {
 		case unicode.In(r, unicode.Mn, unicode.Me):
 			if marks++; marks > maxMarks {
-				return "", errors.New("model name has too many accents on one character")
+				return "", errors.New(what + " has too many accents on one character")
 			}
 			continue
 		case unicode.In(r, unicode.L, unicode.N, unicode.P, unicode.S, unicode.Mc):
@@ -76,7 +80,7 @@ func ModelName(raw string) (string, error) {
 		marks = 0
 	}
 	if name != "" && !shows {
-		return "", errors.New("model name needs a letter, a digit or a sign")
+		return "", errors.New(what + " needs a letter, a digit or a sign")
 	}
 	return name, nil
 }

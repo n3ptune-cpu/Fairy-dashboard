@@ -234,6 +234,8 @@ func (o HostOption) Named() config.Links {
 type HostOptions struct {
 	Rev    int
 	Agents map[string]HostOption
+	// Hosts is what was changed about the machines themselves (name, Wake-on-LAN), by machine id (hostedit.go).
+	Hosts map[string]HostEdit
 	// Ignored is how many things the reader left out of what the file holds (0: none). The lines it gives
 	// name the first MaxIgnoredLines of them.
 	Ignored int
@@ -244,15 +246,20 @@ type HostOptions struct {
 	unknown struct {
 		top    map[string]any
 		agents map[string]map[string]any
+		hosts  map[string]map[string]any
 	}
 }
 
 // Clone returns a copy that shares nothing with o (the unknown keys, which nothing changes, are the same).
 func (o HostOptions) Clone() HostOptions {
-	out := HostOptions{Rev: o.Rev, Agents: make(map[string]HostOption, len(o.Agents)), Ignored: o.Ignored, unknown: o.unknown}
-	out.unknown.agents = maps.Clone(o.unknown.agents)
+	out := HostOptions{Rev: o.Rev, Agents: make(map[string]HostOption, len(o.Agents)), Hosts: make(map[string]HostEdit, len(o.Hosts)),
+		Ignored: o.Ignored, unknown: o.unknown}
+	out.unknown.agents, out.unknown.hosts = maps.Clone(o.unknown.agents), maps.Clone(o.unknown.hosts)
 	for id, e := range o.Agents {
 		out.Agents[id] = e.Clone()
+	}
+	for id, e := range o.Hosts {
+		out.Hosts[id] = e.Clone()
 	}
 	return out
 }
@@ -305,7 +312,7 @@ func (o *HostOptions) Forget(agentID string, ids ...string) []string {
 		}
 		o.Agents[other] = e
 	}
-	return gone
+	return append(gone, o.forgetHosts(ids)...)
 }
 
 // hostOptions reads the overlay out of a state.json object. It never fails: ignored is one line for each
@@ -322,7 +329,7 @@ func hostOptions(d statefile.Data) (HostOptions, []string) {
 }
 
 func readHostOptions(d statefile.Data) (o HostOptions, ignored []string) {
-	o = HostOptions{Agents: map[string]HostOption{}}
+	o = HostOptions{Agents: map[string]HostOption{}, Hosts: map[string]HostEdit{}}
 	raw, present := d[hostOptionsKey]
 	if !present {
 		return o, nil
@@ -346,13 +353,16 @@ func readHostOptions(d statefile.Data) (o HostOptions, ignored []string) {
 		}
 	}
 	for _, k := range slices.Sorted(maps.Keys(top)) {
-		if k != "rev" && k != "agents" {
+		if k != "rev" && k != "agents" && k != "hosts" {
 			say("%q: the key %q is not one Fairy writes: it is not used (and left in the file as it is)", hostOptionsKey, clipKey(k))
 			if o.unknown.top == nil {
 				o.unknown.top = map[string]any{}
 			}
 			o.unknown.top[k] = top[k]
 		}
+	}
+	if rawHosts, has := top["hosts"]; has { // the machines themselves (hostedit.go); read whatever "agents" is
+		o.readHosts(rawHosts, say)
 	}
 	rawAgents, present := top["agents"]
 	if !present {
@@ -540,6 +550,9 @@ func (o HostOptions) encode() map[string]any {
 		out[k] = v
 	}
 	out["rev"], out["agents"] = o.Rev, agents
+	if hosts := o.encodeHosts(); hosts != nil { // no key while nothing is decided about a machine itself
+		out["hosts"] = hosts
+	}
 	return out
 }
 
@@ -593,7 +606,7 @@ func (a *State) HostOptions() HostOptions {
 // config check`).
 func (a *State) HostOptionsRead() (HostOptions, []string) {
 	if a.state.Err() != nil {
-		return HostOptions{Agents: map[string]HostOption{}}, nil
+		return HostOptions{Agents: map[string]HostOption{}, Hosts: map[string]HostEdit{}}, nil
 	}
 	o, ignored := hostOptions(a.state.Get())
 	if len(ignored) > 0 {
@@ -662,6 +675,22 @@ func (a *State) EditHostOptions(by string, fn func(o *HostOptions) error) (after
 		for id, e := range cur.Agents {
 			same = same && sameOption(before.Agents[id], e)
 		}
+		for id, e := range cur.Hosts {
+			if e = e.Clone(); e.Empty() {
+				delete(cur.Hosts, id)
+				continue
+			}
+			if !before.Hosts[id].Same(e) {
+				e.By, e.At = clipKey(by), now
+			}
+			cur.Hosts[id] = e
+		}
+		same = same && len(before.Hosts) == len(cur.Hosts)
+		for id, e := range cur.Hosts {
+			same = same && before.Hosts[id].Same(e)
+		}
+		// what this build does not know in an entry that went away whole (Drop, DropHost) is a change too
+		same = same && len(before.unknown.agents) == len(cur.unknown.agents) && len(before.unknown.hosts) == len(cur.unknown.hosts)
 		after = cur
 		if same {
 			after.Rev = before.Rev

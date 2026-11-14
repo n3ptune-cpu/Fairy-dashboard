@@ -13,7 +13,7 @@ import (
 func ReadHostOptions(dataDir string) (o HostOptions, ignored []string, err error) {
 	d, err := statefile.Read(filepath.Join(dataDir, "state.json"))
 	if err != nil {
-		return HostOptions{Agents: map[string]HostOption{}}, nil, err
+		return HostOptions{Agents: map[string]HostOption{}, Hosts: map[string]HostEdit{}}, nil, err
 	}
 	o, ignored = hostOptions(d)
 	return o, ignored, nil

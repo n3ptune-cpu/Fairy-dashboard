@@ -175,7 +175,7 @@ func TestHostOptionsReaderIsTolerant(t *testing.T) {
 		"rev is negative":                     {`{"rev": -1}`, []string{`"rev" is not a whole number`}, "", 0},
 		"rev is a fraction":                   {`{"rev": 1.5}`, []string{`"rev" is not a whole number`}, "", 0},
 		"rev is huge":                         {`{"rev": 1e300}`, []string{`"rev" is not a whole number`}, "", 0},
-		"another key at the top":              {`{"rev": 1, "hosts": {}, "agents": {}}`, []string{`the key "hosts" is not one Fairy writes`}, "", 1},
+		"another key at the top":              {`{"rev": 1, "groups": {}, "agents": {}}`, []string{`the key "groups" is not one Fairy writes`}, "", 1},
 		"an id no agent can have":             {`{"agents": {"NAS": {"power_exclude_from_total": {"x": true}}, "": {}, "a/b": {}, "ok": {"power_exclude_from_total": {"x": true}}}}`, []string{`"" is not an id`, `"NAS" is not an id`, `"a/b" is not an id`}, "ok:power_exclude_from_total", 0},
 		"an entry that is no object":          {`{"agents": {"nas": ["ups_powers"], "pc": null}}`, []string{"agent nas: its entry is not an object (found a list)", "agent pc: its entry is not an object (found null)"}, "", 0},
 		"fields of the wrong form":            {`{"agents": {"nas": {"ups_powers": {"rack": "pc-a"}, "power_links": ["a"], "power_exclude_from_total": "a"}}}`, []string{"power_exclude_from_total is not of the form", "power_links is not of the form", "ups_powers is not of the form"}, "", 0},
