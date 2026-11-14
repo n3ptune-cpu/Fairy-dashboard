@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,6 +108,30 @@ func TestConfigCheckAndTheOverridesOfEditHost(t *testing.T) {
 	}
 	if strings.Contains(got, "198.51.100.7") {
 		t.Errorf("a value of the file is printed:\n%s", got)
+	}
+	// a file with a great many of them: the first twenty of each kind and how many more, not a screen full
+	var bad, gone, rows []string
+	for i := 0; i < 60; i++ {
+		bad = append(bad, fmt.Sprintf(`"k%02d": 1`, i))
+		gone = append(gone, fmt.Sprintf(`"gone-%02d": {"power_exclude_from_total": {"x": true}}`, i))
+		rows = append(rows, fmt.Sprintf(`"p%02d": "old-%02d"`, i, i))
+	}
+	got, _ = run(`{"host_options": {"agents": {"nas-agent": {` + strings.Join(bad, ",") + `}, "pc-a": {"power_links": {` + strings.Join(rows[:16], ",") + `}},
+		"pc-b": {"power_links": {` + strings.Join(rows[16:32], ",") + `}}, ` + strings.Join(gone, ",") + `}}}`)
+	for want, n := range map[string]int{
+		"WARN  Edit host: an override in state.json is ignored: agent nas-agent: ":                              20,
+		"WARN  Edit host: an override in state.json is ignored: and 40 more that are ignored in the same way\n": 1,
+		"WARN  Edit host: state.json has overrides for gone-":                                                   20,
+		"WARN  Edit host: and 40 more ids with overrides that are no agent's\n":                                 1,
+		"WARN  Edit host: an override of agent pc-":                                                             20,
+		"WARN  Edit host: and 12 more rows that overrides name and that are no row of this panel\n":             1,
+	} {
+		if strings.Count(got, want) != n {
+			t.Errorf("%d lines with %q, want %d:\n%s", strings.Count(got, want), want, n, got)
+		}
+	}
+	if n := strings.Count(got, "WARN  Edit host"); n != 63 {
+		t.Errorf("%d WARN lines about Edit host, want 63", n)
 	}
 	// host_options of another kind altogether: one WARN, never a refusal of config.yaml
 	for _, overlay := range []string{`"x"`, `[]`, `null`, `{"agents": []}`} {

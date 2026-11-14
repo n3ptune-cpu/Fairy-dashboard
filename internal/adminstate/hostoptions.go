@@ -48,6 +48,9 @@ import (
 // hostOptionsKey is the name of the object in state.json.
 const hostOptionsKey = "host_options"
 
+// MaxIgnoredLines is how many things the reader left out are said one by one; the rest is counted.
+const MaxIgnoredLines = 20
+
 // MaxHostOptionAgents is how many agents may have overrides. A panel has far fewer agents; a longer list is
 // not something Fairy wrote, and none of it is used.
 const MaxHostOptionAgents = 256
@@ -225,6 +228,9 @@ func (o HostOption) Named() config.Links {
 type HostOptions struct {
 	Rev    int
 	Agents map[string]HostOption
+	// Ignored is how many things the reader left out of what the file holds (0: none). The lines it gives
+	// name the first MaxIgnoredLines of them.
+	Ignored int
 	// unknown is what the file holds under keys this build does not know: at the top of "host_options" (top),
 	// and in the entries of agents (agents: agent id -> key -> value; also of an agent that has nothing else).
 	// None of it is ever used. It is carried from the read to the write as it is, never looked into and never
@@ -237,7 +243,7 @@ type HostOptions struct {
 
 // Clone returns a copy that shares nothing with o (the unknown keys, which nothing changes, are the same).
 func (o HostOptions) Clone() HostOptions {
-	out := HostOptions{Rev: o.Rev, Agents: make(map[string]HostOption, len(o.Agents)), unknown: o.unknown}
+	out := HostOptions{Rev: o.Rev, Agents: make(map[string]HostOption, len(o.Agents)), Ignored: o.Ignored, unknown: o.unknown}
 	out.unknown.agents = maps.Clone(o.unknown.agents)
 	for id, e := range o.Agents {
 		out.Agents[id] = e.Clone()
@@ -296,15 +302,30 @@ func (o *HostOptions) Forget(agentID string, ids ...string) []string {
 	return gone
 }
 
-// hostOptions reads the overlay out of a state.json object. It never fails: ignored is one line for every
-// thing that was left out, and config.yaml's value counts for each of them.
-func hostOptions(d statefile.Data) (o HostOptions, ignored []string) {
+// hostOptions reads the overlay out of a state.json object. It never fails: ignored is one line for each
+// thing that was left out (config.yaml's value counts for each of them), for the first MaxIgnoredLines of
+// them, and then one line that says how many more there are. However much of the file is not what Fairy
+// writes, what is said about it (in the log at the start, by `fairy admin config check`) stays short, and
+// what is kept of it in memory at every read stays small. HostOptions.Ignored is the whole number.
+func hostOptions(d statefile.Data) (HostOptions, []string) {
+	o, ignored := readHostOptions(d)
+	if more := o.Ignored - len(ignored); more > 0 {
+		ignored = append(ignored, fmt.Sprintf("and %d more that are ignored in the same way", more))
+	}
+	return o, ignored
+}
+
+func readHostOptions(d statefile.Data) (o HostOptions, ignored []string) {
 	o = HostOptions{Agents: map[string]HostOption{}}
 	raw, present := d[hostOptionsKey]
 	if !present {
 		return o, nil
 	}
-	say := func(format string, a ...any) { ignored = append(ignored, fmt.Sprintf(format, a...)) }
+	say := func(format string, a ...any) {
+		if o.Ignored++; len(ignored) < MaxIgnoredLines {
+			ignored = append(ignored, fmt.Sprintf(format, a...))
+		}
+	}
 	top, ok := raw.(map[string]any)
 	if !ok {
 		say("%q is not the object Fairy writes (found %s): none of it is used", hostOptionsKey, kindOf(raw))

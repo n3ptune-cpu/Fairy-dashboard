@@ -51,11 +51,12 @@ func hostOptionsCheck(cfg *config.Panel) (ok, warn, notes []string) {
 	for _, a := range c.Agents {
 		byID[a.ID] = a
 	}
+	var strangers, noRows []string // capped below: a state.json can hold hundreds of each
 	for _, id := range slices.Sorted(maps.Keys(o.Agents)) {
 		e := o.Agents[id]
 		a, known := byID[id]
 		if !known {
-			warn = append(warn, fmt.Sprintf("Edit host: state.json has overrides for %s, which is no agent's id (config.yaml and the hosts added in the panel): they are ignored", id))
+			strangers = append(strangers, fmt.Sprintf("Edit host: state.json has overrides for %s, which is no agent's id (config.yaml and the hosts added in the panel): they are ignored", id))
 			continue
 		}
 		who := "changed in the panel (\"Edit host\")"
@@ -91,12 +92,22 @@ func hostOptionsCheck(cfg *config.Panel) (ok, warn, notes []string) {
 		slices.Sort(rows)
 		for _, row := range slices.Compact(rows) {
 			if !poller.PossibleRow(row, c.Agents, c.Proxmox) {
-				warn = append(warn, fmt.Sprintf("Edit host: an override of agent %s names the row %s, which is no agent's id and not the id of a node or a guest of a proxmox: entry: "+
+				noRows = append(noRows, fmt.Sprintf("Edit host: an override of agent %s names the row %s, which is no agent's id and not the id of a node or a guest of a proxmox: entry: "+
 					"it is ignored (a host that was removed?)", id, row))
 			}
 		}
 	}
+	warn = append(warn, firstLines(strangers, "Edit host: and %d more ids with overrides that are no agent's")...)
+	warn = append(warn, firstLines(noRows, "Edit host: and %d more rows that overrides name and that are no row of this panel")...)
 	return ok, warn, notes
+}
+
+// firstLines is the first adminstate.MaxIgnoredLines of lines, and one line (more, with the number) for the rest.
+func firstLines(lines []string, more string) []string {
+	if n := len(lines) - adminstate.MaxIgnoredLines; n > 0 {
+		return append(lines[:adminstate.MaxIgnoredLines:adminstate.MaxIgnoredLines], fmt.Sprintf(more, n))
+	}
+	return lines
 }
 
 func pick(c bool, yes, no string) string {

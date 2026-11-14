@@ -450,6 +450,53 @@ type writerFunc func(p []byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
+// However much of the file is not what Fairy writes, what is said about it is short: the first twenty things,
+// one line each, and how many more there are. The count is the whole number (the dialog says it); the log gets
+// the twenty lines and the one about the rest, once.
+func TestHostOptionsIgnoredLinesAreCapped(t *testing.T) {
+	var logs bytes.Buffer
+	var mu sync.Mutex
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(writerFunc(func(p []byte) (int, error) { mu.Lock(); defer mu.Unlock(); return logs.Write(p) }), nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	var keys, agents []string
+	for i := 0; i < 300; i++ {
+		keys = append(keys, fmt.Sprintf(`"k%03d": %d`, i, i))
+	}
+	for i := 0; i < 200; i++ {
+		agents = append(agents, fmt.Sprintf(`"Bad Agent %03d": {}`, i))
+	}
+	dir := t.TempDir()
+	writeState(t, dir, `{"host_options": {"agents": {"nas": {"power_links": {"plug": "pc"}, `+strings.Join(keys, ",")+`}, `+strings.Join(agents, ",")+`}}}`)
+	a := New(dir)
+	for i := 0; i < 5; i++ {
+		o, ignored := a.HostOptionsRead()
+		if len(ignored) != MaxIgnoredLines+1 || o.Ignored != 500 || ignored[MaxIgnoredLines] != "and 480 more that are ignored in the same way" || o.For("nas").Links["plug"] != "pc" {
+			t.Fatalf("500 ignored things: %d lines, count %d, last line %q", len(ignored), o.Ignored, ignored[len(ignored)-1])
+		}
+		if !strings.Contains(ignored[0], `"Bad Agent 000" is not an id an agent can have`) || !strings.Contains(ignored[19], `"Bad Agent 019"`) {
+			t.Fatalf("the first twenty are the first twenty: %q ... %q", ignored[0], ignored[19])
+		}
+	}
+	mu.Lock()
+	said := logs.String()
+	mu.Unlock()
+	if n := strings.Count(said, "level=WARN"); n != MaxIgnoredLines+1 || strings.Count(said, "and 480 more that are ignored in the same way") != 1 {
+		t.Fatalf("%d WARN lines for 500 ignored things, want %d:\n%s", n, MaxIgnoredLines+1, said)
+	}
+	// the CLI's reader gives the same lines; a file with a few things says each of them and nothing about more
+	if o, ignored, err := ReadHostOptions(dir); err != nil || len(ignored) != MaxIgnoredLines+1 || o.Ignored != 500 {
+		t.Fatalf("ReadHostOptions: %d lines, count %d, %v", len(ignored), o.Ignored, err)
+	}
+	writeState(t, dir, `{"host_options": {"agents": {"nas": {`+strings.Join(keys[:MaxIgnoredLines], ",")+`}}}}`)
+	if o, ignored, _ := ReadHostOptions(dir); len(ignored) != MaxIgnoredLines || o.Ignored != MaxIgnoredLines || strings.Contains(ignored[MaxIgnoredLines-1], "more") {
+		t.Fatalf("exactly twenty: %d lines, count %d", len(ignored), o.Ignored)
+	}
+	if o, ignored, _ := ReadHostOptions(t.TempDir()); o.Ignored != 0 || ignored != nil {
+		t.Fatalf("nothing ignored: %d %v", o.Ignored, ignored)
+	}
+}
+
 // Keys under "host_options" that this build does not know (a newer build wrote them, and the panel was rolled
 // back) are not used, and they are not lost either: a save and a Reset write them back as they were, at the
 // top of the key and in every agent's entry, also in an entry that has nothing else. Before, the first Edit

@@ -3582,12 +3582,13 @@ function ehView(d, draft) {
   const sect = (title, hint, rows, none) => `<div class="wu-sub">${title}</div>${rows.length ? `<p class="note eh-hint">${hint}</p>${rows.join("")}` : `<p class="note eh-hint">${none}</p>`}`;
   const plan = ehPlan(d, draft);
   const left = d.leftovers?.length ? d.leftover_count || d.leftovers.length : 0;  // stored changes that have no line in any dialog
+  const ignored = d.ignored?.length ? d.ignored_count || d.ignored.length : 0;    // the panel names the first twenty; the number is of all
   const any = [...d.ups.map((u) => ehFrom(u, "ups", draft)), ...d.plugs.map((p) => ehFrom(p, "plugs", draft)), ...mine.map((p) => ehFrom(p, "total", draft))].includes("panel");
   return `${sect("UPS", "Ticked: this machine is on that UPS.", d.ups.map((u) => row(u, "ups")), "No agent relays a UPS.")}
     ${sect("Plugs", "Ticked: the plug's watts are this machine's.", d.plugs.map((p) => row(p, "plugs", p.self ? { fixed: true, note: "set on the machine itself" } : !ehNow(p, "plugs", draft) && where(p) ? { note: `now on ${esc(where(p))}` } : {})), "No agent relays a plug.")}
     ${sect("Total", "Ticked: the plug counts in the total.", mine.map((p) => row(p, "total")), "No plug of this machine.")}
     ${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
-    ${d.ignored?.length ? `<p class="note warn eh-ignored">${d.ignored.length === 1 ? "1 stored change is" : `${d.ignored.length} stored changes are`} ignored: see the panel's log.</p>` : ""}
+    ${ignored ? `<p class="note warn eh-ignored">${ignored === 1 ? "1 stored change is" : `${ignored} stored changes are`} ignored: see the panel's log.</p>` : ""}
     ${left ? `<p class="note warn eh-ignored">${left === 1 ? "1 stored change is" : `${left} stored changes are`} about machines or devices that are gone.${draft.leftovers ? " Save removes them."
       : ' <button class="btn sm" type="button" data-eh-left>Remove</button>'}</p>` : ""}
     ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}`;

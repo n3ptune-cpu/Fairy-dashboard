@@ -1047,8 +1047,8 @@ func TestEditHostABrokenOverlayIsIgnoredNotRefused(t *testing.T) {
 				t.Errorf("PVE-B's watts: %v (a link to a row there is not must not become a link to anything)", w)
 			}
 			g := r.options(ehNodeB)
-			if ig := strs(g.body["ignored"]); len(ig) != c.ignored {
-				t.Errorf("the dialog's ignored lines: %d, want %d: %v", len(ig), c.ignored, ig)
+			if ig := strs(g.body["ignored"]); len(ig) != c.ignored || g.body["ignored_count"] != float64(c.ignored) {
+				t.Errorf("the dialog's ignored lines: %d (count %v), want %d: %v", len(ig), g.body["ignored_count"], c.ignored, ig)
 			}
 			r.poll()
 			warns := 0

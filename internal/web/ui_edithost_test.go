@@ -269,6 +269,8 @@ func TestUIEditHostDialogSections(t *testing.T) {
   text = words(ehView(data({ ignored: ["x"] }), ehDraft()));
   if (!text.includes("UPS No agent relays a UPS. Plugs No agent relays a plug. Total No plug of this machine.") || !text.includes("1 stored change is ignored: see the panel's log.")) fail("empty: " + text);
   if (!words(ehView(data({ ignored: ["x", "y"] }), ehDraft())).includes("2 stored changes are ignored: see the panel's log.")) fail("two ignored");
+  // the panel names the first twenty and says how many there are: the dialog says the number of all
+  if (!words(ehView(data({ ignored: Array(21).fill("x"), ignored_count: 500 }), ehDraft())).includes("500 stored changes are ignored: see the panel's log.")) fail("five hundred ignored");
   // stored changes that have no line in any dialog: how many, and Remove; pressed, Save's list says what goes
   const lo = data({ ups: [ups("rack")], leftovers: ["2 stored changes about the plug b, which NAS does not relay any more", "1 stored change kept with old-pc, which is no machine of this panel"], leftover_count: 3 });
   draft = ehDraft();

@@ -715,7 +715,7 @@ func hoValue(l config.Links, field string) any {
 // line was changed in the panel, and what config.yaml says about it (config_...) is not used until Reset,
 // whatever is written there later. by and at are who last changed something about the devices that agent
 // reads, and when (they are kept for each reading agent, not for each line).
-func (m *hoMachine) view(o adminstate.HostOptions, ignored []string) map[string]any {
+func (m *hoMachine) view(o adminstate.HostOptions, ignored []string, ignoredCount int) map[string]any {
 	who := func(agent string, panel bool) (string, any, any) {
 		e := o.For(agent)
 		if !panel {
@@ -765,7 +765,7 @@ func (m *hoMachine) view(o adminstate.HostOptions, ignored []string) map[string]
 		left = []string{}
 	}
 	return map[string]any{"id": m.row.ID, "name": m.row.Name, "agent": strOrNil(m.agent), "rev": o.Rev,
-		"ups": ups, "plugs": plugs, "ignored": ignored, "leftovers": left, "leftover_count": n}
+		"ups": ups, "plugs": plugs, "ignored": ignored, "ignored_count": ignoredCount, "leftovers": left, "leftover_count": n}
 }
 
 func strOrNil(s string) any {
@@ -796,7 +796,7 @@ func (s *Server) hostOptionsGet(c *reqCtx) error {
 		return err
 	}
 	o, ignored := s.Poller.Admin.HostOptionsRead()
-	c.json(200, m.view(o, ignored))
+	c.json(200, m.view(o, ignored, o.Ignored))
 	return nil
 }
 
@@ -857,7 +857,7 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		c.audit(u, "host.options", m.row.ID, params, "failed: not saved")
 		return err
 	}
-	out := m.view(after, nil)
+	out := m.view(after, nil, 0)
 	out["ok"], out["changed"] = true, []string{}
 	if !changed { // every tick was already as asked
 		out["message"] = "nothing to change"
