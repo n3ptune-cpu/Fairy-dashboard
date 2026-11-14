@@ -3499,7 +3499,8 @@ function editHostMenu(s) {
   if (!isHost(s) || !state.me?.can_manage_users) return "";
   return `<button class="menu-item" type="button" data-act="edit-host">Edit host</button>`;
 }
-const EH_FIELDS = [["ups", "UPS links"], ["plugs", "Plug links"], ["total", "Total of the plugs"]];
+// a field: its name in the API, its words in a line of changes, and what its Reset is about
+const EH_FIELDS = [["ups", "UPS links", "all UPS links"], ["plugs", "Plug links", "all plug links"], ["total", "Total of the plugs", "the total of all plugs"]];
 const ehKey = (agent, field) => `${agent}/${field}`;
 // What an entry is without the ticks made in this dialog: the panel's value, or config.yaml's when Reset was pressed for it.
 const ehWas = (x, field, draft) => {
@@ -3560,7 +3561,7 @@ function ehView(d, draft) {
     const stored = (field === "total" ? x.total_from : x.from) === "panel" && !reset;
     const by = field === "total" ? x.total_by : x.by;
     return `<span class="eh-src${from === "panel" ? " on" : ""}"${stored && by ? ` title="${esc(`Changed here by ${by}`)}"` : ""}>${from === "panel" ? "changed here" : "from config.yaml"}</span>${stored
-      ? `<button class="btn sm" type="button" data-eh-reset="${esc(ehKey(x.agent, field))}" title="${esc(`Back to config.yaml for all ${EH_FIELDS.find((f) => f[0] === field)[1].toLowerCase()} read by ${x.agent_name}`)}">Reset</button>` : ""}`;
+      ? `<button class="btn sm" type="button" data-eh-reset="${esc(ehKey(x.agent, field))}" title="${esc(`Back to config.yaml for ${EH_FIELDS.find((f) => f[0] === field)[2]} read by ${x.agent_name}`)}">Reset</button>` : ""}`;
   };
   // o.note is markup (fixed words, or a name through esc)
   const row = (x, field, o = {}) => `<div class="eh-row"><label class="check opt"><input type="checkbox" data-eh="${field}" value="${esc(x.id)}"${ehNow(x, field, draft) ? " checked" : ""}${o.fixed ? " disabled" : ""}><span>${esc(x.name)}

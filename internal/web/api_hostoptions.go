@@ -281,8 +281,11 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	}
 	for _, r := range req.UPS {
 		i := slices.IndexFunc(m.ups, func(u hoUPS) bool { return u.id == r.ID })
-		if i < 0 || r.On == nil {
-			return nil, nil, bad("ups: no such UPS read by an agent, or \"on\" is missing")
+		if r.On == nil {
+			return nil, nil, bad("ups: \"on\" is missing")
+		}
+		if i < 0 {
+			return nil, nil, bad("no agent relays the UPS %q (any more): close this and open it again", truncate(safeTarget(r.ID), 80))
 		}
 		if seen["ups\x00"+r.ID] {
 			return nil, nil, bad("ups: an entry is there twice")
@@ -306,8 +309,11 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	}
 	for _, r := range req.Plugs {
 		i := slices.IndexFunc(m.plugs, func(p hoPlug) bool { return p.id == r.ID })
-		if i < 0 || (r.Linked == nil && r.InTotal == nil) {
-			return nil, nil, bad("plugs: no such plug read by an agent, or neither \"linked\" nor \"in_total\" is given")
+		if r.Linked == nil && r.InTotal == nil {
+			return nil, nil, bad("plugs: neither \"linked\" nor \"in_total\" is given")
+		}
+		if i < 0 {
+			return nil, nil, bad("no agent relays the plug %q (any more): close this and open it again", truncate(safeTarget(r.ID), 80))
 		}
 		if seen["plug\x00"+r.ID] {
 			return nil, nil, bad("plugs: an entry is there twice")

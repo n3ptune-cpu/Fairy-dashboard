@@ -190,8 +190,8 @@ func TestUIEditHostDialogSections(t *testing.T) {
   // the plug the machine itself links cannot be unticked here; nothing else is disabled
   if (rows.filter((r) => / disabled/.test(r.html)).map((r) => r.text).join("|") !== "own plug read by PC-B · set on the machine itself") fail("disabled: " + rows.filter((r) => / disabled/.test(r.html)).map((r) => r.text));
   // Reset says what it is about (all links of that kind read by that machine), and who changed it is the source's tooltip
-  if (!html.includes('data-eh-reset="nas-agent/ups" title="Back to config.yaml for all ups links read by NAS"') || !html.includes('<span class="eh-src on" title="Changed here by nora@example.com">changed here</span>')
-    || !html.includes('data-eh-reset="pc-b/total" title="Back to config.yaml for all total of the plugs read by PC-B"')) fail("Reset and its words: " + html);
+  if (!html.includes('data-eh-reset="nas-agent/ups" title="Back to config.yaml for all UPS links read by NAS"') || !html.includes('<span class="eh-src on" title="Changed here by nora@example.com">changed here</span>')
+    || !html.includes('data-eh-reset="pc-b/total" title="Back to config.yaml for the total of all plugs read by PC-B"')) fail("Reset and its words: " + html);
   // changed here shadows config.yaml: said in one visible line; nothing to save yet
   if (!text.includes("Changed here: used instead of config.yaml until Reset.") || !html.includes('class="note info-keep eh-shadow"')) fail("the line about config.yaml: " + text);
   if (text.includes("This will change") || ehPlan(d, draft).lines.length || JSON.stringify(ehPlan(d, draft).body) !== "{}") fail("nothing was changed, and the dialog lists changes: " + text);
