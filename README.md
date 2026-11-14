@@ -1261,20 +1261,40 @@ decides who can see the UPS and its notifications. The dialog's info button says
   and **Re-pair** of a host added with Add host keep asking for the name it was added under. The typed
   confirmation of a power action asks for the name the row shows.
 
-  Because that name is what you type to confirm a power action, **no two hosts can have one name, and "one
-  name" is what you cannot tell apart**: `PC-A`, `pc-a`, `PC‑A` with another kind of hyphen, the same in
-  full-width letters, and the same in letters of another alphabet that look like these (a Cyrillic or Greek
-  `А`) are one name, and so are `Relay A` and `relay  a` with more spaces. A word that mixes Latin letters
-  with Cyrillic or Greek ones is not taken at all; a name in another alphabet is fine, as a word of its own
-  ("Дача PC"). What you can see stays a name of its own: `PC-A.` with a dot and `PC-Á` with an accent are
-  not `PC-A`. Three more things follow from it:
-  * the name **config.yaml** has for another host is taken too, also while that host is shown under a name
-    given here: a Reset there can then never make two hosts of one name;
-  * **Reset** (or config.yaml's name typed back) is refused while another host was given that name in the
-    panel; the message names that host, which is renamed first;
-  * the name of a **guest** is taken as well (its shutdown and its stop are confirmed by typing it). The
-    names of UPSes and plugs are not: nothing is confirmed by typing one, and nothing is done to a device by
-    its name, so a host may be called like one.
+  Because that name is what you type to confirm a power action, **Edit host and Add host do not give a host
+  a name that another host has, and "the same name" is what you cannot tell apart**: `PC-A`, `pc-a`, `PC‑A`
+  with another kind of hyphen, the same in full-width letters, and the same in letters of another alphabet
+  that look like these (a Cyrillic or Greek `А`) are one name, and so are `Relay A` and `relay  a` with more
+  spaces. What you can see stays a name of its own: `PC-A.` with a dot and `PC-Á` with an accent are not
+  `PC-A`.
+
+  A word of a name is written in one alphabet. A word ends at a space, a hyphen, a digit or any other sign,
+  so `Сервер-NAS`, `ПК-Dell` and `Дача PC` are names. One word with Latin letters and Cyrillic or Greek ones
+  in it is not taken, and the message names the word: `Dоn` with a Cyrillic `о`, and also `μServer` with the
+  Greek letter mu (type the micro sign `µ` of your keyboard, which is no Greek letter, or `uServer`).
+
+  What is compared, in **Edit host** and in **Add host**:
+  * the names the other hosts are **shown** under;
+  * the name **config.yaml** has for another host (its row's own name and its agent's `name:`), also while
+    that host is shown under a name given here: a Reset there can then never make two hosts of one name;
+  * a name that is **kept for a host that is not shown right now**: a host added with Add host that is not
+    polled at the moment ("Re-pair it"), or a name in `state.json` for a machine that is away. It comes back
+    under that name;
+  * in Edit host also the name of a **guest** (its shutdown and its stop are confirmed by typing it). Add
+    host does not ask for guests: a virtual machine that gets an agent of its own is added under its name.
+    The names of UPSes and plugs are never compared: nothing is confirmed by typing one, and nothing is done
+    to a device by its name.
+
+  **Reset** (or config.yaml's name typed back) is refused while another host was given that name in the
+  panel; the message names that host, which is renamed first. The name a host has, sent again, is never a
+  change and never refused. Add host asks twice: before the join code is made, and again when the machine
+  has paired (the name can be given to another host in between; then the host is not added and the dialog
+  says so). **Re-pair** asks nothing about the name. An agent that is added for a Proxmox node the panel
+  already has may be called like that node: it becomes a part of the node's row.
+
+  What is **not** checked: `config.yaml` itself. Two agents that are given one `name:` there by hand are
+  accepted, both rows show that name, and a typed confirmation then goes to the row you clicked: the name
+  alone does not say which of the two.
 * **Site.** The choices are the sites of the Users page, and the dialog stores what that page stores (one
   setting, two places to change it; `fairy admin sites` shows it). The first choice is the default:
   config.yaml's `site:`, or "No site (admins only)". A site decides who **sees** a machine: its row, its
