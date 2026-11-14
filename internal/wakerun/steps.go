@@ -9,7 +9,12 @@ import (
 
 // The steps of one machine, in order:
 //
-//	queued -> waking -> online -> [awaiting_approval] -> updating -> settling -> shutting_down -> off
+//	queued -> waking -> online -> updating -> settling -> shutting_down -> off
+//
+// and for a machine that checks passkey approvals itself (Host.Checked; checked.go has its steps):
+//
+//	... online -> awaiting_approval -> updating -> ... -> off       confirmed in time
+//	                                -> switching_itself_off -> off  nobody confirmed, and the ticket armed it
 //
 // A machine that was already on goes queued -> online -> updating -> stayed_on and can never reach settling,
 // the only step that leads to the shutdown request (shutdown.go). Every other way out of a step is one of the
@@ -67,11 +72,19 @@ func (m *Manager) stepHost(ctx context.Context, r *Run, h *Host, now time.Time) 
 			m.callOff(ctx, r, h, now, letGo)
 			return
 		}
+		if h.armedMaybe() { // a self-switch-off the run's ticket armed is the run's to call off as well (checked.go)
+			m.disarm(ctx, r, h, now, letGo)
+			return
+		}
 		m.endAsIs(r, h, now, letGo)
 		return
 	}
 	if c := h.calloff; c != nil { // the cancel of its countdown has not got through yet: only that is tried again
 		m.callOff(ctx, r, h, now, c.why)
+		return
+	}
+	if d := h.chk.disarm; d != nil { // the same for the cancel of a self-switch-off
+		m.disarm(ctx, r, h, now, d.why)
 		return
 	}
 	if r.Cancel != nil && !m.cancelled(ctx, r, h, now) {
@@ -83,16 +96,11 @@ func (m *Manager) stepHost(ctx context.Context, r *Run, h *Host, now time.Time) 
 	case StWaking:
 		m.stepWaking(ctx, r, h, info, now)
 	case StOnline:
-		m.stepOnline(r, h, info, now)
+		m.stepOnline(ctx, r, h, info, now)
 	case StApproval:
-		switch {
-		case r.Cancel != nil: // cancelled with "switch off again": the shutdown is tried, the agent has the last word
-			m.updateDone(r, h, now, UpdNotTried, "the run was cancelled before its update")
-		case h.grant != nil:
-			m.enter(h, StUpdating, now, "approved: asking its agent to update")
-		case now.Sub(h.Since) > approvalTimeout:
-			m.endAsIs(r, h, now, fmt.Sprintf("Nobody approved the update and the shutdown within %s", span(approvalTimeout)))
-		}
+		m.stepAwaiting(ctx, r, h, info, now)
+	case StSelfOff:
+		m.stepSelfOff(ctx, r, h, now)
 	case StUpdating:
 		m.stepUpdating(ctx, r, h, info, now)
 	case StSettling:
@@ -110,6 +118,10 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 	c := r.Cancel
 	why := "The run was cancelled by " + c.By
 	woke := h.Mode == ModeWake && !h.AlreadyOn && h.WakeSentAt != nil
+	if h.Checked && h.Mode == ModeWake && !h.confirmed() {
+		// A machine with the check that nobody confirmed: the panel can neither update it nor switch it off.
+		return m.cancelledUnconfirmed(ctx, r, h, now, why, woke)
+	}
 	if c.SwitchOff && woke {
 		if !h.cancelHandled {
 			h.cancelHandled = true
@@ -922,7 +934,7 @@ func (m *Manager) stepWaking(ctx context.Context, r *Run, h *Host, info HostInfo
 	}
 }
 
-func (m *Manager) stepOnline(r *Run, h *Host, info HostInfo, now time.Time) {
+func (m *Manager) stepOnline(ctx context.Context, r *Run, h *Host, info HostInfo, now time.Time) {
 	o := m.Ops.Observe(h.ID)
 	if !o.Online {
 		h.goodSince = time.Time{}
@@ -941,12 +953,12 @@ func (m *Manager) stepOnline(r *Run, h *Host, info HostInfo, now time.Time) {
 	if now.Sub(h.goodSince) < onlineSettle {
 		return
 	}
-	if r.Cancel != nil { // cancelled with "switch off again": no update is started any more
-		m.updateDone(r, h, now, UpdNotTried, "the run was cancelled before its update")
+	if h.Checked { // it checks passkey approvals itself: nothing is sent to it on the strength of the start alone
+		m.checkedOnline(ctx, r, h, info, o, now)
 		return
 	}
-	if m.Approval != nil && h.grant == nil && m.Approval.Needed(info, o) {
-		m.enter(h, StApproval, now, "awake: waiting for your approval of its update and shutdown")
+	if r.Cancel != nil { // cancelled with "switch off again": no update is started any more
+		m.updateDone(r, h, now, UpdNotTried, "the run was cancelled before its update")
 		return
 	}
 	m.enter(h, StUpdating, now, "online: asking its agent to update")
@@ -1082,6 +1094,12 @@ func (m *Manager) startUpdate(ctx context.Context, r *Run, h *Host, info HostInf
 		m.updateDone(r, h, now, UpdCurrent, "")
 		return
 	}
+	if h.Checked && h.grant == nil {
+		// never reached (a machine with the check comes here confirmed, or approved at the start); and if it
+		// ever is, no request without an approval goes to a machine that checks them
+		m.updateDone(r, h, now, UpdApproval, noApprovalForIt)
+		return
+	}
 	if !m.pace.fits(info.AgentID, 1, m.paceNow()) || !m.ask(r, h, "update") { // written down before it goes out
 		return
 	}
@@ -1098,6 +1116,10 @@ func (m *Manager) startUpdate(ctx context.Context, r *Run, h *Host, info HostInf
 	if err != nil {
 		m.emit(EvStep, r, h, "update", params, opText(err))
 		switch {
+		case opCode(err) == CodeApproval && h.Checked:
+			// The one update of the run, or of the start's approval, was not let through (its time is over, it
+			// was used, the run was ended on the machine). It is not asked for again: on to the shutdown.
+			m.updateDone(r, h, now, UpdApproval, "its agent did not let the run's update through ("+opText(err)+")")
 		case opCode(err) == CodeApproval:
 			m.updateDone(r, h, now, UpdApproval, "its agent asks for an approval (Pocket ID) before an update, and this run has none for it")
 		case opCode(err) == CodeRateLimited && h.retries < maxRetries:

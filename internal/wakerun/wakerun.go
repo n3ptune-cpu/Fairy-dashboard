@@ -50,10 +50,13 @@ const (
 	StQueued   = "queued"            // waiting for its turn
 	StWaking   = "waking"            // the wake was sent; waiting for it to come online (its agent answers)
 	StOnline   = "online"            // its agent answers; checking that it stays
-	StApproval = "awaiting_approval" // waiting for the approval after the wake (item 1.1; not used yet)
+	StApproval = "awaiting_approval" // a machine with the check: awake, waiting for the run's second confirmation (checked.go)
 	StUpdating = "updating"          // the agent's self-update
 	StSettling = "settling"          // the update is over; the pause before the shutdown request
 	StShutting = "shutting_down"     // the shutdown countdown runs on the machine
+	// StSelfOff: a machine with the check that nobody confirmed in time is switching itself off, as the ticket
+	// of the start said (checked.go). The run sends it nothing; it watches until the machine is gone.
+	StSelfOff = "switching_itself_off"
 
 	StOff         = "off"         // woken, updated (or not), switched off again
 	StStayedOn    = "stayed_on"   // was already on: updated (or not) and left on, as it must be
@@ -213,8 +216,8 @@ const (
 	// The value is on the careful side on purpose: a machine wrongly taken for "already starting" would be
 	// left on at every run.
 	minBoot         = 8 * time.Second
-	approvalTimeout = 15 * time.Minute
-	journalRetry    = 5 * time.Second // a journal that could not be written is tried again this often
+	approvalTimeout = 15 * time.Minute // (a term of maxRun since build 13; the wait itself is the ticket's now)
+	journalRetry    = 5 * time.Second  // a journal that could not be written is tried again this often
 	maxRetries      = 5
 	maxLog          = 40
 	historyKept     = 10
@@ -340,7 +343,32 @@ type Observation struct {
 	LastMessage   string
 	Behind        *bool // older than the newest release the panel knows (nil: unknown)
 	Pending       *Pending
+	// What the machine's latest answer says about runs (a machine that checks approvals itself, Fairy-agent
+	// v0.9.0). All three are of the answer SeenAt names and are empty while the latest poll was not answered.
+	// Runs: its checker takes runs. Run: the run it says it is in, or that ended last in its boot (nil: it
+	// names none). HelperStopped: its elevated helper, which is what checks and counts on Windows, is not running.
+	Runs          bool
+	Run           *RunBlock
+	HelperStopped bool
 }
+
+// RunBlock is a machine's own word about its run (the "run" of its approval block).
+type RunBlock struct {
+	ID    string
+	State string // BlockArmed, BlockConfirmed, BlockOffPending, BlockCancelled, BlockDone
+	// OffAt (armed): when it begins to switch itself off; (off_pending): when its countdown ends. By the
+	// machine's own clock: it is only ever shown, with those words, never counted with.
+	OffAt time.Time
+}
+
+// The states of a RunBlock (Fairy-agent api.Run...).
+const (
+	BlockArmed      = "armed"
+	BlockConfirmed  = "confirmed"
+	BlockOffPending = "off_pending"
+	BlockCancelled  = "cancelled"
+	BlockDone       = "done"
+)
 
 // Silence is a row of polls of a machine's agent that got nothing at all: no answer and no other sign that
 // the machine runs. The two times are "how long ago", measured by the poller on its steady clock: the run
@@ -427,6 +455,8 @@ func OffNow(o Observation, now time.Time) bool {
 type OpError struct {
 	Code string // CodeApproval, CodeRateLimited or "" (anything else)
 	Text string // for people; no secrets
+	// Reason: with CodeRunRefused, the machine's own word for the rule that said no ("not_fresh", "too_late", ...).
+	Reason string
 }
 
 func (e *OpError) Error() string { return e.Text }
@@ -443,6 +473,11 @@ const (
 	// connection that broke). The machine may have got it: the wake packet may be out, the update or the
 	// shutdown countdown may be running. The run never takes this for "nothing happened".
 	CodeNoAnswer = "no_answer"
+	// CodeRunRefused: the machine answered a run ticket or a run confirmation with "no" (OpError.Reason says
+	// which rule). CodeTicketGone: the panel no longer has the ticket of the start for this machine (it is
+	// older than its valid_s, or it was handed over once already): nothing was sent.
+	CodeRunRefused = "run_refused"
+	CodeTicketGone = "ticket_gone"
 )
 
 // NoAgentRoute is the one sentence for a woken machine whose agent can no longer shut it down.
@@ -482,19 +517,29 @@ type Ops interface {
 	// only from a list that was asked for after its own question (stepSettling), and that is not older than
 	// guestsOld (stepShutting).
 	AskGuests(id string) (listed, ok bool, ago time.Duration)
+	// Arm hands a machine that checks approvals itself the ticket the passkey of the start signed for it (POST
+	// /run/arm), and returns in how long the machine says it begins to switch itself off. The panel keeps the
+	// ticket in memory and hands it over ONCE per machine: a second call for the same machine sends nothing
+	// (CodeTicketGone), whatever came of the first. CodeRunRefused: the machine said no (Reason); CodeNoAnswer:
+	// the request left and no usable answer came back (the machine's own word about its run decides then).
+	// The run calls it only for a machine its own proof says it woke (mayArm).
+	Arm(ctx context.Context, id, run string) (offIn time.Duration, err error)
 	// Blocked is why no control request may be sent at all right now ("": allowed): the kill switch. The run
 	// stops then. The one request it still sends is CancelShutdown, for a countdown it started itself: that
 	// only ever stops a power action, and the panel lets it through the kill switch (stepRun).
 	Blocked() string
 }
 
-// Approver is the hook for item 1.1: a machine whose agent verifies a Pocket ID approval itself before an
-// update or a shutdown. A machine that is off cannot hand out the challenge such an approval is made for, so a
-// run asks for it once, after the machines are awake, for all of them together: a machine for which Needed
-// says yes waits in StApproval until Manager.Approve hands the run a grant, which then goes to Ops.Update and
-// Ops.Shutdown. Manager.Approval is nil today, so no machine ever waits there.
-type Approver interface {
-	Needed(h HostInfo, o Observation) bool
+// Grant is what a run hands to Ops.Update and Ops.Shutdown for a machine that checks approvals itself (the
+// last parameter of both; nil for every other machine, whose requests are sent as they always were). It holds
+// no token: it names what the machine itself has accepted.
+type Grant struct {
+	// Run is the run's id: the machine accepted this run's confirmation (run_go), and the request names the
+	// run in the place of an approval. The machine lets one update and one shutdown of the run through.
+	Run string
+	// Start: the machine was on when the run started and the passkey of the start answered its own challenge
+	// for an update. The panel sends that approval with the one update request; there is no shutdown.
+	Start bool
 }
 
 // LogLine is one line of a machine's history in a run.
@@ -581,6 +626,28 @@ type Host struct {
 	On             string    `json:"on,omitempty"` // set when the machine ends (On...)
 	Log            []LogLine `json:"log"`
 
+	// A machine that checks passkey approvals itself (checked.go). None of this is a secret: the ticket and
+	// every token stay outside this package.
+	//
+	// Checked: decided when the run started, from the panel's record, for the whole run. StartApproved: it was
+	// chosen as a machine that is on, and the passkey of the start answered its challenge for the update.
+	Checked       bool `json:"checked,omitempty"`
+	StartApproved bool `json:"start_approved,omitempty"`
+	// Arm: what came of handing it the ticket (Arm...; "": not tried). ArmText: why it is not armed, for people.
+	Arm     string `json:"arm,omitempty"`
+	ArmText string `json:"arm_text,omitempty"`
+	// ArmedAt: when its "armed" was here. SelfOffAt: when it begins to switch itself off if nobody confirms:
+	// ArmedAt plus the ticket's wait, by the panel's clock; with SelfOffByMachine it is the machine's own word
+	// (its arming got no answer, and its agent showed the run later), by the machine's clock.
+	ArmedAt          *time.Time `json:"armed_at,omitempty"`
+	SelfOffAt        *time.Time `json:"self_off_at,omitempty"`
+	SelfOffByMachine bool       `json:"self_off_by_machine_clock,omitempty"`
+	// Confirm: what came of the run's confirmation for it (Confirm...; "": none yet). To: the version the
+	// confirmation names for its update ("-": none), fixed when it began to wait.
+	Confirm     string `json:"confirm,omitempty"`
+	ConfirmText string `json:"confirm_text,omitempty"`
+	To          string `json:"to,omitempty"`
+
 	// Working values of the run in memory. A run is never continued after a restart, so they are not kept.
 	wakeMono     time.Duration // the steady clock when the run's first wake was accepted
 	wakeOKMono   time.Duration // the steady clock at WakeOKAt
@@ -647,6 +714,7 @@ type Host struct {
 	offAfter, shutDelay time.Duration
 	verdict             *verdict  // how the run would end it: the last look (look) is going on
 	askedAt             time.Time // when the run's own direct question to it got an answer of any kind (it runs)
+	chk                 checked   // the working values of a machine with the check (checked.go)
 }
 
 // Final reports whether the machine has ended in this run.
@@ -680,9 +748,16 @@ type Run struct {
 	Latest     string     `json:"latest,omitempty"` // the newest agent release the panel knew at the start
 	Hosts      []*Host    `json:"hosts"`
 	Cancel     *Cancel    `json:"cancel,omitempty"`
-	Note       string     `json:"note,omitempty"`     // why the run stopped itself
-	Approval   string     `json:"approval,omitempty"` // "", "needed", "given" (item 1.1)
-	Summary    string     `json:"summary,omitempty"`  // one line per machine, when the run is over
+	Note       string     `json:"note,omitempty"` // why the run stopped itself
+	// Approval: where the run's second confirmation stands: "" (not asked for), "needed" (machines with the
+	// check are up and wait for it), "given" (it was given: once per run), "over" (nobody gave it in time).
+	Approval string `json:"approval,omitempty"`
+	// Ticket: the numbers of the run's tickets (nil: no machine with the check is in the run). ConfirmBy: until
+	// when the confirmation is asked for, by the panel's clock (set with "needed"). ConfirmedBy: who gave it.
+	Ticket      *Ticket    `json:"ticket,omitempty"`
+	ConfirmBy   *time.Time `json:"confirm_by,omitempty"`
+	ConfirmedBy string     `json:"confirmed_by,omitempty"`
+	Summary     string     `json:"summary,omitempty"` // one line per machine, when the run is over
 	// Reported: the interrupted run was reported after the restart (once).
 	Reported bool `json:"reported,omitempty"`
 
@@ -694,6 +769,8 @@ type Run struct {
 	stopped string
 	// startMono: the steady clock when the run started (in memory only), for the run's own limit (maxRun).
 	startMono time.Duration
+	// confirmMono: ConfirmBy on the steady clock (in memory only).
+	confirmMono time.Duration
 }
 
 func (r *Run) clone() *Run {
@@ -704,6 +781,10 @@ func (r *Run) clone() *Run {
 		hc.Log = slices.Clone(h.Log)
 		c.Hosts[i] = &hc
 	}
+	if r.Ticket != nil {
+		t := *r.Ticket
+		c.Ticket = &t
+	}
 	if r.Cancel != nil {
 		cc := *r.Cancel
 		c.Cancel = &cc
@@ -713,10 +794,10 @@ func (r *Run) clone() *Run {
 
 // Event is something the audit log and the notifications are told. Run and Host are copies.
 type Event struct {
-	Kind    string // EvStep, EvHostEnd, EvRunEnd, EvInterrupted, EvApproval, EvLate
+	Kind    string // EvStep, EvHostEnd, EvRunEnd, EvInterrupted, EvApproval, EvApprovalEnd, EvLate
 	Run     *Run
 	Host    *Host          // nil for the run's own events
-	Action  string         // EvStep: wake | update | shutdown | cancel
+	Action  string         // EvStep: wake | update | shutdown | cancel | arm | confirm | self_off
 	Params  map[string]any // EvStep: details for the audit entry
 	Outcome string         // EvStep: "ok" or the error text
 }
@@ -727,8 +808,11 @@ const (
 	EvHostEnd     = "host_end"        // a machine ended
 	EvRunEnd      = "run_end"         // the run is over
 	EvInterrupted = "interrupted"     // the panel restarted during this run (reported at the next start)
-	EvApproval    = "approval_needed" // the woken machines wait for an approval (item 1.1)
-	EvLate        = "late_online"     // a machine the run gave up on came online later
+	EvApproval    = "approval_needed" // machines with the check are up and wait for the run's second confirmation
+	// EvApprovalEnd: the confirmation is no longer asked for: it was given, nobody gave it in time, or no
+	// machine waits for it any more.
+	EvApprovalEnd = "approval_over"
+	EvLate        = "late_online" // a machine the run gave up on came online later
 )
 
 // StartRequest is what an admin confirmed: the machines and the options, nothing else.
@@ -738,6 +822,15 @@ type StartRequest struct {
 	UpdateIfOn bool     // a machine of Hosts that turns out to be on is updated (and left on) instead of skipped
 	By, BySub  string
 	Latest     string
+	// ID is the run's id when it was made before the start (16 lower-case hex characters): the tickets the
+	// passkey of the start signed name it. "": Start makes one.
+	ID string
+	// Checked: the machines of the two lists that check passkey approvals themselves (by id). StartApproved:
+	// those of UpdateOnly whose update the passkey of the start approved. Ticket: the numbers of the tickets
+	// (needed when a machine of Hosts is in Checked).
+	Checked       map[string]bool
+	StartApproved map[string]bool
+	Ticket        *Ticket
 }
 
 // ListHash names a list of machines and options with eight hex digits: the dialog, the audit log and the run
@@ -771,11 +864,8 @@ type Manager struct {
 	Mono func() time.Duration
 	// Event is called for every Event, outside the manager's lock (nil: nobody listens).
 	Event func(Event)
-	// Approval is the hook for item 1.1 (nil: no machine needs an approval after the wake).
-	Approval Approver
-
-	path string    // the journal ("" keeps nothing)
-	born time.Time // for Mono: it holds Go's steady clock reading
+	path  string    // the journal ("" keeps nothing)
+	born  time.Time // for Mono: it holds Go's steady clock reading
 
 	tickMu sync.Mutex // one Tick at a time
 	mu     sync.Mutex
@@ -866,6 +956,9 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 			o := m.Ops.Observe(id)
 			h := &Host{ID: id, Name: info.Name, Mode: mode, State: StQueued, Since: now, Text: "waiting for its turn", StartStatus: o.Status, Log: []LogLine{}, entry: info.Entry}
 			h.setTimings(info, m.Settings)
+			if h.Checked = req.Checked[id]; h.Checked && mode == ModeUpdateOnly && req.StartApproved[id] {
+				h.StartApproved = true
+			}
 			if q := QuietFor(o, now); q > 0 && o.OnBy == "" {
 				s := int64(q / time.Second)
 				h.QuietForS = &s
@@ -886,6 +979,10 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 	if len(hosts) > MaxHosts {
 		return nil, &StartError{Msg: fmt.Sprintf("at most %d machines in one run", MaxHosts)}
 	}
+	id, ticket, err := checkedStart(req, hosts)
+	if err != nil {
+		return nil, err
+	}
 	if why := m.Ops.Blocked(); why != "" {
 		return nil, &StartError{Msg: why}
 	}
@@ -900,8 +997,13 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 		return nil, &StartError{Busy: true, Msg: fmt.Sprintf("a run started by %s at %s is still going: one run at a time. Wait for it, or cancel it.",
 			a.By, a.StartedAt.Format("15:04 UTC"))}
 	}
-	r := &Run{ID: newID(), State: RunRunning, StartedAt: now, By: req.By, BySub: req.BySub, UpdateIfOn: req.UpdateIfOn,
-		ListHash: ListHash(req.Hosts, req.UpdateOnly, req.UpdateIfOn), Settings: m.Settings, Latest: req.Latest, Hosts: hosts, startMono: m.mono()}
+	r := &Run{ID: id, State: RunRunning, StartedAt: now, By: req.By, BySub: req.BySub, UpdateIfOn: req.UpdateIfOn,
+		ListHash: ListHash(req.Hosts, req.UpdateOnly, req.UpdateIfOn), Settings: m.Settings, Latest: req.Latest, Hosts: hosts, startMono: m.mono(), Ticket: ticket}
+	for _, h := range hosts {
+		if h.StartApproved {
+			h.grant = &Grant{Run: id, Start: true}
+		}
+	}
 	m.active = r
 	out := r.clone()
 	m.mu.Unlock()
@@ -934,30 +1036,6 @@ func (m *Manager) CancelRun(id, by string, switchOff bool) (*Run, error) {
 	out := r.clone()
 	m.mu.Unlock()
 	return out, nil
-}
-
-// Approve hands the active run the approval the woken machines wait for (item 1.1): every machine in
-// StApproval goes on to its update, and grant goes with its update and shutdown requests.
-func (m *Manager) Approve(id string, grant any) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r := m.active
-	if r == nil || r.ID != id {
-		return &StartError{Msg: "that run is not active (any more)"}
-	}
-	n := 0
-	for _, h := range r.Hosts {
-		if h.State == StApproval {
-			h.grant = grant
-			n++
-		}
-	}
-	if n == 0 {
-		return &StartError{Msg: "no machine of this run waits for an approval"}
-	}
-	r.Approval = "given"
-	m.dirty = true
-	return nil
 }
 
 // Loop runs the active run until ctx ends: one Tick a second.
@@ -1187,11 +1265,14 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 		// Its sentence says that the machine switches off by itself, and the page's Cancel is there for it.
 		r.stopped, r.Note = stop, "stopped: "+stop
 		m.dirty = true
+		m.confirmationOver(r) // a run that stopped asks for no confirmation any more
 		for _, h := range r.Hosts {
 			switch {
 			case h.Final() || h.verdict != nil:
 			case h.State == StShutting && killSwitch:
 				m.callOff(ctx, r, h, now, "the run stopped ("+stop+")")
+			case h.armedMaybe() && killSwitch: // the same for a self-switch-off the run's ticket armed (checked.go)
+				m.disarm(ctx, r, h, now, "the run stopped ("+stop+")")
 			default:
 				m.endAsIs(r, h, now, "the run stopped ("+stop+")")
 			}
@@ -1206,6 +1287,8 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 			case h.Final():
 			case h.verdict == nil && h.calloff != nil:
 				m.callOff(ctx, r, h, now, h.calloff.why)
+			case h.verdict == nil && h.chk.disarm != nil:
+				m.disarm(ctx, r, h, now, h.chk.disarm.why)
 			default:
 				m.look(r, h, now)
 			}
@@ -1232,22 +1315,7 @@ func (m *Manager) stepRun(ctx context.Context, r *Run, now time.Time) {
 		}
 		m.stepHost(ctx, r, h, now)
 	}
-	if m.Approval != nil && r.Approval == "" {
-		waiting, early := 0, 0
-		for _, h := range r.Hosts {
-			switch h.State {
-			case StApproval:
-				waiting++
-			case StQueued, StWaking, StOnline:
-				early++
-			}
-		}
-		if waiting > 0 && early == 0 { // every machine is awake or was given up on: ask once, for all of them
-			r.Approval = "needed"
-			m.dirty = true
-			m.emit(EvApproval, r, nil, "", nil, "")
-		}
-	}
+	m.askConfirmation(r, now) // machines with the check that are up: one question for all of them (checked.go)
 	for _, h := range r.Hosts {
 		if !h.Final() {
 			return
@@ -1269,11 +1337,14 @@ func (m *Manager) maxRun(r *Run) time.Duration {
 		delay = max(delay, h.delay(r))
 	}
 	return time.Duration(len(r.Hosts))*2*time.Minute + 2*s.OnlineTimeout + approvalTimeout + updateStart + updateTimeout + verdictWait +
-		agentBack + s.Settle + delay + offGrace + 10*time.Minute
+		agentBack + s.Settle + delay + offGrace + 10*time.Minute + ticketSpan(r)
 }
 
 func (m *Manager) finish(r *Run, now time.Time, state string) {
 	r.State, r.EndedAt = state, &now
+	if r.Approval == "needed" {
+		r.Approval = "over"
+	}
 	var lines []string
 	for _, h := range r.Hosts {
 		lines = append(lines, h.Name+": "+h.Text)
@@ -1292,6 +1363,14 @@ func (m *Manager) finish(r *Run, now time.Time, state string) {
 // state, and why is the reason it stops here.
 func (m *Manager) endAsIs(r *Run, h *Host, now time.Time, why string) {
 	switch {
+	case h.armedMaybe() && h.State != StShutting:
+		// A machine with the check that may switch itself off (the ticket armed it, or may have), and the run
+		// stops here without having called that off: the sentence says when it goes, and how to keep it on.
+		text := why + ". " + armedTail(r, h, now, m.mono())
+		m.endSeen(r, h, StLeftOn, OnYes, now, text, text)
+	case h.Checked && h.State == StApproval:
+		text := why + ". " + cameOnline(h) + ". " + notArmedWords(h) + " " + notConfirmed
+		m.endSeen(r, h, StLeftOn, OnYes, now, text+" It is ON.", text)
 	case h.State == StShutting && h.lostShutdown(): // no countdown the run knows of: the sentence does not claim one
 		m.endSeen(r, h, StLeftOn, OnYes, now, fmt.Sprintf("%s after its shutdown request got no answer (it would be due at %s). Fairy no longer watches it: "+
 			"if the request arrived, it switches off by itself unless someone cancels that.", why, when(*h.ShutdownAt, now)),

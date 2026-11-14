@@ -102,6 +102,9 @@ type machine struct {
 	silFrom  time.Duration // the steady clock at the first silent poll since its last answer or sign of life
 	seenMono time.Duration // the steady clock at its last answer (Observation.SeenAgo)
 
+	// a machine that checks passkey approvals itself (checkedworld_test.go)
+	chk modelCheck
+
 	// for the judge
 	knownLimit    bool // this machine is the documented limit (r1-p2-01): the judge does not fail the test for it
 	onAtStart     bool
@@ -150,6 +153,7 @@ type world struct {
 	guestsAsked int            // how often the run asked about a machine's guests
 	rows        uint64         // rows of silent polls the poller has counted
 	kicks       map[string]int // how often the run asked the poller to poll a machine
+	tk          modelTickets   // the panel's keeper of the run's tickets, and the judge of the confirmation (checkedworld_test.go)
 	// clock guards now and mono between tick, which moves them, and the Manager, which reads them through
 	// Now and Mono, also from another goroutine (TestReadingAndCancellingWhileARunWorks cancels from one).
 	clock sync.Mutex
@@ -359,11 +363,15 @@ func (w *world) Update(_ context.Context, id, _ string, grant any) error {
 	mc := w.ms[id]
 	w.calls = append(w.calls, "update "+id)
 	w.arrived("update " + id)
+	w.judgeGrant(mc, "update", grant, 0)
 	if !w.answers(mc) {
 		return &OpError{Text: "agent unreachable: connection failed"}
 	}
 	if !w.hit(mc.info.AgentID) || w.busyOnce(mc, "update", mc.updMode) {
 		return errBusy
+	}
+	if why := w.admit(mc, "update", grant, 0); why != "" { // a machine with the check: its own gate
+		return &OpError{Code: CodeApproval, Text: why}
 	}
 	if mc.updLost != "" && !mc.busyDone["update lost"] { // a timeout: the panel does not learn whether the agent got it
 		mc.busyDone["update lost"] = true
@@ -414,11 +422,15 @@ func (w *world) Shutdown(_ context.Context, id string, delay time.Duration, _ st
 	if mc.updating && w.answers(mc) {
 		w.t.Errorf("RULE BROKEN: shutdown sent to %s while its agent says that an update is being installed", id)
 	}
+	w.judgeGrant(mc, "shutdown", grant, delay)
 	if !w.answers(mc) {
 		return time.Time{}, &OpError{Text: "agent unreachable: connection failed"}
 	}
 	if !w.hit(mc.info.AgentID) || w.busyOnce(mc, "shutdown", mc.shutMode) {
 		return time.Time{}, errBusy
+	}
+	if why := w.admit(mc, "shutdown", grant, delay); why != "" { // a machine with the check: its own gate
+		return time.Time{}, &OpError{Code: CodeApproval, Text: why}
 	}
 	switch mc.shutMode {
 	case "approval":
@@ -456,13 +468,18 @@ func (w *world) CancelShutdown(_ context.Context, id, _ string) error {
 		mc.busyDone["cancel lost"] = true
 		if strings.HasSuffix(mc.cancelLost, "arrives") {
 			mc.pending = nil
+			w.runCancelled(mc)
 		}
 		return errLost
 	}
 	if !w.answers(mc) && !mc.cancelOK {
 		return &OpError{Text: "agent unreachable: connection failed"}
 	}
+	if mc.chk.cancelSays != "" { // the agent's own "no" to a cancel (500, 503): nothing was cancelled
+		return &OpError{Text: mc.chk.cancelSays}
+	}
 	mc.pending = nil
+	w.runCancelled(mc)
 	return nil
 }
 
@@ -528,6 +545,7 @@ func (w *world) Blocked() string { return w.blocked }
 func (w *world) sim() {
 	for _, id := range w.order {
 		mc := w.ms[id]
+		w.runTick(mc) // a machine with the check: its own count of the run
 		if mc.updating && !w.now.Before(mc.updDoneAt) && mc.updMode != "stuck" {
 			mc.updating = false
 			at := float64(w.now.Unix())
@@ -637,6 +655,7 @@ func (w *world) poll() {
 		if mc.staleOnce && mc.pending != nil { // a poll that left before the shutdown was asked for and comes back after it
 			mc.staleOnce, o.Pending = false, nil
 		}
+		w.runShown(mc, &o)
 		mc.obs = o
 	}
 }
@@ -670,10 +689,12 @@ func (w *world) start(req StartRequest) *Run {
 	for _, mc := range w.ms {
 		mc.onAtStart, mc.onAtFirstWake, mc.wakeAccepted, mc.wentOff = mc.on, nil, false, false
 	}
+	w.checkedStart(&req)
 	r, err := w.m.Start(req)
 	if err != nil {
 		w.t.Fatal("start:", err)
 	}
+	w.tk.runID = r.ID
 	w.started = true
 	return r
 }
@@ -743,7 +764,7 @@ func (w *world) wellReported(r *Run) {
 		// another machine for longer than that countdown. The machine was on when the sentence was written
 		// (h.Since) and went off after it, as the sentence says. TestRandomRunsWithLinkFlaps has the same
 		// allowance (saysItGoes).
-		saidItGoes := mc != nil && h.On == OnYes && !mc.on && mc.wentOff && mc.offAt.After(h.Since) && strings.Contains(h.Text, "switches off")
+		saidItGoes := mc != nil && h.On == OnYes && !mc.on && mc.wentOff && mc.offAt.After(h.Since) && (strings.Contains(h.Text, "switches off") || saysItMayGo(h.Text))
 		if mc != nil && !saidItGoes && ((h.On == OnNo && (!mc.wentOff || h.State != StOff)) || (h.State == StOff && h.On != OnNo) ||
 			(h.On == OnYes && !mc.on) || (h.On == OnNo && mc.on) || (h.On == OnUntouched && (mc.wakes > 0 || mc.shutdowns > 0))) {
 			w.t.Errorf("%s: the run says it is %q, the machine is on=%v (%s: %s)", h.ID, h.On, mc.on, h.State, h.Text)

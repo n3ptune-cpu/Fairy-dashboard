@@ -97,6 +97,27 @@ func interrupt(r *Run, now time.Time) {
 		asking := h.Asking // a request that was going out when the journal was last written
 		h.State, h.Since, h.Asking = StInterrupted, now, ""
 		switch {
+		case h.Checked && !h.confirmed() && asking == "confirm":
+			// The run's confirmation was going out to it when the panel stopped.
+			h.On = OnUnknown
+			h.Text = "The panel restarted while your confirmation was being handed to it. Fairy does not know whether it arrived: if it did, the machine is confirmed and stays ON " +
+				"(a run is never continued, so nothing more is sent to it); if not, " + interruptedOff(r, h) + " " + notConfirmed
+		case h.Checked && !h.confirmed() && (h.Arm == ArmArmed || h.Arm == ArmUnanswered || asking == "arm") && (was == StOnline || was == StApproval || was == StSelfOff):
+			// A machine with the check that the run's ticket armed, or may have: it switches itself off without the
+			// panel, and nobody can confirm it any more (the run is not continued). The report says when, and how
+			// to keep it on.
+			h.On = OnUnknown
+			switch {
+			case h.Arm == ArmArmed:
+				h.Text = "The panel restarted while it waited for the run's second confirmation. It was armed: " + interruptedOff(r, h) + " " +
+					"A run is never continued, so it can no longer be confirmed. " + notConfirmed
+			default:
+				h.Text = "The panel restarted while the run was arming it, or after its arming got no answer. Fairy does not know whether it is armed: if it is, " +
+					interruptedOff(r, h) + " If not, it is ON and stays on. " + notConfirmed
+			}
+		case h.Checked && !h.confirmed() && was == StApproval:
+			h.On = OnYes
+			h.Text = "The panel restarted while it waited for the run's second confirmation. " + notArmedWords(h) + " It was ON: nothing of this run switches it off. " + notConfirmed
 		case asking == "shutdown" && h.ShutdownAt == nil:
 			h.On = OnUnknown
 			h.Text = "The panel restarted while the run was asking it to shut down. It had come online after the run's wake. Fairy does not know whether the request arrived: " +
@@ -139,6 +160,25 @@ func interrupt(r *Run, now time.Time) {
 		lines = append(lines, h.Name+": "+h.Text)
 	}
 	r.Summary = joinLines(lines)
+}
+
+// interruptedOff says, for the report of an interrupted run, when a machine that is (or may be) armed switches
+// itself off, and how to keep it on.
+func interruptedOff(r *Run, h *Host) string {
+	notice := "a notice"
+	if r.Ticket != nil {
+		notice = "a notice of " + span(r.Ticket.notice())
+	}
+	switch {
+	case h.SelfOffAt != nil && h.SelfOffByMachine:
+		return fmt.Sprintf("it switches itself off at %s by its own clock, with %s, unless that is cancelled (Keep on in the panel, or at the machine).", clock(*h.SelfOffAt), notice)
+	case h.SelfOffAt != nil:
+		return fmt.Sprintf("it switches itself off at about %s, with %s, unless that is cancelled (Keep on in the panel, or at the machine).", clock(*h.SelfOffAt), notice)
+	case r.Ticket != nil:
+		latest := r.StartedAt.Add(r.Ticket.valid() + lateArm + r.Ticket.wait() + selfOffLate)
+		return fmt.Sprintf("it switches itself off by about %s at the latest, with %s, unless that is cancelled (Keep on in the panel, or at the machine).", clock(latest), notice)
+	}
+	return "it switches itself off unless that is cancelled (Keep on in the panel, or at the machine)."
 }
 
 func joinLines(l []string) string {

@@ -65,6 +65,33 @@ import (
 // mayShutDown reports whether the run may ask this machine to shut down, and if not, why (a sentence for the
 // report). o is the poller's view now; guests is what the panel knows about the guests of a Proxmox node.
 func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running int, known bool, why string)) (bool, string) {
+	if ok, why := wokeProof(h); !ok {
+		return false, why
+	}
+	switch {
+	case !info.OptedIn:
+		return false, "it is no longer switched on for \"Update unpowered hosts\""
+	case !o.Online:
+		return false, "its agent is not answering right now"
+	case o.Pending != nil:
+		return false, fmt.Sprintf("another power action is already pending on it (%s at %s)", o.Pending.Action, clock(o.Pending.At))
+	case o.UpdateState == "downloading" || o.UpdateState == "applying":
+		// Whatever the run believes about its own update request (its answer may have been lost, or someone
+		// else started an update): a machine whose agent says that it is installing is not switched off.
+		return false, "its agent says that an update is being installed on it right now (" + o.UpdateState + ")"
+	}
+	// A Proxmox node is left on while guests run on it, and also when the panel cannot see its guests.
+	if why := guestsKeepOn(guests()); why != "" {
+		return false, why
+	}
+	return true, ""
+}
+
+// wokeProof is the first half of mayShutDown: the evidence, collected by the run itself, that the machine was
+// off before the run and that this run woke it. It reads nothing but the Host record. It has two callers:
+// mayShutDown, for the panel's own shutdown request, and mayArm (checked.go), for the ticket that lets a
+// machine with the check switch itself off again. Neither is sent for a machine this says no to.
+func wokeProof(h *Host) (bool, string) {
 	switch {
 	case h.Mode != ModeWake:
 		return false, "it was chosen as a machine that is on: Fairy only updates those"
@@ -94,20 +121,6 @@ func mayShutDown(h *Host, info HostInfo, o Observation, guests func() (running i
 		return false, "it had been running for longer than since the wake: it was already on"
 	case time.Duration(*h.BootUptimeS)*time.Second >= h.onlineMono-h.wakeMono: // the same by the steady clock
 		return false, "it had been running for longer than since the wake: it was already on"
-	case !info.OptedIn:
-		return false, "it is no longer switched on for \"Update unpowered hosts\""
-	case !o.Online:
-		return false, "its agent is not answering right now"
-	case o.Pending != nil:
-		return false, fmt.Sprintf("another power action is already pending on it (%s at %s)", o.Pending.Action, clock(o.Pending.At))
-	case o.UpdateState == "downloading" || o.UpdateState == "applying":
-		// Whatever the run believes about its own update request (its answer may have been lost, or someone
-		// else started an update): a machine whose agent says that it is installing is not switched off.
-		return false, "its agent says that an update is being installed on it right now (" + o.UpdateState + ")"
-	}
-	// A Proxmox node is left on while guests run on it, and also when the panel cannot see its guests.
-	if why := guestsKeepOn(guests()); why != "" {
-		return false, why
 	}
 	return true, ""
 }
@@ -180,6 +193,12 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 		m.end(r, h, state, OnYes, now, "Left ON: "+why+"."+updateTail(h))
 		return
 	}
+	if h.Checked && !h.confirmed() {
+		// never reached (a machine with the check comes to its shutdown only after its confirmation was
+		// accepted); and if it ever is, no shutdown request without one goes to a machine that checks them
+		m.end(r, h, StLeftOn, OnYes, now, "Left ON: "+noApprovalForIt+"."+updateTail(h))
+		return
+	}
 	if !m.pace.fits(info.AgentID, 1, m.paceNow()) || !m.ask(r, h, "shutdown") { // written down before it goes out
 		return
 	}
@@ -200,6 +219,11 @@ func (m *Manager) shutDown(ctx context.Context, r *Run, h *Host, info HostInfo, 
 	if err != nil {
 		m.emit(EvStep, r, h, "shutdown", params, opText(err))
 		switch {
+		case opCode(err) == CodeApproval && h.Checked:
+			// The run's one shutdown was not let through: the time the confirmation named is over, or the run
+			// was ended on the machine (a cancel, a restart). It is not asked for again.
+			m.end(r, h, StLeftOn, OnYes, now, "Left ON: its agent did not let the run's shutdown through ("+opText(err)+"). The confirmation covers one shutdown, for "+
+				span(time.Duration(r.Ticket.WithinS)*time.Second)+" and until the machine is started again."+updateTail(h))
 		case opCode(err) == CodeApproval:
 			m.end(r, h, StLeftOn, OnYes, now, "Left ON: its agent asks for an approval (Pocket ID) before a shutdown, and this run has none for it."+updateTail(h))
 		case opCode(err) == CodeNoAgentRoute: // the route the run confirmed at its start is gone: nothing was sent

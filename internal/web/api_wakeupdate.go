@@ -359,6 +359,12 @@ func (o runOps) CancelShutdown(ctx context.Context, id, by string) error {
 	return err
 }
 
+// Arm hands a machine with the check the ticket of the run's start (wakerun.Ops). No run holds one yet: a
+// machine that checks approvals itself is in no run (wuCheck), so nothing is ever sent from here.
+func (o runOps) Arm(context.Context, string, string) (time.Duration, error) {
+	return 0, &wakerun.OpError{Code: wakerun.CodeTicketGone, Text: "this panel holds no ticket for it"}
+}
+
 // Guests: what the panel knows from the Proxmox API about the guests of a node. A machine the panel knows
 // only through its agent, and whose agent says it is a Proxmox host, has guests the panel cannot see.
 func (o runOps) Guests(id string, since time.Time) (int, bool, string) {

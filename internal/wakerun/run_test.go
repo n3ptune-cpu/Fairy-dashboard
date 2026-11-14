@@ -858,86 +858,10 @@ func TestPacer(t *testing.T) {
 	}
 }
 
-// The hook for item 1.1. With an approver, the woken machines wait in "awaiting_approval" after they are
-// online; the run asks once, when all of them are awake or given up on; the grant goes to their update and
-// shutdown requests. A machine that was on needs none for being left alone, but its update waits too.
-type approveAll struct{}
-
-func (approveAll) Needed(HostInfo, Observation) bool { return true }
-
-func TestApprovalAfterTheWake(t *testing.T) {
-	w := newWorld(t)
-	w.m.Approval = approveAll{}
-	a := w.off("pc-a")
-	b := w.off("pc-b")
-	b.bootTakes = 100 * time.Second
-	w.off("pc-dead").wakeBoots = false
-	for _, mc := range []*machine{a, b} {
-		mc.updMode, mc.shutMode = "approval", "approval" // their agents refuse without a grant
-	}
-	r := w.start(StartRequest{Hosts: []string{"pc-a", "pc-b", "pc-dead"}})
-	asked := func() int {
-		n := 0
-		for _, e := range w.events {
-			if e.Kind == EvApproval {
-				n++
-			}
-		}
-		return n
-	}
-	w.advance(200 * time.Second)
-	act, _ := w.m.Snapshot()
-	if host(act, "pc-a").State != StApproval || host(act, "pc-b").State != StApproval || asked() != 0 || act.Approval != "" {
-		t.Fatalf("both awake, the third still waking: nobody is asked yet: %s (asked %d)", describe(act), asked())
-	}
-	if err := w.m.Approve("other", "grant"); err == nil {
-		t.Fatal("another run's id")
-	}
-	w.advance(110 * time.Second) // the third is given up on
-	act, _ = w.m.Snapshot()
-	if asked() != 1 || act.Approval != "needed" {
-		t.Fatalf("asked %d, approval %q", asked(), act.Approval)
-	}
-	for _, c := range w.calls { // nothing but wakes was sent before the approval
-		if !strings.HasPrefix(c, "wake ") {
-			t.Fatalf("before the approval the run sent %q", c)
-		}
-	}
-	w.advance(60 * time.Second)
-	if asked() != 1 {
-		t.Fatal("asked again")
-	}
-	if err := w.m.Approve(r.ID, "grant"); err != nil {
-		t.Fatal(err)
-	}
-	done := w.finish()
-	has(t, host(done, "pc-a"), StOff, "updated from")
-	has(t, host(done, "pc-b"), StOff, "updated from")
-	has(t, host(done, "pc-dead"), StGaveUp)
-	if done.Approval != "given" || a.on || b.on {
-		t.Fatalf("approval %q", done.Approval)
-	}
-
-	// nobody approves: the woken machines are left on, and that is said
-	w = newWorld(t)
-	w.m.Approval = approveAll{}
-	w.off("pc-a")
-	w.start(StartRequest{Hosts: []string{"pc-a"}})
-	done = w.finish()
-	has(t, host(done, "pc-a"), StLeftOn, "Nobody approved the update and the shutdown within 15 min. It came online after the wake and it is ON.")
-	if got := w.callsFor("pc-a"); got != "wake" {
-		t.Fatalf("requests: %q", got)
-	}
-	if err := w.m.Approve(done.ID, "grant"); err == nil {
-		t.Fatal("a finished run takes no approval")
-	}
-}
-
-// The page reads the run, and an admin cancels it, while the run works: Snapshot, CancelRun and Approve from
+// The page reads the run, and an admin cancels it, while the run works: Snapshot, CancelRun and Waiting from
 // other goroutines than the one that steps (run with -race).
 func TestReadingAndCancellingWhileARunWorks(t *testing.T) {
 	w := newWorld(t)
-	w.m.Approval = approveAll{}
 	for _, id := range []string{"pc-a", "pc-b", "pc-c"} {
 		w.off(id)
 	}
@@ -959,7 +883,7 @@ func TestReadingAndCancellingWhileARunWorks(t *testing.T) {
 			}
 			_ = w.m.JournalError()
 			if i%50 == 0 {
-				_ = w.m.Approve(r.ID, "grant")
+				_, _ = w.m.Waiting(r.ID)
 			}
 			if i == 4000 {
 				_, _ = w.m.CancelRun(r.ID, "Bob", true)
