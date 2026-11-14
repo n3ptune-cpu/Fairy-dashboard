@@ -84,3 +84,44 @@ func TestConfigCheckAndTheMachinesOfEditHost(t *testing.T) {
 		t.Errorf("the check repeats a value of a key it does not read:\n%s", out)
 	}
 }
+
+// A decision that names a relay the configuration does not have (a host that was taken out of config.yaml,
+// a state.json from another panel) is not used, and the check says so in its own words (second review, N4).
+func TestConfigCheckAndARelayThatIsNoAgent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	t.Setenv("TOK_R", "r")
+	t.Setenv("CTL_R", "c")
+	t.Setenv("FAIRY_SESSION_SECRET", strings.Repeat("no-secret-", 5)) // made here, for this test only
+	t.Setenv("FAIRY_OIDC_CLIENT_SECRET", "")
+	y := "public_url: https://p.example\ndata_dir: " + dir + "/data\noidc: {issuer: \"https://id.example\", client_id: c, allowed_groups: [users], control_groups: [admins]}\n" +
+		"agents:\n" +
+		"  - {id: relay-a, url: \"http://relay-a:9101\", token_env: TOK_R, control_token_env: CTL_R, wol_relay: true}\n" +
+		"  - {id: pc-a, name: PC-A, url: \"http://pc-a:9101\", token_env: TOK_R}\n" +
+		"systems:\n" +
+		"  - {id: pc-a, wol: {mac: \"02:00:00:00:00:a1\", relay: relay-a}}\n"
+	if err := os.WriteFile(cfg, []byte(y), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir+"/data", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	run := func(hosts string) (string, int) {
+		t.Helper()
+		if err := os.WriteFile(dir+"/data/state.json", []byte(`{"host_options": {"rev": 3, "hosts": `+hosts+`}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb)
+		if !strings.Contains(out.String(), "config "+cfg+": valid") {
+			t.Fatalf("the fixture is not a valid config:\n%s%s", out.String(), errb.String())
+		}
+		return out.String(), code
+	}
+	_, base := run(`{}`)
+	out, code := run(`{"pc-a": {"wol": {"macs": ["02:00:00:00:00:ee"], "relay": "relay-z", "port": 7}}}`)
+	want := "WARN  Edit host: the Wake-on-LAN details changed in the panel for pc-a are not used (the relay relay-z is no agent of this panel): config.yaml's count (to 02:00:00:00:00:a1 through relay-a, port 9)\n"
+	if strings.Count(out, want) != 1 || strings.Contains(out, "02:00:00:00:00:ee") || code == 0 || code == base {
+		t.Errorf("the check for a relay that is no agent (exit %d, without the decision %d):\n%s", code, base, out)
+	}
+}

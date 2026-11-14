@@ -305,3 +305,29 @@ func TestPanelWolIsWhatPowerOverrideReturns(t *testing.T) {
 		t.Errorf("the relays: %+v", got)
 	}
 }
+
+// WolWith answers two things, and each is used by itself: the dialog shows the Wake-on-LAN it returns, the
+// wake path asks why a decision is not used. So a decision that is not used must come back as the
+// configuration's Wake-on-LAN, never as the decided one with a reason next to it (second review, N4: the guard
+// in WolWith is pinned here by its own; the one in panelWol repeats it for PowerOverride).
+func TestWolWithReturnsTheConfigurationsWhenADecisionIsNotUsed(t *testing.T) {
+	p, _ := plainHosts(t)
+	base := p.ConfigWol("pc-a")
+	for what, e := range map[string]adminstate.WolEdit{
+		"a relay that is no agent":           {MACs: []string{"02:00:00:00:00:f1"}, Relay: "relay-z", Port: 7},
+		"a relay that sends no wake packets": {MACs: []string{"02:00:00:00:00:f1"}, Relay: "pc-b", Port: 7},
+	} {
+		w, why := p.WolWith("pc-a", base, e)
+		if why == "" || w == nil || !slices.Equal(w.AllMACs(), base.AllMACs()) || w.Relay != "relay-a" || w.Port == 7 {
+			t.Errorf("%s: %+v (%q)", what, w, why)
+		}
+	}
+	// its own relay: for a machine that has no wol: the answer is "none", not the decided one
+	if w, why := p.WolWith("relay-a", nil, adminstate.WolEdit{MACs: []string{"02:00:00:00:00:f1"}, Relay: "relay-a"}); why == "" || w != nil {
+		t.Errorf("itself as its relay: %+v (%q)", w, why)
+	}
+	// and one that is used comes back as decided
+	if w, why := p.WolWith("pc-a", base, adminstate.WolEdit{MACs: []string{"02:00:00:00:00:f1"}, Relay: "relay-b", Port: 7}); why != "" || w.Relay != "relay-b" || w.Port != 7 || !slices.Equal(w.AllMACs(), []string{"02:00:00:00:00:f1"}) {
+		t.Errorf("a decision that is used: %+v (%q)", w, why)
+	}
+}
