@@ -244,23 +244,30 @@ poller has no such wait.
 
 Every power source has a graph of its last day: a plug, a BMC, a UPS that is listed under `power_sources`,
 whether the panel reads it itself or an agent relays it. On the **Power** page, click the small chart at the
-end of the source's row (or anywhere in the row). On a machine's page it is in the **Power** box, on the line
+end of the source's row (or anywhere in the row; marking text there, a double click and a click with Ctrl or
+Shift open nothing). On a machine's page it is in the **Power** box, on the line
 of each plug that is linked to the machine.
 
 * **What it shows.** Watts, a point a minute. The line is each minute's average; the band around it runs from
   the minute's lowest to its highest reading, so a spike of a few seconds is still in it. Above the chart: the
   day's average, lowest and highest watts with their times, and the energy. The hours are your browser's
   local time. Point at the chart, drag a finger over it or use the arrow keys, and the line above it says the
-  time and the values of that minute.
+  time and the values of that minute. While it is open it gets a new point a minute (not in a tab that is in
+  the background); for a source that is taken away meanwhile it says "This source is no longer reported" and
+  keeps the chart it has.
 * **A gap stays a gap.** A minute in which the plug, its Home Assistant or the agent that relays it did not
   answer, or in which the panel was not running, has no point. The line stops there and starts again where
   the readings do; nothing is drawn at 0 W, and the average and the energy are over the minutes that have
   readings ("Readings for 19 h of the 24 hours").
-* **Energy.** From the plug's own kWh counter when it has one that counts. Only its increases are added up,
-  so a counter that starts again at 0 after an outage is not counted backwards, and what the plug used while
-  nobody could ask it is still in the number. Where there is no counter, or it did not move, the energy is
-  the average watts times the time, and the tile says **estimated** (**partly estimated** when that is more
-  than 2 % of the number).
+* **Energy.** From the plug's own kWh counter where it counts. Only its increases are added up, so a counter
+  that starts again at 0 after an outage is not counted backwards, and what the plug used while nobody could
+  ask it is still in the number. The day is judged stretch by stretch, from one step of the counter to the
+  next: a stretch in which the counter stood still while the plug measured power (it read 0 for hours after
+  an outage, or it has no counter at all) counts with the average watts times the time. The tile then says
+  **partly estimated**, or **estimated** when nearly all of the number is (under 2 % of it estimated, it
+  says nothing). A counter value that is a little lower than the one before (a plug's cloud hands out an
+  older total now and then) is left out and is not taken for a restart, and a jump no device could have made
+  is not counted.
 * **Volts, amperes, kWh.** Next to the live watts (the Power page's columns, and the machine's Power box) and
   in the graph, when the device reports them: the day's range, and a second, low chart for the volts. A plug
   that is read through Home Assistant needs Fairy-agent v0.9.0 for them, and up to three more lines in the
@@ -279,10 +286,17 @@ of each plug that is linked to the machine.
 * **Where it is kept.** In the panel's memory, and in one file in the data folder, `power-day.json`, written
   every five minutes and when the panel stops: the graph is still there after a restart or an update, with a
   gap for the time between. There is nothing to set and no key in config.yaml. At most 64 sources have a
-  graph (about 60 kB of memory each); with more, the ones the panel already draws keep theirs and the log
-  says so once. The file is for the graph and nothing else: one that is damaged is not used and is replaced,
-  and a write that fails (a full disk) is said once in the log. Neither ever stops the panel or holds up a
-  poll.
+  graph (about 60 kB of memory each), and at most 16 of one host; with more, the ones the panel already
+  draws keep theirs and the log says so once. The file is for the graph and nothing else: one that is
+  damaged is not used and is replaced, and a write that fails (a full disk) is said once in the log. Neither
+  ever stops the panel or holds up a poll.
+* **A wrong clock.** A panel that starts before its machine has the time (no clock of its own, the network
+  not up yet) finds a file "from the future". It leaves that file alone, the log says so, and reads it as
+  soon as the clock has passed the time the file was saved at; the graphs are empty until then. If the clock
+  does not get there within an hour (it was the clock at the last stop that was wrong), the file is replaced
+  with what the panel has measured since. A single reading under a clock a day or more back is not taken;
+  a clock that stays there for ten minutes is believed, and the graph begins anew. A clock set back by less
+  than a day empties what was measured after the new time.
 * **Renamed, linked elsewhere, removed.** The day belongs to the plug, by its id. A new name keeps it. A plug
   that is linked to another machine ([Edit host](#edit-host), `power_links`) takes its whole day along, and
   whoever may see the plug now may see that day. A plug whose id was changed starts empty. A plug an agent no

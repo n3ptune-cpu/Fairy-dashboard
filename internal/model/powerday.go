@@ -42,7 +42,9 @@ type PowerDaySummary struct {
 
 	// EnergyKWh is the energy used in the minutes with readings. Energy says where it is from: "counter" (the
 	// device's own kWh counter: only its increases are counted, a counter that went down has restarted),
-	// "estimated" (average watts x time) or "mixed" (more than 2 % of it is estimated). EnergyEstKWh is the
+	// "estimated" (average watts x time: there is no counter, or it stood still) or "mixed" (a part of it is
+	// estimated, a stretch in which the counter stood still while the device measured power: more than 2 % of
+	// the number, and less than 98 %; under 2 % it is "counter", over 98 % "estimated"). EnergyEstKWh is the
 	// part of EnergyKWh that is estimated.
 	EnergyKWh    float64 `json:"energy_kwh"`
 	EnergyEstKWh float64 `json:"energy_est_kwh"`
