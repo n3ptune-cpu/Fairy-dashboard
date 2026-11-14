@@ -700,9 +700,13 @@ What to know before the first real run:
     ("The run timings were changed after you pressed the button ..."), and you press the button again.
   * Every change is in the audit log (`wakeupdate.timings`, each timing with its old and its new value)
     and in the bell. API tokens cannot read or change the timings.
-  * One machine's own two timings are still set in config.yaml (the next point).
+  * One machine's own two timings are changed in **Edit host** on the machine's page (group
+    [Run timings](#the-machines-own-run-timings)), or set in config.yaml (the next point).
 * One machine can have its own `off_after_s` and `shutdown_delay_s` (build 14): a `wake_update:` block in
-  its `systems:` entry, same ranges (300-3600 and 10-3600), any other key in the block is refused:
+  its `systems:` entry, same ranges (300-3600 and 10-3600), any other key in the block is refused. An admin
+  can also change the two for one machine in the panel
+  ([Edit host, Run timings](#the-machines-own-run-timings)); what is changed there is used instead of the
+  block's value of that key until Reset:
 
   ```yaml
   systems:
@@ -1214,8 +1218,8 @@ hand-written entries.
 ### Edit host
 
 An admin can change a machine's options in the panel: the machine's page, the ⋯ menu, **Edit host**. The
-dialog has the machine itself at the top ([its name, its site and its Wake-on-LAN](#the-machine-itself-name-site-wake-on-lan))
-and under it three sections of links:
+dialog has the machine itself at the top ([its name, its site and its Wake-on-LAN](#the-machine-itself-name-site-wake-on-lan),
+and [its own run timings](#the-machines-own-run-timings)) and under it three sections of links:
 
 | Section | What a tick means | The field it stands for |
 |---|---|---|
@@ -1392,6 +1396,52 @@ decides who can see the UPS and its notifications. The dialog's info button says
   machine's wake packet. What is kept for a machine that is gone is counted with the other changes "about
   machines that are gone".
 
+#### The machine's own run timings
+
+Between "Wake-on-LAN" and the links the dialog has the group **Run timings**: the two timings of
+["Update unpowered hosts"](#update-unpowered-hosts) that one machine can have of its own.
+
+| In the dialog | What it is | config.yaml | Range |
+|---|---|---|---|
+| **Counts as off after** | this machine counts as off after this long without an answer | `off_after_s` in the `wake_update:` block of its `systems:` entry | 300 to 3600 s |
+| **Shutdown countdown** | the countdown of the shutdown a run asks this machine for | `shutdown_delay_s` there | 10 to 3600 s |
+
+* Each is a number of seconds with its reading next to it ("360 s = 6 minutes"), and says where it comes
+  from: **from config.yaml** (the machine's own block), **from Run timings** (the machine has none of its
+  own and follows the panel's timing, which [Run timings](#update-unpowered-hosts) on the Updates page
+  changes), or **changed here** with **Reset**.
+* **What is changed here lies over what counts for the machine anyway**, and is kept next to its name
+  (`state.json`, `host_options`, `hosts`, `<id>`, `wake_update`). The number you save is the number that
+  counts for this machine afterwards. A value that counts anyway (the block's, or the panel's where the
+  machine has no block) is not stored: typing it is the same as Reset, and the machine then follows
+  config.yaml or Run timings again, also when those are changed later. config.yaml is not written.
+* **The ranges are config.yaml's**, checked before you are asked to confirm anything. Nothing below 300 s
+  or below 10 s can be typed, stored, or come into force through a `state.json` edited by hand: such a
+  value is ignored with a warning in the log and a WARN of `fairy admin config check`, and what counts
+  without it counts.
+* **Every change of the two asks you to confirm it's you, by itself**, also right after you confirmed
+  something else, and also a longer countdown and a Reset. The confirmation lists the change and, under a
+  change of "Counts as off after" and under a shorter countdown, what it means for this machine: "If PC-A
+  is on but silent for longer than 6 minutes, it counts as off, and a run switches it off after its
+  update." A machine that restarts is silent too: with a time shorter than its restart takes, a run can
+  take it for a machine it woke, and such a machine is switched off after its update. 15 minutes is the
+  safe value.
+* **A change counts from the next run.** A run that is going keeps the two numbers it took for the machine
+  when it started; the answer of the save says so, and the audit entry names the run. A start that waits
+  for your passkey is for the timings its dialog showed: when a listed machine's own timing is changed in
+  between, nothing is started and you press the button again.
+* A machine that checks passkey approvals itself takes a countdown of at most 10 minutes in a run. A
+  longer one can be saved here, as in config.yaml; the start of a run with that machine then says so and
+  starts nothing.
+* A Proxmox node with an agent keeps the two under either of its ids. **Remove** of the host takes them
+  with it. Remove of **another** host that was the sender of this machine's wake packets takes this
+  machine's Wake-on-LAN change out and leaves its run timings and its name as they are.
+* The audit entry (`host.options`) has each timing with its old and its new value and where each came
+  from. `fairy admin config check` lists them in the host's line ("wake_update.off_after_s 360
+  (config.yaml: 600)"), says in the line of the machine's `systems:` entry which key is not in force, and
+  makes its notes (a time below 900 s, a countdown that is also one of the Power menu) from the value in
+  force. API tokens cannot change them.
+
 **Never editable here**, whatever is sent: `id`, `url`, `token_env`, `control_token_env`, `verify_tls`, `node`,
 `links_to`, `fan_control`, `power_control`, `self_update`, `wol_relay`, `owner`, and of a `wol:` its
 `broadcast` and `password_env`. They say where an agent is, which secret it gets, what the panel may do to a
@@ -1401,8 +1451,10 @@ stay in config.yaml or on the machine (Add host, Re-pair).
 
 API: `GET` and `PUT /api/admin/hosts/{id}/options`. For the machine itself the request takes `"name": "Den"`,
 `"site": "Home"` (`""`: the default), `"wol": {"macs": ["aa:bb:cc:dd:ee:ff"], "relay": "nas-agent", "port": 9}`
-or `"wol": {"off": true}`, and `{"field": "name"}` / `{"field": "wol"}` in `reset`; the answer has them under
-`"host"`, each with where its value comes from. For the links, the request names only what changes:
+or `"wol": {"off": true}`, `"wake_update": {"off_after_s": 600, "shutdown_delay_s": 30}` (one of the two is
+enough), and `{"field": "name"}` / `{"field": "wol"}` / `{"field": "off_after_s"}` /
+`{"field": "shutdown_delay_s"}` in `reset`; the answer has them under `"host"`, each with where its value
+comes from. For the links, the request names only what changes:
 `{"ups": [{"id": "nas-agent/rack", "on": true}], "plugs": [{"id": "nas-agent/pc-plug", "linked": true,
 "in_total": false}], "reset": [{"id": "nas-agent/desk", "field": "ups"}], "leftovers": true,
 "unrelayed": [{"id": "nas-agent/attic", "kind": "ups"}]}` (`field`: `ups`, `plugs` or `total`; a reset is
@@ -1685,6 +1737,12 @@ A name or Wake-on-LAN details changed in **Edit host** are one more key in that 
 config.yaml, says so once in its log and in `fairy admin config check` ("the key "hosts" is not one Fairy
 writes: it is not used (and left in the file as it is)"), and leaves the key in the file, also when it saves a
 change to the links. A site changed in the dialog is the Users page's setting and stays in every build.
+A machine's own run timings changed in **Edit host** are in the same place, inside the machine's entry
+(`host_options`, `hosts`, `<id>`, `wake_update`). An older panel runs with config.yaml's timings for the
+machine and leaves them in the file, also when it saves another change about the same machine, or removes
+the host that sends its wake packets. A panel that knows `hosts` and not yet these two says so once in its
+log and in `fairy admin config check` ("host pc-a: "wake_update" cannot be set in the panel: it is not used
+(and left in the file as it is)"); build 15 and older say it about `hosts` as a whole.
 The same goes for the timings changed with **Run timings** (`run_timings` in `state.json`), back to build
 15 or older: the older panel runs with config.yaml's timings, says nothing about the key and leaves it in
 the file as it is; the changed timings count again after the next update. So before going back, look at
@@ -1974,7 +2032,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/config` | Reads and checks `config.yaml` (`config.go`, `validate.go`) and secrets from `fairy.env` / the environment (`env.go`). |
 | `internal/admin` | The break-glass CLI `fairy admin`: one file per command (users and sites, tokens, sessions, control, audit, config check, health). |
 | `internal/access` | `users.json`: users (by OIDC subject) with a role and sites, the list of sites, and which site each host / power source / UPS is assigned to. |
-| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the hosts' custom model names (`hostmodel.go`), the link overrides of "Edit host" (`hostoptions.go`) and what it changed about a machine itself, its name and Wake-on-LAN details (`hostedit.go`), the run timings changed in the panel (`runtimings.go`), the session list. Also `machines.json` (`machines.go`) and `last-seen.json` (`lastseen.go`: when each agent last answered, so that a machine that is off when the panel starts is shown with that time and not with "last seen never"). |
+| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the hosts' custom model names (`hostmodel.go`), the link overrides of "Edit host" (`hostoptions.go`) and what it changed about a machine itself, its name, its Wake-on-LAN details and its own run timings (`hostedit.go`), the run timings changed in the panel (`runtimings.go`), the session list. Also `machines.json` (`machines.go`) and `last-seen.json` (`lastseen.go`: when each agent last answered, so that a machine that is off when the panel starts is shown with that time and not with "last seen never"). |
 | `internal/statefile` | Safe shared JSON files (state, sessions, tokens, users): lock, re-read, write to a temp file, rename (so CLI and server never lose changes). |
 | `internal/tokens` | Personal API tokens (`fy_...`), stored only as hashes in `tokens.json`. |
 | `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |
