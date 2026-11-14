@@ -1666,7 +1666,8 @@ page is black, with the same strip.
 From build 13. Nothing has to be converted, no file has to be deleted, and the update signs nobody out.
 (From an older build: section 3 first. From build 14: `fairy update` is the whole of it. Build 14 already
 refuses the file of step 1 and knows the keys of step 2, and build 15 has no new key and refuses no file
-that build 14 started with.)
+that build 14 started with. From build 15: the same. Build 16 has no new key in config.yaml and refuses no
+config.yaml that build 15 started with; what is new is the list "Build 16:" in section 2.)
 
 ### 1. The order
 
@@ -1691,9 +1692,12 @@ that build 14 started with.)
    node it worked out by itself: nothing to do when it is the right one.
 
 Nothing has to be done on the agents: every agent build 13 worked with works with this panel. **Add host**
-and **Re-pair** now install Fairy-agent v0.9.0 (build 19). One thing needs an agent of v0.8.0 or newer on
-the machine that does it: reading a plug through Home Assistant
-([Plugs through Home Assistant](#plugs-through-home-assistant)).
+and **Re-pair** now install Fairy-agent v0.9.0 (build 19). Two things need a newer agent on the machine
+that does them. Reading a plug through Home Assistant needs v0.8.0 or newer
+([Plugs through Home Assistant](#plugs-through-home-assistant)), and v0.9.0 for the plug's volts, amperes
+and kWh. And a machine with its own check of approvals switched on is taken into a run of "Update unpowered
+hosts" only with v0.9.0 or newer ([Machines with the check in a run](#machines-with-the-check-in-a-run));
+with an older agent it stays out of runs, as in build 15.
 The **Update panel** button's unit and `fairy.service` are as build 13 had them: no second run, nothing by
 hand.
 
@@ -1752,6 +1756,63 @@ Build 15:
    accepted, and took that host's place). An added host whose id config.yaml has too is polled as
    config.yaml's entry: **Remove the unused copy** takes only that copy away, and no longer the machine's
    model name and its switch for "Update unpowered hosts"; such a copy is not paired again.
+
+Build 16:
+
+1. **"Update unpowered hosts" takes machines that check approvals themselves**, when their agent is
+   Fairy-agent v0.9.0 or newer (with an older one the machine's row says "needs Fairy-agent v0.9.0 or newer
+   to be in a run"). A run with such machines takes two passkeys. The first is the one at the start, as
+   always. A machine the run wakes is then *armed*: it switches itself off again by itself, with a notice
+   of 2 minutes on its screen, unless a second passkey confirms. When the woken machines are up, a strip on
+   every page says **Your passkey is needed**, with the names and the time left
+   (`approval.run_approval_wait_s`: 600 seconds without the key, it was 900 and nothing used it; a number
+   you wrote there counts). One click and one passkey confirm all machines that wait, and only then does
+   the run send their update and their shutdown. Nobody confirms: not confirmed, not updated, and an armed
+   machine switches itself off again. **Keep on** calls that off: it is in the machine's row of the run on
+   the Updates page and, once nobody is asked any more, in a strip on every page. Machines without the
+   check are in the same run as they always were. See
+   [Machines with the check in a run](#machines-with-the-check-in-a-run).
+2. **Run timings in the browser.** The Updates page has the button **Run timings**, next to the start
+   button of "Update unpowered hosts" (admins): the six timings of a run, each with where its value comes
+   from. What you change there is kept by the panel (`state.json`, `run_timings`) and used instead of
+   config.yaml's value until **Reset**; config.yaml is not written. Three changes ask you to confirm it's
+   you by themselves, also right after another confirmation: "Counts as off after" every time it is
+   changed, "Wait for a woken machine" when it gets longer, "Shutdown countdown" when it gets shorter. A
+   change counts from the next run; a run that is going keeps the numbers it started with. See
+   [Update unpowered hosts](#update-unpowered-hosts).
+3. **Edit host changes the machine itself too**: its **name**, its **site** and its **Wake-on-LAN** (the
+   MAC addresses, which machine sends the wake packet, the port; or no Wake-on-LAN at all). A name and
+   Wake-on-LAN details are kept in `state.json` (`host_options`, `hosts`) and used instead of
+   config.yaml's until **Reset**; the site is the Users page's setting, changed from one more place. Every
+   change to Wake-on-LAN asks you to confirm it by itself. Still never changed there, whatever is sent: a
+   host's address and its tokens, its node and owner, what the panel may do to it (power control, fan
+   control, self-update, sending wake packets), and of a Wake-on-LAN the address its packets go to and its
+   password. Those stay in config.yaml or on the machine (Add host, Re-pair). (Point 1 of build 15 above
+   says "not its ... site": that was build 15.) See
+   [The machine itself: name, site, Wake-on-LAN](#the-machine-itself-name-site-wake-on-lan).
+4. **A machine's own run timings in Edit host.** The dialog's group **Run timings** has the two timings one
+   machine can have of its own, "Counts as off after" and "Shutdown countdown": what was a `wake_update:`
+   block in the machine's `systems:` entry only (build 14). What is changed there lies over the block, or
+   over the panel's timing where the machine has no block, until **Reset**. Every change of the two asks
+   you to confirm it's you, by itself. See
+   [The machine's own run timings](#the-machines-own-run-timings).
+5. **Last 24 hours.** Every power source has a graph of its last day: on the **Power** page, click the
+   source's row (or the small chart at its end); on a machine's page it is in the **Power** box, on the
+   line of each plug that is linked to the machine. Watts, a point a minute, with the day's average, lowest
+   and highest and the energy. The volts, amperes and kWh a device reports are in the graph and in the
+   machine's Power box, next to the watts. The day is kept in a new file in the data folder,
+   `power-day.json`, written every five minutes and when the panel stops: the graph is still there after a
+   restart or an update, with a gap for the time between. There is nothing to set and no key in
+   config.yaml, and an older build leaves the file alone. **Re-pair** keeps the graphs of the plugs a host
+   relays, **Remove** empties them. See [Last 24 hours](#last-24-hours).
+6. **The report of a run no longer says "switched off again" of a machine that is on** (builds 12 to 15
+   could). It happened when the run saw its shutdown countdown, the countdown did not switch the machine
+   off (it was called off at the machine while the panel could not reach it, or the shutdown did not
+   happen), the machine answered once more after the countdown's time with no shutdown pending, and the
+   link then dropped within the 5 minutes the run still watches: that silence was read as the machine
+   going off. The report now says "Its agent still answered at HH:MM, after its countdown's time, with no
+   shutdown pending ... It does not answer now: not known whether it is on". A machine that stops
+   answering at its countdown's time, with no answer after it, is off as before.
 
 ### 3. From a build older than 13
 

@@ -328,6 +328,10 @@ func TestWakeUpdateTimings(t *testing.T) {
 // about the keys is held against what Parse does, so that the two change together. With "Edit host" and the
 // fixes after the fourth review the section has a list "Build 15:" under "Build 14:", and says what the way
 // from build 14 is.
+//
+// Build 16: a list "Build 16:" under it (approvals in runs, Run timings, what Edit host changes now, the
+// last 24 hours, the run report's "switched off again"), the way from build 15, and which agent the new
+// things need. The default the list names for approval.run_approval_wait_s is held against Parse.
 func TestReadmeUpgradeTextsMatchThisRelease(t *testing.T) {
 	b, err := os.ReadFile("../../README.md")
 	if err != nil {
@@ -369,10 +373,29 @@ func TestReadmeUpgradeTextsMatchThisRelease(t *testing.T) {
 		"laid over config.yaml line by line until **Reset** on that line",
 		"**a UPS link never shuts a machine down**",
 		"(\"this host's entry in the panel was removed or replaced: nothing was sent\")",
+		// build 16: its own list, the way from build 15, and what needs a newer agent
+		"Build 16:", "From build 15: the same. Build 16 has no new key in config.yaml and refuses no config.yaml that build 15 started with",
+		"is taken into a run of \"Update unpowered hosts\" only with v0.9.0 or newer",
+		"**\"Update unpowered hosts\" takes machines that check approvals themselves**", "a strip on every page says **Your passkey is needed**",
+		"(`approval.run_approval_wait_s`: 600 seconds without the key, it was 900 and nothing used it; a number you wrote there counts)",
+		"**Keep on** calls that off",
+		"The Updates page has the button **Run timings**", "(`state.json`, `run_timings`)",
+		"\"Counts as off after\" every time it is changed, \"Wait for a woken machine\" when it gets longer, \"Shutdown countdown\" when it gets shorter",
+		"**Edit host changes the machine itself too**: its **name**, its **site** and its **Wake-on-LAN**", "(`host_options`, `hosts`)",
+		"Every change to Wake-on-LAN asks you to confirm it by itself",
+		"**A machine's own run timings in Edit host.**", "Every change of the two asks you to confirm it's you, by itself",
+		"**Last 24 hours.** Every power source has a graph of its last day", "a new file in the data folder, `power-day.json`, written every five minutes and when the panel stops",
+		"**Re-pair** keeps the graphs of the plugs a host relays, **Remove** empties them",
+		"**The report of a run no longer says \"switched off again\" of a machine that is on** (builds 12 to 15 could)",
+		"\"Its agent still answered at HH:MM, after its countdown's time, with no shutdown pending ... It does not answer now: not known whether it is on\"",
 	} {
 		if !strings.Contains(section, want) {
 			t.Errorf("the section lacks %q", want)
 		}
+	}
+	// build 16's list comes after build 15's, and before the way from an older build
+	if b15, b16, older := strings.Index(section, "Build 15: 1. "), strings.Index(section, "Build 16: 1. "), strings.Index(section, "### 3. From a build older than 13"); !(0 < b15 && b15 < b16 && b16 < older) {
+		t.Errorf("the lists are not in the order of the builds: the list of build 15 at %d, of build 16 at %d, section 3 at %d", b15, b16, older)
 	}
 	if !strings.Contains(readme, "the one file build 13 started with that this release refuses (two `systems:` entries with one id) and the new keys (write them only after the update)") {
 		t.Error("the pointer to \"Upgrading to this release\" does not name what the section is about")
@@ -395,6 +418,12 @@ func TestReadmeUpgradeTextsMatchThisRelease(t *testing.T) {
 	}
 	if c, err := Parse([]byte(base)); err != nil || c.WakeUpdate.OffAfterS != 900 {
 		t.Errorf("off_after_s without the key: %v", err)
+	}
+	if c, err := Parse([]byte(base)); err != nil || c.Approval.RunApprovalWaitS != 600 {
+		t.Errorf("approval.run_approval_wait_s without the key is not the 600 the list for build 16 names: %v", err)
+	}
+	if c, err := Parse([]byte(base + "approval: {run_approval_wait_s: 900}\n")); err != nil || c.Approval.RunApprovalWaitS != 900 {
+		t.Errorf("approval.run_approval_wait_s as written: %v", err)
 	}
 	for v, fine := range map[int]bool{299: false, 300: true, 3600: true, 3601: false} {
 		_, panel := Parse([]byte(fmt.Sprintf("%swake_update: {off_after_s: %d}\n", base, v)))
