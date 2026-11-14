@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -145,5 +146,61 @@ func TestAddHostNameIsNotAnotherHosts(t *testing.T) {
 	// Edit host (an Add host under it is the same id, and refused as that)
 	if p := r.put("pc-b", map[string]any{"name": "loft"}); p.code != 422 || !strings.Contains(string(p.raw), "Loft is the name config.yaml has for another host (shown as Upstairs now)") {
 		t.Errorf("Edit host, the name an added host was added under: %d %s", p.code, p.raw)
+	}
+}
+
+// What is NOT refused: the row a new host becomes a part of is its own, whatever it is called (an agent for
+// a Proxmox node the panel has, added under the node's name), and a guest's name (a virtual machine that
+// gets an agent of its own is added under its name). And a node keeps being found by its own name after
+// "Edit host" gave its row another one: Add host lists it by the name the machine answers with.
+func TestAddHostOnANodeAndUnderAGuestsName(t *testing.T) {
+	e := setup(t)
+	e.s.control = newRateLimiter(100)
+	e.s.Enroll.PanelAddr = "100.64.0.10"
+	e.s.Enroll.Pair = func(ctx context.Context, url string, _ []byte) (int, enroll.Response, string, error) {
+		return 0, enroll.Response{}, "", errors.New("dial tcp: connection refused") // nobody answers: the codes stay waiting
+	}
+	hdr := []string{"Cookie", e.cookie(controller(), 0), "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	add := func(body map[string]any) resp { return e.do("POST", "/api/admin/hosts", body, hdr...) }
+	if p := e.do("PUT", "/api/admin/hosts/node-srv-pvea/options", map[string]any{"name": "Rack node"}, hdr...); p.code != 200 {
+		t.Fatalf("the node is given a name in Edit host: %d %s", p.code, p.raw)
+	}
+	g := e.do("GET", "/api/admin/hosts", nil, hdr[:2]...)
+	var nodes []string
+	for _, n := range g.body["nodes"].([]any) {
+		m := n.(map[string]any)
+		shown, _ := m["shown"].(string)
+		nodes = append(nodes, m["name"].(string)+"|"+shown+"|"+m["system_id"].(string))
+	}
+	slices.Sort(nodes)
+	if !slices.Equal(nodes, []string{"SRV-PVEA|Rack node|node-srv-pvea", "SRV-PVEB||node-srv-pveb"}) {
+		t.Fatalf("the nodes of the Add host dialog: %v", nodes)
+	}
+	// the dialog's choice says both names, and sends the node's own
+	if !strings.Contains(appJS(t), "`<option value=\"${esc(n.name)}\">Yes: ${esc(n.name)}${n.cluster ? ` (${esc(n.cluster)})` : \"\"}, already in the panel${n.shown ? ` as ${esc(n.shown)}` : \"\"}</option>`") {
+		t.Error("app.js: the node choice of Add host does not say the name the row shows any more")
+	}
+	// on the renamed node, by the node's own name
+	if p := add(map[string]any{"name": "BOX-A", "os": "linux", "node": "SRV-PVEA"}); p.code != 201 {
+		t.Errorf("Add host on the node that Edit host renamed: %d %s", p.code, p.raw)
+	}
+	if p := add(map[string]any{"name": "BOX-B", "os": "linux", "node": "Rack node"}); p.code != 400 {
+		t.Errorf("Add host on a node by the name its row shows: %d %s", p.code, p.raw)
+	}
+	// an agent for a node the panel has, called like the node: the node's row is its own
+	if p := add(map[string]any{"name": "SRV-PVEB", "os": "linux", "node": "SRV-PVEB"}); p.code != 201 {
+		t.Errorf("Add host of a node's agent under the node's name: %d %s", p.code, p.raw)
+	}
+	// ... and not as a machine of its own next to that node
+	for name, want := range map[string]string{
+		"srv-pveb-x": "",
+		"TrueNAS":    "", // a guest of a node: its name is not asked
+	} {
+		if p := add(map[string]any{"name": name, "os": "linux"}); p.code != 201 {
+			t.Errorf("Add host %q: %d %s (%s)", name, p.code, p.raw, want)
+		}
+	}
+	if p := add(map[string]any{"name": "Srv-Pvea", "os": "linux"}); p.code != 400 || !strings.Contains(string(p.raw), "name: SRV-PVEA is the name config.yaml has for another host (shown as Rack node now)") {
+		t.Errorf("Add host of a second machine under a node's own name: %d %s", p.code, p.raw)
 	}
 }

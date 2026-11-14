@@ -184,7 +184,8 @@ type hostsPage struct {
 }
 
 type nodeChoice struct {
-	Name     string `json:"name"`
+	Name     string `json:"name"`            // the Proxmox node's own name
+	Shown    string `json:"shown,omitempty"` // the name its row shows, when "Edit host" gave it another one
 	SystemID string `json:"system_id"`
 	Cluster  string `json:"cluster"`
 }
@@ -246,9 +247,12 @@ func (s *Server) shadowedCopy(h managed.Host) bool {
 	return shadowed
 }
 
+// nodeSystemID is the row of the Proxmox node called name. By the node's own name, which is what Add host
+// sends and what the machine answers with: a name the node was given in "Edit host" is only what its row
+// shows.
 func (s *Server) nodeSystemID(name string) string {
 	for _, x := range s.Poller.Snapshot() {
-		if x.Kind == "node" && x.Name == name {
+		if x.Kind == "node" && s.Poller.BaseName(x.ID) == name {
 			return x.ID
 		}
 	}
@@ -283,7 +287,13 @@ func (s *Server) hostsPage(c *reqCtx) error {
 			if x.Cluster != nil {
 				cl = *x.Cluster
 			}
-			p.Nodes = append(p.Nodes, nodeChoice{Name: x.Name, SystemID: x.ID, Cluster: cl})
+			// the node's own name: it is what the request carries and what the machine answers with. The name its
+			// row shows (given in "Edit host") is said next to it when it is another one.
+			n := nodeChoice{Name: s.Poller.BaseName(x.ID), SystemID: x.ID, Cluster: cl}
+			if x.Name != n.Name {
+				n.Shown = x.Name
+			}
+			p.Nodes = append(p.Nodes, n)
 		}
 	}
 	for _, a := range s.Poller.Agents() {
