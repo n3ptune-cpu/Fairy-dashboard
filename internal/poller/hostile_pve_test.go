@@ -68,6 +68,12 @@ func pveNodes(n int, status string) []byte {
 // and no agent that answers.
 func pvePoller(t *testing.T, handlers ...http.HandlerFunc) *Poller {
 	t.Helper()
+	return pvePollerWith(t, nil, handlers...)
+}
+
+// pvePollerWith is pvePoller with a change to the configuration before the poller is made.
+func pvePollerWith(t *testing.T, change func(cfg *config.Panel), handlers ...http.HandlerFunc) *Poller {
+	t.Helper()
 	var urls []string
 	for _, h := range handlers {
 		srv := httptest.NewTLSServer(h)
@@ -82,6 +88,9 @@ func pvePoller(t *testing.T, handlers ...http.HandlerFunc) *Poller {
 		cfg.Proxmox = append(cfg.Proxmox, c)
 	}
 	cfg.RequestTimeout = 20
+	if change != nil {
+		change(cfg)
+	}
 	p, err := New(cfg, config.Secrets{SessionSecret: "x", ProxmoxTokenSecret: "s"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -608,7 +617,14 @@ func TestHeapWithSeveralHostileProxmoxSources(t *testing.T) {
 			_, _ = w.Write(b.Bytes())
 		}
 	}
-	p := pvePoller(t, mk(0), mk(1), mk(2), mk(3), mk(4))
+	// The time one request may take is 0.9 of the poll interval at most (scheduler.TimeoutFor): with the
+	// interval of the test configuration, 2 s, that was 1.8 s, whatever request_timeout said. In it the test's
+	// own five servers each build 4 MiB of answer and the poller reads it, all in this process: on a machine
+	// that is busy, and under the race detector, an answer did not arrive in time, its source had no systems,
+	// and the test failed with "N guests (two of the five sources list more guests than the limit)" (third
+	// review of build 14, S8: 3207 guests in the full run; 0 to 1207 in every one of six runs on one busy CPU).
+	// This test measures memory, not time: its requests get two minutes.
+	p := pvePollerWith(t, func(cfg *config.Panel) { cfg.Intervals.Proxmox, cfg.RequestTimeout = 300, 120 }, mk(0), mk(1), mk(2), mk(3), mk(4))
 	base := heapMiB()
 	var peak atomic.Uint64
 	stop := make(chan struct{})
