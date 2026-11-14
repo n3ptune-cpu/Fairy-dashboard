@@ -767,9 +767,10 @@ What to know before the first real run:
     also the second one a minute after the first, and the confirmation says what the number means ("A
     machine that is silent for longer than 6 minutes counts as off. If it was restarting and comes up
     during the run, the run switches it off after its update."). A machine with its own value (Edit host,
-    or config.yaml) keeps it. A shorter countdown leaves somebody at the machine less time to cancel. A longer wait for a woken machine makes the time longer in which a machine that a
-    person switches on is treated as woken by the run. A confirmation given for something else a minute
-    ago does not count for these.
+    or config.yaml) keeps it. A shorter countdown leaves somebody at the machine less time to cancel. A
+    longer wait for a woken machine makes the time longer in which a machine that a person switches on is
+    treated as woken by the run. A confirmation given for something else a minute ago does not count for
+    these.
   * **What you confirm is what is saved.** "Confirm it's you" lists the change with the value before and
     after. When somebody else changes the timings between your Save and your confirmation, so that your
     request would now do something else than that list said, nothing is saved ("The run timings were
@@ -1427,6 +1428,8 @@ decides who can see the UPS and its notifications. The dialog's info button says
     host does not ask for guests: a virtual machine that gets an agent of its own is added under its name.
     The names of UPSes and plugs are never compared: nothing is confirmed by typing one, and nothing is done
     to a device by its name.
+  * **not compared:** a name a machine reports itself (its hostname, or the node name its agent reports).
+    Add host compares the name you type for the new host, not what the machine says it is called.
 
   **Reset** (or config.yaml's name typed back) is refused while another host was given that name in the
   panel; the message names that host, which is renamed first. The name a host has, sent again, is never a
