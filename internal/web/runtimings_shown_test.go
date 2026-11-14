@@ -192,3 +192,36 @@ func TestRunTimingsTheAuditEntryHoldsWhatWasWritten(t *testing.T) {
 		t.Fatalf("the audit entry: %v", entries)
 	}
 }
+
+// The first line of a confirmation is still true and a later one is not: every line is compared. A change of
+// "counts as off after" (600 s, was 900 s) and a LONGER countdown (60 s, was 30 s) are confirmed; by then the
+// countdown in force is an hour, and the request would shorten it. Nothing is saved, the first line's change
+// included.
+func TestRunTimingsALaterLineThatIsNoLongerTrueSavesNothing(t *testing.T) {
+	a := signedIn(t)
+	e := a.e
+	e.rtSet(map[string]int{config.KeyShutdownDelay: 30})
+	how, r := a.rtAsk(map[string]any{"off_after_s": 600, "shutdown_delay_s": 60})
+	d, _ := r.body["detail"].(map[string]any)
+	items := strs(d["items"])
+	if how != "each" || len(items) != 3 || items[0] != "Counts as off after: 600 s = 10 minutes (was 900 s = 15 minutes)" || items[2] != "Shutdown countdown: 60 s = 1 minute (was 30 s)" {
+		t.Fatalf("the rig: %q %q", how, items)
+	}
+	e.rtSet(map[string]int{config.KeyShutdownDelay: 3600})
+	if cb := a.confirm(pendingID(r), false); cb.code != 303 {
+		t.Fatal(cb.code)
+	}
+	if res := a.rtResult(); !rtRefused(res) || e.rtValues() != "shutdown_delay_s=3600" {
+		t.Errorf("a countdown shortened from an hour (and off-after changed) on a confirmation whose third line said \"was 30 s\": %v, stored %q", res, e.rtValues())
+	}
+	// ... and the last line alone: the same request when only the first line's "was" is another one
+	e.rtSet(map[string]int{config.KeyShutdownDelay: 30})
+	_, r = a.rtAsk(map[string]any{"off_after_s": 600, "shutdown_delay_s": 60})
+	e.rtSet(map[string]int{config.KeyOffAfter: 1200})
+	if cb := a.confirm(pendingID(r), false); cb.code != 303 {
+		t.Fatal(cb.code)
+	}
+	if res := a.rtResult(); !rtRefused(res) || e.rtValues() != "off_after_s=1200 shutdown_delay_s=30" {
+		t.Errorf("off-after changed from 20 minutes on a confirmation whose first line said \"was 900 s\": %v, stored %q", res, e.rtValues())
+	}
+}
