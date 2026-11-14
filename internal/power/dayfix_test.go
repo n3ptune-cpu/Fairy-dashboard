@@ -66,3 +66,55 @@ func TestDayFileWriteThatFailsWithANewTemporaryNameIsStillSaidOnce(t *testing.T)
 		t.Errorf("four failed writes into a folder that cannot be written are in the log %d times, want once:\n%s", said(), log)
 	}
 }
+
+// A write that the panel was killed in the middle of left its temporary file in the data folder, and nothing
+// ever took it away: 6 MB each time, for ever. The start removes them now, and nothing else: only plain files
+// with the name a write of this file gives its temporary file.
+func TestDayFileLeftoversOfAKilledWriteAreRemovedAtTheStart(t *testing.T) {
+	log := captureLog(t)
+	path := dayPath(t)
+	dir := filepath.Dir(path)
+	d := loaded(path, at(0, 0, 0))
+	rec(d, at(0, 0, 0), 40)
+	saved(t, d, at(0, 1, 0))
+	put := func(name string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(`{"version":1`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	gone := []string{put(".power-day.json.1234567.tmp"), put(".power-day.json.tmp-of-an-older-build.tmp")}
+	stay := []string{path, put(".notifications.json.1234567.tmp"), put(".power-day.json.1234567.tmp.keep"),
+		put("power-day.json.1234567.tmp"), put(".power-day.jsonx.tmp"), put("power-day.json.bak")}
+	folder := filepath.Join(dir, ".power-day.json.folder.tmp")
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, ".power-day.json.link.tmp")
+	if err := os.Symlink(filepath.Join(dir, "power-day.json.bak"), link); err != nil {
+		t.Fatal(err)
+	}
+	stay = append(stay, folder, link)
+
+	e := loaded(path, at(0, 2, 0))
+	for _, p := range gone {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s is still there after the start (%v)", filepath.Base(p), err)
+		}
+	}
+	for _, p := range stay {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("%s is not a leftover of a write of this file and was taken away: %v", filepath.Base(p), err)
+		}
+	}
+	if n := strings.Count(log.String(), "removed the temporary file"); n != len(gone) {
+		t.Errorf("the log names %d removed files, want %d:\n%s", n, len(gone), log)
+	}
+	if !e.Has("plug-a", at(0, 2, 0)) {
+		t.Error("the day itself was not read")
+	}
+	// a start without a data folder, or with one that cannot be listed, is still a start
+	loaded(filepath.Join(dir, "none", "deeper", DayFile), at(0, 2, 0))
+}

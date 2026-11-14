@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -117,6 +118,7 @@ type dayFileDeviceIn struct {
 // Load names the store's file and reads it. It never fails: what cannot be used is not used, and the log says
 // so once. From then on the store writes to that file. now is the panel's clock.
 func (d *DayStore) Load(path string, now time.Time) {
+	removeDayTemp(path)
 	devs, err := readDayFile(path, now)
 	if err != nil {
 		slog.Warn("power: the last 24 hours are not known from before this start: the file is not used (the graphs start empty)",
@@ -128,6 +130,25 @@ func (d *DayStore) Load(path string, now time.Time) {
 	for id, dv := range devs {
 		if _, ok := d.dev[id]; !ok && len(d.dev) < MaxDayDevices {
 			d.dev[id] = dv
+		}
+	}
+}
+
+// removeDayTemp removes what a write of the file left behind when the panel was killed in the middle of it:
+// the temporary files of statefile.WriteAtomic for this file (.power-day.json.<random>.tmp), each as large as
+// the file. Only the panel writes this file, and at its start it is not writing: every such file is a
+// leftover. Only plain files are removed (as internal/notifications does for its list).
+func removeDayTemp(path string) {
+	dir, prefix := filepath.Dir(path), "."+filepath.Base(path)+"."
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if n := e.Name(); strings.HasPrefix(n, prefix) && strings.HasSuffix(n, ".tmp") && e.Type().IsRegular() {
+			if err := os.Remove(filepath.Join(dir, n)); err == nil {
+				slog.Info("power: removed the temporary file of a write of the last 24 hours that an earlier stop cut off", "path", filepath.Join(dir, n))
+			}
 		}
 	}
 }
