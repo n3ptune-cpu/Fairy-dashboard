@@ -24,14 +24,26 @@ func TestUIUpdatesPageSummaryTiles(t *testing.T) {
     agent("pc-f", { can_update: false, self_update: { state: "unavailable", message: "the running helper is older than its agent" }, why: "the running helper is older than its agent" }),
     agent("pc-g", { behind: false, can_update: false, approval: "broken" }),
     agent("pc-h", { status: "offline", can_update: false, version_last_seen: true, self_update: null }),
+    // two machines that do not answer and reported the newest release when they last did: not "up to date"
+    agent("pc-i", { status: "offline", behind: false, can_update: false, version_last_seen: true, self_update: null }),
+    agent("pc-j", { status: "stale", behind: false, can_update: false, version_last_seen: true }),
   ], { latest: { tag: "v0.8.0", version: "18-ccccccc", verified: true, published_at: "2026-11-13T10:00:00Z", url: "https://example.test/release" },
     panel_version: "17-aaaaaaa", panel_latest: { tag: "v0.8.1", version: "18-ccccccc", url: "https://example.test/notes" }, panel_behind: true });
   pupd.data = { ready: true, behind: true, version: "17-aaaaaaa" };
   let html = pageUpdates();
   if ((html.match(/class="panel glass tile"/g) || []).length !== 3 || !html.startsWith('<div class="stack">\n    <div class="tiles upd-tiles">')) fail("three tiles on top: " + html.slice(0, 120));
-  // the agents: 3 up to date of 8; 4 rows say "update available"; 4 rows are red; 1 is offline; and the main button
+  // the agents: 3 up to date of 10; 4 rows say "update available"; 4 rows are red; 3 do not answer; and the main button
   const agents = words(tile(html, "upt-agents"));
-  if (agents !== "Agents 3 / 8 up to date 4 update available 4 to look at 1 offline Update all (3)") fail("the agents' tile: " + agents);
+  if (agents !== "Agents 3 / 10 up to date 4 update available 4 to look at 3 offline Update all (3)") fail("the agents' tile: " + agents);
+  // "up to date" is the number of rows whose version is green: a machine that does not answer has the version
+  // it last reported, without a colour and with "last seen", and is counted as offline, never as up to date
+  // (third review of build 14: a copy of the page that counted it got past the tests)
+  const green = (html.match(/<td><span class="chip ok" title="[^"]*">build /g) || []).length;
+  if (green !== 3) fail("rows with a green version: " + green);
+  for (const id of ["pc-h", "pc-i", "pc-j"]) {
+    const r = (html.match(new RegExp('<tr class="row" data-key="up-' + id + '">.*?</tr>', "s")) || [""])[0];
+    if (!r.includes('<td><span class="chip " title="17-bbbbbbb">') || !words(r).includes("last seen") || words(r).includes("update available")) fail(id + " does not answer: " + words(r));
+  }
   const all = tag(tile(html, "upt-agents"), 'data-act="upd-all"');
   if (!all || all.disabled) fail("Update all in the tile: " + (all && all.html));
   // ... and each of the four is red in its own row, with its words: nothing of it is behind a fold
