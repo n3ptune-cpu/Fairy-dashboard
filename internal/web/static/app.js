@@ -2166,6 +2166,9 @@ const wuKeepOn = (r, h) => ((typeof rw === "object" && rw.data?.armed) || []).so
 function wuHostRow(r, h) {
   const [cls, said] = WU_STATE[h.state] || ["", h.state], end = wuEnded(h), key = r.id + "/" + h.id;
   // "LEFT ON" is for a machine the run saw as on. When its last look could not see the machine, the chip says that.
+  // A machine that waits is not waiting "for your passkey" once no confirmation can reach it (the question is over,
+  // the run was confirmed without it, or cancelled): it is still up and armed, and its sentence says until when.
+  const waits = h.state !== "awaiting_approval" ? "" : h.asking === "confirm" ? "confirming" : r.approval === "over" || r.approval === "given" || r.cancel ? "not confirmed" : "";
   const label = h.state === "left_on" && h.on === "unknown" ? "not confirmed" : said;
   const warnEnd = end && cls === "ok" && wuNotUpdated(h);  // off again or left on as planned, but not updated
   const pw = end && WU_POWER[h.on] ? `<span class="chip ${WU_POWER[h.on][0]}">${WU_POWER[h.on][1]}</span>` : "";
@@ -2174,7 +2177,7 @@ function wuHostRow(r, h) {
   const log = h.log || [], open = !!wu.open[key];
   return `<div class="wu-host ${end ? "end" : ""}" data-key="wuh-${esc(key)}">
     <div class="wu-h1"><b>${state.byId[h.id] ? `<a href="#/system/${enc(h.id)}">${esc(h.name)}</a>` : esc(h.name)}</b>
-      <span class="chip ${warnEnd ? "warn" : cls}">${esc(warnEnd ? `${label} · not updated` : label)}</span>${pw}${
+      <span class="chip ${warnEnd ? "warn" : cls}">${esc(warnEnd ? `${label} · not updated` : waits || label)}</span>${pw}${
       wuKeepOn(r, h) ? `<button class="btn sm push" type="button" data-act="rw-keep" data-id="${esc(h.id)}" data-name="${esc(h.name)}">Keep on</button>` : ""}</div>
     ${wuSteps(h)}
     <div class="wu-text">${esc(h.text)}${count}</div>

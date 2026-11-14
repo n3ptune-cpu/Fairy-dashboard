@@ -92,3 +92,20 @@ func TestUIRunsOfCheckedMachinesAreSaidShortly(t *testing.T) {
 		t.Error("the dialog's line of a machine with the check that is woken does not say that a second passkey is asked for")
 	}
 }
+
+// After the question (nobody confirmed in time, the run was confirmed without the machine, or it was
+// cancelled) a machine that is still up and armed no longer "waits for your passkey": nobody can give it one.
+// Its chip says "not confirmed"; its sentence (the run's) says when it switches itself off. While the
+// confirmation is on its way to it, the chip says "confirming".
+func TestUIRunRowAfterTheQuestionDoesNotWaitForAPasskey(t *testing.T) {
+	runWuPageScript(t, "afterquestion", `
+  const chip = (r) => (wuRunBox(r, true).match(/<span class="chip ([a-z]*)">([^<]*)<\/span>/g) || [])[1];
+  const waits = (o, h) => run("00000000000000aa", "running", [runHost("pc-a", { state: "awaiting_approval", checked: true, ...h })], o);
+  // the confirmation is on its way to the machine (the run counts as confirmed from the click on)
+  if (chip(waits({ approval: "given" }, { asking: "confirm" })) !== '<span class="chip warn">confirming</span>') fail("while it is confirmed: " + chip(waits({ approval: "given" }, { asking: "confirm" })));
+  for (const [o, want] of [[{}, "waits for your passkey"], [{ approval: "needed" }, "waits for your passkey"], [{ approval: "over" }, "not confirmed"],
+    [{ approval: "given" }, "not confirmed"], [{ approval: "needed", cancel: { by: "nora", switch_off: false } }, "not confirmed"]]) {
+    if (chip(waits(o)) !== '<span class="chip warn">' + want + "</span>") fail(JSON.stringify(o) + ": " + chip(waits(o)));
+  }
+`)
+}

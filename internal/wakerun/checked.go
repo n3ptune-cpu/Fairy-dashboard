@@ -407,6 +407,25 @@ func armedTail(r *Run, h *Host, now time.Time, mono time.Duration) string {
 
 // awaitingText is what the row of a waiting machine says.
 func awaitingText(r *Run, h *Host, now time.Time, mono time.Duration) string {
+	// No confirmation of the run can reach it any more (the question is over, the run was confirmed without it,
+	// or it was cancelled), and it is still up and armed, or may be: its row does not go on saying "unless
+	// you confirm". It says that it was not confirmed, when it switches itself off, and what keeps it on.
+	if over := r.Approval == "given" || r.Approval == "over" || r.Cancel != nil; over && !h.chk.disarmed {
+		armed := h.Arm == ArmArmed || (h.Arm == ArmUnanswered && h.chk.armSeen)
+		switch {
+		case armed && h.Confirm == ConfirmUnanswered:
+			return fmt.Sprintf("Its confirmation got no answer (%s), and its agent does not show the run as confirmed so far: not updated. It is armed: unless the confirmation did arrive, it switches itself off at %s (Keep on cancels that)",
+				h.ConfirmText, offWords(r, h, now, mono))
+		case armed:
+			return fmt.Sprintf("%s: not confirmed, not updated. It is armed: it switches itself off at %s (Keep on cancels that)", leadWhy(r, h), offWords(r, h, now, mono))
+		case h.Arm == ArmUnanswered && h.Confirm == ConfirmUnanswered:
+			return fmt.Sprintf("Neither its arming nor its confirmation (%s) got an answer, and its agent does not show the run so far: not updated. If it is armed and not confirmed, it switches itself off at %s (Keep on cancels that)",
+				h.ConfirmText, offWords(r, h, now, mono))
+		case h.Arm == ArmUnanswered:
+			return fmt.Sprintf("%s: not confirmed, not updated. Its arming got no answer, so Fairy does not know yet whether it is armed: if it is, it switches itself off at %s (Keep on cancels that)",
+				leadWhy(r, h), offWords(r, h, now, mono))
+		}
+	}
 	switch {
 	case h.chk.disarmed && h.Arm == ArmArmed:
 		return "awake; it is not armed any more (its agent no longer shows the run): it stays ON unless you confirm"
