@@ -129,15 +129,24 @@ func TestUIEditHostIsInTheMenuOfAHostForAdmins(t *testing.T) {
 	if frame := strings.ReplaceAll(part[i:j], "${EH_INFO()}", ""); strings.Contains(frame, "${") {
 		t.Errorf("the dialog's frame holds an inserted value: %s", frame)
 	}
-	// markup is written in three places: the frame, the sections (ehView, through esc), and the emptied body when loading failed
-	if n := strings.Count(part, "innerHTML"); n != 3 || strings.Contains(part, "insertAdjacentHTML") || strings.Contains(part, "outerHTML") {
-		t.Errorf("the Edit host part writes markup in %d places, want 3", n)
+	// markup is written in five places: the frame, the sections (ehView, through esc), the emptied body when
+	// loading failed, and, while somebody types in a field of the machine, the list of changes (ehPlanView) and
+	// the field's "changed here" (ehHostTag), both through esc
+	if n := strings.Count(part, "innerHTML"); n != 5 || strings.Contains(part, "insertAdjacentHTML") || strings.Contains(part, "outerHTML") {
+		t.Errorf("the Edit host part writes markup in %d places, want 5", n)
+	}
+	for _, want := range []string{`$("#eh-plan").innerHTML = ehPlanView(plan);`, `tag.innerHTML = ehHostTag(eh.d, eh.draft, tag.dataset.ehTag);`} {
+		if strings.Count(part, want) != 1 {
+			t.Errorf("the Edit host part lacks (or has twice) %q", want)
+		}
 	}
 	// every value of the panel that a template of the part inserts goes through esc(): no name, id or line as it is
 	view := part[strings.Index(part, "function ehView"):strings.Index(part, "function ehTick")]
+	// ... and the two groups about the machine itself, with what was typed into them
+	view += part[strings.Index(part, "function ehHostTag"):strings.Index(part, "function ehField")]
 	view = regexp.MustCompile("esc\\(`[^`]*`\\)").ReplaceAllString(view, "esc()") // a sentence made of names, escaped as a whole
-	if m := regexp.MustCompile(`\$\{\s*((x|u|p|d|s|e|r)\.(name|agent_name|agent|id|other|by|total_by|message)|l|line|by)\s*\}`).FindAllString(view, -1); len(m) != 0 {
-		t.Errorf("ehView inserts a value without esc(): %v", m)
+	if m := regexp.MustCompile(`\$\{\s*((x|u|p|d|s|e|r|h|w|want)\.[a-z_.]*(name|agent_name|agent|id|other|by|total_by|message|value|config|default|relay|target|unused|relay_fixed|macs)|l|line|by|name|macs|site)\s*\}`).FindAllString(view, -1); len(m) != 0 {
+		t.Errorf("the dialog inserts a value without esc(): %v", m)
 	}
 	// the errors and the result are set as text
 	for _, want := range []string{`$("#eh-err").textContent = msg;`, "close(); flash(`${s.name}: ${r.message}`);"} {
@@ -278,7 +287,7 @@ func TestUIEditHostDialogSections(t *testing.T) {
   draft = ehDraft();
   html = ehView(lo, draft); text = words(html);
   if (!text.includes("3 stored changes are about machines that are gone. Remove") || !html.includes('<button class="btn sm" type="button" data-eh-left>Remove</button>') || text.includes("This will change")) fail("leftovers: " + html);
-  if (JSON.stringify(ehPlan(lo, draft)) !== JSON.stringify({ lines: [], body: {}, notes: [] })) fail("leftovers are removed without being asked: " + JSON.stringify(ehPlan(lo, draft)));
+  if (JSON.stringify(ehPlan(lo, draft)) !== JSON.stringify({ lines: [], body: {}, notes: [], problems: [] })) fail("leftovers are removed without being asked: " + JSON.stringify(ehPlan(lo, draft)));
   draft.leftovers = true;
   ehTick(lo, draft, "ups", "nas-agent/rack", true);
   plan = ehPlan(lo, draft);
@@ -362,7 +371,7 @@ func TestUIEditHostDialogSections(t *testing.T) {
     "A link also decides who can see a UPS or plug: the viewers of the site of a machine it is linked to or, linked to nothing, of the machine that reads it. Before you save, the list says when a change shows a device to another site's viewers or hides it from them.",
     "Stored changes about a machine that is gone have no line here. The dialog says how many there are; Remove takes them out.",
     "Stored changes about a UPS or plug that its machine does not relay right now have no line either. They are kept and count again when the device is back; Remove anyway takes them out.",
-    "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]) if (!info.includes(s)) fail("the info button lacks: " + s);
+    "Set on the machine or in config.yaml: address, tokens, power control, updates, which machines may send wake packets, and where a wake packet is sent to and its password."]) if (!info.includes(s)) fail("the info button lacks: " + s);
 `)
 }
 

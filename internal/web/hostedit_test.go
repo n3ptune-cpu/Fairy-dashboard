@@ -86,7 +86,7 @@ func hedSetup(t *testing.T) *hedRig { return hedStart(t, hedConfig(t), hedBacken
 func hedStart(t *testing.T, cfg *config.Panel, b *testutil.Backend) *hedRig {
 	t.Helper()
 	r := &hedRig{env: ehStart(t, cfg, b)}
-	r.s.control = newRateLimiter(1000)
+	r.s.control, r.s.login = newRateLimiter(1000), newRateLimiter(1000) // these tests confirm many changes in one minute
 	r.a = &armed{e: r.env, idp: newFakeIDP(t), clk: r.fakeClock()}
 	r.hdr = []string{"Cookie", r.cookie(controller(), 0), "X-Requested-With", "fairy"} // the first sign-in of a control group: an admin
 	r.s.Cfg.OIDC.Issuer = r.a.idp.srv.URL

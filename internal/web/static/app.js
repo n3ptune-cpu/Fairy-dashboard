@@ -3618,7 +3618,7 @@ document.addEventListener("click", (e) => {
 // eh.d is the panel's answer (GET .../options); eh.draft holds what was changed in the dialog and nothing else.
 // Everything that is drawn or sent is made from the two by the functions below, which touch no page.
 const eh = { d: null, draft: null, seq: 0, busy: false };
-const ehDraft = () => ({ ups: dict(), linked: dict(), total: dict(), reset: dict(), leftovers: false, unrelayed: false });
+const ehDraft = () => ({ ups: dict(), linked: dict(), total: dict(), reset: dict(), leftovers: false, unrelayed: false, name: undefined, site: undefined, wol: null });
 function editHostMenu(s) {
   if (!isHost(s) || !state.me?.can_manage_users) return "";
   return `<button class="menu-item" type="button" data-act="edit-host">Edit host</button>`;
@@ -3672,10 +3672,119 @@ function ehNotes(d, draft) {
   }
   return notes;
 }
+// ---- The machine itself: its name, its site and its Wake-on-LAN details (d.host). The name and the Wake-on-LAN
+// are kept like the links (a change here lies over config.yaml until Reset); the site is the Users page's own
+// setting. Of a wake packet three things can be changed: the network cards it is for, which of the machines
+// that may send wake packets sends it, and the port. Where it is sent to and its password are only shown.
+// An answer without d.host (an older panel) draws none of this.
+const ehHost = (d) => (d.host && typeof d.host === "object" && d.host.name && d.host.site && d.host.wol ? d.host : null);
+const ehNameOf = (v) => String(v).trim().split(/\s+/).filter(Boolean).join(" ");
+const ehMACs = (v) => String(v).split(/[\s,;]+/).filter(Boolean).map((m) => m.toLowerCase().replace(/-/g, ":"));
+const EH_MAC = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;
+const ehRelayName = (w, id) => (w.relays || []).find((r) => r.id === id)?.name || (w.relay === id && w.relay_name) || id;
+const ehWolWords = (w) => (w && w.on ? `to ${w.macs.join(", ")} through ${w.relay_name}, port ${w.port}` : "off");
+// The site that is chosen in the dialog: "" is the default (config.yaml's site, or none).
+const ehSiteNow = (h, draft) => (draft.site !== undefined ? draft.site : h.site.from === "panel" ? h.site.value || "" : "");
+// What the Wake-on-LAN group says the machine's Wake-on-LAN shall be: the panel's, with what was changed here.
+function ehWolWant(h, draft) {
+  const w = h.wol, t = draft.wol || {};
+  const relay = w.relay_fixed ? w.relay : t.relay !== undefined ? t.relay : w.relay || w.relays?.[0]?.id || null;
+  return { on: t.on === undefined ? !!w.on : t.on, macs: t.macs === undefined ? w.macs || [] : ehMACs(t.macs), relay, relay_name: relay ? ehRelayName(w, relay) : null,
+    port: t.port === undefined ? w.port || 9 : t.port };
+}
+// What Save will change about the machine itself: the panel's own lines, the parts of the request, the notes
+// about who will see the machine, and what is wrong with what was typed (problems: nothing of it is sent).
+function ehHostPlan(d, draft) {
+  const h = ehHost(d), out = { site: [], lines: [], notes: [], body: {}, reset: [], problems: {} };
+  if (!h) return out;
+  if (draft.reset["name:"]) { out.reset.push({ field: "name" }); out.lines.push(`Name: back to config.yaml: ${h.name.config}`); }
+  else if (draft.name !== undefined) {
+    const name = ehNameOf(draft.name);
+    if (!name) out.problems.name = "Type a name.";
+    else if ([...name].length > 64) out.problems.name = "At most 64 characters.";
+    else if (name !== h.name.value) { out.body.name = name; out.lines.push(`Name: ${name} (was ${h.name.value})`); }
+  }
+  const move = draft.site !== undefined ? h.site.plans?.[draft.site] : null;  // the panel says what each choice moves
+  if (move && typeof move.line === "string") { out.body.site = draft.site; out.site.push(move.line); out.notes.push(...(Array.isArray(move.notes) ? move.notes : [])); }
+  const cur = h.wol;
+  if (draft.reset["wol:"]) { out.reset.push({ field: "wol" }); out.lines.push(`Wake-on-LAN: back to config.yaml: ${ehWolWords(cur.config ? { on: true, ...cur.config } : null)}`); }
+  else if (draft.wol) {
+    const want = ehWolWant(h, draft);
+    const same = want.on === !!cur.on && (!want.on || (want.macs.join() === (cur.macs || []).join() && want.relay === cur.relay && want.port === cur.port));
+    if (same) return out;
+    if (!want.on) { out.body.wol = { off: true }; out.lines.push(`Wake-on-LAN: off (was ${ehWolWords(cur)})`); }
+    else if (!want.macs.length || !want.macs.every((m) => EH_MAC.test(m))) out.problems.wol = "A MAC address looks like aa:bb:cc:dd:ee:ff.";
+    else if (want.macs.length > 8 || new Set(want.macs).size !== want.macs.length) out.problems.wol = "One to eight MAC addresses, each once.";
+    else if (!want.relay) out.problems.wol = "No machine is set up to send wake packets.";
+    else {
+      out.body.wol = { macs: want.macs, port: want.port };
+      if (!cur.relay_fixed) out.body.wol.relay = want.relay;
+      out.lines.push(`Wake-on-LAN: ${ehWolWords(want)} (was ${ehWolWords(cur)})`);
+    }
+  }
+  return out;
+}
+// Where a value of the machine comes from once this dialog is saved, and the Reset of one that was changed here.
+function ehHostTag(d, draft, field) {
+  const h = ehHost(d), plan = ehHostPlan(d, draft), reset = !!draft.reset[`${field}:`];
+  if (field === "site") {
+    const now = ehSiteNow(h, draft);
+    return now ? '<span class="eh-src on">changed here</span>' : h.site.default ? '<span class="eh-src">from config.yaml</span>' : "";
+  }
+  const x = h[field], stored = x.from === "panel" && !reset;
+  const panel = !reset && (field in plan.body ? plan.body[field] !== undefined && !(field === "name" && plan.body.name === x.config) : stored);
+  return `<span class="eh-src${panel ? " on" : ""}"${stored && x.by ? ` title="${esc(`Changed here. Last change: ${x.by}`)}"` : ""}>${panel ? "changed here" : "from config.yaml"}</span>${stored
+    ? `<button class="btn sm" type="button" data-eh-reset="${field}:" title="Back to config.yaml">Reset</button>` : ""}`;
+}
+// The two groups of the dialog about the machine itself. Every value in them is the panel's data or what was
+// typed, and goes through esc().
+function ehHostView(d, draft) {
+  const h = ehHost(d);
+  if (!h) return "";
+  const w = h.wol, want = ehWolWant(h, draft), site = ehSiteNow(h, draft);
+  const name = draft.reset["name:"] ? h.name.config : draft.name !== undefined ? draft.name : h.name.value;
+  const cap = (id, text, field) => `<span class="eh-cap"><label for="${id}">${text}</label><span data-eh-tag="${field}">${ehHostTag(d, draft, field)}</span></span>`;
+  const sites = (h.site.choices || []).filter((x) => x !== h.site.default);
+  const relays = w.relays || [], macs = draft.wol?.macs !== undefined ? draft.wol.macs : want.macs.join(", ");
+  const fixed = [w.relay_fixed && w.on ? `Sent by ${esc(w.relay_name || w.relay)}` : "", w.target ? `to ${esc(w.target)}` : "", w.password ? "with a password" : ""].filter(Boolean);
+  return `<div class="wu-sub">Machine</div>
+    <div class="form-grid eh-form">
+      <div class="mfield">${cap("eh-name", "Name", "name")}<input class="input" id="eh-name" data-eh-f="name" maxlength="64" autocomplete="off" spellcheck="false" value="${esc(name)}"></div>
+      <div class="mfield">${cap("eh-site", "Site", "site")}<select class="select" id="eh-site" data-eh-f="site"><option value=""${site ? "" : " selected"}>${h.site.default ? `${esc(h.site.default)} (default)` : "No site (admins only)"}</option>${sites.map((x) => `<option value="${esc(x)}"${x === site ? " selected" : ""}>${esc(x)}</option>`).join("")}</select></div>
+    </div>
+    <div class="wu-sub eh-cap"><span>Wake-on-LAN</span><span data-eh-tag="wol">${ehHostTag(d, draft, "wol")}</span></div>
+    <label class="check opt"><input type="checkbox" data-eh-f="wol-on"${want.on ? " checked" : ""}${!w.on && !relays.length ? " disabled" : ""}><span>This machine can be woken${!w.on && !relays.length ? '<span class="note">No machine is set up to send wake packets.</span>' : ""}</span></label>
+    ${want.on ? `<div class="form-grid eh-form">
+      <div class="mfield full"><label for="eh-macs">MAC address</label><input class="input" id="eh-macs" data-eh-f="wol-macs" autocomplete="off" spellcheck="false" placeholder="aa:bb:cc:dd:ee:ff" value="${esc(macs)}"></div>
+      <div class="mfield"><label for="eh-relay">Sent by</label><select class="select" id="eh-relay" data-eh-f="wol-relay"${w.relay_fixed ? ` disabled title="${esc(w.relay_fixed)}"` : ""}>${(w.relay_fixed || !relays.some((r) => r.id === want.relay)) && want.relay ? `<option value="${esc(want.relay)}" selected>${esc(want.relay_name)}</option>` : ""}${w.relay_fixed
+    ? "" : relays.map((r) => `<option value="${esc(r.id)}"${r.id === want.relay ? " selected" : ""}>${esc(r.name)}${r.online ? "" : " (offline)"}</option>`).join("")}</select></div>
+      <div class="mfield"><label for="eh-port">Port</label><select class="select" id="eh-port" data-eh-f="wol-port">${[9, 7].map((x) => `<option value="${x}"${x === want.port ? " selected" : ""}>${x}</option>`).join("")}</select></div>
+    </div>` : ""}
+    ${fixed.length && w.on ? `<p class="note eh-hint">${fixed.join(" ")}: set in config.yaml.</p>` : ""}
+    ${w.unused ? `<p class="note warn eh-hint">What was changed here is not used: ${esc(w.unused)}.</p>` : ""}`;
+}
+// What was typed or chosen in one of the machine's fields goes into the draft, never to the panel.
+function ehField(d, draft, field, value) {
+  const h = ehHost(d);
+  if (!h) return;
+  if (field === "name") { draft.name = value; delete draft.reset["name:"]; }
+  else if (field === "site") draft.site = value === (h.site.from === "panel" ? h.site.value || "" : "") ? undefined : value;
+  else if (field.startsWith("wol-")) {
+    draft.wol ||= {};
+    delete draft.reset["wol:"];
+    if (field === "wol-on") draft.wol.on = !!value;
+    else if (field === "wol-macs") draft.wol.macs = value;
+    else if (field === "wol-relay") draft.wol.relay = value;
+    else if (field === "wol-port") draft.wol.port = Number(value);
+  }
+}
+// (A "Run timings" group for this machine goes between ehHostView and the UPS section of ehView, with its own
+// part of the plan next to ehHostPlan.)
 // One line for each thing Save will change, in the panel's own words (the same lines are in "Confirm it's you"
 // and in the audit log), the request that says exactly that, and the notes about who will see what (ehNotes).
 function ehPlan(d, draft) {
-  const lines = [], body = { ups: [], plugs: [], reset: [] };
+  const host = ehHostPlan(d, draft);
+  const lines = [...host.site, ...host.lines], body = { ups: [], plugs: [], reset: [...host.reset] };
   const left = draft.leftovers && d.leftovers?.length ? d.leftovers : [];
   for (const l of left) lines.push(`Removed: ${l}`);
   // ... and those about devices that are not relayed right now: only the ones the dialog lists, each by its id
@@ -3712,7 +3821,8 @@ function ehPlan(d, draft) {
   for (const k of Object.keys(body)) if (!body[k].length) delete body[k];
   if (left.length) body.leftovers = true;
   if (away.length) body.unrelayed = away.map((x) => ({ id: x.id, kind: x.kind }));
-  return { lines, body, notes: ehNotes(d, draft) };
+  Object.assign(body, host.body);
+  return { lines, body, notes: [...host.notes, ...ehNotes(d, draft)], problems: Object.values(host.problems) };
 }
 // The stored changes about devices that are not relayed right now, as the panel lists them (each with its id,
 // kind and sentence; anything else in the list is left out).
@@ -3737,8 +3847,10 @@ function ehView(d, draft) {
   const left = d.leftovers?.length ? d.leftover_count || d.leftovers.length : 0;  // stored changes about machines that are gone
   const away = ehAway(d).length ? d.unrelayed_count || ehAway(d).length : 0;       // ... and about devices that are not relayed right now
   const ignored = d.ignored?.length ? d.ignored_count || d.ignored.length : 0;    // the panel names the first twenty; the number is of all
-  const any = [...d.ups.map((u) => ehFrom(u, "ups", draft)), ...d.plugs.map((p) => ehFrom(p, "plugs", draft)), ...mine.map((p) => ehFrom(p, "total", draft))].includes("panel");
-  return `${sect("UPS", "Ticked: this machine is on that UPS.", d.ups.map((u) => row(u, "ups")), "No agent relays a UPS.")}
+  const h = ehHost(d);
+  const any = [...d.ups.map((u) => ehFrom(u, "ups", draft)), ...d.plugs.map((p) => ehFrom(p, "plugs", draft)), ...mine.map((p) => ehFrom(p, "total", draft))].includes("panel")
+    || (!!h && ((h.name.from === "panel" && !draft.reset["name:"]) || (h.wol.from === "panel" && !draft.reset["wol:"]) || "name" in plan.body || "wol" in plan.body));
+  return `${ehHostView(d, draft)}${sect("UPS", "Ticked: this machine is on that UPS.", d.ups.map((u) => row(u, "ups")), "No agent relays a UPS.")}
     ${sect("Plugs", "Ticked: the plug's watts are this machine's.", d.plugs.map((p) => row(p, "plugs", p.self ? { fixed: true, note: "set on the machine itself" } : !ehNow(p, "plugs", draft) && where(p) ? { note: `now on ${esc(where(p))}` } : {})), "No agent relays a plug.")}
     ${sect("Total", "Ticked: the plug counts in the total.", mine.map((p) => row(p, "total")), "No plug of this machine.")}
     ${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
@@ -3747,8 +3859,13 @@ function ehView(d, draft) {
       : ' <button class="btn sm" type="button" data-eh-left>Remove</button>'}</p>` : ""}
     ${away ? `<p class="note eh-ignored">${away === 1 ? "1 stored change is" : `${away} stored changes are`} about a UPS or plug that is not relayed right now. Kept: ${away === 1 ? "it counts" : "they count"} again when the device is back.${draft.unrelayed
       ? " Save removes what is listed below." : ' <button class="btn sm" type="button" data-eh-away>Remove anyway</button>'}</p>` : ""}
-    ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li>${esc(l)}</li>`).join("")}${plan.notes.map((l) => `<li class="eh-sees">${esc(l)}</li>`).join("")}</ul>` : ""}`;
+    <div id="eh-plan">${ehPlanView(plan)}</div>`;
 }
+// The end of the dialog: what is wrong with what was typed, and the list of what Save will change. It is drawn
+// by itself while somebody types, so that the field keeps its cursor.
+const ehPlanView = (plan) => `${plan.problems.map((l) => `<p class="note warn eh-hint" role="alert">${esc(l)}</p>`).join("")}${plan.lines.length
+  ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li>${esc(l)}</li>`).join("")}${plan.notes.map((l) => `<li class="eh-sees">${esc(l)}</li>`).join("")}</ul>` : ""}`;
+const ehCanSave = (plan) => plan.lines.length > 0 && !plan.problems.length;
 // A tick or a Reset in the dialog changes the draft, never the panel. Each is about one line; the later of the
 // two on a line counts.
 function ehTick(d, draft, field, id, checked) {
@@ -3759,6 +3876,13 @@ function ehTick(d, draft, field, id, checked) {
   if (checked === ehWas(x, field)) delete m[id]; else m[id] = checked;
 }
 function ehReset(d, draft, key) {
+  if (key === "name:" || key === "wol:") {  // the machine's own name or Wake-on-LAN: what was typed goes with it
+    const h = ehHost(d);
+    if (!h || h[key.slice(0, -1)].from !== "panel") return;
+    draft.reset[key] = true;
+    if (key === "name:") draft.name = undefined; else draft.wol = null;
+    return;
+  }
   const i = key.indexOf(":"), field = key.slice(0, i), id = key.slice(i + 1);
   const x = (field === "ups" ? d.ups : d.plugs).find((y) => y.id === id);
   if (!x || !ehStored(x, field)) return;  // only a line that was changed here has something to put back
@@ -3774,7 +3898,9 @@ const EH_INFO = () => infoBtn("edit-host", "Edit host", infoList([
   "A link also decides who can see a UPS or plug: the viewers of the site of a machine it is linked to or, linked to nothing, of the machine that reads it. Before you save, the list says when a change shows a device to another site's viewers or hides it from them.",
   "Stored changes about a machine that is gone have no line here. The dialog says how many there are; Remove takes them out.",
   "Stored changes about a UPS or plug that its machine does not relay right now have no line either. They are kept and count again when the device is back; Remove anyway takes them out.",
-  "Set on the machine or in config.yaml: address, tokens, power control, updates, Wake-on-LAN."]));
+  "Name, site and Wake-on-LAN count at once. The site decides who can see this machine, its guests and the UPSes and plugs that follow it; it is the same setting as on the Users page.",
+  "Wake-on-LAN: the network cards, the machine that sends the packet and the port can be changed here. Every change to it asks you to confirm, and only machines that were set up to send wake packets can be chosen.",
+  "Set on the machine or in config.yaml: address, tokens, power control, updates, which machines may send wake packets, and where a wake packet is sent to and its password."]));
 // Is d what GET .../options gives: the two lists, each entry with its id? Everything else is read with a default.
 const ehValid = (d) => !!d && typeof d === "object" && Array.isArray(d.ups) && Array.isArray(d.plugs)
   && [...d.ups, ...d.plugs].every((x) => !!x && typeof x === "object" && typeof x.id === "string");
@@ -3785,10 +3911,14 @@ const ehValid = (d) => !!d && typeof d === "object" && Array.isArray(d.ups) && A
 function ehDraw() {
   const body = $("#eh-body");
   if (!body || !eh.d) return;
-  const a = document.activeElement, had = a && body.contains?.(a) ? { eh: a.dataset.eh, value: a.value, reset: a.dataset.ehReset, left: a.dataset.ehLeft !== undefined || a.dataset.ehAway !== undefined } : null;
+  const a = document.activeElement, had = a && body.contains?.(a) ? { eh: a.dataset.eh, value: a.value, reset: a.dataset.ehReset, left: a.dataset.ehLeft !== undefined || a.dataset.ehAway !== undefined, f: a.dataset.ehF } : null;
   body.innerHTML = ehView(eh.d, eh.draft);
-  $("#eh-save").disabled = eh.busy || !ehPlan(eh.d, eh.draft).lines.length;
+  $("#eh-save").disabled = eh.busy || !ehCanSave(ehPlan(eh.d, eh.draft));
   if (!had) return;
+  if (had.f || had.reset === "name:" || had.reset === "wol:") {  // a field of the machine itself: the same field again (after its Reset: the name, the tick of Wake-on-LAN)
+    body.querySelector?.(`[data-eh-f="${had.f || (had.reset === "name:" ? "name" : "wol-on")}"]`)?.focus();
+    return;
+  }
   if (had.left) { $("#eh-save").focus(); return; }  // "Remove" and "Remove anyway" are gone once pressed: Save is what comes next
   const ticks = [...body.querySelectorAll("input[data-eh]")], resets = [...body.querySelectorAll("[data-eh-reset]")];
   const cut = had.reset ? had.reset.indexOf(":") : -1;
@@ -3827,9 +3957,26 @@ async function openEditHost(s) {
   if (!mine()) return;
   ehDraw();
   $("#eh-body").onchange = (e) => {
+    const f = e.target.closest("[data-eh-f]");
+    if (f) {  // a choice or a tick of the machine's own groups (what is typed is taken while it is typed, below)
+      if (f.type !== "checkbox" && f.tagName !== "SELECT") return;
+      ehField(eh.d, eh.draft, f.dataset.ehF, f.type === "checkbox" ? f.checked : f.value); $("#eh-err").textContent = ""; ehDraw();
+      return;
+    }
     const t = e.target.closest("input[data-eh]");
     if (!t) return;
     ehTick(eh.d, eh.draft, t.dataset.eh, t.value, t.checked); $("#eh-err").textContent = ""; ehDraw();
+  };
+  // Typing in a field of the machine: the list of changes and the field's "changed here" follow, and the field
+  // itself is not drawn anew (it keeps its cursor).
+  $("#eh-body").oninput = (e) => {
+    const f = e.target.closest("[data-eh-f]");
+    if (!f || f.type === "checkbox" || f.tagName === "SELECT") return;
+    ehField(eh.d, eh.draft, f.dataset.ehF, f.value); $("#eh-err").textContent = "";
+    const plan = ehPlan(eh.d, eh.draft);
+    $("#eh-plan").innerHTML = ehPlanView(plan);
+    $("#eh-save").disabled = eh.busy || !ehCanSave(plan);
+    for (const tag of $("#eh-body").querySelectorAll?.("[data-eh-tag]") || []) tag.innerHTML = ehHostTag(eh.d, eh.draft, tag.dataset.ehTag);
   };
   $("#eh-body").onclick = (e) => {
     const t = e.target.closest("[data-eh-reset], [data-eh-left], [data-eh-away]");
@@ -3842,7 +3989,7 @@ async function openEditHost(s) {
   $("#eh-form").onsubmit = async (e) => {
     e.preventDefault();
     const plan = ehPlan(eh.d, eh.draft);
-    if (eh.busy || !plan.lines.length) return;
+    if (eh.busy || !ehCanSave(plan)) return;
     eh.busy = true; $("#eh-save").disabled = true; $("#eh-err").textContent = "";
     try {
       const r = await controlCall({ kind: "request", label: `Edit host ${s.name}`, system: s.id, method: "PUT", path, body: plan.body },

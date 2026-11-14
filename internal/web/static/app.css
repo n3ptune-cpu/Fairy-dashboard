@@ -396,6 +396,13 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .eh-src { font-size: 12px; color: var(--faint); white-space: nowrap; padding-top: 1px; }
 .eh-src.on { color: var(--warn); }
 .modal-box .eh-hint { margin: 0 0 4px; }
+/* ... and its two groups about the machine itself: a field's name with where its value comes from and its Reset */
+.eh-cap { display: flex; align-items: center; gap: 8px; }
+.eh-cap > label, .eh-cap > span:first-child { flex: 1; min-width: 0; }
+.eh-cap > [data-eh-tag] { display: inline-flex; align-items: center; gap: 8px; }
+.wu-sub.eh-cap .eh-src { font-weight: 400; }
+.eh-form .mfield { margin: 6px 0; }
+.eh-form .mfield .select { width: 100%; }
 .modal-box .eh-shadow, .modal-box .eh-ignored { margin: 12px 0 0; }
 .modal-box .eh-sees { color: var(--warn); }
 .btn.danger-solid { background: #3a0d12; border-color: #7a1c26; color: #ffb3ba; }
