@@ -1815,8 +1815,9 @@ function pageUps() {
 // (dayRuns), each its own piece; nothing is ever drawn across a gap, and nothing is drawn at zero for one.
 // The time under the pointer is read out in a line above the chart (and "no readings" in a gap), so it works
 // the same with a mouse, a finger and the arrow keys.
-const pday = { id: null, d: null, err: "", at: null, timer: null };
+const pday = { id: null, d: null, err: "", gone: false, at: null, timer: null, got: 0, shape: "", row: null };
 const DAY_S = 86400;
+const DAY_EVERY = 60000;  // the open dialog asks for the day again this often (ms): a new point a minute
 const dayTime = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 // The stretches of a list that have readings, as [first, last] indexes. A null ends one.
 function dayRuns(v) {
@@ -1858,27 +1859,35 @@ function dayHours(now, W) {
   }
   return out;
 }
-// Where things are in a chart of W x H pixels: kind "w" is the watts (from 0, or from the lowest value when a
-// source goes under 0), "v" the volts (around the values: 240 V is not a small step above 0).
+// Where things are in a chart of W x H pixels: kind "w" is the watts (always with 0 in it: from 0 up, and down
+// to the lowest value of a source that goes under 0), "v" the volts (around the values: 240 V is not a small
+// step above 0).
 function dayGeom(d, W, H, kind) {
   const main = kind === "w" ? d.avg : d.volts || [], lows = kind === "w" ? d.min : main, highs = kind === "w" ? d.max : main;
-  const L = 46, R = 12, T = 10, B = kind === "w" ? 24 : 8, pw = Math.max(10, W - L - R), ph = Math.max(10, H - T - B);
+  const R = 12, T = 10, B = kind === "w" ? 24 : 8, ph = Math.max(10, H - T - B);
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < main.length; i++) {
     if (main[i] == null) continue;
     lo = Math.min(lo, lows[i] ?? main[i]); hi = Math.max(hi, highs[i] ?? main[i]);
   }
   if (lo > hi) { lo = 0; hi = 1; }
-  if (kind === "w") lo = Math.min(0, lo);
+  if (kind === "w") { lo = Math.min(0, lo); hi = Math.max(0, hi); }
   else if (hi - lo < 4) { const mid = (hi + lo) / 2; lo = mid - 2; hi = mid + 2; }
   if (hi <= lo) hi = lo + 1;
   const ticks = dayTicks(lo, hi, kind === "w" ? 5 : 3), y0 = ticks[0], y1 = ticks[ticks.length - 1], t0 = d.now - DAY_S;
+  // The numbers of the axis stand left of the chart, right-aligned 8 px before it: room for the longest of them
+  // ("-12.5k" of a source that feeds in is longer than "1500"), at 8 px a character (a digit of the 12 px
+  // numbers is a little under that).
+  const L = Math.max(46, 10 + 8 * Math.max(...ticks.map((v) => dayNum(v).length))), pw = Math.max(10, W - L - R);
   return { main, lows, highs, L, R, T, B, pw, ph, ticks, y0, y1, t0, W, H,
     xt: (t) => L + Math.min(1, Math.max(0, (t - t0) / DAY_S)) * pw,
     x: (i) => L + Math.min(1, Math.max(0, (d.start + (i + 0.5) * d.step_s - t0) / DAY_S)) * pw,
     y: (v) => T + ph - ((v - y0) / (y1 - y0)) * ph };
 }
-const dayNum = (v) => (Math.abs(v) >= 10000 ? `${+(v / 1000).toFixed(1)}k` : String(+v.toFixed(2)));
+function dayNum(v) { return Math.abs(v) >= 10000 ? `${+(v / 1000).toFixed(1)}k` : String(+v.toFixed(2)); }
+// A run of one minute is a fraction of a pixel wide: it is drawn DAY_MARK px to each side of its place, so that
+// a single reading between two gaps can be seen (the readout above the chart says its minute).
+const DAY_MARK = 2;
 // One chart as SVG. Watts: a band from each minute's lowest to its highest sample (a short spike shows in it)
 // and the line of the minute's average. Volts: a line. One piece per run of minutes with readings.
 function dayChart(d, W, H, kind) {
@@ -1911,7 +1920,13 @@ function dayChart(d, W, H, kind) {
       pts.push(`${x},${f(g.y(g.main[i]))}`);
       if (kind === "w") { up.push(`${x},${f(g.y(g.highs[i]))}`); down.push(`${x},${f(g.y(g.lows[i]))}`); }
     }
-    line += a === b ? `M${pts[0]}h0.01` : `M${pts.join("L")}`;
+    if (a === b) {  // one minute: a short mark, not a point
+      const x = f(g.x(a) - DAY_MARK), w = 2 * DAY_MARK;
+      line += `M${x},${f(g.y(g.main[a]))}h${w}`;
+      if (kind === "w") band += `M${x},${f(g.y(g.highs[a]))}h${w}V${f(g.y(g.lows[a]))}h${-w}Z`;
+      continue;
+    }
+    line += `M${pts.join("L")}`;
     if (kind === "w") band += `M${up.join("L")}L${down.reverse().join("L")}Z`;
   }
   gap(edge, g.L + g.pw);
@@ -1954,7 +1969,7 @@ function dayReadout(d, t) {
 function openPowerDay(id) {
   const s = (state.power?.sources || []).find((x) => x.id === id);
   if (!s || stepUpOpen) return;
-  Object.assign(pday, { id, d: null, err: "", at: null });
+  Object.assign(pday, { id, d: null, err: "", gone: false, at: null, got: 0, shape: "" });
   const m = $("#modal");
   m.innerHTML = `<div class="modal-box wide pday" id="pday" role="dialog" aria-modal="true" aria-labelledby="pday-t">
     <div class="pday-head"><h3 id="pday-t">Last 24 hours</h3><span class="note" id="pday-name"></span></div>
@@ -1964,28 +1979,52 @@ function openPowerDay(id) {
   m.hidden = false;
   $("#pday-x").onclick = closeModal;
   m.onclick = (e) => { if (e.target === m) closeModal(); };
-  clearInterval(pday.timer);  // the open dialog follows the day: once a minute, for as long as it is open
-  pday.timer = setInterval(() => { if ($("#pday")) loadPowerDay(); else clearInterval(pday.timer); }, 60000);
+  clearInterval(pday.timer);  // one timer, whatever was open before
+  pday.timer = setInterval(tickPowerDay, DAY_EVERY);
+  focusAtTop("#pday-x");  // it is opened to be read: the focus starts on Close, not on the first control (the info button of "Energy")
   loadPowerDay();
+}
+// The open dialog follows the day, once a minute: for as long as it is open, its source is still reported, and
+// the tab is shown (a tab in the background asks for nothing, and catches up when it is shown again).
+function tickPowerDay() {
+  if (!$("#pday") || pday.gone) { clearInterval(pday.timer); pday.timer = null; return; }
+  if (!document.hidden) loadPowerDay();
 }
 async function loadPowerDay() {
   const id = pday.id;
-  let d = null, err = "";
-  try { d = await api(`/api/power/day?source=${enc(id)}`); } catch (e) { err = e.message || String(e); }
+  let d = null, err = "", gone = false;
+  try { d = await api(`/api/power/day?source=${enc(id)}`); } catch (e) { err = e.message || String(e); gone = e.status === 404; }
   if (pday.id !== id || !$("#pday")) return;  // closed, or another source's by now
   if (d) pday.d = d;
-  pday.err = err;
+  // 404: the source is not reported any more (taken out of its agent's config, its host removed, or not for
+  // this account any more). That does not change by asking again: the dialog says so once and stops asking.
+  Object.assign(pday, { err: gone ? "" : err, gone, got: Date.now() });
+  if (gone) { clearInterval(pday.timer); pday.timer = null; }
   drawPowerDay();
 }
 function drawPowerDay() {
   const body = $("#pday-body"), d = pday.d;
   if (!body) return;
-  const err = pday.err ? `<div class="error">${esc(pday.err)}</div>` : "";
-  if (!d) { body.innerHTML = err; return; }
-  if (!d.summary) { body.innerHTML = `<div class="empty">No readings in the last 24 hours.</div>${err}`; return; }
-  body.innerHTML = `${dayStats(d)}<div class="pday-row"><div class="pday-sub">Watts</div><div class="pday-read" id="pday-read"></div></div>
+  const msg = pday.gone ? `<div class="note pday-gone">This source is no longer reported.${d?.summary ? " The chart is as it was when it was last read." : ""}</div>`
+    : pday.err ? `<div class="error">${esc(pday.err)}</div>` : "";
+  if (!d || !d.summary) {
+    pday.shape = "";
+    body.innerHTML = `${d ? '<div class="empty">No readings in the last 24 hours.</div>' : ""}${msg}`;
+    return;
+  }
+  // The dialog's parts are built once and filled with every answer: the chart keeps the keyboard's focus and
+  // the place it was moved to, where a new build every minute took both away.
+  const shape = d.volts ? "wv" : "w";
+  if (pday.shape !== shape || !$("#pday-plot")) {
+    pday.shape = shape;
+    body.innerHTML = `<div id="pday-stats"></div><div class="pday-row"><div class="pday-sub">Watts</div><div class="pday-read" id="pday-read"></div></div>
     <div class="pday-plot" id="pday-plot" tabindex="0" role="group" aria-label="Watts over the last 24 hours. Left and right arrow keys move through the day."></div>
-    ${d.volts ? '<div class="pday-sub">Volts</div><div class="pday-plot volts" id="pday-volts"></div>' : ""}${err}`;
+    ${d.volts ? '<div class="pday-sub">Volts</div><div class="pday-plot volts" id="pday-volts"></div>' : ""}<div id="pday-msg"></div>`;
+  }
+  const stats = $("#pday-stats"), had = stats.contains(document.activeElement) ? document.activeElement.dataset?.info : null;
+  stats.innerHTML = dayStats(d);
+  if (had) stats.querySelector(`[data-info="${had}"]`)?.focus({ preventScroll: true });  // the info button, drawn anew
+  $("#pday-msg").innerHTML = msg;
   sizePowerDay();
 }
 // The charts are drawn in the pixels they get (so the text is never scaled), and again when that changes.
@@ -2024,12 +2063,30 @@ function dayAt(e) {
   const frac = Math.min(1, Math.max(0, ((e.clientX - box.left) * (g.W / (box.width || g.W)) - g.L) / g.pw));
   return Math.min(Math.floor(d.now / d.step_s), Math.floor((g.t0 + frac * DAY_S) / d.step_s)) * d.step_s;
 }
-// The button opens it, and so does a click anywhere else in the button's row of the Power page (not on a
-// link or another button): on a phone the button's column is the last one, off the screen to the right.
+// The button opens it, and so does a click anywhere else in the button's row of the Power page: on a phone the
+// button's column is the last one, off the screen to the right.
+//
+// A click in the row that means something else opens nothing: one on a link or a control; one with Ctrl, Shift,
+// Alt or the command key; the end of a drag that marked text; and a double click, which marks a word. A mouse's
+// click in the row therefore waits DAY_ROW_WAIT for the second one before it opens (a finger's does not: a double
+// tap marks nothing).
+const DAY_ROW_WAIT = 250;
+const daySelected = () => String(window.getSelection?.() ?? "") !== "";
+function dayRowClick(e) {
+  if (e.target.closest?.("a, button, input, select, textarea, label") || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return null;
+  return e.target.closest?.("tr.row")?.querySelector('[data-act="power-day"]') || null;
+}
 document.addEventListener("click", (e) => {
-  const t = e.target.closest?.('[data-act="power-day"]')
-    || (e.target.closest?.("a, button, input, select, label") ? null : e.target.closest?.("tr.row")?.querySelector('[data-act="power-day"]'));
-  if (t && !t.disabled) openPowerDay(t.dataset.source);
+  clearTimeout(pday.row); pday.row = null;  // a second click: the first one's opening is off
+  const btn = e.target.closest?.('[data-act="power-day"]');
+  if (btn) { if (!btn.disabled) openPowerDay(btn.dataset.source); return; }
+  const t = dayRowClick(e);
+  if (!t || t.disabled || e.detail > 1 || daySelected()) return;
+  const open = () => { pday.row = null; if (!daySelected()) openPowerDay(t.dataset.source); };
+  if (e.pointerType === "touch" || e.pointerType === "pen") open(); else pday.row = setTimeout(open, DAY_ROW_WAIT);
+});
+document.addEventListener("visibilitychange", () => {  // shown again: what the dialog has is older than a minute
+  if (!document.hidden && $("#pday") && pday.timer != null && Date.now() - pday.got >= DAY_EVERY) loadPowerDay();
 });
 for (const ev of ["pointermove", "pointerdown"]) document.addEventListener(ev, (e) => { const t = dayAt(e); if (t != null) dayPoint(t); });
 document.addEventListener("pointerout", (e) => {  // a mouse that leaves the chart: back to the newest reading. A finger's choice stays.

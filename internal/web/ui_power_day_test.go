@@ -90,12 +90,20 @@ for (const W of [860, 330]) {
   // where each piece starts and ends, as minutes
   const minute = (x) => Math.round(((x - g.L) / g.pw * 86400 + g.t0 - d.start) / 60 - 0.5);
   const ends = pieces.map((p) => { const xs = p.split("L").map((q) => parseFloat(q)); return [minute(xs[0]), minute(xs[xs.length - 1])]; });
+  // the minute alone is a mark of 4 px around its place (a point of the line's width is not seen), the band a box of that width
+  const alone = /^([\d.]+),([\d.]+)h4$/.exec(pieces[1]);
+  if (!alone) fail(W + ": a minute alone is not drawn as a short mark: " + pieces[1]);
+  else {
+    if (Math.abs(+alone[1] + 2 - g.x(750)) > 0.11 || Math.abs(+alone[2] - g.y(80)) > 0.11) fail(W + ": the mark of the minute alone is not around its place: " + pieces[1] + ", the minute is at " + g.x(750).toFixed(1) + "," + g.y(80).toFixed(1));
+    ends[1] = [minute(+alone[1] + 2), minute(+alone[1] + 2)];
+    const box = new RegExp("M" + alone[1].replace(".", "\\.") + ",([\\d.]+)h4V([\\d.]+)h-4Z").exec(band);
+    if (!box || Math.abs(+box[1] - g.y(120)) > 0.11 || Math.abs(+box[2] - g.y(72)) > 0.11) fail(W + ": the band of the minute alone is not a box from its lowest to its highest reading: " + band.split("M")[2]);
+  }
   const near = (a, b) => Math.abs(a - b) <= Math.ceil(1440 / g.pw);  // a pixel is some minutes wide
   if (!near(ends[0][0], 0) || !near(ends[0][1], 599) || !near(ends[1][0], 750) || !near(ends[2][0], 900) || !near(ends[2][1], 1439)) fail(W + ": the pieces run over " + JSON.stringify(ends));
-  if (!pieces[1].endsWith("h0.01")) fail(W + ": a minute alone is not drawn as a dot: " + pieces[1]);
   // no point of the line lies in the gap, and none at the height of 0 W
   const y0 = g.y(0).toFixed(1);
-  for (const p of pieces) for (const q of p.replace("h0.01", "").split("L")) {
+  for (const p of pieces) for (const q of p.replace(/h4$/, "").split("L")) {
     const [x, y] = q.split(",").map(parseFloat), m = minute(x);
     if (y.toFixed(1) === y0) fail(W + ": a point at 0 W: " + q);
     if (m > 610 && m < 890 && Math.abs(m - 750) > 12) fail(W + ": a point in the gap, at minute " + m);
@@ -130,6 +138,22 @@ for (const flat of [dayOf(1440, () => 0), dayOf(1440, () => 7.5), dayOf(1, () =>
 }
 // a source that goes under 0 (it feeds in): the axis goes down with it
 if (dayGeom(dayOf(100, (i) => i - 50), 600, 260, "w").ticks[0] > -50) fail("an axis that does not reach a negative value");
+// ... and its numbers, which are longer ("-12.5k"), are not cut off at the left: the chart begins further right
+// for them. Each number ends 8 px before the chart and has at most 8 px a character.
+const around = (w, by) => { const x = dayOf(1440, w); return { ...x, min: x.avg.map((v) => v - by), max: x.avg.map((v) => v + by) }; };
+const fed = around((i) => -12300 + (i % 7) * 10, 100);
+for (const [name, day, wantL] of [["a plug", dayOf(1440, (i) => 100 + (i % 50)), 46], ["a heater", dayOf(1440, () => 2400), 46],
+  ["a source that feeds in 12 kW", fed, 58], ["a source around zero", around((i) => (i % 9) / 100 - 0.04, 0.01), 50]]) {
+  const g = dayGeom(day, 600, 260, "w"), svg = dayChart(day, 600, 260, "w");
+  const nums = [...svg.matchAll(/<text x="([\d.]+)" y="[\d.]+" dy="0.32em" text-anchor="end">([^<]*)</g)].map((m) => ({ x: +m[1], s: m[2] }));
+  if (nums.length !== g.ticks.length) fail(name + ": " + nums.length + " numbers at the axis for " + g.ticks.length + " lines");
+  for (const n of nums) if (n.x !== g.L - 8 || n.x - 8 * n.s.length < 2) fail(name + ": the number " + n.s + " of the axis begins " + (n.x - 8 * n.s.length) + " px from the left edge (the chart begins at " + g.L + ")");
+  if (wantL != null && g.L !== wantL) fail(name + ": the chart begins at " + g.L + " px, want " + wantL);
+  if (g.L + g.pw + g.R !== 600) fail(name + ": the chart does not end 12 px before the right edge");
+}
+if (!dayChart(fed, 600, 260, "w").includes(">-12.5k<")) fail("the rig: no -12.5k at the axis of a source that feeds in 12 kW");
+// a source that is under 0 all day still has 0 W at its axis (the watts are never drawn around the values)
+if (!same(dayGeom(fed, 600, 260, "w").ticks, [-12500, -10000, -7500, -5000, -2500, 0])) fail("the axis of a source that feeds in all day: " + JSON.stringify(dayGeom(fed, 600, 260, "w").ticks));
 // volts: an axis around the values, a line and no band, gaps as in the watts
 const dv = { ...d, volts: d.avg.map((v, i) => (v == null ? null : 246.5 + (i % 30) / 20)) };
 const vs = dayChart(dv, 860, 90, "v"), vg = dayGeom(dv, 860, 90, "v");

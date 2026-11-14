@@ -949,6 +949,7 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .pday-sub { margin: 12px 0 2px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .pday .row-gap.end { margin-top: 16px; }
 .pday .empty, .pday .error { margin-top: 4px; }
+.pday #pday-msg > * { margin-top: 12px; }
 .pd-svg { display: block; max-width: 100%; height: auto; user-select: none; -webkit-user-select: none; }
 .pd-grid { stroke: var(--line); stroke-width: 1; shape-rendering: crispEdges; }
 .pd-grid.v { stroke: var(--rule); }
