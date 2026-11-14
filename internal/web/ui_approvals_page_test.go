@@ -149,6 +149,46 @@ func TestUIApprovalsPageARowHasItsButtonOnlyWithSomethingToOpen(t *testing.T) {
 `))
 }
 
+// The Approvals page asks for its list every 5 s while it is open, and stops when it is left: the load that
+// comes back after the admin went to another page starts no timer (third review of build 14: a copy of the
+// page that kept the timer on every page got past the tests). A viewer's page asks the panel nothing.
+func TestUIApprovalsPageStopsAskingWhenItIsLeft(t *testing.T) {
+	js := appJS(t)
+	runPageScript(t, "approvals-timer", approvalsPageScript(t, js, `
+  const list = () => ({ configured: true, machines: [mach("alfa", "ALFA", { ready: true })], ready: 1, required: 0, broken: 0, max: 64, last: null });
+  answer = list;
+  // on the page: one question, and the next one in 5 s
+  await loadApprovals();
+  if (JSON.stringify(asked) !== '[["/api/admin/approval","GET",""]]' || JSON.stringify(timers) !== "[5000]") fail("on the page: asked " + JSON.stringify(asked) + ", timers " + JSON.stringify(timers));
+  await loadApprovals();
+  if (asked.length !== 2 || JSON.stringify(timers) !== "[5000,5000]") fail("the second load: asked " + asked.length + ", timers " + JSON.stringify(timers));
+  // the admin leaves while a load is on its way: its answer is kept, and no timer is started for it
+  asked.length = 0; timers.length = 0;
+  answer = () => { page = "updates"; return list(); };
+  await loadApprovals();
+  if (asked.length !== 1 || timers.length) fail("left during a load: asked " + asked.length + ", timers " + JSON.stringify(timers));
+  // ... nor by a load that begins on another page
+  for (const other of ["updates", "overview", "system"]) {
+    page = other; answer = list; timers.length = 0;
+    await loadApprovals();
+    if (timers.length) fail("on the page " + other + " the Approvals page's timer goes on: " + JSON.stringify(timers));
+  }
+  // back on the page: it asks again every 5 s
+  page = "approvals"; timers.length = 0;
+  await loadApprovals();
+  if (JSON.stringify(timers) !== "[5000]") fail("back on the page: " + JSON.stringify(timers));
+  // an error of the panel does not stop it; a viewer's page asks nothing
+  answer = () => { const e = new Error("bad gateway"); e.status = 502; throw e; };
+  timers.length = 0;
+  await loadApprovals();
+  if (JSON.stringify(timers) !== "[5000]" || apv.error !== "bad gateway" || !apv.data) fail("after an error: timers " + JSON.stringify(timers) + ", " + apv.error);
+  state.me = { can_control: false, role: "viewer" };
+  asked.length = 0;
+  await loadApprovals();
+  if (asked.length) fail("a viewer's page asked the panel: " + JSON.stringify(asked));
+`))
+}
+
 // One row per machine, and the row says in one or two words how its check stands: on, off, not supported (an
 // agent that knows no check), offline, needs accepting. The id on record is shown while the check is on.
 //
