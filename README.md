@@ -1260,6 +1260,21 @@ decides who can see the UPS and its notifications. The dialog's info button says
   at once. Nothing is addressed by it: the id, the address and the tokens stay what they are, and **Remove**
   and **Re-pair** of a host added with Add host keep asking for the name it was added under. The typed
   confirmation of a power action asks for the name the row shows.
+
+  Because that name is what you type to confirm a power action, **no two hosts can have one name, and "one
+  name" is what you cannot tell apart**: `PC-A`, `pc-a`, `PC‑A` with another kind of hyphen, the same in
+  full-width letters, and the same in letters of another alphabet that look like these (a Cyrillic or Greek
+  `А`) are one name, and so are `Relay A` and `relay  a` with more spaces. A word that mixes Latin letters
+  with Cyrillic or Greek ones is not taken at all; a name in another alphabet is fine, as a word of its own
+  ("Дача PC"). What you can see stays a name of its own: `PC-A.` with a dot and `PC-Á` with an accent are
+  not `PC-A`. Three more things follow from it:
+  * the name **config.yaml** has for another host is taken too, also while that host is shown under a name
+    given here: a Reset there can then never make two hosts of one name;
+  * **Reset** (or config.yaml's name typed back) is refused while another host was given that name in the
+    panel; the message names that host, which is renamed first;
+  * the name of a **guest** is taken as well (its shutdown and its stop are confirmed by typing it). The
+    names of UPSes and plugs are not: nothing is confirmed by typing one, and nothing is done to a device by
+    its name, so a host may be called like one.
 * **Site.** The choices are the sites of the Users page, and the dialog stores what that page stores (one
   setting, two places to change it; `fairy admin sites` shows it). The first choice is the default:
   config.yaml's `site:`, or "No site (admins only)". A site decides who **sees** a machine: its row, its
@@ -1267,9 +1282,17 @@ decides who can see the UPS and its notifications. The dialog's info button says
   nothing else. Only admins control anything, and an admin sees every site, so there is no admin who is
   limited to one site, and nobody can lock themselves out. Before you save, the dialog lists whose view moves
   ("Viewers of Home will see PC-A and 2 guests of it"), and so do "Confirm it's you" and the audit entry.
+  In the audit log a site changed here is there twice: in the `host.options` entry of the save, with the
+  rest of it, and as a `site.assign` entry like the one the Users page writes (same target, `site` and
+  `before`, and `via: Edit host`), so a search for `site.assign` finds every change of a site. If somebody
+  else changes the same host's site in the moment between your look and your save, their change stays and
+  yours is refused: open the dialog again.
 * **Wake-on-LAN.** Three things can be changed, and they are what **Power on** and a run of "Update
   unpowered hosts" send from then on:
-  * the **MAC address** (up to eight, for a machine with several network cards);
+  * the **MAC address** (up to eight, for a machine with several network cards). It must be the address of
+    one network card: the broadcast address, the all-zero address and every multicast address (the lowest
+    bit of the first byte set, as in `01:00:5e:...` or `33:33:...`) are refused, and ignored in a
+    `state.json` written by hand;
   * **Sent by**: one of the machines that are already set up to send wake packets (`wol_relay: true` in
     config.yaml, or the "Wake-on-LAN relay" option of Add host). Whether a machine may send wake packets at
     all is not set here;
@@ -1280,6 +1303,12 @@ decides who can see the UPS and its notifications. The dialog's info button says
   after you confirmed something else: a wake packet for a MAC address of your choice is something the panel's
   buttons could not send before. (The owner of a relay can also pin the addresses it wakes on the machine:
   `wol.allowed_macs` in the agent's config.)
+
+  **Remove** of a host that was chosen here as the sender for other machines takes the whole Wake-on-LAN
+  change of those machines out with it, never half of it: "these MAC addresses, through that sender" was one
+  decision, and without its sender config.yaml's Wake-on-LAN counts for the machine again. The Remove dialog
+  names the machines before you confirm, the answer says it again, and the audit log (`host.options` and
+  `host.remove`) and the panel's log (one WARN for each machine) have it.
 * **Only shown, never changed here:** where a wake packet is sent to (`broadcast:`) and its password
   (`password_env:`). The first is an address an agent sends packets to, the second names a secret of the
   panel's environment: neither can be set from a browser. For a machine whose `wol:` has one of them, the
