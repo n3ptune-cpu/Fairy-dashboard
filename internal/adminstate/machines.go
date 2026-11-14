@@ -27,6 +27,8 @@ import (
 //	      "holder":     true                         (optional) an admin said this host keeps an id two hosts show
 //	      "unaccepted": true                         (optional) it showed the check on, with an id nobody accepted
 //	      "alarm":      "changed" | "duplicate" | ... (optional) the alarm last written to the audit log for it
+//	      "runs":       1                            (optional) its checker takes the ticket and the confirmation of
+//	                                                 an "Update unpowered hosts" run (what it last said)
 //	} } }
 //
 // A record whose agent id the panel does not have at a start (the host was taken out of config.yaml or renamed
@@ -92,6 +94,9 @@ func parseMachines(path string, d statefile.Data) (map[string]approval.Record, e
 		r.Unaccepted, _ = e["unaccepted"].(bool)
 		r.Alarm, _ = e["alarm"].(string)
 		r.Alarm = clipRecord(r.Alarm)
+		if n, _ := e["runs"].(float64); n == api.ApprovalRuns { // the one version this panel speaks, or nothing
+			r.Runs = api.ApprovalRuns
+		}
 		out[id] = r
 	}
 	return out, nil
@@ -141,6 +146,9 @@ func (a *State) SetMachines(set map[string]approval.Record, drop []string) error
 			}
 			if r.Alarm != "" {
 				e["alarm"] = r.Alarm
+			}
+			if r.Runs == api.ApprovalRuns {
+				e["runs"] = r.Runs
 			}
 			m[id] = e
 		}

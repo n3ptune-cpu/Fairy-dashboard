@@ -357,6 +357,12 @@ func (p *Poller) noteMachineLocked(id string, ap *model.Approval, now time.Time)
 		rec.State, rec.StateAt = state, now.UTC()
 		changed = true
 	}
+	// What it says about runs is kept while it shows the check on (Record.Runs): an answer in another state
+	// (broken, unknown: the helper is not answering) says nothing about what its checker can do.
+	if ap != nil && state == api.ApprovalRequired && rec.Runs != ap.Runs {
+		rec.Runs = ap.Runs
+		changed = true
+	}
 	if changed {
 		p.mach.records[id] = rec
 		p.mach.seq++
@@ -685,6 +691,7 @@ func (p *Poller) shownApprovalLocked(id string, live *model.Approval, reps map[s
 	}
 	a := &model.Approval{State: b.Record.State, Keys: []model.ApprovalKey{}, AgentChecks: []string{}, Binding: b.Status, MachineID: b.Record.MachineID,
 		BindingWith: p.hostNamesLocked(b.With), BindingHeld: p.hostNamesLocked(b.Held), BindingWithIDs: b.With, BindingHeldIDs: b.Held}
+	a.Runs = b.Record.Runs // what it last said about runs, with the check on
 	if !b.Report.Heard {
 		a.LastKnown = true // what it said before it went silent (or before the panel restarted)
 	}

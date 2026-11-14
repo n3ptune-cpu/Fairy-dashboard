@@ -16,7 +16,8 @@ import (
 //	"approval": {"state": "off"|"required"|"broken"|"unknown", "enforced_by": "helper"|"agent", "proto": 1,
 //	             "issuer": "...", "client_id": "...", "keys": [{"kid", "alg", "thumbprint"}], "users": 2,
 //	             "fan_window_s": 30, "boot_shutdown_s": 0, "error": "...", "agent_checks": [...], "agent_error": "...",
-//	             "machine_id": "...", "trust_hash": "...", "set_by": "panel"|"admin", "set_at": "<RFC 3339>"}
+//	             "machine_id": "...", "trust_hash": "...", "set_by": "panel"|"admin", "set_at": "<RFC 3339>",
+//	             "runs": 1, "run": {"id": "<16 hex>", "state": "armed"|"confirmed"|"off_pending"|"cancelled"|"done", "off_at": <unix s>}}
 //
 // Absent: an agent from before the feature (or a Windows agent with nothing that checks). Like every block of
 // an agent's answer it is read defensively: an unknown state reads as "unknown" (which the panel treats like
@@ -93,8 +94,27 @@ func agentApproval(m jsonx.M) *model.Approval {
 			out.SetAt = t.UTC().Format(time.RFC3339)
 		}
 	}
+	// Runs (Fairy-agent v0.9.0): whether the machine's checker takes run tickets and confirmations, and the run
+	// it is in. Only the one version this panel speaks counts; a run that is not what the agent can send (its
+	// id, one of the five states, a time inside this century) is dropped whole.
+	if n := jsonx.IntP(b, "runs"); n != nil && *n == api.ApprovalRuns {
+		out.Runs = api.ApprovalRuns
+	}
+	if r := jsonx.Obj(b, "run"); r != nil && out.Runs == api.ApprovalRuns {
+		id, st := jsonx.S(r, "id"), jsonx.S(r, "state")
+		if api.CheckRunID(id) == nil && runStates[st] {
+			run := &model.ApprovalRun{ID: id, State: st}
+			if at := jsonx.IntP(r, "off_at"); at != nil && *at > 0 && *at < 4102444800 { // before the year 2100
+				run.OffAt = int64(*at)
+			}
+			out.Run = run
+		}
+	}
 	return out
 }
+
+// runStates are the states of a machine's run (api.RunStatus.State).
+var runStates = map[string]bool{api.RunArmed: true, api.RunConfirmed: true, api.RunOffPending: true, api.RunCancelled: true, api.RunDone: true}
 
 // boundedInt is m[k] as a whole number from 0 to max, or nil.
 func boundedInt(m jsonx.M, k string, max int) *int {

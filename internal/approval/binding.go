@@ -71,6 +71,11 @@ type Record struct {
 	// like a host with an id on record: a machine that was once seen to require approvals never silently
 	// becomes one without the check.
 	Unaccepted bool
+	// Runs is what the machine last said about runs while it showed the check on: 1 when its checker takes the
+	// ticket and the confirmation of an "Update unpowered hosts" run (Fairy-agent v0.9.0), else 0. A machine
+	// that a run is to wake is off when the run starts: this is what the panel goes by then, also after a
+	// restart of the panel.
+	Runs int
 	// Alarm is the alarm that was last written to the audit log for this host ("": none, or it was cleared):
 	// "no_record", "changed", "duplicate", "vanished", "too_old". It is kept with the record so that a restart of the panel
 	// does not write every standing alarm again (audit 5, r2-b2-09): an alarm is written when it CHANGES.

@@ -174,6 +174,22 @@ type Approval struct {
 	// LastKnown: the machine has not answered since the panel started; State is what it last said, from the
 	// panel's record.
 	LastKnown bool `json:"last_known,omitempty"`
+	// Runs is 1 when whoever checks on this machine takes the ticket and the confirmation of an "Update
+	// unpowered hosts" run (Fairy-agent v0.9.0, api.ApprovalRuns); 0: it does not, or did not say. While the
+	// machine is silent it is what the panel has on record for it.
+	Runs int `json:"runs,omitempty"`
+	// Run is the run the machine says it is armed for or confirmed in, or the one that ended last in its
+	// present boot (nil: it names none). It is the machine's own word, read from its latest answer.
+	Run *ApprovalRun `json:"run,omitempty"`
+}
+
+// ApprovalRun is the "run" of a machine's approval block (Fairy-agent api.RunStatus).
+type ApprovalRun struct {
+	ID    string `json:"id"`    // the run's id, 16 lower-case hex characters
+	State string `json:"state"` // armed | confirmed | off_pending | cancelled | done
+	// OffAt (armed): when the machine begins to switch itself off; (off_pending): when its countdown ends.
+	// Unix seconds by the machine's own clock; 0: not given.
+	OffAt int64 `json:"off_at,omitempty"`
 }
 
 // ApprovalKey is one Pocket ID signing key a machine has pinned.
