@@ -283,6 +283,11 @@ func (o runOps) Arm(ctx context.Context, id, run string) (time.Duration, error) 
 	if err := s.bindingRefusal(a.ID, x.Name); err != nil {
 		return gone(shortWhy(err))
 	}
+	if with := s.Poller.SharedMachineID(a.ID); len(with) > 0 {
+		// Rule 3, asked again at the moment the ticket goes out (it was asked when the run was started): a ticket
+		// answers no challenge, so the machine id is all that says which machine it is for.
+		return gone(andNames(s.machineNames(with)) + " has the same machine id now, and a run's ticket is tied to the machine id alone")
+	}
 	ap, why := s.tickets.take(run, "arm", a.ID, s.Poller.BindingOf(a.ID).Record.MachineID)
 	if ap == nil {
 		return gone(why)
