@@ -397,7 +397,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .eh-src.on { color: var(--warn); }
 .modal-box .eh-hint { margin: 0 0 4px; }
 /* ... and its two groups about the machine itself: a field's name with where its value comes from and its Reset */
-.eh-cap { display: flex; align-items: center; gap: 8px; }
+.eh-cap { display: flex; align-items: center; gap: 8px; min-height: 28px; }
 .eh-cap > label, .eh-cap > span:first-child { flex: 1; min-width: 0; }
 .eh-cap > [data-eh-tag] { display: inline-flex; align-items: center; gap: 8px; }
 .wu-sub.eh-cap .eh-src { font-weight: 400; }
