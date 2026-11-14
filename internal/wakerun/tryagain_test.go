@@ -193,3 +193,61 @@ func TestWhyTheQuestionEndedIsOnRecord(t *testing.T) {
 		}
 	})
 }
+
+// After a confirmation that no machine accepted, a machine that waited and was not part of it is not marked
+// "the run was confirmed without it": it can still be confirmed.
+func TestAMachineThatWasNotPartOfAFailedConfirmationCanStillBeConfirmed(t *testing.T) {
+	w := newWorld(t)
+	w.checkedOff("pc-a")
+	w.checkedOff("pc-b")
+	w.start(StartRequest{Hosts: []string{"pc-a", "pc-b"}, Latest: "17-bbbbbbb"})
+	act := w.waitFor(10*time.Minute, "the run asks", func(r *Run) bool { return r.Approval == "needed" })
+	if begun, err := w.m.BeginConfirm(act.ID, "Bob", []string{"pc-a"}); err != nil || len(begun) != 1 {
+		t.Fatalf("%v %v", begun, err)
+	}
+	w.m.Confirmed(act.ID, "pc-a", ConfirmResult{Reason: "user", Text: "run refused (user)"})
+	w.m.Confirmed(act.ID, "pc-b", ConfirmResult{NotAsked: true, Text: "it could not be asked"}) // as the web package tells it
+	cur, _ := w.m.Snapshot()
+	if h := host(cur, "pc-b"); h.Confirm != "" || cur.Approval != "needed" {
+		t.Fatalf("pc-b after a confirmation no machine accepted: confirm %q, approval %q", h.Confirm, cur.Approval)
+	}
+	if ws, err := w.m.Waiting(act.ID); err != nil || len(ws) != 2 {
+		t.Fatalf("both can be confirmed: %+v %v", ws, err)
+	}
+	// once a machine has accepted, the one that was not part of it is told so
+	if begun, err := w.m.BeginConfirm(act.ID, "Ann", []string{"pc-a"}); err != nil || len(begun) != 1 {
+		t.Fatalf("%v %v", begun, err)
+	}
+	w.m.Confirmed(act.ID, "pc-a", ConfirmResult{OK: true})
+	w.m.Confirmed(act.ID, "pc-b", ConfirmResult{NotAsked: true, Text: "it could not be asked"})
+	cur, _ = w.m.Snapshot()
+	if h := host(cur, "pc-b"); h.Confirm != ConfirmNotAsked || cur.Approval != "given" || cur.ConfirmedBy != "Ann" {
+		t.Fatalf("pc-b after Ann's: confirm %q, approval %q by %q", h.Confirm, cur.Approval, cur.ConfirmedBy)
+	}
+}
+
+// The question's time does not end the question under a confirmation that is on its way: what comes of it is
+// taken in first, and the question ends once.
+func TestTheQuestionDoesNotEndUnderAConfirmationThatIsOnItsWay(t *testing.T) {
+	w := newWorld(t)
+	w.checkedOff("pc-a")
+	w.start(StartRequest{Hosts: []string{"pc-a"}, Latest: "17-bbbbbbb"})
+	act := w.waitFor(10*time.Minute, "the run asks", func(r *Run) bool { return r.Approval == "needed" })
+	w.advance(act.ConfirmBy.Sub(w.now) - 2*time.Second)
+	if _, err := w.m.BeginConfirm(act.ID, "Ann", []string{"pc-a"}); err != nil {
+		t.Fatal(err)
+	}
+	w.advance(10 * time.Second) // past the question's time; the answer has not come
+	cur, _ := w.m.Snapshot()
+	if _, over := ends(w); cur.Approval != "needed" || over != 0 {
+		t.Fatalf("under a confirmation that is on its way: approval %q, the question was ended %d times", cur.Approval, over)
+	}
+	w.m.Confirmed(act.ID, "pc-a", w.goNow(w.ms["pc-a"], act.ID, host(cur, "pc-a").To, 120*time.Second, 1560*time.Second))
+	w.tick()
+	cur, _ = w.m.Snapshot()
+	if _, over := ends(w); cur.Approval != "given" || cur.ConfirmedBy != "Ann" || over != 1 {
+		t.Fatalf("after its answer: approval %q by %q, ended %d times", cur.Approval, cur.ConfirmedBy, over)
+	}
+	done := w.finish()
+	has(t, host(done, "pc-a"), StOff, "updated from 16-aaaaaaa to 17-bbbbbbb")
+}
