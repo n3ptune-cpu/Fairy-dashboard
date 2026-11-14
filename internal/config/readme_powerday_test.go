@@ -27,7 +27,7 @@ func TestReadmeHasTheLast24Hours(t *testing.T) {
 		"a counter that starts again at 0 after an outage is not counted backwards", "**estimated**", "**partly estimated**",
 		"judged stretch by stretch", "to within 5 %: what it shows less is added",
 		"**Time without readings** is counted where the counter went on through it by an amount the plug could have used", "that time is left out", "is left out and is not taken for a restart", "and at most 16 of one host",
-		"**A wrong clock.**", "reads it as soon as the clock has passed the time the file was saved at", "within an hour",
+		"**A wrong clock.**", "reads it as soon as the clock has passed the time the file was saved at", "within an hour", "saved more than a day before the clock's time is left alone for that hour",
 		"a write that fails (a full disk) is said once in the log", "This source is no longer reported",
 		"voltage_entity: sensor.corner_plug_voltage", "current_entity:", "energy_entity:", "an agent up to v0.8.0 does not start with one of these lines",
 		"`power-day.json`", "every five minutes and when the panel stops", "no key in config.yaml", "At most 64 sources",

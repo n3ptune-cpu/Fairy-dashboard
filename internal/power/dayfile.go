@@ -135,10 +135,11 @@ type dayFileDeviceIn struct {
 // Load names the store's file and reads it. It never fails: what cannot be used is not used, and the log says
 // so once. From then on the store writes to that file. now is the panel's clock.
 //
-// A file that was saved at a later time than now is left alone (hold): see there.
+// A file that was saved at a later time than now, or more than a day before now, is left alone (hold): see
+// there.
 func (d *DayStore) Load(path string, now time.Time) {
 	removeDayTemp(path)
-	devs, savedAt, err := readDayFile(path, now)
+	devs, held, err := readDayFile(path, now)
 	if err != nil {
 		slog.Warn("power: the last 24 hours are not known from before this start: the file is not used (the graphs start empty)",
 			"file", path, "error", err)
@@ -146,13 +147,18 @@ func (d *DayStore) Load(path string, now time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.path, d.savedAt = path, now
-	if savedAt.After(now) {
-		d.heldUntil, d.heldSince = savedAt, now
+	switch {
+	case held.After(now):
 		slog.Warn("power: the file with the last 24 hours was saved at a later time than the panel's clock has now: it is neither read nor replaced until the clock has passed that time, for an hour at most (the graphs start empty; is the clock right?)",
-			"file", path, "saved_at", savedAt.UTC().Format(time.RFC3339), "clock", now.UTC().Format(time.RFC3339))
+			"file", path, "saved_at", held.UTC().Format(time.RFC3339), "clock", now.UTC().Format(time.RFC3339))
+	case !held.IsZero():
+		slog.Info("power: the file with the last 24 hours was saved more than a day before the time the panel's clock has now. If the clock is right, the file's day is over, and the file is replaced in an hour; if the clock is ahead, the file is read as soon as the clock is back within that day. Until then it is neither read nor replaced (the graphs start empty)",
+			"file", path, "saved_at", held.UTC().Format(time.RFC3339), "clock", now.UTC().Format(time.RFC3339))
+	default:
+		d.adopt(devs, now)
 		return
 	}
-	d.adopt(devs, now)
+	d.heldAt, d.heldSince = held, now
 }
 
 // adopt takes the file's days into the store. A source the store has no day for gets the file's; for one it
@@ -190,25 +196,39 @@ func (d *DayStore) adopt(devs map[string]*dayDevice, now time.Time) {
 // the panel's own running the file is given up and replaced with what the panel has measured since its
 // start. Without that end, one write under a clock a year ahead would keep the panel from writing a day ever
 // again.
+//
+// The clock can also be ahead at a start (a hardware clock that is wrong until the network's time comes).
+// Then every minute of the file is older than a day, and the same would happen: none taken, the file
+// replaced. So a file with sources that was saved a day or more before the clock's time is held the same
+// way: read when the clock is back within the day after saved_at, given up after dayHoldMax. That is also
+// the file of a panel that was off for more than a day, whose clock is right: for it the hold costs that
+// nothing is written in the first hour after such a start.
 const dayHoldMax = time.Hour
 
-// held reports whether the file must be left alone now. When the clock has passed the time the file was
-// saved at, it starts reading it (the answer is still yes: until it is read). Caller holds d.mu, and nothing
+// dayFileFits reports whether a file saved at savedAt is one for the clock's time: not from a later time, and
+// not a day or more old.
+func dayFileFits(savedAt, now time.Time) bool {
+	return !savedAt.After(now) && now.Before(savedAt.Add(DaySlots*DayStepS*time.Second))
+}
+
+// held reports whether the file must be left alone now. When the clock has come to the file's day (it has
+// passed the time the file was saved at, or is back within a day after it), it starts reading the file (the
+// answer is still yes: until it is read). Caller holds d.mu, and nothing
 // is being written or read.
 func (d *DayStore) held(now time.Time) bool {
 	if now.Before(d.heldSince) { // the clock went back: the hour begins anew, so that it ends
 		d.heldSince = now
 	}
 	switch {
-	case d.heldUntil.IsZero():
+	case d.heldAt.IsZero():
 		return false
-	case !now.Before(d.heldUntil):
+	case dayFileFits(d.heldAt, now):
 		d.read(now)
 		return true
 	case now.Sub(d.heldSince) >= dayHoldMax:
-		slog.Warn("power: the panel's clock has not reached the time the file with the last 24 hours was saved at: the file is not used, and it is replaced now with what the panel has measured since its start",
-			"file", d.path, "saved_at", d.heldUntil.UTC().Format(time.RFC3339), "clock", now.UTC().Format(time.RFC3339))
-		d.heldUntil, d.dirty = time.Time{}, true
+		slog.Warn("power: the panel's clock has not come to the day of the file with the last 24 hours: the file is not used, and it is replaced now with what the panel has measured since its start",
+			"file", d.path, "saved_at", d.heldAt.UTC().Format(time.RFC3339), "clock", now.UTC().Format(time.RFC3339))
+		d.heldAt, d.dirty = time.Time{}, true
 		return false
 	}
 	return true
@@ -226,10 +246,10 @@ func (d *DayStore) read(now time.Time) {
 			slog.Warn("power: the last 24 hours are not known from before this start: the file is not used (the graphs start empty)",
 				"file", path, "error", err)
 		} else {
-			slog.Info("power: the panel's clock has passed the time the file with the last 24 hours was saved at: the file is read now", "file", path, "sources", len(devs))
+			slog.Info("power: the panel's clock has come to the day of the file with the last 24 hours: the file is read now", "file", path, "sources", len(devs))
 		}
 		d.mu.Lock()
-		d.heldUntil = time.Time{}
+		d.heldAt = time.Time{}
 		d.adopt(devs, now)
 		d.dirty = true // what was measured meanwhile, and what was removed, is not in the file
 		d.saving = nil
@@ -257,31 +277,32 @@ func removeDayTemp(path string) {
 	}
 }
 
-// readDayFile reads the file. No file is no error and no source. savedAt is when a file that can be used was
-// written; when that is later than now, its sources are not looked at (Load: the file is left alone).
-func readDayFile(path string, now time.Time) (devs map[string]*dayDevice, savedAt time.Time, err error) {
+// readDayFile reads the file. No file is no error and no source. held is not zero for a file that is to be
+// left alone (hold): one that can be used, has sources, and was saved at a time (held) that is later than now
+// or a day or more before it. Its sources are not looked at then.
+func readDayFile(path string, now time.Time) (devs map[string]*dayDevice, held time.Time, err error) {
 	m, ok := dayMinute(now)
 	if !ok {
-		return nil, savedAt, errors.New("the panel's clock is not a time the history can be kept for")
+		return nil, held, errors.New("the panel's clock is not a time the history can be kept for")
 	}
 	raw, err := statefile.ReadFile(path, maxDayFile)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, savedAt, nil
+			return nil, held, nil
 		}
-		return nil, savedAt, err
+		return nil, held, err
 	}
 	var f dayFileIn
 	if err := json.Unmarshal(raw, &f); err != nil {
-		return nil, savedAt, fmt.Errorf("it is not what the panel writes (%d bytes: %v)", len(raw), err)
+		return nil, held, fmt.Errorf("it is not what the panel writes (%d bytes: %v)", len(raw), err)
 	}
 	if f.Version != dayFileVersion || f.StepS != DayStepS {
-		return nil, savedAt, fmt.Errorf("it is of another version (version %d, step %d s; this panel reads version %d with %d s)", f.Version, f.StepS, dayFileVersion, DayStepS)
+		return nil, held, fmt.Errorf("it is of another version (version %d, step %d s; this panel reads version %d with %d s)", f.Version, f.StepS, dayFileVersion, DayStepS)
 	}
 	if len(f.Devices) > MaxDayDevices {
-		return nil, savedAt, fmt.Errorf("it holds %d sources, more than the %d this panel ever writes", len(f.Devices), MaxDayDevices)
+		return nil, held, fmt.Errorf("it holds %d sources, more than the %d this panel ever writes", len(f.Devices), MaxDayDevices)
 	}
-	if f.SavedAt.After(now) {
+	if !f.SavedAt.IsZero() && len(f.Devices) > 0 && !dayFileFits(f.SavedAt.Time, now) {
 		return nil, f.SavedAt.Time, nil
 	}
 	out := map[string]*dayDevice{}
@@ -290,7 +311,7 @@ func readDayFile(path string, now time.Time) (devs map[string]*dayDevice, savedA
 			out[id] = dv
 		}
 	}
-	return out, f.SavedAt.Time, nil
+	return out, held, nil
 }
 
 // device is one source of the file as a ring, or nil when nothing of it can be used: a bad id, lists that do

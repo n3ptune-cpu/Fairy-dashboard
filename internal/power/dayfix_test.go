@@ -665,7 +665,7 @@ func TestDayFileFromALaterTimeTheEdges(t *testing.T) {
 	if now, _ := os.ReadFile(path); string(now) == string(was) {
 		t.Error("a file that was given up, with nothing measured since, was not replaced")
 	}
-	if h := loaded(path, at(1, 0, 2)); !h.heldUntil.IsZero() {
+	if h := loaded(path, at(1, 0, 2)); !h.heldAt.IsZero() {
 		t.Error("the start after that waits for the file again")
 	}
 
@@ -723,8 +723,95 @@ func TestDayFileWithoutAUsableSavedAtIsStillRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		d := loaded(path, at(0, 1, 30))
-		if n := minutes(d, "plug-a", at(0, 1, 30)); n != 2 || !d.heldUntil.IsZero() {
-			t.Errorf("saved_at %s: %d minutes read, want 2 (held: %v)", name, n, !d.heldUntil.IsZero())
+		if n := minutes(d, "plug-a", at(0, 1, 30)); n != 2 || !d.heldAt.IsZero() {
+			t.Errorf("saved_at %s: %d minutes read, want 2 (held: %v)", name, n, !d.heldAt.IsZero())
 		}
 	}
+}
+
+// The clock can be wrong the other way at a start: ahead. To a panel whose clock is two days ahead for its
+// first minute, every minute of the file is older than a day: none was taken, and the next write replaced the
+// file with the nothing the panel had. Such a file (saved more than a day before the clock's time) is left
+// alone like one from a later time: read when the clock is back within its day, replaced after an hour.
+func TestDayFileOlderThanADayByTheClockIsKeptUntilTheClockIsBack(t *testing.T) {
+	log := captureLog(t)
+	path, was := tenHours(t) // readings from 12:00 to 21:59, saved at 22:00
+	e := loaded(path, at(58, 0, 0))
+	for s := 0; s < 60; s += 5 { // a minute with the clock two days ahead
+		rec(e, at(58, 0, s), 50)
+		e.SaveIfDue(at(58, 0, s))
+	}
+	if e.Flush(at(58, 1, 0), 5*time.Second) {
+		t.Error("a stop with the clock two days ahead says that everything is written")
+	}
+	if now, _ := os.ReadFile(path); string(now) != string(was) {
+		t.Fatal("the file was replaced while the clock was two days ahead")
+	}
+	if n := strings.Count(log.String(), "saved more than a day before"); n != 1 {
+		t.Errorf("the log says %d times that the file is left alone, want once:\n%s", n, log)
+	}
+	for s := 0; s < 12*60; s += 5 { // the clock is right: twelve minutes of it
+		rec(e, at(10, 1, s), 50)
+		e.SaveIfDue(at(10, 1, s))
+		settled(t, e)
+	}
+	if !e.Flush(at(10, 13, 0), 5*time.Second) {
+		t.Fatal("not written after the clock was right")
+	}
+	if n := minutes(e, "plug-a", at(10, 13, 0)); n != 612 {
+		t.Errorf("after the clock was right: %d minutes, want the file's 600 and twelve since", n)
+	}
+	if f := loaded(path, at(10, 14, 0)); minutes(f, "plug-a", at(10, 14, 0)) != 612 || minutes(f, "pc-a/plug-b", at(10, 14, 0)) != 600 {
+		t.Errorf("in the file after that: %d and %d minutes", minutes(f, "plug-a", at(10, 14, 0)), minutes(f, "pc-a/plug-b", at(10, 14, 0)))
+	}
+	// the edge: 24 hours after it was saved, to the second, the file's day is over; before that it is read
+	// (its last minute, 21:59, is in the day until 21:58:59)
+	if g := loaded(path2(t, was), at(33, 58, 59)); g.Len() != 2 || !g.heldAt.IsZero() {
+		t.Errorf("a minute before the file is a day old: %d sources read", g.Len())
+	}
+	if g := loaded(path2(t, was), at(33, 59, 59)); !g.heldAt.IsZero() {
+		t.Error("a second before the file is a day old it is left alone")
+	}
+	if g := loaded(path2(t, was), at(34, 0, 0)); g.Len() != 0 || g.heldAt.IsZero() {
+		t.Errorf("a day after the file was saved: %d sources read, left alone: %v", g.Len(), !g.heldAt.IsZero())
+	}
+
+	// The panel was off for two days and its clock is right: the file's day is over. It is left alone for the
+	// hour all the same (the panel cannot tell), and then replaced with what was measured since the start.
+	path, was = tenHours(t)
+	h := loaded(path, at(58, 0, 0))
+	for i := 0; i < 60; i++ {
+		rec(h, at(58, i, 0), 50)
+		h.SaveIfDue(at(58, i, 0))
+		settled(t, h)
+	}
+	if now, _ := os.ReadFile(path); string(now) != string(was) {
+		t.Fatal("the file was replaced within the hour")
+	}
+	rec(h, at(59, 0, 0), 50)
+	h.SaveIfDue(at(59, 0, 0))
+	if !h.Flush(at(59, 0, 1), 5*time.Second) {
+		t.Fatal("not written after the hour")
+	}
+	if f := loaded(path, at(59, 0, 2)); minutes(f, "plug-a", at(59, 0, 2)) != 61 || f.Len() != 1 {
+		t.Errorf("the file after the hour: %d minutes of plug-a, %d sources", minutes(f, "plug-a", at(59, 0, 2)), f.Len())
+	}
+	// a file that holds no source is not waited for
+	empty := dayPath(t)
+	if err := os.WriteFile(empty, []byte(`{"version":1,"step_s":60,"saved_at":"2026-11-10T12:00:00Z","devices":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if k := loaded(empty, at(0, 0, 0)); !k.heldAt.IsZero() {
+		t.Error("an old file without a source is left alone for an hour")
+	}
+}
+
+// path2 is a new file with the given content.
+func path2(t *testing.T, content []byte) string {
+	t.Helper()
+	p := dayPath(t)
+	if err := os.WriteFile(p, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

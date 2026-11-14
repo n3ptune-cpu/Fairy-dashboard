@@ -299,7 +299,10 @@ of each plug that is linked to the machine.
   not up yet) finds a file "from the future". It leaves that file alone, the log says so, and reads it as
   soon as the clock has passed the time the file was saved at; the graphs are empty until then. If the clock
   does not get there within an hour (it was the clock at the last stop that was wrong), the file is replaced
-  with what the panel has measured since. A single reading under a clock a day or more back is not taken;
+  with what the panel has measured since. The same for a clock that is ahead at the start: a file that was
+  saved more than a day before the clock's time is left alone for that hour, and read when the clock comes
+  back within its day. (A panel that was off for more than a day finds such a file too: it writes nothing
+  in its first hour.) A single reading under a clock a day or more back is not taken;
   a clock that stays there for ten minutes is believed, and the graph begins anew. A clock set back by less
   than a day empties what was measured after the new time.
 * **Renamed, linked elsewhere, removed.** The day belongs to the plug, by its id. A new name keeps it. A plug

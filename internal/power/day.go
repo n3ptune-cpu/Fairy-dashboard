@@ -92,7 +92,7 @@ type DayStore struct {
 	saving    chan struct{}        // not nil while a write is on its way; closed when it has ended
 	savedAt   time.Time            // when the last write was started (or the file was read)
 	loadedAt  time.Time            // when the file's days came into the store (zero: none did)
-	heldUntil time.Time            // not zero: the file is left alone until the clock has passed this (dayfile.go: hold)
+	heldAt    time.Time            // not zero: the file is left alone; it was saved at this time (dayfile.go: hold)
 	heldSince time.Time            // when that began
 	forgot    map[string]time.Time // the hosts ("<agent id>/") that were removed, and when (Forget)
 	saveErr   string               // how the last write failed (failure), as it was logged
@@ -471,7 +471,7 @@ func (d *DayStore) forgotten(id string) bool {
 // forgetOld takes the removals that are over out of the list: a minute old (by a clock that may have gone
 // back), and no file is waiting to be read. Caller holds d.mu.
 func (d *DayStore) forgetOld(now time.Time) {
-	if !d.heldUntil.IsZero() {
+	if !d.heldAt.IsZero() {
 		return
 	}
 	for prefix, at := range d.forgot {
