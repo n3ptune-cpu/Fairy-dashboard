@@ -234,6 +234,11 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 		}
 		return answer(m.Runs.Go(in.Request(), in.Approval))
 	}
+	if path == api.PathRunArm || path == api.PathRunGo {
+		// a checker that keeps no runs (an agent as v0.8.0 was has no such route at all): the real agent's answer
+		ref := approval.NoRuns()
+		return refusal(ref)
+	}
 	var b struct {
 		Run      string        `json:"run"`
 		Action   string        `json:"action"`
@@ -298,6 +303,7 @@ type GatedBackend struct {
 	relays   map[string]func(path string, body any) (int, jsonx.M)
 	fails    map[string]error
 	stale    map[string]jsonx.M
+	live     map[string]func() jsonx.M
 }
 
 // NewGatedBackend wraps b.
@@ -376,6 +382,22 @@ func (g *GatedBackend) Stale(id string, block jsonx.M) {
 	}
 }
 
+// Live makes the agent id's /metrics carry the approval block fn returns at every poll (nil: no block), whether
+// or not the id is a Machine: for an agent whose check is somebody else's (a real agent behind Relay). A nil fn
+// ends it.
+func (g *GatedBackend) Live(id string, fn func() jsonx.M) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.live == nil {
+		g.live = map[string]func() jsonx.M{}
+	}
+	if fn == nil {
+		delete(g.live, id)
+		return
+	}
+	g.live[id] = fn
+}
+
 // Fail makes every POST to the agent id fail with err (a machine that does not answer control requests).
 func (g *GatedBackend) Fail(id string, err error) {
 	g.mu.Lock()
@@ -390,8 +412,16 @@ func (g *GatedBackend) Fail(id string, err error) {
 func (g *GatedBackend) FetchAgentMetrics(ctx context.Context, a config.Agent, timeout time.Duration) (jsonx.M, error) {
 	out, err := g.Backend.FetchAgentMetrics(ctx, a, timeout)
 	g.mu.Lock()
-	m, old := g.machines[a.ID], g.stale[a.ID]
+	m, old, live := g.machines[a.ID], g.stale[a.ID], g.live[a.ID]
 	g.mu.Unlock()
+	if live != nil && err == nil {
+		if block := live(); block != nil {
+			out["approval"] = block
+		} else {
+			delete(out, "approval")
+		}
+		return out, err
+	}
 	switch {
 	case err != nil || m == nil:
 	case old != nil && len(old) == 0:

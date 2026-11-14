@@ -125,6 +125,18 @@ func (i *Issuer) sign(claims map[string]any) string {
 	return in + "." + b64(sig)
 }
 
+// Mint is an ID token as the token endpoint hands one out for the client and the nonce, without the round
+// trip through the browser: for a test that plays the panel's part towards a machine itself.
+func (i *Issuer) Mint(clientID, nonce string) string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	now := i.Now()
+	tok := i.sign(map[string]any{"iss": i.Srv.URL, "aud": clientID, "sub": i.Sub, "nonce": nonce, "iat": now.Unix(),
+		"exp": now.Add(time.Hour).Unix(), "auth_time": now.Unix(), "amr": []string{"phr"}})
+	i.tokens = append(i.tokens, tok)
+	return tok
+}
+
 // URL is the issuer's address (its "iss").
 func (i *Issuer) URL() string { return i.Srv.URL }
 

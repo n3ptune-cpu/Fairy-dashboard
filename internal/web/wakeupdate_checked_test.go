@@ -55,6 +55,8 @@ type runRig struct {
 	seen  []string        // every answer of the panel to the browser
 	kept  []time.Duration // for how long each ticket was to be kept (the keeper's timer)
 	relay map[string]int
+	// real: the machines whose agent is Fairy-agent's real HTTP handler (contract_runs_test.go), by id
+	real map[string]*realAgent
 }
 
 // newRunRig is the farm with the given machines as ones that check approvals themselves and take runs. Each
@@ -62,7 +64,14 @@ type runRig struct {
 // now, like the farm's other machines; all of them are switched on for runs.
 func newRunRig(t *testing.T, checked ...string) *runRig {
 	t.Helper()
-	r := &runRig{approvalEnv: newApprovalEnv(t), m: map[string]*testutil.Machine{}, boot: map[string]time.Time{}, log: &lockedBuf{}, relay: map[string]int{}}
+	return newRunRigOpt(t, nil, checked...)
+}
+
+// newRunRigOpt is newRunRig; the machines of real get Fairy-agent's real HTTP handler in the place of the test
+// machine (the value: whether its checker takes runs).
+func newRunRigOpt(t *testing.T, real map[string]bool, checked ...string) *runRig {
+	t.Helper()
+	r := &runRig{real: map[string]*realAgent{}, approvalEnv: newApprovalEnv(t), m: map[string]*testutil.Machine{}, boot: map[string]time.Time{}, log: &lockedBuf{}, relay: map[string]int{}}
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(r.log, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(old) })
@@ -75,6 +84,15 @@ func newRunRig(t *testing.T, checked ...string) *runRig {
 	for _, id := range checked {
 		m := r.gb.AddRuns(t, id)
 		r.m[id] = m
+		if runs, isReal := real[id]; isReal {
+			// the test machine only lends its folder (the trust file) and its name; every request goes to the real agent
+			r.b.Mu.Lock()
+			f.on[id], f.booted[id] = true, f.now.Add(-time.Hour)
+			r.b.Mu.Unlock()
+			r.boot[id] = f.booted[id]
+			r.real[id] = newRealAgent(t, r, id, m.TrustPath, runs)
+			continue
+		}
 		m.SetNow(func() time.Time { return f.now })
 		m.SetUptime(func() time.Duration {
 			r.b.Mu.Lock()
@@ -99,6 +117,22 @@ func newRunRig(t *testing.T, checked ...string) *runRig {
 	}
 	f.tick()
 	for _, id := range checked {
+		if ra := r.real[id]; ra != nil {
+			r.setTrust(t, r.m[id])
+			ra.run()                           // its gate looks at the trust file now (a real one does every few seconds)
+			time.Sleep(300 * time.Millisecond) // and the agent keeps an answer of GET /metrics for a quarter of a second
+			f.tick()
+			if ap := r.s.Poller.ApprovalOf(id); ap == nil || ap.State != api.ApprovalRequired {
+				t.Fatalf("%s: the panel does not see the real agent's state as required: %+v", id, ap)
+			}
+			r.acceptShown(t, r.m[id])
+			ra.look()
+			f.tick()
+			if b := r.s.Poller.BindingOf(id); (b.Record.Runs == 1) != ra.runs {
+				t.Fatalf("%s: what the real agent says about runs is not on record: %+v", id, b.Record)
+			}
+			continue
+		}
 		r.require(t, r.m[id])
 		// its run watch looks, as it does every second on a real machine: the run record is made in this boot (a
 		// record that is first made in the boot of a ticket takes no ticket from before)
@@ -136,6 +170,17 @@ func (r *runRig) tick(n int) {
 			r.b.Mu.Lock()
 			on, booted := r.f.on[id], r.f.booted[id]
 			r.b.Mu.Unlock()
+			if ra := r.real[id]; ra != nil {
+				if !booted.Equal(r.boot[id]) {
+					r.boot[id] = booted
+					ra.start("boot-" + booted.Format(time.RFC3339))
+				}
+				ra.reachable(on && !r.f.now.Before(booted))
+				if on && !r.f.now.Before(booted) {
+					ra.look()
+				}
+				continue
+			}
 			if !booted.Equal(r.boot[id]) {
 				r.boot[id] = booted
 				m.SetBoot("boot-" + booted.Format(time.RFC3339))
