@@ -611,6 +611,10 @@ const (
 	// and the counter never agree to the last digit).
 	energyCounted = 0.5
 	energySteps   = 3
+	// energyShort: over all the stretches that count with the counter, the counter may show this part less
+	// than their watts and still be the day's number (the watts are samples, the counter is the device's own
+	// sum). What it shows less beyond that it has missed: that is added, as estimated.
+	energyShort = 0.05
 	// energyStill: two counter values closer than this are the same value.
 	energyStill = 1e-6
 	// energyMixedFrom: the energy is called "mixed" when more than this part of it is estimated, and
@@ -638,6 +642,12 @@ const (
 //     day's highest watts) and that the watts since the counter's last change do not account for either
 //     (energyCoarse) is a jump: both end the stretch, whose minutes then count with their watts, and the
 //     counter goes on from the new value. Never negative energy, and never the new value as an increase.
+//   - The stretches that count with the counter are then looked at together. A stretch is judged with a
+//     slack of the counter's own steps, and for a counter whose total comes every half hour a "step" is half
+//     an hour of energy: some hours of standing still pass as counted. So over all of them the counter must
+//     show what their watts show, to within energyShort; what it shows less is added, as estimated. (A late
+//     total, and a step that falls into the next stretch, even out over the day. A counter that shows more
+//     than the watts is the counter's: the watts are samples.)
 //   - Minutes with watts that no stretch covers count with their watts: before the first counter value and in
 //     its own minute (a counter value says nothing about the time before it), after the counter's last
 //     change, and all of them for a device without a counter or with one that never moved.
@@ -698,12 +708,16 @@ func dayEnergy(bs []dayBucket, maxW float64) (total, est float64) {
 		step = math.Min(step, s.up)
 	}
 	total = est
+	var watts, counted float64 // of the stretches that count with the counter: their watts, and the counter's increase
 	for _, s := range stretches {
 		if s.up >= energyCounted*s.watts-energySteps*step {
-			total += s.up
+			total, watts, counted = total+s.up, watts+s.watts, counted+s.up
 		} else {
 			total, est = total+s.watts, est+s.watts-s.up
 		}
+	}
+	if short := watts - counted; short > energyShort*watts {
+		total, est = total+short, est+short
 	}
 	return total, est
 }

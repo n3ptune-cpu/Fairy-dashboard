@@ -63,10 +63,17 @@ func TestDayEnergyACounterThatComesInStepsIsNotCountedTwice(t *testing.T) {
 	if !near(kwh, 2.40, 0.005) || est > 0.06 || label == "estimated" {
 		t.Errorf("a counter in half-hour steps: %.3f kWh, %.3f estimated, %s; want 2.40 with at most the last half hour estimated", kwh, est, label)
 	}
-	// and one whose steps and whose watts do not agree to the last digit (the watts read 20 % high): still the counter
-	kwh, est, label = en(1440, flat(120), func(i int) float64 { return 300 + math.Floor(float64(i)/30)*0.05 })
+	// and one whose steps and whose watts do not agree to the last digit (the watts read 4 % high): still the counter
+	kwh, est, label = en(1440, flat(104), func(i int) float64 { return 300 + math.Floor(float64(i)/30)*0.05 })
 	if kwh > 2.45 || kwh < 2.35 || label != "counter" && label != "mixed" || est > 0.07 {
-		t.Errorf("a counter in half-hour steps under watts that read high: %.3f kWh, %.3f estimated, %s", kwh, est, label)
+		t.Errorf("a counter in half-hour steps under watts that read a little high: %.3f kWh, %.3f estimated, %s", kwh, est, label)
+	}
+	// Watts that are a fifth over the counter all day are not "the last digit": the panel cannot know which of
+	// the two is right, and takes the higher one, marked (dayenergy_slow_test.go: a counter that missed a
+	// fifth of the day looks just like this).
+	kwh, est, label = en(1440, flat(120), func(i int) float64 { return 300 + math.Floor(float64(i)/30)*0.05 })
+	if !near(kwh, 2.88, 0.005) || label != "mixed" || !near(est, 0.53, 0.01) {
+		t.Errorf("a counter in half-hour steps under watts that read a fifth higher: %.3f kWh, %.3f estimated, %s; want the watts' 2.880, mixed", kwh, est, label)
 	}
 }
 
@@ -74,32 +81,33 @@ func TestDayEnergyACounterThatComesInStepsIsNotCountedTwice(t *testing.T) {
 // over the stretch must be at least half of the stretch's watts, less three of the counter's own steps.
 func TestDayEnergyWhereAStretchCountsWithItsWatts(t *testing.T) {
 	// One stretch of n minutes at 60 W (0.001 kWh a minute) in which the counter stands still and then goes up
-	// by `up`; before and after it the counter ticks every minute by 0.001 (which is its step: three are 0.003).
+	// by `up`; before and after it the counter ticks every minute by 0.001 (which is its step: three are 0.003),
+	// for 400 minutes each: what the one stretch is short of is little in the day (dayenergy_slow_test.go).
 	stretch := func(n int, up float64) (kwh, est float64) {
-		kwh, est, _ = en(200+n, flat(60), func(i int) float64 {
+		kwh, est, _ = en(800+n, flat(60), func(i int) float64 {
 			switch {
-			case i < 100:
+			case i < 400:
 				return 10 + float64(i)*0.001
-			case i < 100+n:
-				return 10 + 99*0.001
+			case i < 400+n:
+				return 10 + 399*0.001
 			}
-			return 10 + 99*0.001 + up + float64(i-100-n)*0.001
+			return 10 + 399*0.001 + up + float64(i-400-n)*0.001
 		})
 		return kwh, est
 	}
 	// 20 minutes still (0.021 kWh of watts with the minute of the step), then +0.008: half of 0.021 less 0.003 is
 	// 0.0075, and 0.008 is not under it: the counter's
-	if kwh, est := stretch(20, 0.008); !near(kwh, 0.207, 0.0006) || est > 0.0015 {
-		t.Errorf("a step of 0.008 after 20 still minutes: %.4f kWh, %.4f estimated; want the counter's 0.207", kwh, est)
+	if kwh, est := stretch(20, 0.008); !near(kwh, 0.807, 0.0006) || est > 0.0015 {
+		t.Errorf("a step of 0.008 after 20 still minutes: %.4f kWh, %.4f estimated; want the counter's 0.807", kwh, est)
 	}
 	// the same with +0.007: under the line, so the stretch counts with its watts (0.021)
-	if kwh, est := stretch(20, 0.007); !near(kwh, 0.220, 0.0006) || !near(est, 0.015, 0.0006) {
-		t.Errorf("a step of 0.007 after 20 still minutes: %.4f kWh, %.4f estimated; want 0.220 with 0.015 estimated", kwh, est)
+	if kwh, est := stretch(20, 0.007); !near(kwh, 0.820, 0.0006) || !near(est, 0.015, 0.0006) {
+		t.Errorf("a step of 0.007 after 20 still minutes: %.4f kWh, %.4f estimated; want 0.820 with 0.015 estimated", kwh, est)
 	}
 	// three steps of slack: 6 still minutes (0.007 of watts) and +0.001 is the counter's (half of 0.007 less
 	// 0.003 is 0.0005); without the slack it would not be (0.0035)
-	if kwh, est := stretch(6, 0.001); !near(kwh, 0.200, 0.0006) || est > 0.0015 {
-		t.Errorf("a step of 0.001 after 6 still minutes: %.4f kWh, %.4f estimated; want the counter's 0.200", kwh, est)
+	if kwh, est := stretch(6, 0.001); !near(kwh, 0.800, 0.0006) || est > 0.0015 {
+		t.Errorf("a step of 0.001 after 6 still minutes: %.4f kWh, %.4f estimated; want the counter's 0.800", kwh, est)
 	}
 	// minutes with watts and no counter value at all in between belong to the stretch: 100 minutes at 60 W
 	// without a counter value, then the counter is 0.001 higher than before them
@@ -308,10 +316,10 @@ func TestDayEnergyACoarseCounterIsNotAJump(t *testing.T) {
 		if i < 40 {
 			return 5
 		}
-		return 5.395 + float64(i-40)*0.001
+		return 5.395 + float64(i-40)*0.005
 	}
-	if kwh, _, _ := en(100, flat(300), late); !near(kwh, 0.005+0.395+0.059, 0.002) {
-		t.Errorf("a step of 0.395 kWh after 0.200 kWh of watts with its own minute: %.3f kWh, want it counted (0.459)", kwh)
+	if kwh, _, _ := en(100, flat(300), late); !near(kwh, 0.005+0.395+0.295, 0.002) {
+		t.Errorf("a step of 0.395 kWh after 0.200 kWh of watts with its own minute: %.3f kWh, want it counted (0.695)", kwh)
 	}
 	// and the review's case stays: 19 kWh after five hours of standing still is no coarse counter
 	if kwh, _, _ := en(360, flat(60), stuck(19)); !near(kwh, 0.360, 0.002) {
