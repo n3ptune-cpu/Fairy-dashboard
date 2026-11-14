@@ -100,6 +100,8 @@ func (c *cli) configCheck() int {
 	notes, inferred = append(notes, okLines...), append(inferred, said...)
 	okLines, ignored, said := hostOptionsCheck(cfg) // "Edit host": what the panel changed about these links (state.json)
 	notes, problems, inferred = append(notes, okLines...), append(problems, ignored...), append(inferred, said...)
+	dayLine, said := powerDayCheck(cfg) // the power sources' last 24 hours: where they are kept (power-day.json)
+	notes, inferred = append(notes, dayLine), append(inferred, said...)
 	for _, e := range secretEnvs(cfg) {
 		if os.Getenv(e.env) != "" {
 			notes = append(notes, fmt.Sprintf("%s (%s): present", e.env, e.what))
