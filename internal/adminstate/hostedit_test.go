@@ -33,23 +33,43 @@ func TestHostName(t *testing.T) {
 }
 
 // A word of a host's name is written in one alphabet: a Latin word with a Cyrillic or Greek letter in it is
-// refused, because it reads as another host's name and is not that name. Names in other alphabets, and names
-// of several words in several alphabets, are names.
+// refused, because it reads as another host's name and is not that name. A word is a run of letters: it ends
+// at a space, a hyphen, a digit or a sign. Names in other alphabets, and names of several words in several
+// alphabets, are names (second look of the review, a1: "Сервер-NAS" was refused, because words were split at
+// spaces only).
 func TestHostNameIsOneAlphabetAWord(t *testing.T) {
-	for what, raw := range map[string]string{"a Cyrillic А in a Latin word": "PC-А", "a Cyrillic о": "Den-bоx", "a Greek Α": "PC-Α", "a Greek ο in a word": "Dοn",
-		"in the second word": "Big PС", "Latin in a Cyrillic word": "Сервер-X1"} {
-		if got, err := HostName(raw); err == nil || !strings.Contains(err.Error(), "one alphabet") {
-			t.Errorf("%s: %q taken as %q (%v)", what, raw, got, err)
+	for what, c := range map[string]struct{ raw, word string }{
+		"a Cyrillic о":                     {"Den-bоx", "bоx"},
+		"a Greek ο in a word":              {"Dοn", "Dοn"},
+		"in the second word":               {"Big PС", "PС"},
+		"a Cyrillic С between two hyphens": {"A-PС-1", "PС"},
+		"an accent does not end a word":    {"Büо", "Büо"},
+		"a combining accent does not":      {"Bu\u0308\u043e", "Bu\u0308\u043e"},
+		"the Greek letter mu and Latin":    {"μServer", "μServer"},
+		"an apostrophe ends a word":        {"Bоb's PC", "Bоb"},
+	} {
+		got, err := HostName(c.raw)
+		if err == nil || err.Error() != fmt.Sprintf("name mixes Latin letters with Cyrillic or Greek ones in one word (%q): write the word in one alphabet", c.word) {
+			t.Errorf("%s: %q taken as %q (%v)", what, c.raw, got, err)
 		}
 	}
-	for _, raw := range []string{"Сервер", "Сервер 2", "Büro ПК", "Σπίτι PC", "机房-1", "サーバー A", "Ærø NAS", "PC-Á", "PC-A."} {
+	for _, raw := range []string{"Сервер", "Сервер 2", "Büro ПК", "Σπίτι PC", "机房-1", "サーバー A", "Ærø NAS", "PC-Á", "PC-A.",
+		// a word in one alphabet joined to a word in another by a hyphen, a digit or a sign
+		"Сервер-NAS", "ПК-Dell", "NAS-Кухня", "Σπίτι-PC", "Сервер-X1", "ПК2Dell", "NAS_Кухня", "Дача/PC", "PC-А" /* a Cyrillic А: NameKey's to catch */, "PC-Α", /* a Greek one */
+		"µServer" /* the micro sign of a keyboard, U+00B5: no Greek letter */} {
 		if got, err := HostName(raw); err != nil || got != raw {
 			t.Errorf("%q: %q, %v", raw, got, err)
 		}
 	}
-	// the reader does not take such a name from state.json either
+	// ... and what the rule lets through as a name is still the SAME name as its look-alike
+	for _, pair := range [][2]string{{"PC-А", "PC-A"}, {"PC-Α", "PC-A"}, {"ΡϹ-Α", "PC-A"}, {"NAS-О", "NAS-O"}} {
+		if NameKey(pair[0]) != NameKey(pair[1]) {
+			t.Errorf("%q and %q are two names (%q, %q)", pair[0], pair[1], NameKey(pair[0]), NameKey(pair[1]))
+		}
+	}
+	// the reader does not take a mixed word from state.json either
 	dir := t.TempDir()
-	writeState(t, dir, `{"host_options": {"hosts": {"pc-b": {"name": "PC-А"}}}}`)
+	writeState(t, dir, `{"host_options": {"hosts": {"pc-b": {"name": "PС-A"}}}}`)
 	if o, ignored := New(dir).HostOptionsRead(); len(o.Hosts) != 0 || len(ignored) != 1 {
 		t.Errorf("a mixed name in state.json: %+v %q", o.Hosts, ignored)
 	}
@@ -63,6 +83,12 @@ func TestNameKey(t *testing.T) {
 			"РС-А" /* all Cyrillic */, "ΡC-Α" /* Greek Ρ and Α */, "PC‐A" /* U+2010 */},
 		{"Relay A", "relay  a", "RELAY A", "Relay　A", "relay	a"},
 		{"NAS", "ΝΑЅ", "nas"},
+		// letters whose lower case is reached only through their upper case (the fold goes both ways): the long
+		// s, the dotless i, the final sigma, the micro sign and the Greek mu
+		{"Server", "\u017ferver", "SERVER"},
+		{"Mini", "M\u0131n\u0131", "MINI"},
+		{"Σπίτις", "σπίτισ"},
+		{"µ-box", "μ-box", "Μ-BOX"},
 	}
 	for _, group := range same {
 		for _, n := range group[1:] {

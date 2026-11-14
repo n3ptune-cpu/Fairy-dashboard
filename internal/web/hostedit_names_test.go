@@ -96,15 +96,17 @@ func TestEditHostNameIsCheckedWhenItIsStored(t *testing.T) {
 func TestEditHostNameLookAlikes(t *testing.T) {
 	r := hedSetup(t)
 	for what, c := range map[string]struct{ name, want string }{
-		"a Cyrillic A in a Latin word": {"PC-А", "name mixes Latin letters with Cyrillic or Greek ones in one word"},
-		"a Greek A in a Latin word":    {"PC-Α", "name mixes Latin letters with Cyrillic or Greek ones in one word"},
-		"all of it Cyrillic":           {"РС-А", "another host is called PC-A already"},
-		"the non-breaking hyphen":      {"PC‑A", "another host is called PC-A already"},
-		"an en dash":                   {"PC–A", "another host is called PC-A already"},
-		"the minus sign":               {"PC−A", "another host is called PC-A already"},
-		"full-width letters":           {"ＰＣ-Ａ", "another host is called PC-A already"},
-		"a full-width hyphen":          {"PC－A", "another host is called PC-A already"},
-		"two spaces and another case":  {"relay  a", "another host is called Relay A already"},
+		"a Cyrillic A behind the hyphen": {"PC-А", "another host is called PC-A already"},
+		"a Greek A behind the hyphen":    {"PC-Α", "another host is called PC-A already"},
+		"a Cyrillic C in a Latin word":   {"PС-A", `name mixes Latin letters with Cyrillic or Greek ones in one word (\"PС\"): write the word in one alphabet`},
+		"the Greek letter mu and Latin":  {"μServer", `name mixes Latin letters with Cyrillic or Greek ones in one word (\"μServer\"): write the word in one alphabet`},
+		"all of it Cyrillic":             {"РС-А", "another host is called PC-A already"},
+		"the non-breaking hyphen":        {"PC‑A", "another host is called PC-A already"},
+		"an en dash":                     {"PC–A", "another host is called PC-A already"},
+		"the minus sign":                 {"PC−A", "another host is called PC-A already"},
+		"full-width letters":             {"ＰＣ-Ａ", "another host is called PC-A already"},
+		"a full-width hyphen":            {"PC－A", "another host is called PC-A already"},
+		"two spaces and another case":    {"relay  a", "another host is called Relay A already"},
 	} {
 		p := r.put("pc-b", map[string]any{"name": c.name})
 		if p.code != 422 || !strings.Contains(string(p.raw), c.want) {
@@ -115,7 +117,10 @@ func TestEditHostNameLookAlikes(t *testing.T) {
 		t.Fatalf("a look-alike was stored: %v", r.storedOptions())
 	}
 	// honest names stay possible: another alphabet in a word of its own, a dot, an accent
-	for _, name := range []string{"PC-A.", "PC-Á", "Дача", "Дача PC", "Σπίτι 2"} {
+	for _, name := range []string{"PC-A.", "PC-Á", "Дача", "Дача PC", "Σπίτι 2",
+		// a word in one alphabet joined to a word in another by a hyphen (second look of the review, a1), and the
+		// micro sign of a keyboard, which is no Greek letter
+		"Сервер-NAS", "ПК-Dell", "NAS-Кухня", "Σπίτι-PC", "µServer"} {
 		if p := r.ok("pc-b", map[string]any{"name": name}); r.row("pc-b")["name"] != name {
 			t.Errorf("%q: %s, shown as %v", name, p.raw, r.row("pc-b")["name"])
 		}

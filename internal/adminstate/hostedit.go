@@ -51,22 +51,29 @@ const MaxWolMACs = 8
 // name.
 //
 // One more rule than a model name has, because a host's name is typed to confirm a power action and must not
-// be taken for another host's: a word of it is written in ONE alphabet. A word with Latin letters and
-// Cyrillic or Greek ones ("PC-А" with a Cyrillic А) is refused; "Büro ПК", two words in two alphabets, is a
-// name. (Whether a name is another host's is not asked here: NameKey, and the API that knows the hosts.)
+// be taken for another host's: a word of it is written in ONE alphabet. A word is a run of letters: it ends
+// at a space, a hyphen, a digit or any other sign. So "Сервер-NAS", "ПК-Dell" and "Büro ПК" are names (a
+// Cyrillic word and a Latin word), and "Dоn" with a Cyrillic о in a Latin word is refused: nobody writes it
+// by accident, and it reads as "Don". "μServer" with the Greek letter mu is refused by the same rule (one word,
+// two alphabets), and the message names the word; the micro sign "µ" of a keyboard is no Greek letter and is
+// taken.
+//
+// A word that is all of another alphabet next to a Latin one ("PC-А" with a Cyrillic А) is a name by this
+// rule. Whether it is another host's name is not asked here: NameKey makes it the same name as "PC-A", and
+// the API that knows the hosts refuses it then.
 func HostName(raw string) (string, error) {
 	name, err := labelText(raw, "name", MaxHostName)
 	if err != nil {
 		return "", err
 	}
-	for _, word := range strings.Fields(name) {
+	for _, word := range strings.FieldsFunc(name, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.Is(unicode.M, r) }) {
 		latin, other := false, false
 		for _, r := range word {
 			latin = latin || unicode.Is(unicode.Latin, r)
 			other = other || unicode.In(r, unicode.Cyrillic, unicode.Greek)
 		}
 		if latin && other {
-			return "", errors.New("name mixes Latin letters with Cyrillic or Greek ones in one word: write the word in one alphabet")
+			return "", fmt.Errorf("name mixes Latin letters with Cyrillic or Greek ones in one word (%q): write the word in one alphabet", word)
 		}
 	}
 	return name, nil
@@ -78,7 +85,7 @@ func HostName(raw string) (string, error) {
 var nameLookalikes = map[rune]rune{
 	'а': 'a', 'в': 'b', 'е': 'e', 'к': 'k', 'м': 'm', 'н': 'h', 'о': 'o', 'р': 'p', 'с': 'c', 'т': 't', 'у': 'y', 'х': 'x',
 	'і': 'i', 'ј': 'j', 'ѕ': 's', 'ԁ': 'd', 'ԛ': 'q', 'ԝ': 'w',
-	'α': 'a', 'β': 'b', 'ε': 'e', 'ζ': 'z', 'η': 'h', 'ι': 'i', 'κ': 'k', 'μ': 'm', 'ν': 'n', 'ο': 'o', 'ρ': 'p', 'τ': 't', 'υ': 'y', 'χ': 'x',
+	'α': 'a', 'β': 'b', 'ε': 'e', 'ζ': 'z', 'η': 'h', 'ι': 'i', 'κ': 'k', 'μ': 'm', 'ν': 'n', 'ο': 'o', 'ρ': 'p', 'τ': 't', 'υ': 'y', 'χ': 'x', 'ϲ': 'c',
 }
 
 // NameKey is the form of a name under which two names count as ONE name: what a person reading a row, or
