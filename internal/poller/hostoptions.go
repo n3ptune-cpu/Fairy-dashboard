@@ -38,6 +38,7 @@ type linkNotes struct {
 	mu      sync.Mutex
 	rows    map[string]string // agent id -> the rows its overrides name that the panel does not have
 	unknown string            // the agent ids with overrides that are no agent's
+	wol     map[string]string // machine id -> why its Wake-on-LAN decisions are not used (hostedit.go)
 }
 
 func (p *Poller) notes() *linkNotes { return &p.linkNotes }

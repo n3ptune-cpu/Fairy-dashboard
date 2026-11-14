@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/normalise"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/textsafe"
@@ -238,6 +239,7 @@ func (p *Poller) buildSnapshot() []model.System {
 	watts, upsMap := p.Power.LinkedWatts(), p.UPS.SystemsMap()
 	poll := p.pollFields()
 	models := p.Admin.HostModels() // the model names set in the panel (state.json), by system id
+	edits := p.Admin.HostOptions() // what "Edit host" changed about the machines themselves: name, Wake-on-LAN
 	p.mu.Lock()
 	systems := make(map[string]model.System, len(p.systems))
 	for k, v := range p.systems {
@@ -317,7 +319,8 @@ func (p *Poller) buildSnapshot() []model.System {
 		if m, ok := models[s.ID]; ok && (s.Kind == "node" || s.Kind == "agent") {
 			s.CustomModel = &m
 		}
-		if acts := p.powerActions(s); len(acts) > 0 {
+		p.named(edits, &s) // the name an admin gave the host (hostedit.go)
+		if acts := p.powerActions(edits, s); len(acts) > 0 {
 			s.PowerActions = acts
 		}
 		if p.Scheduler.IsPaused(s.ID) {
@@ -411,7 +414,7 @@ func sortSystems(list []model.System) {
 }
 
 // powerActions: configured (not necessarily currently available) power actions, for list badges / menus.
-func (p *Poller) powerActions(s model.System) []string {
+func (p *Poller) powerActions(edits adminstate.HostOptions, s model.System) []string {
 	out := []string{}
 	c, hasC := p.ClusterCfg(model.Deref(s.ClusterID))
 	if s.Kind == "qemu" || s.Kind == "lxc" {
@@ -429,7 +432,7 @@ func (p *Poller) powerActions(s model.System) []string {
 	}
 	// under cfgMu: Add host / Re-pair / Remove change the overrides. For a host shown under its agent's id while
 	// its node's row is not there, the entry is the one under the node's id (PowerOverride).
-	if o := p.PowerOverride(s.ID); o != nil {
+	if o := p.panelWol(edits, s.ID, p.configPowerOverride(s.ID)); o != nil { // PowerOverride, with the overlay read once
 		if o.Wol != nil {
 			out = append(out, "wake")
 		}

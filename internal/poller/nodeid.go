@@ -498,7 +498,16 @@ func (p *Poller) ShownID(id string) string {
 // shown under id: the entry with that id, or, for a host that is shown under its agent's id because its
 // node's row is not there (yet), the entry written under the node's id (nodeLinks). An entry under the shown
 // id that has a wol: or a bmc_power: of its own always counts first. nil: there is none.
+//
+// Over the entry's wol: lie the Wake-on-LAN details an admin changed in the panel ("Edit host": the MAC
+// addresses, the relay among the agents that may send wake packets, the port, or "off"; hostedit.go). The
+// entry itself is never changed: what is returned is then a copy.
 func (p *Poller) PowerOverride(id string) *config.SystemOverride {
+	return p.panelWol(p.Admin.HostOptions(), id, p.configPowerOverride(id))
+}
+
+// configPowerOverride is PowerOverride without what was changed in the panel: the configuration's entry.
+func (p *Poller) configPowerOverride(id string) *config.SystemOverride {
 	o := p.Override(id)
 	if o != nil && (o.Wol != nil || o.BMCPower != nil) {
 		return o

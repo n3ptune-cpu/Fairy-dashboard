@@ -34,6 +34,12 @@ func (p *Poller) AgentByID(id string) (config.Agent, bool) {
 // linked to. It is never the row a node's agent is shown as on the pages (ShownSystem). The Wake-on-LAN and
 // BMC relay lookups ask here: a relay's status is that of the agent that sends the packet.
 func (p *Poller) RelaySystem(agentID string) *model.System {
+	s := p.relaySystem(agentID)
+	p.named(p.Admin.HostOptions(), s) // under the name an admin gave it ("Edit host", hostedit.go)
+	return s
+}
+
+func (p *Poller) relaySystem(agentID string) *model.System {
 	a, ok := p.AgentByID(agentID)
 	if !ok {
 		return nil
@@ -59,6 +65,12 @@ func (p *Poller) RelaySystem(agentID string) *model.System {
 // A node's row is ONE agent's (AgentFor: the first agent of the configuration whose link is that node). A
 // second agent that names the same node keeps its own row and is its own row here.
 func (p *Poller) ShownSystem(agentID string) *model.System {
+	s := p.shownSystem(agentID)
+	p.named(p.Admin.HostOptions(), s) // under the name an admin gave it ("Edit host", hostedit.go)
+	return s
+}
+
+func (p *Poller) shownSystem(agentID string) *model.System {
 	a, ok := p.AgentByID(agentID)
 	if !ok {
 		return nil
