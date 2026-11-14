@@ -1,0 +1,657 @@
+package web
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
+)
+
+// The traps of "Edit host" that the design names, one test each (trap (a), the reading agent, and (e), the
+// restart, are in hostoptions_test.go).
+
+// Who may. The matrix (routes_test.go) asks the route's guard in every way it asks the others; this is what
+// it does not ask: the dialog's data is for admins with a browser session too, an old sign-in is asked to
+// confirm with the panel's own lines of what will change, and the kept change then runs once.
+func TestEditHostWhoMay(t *testing.T) {
+	a := signedIn(t) // an admin whose sign-in is an hour old
+	e := a.e
+	csrf := []string{"X-Requested-With", "fairy", "Content-Type", "application/json"}
+	body := map[string]any{"plugs": []any{map[string]any{"id": "laptop/desk", "in_total": false}}}
+	const path = "/api/admin/hosts/laptop/options"
+	// the dialog's data: nobody, a viewer, a token of either scope
+	if r := e.do("GET", path, nil); r.code != 401 {
+		t.Fatalf("GET, not signed in: %d", r.code)
+	}
+	v := model.User{Sub: "u7", Name: model.P("Vee"), Email: model.P("v@example.com"), Groups: []string{"viewers"}}
+	vc := e.cookie(v, 0)
+	_ = e.s.Access.EnsureSites([]string{"Home"})
+	if _, err := e.s.Access.Assign("laptop", "Home"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.s.Access.SetRole("u7", "viewer", []string{"Home"}, "test", false); err != nil {
+		t.Fatal(err)
+	}
+	if e.do("GET", "/api/systems/laptop", nil, "Cookie", vc).code != 200 {
+		t.Fatal("the viewer of this test sees the laptop")
+	}
+	if r := e.do("GET", path, nil, "Cookie", vc); r.code != 403 || r.body["detail"] != "only admins can edit a host" {
+		t.Fatalf("GET, a viewer: %d %s", r.code, r.raw)
+	}
+	if r := e.do("PUT", path, body, append([]string{"Cookie", vc}, csrf...)...); r.code != 403 || r.body["detail"] != "only admins can edit a host" {
+		t.Fatalf("PUT, a viewer: %d %s", r.code, r.raw)
+	}
+	for _, scope := range []string{"read", "control"} {
+		tok, _, err := e.s.Tokens.Create("t-"+scope, "system", scope, "cli:test", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, method := range []string{"GET", "PUT"} {
+			if r := e.do(method, path, body, "Authorization", "Bearer "+tok, "Content-Type", "application/json"); r.code != 403 || r.body["detail"] != "API tokens are not accepted on this endpoint" {
+				t.Fatalf("%s with a %s token: %d %s", method, scope, r.code, r.raw)
+			}
+			// ... also next to an admin's cookie
+			if r := e.do(method, path, body, append([]string{"Authorization", "Bearer " + tok, "Cookie", a.sess}, csrf...)...); r.code != 403 {
+				t.Fatalf("%s with a %s token next to an admin's cookie: %d", method, scope, r.code)
+			}
+		}
+	}
+	// the admin may look (reading asks for no confirmation) ...
+	if r := e.do("GET", path, nil, "Cookie", a.sess); r.code != 200 || r.body["name"] == nil {
+		t.Fatalf("GET, the admin: %d %s", r.code, r.raw)
+	}
+	// ... and is asked to confirm a change: nothing is stored, and the dialog gets the panel's own lines
+	r := e.do("PUT", path, body, append([]string{"Cookie", a.sess, "X-Fairy-Action", "Edit%20host%20laptop"}, csrf...)...)
+	d, _ := r.body["detail"].(map[string]any)
+	if !stepUpRequired(r) || d["action"] != "change the links of laptop" || d["pending"] != true ||
+		!slices.Equal(strs(d["items"]), []string{"Plug Desk plug (read by laptop): not in the total"}) ||
+		!strings.Contains(fmt.Sprint(d["message"]), "changes to a host need a Pocket ID sign-in") {
+		t.Fatalf("an old sign-in: %d %s", r.code, r.raw)
+	}
+	if e.storedOptions() != nil {
+		t.Fatal("stored before it was confirmed")
+	}
+	// a body with two readings is refused before anything is kept or described
+	if r := e.doRaw("PUT", path, `{"plugs":[{"id":"laptop/desk","in_total":true}],"PLUGS":[{"id":"laptop/desk","in_total":false}]}`,
+		append([]string{"Cookie", a.sess}, csrf...)...); r.code != 422 {
+		t.Fatalf("two readings: %d %s", r.code, r.raw)
+	}
+	r = e.do("PUT", path, body, append([]string{"Cookie", a.sess, "X-Fairy-Action", "Edit%20host%20laptop"}, csrf...)...)
+	if cb := a.confirm(pendingID(r), false); cb.code != 303 {
+		t.Fatal("the confirmation:", cb.code)
+	}
+	if ex := strs(e.storedAgent("laptop")["power_exclude_from_total"]); !slices.Equal(ex, []string{"desk"}) {
+		t.Fatalf("after the confirmation the change is stored: %v", e.storedOptions())
+	}
+	if n := len(e.auditEntries("", "host.options")); n != 1 {
+		t.Fatalf("%d audit entries, want 1", n)
+	}
+	// what the page shows afterwards is the kept result: the label and the panel's sentence
+	me := e.do("GET", "/api/me", nil, "Cookie", a.sess)
+	pr, _ := me.body["pending_result"].(map[string]any)
+	if pr["ok"] != true || pr["message"] != "links saved" || pr["label"] != "Edit host laptop" {
+		t.Fatalf("the kept result: %v", me.body["pending_result"])
+	}
+	// inside the window the next change needs no confirmation; the kill switch does not stop it (no device is controlled)
+	if err := e.s.Poller.Admin.SetControlDisabled(true, "test", "kill switch"); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.do("PUT", path, map[string]any{"plugs": []any{map[string]any{"id": "laptop/desk", "in_total": true}}}, append([]string{"Cookie", a.sess}, csrf...)...); r.code != 200 {
+		t.Fatalf("inside the window, kill switch on: %d %s", r.code, r.raw)
+	}
+	// the rate limit of admin changes counts here: 429 with the time to wait
+	e.s.adminRL = newRateLimiter(1)
+	_ = e.do("PUT", path, body, append([]string{"Cookie", a.sess}, csrf...)...)
+	r = e.do("PUT", path, body, append([]string{"Cookie", a.sess}, csrf...)...)
+	if r.code != 429 || r.hdr.Get("Retry-After") == "" || !strings.HasPrefix(fmt.Sprint(r.body["detail"]), "too many changes; try again in ") {
+		t.Fatalf("over the limit: %d %s", r.code, r.raw)
+	}
+}
+
+// Trap (b). A field that was changed in the panel is used INSTEAD of config.yaml's: a line of config.yaml that
+// is edited afterwards does not count while the override is there. The dialog says where the value comes from
+// and what config.yaml says now; Reset makes config.yaml's (new) value count.
+func TestEditHostOverrideShadowsALaterEditOfConfigYAML(t *testing.T) {
+	r := ehSetup(t)
+	r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})
+	// config.yaml is edited: the desk UPS is given to PVE-A, the rack UPS to nobody; and the panel restarted
+	r2 := r.again(ehConfig(t, `ups_powers: {desk: [lab-a-node-pve-a]}, power_links: {a-plug: lab-a-agent}`))
+	if a, b := strs(r2.row(ehNodeA)["ups"]), strs(r2.row(ehNodeB)["ups"]); !slices.Equal(a, []string{"nas-agent/rack"}) || !slices.Equal(b, []string{"nas-agent/desk"}) {
+		t.Fatalf("with the override, after config.yaml changed: PVE-A %v, PVE-B %v (the panel's value counts: rack for A, desk for B)", a, b)
+	}
+	g := r2.options(ehNodeA)
+	rack, desk := ehEntry(t, g, "ups", "nas-agent/rack"), ehEntry(t, g, "ups", "nas-agent/desk")
+	if rack["on"] != true || rack["from"] != "panel" || rack["config_on"] != false || desk["on"] != false || desk["from"] != "panel" || desk["config_on"] != true {
+		t.Fatalf("PVE-A's dialog (what counts, and what config.yaml says now): rack %v, desk %v", rack, desk)
+	}
+	// the plug links were not changed in the panel: config.yaml's value counts for that field
+	if ap := ehEntry(t, g, "plugs", "nas-agent/a-plug"); ap["from"] != "config" || ap["linked"] != true {
+		t.Fatalf("a field without an override: %v", ap)
+	}
+	r2.ok(ehNodeA, map[string]any{"reset": []any{map[string]any{"agent": ehNAS, "field": "ups"}}})
+	r2.poll()
+	if a, b := strs(r2.row(ehNodeA)["ups"]), strs(r2.row(ehNodeB)["ups"]); !slices.Equal(a, []string{"nas-agent/desk"}) || len(b) != 0 {
+		t.Fatalf("after Reset: PVE-A %v, PVE-B %v (config.yaml as it is now: desk for A)", a, b)
+	}
+}
+
+// Traps (c) and (d), with a host added in the panel. Re-pair keeps what was changed for it (the same machine,
+// the same id). Remove takes it all out: the overrides of its own agent, and every link to its row in the
+// overrides of other agents, so that the next machine added under the same name starts with nothing.
+func TestEditHostRepairKeepsAndRemoveForgets(t *testing.T) {
+	e := setup(t)
+	e.s.Enroll.Interval = 10 * time.Millisecond
+	e.s.control, e.s.adminRL = newRateLimiter(1000), newRateLimiter(1000)
+	e.s.Enroll.PanelAddr = "100.64.0.10"
+	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
+		return 200, enroll.Response{AgentVersion: "42-abc", Platform: "linux", Token: "winpc-read-token-xxxxxxxxxxxxxxxx",
+			ControlToken: "winpc-control-token-yyyyyyyyyyyyyy"}, "", nil
+	}
+	e.b.Mu.Lock()
+	e.b.Metrics["srv-winpc"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil } // it relays a plug of its own, "desk"
+	e.b.Metrics["laptop"] = func() (jsonx.M, error) {
+		m := testutil.AgentMetrics()
+		m["ups"] = []any{jsonx.M{"name": "rack", "state": "online", "description": "Rack UPS"}}
+		m["power_sources"] = append(m["power_sources"].([]any), jsonx.M{"id": "spare", "name": "Spare plug", "type": "shelly", "ok": true, "watts": 55.0})
+		return m, nil
+	}
+	e.b.Mu.Unlock()
+	c := e.cookie(controller(), 0)
+	hdr := []string{"Cookie", c, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	run := func(path string, body map[string]any) {
+		t.Helper()
+		p := e.do("POST", path, body, hdr...)
+		if p.code != 201 {
+			t.Fatal(path, p.code, string(p.raw))
+		}
+		id := p.body["id"].(string)
+		for i := 0; i < 300; i++ {
+			time.Sleep(10 * time.Millisecond)
+			e.s.Poller.PollOnce(context.Background())
+			if g := e.do("GET", "/api/admin/enrollments/"+id, nil, "Cookie", c); g.body["done"] == true {
+				if g.body["state"] != "online" {
+					t.Fatal(path, g.body["state"], g.body["message"])
+				}
+				return
+			}
+		}
+		t.Fatal("the enrollment never finished", path)
+	}
+	add := func() { run("/api/admin/hosts", map[string]any{"name": "SRV-WINPC", "os": "linux", "site": "Alice"}) }
+	sys := func(id string) map[string]any { return e.do("GET", "/api/systems/"+id, nil, "Cookie", c).body }
+	put := func(id string, body any) {
+		t.Helper()
+		if r := e.do("PUT", "/api/admin/hosts/"+id+"/options", body, hdr...); r.code != 200 || r.body["ok"] != true {
+			t.Fatalf("PUT %s %v: %d %s", id, body, r.code, r.raw)
+		}
+	}
+	add()
+	// three things about the new host: the laptop's UPS powers it, the laptop's spare plug is its plug, and its
+	// own plug is left out of the total; and one thing that is not about it (the laptop's own total)
+	put("srv-winpc", map[string]any{"ups": []any{ehUPS("laptop/rack", true)},
+		"plugs": []any{map[string]any{"id": "laptop/spare", "linked": true}, map[string]any{"id": "srv-winpc/desk", "in_total": false}}})
+	put("laptop", map[string]any{"ups": []any{ehUPS("laptop/rack", true)}, "plugs": []any{map[string]any{"id": "laptop/desk", "in_total": false}}})
+	e.s.Poller.PollOnce(context.Background())
+	has := func() (ups []string, watts any) { x := sys("srv-winpc"); return strs(x["ups"]), x["power_w"] }
+	if ups, w := has(); !slices.Equal(ups, []string{"laptop/rack"}) || w != 135.0 {
+		t.Fatalf("the new host: ups %v, power_w %v (its own plug 80 W and the spare one 55 W)", ups, w)
+	}
+	storedBefore := fmt.Sprint(e.storedOptions()["agents"])
+
+	// (d) Re-pair: new tokens, the same machine. Everything stays, in the file and on the page.
+	run("/api/admin/hosts/srv-winpc/repair", map[string]any{"confirm": "SRV-WINPC"})
+	if now := fmt.Sprint(e.storedOptions()["agents"]); now != storedBefore {
+		t.Fatalf("Re-pair changed the overrides:\n%s\n%s", storedBefore, now)
+	}
+	e.s.Poller.PollOnce(context.Background())
+	if ups, w := has(); !slices.Equal(ups, []string{"laptop/rack"}) || w != 135.0 {
+		t.Fatalf("after Re-pair: ups %v, power_w %v", ups, w)
+	}
+	if ex := strs(e.storedAgent("srv-winpc")["power_exclude_from_total"]); !slices.Equal(ex, []string{"desk"}) {
+		t.Fatalf("after Re-pair the host's own override: %v", e.storedAgent("srv-winpc"))
+	}
+
+	// (c) Remove: its own overrides and every link to it are gone; what is about other machines stays
+	if r := e.do("DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "SRV-WINPC"}, hdr...); r.code != 200 {
+		t.Fatal("remove", r.code, string(r.raw))
+	}
+	if e.storedAgent("srv-winpc") != nil {
+		t.Fatalf("the removed host's overrides are still there: %v", e.storedOptions())
+	}
+	lap := e.storedAgent("laptop")
+	if raw := fmt.Sprint(e.storedOptions()); strings.Contains(raw, "srv-winpc") {
+		t.Fatalf("state.json still names the removed host: %s", raw)
+	}
+	ups, _ := lap["ups_powers"].(map[string]any)
+	links, _ := lap["power_links"].(map[string]any)
+	if !slices.Equal(strs(ups["rack"]), []string{"laptop"}) || len(links) != 0 || !slices.Equal(strs(lap["power_exclude_from_total"]), []string{"desk"}) {
+		t.Fatalf("the laptop's overrides after the removal (its own UPS link and total stay): %v", lap)
+	}
+	var forgot map[string]any
+	for _, en := range e.auditEntries("", "host.options") {
+		if p, _ := en["params"].(map[string]any); p["because"] == "host removed" && en["target"] == "srv-winpc" {
+			forgot = p
+		}
+	}
+	if got := strs(forgot["removed"]); !slices.Equal(got, []string{"the overrides of srv-winpc", "laptop: UPS rack no longer powers it", "laptop: device spare is no longer linked to it"}) {
+		t.Fatalf("the audit entry of what Remove took out: %v", forgot)
+	}
+	// the same name again (another machine, for all the panel knows): it inherits nothing
+	add()
+	e.s.Poller.PollOnce(context.Background())
+	if ups, w := has(); len(ups) != 0 || w != 80.0 {
+		t.Fatalf("the host added again under the same name: ups %v, power_w %v (want no UPS, and its own plug alone)", ups, w)
+	}
+	g := e.do("GET", "/api/admin/hosts/srv-winpc/options", nil, "Cookie", c)
+	if own := ehEntry(t, g, "plugs", "srv-winpc/desk"); own["in_total"] != true || own["total_from"] != "config" {
+		t.Fatalf("its own plug is in the total again: %v", own)
+	}
+	if spare := ehEntry(t, g, "plugs", "laptop/spare"); spare["linked"] != false {
+		t.Fatalf("the spare plug: %v", spare)
+	}
+	// a Remove of a host that has nothing writes no entry about overrides
+	n := len(e.auditEntries("", "host.options"))
+	if r := e.do("DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "SRV-WINPC"}, hdr...); r.code != 200 {
+		t.Fatal("remove", r.code, string(r.raw))
+	}
+	if len(e.auditEntries("", "host.options")) != n {
+		t.Fatal("a Remove with nothing to forget wrote a host.options entry")
+	}
+}
+
+// Trap (f). Two admins save at the same moment. Each request says only its own ticks and is applied, under
+// the lock of state.json, to what the other left: nothing is lost, the file is whole after every write, every
+// answer shows the stored state it left (its rev), and of two changes to the same tick the later one counts.
+func TestEditHostTwoAdminsAtOnce(t *testing.T) {
+	r := ehSetup(t)
+	second := model.User{Sub: "u9", Name: model.P("Bea"), Email: model.P("b@example.com"), EmailVerified: true, Groups: []string{"viewers"}}
+	bea := r.cookie(second, 0)
+	if _, _, err := r.s.Access.SetRole("u9", "admin", nil, "test", false); err != nil {
+		t.Fatal(err)
+	}
+	who := [][]string{r.hdr, {"Cookie", bea, "X-Requested-With", "fairy"}}
+	put := func(admin int, id string, body any) resp {
+		return r.do("PUT", "/api/admin/hosts/"+id+"/options", body, append([]string{"Content-Type", "application/json"}, who[admin]...)...)
+	}
+	plug := func(id string, linked bool) map[string]any { return map[string]any{"id": id, "linked": linked} }
+	// 1. different things, all in the entry of the one agent that reads them, eight at a time
+	changes := []struct {
+		id   string
+		body map[string]any
+	}{
+		{ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}}},
+		{ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}}},
+		{ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}}},
+		{ehNodeB, map[string]any{"plugs": []any{plug("nas-agent/b-plug", true)}}},
+		{ehNodeA, map[string]any{"plugs": []any{plug("nas-agent/corner", true)}}},
+		{ehNAS, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/own", "in_total": false}}}},
+		{ehNAS, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}}},
+		{ehNodeA, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/a-plug", "in_total": false}}}},
+	}
+	out := make([]resp, len(changes))
+	var wg sync.WaitGroup
+	for i, c := range changes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i] = put(i%2, c.id, c.body)
+		}()
+	}
+	wg.Wait()
+	var revs []int
+	for i, p := range out {
+		if p.code != 200 || len(strs(p.body["changed"])) != 1 {
+			t.Fatalf("change %d: %d %s", i, p.code, p.raw)
+		}
+		revs = append(revs, int(p.body["rev"].(float64)))
+	}
+	sort.Ints(revs)
+	if !slices.Equal(revs, []int{1, 2, 3, 4, 5, 6, 7, 8}) {
+		t.Fatalf("the revs of eight changes at once: %v (each write is one step after another)", revs)
+	}
+	nas := r.storedAgent(ehNAS)
+	ups, links := nas["ups_powers"].(map[string]any), nas["power_links"].(map[string]any)
+	rack, desk := strs(ups["rack"]), strs(ups["desk"])
+	sort.Strings(rack)
+	sort.Strings(desk)
+	if !slices.Equal(rack, []string{ehNodeA, ehNodeB, ehNAS}) || !slices.Equal(desk, []string{ehNodeA, ehNodeB}) ||
+		links["a-plug"] != "lab-a-agent" || links["b-plug"] != "lab-b-agent" || links["corner"] != "lab-a-agent" || len(links) != 3 ||
+		!slices.Equal(strs(nas["power_exclude_from_total"]), []string{"a-plug", "corner", "own"}) || r.storedOptions()["rev"] != 8.0 {
+		t.Fatalf("after eight changes at once, one is missing: %v", r.storedOptions())
+	}
+	if n := len(r.auditEntries("", "host.options")); n != 8 {
+		t.Fatalf("%d audit entries, want 8", n)
+	}
+	// 2. the same tick, one admin on, the other off, many times: every answer is the state its own write left,
+	// and the file ends as the answer with the highest rev says
+	for round := 0; round < 12; round++ {
+		res := make([]resp, 2)
+		for i := range res {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				res[i] = put(i, ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", i == 0)}})
+			}()
+		}
+		wg.Wait()
+		last, top := false, -1.0
+		for i, p := range res {
+			if p.code != 200 {
+				t.Fatalf("round %d: %d %s", round, p.code, p.raw)
+			}
+			on := ehEntry(t, p, "ups", "nas-agent/rack")["on"].(bool)
+			// an answer that wrote shows what it asked for; one that had nothing to change shows what was there
+			if len(strs(p.body["changed"])) == 1 && on != (i == 0) {
+				t.Fatalf("round %d: admin %d changed it and the answer shows on=%v", round, i, on)
+			}
+			if rev := p.body["rev"].(float64); rev > top || (rev == top && len(strs(p.body["changed"])) == 1) {
+				top, last = rev, on
+			}
+		}
+		stored := slices.Contains(strs(r.storedAgent(ehNAS)["ups_powers"].(map[string]any)["rack"]), ehNodeB)
+		if stored != last || r.storedOptions()["rev"] != top {
+			t.Fatalf("round %d: the file says %v at rev %v, the last answer said %v at rev %v", round, stored, r.storedOptions()["rev"], last, top)
+		}
+	}
+	// what the two did not touch is as it was
+	if got := strs(r.storedAgent(ehNAS)["ups_powers"].(map[string]any)["desk"]); len(got) != 2 {
+		t.Fatalf("desk after the rounds: %v", got)
+	}
+}
+
+// Trap (g). One machine, two ids: a Proxmox node with an agent is its node's row while that row is there, and
+// its agent's row after a restart of the panel with the machine off. The dialog opens on the row that is
+// shown and changes the same machine either way.
+//
+//   - A plug's link is written with the agent's id, and the watts follow the machine to whichever row it is.
+//   - A UPS's rows are matched by their exact id today (ups.Manager), as in a hand-written config.yaml: the id
+//     of the row shown at that moment is written, and the chip is on that row only. Ticked while the machine
+//     is shown under its agent's id, it does not follow to the node's row; the dialog on the node's row then
+//     shows it unticked, a tick there adds the node's id, and taking the tick out removes both.
+func TestEditHostOnANodeRowAndOnItsAgentsRow(t *testing.T) {
+	r := ehSetupWith(t, ehConfig(t, ehNASLinks), false) // PVE-B's Proxmox API never answered: no node row
+	if r.do("GET", "/api/systems/"+ehNodeB, nil, r.hdr[:2]...).code != 404 || r.row("lab-b-agent")["kind"] != "agent" {
+		t.Fatal("the rig: PVE-B is not shown under its agent's id")
+	}
+	g := r.options("lab-b-agent")
+	if g.body["id"] != "lab-b-agent" || g.body["agent"] != "lab-b-agent" {
+		t.Fatalf("the dialog on the agent's row: %s", g.raw)
+	}
+	// the node's id names the same machine while its row is not there: the row that is shown, its agent's
+	if byNode := r.options(ehNodeB); byNode.body["id"] != "lab-b-agent" {
+		t.Fatalf("asked by the node's id while its row is not there: %v", byNode.body["id"])
+	}
+	r.ok("lab-b-agent", map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}, "plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true}}})
+	nas := r.storedAgent(ehNAS)
+	if got := strs(nas["ups_powers"].(map[string]any)["rack"]); !slices.Equal(got, []string{ehNodeA, "lab-b-agent"}) {
+		t.Fatalf("ups_powers (the row shown now): %v", got)
+	}
+	if nas["power_links"].(map[string]any)["b-plug"] != "lab-b-agent" {
+		t.Fatalf("power_links (the agent's id): %v", nas["power_links"])
+	}
+	en := r.auditEntries("", "host.options")[0]
+	if p := en["params"].(map[string]any); en["target"] != "lab-b-agent" || p["agent"] != "lab-b-agent" || p["changes"].([]any)[0].(map[string]any)["agent"] != ehNAS {
+		t.Fatalf("audit: target %v, params %v", en["target"], p)
+	}
+	r.poll()
+	if x := r.row("lab-b-agent"); !slices.Equal(strs(x["ups"]), []string{"nas-agent/rack"}) || x["power_w"] != 200.0 {
+		t.Fatalf("the agent's row: ups %v, power_w %v", x["ups"], x["power_w"])
+	}
+	// the machine's Proxmox API answers: it is its node's row from now on
+	r.mu.Lock()
+	r.bUp = true
+	r.mu.Unlock()
+	r.poll()
+	r.poll()
+	x := r.row(ehNodeB)
+	if x["power_w"] != 200.0 {
+		t.Fatalf("the plug's watts did not follow the machine to its node's row: %v", x["power_w"])
+	}
+	if got := strs(x["ups"]); len(got) != 0 {
+		t.Fatalf("the UPS chip followed to the node's row: %v (UPS rows are matched by their exact id: if this changed, change the dialog and its words too)", got)
+	}
+	g = r.options(ehNodeB)
+	if g.body["agent"] != "lab-b-agent" || ehEntry(t, g, "ups", "nas-agent/rack")["on"] != false || ehEntry(t, g, "plugs", "nas-agent/b-plug")["linked"] != true {
+		t.Fatalf("the dialog on the node's row (the UPS as the page shows it, the plug linked): %s", g.raw)
+	}
+	// by the agent's id the same machine is found: its node's row
+	if byAgent := r.options("lab-b-agent"); byAgent.body["id"] != ehNodeB {
+		t.Fatalf("asked by the agent's id: %v", byAgent.body["id"])
+	}
+	// a tick on the node's row: the node's id is added, and the chip is there
+	r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}})
+	if got := strs(r.storedAgent(ehNAS)["ups_powers"].(map[string]any)["rack"]); !slices.Equal(got, []string{ehNodeA, "lab-b-agent", ehNodeB}) {
+		t.Fatalf("ups_powers after the tick on the node's row: %v", got)
+	}
+	r.poll()
+	if got := strs(r.row(ehNodeB)["ups"]); !slices.Equal(got, []string{"nas-agent/rack"}) {
+		t.Fatalf("the node's row: %v", got)
+	}
+	// the tick taken out: the machine is taken out under both ids, and nobody else
+	p := r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", false)}, "plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": false}}})
+	if got := strs(p.body["changed"]); !slices.Equal(got, []string{"UPS Rack UPS (read by NAS): no longer powers PVE-B", "Plug B plug (read by NAS): no longer linked to PVE-B"}) {
+		t.Fatalf("changed: %v", got)
+	}
+	nas = r.storedAgent(ehNAS)
+	if got := strs(nas["ups_powers"].(map[string]any)["rack"]); !slices.Equal(got, []string{ehNodeA}) {
+		t.Fatalf("ups_powers after the tick was taken out: %v", got)
+	}
+	if l := nas["power_links"].(map[string]any); len(l) != 1 || l["a-plug"] != "lab-a-agent" {
+		t.Fatalf("power_links: %v", l)
+	}
+	// PVE-A, on its node's row from the start: the plug with its agent's id, the UPS with its node's id
+	r.ok(ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}, "plugs": []any{map[string]any{"id": "nas-agent/corner", "linked": true}}})
+	nas = r.storedAgent(ehNAS)
+	if got := strs(nas["ups_powers"].(map[string]any)["desk"]); !slices.Equal(got, []string{ehNodeA}) || nas["power_links"].(map[string]any)["corner"] != "lab-a-agent" {
+		t.Fatalf("PVE-A: %v", nas)
+	}
+}
+
+// A state.json that holds something else under "host_options" never stops a start and never changes what an
+// agent's entry says: every broken part is left out, config.yaml's value counts for it, the rest is used, and
+// the dialog and the log say what was ignored. Whatever the file says, nothing but the three link fields is
+// ever read from it.
+func TestEditHostABrokenOverlayIsIgnoredNotRefused(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&lockedWriter{w: &logs}, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	for name, c := range map[string]struct {
+		overlay string
+		ignored int      // lines in the dialog
+		upsB    []string // PVE-B's UPSes afterwards
+	}{
+		"a text":                        {`"links"`, 1, nil},
+		"a list":                        {`[{"nas-agent": {}}]`, 1, nil},
+		"null":                          {`null`, 1, nil},
+		"agents is a list":              {`{"rev": 3, "agents": []}`, 1, nil},
+		"a rev that is no number":       {`{"rev": "seven", "agents": {"nas-agent": {"ups_powers": {"desk": ["lab-b-node-pve-b"]}}}}`, 1, []string{"nas-agent/desk"}},
+		"an entry that is no object":    {`{"agents": {"nas-agent": "x", "lab-a-agent": 7}}`, 2, nil},
+		"an id no agent can have":       {`{"agents": {"NAS Agent!": {"ups_powers": {"desk": ["lab-b-node-pve-b"]}}}}`, 1, nil},
+		"a field of the wrong form":     {`{"agents": {"nas-agent": {"ups_powers": ["lab-b-node-pve-b"], "power_links": {"b-plug": 5}, "power_exclude_from_total": "corner"}}}`, 3, nil},
+		"a row id no row can have":      {`{"agents": {"nas-agent": {"ups_powers": {"desk": ["Lab B!"]}}}}`, 1, nil},
+		"seventeen devices":             {`{"agents": {"nas-agent": {"power_exclude_from_total": ["d1","d2","d3","d4","d5","d6","d7","d8","d9","d10","d11","d12","d13","d14","d15","d16","d17"]}}}`, 1, nil},
+		"one bad field, one good":       {`{"agents": {"nas-agent": {"power_links": 7, "ups_powers": {"rack": ["lab-b-node-pve-b"]}}}}`, 1, []string{"nas-agent/rack"}},
+		"fields that cannot be set":     {`{"agents": {"lab-b-agent": {"url": "http://198.51.100.7:9101", "token_env": "FAIRY_SESSION_SECRET", "power_control": true, "wol_relay": true, "verify_tls": false, "node": "PVE-A", "name": "x"}}}`, 7, nil},
+		"an agent there is not":         {`{"agents": {"gone-agent": {"ups_powers": {"desk": ["lab-b-node-pve-b"]}}}}`, 0, nil},
+		"a row there is not":            {`{"agents": {"nas-agent": {"ups_powers": {"desk": ["lab-b-node-pve-b", "old-pc"]}, "power_links": {"a-plug": "lab-a-agent", "b-plug": "old-pc"}}}}`, 0, []string{"nas-agent/desk"}},
+		"what Fairy writes, and a tail": {`{"rev": 4, "agents": {"nas-agent": {"ups_powers": {"desk": ["lab-b-node-pve-b"]}, "by": "x", "at": "2026-11-13T23:40:00Z"}}, "more": 1}`, 1, []string{"nas-agent/desk"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := ehConfig(t, ehNASLinks)
+			if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(cfg.DataDir, "state.json"), []byte(`{"host_options": `+c.overlay+`}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			logs.Reset()
+			r := ehSetupWith(t, cfg, true) // the panel starts
+			// every agent's entry is what config.yaml says
+			for _, a := range r.s.Poller.Agents() {
+				if a.ID == "lab-b-agent" && (a.URL != "http://lab-b-agent" || a.TokenEnv != "TOK_LAB_B" || !a.PowerControl || a.WolRelay || a.VerifyTLS != nil || a.Node != "PVE-B" || a.Name != "PVE-B") {
+					t.Fatalf("the agent's entry changed: %+v", a)
+				}
+			}
+			got := strs(r.row(ehNodeB)["ups"])
+			if !slices.Equal(got, append([]string{}, c.upsB...)) {
+				t.Errorf("PVE-B's UPSes: %v, want %v", got, c.upsB)
+			}
+			// what config.yaml gives PVE-A counts wherever its field was not validly overridden
+			if a := strs(r.row(ehNodeA)["ups"]); len(c.upsB) == 0 && !slices.Equal(a, []string{"nas-agent/rack"}) {
+				t.Errorf("PVE-A's UPSes: %v (config.yaml's value counts for what is ignored)", a)
+			}
+			if w := r.row(ehNodeA)["power_w"]; w != 100.0 {
+				t.Errorf("PVE-A's watts: %v", w)
+			}
+			if w := r.row(ehNodeB)["power_w"]; w != nil {
+				t.Errorf("PVE-B's watts: %v (a link to a row there is not must not become a link to anything)", w)
+			}
+			g := r.options(ehNodeB)
+			if ig := strs(g.body["ignored"]); len(ig) != c.ignored {
+				t.Errorf("the dialog's ignored lines: %d, want %d: %v", len(ig), c.ignored, ig)
+			}
+			r.poll()
+			warns := 0
+			for _, line := range strings.Split(logs.String(), "\n") {
+				if strings.Contains(line, "level=WARN") && strings.Contains(line, "Edit host") {
+					warns++
+				}
+				if strings.Contains(line, "level=ERROR") {
+					t.Errorf("an ERROR in the log: %s", line)
+				}
+			}
+			if want := max(c.ignored, 1); warns != want {
+				t.Errorf("%d WARN lines about it, want %d (one for each thing, once):\n%s", warns, want, logs.String())
+			}
+			// the next change is stored, and what was broken is gone from the file with it
+			r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", !slices.Contains(got, "nas-agent/rack"))}})
+			if ig := strs(r.options(ehNodeB).body["ignored"]); len(ig) != 0 {
+				t.Errorf("after the next change: %v", ig)
+			}
+		})
+	}
+}
+
+type lockedWriter struct {
+	mu sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (l *lockedWriter) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(b)
+}
+
+// What is linked where decides what is shown, and nothing else. The same panel twice, once with overrides
+// that give every UPS and plug to PVE-B (and leave everything out of the total): a shutdown of PVE-B, its
+// power capabilities and the list of "Update unpowered hosts" are the same, and so is every request that goes
+// to a machine.
+func TestEditHostChangesNoControlPath(t *testing.T) {
+	type seen struct{ caps, wake, power, requests string }
+	look := func(withOverrides bool) seen {
+		r := ehSetup(t)
+		r.s.control = newRateLimiter(1000)
+		if withOverrides {
+			r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true), ehUPS("nas-agent/desk", true)},
+				"plugs": []any{map[string]any{"id": "nas-agent/a-plug", "linked": true, "in_total": false}, map[string]any{"id": "nas-agent/b-plug", "linked": true, "in_total": false},
+					map[string]any{"id": "nas-agent/own", "linked": true, "in_total": false}}})
+			r.ok(ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/rack", false)}})
+			r.poll()
+			if got := strs(r.row(ehNodeB)["ups"]); len(got) != 2 {
+				t.Fatalf("the overrides do not count: %v", got)
+			}
+		}
+		r.b.Mu.Lock()
+		r.b.Requests = nil
+		r.b.Mu.Unlock()
+		caps := r.do("GET", "/api/systems/"+ehNodeB+"/power", nil, r.hdr[:2]...)
+		wake := r.do("GET", "/api/admin/wake-update", nil, r.hdr[:2]...)
+		pw := r.do("POST", "/api/systems/"+ehNodeB+"/power", map[string]any{"action": "shutdown", "delay_s": 60, "confirm": "PVE-B"}, append([]string{"Content-Type", "application/json"}, r.hdr...)...)
+		if caps.code != 200 || wake.code != 200 || pw.code != 200 {
+			t.Fatalf("caps %d, wake-update %d, shutdown %d %s", caps.code, wake.code, pw.code, pw.raw)
+		}
+		hosts, _ := json.Marshal(wake.body["hosts"])
+		r.b.Mu.Lock()
+		defer r.b.Mu.Unlock()
+		// times of day and ages differ between two panels; what a machine may be asked does not
+		strip := regexp.MustCompile(`"(at|[a-z_]*_at|[a-z_]*_ago_s|[a-z_]*age_s|since|generated_at|last_seen|seen_s)":("[^"]*"|[0-9.e+-]+|null),?`)
+		return seen{caps: strip.ReplaceAllString(string(caps.raw), ""), wake: strip.ReplaceAllString(string(hosts), ""),
+			power: strip.ReplaceAllString(string(pw.raw), ""), requests: strings.Join(r.b.Requests, "\n")}
+	}
+	plain, changed := look(false), look(true)
+	if plain.requests == "" || !strings.Contains(plain.requests, "lab-b-agent POST /power") {
+		t.Fatalf("the shutdown did not go to the machine: %q", plain.requests)
+	}
+	if plain != changed {
+		t.Errorf("with overrides something a control path does differs:\n%+v\n%+v", plain, changed)
+	}
+	// And in the source: the overlay is read where links are handed to the power and the UPS manager, by the
+	// API of the dialog, by Remove and by `fairy admin config check`. Nowhere else.
+	allowed := map[string]bool{
+		"adminstate/hostoptions.go": true, "adminstate/hostoptions_read.go": true, "poller/hostoptions.go": true, "poller/agents.go": true,
+		"web/api_hostoptions.go": true, "web/api_enroll.go": true, "admin/hostoptions_check.go": true,
+	}
+	// every way to get at the overlay or at the links made with it (a call; a comment that names one is none)
+	word := regexp.MustCompile(`\b(HostOptions|HostOptionsRead|ReadHostOptions|EditHostOptions|hostOptions|forgetHostOptions|LinksOf|BaseLinks)\(|hostOptionsKey\]`)
+	found := map[string]bool{}
+	for _, root := range []string{"..", "../../cmd"} {
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			src, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			rel := strings.TrimPrefix(filepath.ToSlash(path), "../")
+			if word.Match(src) {
+				found[rel] = true
+				if !allowed[rel] {
+					t.Errorf("%s reads or names the \"Edit host\" overlay: only the poll of an agent's devices, the dialog's API, Remove and the config check may", rel)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for f := range allowed {
+		if !found[f] {
+			t.Errorf("%s no longer names the overlay: correct the list in this test", f)
+		}
+	}
+	// in the poll, the links go to the two managers and nowhere else; the run of "Update unpowered hosts",
+	// power control and the wake are other files and are not in the list above
+	agents := string(must(os.ReadFile("../poller/agents.go")))
+	if n := strings.Count(agents, "p.LinksOf(a)"); n != 2 {
+		t.Errorf("poller/agents.go asks LinksOf %d times, want 2 (an agent's answer, and its silence)", n)
+	}
+	for _, use := range regexp.MustCompile(`(?m)^.*\bl\.(PowerLinks|PowerExcludeFromTotal|UPSPowers)\b.*$`).FindAllString(agents, -1) {
+		if !strings.Contains(use, "p.Power.UpdateRemote(") && !strings.Contains(use, "p.UPS.UpdateFromAgent(") {
+			t.Errorf("poller/agents.go uses the links for something else: %s", strings.TrimSpace(use))
+		}
+	}
+	for _, f := range []string{"../wakerun", "../powerctl"} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s is not where this test looks for it: %v", f, err)
+		}
+	}
+}

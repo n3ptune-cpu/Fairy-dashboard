@@ -263,14 +263,21 @@ func (c *reqCtx) stepUpCheck(u *model.User, what string, window int, perAction b
 // step-up within the same window as control actions, and a rate limit. The control kill switch does not apply:
 // it stops device control, not the management of who may sign in.
 func (c *reqCtx) adminGuard() (*model.User, error) {
+	return c.adminGuardFor("only admins can manage users and sites", "changes to users and sites")
+}
+
+// adminGuardFor is adminGuard with the words of another admin write that is guarded the same way ("Edit
+// host"): denied is what somebody who is no admin is told, what names the changes in "Confirm it's you: <what>
+// need a Pocket ID sign-in ...". The checks are adminGuard's, all of them, in its order.
+func (c *reqCtx) adminGuardFor(denied, what string) (*model.User, error) {
 	u, err := c.sessionCSRF()
 	if err != nil {
 		return nil, err
 	}
 	if _, g, _ := c.grant(); !g.Admin() {
-		return nil, c.deny(u, 403, "only admins can manage users and sites", "not an admin")
+		return nil, c.deny(u, 403, denied, "not an admin")
 	}
-	if err := c.stepUp(u, "changes to users and sites"); err != nil {
+	if err := c.stepUp(u, what); err != nil {
 		return nil, err
 	}
 	if !c.s.adminRL.allow(u.Sub) {

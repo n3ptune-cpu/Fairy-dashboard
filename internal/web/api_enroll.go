@@ -364,6 +364,16 @@ func (s *Server) hostRemove(c *reqCtx) error {
 			c.audit(u, "host.model", sid, map[string]any{"model": "", "before": prev, "because": "host removed"}, "ok")
 		}
 	}
+	// What "Edit host" changed goes with it too, for the same reason: the overrides of its own agent, and every
+	// link to one of its rows in the overrides of other agents (api_hostoptions.go).
+	gone, err := s.forgetHostOptions(actorOf(u), h.ID, h.Shown())
+	if err != nil {
+		c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
+		return err
+	}
+	if len(gone) > 0 {
+		c.audit(u, "host.options", h.ID, map[string]any{"removed": gone, "because": "host removed"}, "ok")
+	}
 	s.Enroll.CancelHost(h.ID) // a Re-pair still pairing must not bring the host back
 	s.unpoll(h.ID)            // before the store forgets which node is the host's
 	if err := s.Managed.Remove(h.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
