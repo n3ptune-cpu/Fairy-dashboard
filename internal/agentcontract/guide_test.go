@@ -65,7 +65,7 @@ func TestTestingLocalPartIFitsTheBuild(t *testing.T) {
 	}
 	for _, want := range []string{
 		"`TEST-ON-WINDOWS.md` in the agent folder", "level=WARN msg=\"!!! TEST BUILD: an approval was accepted without", "level=WARN msg=\"!!! TEST BUILD: approvals for the",
-		"is on the **Updates** page", "It needs no passkey and no confirmation of any kind", "### I10. The machine id",
+		"is on the **Approvals** page", "It needs no passkey and no confirmation of any kind", "### I10. The machine id",
 	} {
 		if !strings.Contains(guide, want) {
 			t.Errorf("TESTING-LOCAL.md lacks %q", want)

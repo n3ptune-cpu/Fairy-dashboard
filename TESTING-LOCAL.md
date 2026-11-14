@@ -312,8 +312,8 @@ can try now, what you can try with a second test VM, and what only the real mach
 
 The test VM is added as in part B, with **self-update** ticked.
 
-1. Menu, **Updates**. Below the panel's own box there is **Update unpowered hosts**, and in it a
-   table "Machines" with the test VM: "Now: on", "In these runs: off".
+1. Menu, **Updates**. Under the table of machines there is **Update unpowered hosts**. Press **Show the
+   machines** in it: a table "Machines" with the test VM: "Now: on", "In these runs: off".
 2. Press **Switch on** in its line. The browser asks whether you mean it; then "Confirm it's you" names the
    action; press **Confirm (test build)**. The line now says "switched on". (The same switch is in the ⋯
    menu on the test VM's page.)
@@ -648,8 +648,8 @@ not press Update. Both put the released agent (build 17) in its place.
 5. A message at the bottom right says "1 of 1 machines now check approvals themselves". The VM's **Approval**
    button is green, and its dialog says **required**, with Pocket ID's address, the Client ID, the pinned key
    and "Allowed users: 1".
-   The result line (**switched on · locked**) is on the **Updates** page, in the box "The check on the
-   machine itself", under "Last Turn on".
+   The result line (**switched on · locked**) is on the **Approvals** page (in the menu), under "Last Turn
+   on".
 
    If it says **proof refused**: nothing was written on the VM and you can try again. The reason is in
    brackets in the line, and the ⓘ behind it shows the VM's own answer. `user`: the id in `users:` is not
