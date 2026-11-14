@@ -61,6 +61,12 @@ func (s *Server) enrollHooks() enrollment.Hooks {
 		// is for what is there all the same (a host taken out of config.yaml, a state.json from a backup). It is
 		// asked before anything of the host is stored, and when it cannot be done the host is not added: with
 		// those changes it would show another machine's UPS and plugs as its own, and nothing would say so.
+		//
+		// The last 24 hours of the plugs that were relayed under the new host's id are another machine's in the
+		// same way (a host that was in config.yaml until the last start: its plugs' day is in power-day.json for
+		// a day; a Remove by an older build): they go too, in memory and in the file, once the host can be
+		// added. A plug of the same id that the new machine relays would otherwise go on with the old machine's
+		// graph. (No agent is polled under this id now: the panel's check of the new entry was before this.)
 		Fresh: func(h managed.Host) error {
 			by := h.AddedBy
 			if by == "" {
@@ -75,6 +81,7 @@ func (s *Server) enrollHooks() enrollment.Hooks {
 			if len(gone) > 0 {
 				s.writeAudit(audit.Entry{Actor: by, Action: "host.options", Target: h.ID, Source: "fairy", Params: forgotParams(gone, notes, "host added"), Outcome: "ok"})
 			}
+			s.Poller.ForgetPowerDay(h.ID)
 			return nil
 		},
 		Online: func(id string) (bool, string) {
@@ -507,12 +514,17 @@ func (s *Server) hostRemove(c *reqCtx) error {
 		}
 	}
 	s.Enroll.CancelHost(h.ID) // a Re-pair still pairing must not bring the host back
-	a, polled := s.Poller.AgentByID(h.ID)
-	s.unpoll(h.ID) // before the store forgets which node is the host's; config.yaml's agent of the id stays
-	if polled && a.Managed {
+	s.unpoll(h.ID)            // before the store forgets which node is the host's; config.yaml's agent of the id stays
+	if !copyOnly {
 		// The last 24 hours of the plugs it relayed go with it (not with a Re-pair, which takes the host out of
 		// the poller the same way and puts it in again): the next machine added under this name starts with
 		// empty graphs. Not for the unused copy of a machine that config.yaml has: its agent stays, and its day.
+		//
+		// Whether the host is polled right now does not matter. It was "if it is polled", and a host that the
+		// panel left out at its start (its tokens file is damaged: "Re-pair it") is listed, can be removed, and
+		// is not polled: the day of its plugs, read from power-day.json at that start, stayed in memory and in
+		// the file, and a machine added under the same id within a day showed it as its own (final review of
+		// build 16, J2-C).
 		s.Poller.ForgetPowerDay(h.ID)
 	}
 	if err := s.Managed.Remove(h.ID); err != nil && !errors.Is(err, os.ErrNotExist) {

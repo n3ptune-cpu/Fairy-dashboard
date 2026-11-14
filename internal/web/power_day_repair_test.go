@@ -58,11 +58,13 @@ func TestPowerDayRepairKeepsItAndRemoveForgetsIt(t *testing.T) {
 	file := filepath.Join(e.s.Poller.Cfg.DataDir, power.DayFile)
 	const own, other = "pc-z/desk", "laptop/desk"
 
-	// an hour of readings (as if the host had been there for an hour), so that there is a day to lose
+	run("/api/admin/hosts", map[string]any{"name": "PC-Z", "os": "linux", "site": "Alice"})
+	// an hour of readings (as if the host had been there for an hour), so that there is a day to lose. After
+	// the host was added: Add host itself empties what was there under the new host's id before (J2-C of the
+	// final review of build 16; host_day_notpolled_test.go).
 	for m := 60; m >= 2; m-- {
 		day.Record(time.Now().Add(-time.Duration(m)*time.Minute), []power.DaySample{{ID: own, W: 40}}, nil)
 	}
-	run("/api/admin/hosts", map[string]any{"name": "PC-Z", "os": "linux", "site": "Alice"})
 	e.s.Poller.PollOnce(context.Background())
 	before := day.Series(own, time.Now())
 	if before.Summary == nil || before.Summary.CoveredS < 60*60 || before.Summary.MaxW != 80 || !day.Has(other, time.Now()) {
