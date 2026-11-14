@@ -52,7 +52,8 @@ import (
 // What can be sent is a closed set: the three lists above with the fields named there, decoded strictly. A
 // request cannot name a row, an address, a token or a switch: the row is the machine of the path, and the
 // rest has no field. Never editable here: id, url, token_env, control_token_env, verify_tls, node, links_to,
-// fan_control, power_control, self_update, wol_relay, owner, site, name.
+// fan_control, power_control, self_update, wol_relay, owner. (The machine's own name, its site and three
+// details of its Wake-on-LAN can be changed since stage 1b: api_hostedit.go says which, and why not the rest.)
 //
 // Who may: the guard of the Users page's changes (adminGuardFor): an admin's browser session (API tokens:
 // 403), the CSRF header and the panel's own origin, "Confirm it's you" inside the step-up window, the rate
@@ -71,11 +72,11 @@ func init() {
 	// What a kept request does, for "Confirm it's you" and its audit entries (pending.go), and the route's line
 	// in the description of the API (docs.go). Added here, next to the route, so that this feature's lines are
 	// in one file.
-	actionText[hostOptionsRoute] = "change the links of {id}"
+	actionText[hostOptionsRoute] = "edit the host {id}"
 	actionList[hostOptionsRoute] = (*reqCtx).hostOptionsItems
 	apiDoc = append(apiDoc,
-		struct{ method, path, summary string }{"GET", "/api/admin/hosts/{id}/options", "Edit host: which UPS powers this machine, which plugs are linked to it and which count in the total, with where each value comes from (config.yaml or changed in the panel) and the agent that reads the device (admins, browser session only)"},
-		struct{ method, path, summary string }{"PUT", "/api/admin/hosts/{id}/options", "Edit host: change the links of one machine: {ups: [{id, on}], plugs: [{id, linked, in_total}], reset: [{id, field: ups|plugs|total}], leftovers: true, unrelayed: [{id, kind: ups|plug}]}; only what is named changes, for this machine (leftovers: the stored changes about machines that are gone are removed; unrelayed: the stored changes about these devices are removed, each only if its reading machine does not relay it right now). Stored as single decisions laid over config.yaml in state.json (config.yaml is not written; reset takes the decision of one line out), counts with the reading agent's next poll. Admins, browser session only (API tokens get 403), CSRF header, step-up. 422: an unknown field, UPS or plug; 409: not a host. Audited as host.options"})
+		struct{ method, path, summary string }{"GET", "/api/admin/hosts/{id}/options", "Edit host: which UPS powers this machine, which plugs are linked to it and which count in the total, with where each value comes from (config.yaml or changed in the panel) and the agent that reads the device; under \"host\" the machine's name, its site and its Wake-on-LAN details, each with its source, the choices (sites, relays) and what is shown read-only (admins, browser session only)"},
+		struct{ method, path, summary string }{"PUT", "/api/admin/hosts/{id}/options", "Edit host: change the links of one machine: {ups: [{id, on}], plugs: [{id, linked, in_total}], reset: [{id, field: ups|plugs|total}], leftovers: true, unrelayed: [{id, kind: ups|plug}]}; only what is named changes, for this machine (leftovers: the stored changes about machines that are gone are removed; unrelayed: the stored changes about these devices are removed, each only if its reading machine does not relay it right now). Also the machine itself: name: \"...\"; site: \"<a site>\" or \"\" (the default; stored as the Users page stores it); wol: {macs: [..], relay: \"<an agent with wol_relay>\", port: 7|9} or {off: true}; reset: [{field: name|wol}]. Anything about Wake-on-LAN needs its own confirmation every time; a target address or a password of a wake packet cannot be sent. Stored as single decisions laid over config.yaml in state.json (config.yaml is not written; reset takes the decision of one line out), counts with the reading agent's next poll. Admins, browser session only (API tokens get 403), CSRF header, step-up. 422: an unknown field, UPS or plug; 409: not a host. Audited as host.options"})
 }
 
 func (s *Server) hostOptionsRoutes() {
@@ -97,6 +98,10 @@ type hostOptionsReq struct {
 	// Unrelayed: the stored changes about these devices are taken out, each only if its reading machine does
 	// not relay it right now (leftovers). Named one by one: what is removed is what the dialog listed.
 	Unrelayed []hoAwayReq `json:"unrelayed"`
+	// The machine itself (api_hostedit.go): its name, its site ("": the default) and its Wake-on-LAN details.
+	Name *string   `json:"name"`
+	Site *string   `json:"site"`
+	Wol  *hoWolReq `json:"wol"`
 }
 
 // hoAwayReq names a UPS (kind "ups") or a plug (kind "plug") by its id, "<reading agent>/<name>".
@@ -111,7 +116,7 @@ type hoAwayReq struct {
 // admin is: who may is asked first (hostOptionsPut).
 func (r hostOptionsReq) check() error {
 	bad := func(msg string) error { return apierr.New(422, msg) }
-	if len(r.UPS)+len(r.Plugs)+len(r.Reset)+len(r.Unrelayed) == 0 && (r.Leftovers == nil || !*r.Leftovers) {
+	if len(r.UPS)+len(r.Plugs)+len(r.Reset)+len(r.Unrelayed) == 0 && (r.Leftovers == nil || !*r.Leftovers) && !r.hostSet() {
 		return bad("nothing to change")
 	}
 	if len(r.UPS) > maxHostOptionEntries || len(r.Plugs) > maxHostOptionEntries || len(r.Reset) > maxHostOptionEntries || len(r.Unrelayed) > maxHostOptionEntries {
@@ -134,8 +139,14 @@ func (r hostOptionsReq) check() error {
 		}
 	}
 	for _, e := range r.Reset {
+		if e.Field == "name" || e.Field == "wol" { // the machine's own: no device is named
+			if e.ID != "" || !once(e.Field, "") {
+				return bad("reset: " + e.Field + " takes no id, and is there once")
+			}
+			continue
+		}
 		if _, ok := hoFields[e.Field]; !ok {
-			return bad("reset: no such field (ups, plugs or total)")
+			return bad("reset: no such field (ups, plugs, total, name or wol)")
 		}
 		if !once(e.Field, e.ID) {
 			return bad("reset: an entry is there twice")
@@ -159,7 +170,7 @@ func (r hostOptionsReq) check() error {
 		}
 		plugs[e.ID] = true
 	}
-	return nil
+	return r.checkHost()
 }
 
 // exactNames reports whether every name in a JSON body, in every object at every depth, is spelled as this
@@ -229,7 +240,8 @@ type hoPlugReq struct {
 
 // hoResetReq: what the panel changed about this UPS or plug FOR THIS MACHINE is taken out; config.yaml counts
 // for that line again. field: "ups" (does the UPS with this id power the machine), "plugs" (is the plug with
-// this id linked to it) or "total" (does the plug count in the total).
+// this id linked to it) or "total" (does the plug count in the total); or, without an id, "name" and "wol"
+// (the machine's own name and Wake-on-LAN details, api_hostedit.go).
 type hoResetReq struct {
 	ID    string `json:"id"`
 	Field string `json:"field"`
@@ -266,6 +278,9 @@ type hoMachine struct {
 	// that have a site of their own (the Users page), by their ids
 	site  map[string]string
 	fixed map[string]string
+	// the machine itself: its name and Wake-on-LAN, its site (api_hostedit.go; nil where no machine is asked about)
+	host  *hoHost
+	sites *hoSites
 }
 
 type hoUPS struct{ id, agent, name, label string }
@@ -302,6 +317,7 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 			m.ids = append(m.ids, x)
 		}
 	}
+	m.host, m.sites = c.s.hostOptionsHost(m), c.s.hostOptionsSites(m)
 	return m, nil
 }
 
@@ -379,7 +395,11 @@ func (s *Server) hostOptionsDevices() *hoMachine {
 	for _, h := range hosts {
 		m.waiting[h.ID], m.waiting[h.Shown()] = true, true
 	}
-	for _, e := range p.Admin.HostOptions().Agents {
+	stored := p.Admin.HostOptions()
+	for key := range stored.Hosts { // what is kept about machines themselves: is each still a machine of this panel
+		m.rowKnown[key] = p.KnownRow(key)
+	}
+	for _, e := range stored.Agents {
 		for _, decided := range e.UPS {
 			for id := range decided {
 				m.rowKnown[id] = p.KnownRow(id)
@@ -470,6 +490,12 @@ func (m *hoMachine) counted(o adminstate.HostOptions, agent string) config.Links
 // visibility is one note for each device and each way a change from before to after moves who sees it: the
 // sites whose viewers will see it and did not, and those who saw it and will not. nil: nobody's view moves.
 func (m *hoMachine) visibility(before, after adminstate.HostOptions) (notes []string) {
+	return m.visibilityTo(m, before, after)
+}
+
+// visibilityTo is visibility for a change that also moves the site of a machine: am is m with the sites as
+// they will be (hoSiteChange), m has them as they are.
+func (m *hoMachine) visibilityTo(am *hoMachine, before, after adminstate.HostOptions) (notes []string) {
 	note := func(what string, was, is []string) {
 		gain := slices.DeleteFunc(slices.Clone(is), func(s string) bool { return slices.Contains(was, s) })
 		loss := slices.DeleteFunc(slices.Clone(was), func(s string) bool { return slices.Contains(is, s) })
@@ -481,10 +507,10 @@ func (m *hoMachine) visibility(before, after adminstate.HostOptions) (notes []st
 		}
 	}
 	for _, u := range m.ups {
-		note("UPS "+u.label, m.upsSeen(u, m.counted(before, u.agent).UPSPowers[u.name]), m.upsSeen(u, m.counted(after, u.agent).UPSPowers[u.name]))
+		note("UPS "+u.label, m.upsSeen(u, m.counted(before, u.agent).UPSPowers[u.name]), am.upsSeen(u, m.counted(after, u.agent).UPSPowers[u.name]))
 	}
 	for _, p := range m.plugs {
-		note("plug "+p.label, m.plugSeen(p, m.counted(before, p.agent).PowerLinks[p.dev]), m.plugSeen(p, m.counted(after, p.agent).PowerLinks[p.dev]))
+		note("plug "+p.label, m.plugSeen(p, m.counted(before, p.agent).PowerLinks[p.dev]), am.plugSeen(p, m.counted(after, p.agent).PowerLinks[p.dev]))
 	}
 	return notes
 }
@@ -644,6 +670,19 @@ func (m *hoMachine) leftovers(o *adminstate.HostOptions, gone bool, forget []hoA
 			o.Agents[agent] = e
 		}
 	}
+	// What is kept about a machine itself (name, Wake-on-LAN) under an id that is no machine of this panel.
+	for _, key := range slices.Sorted(maps.Keys(o.Hosts)) {
+		if _, isAgent := m.agents[key]; isAgent || !noRow(key) {
+			continue
+		}
+		if k := o.Hosts[key].Count(); k > 0 {
+			left.n += k
+			late = append(late, fmt.Sprintf("%s kept with %s, which is no machine of this panel", count(k), key))
+		}
+		if gone {
+			o.DropHost(key)
+		}
+	}
 	// Each kind is shortened by itself, so that what a removal says is what the dialog listed, line for line.
 	left.gone, left.removed = capLines(append(lines, late...)), capLines(left.removed)
 	if gone { // they were taken out above: first in what was removed, and no longer there
@@ -699,7 +738,8 @@ func (m *hoMachine) concerns(p hoPlug, to string) bool {
 // are what counts for that agent (config.yaml with the decisions), BeforeFrom and AfterFrom whether a
 // decision of the panel is part of it ("panel") or it is config.yaml's alone.
 type hoChange struct {
-	Agent      string `json:"agent"`
+	Agent      string `json:"agent,omitempty"`
+	Host       string `json:"host,omitempty"` // for name and wol: the id the machine's decisions are kept under
 	Field      string `json:"field"`
 	Before     any    `json:"before"`
 	After      any    `json:"after"`
@@ -785,6 +825,9 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 	}
 	// 1. resets: the decision of one line goes, config.yaml counts for it again
 	for _, r := range req.Reset {
+		if r.Field == "name" || r.Field == "wol" {
+			continue // the machine's own: applyHost, below
+		}
 		field := hoFields[r.Field]
 		if field == config.FieldUPSPowers {
 			i := slices.IndexFunc(m.ups, func(u hoUPS) bool { return u.id == r.ID })
@@ -961,7 +1004,12 @@ func (m *hoMachine) apply(o *adminstate.HostOptions, req hostOptionsReq) (lines 
 				Stored: hoStored(is, field)})
 		}
 	}
-	return lines, changes, removed, nil
+	// the machine itself: its name, its Wake-on-LAN
+	hl, hc, err := m.applyHost(o, req)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	return append(hl, lines...), append(hc, changes...), removed, nil
 }
 
 func hoFrom(panel bool) string {
@@ -1068,9 +1116,13 @@ func (m *hoMachine) view(o adminstate.HostOptions, ignored []string, ignoredCoun
 	if left.away == nil {
 		left.away = []hoAway{}
 	}
-	return map[string]any{"id": m.row.ID, "name": m.row.Name, "agent": strOrNil(m.agent), "site": strOrNil(m.site[m.row.ID]), "rev": o.Rev,
+	out := map[string]any{"id": m.row.ID, "name": m.row.Name, "agent": strOrNil(m.agent), "site": strOrNil(m.site[m.row.ID]), "rev": o.Rev,
 		"ups": ups, "plugs": plugs, "ignored": ignored, "ignored_count": ignoredCount, "leftovers": left.gone, "leftover_count": left.n,
 		"unrelayed": left.away, "unrelayed_count": left.awayN}
+	if m.host != nil && m.sites != nil { // the machine itself: its name, its site, its Wake-on-LAN (api_hostedit.go)
+		out["host"] = m.hostView(o, m.sites)
+	}
+	return out
 }
 
 func strOrNil(s string) any {
@@ -1122,6 +1174,15 @@ func (c *reqCtx) hostOptionsItems(*model.User) []string {
 	if err != nil {
 		return nil
 	}
+	if req.Site != nil { // the site, and whose view of the machine and of its devices it moves
+		sc, err := m.sites.plan(*req.Site)
+		if err != nil {
+			return nil
+		}
+		if sc != nil {
+			return append(append([]string{sc.line}, lines...), sc.notes(m, before, o)...)
+		}
+	}
 	return append(lines, m.visibility(before, o)...) // and whose view of a device it moves
 }
 
@@ -1136,15 +1197,54 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	if err := c.hostOptionsBody(&req); err != nil { // its form, before the admin is asked to confirm it
 		return err
 	}
-	u, err := c.adminGuardFor(denied, "changes to a host") // the same checks again, then the confirmation and the rate limit
+	// The same checks again, then the confirmation and the rate limit (adminGuardFor). Anything about
+	// Wake-on-LAN needs a confirmation of its own, whatever was confirmed a minute ago (api_hostedit.go).
+	u, err := c.adminSession(denied)
 	if err != nil {
 		return err
+	}
+	if req.touchesWol() {
+		err = c.stepUpEach(u, "changes to a host's Wake-on-LAN")
+	} else {
+		err = c.stepUp(u, "changes to a host")
+	}
+	if err != nil {
+		return err
+	}
+	if !s.adminRL.allow(u.Sub) {
+		return c.limited(u, s.adminRL, "too many changes")
 	}
 	id := c.r.PathValue("id")
 	m, err := c.hostOptionsMachine(id)
 	if err != nil {
 		c.audit(u, "host.options", id, nil, errorOutcome(err))
 		return err
+	}
+	params := map[string]any{"machine": m.row.Name, "agent": strOrNil(m.agent)}
+	refuse := func(err error) error {
+		if _, refused := err.(*apierr.Error); refused {
+			c.audit(u, "host.options", m.row.ID, params, errorOutcome(err))
+		} else {
+			c.audit(u, "host.options", m.row.ID, params, "failed: not saved")
+		}
+		return err
+	}
+	// The site is kept in another file than the rest (users.json: the Users page's own store). So the whole
+	// request is looked at first, on a copy: what is refused is refused before either file is written.
+	var site *hoSiteChange
+	if req.Site != nil {
+		if site, err = m.sites.plan(*req.Site); err != nil {
+			return refuse(err)
+		}
+		probe := s.Poller.Admin.HostOptions().Clone()
+		if _, _, _, err := m.apply(&probe, req); err != nil {
+			return refuse(err)
+		}
+	}
+	if site != nil {
+		if _, err := s.Access.Assign(m.row.ID, site.assign); err != nil {
+			return refuse(err)
+		}
 	}
 	var lines, notes []string
 	var changes []hoChange
@@ -1154,17 +1254,30 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		before := o.Clone()
 		var err error
 		if lines, changes, removed, err = m.apply(o, req); err == nil {
-			notes = m.visibility(before, *o)
+			if notes = m.visibility(before, *o); site != nil {
+				notes = site.notes(m, before, *o)
+			}
 		}
 		return err
 	})
-	params := map[string]any{"machine": m.row.Name, "agent": strOrNil(m.agent)}
 	if err != nil {
-		if _, refused := err.(*apierr.Error); refused {
-			c.audit(u, "host.options", m.row.ID, params, errorOutcome(err))
-			return err
+		if site != nil { // the site goes back to what it was: nothing of a request that failed stays
+			if _, back := s.Access.Assign(m.row.ID, s.siteAssigned(site.was)); back != nil {
+				params["site_not_put_back"] = site.is.Site
+			}
 		}
-		c.audit(u, "host.options", m.row.ID, params, "failed: not saved")
+		return refuse(err)
+	}
+	// A link reaches the rows with the reading agent's next answer, and that poll says so itself. A name, a
+	// site and the Wake-on-LAN details count at once: the poller's picture is made anew.
+	s.Poller.Bump()
+	if site != nil {
+		lines = append([]string{site.line}, lines...)
+		changes = append([]hoChange{{Host: m.row.ID, Field: "site", Before: strOrNil(site.was.Site), After: strOrNil(site.is.Site),
+			BeforeFrom: siteFrom(site.was), AfterFrom: siteFrom(site.is), Stored: strOrNil(site.assign)}}, changes...)
+		changed = true
+	}
+	if m, err = c.hostOptionsMachine(id); err != nil { // as it is now: the name and the site may be other ones
 		return err
 	}
 	out := m.view(after, nil, 0)
@@ -1179,18 +1292,37 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		params["removed_count"] = removed
 	}
 	if len(notes) > 0 {
-		params["visibility"], out["visibility"] = notes, notes // whose view of a device the change moves
+		params["visibility"], out["visibility"] = notes, notes // whose view of a machine or a device the change moves
 	}
 	c.audit(u, "host.options", m.row.ID, params, "ok")
+	// what was saved, in the words of the bell and of the page: "links" while nothing else was changed
+	what, about := "links", "links changed by "
+	if slices.ContainsFunc(changes, func(x hoChange) bool { return x.Host != "" }) {
+		what, about = "changes", "host edited by "
+	}
 	if s.Notes != nil {
 		s.Notes.Add(notifications.Event{Kind: "host_options", Type: "host", Severity: notifications.Info, SystemID: m.row.ID, Host: m.row.Name,
-			Text: "links changed by " + actorOf(u)})
+			Text: about + actorOf(u)})
 	}
-	// Nothing of the poller's picture has changed yet, so nothing is told to rebuild it: the links reach the
-	// rows with the reading agent's next answer, and that poll says so itself.
-	out["message"], out["changed"] = "links saved", lines
+	out["message"], out["changed"] = what+" saved", lines
 	c.json(200, out)
 	return nil
+}
+
+// siteAssigned is the assignment that was stored for a row whose site was ref ("": none, the default counted).
+func (s *Server) siteAssigned(ref siteRef) string {
+	if ref.From == fromPanel {
+		return ref.Site
+	}
+	return ""
+}
+
+// siteFrom is where a site comes from, in the audit log's words for a change.
+func siteFrom(ref siteRef) string {
+	if ref.From == fromPanel {
+		return "panel"
+	}
+	return "config.yaml"
 }
 
 // rowsOf is the rows that come and go with a host added with Add host, besides the row of its agent's own
@@ -1220,6 +1352,7 @@ func (s *Server) forgetHostOptions(by, agentID string, ids ...string) (gone, not
 		notes = m.visibility(before, *o)
 		return nil
 	})
+	s.Poller.Bump() // a name or a Wake-on-LAN decision that went counts at once
 	return gone, notes, err
 }
 

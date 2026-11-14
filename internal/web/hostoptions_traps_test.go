@@ -82,7 +82,7 @@ func TestEditHostWhoMay(t *testing.T) {
 	// ... and is asked to confirm a change: nothing is stored, and the dialog gets the panel's own lines
 	r := e.do("PUT", path, body, append([]string{"Cookie", a.sess, "X-Fairy-Action", "Edit%20host%20laptop"}, csrf...)...)
 	d, _ := r.body["detail"].(map[string]any)
-	if !stepUpRequired(r) || d["action"] != "change the links of laptop" || d["pending"] != true ||
+	if !stepUpRequired(r) || d["action"] != "edit the host laptop" || d["pending"] != true ||
 		!slices.Equal(strs(d["items"]), []string{"Plug Desk plug (read by laptop): not in the total"}) ||
 		!strings.Contains(fmt.Sprint(d["message"]), "changes to a host need a Pocket ID sign-in") {
 		t.Fatalf("an old sign-in: %d %s", r.code, r.raw)
@@ -1645,13 +1645,18 @@ func TestEditHostChangesNoControlPath(t *testing.T) {
 		t.Errorf("with overrides something a control path does differs:\n%+v\n%+v", plain, changed)
 	}
 	// And in the source: the overlay is read where links are handed to the power and the UPS manager, by the
-	// API of the dialog, by Remove and by `fairy admin config check`. Nowhere else.
+	// API of the dialog, by Remove and by `fairy admin config check`. Since stage 1b it also holds a machine's
+	// own name and Wake-on-LAN details, and poller/hostedit.go is where those meet the configuration: the
+	// snapshot and the two functions that hand a row to other pages ask it for the name (snapshot.go,
+	// agents.go), PowerOverride for the Wake-on-LAN (nodeid.go). Nowhere else; what a wake does with it is held
+	// by TestEditHostWolIsTheOneThingAControlPathReads.
 	allowed := map[string]bool{
 		"adminstate/hostoptions.go": true, "adminstate/hostoptions_read.go": true, "poller/hostoptions.go": true, "poller/agents.go": true,
 		"web/api_hostoptions.go": true, "web/api_enroll.go": true, "admin/hostoptions_check.go": true,
+		"poller/hostedit.go": true, "poller/snapshot.go": true, "poller/nodeid.go": true, "web/api_hostedit.go": true,
 	}
-	// every way to get at the overlay or at the links made with it (a call; a comment that names one is none)
-	word := regexp.MustCompile(`\b(HostOptions|HostOptionsRead|ReadHostOptions|EditHostOptions|hostOptions|forgetHostOptions|LinksOf|BaseLinks)\(|hostOptionsKey\]`)
+	// every way to get at the overlay or at what is made with it (a call; a comment that names one is none)
+	word := regexp.MustCompile(`\b(HostOptions|HostOptionsRead|ReadHostOptions|EditHostOptions|hostOptions|forgetHostOptions|LinksOf|BaseLinks|HostEdit|hostEditIn|HostKey|panelWol|WolWith)\(|hostOptionsKey\]`)
 	found := map[string]bool{}
 	for _, root := range []string{"..", "../../cmd"} {
 		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -1695,6 +1700,16 @@ func TestEditHostChangesNoControlPath(t *testing.T) {
 		if _, err := os.Stat(f); err != nil {
 			t.Errorf("%s is not where this test looks for it: %v", f, err)
 		}
+	}
+	// ... and the decisions about a machine itself reach a control path in one place: PowerOverride lays the
+	// Wake-on-LAN details over the configuration's entry, and the snapshot does the same for the Wake among a
+	// row's actions.
+	nodeid, snap := string(must(os.ReadFile("../poller/nodeid.go"))), string(must(os.ReadFile("../poller/snapshot.go")))
+	if n := strings.Count(nodeid, "p.panelWol("); n != 1 || !strings.Contains(nodeid, "return p.panelWol(p.Admin.HostOptions(), id, p.configPowerOverride(id))") {
+		t.Errorf("poller/nodeid.go asks panelWol %d times, want once, in PowerOverride", n)
+	}
+	if n := strings.Count(snap, "p.panelWol("); n != 1 {
+		t.Errorf("poller/snapshot.go asks panelWol %d times, want once, for a row's actions", n)
 	}
 }
 

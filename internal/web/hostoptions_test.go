@@ -587,8 +587,11 @@ func TestEditHostPlugLinksAndTheTotal(t *testing.T) {
 // it, at the top and inside every entry, and neither the stored overrides nor the agent's entry change.
 func TestEditHostNeverEditable(t *testing.T) {
 	r := ehSetup(t)
+	// (Until stage 1b "site" and "name" were in this list. Both have a field of their own at the top of a request
+	// now, with their own checks: TestEditHostTheMachineItselfNeverEditable. Inside an entry they are refused
+	// as before: the loop at the end of this list.)
 	never := []string{"id", "url", "token_env", "control_token_env", "verify_tls", "node", "links_to", "fan_control", "power_control", "self_update",
-		"wol_relay", "owner", "site", "name"}
+		"wol_relay", "owner"}
 	entry := func(a config.Agent) string {
 		return fmt.Sprintf("%s|%s|%s|%s|%v|%s|%s|%v|%v|%v|%v|%v|%s|%s", a.ID, a.URL, a.TokenEnv, a.ControlTokenEnv, a.VerifyTLS, a.Node, a.LinksTo, a.FanControl,
 			a.PowerControl, a.SelfUpdate, a.WolRelay, model.Deref(a.Owner), a.Site, a.Name)
@@ -624,7 +627,22 @@ func TestEditHostNeverEditable(t *testing.T) {
 			}
 		}
 	}
-	if n < 300 {
+	for _, f := range []string{"site", "name"} { // inside an entry, and with a value that is no text
+		for where, body := range map[string]map[string]any{
+			"in a UPS entry":      {"ups": []any{map[string]any{"id": "nas-agent/rack", "on": true, f: "x"}}},
+			"in a plug entry":     {"plugs": []any{map[string]any{"id": "nas-agent/b-plug", "linked": true, f: "x"}}},
+			"in a reset entry":    {"reset": []any{map[string]any{"id": "nas-agent/rack", "field": "ups", f: "x"}}},
+			"under an agent's id": {"agents": map[string]any{ehNAS: map[string]any{f: "x"}}},
+			"as a switch":         {f: true},
+			"as an object":        {f: map[string]any{"vendor": "supermicro"}},
+		} {
+			n++
+			if got := r.put(ehNodeB, body); got.code != 422 {
+				t.Errorf("%q %s: %d %s", f, where, got.code, got.raw)
+			}
+		}
+	}
+	if n < 280 {
 		t.Fatalf("only %d requests were tried", n)
 	}
 	if r.storedOptions() != nil {
