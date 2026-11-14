@@ -587,6 +587,13 @@ const wallPower = (lp) => {
   if (lp.watts != null) return `<div class="big-w">${fmtW(lp.watts)} <small>wall · ${names}</small></div>${spark(lp.history)}${bad}`;
   return lp.sources.length ? `<div class="note">No wall-power reading from ${names}.</div>${bad}` : '<div class="note">No wall-power source linked.</div>';
 };
+// Under them: one line for each linked source, with the volts, amperes and kWh counter its reading has (the
+// agent sends them when the device reports them), and the button for the source's last 24 hours.
+const wallMore = (lp) => lp.sources.map((x) => {
+  const r = x.readings[0] || {};
+  const vals = [r.voltage != null && `${r.voltage.toFixed(1)} V`, r.current != null && `${fmtAmps(r.current)} A`, r.energy_kwh_total != null && `${fmtKWh(r.energy_kwh_total)} kWh`].filter(Boolean);
+  return `<div class="list-row wall-src"><span>${esc(x.name)}</span><span>${esc(vals.join(" · "))}${dayBtn(x)}</span></div>`;
+}).join("");
 
 // ------------------------------------------------------------ grouping: hosts by site
 // Every host (Proxmox node or agent) is listed under its site (site: in config.yaml, or set on the Users page);
@@ -1601,7 +1608,7 @@ function systemOverview(s) {
     <div class="list-row"><span>Last change</span><span data-ago="${esc(s.updated_at || s.last_seen)}">${ago(s.updated_at || s.last_seen)}</span></div></div>`;
   const ups = upsOf(s);
   const power = `<div class="panel glass pad"><h3>Power</h3>
-    ${wallPower(lp)}
+    ${wallPower(lp)}${wallMore(lp)}
     ${ups.map((u) => `<div class="list-row"><span>${I.ups} UPS · <a href="#/ups">${esc(u.name)}</a></span><span class="${onBattery(u) ? "warn-t" : ""}">${esc(u.status.replace("_", " "))} · ${u.battery_charge?.toFixed(0) ?? "–"}% · ${fmtRuntime(u.battery_runtime_s)}</span></div>`).join("")}
     ${cp ? [["CPU package", cp.cpu_package_w], ["GPU", cp.gpu_w], ["Battery", cp.battery_w != null && !s.battery ? cp.battery_w : null], ["BMC (in-band)", cp.bmc_w]]
       .filter(([, v]) => v != null).map(([k, v]) => `<div class="list-row"><span>${k}${k === "Battery" && cp.battery_state ? ` · ${esc(cp.battery_state)}` : ""}</span><span>${fmtW(v)}</span></div>`).join("")
@@ -1731,10 +1738,19 @@ function powerSourceRow(s, chip) {
   const linked = state.systems.find((x) => x.id === (s.system_id ?? r.system_id));
   return `<tr class="row"><td><b>${esc(s.name)}</b>${s.via ? `<div class="note">via agent ${esc(s.via)}</div>` : ""}</td><td>${esc(s.type)}</td>
         <td>${chip(s.status)}${s.error ? `<div class="error">${esc(s.error)}</div>` : ""}</td><td class="num"><b class="value pwr">${fmtW(r.watts)}</b></td>
-        <td class="num">${r.voltage?.toFixed(1) ?? "–"}</td><td class="num">${r.current?.toFixed(2) ?? "–"}</td><td class="num">${r.energy_kwh_total?.toFixed(2) ?? "–"}</td>
+        <td class="num">${r.voltage?.toFixed(1) ?? "–"}</td><td class="num">${fmtAmps(r.current)}</td><td class="num">${fmtKWh(r.energy_kwh_total)}</td>
         <td>${linked ? `<a href="#/system/${enc(linked.id)}">${esc(linked.name)}</a>` : "–"}${s.include_in_total ? "" : ' <span class="chip">not in total</span>'}</td>
-        <td>${spark(state.history.map((h) => own(h.sources, s.id) ?? null))}</td></tr>`;
+        <td>${dayBtn(s, spark(state.history.map((h) => own(h.sources, s.id) ?? null)))}</td></tr>`;
 }
+// Amperes and the kWh counter next to the watts. A plug's current is often well under one ampere, and its
+// counter starts again at 0 after an outage: both are written with three decimals while they are small, so
+// that 0.085 A is not "0.09" and 0.004 kWh not "0.00".
+const fmtAmps = (a) => (a == null ? "–" : Math.abs(a) < 1 ? a.toFixed(3) : a.toFixed(2));
+const fmtKWh = (k) => (k == null ? "–" : Math.abs(k) < 10 ? k.toFixed(3) : Math.abs(k) < 1000 ? k.toFixed(2) : k.toFixed(1));
+// The button that opens a source's "Last 24 hours" (openPowerDay): a small chart sign, after what it is given
+// to hold (the hour's sparkline on the Power page). No words: its name is in title and aria-label.
+const DAY_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 15 4-5 3 3 5-7"/></svg>';
+const dayBtn = (s, inner = "") => `<button class="day-btn" type="button" data-act="power-day" data-source="${esc(s.id)}" title="Last 24 hours" aria-label="${esc(`Last 24 hours of ${s.name}`)}">${inner}${DAY_ICON}</button>`;
 
 // ------------------------------------------------------------ UPS page
 const UPS_STATUS = table({ online: ["ok", "online"], on_battery: ["warn", "on battery"], low_battery: ["bad", "LOW BATTERY"],
@@ -1789,6 +1805,246 @@ function pageUps() {
       "The panel asks NUT with LIST UPS and LIST VAR only.",
       "No instant commands, no SET VAR."]))}</p>`;
 }
+
+// ------------------------------------------------------------ power: the last 24 hours of one source
+// The dialog behind the chart button of a power source (dayBtn): GET /api/power/day?source=<id> gives one
+// element a minute for the last 24 hours (lowest, average and highest watts, the last volts and amperes),
+// null for a minute without readings, and the day in numbers. Drawn here as plain SVG, nothing loaded.
+//
+// A minute without readings is drawn as nothing. The line is cut into the runs of minutes that have readings
+// (dayRuns), each its own piece; nothing is ever drawn across a gap, and nothing is drawn at zero for one.
+// The time under the pointer is read out in a line above the chart (and "no readings" in a gap), so it works
+// the same with a mouse, a finger and the arrow keys.
+const pday = { id: null, d: null, err: "", at: null, timer: null };
+const DAY_S = 86400;
+const dayTime = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// The stretches of a list that have readings, as [first, last] indexes. A null ends one.
+function dayRuns(v) {
+  const out = [];
+  let a = -1;
+  for (let i = 0; i <= v.length; i++) {
+    const has = i < v.length && v[i] != null;
+    if (has && a < 0) a = i;
+    if (!has && a >= 0) { out.push([a, i - 1]); a = -1; }
+  }
+  return out;
+}
+// The lines of an axis from lo to hi: round numbers (1, 2, 2.5 or 5 times a power of ten) from the one at or
+// under lo to the one at or over hi, with the smallest such step that needs at most n steps for it.
+function dayTicks(lo, hi, n) {
+  const p = 10 ** Math.floor(Math.log10((hi - lo || 1) / n));
+  for (const step of [1, 2, 2.5, 5, 10, 20, 25, 50].map((m) => m * p)) {
+    const a = Math.floor(lo / step + 1e-9), b = Math.ceil(hi / step - 1e-9);
+    if (b - a > n) continue;
+    const out = [];
+    for (let k = a; k <= Math.max(b, a + 1); k++) out.push(+(k * step).toFixed(6));
+    return out;
+  }
+  return [lo, hi];
+}
+// The hours named under the chart: local time, every 3, 6 or 12 hours by the chart's width, and the date in
+// place of the time at midnight.
+function dayHours(now, W) {
+  const every = W >= 620 ? 3 : W >= 300 ? 6 : 12, out = [];
+  const dt = new Date((now - DAY_S) * 1000);
+  dt.setMinutes(0, 0, 0);
+  for (let k = 0; k < 30; k++) {
+    dt.setHours(dt.getHours() + 1);
+    const t = dt.getTime() / 1000;
+    if (t > now) break;
+    if (t <= now - DAY_S || dt.getHours() % every) continue;
+    const day = dt.getHours() === 0;
+    out.push({ t, day, label: day ? dt.toLocaleDateString([], { weekday: "short", day: "numeric" }) : dayTime(t) });
+  }
+  return out;
+}
+// Where things are in a chart of W x H pixels: kind "w" is the watts (from 0, or from the lowest value when a
+// source goes under 0), "v" the volts (around the values: 240 V is not a small step above 0).
+function dayGeom(d, W, H, kind) {
+  const main = kind === "w" ? d.avg : d.volts || [], lows = kind === "w" ? d.min : main, highs = kind === "w" ? d.max : main;
+  const L = 46, R = 12, T = 10, B = kind === "w" ? 24 : 8, pw = Math.max(10, W - L - R), ph = Math.max(10, H - T - B);
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < main.length; i++) {
+    if (main[i] == null) continue;
+    lo = Math.min(lo, lows[i] ?? main[i]); hi = Math.max(hi, highs[i] ?? main[i]);
+  }
+  if (lo > hi) { lo = 0; hi = 1; }
+  if (kind === "w") lo = Math.min(0, lo);
+  else if (hi - lo < 4) { const mid = (hi + lo) / 2; lo = mid - 2; hi = mid + 2; }
+  if (hi <= lo) hi = lo + 1;
+  const ticks = dayTicks(lo, hi, kind === "w" ? 5 : 3), y0 = ticks[0], y1 = ticks[ticks.length - 1], t0 = d.now - DAY_S;
+  return { main, lows, highs, L, R, T, B, pw, ph, ticks, y0, y1, t0, W, H,
+    xt: (t) => L + Math.min(1, Math.max(0, (t - t0) / DAY_S)) * pw,
+    x: (i) => L + Math.min(1, Math.max(0, (d.start + (i + 0.5) * d.step_s - t0) / DAY_S)) * pw,
+    y: (v) => T + ph - ((v - y0) / (y1 - y0)) * ph };
+}
+const dayNum = (v) => (Math.abs(v) >= 10000 ? `${+(v / 1000).toFixed(1)}k` : String(+v.toFixed(2)));
+// One chart as SVG. Watts: a band from each minute's lowest to its highest sample (a short spike shows in it)
+// and the line of the minute's average. Volts: a line. One piece per run of minutes with readings.
+function dayChart(d, W, H, kind) {
+  const g = dayGeom(d, W, H, kind), f = (n) => n.toFixed(1);
+  let grid = "", labels = "", band = "", line = "", gaps = "";
+  for (const v of g.ticks) {  // the unit is the chart's heading ("Watts", "Volts"): the numbers stay in one column
+    const y = f(g.y(v));
+    grid += `<line class="pd-grid${v === 0 ? " zero" : ""}" x1="${g.L}" x2="${f(g.L + g.pw)}" y1="${y}" y2="${y}"/>`;
+    labels += `<text x="${g.L - 8}" y="${y}" dy="0.32em" text-anchor="end">${esc(dayNum(v))}</text>`;
+  }
+  let used = -100;  // where the last hour's name ends: one that would touch it is left out
+  for (const h of dayHours(d.now, W)) {
+    const x = g.xt(h.t);
+    grid += `<line class="pd-grid v" x1="${f(x)}" x2="${f(x)}" y1="${g.T}" y2="${f(g.T + g.ph)}"/>`;
+    if (kind !== "w") continue;
+    const half = h.label.length * 3.5 + 2;  // about its half width at 12 px
+    const anchor = x - half < 2 ? "start" : x + half > W - 2 ? "end" : "middle";
+    const left = anchor === "start" ? x : anchor === "end" ? x - 2 * half : x - half;
+    if (left < used + 4) continue;
+    used = left + 2 * half;
+    labels += `<text class="${h.day ? "day" : ""}" x="${f(x)}" y="${f(g.T + g.ph + 16)}" text-anchor="${anchor}">${esc(h.label)}</text>`;
+  }
+  const runs = dayRuns(g.main), gap = (a, b) => { if (b - a >= 3) gaps += `<rect class="pd-gap" x="${f(a)}" y="${g.T}" width="${f(b - a)}" height="${f(g.ph)}"/>`; };
+  let edge = g.L;  // the stretches without readings, also before the first and after the last one
+  for (const [a, b] of runs) {
+    gap(edge, g.x(a)); edge = g.x(b);
+    const pts = [], up = [], down = [];
+    for (let i = a; i <= b; i++) {
+      const x = f(g.x(i));
+      pts.push(`${x},${f(g.y(g.main[i]))}`);
+      if (kind === "w") { up.push(`${x},${f(g.y(g.highs[i]))}`); down.push(`${x},${f(g.y(g.lows[i]))}`); }
+    }
+    line += a === b ? `M${pts[0]}h0.01` : `M${pts.join("L")}`;
+    if (kind === "w") band += `M${up.join("L")}L${down.reverse().join("L")}Z`;
+  }
+  gap(edge, g.L + g.pw);
+  return `<svg class="pd-svg ${kind}" data-kind="${kind}" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-hidden="true">
+    ${gaps}${grid}<g class="pd-axis">${labels}</g>${band ? `<path class="pd-band" d="${band}"/>` : ""}<path class="pd-line" d="${line}"/>
+    <line class="pd-cross" x1="0" x2="0" y1="${g.T}" y2="${f(g.T + g.ph)}" visibility="hidden"/><circle class="pd-dot" r="4" cx="0" cy="0" visibility="hidden"/></svg>`;
+}
+const daySpan = (s) => { const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h ? `${h} h${m ? ` ${m} min` : ""}` : `${m} min`; };
+// The day in numbers, above the chart: average, lowest and highest watts (with when), the energy and where it
+// is from, and the range of volts and amperes when the device reports them.
+function dayStats(d) {
+  const s = d.summary;
+  const tile = (label, value, note) => `<div class="pd-stat"><div class="k">${label}</div><div class="v">${value}</div><div class="note">${note || ""}</div></div>`;
+  const est = s.energy === "estimated" ? "estimated" : s.energy === "mixed" ? "partly estimated" : "";
+  const about = infoBtn("pday-energy", "Energy", infoList([
+    s.energy === "counter" ? "From the device's own kWh counter: what it counted up in this time."
+      : s.energy === "mixed" ? `${esc(fmtKWh(s.energy_est_kwh))} kWh of it are estimated from the watts, where the device's kWh counter had no value or did not move. The rest is what the counter counted up.`
+        : "Estimated: average watts × time. The device has no kWh counter, or its counter did not move.",
+    "A counter that starts again at 0 is not counted backwards.",
+    "Time without readings is not counted."]));
+  const range = (lo, hi, fmt, unit) => (lo == null ? "" : lo === hi ? `${fmt(lo)} ${unit}` : `${fmt(lo)} – ${fmt(hi)} ${unit}`);
+  const volts = range(s.volts_min, s.volts_max, (v) => v.toFixed(1), "V"), amps = range(s.amps_min, s.amps_max, fmtAmps, "A");
+  const part = s.covered_s < DAY_S - 1200 ? `<span>Readings for <b>${esc(daySpan(s.covered_s))}</b> of the 24 hours</span>` : "";
+  return `<div class="pday-stats">${tile("Average", esc(fmtW(s.avg_w)))}${tile("Lowest", esc(fmtW(s.min_w)), esc(dayTime(s.min_at)))}${tile("Highest", esc(fmtW(s.max_w)), esc(dayTime(s.max_at)))}
+    ${tile(`Energy${about}`, `${est ? "≈ " : ""}${esc(fmtKWh(s.energy_kwh))} kWh`, est)}</div>
+    ${volts || amps || part ? `<div class="pday-more">${volts ? `<span>Volts <b>${esc(volts)}</b></span>` : ""}${amps ? `<span>Amps <b>${esc(amps)}</b></span>` : ""}${part}</div>` : ""}`;
+}
+// What the line above the chart says for the minute at Unix time t (null: the newest minute with readings),
+// as [class, text] pieces; and the list index of that minute (-1: outside the lists).
+function dayReadout(d, t) {
+  const n = d.avg.length, i = t == null ? n - 1 : Math.floor((t - d.start) / d.step_s), at = t == null ? d.start + i * d.step_s : t;
+  const out = [["pd-t", t == null ? `Latest · ${dayTime(at)}` : dayTime(at)]];
+  if (i < 0 || i >= n || d.avg[i] == null) return { i: -1, parts: out.concat([["pd-none", "no readings"]]) };
+  out.push(["pd-v", fmtW(d.avg[i])]);
+  if (d.max[i] - d.min[i] >= 0.05) out.push(["pd-r", `${fmtW(d.min[i])} – ${fmtW(d.max[i])}`]);
+  if (d.volts?.[i] != null) out.push(["pd-r", `${d.volts[i].toFixed(1)} V`]);
+  if (d.amps?.[i] != null) out.push(["pd-r", `${fmtAmps(d.amps[i])} A`]);
+  return { i, parts: out };
+}
+function openPowerDay(id) {
+  const s = (state.power?.sources || []).find((x) => x.id === id);
+  if (!s || stepUpOpen) return;
+  Object.assign(pday, { id, d: null, err: "", at: null });
+  const m = $("#modal");
+  m.innerHTML = `<div class="modal-box wide pday" id="pday" role="dialog" aria-modal="true" aria-labelledby="pday-t">
+    <div class="pday-head"><h3 id="pday-t">Last 24 hours</h3><span class="note" id="pday-name"></span></div>
+    <div id="pday-body"><div class="note">Loading…</div></div>
+    <div class="row-gap end"><button class="btn" type="button" id="pday-x">Close</button></div></div>`;
+  $("#pday-name").textContent = s.name;
+  m.hidden = false;
+  $("#pday-x").onclick = closeModal;
+  m.onclick = (e) => { if (e.target === m) closeModal(); };
+  clearInterval(pday.timer);  // the open dialog follows the day: once a minute, for as long as it is open
+  pday.timer = setInterval(() => { if ($("#pday")) loadPowerDay(); else clearInterval(pday.timer); }, 60000);
+  loadPowerDay();
+}
+async function loadPowerDay() {
+  const id = pday.id;
+  let d = null, err = "";
+  try { d = await api(`/api/power/day?source=${enc(id)}`); } catch (e) { err = e.message || String(e); }
+  if (pday.id !== id || !$("#pday")) return;  // closed, or another source's by now
+  if (d) pday.d = d;
+  pday.err = err;
+  drawPowerDay();
+}
+function drawPowerDay() {
+  const body = $("#pday-body"), d = pday.d;
+  if (!body) return;
+  const err = pday.err ? `<div class="error">${esc(pday.err)}</div>` : "";
+  if (!d) { body.innerHTML = err; return; }
+  if (!d.summary) { body.innerHTML = `<div class="empty">No readings in the last 24 hours.</div>${err}`; return; }
+  body.innerHTML = `${dayStats(d)}<div class="pday-row"><div class="pday-sub">Watts</div><div class="pday-read" id="pday-read"></div></div>
+    <div class="pday-plot" id="pday-plot" tabindex="0" role="group" aria-label="Watts over the last 24 hours. Left and right arrow keys move through the day."></div>
+    ${d.volts ? '<div class="pday-sub">Volts</div><div class="pday-plot volts" id="pday-volts"></div>' : ""}${err}`;
+  sizePowerDay();
+}
+// The charts are drawn in the pixels they get (so the text is never scaled), and again when that changes.
+function sizePowerDay() {
+  const box = $("#pday-plot"), d = pday.d;
+  if (!box || !d) return;
+  const W = Math.max(240, Math.floor(box.clientWidth));
+  box.innerHTML = dayChart(d, W, W < 480 ? 200 : 260, "w");
+  const vb = $("#pday-volts");
+  if (vb) vb.innerHTML = dayChart(d, W, 90, "v");
+  dayPoint(pday.at);
+}
+// Puts the readout and the marker at the minute of Unix time t (null: back to the newest reading, no marker).
+function dayPoint(t) {
+  const d = pday.d, read = $("#pday-read");
+  if (!d || !read) return;
+  pday.at = t;
+  const r = dayReadout(d, t);
+  read.textContent = "";
+  for (const [cls, text] of r.parts) { const el = document.createElement("span"); el.className = cls; el.textContent = text; read.append(el); }
+  for (const svg of document.querySelectorAll("#pday .pd-svg")) {
+    const kind = svg.dataset.kind, g = dayGeom(d, +svg.getAttribute("width"), +svg.getAttribute("height"), kind);
+    const cross = svg.querySelector(".pd-cross"), dot = svg.querySelector(".pd-dot");
+    cross.setAttribute("visibility", t == null ? "hidden" : "visible");
+    if (t != null) { const x = g.xt(t + d.step_s / 2).toFixed(1); cross.setAttribute("x1", x); cross.setAttribute("x2", x); }
+    const v = t != null && r.i >= 0 ? g.main[r.i] : null;
+    dot.setAttribute("visibility", v == null ? "hidden" : "visible");
+    if (v != null) { dot.setAttribute("cx", g.x(r.i).toFixed(1)); dot.setAttribute("cy", g.y(v).toFixed(1)); }
+  }
+}
+// The minute under the pointer, from where it is over a chart.
+function dayAt(e) {
+  const svg = e.target.closest?.(".pday-plot")?.querySelector(".pd-svg"), d = pday.d;
+  if (!svg || !d) return null;
+  const box = svg.getBoundingClientRect(), g = dayGeom(d, +svg.getAttribute("width"), +svg.getAttribute("height"), svg.dataset.kind);
+  const frac = Math.min(1, Math.max(0, ((e.clientX - box.left) * (g.W / (box.width || g.W)) - g.L) / g.pw));
+  return Math.min(Math.floor(d.now / d.step_s), Math.floor((g.t0 + frac * DAY_S) / d.step_s)) * d.step_s;
+}
+// The button opens it, and so does a click anywhere else in the button's row of the Power page (not on a
+// link or another button): on a phone the button's column is the last one, off the screen to the right.
+document.addEventListener("click", (e) => {
+  const t = e.target.closest?.('[data-act="power-day"]')
+    || (e.target.closest?.("a, button, input, select, label") ? null : e.target.closest?.("tr.row")?.querySelector('[data-act="power-day"]'));
+  if (t && !t.disabled) openPowerDay(t.dataset.source);
+});
+for (const ev of ["pointermove", "pointerdown"]) document.addEventListener(ev, (e) => { const t = dayAt(e); if (t != null) dayPoint(t); });
+document.addEventListener("pointerout", (e) => {  // a mouse that leaves the chart: back to the newest reading. A finger's choice stays.
+  const plot = e.target.closest?.(".pday-plot");
+  if (plot && e.pointerType === "mouse" && !plot.contains(e.relatedTarget)) dayPoint(null);
+});
+document.addEventListener("keydown", (e) => {
+  const d = pday.d;
+  if (!d || !e.target.closest?.("#pday-plot") || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+  e.preventDefault();
+  const last = Math.floor(d.now / d.step_s) * d.step_s, first = last - DAY_S + d.step_s, step = (e.shiftKey ? 60 : 5) * d.step_s;
+  const from = pday.at ?? d.start + (d.avg.length - 1) * d.step_s;
+  dayPoint(e.key === "Home" ? first : e.key === "End" ? last : Math.min(last, Math.max(first, from + (e.key === "ArrowLeft" ? -step : step))));
+});
+window.addEventListener("resize", () => { if ($("#pday-plot")) sizePowerDay(); });
 
 // ------------------------------------------------------------ audit page (control group only)
 const audit = { entries: [], next: null, q: "", action: "", host: "", loading: false, error: null, open: dict() };

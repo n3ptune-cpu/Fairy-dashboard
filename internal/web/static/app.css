@@ -917,3 +917,54 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .modal-box.approval .ap-more { border-top: 1px solid var(--rule); margin-top: 14px; padding-top: 14px; }
 .modal-box.approval .ap-more p:last-child { margin-bottom: 0; }
 .modal-box.approval .ap-more code { overflow-wrap: anywhere; }
+
+/* power: the button for a source's last 24 hours, and the dialog with its chart (app.js: openPowerDay) */
+.day-btn { display: inline-flex; align-items: center; gap: 8px; padding: 3px 5px; margin: -3px -5px; border: 1px solid transparent; border-radius: var(--radius);
+  background: none; color: var(--faint); cursor: pointer; vertical-align: middle; font: inherit; }
+.day-btn:hover { color: var(--text); border-color: var(--line2); background: var(--hover); }
+.day-btn:focus-visible { color: var(--text); outline: 2px solid var(--accent); outline-offset: 1px; }
+.day-btn svg { flex: none; }
+.table tr.row:has(.day-btn) { cursor: pointer; }
+.wall-src { align-items: center; }
+.wall-src > span:last-child { display: inline-flex; align-items: center; gap: 10px; flex: none; white-space: nowrap; }
+.wall-src .day-btn { margin: -3px -5px -3px 0; }
+.modal-box.pday { max-width: 900px; }
+.pday-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 14px; }
+.pday-head h3 { margin: 0; }
+.pday-head .note { min-width: 0; overflow-wrap: anywhere; }
+.pday-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.pd-stat { border: 1px solid var(--line); padding: 10px 12px; min-width: 0; }
+.pd-stat .k { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; font-weight: 600; min-height: 16px; }
+.pd-stat .v { margin-top: 2px; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pd-stat .note { min-height: 15px; }
+.pday-more { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 10px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.pday-more b { color: var(--text); font-weight: 600; }
+.pday-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 14px; margin: 16px 0 6px; }
+.pday-row .pday-sub { margin: 0; }
+.pday-read { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-height: 22px; color: var(--muted); font-size: 12.5px;
+  font-variant-numeric: tabular-nums; }
+.pday-read .pd-v { color: var(--text); font-size: 14px; font-weight: 600; }
+.pday-plot { touch-action: pan-y; cursor: crosshair; }
+.pday-plot:focus-visible { outline: 1px solid var(--line2); outline-offset: 2px; }
+.pday-sub { margin: 12px 0 2px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.pday .row-gap.end { margin-top: 16px; }
+.pday .empty, .pday .error { margin-top: 4px; }
+.pd-svg { display: block; max-width: 100%; height: auto; user-select: none; -webkit-user-select: none; }
+.pd-grid { stroke: var(--line); stroke-width: 1; shape-rendering: crispEdges; }
+.pd-grid.v { stroke: var(--rule); }
+.pd-grid.zero { stroke: var(--line2); }
+.pd-axis text { fill: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pd-axis text.day { fill: var(--muted); }
+.pd-gap { fill: rgba(255, 255, 255, .025); }
+.pd-band { fill: rgba(245, 184, 75, .25); stroke: rgba(245, 184, 75, .25); stroke-width: 1; stroke-linejoin: round; }
+.pd-line { fill: none; stroke: var(--pwr); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.pd-svg.v .pd-line { stroke: var(--accent); }
+.pd-cross { stroke: var(--muted); stroke-width: 1; shape-rendering: crispEdges; }
+.pd-dot { fill: var(--pwr); stroke: var(--panel); stroke-width: 2; }
+.pd-svg.v .pd-dot { fill: var(--accent); }
+@media (max-width: 760px) {
+  .modal-box.pday { padding: 16px 14px; }
+  .pday-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .pd-stat { padding: 8px 10px; }
+  .pd-stat .v { font-size: 18px; }
+}
