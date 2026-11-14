@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
@@ -87,7 +88,8 @@ func TestEditHostAnAddedHostThatIsLeftOutAtOneStartIsNotGone(t *testing.T) {
 	}
 	stored := fmt.Sprint(e.storedOptions()["agents"])
 
-	// start 2: its tokens file is damaged
+	// start 2: its tokens file is damaged. And a second added host is left out with it: BOX-N, added as "a new
+	// Proxmox node", which is shown as its node's row; the laptop's entry keeps a change about that row
 	tokens := filepath.Join(cfg.DataDir, "secrets", "agent-box-a.json")
 	good, err := os.ReadFile(tokens)
 	if err != nil {
@@ -96,10 +98,34 @@ func TestEditHostAnAddedHostThatIsLeftOutAtOneStartIsNotGone(t *testing.T) {
 	if err := os.WriteFile(tokens, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	const nodeRow = "alice-box-n-node-box-n"
+	boxN := managed.Host{ID: "box-n", Name: "BOX-N", URL: "http://box-n", OS: "linux", AddedAt: time.Now().UTC(), ProxmoxWanted: true, SystemID: nodeRow,
+		Proxmox: &managed.PVE{ID: "alice-box-n", IDPrefix: "alice-box-n-", Node: "BOX-N", URL: "https://box-n:8006", ServerName: "BOX-N", TokenID: "fairy@pve!panel-box-n"}}
+	if err := st.Put(boxN, managed.Secret{Token: strings.Repeat("n", 32)}); err != nil {
+		t.Fatal(err)
+	}
+	if boxN.Shown() != nodeRow || boxN.Shown() == boxN.ID {
+		t.Fatalf("the rig: BOX-N is shown as its node's row: %q", boxN.Shown())
+	}
+	if err := os.WriteFile(filepath.Join(cfg.DataDir, "secrets", "agent-box-n.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	e, skipped = ehStartAdded(t, cfg, b)
-	if len(skipped) != 1 || !strings.Contains(skipped[0], "Re-pair it") {
+	if len(skipped) != 2 || !strings.Contains(skipped[0], "Re-pair it") || !strings.Contains(skipped[1], "Re-pair it") {
 		t.Fatalf("start 2 left out: %v", skipped)
 	}
+	if _, _, err := e.s.Poller.Admin.EditHostOptions("earlier", func(o *adminstate.HostOptions) error {
+		lap := o.Agents["laptop"].Clone()
+		lap.SetUPS("rack", nodeRow, true)
+		o.Agents["laptop"] = lap
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if e.s.Poller.KnownRow(nodeRow) || !strings.Contains(fmt.Sprint(e.storedAgent("laptop")["ups_powers"]), nodeRow) {
+		t.Fatalf("the rig: a change about BOX-N's node row is stored, and the poller knows no such row at this start: %v", e.storedAgent("laptop"))
+	}
+	stored = fmt.Sprint(e.storedOptions()["agents"])
 	for _, id := range []string{"laptop", "tower"} {
 		g := e.do("GET", "/api/admin/hosts/"+id+"/options", nil, hdr(e)[:2]...)
 		if g.code != 200 || g.body["leftover_count"] != 0.0 || len(strs(g.body["leftovers"])) != 0 {
@@ -163,8 +189,8 @@ func TestEditHostAnAddedHostThatIsLeftOutAtOneStartIsNotGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	e, skipped = ehStartAdded(t, cfg, b)
-	if len(skipped) != 0 {
-		t.Fatal("start 3 left out:", skipped)
+	if len(skipped) != 1 || !strings.Contains(skipped[0], "box-n") {
+		t.Fatal("start 3 left out (BOX-N still waits for Re-pair):", skipped)
 	}
 	if got := onRack(e); !slices.Equal(got, []string{"laptop/rack"}) {
 		t.Errorf("BOX-A is back and its UPS link is gone: %v", got)
@@ -270,7 +296,7 @@ func TestEditHostADeviceThatIsNotRelayedRightNowIsNotGone(t *testing.T) {
 		t.Fatalf("state.json afterwards (the rack UPS's change alone is gone): %v", nas)
 	}
 	en := r.auditEntries("", "host.options")[0]
-	if lines := strs(en["params"].(map[string]any)["lines"]); !slices.Equal(lines, removed) || en["outcome"] != "ok" {
+	if lines := strs(en["params"].(map[string]any)["lines"]); !slices.Equal(lines, removed) || en["outcome"] != "ok" || en["params"].(map[string]any)["removed_count"] != 1.0 {
 		t.Fatalf("the audit entry: %v", en)
 	}
 	// NUT and the plug are back: the changes that were kept have their lines and count again; the one that was
@@ -283,8 +309,52 @@ func TestEditHostADeviceThatIsNotRelayedRightNowIsNotGone(t *testing.T) {
 	if len(unrelayed(g)) != 0 || g.body["unrelayed_count"] != 0.0 || ehEntry(t, g, "ups", "nas-agent/desk")["on"] != true || ehEntry(t, g, "ups", "nas-agent/desk")["from"] != "panel" {
 		t.Errorf("the devices are back: %s", g.raw)
 	}
+	// a device that is relayed has its line: a request that names it all the same (a dialog that was open
+	// while the device came back) takes nothing
+	stored = fmt.Sprint(r.storedOptions()["agents"])
+	back := map[string]any{"unrelayed": []any{map[string]any{"id": "nas-agent/desk", "kind": "ups"}, map[string]any{"id": "nas-agent/b-plug", "kind": "plug"}}}
+	if p := r.ok(ehNodeA, back); p.body["message"] != "nothing to change" || fmt.Sprint(r.storedOptions()["agents"]) != stored {
+		t.Errorf("devices that are relayed again, named for removal: %s\nstate.json: %v", p.raw, r.storedOptions())
+	}
 	a, b := r.row(ehNodeA), r.row(ehNodeB)
 	if on := strs(a["ups"]); !slices.Contains(on, "nas-agent/desk") || !slices.Contains(on, "nas-agent/rack") || len(strs(b["ups"])) != 0 || b["power_w"] != 200.0 {
 		t.Errorf("after the devices are back: PVE-A ups %v (want desk, by the change that was kept, and rack, by config.yaml), PVE-B ups %v (want none) power_w %v (want 200, its plug)", a["ups"], b["ups"], b["power_w"])
+	}
+}
+
+// Many devices that are not relayed right now: the dialog's data names the first twenty and counts all the
+// changes; a request can only name what was listed, so the rest is listed (and can be named) afterwards.
+func TestEditHostManyDevicesThatAreNotRelayedRightNow(t *testing.T) {
+	cfg := ehConfig(t, ehNASLinks)
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var ups, plugs []string
+	for i := 0; i < 12; i++ {
+		ups = append(ups, fmt.Sprintf(`"attic-%02d": {"lab-b-node-pve-b": true}`, i))
+		plugs = append(plugs, fmt.Sprintf(`"shed-%02d": true`, i))
+	}
+	if err := os.WriteFile(filepath.Join(cfg.DataDir, "state.json"), []byte(`{"host_options": {"rev": 1, "agents": {"nas-agent": {
+		"ups_powers": {`+strings.Join(ups, ",")+`}, "power_exclude_from_total": {`+strings.Join(plugs, ",")+`}}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := ehSetupWith(t, cfg, true)
+	g := r.options(ehNodeA)
+	list, _ := g.body["unrelayed"].([]any)
+	if len(list) != maxLeftoverLines || g.body["unrelayed_count"] != 24.0 || g.body["leftover_count"] != 0.0 {
+		t.Fatalf("24 devices that are not relayed: %d entries, count %v, leftovers %v", len(list), g.body["unrelayed_count"], g.body["leftover_count"])
+	}
+	var named []any
+	for _, x := range list {
+		m := x.(map[string]any)
+		named = append(named, map[string]any{"id": m["id"], "kind": m["kind"]})
+	}
+	p := r.ok(ehNodeA, map[string]any{"unrelayed": named})
+	rest, _ := p.body["unrelayed"].([]any)
+	if len(strs(p.body["changed"])) != maxLeftoverLines || len(rest) != 4 || p.body["unrelayed_count"] != 4.0 {
+		t.Fatalf("after the twenty that were listed went: %d lines, %d entries left, count %v", len(strs(p.body["changed"])), len(rest), p.body["unrelayed_count"])
+	}
+	if en := r.auditEntries("", "host.options")[0]["params"].(map[string]any); en["removed_count"] != 20.0 {
+		t.Fatalf("the audit entry: removed_count %v", en["removed_count"])
 	}
 }

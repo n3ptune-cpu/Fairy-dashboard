@@ -196,6 +196,17 @@ func TestLinksOfIsTheEntryWithThePanelsChanges(t *testing.T) {
 			t.Errorf("KnownRow(%q) = %v, want %v", id, got, want)
 		}
 	}
+	// ... and a row that is there now counts whatever its id is: the rule does not depend on every kind of row
+	// the panel will ever show having one of the two forms
+	p.mu.Lock()
+	p.systems["shelf-1"] = model.System{ID: "shelf-1", Name: "Shelf"}
+	p.mu.Unlock()
+	if !p.KnownRow("shelf-1") || p.KnownRow("shelf-2") {
+		t.Errorf("KnownRow of a row that is there (%v) and of one that is not (%v)", p.KnownRow("shelf-1"), p.KnownRow("shelf-2"))
+	}
+	p.mu.Lock()
+	delete(p.systems, "shelf-1")
+	p.mu.Unlock()
 	// Reset of everything: config.yaml's links again, with the next poll
 	edit(func(o *adminstate.HostOptions) { delete(o.Agents, "laptop") })
 	p.PollOnce(context.Background())

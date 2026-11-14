@@ -367,7 +367,11 @@ func TestEditHostRepairKeepsAndRemoveForgets(t *testing.T) {
 			ControlToken: "winpc-control-token-yyyyyyyyyyyyyy"}, "", nil
 	}
 	e.b.Mu.Lock()
-	e.b.Metrics["srv-winpc"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil } // it relays a plug of its own, "desk"
+	e.b.Metrics["srv-winpc"] = func() (jsonx.M, error) { // it relays a plug of its own, "desk", and a UPS, "own"
+		m := testutil.AgentMetrics()
+		m["ups"] = []any{jsonx.M{"name": "own", "state": "online", "description": "Own UPS"}}
+		return m, nil
+	}
 	e.b.Metrics["laptop"] = func() (jsonx.M, error) {
 		m := testutil.AgentMetrics()
 		m["ups"] = []any{jsonx.M{"name": "rack", "state": "online", "description": "Rack UPS"}}
@@ -433,9 +437,9 @@ func TestEditHostRepairKeepsAndRemoveForgets(t *testing.T) {
 	// (c) Remove: its own overrides and every link to it are gone; what is about other machines stays. (Before
 	// it, the host's own plug is given to the laptop: a link kept with the host itself, about a device that
 	// goes with it.)
-	put("laptop", map[string]any{"plugs": []any{map[string]any{"id": "srv-winpc/desk", "linked": true}}})
-	if fmt.Sprint(e.storedAgent("srv-winpc")["power_links"]) != "map[desk:laptop]" {
-		t.Fatalf("the rig: the host's own plug is linked to the laptop: %v", e.storedAgent("srv-winpc"))
+	put("laptop", map[string]any{"plugs": []any{map[string]any{"id": "srv-winpc/desk", "linked": true}}, "ups": []any{ehUPS("srv-winpc/own", true)}})
+	if own := e.storedAgent("srv-winpc"); fmt.Sprint(own["power_links"]) != "map[desk:laptop]" || fmt.Sprint(own["ups_powers"]) != "map[own:map[laptop:true]]" {
+		t.Fatalf("the rig: the host's own plug and UPS are linked to the laptop: %v", own)
 	}
 	if r := e.do("DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "SRV-WINPC"}, hdr...); r.code != 200 {
 		t.Fatal("remove", r.code, string(r.raw))
@@ -461,7 +465,7 @@ func TestEditHostRepairKeepsAndRemoveForgets(t *testing.T) {
 	}
 	// ... and whose view of a device that stays it moved: the host was of the site Alice, and the laptop's UPS
 	// and spare plug were seen by Alice's viewers through their links to it. Nothing is said about the host's
-	// own plug: it goes with the host
+	// own plug and its own UPS: they go with the host
 	if got := strs(forgot["visibility"]); !slices.Equal(got, []string{"Viewers of Alice will no longer see UPS Rack UPS", "Viewers of Alice will no longer see plug Spare plug"}) {
 		t.Fatalf("the audit entry of what Remove took out, who sees what: %q", got)
 	}
@@ -688,7 +692,7 @@ func TestEditHostStoredChangesWithoutALineCanBeRemoved(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(cfg.DataDir, "state.json"), []byte(`{"host_options": {"rev": 1, "agents": {
-			"old-pc": {"power_exclude_from_total": {"desk": true}, "ups_powers": {"attic": {"old-pc": true}}},
+			"old-pc": {"power_exclude_from_total": {"desk": true}, "ups_powers": {"attic": {"old-pc": true}}, "colour": "kept by a newer build"},
 			"nas-agent": {"ups_powers": {"rack": {"old-pc": true, "older-pc": false, "lab-b-node-pve-b": true}}, "power_links": {"b-plug": "old-pc", "corner": "lab-b-agent"}}}}}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -700,15 +704,30 @@ func TestEditHostStoredChangesWithoutALineCanBeRemoved(t *testing.T) {
 		if l, n := left(r, ehNodeB); !slices.Equal(l, want) || n != 5.0 {
 			t.Fatalf("leftovers: %q %v", l, n)
 		}
-		// a save for a machine does not touch them, and does not drop them
+		// a save for a machine does not touch them, and does not drop them; nor does one that says "leftovers": false
 		r.ok(ehNodeA, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})
 		if l, n := left(r, ehNodeA); !slices.Equal(l, want) || n != 5.0 || r.storedAgent("old-pc") == nil {
 			t.Fatalf("after another save: %q %v", l, n)
+		}
+		if p := r.ok(ehNodeB, map[string]any{"leftovers": false, "plugs": []any{map[string]any{"id": "nas-agent/corner", "in_total": true}}}); len(strs(p.body["changed"])) != 1 {
+			t.Fatalf("a save with leftovers: false: %s", p.raw)
+		}
+		if l, n := left(r, ehNodeA); !slices.Equal(l, want) || n != 5.0 || r.storedAgent("old-pc") == nil {
+			t.Fatalf("after a save with leftovers: false: %q %v", l, n)
+		}
+		r.ok(ehNodeB, map[string]any{"reset": []any{map[string]any{"id": "nas-agent/corner", "field": "total"}}})
+		// (what this build does not know in the entry of old-pc is kept by every save, as for every entry)
+		if r.storedAgent("old-pc")["colour"] != "kept by a newer build" {
+			t.Fatalf("the rig: the key of a newer build is in the file: %v", r.storedAgent("old-pc"))
 		}
 		// removed together with a change of this machine, in one request
 		p := r.ok(ehNodeB, map[string]any{"leftovers": true, "ups": []any{ehUPS("nas-agent/desk", true)}})
 		if got := strs(p.body["changed"]); len(got) != 5 || got[0] != "Removed: "+want[0] || got[3] != "Removed: "+want[3] || got[4] != "UPS Desk UPS (read by NAS): powers PVE-B" {
 			t.Fatalf("changed: %q", got)
+		}
+		// the entry of old-pc is gone whole, with what this build does not know in it: all of it was that machine's
+		if raw, _ := os.ReadFile(filepath.Join(r.s.Cfg.DataDir, "state.json")); strings.Contains(string(raw), "old-pc") || strings.Contains(string(raw), "colour") {
+			t.Fatalf("state.json still has something of old-pc: %s", raw)
 		}
 		nas := r.storedAgent(ehNAS)
 		if r.storedAgent("old-pc") != nil || fmt.Sprint(nas["ups_powers"]) != "map[desk:map["+ehNodeA+":true "+ehNodeB+":true] rack:map["+ehNodeB+":true]]" || fmt.Sprint(nas["power_links"]) != "map[corner:lab-b-agent]" {
@@ -833,6 +852,115 @@ func TestEditHostAHostAddedUnderAnIdWithStoredChangesStartsClean(t *testing.T) {
 	}
 	if len(e.auditEntries("", "host.options")) != n {
 		t.Error("an Add host with nothing to forget wrote a host.options entry")
+	}
+}
+
+// A host added as "a new Proxmox node" has two rows that are its own: its agent's and its node's (rowsOf).
+// What was changed about the NODE's row is kept with other machines, under the node row's id, and goes with
+// the host like everything else of it: at Remove, and at an Add host under the same name when it is stored
+// all the same (a state.json from a backup).
+func TestEditHostANewNodesRowGoesWithTheHost(t *testing.T) {
+	e := setup(t)
+	e.s.Enroll.Interval = 10 * time.Millisecond
+	e.s.control, e.s.adminRL = newRateLimiter(1000), newRateLimiter(1000)
+	e.s.Enroll.PanelAddr = "100.64.0.10"
+	ca := testCA(t)
+	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
+		return 200, enroll.Response{AgentVersion: "43-abc", Platform: "linux", Token: strings.Repeat("r", 32), ControlToken: strings.Repeat("c", 32),
+			Proxmox: &enroll.ProxmoxGrant{TokenID: "fairy@pve!panel-srv-pvea", TokenSecret: "0b7c4e2a-1111-2222-3333-444455556666", CAPEM: string(ca),
+				Node: "SRV-PVEA", URL: "https://srv-pvea.example.ts.net:8006", ServerName: "SRV-PVEA"}}, "", nil
+	}
+	e.b.Mu.Lock()
+	e.b.Metrics["srv-pvea-2"] = func() (jsonx.M, error) { return testutil.AgentMetrics(), nil }
+	e.b.Metrics["laptop"] = func() (jsonx.M, error) {
+		m := testutil.AgentMetrics()
+		m["ups"] = []any{jsonx.M{"name": "rack", "state": "online", "description": "Rack UPS"}}
+		return m, nil
+	}
+	e.b.Mu.Unlock()
+	c := e.cookie(controller(), 0)
+	hdr := []string{"Cookie", c, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	const node = "alice-srv-pvea-node-srv-pvea" // the node's row: the site's and the node's name make its id
+	add := func() {
+		t.Helper()
+		p := e.do("POST", "/api/admin/hosts", map[string]any{"name": "srv-pvea-2", "os": "linux", "site": "Alice", "proxmox_new": true}, hdr...)
+		if p.code != 201 {
+			t.Fatal(p.code, string(p.raw))
+		}
+		for i := 0; ; i++ {
+			time.Sleep(10 * time.Millisecond)
+			e.s.Poller.PollOnce(context.Background())
+			if g := e.do("GET", "/api/admin/enrollments/"+p.body["id"].(string), nil, "Cookie", c); g.body["state"] == "online" {
+				return
+			} else if i > 400 || (g.body["done"] == true && g.body["state"] != "online") {
+				t.Fatal("the enrollment:", g.body["state"], g.body["message"])
+			}
+		}
+	}
+	add()
+	e.s.Poller.PollOnce(context.Background())
+	if g := e.do("GET", "/api/systems/"+node, nil, "Cookie", c); g.code != 200 || g.body["kind"] != "node" {
+		t.Fatalf("the rig: the new host is shown as its node's row: %d %s", g.code, g.raw)
+	}
+	if hosts, _ := e.s.Managed.Load(); len(hosts) != 1 || !slices.Equal(rowsOf(hosts[0]), []string{node}) {
+		t.Fatalf("the rig: the node's row is the host's own: %+v", hosts)
+	}
+	if p := e.do("PUT", "/api/admin/hosts/"+node+"/options", map[string]any{"ups": []any{ehUPS("laptop/rack", true)}}, hdr...); p.code != 200 {
+		t.Fatal(p.code, string(p.raw))
+	}
+	if got := fmt.Sprint(e.storedAgent("laptop")["ups_powers"]); got != "map[rack:map["+node+":true]]" {
+		t.Fatalf("the rig: the change is kept with the laptop, under the node row's id: %s", got)
+	}
+	if r := e.do("DELETE", "/api/admin/hosts/srv-pvea-2", map[string]any{"confirm": "srv-pvea-2"}, hdr...); r.code != 200 {
+		t.Fatal("remove", r.code, string(r.raw))
+	}
+	if raw := fmt.Sprint(e.storedOptions()); strings.Contains(raw, node) {
+		t.Errorf("Remove left the change about the host's node row: %s", raw)
+	}
+	// stored all the same: the next host of that name starts without it
+	if _, _, err := e.s.Poller.Admin.EditHostOptions("earlier", func(o *adminstate.HostOptions) error {
+		o.Agents["laptop"] = adminstate.HostOption{UPS: map[string]map[string]bool{"rack": {node: true, "laptop": true}}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	add()
+	e.s.Poller.PollOnce(context.Background())
+	if got := fmt.Sprint(e.storedAgent("laptop")["ups_powers"]); got != "map[rack:map[laptop:true]]" {
+		t.Errorf("Add host left the stored change about its node row (what is about the laptop stays): %s", got)
+	}
+	if g := e.do("GET", "/api/systems/"+node, nil, "Cookie", c); len(strs(g.body["ups"])) != 0 {
+		t.Errorf("the new node's row is on a UPS nobody linked it to: %v", g.body["ups"])
+	}
+}
+
+// A tick that says what config.yaml says stores nothing: the line follows config.yaml again, as after Reset.
+// For a plug this is so also when the line was changed from ANOTHER machine's page (the plug was taken away,
+// and is ticked back on the page of the machine config.yaml gives it to): no decision "linked to PVE-A" is
+// left that would shadow what config.yaml says about the plug later.
+func TestEditHostATickBackToConfigYAMLStoresNothing(t *testing.T) {
+	r := ehSetup(t)
+	r.ok(ehNodeB, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/a-plug", "linked": true}}}) // config.yaml: PVE-A's
+	if got := fmt.Sprint(r.storedAgent(ehNAS)["power_links"]); got != "map[a-plug:lab-b-agent]" {
+		t.Fatalf("the rig: the plug was taken to PVE-B: %s", got)
+	}
+	p := r.ok(ehNodeA, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/a-plug", "linked": true}}})
+	if !slices.Equal(strs(p.body["changed"]), []string{"Plug A plug (read by NAS): linked to PVE-A (was on PVE-B)"}) {
+		t.Fatalf("ticked back on PVE-A's page: %s", p.raw)
+	}
+	if nas := r.storedAgent(ehNAS); nas != nil {
+		t.Fatalf("a decision is stored for a line that says what config.yaml says: %v", nas)
+	}
+	if x := ehEntry(t, r.options(ehNodeA), "plugs", "nas-agent/a-plug"); x["linked"] != true || x["from"] != "config" {
+		t.Fatalf("the line on PVE-A's page: %v", x)
+	}
+	// the same for the other two fields
+	r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}})
+	r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/rack", false)}})
+	r.ok(ehNAS, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/corner", "in_total": true}}})
+	r.ok(ehNAS, map[string]any{"plugs": []any{map[string]any{"id": "nas-agent/corner", "in_total": false}}})
+	if nas := r.storedAgent(ehNAS); nas != nil {
+		t.Fatalf("after ticks back to config.yaml on the other two fields: %v", nas)
 	}
 }
 

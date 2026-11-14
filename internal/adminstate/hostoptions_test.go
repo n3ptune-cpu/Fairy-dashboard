@@ -521,6 +521,11 @@ func TestHostOptionsIgnoredLinesAreCapped(t *testing.T) {
 	if o, ignored, _ := ReadHostOptions(dir); len(ignored) != MaxIgnoredLines || o.Ignored != MaxIgnoredLines || strings.Contains(ignored[MaxIgnoredLines-1], "more") {
 		t.Fatalf("exactly twenty: %d lines, count %d", len(ignored), o.Ignored)
 	}
+	// one more than twenty: the first twenty, and a line that says there is one more
+	writeState(t, dir, `{"host_options": {"agents": {"nas": {`+strings.Join(keys[:MaxIgnoredLines+1], ",")+`}}}}`)
+	if o, ignored, _ := ReadHostOptions(dir); len(ignored) != MaxIgnoredLines+1 || o.Ignored != MaxIgnoredLines+1 || ignored[MaxIgnoredLines] != "and 1 more that are ignored in the same way" {
+		t.Fatalf("twenty-one: %d lines, count %d, last line %q", len(ignored), o.Ignored, ignored[len(ignored)-1])
+	}
 	if o, ignored, _ := ReadHostOptions(t.TempDir()); o.Ignored != 0 || ignored != nil {
 		t.Fatalf("nothing ignored: %d %v", o.Ignored, ignored)
 	}
