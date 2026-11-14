@@ -130,13 +130,17 @@ func rtSpan(v int) string {
 
 // rtConsequence is the sentence that says what a change means for the machines, for the three timings whose
 // change can switch a machine off or shorten the time to stop that ("": the timing has none). v is the value
-// after the change. It is in the dialog, in "Confirm it's you" and in the audit entry, under the line of a
+// after the change. The sentence of off_after_s is what a run does (internal/wakerun, steps.go): a machine
+// that gave nothing for that long counts as off and is sent the wake; the run switches off only a machine
+// that then comes up FRESHLY STARTED (its uptime begins after the wake), which is one that was off, or one
+// that was in a restart. A machine that was on and out of reach, or asleep, answers with an older uptime and
+// is left on. It is in the dialog, in "Confirm it's you" and in the audit entry, under the line of a
 // change that asks for its own confirmation (every change of off_after_s, a shorter countdown, a longer wait
 // for a woken machine). app.js: rtConsequence.
 func rtConsequence(key string, v int) string {
 	switch key {
 	case config.KeyOffAfter:
-		return fmt.Sprintf("A machine that is on but silent for longer than %s counts as off, and the run switches it off after its update.", rtSpan(v))
+		return fmt.Sprintf("A machine that is silent for longer than %s counts as off. If it was restarting and comes up during the run, the run switches it off after its update.", rtSpan(v))
 	case config.KeyShutdownDelay:
 		return fmt.Sprintf("Somebody at a machine has %s to cancel the run's shutdown.", rtSpan(v))
 	case config.KeyOnlineTimeout:

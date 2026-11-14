@@ -285,7 +285,7 @@ func TestUIRunTimingsDialog(t *testing.T) {
   let html = rtView(d, draft), text = words(html);
   if ((html.match(/class="rt-row"/g) || []).length !== 6) fail("rows: " + html);
   if ((text.match(/from config\.yaml/g) || []).length !== 6 || text.includes("changed here") || text.includes("Reset") || text.includes("This will change")) fail("as opened: " + text);
-  if (!text.includes("Counts as off after from config.yaml s = 15 minutes A machine that is on but silent for longer than 15 minutes counts as off, and the run switches it off after its update.")) fail("the first row: " + text);
+  if (!text.includes("Counts as off after from config.yaml s = 15 minutes A machine that is silent for longer than 15 minutes counts as off. If it was restarting and comes up during the run, the run switches it off after its update.")) fail("the first row: " + text);
   if (!text.includes("Shutdown countdown from config.yaml s = 2 minutes") || !text.includes("Requests a minute from config.yaml to one agent")) fail("the readings: " + text);
   if (!html.includes('id="rt-off_after_s" data-rt="off_after_s" type="text" inputmode="numeric" maxlength="5"') || !html.includes('value="900"')) fail("the field: " + html);
   if (!/data-rt-hint="off_after_s"[^>]*>/.test(html) || !html.includes('class="note rt-hint warn" id="rt-h-off_after_s"')) fail("the sentence of off_after_s is not the warning: " + html);
@@ -300,14 +300,15 @@ func TestUIRunTimingsDialog(t *testing.T) {
   // typing: the reading, the tag, the sentence and the lines follow; a value that cannot be sent says its range and stops Save
   draft.text.off_after_s = "360";
   text = words(rtView(d, draft));
-  if (!text.includes("Counts as off after changed here s = 6 minutes A machine that is on but silent for longer than 6 minutes counts as off")) fail("after typing 360: " + text);
+  if (!text.includes("Counts as off after changed here s = 6 minutes A machine that is silent for longer than 6 minutes counts as off. If it was restarting and comes up during the run, the run switches it off after its update.")) fail("after typing 360: " + text);
   plan = rtPlan(d, draft);
   if (JSON.stringify(plan.body) !== '{"off_after_s":360}' || !plan.own || plan.lines.length !== 2 || plan.lines[0] !== "Counts as off after: 360 s = 6 minutes (was 900 s = 15 minutes)") fail("the plan: " + JSON.stringify(plan));
-  if (!words(rtFoot(d, draft)).includes("Asks you to confirm it's you, by itself, every time.") || !rtFoot(d, draft).includes('<li class="eh-sees">A machine that is on but silent for longer than 6 minutes')) fail("the foot: " + rtFoot(d, draft));
+  if (!words(rtFoot(d, draft)).includes("Asks you to confirm it's you, by itself, every time.") || !rtFoot(d, draft).includes('<li class="eh-sees">A machine that is silent for longer than 6 minutes counts as off. If it was restarting')) fail("the foot: " + rtFoot(d, draft));
+  if (!words(rtFoot(d, rtDraft())).includes("A machine with its own time or countdown (Edit host, or config.yaml) keeps it.")) fail("the foot does not say that a machine's own values stay: " + rtFoot(d, rtDraft()));
   draft.text.off_after_s = "120";
   plan = rtPlan(d, draft);
   if (plan.problems.off_after_s !== "300 to 3600" || plan.lines.length || rtRead(t0, draft) !== "300 to 3600") fail("120 s: " + JSON.stringify(plan) + " " + rtRead(t0, draft));
-  if (rtHint(t0, draft) !== "A machine that is on but silent for longer than 15 minutes counts as off, and the run switches it off after its update.") fail("the sentence while the field holds no value: " + rtHint(t0, draft));
+  if (rtHint(t0, draft) !== "A machine that is silent for longer than 15 minutes counts as off. If it was restarting and comes up during the run, the run switches it off after its update.") fail("the sentence while the field holds no value: " + rtHint(t0, draft));
   draft.text.off_after_s = "900";  // back to what it was: nothing to change (the page deletes such a text; a text that says the same number is no change either)
   if (rtPlan(d, draft).lines.length) fail("the value that is in force already is a change");
 
@@ -341,7 +342,7 @@ func TestUIRunTimingsDialog(t *testing.T) {
   // a run is going, stored values are ignored: said under the fields
   text = words(rtFoot({ ...data(), active: true, ignored: ["x", "y"], ignored_count: 7 }, rtDraft()));
   if (!text.includes("A run is going: it keeps its numbers. A change counts from the next run.") || !text.includes("7 stored values are ignored: see the panel's log.")) fail("the foot: " + text);
-  if (words(rtFoot({ ...data(), ignored: ["x"], ignored_count: 1 }, rtDraft())) !== "1 stored value is ignored: see the panel's log.") fail("one ignored value");
+  if (words(rtFoot({ ...data(), ignored: ["x"], ignored_count: 1 }, rtDraft())) !== "A machine with its own time or countdown (Edit host, or config.yaml) keeps it. 1 stored value is ignored: see the panel's log.") fail("one ignored value");
 
   // nothing the panel sends is markup
   const evil = '<img src=x onerror=alert(1)>"\'';

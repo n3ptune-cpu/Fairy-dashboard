@@ -2778,7 +2778,7 @@ const rtSpan = (v) => (v < 60 ? `${v} second${v === 1 ? "" : "s"}` : rtReading("
 // What a change means for the machines, for the three timings whose change can switch a machine off or shorten
 // the time to stop that. The panel says the same sentence in "Confirm it's you" (rtConsequence).
 function rtConsequence(key, v) {
-  if (key === "off_after_s") return `A machine that is on but silent for longer than ${rtSpan(v)} counts as off, and the run switches it off after its update.`;
+  if (key === "off_after_s") return `A machine that is silent for longer than ${rtSpan(v)} counts as off. If it was restarting and comes up during the run, the run switches it off after its update.`;
   if (key === "shutdown_delay_s") return `Somebody at a machine has ${rtSpan(v)} to cancel the run's shutdown.`;
   if (key === "online_timeout_s") return `A machine somebody switches on while the run waits for it (up to ${rtSpan(v)}) is treated as woken by the run, and switched off after its update.`;
   return "";
@@ -2843,7 +2843,8 @@ const rtHint = (t, draft) => RT_ROWS[t.key].hint(rtParse(t, rtText(t, draft)) ??
 function rtFoot(d, draft) {
   const plan = rtPlan(d, draft), ignored = d.ignored?.length ? d.ignored_count || d.ignored.length : 0;
   const any = d.timings.some((t) => t.from === "panel" && !draft.reset[t.key]) || Object.keys(plan.body).some((k) => k !== "reset" && plan.body[k] !== d.timings.find((t) => t.key === k)?.config);
-  return `${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
+  return `<p class="note eh-hint" id="rt-own-note">A machine with its own time or countdown (Edit host, or config.yaml) keeps it.</p>
+    ${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
     ${d.active ? '<p class="note warn eh-ignored" id="rt-active">A run is going: it keeps its numbers. A change counts from the next run.</p>' : ""}
     ${ignored ? `<p class="note warn eh-ignored">${ignored === 1 ? "1 stored value is" : `${ignored} stored values are`} ignored: see the panel's log.</p>` : ""}
     ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="rt-lines">${plan.lines.map((l) => `<li${plan.means.includes(l) ? ' class="eh-sees"' : ""}>${esc(l)}</li>`).join("")}</ul>
@@ -2863,7 +2864,7 @@ const RT_INFO = () => infoBtn("run-timings", "Run timings", infoList([
   "What you change here is kept by the panel. config.yaml is not changed and stays the base.",
   "A changed timing is used instead of config.yaml's until Reset, also when config.yaml is edited later.",
   "A change counts from the next run. A run that is going keeps the numbers it started with.",
-  "Counts as off after: a machine that restarts is silent too, and comes back by itself. With a time shorter than its restart takes, a run can take it for a machine it woke, and switch it off after its update. 15 minutes is the safe value.",
+  "Counts as off after: a machine that restarts is silent too, and comes back by itself. With a time shorter than its restart takes, a run can take it for a machine it woke, and switch it off after its update. A machine that was only out of reach or asleep is left on. 15 minutes is the safe value.",
   "Every change of that time asks you to confirm it's you, by itself. So do a shorter shutdown countdown and a longer wait for a woken machine.",
   "A countdown of 10 s, 1, 5 or 15 minutes is also one of the Power menu: a run then cannot tell a shutdown somebody else asked for from its own.",
   "A machine that checks passkey approvals takes a countdown of at most 10 minutes in a run.",
@@ -4341,7 +4342,7 @@ function ehRunPanel(t, draft) {
 const ehRunBase = (t) => (t.base_from === "run" ? "Run timings" : "config.yaml");
 // What a change means for this machine. The panel says the same sentence in "Confirm it's you" (hoRunConsequence).
 const ehRunConsequence = (key, name, v) => (key === "off_after_s"
-  ? `If ${name} is on but silent for longer than ${rtSpan(v)}, it counts as off, and a run switches it off after its update.`
+  ? `If ${name} is silent for longer than ${rtSpan(v)}, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update.`
   : `Somebody at ${name} has ${rtSpan(v)} to cancel a run's shutdown.`);
 // What Save will change about the machine's own run timings: the panel's own lines, the part of the request,
 // and what is wrong with what was typed. name: what the machine is called once this dialog is saved.

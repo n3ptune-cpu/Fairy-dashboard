@@ -181,7 +181,7 @@ func hoRunFrom(from string) string {
 func hoRunConsequence(key, name string, v int) string {
 	switch key {
 	case config.KeyOffAfter:
-		return fmt.Sprintf("If %s is on but silent for longer than %s, it counts as off, and a run switches it off after its update.", name, rtSpan(v))
+		return fmt.Sprintf("If %s is silent for longer than %s, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update.", name, rtSpan(v))
 	case config.KeyShutdownDelay:
 		return fmt.Sprintf("Somebody at %s has %s to cancel a run's shutdown.", name, rtSpan(v))
 	}

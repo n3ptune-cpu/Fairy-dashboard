@@ -91,7 +91,7 @@ func TestUIEditHostRunTimingsGroup(t *testing.T) {
   // a time typed: the line, what it means for this machine under it, the request
   ehField(d, draft, "run-off_after_s", " 360 ");
   let plan = ehPlan(d, draft);
-  const means6 = "If PC-B is on but silent for longer than 6 minutes, it counts as off, and a run switches it off after its update.";
+  const means6 = "If PC-B is silent for longer than 6 minutes, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update.";
   same(plan, { lines: ["Counts as off after: 360 s = 6 minutes (was 900 s = 15 minutes)", means6], body: { wake_update: { off_after_s: 360 } }, notes: [], problems: [], means: [means6] }, "a time typed");
   if (!ehCanSave(plan) || !ehPlanView(plan).includes('<li class="eh-sees">' + means6 + "</li>") || !ehPlanView(plan).includes("<li>Counts as off after: 360 s")) fail("the list of changes: " + ehPlanView(plan));
   html = ehView(d, draft);
@@ -135,7 +135,7 @@ func TestUIEditHostRunTimingsGroup(t *testing.T) {
   ehField(d, draft, "run-off_after_s", "420");
   ehReset(d, draft, "off_after_s:");
   plan = ehPlan(d, draft);
-  same(plan.lines, ["Counts as off after: back to config.yaml: 600 s = 10 minutes (was 360 s = 6 minutes)", "If PC-B is on but silent for longer than 10 minutes, it counts as off, and a run switches it off after its update."], "Reset");
+  same(plan.lines, ["Counts as off after: back to config.yaml: 600 s = 10 minutes (was 360 s = 6 minutes)", "If PC-B is silent for longer than 10 minutes, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update."], "Reset");
   same(plan.body, { reset: [{ field: "off_after_s" }] }, "the request of a Reset");
   html = ehView(d, draft);
   if (!html.includes('data-eh-f="run-off_after_s" type="text" inputmode="numeric" maxlength="5" autocomplete="off" spellcheck="false" value="600"') || html.includes("data-eh-reset")
@@ -159,7 +159,7 @@ func TestUIEditHostRunTimingsGroup(t *testing.T) {
   ehTick(d, draft, "ups", "nas-agent/rack", true); ehField(d, draft, "wol-port", "7"); ehField(d, draft, "run-off_after_s", "1800");
   plan = ehPlan(d, draft);
   same(plan.body, { ups: [{ id: "nas-agent/rack", on: true }], wol: { macs: ["02:00:00:00:00:b1"], port: 7, relay: "relay-a" }, wake_update: { off_after_s: 1800 } }, "one request");
-  same(plan.lines.slice(1), ["Counts as off after: 1800 s = 30 minutes (was 900 s = 15 minutes)", "If PC-B is on but silent for longer than 30 minutes, it counts as off, and a run switches it off after its update.", "UPS RACK UPS (read by NAS): powers PC-B"], "its lines");
+  same(plan.lines.slice(1), ["Counts as off after: 1800 s = 30 minutes (was 900 s = 15 minutes)", "If PC-B is silent for longer than 30 minutes, it counts as off. If it was restarting and comes up during a run, the run switches it off after its update.", "UPS RACK UPS (read by NAS): powers PC-B"], "its lines");
 `)
 }
 

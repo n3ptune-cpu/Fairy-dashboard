@@ -373,7 +373,7 @@ func TestRunTimingsWhichChangeAsksForItsOwnConfirmation(t *testing.T) {
 	if cb := a.stepUp("", false); cb.code != 303 { // confirmed just now: inside the window from here on
 		t.Fatal("the step-up:", cb.code)
 	}
-	const consequence = "A machine that is on but silent for longer than 6 minutes counts as off, and the run switches it off after its update."
+	const consequence = "A machine that is silent for longer than 6 minutes counts as off. If it was restarting and comes up during the run, the run switches it off after its update."
 	// off_after_s, lowered
 	how, r := a.rtAsk(map[string]any{"off_after_s": 360})
 	d, _ := r.body["detail"].(map[string]any)
