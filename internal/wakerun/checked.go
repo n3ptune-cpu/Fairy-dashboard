@@ -1208,6 +1208,38 @@ func (m *Manager) disarm(ctx context.Context, r *Run, h *Host, now time.Time, wh
 	m.say(h, "asked to stay on: waiting for its agent to show that its switch-off is called off")
 }
 
+// KeepOn is the panel's "Keep on" for a machine of the run that is going, taken over by the run: it calls the
+// machine's self-switch-off off as its own cancel does (disarm), which repeats the cancel for as long as a
+// ticket whose request got no answer can still arrive, and ends the machine with what its agent shows then.
+// The panel's one cancel cannot do that: while the ticket is on its way a cancel finds no run and ends
+// nothing. It reports whether the run is calling it off now (false: no run is going, or the machine is not
+// one that may switch itself off by this run's ticket).
+func (m *Manager) KeepOn(hostID, by string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.active
+	if r == nil || r.Ticket == nil {
+		return false
+	}
+	for _, h := range r.Hosts {
+		if h.ID != hostID {
+			continue
+		}
+		c := &h.chk
+		if h.Final() || h.verdict != nil || !h.armedMaybe() || c.confirming || (h.State != StApproval && h.State != StSelfOff) {
+			return false
+		}
+		if c.disarm != nil { // the run is at it already
+			return true
+		}
+		c.disarm = &disarming{why: "Kept ON by " + by}
+		m.note(h, m.now(), "Keep on by "+by+": the run calls its switch-off off, and repeats that for as long as its ticket can still arrive")
+		m.dirty = true
+		return true
+	}
+	return false
+}
+
 // endKeptOn ends a machine whose self-switch-off was called off, by its own word (how).
 func (m *Manager) endKeptOn(r *Run, h *Host, now time.Time, why, how string) {
 	h.chk.disarm, h.chk.disarmed = nil, true
@@ -1255,6 +1287,9 @@ type ArmedHost struct {
 	Sure bool
 	// Active: it is a machine of the run that is going.
 	Active bool
+	// TicketUntil (not Sure): until when the ticket, whose request got no answer, can still reach the machine
+	// (nil: no longer). Until then a cancel that finds no run on it has ended nothing.
+	TicketUntil *time.Time
 }
 
 // MayGoOff returns the machines that may still switch themselves off by a ticket at now: the banner names
@@ -1286,6 +1321,10 @@ func (m *Manager) MayGoOff(now time.Time) []ArmedHost {
 				continue
 			}
 			a := ArmedHost{RunID: r.ID, ID: h.ID, Name: h.Name, ByMachine: h.SelfOffByMachine, Sure: h.armedSure(), Active: true}
+			if !a.Sure && mono <= h.chk.lateUntil {
+				until := now.Add(h.chk.lateUntil - mono)
+				a.TicketUntil = &until
+			}
 			if h.SelfOffAt != nil {
 				at := *h.SelfOffAt
 				a.At = &at
@@ -1323,5 +1362,8 @@ func letGo(r *Run, h *Host, now time.Time) []ArmedHost {
 		return nil
 	}
 	a.At = &at
+	if until := r.StartedAt.Add(r.Ticket.valid() + lateArm); !a.Sure && now.Before(until) {
+		a.TicketUntil = &until
+	}
 	return []ArmedHost{a}
 }

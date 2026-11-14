@@ -700,12 +700,16 @@ func (s *Server) wakeUpdateKeepOn(c *reqCtx) error {
 		return apierr.New(409, "this is not a machine with an agent of its own")
 	}
 	mayGo := ""
+	var late *wakerun.ArmedHost // its arming got no answer, and the ticket can still reach it
 	for _, h := range s.WakeRuns.MayGoOff(s.Poller.Clock()) {
 		if h.ID == x.ID && h.At != nil {
 			mayGo = h.At.UTC().Format("15:04 UTC")
 			if h.Latest {
 				mayGo += " at the latest"
 			}
+		}
+		if h.ID == x.ID && !h.Sure && h.TicketUntil != nil {
+			late = &h
 		}
 	}
 	itMayGo := func() string {
@@ -739,6 +743,15 @@ func (s *Server) wakeUpdateKeepOn(c *reqCtx) error {
 				"The cancel was answered, but "+x.Name+" did not answer when Fairy asked what it shows now: not known whether it stays on. "+itMayGo()+" Try again.", false)
 		}
 		live, state := runLive(ap)
+		if !live && late != nil {
+			// A cancel that finds no run ends nothing, and the ticket can still arrive: this is not "stays ON".
+			until := late.TicketUntil.UTC().Format("15:04 UTC")
+			lead := "Not known until " + until + " whether " + x.Name + " stays on: its agent shows no run now, but the run's ticket, whose request got no answer, may still reach it. "
+			if late.Active && s.WakeRuns.KeepOn(x.ID, actorOf(u)) {
+				return done(200, "not known until "+until+": the ticket may still arrive; the run keeps cancelling", lead+"The panel keeps cancelling until then, and the run's report says what came of it.", false)
+			}
+			return done(200, "not known until "+until+": the ticket may still arrive", lead+"The run it was in is not going any more, so nothing repeats the cancel: press Keep on again after "+until+", or cancel at the machine.", false)
+		}
 		if !live {
 			how := "it shows no run any more"
 			if state != "" {
