@@ -10,6 +10,7 @@ import (
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/enroll"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/power"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
@@ -98,5 +99,36 @@ func TestPowerDayRepairKeepsItAndRemoveForgetsIt(t *testing.T) {
 	e.s.Poller.Power.SampleHistory()
 	if day.Has(own, time.Now()) {
 		t.Error("the day came back with the next history tick")
+	}
+}
+
+// The Remove of the unused copy of a machine that config.yaml has (Add host under an id config.yaml uses)
+// takes the copy away and nothing of the machine: its agent stays, the plug it relays stays, and so does the
+// plug's day.
+func TestPowerDayRemoveOfAnUnusedCopyKeepsTheDay(t *testing.T) {
+	cfg := testutil.Config(t, []string{"https://pve1:8006"}, "http://laptop", "http://tower")
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := managed.NewStore(cfg.DataDir).Put(managed.Host{ID: "laptop", Name: "LAPTOP", URL: "http://laptop-old:9101", OS: "linux", AddedAt: time.Now().UTC()},
+		managed.Secret{Token: strings.Repeat("t", 32)}); err != nil {
+		t.Fatal(err)
+	}
+	e, skipped := ehStartAdded(t, cfg, testutil.NewBackend())
+	if len(skipped) != 1 {
+		t.Fatal("the rig: the copy is not left out:", skipped)
+	}
+	e.s.control, e.s.adminRL = newRateLimiter(1000), newRateLimiter(1000)
+	e.s.Poller.PollOnce(context.Background())
+	day := e.s.Poller.Power.Day
+	if !day.Has("laptop/desk", time.Now()) {
+		t.Fatal("the rig: the plug config.yaml's laptop relays has no day")
+	}
+	hdr := []string{"Cookie", e.cookie(controller(), 0), "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	if r := e.do("DELETE", "/api/admin/hosts/laptop", map[string]any{"confirm": "LAPTOP"}, hdr...); r.code != 200 {
+		t.Fatal("remove", r.code, string(r.raw))
+	}
+	if !day.Has("laptop/desk", time.Now()) {
+		t.Error("the Remove of the unused copy emptied the graph of the plug that config.yaml's host relays")
 	}
 }

@@ -585,3 +585,27 @@ func TestDayRemoveAgainstTheHistoryTick(t *testing.T) {
 		t.Errorf("%d of 400 removals left a day for the removed host's plug", stray)
 	}
 }
+
+// When the file comes in and the panel has had no sample since its clock is right, the file's newest minute
+// is the source's newest: it has its day at once, its open minute goes on, and the file is written anew (what
+// was removed meanwhile is still in it).
+func TestDayFileFromALaterTimeComesInWithoutASampleOfNow(t *testing.T) {
+	path, was := tenHours(t)
+	e := loaded(path, at(-48, 0, 0))
+	rec(e, at(-48, 0, 0), 80) // a sample under the wrong clock: two days before the file's readings
+	e.Forget("pc-a/", at(-48, 0, 30))
+	e.SaveIfDue(at(10, 0, 30))
+	if !e.Flush(at(10, 0, 31), 5*time.Second) {
+		t.Fatal("not written")
+	}
+	if !e.Has("plug-a", at(10, 0, 31)) || minutes(e, "plug-a", at(10, 0, 31)) != 600 {
+		t.Fatalf("plug-a after the file came in: has a day: %v, %d minutes", e.Has("plug-a", at(10, 0, 31)), minutes(e, "plug-a", at(10, 0, 31)))
+	}
+	if now, _ := os.ReadFile(path); string(now) == string(was) || strings.Contains(string(now), "pc-a/plug-b") {
+		t.Error("the file was not written anew after it came in: the host that was removed meanwhile is still in it")
+	}
+	rec(e, at(9, 59, 30), 20) // the file's last minute, 21:59, is the open one
+	if s := seriesOf(t, e, "plug-a", at(10, 0, 31)); *s.Avg[599] != 35 {
+		t.Errorf("21:59 after one more sample of 20 W: %v, want 35 (the file's 50 and 20)", *s.Avg[599])
+	}
+}
