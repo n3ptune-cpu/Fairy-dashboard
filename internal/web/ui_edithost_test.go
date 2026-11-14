@@ -32,6 +32,13 @@ func ehPageScript(t *testing.T, js, body string) string {
 		}
 		parts = append(parts, m)
 	}
+	// the group "Run timings" of the dialog says its numbers in the words of the "Run timings" dialog: the names
+	// of the timings, their readings, and what a field takes
+	wordsFrom, wordsTo := strings.Index(js, "\nconst RT_ROWS = {"), strings.Index(js, "\n// One line for each thing Save will change, in the panel's own words (the same lines are in \"Confirm it's you\"\n// and in the audit log), the request that says exactly that, whether it asks")
+	if wordsFrom < 0 || wordsTo < wordsFrom {
+		t.Fatal("app.js has no words of \"Run timings\" where this test looks for them")
+	}
+	parts = append(parts, regexp.MustCompile(`(?m)^const own = .*$`).FindString(js), js[wordsFrom:wordsTo])
 	from := strings.Index(js, "// ------------------------------------------------------------ Edit host (admins, the ⋯ menu of a host's page)")
 	to := strings.Index(js, "// ------------------------------------------------------------ elevated helper Stop / Start")
 	if from < 0 || to < from {

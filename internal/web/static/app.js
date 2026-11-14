@@ -2549,7 +2549,7 @@ const RT_INFO = () => infoBtn("run-timings", "Run timings", infoList([
   "A countdown of 10 s, 1, 5 or 15 minutes is also one of the Power menu: a run then cannot tell a shutdown somebody else asked for from its own.",
   "A machine that checks passkey approvals takes a countdown of at most 10 minutes in a run.",
   "The time for the second passkey gives way when a machine would wait for more than an hour in all.",
-  "One machine can have its own time to count as off and its own countdown: a wake_update: block in its systems: entry of config.yaml."]));
+  "One machine can have its own time to count as off and its own countdown: Edit host, in the ⋯ menu on its page (or a wake_update: block in its systems: entry of config.yaml)."]));
 function rtSync() {
   const body = $("#rt-body");
   if (!body || !rt.d) return;
@@ -3830,7 +3830,7 @@ document.addEventListener("click", (e) => {
 // eh.d is the panel's answer (GET .../options); eh.draft holds what was changed in the dialog and nothing else.
 // Everything that is drawn or sent is made from the two by the functions below, which touch no page.
 const eh = { d: null, draft: null, seq: 0, busy: false };
-const ehDraft = () => ({ ups: dict(), linked: dict(), total: dict(), reset: dict(), leftovers: false, unrelayed: false, name: undefined, site: undefined, wol: null });
+const ehDraft = () => ({ ups: dict(), linked: dict(), total: dict(), reset: dict(), leftovers: false, unrelayed: false, name: undefined, site: undefined, wol: null, run: dict() });
 function editHostMenu(s) {
   if (!isHost(s) || !state.me?.can_manage_users) return "";
   return `<button class="menu-item" type="button" data-act="edit-host">Edit host</button>`;
@@ -3939,6 +3939,8 @@ function ehHostPlan(d, draft) {
 }
 // Where a value of the machine comes from once this dialog is saved, and the Reset of one that was changed here.
 function ehHostTag(d, draft, field) {
+  const own = ehRun(d).find((t) => t.key === field);
+  if (own) return ehRunTag(own, draft);  // one of the machine's own run timings (below)
   const h = ehHost(d), plan = ehHostPlan(d, draft), reset = !!draft.reset[`${field}:`];
   if (field === "site") {
     const now = ehSiteNow(h, draft);
@@ -3981,6 +3983,7 @@ function ehField(d, draft, field, value) {
   const h = ehHost(d);
   if (!h) return;
   if (field === "name") { draft.name = value; delete draft.reset["name:"]; }
+  else if (field.startsWith("run-")) { draft.run[field.slice(4)] = value; delete draft.reset[`${field.slice(4)}:`]; }
   else if (field === "site") draft.site = value === (h.site.from === "panel" ? h.site.value || "" : "") ? undefined : value;
   else if (field.startsWith("wol-")) {
     draft.wol ||= {};
@@ -3991,13 +3994,84 @@ function ehField(d, draft, field, value) {
     else if (field === "wol-port") draft.wol.port = Number(value);
   }
 }
-// (A "Run timings" group for this machine goes between ehHostView and the UPS section of ehView, with its own
-// part of the plan next to ehHostPlan.)
+// ---- The machine's own run timings (d.host.run): after how long without an answer it counts as off, and the
+// countdown of the shutdown a run of "Update unpowered hosts" asks it for. They are kept like the name (a change
+// here lies over what counts for the machine anyway until Reset): over the wake_update: block of its entry in
+// config.yaml, or over the panel's own timing ("Run timings" on the Updates page) where it has none. The fields,
+// the readings and the words are those of the "Run timings" dialog (RT_ROWS, rtReading, rtParse). An answer
+// without d.host.run (an older panel) draws none of this.
+const EH_RUN = ["off_after_s", "shutdown_delay_s"];
+const ehRun = (d) => {
+  const rows = ehHost(d)?.run?.timings;
+  return Array.isArray(rows) && rows.every((t) => !!t && typeof t === "object" && EH_RUN.includes(t.key) && [t.value, t.base, t.min, t.max].every(Number.isInteger)
+    && ["panel", "config", "run"].includes(t.from) && ["config", "run"].includes(t.base_from)) ? rows : [];
+};
+// What a field shows: what was typed, what counts without a change here after a Reset, else the value that counts.
+const ehRunText = (t, draft) => (draft.reset[`${t.key}:`] ? String(t.base) : draft.run[t.key] ?? String(t.value));
+// Next to a field: the reading of what it holds ("s = 6 minutes"), or the range when it cannot be sent.
+function ehRunRead(t, draft) {
+  const v = rtParse(t, ehRunText(t, draft));
+  return v === null ? `${t.min} to ${t.max}` : rtReading(t.key, v).slice(String(v).length + 1);
+}
+// Is the value a change made here once this dialog is saved (and not what counts for the machine anyway)?
+function ehRunPanel(t, draft) {
+  if (draft.reset[`${t.key}:`]) return false;
+  const v = draft.run[t.key] === undefined ? null : rtParse(t, draft.run[t.key]);
+  return v === null ? t.from === "panel" : v !== t.base;
+}
+const ehRunBase = (t) => (t.base_from === "run" ? "Run timings" : "config.yaml");
+// What a change means for this machine. The panel says the same sentence in "Confirm it's you" (hoRunConsequence).
+const ehRunConsequence = (key, name, v) => (key === "off_after_s"
+  ? `If ${name} is on but silent for longer than ${rtSpan(v)}, it counts as off, and a run switches it off after its update.`
+  : `Somebody at ${name} has ${rtSpan(v)} to cancel a run's shutdown.`);
+// What Save will change about the machine's own run timings: the panel's own lines, the part of the request,
+// and what is wrong with what was typed. name: what the machine is called once this dialog is saved.
+function ehRunPlan(d, draft, name) {
+  const out = { lines: [], means: [], body: {}, reset: [], problems: {} };
+  for (const t of ehRun(d)) {
+    const label = RT_ROWS[t.key].label, stored = t.from === "panel";
+    let after, keep;
+    if (draft.reset[`${t.key}:`]) {
+      if (!stored) continue;
+      after = t.base; keep = false; out.reset.push({ field: t.key });
+    } else {
+      if (draft.run[t.key] === undefined) continue;
+      const v = rtParse(t, draft.run[t.key]);
+      if (v === null) { out.problems[t.key] = `${label}: ${t.min} to ${t.max}.`; continue; }
+      after = v; keep = v !== t.base;
+      if (after === t.value && keep === stored) continue;
+      out.body[t.key] = v;
+    }
+    out.lines.push(`${label}: ${keep ? "" : `back to ${ehRunBase(t)}: `}${!keep && after === t.value ? `nothing changes now (${rtReading(t.key, after)})` : `${rtReading(t.key, after)} (was ${rtReading(t.key, t.value)})`}`);
+    if (t.key === "off_after_s" ? after !== t.value : after < t.value) {  // what it means, under a change that can switch the machine off or shorten the time to stop that
+      const c = ehRunConsequence(t.key, name, after);
+      out.lines.push(c); out.means.push(c);
+    }
+  }
+  return out;
+}
+// "from config.yaml", "from Run timings" or "changed here", with Reset: where a timing comes from once this dialog is saved.
+function ehRunTag(t, draft) {
+  const stored = t.from === "panel" && !draft.reset[t.key + ":"], panel = ehRunPanel(t, draft);
+  return `<span class="eh-src${panel ? " on" : ""}"${stored && t.by ? ` title="${esc(`Changed here. Last change: ${t.by}`)}"` : ""}>${panel ? "changed here" : `from ${ehRunBase(t)}`}</span>${stored
+    ? `<button class="btn sm" type="button" data-eh-reset="${esc(t.key)}:" title="${esc(`Back to ${ehRunBase(t)}: ${rtReading(t.key, t.base)}`)}">Reset</button>` : ""}`;
+}
+// The group of the dialog. Every value in it is the panel's data or what was typed, and goes through esc().
+function ehRunView(d, draft) {
+  const rows = ehRun(d);
+  if (!rows.length) return "";
+  return `<div class="wu-sub">Run timings</div>
+    <div class="form-grid eh-form">${rows.map((t) => `<div class="mfield"><span class="eh-cap"><label for="eh-rt-${esc(t.key)}">${esc(RT_ROWS[t.key].label)}</label><span data-eh-tag="${esc(t.key)}">${ehRunTag(t, draft)}</span></span>
+      <div class="rt-in"><input class="input" id="eh-rt-${esc(t.key)}" data-eh-f="run-${esc(t.key)}" type="text" inputmode="numeric" maxlength="5" autocomplete="off" spellcheck="false" value="${esc(ehRunText(t, draft))}"><span class="rt-read" data-eh-read="${esc(t.key)}">${esc(ehRunRead(t, draft))}</span></div></div>`).join("")}
+    </div>
+    <p class="note eh-hint">This machine's own, in a run of Update unpowered hosts.</p>`;
+}
 // One line for each thing Save will change, in the panel's own words (the same lines are in "Confirm it's you"
 // and in the audit log), the request that says exactly that, and the notes about who will see what (ehNotes).
 function ehPlan(d, draft) {
-  const host = ehHostPlan(d, draft);
-  const lines = [...host.site, ...host.lines], body = { ups: [], plugs: [], reset: [...host.reset] };
+  const host = ehHostPlan(d, draft), h = ehHost(d);
+  const run = ehRunPlan(d, draft, !h ? d.name : draft.reset["name:"] ? h.name.config : host.body.name || h.name.value);
+  const lines = [...host.site, ...host.lines, ...run.lines], body = { ups: [], plugs: [], reset: [...host.reset, ...run.reset] };
   const left = draft.leftovers && d.leftovers?.length ? d.leftovers : [];
   for (const l of left) lines.push(`Removed: ${l}`);
   // ... and those about devices that are not relayed right now: only the ones the dialog lists, each by its id
@@ -4035,7 +4109,9 @@ function ehPlan(d, draft) {
   if (left.length) body.leftovers = true;
   if (away.length) body.unrelayed = away.map((x) => ({ id: x.id, kind: x.kind }));
   Object.assign(body, host.body);
-  return { lines, body, notes: [...host.notes, ...ehNotes(d, draft)], problems: Object.values(host.problems) };
+  if (Object.keys(run.body).length) body.wake_update = run.body;
+  return { lines, body, notes: [...host.notes, ...ehNotes(d, draft)], problems: [...Object.values(host.problems), ...Object.values(run.problems)],
+    means: run.means.length ? run.means : undefined };  // the lines that say what a change means for the machine (ehPlanView)
 }
 // The stored changes about devices that are not relayed right now, as the panel lists them (each with its id,
 // kind and sentence; anything else in the list is left out).
@@ -4062,8 +4138,9 @@ function ehView(d, draft) {
   const ignored = d.ignored?.length ? d.ignored_count || d.ignored.length : 0;    // the panel names the first twenty; the number is of all
   const h = ehHost(d);
   const any = [...d.ups.map((u) => ehFrom(u, "ups", draft)), ...d.plugs.map((p) => ehFrom(p, "plugs", draft)), ...mine.map((p) => ehFrom(p, "total", draft))].includes("panel")
-    || (!!h && ((h.name.from === "panel" && !draft.reset["name:"]) || (h.wol.from === "panel" && !draft.reset["wol:"]) || "name" in plan.body || "wol" in plan.body));
-  return `${ehHostView(d, draft)}${sect("UPS", "Ticked: this machine is on that UPS.", d.ups.map((u) => row(u, "ups")), "No agent relays a UPS.")}
+    || (!!h && ((h.name.from === "panel" && !draft.reset["name:"]) || (h.wol.from === "panel" && !draft.reset["wol:"]) || "name" in plan.body || "wol" in plan.body))
+    || ehRun(d).some((t) => ehRunPanel(t, draft));
+  return `${ehHostView(d, draft)}${ehRunView(d, draft)}${sect("UPS", "Ticked: this machine is on that UPS.", d.ups.map((u) => row(u, "ups")), "No agent relays a UPS.")}
     ${sect("Plugs", "Ticked: the plug's watts are this machine's.", d.plugs.map((p) => row(p, "plugs", p.self ? { fixed: true, note: "set on the machine itself" } : !ehNow(p, "plugs", draft) && where(p) ? { note: `now on ${esc(where(p))}` } : {})), "No agent relays a plug.")}
     ${sect("Total", "Ticked: the plug counts in the total.", mine.map((p) => row(p, "total")), "No plug of this machine.")}
     ${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
@@ -4077,7 +4154,7 @@ function ehView(d, draft) {
 // The end of the dialog: what is wrong with what was typed, and the list of what Save will change. It is drawn
 // by itself while somebody types, so that the field keeps its cursor.
 const ehPlanView = (plan) => `${plan.problems.map((l) => `<p class="note warn eh-hint" role="alert">${esc(l)}</p>`).join("")}${plan.lines.length
-  ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li>${esc(l)}</li>`).join("")}${plan.notes.map((l) => `<li class="eh-sees">${esc(l)}</li>`).join("")}</ul>` : ""}`;
+  ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="eh-lines">${plan.lines.map((l) => `<li${plan.means?.includes(l) ? ' class="eh-sees"' : ""}>${esc(l)}</li>`).join("")}${plan.notes.map((l) => `<li class="eh-sees">${esc(l)}</li>`).join("")}</ul>` : ""}`;
 const ehCanSave = (plan) => plan.lines.length > 0 && !plan.problems.length;
 // A tick or a Reset in the dialog changes the draft, never the panel. Each is about one line; the later of the
 // two on a line counts.
@@ -4089,6 +4166,13 @@ function ehTick(d, draft, field, id, checked) {
   if (checked === ehWas(x, field)) delete m[id]; else m[id] = checked;
 }
 function ehReset(d, draft, key) {
+  const own = ehRun(d).find((t) => `${t.key}:` === key);
+  if (own) {  // one of the machine's own run timings: what was typed goes with it
+    if (own.from !== "panel") return;
+    draft.reset[key] = true;
+    delete draft.run[own.key];
+    return;
+  }
   if (key === "name:" || key === "wol:") {  // the machine's own name or Wake-on-LAN: what was typed goes with it
     const h = ehHost(d);
     if (!h || h[key.slice(0, -1)].from !== "panel") return;
@@ -4113,6 +4197,7 @@ const EH_INFO = () => infoBtn("edit-host", "Edit host", infoList([
   "Stored changes about a UPS or plug that its machine does not relay right now have no line either. They are kept and count again when the device is back; Remove anyway takes them out.",
   "Name, site and Wake-on-LAN count at once. The site decides who can see this machine, its guests and the UPSes and plugs that follow it; it is the same setting as on the Users page.",
   "Wake-on-LAN: the network cards, the machine that sends the packet and the port can be changed here. Every change to it asks you to confirm, and only machines that were set up to send wake packets can be chosen.",
+  "Run timings: this machine's own time to count as off and its own shutdown countdown in a run of Update unpowered hosts. A machine without its own follows Run timings on the Updates page. Every change to them asks you to confirm, and counts from the next run.",
   "Set on the machine or in config.yaml: address, tokens, power control, updates, which machines may send wake packets, and where a wake packet is sent to and its password."]));
 // Is d what GET .../options gives: the two lists, each entry with its id? Everything else is read with a default.
 const ehValid = (d) => !!d && typeof d === "object" && Array.isArray(d.ups) && Array.isArray(d.plugs)
@@ -4128,8 +4213,9 @@ function ehDraw() {
   body.innerHTML = ehView(eh.d, eh.draft);
   $("#eh-save").disabled = eh.busy || !ehCanSave(ehPlan(eh.d, eh.draft));
   if (!had) return;
-  if (had.f || had.reset === "name:" || had.reset === "wol:") {  // a field of the machine itself: the same field again (after its Reset: the name, the tick of Wake-on-LAN)
-    body.querySelector?.(`[data-eh-f="${had.f || (had.reset === "name:" ? "name" : "wol-on")}"]`)?.focus();
+  const ownReset = EH_RUN.find((k) => had.reset === `${k}:`);
+  if (had.f || had.reset === "name:" || had.reset === "wol:" || ownReset) {  // a field of the machine itself: the same field again (after its Reset: the name, the tick of Wake-on-LAN, the timing)
+    body.querySelector?.(`[data-eh-f="${had.f || (ownReset ? `run-${ownReset}` : had.reset === "name:" ? "name" : "wol-on")}"]`)?.focus();
     return;
   }
   if (had.left) { $("#eh-save").focus(); return; }  // "Remove" and "Remove anyway" are gone once pressed: Save is what comes next
@@ -4190,6 +4276,10 @@ async function openEditHost(s) {
     $("#eh-plan").innerHTML = ehPlanView(plan);
     $("#eh-save").disabled = eh.busy || !ehCanSave(plan);
     for (const tag of $("#eh-body").querySelectorAll?.("[data-eh-tag]") || []) tag.innerHTML = ehHostTag(eh.d, eh.draft, tag.dataset.ehTag);
+    for (const el of $("#eh-body").querySelectorAll?.("[data-eh-read]") || []) {  // a run timing's reading, or its range
+      const t = ehRun(eh.d).find((x) => x.key === el.dataset.ehRead);
+      if (t) { el.textContent = ehRunRead(t, eh.draft); el.classList.toggle("bad", rtParse(t, ehRunText(t, eh.draft)) === null); }
+    }
   };
   $("#eh-body").onclick = (e) => {
     const t = e.target.closest("[data-eh-reset], [data-eh-left], [data-eh-away]");
