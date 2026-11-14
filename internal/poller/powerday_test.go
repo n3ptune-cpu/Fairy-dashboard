@@ -81,6 +81,11 @@ func TestPowerDayIsKeptOverARestart(t *testing.T) {
 	if q.Power.Day.Has("laptop/desk", time.Now()) {
 		t.Error("the day of a removed host's plug is still there")
 	}
+	// a history tick that took its list of sources before the Remove and records after it starts no new day
+	q.Power.Day.Record(time.Now(), []power.DaySample{{ID: "laptop/desk", W: 80}}, nil)
+	if q.Power.Day.Has("laptop/desk", time.Now()) {
+		t.Error("a sample that was on its way when the host was removed started a day for its plug again")
+	}
 	if now, err := os.Stat(file); err != nil || os.SameFile(old, now) {
 		t.Errorf("the Remove did not write the file anew (%v)", err)
 	}
