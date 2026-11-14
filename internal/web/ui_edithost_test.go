@@ -358,6 +358,7 @@ func TestUIEditHostDialogSections(t *testing.T) {
     "A changed line is used instead of what config.yaml says about it until Reset, also when config.yaml is edited later. Every other line follows config.yaml.",
     "A link is kept with the machine that reads the device (\"read by …\"). Reset puts back that one line.",
     "A change counts from the next poll of the machine that reads the device.",
+    "A UPS link never shuts a machine down: it shows the UPS on the machine's row, and decides who can see the UPS and its notifications.",
     "A link also decides who can see a UPS or plug: the viewers of the site of a machine it is linked to or, linked to nothing, of the machine that reads it. Before you save, the list says when a change shows a device to another site's viewers or hides it from them.",
     "Stored changes about a machine that is gone have no line here. The dialog says how many there are; Remove takes them out.",
     "Stored changes about a UPS or plug that its machine does not relay right now have no line either. They are kept and count again when the device is back; Remove anyway takes them out.",

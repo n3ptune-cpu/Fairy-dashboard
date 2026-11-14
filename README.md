@@ -1088,7 +1088,9 @@ An admin can change three things about a machine in the panel: the machine's pag
 | **Total** | the plug counts in the total | `power_exclude_from_total` |
 
 These are fields of an agent's entry in config.yaml, and they decide what is **shown** where. Nothing acts on
-them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads them.
+them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads them. In particular a UPS
+link never shuts a machine down when the UPS runs on battery: it shows the UPS on the machine's row, and
+decides who can see the UPS and its notifications. The dialog's info button says so.
 
 * **config.yaml stays the base.** The panel does not write config.yaml (it cannot: the service has no write
   access to it). What you change is kept by the panel (`state.json`, `host_options`) as one decision for each
