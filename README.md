@@ -1168,7 +1168,9 @@ hand-written entries.
 
 ### Edit host
 
-An admin can change three things about a machine in the panel: the machine's page, the ⋯ menu, **Edit host**.
+An admin can change a machine's options in the panel: the machine's page, the ⋯ menu, **Edit host**. The
+dialog has the machine itself at the top ([its name, its site and its Wake-on-LAN](#the-machine-itself-name-site-wake-on-lan))
+and under it three sections of links:
 
 | Section | What a tick means | The field it stands for |
 |---|---|---|
@@ -1176,7 +1178,7 @@ An admin can change three things about a machine in the panel: the machine's pag
 | **Plugs** | the plug's watts are this machine's (the watts on its row; who sees the plug) | `power_links` |
 | **Total** | the plug counts in the total | `power_exclude_from_total` |
 
-These are fields of an agent's entry in config.yaml, and they decide what is **shown** where. Nothing acts on
+These three are fields of an agent's entry in config.yaml, and they decide what is **shown** where. Nothing acts on
 them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads them. In particular a UPS
 link never shuts a machine down when the UPS runs on battery: it shows the UPS on the machine's row, and
 decides who can see the UPS and its notifications. The dialog's info button says so.
@@ -1246,13 +1248,67 @@ decides who can see the UPS and its notifications. The dialog's info button says
   What is merely under a name this version does not know (a newer version wrote it, and the panel was rolled
   back) is not used either, and it is left in the file as it is: a save in the older panel does not lose it.
 
-**Never editable here**, whatever is sent: `id`, `url`, `token_env`, `control_token_env`, `verify_tls`, `node`,
-`links_to`, `fan_control`, `power_control`, `self_update`, `wol_relay`, `owner`, `site`, `name`. They say where
-an agent is, which secret it gets and what the panel may do to a machine: a stolen admin session must not be
-able to send a token to another address or switch on power control. Those stay in config.yaml, on the machine
-(Add host, Re-pair) or, for the site, on the Users page.
+#### The machine itself: name, site, Wake-on-LAN
 
-API: `GET` and `PUT /api/admin/hosts/{id}/options`. The request names only what changes:
+| In the dialog | What it changes | Where it is kept |
+|---|---|---|
+| **Name** | the name the machine is shown under, everywhere in the panel | `state.json`, `host_options`, `hosts` (over `name:`) |
+| **Site** | who can see the machine | `users.json`: the same setting as on the Users page |
+| **Wake-on-LAN** | the network cards a wake packet is for, which machine sends it, the port; or no Wake-on-LAN at all | `state.json`, `host_options`, `hosts` (over `wol:`) |
+
+* **Name.** One line, at most 64 characters, and not the name of another host. It is on the machine's row
+  at once. Nothing is addressed by it: the id, the address and the tokens stay what they are, and **Remove**
+  and **Re-pair** of a host added with Add host keep asking for the name it was added under. The typed
+  confirmation of a power action asks for the name the row shows.
+* **Site.** The choices are the sites of the Users page, and the dialog stores what that page stores (one
+  setting, two places to change it; `fairy admin sites` shows it). The first choice is the default:
+  config.yaml's `site:`, or "No site (admins only)". A site decides who **sees** a machine: its row, its
+  guests that have no site of their own, and the UPSes and plugs that follow their links to it. It decides
+  nothing else. Only admins control anything, and an admin sees every site, so there is no admin who is
+  limited to one site, and nobody can lock themselves out. Before you save, the dialog lists whose view moves
+  ("Viewers of Home will see PC-A and 2 guests of it"), and so do "Confirm it's you" and the audit entry.
+* **Wake-on-LAN.** Three things can be changed, and they are what **Power on** and a run of "Update
+  unpowered hosts" send from then on:
+  * the **MAC address** (up to eight, for a machine with several network cards);
+  * **Sent by**: one of the machines that are already set up to send wake packets (`wol_relay: true` in
+    config.yaml, or the "Wake-on-LAN relay" option of Add host). Whether a machine may send wake packets at
+    all is not set here;
+  * the **port**, 9 or 7.
+
+  Unticking "This machine can be woken" takes Wake-on-LAN away from the machine; a machine that has none
+  gets it with a MAC address and a sender. **Every change to Wake-on-LAN asks you to confirm it**, also right
+  after you confirmed something else: a wake packet for a MAC address of your choice is something the panel's
+  buttons could not send before. (The owner of a relay can also pin the addresses it wakes on the machine:
+  `wol.allowed_macs` in the agent's config.)
+* **Only shown, never changed here:** where a wake packet is sent to (`broadcast:`) and its password
+  (`password_env:`). The first is an address an agent sends packets to, the second names a secret of the
+  panel's environment: neither can be set from a browser. For a machine whose `wol:` has one of them, the
+  sender is shown and cannot be changed either, because the address and the password were written for that
+  sender; the dialog says "Sent by NAS to 192.0.2.255: set in config.yaml." The name of the password's
+  variable is not shown.
+* **config.yaml stays the base** here too: a changed value is used instead of config.yaml's until **Reset**
+  (the name; the Wake-on-LAN details as a whole), and config.yaml's own value typed back is the same as
+  Reset. Name and Wake-on-LAN count at once, without a poll or a restart.
+* **A change that cannot be used is not used.** When the sender you chose is no longer set up to send wake
+  packets (it was removed, or paired again without that option), or config.yaml got a target address for the
+  machine since, the Wake-on-LAN details of config.yaml count as they are, the log has one warning, the
+  dialog says "What was changed here is not used: ..." and `fairy admin config check` has a WARN.
+* **A Proxmox node with an agent** keeps its name and its Wake-on-LAN details under either of its two ids.
+* **Remove** of a host takes them with it, and with them the choice of that host as the sender of another
+  machine's wake packet. What is kept for a machine that is gone is counted with the other changes "about
+  machines that are gone".
+
+**Never editable here**, whatever is sent: `id`, `url`, `token_env`, `control_token_env`, `verify_tls`, `node`,
+`links_to`, `fan_control`, `power_control`, `self_update`, `wol_relay`, `owner`, and of a `wol:` its
+`broadcast` and `password_env`. They say where an agent is, which secret it gets, what the panel may do to a
+machine and where packets are sent: a stolen admin session must not be able to send a token or a secret to
+another address, switch on power control, or make a machine send packets to an address of its choice. Those
+stay in config.yaml or on the machine (Add host, Re-pair).
+
+API: `GET` and `PUT /api/admin/hosts/{id}/options`. For the machine itself the request takes `"name": "Den"`,
+`"site": "Home"` (`""`: the default), `"wol": {"macs": ["aa:bb:cc:dd:ee:ff"], "relay": "nas-agent", "port": 9}`
+or `"wol": {"off": true}`, and `{"field": "name"}` / `{"field": "wol"}` in `reset`; the answer has them under
+`"host"`, each with where its value comes from. For the links, the request names only what changes:
 `{"ups": [{"id": "nas-agent/rack", "on": true}], "plugs": [{"id": "nas-agent/pc-plug", "linked": true,
 "in_total": false}], "reset": [{"id": "nas-agent/desk", "field": "ups"}], "leftovers": true,
 "unrelayed": [{"id": "nas-agent/attic", "kind": "ups"}]}` (`field`: `ups`, `plugs` or `total`; a reset is
@@ -1530,6 +1586,11 @@ Build 14 starts with everything this release starts with, those two keys include
 **Edit host** is kept when you go back to build 14 or build 13: neither knows `host_options` in
 `state.json`, both show what config.yaml says, and both leave the key in the file as it is, also when they
 save the file themselves. The changes count again after the next update to this release.
+A name or Wake-on-LAN details changed in **Edit host** are one more key in that object (`host_options`,
+`hosts`; new after build 15). Build 15 does not know it: it shows the names and uses the Wake-on-LAN of
+config.yaml, says so once in its log and in `fairy admin config check` ("the key "hosts" is not one Fairy
+writes: it is not used (and left in the file as it is)"), and leaves the key in the file, also when it saves a
+change to the links. A site changed in the dialog is the Users page's setting and stays in every build.
 Going back further than build 13 (the README of build 13 has the whole of it): a panel older than build 12
 does not start when config.yaml has a `wake_update:` block: take the block out first. The same goes for an
 `approval:` block ("field approval not found"). It does not know `machines.json` and leaves it alone; a
@@ -1814,7 +1875,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/config` | Reads and checks `config.yaml` (`config.go`, `validate.go`) and secrets from `fairy.env` / the environment (`env.go`). |
 | `internal/admin` | The break-glass CLI `fairy admin`: one file per command (users and sites, tokens, sessions, control, audit, config check, health). |
 | `internal/access` | `users.json`: users (by OIDC subject) with a role and sites, the list of sites, and which site each host / power source / UPS is assigned to. |
-| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the hosts' custom model names (`hostmodel.go`), the link overrides of "Edit host" (`hostoptions.go`), the session list. Also `machines.json` (`machines.go`) and `last-seen.json` (`lastseen.go`: when each agent last answered, so that a machine that is off when the panel starts is shown with that time and not with "last seen never"). |
+| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the hosts' custom model names (`hostmodel.go`), the link overrides of "Edit host" (`hostoptions.go`) and what it changed about a machine itself, its name and Wake-on-LAN details (`hostedit.go`), the session list. Also `machines.json` (`machines.go`) and `last-seen.json` (`lastseen.go`: when each agent last answered, so that a machine that is off when the panel starts is shown with that time and not with "last seen never"). |
 | `internal/statefile` | Safe shared JSON files (state, sessions, tokens, users): lock, re-read, write to a temp file, rename (so CLI and server never lose changes). |
 | `internal/tokens` | Personal API tokens (`fy_...`), stored only as hashes in `tokens.json`. |
 | `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |
