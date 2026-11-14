@@ -55,7 +55,7 @@ func TestNoTicketLeavesThePanelWhenSomethingStandsInTheWay(t *testing.T) {
 		if r.s.Poller.BindingOf("pc-a").OK() {
 			t.Fatal("the setup: pc-a's binding is in order")
 		}
-		notSent(t, r, run, "machine id")
+		notSent(t, r, run, "PC-A and PC-B have the same machine id, so each would accept an approval made for the other")
 	})
 	t.Run("another host has its machine id (rule 3, asked again when the ticket is handed over)", func(t *testing.T) {
 		r, run := started(t, "pc-a", "pc-b")
