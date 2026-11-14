@@ -78,7 +78,7 @@ func TestUIUpdatesPageUnpoweredHostsFold(t *testing.T) {
 	for _, want := range []string{
 		`const wuOpen = (d) => !!d.active || (wu.open.runs ?? wuJustOver(d));`,
 		`if (t.dataset.act === "wu-fold") { wu.open.runs = !(wu.data && wuOpen(wu.data)); render(); return; }`,
-		`if (wuLive && wuLive !== was) delete wu.open.runs;`,
+		`if (wuLive && wuLive !== was && wu.open.runs === false) delete wu.open.runs;`,
 	} {
 		if strings.Count(js, want) != 1 {
 			t.Errorf("app.js lacks (or has twice) %q", want)
@@ -183,5 +183,106 @@ func TestUIUpdatesPageUnpoweredHostsFold(t *testing.T) {
   // ... and it is said above the table too, where the page opens
   const said = words((html.match(/<div class="note" id="upd-run">.*?<\/div>/) || [""])[0]);
   if (said !== 'running "Update unpowered hosts" is going for 2 machines: its progress is under the table.' || html.indexOf('id="upd-run"') > html.indexOf('class="table updates"')) fail("a run is going, above the table: " + said);
+`))
+}
+
+// Third review of build 14, S4. "A run just ended" (the section is open by itself for 10 minutes) was measured
+// with the browser's clock against the panel's ended_at: a browser 11 minutes ahead folded the report of a run
+// at the moment it ended, and one that is behind kept the section open for as long as the clocks differ. It is
+// measured on the panel's clock: the "now" of the same answer, plus the time since the answer came.
+//
+// And the section does not fold by itself in front of a reader who opened it: what the reader opened (with the
+// button, or by opening a machine's steps or the earlier runs in the open section) stays open, through a new
+// run and past its 10 minutes. A section nobody touched folds when the 10 minutes are over.
+func TestUIUpdatesPageFoldGoesByThePanelsClockAndTheReader(t *testing.T) {
+	js := appJS(t)
+	runPageScript(t, "updates-fold-clock", updatesPageScript(t, js, `
+  const settings = { online_timeout_s: 300, settle_s: 60, shutdown_delay_s: 120 };
+  const host = (id) => ({ id, name: id.toUpperCase(), opted_in: true, can_join: true, can_wake: true, relay: "NAS", power: "off", choice: "wake" });
+  const runHost = (id, o) => ({ id, name: id.toUpperCase(), mode: "wake", state: "left_on", on: "unknown", update: "ok", text: "Look at it.", log: [{ t: "2026-11-13T16:19:00Z", text: "Wake sent." }], ...o });
+  const PANEL = Date.parse("2026-11-13T16:30:00Z");  // the panel's clock, whatever the browser's says
+  const at = (ms) => new Date(PANEL + ms).toISOString();
+  const run = (id, o) => ({ id, state: "done", by: "nora", started_at: at(-3600e3), list_hash: "abc123", hosts: [runHost("pc-a")], ...o });
+  const data = (o) => ({ hosts: [host("pc-a")], active: null, last: [], settings, off_after_s: 900, max_hosts: 16, now: at(0), ...o });
+  const isOpen = () => wakeUpdateBox().includes('class="table wu-machines"');
+  const fold = () => tag(wakeUpdateBox(), 'data-act="wu-fold"');
+  const realNow = Date.now;
+  const clocks = { "right": 0, "11 minutes ahead": 11 * 60e3, "3 hours behind": -3 * 3600e3, "a day ahead": 86400e3 };
+  upd.data = updates([agent("pc-a")]);
+
+  // 1. the browser's clock does not decide: a run that ended 5 s ago (by the panel) is shown, one that ended 11
+  //    minutes ago is folded, whatever time the browser has
+  for (const [name, skew] of Object.entries(clocks)) {
+    Date.now = () => PANEL + skew;
+    delete wu.open.runs; wu.at = 0;
+    wu.data = data({ last: [run("r1", { ended_at: at(-5000) })] });
+    if (!isOpen()) fail("browser clock " + name + ": the report of a run that ended 5 s ago is folded");
+    wu.data = data({ last: [run("r1", { ended_at: at(-9 * 60e3 - 55e3) })] });
+    if (!isOpen()) fail("browser clock " + name + ": folded before the 10 minutes are over");
+    wu.data = data({ last: [run("r1", { ended_at: at(-11 * 60e3) })] });
+    if (isOpen()) fail("browser clock " + name + ": still open 11 minutes after the run ended");
+  }
+  // ... and the time since the answer came counts: the answer said "ended 9 minutes ago", and it came 2 minutes ago
+  Date.now = () => PANEL + 86400e3;
+  wu.data = data({ last: [run("r1", { ended_at: at(-9 * 60e3) })] });
+  wu.at = wuTick() - 30e3;
+  if (!isOpen()) fail("9 min + 30 s after the end: folded");
+  wu.at = wuTick() - 120e3;
+  if (isOpen()) fail("9 min + 2 min after the end, with an answer that is 2 minutes old: still open");
+  // fetchWakeUpdate notes when its answer came
+  wu.at = 0;
+  answer = () => data({ last: [run("r1", { ended_at: at(-5000) })] });
+  const before = wuTick();
+  await fetchWakeUpdate();
+  if (!(wu.at >= before && wu.at <= wuTick()) || !isOpen()) fail("the page did not note when the answer came: " + wu.at);
+  // an answer without "now" (never from this panel): the browser's clock, as before
+  Date.now = () => PANEL;
+  wu.at = 0; wu.data = data({ now: undefined, last: [run("r1", { ended_at: at(-5000) })] });
+  if (!isOpen()) fail("no now in the answer: folded");
+  Date.now = realNow;
+
+  // 2. nobody touched the section: it folds by itself when the 10 minutes are over
+  delete wu.open.runs; wu.at = 0;
+  wu.data = data({ last: [run("r1", { ended_at: at(-60e3) })] });
+  if (!isOpen() || wu.open.runs !== undefined) fail("just over: not open by itself");
+  wu.data = data({ last: [run("r1", { ended_at: at(-11 * 60e3) })] });
+  if (isOpen()) fail("nobody touched it: still open after 11 minutes");
+
+  // 3. the reader opens a machine's steps in the report that is open by itself: it stays open after the 10 minutes
+  wu.data = data({ last: [run("r1", { ended_at: at(-60e3) })] });
+  const steps = tag(wakeUpdateBox(), 'data-act="wu-log"');
+  if (!steps) fail("the open report has no button for a machine's steps");
+  await click(steps, '[data-act="wu-log"]');
+  if (wu.open.runs !== true || !wakeUpdateBox().includes('<ol class="wu-log">')) fail("the steps opened: " + wu.open.runs);
+  wu.data = data({ last: [run("r1", { ended_at: at(-11 * 60e3) })] });
+  if (!isOpen()) fail("the reader was reading the steps, and the section folded by itself after 10 minutes");
+  // the reader folds it: folded, and it stays folded
+  await click(fold(), '[data-act="wu-fold"]');
+  if (isOpen() || wu.open.runs !== false) fail("the reader cannot fold it: " + wu.open.runs);
+  // "Show 1 earlier run" on the folded section opens the earlier runs, not the section
+  wu.data = data({ last: [run("r1", { ended_at: at(-3600e3) }), run("r0", { ended_at: at(-7200e3) })] });
+  await click(tag(wakeUpdateBox(), 'data-k="earlier"'), '[data-act="wu-log"]');
+  if (isOpen() || wu.open.runs !== false || !wu.open.earlier) fail("the earlier runs on the folded section: " + wu.open.runs + " " + wu.open.earlier);
+
+  // 4. the reader opened the section with the button; a run starts and ends: open during it, after it, and 11
+  //    minutes after it (it was reset by the new run, and folded by itself 10 minutes after the end)
+  await click(fold(), '[data-act="wu-fold"]');
+  if (!isOpen() || wu.open.runs !== true) fail("opened with the button: " + wu.open.runs);
+  answer = () => data({ active: run("r2", { state: "running" }), last: [run("r1", { ended_at: at(-3600e3) })] });
+  await fetchWakeUpdate();
+  if (!isOpen() || wu.open.runs !== true) fail("a new run: what the reader opened was forgotten: " + wu.open.runs);
+  answer = () => data({ last: [run("r2", { ended_at: at(-11 * 60e3) }), run("r1", { ended_at: at(-3600e3) })] });
+  await fetchWakeUpdate();
+  if (!isOpen()) fail("the reader had opened the section: it folded by itself 11 minutes after the run");
+  // ... and a section the reader had folded is open for the new run and its 10 minutes, then folded again
+  await click(fold(), '[data-act="wu-fold"]');
+  answer = () => data({ active: run("r3", { state: "running" }), last: [run("r2", { ended_at: at(-3600e3) })] });
+  await fetchWakeUpdate();
+  answer = () => data({ last: [run("r3", { ended_at: at(-60e3) }), run("r2", { ended_at: at(-3600e3) })] });
+  await fetchWakeUpdate();
+  if (!isOpen() || wu.open.runs !== undefined) fail("folded before the run: its report is not shown: " + wu.open.runs);
+  answer = () => data({ last: [run("r3", { ended_at: at(-11 * 60e3) }), run("r2", { ended_at: at(-3600e3) })] });
+  await fetchWakeUpdate();
+  if (isOpen()) fail("folded before the run, untouched since: still open 11 minutes after it");
 `))
 }

@@ -318,7 +318,8 @@ manual install per machine) is in Fairy-agent's
 
 For machines that are normally switched off: a PC that is only on while someone uses it, a Proxmox node
 whose guests do not start by themselves. **Update unpowered hosts** on the Updates page (admins; the
-section under the table of machines, folded until a run is going or just ended: **Show the machines** opens it)
+section under the table of machines, folded until a run is going or ended less than 10 minutes ago by the
+panel's clock: **Show the machines** opens it, and what you have opened stays open until you fold it)
 starts a **run**: you tick the machines, confirm once, and the panel does by itself what you would do by hand.
 For each ticked machine that is off:
 

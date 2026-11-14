@@ -2039,10 +2039,11 @@ function updBanner() {
 // dialog, its live progress and its report. Everything shown here that comes from the panel (machine names,
 // the sentences of a run, an agent's own error text inside them) goes through esc().
 const wu = { data: null, error: null, open: dict() };
+wu.at = 0;  // when data came, on this browser's steady clock (wuTick, wuNow)
 let wuLive = "";  // the id of the run this page has seen going (wuSeen)
 async function fetchWakeUpdate() {
   if (!state.me?.can_control) return;
-  try { wu.data = await api("/api/admin/wake-update"); wu.error = null; wuSeen(wu.data); }
+  try { wu.data = await api("/api/admin/wake-update"); wu.at = wuTick(); wu.error = null; wuSeen(wu.data); }
   catch (e) { wu.error = e.message; if (e.status === 403) wu.data = null; }
   render();
 }
@@ -2058,7 +2059,7 @@ async function fetchWakeUpdate() {
 function wuSeen(d) {
   const was = wuLive;
   wuLive = d?.active?.id || "";
-  if (wuLive && wuLive !== was) delete wu.open.runs;  // a new run: the section is open while it goes and when it is over, whatever was chosen before
+  if (wuLive && wuLive !== was && wu.open.runs === false) delete wu.open.runs;  // a new run: the section is open while it goes and when it is over, also when it was folded before
   if (!was || was === wuLive) return;
   const r = (d.last || []).find((x) => x.id === was);
   if (r) wuRunOver(r);
@@ -2126,8 +2127,18 @@ function wuRunBox(r, live) {
 // going (there is no button to fold it then: a run that is going is never out of sight) and for 10 minutes after
 // a run ended; otherwise it is as the reader left it (wu.open.runs: true, false, or not chosen), for as long as the
 // page is loaded, like the page's other folds.
+// It never folds by itself in front of a reader who opened it: a section the reader has opened (the button, or a
+// machine's steps or the earlier runs while it is open) stays open until the reader folds it, through a new run
+// and past the 10 minutes after it. Only a section nobody touched folds again when the 10 minutes are over.
+// "10 minutes after a run ended" is measured on the panel's clock: ended_at is the panel's time, and so is the
+// "now" of the same answer; the time since that answer came is added from this browser's steady clock (wuTick).
+// It was Date.now() against ended_at: with the browser's clock 11 minutes ahead of the panel's the report of a
+// run that had just ended was folded at once, and with it behind the section stayed open for as long as the
+// clocks differed (third review of build 14, S4).
 const WU_JUST_OVER = 10 * 60 * 1000;
-const wuJustOver = (d) => { const end = d.last?.[0]?.ended_at; return !!end && Date.now() - new Date(end) < WU_JUST_OVER; };
+const wuTick = () => (typeof performance === "object" && typeof performance.now === "function" ? performance.now() : Date.now());
+const wuNow = (d) => { const t = new Date(d.now ?? NaN).getTime(); return Number.isFinite(t) ? t + (wu.at ? wuTick() - wu.at : 0) : Date.now(); };
+const wuJustOver = (d) => { const end = d.last?.[0]?.ended_at; return !!end && wuNow(d) - new Date(end) < WU_JUST_OVER; };
 const wuOpen = (d) => !!d.active || (wu.open.runs ?? wuJustOver(d));
 // The folded section's line about the last run: how it ended and when, and in red and amber what the report
 // has to say that must not wait behind a fold: machines to look at, and machines nothing was sent to.
@@ -2207,7 +2218,7 @@ const wuOwnTimings = (h) => `${h.off_after_s ? ` · counts as off after ${esc(fm
 async function openWakeUpdate() {
   let d;
   try { d = await api("/api/admin/wake-update"); } catch (e) { flash(e.message, true); return; }
-  wu.data = d; wuSeen(d);
+  wu.data = d; wu.at = wuTick(); wuSeen(d);
   if (d.active) { flash("A run is going: one run at a time", true); render(); return; }
   const joined = d.hosts.filter((h) => h.opted_in);
   // A machine the panel itself sent to sleep is "asleep or off": listed apart and not ticked (it does not look freshly started when it wakes)
@@ -2301,7 +2312,12 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.act === "wu-fold") { wu.open.runs = !(wu.data && wuOpen(wu.data)); render(); return; }
   if (t.dataset.act === "wu-open") { openWakeUpdate(); return; }
   if (t.dataset.act === "wu-cancel") { openWakeCancel(t.dataset.id); return; }
-  if (t.dataset.act === "wu-log") { const k = t.dataset.k; if (wu.open[k]) delete wu.open[k]; else wu.open[k] = true; render(); return; }
+  if (t.dataset.act === "wu-log") {
+    const k = t.dataset.k;
+    if (wu.data && wuOpen(wu.data)) wu.open.runs = true;  // the reader is reading in the open section: it does not fold by itself any more
+    if (wu.open[k]) delete wu.open[k]; else wu.open[k] = true;
+    render(); return;
+  }
   const on = t.dataset.on === "1", name = t.dataset.name, path = `/api/systems/${enc(t.dataset.id)}/wake-update`, body = { enabled: on };
   // A machine that checks approvals itself is in no run: the question about waking it and switching it off is not
   // asked for it. "Confirm it's you" says what is true for it, and so does the answer.
