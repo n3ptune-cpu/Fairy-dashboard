@@ -167,11 +167,25 @@ func TestPanelNameAndWolFollowAMachineWithTwoIDs(t *testing.T) {
 	if o := p.PowerOverride(node); o == nil || o.Wol == nil || !slices.Equal(o.Wol.AllMACs(), []string{"02:00:00:00:00:b9"}) || o.Wol.Relay != "lab-a-agent" || o.Wol.Broadcast != "192.0.2.255" {
 		t.Errorf("the node's Wake-on-LAN: %+v", o)
 	}
+	guest := ""
 	for _, s := range p.Snapshot() {
 		if s.Kind != "node" && s.Name == "Cellar" {
 			t.Errorf("the row %s (%s) has the host's name", s.ID, s.Kind)
 		}
+		if s.Kind == "qemu" || s.Kind == "lxc" {
+			guest = s.ID
+		}
 	}
+	// ... and a name kept under a guest's id (a file edited by hand) names nothing: only hosts have one here
+	if guest == "" {
+		t.Fatal("the rig has no guest")
+	}
+	was := rowOf(t, p, guest).Name
+	setHost(t, p, guest, adminstate.HostEdit{Name: "Not a host"})
+	if got := rowOf(t, p, guest).Name; got != was {
+		t.Errorf("the guest %s is shown as %q", guest, got)
+	}
+	setHost(t, p, guest, adminstate.HostEdit{})
 	// the panel starts again while the machine is off: no node row, the agent's row stands for the machine
 	b.Mu.Lock()
 	up = false
