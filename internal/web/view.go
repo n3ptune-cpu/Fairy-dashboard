@@ -3,6 +3,7 @@ package web
 import (
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
@@ -363,6 +364,28 @@ func (v *view) PowerHistory(source string) model.PowerHistory {
 		h.Points[i] = pt
 	}
 	return h
+}
+
+// PowerDay is one power source's last 24 hours (GET /api/power/day), for a source this view lists.
+//
+// The question "may this caller see the source" is asked of Power(), the list the caller gets from
+// GET /api/power at this moment: by the site the source is assigned to, else by the hosts it is linked to
+// now, else by the host of the agent that relays it. A source that is not in that list (hidden from the
+// caller, unknown, taken out of an agent's config, of a host that was removed) is "not found", in the same
+// words for all of them, and an admin gets no day of a source the panel does not list either: what the day
+// history still holds of such a source can be asked by nobody.
+//
+// The day is the device's, not a host's: after a plug was linked to another host, its whole day shows there,
+// and whoever may see the plug now sees that day (the hour's history is the same: PowerHistory).
+func (v *view) PowerDay(source string, now time.Time) (model.PowerDay, error) {
+	if source != "" {
+		for _, st := range v.Power().Sources {
+			if st.ID == source {
+				return v.s.Poller.Power.Day.Series(source, now), nil
+			}
+		}
+	}
+	return model.PowerDay{}, apierr.New(404, "power source not found")
 }
 
 // UPS is the visible UPSes (their lists of powered systems only show visible ones) and their history.

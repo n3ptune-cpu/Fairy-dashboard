@@ -177,6 +177,20 @@ func (s *Server) powerHistory(c *reqCtx) error {
 	return nil
 }
 
+// powerDay is GET /api/power/day?source=<id>: the last 24 hours of one power source the caller may see.
+func (s *Server) powerDay(c *reqCtx) error {
+	v, err := c.view()
+	if err != nil {
+		return err
+	}
+	d, err := v.PowerDay(c.r.URL.Query().Get("source"), time.Now())
+	if err != nil {
+		return err
+	}
+	c.json(200, d)
+	return nil
+}
+
 func (s *Server) ups(c *reqCtx) error {
 	v, err := c.view()
 	if err != nil {
