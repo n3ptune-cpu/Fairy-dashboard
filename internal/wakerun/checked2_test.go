@@ -115,8 +115,12 @@ func TestAStoppedRunAndAnArmedMachine(t *testing.T) {
 	}
 
 	w, pc, act := armedRun(t, nil)
-	if err := os.Mkdir(w.m.path+".lock", 0o700); err != nil { // the journal cannot be written from here on
-		t.Skip(err)
+	// The journal cannot be written from here on: its lock is a folder. The lock file is there already (the
+	// run wrote its journal when it armed the machine), so it goes first; a folder that cannot be made is a
+	// failure of the test, not a reason to leave it out.
+	_ = os.Remove(w.m.path + ".lock")
+	if err := os.Mkdir(w.m.path+".lock", 0o700); err != nil {
+		t.Fatal(err)
 	}
 	off := *host(act, "pc-a").SelfOffAt
 	w.m.mu.Lock()
