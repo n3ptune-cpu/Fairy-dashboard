@@ -607,7 +607,7 @@ func (s *Server) runGo(ctx context.Context, agentID string, h runGoHost, g *appr
 		return wakerun.ConfirmResult{Unanswered: true, Text: fmt.Sprintf("http %d from its agent", status)}
 	case status != 200:
 		reason, words := runRefusal(status, data)
-		return wakerun.ConfirmResult{Reason: reason, Text: words}
+		return wakerun.ConfirmResult{Sent: true, Reason: reason, Text: words} // the machine's own answer
 	}
 	var ans api.RunAnswer
 	raw, _ := json.Marshal(data)

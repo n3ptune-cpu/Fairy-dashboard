@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 )
 
 // A machine that checks passkey approvals itself in a run (Fairy-agent v0.9.0; README, "Machines with the
@@ -114,6 +116,12 @@ type checked struct {
 	guestsAsked    bool
 	guestsMono     time.Duration
 	guestsUnseen   bool
+	// goSent: a confirmation of this run left the panel for this machine (it was answered, or got no answer).
+	// Only then does its agent's word "confirmed" count (showsConfirmed). goBy: who gave the latest of them;
+	// goSince: steady, the moment before the first of them left.
+	goSent  bool
+	goBy    string
+	goSince time.Duration
 }
 
 // disarming is a cancel of a machine's self-switch-off that the run is at (disarm).
@@ -139,6 +147,42 @@ func (h *Host) armedMaybe() bool {
 		return false
 	}
 	return h.Arm == ArmArmed || h.Arm == ArmUnanswered || h.chk.armSeen
+}
+
+// showsConfirmed reports whether the machine's own word makes it confirmed, whatever the panel was answered: a
+// confirmation can arrive twice, and the panel then holds the refusal of the second copy ("already_confirmed"),
+// or no answer at all. word is runWord's: the machine's agent shows THIS run, under the entry the run knows.
+// The binding is strict: the word is "confirmed", a confirmation of this run did leave the panel for this
+// machine (goSent), and the answer that shows it was made after the first of them left. "Confirmed" is never
+// taken from an agent for a run the panel sent it no confirmation of.
+func (h *Host) showsConfirmed(o Observation, word string, mono time.Duration) bool {
+	c := &h.chk
+	return word == BlockConfirmed && c.goSent && !h.confirmed() && mono-o.SeenAgo > c.goSince
+}
+
+// wordConfirmed makes a machine confirmed by its own word (showsConfirmed), and the run with it, by the one
+// whose confirmation left for it. tail ends the line of its history.
+func (m *Manager) wordConfirmed(r *Run, h *Host, now time.Time, tail string) {
+	how := "its agent shows the run as confirmed: the confirmation did arrive"
+	switch {
+	case h.Confirm == ConfirmUnanswered:
+	case h.ConfirmText != "":
+		how = "its agent shows the run as confirmed, although the panel was answered that its confirmation was not accepted (" + h.ConfirmText + "): a confirmation did arrive"
+	default: // not accepted, and offered again since (tryOver)
+		how = "its agent shows the run as confirmed, although the panel was answered that its confirmation was not accepted: a confirmation did arrive"
+	}
+	h.Confirm, h.ConfirmText, h.ConfirmTried, h.grant = ConfirmOK, "", "", &Grant{Run: r.ID}
+	m.note(h, now, how+tail)
+	m.given(r, h.chk.goBy)
+}
+
+// left takes in that a confirmation of the run by by left the panel for the machine at since (steady: the
+// moment before it left).
+func (c *checked) left(by string, since time.Duration) {
+	if !c.goSent {
+		c.goSent, c.goSince = true, since
+	}
+	c.goBy = by
 }
 
 // armedSure: it took the ticket, or its agent showed this run as armed.
@@ -736,11 +780,14 @@ func (m *Manager) BeginConfirm(id, by string, hosts []string) ([]string, error) 
 
 // ConfirmResult is what came of the run's confirmation for one machine.
 type ConfirmResult struct {
-	OK         bool   // the machine accepted it
-	Unanswered bool   // the request left and got no usable answer
-	NotAsked   bool   // nothing was sent to it (Text says why)
-	Reason     string // refused: the machine's word for the rule ("too_late", "run_over", ...)
-	Text       string // for people
+	OK         bool // the machine accepted it
+	Unanswered bool // the request left and got no usable answer
+	NotAsked   bool // nothing was sent to it (Text says why)
+	// Sent (refused): the request left for the machine, and the refusal is the machine's own answer (false: the
+	// panel itself sent nothing). OK and Unanswered always mean that it left.
+	Sent   bool
+	Reason string // refused: the machine's word for the rule (Fairy-agent api.RunReason...)
+	Text   string // for people
 }
 
 // Confirmed tells the run what came of the confirmation for one machine BeginConfirm returned, or, with
@@ -771,11 +818,14 @@ func (m *Manager) Confirmed(id, hostID string, res ConfirmResult) {
 		}
 		c.confirming = false
 		m.done(h)
+		if res.OK || res.Unanswered || res.Sent {
+			c.left(r.Trying, c.confirmMono)
+		}
 		switch {
 		case res.OK:
 			h.Confirm, h.ConfirmText = ConfirmOK, ""
 			h.grant = &Grant{Run: r.ID}
-			m.given(r)
+			m.given(r, r.lastBy)
 			m.emit(EvStep, r, h, "confirm", map[string]any{"to": h.To}, "ok")
 			m.note(h, now, fmt.Sprintf("confirmed by %s: its agent lets one update (%s) and one shutdown of this run through, for %s",
 				r.ConfirmedBy, toWords(h.To), span(time.Duration(r.Ticket.WithinS)*time.Second)))
@@ -785,7 +835,7 @@ func (m *Manager) Confirmed(id, hostID string, res ConfirmResult) {
 			m.note(h, now, "its confirmation got no answer ("+res.Text+"): it may have arrived. It is not sent again; what its agent shows decides")
 		default:
 			h.Confirm, h.ConfirmText = ConfirmRefused, res.Text
-			c.tooLate, c.goReason = res.Reason == "too_late", res.Reason
+			c.tooLate, c.goReason = res.Reason == api.RunReasonTooLate, res.Reason
 			m.emit(EvStep, r, h, "confirm", map[string]any{"to": h.To}, res.Text)
 			m.note(h, now, "its confirmation was not accepted ("+res.Text+")")
 		}
@@ -795,19 +845,20 @@ func (m *Manager) Confirmed(id, hostID string, res ConfirmResult) {
 	}
 }
 
-// given makes the run confirmed, by the first machine that accepted a confirmation: once.
-func (m *Manager) given(r *Run) {
+// given makes the run confirmed, by the first machine that accepted a confirmation (by: whose it was): once.
+func (m *Manager) given(r *Run, by string) {
 	if r.Approval == "given" {
 		return
 	}
-	r.Approval, r.ConfirmedBy, r.Tried = "given", r.lastBy, ""
+	r.Approval, r.ConfirmedBy, r.Tried = "given", by, ""
 	m.dirty = true
 	m.emit(EvApprovalEnd, r, nil, "", nil, "")
 }
 
 // noUseAgain are the machines' reasons for refusing a confirmation after which no other confirmation can help
-// the machine: it is not offered again.
-var noUseAgain = map[string]bool{"too_late": true, "run_over": true, "other_run": true, "confirmed": true}
+// the machine: it is not offered again. The machines' own words (Fairy-agent api.RunReason...), by their
+// constants: the list had "confirmed" where the machines say "already_confirmed".
+var noUseAgain = map[string]bool{api.RunReasonTooLate: true, api.RunReasonOver: true, api.RunReasonOtherRun: true, api.RunReasonConfirmed: true}
 
 // tryOver takes in the end of a confirmation that was on its way (every machine of it has answered, or the
 // run stopped waiting for its answer). If a machine accepted, the run is confirmed and the others stay as
@@ -890,14 +941,13 @@ func (m *Manager) stepAwaiting(ctx context.Context, r *Run, h *Host, info HostIn
 		}
 		c.confirming = false
 		m.done(h)
+		c.left(r.Trying, c.confirmMono) // it may have left
 		h.Confirm, h.ConfirmText = ConfirmUnanswered, "the panel did not learn what came of it"
 		m.note(h, now, "the panel did not learn what came of its confirmation: what its agent shows decides")
 		m.tryOver(r, now)
 	}
-	if h.Confirm == ConfirmUnanswered && word == BlockConfirmed {
-		h.Confirm, h.grant = ConfirmOK, &Grant{Run: r.ID}
-		m.note(h, now, "its agent shows the run as confirmed: the confirmation did arrive")
-		m.given(r)
+	if h.showsConfirmed(o, word, mono) {
+		m.wordConfirmed(r, h, now, "")
 	}
 	if h.confirmed() {
 		m.afterConfirm(r, h, o, now)
@@ -1080,10 +1130,8 @@ func (m *Manager) stepSelfOff(ctx context.Context, r *Run, h *Host, now time.Tim
 	mono := m.mono()
 	o := m.Ops.Observe(h.ID)
 	word := h.runWord(r, o, mono, c.armBefore)
-	if h.Confirm == ConfirmUnanswered && word == BlockConfirmed { // the confirmation arrived after all, in time
-		m.given(r)
-		h.Confirm, h.grant = ConfirmOK, &Grant{Run: r.ID}
-		m.note(h, now, "its agent shows the run as confirmed: the confirmation did arrive, and it is not switching itself off")
+	if h.showsConfirmed(o, word, mono) { // a confirmation arrived after all, in time
+		m.wordConfirmed(r, h, now, ", and it is not switching itself off")
 		m.afterConfirm(r, h, o, now)
 		return
 	}

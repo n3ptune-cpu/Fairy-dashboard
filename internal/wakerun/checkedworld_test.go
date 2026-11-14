@@ -35,6 +35,7 @@ type modelCheck struct {
 	armSays       string // it refuses the ticket with this reason, whatever its rules say
 	goLost        string // the answer to the confirmation is lost: "arrives" | "never"
 	goSays        string // it refuses the confirmation with this reason
+	goTwice       bool   // the confirmation reaches it twice: it takes the first copy, and the panel holds its answer to the second
 	cancelSays    string // its agent answers a cancel with this error (500 / 503): nothing is cancelled
 
 	// its run record
@@ -345,7 +346,7 @@ func (w *world) goNow(mc *machine, run, to string, delay, within time.Duration) 
 		w.t.Errorf("RULE BROKEN: a confirmation request for %s after one it accepted, or one that got no answer", mc.info.ID)
 	}
 	if !w.answers(mc) {
-		return ConfirmResult{Text: "agent unreachable: connection failed"}
+		return ConfirmResult{Text: "agent unreachable: connection failed"} // nothing left the panel
 	}
 	accept := func() string {
 		switch {
@@ -377,8 +378,11 @@ func (w *world) goNow(mc *machine, run, to string, delay, within time.Duration) 
 		}
 		return ConfirmResult{Unanswered: true, Text: "agent unreachable: timeout"}
 	}
+	if c.goTwice {
+		accept()
+	}
 	if why := accept(); why != "" {
-		return ConfirmResult{Reason: why, Text: "run refused (" + why + ")"}
+		return ConfirmResult{Sent: true, Reason: why, Text: "run refused (" + why + ")"}
 	}
 	return ConfirmResult{OK: true}
 }
