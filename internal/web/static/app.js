@@ -2081,8 +2081,8 @@ document.addEventListener("click", (e) => {
   const btn = e.target.closest?.('[data-act="power-day"]');
   if (btn) { if (!btn.disabled) openPowerDay(btn.dataset.source); return; }
   const t = dayRowClick(e);
-  if (!t || t.disabled || e.detail > 1 || daySelected()) return;
-  const open = () => { pday.row = null; if (!daySelected()) openPowerDay(t.dataset.source); };
+  if (!t || t.disabled || e.detail > 1) return;
+  const open = () => { pday.row = null; if (!daySelected()) openPowerDay(t.dataset.source); };  // marked by this click's drag, or since
   if (e.pointerType === "touch" || e.pointerType === "pen") open(); else pday.row = setTimeout(open, DAY_ROW_WAIT);
 });
 document.addEventListener("visibilitychange", () => {  // shown again: what the dialog has is older than a minute

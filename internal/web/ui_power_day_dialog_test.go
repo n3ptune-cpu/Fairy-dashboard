@@ -286,6 +286,9 @@ if (opened() !== 0) fail("the click that ends a drag over text opened the dialog
 selection = "";
 click(cell); selection = "Plug B"; runTimers(false);
 if (opened() !== 0) fail("a click opened the dialog although text was marked before its wait was over");
+// ... also for a finger, whose tap does not wait: marked text (a long press) is not thrown away by the next tap
+click(cell, { pointerType: "touch" });
+if (pending() !== 0 || opened() !== 0) fail("a tap in the row opened the dialog while text was marked");
 selection = "";
 // a click outside of any row
 click(on({})); runTimers(false);

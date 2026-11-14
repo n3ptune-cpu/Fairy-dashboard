@@ -609,3 +609,106 @@ func TestDayFileFromALaterTimeComesInWithoutASampleOfNow(t *testing.T) {
 		t.Errorf("21:59 after one more sample of 20 W: %v, want 35 (the file's 50 and 20)", *s.Avg[599])
 	}
 }
+
+// settled waits for the write or the read the store has on its way.
+func settled(t *testing.T, d *DayStore) {
+	t.Helper()
+	d.mu.Lock()
+	done := d.saving
+	d.mu.Unlock()
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the store's write or read did not end")
+	}
+}
+
+// The edges of the hold of a file from a later time.
+func TestDayFileFromALaterTimeTheEdges(t *testing.T) {
+	// The file is read in the second it was saved at, not a second later.
+	path, was := tenHours(t) // saved at 22:00:00
+	e := loaded(path, at(9, 59, 0))
+	e.SaveIfDue(at(9, 59, 59))
+	settled(t, e)
+	if e.Len() != 0 {
+		t.Fatal("the file was read a second before the clock was at the time it was saved at")
+	}
+	e.SaveIfDue(at(10, 0, 0))
+	settled(t, e)
+	if minutes(e, "plug-a", at(10, 0, 0)) != 600 {
+		t.Errorf("the file was not read when the clock was at the time it was saved at: %d minutes", minutes(e, "plug-a", at(10, 0, 0)))
+	}
+
+	// A host removed while the file waits, and nothing measured meanwhile: when the file has come in it is
+	// written anew, without that host. (Otherwise the next start would bring the host's day back.)
+	f := loaded(path, at(-48, 0, 0))
+	f.Forget("pc-a/", at(-48, 0, 30))
+	f.SaveIfDue(at(10, 0, 30))
+	if !f.Flush(at(10, 0, 31), 5*time.Second) {
+		t.Fatal("not written after the file came in")
+	}
+	if now, _ := os.ReadFile(path); string(now) == string(was) || strings.Contains(string(now), "pc-a/plug-b") || !strings.Contains(string(now), `"plug-a"`) {
+		t.Errorf("the file after it came in with a host removed meanwhile: %.300s", now)
+	}
+
+	// Given up after an hour with nothing measured (a panel without a source that answers): the file is
+	// replaced all the same, so that the next start does not wait an hour again.
+	path, was = tenHours(t)
+	g := loaded(path, at(0, 0, 0))
+	g.SaveIfDue(at(1, 0, 0))
+	if !g.Flush(at(1, 0, 1), 5*time.Second) {
+		t.Fatal("not written when the hold was given up")
+	}
+	if now, _ := os.ReadFile(path); string(now) == string(was) {
+		t.Error("a file that was given up, with nothing measured since, was not replaced")
+	}
+	if h := loaded(path, at(1, 0, 2)); !h.heldUntil.IsZero() {
+		t.Error("the start after that waits for the file again")
+	}
+
+	// The clock goes back during the hold: the hour begins anew from there, and ends an hour later (not when
+	// the clock is back where the start was).
+	path, was = tenHours(t)
+	k := loaded(path, at(0, 0, 0))
+	rec(k, at(-5, 0, 0), 50)
+	k.SaveIfDue(at(-5, 0, 0))
+	rec(k, at(-4, -1, 0), 50)
+	k.SaveIfDue(at(-4, -1, 0))
+	settled(t, k)
+	if now, _ := os.ReadFile(path); string(now) != string(was) {
+		t.Fatal("59 minutes after the clock went back the file was replaced")
+	}
+	rec(k, at(-4, 0, 0), 50)
+	k.SaveIfDue(at(-4, 0, 0))
+	settled(t, k)
+	if now, _ := os.ReadFile(path); string(now) == string(was) {
+		t.Error("an hour after the clock went back the file is still left alone")
+	}
+}
+
+// The hold after a start (no unlisted source goes for a new one) ends a quarter of an hour after a clock that
+// went back, not when the clock is back where the start was.
+func TestDayHoldAfterAStartEndsAlsoWhenTheClockWentBack(t *testing.T) {
+	path := dayPath(t)
+	d := loaded(path, at(0, 0, 0))
+	var ids []string
+	for i := 0; i < 8; i++ {
+		ids = append(ids, names(fmt.Sprintf("pc-%c", 'a'+i), "plug-", 8)...)
+	}
+	d.Record(at(7, 59, 0), dayOf(ids...), nil)
+	saved(t, d, at(8, 0, 0))
+	e := loaded(path, at(8, 0, 10))
+	one := func(now time.Time) bool {
+		e.Record(now, dayOf("pc-new/plug"), listed("pc-new/plug"))
+		return e.Has("pc-new/plug", now)
+	}
+	if one(at(3, 0, 0)) || one(at(3, 14, 59)) {
+		t.Fatal("something went for a new source within a quarter of an hour of the clock's new time")
+	}
+	if !one(at(3, 15, 0)) {
+		t.Error("a quarter of an hour after the clock went back by five hours, a new source still has no place (the hold would last five hours)")
+	}
+}
