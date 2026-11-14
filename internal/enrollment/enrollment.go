@@ -330,6 +330,9 @@ func (m *Manager) Create(ctx context.Context, req Request, existing *managed.Hos
 		if err := managed.Check(cfg, e); err != nil {
 			return Created{}, invalid("%s", strings.TrimSpace(strings.ReplaceAll(err.Error(), "config invalid:\n  -", "")))
 		}
+		if err := m.idFree(h.ID); err != nil { // an added host the running configuration does not have (stored)
+			return Created{}, err
+		}
 	}
 	// One Add host per host at a time, decided here in one step (N4): the host is either waiting already, or
 	// another request for it is between this check and its own entry in the list (making the code means
@@ -640,6 +643,11 @@ func (m *Manager) commit(e *Enrollment, h managed.Host, sec managed.Secret, entr
 	} else if err := managed.Check(m.Hooks.Config(), entry); err != nil {
 		fail("cannot add it: " + err.Error())
 		return false
+	} else if err := m.idFree(h.ID); err != nil {
+		// the id came into the list after the code was made, or the list cannot be read: before Fresh, which
+		// would take out what is kept for the host that has the id
+		fail("cannot add it: " + err.Error() + "; make a new code after that")
+		return false
 	} else if m.Hooks.Fresh != nil {
 		// before the first thing is stored: a host that cannot start clean does not start
 		if err := m.Hooks.Fresh(h); err != nil {
@@ -669,6 +677,35 @@ func (m *Manager) commit(e *Enrollment, h managed.Host, sec managed.Secret, entr
 		return false
 	}
 	return true
+}
+
+// idFree refuses an Add host under an id that the list of added hosts (managed-hosts.yaml) already has.
+//
+// managed.Check asks the running configuration, and that is not the whole list: a host that was added in the
+// panel and that the panel left out at its start (its tokens file is damaged: "Re-pair it"; or its entry no
+// longer passes the check) is in the list and not in the configuration. An Add under its name was accepted
+// like any other. At pairing it took that host's place in the list (Store.Put), and Hooks.Fresh took out what
+// "Edit host" had stored for it, with the audit entry "host added": the changes the README says are kept for
+// its Re-pair (re-review of Edit host round 2, H1). Such a host is the panel's still. It is paired again or
+// removed (both keep or take what is its own, and both ask for its name), never added a second time.
+//
+// A list that cannot be read refuses too: whether the id is free is then not known, and Store.Put would fail
+// at pairing anyway, after Fresh.
+func (m *Manager) idFree(id string) error {
+	if m.Store == nil {
+		return nil
+	}
+	hosts, err := m.Store.Load()
+	if err != nil {
+		return invalid("the list of hosts added in the panel cannot be read (%v): whether the id %s is free is not known, so no host is added. Nothing was stored", err, id)
+	}
+	for _, x := range hosts {
+		if x.ID == id {
+			return invalid("the panel already has a host with the id %s (%s, added with Add host) that is not polled right now: "+
+				"the list of this dialog says why. Re-pair that host, or Remove it first; an Add under its id would take its place. Nothing was stored", id, x.Name)
+		}
+	}
+	return nil
 }
 
 // withoutHost is cfg without the entries a managed host has in it (its agent, its systems: entry, its Proxmox
