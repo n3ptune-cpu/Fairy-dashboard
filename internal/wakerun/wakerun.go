@@ -901,6 +901,16 @@ type StartRequest struct {
 	// and nothing of a run reads the manager's settings, or the panel's, again. A change of a timing while a
 	// run is going counts from the next run.
 	Settings *Settings
+	// Own: the own two timings of machines of the two lists (by id), as the panel read them with Settings, in
+	// the same moment: the numbers its start dialog and its confirmation showed for the machine. A machine
+	// that is in it gets these (0: none of its own, the run's count), not what Ops.Host says a moment later.
+	// nil, or a machine that is not in it: Ops.Host's.
+	Own map[string]HostTimings
+}
+
+// HostTimings are the two timings one machine can have of its own (HostInfo.OffAfter, HostInfo.ShutdownDelay).
+type HostTimings struct {
+	OffAfter, ShutdownDelay time.Duration
 }
 
 // ListHash names a list of machines and options with eight hex digits: the dialog, the audit log and the run
@@ -1031,6 +1041,9 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 			}
 			if !info.OptedIn {
 				return &StartError{Msg: info.Name + " is not switched on for \"Update unpowered hosts\""}
+			}
+			if own, ok := req.Own[id]; ok { // the machine's own timings as the start read and compared them
+				info.OffAfter, info.ShutdownDelay = own.OffAfter, own.ShutdownDelay
 			}
 			o := m.Ops.Observe(id)
 			h := &Host{ID: id, Name: info.Name, Mode: mode, State: StQueued, Since: now, Text: "waiting for its turn", StartStatus: o.Status, Log: []LogLine{}, entry: info.Entry}

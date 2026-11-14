@@ -82,3 +82,54 @@ func TestARunHandedTimingsOutsideTheRangesUsesAndReportsTheDefaults(t *testing.T
 		}
 	}
 }
+
+// A start can hand the run the own two timings of its machines (StartRequest.Own): the numbers the panel
+// read, showed and compared with the run's settings. A machine that is in it gets these, whatever the
+// panel's configuration says for it a moment later (Ops.Host); 0 is "none of its own". A machine that is not
+// in it gets Ops.Host's, as before. The run's own floors hold for both.
+func TestARunTakesAMachinesOwnTimingsFromItsStart(t *testing.T) {
+	val := func(p *int) int {
+		if p == nil {
+			return 0
+		}
+		return *p
+	}
+	set := NewSettings(300, 60, 120, 8)
+	w := newWorld(t)
+	for id, now := range map[string]HostTimings{ // what Ops.Host says when the run is made
+		"pc-none": {OffAfter: 5 * time.Minute, ShutdownDelay: 10 * time.Second},
+		"pc-own":  {},
+		"pc-low":  {OffAfter: 20 * time.Minute, ShutdownDelay: 45 * time.Second},
+		"pc-ops":  {OffAfter: 20 * time.Minute, ShutdownDelay: 45 * time.Second},
+	} {
+		mc := w.off(id)
+		mc.info.OffAfter, mc.info.ShutdownDelay = now.OffAfter, now.ShutdownDelay
+	}
+	own := map[string]HostTimings{ // what the start read and compared
+		"pc-none": {},
+		"pc-own":  {OffAfter: 30 * time.Minute, ShutdownDelay: 5 * time.Minute},
+		"pc-low":  {OffAfter: 5 * time.Second, ShutdownDelay: time.Second}, // below the floors: never used, the run's count
+	}
+	r0 := w.start(StartRequest{Hosts: []string{"pc-none", "pc-own", "pc-low", "pc-ops"}, Settings: &set, Own: own})
+	for id, o := range own { // what the world's judge holds the run to
+		if o.OffAfter < OffAfterFloor {
+			o.OffAfter = 0
+		}
+		if o.ShutdownDelay < DelayFloor {
+			o.ShutdownDelay = 0
+		}
+		w.ms[id].ownAtStart.offAfter, w.ms[id].ownAtStart.delay = o.OffAfter, o.ShutdownDelay
+	}
+	for id, want := range map[string][2]int{"pc-none": {0, 0}, "pc-own": {1800, 300}, "pc-low": {0, 0}, "pc-ops": {1200, 45}} {
+		if h := host(r0, id); val(h.OffAfterS) != want[0] || val(h.ShutdownDelayS) != want[1] {
+			t.Errorf("%s: its own in the run: %d s / %d s, want %d / %d", id, val(h.OffAfterS), val(h.ShutdownDelayS), want[0], want[1])
+		}
+	}
+	w.finish()
+	got := strings.Join(shutdowns(w), ", ")
+	for _, want := range []string{"shutdown pc-none 120", "shutdown pc-own 300", "shutdown pc-low 120", "shutdown pc-ops 45"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the shutdown requests lack %q: %s", want, got)
+		}
+	}
+}

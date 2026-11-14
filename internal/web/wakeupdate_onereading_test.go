@@ -1,9 +1,11 @@
 package web
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 )
 
@@ -92,5 +94,78 @@ func TestAStartDoesNotReadTheTimingsAgainAfterTheyWereCompared(t *testing.T) {
 			t.Fatalf("changed after %q: the run's settings are not the ones that were read and compared with the confirmation: %+v (answered %v)", at, act, res)
 		}
 		f.finish()
+	}
+}
+
+// The same for a machine's OWN two timings: the start reads them with the panel's, makes its stamps and its
+// lines from that reading, and hands them to the run. An Edit host change that lands after the reading (or
+// after the comparison with what was confirmed) counts from the next run: the run has, for the machine, the
+// numbers its confirmation showed.
+func TestARunHasAMachinesOwnTimingsAsTheStartReadAndComparedThem(t *testing.T) {
+	setOwn := func(e *env, id string, r adminstate.RunEdit) {
+		t.Helper()
+		if _, _, err := e.s.Poller.Admin.EditHostOptions("other admin", func(o *adminstate.HostOptions) error {
+			o.SetHost(id, adminstate.HostEdit{Run: r})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		e.s.Poller.Bump()
+	}
+	val := func(p *int) int {
+		if p == nil {
+			return 0
+		}
+		return *p
+	}
+	for _, c := range []struct {
+		what               string
+		before, then       adminstate.RunEdit // pc-a's own at the start's reading; what another admin makes of it afterwards
+		wantOff, wantDelay int                // pc-a's own in the run (0: the run's)
+		line               string             // the confirmation's line about pc-a's own ("": none)
+	}{
+		{"none of its own, then the floors", adminstate.RunEdit{}, adminstate.RunEdit{OffAfterS: 300, ShutdownDelayS: 10}, 0, 0, ""},
+		{"its own, then none", adminstate.RunEdit{OffAfterS: 1800, ShutdownDelayS: 300}, adminstate.RunEdit{}, 1800, 300,
+			"PC-A, its own: counts as off after 30 minutes; shutdown countdown 5 minutes"},
+		{"its own, then the floors", adminstate.RunEdit{OffAfterS: 1800}, adminstate.RunEdit{OffAfterS: 300, ShutdownDelayS: 10}, 1800, 0,
+			"PC-A, its own: counts as off after 30 minutes; shutdown countdown 2 minutes"},
+	} {
+		for _, at := range []string{"read", "checked"} {
+			a := signedIn(t)
+			e := a.e
+			f := newFarm(t, e)
+			f.optIn("pc-a")
+			f.offline()
+			setOwn(e, "pc-a", c.before)
+			seen := 0
+			e.s.wuStartStep = func(step string) {
+				if step == at {
+					if seen++; seen == 2 { // the replay
+						setOwn(e, "pc-a", c.then)
+					}
+				}
+			}
+			page := e.do("GET", "/api/admin/wake-update", nil, "Cookie", a.sess)
+			r := e.wuStart(a.sess, map[string]any{"hosts": []string{"pc-a"}, "timings": shownBy(t, page, "pc-a")})
+			d, _ := r.body["detail"].(map[string]any)
+			items := strs(d["items"])
+			if has := slices.ContainsFunc(items, func(l string) bool { return strings.HasPrefix(l, "PC-A, its own:") }); has != (c.line != "") || (c.line != "" && !slices.Contains(items, c.line)) {
+				t.Fatalf("%s: the confirmation's lines: %q", c.what, items)
+			}
+			if cb := a.confirm(pendingID(r), false); cb.code != 303 || seen != 2 {
+				t.Fatal(c.what, at, cb.code, seen)
+			}
+			act, _ := e.s.WakeRuns.Snapshot()
+			if act == nil || len(act.Hosts) != 1 {
+				res, _ := e.do("GET", "/api/me", nil, "Cookie", a.sess).body["pending_result"].(map[string]any)
+				t.Fatalf("%s, changed after %q: no run: %v", c.what, at, res)
+			}
+			if h := act.Hosts[0]; val(h.OffAfterS) != c.wantOff || val(h.ShutdownDelayS) != c.wantDelay || act.Settings.OffAfterS != 900 || act.Settings.ShutdownDelayS != 120 {
+				t.Errorf("%s, changed after %q: the run has pc-a's own %d s / %d s (the run's: %d / %d), want %d / %d as confirmed (%q)",
+					c.what, at, val(h.OffAfterS), val(h.ShutdownDelayS), act.Settings.OffAfterS, act.Settings.ShutdownDelayS, c.wantOff, c.wantDelay, items)
+			}
+			f.finish()
+			e.s.wuStartStep = nil
+		}
 	}
 }

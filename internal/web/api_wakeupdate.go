@@ -926,16 +926,17 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	}
 	latest := s.latest()
 	// The timings of this run: ONE reading of what is in force now (config.yaml with what was changed in the
-	// panel). The ticket numbers are made from it, the run gets it as its settings, and nothing of the run
+	// panel), and of the own two timings of every listed machine (wuTimesFor). The ticket numbers are made
+	// from it, the run gets it as its settings and as each machine's own timings, and nothing of the run
 	// reads the timings again: a change while the run is going counts from the next run. What is kept for the
 	// confirmation (its lines, its stamp) is made from the same reading (c.wu).
-	times := s.wuTimesNow()
+	times := s.wuTimesFor(b)
 	c.wu = &times
 	s.wuStartAt("read")
 	stamp := s.wuStamp(times, b) // of the same reading: what the replay compares with the kept stamp
 	text, _ := s.wuDescribe(b, hosts, times)
 	req := wakerun.StartRequest{Hosts: b.Hosts, UpdateOnly: b.UpdateOnly, UpdateIfOn: b.UpdateIfOn, By: actorOf(u), BySub: u.Sub, Latest: latest.Version,
-		Settings: &times.set}
+		Settings: &times.set, Own: times.own}
 	params := map[string]any{"hosts": b.Hosts, "update_only": b.UpdateOnly, "update_if_on": b.UpdateIfOn,
 		"list": wakerun.ListHash(b.Hosts, b.UpdateOnly, b.UpdateIfOn), "latest": latest.Version}
 	// The panel's replay of a kept start: the timings must be the ones in force when it was kept, which the

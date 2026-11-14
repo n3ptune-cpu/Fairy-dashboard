@@ -31,6 +31,10 @@ import (
 type wuTimes struct {
 	set         wakerun.Settings
 	confirmWait int // approval.run_approval_wait_s, seconds
+	// own: the own two timings of the machines a start lists (wuTimesFor), read at the same moment. nil: a
+	// reading that is not a start's. A start makes its stamps and its lines from these and hands them to the
+	// run, so the run has, per machine, the numbers that were shown and compared.
+	own map[string]wakerun.HostTimings
 }
 
 // rtConfig is the value config.yaml gives a timing: what the panel was started with.
@@ -117,6 +121,27 @@ func (s *Server) wuTimesWith(o adminstate.RunTimings) wuTimes {
 	return t
 }
 
+// wuTimesFor is the one reading of a start: the timings in force, and the own two timings of every machine
+// the request lists (0: it has none of its own, the panel's count).
+func (s *Server) wuTimesFor(b wuStartBody) wuTimes {
+	t := s.wuTimesNow()
+	t.own = map[string]wakerun.HostTimings{}
+	for _, id := range slices.Concat(b.Hosts, b.UpdateOnly) {
+		off, delay := s.wuTimings(id)
+		t.own[id] = wakerun.HostTimings{OffAfter: off, ShutdownDelay: delay}
+	}
+	return t
+}
+
+// ownOf is the own two timings of the machine shown under id as the reading t has them; for a machine t did
+// not read (t is not a start's reading, or the machine is not in its list), what counts now.
+func (s *Server) ownOf(t wuTimes, id string) (offAfter, shutdownDelay time.Duration) {
+	if o, ok := t.own[id]; ok {
+		return o.OffAfter, o.ShutdownDelay
+	}
+	return s.wuTimings(id)
+}
+
 // ticket is the numbers the two passkeys of a run sign, from the timings t:
 //
 //   - valid_s: approval.TicketValidS, always.
@@ -156,7 +181,7 @@ func (s *Server) wuStamp(t wuTimes, b wuStartBody) string {
 		fmt.Fprintf(&sb, "%s=%d;", tm.Key, t.value(tm.Key))
 	}
 	for _, id := range slices.Concat(b.Hosts, b.UpdateOnly) {
-		own, delay := s.wuTimings(id)
+		own, delay := s.ownOf(t, id)
 		fmt.Fprintf(&sb, "%q=%d/%d;", id, int(own/time.Second), int(delay/time.Second))
 	}
 	return sb.String()
@@ -187,6 +212,10 @@ func (t wuTimes) shown() string {
 // wuHostShown is the stamp of the own two timings of the machine shown under id (0: it has none).
 func (s *Server) wuHostShown(id string) string {
 	own, delay := s.wuTimings(id)
+	return hostShown(id, own, delay)
+}
+
+func hostShown(id string, own, delay time.Duration) string {
 	return shownStamp(fmt.Sprintf("%q=%d/%d;", id, int(own/time.Second), int(delay/time.Second)))
 }
 
@@ -194,7 +223,8 @@ func (s *Server) wuHostShown(id string) string {
 func (s *Server) wuShown(t wuTimes, b wuStartBody) string {
 	parts := []string{t.shown()}
 	for _, id := range slices.Concat(b.Hosts, b.UpdateOnly) {
-		parts = append(parts, s.wuHostShown(id))
+		own, delay := s.ownOf(t, id)
+		parts = append(parts, hostShown(id, own, delay))
 	}
 	return strings.Join(parts, ".")
 }
@@ -211,7 +241,7 @@ func (s *Server) wuTimingLines(b wuStartBody, hosts map[string]wuHost, t wuTimes
 	panelOff, panelDelay := t.value(config.KeyOffAfter), t.value(config.KeyShutdownDelay)
 	lines := []string{fmt.Sprintf("A machine counts as off after %s without an answer; shutdown countdown %s", rtSpan(panelOff), rtSpan(panelDelay))}
 	for _, id := range b.Hosts {
-		own, delay := s.wuTimings(id)
+		own, delay := s.ownOf(t, id)
 		off, d := int(own/time.Second), int(delay/time.Second)
 		if (off == 0 || off == panelOff) && (d == 0 || d == panelDelay) {
 			continue
@@ -257,7 +287,7 @@ func (s *Server) wuStartAt(step string) {
 // shutdownDelayWith is the countdown of the shutdown a run with the timings t asks the machine shown under id
 // for: its own, else t's.
 func (s *Server) shutdownDelayWith(t wuTimes, id string) time.Duration {
-	if _, own := s.wuTimings(id); own > 0 {
+	if _, own := s.ownOf(t, id); own > 0 {
 		return own
 	}
 	return t.set.ShutdownDelay
