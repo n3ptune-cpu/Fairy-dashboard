@@ -291,7 +291,7 @@ func TestDayHasAHardLimitOfSources(t *testing.T) {
 	present := map[string]bool{}
 	var all []DaySample
 	for i := 0; i < MaxDayDevices; i++ {
-		id := fmt.Sprintf("agent-a/plug-%02d", i)
+		id := fmt.Sprintf("agent-%c/plug-%02d", 'a'+i/MaxRemoteSources, i) // four hosts with sixteen each
 		present[id] = true
 		all = append(all, DaySample{ID: id, W: float64(i)})
 	}
@@ -300,12 +300,12 @@ func TestDayHasAHardLimitOfSources(t *testing.T) {
 		t.Fatalf("%d sources", d.Len())
 	}
 	// every one is listed: number 65 gets nothing, again and again, and nothing is taken out for it
-	present["agent-b/new"] = true
+	present["agent-z/new"] = true
 	for i := 0; i < 3; i++ {
-		d.Record(at(0, 1+i, 0), append(all, DaySample{ID: "agent-b/new", W: 1}), present)
+		d.Record(at(0, 1+i, 0), append(all, DaySample{ID: "agent-z/new", W: 1}), present)
 	}
-	if d.Len() != MaxDayDevices || d.Has("agent-b/new", at(0, 3, 0)) {
-		t.Fatalf("with every source listed: %d sources, the new one has a day: %v", d.Len(), d.Has("agent-b/new", at(0, 3, 0)))
+	if d.Len() != MaxDayDevices || d.Has("agent-z/new", at(0, 3, 0)) {
+		t.Fatalf("with every source listed: %d sources, the new one has a day: %v", d.Len(), d.Has("agent-z/new", at(0, 3, 0)))
 	}
 	// two are not listed any more (taken out of the agent's config); 07 was silent longer than 09
 	delete(present, "agent-a/plug-07")
@@ -319,10 +319,10 @@ func TestDayHasAHardLimitOfSources(t *testing.T) {
 		}
 		return out
 	}
-	d.Record(at(0, 5, 0), append(rest("agent-a/plug-07"), DaySample{ID: "agent-b/new", W: 1}), present)
-	if d.Len() != MaxDayDevices || !d.Has("agent-b/new", at(0, 5, 0)) || d.Has("agent-a/plug-07", at(0, 5, 0)) || !d.Has("agent-a/plug-09", at(0, 5, 0)) {
+	d.Record(at(0, 5, 0), append(rest("agent-a/plug-07"), DaySample{ID: "agent-z/new", W: 1}), present)
+	if d.Len() != MaxDayDevices || !d.Has("agent-z/new", at(0, 5, 0)) || d.Has("agent-a/plug-07", at(0, 5, 0)) || !d.Has("agent-a/plug-09", at(0, 5, 0)) {
 		t.Fatalf("the source that left the list first did not make room: 07 %v, 09 %v, new %v",
-			d.Has("agent-a/plug-07", at(0, 5, 0)), d.Has("agent-a/plug-09", at(0, 5, 0)), d.Has("agent-b/new", at(0, 5, 0)))
+			d.Has("agent-a/plug-07", at(0, 5, 0)), d.Has("agent-a/plug-09", at(0, 5, 0)), d.Has("agent-z/new", at(0, 5, 0)))
 	}
 	// a day later every source of before is older than a day: they all go for the first new one
 	d.Record(at(30, 0, 0), []DaySample{{ID: "agent-c/late", W: 2}}, map[string]bool{"agent-c/late": true})
@@ -332,8 +332,8 @@ func TestDayHasAHardLimitOfSources(t *testing.T) {
 	// without a list of what is there (nil), nothing that still has readings is taken out
 	e := NewDayStore()
 	e.Record(at(0, 0, 0), all, nil)
-	e.Record(at(0, 1, 0), []DaySample{{ID: "agent-b/new", W: 1}}, nil)
-	if e.Len() != MaxDayDevices || e.Has("agent-b/new", at(0, 1, 0)) {
+	e.Record(at(0, 1, 0), []DaySample{{ID: "agent-z/new", W: 1}}, nil)
+	if e.Len() != MaxDayDevices || e.Has("agent-z/new", at(0, 1, 0)) {
 		t.Errorf("without a list: %d sources", e.Len())
 	}
 }

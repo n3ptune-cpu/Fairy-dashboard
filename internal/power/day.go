@@ -47,6 +47,9 @@ const (
 	dayMaxAge = 10 * time.Minute
 	// maxDayID is the longest source id that is kept (an agent's id, "/", a device's id: far below it).
 	maxDayID = 200
+	// dayEvictHold is how long after the file was read no source of another host that is not listed is taken
+	// out for a new one (room).
+	dayEvictHold = 15 * time.Minute
 )
 
 // dayBucket is one minute of one source. minute is the Unix minute it is for (0: the slot is empty); n the
@@ -86,6 +89,7 @@ type DayStore struct {
 	writeFile func(path string, data []byte, perm os.FileMode) error
 	saving    chan struct{} // not nil while a write is on its way; closed when it has ended
 	savedAt   time.Time     // when the last write was started (or the file was read)
+	loadedAt  time.Time     // when the file's days came into the store (zero: none did)
 	saveErr   string        // how the last write failed (failure), as it was logged
 }
 
@@ -133,14 +137,15 @@ func (d *DayStore) Record(now time.Time, samples []DaySample, present map[string
 		}
 		dv := d.dev[s.ID]
 		if dv == nil {
-			if !d.room(m, present) {
+			if !d.room(now, m, s.ID, present) {
 				if !d.fullWarned {
 					d.fullWarned = true
-					slog.Warn("power: the last 24 hours are kept for at most this many sources, and every one of them is in use: no day history for the others",
-						"limit", MaxDayDevices, "first_without", s.ID)
+					slog.Warn("power: the last 24 hours are kept for at most this many sources, and for at most this many of one host, and no place can be given to another one now: no day history for the others",
+						"limit", MaxDayDevices, "limit_of_a_host", MaxRemoteSources, "first_without", s.ID)
 				}
 				continue
 			}
+			d.fullWarned = false
 			dv = &dayDevice{b: make([]dayBucket, DaySlots)}
 			d.dev[s.ID] = dv
 		}
@@ -149,38 +154,98 @@ func (d *DayStore) Record(now time.Time, samples []DaySample, present map[string
 	}
 }
 
-// room makes sure one more source fits and reports whether it does. With MaxDayDevices sources there: every
-// source whose newest bucket is older than a day goes; if that frees nothing, the one source that the panel
-// does not list any more (it was taken out of an agent's config, or its id was changed) and whose newest
-// bucket is the oldest. A source that is listed is never taken out for another one. Caller holds d.mu.
-func (d *DayStore) room(m uint32, present map[string]bool) bool {
-	if len(d.dev) < MaxDayDevices {
+// room makes sure the new source id fits and reports whether it does. Caller holds d.mu.
+//
+// Two limits. A host's sources ("<agent id>/...") take at most MaxRemoteSources places, which is as many as a
+// host can have listed: a host that reports new ids all the time takes its own older ones out and nobody
+// else's. And the store has MaxDayDevices places.
+//
+// What goes for a new source, in this order: every source whose newest bucket is older than a day (nothing is
+// lost with it); then one source that the panel does not list any more (it was taken out of an agent's
+// config, its id was changed, or its host is away since the panel started), the one whose newest bucket is
+// the oldest, of the new source's own host first. A source that is listed is never taken out for another
+// one, and without a list (present nil) nothing that still has a day is.
+//
+// Right after a start nearly nothing is listed yet: the panel lists what has answered since, and the day of a
+// plug whose site is away came from the file. So in the first dayEvictHold after the file was read, a source
+// of another host that is not listed is not taken out either: the new source waits, and is tried again with
+// its next sample.
+func (d *DayStore) room(now time.Time, m uint32, id string, present map[string]bool) bool {
+	host := dayHost(id)
+	mine := func() (n int) {
+		if host == "" {
+			return 0
+		}
+		for other := range d.dev {
+			if strings.HasPrefix(other, host) {
+				n++
+			}
+		}
+		return n
+	}
+	fits := func() bool { return len(d.dev) < MaxDayDevices && mine() < MaxRemoteSources }
+	if fits() {
 		return true
 	}
-	for id, dv := range d.dev {
+	for other, dv := range d.dev {
 		if dv.expired(m) {
-			delete(d.dev, id)
+			delete(d.dev, other)
 		}
 	}
-	if len(d.dev) < MaxDayDevices {
-		d.fullWarned = false
+	if fits() {
 		return true
 	}
 	if present == nil {
 		return false
 	}
-	gone, at := "", uint32(math.MaxUint32)
-	for id, dv := range d.dev {
-		if !present[id] && (dv.cur < at || (dv.cur == at && id < gone)) {
-			gone, at = id, dv.cur
+	// the unlisted source that was silent longest: of this host, and of all
+	own, any := "", ""
+	older := func(a, than string) bool {
+		return than == "" || d.dev[a].cur < d.dev[than].cur || (d.dev[a].cur == d.dev[than].cur && a < than)
+	}
+	for other := range d.dev {
+		if present[other] {
+			continue
+		}
+		if host != "" && strings.HasPrefix(other, host) && older(other, own) {
+			own = other
+		}
+		if older(other, any) {
+			any = other
 		}
 	}
-	if gone == "" {
+	switch {
+	case own != "":
+		delete(d.dev, own)
+	case mine() >= MaxRemoteSources: // every one of the host's places is a listed source's
+		return false
+	case any == "" || d.evictHeld(now):
+		return false
+	default:
+		delete(d.dev, any)
+	}
+	return true
+}
+
+// dayHost is the part of a relayed source's id that names its host, with the "/": "pc-a/" of "pc-a/plug-a".
+// A source of config.yaml has none.
+func dayHost(id string) string {
+	if i := strings.IndexByte(id, '/'); i > 0 {
+		return id[:i+1]
+	}
+	return ""
+}
+
+// evictHeld reports whether the file's days were read less than dayEvictHold ago (room). A clock that went
+// back to before that makes the hold begin anew, so that it ends. Caller holds d.mu.
+func (d *DayStore) evictHeld(now time.Time) bool {
+	if d.loadedAt.IsZero() {
 		return false
 	}
-	delete(d.dev, gone)
-	d.fullWarned = false
-	return true
+	if now.Before(d.loadedAt) {
+		d.loadedAt = now
+	}
+	return now.Sub(d.loadedAt) < dayEvictHold
 }
 
 // expired reports whether the source has no bucket in the 24 hours that end with minute m.

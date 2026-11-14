@@ -126,7 +126,7 @@ func (d *DayStore) Load(path string, now time.Time) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.path, d.savedAt = path, now
+	d.path, d.savedAt, d.loadedAt = path, now, now
 	for id, dv := range devs {
 		if _, ok := d.dev[id]; !ok && len(d.dev) < MaxDayDevices {
 			d.dev[id] = dv
