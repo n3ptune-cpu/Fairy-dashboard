@@ -52,6 +52,11 @@ type Request struct {
 	// that was not, once the agent's time for it has passed by the panel's clock). The agent answers a cancel
 	// with "ok" when nothing is pending, so the request is safe either way (second review of fix7a, R7A-09).
 	PendingUnseen bool `json:"-"`
+	// Run, for a shutdown through the system's own agent: the id of the "Update unpowered hosts" run whose
+	// confirmation the machine has accepted (Fairy-agent v0.9.0, "run" of POST /power). It is never read from a
+	// request body, and it is never sent together with an approval: the machine lets the run's one shutdown
+	// through for it, with exactly the delay the confirmation named, or refuses.
+	Run string `json:"-"`
 }
 
 // ErrOtherRoute is Execute's refusal of a request whose OnlyVia is not the route the action would take now.
@@ -505,6 +510,8 @@ func executeViaAgent(ctx context.Context, p *poller.Poller, s model.System, req 
 	body := map[string]any{"action": req.Action, "delay_s": *req.DelayS, "requested_by": requestedBy}
 	if ap != nil && req.Action != "cancel" {
 		body["approval"] = ap
+	} else if req.Run != "" && req.Action == "shutdown" {
+		body["run"] = req.Run
 	}
 	data, err := agentCall(ctx, p, agent, "/power", body)
 	if err != nil {
@@ -652,6 +659,45 @@ func UpdateAgentApproved(ctx context.Context, p *poller.Poller, a config.Agent, 
 		body["approval"] = ap
 	}
 	return agentCall(ctx, p, a, "/update", body)
+}
+
+// UpdateAgentRun is UpdateAgent for the one update of an "Update unpowered hosts" run on a machine that checks
+// approvals itself and has accepted the run's confirmation: the request names the run in the place of an
+// approval (Fairy-agent v0.9.0, "run" of POST /update). The machine installs the version the confirmation
+// named or nothing, once.
+func UpdateAgentRun(ctx context.Context, p *poller.Poller, a config.Agent, requestedBy, run string) (jsonx.M, error) {
+	if p.Admin.ControlDisabled() != nil {
+		return nil, apierr.New(409, "control is disabled by an administrator (fairy admin control enable)")
+	}
+	if !a.SelfUpdate {
+		return nil, apierr.New(409, "self-update is not configured for this agent (self_update: true in its agents: entry)")
+	}
+	if api.CheckRunID(run) != nil {
+		return nil, apierr.New(409, "the update names no run; nothing was sent")
+	}
+	return agentCall(ctx, p, a, "/update", map[string]any{"requested_by": requestedBy, "run": run})
+}
+
+// RunCall sends one of the two requests of a run to a machine that checks approvals itself (POST /run/arm with
+// the ticket, POST /run/go with the confirmation) and says what came of it by the panel's one rule for a
+// request that changes something on a machine (NoAnswer): the agent's own answer with its status, or an error
+// that is an Unanswered (it may have arrived), or the plain error of a request that never left (the kill
+// switch, an agent without a control token: nothing was sent).
+func RunCall(ctx context.Context, p *poller.Poller, a config.Agent, path string, body any) (status int, data jsonx.M, err error) {
+	if path != api.PathRunArm && path != api.PathRunGo {
+		return 0, nil, apierr.New(500, "not a request of a run")
+	}
+	if p.Admin.ControlDisabled() != nil { // the kill switch stops a run's requests like it stops a click
+		return 0, nil, apierr.New(409, "control is disabled by an administrator (fairy admin control enable)")
+	}
+	if !a.HasControl() {
+		return 0, nil, apierr.New(409, "no control token is configured for this agent (control_token_env)")
+	}
+	status, data, err = p.AgentRequest(ctx, a, "POST", path, body)
+	if e := NoAnswer(path, status, data, err); e != nil {
+		return status, nil, e
+	}
+	return status, data, nil
 }
 
 // NoAnswer is the first half of agentCall, for the panel's other requests that change something on a machine
