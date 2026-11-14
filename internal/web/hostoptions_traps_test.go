@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -555,6 +556,15 @@ func TestEditHostStoredChangesWithoutALineCanBeRemoved(t *testing.T) {
 		r.poll()
 		if l, n := left(r, ehNodeA); len(l) != 0 || n != 0.0 {
 			t.Fatalf("while the NAS is silent: %v %v", l, n)
+		}
+		// ... also not after a restart of the panel, when it knows of no device of the NAS at all: what the NAS
+		// reads is not known then, and nothing is offered for removal
+		r = r.again(nil)
+		if g := r.options(ehNodeA); len(g.body["ups"].([]any)) != 0 || len(g.body["plugs"].([]any)) != 0 || len(strs(g.body["leftovers"])) != 0 || g.body["leftover_count"] != 0.0 {
+			t.Fatalf("after a restart with the NAS silent: %s", g.raw)
+		}
+		if p := r.ok(ehNodeA, map[string]any{"leftovers": true}); p.body["message"] != "nothing to change" || r.storedAgent(ehNAS) == nil {
+			t.Fatalf("a removal asked for while the NAS is silent: %s", p.raw)
 		}
 		// it answers, without a UPS and without a plug
 		r.b.Mu.Lock()
@@ -1371,6 +1381,36 @@ func TestEditHostChangesNoControlPath(t *testing.T) {
 	}
 }
 
+// A request is small whatever it holds: each of its three lists takes at most 128 entries. The 129th is
+// refused for that, whoever asks and whatever the entries are; 128 are looked at one by one.
+func TestEditHostARequestHasAtMost128EntriesInAList(t *testing.T) {
+	r := ehSetup(t)
+	list := func(n int, entry func(i int) any) []any {
+		var out []any
+		for i := 0; i < n; i++ {
+			out = append(out, entry(i))
+		}
+		return out
+	}
+	ups := func(i int) any { return ehUPS(fmt.Sprintf("nas-agent/u%d", i), true) }
+	plug := func(i int) any { return map[string]any{"id": fmt.Sprintf("nas-agent/p%d", i), "linked": true} }
+	reset := func(i int) any { return map[string]any{"id": fmt.Sprintf("nas-agent/p%d", i), "field": "plugs"} }
+	for name, entry := range map[string]func(int) any{"ups": ups, "plugs": plug, "reset": reset} {
+		over := r.put(ehNodeB, map[string]any{name: list(maxHostOptionEntries+1, entry)})
+		if over.code != 422 || over.body["detail"] != "too many entries in one request" {
+			t.Errorf("%d entries in %s: %d %s", maxHostOptionEntries+1, name, over.code, over.raw)
+		}
+		// at the limit the entries themselves are looked at: these name devices no agent relays
+		at := r.put(ehNodeB, map[string]any{name: list(maxHostOptionEntries, entry)})
+		if d := fmt.Sprint(at.body["detail"]); at.code != 422 || !strings.HasPrefix(d, "no agent relays the ") {
+			t.Errorf("%d entries in %s: %d %s", maxHostOptionEntries, name, at.code, at.raw)
+		}
+	}
+	if maxHostOptionEntries != 128 || r.storedOptions() != nil {
+		t.Errorf("the limit is %d; stored: %v", maxHostOptionEntries, r.storedOptions())
+	}
+}
+
 // What the API stores is checked by the same check that reads it back (config.LinkProblems): the names and ids
 // of the decisions, and what counts with them laid over config.yaml. A change whose result an agent could not
 // have (a 33rd row for one UPS, a 17th device) is refused, with the reason, and nothing is stored. What that
@@ -1406,11 +1446,17 @@ func TestEditHostRefusesWhatTheSharedCheckWouldIgnore(t *testing.T) {
 			t.Fatalf("%s: refused, and stored: %v", name, r.storedOptions())
 		}
 	}
-	// a refusal is in the audit log as one, never as a change
+	// each refusal is in the audit log as one, with the reason, never as a change: one entry for each
+	refused := map[string]string{}
 	for _, en := range r.auditEntries("", "host.options") {
-		if en["outcome"] == "ok" || !strings.HasPrefix(fmt.Sprint(en["outcome"]), "error 422: ") {
+		if en["outcome"] == "ok" || !strings.HasPrefix(fmt.Sprint(en["outcome"]), "error 422: ") || en["params"].(map[string]any)["machine"] == nil {
 			t.Errorf("audit: %v", en)
 		}
+		refused[fmt.Sprint(en["outcome"])] = fmt.Sprint(en["target"])
+	}
+	if want := map[string]string{"error 422: NAS: ups_powers: UPS rack powers 33 rows, at most 32 are taken": ehNodeB,
+		"error 422: NAS: power_exclude_from_total: 17 devices, and an agent relays at most 16": ehNAS}; !maps.Equal(refused, want) || len(r.auditEntries("", "host.options")) != 2 {
+		t.Errorf("the audit entries of the refusals: %v\nwant %v", refused, want)
 	}
 	// a line that is in order can be changed for the same agent: the desk UPS has room ...
 	p := r.ok(ehNodeB, map[string]any{"ups": []any{ehUPS("nas-agent/desk", true)}})

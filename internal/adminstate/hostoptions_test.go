@@ -607,6 +607,37 @@ func TestHostOptionsKeysOfANewerBuildSurviveASaveAndAReset(t *testing.T) {
 	}
 }
 
+// "by" is a name out of a file: whatever is there, what is read of it is one short line (the dialog shows it
+// as a tooltip, `fairy admin config check` prints it), and what is not a text or a time reads as none.
+func TestHostOptionsWhoAndWhenAreReadAsOneShortLine(t *testing.T) {
+	long := strings.Repeat("n", 5000)
+	for name, c := range map[string]struct{ by, want string }{
+		"long":          {`"` + long + `"`, long[:80] + "…"},
+		"line breaks":   {`"nora\r\nlevel=ERROR msg=made-up\u2028x\u0000y\u007f"`, "nora  level=ERROR msg=made-up x y "},
+		"a short one":   {`"nora@example.com (unverified)"`, "nora@example.com (unverified)"},
+		"not a text":    {`{"name": "nora"}`, ""},
+		"cut in a rune": {`"` + strings.Repeat("é", 60) + `"`, strings.Repeat("é", 40) + "…"},
+	} {
+		d := statefile.Data{}
+		if err := json.Unmarshal([]byte(`{"host_options": {"agents": {"nas": {"power_links": {"plug": "pc"}, "by": `+c.by+`, "at": "2026-11-13T23:40:00Z"}}}}`), &d); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		o, ignored := hostOptions(d)
+		if e := o.For("nas"); e.By != c.want || len(ignored) != 0 || e.At.IsZero() || e.Links["plug"] != "pc" {
+			t.Errorf("%s: by %q (%d bytes), want %q; ignored %q", name, e.By, len(e.By), c.want, ignored)
+		}
+	}
+	// the writer's name is cut the same way before it is stored
+	dir := t.TempDir()
+	after, _, err := New(dir).EditHostOptions(long+"\nx", func(o *HostOptions) error {
+		o.Agents["nas"] = HostOption{Links: map[string]string{"plug": "pc"}}
+		return nil
+	})
+	if err != nil || after.For("nas").By != long[:80]+"…" || readOptions(t, dir)["agents"].(map[string]any)["nas"].(map[string]any)["by"] != long[:80]+"…" {
+		t.Fatalf("written: %q %v", after.For("nas").By, err)
+	}
+}
+
 // Many writers at once, each changing its own thing in the entry of the same agent: every change is there
 // afterwards, the counter counted every write, and the file is whole after each of them. (The lock is the
 // file's: two processes, the panel and a CLI, are held apart by it too.)

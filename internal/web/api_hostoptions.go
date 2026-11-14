@@ -1061,7 +1061,8 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		s.Notes.Add(notifications.Event{Kind: "host_options", Type: "host", Severity: notifications.Info, SystemID: m.row.ID, Host: m.row.Name,
 			Text: "links changed by " + actorOf(u)})
 	}
-	s.Poller.Bump()
+	// Nothing of the poller's picture has changed yet, so nothing is told to rebuild it: the links reach the
+	// rows with the reading agent's next answer, and that poll says so itself.
 	out["message"], out["changed"] = "links saved", lines
 	c.json(200, out)
 	return nil

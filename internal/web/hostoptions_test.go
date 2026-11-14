@@ -473,6 +473,15 @@ func TestEditHostPlugLinksAndTheTotal(t *testing.T) {
 	if ex := fmt.Sprint(r.storedAgent(ehNAS)["power_exclude_from_total"]); ex != "map[b-plug:true]" {
 		t.Fatalf("power_exclude_from_total in state.json: %v", ex)
 	}
+	// the answer of the change, and the dialog's data afterwards, show what counts NOW (not what config.yaml says)
+	for where, x := range map[string]resp{"the answer of the PUT": p, "the next GET": r.options(ehNodeB)} {
+		if bp := ehEntry(t, x, "plugs", "nas-agent/b-plug"); bp["in_total"] != false || bp["total_from"] != "panel" || bp["config_in_total"] != true || bp["total_by"] != ehAdmin {
+			t.Fatalf("b-plug after it was taken out of the total, in %s: %v", where, bp)
+		}
+		if cp := ehEntry(t, x, "plugs", "nas-agent/corner"); cp["in_total"] != false || cp["total_from"] != "config" || cp["config_in_total"] != false {
+			t.Fatalf("the corner plug, which config.yaml leaves out, in %s: %v", where, cp)
+		}
+	}
 	r.poll()
 	if after := total(); before.(float64)-after.(float64) != 200 {
 		t.Fatalf("the total: %v before, %v after b-plug was taken out", before, after)
@@ -495,6 +504,9 @@ func TestEditHostPlugLinksAndTheTotal(t *testing.T) {
 	}
 	if nas := r.storedAgent(ehNAS); fmt.Sprint(nas["power_links"]) != "map[a-plug: b-plug:lab-b-agent]" || nas["power_exclude_from_total"] != nil {
 		t.Fatalf("state.json after the unlink (a-plug: to none; b-plug's place in the total is config.yaml's again): %v", nas)
+	}
+	if bp := ehEntry(t, p, "plugs", "nas-agent/b-plug"); bp["in_total"] != true || bp["total_from"] != "config" || bp["total_by"] != nil {
+		t.Fatalf("b-plug back in the total, in the answer: %v", bp)
 	}
 	r.poll()
 	if ap := ehEntry(t, r.options(ehNodeA), "plugs", "nas-agent/a-plug"); r.row(ehNodeA)["power_w"] != nil || ap["linked"] != false || ap["from"] != "panel" || ap["config_linked"] != true {
@@ -552,12 +564,18 @@ func TestEditHostPlugLinksAndTheTotal(t *testing.T) {
 	if w := r.row(ehNAS)["power_w"]; w != 30.0 {
 		t.Fatalf("the NAS has its own plug back: %v", w)
 	}
-	// not a host, and not there
+	// not a host, and not there: refused, and each refusal is an entry of the audit log about the id that was asked for
+	n := len(r.auditEntries("", "host.options"))
 	if got := r.put("lab-a-qemu-100", map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}}); got.code != 409 {
 		t.Errorf("a VM: %d %s", got.code, got.raw)
 	}
 	if got := r.put("no-such-host", map[string]any{"ups": []any{ehUPS("nas-agent/rack", true)}}); got.code != 404 {
 		t.Errorf("an unknown host: %d %s", got.code, got.raw)
+	}
+	en := r.auditEntries("", "host.options")
+	if len(en) != n+2 || en[0]["target"] != "no-such-host" || en[0]["outcome"] != "error 404: no such host" ||
+		en[1]["target"] != "lab-a-qemu-100" || en[1]["outcome"] != "error 409: only hosts can be edited here (not a VM or a container)" {
+		t.Errorf("the audit entries of the two refusals (%d new): %v", len(en)-n, en[:min(2, len(en))])
 	}
 	if got := r.do("GET", "/api/admin/hosts/lab-a-qemu-100/options", nil, r.hdr[:2]...); got.code != 409 {
 		t.Errorf("GET for a VM: %d", got.code)
