@@ -556,3 +556,28 @@ func TestDayEnergyThroughTheStore(t *testing.T) {
 		t.Errorf("no counter: %+v", c)
 	}
 }
+
+// A counter that starts again leaves one minute behind that has no increase yet (the first value of the new
+// run), and that minute counts with its watts. A few such minutes in a day do not make the day's energy
+// "mixed": the page would say "partly estimated" for a thousandth of it. Above 2 % it does.
+func TestDayEnergyIsTheCountersWhenOnlyMinutesOfItAreEstimated(t *testing.T) {
+	k := func(i int) float64 {
+		if i == 1439 { // the panel was restarted a minute ago, and the counter with it
+			return 0
+		}
+		return 40 + float64(i)*0.002
+	}
+	s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 120 }, k))
+	if s.Energy != "counter" || s.EnergyEstKWh != 0.002 || !near(s.EnergyKWh, 1438*0.002+0.002, 1e-9) {
+		t.Errorf("one estimated minute in a day: %+v", s)
+	}
+	k = func(i int) float64 { // the last hour without a counter value: 4 % of the day
+		if i >= 1380 {
+			return math.NaN()
+		}
+		return 40 + float64(i)*0.002
+	}
+	if s := daySummary(1000, bucketsOf(1440, func(int) float64 { return 120 }, k)); s.Energy != "mixed" || !near(s.EnergyEstKWh, 0.12, 1e-9) {
+		t.Errorf("an estimated hour in a day: %+v", s)
+	}
+}

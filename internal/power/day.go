@@ -391,6 +391,10 @@ func daySummary(start uint32, bs []dayBucket) *model.PowerDaySummary {
 		s.Energy, s.EnergyEstKWh = "estimated", s.EnergyKWh
 	case est <= 1e-9:
 		s.Energy, s.EnergyEstKWh = "counter", 0
+	case est <= energyMixedFrom*total:
+		// a few minutes of watts in a day of counter (the minute a counter starts again in is such a part
+		// until the counter moves): the number is the counter's, and the page does not call it estimated
+		s.Energy = "counter"
 	default:
 		s.Energy = "mixed"
 	}
@@ -412,6 +416,8 @@ const (
 	// energySlackKWh is how far a counter may lag behind half of the watts of the same time and still count:
 	// counters have coarse steps (0.001 kWh and worse).
 	energySlackKWh = 0.1
+	// energyMixedFrom: the energy is called "mixed" when more than this part of it is estimated.
+	energyMixedFrom = 0.02
 )
 
 // dayEnergy is the energy of the day's buckets in kWh, and the part of it that is estimated from the watts
