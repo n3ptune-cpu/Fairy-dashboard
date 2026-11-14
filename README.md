@@ -847,13 +847,64 @@ still be scheduled: send the cancel again"); when it answers that nothing is pen
 that and not "cancelled". Without such a request a cancel is sent only while a countdown shows, as before.
 The panel keeps this in memory: after a restart of the panel Cancel is there again once the countdown shows.
 
-**Update unpowered hosts** does not ask for approvals yet. A machine with the check on is not taken
-into a run: its row says "needs approval: not supported in runs yet", before and after "Switch on", also
-while the machine is off and after a restart of the panel (the panel has it on record). Update it and
-switch it off on its own page. "Switch on" for such a machine asks one question, and it says both things: no
-run can take it for now, and once that is over a run you start may wake, update and switch it off. Nothing
-is switched on before that question was answered (the API refuses the switch with `ask_first` until the
-request says `"asked": true`, or comes back from "Confirm it's you").
+**Update unpowered hosts** takes a machine with the check on when its agent is Fairy-agent v0.9.0 or
+newer (see "Machines with the check in a run" below). A machine with the check on whose agent is older is
+not taken into a run: its row says "needs Fairy-agent v0.9.0 or newer to be in a run",
+before and after "Switch on", also while the machine is off and after a restart of the panel (the panel has
+it on record).
+Update it and switch it off on its own page. "Switch on" for a machine that no run can take asks one
+question, and it says both things: no run can take it for now, and once that is over a run you start may
+wake, update and switch it off. Nothing is switched on before that question was answered (the API refuses
+the switch with `ask_first` until the request says `"asked": true`, or comes back from "Confirm it's you").
+
+#### Machines with the check in a run
+
+A machine that checks passkey approvals itself does nothing for the panel alone, also in a run. A run with
+such machines takes two passkeys:
+
+1. **The start.** The dialog lists every machine with what the passkey signs for it. For a machine that is
+   off, that is a *ticket*: "once up it switches itself off after 960 s (notice 120 s) unless a second
+   passkey confirms: update to *version*, shut down in 120 s". The machine was off, so the ticket answers no
+   question of the machine; what ties it to its machine is the machine id Fairy has on record. For a
+   machine that is on (update only), the passkey answers the machine's own question for its one update.
+2. **The confirmation.** When the woken machines are up, a strip on every page says **Your passkey is
+   needed**, with the names and the time left (10 minutes; `approval.run_approval_wait_s`); the bell, the
+   tab's title and a notification (pushed to ntfy / Discord where that is set up) say the same. One click
+   and one passkey confirm all machines that wait: each is asked for a fresh question for exactly its update
+   (to the version shown) and its shutdown (with the countdown shown), and each checks the answer itself.
+   Only then does the run send the update and the shutdown, once each, and the machine lets them through
+   for 26 minutes.
+
+Nobody confirms: **not confirmed, not updated.** A machine that took its ticket (it is *armed*) switches
+itself off again by itself, with a notice of 2 minutes on its screen; the run's report says "It switched
+itself off again" only when the run saw it go. A machine that was not armed stays ON, and the report says
+so and why. **Keep on** (in the strip, next to the machine's name) calls a machine's switch-off off: it is
+the cancel of the Power menu, and after it Fairy reads what the machine itself says. Only "cancelled" is
+reported as "stays ON"; anything else is "NOT cancelled ... it may switch itself off at HH:MM".
+
+What the panel holds, and for how long: the approval of the start (the ticket) is kept **in the panel's
+memory only**, for at most 7 minutes after the passkey (`valid_s` 420; the machines refuse it after that),
+handed to each machine once and never again, and dropped when every machine had its part, when it is 7
+minutes old, or when the run ends. It is never written to a file (not `wake-update.json`, not
+`state.json`, not the audit log), never logged and never sent to a browser. All a ticket lets its holder do
+is make a machine with the right id that *started after the ticket was signed* switch itself off again;
+Fairy hands it only to a machine that its own run woke, by the same evidence a run needs before it shuts a
+machine down. The approval of the confirmation lives for the one request, as every approval does.
+
+- **A restart of the panel during such a run** forgets the ticket. The run is reported as interrupted, as
+  always, and for every machine the report says what the machine will do: "It was armed: it switches itself
+  off at about HH:MM ... unless that is cancelled", "Fairy does not know whether it is armed", or "it is
+  ON". The strip names the armed machines, with **Keep on**, also when no run is going.
+- **No run with two hosts that share a machine id**, whoever was said to keep the id: a ticket is tied to
+  the id alone. Give one of them its own id (Approvals).
+- **A machine of the wake list that turns out to be on** gets nothing: the ticket is for a machine the run
+  wakes. Update it on its own page.
+- **The elevated helper (Windows)** is what counts a ticket's wait and switches the PC off again. Fairy
+  does not stop it while a run is live on the machine ("Stop helper" is refused, with the reason), and a
+  helper that is stopped during a run is a warning in the machine's row.
+- **The shutdown countdown** of such a machine is at most 10 minutes (`wake_update.shutdown_delay_s`, or
+  its own in `systems:`): a longer one is refused at the start.
+- Machines without the check are in the same run as they always were: one passkey at the start, no wait.
 
 **When something is wrong** the page says which thing, not "failed":
 
