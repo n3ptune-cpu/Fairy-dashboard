@@ -50,6 +50,9 @@ func (p *Poller) machineIDs(id string) []string {
 	return ids
 }
 
+// MachineIDs is every id under which something kept about the machine shown under id is found (machineIDs).
+func (p *Poller) MachineIDs(id string) []string { return p.machineIDs(id) }
+
 // HostEdit returns what was changed in the panel about the machine shown under id, and the id it is kept
 // under (ok false: nothing). An entry is the machine's under every id the machine has.
 func (p *Poller) HostEdit(id string) (key string, e adminstate.HostEdit, ok bool) {

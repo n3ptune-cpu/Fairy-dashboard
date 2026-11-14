@@ -109,8 +109,19 @@ type hoHost struct {
 	baseName string                                                                      // the row's name without the panel's
 	baseWol  *config.Wol                                                                 // the configuration's Wake-on-LAN (nil: none)
 	relays   []hoRelay                                                                   // the agents that may send wake packets, this machine aside
-	taken    map[string]string                                                           // the names of the other hosts, lower case -> the name
+	others   []hoOther                                                                   // the other hosts, for whose names this one must not be taken
+	guests   []hoOther                                                                   // ... and the guests (their names are typed to confirm a shutdown or a stop too)
 	wolWith  func(base *config.Wol, e adminstate.WolEdit) (w *config.Wol, unused string) // poller.WolWith for this machine
+}
+
+// hoOther is another host (or a guest) as far as its name goes: the row it is shown as, the ids under which
+// a name given in the panel is kept for it, and the names the configuration has for it (the row's name
+// without the panel's, and its agent's name: the one it is shown under after a Reset, the other after a
+// restart of the panel while the machine is off).
+type hoOther struct {
+	row   string
+	ids   []string
+	names []string
 }
 
 type hoRelay struct {
@@ -123,7 +134,7 @@ type hoRelay struct {
 func (s *Server) hostOptionsHost(m *hoMachine) *hoHost {
 	p := s.Poller
 	row := m.row.ID
-	h := &hoHost{key: p.HostKey(row), baseName: p.BaseName(row), baseWol: p.ConfigWol(row), taken: map[string]string{},
+	h := &hoHost{key: p.HostKey(row), baseName: p.BaseName(row), baseWol: p.ConfigWol(row),
 		wolWith: func(base *config.Wol, e adminstate.WolEdit) (*config.Wol, string) { return p.WolWith(row, base, e) }}
 	if h.baseName == "" {
 		h.baseName = m.row.Name
@@ -139,11 +150,72 @@ func (s *Server) hostOptionsHost(m *hoMachine) *hoHost {
 		h.relays = append(h.relays, r)
 	}
 	for _, x := range p.Snapshot() {
-		if (x.Kind == "node" || x.Kind == "agent") && x.ID != row && !m.mine(x.ID) {
-			h.taken[strings.ToLower(x.Name)] = x.Name
+		switch {
+		case x.ID == row || m.mine(x.ID):
+		case x.Kind == "node" || x.Kind == "agent":
+			o := hoOther{row: x.ID, ids: p.MachineIDs(x.ID), names: []string{p.BaseName(x.ID)}}
+			for _, id := range o.ids {
+				if a, ok := p.AgentByID(id); ok && a.Name != "" && !slices.Contains(o.names, a.Name) {
+					o.names = append(o.names, a.Name)
+				}
+			}
+			h.others = append(h.others, o)
+		default:
+			h.guests = append(h.guests, hoOther{row: x.ID, names: []string{x.Name}})
+		}
+	}
+	for _, a := range p.Agents() { // an agent that has no row yet (never polled): its name is a host's name all the same
+		if a.Name != "" && !m.mine(a.ID) && !slices.ContainsFunc(h.others, func(o hoOther) bool { return slices.Contains(o.ids, a.ID) }) {
+			h.others = append(h.others, hoOther{row: a.ID, ids: []string{a.ID}, names: []string{a.Name}})
 		}
 	}
 	return h
+}
+
+// A host's name is typed to confirm a power action on it, and a guest's to confirm its shutdown or stop
+// (powerctl.CheckConfirmation). So no two rows that can be asked for may have one name, and "one name" is what
+// a person cannot tell apart (adminstate.NameKey). The names of UPSes and plugs are not in this: nothing is
+// confirmed by typing one, and no action is taken on one by its name.
+//
+// hoName is a name that is taken: whose it is, and how. panel: an admin gave it in the panel (it is what the
+// host is shown under). config: the configuration has it for the host, which is shown under another name
+// right now; it is what a Reset there would show.
+type hoName struct {
+	name, row string
+	guest     bool
+	panel     bool
+	shown     string // for a config name: what the host is shown under now
+}
+
+// names is every name of the other rows under o: by its key, the names that are shown now (shown) and the
+// names the configuration has for hosts that are shown under another one (config). It is asked with what
+// state.json holds at that moment (inside adminstate.EditHostOptions): of two admins who name two hosts at
+// once, the second is told that the name is taken.
+func (h *hoHost) names(o adminstate.HostOptions) (shown, config map[string]hoName) {
+	shown, config = map[string]hoName{}, map[string]hoName{}
+	for _, g := range h.guests {
+		shown[adminstate.NameKey(g.names[0])] = hoName{name: g.names[0], row: g.row, guest: true}
+	}
+	for _, x := range h.others {
+		now, panel := x.names[0], false
+		for _, id := range x.ids { // the entry the poller finds for it (poller.hostEditIn)
+			if e, ok := o.Hosts[id]; ok && !e.Empty() {
+				if e.Name != "" {
+					now, panel = e.Name, true
+				}
+				break
+			}
+		}
+		for _, n := range x.names {
+			if n != "" && adminstate.NameKey(n) != adminstate.NameKey(now) {
+				config[adminstate.NameKey(n)] = hoName{name: n, row: x.row, shown: now}
+			}
+		}
+		if now != "" {
+			shown[adminstate.NameKey(now)] = hoName{name: now, row: x.row, panel: panel}
+		}
+	}
+	return shown, config
 }
 
 func (h *hoHost) relayName(id string) string {
@@ -283,11 +355,28 @@ func (m *hoMachine) applyHost(o *adminstate.HostOptions, req hostOptionsReq) (li
 		if err != nil || name == "" {
 			return nil, nil, bad("name: not a name")
 		}
-		if other, taken := h.taken[strings.ToLower(name)]; taken {
-			return nil, nil, bad("name: another host is called %s already", other)
-		}
 		if e.Name = name; name == h.baseName {
-			e.Name = "" // config.yaml's own name: nothing to keep
+			e.Name = "" // config.yaml's own name: nothing to keep (and the same as a Reset: below)
+		} else {
+			shown, config := h.names(*o)
+			key := adminstate.NameKey(name)
+			if t, taken := shown[key]; taken && t.guest {
+				return nil, nil, bad("name: a guest is called %s already", t.name)
+			} else if taken {
+				return nil, nil, bad("name: another host is called %s already", t.name)
+			}
+			if t, taken := config[key]; taken {
+				return nil, nil, bad("name: %s is the name config.yaml has for another host (shown as %s now): after a Reset there, two hosts would have one name", t.name, t.shown)
+			}
+		}
+	}
+	if was.Name != "" && e.Name == "" {
+		// Back to config.yaml's name, by Reset or by typing it. Another host may have been given that name in the
+		// panel meanwhile: then this one keeps the name it has until that one is renamed. (Two hosts that
+		// config.yaml itself gives one name are config.yaml's, and are not refused here.)
+		shown, _ := h.names(*o)
+		if t, taken := shown[adminstate.NameKey(h.baseName)]; taken && t.panel {
+			return nil, nil, bad("name: config.yaml's name of this host is %s, and another host (%s) was given that name here: rename that host first", h.baseName, t.row)
 		}
 	}
 	if req.Wol != nil {
