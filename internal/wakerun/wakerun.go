@@ -654,6 +654,10 @@ type Host struct {
 	// down; and: it does not switch itself off (any more) by this run's ticket.
 	ArmSeen  bool `json:"arm_seen,omitempty"`
 	Disarmed bool `json:"disarmed,omitempty"`
+	// NoRunSeen: the run has read from its agent, in answers from after the arm request (or from after it was
+	// decided that none goes out), that no run of this run is on it. Only then does a report say of a machine
+	// that was not armed that nothing of the run switches it off.
+	NoRunSeen bool `json:"no_run_seen,omitempty"`
 	// ConfirmTried: a confirmation it did not accept, after which it could be confirmed again ("by Bob was
 	// not accepted (...)"): for its sentence when nobody confirmed after that.
 	ConfirmTried string `json:"confirm_tried,omitempty"`
@@ -802,7 +806,7 @@ func (r *Run) clone() *Run {
 	for i, h := range r.Hosts {
 		hc := *h
 		if h.Checked && !h.Final() { // (an ended machine keeps what it ended with)
-			hc.ArmSeen, hc.Disarmed = h.chk.armSeen, h.chk.disarmed
+			hc.ArmSeen, hc.Disarmed, hc.NoRunSeen = h.chk.armSeen, h.chk.disarmed, h.chk.noRun
 		}
 		hc.Log = slices.Clone(h.Log)
 		c.Hosts[i] = &hc

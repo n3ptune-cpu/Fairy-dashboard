@@ -904,8 +904,9 @@ func (m *Manager) stepAwaiting(ctx context.Context, r *Run, h *Host, info HostIn
 		return
 	}
 	none := h.seeNoRun(o, word)
-	if word != "" {
+	if word != "" && c.noRun != (none >= 2) {
 		c.noRun = none >= 2
+		m.dirty = true // the journal knows that its agent was read (Host.NoRunSeen): the report after a restart goes by it
 	}
 	if was := c.other; true {
 		c.other = h.otherRun(r, o, word, was)

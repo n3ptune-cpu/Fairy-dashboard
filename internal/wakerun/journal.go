@@ -115,6 +115,14 @@ func interrupt(r *Run, now time.Time) {
 				h.Text = "The panel restarted while the run was arming it, or after its arming got no answer. Fairy does not know whether it is armed: if it is, " +
 					interruptedOff(r, h) + " If not, it is ON and stays on. " + notConfirmed
 			}
+		case h.Checked && !h.confirmed() && was == StApproval && !h.NoRunSeen && !h.Disarmed:
+			// Not armed by what the panel was answered (a refusal, or no ticket went out), and the run had not
+			// read from its agent yet that no run is on it: that answer is what decides (a ticket can have
+			// reached it all the same), so the report does not say that it stays on. It says what is not known,
+			// and by when the machine would switch itself off; Keep on asks the machine itself.
+			h.On, h.MayGoOff = OnUnknown, true
+			h.Text = "The panel restarted while it waited for the run's second confirmation. " + notArmedWords(h) + " Fairy had not read from its agent yet that no run is on it, " +
+				"so it does not say that it stays on: if a run is on it all the same, " + interruptedOff(r, h) + " If not, it is ON and stays on. " + notConfirmed
 		case h.Checked && !h.confirmed() && was == StApproval:
 			h.On = OnYes
 			h.Text = "The panel restarted while it waited for the run's second confirmation. " + notArmedWords(h) + " It was ON: nothing of this run switches it off. " + notConfirmed

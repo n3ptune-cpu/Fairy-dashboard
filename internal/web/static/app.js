@@ -1398,7 +1398,7 @@ function runWaitStrips() {
     const when = a.at ? `${a.latest ? "by " : "at "}${rwClock(a.at)}${a.latest ? " at the latest" : ""}${a.by_machine ? " (by its own clock)" : ""}` : "at a time Fairy does not know";
     out.push(`<div class="alert-strip warn static rw" data-key="rw-armed-${esc(a.id)}">${I.onoff}<span class="rw-text"><b>${esc(a.name)}</b>
       <span>${a.sure ? "switches itself off" : "may switch itself off"} ${esc(when)}</span>
-      <span class="note">${a.sure ? "armed by a run" : "its arming got no answer"}</span></span>
+      <span class="note">${a.sure ? "armed by a run" : "not known whether it is armed"}</span></span>
       <button class="btn push" type="button" data-act="rw-keep" data-id="${esc(a.id)}" data-name="${esc(a.name)}">Keep on</button></div>`);
   }
   return out;

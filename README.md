@@ -909,7 +909,9 @@ machine down. The approval of the confirmation lives for the one request, as eve
 - **A restart of the panel during such a run** forgets the ticket. The run is reported as interrupted, as
   always, and for every machine the report says what the machine will do: "It was armed: it switches itself
   off at about HH:MM ... unless that is cancelled", "Fairy does not know whether it is armed", or "it is
-  ON". The strip names the armed machines, with **Keep on**, also when no run is going.
+  ON". "It was ON: nothing of this run switches it off" is said of a machine that was not armed only when
+  the run had read from its agent, before the restart, that no run is on it; otherwise the report says that
+  this is not known, and by when the machine would switch itself off. The strip names the armed machines, with **Keep on**, also when no run is going.
 - **No run with two hosts that share a machine id**, whoever was said to keep the id: a ticket is tied to
   the id alone. Give one of them its own id (Approvals).
 - **A machine of the wake list that turns out to be on** gets nothing: the ticket is for a machine the run

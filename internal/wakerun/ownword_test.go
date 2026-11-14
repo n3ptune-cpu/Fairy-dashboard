@@ -241,3 +241,68 @@ func restarted(w *world) (*Manager, *Run) {
 	}
 	return m2, hist[0]
 }
+
+// After a restart of the panel the report says "It was ON: nothing of this run switches it off" of a machine
+// that was not armed only when the run had read from its agent that no run is on it. A restart between the
+// refused arm and that first read: the journal knows the refusal and nothing else, and the report says that it
+// is not known, with the time by which the machine would switch itself off.
+func TestAfterARestartARefusedArmIsNotSaidToStayOnBeforeItsAgentWasRead(t *testing.T) {
+	arm := func(t *testing.T, set func(pc *machine)) (*world, *machine) {
+		w := newWorld(t)
+		pc := w.checkedOff("pc-a")
+		set(pc)
+		w.start(StartRequest{Hosts: []string{"pc-a"}, Latest: "17-bbbbbbb"})
+		w.waitFor(8*time.Minute, "it waits", func(r *Run) bool { return stateOf(r, "pc-a") == StApproval })
+		return w, pc
+	}
+	for name, c := range map[string]struct {
+		set func(pc *machine)
+		arm string
+		not string
+	}{
+		"its arming was refused":     {func(pc *machine) { pc.chk.armSays = "limits" }, ArmRefused, "It could not be armed (run refused (limits))."},
+		"it was not handed a ticket": {func(pc *machine) { pc.guests, pc.guestNames = 1, "vm-1" }, ArmNotSent, "It was not armed (1 guest is running on it (vm-1))."},
+	} {
+		t.Run(name+", restart before its agent was read", func(t *testing.T) {
+			w, _ := arm(t, c.set)
+			m2, r := restarted(w)
+			h := host(r, "pc-a")
+			latest := clock(r.StartedAt.Add(r.Ticket.valid() + lateArm + r.Ticket.wait() + selfOffLate))
+			want := "The panel restarted while it waited for the run's second confirmation. " + c.not + " Fairy had not read from its agent yet that no run is on it, so it does not say that it stays on: " +
+				"if a run is on it all the same, it switches itself off by about " + latest + " at the latest, with a notice of 2 min, unless that is cancelled (Keep on in the panel, or at the machine). " +
+				"If not, it is ON and stays on. Not confirmed, not updated."
+			if h.Arm != c.arm || h.NoRunSeen || h.State != StInterrupted || h.Text != want {
+				t.Fatalf("arm %q, no_run_seen %v, %s:\n got %q\nwant %q", h.Arm, h.NoRunSeen, h.State, h.Text, want)
+			}
+			if a := named(m2.MayGoOff(w.now), "pc-a"); !h.MayGoOff || h.On != OnUnknown || a == nil || a.Sure || !a.Latest || a.At == nil {
+				t.Fatalf("may_go_off %v, on %q, the strip's list: %+v", h.MayGoOff, h.On, a)
+			}
+		})
+		t.Run(name+", restart after its agent showed no run", func(t *testing.T) {
+			w, pc := arm(t, c.set)
+			w.advance(30 * time.Second)
+			m2, r := restarted(w)
+			h := host(r, "pc-a")
+			want := "The panel restarted while it waited for the run's second confirmation. " + c.not + " It was ON: nothing of this run switches it off. Not confirmed, not updated."
+			if !h.NoRunSeen || h.Text != want || h.MayGoOff || h.On != OnYes {
+				t.Fatalf("no_run_seen %v, may_go_off %v, on %q:\n got %q\nwant %q", h.NoRunSeen, h.MayGoOff, h.On, h.Text, want)
+			}
+			if a := named(m2.MayGoOff(w.now), "pc-a"); a != nil {
+				t.Fatalf("the strip's list names it: %+v", a)
+			}
+			w.advance(40 * time.Minute)
+			if !pc.on {
+				t.Fatal("the model: it went off")
+			}
+		})
+	}
+	// its checker never says anything about runs: never read, so never "nothing of this run switches it off"
+	t.Run("its agent never says, restart minutes later", func(t *testing.T) {
+		w, _ := arm(t, func(pc *machine) { pc.chk.armSays, pc.chk.noRuns = "limits", true })
+		w.advance(3 * time.Minute)
+		_, r := restarted(w)
+		if h := host(r, "pc-a"); h.NoRunSeen || !h.MayGoOff || strings.Contains(h.Text, "nothing of this run switches it off") || !strings.Contains(h.Text, "Fairy had not read from its agent yet that no run is on it") {
+			t.Fatalf("no_run_seen %v, may_go_off %v: %q", h.NoRunSeen, h.MayGoOff, h.Text)
+		}
+	})
+}

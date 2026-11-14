@@ -146,7 +146,7 @@ const click = (dataset) => listeners.click({ target: { closest: () => ({ dataset
   const [a, b, ...more] = runWaitStrips();
   if (more.length || document.title !== "Overview · Fairy") fail("after the question: " + more.length + " more strips, " + document.title);
   if (words(a) !== "PC-A switches itself off at " + clock + " (by its own clock) armed by a run Keep on") fail("the armed machine: " + words(a));
-  if (words(b) !== "PC-B may switch itself off by " + clock + " at the latest its arming got no answer Keep on") fail("the machine whose arming is not known: " + words(b));
+  if (words(b) !== "PC-B may switch itself off by " + clock + " at the latest not known whether it is armed Keep on") fail("the machine whose arming is not known: " + words(b));
   if (!a.includes('data-act="rw-keep" data-id="pc-a" data-name="PC-A"')) fail("Keep on: " + a);
   answer = () => ({ now: at, armed: [{ run, id: "pc-a", name: "PC-A", sure: true }] });
   await fetchRunWait();
