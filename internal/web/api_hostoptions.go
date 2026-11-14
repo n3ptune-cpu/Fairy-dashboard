@@ -1266,8 +1266,11 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	var removed int
 	runGoing := false // a run is going while one of the machine's own run timings is changed
 	// One locked read-modify-write: the ticks are applied to what state.json holds at that moment.
-	after, changed, err := s.Poller.Admin.EditHostOptions(actorOf(u), func(o *adminstate.HostOptions) error {
+	// What a machine's own run timing is compared with (the panel's timing, where the machine has no block) is
+	// the one the same reading of the file holds.
+	after, changed, err := s.Poller.Admin.EditHostOptionsWith(actorOf(u), func(o *adminstate.HostOptions, panel adminstate.RunTimings) error {
 		before := o.Clone()
+		m.host.run = s.hostRunBasesWith(m.row.ID, panel)
 		var err error
 		if lines, changes, removed, err = m.apply(o, req); err == nil {
 			if notes = m.visibility(before, *o); site != nil {

@@ -135,10 +135,20 @@ func (b hoRunBase) value() (int, string) {
 	return b.panel, "run"
 }
 
-// hostRunBases collects hoRunBase for the two timings of the machine shown under row.
+// hostRunBases collects hoRunBase for the two timings of the machine shown under row, as the panel reads its
+// run timings now: for the dialog's data and for the lines of a confirmation. A save does not use this
+// reading (hostRunBasesWith).
 func (s *Server) hostRunBases(row string) map[string]hoRunBase {
+	return s.hostRunBasesWith(row, s.Poller.Admin.RunTimings())
+}
+
+// hostRunBasesWith is hostRunBases when the panel's store of run timings holds panel. A save asks with what
+// state.json holds inside the lock of its own write (adminstate.EditHostOptionsWith): whether a number is
+// "what counts anyway" (not stored) or a decision (stored) is then decided against the panel's timing that
+// is in the file at the moment of the write, not one that was read before and changed since.
+func (s *Server) hostRunBasesWith(row string, panel adminstate.RunTimings) map[string]hoRunBase {
 	off, delay := s.Poller.ConfigWakeUpdate(row)
-	times := s.wuTimesNow()
+	times := s.wuTimesWith(panel)
 	return map[string]hoRunBase{
 		config.KeyOffAfter:      {config: off, panel: times.value(config.KeyOffAfter)},
 		config.KeyShutdownDelay: {config: delay, panel: times.value(config.KeyShutdownDelay)},

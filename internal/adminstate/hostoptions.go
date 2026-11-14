@@ -657,10 +657,19 @@ func (a *State) hostOptionsWarn(ignored []string) {
 // dropped by the same write, as SetHostModel does; what is under a key this build does not know is written
 // back as it was.
 func (a *State) EditHostOptions(by string, fn func(o *HostOptions) error) (after HostOptions, changed bool, err error) {
+	return a.EditHostOptionsWith(by, func(o *HostOptions, _ RunTimings) error { return fn(o) })
+}
+
+// EditHostOptionsWith is EditHostOptions for a change that depends on the panel's run timings (a machine's
+// own run timing is stored only when it differs from what counts for the machine anyway, and that can be the
+// panel's timing): fn also gets the run timings the SAME reading of state.json holds, under the same lock.
+// Nobody can change them between fn's look at them and the write.
+func (a *State) EditHostOptionsWith(by string, fn func(o *HostOptions, panel RunTimings) error) (after HostOptions, changed bool, err error) {
 	_, err = statefile.Update(a.StatePath, func(d statefile.Data) error {
 		cur, _ := hostOptions(d)
 		before := cur.Clone()
-		if err := fn(&cur); err != nil {
+		panel, _ := runTimings(d)
+		if err := fn(&cur, panel); err != nil {
 			return err
 		}
 		now := time.Now().UTC().Truncate(time.Second)
