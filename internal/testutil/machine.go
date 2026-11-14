@@ -25,11 +25,21 @@ type Machine struct {
 	// TrustPath is the machine's trust file.
 	TrustPath string
 
-	mu     sync.Mutex
-	passed []Sent // control requests the gate let through, in order
-	asked  []Sent // every request the panel sent (also refused ones), with its body
-	now    func() time.Time
-	uptime time.Duration
+	// Runs is set for a machine whose checker takes runs (NewRunMachine): Fairy-agent's real run watch.
+	Runs *approval.RunWatch
+	// PowerPending says whether a power action is pending on the machine (nil: none), and OnSelfOff is told
+	// when the run watch schedules the self-switch-off (the countdown in seconds). Both are the test's.
+	PowerPending func() bool
+	OnSelfOff    func(delay time.Duration)
+
+	mu       sync.Mutex
+	passed   []Sent // control requests the gate let through, in order
+	asked    []Sent // every request the panel sent (also refused ones), with its body
+	now      func() time.Time
+	uptime   time.Duration
+	uptimeFn func() time.Duration
+	boot     string
+	runs     bool
 }
 
 // Sent is one request the panel sent to a machine.
@@ -48,6 +58,65 @@ func NewMachine(t testing.TB, id string) *Machine {
 		Now:    func() time.Time { m.mu.Lock(); defer m.mu.Unlock(); return m.now() },
 		Uptime: func() (time.Duration, error) { m.mu.Lock(); defer m.mu.Unlock(); return m.uptime, nil }})
 	return m
+}
+
+// NewRunMachine is NewMachine for a machine whose checker takes the ticket and the confirmation of a run
+// (Fairy-agent v0.9.0: "runs" in its approval block), through the agent's real gate and run watch. Its uptime
+// is ten seconds until the test says otherwise (SetUptime): a machine that has just started.
+func NewRunMachine(t testing.TB, id string) *Machine {
+	t.Helper()
+	m := &Machine{ID: id, TrustPath: filepath.Join(t.TempDir(), approval.TrustFileName), now: time.Now, uptime: 10 * time.Second, boot: "boot-1", runs: true}
+	m.Restart()
+	return m
+}
+
+// Restart is the machine's agent starting anew (a process does not outlive a boot): a new gate and a new run
+// watch on the same files. With SetBoot before it, it is a new boot.
+func (m *Machine) Restart() {
+	gate := approval.NewGate(approval.Options{Files: approval.Files{Path: m.TrustPath}, EnforcedBy: api.EnforcedByAgent, Runs: m.runs, MinDelayS: 10,
+		Now: func() time.Time { m.mu.Lock(); defer m.mu.Unlock(); return m.now() },
+		Uptime: func() (time.Duration, error) {
+			m.mu.Lock()
+			fn, up := m.uptimeFn, m.uptime
+			m.mu.Unlock()
+			if fn != nil {
+				return fn(), nil
+			}
+			return up, nil
+		},
+		BootID: func() (string, error) { m.mu.Lock(); defer m.mu.Unlock(); return m.boot, nil }})
+	watch := approval.NewRunWatch(gate, approval.RunHooks{
+		Pending: func() bool { return m.PowerPending != nil && m.PowerPending() },
+		Shutdown: func(delay time.Duration, _, _ string) error {
+			if m.OnSelfOff != nil {
+				m.OnSelfOff(delay)
+			}
+			return nil
+		},
+		Cancel: func() error { return nil }})
+	m.mu.Lock()
+	m.Gate, m.Runs = gate, watch
+	m.mu.Unlock()
+}
+
+// SetUptime makes the machine's uptime what fn says, and SetBoot names its boot.
+func (m *Machine) SetUptime(fn func() time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.uptimeFn = fn
+}
+
+func (m *Machine) SetBoot(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.boot = id
+}
+
+// SetNow sets the machine's clock alone.
+func (m *Machine) SetNow(now func() time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.now = now
 }
 
 // SetClock sets the machine's clock and uptime.
@@ -73,7 +142,10 @@ func (m *Machine) Asked() []Sent {
 
 // Block is the machine's "approval" block for /metrics.
 func (m *Machine) Block() jsonx.M {
-	raw, _ := json.Marshal(m.Gate.StatusNow())
+	m.mu.Lock()
+	gate := m.Gate
+	m.mu.Unlock()
+	raw, _ := json.Marshal(gate.StatusNow())
 	out := jsonx.M{}
 	_ = json.Unmarshal(raw, &out)
 	return out
@@ -102,6 +174,9 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 	}
 	refusal := func(r *approval.Refusal) (bool, int, jsonx.M, func()) {
 		out := jsonx.M{"error": r.Msg, "code": r.Code}
+		if r.Reason != "" {
+			out["reason"] = r.Reason
+		}
 		if r.RetryAfterS > 0 {
 			out["retry_after_s"] = float64(r.RetryAfterS)
 		}
@@ -135,7 +210,32 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 		_ = json.Unmarshal(b, &out)
 		return true, 200, out, nil
 	}
+	if m.Runs != nil && (path == api.PathRunArm || path == api.PathRunGo) {
+		answer := func(ans api.RunAnswer, ref *approval.Refusal) (bool, int, jsonx.M, func()) {
+			if ref != nil {
+				return refusal(ref)
+			}
+			out := jsonx.M{}
+			b, _ := json.Marshal(ans)
+			_ = json.Unmarshal(b, &out)
+			rec.Approved = true
+			return true, 200, out, nil
+		}
+		if path == api.PathRunArm {
+			var in api.RunArm
+			if !strict(&in) || in.Approval == nil {
+				return true, 400, jsonx.M{"error": "a run ticket is an approval: the body needs \"approval\""}, nil
+			}
+			return answer(m.Runs.Arm(in.Approval))
+		}
+		var in api.RunGo
+		if !strict(&in) || in.ShutdownDelayS == nil || in.WithinS == nil {
+			return true, 400, jsonx.M{"error": "not a run confirmation"}, nil
+		}
+		return answer(m.Runs.Go(in.Request(), in.Approval))
+	}
 	var b struct {
+		Run      string        `json:"run"`
 		Action   string        `json:"action"`
 		DelayS   *int          `json:"delay_s"`
 		Mode     *string       `json:"mode"`
@@ -158,8 +258,24 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 		req = api.ApprovalRequest{Verb: api.ApproveFanSet, Zone: b.Zone, Percent: b.Percent}
 	case path == "/update":
 		req = api.ApprovalRequest{Verb: api.ApproveApplyUpdate}
+	case path == "/power" && b.Action == "cancel" && m.Runs != nil:
+		// as the agent: a cancel ends the run this machine is in, then stops what is pending
+		if _, err := m.Runs.Cancel("a cancel of the pending power action (POST /power)"); err != nil {
+			return true, 500, jsonx.M{"error": "the end of the run could not be written down; cancel again"}, nil
+		}
+		return false, 0, nil, nil
 	default:
 		return false, 0, nil, nil // cancel, wake, ...: nothing to check
+	}
+	if b.Run != "" && b.Approval == nil && m.Runs != nil && (path == "/update" || b.Action == "shutdown") {
+		// the one update and the one shutdown of a confirmed run: looked at, then used up, as the agent does
+		if _, ref := m.Gate.RunCovers(req, b.Run); ref != nil {
+			return refusal(ref)
+		}
+		if _, ref := m.Gate.AdmitRun(req, b.Run); ref != nil {
+			return refusal(ref)
+		}
+		return false, 0, nil, nil
 	}
 	// the agent's two questions: when the request arrives (nothing is used up), and when it is carried out
 	if ref := m.Gate.Precheck(req, b.Approval != nil); ref != nil {
@@ -193,6 +309,15 @@ func NewGatedBackend(b *Backend) *GatedBackend {
 // go through the machine's gate.
 func (g *GatedBackend) Add(t testing.TB, id string) *Machine {
 	m := NewMachine(t, id)
+	g.mu.Lock()
+	g.machines[id] = m
+	g.mu.Unlock()
+	return m
+}
+
+// AddRuns is Add for a machine whose checker takes runs (NewRunMachine).
+func (g *GatedBackend) AddRuns(t testing.TB, id string) *Machine {
+	m := NewRunMachine(t, id)
 	g.mu.Lock()
 	g.machines[id] = m
 	g.mu.Unlock()
