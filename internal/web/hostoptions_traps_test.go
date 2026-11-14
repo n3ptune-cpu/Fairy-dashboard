@@ -671,7 +671,13 @@ func TestEditHostAHostAddedUnderAnIdWithStoredChangesStartsClean(t *testing.T) {
 	e.s.Enroll.Interval = 10 * time.Millisecond
 	e.s.control, e.s.adminRL = newRateLimiter(1000), newRateLimiter(1000)
 	e.s.Enroll.PanelAddr = "100.64.0.10"
+	// the machine answers the pairing only when the test lets it: until then there is a join code and nothing else
+	answer := make(chan struct{})
+	var once sync.Once
+	letItAnswer := func() { once.Do(func() { close(answer) }) }
+	t.Cleanup(letItAnswer)
 	e.s.Enroll.Pair = func(context.Context, string, []byte) (int, enroll.Response, string, error) {
+		<-answer
 		return 200, enroll.Response{AgentVersion: "42-abc", Platform: "linux", Token: "boxa-read-token-xxxxxxxxxxxxxxxxx",
 			ControlToken: "boxa-control-token-yyyyyyyyyyyyyyy"}, "", nil
 	}
@@ -699,9 +705,11 @@ func TestEditHostAHostAddedUnderAnIdWithStoredChangesStartsClean(t *testing.T) {
 	if p.code != 201 {
 		t.Fatal(p.code, string(p.raw))
 	}
+	time.Sleep(50 * time.Millisecond) // the pairing has asked the machine by now (every 10 ms), and waits for it
 	if e.storedAgent("box-a") == nil {
 		t.Fatal("a join code alone (no machine has answered) took the stored changes out")
 	}
+	letItAnswer()
 	for i := 0; ; i++ {
 		time.Sleep(10 * time.Millisecond)
 		e.s.Poller.PollOnce(context.Background())
