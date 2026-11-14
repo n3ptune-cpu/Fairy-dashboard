@@ -682,3 +682,40 @@ func powerSourceForTest(t *testing.T, typ string, watts float64) {
 	}
 	t.Cleanup(func() { delete(powersrc.Extra, typ) })
 }
+
+// Nothing writes the file behind a caller's back before a period has passed. A panel that runs for less than
+// five minutes (every test that makes a poller) starts no write that could still be going when it ends: such a
+// write put a file into a test's folder while the folder was being removed (seen once in a full run, in a test
+// of Edit host's Remove; Forget used to ask for a write with the next tick).
+func TestDayFileIsNotWrittenBehindACallersBackWithinAPeriod(t *testing.T) {
+	path := dayPath(t)
+	d := loaded(path, at(0, 0, 0))
+	var started atomic.Int32
+	real := d.writeFile
+	d.writeFile = func(p string, b []byte, m os.FileMode) error { started.Add(1); return real(p, b, m) }
+	for i := 0; i < 59; i++ { // 4 min 55 s of ticks, with a host removed in the middle
+		now := at(0, 0, i*5)
+		d.Record(now, []DaySample{{ID: "pc-a/plug-a", W: 1}}, nil)
+		if i < 30 {
+			d.Record(now, []DaySample{{ID: "pc-b/plug-b", W: 2}}, nil)
+		}
+		if i == 30 && !d.Forget("pc-b/") {
+			t.Fatal("nothing was forgotten")
+		}
+		d.SaveIfDue(now)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if started.Load() != 0 {
+		t.Fatalf("%d writes were started within the first period", started.Load())
+	}
+	if _, err := os.Lstat(path); err == nil {
+		t.Fatal("the file was written")
+	}
+	// what was forgotten is written when the caller says so, and is done when Flush returns
+	if !d.Flush(at(0, 4, 56), 10*time.Second) || started.Load() != 1 {
+		t.Fatalf("Flush: %d writes", started.Load())
+	}
+	if e := loaded(path, at(0, 5, 0)); e.Has("pc-b/plug-b", at(0, 5, 0)) || !e.Has("pc-a/plug-a", at(0, 5, 0)) {
+		t.Error("the file after the Flush still has the forgotten host's source, or lacks the other")
+	}
+}

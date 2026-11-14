@@ -43,8 +43,10 @@ import (
 //     and writes them (statefile.WriteAtomic: a temporary file, synced, renamed). At most one write is on its
 //     way: while one hangs on a dead disk no other is started, and nothing waits for it. A write that fails is
 //     logged once per error text and tried again with the next one.
-//   - When: every daySaveEvery while something changed, soon after a host's sources were forgotten, and when
-//     the panel stops (Flush, which waits for it, with an end).
+//   - When: every daySaveEvery while something changed, and when the panel stops and when a host is removed
+//     (Flush, which waits for the write, with an end: neither is the poller's own time). A write that nobody
+//     waits for is started only by the history tick, and only after daySaveEvery: a program that runs for
+//     less than that (a test) never has one going when it ends.
 const (
 	// DayFile is the file's name in the data folder.
 	DayFile = "power-day.json"

@@ -284,20 +284,21 @@ func (d *DayStore) Len() int {
 }
 
 // Forget drops the day of every source whose id starts with prefix (a host was removed: its devices'
-// "<agent id>/"), and has the file written with the next history tick.
-func (d *DayStore) Forget(prefix string) {
+// "<agent id>/") and reports whether there was one. The file still has them until it is written again: the
+// caller writes it (Flush), as Poller.RemoveAgent does.
+func (d *DayStore) Forget(prefix string) (dropped bool) {
 	if prefix == "" {
-		return
+		return false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for id := range d.dev {
 		if strings.HasPrefix(id, prefix) {
 			delete(d.dev, id)
-			d.dirty = true
-			d.savedAt = time.Time{}
+			d.dirty, dropped = true, true
 		}
 	}
+	return dropped
 }
 
 // Series is GET /api/power/day for one source: its last 24 hours as lists, and the day in numbers.

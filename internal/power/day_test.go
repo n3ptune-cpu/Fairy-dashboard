@@ -342,11 +342,12 @@ func TestDayHasAHardLimitOfSources(t *testing.T) {
 func TestDayForgetsAHostsSources(t *testing.T) {
 	d := NewDayStore()
 	d.Record(at(0, 0, 0), []DaySample{{ID: "pc-a/plug-a", W: 1}, {ID: "pc-a/plug-b", W: 1}, {ID: "pc-ab/plug-a", W: 1}, {ID: "pc-a", W: 1}, {ID: "plug-a", W: 1}}, nil)
-	d.Forget("")
-	if d.Len() != 5 {
-		t.Fatal("Forget without a prefix dropped something")
+	if d.Forget("") || d.Forget("pc-z/") || d.Len() != 5 {
+		t.Fatal("Forget without a prefix, or of a host that has no source, dropped something")
 	}
-	d.Forget("pc-a/")
+	if !d.Forget("pc-a/") {
+		t.Fatal("Forget does not say that it dropped the host's sources")
+	}
 	for id, want := range map[string]bool{"pc-a/plug-a": false, "pc-a/plug-b": false, "pc-ab/plug-a": true, "pc-a": true, "plug-a": true} {
 		if d.Has(id, at(0, 0, 30)) != want {
 			t.Errorf("%s after the host pc-a was removed: has a day %v, want %v", id, !want, want)

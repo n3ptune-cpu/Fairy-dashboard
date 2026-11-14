@@ -660,7 +660,11 @@ func (p *Poller) RemoveAgent(id string) {
 		p.flushSeen()
 	}
 	p.Power.UpdateRemote(id, nil, false, nil, nil)
-	p.Power.Day.Forget(id + "/") // and their last 24 hours: a host added later under the same id starts with empty graphs
+	// and their last 24 hours, in memory and in the file (written here and waited for, with an end, like the
+	// last-seen time above): a host added later under the same id starts with empty graphs
+	if p.Power.Day.Forget(id + "/") {
+		p.Power.Day.Flush(time.Now(), dayFlushWait)
+	}
 	p.UPS.UpdateFromAgent(id, nil, false, nil, nil)
 }
 
