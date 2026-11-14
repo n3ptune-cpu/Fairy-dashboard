@@ -167,3 +167,61 @@ func TestAnArmedMachineThatGoesSilentWhileItCountsDownIsOff(t *testing.T) {
 		t.Fatalf("[%s] power %q: %s (the machine is on: %v)", h.State, h.On, h.Text, pc.on)
 	}
 }
+
+// One answer without the countdown after its time is not "up after its countdown" when the same countdown
+// shows again (a hiccup of the agent, which shows a shutdown for a minute after its time): the machine that
+// then goes off is "switched off again".
+func TestAHiccupAfterTheCountdownsTimeDoesNotTakeOffAway(t *testing.T) {
+	w := newWorld(t)
+	pc := w.off("pc-a")
+	pc.shutMode = "ignore" // the system goes down some seconds after the countdown's time (below)
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	due := *host(active(w), "pc-a").ShutdownAt
+	var r *Run
+	for i := 0; i < 900 && r == nil; i++ {
+		tickShown(w, func() {
+			since := w.now.Sub(due)
+			if pc.obs.Online && since >= 0 && since < 10*time.Second && since != 3*time.Second { // still shown after its time, but for one answer
+				pc.obs.Pending = &Pending{Action: "shutdown", At: due}
+			}
+			if since >= 9*time.Second && pc.on { // its last answer, nine seconds after its time, still shows the countdown
+				pc.on, pc.wentOff, pc.offAt = false, true, w.now
+			}
+		})
+		if a, hist := w.m.Snapshot(); a == nil {
+			r = hist[0]
+		}
+	}
+	if r == nil {
+		t.Fatal("the run did not end")
+	}
+	if h := host(r, "pc-a"); h.State != StOff || h.On != OnNo || !strings.HasSuffix(h.Text, "and switched off again.") {
+		t.Fatalf("[%s] power %q: %s", h.State, h.On, h.Text)
+	}
+}
+
+// In the watch of its own switch-off: a machine whose last answer still showed the run as armed (its wait was
+// not over by its own count) and that then goes silent past the due time switched itself off.
+func TestAnArmedMachineWhoseLastAnswerShowedArmedIsOffByItsSilence(t *testing.T) {
+	w, pc, _ := armedRun(t, nil)
+	var r *Run
+	for i := 0; i < 3600 && r == nil; i++ {
+		tickShown(w, func() {
+			if pc.obs.Online && pc.obs.Run != nil && pc.obs.Run.State == BlockOffPending {
+				b := *pc.obs.Run
+				b.State = BlockArmed
+				pc.obs.Run = &b
+			}
+		})
+		if a, hist := w.m.Snapshot(); a == nil {
+			r = hist[0]
+		}
+	}
+	if r == nil {
+		t.Fatal("the run did not end")
+	}
+	if h := host(r, "pc-a"); h.State != StOff || h.On != OnNo || !strings.HasSuffix(h.Text, "It switched itself off again.") || pc.on {
+		t.Fatalf("[%s] power %q: %s (the machine is on: %v)", h.State, h.On, h.Text, pc.on)
+	}
+}

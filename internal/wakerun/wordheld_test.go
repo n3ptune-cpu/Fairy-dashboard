@@ -61,7 +61,7 @@ func TestAWordConfirmedMachineThatIsArmedAfterAllIsEndedAsArmed(t *testing.T) {
 	if strings.HasPrefix(h.Text, "Left ON") {
 		t.Fatalf("the report: %s", h.Text)
 	}
-	if a := named(w.m.MayGoOff(w.now), "pc-a"); a == nil || !a.Sure || a.At == nil {
+	if a := named(w.m.MayGoOff(w.now), "pc-a"); a == nil || !a.Sure || a.At == nil || !a.ByMachine { // with the machine's own time
 		t.Fatalf("the strip does not name it with Keep on: %+v", a)
 	}
 	none(t, w.callsFor("pc-a"), "cancel")

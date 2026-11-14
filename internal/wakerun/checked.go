@@ -126,9 +126,9 @@ type checked struct {
 	goSince time.Duration
 	goEnd   time.Duration
 	goRead  bool
-	// The watch of its own switch-off (stepSelfOff): selfSaid: an answer of its agent was read in the watch;
-	// selfWord: what the latest of them said about this run (runWord); selfAt: its SeenAt, for the report.
-	selfSaid bool
+	// The watch of its own switch-off (stepSelfOff): selfWord: what the latest answer of its agent that was
+	// read in the watch said about this run (runWord); selfAt: its SeenAt, for the report. (Silence that
+	// counts as "off" began after the earliest end of its countdown, so an answer was read in the watch.)
 	selfWord string
 	selfAt   time.Time
 	byWord   bool // it is confirmed by its agent's word, not by an answer to the panel's confirmation (wordConfirmed)
@@ -1249,7 +1249,7 @@ func (m *Manager) stepSelfOff(ctx context.Context, r *Run, h *Host, now time.Tim
 	}
 	none := h.seeNoRun(o, word)
 	if o.Online && mono-o.SeenAgo > c.armBefore {
-		c.selfSaid, c.selfWord, c.selfAt = true, word, o.SeenAt
+		c.selfWord, c.selfAt = word, o.SeenAt
 	}
 	lead := cameOnline(h) + ". " + leadWhy(r, h) + ": not confirmed, not updated."
 	switch {
@@ -1296,7 +1296,7 @@ func (m *Manager) stepSelfOff(ctx context.Context, r *Run, h *Host, now time.Tim
 		}
 	case !o.Online && o.OnBy == "": // nothing at all from it
 		switch {
-		case h.seenOff(mono) && c.selfSaid && c.selfWord != BlockArmed && c.selfWord != BlockOffPending:
+		case h.seenOff(mono) && c.selfWord != BlockArmed && c.selfWord != BlockOffPending:
 			// Silence proves its own switch-off only when the last answer the run read showed this run as armed
 			// or counting down. One answer that shows no run (the machine was started again, the run was ended
 			// on it) is not enough for "not armed any more" (two are asked for, above), and it takes back "out
