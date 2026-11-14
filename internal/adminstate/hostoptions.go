@@ -234,7 +234,8 @@ func (o HostOption) Named() config.Links {
 type HostOptions struct {
 	Rev    int
 	Agents map[string]HostOption
-	// Hosts is what was changed about the machines themselves (name, Wake-on-LAN), by machine id (hostedit.go).
+	// Hosts is what was changed about the machines themselves (name, Wake-on-LAN, run timings), by machine id
+	// (hostedit.go).
 	Hosts map[string]HostEdit
 	// Ignored is how many things the reader left out of what the file holds (0: none). The lines it gives
 	// name the first MaxIgnoredLines of them.
@@ -244,9 +245,10 @@ type HostOptions struct {
 	// None of it is ever used. It is carried from the read to the write as it is, never looked into and never
 	// changed, so that a save by this build does not drop what a newer build wrote.
 	unknown struct {
-		top    map[string]any
-		agents map[string]map[string]any
-		hosts  map[string]map[string]any
+		top     map[string]any
+		agents  map[string]map[string]any
+		hosts   map[string]map[string]any
+		hostRun map[string]map[string]any // in a machine's "wake_update": machine id -> key -> value
 	}
 }
 
@@ -254,7 +256,7 @@ type HostOptions struct {
 func (o HostOptions) Clone() HostOptions {
 	out := HostOptions{Rev: o.Rev, Agents: make(map[string]HostOption, len(o.Agents)), Hosts: make(map[string]HostEdit, len(o.Hosts)),
 		Ignored: o.Ignored, unknown: o.unknown}
-	out.unknown.agents, out.unknown.hosts = maps.Clone(o.unknown.agents), maps.Clone(o.unknown.hosts)
+	out.unknown.agents, out.unknown.hosts, out.unknown.hostRun = maps.Clone(o.unknown.agents), maps.Clone(o.unknown.hosts), maps.Clone(o.unknown.hostRun)
 	for id, e := range o.Agents {
 		out.Agents[id] = e.Clone()
 	}
@@ -648,7 +650,8 @@ func (a *State) hostOptionsWarn(ignored []string) {
 // state the other left: nothing is lost and nothing is half written; of two changes to the same thing the
 // later one counts. fn's error stops the write and is returned as it is.
 //
-// by is who changes it; it and the time are put on every agent's entry that differs afterwards. after is the
+// by is who changes it; it and the time are put on every agent's entry that differs afterwards. A machine's
+// own run timing outside its range stops the write (RunEdit.Check). after is the
 // stored state as it is after the call, changed reports whether anything was written. What the reader leaves
 // out because it is not of the form Fairy writes (an entry that is no object, a field of another form) is
 // dropped by the same write, as SetHostModel does; what is under a key this build does not know is written
@@ -680,6 +683,9 @@ func (a *State) EditHostOptions(by string, fn func(o *HostOptions) error) (after
 				delete(cur.Hosts, id)
 				continue
 			}
+			if err := e.Run.Check(); err != nil { // never written, whoever asks: a timing outside its range
+				return fmt.Errorf("host %s: %w", id, err)
+			}
 			if !before.Hosts[id].Same(e) {
 				e.By, e.At = clipKey(by), now
 			}
@@ -690,7 +696,8 @@ func (a *State) EditHostOptions(by string, fn func(o *HostOptions) error) (after
 			same = same && before.Hosts[id].Same(e)
 		}
 		// what this build does not know in an entry that went away whole (Drop, DropHost) is a change too
-		same = same && len(before.unknown.agents) == len(cur.unknown.agents) && len(before.unknown.hosts) == len(cur.unknown.hosts)
+		same = same && len(before.unknown.agents) == len(cur.unknown.agents) && len(before.unknown.hosts) == len(cur.unknown.hosts) &&
+			len(before.unknown.hostRun) == len(cur.unknown.hostRun)
 		after = cur
 		if same {
 			after.Rev = before.Rev

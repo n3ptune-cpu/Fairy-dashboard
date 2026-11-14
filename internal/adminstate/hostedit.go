@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -16,12 +17,14 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 )
 
-// "Edit host", the machine itself: its name and its Wake-on-LAN details, changed in the panel. They are kept
-// next to the link decisions (hostoptions.go), in the same object of state.json and under the same rules:
+// "Edit host", the machine itself: its name, its Wake-on-LAN details and its own two timings of "Update
+// unpowered hosts", changed in the panel. They are kept next to the link decisions (hostoptions.go), in the
+// same object of state.json and under the same rules:
 //
 //	"host_options": {"rev": 8, "agents": {...}, "hosts": {"<machine id>": {
 //	    "name": "<display name>",
 //	    "wol": {"macs": ["aa:bb:cc:dd:ee:ff"], "relay": "<agent id>", "port": 7 | 9}  or  {"off": true},
+//	    "wake_update": {"off_after_s": 300..3600, "shutdown_delay_s": 10..3600},
 //	    "by": "<who>", "at": "<RFC 3339>"}}}
 //
 // <machine id> is the id of the machine's agent, or the id of its row for a Proxmox node without an agent
@@ -31,7 +34,9 @@ import (
 //   - name: the machine is shown under this name;
 //   - wol.macs: the wake packet goes to these network cards (instead of mac and macs);
 //   - wol.relay: this agent sends it; wol.port: to this port;
-//   - wol.off: the machine has no Wake-on-LAN, whatever the configuration says.
+//   - wol.off: the machine has no Wake-on-LAN, whatever the configuration says;
+//   - wake_update.off_after_s, wake_update.shutdown_delay_s: the machine's own timing in a run (RunEdit),
+//     instead of the one its systems: entry gives it in config.yaml, or of the panel's where it has none.
 //
 // What no decision is about follows the configuration. "Reset" takes a decision out. NOTHING else can be
 // here: where a wake packet is sent to (broadcast) and the password that goes with it (password_env) are the
@@ -280,10 +285,65 @@ func (w WolEdit) Apply(base *config.Wol) (out *config.Wol, unused string) {
 	return &e, ""
 }
 
+// RunEdit is the decisions about one machine's own timings of "Update unpowered hosts": what the wake_update:
+// block of its systems: entry sets in config.yaml (config.MachineRunTimings has the two keys and their
+// ranges, which are the panel's). 0: no decision. A value outside its range is never a decision: the reader
+// leaves it out, and Check refuses it before it is written.
+type RunEdit struct {
+	OffAfterS      int // the machine counts as off after this long without an answer
+	ShutdownDelayS int // the countdown of the shutdown a run asks it for
+}
+
+// Empty reports whether there is no decision.
+func (r RunEdit) Empty() bool { return r.OffAfterS == 0 && r.ShutdownDelayS == 0 }
+
+// Value is the decision about one of the two keys (0: none, or no such key).
+func (r RunEdit) Value(key string) int {
+	switch key {
+	case config.KeyOffAfter:
+		return r.OffAfterS
+	case config.KeyShutdownDelay:
+		return r.ShutdownDelayS
+	}
+	return 0
+}
+
+// Set decides v for one of the two keys (0: no decision; a key that is none of them: nothing).
+func (r *RunEdit) Set(key string, v int) {
+	switch key {
+	case config.KeyOffAfter:
+		r.OffAfterS = v
+	case config.KeyShutdownDelay:
+		r.ShutdownDelayS = v
+	}
+}
+
+// Count is the number of decisions.
+func (r RunEdit) Count() int {
+	n := 0
+	for _, t := range config.MachineRunTimings() {
+		if r.Value(t.Key) != 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// Check reports what is wrong with the decisions (nil: nothing): each is a value its key can have.
+func (r RunEdit) Check() error {
+	for _, t := range config.MachineRunTimings() {
+		if v := r.Value(t.Key); v != 0 && !t.In(v) {
+			return fmt.Errorf("%s must be %d to %d", t.Key, t.Min, t.Max)
+		}
+	}
+	return nil
+}
+
 // HostEdit is what was changed about one machine itself. A zero field is no decision.
 type HostEdit struct {
 	Name string   // the name it is shown under
 	Wol  *WolEdit // its Wake-on-LAN (nil: nothing decided)
+	Run  RunEdit  // its own timings of "Update unpowered hosts"
 	By   string   // who changed it last (the audit log's name for them)
 	At   time.Time
 }
@@ -300,7 +360,7 @@ func (e HostEdit) Count() int {
 	if e.Wol != nil {
 		n += e.Wol.Count()
 	}
-	return n
+	return n + e.Run.Count()
 }
 
 // Clone returns a copy that shares nothing with e (a Wake-on-LAN without a decision is none).
@@ -319,7 +379,7 @@ func (e HostEdit) Clone() HostEdit {
 // Same reports whether two entries hold the same decisions (who and when aside).
 func (e HostEdit) Same(b HostEdit) bool {
 	x, y := e.Clone(), b.Clone()
-	if x.Name != y.Name || (x.Wol == nil) != (y.Wol == nil) {
+	if x.Name != y.Name || x.Run != y.Run || (x.Wol == nil) != (y.Wol == nil) {
 		return false
 	}
 	return x.Wol == nil || x.Wol.Same(*y.Wol)
@@ -349,6 +409,15 @@ func (e HostEdit) encode() map[string]any {
 			w["port"] = e.Wol.Port
 		}
 		m["wol"] = w
+	}
+	if !e.Run.Empty() {
+		r := map[string]any{}
+		for _, t := range config.MachineRunTimings() {
+			if v := e.Run.Value(t.Key); v != 0 {
+				r[t.Key] = v
+			}
+		}
+		m[hostRunKey] = r
 	}
 	if e.By != "" {
 		m["by"] = e.By
@@ -410,6 +479,39 @@ func wolEditOf(v any) (w WolEdit, why string) {
 	return w, ""
 }
 
+// hostRunKey is the key of a machine's own run timings in its entry, as config.yaml names the block.
+const hostRunKey = "wake_update"
+
+// runEditOf reads a "wake_update" object as Fairy writes it. It never fails: say is told each key whose
+// value is not a whole number of its range (the configuration's value counts for that key, the other key is
+// read all the same: the two are two decisions). unknown is what is under a key that is none of the two: it
+// is not used, and kept (a newer build may have written it).
+func runEditOf(id string, v any, say func(format string, a ...any)) (r RunEdit, unknown map[string]any) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		say("host %s: %q is not an object (found %s): the configuration's run timings count", id, hostRunKey, kindOf(v))
+		return RunEdit{}, nil
+	}
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		t, known := config.RunTimingOf(k)
+		if !known || !slices.Contains(config.MachineRunTimings(), t) {
+			say("host %s: %s.%q cannot be set in the panel: it is not used (and left in the file as it is)", id, hostRunKey, clipKey(k))
+			if unknown == nil {
+				unknown = map[string]any{}
+			}
+			unknown[k] = m[k]
+			continue
+		}
+		f, isNum := m[k].(float64)
+		if !isNum || f != math.Trunc(f) || f < float64(t.Min) || f > float64(t.Max) {
+			say("host %s: %s.%s is not a whole number from %d to %d: the configuration's value counts", id, hostRunKey, k, t.Min, t.Max)
+			continue
+		}
+		r.Set(k, int(f))
+	}
+	return r, unknown
+}
+
 // readHosts reads "hosts" of the overlay into o. It never fails: say is told each thing that is left out
 // (the configuration's value counts for it).
 func (o *HostOptions) readHosts(raw any, say func(format string, a ...any)) {
@@ -449,6 +551,14 @@ func (o *HostOptions) readHosts(raw any, say func(format string, a ...any)) {
 					continue
 				}
 				e.Wol = &w
+			case hostRunKey:
+				var rest map[string]any
+				if e.Run, rest = runEditOf(id, v, say); rest != nil {
+					if o.unknown.hostRun == nil {
+						o.unknown.hostRun = map[string]map[string]any{}
+					}
+					o.unknown.hostRun[id] = rest
+				}
 			case "by":
 				s, _ := v.(string)
 				e.By = clipKey(s)
@@ -493,6 +603,21 @@ func (o HostOptions) encodeHosts() map[string]any {
 			entry[k] = v
 		}
 	}
+	for id, keys := range o.unknown.hostRun { // ... and in a machine's "wake_update"
+		entry, _ := hosts[id].(map[string]any)
+		if entry == nil {
+			entry = map[string]any{}
+			hosts[id] = entry
+		}
+		run, _ := entry[hostRunKey].(map[string]any)
+		if run == nil {
+			run = map[string]any{}
+			entry[hostRunKey] = run
+		}
+		for k, v := range keys {
+			run[k] = v
+		}
+	}
 	if len(hosts) == 0 {
 		return nil
 	}
@@ -518,6 +643,7 @@ func (o *HostOptions) SetHost(id string, e HostEdit) {
 func (o *HostOptions) DropHost(id string) {
 	delete(o.Hosts, id)
 	delete(o.unknown.hosts, id)
+	delete(o.unknown.hostRun, id)
 }
 
 // forgetHosts is the part of Forget about the machines themselves: the decisions kept under one of ids go,
@@ -525,12 +651,13 @@ func (o *HostOptions) DropHost(id string) {
 // ids. They go WHOLE: "these MAC addresses through that relay" was one decision, and with the relay alone
 // taken out it would become "these MAC addresses through config.yaml's relay", a packet nobody decided on.
 // config.yaml's own Wake-on-LAN counts for that machine again. (The next machine added under the removed id
-// must not become the relay of a wake packet nobody gave it either.) It reports what was taken out, and
-// says each machine that lost its Wake-on-LAN details in the log.
+// must not become the relay of a wake packet nobody gave it either.) Nothing else of such a machine goes: its
+// name and its own run timings have nothing to do with who sends its wake packet. It reports what was taken
+// out, and says each machine that lost its Wake-on-LAN details in the log.
 func (o *HostOptions) forgetHosts(ids []string) (gone []string) {
 	for _, id := range ids {
 		if e, ok := o.Hosts[id]; ok && !e.Empty() {
-			gone = append(gone, "what was changed about "+id+" itself (name, Wake-on-LAN)")
+			gone = append(gone, "what was changed about "+id+" itself (name, Wake-on-LAN, run timings)")
 		}
 		o.DropHost(id)
 	}
