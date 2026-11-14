@@ -220,9 +220,11 @@ In short:
    * The device ids are the agent's own. When the agent reports no device with an id that is written here (a
      typing mistake), nothing is linked or left out for it: the panel says so once in its log ("... names
      devices the agent does not report"), and `fairy admin config check` lists what is set for each agent.
-   * Hosts added with **Add host** have no `power_links` (their entry is not in config.yaml): give such an
-     agent's plug `system_hint: self` in the agent's own config.yaml, or let an agent that is in config.yaml
-     read the plug and link it.
+   * Hosts added with **Add host** have no `power_links` in config.yaml (their entry is not in it): link such
+     an agent's plugs in the panel ([Edit host](#edit-host)), or give the plug `system_hint: self` in the
+     agent's own config.yaml.
+   * All three can also be changed in the panel, without a restart: [Edit host](#edit-host). A field that was
+     changed there is used instead of config.yaml's until it is reset there.
 4. A plug that cannot be read stays on the Power page and on its machine's page with the agent's words for
    why (`home assistant refused the token`, `entity not found`, `the sensor is unavailable`), also after it
    has had no reading for longer than `offline_after`.
@@ -1074,6 +1076,58 @@ the command says so and the host is added without the token (write the cluster u
 hand-written `proxmox:` entry keeps working and wins on the same id. `tls_server_name` can also be set on
 hand-written entries.
 
+### Edit host
+
+An admin can change three things about a machine in the panel: the machine's page, the ⋯ menu, **Edit host**.
+
+| Section | What a tick means | The field it stands for |
+|---|---|---|
+| **UPS** | this machine is on that UPS (the UPS sign on its row; who sees the UPS) | `ups_powers` |
+| **Plugs** | the plug's watts are this machine's (the watts on its row; who sees the plug) | `power_links` |
+| **Total** | the plug counts in the total | `power_exclude_from_total` |
+
+These are fields of an agent's entry in config.yaml, and they decide what is **shown** where. Nothing acts on
+them: no power action, no Wake-on-LAN, no run of "Update unpowered hosts" reads them.
+
+* **config.yaml stays the base.** The panel does not write config.yaml (it cannot: the service has no write
+  access to it). What you change is kept by the panel as an override (`state.json`, `host_options`) and laid
+  over the agent's entry each time the agent is polled. Each line of the dialog says where its value comes
+  from: **from config.yaml**, or **changed here** with **Reset**, which takes the override out so that
+  config.yaml's value shows again. The same works for a host added with **Add host**, whose entry has no
+  such fields: this is how such a host gets its links.
+* **A link belongs to the machine that reads the device.** "Rack UPS powers PC-B" is a line in the entry of
+  the NAS whose agent reads the UPS, not in PC-B's. You tick it on PC-B's page; the panel stores it with the
+  NAS and says so ("read by NAS"), in the dialog, in "Confirm it's you" and in the audit log.
+* **A changed field replaces config.yaml's, whole.** Once the UPS links read by the NAS are changed here, the
+  `ups_powers:` of the NAS's entry in config.yaml is not used until Reset, also when you edit that line later.
+  The dialog says "Changed here: used instead of config.yaml until Reset.", and `fairy admin config check`
+  lists every override with what of config.yaml it replaces. Reset is per field and per reading machine: it
+  puts back all links of that kind read by that machine.
+* **It counts with the next poll** of the machine that reads the device (seconds; no restart). While that
+  machine's polling is paused or it does not answer, the old links stay.
+* **A Proxmox node with an agent has two ids.** A plug's link is stored with the agent's id and follows the
+  machine to whichever row it is shown as. A UPS link is stored with the id of the row shown at that moment,
+  as in a hand-written config.yaml: ticked while the machine is shown under its agent's id (after a restart
+  of the panel with the machine off), it is not on the node's row afterwards. Tick it again there.
+* **Who may:** admins, from a browser session (no API token), with "Confirm it's you" inside the usual
+  window. Every change is in the audit log (`host.options`, with before and after) and in the bell.
+* **Remove** of a host takes its overrides with it, and every link to it in the overrides of other machines;
+  **Re-pair** keeps them.
+* **A damaged override never stops the panel.** Whatever is under `host_options` that is not what Fairy
+  writes is ignored with one warning in the log (and a WARN line of `fairy admin config check`);
+  config.yaml's value counts for it. `fairy update` is not affected: its check reads config.yaml only.
+
+**Never editable here**, whatever is sent: `id`, `url`, `token_env`, `control_token_env`, `verify_tls`, `node`,
+`links_to`, `fan_control`, `power_control`, `self_update`, `wol_relay`, `owner`, `site`, `name`. They say where
+an agent is, which secret it gets and what the panel may do to a machine: a stolen admin session must not be
+able to send a token to another address or switch on power control. Those stay in config.yaml, on the machine
+(Add host, Re-pair) or, for the site, on the Users page.
+
+API: `GET` and `PUT /api/admin/hosts/{id}/options`. The request names only what changes:
+`{"ups": [{"id": "nas-agent/rack", "on": true}], "plugs": [{"id": "nas-agent/pc-plug", "linked": true,
+"in_total": false}], "reset": [{"agent": "nas-agent", "field": "ups"}]}` (`field`: `ups`, `plugs` or `total`).
+Any other field is refused (422).
+
 ### Notifications
 
 The bell (top bar) and **Notifications** (sidebar): what changed, newest first. Events are made on state
@@ -1582,7 +1636,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/config` | Reads and checks `config.yaml` (`config.go`, `validate.go`) and secrets from `fairy.env` / the environment (`env.go`). |
 | `internal/admin` | The break-glass CLI `fairy admin`: one file per command (users and sites, tokens, sessions, control, audit, config check, health). |
 | `internal/access` | `users.json`: users (by OIDC subject) with a role and sites, the list of sites, and which site each host / power source / UPS is assigned to. |
-| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the hosts' custom model names (`hostmodel.go`), the session list. Also `machines.json` (`machines.go`) and `last-seen.json` (`lastseen.go`: when each agent last answered, so that a machine that is off when the panel starts is shown with that time and not with "last seen never"). |
+| `internal/adminstate` | `state.json` and `sessions.json`: kill switch, per-host power flags, polling overrides, the machines switched on for "Update unpowered hosts", the hosts' custom model names (`hostmodel.go`), the link overrides of "Edit host" (`hostoptions.go`), the session list. Also `machines.json` (`machines.go`) and `last-seen.json` (`lastseen.go`: when each agent last answered, so that a machine that is off when the panel starts is shown with that time and not with "last seen never"). |
 | `internal/statefile` | Safe shared JSON files (state, sessions, tokens, users): lock, re-read, write to a temp file, rename (so CLI and server never lose changes). |
 | `internal/tokens` | Personal API tokens (`fy_...`), stored only as hashes in `tokens.json`. |
 | `internal/audit` | The append-only audit log and its reader (Audit page, `fairy admin audit tail`). |
