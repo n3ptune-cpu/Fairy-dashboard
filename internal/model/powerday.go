@@ -45,7 +45,9 @@ type PowerDaySummary struct {
 	// "estimated" (average watts x time: there is no counter, or it stood still) or "mixed" (a part of it is
 	// estimated, a stretch in which the counter stood still while the device measured power: more than 2 % of
 	// the number, and less than 98 %; under 2 % it is "counter", over 98 % "estimated"). EnergyEstKWh is the
-	// part of EnergyKWh that is estimated.
+	// part of EnergyKWh that is estimated. "mixed" is also a day of the counter from which a time without
+	// readings is left out, because the counter's increase over it was more than the device could have used:
+	// the number is then less than the device used, and EnergyEstKWh may be 0.
 	EnergyKWh    float64 `json:"energy_kwh"`
 	EnergyEstKWh float64 `json:"energy_est_kwh"`
 	Energy       string  `json:"energy"`

@@ -257,17 +257,22 @@ of each plug that is linked to the machine.
   keeps the chart it has.
 * **A gap stays a gap.** A minute in which the plug, its Home Assistant or the agent that relays it did not
   answer, or in which the panel was not running, has no point. The line stops there and starts again where
-  the readings do; nothing is drawn at 0 W, and the average and the energy are over the minutes that have
-  readings ("Readings for 19 h of the 24 hours").
+  the readings do; nothing is drawn at 0 W, and the average is over the minutes that have readings
+  ("Readings for 19 h of the 24 hours"). For the energy see the next point: what was used in a gap is in the
+  number only where the plug's counter says it.
 * **Energy.** From the plug's own kWh counter where it counts. Only its increases are added up, so a counter
-  that starts again at 0 after an outage is not counted backwards, and what the plug used while nobody could
-  ask it is still in the number. The day is judged stretch by stretch, from one step of the counter to the
-  next: a stretch in which the counter stood still while the plug measured power (it read 0 for hours after
-  an outage, or it has no counter at all) counts with the average watts times the time. The tile then says
-  **partly estimated**, or **estimated** when nearly all of the number is (under 2 % of it estimated, it
-  says nothing). A counter value that is a little lower than the one before (a plug's cloud hands out an
-  older total now and then) is left out and is not taken for a restart, and a jump no device could have made
-  is not counted.
+  that starts again at 0 after an outage is not counted backwards. The day is judged stretch by stretch, from
+  one step of the counter to the next: a stretch in which the counter stood still while the plug measured
+  power (it read 0 for hours after an outage, or it has no counter at all) counts with the average watts
+  times the time. And over the whole day the counter must show what the watts show, to within 5 %: what it
+  shows less is added. The tile then says **partly estimated**, or **estimated** when nearly all of the
+  number is (under 2 % of it estimated, it says nothing). A counter value that is a little lower than the
+  one before (a plug's cloud hands out an older total now and then) is left out and is not taken for a
+  restart, and a jump no device could have made is not counted.
+  **Time without readings** is counted where the counter went on through it by an amount the plug could have
+  used (what it used while nobody could ask it is then in the number). Where the counter went up by more
+  than that, or there is no counter, that time is left out: the number is then less than the plug used, and
+  when it was the counter's increase that was left out the tile says **partly estimated**.
 * **Volts, amperes, kWh.** Next to the live watts (the Power page's columns, and the machine's Power box) and
   in the graph, when the device reports them: the day's range, and a second, low chart for the volts. A plug
   that is read through Home Assistant needs Fairy-agent v0.9.0 for them, and up to three more lines in the

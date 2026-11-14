@@ -562,7 +562,7 @@ func daySummary(start uint32, bs []dayBucket) *model.PowerDaySummary {
 	if n == 0 {
 		return nil
 	}
-	total, est := dayEnergy(bs, s.MaxW)
+	total, est, left := dayEnergy(bs, s.MaxW)
 	s.CoveredS = n * DayStepS
 	s.AvgW = normalise.Round(sum/float64(n), 2)
 	s.MinW, s.MaxW = normalise.Round(s.MinW, 2), normalise.Round(s.MaxW, 2)
@@ -571,11 +571,11 @@ func daySummary(start uint32, bs []dayBucket) *model.PowerDaySummary {
 	case math.Abs(total-est) <= energyMixedFrom*whole:
 		// all of it from the watts, or all but a step or two of a counter that hardly moved
 		s.Energy = "estimated"
-	case math.Abs(est) <= energyMixedFrom*whole:
+	case math.Abs(est) <= energyMixedFrom*whole && !left:
 		// a few minutes of watts in a day of counter (the counter's first minute, and the minute it starts
 		// again in): the number is the counter's, and the page does not call it estimated
 		s.Energy = "counter"
-	default:
+	default: // also a day of counter of which a time without readings was left out (dayEnergy: left)
 		s.Energy = "mixed"
 	}
 	round := func(p *float64, n int) *float64 {
@@ -653,8 +653,10 @@ const (
 //     change, and all of them for a device without a counter or with one that never moved.
 //
 // A minute without a bucket adds nothing to the watts: it is not zero watts, it is not known. A stretch the
-// counter counted does include what the device used while nobody could ask it.
-func dayEnergy(bs []dayBucket, maxW float64) (total, est float64) {
+// counter counted does include what the device used while nobody could ask it. When the counter's increase
+// over minutes without a bucket is a jump, what the device used in them is in nothing: left says so, and the
+// day is not called the counter's (the number is less than the device used, by an amount nobody knows).
+func dayEnergy(bs []dayBucket, maxW float64) (total, est float64, left bool) {
 	const stepH = DayStepS / 3600.0
 	capKW, gapKW := math.Max(energyFloorW, 10*maxW)/1000, math.Max(energyGapFloorW, 10*maxW)/1000
 	type stretch struct{ up, watts float64 } // the counter's increase over it, and the watts of its minutes
@@ -691,6 +693,7 @@ func dayEnergy(bs []dayBucket, maxW float64) (total, est float64) {
 		gap := i - prevI - since // minutes without readings since the last counter value
 		jump := up > (float64(since+1)*capKW+float64(gap)*gapKW)*stepH && up > energyCoarse*(open+e)
 		if up < 0 || jump {
+			left = left || (jump && gap > 0)
 			est += open + e // a restart or a jump: the counter says nothing about these minutes
 			prevK, prevI, since, open = b.kwh, i, 0, 0
 			continue
@@ -719,5 +722,5 @@ func dayEnergy(bs []dayBucket, maxW float64) (total, est float64) {
 	if short := watts - counted; short > energyShort*watts {
 		total, est = total+short, est+short
 	}
-	return total, est
+	return total, est, left
 }

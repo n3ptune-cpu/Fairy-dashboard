@@ -32,7 +32,8 @@ func powerDayScript(t *testing.T, js, body string) string {
 	return `"use strict";
 process.env.TZ = "Europe/Berlin";  // the hours under the chart are local time: one zone for every machine that runs this
 const state = { power: null, history: [], systems: [], ups: { ups: [] } };
-const spark = () => "", setTitle = () => {}, infoBtn = (key) => "<i data-info=\"" + key + "\"></i>";
+const infoHTML = {};  // what each info box says, by its key
+const spark = () => "", setTitle = () => {}, infoBtn = (key, about, html) => { infoHTML[key] = html; return "<i data-info=\"" + key + "\"></i>"; };
 const document = { addEventListener() {} }, window = { addEventListener() {} };
 ` + strings.Join(parts, "\n") + "\n" +
 		block("const linkedPower = (id) => {", "// ------------------------------------------------------------ grouping: hosts by site") +
@@ -198,6 +199,21 @@ html = dayStats({ ...d, summary: sum({ energy: "estimated", energy_est_kwh: 2.4 
 if (!words(html).endsWith("Energy ≈ 2.400 kWh estimated")) fail("an estimated day: " + words(html));
 html = dayStats({ ...d, summary: sum({ energy: "mixed", energy_est_kwh: 0.9 }) });
 if (!words(html).endsWith("Energy ≈ 2.400 kWh partly estimated")) fail("a partly estimated day: " + words(html));
+// what the info box of Energy says about it: how much is estimated
+let about = words(infoHTML["pday-energy"]);
+if (!about.includes("0.900 kWh of it are estimated from the watts")) fail("the info box of a partly estimated day: " + about);
+// a day of the counter from which a time without readings is left out (mixed, nothing estimated): the box
+// says that, and not "0.000 kWh of it are estimated"
+html = dayStats({ ...d, summary: sum({ energy: "mixed", energy_est_kwh: 0 }) });
+about = words(infoHTML["pday-energy"]);
+if (!words(html).endsWith("Energy ≈ 2.400 kWh partly estimated")) fail("a day with a time left out: " + words(html));
+if (/kWh of it are estimated/.test(about) || !about.includes("From the device's own kWh counter, but not for all of the time: over a time without readings the counter went up by more than the device could have used, and that time is left out")) fail("the info box of a day with a time left out: " + about);
+// and every kind of day says the same about time without readings
+for (const energy of ["counter", "mixed", "estimated"]) {
+  dayStats({ ...d, summary: sum({ energy, energy_est_kwh: energy === "counter" ? 0 : 0.9 }) });
+  about = words(infoHTML["pday-energy"]);
+  if (!about.includes("Time without readings is counted where the device's counter went on through it by an amount the device could have used. Otherwise that time is left out, and the number is marked as partly estimated: the device used more.") || about.includes("Time without readings is not counted")) fail(energy + ": the info box about time without readings: " + about);
+}
 // a counter that started again at 0 after an outage: a small number keeps its digits
 html = dayStats({ ...d, summary: sum({ energy_kwh: 0.004 }) });
 if (!words(html).endsWith("Energy 0.004 kWh")) fail("a small energy: " + words(html));

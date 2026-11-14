@@ -1943,10 +1943,11 @@ function dayStats(d) {
   const est = s.energy === "estimated" ? "estimated" : s.energy === "mixed" ? "partly estimated" : "";
   const about = infoBtn("pday-energy", "Energy", infoList([
     s.energy === "counter" ? "From the device's own kWh counter: what it counted up in this time."
-      : s.energy === "mixed" ? `${esc(fmtKWh(s.energy_est_kwh))} kWh of it are estimated from the watts, where the device's kWh counter had no value or did not move. The rest is what the counter counted up.`
-        : "Estimated: average watts × time. The device has no kWh counter, or its counter did not move.",
+      : s.energy !== "mixed" ? "Estimated: average watts × time. The device has no kWh counter, or its counter did not move."
+        : Math.abs(s.energy_est_kwh) >= 0.0005 ? `${esc(fmtKWh(s.energy_est_kwh))} kWh of it are estimated from the watts, where the device's kWh counter had no value or did not move. The rest is what the counter counted up.`
+          : "From the device's own kWh counter, but not for all of the time: over a time without readings the counter went up by more than the device could have used, and that time is left out.",
     "A counter that starts again at 0 is not counted backwards.",
-    "Time without readings is not counted."]));
+    "Time without readings is counted where the device's counter went on through it by an amount the device could have used. Otherwise that time is left out, and the number is marked as partly estimated: the device used more."]));
   const range = (lo, hi, fmt, unit) => (lo == null ? "" : lo === hi ? `${fmt(lo)} ${unit}` : `${fmt(lo)} – ${fmt(hi)} ${unit}`);
   const volts = range(s.volts_min, s.volts_max, (v) => v.toFixed(1), "V"), amps = range(s.amps_min, s.amps_max, fmtAmps, "A");
   const part = s.covered_s < DAY_S - 1200 ? `<span>Readings for <b>${esc(daySpan(s.covered_s))}</b> of the 24 hours</span>` : "";

@@ -171,7 +171,7 @@ func TestDayEnergyOfRandomDaysIsNotShownTooLowAsTheCounters(t *testing.T) {
 		if s.Energy != "counter" || covered < 0.05 {
 			continue
 		}
-		kwh, _ := dayEnergy(bs, maxW)
+		kwh, _, _ := dayEnergy(bs, maxW)
 		worst = math.Min(worst, kwh/covered)
 		if kwh < (1-energyShort-0.005)*covered {
 			if low++; low <= 5 {
@@ -189,5 +189,49 @@ func TestDayEnergyOfRandomDaysIsNotShownTooLowAsTheCounters(t *testing.T) {
 	t.Logf("%d days: %v; shown as the counter's and too low: %d, too high: %d; the lowest is %.1f %% of the minutes with readings", days, labels, low, high, 100*worst)
 	if labels["counter"] < days/20 || labels["mixed"] < days/20 {
 		t.Errorf("the days are not the mix this test is for: %v", labels)
+	}
+}
+
+// Time without readings. What the device used then is in the number when the counter went on through it by
+// an amount a device could have used (dayEnergy: energyGapFloorW). An increase over such a time that is not
+// believable is left out, and then the number is less than the device used: the day does not call it the
+// counter's number. (The review: a plug that reads 2 W all day, its site away for five hours in which the PC
+// behind it ran at 250 W; 0.038 kWh was shown as the counter's, the plug used 1.288.)
+func TestDayEnergyAnIncreaseOverAGapThatIsLeftOutIsMarked(t *testing.T) {
+	seen := func(i int) float64 { // 2 W, no readings from 10:00 to 15:00
+		if i >= 600 && i < 900 {
+			return math.NaN()
+		}
+		return 2
+	}
+	over := func(gap float64) func(int) float64 {
+		return func(i int) float64 {
+			if i < 600 {
+				return 8 + float64(i)*2/60000
+			}
+			return 8 + 600*2.0/60000 + gap + float64(i-900)*2/60000
+		}
+	}
+	// 1.25 kWh in five hours is 250 W: more than ten times what the plug was ever seen to use, and more than
+	// 200 W. It is left out, and the day is marked.
+	kwh, est, label := en(1440, seen, over(1.25))
+	if !near(kwh, 0.038, 0.001) || est > 0.001 || label != "mixed" {
+		t.Errorf("an increase of 1.25 kWh over five hours without readings, on a plug seen at 2 W: %.3f kWh, %.3f estimated (%s); want 0.038, marked as mixed", kwh, est, label)
+	}
+	// 0.9 kWh in five hours is 180 W, under the limit: it is the counter's, and nothing is marked
+	kwh, est, label = en(1440, seen, over(0.9))
+	if !near(kwh, 0.938, 0.001) || est > 0.001 || label != "counter" {
+		t.Errorf("an increase of 0.9 kWh over five hours without readings: %.3f kWh, %.3f estimated (%s); want the counter's 0.938", kwh, est, label)
+	}
+	// a jump with readings in every minute is another matter: its minutes count with their watts, which are
+	// known, and a minute or two of them do not mark a day (day_test.go: TestDayEnergyIgnoresAJumpNoDeviceCanMake)
+	kwh, _, label = en(1440, flat(2), func(i int) float64 {
+		if i < 600 {
+			return 8 + float64(i)*2/60000
+		}
+		return 9.25 + float64(i)*2/60000
+	})
+	if !near(kwh, 0.048, 0.001) || label != "counter" {
+		t.Errorf("a jump of 1.25 kWh from one minute to the next, with readings: %.3f kWh (%s); want 0.048, the counter's", kwh, label)
 	}
 }
