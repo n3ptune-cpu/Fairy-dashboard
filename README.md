@@ -240,6 +240,57 @@ agent, not by the panel"). After a refused token an agent waits before it asks H
 minutes, 15, then an hour), because Home Assistant counts such a request as a failed login; the panel's own
 poller has no such wait.
 
+### Last 24 hours
+
+Every power source has a graph of its last day: a plug, a BMC, a UPS that is listed under `power_sources`,
+whether the panel reads it itself or an agent relays it. On the **Power** page, click the small chart at the
+end of the source's row (or anywhere in the row). On a machine's page it is in the **Power** box, on the line
+of each plug that is linked to the machine.
+
+* **What it shows.** Watts, a point a minute. The line is each minute's average; the band around it runs from
+  the minute's lowest to its highest reading, so a spike of a few seconds is still in it. Above the chart: the
+  day's average, lowest and highest watts with their times, and the energy. The hours are your browser's
+  local time. Point at the chart, drag a finger over it or use the arrow keys, and the line above it says the
+  time and the values of that minute.
+* **A gap stays a gap.** A minute in which the plug, its Home Assistant or the agent that relays it did not
+  answer, or in which the panel was not running, has no point. The line stops there and starts again where
+  the readings do; nothing is drawn at 0 W, and the average and the energy are over the minutes that have
+  readings ("Readings for 19 h of the 24 hours").
+* **Energy.** From the plug's own kWh counter when it has one that counts. Only its increases are added up,
+  so a counter that starts again at 0 after an outage is not counted backwards, and what the plug used while
+  nobody could ask it is still in the number. Where there is no counter, or it did not move, the energy is
+  the average watts times the time, and the tile says **estimated** (**partly estimated** when that is more
+  than 2 % of the number).
+* **Volts, amperes, kWh.** Next to the live watts (the Power page's columns, and the machine's Power box) and
+  in the graph, when the device reports them: the day's range, and a second, low chart for the volts. A plug
+  that is read through Home Assistant needs Fairy-agent v0.9.0 for them, and up to three more lines in the
+  plug's entry in the **agent's** config.yaml, each naming a sensor of its own:
+
+  ```yaml
+      entity: sensor.corner_plug_power
+      voltage_entity: sensor.corner_plug_voltage   # optional
+      current_entity: sensor.corner_plug_current   # optional
+      energy_entity: sensor.corner_plug_energy     # optional: the kWh counter, not a power
+  ```
+
+  Update that agent first: an agent up to v0.8.0 does not start with one of these lines in its file. The
+  rest is in the agent's
+  [AGENT.md](https://github.com/n3ptune-cpu/Fairy-agent/blob/main/AGENT.md#volts-amperes-and-the-energy-total-voltage_entity-current_entity-energy_entity).
+* **Where it is kept.** In the panel's memory, and in one file in the data folder, `power-day.json`, written
+  every five minutes and when the panel stops: the graph is still there after a restart or an update, with a
+  gap for the time between. There is nothing to set and no key in config.yaml. At most 64 sources have a
+  graph (about 60 kB of memory each); with more, the ones the panel already draws keep theirs and the log
+  says so once. The file is for the graph and nothing else: one that is damaged is not used and is replaced,
+  and a write that fails (a full disk) is said once in the log. Neither ever stops the panel or holds up a
+  poll.
+* **Renamed, linked elsewhere, removed.** The day belongs to the plug, by its id. A new name keeps it. A plug
+  that is linked to another machine ([Edit host](#edit-host), `power_links`) takes its whole day along, and
+  whoever may see the plug now may see that day. A plug whose id was changed starts empty. A plug an agent no
+  longer reports is gone from the pages at once and from the file a day later. **Remove** of a host added
+  with Add host (and **Re-pair**, which removes it first) empties the graphs of the plugs that host relays.
+* **Who sees it.** Whoever sees the source on the Power page. For scripts: `GET /api/power/day?source=<id>`
+  (the id as `/api/power` gives it), a list of numbers per minute with `null` for a minute without readings.
+
 ### Updates
 
 Nothing updates on its own. Every push to `main` makes a signed GitHub release (`.github/workflows/release.yml`:
@@ -1748,6 +1799,9 @@ The same goes for the timings changed with **Run timings** (`run_timings` in `st
 the file as it is; the changed timings count again after the next update. So before going back, look at
 what is changed (`fairy admin config check` lists it, the dialog shows it): a "counts as off after" you
 raised in the panel is config.yaml's again in the older panel.
+`power-day.json` (the power sources' last 24 hours) is known to no build before the one that has the graph:
+build 15, 14 and 13 leave it alone, there is nothing to take out of config.yaml for it, and the graphs go on
+from it after the next update if that is within a day.
 Going back further than build 13 (the README of build 13 has the whole of it): a panel older than build 12
 does not start when config.yaml has a `wake_update:` block: take the block out first. The same goes for an
 `approval:` block ("field approval not found"). It does not know `machines.json` and leaves it alone; a
@@ -1940,6 +1994,14 @@ settings (on or off, seconds, events) are the defaults again after the next upda
   starts all the same, moves the file to `last-seen.json.bad` (one older copy is replaced), starts a new
   one and says so once in its log. A symbolic link or a folder at that name is never touched: nothing is
   read or kept until it is taken away.
+* `power-day.json` in the data folder is the other file that decides nothing: the last 24 hours of every
+  power source, a point a minute ([Last 24 hours](#last-24-hours)). Watts, volts, amperes and kWh counters
+  only; no name, no address, no token. It is written by the panel alone (mode 0600, in one step, every five
+  minutes and at a stop, never while a poll waits for it), read once at start, and never through a symbolic
+  link. A file that cannot be used is not used and is replaced by the next write; a link or a folder at its
+  name is left alone, and then nothing is kept. Its content reaches a browser only through
+  `GET /api/power/day`, which answers for a source the caller sees on the Power page and gives the same 404
+  for one that is hidden as for one that does not exist.
 * State files fail closed: an unreadable `users.json`, `sessions.json`, `tokens.json` or `state.json`, and a
   corrupt `users.json` or `state.json`, stops the panel at start, and at run time such a file grants nothing
   (no sessions, control off) instead of being read as empty; it is never overwritten. A file that exists and
@@ -2025,7 +2087,7 @@ cache). Each folder below is one Go package; inside a package, files are named a
 | `internal/poller` | Polls everything in the background and builds what the API shows: Proxmox (`proxmox.go`), agents (`agents.go`), the merged system list (`snapshot.go`), cluster and all-hosts totals (`summary.go`), per-host polling rate (`pollctl.go`), `health.json` (`health.go`), and the real network calls (`httpbackend.go`). |
 | `internal/scheduler` | Runs each source as a job at its own interval: overrides, pause, boost while viewing, never overlapping. |
 | `internal/normalise` | Turns raw Proxmox and agent data into the one "system" shape the UI uses. |
-| `internal/power` | Wall power on the panel: retry/backoff per source (`runner.go`), totals and history (`manager.go`), devices reported by agents (`remote.go`), and the `type: agent` component-power metrics (`agentpower.go`). The device types themselves are Fairy-agent's `pkg/power`. |
+| `internal/power` | Wall power on the panel: retry/backoff per source (`runner.go`), totals and history (`manager.go`), devices reported by agents (`remote.go`), the `type: agent` component-power metrics (`agentpower.go`), and the last 24 hours of every source, a bucket a minute (`day.go`), with their file `power-day.json` (`dayfile.go`). The device types themselves are Fairy-agent's `pkg/power`. |
 | `internal/ups` | UPSes on the panel: state and history (`ups.go`), on-battery / restored events (`events.go`). The NUT sources are Fairy-agent's `pkg/ups`. |
 | `internal/powerctl` | Which power actions a system offers (and why not) and carrying them out: agent, Proxmox API or Wake-on-LAN. |
 | `internal/wakerun` | "Update unpowered hosts": the run as a state machine per machine (`wakerun.go`, `steps.go`), the one place that decides a shutdown (`shutdown.go`), pacing below the agents' limit (`pacer.go`) and the journal `wake-update.json` (`journal.go`). It knows no HTTP: the web package gives it the panel's wake, update and power calls. |
