@@ -37,7 +37,8 @@ import (
 //     maxDayFile) is not used, with one line in the log, and the next write replaces it: there is nothing in
 //     it to rescue, the readings come again. A source whose lists do not fit together is skipped; a value that
 //     is not a possible reading makes its minute a gap; minutes after the panel's clock and minutes older than
-//     24 hours are dropped. A symbolic link, a folder or a pipe at that name is never read (statefile.ReadFile)
+//     24 hours are dropped. A file that as a whole was saved at a later time than the panel's clock has is
+//     left alone until the clock is there (hold). Temporary files a killed write left are removed. A symbolic link, a folder or a pipe at that name is never read (statefile.ReadFile)
 //     and never written over (put).
 //   - Writing never happens in the poller's own time. The history tick asks SaveIfDue, which looks at the
 //     clock and starts a goroutine; that goroutine copies the buckets (under the lock, a memory copy), encodes
@@ -101,6 +102,7 @@ func (v dayCounter) MarshalJSON() ([]byte, error) {
 type dayFileIn struct {
 	Version int                        `json:"version"`
 	StepS   int                        `json:"step_s"`
+	SavedAt time.Time                  `json:"saved_at"`
 	Devices map[string]dayFileDeviceIn `json:"devices"`
 }
 
@@ -117,21 +119,108 @@ type dayFileDeviceIn struct {
 
 // Load names the store's file and reads it. It never fails: what cannot be used is not used, and the log says
 // so once. From then on the store writes to that file. now is the panel's clock.
+//
+// A file that was saved at a later time than now is left alone (hold): see there.
 func (d *DayStore) Load(path string, now time.Time) {
 	removeDayTemp(path)
-	devs, err := readDayFile(path, now)
+	devs, savedAt, err := readDayFile(path, now)
 	if err != nil {
 		slog.Warn("power: the last 24 hours are not known from before this start: the file is not used (the graphs start empty)",
 			"file", path, "error", err)
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.path, d.savedAt, d.loadedAt = path, now, now
+	d.path, d.savedAt = path, now
+	if savedAt.After(now) {
+		d.heldUntil, d.heldSince = savedAt, now
+		slog.Warn("power: the file with the last 24 hours was saved at a later time than the panel's clock has now: it is neither read nor replaced until the clock has passed that time, for an hour at most (the graphs start empty; is the clock right?)",
+			"file", path, "saved_at", savedAt.UTC().Format(time.RFC3339), "clock", now.UTC().Format(time.RFC3339))
+		return
+	}
+	d.adopt(devs, now)
+}
+
+// adopt takes the file's days into the store. A source the store has no day for gets the file's; for one it
+// has, the file's minutes fill what the store has not measured itself (dayDevice.merge). Hosts that were
+// removed since the start stay removed. Caller holds d.mu.
+func (d *DayStore) adopt(devs map[string]*dayDevice, now time.Time) {
+	m, _ := dayMinute(now)
+	d.loadedAt = now
 	for id, dv := range devs {
-		if _, ok := d.dev[id]; !ok && len(d.dev) < MaxDayDevices {
+		if d.forgotten(id) {
+			continue
+		}
+		if mine := d.dev[id]; mine != nil {
+			mine.merge(dv, m)
+		} else if len(d.dev) < MaxDayDevices {
 			d.dev[id] = dv
 		}
 	}
+}
+
+// hold: a file that was saved at a later time than the panel's clock has.
+//
+// A machine without a clock of its own starts with the time it was switched off at, or with none, and gets
+// the right one from the network some seconds or minutes later. To a panel that starts before that, the file
+// is "from the future": none of its minutes is one the clock has reached. Taking none of them and writing
+// the file anew, as a start does with a file it cannot use, throws a day away that was fine.
+//
+// So such a file is neither read nor replaced. The store records what comes, in memory, and writes nothing.
+// As soon as the clock has passed the file's saved_at, the file is read (by a goroutine the history tick
+// starts, like a write: SaveIfDue) and its days come into the store; from then on everything is as after any
+// start.
+//
+// The same file is what a panel finds whose clock WAS ahead when it wrote and is right now, and there the
+// clock may never pass saved_at. The two cannot be told apart, so the hold has an end: after dayHoldMax of
+// the panel's own running the file is given up and replaced with what the panel has measured since its
+// start. Without that end, one write under a clock a year ahead would keep the panel from writing a day ever
+// again.
+const dayHoldMax = time.Hour
+
+// held reports whether the file must be left alone now. When the clock has passed the time the file was
+// saved at, it starts reading it (the answer is still yes: until it is read). Caller holds d.mu, and nothing
+// is being written or read.
+func (d *DayStore) held(now time.Time) bool {
+	if now.Before(d.heldSince) { // the clock went back: the hour begins anew, so that it ends
+		d.heldSince = now
+	}
+	switch {
+	case d.heldUntil.IsZero():
+		return false
+	case !now.Before(d.heldUntil):
+		d.read(now)
+		return true
+	case now.Sub(d.heldSince) >= dayHoldMax:
+		slog.Warn("power: the panel's clock has not reached the time the file with the last 24 hours was saved at: the file is not used, and it is replaced now with what the panel has measured since its start",
+			"file", d.path, "saved_at", d.heldUntil.UTC().Format(time.RFC3339), "clock", now.UTC().Format(time.RFC3339))
+		d.heldUntil, d.dirty = time.Time{}, true
+		return false
+	}
+	return true
+}
+
+// read reads the file that was left alone at the start, in its own goroutine: the caller is the history
+// tick. Caller holds d.mu, and nothing is being written or read (d.saving is the one place for both).
+func (d *DayStore) read(now time.Time) {
+	done := make(chan struct{})
+	d.saving = done
+	path := d.path
+	go func() {
+		devs, _, err := readDayFile(path, now)
+		if err != nil {
+			slog.Warn("power: the last 24 hours are not known from before this start: the file is not used (the graphs start empty)",
+				"file", path, "error", err)
+		} else {
+			slog.Info("power: the panel's clock has passed the time the file with the last 24 hours was saved at: the file is read now", "file", path, "sources", len(devs))
+		}
+		d.mu.Lock()
+		d.heldUntil = time.Time{}
+		d.adopt(devs, now)
+		d.dirty = true // what was measured meanwhile, and what was removed, is not in the file
+		d.saving = nil
+		d.mu.Unlock()
+		close(done)
+	}()
 }
 
 // removeDayTemp removes what a write of the file left behind when the panel was killed in the middle of it:
@@ -153,28 +242,32 @@ func removeDayTemp(path string) {
 	}
 }
 
-// readDayFile reads the file. No file is no error and no source.
-func readDayFile(path string, now time.Time) (map[string]*dayDevice, error) {
+// readDayFile reads the file. No file is no error and no source. savedAt is when a file that can be used was
+// written; when that is later than now, its sources are not looked at (Load: the file is left alone).
+func readDayFile(path string, now time.Time) (devs map[string]*dayDevice, savedAt time.Time, err error) {
 	m, ok := dayMinute(now)
 	if !ok {
-		return nil, errors.New("the panel's clock is not a time the history can be kept for")
+		return nil, savedAt, errors.New("the panel's clock is not a time the history can be kept for")
 	}
 	raw, err := statefile.ReadFile(path, maxDayFile)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
+			return nil, savedAt, nil
 		}
-		return nil, err
+		return nil, savedAt, err
 	}
 	var f dayFileIn
 	if err := json.Unmarshal(raw, &f); err != nil {
-		return nil, fmt.Errorf("it is not what the panel writes (%d bytes: %v)", len(raw), err)
+		return nil, savedAt, fmt.Errorf("it is not what the panel writes (%d bytes: %v)", len(raw), err)
 	}
 	if f.Version != dayFileVersion || f.StepS != DayStepS {
-		return nil, fmt.Errorf("it is of another version (version %d, step %d s; this panel reads version %d with %d s)", f.Version, f.StepS, dayFileVersion, DayStepS)
+		return nil, savedAt, fmt.Errorf("it is of another version (version %d, step %d s; this panel reads version %d with %d s)", f.Version, f.StepS, dayFileVersion, DayStepS)
 	}
 	if len(f.Devices) > MaxDayDevices {
-		return nil, fmt.Errorf("it holds %d sources, more than the %d this panel ever writes", len(f.Devices), MaxDayDevices)
+		return nil, savedAt, fmt.Errorf("it holds %d sources, more than the %d this panel ever writes", len(f.Devices), MaxDayDevices)
+	}
+	if f.SavedAt.After(now) {
+		return nil, f.SavedAt, nil
 	}
 	out := map[string]*dayDevice{}
 	for id, in := range f.Devices {
@@ -182,7 +275,7 @@ func readDayFile(path string, now time.Time) (map[string]*dayDevice, error) {
 			out[id] = dv
 		}
 	}
-	return out, nil
+	return out, f.SavedAt, nil
 }
 
 // device is one source of the file as a ring, or nil when nothing of it can be used: a bad id, lists that do
@@ -284,13 +377,14 @@ func (d *DayStore) snapshot(now time.Time) dayFileOut {
 	return out
 }
 
-// SaveIfDue starts a write when one is due: the store has a file, something changed, no write is on its way,
-// and the last one was started daySaveEvery ago (or the clock went back since). It never waits: the write
-// runs in its own goroutine. The history tick calls it.
+// SaveIfDue starts a write when one is due: the store has a file that is not left alone (hold), something
+// changed, no write is on its way, and the last one was started daySaveEvery ago (or the clock went back
+// since). It never waits: the write runs in its own goroutine, and so does the read at the end of a hold. The
+// history tick calls it.
 func (d *DayStore) SaveIfDue(now time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.path == "" || !d.dirty || d.saving != nil {
+	if d.path == "" || d.saving != nil || d.held(now) || !d.dirty {
 		return
 	}
 	if !d.savedAt.IsZero() && !now.Before(d.savedAt) && now.Sub(d.savedAt) < daySaveEvery {
@@ -357,19 +451,31 @@ func putDayFile(path string, write func(string, []byte, os.FileMode) error, f da
 
 // Flush writes what is not in the file yet and waits for that write, at most wait in all: the panel is
 // stopping, and a disk that does not answer must not keep it from stopping. It reports whether everything is
-// written.
+// written. A file that is left alone (hold) is not written: the answer is no.
 func (d *DayStore) Flush(now time.Time, wait time.Duration) bool {
 	t := time.NewTimer(wait)
 	defer t.Stop()
-	for range 2 { // a write that is on its way holds an older copy: wait for it, then write the newest
+	// What may be on its way holds an older copy: wait for it, then write the newest. And a hold that ends
+	// now is a read before the write.
+	for range 3 {
 		d.mu.Lock()
 		done := d.saving
 		if done == nil {
-			if d.path == "" || !d.dirty {
+			switch {
+			case d.path == "":
 				d.mu.Unlock()
 				return true
+			case d.held(now):
+				if done = d.saving; done == nil { // not yet
+					d.mu.Unlock()
+					return false
+				}
+			case !d.dirty:
+				d.mu.Unlock()
+				return true
+			default:
+				done = d.start(now)
 			}
-			done = d.start(now)
 		}
 		d.mu.Unlock()
 		select {

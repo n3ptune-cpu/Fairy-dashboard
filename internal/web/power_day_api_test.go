@@ -145,7 +145,7 @@ func TestPowerDayAnswerForAWholeDay(t *testing.T) {
 	now := time.Now()
 	day := e.s.Poller.Power.Day
 	const id = "laptop/desk" // the fixture's plug: listed, so its day can be asked for
-	day.Forget("laptop/")
+	day.Forget("laptop/", now.Add(-48*time.Hour))
 	k, want := 500.0, 0.0                      // the plug's counter, and what it counts in the minutes with readings
 	for m := power.DaySlots - 1; m >= 1; m-- { // 23 h 59 min, ending a minute ago
 		if m >= 600 && m < 900 { // five hours without readings

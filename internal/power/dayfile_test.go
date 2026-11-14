@@ -699,7 +699,7 @@ func TestDayFileIsNotWrittenBehindACallersBackWithinAPeriod(t *testing.T) {
 		if i < 30 {
 			d.Record(now, []DaySample{{ID: "pc-b/plug-b", W: 2}}, nil)
 		}
-		if i == 30 && !d.Forget("pc-b/") {
+		if i == 30 && !d.Forget("pc-b/", now) {
 			t.Fatal("nothing was forgotten")
 		}
 		d.SaveIfDue(now)

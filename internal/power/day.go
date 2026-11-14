@@ -69,6 +69,8 @@ type dayDevice struct {
 	b   []dayBucket
 	cur uint32  // the minute of the newest bucket (0: none yet)
 	sum float64 // the sum of the watts of bucket cur's samples (its average is sum / n)
+	// not 0: the first and the last minute of the samples a day or more before cur that were not taken (back)
+	backAt, backLast uint32
 }
 
 // DaySample is one sample of one source: its watts, and what else its reading had.
@@ -87,10 +89,13 @@ type DayStore struct {
 
 	path      string
 	writeFile func(path string, data []byte, perm os.FileMode) error
-	saving    chan struct{} // not nil while a write is on its way; closed when it has ended
-	savedAt   time.Time     // when the last write was started (or the file was read)
-	loadedAt  time.Time     // when the file's days came into the store (zero: none did)
-	saveErr   string        // how the last write failed (failure), as it was logged
+	saving    chan struct{}        // not nil while a write is on its way; closed when it has ended
+	savedAt   time.Time            // when the last write was started (or the file was read)
+	loadedAt  time.Time            // when the file's days came into the store (zero: none did)
+	heldUntil time.Time            // not zero: the file is left alone until the clock has passed this (dayfile.go: hold)
+	heldSince time.Time            // when that began
+	forgot    map[string]time.Time // the hosts ("<agent id>/") that were removed, and when (Forget)
+	saveErr   string               // how the last write failed (failure), as it was logged
 }
 
 // NewDayStore returns an empty store that keeps nothing on disk until Load names its file.
@@ -131,12 +136,18 @@ func (d *DayStore) Record(now time.Time, samples []DaySample, present map[string
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if len(d.forgot) > 0 {
+		d.forgetOld(now)
+	}
 	for _, s := range samples {
 		if !validDayID(s.ID) || normalise.Reading(&s.W) == nil {
 			continue
 		}
 		dv := d.dev[s.ID]
 		if dv == nil {
+			if d.forgotten(s.ID) {
+				continue // its host was removed while this sample was on its way
+			}
 			if !d.room(now, m, s.ID, present) {
 				if !d.fullWarned {
 					d.fullWarned = true
@@ -149,8 +160,9 @@ func (d *DayStore) Record(now time.Time, samples []DaySample, present map[string
 			dv = &dayDevice{b: make([]dayBucket, DaySlots)}
 			d.dev[s.ID] = dv
 		}
-		dv.add(m, s)
-		d.dirty = true
+		if dv.add(m, s) {
+			d.dirty = true
+		}
 	}
 }
 
@@ -259,7 +271,18 @@ func (dv *dayDevice) expired(m uint32) bool { return uint64(dv.cur)+DaySlots <= 
 // the clock the panel has now, and each would otherwise come back into the graph when the clock reaches its
 // minute a second time, as a reading of then. Bucket m itself, when it is there, goes on: its average
 // continues from its number of samples (that is also what happens to the open minute after a restart).
-func (dv *dayDevice) add(m uint32, s DaySample) {
+//
+// A day or more before the newest bucket, that would empty the whole day, and for one sample under a wrong
+// clock (a machine that woke up with its clock at zero, a restored one) that is far too much: see back. It
+// reports whether the sample was taken.
+func (dv *dayDevice) add(m uint32, s DaySample) bool {
+	if uint64(m)+DaySlots <= uint64(dv.cur) {
+		if !dv.back(m) {
+			return false
+		}
+	} else {
+		dv.backAt = 0
+	}
 	if m < dv.cur {
 		for i := range dv.b {
 			if dv.b[i].minute > m {
@@ -297,6 +320,63 @@ func (dv *dayDevice) add(m uint32, s DaySample) {
 	}
 	if k := normalise.Finite(s.KWh, -normalise.MaxEnergyKWh, normalise.MaxEnergyKWh); k != nil {
 		b.kwh = *k
+	}
+	return true
+}
+
+// dayBackMinutes is how long a clock must stay a day or more before a source's newest bucket to be believed.
+const dayBackMinutes = 10
+
+// back decides about a sample for minute m that is a day or more before the source's newest bucket: is it
+// taken (and everything after m emptied, as add does for a clock that was set back)? One of two clocks was
+// wrong, the one of the buckets after m or the one of this sample.
+//
+//   - When the ring has more buckets in the day that ends with m than after m, the buckets after m are the
+//     odd ones (the clock was ahead for a tick or some minutes, and the day before it is still there): yes.
+//   - Otherwise this sample is the odd one: no, it is not taken and nothing is emptied. Until the clock has
+//     stayed there for dayBackMinutes, sample after sample, without one from the newest bucket's day in
+//     between: then it is the clock the panel has, and the source's day begins anew under it.
+func (dv *dayDevice) back(m uint32) bool {
+	day, after := 0, 0
+	for i := range dv.b {
+		switch b := &dv.b[i]; {
+		case b.n == 0:
+		case b.minute > m:
+			after++
+		case uint64(b.minute)+DaySlots > uint64(m):
+			day++
+		}
+	}
+	if day > after {
+		dv.backAt = 0
+		return true
+	}
+	if dv.backAt == 0 || m < dv.backAt || m-dv.backLast > dayBackMinutes { // another clock again: from the start
+		dv.backAt = m
+	}
+	dv.backLast = m
+	if m-dv.backAt < dayBackMinutes {
+		return false
+	}
+	dv.backAt = 0
+	return true
+}
+
+// merge fills the ring with the buckets of o, the same source as the file has it, for the 24 hours that end
+// with minute m: a minute this ring has a bucket for keeps it (it was measured under the clock the panel has
+// now), every other one gets the file's.
+func (dv *dayDevice) merge(o *dayDevice, m uint32) {
+	for i := range o.b {
+		ob, b := o.b[i], &dv.b[i]
+		if ob.n == 0 || (b.n > 0 && b.minute <= m && uint64(b.minute)+DaySlots > uint64(m)) {
+			continue
+		}
+		*b = ob
+	}
+	if o.cur > dv.cur {
+		dv.cur = o.cur
+		b := dv.b[dv.cur%DaySlots]
+		dv.sum = float64(b.avg) * float64(b.n)
 	}
 }
 
@@ -350,13 +430,20 @@ func (d *DayStore) Len() int {
 
 // Forget drops the day of every source whose id starts with prefix (a host was removed: its devices'
 // "<agent id>/") and reports whether there was one. The file still has them until it is written again: the
-// caller writes it (Flush), as Poller.RemoveAgent does.
-func (d *DayStore) Forget(prefix string) (dropped bool) {
+// caller writes it (Flush), as Poller.ForgetPowerDay does.
+//
+// The removal is remembered for a while (forgotten): a sample of such a source that was taken before the
+// removal and comes after it starts no new day, and a file that is read later (hold) brings none back.
+func (d *DayStore) Forget(prefix string, now time.Time) (dropped bool) {
 	if prefix == "" {
 		return false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.forgot == nil {
+		d.forgot = map[string]time.Time{}
+	}
+	d.forgot[prefix] = now
 	for id := range d.dev {
 		if strings.HasPrefix(id, prefix) {
 			delete(d.dev, id)
@@ -364,6 +451,34 @@ func (d *DayStore) Forget(prefix string) (dropped bool) {
 		}
 	}
 	return dropped
+}
+
+// dayForgetFor is how long after a host's removal no sample starts a day for one of its sources: longer than
+// a history tick takes, shorter than adding a host again.
+const dayForgetFor = time.Minute
+
+// forgotten reports whether id is a source of a host that was removed a moment ago, or while the file is left
+// alone. Caller holds d.mu.
+func (d *DayStore) forgotten(id string) bool {
+	for prefix := range d.forgot {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// forgetOld takes the removals that are over out of the list: a minute old (by a clock that may have gone
+// back), and no file is waiting to be read. Caller holds d.mu.
+func (d *DayStore) forgetOld(now time.Time) {
+	if !d.heldUntil.IsZero() {
+		return
+	}
+	for prefix, at := range d.forgot {
+		if age := now.Sub(at); age >= dayForgetFor || age <= -dayForgetFor {
+			delete(d.forgot, prefix)
+		}
+	}
 }
 
 // Series is GET /api/power/day for one source: its last 24 hours as lists, and the day in numbers.
