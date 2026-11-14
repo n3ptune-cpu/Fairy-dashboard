@@ -480,6 +480,80 @@ func TestContractAConfirmationTheRealAgentRefuses(t *testing.T) {
 	}
 }
 
+// Keep on against the real agent, and a cancel the machine cannot write down. While the record cannot be
+// written the agent answers the cancel with 500 and still shows its run as armed: Keep on says "NOT
+// cancelled" with the time, the strip keeps naming the machine, and a run that was cancelled "leave on"
+// sends its cancel again and again. When the record can be written again, the next cancel is the one that
+// counts, and only then does anything say "stays ON".
+func TestContractACancelTheRealAgentCannotWriteDown(t *testing.T) {
+	r, a := newContractRig(t, true)
+	_, res := r.approved(t, "POST", "/api/admin/wake-update", map[string]any{"hosts": []string{"pc-a"}})
+	if res["ok"] != true {
+		t.Fatal(res)
+	}
+	run, _ := r.s.WakeRuns.Snapshot()
+	r.until(t, "pc-a armed", 300, func() bool { return r.host("pc-a").Arm == wakerun.ArmArmed })
+	at := r.host("pc-a").SelfOffAt.UTC().Format("15:04 UTC")
+	r.admin = r.cookie(controller(), 0)
+	r.csrf = []string{"Cookie", r.admin, "X-Requested-With", "fairy", "Content-Type", "application/json"}
+	// the writers' lock of the run record cannot be taken: nothing of a run can be written down
+	lock := filepath.Join(filepath.Dir(a.trust), agentapproval.RunLockName)
+	_ = os.Remove(lock)
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	no := r.req("POST", "/api/systems/pc-a/wake-update/keep-on", map[string]any{})
+	if no.code == 200 || !strings.Contains(string(no.raw), "NOT cancelled (") || !strings.Contains(string(no.raw), "PC-A may switch itself off at "+at+". Try again, or stop it at the machine.") {
+		t.Fatalf("Keep on while the record cannot be written: %d %s", no.code, no.raw)
+	}
+	if a.sent("/power", 500) != 1 {
+		t.Fatalf("the real agent's answer to that cancel: %v", a.posts)
+	}
+	if st := a.run(); st == nil || st.State != api.RunArmed {
+		t.Fatalf("the real agent shows its run as %+v after a cancel it answered 500", st)
+	}
+	armed := func() int {
+		list, _ := r.req("GET", "/api/admin/wake-update/waiting", nil).body["armed"].([]any)
+		return len(list)
+	}
+	if armed() != 1 {
+		t.Fatal("the strip no longer names the machine")
+	}
+	// the run is cancelled, "the woken machines stay on": its cancels get the same answer, again and again
+	if c := r.req("DELETE", "/api/admin/wake-update/"+run.ID, map[string]any{"switch_off": false}); c.code != 200 {
+		t.Fatalf("the run's cancel: %d %s", c.code, c.raw)
+	}
+	r.tick(45)
+	if n := a.sent("/power", 500); n < 4 {
+		t.Fatalf("the run sent %d cancels in 45 s: %v", n-1, a.posts)
+	}
+	if h := r.host("pc-a"); h.Final() || armed() != 1 || a.run().State != api.RunArmed {
+		t.Fatalf("while no cancel got through: final %v (%q), armed in the strip %d, the agent %+v", h.Final(), h.Text, armed(), a.run())
+	}
+	if h := r.host("pc-a"); !strings.Contains(h.Text, "not cancelled") && !strings.Contains(h.Text, "NOT cancelled") && !strings.Contains(h.Text, "switch itself off") {
+		t.Fatalf("the row while the cancels fail says nothing of it: %q", h.Text)
+	}
+	// the record can be written again
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	r.until(t, "the run over", 120, func() bool { x, _ := r.s.WakeRuns.Snapshot(); return x == nil })
+	if st := a.run(); st == nil || st.State != api.RunCancelled || a.sent("/power", 200) < 1 {
+		t.Fatalf("after the record could be written: %+v %v", st, a.posts)
+	}
+	if h := r.host("pc-a"); h.State != wakerun.StLeftOn || !strings.Contains(h.Text, "its switch-off was called off") || !strings.HasSuffix(h.Text, "It is ON.") || h.MayGoOff {
+		t.Fatalf("pc-a: %s %q", h.State, h.Text)
+	}
+	if armed() != 0 {
+		t.Fatal("the strip still names a machine that was kept on")
+	}
+	// and Keep on for a machine with no run: answered 200 by the real agent, "stays ON"
+	yes := r.req("POST", "/api/systems/pc-a/wake-update/keep-on", map[string]any{})
+	if yes.code != 200 || yes.body["stays_on"] != true || yes.body["message"] != "PC-A stays ON: its switch-off was called off (it shows its run as cancelled)." {
+		t.Fatalf("Keep on afterwards: %d %s", yes.code, yes.raw)
+	}
+}
+
 // An agent as v0.8.0 was: the check, and a checker that takes no runs. Its block has no "runs", it is in no
 // run with the sentence that names v0.9.0, and what it answers to a ticket all the same is "not armed".
 func TestContractAnAgentWithoutRuns(t *testing.T) {
