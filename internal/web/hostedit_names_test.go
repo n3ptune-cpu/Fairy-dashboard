@@ -1,10 +1,13 @@
 package web
 
 import (
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/adminstate"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 )
 
 // "Edit host", one name for one host. A host's name is typed to confirm a power action on it, so no two rows
@@ -150,5 +153,54 @@ func TestEditHostNameOfAGuestIsTakenAndOfADeviceIsNot(t *testing.T) {
 		if p := r.ok(ehNAS, map[string]any{"name": name}); r.row(ehNAS)["name"] != name {
 			t.Errorf("the NAS named %q like a device: %s", name, p.raw)
 		}
+	}
+}
+
+// A name that state.json keeps for a host that has no row right now is taken too (second look of the review,
+// a2): an added host that is left out at this start ("Re-pair it"), a Proxmox node without an agent whose API
+// does not answer. It comes back under that name. So is the name an added host that is not polled right now
+// was added under.
+func TestEditHostNameKeptForAHostThatIsNotShownRightNow(t *testing.T) {
+	cfg := hedConfig(t)
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// box-m is in the list of added hosts and not in the running configuration (as after a start that left it out)
+	if err := managed.NewStore(cfg.DataDir).Put(managed.Host{ID: "box-m", Name: "Box-M", URL: "http://box-m", OS: "linux", AddedAt: time.Now().UTC()},
+		managed.Secret{Token: strings.Repeat("m", 32)}); err != nil {
+		t.Fatal(err)
+	}
+	r := hedStart(t, cfg, hedBackend())
+	r.hedGive("pc-z", "Den") // pc-z: no row and no agent right now
+	for name, want := range map[string]string{
+		"Den":    "name: Den is kept as the name of another host (pc-z) that is not shown right now, and it comes back under that name",
+		" den ":  "name: Den is kept as the name of another host (pc-z) that is not shown right now",
+		"BOX‑M":  "name: Box-M is kept as the name of another host (box-m) that is not shown right now",
+		"box-m":  "name: Box-M is kept as the name of another host (box-m) that is not shown right now",
+		"Box-M.": "",
+	} {
+		p := r.put("pc-b", map[string]any{"name": name})
+		if want == "" && p.code == 200 {
+			continue
+		}
+		if p.code != 422 || want == "" || !strings.Contains(string(p.raw), want) {
+			t.Errorf("pc-b named %q: %d %s", name, p.code, p.raw)
+		}
+	}
+	// Reset: config.yaml's name of pc-b is kept for a host that is not there right now
+	r.ok("pc-b", map[string]any{"name": "Attic"})
+	r.hedGive("pc-y", "PC-B")
+	if p := r.put("pc-b", map[string]any{"reset": []any{map[string]any{"field": "name"}}}); p.code != 422 ||
+		!strings.Contains(string(p.raw), "config.yaml's name of this host is PC-B, and another host (pc-y) was given that name here: rename that host first") {
+		t.Errorf("Reset: %d %s", p.code, p.raw)
+	}
+	// what is kept under this machine's own id is its own: pc-a keeps its name, and can have it spelled anew
+	r.ok("pc-a", map[string]any{"name": "Gaming PC"})
+	if p := r.ok("pc-a", map[string]any{"name": "GAMING  pc"}); r.row("pc-a")["name"] != "GAMING pc" {
+		t.Errorf("another spelling of its own name: %s", p.raw)
+	}
+	r.ok("pc-a", map[string]any{"name": "Gaming PC"})
+	if p := r.ok("pc-a", map[string]any{"name": "Gaming PC", "plugs": []any{map[string]any{"id": "pc-a/desk", "in_total": false}}}); len(strs(p.body["changed"])) != 1 {
+		t.Errorf("its own name sent again with a link: %s", p.raw)
 	}
 }

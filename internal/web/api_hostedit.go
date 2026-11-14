@@ -111,6 +111,7 @@ type hoHost struct {
 	relays   []hoRelay                                                                   // the agents that may send wake packets, this machine aside
 	others   []hoOther                                                                   // the other hosts, for whose names this one must not be taken
 	guests   []hoOther                                                                   // ... and the guests (their names are typed to confirm a shutdown or a stop too)
+	mine     func(id string) bool                                                        // whether something kept under id is about this machine
 	wolWith  func(base *config.Wol, e adminstate.WolEdit) (w *config.Wol, unused string) // poller.WolWith for this machine
 }
 
@@ -119,9 +120,10 @@ type hoHost struct {
 // without the panel's, and its agent's name: the one it is shown under after a Reset, the other after a
 // restart of the panel while the machine is off).
 type hoOther struct {
-	row   string
-	ids   []string
-	names []string
+	row    string
+	ids    []string
+	names  []string
+	absent bool // a host of the Add host list that is not polled right now: it has no row, and comes back under its name
 }
 
 type hoRelay struct {
@@ -149,9 +151,25 @@ func (s *Server) hostOptionsHost(m *hoMachine) *hoHost {
 		}
 		h.relays = append(h.relays, r)
 	}
+	h.mine = func(id string) bool { return id == row || m.mine(id) }
+	h.others, h.guests = s.otherNames(h.mine)
+	return h
+}
+
+// otherNames collects, for a machine (mine: whether an id is one of its own), everybody else whose name it
+// must not be taken for: the other hosts (others) and the guests. A host is a row of a node or an agent, with
+// the ids its panel-given name can be kept under and the names the configuration has for it; an agent that
+// has no row (it is a part of no row yet: added a moment ago, never polled); and a host of the Add host list
+// that the panel does not poll right now (its tokens file is damaged: "Re-pair it"), which comes back under
+// its name.
+func (s *Server) otherNames(mine func(id string) bool) (others, guests []hoOther) {
+	p := s.Poller
+	known := func(id string) bool {
+		return slices.ContainsFunc(others, func(o hoOther) bool { return slices.Contains(o.ids, id) })
+	}
 	for _, x := range p.Snapshot() {
 		switch {
-		case x.ID == row || m.mine(x.ID):
+		case mine(x.ID):
 		case x.Kind == "node" || x.Kind == "agent":
 			o := hoOther{row: x.ID, ids: p.MachineIDs(x.ID), names: []string{p.BaseName(x.ID)}}
 			for _, id := range o.ids {
@@ -159,17 +177,25 @@ func (s *Server) hostOptionsHost(m *hoMachine) *hoHost {
 					o.names = append(o.names, a.Name)
 				}
 			}
-			h.others = append(h.others, o)
+			others = append(others, o)
 		default:
-			h.guests = append(h.guests, hoOther{row: x.ID, names: []string{x.Name}})
+			guests = append(guests, hoOther{row: x.ID, names: []string{x.Name}})
 		}
 	}
-	for _, a := range p.Agents() { // an agent that has no row yet (never polled): its name is a host's name all the same
-		if a.Name != "" && !m.mine(a.ID) && !slices.ContainsFunc(h.others, func(o hoOther) bool { return slices.Contains(o.ids, a.ID) }) {
-			h.others = append(h.others, hoOther{row: a.ID, ids: []string{a.ID}, names: []string{a.Name}})
+	for _, a := range p.Agents() {
+		if a.Name != "" && !mine(a.ID) && !known(a.ID) {
+			others = append(others, hoOther{row: a.ID, ids: []string{a.ID}, names: []string{a.Name}})
 		}
 	}
-	return h
+	if s.Managed != nil {
+		added, _ := s.Managed.Load() // a list that cannot be read adds nobody here: Add host refuses on its own then (idFree)
+		for _, x := range added {
+			if x.Name != "" && !mine(x.ID) && !mine(x.Shown()) && !known(x.ID) {
+				others = append(others, hoOther{row: x.ID, ids: slices.Compact([]string{x.ID, x.Shown()}), names: []string{x.Name}, absent: true})
+			}
+		}
+	}
+	return others, guests
 }
 
 // A host's name is typed to confirm a power action on it, and a guest's to confirm its shutdown or stop
@@ -184,6 +210,7 @@ type hoName struct {
 	name, row string
 	guest     bool
 	panel     bool
+	absent    bool   // its host has no row right now: the name is kept for it (state.json, the Add host list)
 	shown     string // for a config name: what the host is shown under now
 }
 
@@ -212,10 +239,40 @@ func (h *hoHost) names(o adminstate.HostOptions) (shown, config map[string]hoNam
 			}
 		}
 		if now != "" {
-			shown[adminstate.NameKey(now)] = hoName{name: now, row: x.row, panel: panel}
+			shown[adminstate.NameKey(now)] = hoName{name: now, row: x.row, panel: panel, absent: x.absent}
+		}
+	}
+	// ... and a name that state.json keeps under an id that is nobody's row right now: an added host that is
+	// left out at this start, a Proxmox node without an agent whose API does not answer, a host taken out of
+	// config.yaml. The name waits for that host, and is on its row the moment it is back.
+	for _, id := range slices.Sorted(maps.Keys(o.Hosts)) {
+		e := o.Hosts[id]
+		if e.Name == "" || (h.mine != nil && h.mine(id)) || slices.ContainsFunc(h.others, func(x hoOther) bool { return slices.Contains(x.ids, id) }) {
+			continue
+		}
+		if key := adminstate.NameKey(e.Name); shown[key].name == "" {
+			shown[key] = hoName{name: e.Name, row: id, panel: true, absent: true}
 		}
 	}
 	return shown, config
+}
+
+// nameRefusal says why name cannot be given to a host: whose it is already (shown and config are what names
+// returns). "": it is free. A guest's name is in shown for Edit host only: Add host does not collect guests.
+func nameRefusal(name string, shown, config map[string]hoName) string {
+	key := adminstate.NameKey(name)
+	switch t, taken := shown[key]; {
+	case taken && t.guest:
+		return fmt.Sprintf("a guest is called %s already", t.name)
+	case taken && t.absent:
+		return fmt.Sprintf("%s is kept as the name of another host (%s) that is not shown right now, and it comes back under that name", t.name, t.row)
+	case taken:
+		return fmt.Sprintf("another host is called %s already", t.name)
+	}
+	if t, taken := config[key]; taken {
+		return fmt.Sprintf("%s is the name config.yaml has for another host (shown as %s now): after a Reset there, two hosts would have one name", t.name, t.shown)
+	}
+	return ""
 }
 
 func (h *hoHost) relayName(id string) string {
@@ -355,19 +412,15 @@ func (m *hoMachine) applyHost(o *adminstate.HostOptions, req hostOptionsReq) (li
 		if err != nil || name == "" {
 			return nil, nil, bad("name: not a name")
 		}
-		if e.Name = name; name == h.baseName {
+		switch {
+		case name == h.baseName:
 			e.Name = "" // config.yaml's own name: nothing to keep (and the same as a Reset: below)
-		} else {
+		default:
 			shown, config := h.names(*o)
-			key := adminstate.NameKey(name)
-			if t, taken := shown[key]; taken && t.guest {
-				return nil, nil, bad("name: a guest is called %s already", t.name)
-			} else if taken {
-				return nil, nil, bad("name: another host is called %s already", t.name)
+			if why := nameRefusal(name, shown, config); why != "" {
+				return nil, nil, bad("name: %s", why)
 			}
-			if t, taken := config[key]; taken {
-				return nil, nil, bad("name: %s is the name config.yaml has for another host (shown as %s now): after a Reset there, two hosts would have one name", t.name, t.shown)
-			}
+			e.Name = name
 		}
 	}
 	if was.Name != "" && e.Name == "" {
