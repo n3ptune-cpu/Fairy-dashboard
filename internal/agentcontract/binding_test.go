@@ -570,11 +570,11 @@ func TestBindingARestartKeepsTheRecordAndTheRunExclusion(t *testing.T) {
 		t.Fatalf("pc-a's block after the restart, while it is silent: %v", ap)
 	}
 	st, page := p2.call("GET", "/api/admin/wake-update", nil)
-	if h := runRow(t, page, "pc-a"); st != 200 || h["choice"] != "" || h["approval"] != "required" || !strings.HasPrefix(fmt.Sprint(h["why"]), "needs approval: not supported in runs yet") {
+	if h := runRow(t, page, "pc-a"); st != 200 || h["choice"] != "" || h["approval"] != "required" || !strings.HasPrefix(fmt.Sprint(h["why"]), "needs Fairy-agent v0.9.0 or newer to be in a run") {
 		t.Fatalf("pc-a is offered to a run after the restart: %v", h)
 	}
 	for _, body := range []any{map[string]any{"update_only": []string{"pc-a"}}, map[string]any{"update_only": []string{"pc-a", "pc-b"}}} {
-		if st, out := p2.call("POST", "/api/admin/wake-update", body); st != 400 || !strings.HasPrefix(fmt.Sprint(out["detail"]), "PC-A needs approval: not supported in runs yet") {
+		if st, out := p2.call("POST", "/api/admin/wake-update", body); st != 400 || !strings.HasPrefix(fmt.Sprint(out["detail"]), "PC-A needs Fairy-agent v0.9.0 or newer to be in a run") {
 			t.Fatalf("a run with pc-a %v: %d %v", body, st, out)
 		}
 	}

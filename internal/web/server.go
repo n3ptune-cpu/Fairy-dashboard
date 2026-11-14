@@ -91,6 +91,9 @@ type Server struct {
 	savedOnce sync.Once
 	// WakeRuns runs "Update unpowered hosts" (Updates page): one run at a time, in the background.
 	WakeRuns *wakerun.Manager
+	// tickets keeps the passkey approval of a run's start, in memory only, for the machines that check
+	// approvals themselves (runtickets.go).
+	tickets *runTickets
 
 	seenMu  sync.Mutex
 	seen    map[string]time.Time // subject -> last "last seen" write
@@ -181,6 +184,7 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	s.WakeRuns = wakerun.New(filepath.Join(cfg.DataDir, "wake-update.json"),
 		wakerun.NewSettings(wu.OnlineTimeoutS, wu.SettleS, wu.ShutdownDelayS, wu.AgentRequestsPerMin).WithOffAfter(wu.OffAfterS), runOps{s})
 	s.WakeRuns.Event = s.wakeRunEvent
+	s.tickets = &runTickets{}
 	if p.OnMachine == nil { // the record of machine ids: its alarms go to the audit log and the Notifications list
 		p.OnMachine = s.machineEvent
 	}

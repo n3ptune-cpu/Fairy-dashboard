@@ -44,7 +44,7 @@ func TestRunsLeaveOutMachinesThatCheckApprovals(t *testing.T) {
 	}
 	f.accept(t, "pc-a", "farm-machine-id-of-pc-a-01") // an admin accepts its id: on record from here on
 	h = wuHostRow(t, page(), "pc-a")
-	if h["choice"] != "" || h["approval"] != "required" || !strings.HasPrefix(h["why"].(string), "needs approval: not supported in runs yet") {
+	if h["choice"] != "" || h["approval"] != "required" || !strings.HasPrefix(h["why"].(string), "needs Fairy-agent v0.9.0 or newer to be in a run") {
 		t.Fatalf("pc-a while it is on: %v", h)
 	}
 	if h := wuHostRow(t, page(), "pc-b"); h["choice"] != "update_only" || h["approval"] != nil {
@@ -55,7 +55,7 @@ func TestRunsLeaveOutMachinesThatCheckApprovals(t *testing.T) {
 	f.on["pc-a"] = false
 	e.b.Mu.Unlock()
 	f.offline()
-	if h := wuHostRow(t, page(), "pc-a"); h["power"] != "off" || h["choice"] != "" || !strings.HasPrefix(h["why"].(string), "needs approval: not supported in runs yet") {
+	if h := wuHostRow(t, page(), "pc-a"); h["power"] != "off" || h["choice"] != "" || !strings.HasPrefix(h["why"].(string), "needs Fairy-agent v0.9.0 or newer to be in a run") {
 		t.Fatalf("pc-a while it is off: %v", h)
 	}
 	before := len(f.requests())
@@ -65,7 +65,7 @@ func TestRunsLeaveOutMachinesThatCheckApprovals(t *testing.T) {
 		map[string]any{"hosts": []string{"pc-a"}, "update_only": []string{"pc-b"}},
 	} {
 		r := e.wuStart(a.sess, body)
-		if d, _ := r.body["detail"].(string); r.code != 400 || !strings.HasPrefix(d, "PC-A needs approval: not supported in runs yet") {
+		if d, _ := r.body["detail"].(string); r.code != 400 || !strings.HasPrefix(d, "PC-A needs Fairy-agent v0.9.0 or newer to be in a run") {
 			t.Fatalf("a start with pc-a %v: %d %s", body, r.code, r.raw)
 		}
 	}
@@ -162,7 +162,7 @@ func TestAMachineWithTheCheckIsInNoRunAfterARestartOfThePanel(t *testing.T) {
 		t.Fatalf("the page: %d %s", page.code, page.raw)
 	}
 	h := wuHostRow(t, page, "pc-a")
-	if h["power"] != "off" || h["choice"] != "" || h["approval"] != "required" || !strings.HasPrefix(h["why"].(string), "needs approval: not supported in runs yet") {
+	if h["power"] != "off" || h["choice"] != "" || h["approval"] != "required" || !strings.HasPrefix(h["why"].(string), "needs Fairy-agent v0.9.0 or newer to be in a run") {
 		t.Fatalf("pc-a after the restart, off for a quarter of an hour: %v", h)
 	}
 	if h := wuHostRow(t, page, "pc-b"); h["power"] != "off" || h["choice"] != "wake" || h["approval"] != nil {
@@ -172,7 +172,7 @@ func TestAMachineWithTheCheckIsInNoRunAfterARestartOfThePanel(t *testing.T) {
 	before := len(f2.requests())
 	for _, body := range []any{map[string]any{"hosts": []string{"pc-a"}}, map[string]any{"hosts": []string{"pc-a", "pc-b"}}} {
 		r := e2.wuStart(a.sess, body)
-		if d, _ := r.body["detail"].(string); r.code != 400 || !strings.HasPrefix(d, "PC-A needs approval: not supported in runs yet") {
+		if d, _ := r.body["detail"].(string); r.code != 400 || !strings.HasPrefix(d, "PC-A needs Fairy-agent v0.9.0 or newer to be in a run") {
 			t.Fatalf("a start with pc-a %v: %d %s", body, r.code, r.raw)
 		}
 	}
@@ -256,7 +256,7 @@ func TestSwitchOnForRunsSaysWhatTheRowSays(t *testing.T) {
 	f.tick()
 	f.accept(t, "pc-a", "farm-machine-id-of-pc-a-01")
 	page := func() resp { return e.do("GET", "/api/admin/wake-update", nil, "Cookie", a.sess) }
-	if h := wuHostRow(t, page(), "pc-a"); h["opted_in"] != false || !strings.HasPrefix(h["why"].(string), "needs approval: not supported in runs yet") {
+	if h := wuHostRow(t, page(), "pc-a"); h["opted_in"] != false || !strings.HasPrefix(h["why"].(string), "needs Fairy-agent v0.9.0 or newer to be in a run") {
 		t.Fatalf("pc-a before the switch: %v", h)
 	}
 	put := func(id string) resp {
@@ -272,17 +272,17 @@ func TestSwitchOnForRunsSaysWhatTheRowSays(t *testing.T) {
 		t.Fatalf("pc-a inside the window, not asked: %d %s", r.code, r.raw)
 	}
 	r = e.do("PUT", "/api/systems/pc-a/wake-update", map[string]any{"enabled": true, "asked": true}, append([]string{"Cookie", a.sess}, wuWrite...)...)
-	if msg, _ := r.body["message"].(string); r.code != 200 || msg != "PC-A is switched on, but no run can take it: it checks a passkey approval itself" || strings.Contains(msg, "can now be chosen") {
+	if msg, _ := r.body["message"].(string); r.code != 200 || msg != "PC-A is switched on, but no run can take it: its agent is older than Fairy-agent v0.9.0" || strings.Contains(msg, "can now be chosen") {
 		t.Fatalf("pc-a: %d %s", r.code, r.raw)
 	}
-	if h := wuHostRow(t, page(), "pc-a"); h["opted_in"] != true || h["choice"] != "" || !strings.HasPrefix(h["why"].(string), "needs approval: not supported in runs yet") {
+	if h := wuHostRow(t, page(), "pc-a"); h["opted_in"] != true || h["choice"] != "" || !strings.HasPrefix(h["why"].(string), "needs Fairy-agent v0.9.0 or newer to be in a run") {
 		t.Fatalf("pc-a after the switch: %v", h)
 	}
 	if r := put("pc-b"); r.code != 200 || !strings.HasPrefix(r.body["message"].(string), "PC-B can now be chosen for \"Update unpowered hosts\"") {
 		t.Fatalf("pc-b: %d %s", r.code, r.raw)
 	}
 	// (in its column, and under the name on a phone, where that column is scrolled out of view: audit 5, r2-b2-07)
-	if js := appJS(t); !strings.Contains(js, "const whyNot = (h) => ((h.opted_in && !h.choice) || h.approval ? h.why || \"\" : \"\");") ||
+	if js := appJS(t); !strings.Contains(js, "const whyNot = (h) => ((h.opted_in && !h.choice) || h.no_run ? h.why || \"\" : \"\");") ||
 		!strings.Contains(js, "${whyNot(h) ? `<div class=\"note wu-why-col\">${esc(whyNot(h))}</div>` : \"\"}") || !strings.Contains(js, "${whyNot(h) ? `<span class=\"note wu-why\">${esc(whyNot(h))}</span>` : \"\"}") {
 		t.Error("the row shows the reason only after the switch")
 	}

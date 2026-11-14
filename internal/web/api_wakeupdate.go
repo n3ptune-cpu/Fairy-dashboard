@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/release"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
-	"github.com/n3ptune-cpu/Fairy-dashboard/internal/approval"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
@@ -29,6 +29,9 @@ import (
 //   - POST   /api/admin/wake-update          start a run with exactly the machines and options of the body
 //   - DELETE /api/admin/wake-update/{id}     cancel the run that is going
 //   - PUT    /api/systems/{id}/wake-update   switch a machine on or off for these runs
+//   - POST   /api/admin/wake-update/{id}/confirm, GET /api/admin/wake-update/waiting,
+//     POST /api/systems/{id}/wake-update/keep-on: the run's second confirmation for machines that check
+//     approvals themselves, what the banner shows, and "Keep on" (api_wakeupdate_runs.go)
 //
 // Who may: admins, the same people who may use the power menu. All three writes need a browser session: an
 // API token cannot "confirm it's you", and a run goes on for many minutes after the one request that starts
@@ -46,6 +49,9 @@ func (s *Server) wakeUpdateRoutes() {
 	s.mux.HandleFunc("POST /api/admin/wake-update", s.h(s.wakeUpdateStart))
 	s.mux.HandleFunc("DELETE /api/admin/wake-update/{id}", s.h(s.wakeUpdateCancel))
 	s.mux.HandleFunc("PUT /api/systems/{id}/wake-update", s.h(s.wakeUpdateSwitch))
+	s.mux.HandleFunc("GET /api/admin/wake-update/waiting", s.h(s.wakeUpdateWaiting))
+	s.mux.HandleFunc("POST /api/admin/wake-update/{id}/confirm", s.h(s.wakeUpdateConfirm))
+	s.mux.HandleFunc("POST /api/systems/{id}/wake-update/keep-on", s.h(s.wakeUpdateKeepOn))
 }
 
 // wuHost is one machine on the page: whether it is switched on for these runs, and how it could be in a run
@@ -81,22 +87,31 @@ type wuHost struct {
 	// unticked: a machine that resumes from sleep does not look freshly started, and a run leaves it on.
 	Asleep bool `json:"asleep,omitempty"`
 	// Approval: the machine checks a passkey approval itself before an update or a shutdown ("required",
-	// "broken", "unknown"; empty: it does not). A run cannot take such a machine yet (wuNeedsApproval). It is
-	// what the machine says now or, while it is silent, also after a restart of the panel, what the panel has
-	// on record for it (audit 5, r1-b2-03: the panel used to forget, offer the machine as "off", wake it and
-	// leave it on). "alarm": the panel's decision about which machine it is, is an alarm.
+	// "broken", "unknown"; empty: it does not). It is what the machine says now or, while it is silent, also
+	// after a restart of the panel, what the panel has on record for it (audit 5, r1-b2-03: the panel used to
+	// forget, offer the machine as "off", wake it and leave it on). "alarm": the panel's decision about which
+	// machine it is, is an alarm.
 	Approval string `json:"approval,omitempty"`
-	// approvalWhy is the sentence for that (wuNeedsApproval, or the alarm in words).
-	approvalWhy string
-	Version     string `json:"version,omitempty"`
-	Behind      *bool  `json:"behind"`
+	// Checked: it is such a machine, and a run can take it (Fairy-agent v0.9.0: the run's ticket and its second
+	// confirmation; api_wakeupdate_runs.go). NoRun: it is such a machine and no run can take it; noRun is the
+	// sentence that says why (wuNeedsNewAgent, the alarm in words, ...), noRunShort the few words of it.
+	Checked    bool `json:"checked,omitempty"`
+	NoRun      bool `json:"no_run,omitempty"`
+	noRun      string
+	noRunShort string
+	// agentID: the agent the requests for it go to.
+	agentID string
+	Version string `json:"version,omitempty"`
+	Behind  *bool  `json:"behind"`
 }
 
-// wuNeedsApproval is why a machine that checks passkey approvals itself is in no run. A run sends its update
-// and its shutdown many minutes after the one confirmation that starts it, and the machine accepts an approval
-// only for a question it was asked a few minutes before: the run has none to give it. Until runs can ask for
-// one after the wake, such a machine is not taken at all, rather than woken and then left on.
-const wuNeedsApproval = "needs approval: not supported in runs yet (this machine checks a passkey approval itself before an update or a shutdown; use Update and Shut down on its own page)"
+// wuNeedsNewAgent is why a machine that checks passkey approvals itself and does not say that its checker
+// takes runs ("runs" in its approval block: Fairy-agent v0.9.0) is in no run. A run sends its update and its
+// shutdown many minutes after the confirmation that starts it, and such a machine accepts an approval only for
+// a question it was asked a few minutes before: the run has none to give it. It is not taken at all, rather
+// than woken and then left on.
+const wuNeedsNewAgent = "needs Fairy-agent v0.9.0 or newer to be in a run (this machine checks a passkey approval itself before an update or a shutdown, " +
+	"and its agent, or on Windows its running helper, cannot take a run's ticket yet; use Update and Shut down on its own page)"
 
 type wakeUpdatePage struct {
 	Hosts    []wuHost         `json:"hosts"`
@@ -211,6 +226,17 @@ func (o runOps) Observe(id string) wakerun.Observation {
 		if p := sys.PowerPending; p != nil {
 			obs.Pending = &wakerun.Pending{Action: p.Action, At: p.At, DelayS: p.DelayS}
 		}
+		// What its latest answer says about runs (a machine that checks approvals itself; never from an older answer).
+		if ap := sys.Approval; ap != nil {
+			obs.Runs = ap.Runs == 1
+			if r := ap.Run; r != nil {
+				obs.Run = &wakerun.RunBlock{ID: r.ID, State: r.State}
+				if r.OffAt > 0 {
+					obs.Run.OffAt = time.Unix(r.OffAt, 0).UTC()
+				}
+			}
+			obs.HelperStopped = ap.EnforcedBy == api.EnforcedByHelper && sys.Helper != nil && sys.Helper.State == api.HelperStopped
+		}
 	}
 	if su := info.SelfUpdate; su != nil {
 		obs.UpdateState, _ = su["state"].(string)
@@ -320,14 +346,35 @@ func (o runOps) Wake(ctx context.Context, id, by string) error {
 	return err
 }
 
-// Update is the Update button's request. grant is the approval of item 1.1: a run has none (wuNeedsApproval),
-// so a machine that asks for one answers approval_required and the run says so.
-func (o runOps) Update(ctx context.Context, id, by string, _ any) error {
+// Update is the Update button's request. grant is nil for a machine without the check: the request is sent as
+// it always was (a machine whose check was switched on meanwhile answers approval_required, and the run says
+// so). For a machine with the check it is the run's *wakerun.Grant, and the request is one of two, never the
+// plain one: with the approval the passkey of the start gave for this machine's own challenge (Start: the
+// machine was on), taken from the tickets once; or naming the run whose confirmation the machine accepted.
+func (o runOps) Update(ctx context.Context, id, by string, grant any) error {
 	a, ok := o.s.Poller.AgentFor(id)
 	if !ok {
 		return &wakerun.OpError{Text: "the machine is no longer in the panel"}
 	}
-	_, err := powerctl.UpdateAgent(ctx, o.s.Poller, a, by)
+	g, _ := grant.(*wakerun.Grant)
+	switch {
+	case grant != nil && (g == nil || api.CheckRunID(g.Run) != nil):
+		return &wakerun.OpError{Text: "the run has no approval of this machine for it; nothing was sent"}
+	case g == nil:
+		_, err := powerctl.UpdateAgent(ctx, o.s.Poller, a, by)
+		return opError(err)
+	case g.Start:
+		if err := o.s.bindingRefusal(a.ID, a.DisplayName()); err != nil {
+			return opError(err)
+		}
+		ap, why := o.s.tickets.take(g.Run, "update", a.ID, o.s.Poller.BindingOf(a.ID).Record.MachineID)
+		if ap == nil {
+			return &wakerun.OpError{Code: wakerun.CodeTicketGone, Text: why + "; nothing was sent"}
+		}
+		_, err := powerctl.UpdateAgentApproved(ctx, o.s.Poller, a, by, ap)
+		return opError(err)
+	}
+	_, err := powerctl.UpdateAgentRun(ctx, o.s.Poller, a, by, g.Run)
 	return opError(err)
 }
 
@@ -335,9 +382,20 @@ func (o runOps) Update(ctx context.Context, id, by string, _ any) error {
 // (OnlyVia): when the machine's agent can no longer take it (its power control was switched off during the
 // run) powerctl refuses before anything is sent, and never falls back to the Proxmox API's node shutdown,
 // which starts at once and cannot be cancelled. The run then leaves the machine on (CodeNoAgentRoute).
-func (o runOps) Shutdown(ctx context.Context, id string, delay time.Duration, by string, _ any) (time.Time, error) {
+//
+// grant is nil for a machine without the check. For a machine with the check it is the run's *wakerun.Grant:
+// the request names the run whose confirmation the machine accepted ("run"), and is never sent without it.
+func (o runOps) Shutdown(ctx context.Context, id string, delay time.Duration, by string, grant any) (time.Time, error) {
 	d := int(delay.Seconds())
-	res, err := o.power(ctx, id, powerctl.Request{Action: "shutdown", DelayS: &d, OnlyVia: "agent"}, by)
+	req := powerctl.Request{Action: "shutdown", DelayS: &d, OnlyVia: "agent"}
+	if grant != nil {
+		g, _ := grant.(*wakerun.Grant)
+		if g == nil || g.Start || api.CheckRunID(g.Run) != nil {
+			return time.Time{}, &wakerun.OpError{Text: "the run has no confirmation of this machine for a shutdown; nothing was sent"}
+		}
+		req.Run = g.Run
+	}
+	res, err := o.power(ctx, id, req, by)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -357,12 +415,6 @@ func (o runOps) Shutdown(ctx context.Context, id string, delay time.Duration, by
 func (o runOps) CancelShutdown(ctx context.Context, id, by string) error {
 	_, err := o.power(ctx, id, powerctl.Request{Action: "cancel", PendingUnseen: true}, by)
 	return err
-}
-
-// Arm hands a machine with the check the ticket of the run's start (wakerun.Ops). No run holds one yet: a
-// machine that checks approvals itself is in no run (wuCheck), so nothing is ever sent from here.
-func (o runOps) Arm(context.Context, string, string) (time.Duration, error) {
-	return 0, &wakerun.OpError{Code: wakerun.CodeTicketGone, Text: "this panel holds no ticket for it"}
 }
 
 // Guests: what the panel knows from the Proxmox API about the guests of a node. A machine the panel knows
@@ -540,7 +592,7 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	}
 	ops := runOps{s}
 	o := ops.Observe(x.ID)
-	h := wuHost{ID: x.ID, Name: x.Name, OptedIn: s.wuOptedIn(x.ID), Version: o.Version, Behind: o.Behind, Power: "unclear"}
+	h := wuHost{ID: x.ID, Name: x.Name, OptedIn: s.wuOptedIn(x.ID), Version: o.Version, Behind: o.Behind, Power: "unclear", agentID: a.ID}
 	switch {
 	case powerctl.KillsPanel(s.Poller, x):
 		h.WhyNot = "the panel itself runs on it"
@@ -581,21 +633,15 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 		h.Asleep = x.Asleep
 	}
 	if ap := s.Poller.ApprovalOf(a.ID); ap != nil && s.approvalWanted(a.ID) { // the last answer stays while it is off; the record after a restart
-		h.Approval, h.approvalWhy = orText(ap.State, api.ApprovalUnknown), wuNeedsApproval
-		if b := s.Poller.BindingOf(a.ID); !b.OK() {
-			h.Approval = "alarm"
-			h.approvalWhy = "is in no run: " + machineAlarmText(b.Status, s.machineNames(b.With)) + " (see its page)"
-			if b.Status == approval.BindNoStore {
-				h.approvalWhy = "is in no run: " + approval.BindingText(x.Name, b.Status, nil)
-			}
-		}
+		h.Approval = orText(ap.State, api.ApprovalUnknown)
+		s.wuChecked(&h, x, a.ID, ap)
 	}
 	switch {
 	case !h.CanJoin:
 		h.Why = h.WhyNot
-	case h.Approval != "":
+	case h.NoRun:
 		// said before it is switched on for runs too: the switch does not make it choosable (audit 5, r1-b2-05)
-		h.Why = strings.TrimPrefix(h.approvalWhy, "is ")
+		h.Why = strings.TrimPrefix(h.noRun, "is ")
 	case !h.OptedIn:
 		h.Why = "not switched on for this (on the machine's page: the ⋯ menu)"
 	case powerOff(s.Poller, x.ID):
@@ -724,8 +770,15 @@ func (s *Server) wuCheck(b wuStartBody) (map[string]wuHost, error) {
 			return nil, apierr.New(400, h.Name+" is not switched on for \"Update unpowered hosts\"")
 		case i < len(b.Hosts) && !h.CanWake:
 			return nil, apierr.New(400, h.Name+" cannot be woken and switched off again: "+h.NoWake)
-		case h.Approval != "": // refused here, before anybody is asked to confirm a run that could not do it
-			return nil, apierr.New(400, h.Name+" "+h.approvalWhy)
+		case h.NoRun: // refused here, before anybody is asked to confirm a run that could not do it
+			return nil, apierr.New(400, h.Name+" "+h.noRun)
+		case h.Checked && i < len(b.Hosts):
+			// the countdown of its shutdown is part of what the run's confirmation names, and a machine takes
+			// one of at most ten minutes there
+			if d := s.wuShutdownDelay(h.ID); d > runMaxDelay {
+				return nil, apierr.Errf(400, "%s checks passkey approvals itself, and in a run such a machine takes a shutdown countdown of at most %s; its countdown is %s (wake_update.shutdown_delay_s)",
+					h.Name, spanWords(runMaxDelay), spanWords(d))
+			}
 		}
 		out[id] = h
 	}
@@ -735,6 +788,24 @@ func (s *Server) wuCheck(b wuStartBody) (map[string]wuHost, error) {
 // wuDescribe is the panel's own description of a start request for "Confirm it's you" and the audit log: how
 // many machines, the value that names the list, and the machines by the names the panel has for them. items
 // is one line per machine, saying what happens to it.
+func (s *Server) wuDescribe(b wuStartBody, hosts map[string]wuHost) (text string, items []string) {
+	text, items = wuDescribe(b, hosts)
+	tm := s.runTimings()
+	i := 0
+	for _, id := range slices.Concat(b.Hosts, b.UpdateOnly) {
+		h := hosts[id]
+		if h.Checked && i < len(items) {
+			if i < len(b.Hosts) {
+				items[i] = h.Name + ": " + s.wuTicketWords(h, tm)
+			} else {
+				items[i] = h.Name + ": update only, with this passkey (it checks the approval itself); it is on and is never switched off"
+			}
+		}
+		i++
+	}
+	return text, items
+}
+
 func wuDescribe(b wuStartBody, hosts map[string]wuHost) (text string, items []string) {
 	names := func(ids []string) []string {
 		var out []string
@@ -775,7 +846,7 @@ func (c *reqCtx) wakeUpdateKept() (string, []string) {
 	if err != nil {
 		return "", nil
 	}
-	return wuDescribe(b, hosts)
+	return c.s.wuDescribe(b, hosts)
 }
 
 // wakeUpdateDetail and wakeUpdateItems describe a kept start request (pending.go: actionDetail, actionList).
@@ -814,7 +885,7 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	if a, _ := s.WakeRuns.Snapshot(); a != nil { // before a passkey is asked for; Start checks again
 		return apierr.Errf(409, "a run started by %s at %s is still going: one run at a time. Wait for it, or cancel it.", a.By, a.StartedAt.Format("15:04 UTC"))
 	}
-	text, _ := wuDescribe(b, hosts)
+	text, _ := s.wuDescribe(b, hosts)
 	latest := s.latest()
 	req := wakerun.StartRequest{Hosts: b.Hosts, UpdateOnly: b.UpdateOnly, UpdateIfOn: b.UpdateIfOn, By: actorOf(u), BySub: u.Sub, Latest: latest.Version}
 	params := map[string]any{"hosts": b.Hosts, "update_only": b.UpdateOnly, "update_if_on": b.UpdateIfOn,
@@ -830,8 +901,11 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 		return limited()
 	}
 	// Always its own confirmation: only the panel's replay of this very request (this list, these options)
-	// passes, right after the sign-in that was made for it.
-	if err := c.stepUpEach(u, "runs that wake, update and switch off machines"); err != nil {
+	// passes, right after the sign-in that was made for it. With a machine that checks approvals itself in
+	// the list the confirmation is the machines' own passkey approval (wuConfirmStart), which signs the
+	// tickets; rs is then what was signed.
+	rs, grant, err := s.wuConfirmStart(c, u, b, hosts)
+	if err != nil {
 		return err
 	}
 	// That replay counts as a control request, but the limit no longer refuses it: it was inside the limit when
@@ -839,8 +913,30 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	if !s.control.allow(u.Sub) && !c.resumed() {
 		return limited()
 	}
+	if rs != nil {
+		req.ID, req.Ticket = rs.id, &rs.numbers
+		req.Checked, req.StartApproved = map[string]bool{}, map[string]bool{}
+		for id, h := range hosts {
+			if h.Checked {
+				req.Checked[id] = true
+				_, on := rs.update[h.agentID]
+				req.StartApproved[id] = on
+			}
+		}
+		params["run"], params["tickets"], params["ticket"] = rs.id, len(rs.arm), rs.numbers
+		// The token is kept from here on, in memory, for what is left of the ticket's valid_s by its own "issued
+		// at" (runtickets.go), before the run exists: the run's first step may ask for it.
+		left := time.Duration(rs.numbers.ValidS)*time.Second - max(0, s.now().Sub(grant.issued))
+		if !s.tickets.put(rs.id, grant.token, grant.plan.plan, maps.Clone(rs.arm), maps.Clone(rs.update), left) {
+			c.audit(u, "wakeupdate.start", "run", params, "error 409: the approval is older than a ticket may be; nothing was started")
+			return apierr.New(409, "The approval is older than a run's ticket may be (is the panel's clock right?). Nothing was started: press the button again.")
+		}
+	}
 	r, err := s.WakeRuns.Start(req)
 	if err != nil {
+		if rs != nil {
+			s.tickets.drop(rs.id)
+		}
 		var se *wakerun.StartError
 		status := 400
 		if errors.As(err, &se) && se.Busy {
@@ -949,7 +1045,7 @@ func (s *Server) wakeUpdateSwitch(c *reqCtx) error {
 		c.audit(u, "wakeupdate.switch", id, map[string]any{"enabled": true}, "error 409: "+h.WhyNot)
 		return apierr.New(409, x.Name+" cannot take part: "+h.WhyNot)
 	}
-	if *b.Enabled && h.Approval != "" && !b.Asked && !c.resumed() {
+	if *b.Enabled && h.NoRun && !b.Asked && !c.resumed() {
 		// A machine that checks approvals itself is asked about ONCE, with words that are true of it (review of
 		// passkey-k, RK-04). Outside the confirmation window that question is "Confirm it's you", whose dialog
 		// says them (wakeUpdateSwitchDetail), and this request is then the kept one (resumed). Inside the
@@ -985,7 +1081,7 @@ func (s *Server) wakeUpdateSwitch(c *reqCtx) error {
 	if *b.Enabled {
 		msg = x.Name + " can now be chosen for \"Update unpowered hosts\""
 		switch {
-		case h.Approval != "": // the row says why it cannot be chosen: the message must not say it can
+		case h.NoRun: // the row says why it cannot be chosen: the message must not say it can
 			msg = x.Name + " is switched on, but no run can take it: " + wuSwitchWhy(h)
 		case !h.CanWake:
 			msg += " (only to be updated while it is on: " + h.NoWake + ")"
@@ -1001,7 +1097,7 @@ func wuSwitchWhy(h wuHost) string {
 	if h.Approval == "alarm" {
 		return "see its page"
 	}
-	return "it checks a passkey approval itself"
+	return orText(h.noRunShort, "it checks a passkey approval itself")
 }
 
 // wuCountsLater is what the switch of a machine that is in no run allows all the same: the second half of the
@@ -1023,13 +1119,13 @@ func (c *reqCtx) wakeUpdateSwitchDetail(*model.User) string {
 		return ""
 	}
 	if *b.Enabled {
-		// A machine that checks approvals itself is in no run. "Confirm it's you" said the opposite ("a run you
+		// A machine that checks approvals itself and that no run can take. "Confirm it's you" said the opposite ("a run you
 		// start may then wake, update and switch off this machine"), after the page had asked the same, and
 		// the result then said that no run can take it (audit 6, r4-b1-04). The truth is said here, up front,
 		// and all of it: what the switch allows once the machine is one a run can take (RK-04: this dialog is
 		// the one question such a machine is asked about).
 		if x, err := c.find(c.r.PathValue("id")); err == nil {
-			if h, ok := c.s.wuHostOf(x); ok && h.Approval != "" {
+			if h, ok := c.s.wuHostOf(x); ok && h.NoRun {
 				return "switch it on; no run can take it for now: " + wuSwitchWhy(h) + ". " + wuCountsLater
 			}
 		}
@@ -1059,7 +1155,11 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 	}
 	switch e.Kind {
 	case wakerun.EvStep:
-		action := map[string]string{"wake": "power.wake", "update": "update.agent", "shutdown": "power.shutdown", "cancel": "power.cancel"}[e.Action]
+		action := map[string]string{"wake": "power.wake", "update": "update.agent", "shutdown": "power.shutdown", "cancel": "power.cancel",
+			"arm": "wakeupdate.arm", "confirm": "wakeupdate.confirm_host", "self_off": "wakeupdate.self_off"}[e.Action]
+		if action == "" {
+			action = "wakeupdate." + e.Action
+		}
 		if off := powerctl.ControlOff(s.Poller, e.Host.ID); off != "" && e.Action == "cancel" {
 			// the run called its own countdown off although control is off (the kill switch stopped the run, or
 			// the host's power switch was flipped): the entry says so, like the one of a click (api_power.go).
@@ -1088,13 +1188,35 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 		entry("wakeupdate.host", h.ID, map[string]any{"state": h.State, "power": h.On, "late": true}, h.Text)
 		note(notifications.Warning, "wakeupdate_late", h.ID, h.Name, "came online after the run had given up on it: it is ON, and Fairy did not touch it")
 	case wakerun.EvApproval:
+		// The run's one question for the second passkey: the banner on every page (stream event run_wait), and
+		// a notification that is an alarm until the question is over. A warning: it is pushed (ntfy, Discord)
+		// where that is set up.
 		entry("wakeupdate.approval", r.ID, nil, "needed")
-		note(notifications.Warning, "wakeupdate_approval", "", wuNoteHost, "the woken machines wait for your approval of their update and shutdown (Updates page)")
+		if s.Notes != nil {
+			s.Notes.Add(notifications.Event{Kind: wuConfirmNote, Type: "update", Severity: notifications.Warning, Host: wuNoteHost,
+				Key: wuConfirmNote + ":" + r.ID, Alarm: true, Text: clipText(wuConfirmText(r), wuNoteMax)})
+		}
+	case wakerun.EvApprovalEnd:
+		text := "nobody confirmed in time: not confirmed, not updated. A machine that was armed switches itself off again; see the run's report"
+		outcome := "over"
+		switch {
+		case r.Approval == "given":
+			outcome, text = "given", "confirmed by "+r.ConfirmedBy
+		case r.Cancel != nil:
+			text = "the run was cancelled by " + r.Cancel.By + ": no confirmation is asked for any more"
+		}
+		entry("wakeupdate.approval", r.ID, nil, outcome)
+		if s.Notes != nil {
+			s.Notes.Add(notifications.Event{Kind: wuConfirmNote + "_over", Type: "update", Severity: notifications.Info, Host: wuNoteHost,
+				Key: wuConfirmNote + ":" + r.ID, Text: text})
+		}
 	case wakerun.EvRunEnd, wakerun.EvInterrupted:
+		s.tickets.drop(r.ID) // the run is over: its ticket is not kept a second longer
 		counts := map[string]int{}
 		attention := false
 		for _, h := range r.Hosts {
 			counts[h.State]++
+			attention = attention || h.MayGoOff
 			switch h.State {
 			case wakerun.StLeftOn, wakerun.StGaveUp, wakerun.StInterrupted:
 				attention = true
@@ -1226,4 +1348,28 @@ func clipText(s string, n int) string {
 		return s
 	}
 	return strings.ToValidUTF8(s[:n], "") + "…"
+}
+
+// wuConfirmNote is the kind (and the start of the key) of the notification that asks for a run's second passkey.
+const wuConfirmNote = "wakeupdate_confirm"
+
+// wuConfirmText is that notification: which machines wait, until when, and what happens otherwise.
+func wuConfirmText(r *wakerun.Run) string {
+	var names []string
+	for _, h := range r.Hosts {
+		if h.Checked && h.State == wakerun.StApproval && h.Confirm == "" {
+			names = append(names, h.Name)
+		}
+	}
+	until := ""
+	if r.ConfirmBy != nil {
+		until = " until " + r.ConfirmBy.UTC().Format("15:04 UTC")
+	}
+	wait := "in time"
+	if r.Ticket != nil {
+		wait = "within " + spanWords(time.Duration(r.Ticket.ConfirmWaitS)*time.Second)
+	}
+	return fmt.Sprintf("%s woke %s for the run %s started, and %s for your passkey: confirm %s%s in the panel (the banner on every page). "+
+		"Not confirmed: not updated, and a machine that is armed switches itself off again.",
+		"Fairy", andNames(names), r.By, map[bool]string{true: "it waits", false: "they wait"}[len(names) == 1], wait, until)
 }

@@ -60,6 +60,10 @@ type approvalPlan struct {
 	// agent id -> the canonical text of the request. After the approval the request is sent to the machines of
 	// the plan and to these, never to a machine the dialog did not show (shown; audit 6, r4-x1-04).
 	others map[string]string
+	// run: the start of an "Update unpowered hosts" run with machines that check approvals themselves (the
+	// run's id and which entry is whose). confirm: such a run's second confirmation (api_wakeupdate_runs.go).
+	run     *runStart
+	confirm *runConfirm
 }
 
 // newApprovalPlan makes the kept form of plan.
@@ -103,6 +107,8 @@ type approvalGrant struct {
 	plan  *approvalPlan
 	token string // the raw ID token: only For hands it out, into a request to a machine of the plan
 	sub   string // who approved (Pocket ID user id)
+	// issued: the token's "issued at" (iat). A run's ticket is good for its valid_s from then on.
+	issued time.Time
 }
 
 // String and LogValue: a grant that ends up in a log line or an error text by mistake shows no token.
@@ -342,7 +348,7 @@ func (s *Server) approvalCallback(c *reqCtx) error {
 		"entries": len(kept.Approval.plan.Entries()), "approver": idt.Subject})
 	// what came of the kept action is kept with the round trip, for a repeat of this callback (approvalrepeat.go)
 	s.codec.live.approvalAccepted(round, target, s.now())
-	s.codec.live.stepOutcome(round, s.resumePendingWith(c, kept, &approvalGrant{plan: kept.Approval, token: rawID, sub: idt.Subject}))
+	s.codec.live.stepOutcome(round, s.resumePendingWith(c, kept, &approvalGrant{plan: kept.Approval, token: rawID, sub: idt.Subject, issued: idt.IssuedAt}))
 	c.redirect(target)
 	return nil
 }

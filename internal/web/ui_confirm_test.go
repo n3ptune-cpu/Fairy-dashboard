@@ -16,11 +16,12 @@ import (
 // the place in app.js where the page puts that action into words. A new route that asks to confirm fails
 // TestConfirmDialogSaysEveryActionInPlainWords until its words are written and listed here.
 var confirmLabels = map[string][]string{
-	"POST /api/me/sessions/revoke":        {"sessCall(`Sign out ${t.dataset.label}`, t.dataset.scope === \"all\" ? \"/api/admin/sessions/revoke\" : \"/api/me/sessions/revoke\""},
-	"POST /api/me/sessions/revoke-others": {`sessCall("Sign out everywhere else", "/api/me/sessions/revoke-others")`},
-	"POST /api/admin/sessions/revoke":     {"sessCall(`Sign out ${t.dataset.label}`, t.dataset.scope === \"all\" ? \"/api/admin/sessions/revoke\" : \"/api/me/sessions/revoke\""},
-	"POST /api/systems/{id}/fan/mode":     {"`Set fan mode to ${p.mode}`", `label: fanLabel(path, payload, state.byId[id]?.name || id)`, `post("/fan/mode", { mode: b.dataset.mode })`},
-	"POST /api/systems/{id}/fan/duty":     {"`Set fan zone ${p.zone} to ${p.percent}%`", `label: fanLabel(path, payload, state.byId[id]?.name || id)`, `post("/fan/duty", { zone: +b.dataset.apply, percent: `},
+	"POST /api/systems/{id}/wake-update/keep-on": {"const label = keep ? `Keep ${t.dataset.name} on` : \"Confirm the update and the shutdown of the machines the run woke\";"},
+	"POST /api/me/sessions/revoke":               {"sessCall(`Sign out ${t.dataset.label}`, t.dataset.scope === \"all\" ? \"/api/admin/sessions/revoke\" : \"/api/me/sessions/revoke\""},
+	"POST /api/me/sessions/revoke-others":        {`sessCall("Sign out everywhere else", "/api/me/sessions/revoke-others")`},
+	"POST /api/admin/sessions/revoke":            {"sessCall(`Sign out ${t.dataset.label}`, t.dataset.scope === \"all\" ? \"/api/admin/sessions/revoke\" : \"/api/me/sessions/revoke\""},
+	"POST /api/systems/{id}/fan/mode":            {"`Set fan mode to ${p.mode}`", `label: fanLabel(path, payload, state.byId[id]?.name || id)`, `post("/fan/mode", { mode: b.dataset.mode })`},
+	"POST /api/systems/{id}/fan/duty":            {"`Set fan zone ${p.zone} to ${p.percent}%`", `label: fanLabel(path, payload, state.byId[id]?.name || id)`, `post("/fan/duty", { zone: +b.dataset.apply, percent: `},
 	// with the countdown the kept request carries; without a dialog (Power on, Start) there is none
 	"POST /api/systems/{id}/power": {"const what = `${label} ${s.name}`, timed = body.delay_s ? `${what} in ${fmtSpan(body.delay_s)}` : what;",
 		"label: e.detail?.pending ? timed : what }, e.detail)", "label: `${POWER_LABEL[action]} · ${s.name}`, system: s.id, method: \"POST\", path, body: { action } }"},

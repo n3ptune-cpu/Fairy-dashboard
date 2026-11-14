@@ -64,6 +64,13 @@ func (s *Server) helperAction(c *reqCtx, action string) error {
 	if !a.HasControl() {
 		return fail(apierr.New(409, "no control token is configured for this agent (control_token_env)"))
 	}
+	if action == "stop" {
+		// never while a run of "Update unpowered hosts" is live on the machine: the helper is what counts the
+		// wait of a ticket and switches the PC off again (api_wakeupdate_runs.go)
+		if why := s.helperStopRefusal(x); why != "" {
+			return fail(apierr.New(409, why))
+		}
+	}
 	if err := c.typedName(x.Name, map[string]string{"stop": "stopping its helper", "start": "starting its helper"}[action]); err != nil {
 		return fail(err)
 	}

@@ -463,14 +463,14 @@ func TestUIUpdatesPageWithoutTheApprovalControls(t *testing.T) {
   state.systems = rows; state.byId = dict(rows.map((s) => [s.id, s]));
   const host = (id, o) => ({ id, name: id.toUpperCase(), opted_in: false, can_join: true, can_wake: true, relay: "NAS", power: "off", choice: "", ...o });
   const settings = { online_timeout_s: 300, settle_s: 60, shutdown_delay_s: 120 };
-  wu.data = { hosts: [host("pc-a", { approval: "required", why: "needs approval: not supported in runs yet" }), host("pc-b")], active: null, last: [], settings, off_after_s: 900, max_hosts: 16 };
+  wu.data = { hosts: [host("pc-a", { approval: "required", no_run: true, why: "needs Fairy-agent v0.9.0 or newer to be in a run" }), host("pc-b")], active: null, last: [], settings, off_after_s: 900, max_hosts: 16 };
   upd.data = updates([agent("pc-a", { approval: "required" }), agent("pc-b"), agent("agent-of-n1", { system_id: "node-n1", name: "NODE-ONE", approval: "broken", can_update: false, why: "its check of approvals is broken" }), agent("<b>pc-d</b>", { behind: false })]);
   updIndex();
   const html = pageUpdates();
   for (const gone of ["ap-open", "ap-accept", "ap-machines", "Turn on", "is waiting for the check", "ready for the check", "passkey on the machine", "helper-trust clear", "cannot be in a run yet"]) if (html.includes(gone)) fail("the Updates page still has: " + gone);
   // one short line each, with the link, where an update meets the check
   const links = [...html.matchAll(/<div class="note" id="([a-z-]+)">(.*?)<\/div>/g)].filter((m) => m[2].includes('href="#/approvals"')).map((m) => m[1] + ": " + words(m[2]));
-  if (JSON.stringify(links.sort()) !== JSON.stringify(["upd-appr: A machine with the check on asks for your passkey at every Update. Approvals", "wu-appr: A machine with the check on is in no run yet. Approvals"])) fail("the lines: " + JSON.stringify(links));
+  if (JSON.stringify(links.sort()) !== JSON.stringify(["upd-appr: A machine with the check on asks for your passkey at every Update. Approvals", "wu-appr: A machine with the check on needs Fairy-agent v0.9.0 or newer to be in a run; its row says what stands in the way. Approvals"])) fail("the lines: " + JSON.stringify(links));
   // a broken check is the row's own sign, and leads to the machine's dialog (the node's row for a node's agent)
   const broken = tag(html, 'data-ap-go="node-n1"');
   if (!broken || !broken.html.includes('class="chip bad" href="#/system/node-n1"') || !html.includes(">approval broken</a>")) fail("approval broken: " + (broken && broken.html));

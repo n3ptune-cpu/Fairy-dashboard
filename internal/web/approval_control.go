@@ -277,6 +277,10 @@ func requestWords(r api.ApprovalRequest) string {
 		return "fan mode " + *r.Mode
 	case api.ApproveFanSet:
 		return fmt.Sprintf("fan zone %d to %d%%", *r.Zone, *r.Percent)
+	case api.ApproveRunArm:
+		return fmt.Sprintf("ticket of a run: switch itself off %d s after it is armed (notice %d s) unless confirmed", *r.WaitS, *r.NoticeS)
+	case api.ApproveRunGo:
+		return "confirmation of a run: " + runGoWords(*r.To, *r.ShutdownDelayS, *r.WithinS)
 	}
 	return r.Verb
 }
@@ -411,6 +415,11 @@ func challengeRefusal(name string, status int, data jsonx.M, why string) error {
 		return apierr.New(409, msg)
 	}
 	switch {
+	case code == api.CodeRunRefused || code == api.CodeRunUnavailable:
+		// the question for a run's confirmation (run_go), answered with a rule of runs: said in words, and
+		// nothing asks again by itself
+		_, words := runRefusal(status, data)
+		return apierr.New(409, name+" does not take the run's confirmation: "+words)
 	case status == 401:
 		return apierr.New(apierr.Upstream, "agent rejected the control token (check control_token_env)")
 	case status == 503 && (code == api.ReasonHelperStopped || code == api.ReasonHelperError):

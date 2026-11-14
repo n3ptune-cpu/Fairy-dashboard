@@ -171,7 +171,7 @@ func TestUIUpdatesPageUnpoweredHostsFold(t *testing.T) {
   if (isOpen(box())) fail("over for 11 minutes: still open");
 
   // 5. what must not wait behind a fold is on the folded section: why no run can start, and the machine with the check on
-  wu.data = data({ problem: "No relay is <online>.", hosts: [host("pc-a", { approval: "required", why: "needs approval: not supported in runs yet" })] });
+  wu.data = data({ problem: "No relay is <online>.", hosts: [host("pc-a", { approval: "required", no_run: true, why: "needs Fairy-agent v0.9.0 or newer to be in a run" })] });
   html = box();
   if (isOpen(html) || !html.includes('<div class="warnbox">No relay is &lt;online&gt;.</div>') || !html.includes('id="wu-appr"') || !tag(html, 'data-act="wu-open"').disabled) fail("folded, with a problem: " + words(html));
 

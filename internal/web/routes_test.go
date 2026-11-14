@@ -88,6 +88,10 @@ var matrixRoutes = []writeRoute{
 	{pattern: "POST /api/admin/wake-update", path: "/api/admin/wake-update", body: "WAKERUN", adminOnly: true, stepUp: true, each: true, killSwitch: true},
 	{pattern: "DELETE /api/admin/wake-update/{id}", path: "/api/admin/wake-update/nope", adminOnly: true, stepUp: true},
 	{pattern: "PUT /api/systems/{id}/wake-update", path: "/api/systems/laptop/wake-update", body: map[string]any{"enabled": true}, adminOnly: true, stepUp: true, killSwitch: true},
+	// the run's second confirmation is the machines' own passkey approval (asked for a run that waits; none here);
+	// Keep on is a cancel: it wants a recent sign-in and passes the kill switch
+	{pattern: "POST /api/admin/wake-update/{id}/confirm", path: "/api/admin/wake-update/nope/confirm", adminOnly: true, killSwitch: true},
+	{pattern: "POST /api/systems/{id}/wake-update/keep-on", path: "/api/systems/laptop/wake-update/keep-on", adminOnly: true, stepUp: true},
 	// Switching on a machine's own check of approvals: browser sessions only. It asks for the machines'
 	// approval, not for the panel's confirmation (TestTurnOn...); this panel has no approval: block, so an admin
 	// is told so (409).

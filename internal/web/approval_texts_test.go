@@ -51,7 +51,7 @@ func TestTheFiveTextsOfTheReview(t *testing.T) {
 		t.Errorf("the line of a Turn on's results: %q", got)
 	}
 	// 4. the tooltip of "Switch on" for a machine with the check had two colons in a row
-	if !strings.Contains(js, "h.approval ? `No run can take it for now (${h.why || \"it checks approvals itself\"})`") || strings.Contains(js, "No run can take it for now: ${h.why") {
+	if !strings.Contains(js, "h.no_run ? `No run can take it for now (${h.why || \"it checks approvals itself\"})`") || strings.Contains(js, "No run can take it for now: ${h.why") {
 		t.Error("app.js: the tooltip of Switch on for a machine that checks approvals itself")
 	}
 	// 5. "No request was sent to it" after the question itself was sent

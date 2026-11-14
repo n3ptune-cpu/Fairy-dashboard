@@ -30,7 +30,7 @@ func TestSwitchOnForRunsAsksOnceAndSaysTheTruth(t *testing.T) {
 	}
 	// (review of passkey-k, RK-04: this dialog is the ONE question such a machine is asked about, so it also says
 	// what the switch allows once the machine is one a run can take. It still does not say that a run may wake it now.)
-	if got := put("pc-a"); !strings.HasSuffix(got, "(switch it on; no run can take it for now: it checks a passkey approval itself. "+
+	if got := put("pc-a"); !strings.HasSuffix(got, "(switch it on; no run can take it for now: its agent is older than Fairy-agent v0.9.0. "+
 		"After that, a run you start may wake, update and switch it off)") || strings.Contains(got, "may then wake") {
 		t.Fatalf("Confirm it's you for the machine with the check: %q", got)
 	}
@@ -39,9 +39,9 @@ func TestSwitchOnForRunsAsksOnceAndSaysTheTruth(t *testing.T) {
 	}
 	js := appJS(t)
 	for _, want := range []string{
-		"const inNoRun = !!(wu.data?.hosts || []).find((h) => h.id === t.dataset.id)?.approval;",
+		"const inNoRun = !!(wu.data?.hosts || []).find((h) => h.id === t.dataset.id)?.no_run;",
 		"if (on && !inNoRun && !confirm(`Switch \"Update unpowered hosts\" on for ${name}?",
-		"h.approval ? `No run can take it for now (${h.why || \"it checks approvals itself\"})`", // (RK-08: it had two colons in a row)
+		"h.no_run ? `No run can take it for now (${h.why || \"it checks approvals itself\"})`", // (RK-08: it had two colons in a row)
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js lacks %q", want)
@@ -79,7 +79,7 @@ func TestSwitchOnForRunsInsideTheWindowIsAskedOnce(t *testing.T) {
 	// inside the window: nothing is recorded before the question was put
 	r = put("pc-a", map[string]any{"enabled": true})
 	d, _ := r.body["detail"].(map[string]any)
-	const question = "Switch \"Update unpowered hosts\" on for PC-A? No run can take it for now: it checks a passkey approval itself. " +
+	const question = "Switch \"Update unpowered hosts\" on for PC-A? No run can take it for now: its agent is older than Fairy-agent v0.9.0. " +
 		"After that, a run you start may wake, update and switch it off."
 	if r.code != 409 || d["code"] != "ask_first" || d["message"] != question {
 		t.Fatalf("inside the window, not asked: %d %s", r.code, r.raw)
@@ -94,7 +94,7 @@ func TestSwitchOnForRunsInsideTheWindowIsAskedOnce(t *testing.T) {
 	}
 	// the page asks with that sentence and sends the request again
 	r = put("pc-a", map[string]any{"enabled": true, "asked": true})
-	if msg, _ := r.body["message"].(string); r.code != 200 || msg != "PC-A is switched on, but no run can take it: it checks a passkey approval itself" || optedIn("pc-a") != true {
+	if msg, _ := r.body["message"].(string); r.code != 200 || msg != "PC-A is switched on, but no run can take it: its agent is older than Fairy-agent v0.9.0" || optedIn("pc-a") != true {
 		t.Fatalf("asked: %d %s", r.code, r.raw)
 	}
 	// switching off, and a machine without the check, are as they were: no "ask_first"

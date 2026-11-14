@@ -1293,6 +1293,7 @@ function renderAlerts() {
     <span class="note">fan, power, Wake-on-LAN and polling changes are refused for everyone · re-enable on the server: <code>fairy admin control enable</code></span></div>`);
   const resume = resumePending();
   if (resume && !off) out.push(resume);
+  out.push(...runWaitStrips());
   const ub = updBanner();
   if (ub) out.push(ub);
   for (const u of (state.ups?.ups || []).filter(onBattery)) {
@@ -1346,11 +1347,69 @@ function pendingStrip(s, why) {
 }
 // Once a second (the page's ticker): the second a countdown runs out its line is drawn anew, also when no data arrives.
 function pendingTick() {
+  rwTick();
   if ([...document.querySelectorAll(".pending-strip [data-countdown], #alerts [data-countdown]")].some((el) => new Date(el.dataset.countdown) <= Date.now())) render();
 }
 
 // ------------------------------------------------------------ pages
-function setTitle(t, sub = "") { $("#page-title").textContent = t; $("#page-sub").textContent = sub; document.title = `${t} · Fairy`; }
+function setTitle(t, sub = "") { $("#page-title").textContent = t; $("#page-sub").textContent = sub; state.title = t; paintTitle(); }
+// The tab's title says it first while a run waits for the admin's passkey: the tab may be in the background.
+function paintTitle() { document.title = `${rw.data?.run ? "Passkey needed · " : ""}${state.title || "Fairy"} · Fairy`; }
+
+// ---- a run of "Update unpowered hosts" waits for its second passkey, or a machine may switch itself off by a
+// run's ticket (admins; the stream's run_wait event says that something changed, GET .../waiting has the rest).
+// It is in the strip on every page: the machines wait with a clock running.
+const rw = { data: null, at: 0, busy: false };
+const rwLeft = () => (rw.data?.run ? Math.max(0, Math.round((rw.data.left_s || 0) - (wuTick() - rw.at) / 1000)) : 0);
+async function fetchRunWait() {
+  if (state.me?.role !== "admin" || rw.busy) return;
+  rw.busy = true;
+  try { rw.data = await api("/api/admin/wake-update/waiting"); rw.at = wuTick(); } catch { /* the next event asks again */ }
+  rw.busy = false; paintTitle(); render();
+}
+// Once a second (the page's ticker, through pendingTick): the time left to confirm; at its end the strip is read anew.
+function rwTick() {
+  const left = document.getElementById("rw-left");
+  if (!left) return;
+  const v = fmtRuntime(rwLeft());
+  if (left.textContent !== v) left.textContent = v;
+  if (rwLeft() === 0) fetchRunWait();
+}
+const rwClock = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function runWaitStrips() {
+  const d = rw.data, out = [];
+  if (!d || state.me?.role !== "admin") return out;
+  if (d.run) {
+    const names = d.hosts || [], n = names.length;
+    out.push(`<div class="alert-strip bad static" data-key="rw-confirm" role="alert">${I.shield}<b>Your passkey is needed</b>
+      <span>${esc(names.join(", "))} ${n === 1 ? "was woken and waits" : "were woken and wait"} to be updated and switched off again</span>
+      <span>time left <b id="rw-left">${fmtRuntime(rwLeft())}</b></span>
+      <span class="note">not confirmed: not updated, and a machine that is armed switches itself off again</span>
+      <button class="btn push" type="button" data-act="rw-confirm" data-id="${esc(d.run)}" ${state.me?.can_control ? "" : "disabled"}>Confirm it's you</button></div>`);
+  }
+  for (const a of d.armed || []) {
+    const when = a.at ? `${a.latest ? "by " : "at "}${rwClock(a.at)}${a.latest ? " at the latest" : ""}${a.by_machine ? " (by its own clock)" : ""}` : "at a time Fairy does not know";
+    out.push(`<div class="alert-strip warn static" data-key="rw-armed-${esc(a.id)}">${I.onoff}<b>${esc(a.name)}</b>
+      <span>${a.sure ? "is armed by a run: it switches itself off" : "may be armed by a run (its arming got no answer): if it is, it switches itself off"} ${esc(when)} unless ${d.run ? "you confirm, or keep it on" : "it is kept on"}</span>
+      <button class="btn push" type="button" data-act="rw-keep" data-id="${esc(a.id)}" data-name="${esc(a.name)}">Keep on</button></div>`);
+  }
+  return out;
+}
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest('[data-act="rw-confirm"],[data-act="rw-keep"]');
+  if (!t || t.disabled) return;
+  const keep = t.dataset.act === "rw-keep";
+  const path = keep ? `/api/systems/${enc(t.dataset.id)}/wake-update/keep-on` : `/api/admin/wake-update/${enc(t.dataset.id)}/confirm`;
+  const label = keep ? `Keep ${t.dataset.name} on` : "Confirm the update and the shutdown of the machines the run woke";
+  t.disabled = true;
+  try {
+    const r = await controlCall({ kind: "request", label, method: "POST", path, body: {} }, () => api(path, { method: "POST", body: "{}" }));
+    if (r !== null) flash(r.message || "done", keep ? r.stays_on === false : r.all_ok === false, r.lines);
+  } catch (x) { flash(x.message, true); }
+  t.disabled = false;
+  fetchRunWait(); if (typeof fetchWakeUpdate === "function" && current().page === "updates") fetchWakeUpdate();
+});
+// ---- end of the run's strip
 
 const watts = (s) => s.power_w ?? linkedPower(s.id).watts;
 const gpuAvg = (s) => ((s.gpus || []).length ? s.gpus.reduce((a, g) => a + (g.util_percent || 0), 0) / s.gpus.length : null);
@@ -2071,7 +2130,7 @@ function wuRunOver(r) {
   flash(`Update unpowered hosts: run ${how} · ${n} machine${n === 1 ? "" : "s"}${look ? ` · ${look} to look at` : ""}`,
     look > 0 || r.state === "stopped" || r.state === "interrupted", hosts.map((h) => [h.name, h.text].join(": ")));  // flash writes each line through esc()
 }
-const WU_STATE = table({ queued: ["", "waiting"], waking: ["warn", "waking"], online: ["warn", "online"], awaiting_approval: ["warn", "needs your approval"],
+const WU_STATE = table({ queued: ["", "waiting"], waking: ["warn", "waking"], online: ["warn", "online"], awaiting_approval: ["warn", "waits for your passkey"], switching_itself_off: ["warn", "switching itself off"],
   updating: ["warn", "updating"], settling: ["warn", "pause before shutdown"], shutting_down: ["warn", "switching off"], off: ["ok", "done · off again"],
   stayed_on: ["ok", "done · stays on"], left_on: ["bad", "LEFT ON"], gave_up: ["bad", "gave up"], skipped: ["", "skipped"], interrupted: ["bad", "interrupted"] });
 const WU_RUN = table({ running: ["warn", "running"], done: ["ok", "finished"], cancelled: ["", "cancelled"], stopped: ["bad", "stopped"], interrupted: ["bad", "interrupted"] });
@@ -2119,7 +2178,7 @@ function wuRunBox(r, live) {
       ${live && !c ? `<button class="btn danger push" type="button" data-act="wu-cancel" data-id="${esc(r.id)}" ${state.me?.can_control ? "" : "disabled"} title="${esc(why || "Stop the run")}">Cancel run</button>` : ""}</div>
     ${c ? `<div class="note warn wu-note">Cancelled by ${esc(c.by)}: ${!r.hosts.some((h) => h.wake_sent_at) ? "nothing else is started." : c.switch_off ? "the machines it has woken are still switched off again; nothing else is started." : "the machines it has woken stay on."}</div>` : ""}
     ${r.note ? `<div class="note warn wu-note">${esc(r.note)}</div>` : ""}
-    ${r.approval === "needed" ? '<div class="warnbox wu-note">The woken machines wait for your approval of their update and shutdown.</div>' : ""}
+    ${r.approval === "needed" ? '<div class="warnbox wu-note">The woken machines wait for your passkey: "Confirm it\'s you" in the strip at the top of every page. Not confirmed in time: not updated, and a machine that is armed switches itself off again.</div>' : ""}
     ${r.hosts.map((h) => wuHostRow(r, h)).join("")}</div>`;
 }
 // The section is folded: under its heading and its one sentence there is a line about the last run and the
@@ -2160,13 +2219,13 @@ function wakeUpdateBox() {
   const why = controlWhyNot(), joined = d.hosts.filter((h) => h.opted_in), can = joined.filter((h) => h.choice);
   const able = d.hosts.filter((h) => h.can_join || h.opted_in);
   // why a machine is in no run: in the last column, and on a phone (where that column is scrolled out of view) under its name
-  const whyNot = (h) => ((h.opted_in && !h.choice) || h.approval ? h.why || "" : "");
+  const whyNot = (h) => ((h.opted_in && !h.choice) || h.no_run ? h.why || "" : "");
   const row = (h) => `<tr class="row" data-key="wum-${esc(h.id)}"><td class="namecell"><b title="${esc(h.name)}">${state.byId[h.id] ? `<a href="#/system/${enc(h.id)}">${esc(h.name)}</a>` : esc(h.name)}</b>${whyNot(h) ? `<span class="note wu-why">${esc(whyNot(h))}</span>` : ""}</td>
     <td><span class="chip ${h.power === "on" ? "ok" : h.power === "off" ? "" : "warn"}"${h.asleep ? ' title="Sent to sleep from the panel. Asleep and off look the same from here."' : ""}>${esc(h.asleep ? "asleep or off" : h.power)}</span></td>
     <td>${h.can_wake ? `via ${esc(h.relay)}` : `<span class="note" title="Fairy cannot wake this machine: in a run it is only updated while it is on">${esc(h.no_wake || h.why_not)}</span>`}</td>
     <td>${h.opted_in ? '<span class="chip ok">switched on</span>' : '<span class="note">off</span>'}${whyNot(h) ? `<div class="note wu-why-col">${esc(whyNot(h))}</div>` : ""}</td>
     <td class="num"><button class="btn sm" type="button" data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"
-      ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.approval ? `No run can take it for now (${h.why || "it checks approvals itself"})` : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
+      ${why || (!h.opted_in && !h.can_join) ? "disabled" : ""} title="${esc(why || (h.opted_in ? "Take this machine out of these runs" : h.no_run ? `No run can take it for now (${h.why || "it checks approvals itself"})` : h.can_join ? "Let runs you start wake, update and switch off this machine" : h.why_not))}">${h.opted_in ? "Switch off" : "Switch on"}</button></td></tr>`;
   const earlier = d.active ? d.last : d.last.slice(1), showEarlier = !!wu.open.earlier, open = wuOpen(d);
   return `<div class="panel glass pad wu" data-key="wu">
     <div class="wu-top"><h3>Update unpowered hosts${infoBtn("wu", "Update unpowered hosts", infoList([
@@ -2196,7 +2255,8 @@ function wakeUpdateBox() {
       <tbody>${able.map(row).join("") || '<tr><td colspan="5" class="note">No machine with an agent that can update itself from the panel.</td></tr>'}</tbody></table></div>` : ""}
     ${earlier.length ? `<button class="wu-more" type="button" data-act="wu-log" data-k="earlier" aria-expanded="${showEarlier}">${showEarlier ? "Hide" : "Show"} ${earlier.length} earlier run${earlier.length === 1 ? "" : "s"}</button>
       ${showEarlier ? earlier.map((r) => wuRunBox(r, false)).join("") : ""}` : ""}
-    ${d.hosts.some((h) => h.approval) ? '<div class="note" id="wu-appr">A machine with the check on is in no run yet. <a href="#/approvals">Approvals</a></div>' : ""}</div>`;
+    ${d.hosts.some((h) => h.no_run) ? '<div class="note" id="wu-appr">A machine with the check on needs Fairy-agent v0.9.0 or newer to be in a run; its row says what stands in the way. <a href="#/approvals">Approvals</a></div>' : ""}
+    ${d.hosts.some((h) => h.checked) ? '<div class="note" id="wu-chk">A machine with the check on is woken with a ticket and asks for a second passkey once it is up (the strip on every page, 10 minutes). Not confirmed: not updated, and it switches itself off again. <a href="#/approvals">Approvals</a></div>' : ""}</div>`;
 }
 // The per-host switch in the ⋯ menu of a machine's page (admins).
 function wakeUpdateMenu(s) {
@@ -2321,7 +2381,7 @@ document.addEventListener("click", async (e) => {
   const on = t.dataset.on === "1", name = t.dataset.name, path = `/api/systems/${enc(t.dataset.id)}/wake-update`, body = { enabled: on };
   // A machine that checks approvals itself is in no run: the question about waking it and switching it off is not
   // asked for it. "Confirm it's you" says what is true for it, and so does the answer.
-  const inNoRun = !!(wu.data?.hosts || []).find((h) => h.id === t.dataset.id)?.approval;
+  const inNoRun = !!(wu.data?.hosts || []).find((h) => h.id === t.dataset.id)?.no_run;
   if (on && !inNoRun && !confirm(`Switch "Update unpowered hosts" on for ${name}? In a run that you start on the Updates page, Fairy may then wake this machine, update its agent and switch it off again.`)) return;
   const label = `${on ? "Switch on" : "Switch off"} "Update unpowered hosts" for ${name}`;
   try {
@@ -3987,6 +4047,7 @@ function connect(watch) {
   const es = new EventSource(`/api/stream${q ? `?${q}` : ""}`);
   state.es = es;
   for (const ev of ["open", "systems", "systems_delta", "summary", "ups", "notes", "notes_new", "ups_event", "power"]) es.addEventListener(ev, () => netHeard(ev !== "open"));
+  es.addEventListener("run_wait", () => { netHeard(true); fetchRunWait(); });
   es.addEventListener("open", () => { streamBackoff = 0; if (state.streamed) checkAccess(); state.streamed = true; });
   es.addEventListener("systems", (e) => { state.systems = JSON.parse(e.data).systems; indexSystems(); loadSites(); render(); ensurePowerOnCaps(); });
   es.addEventListener("systems_delta", (e) => {

@@ -98,7 +98,9 @@ func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 // drop out of the list without anyone noticing.
 func TestSignInOnlyActionsAreRealRoutes(t *testing.T) {
 	e := setup(t)
-	if len(sessionOnlyControl) != 11 { // 10th: switching on a machine's own check of approvals (it needs a passkey); 11th: accepting its new machine id
+	// 10th: switching on a machine's own check of approvals (it needs a passkey); 11th: accepting its new machine
+	// id; 12th and 13th: a run's second confirmation (a passkey) and Keep on for a machine a run armed
+	if len(sessionOnlyControl) != 13 {
 		t.Fatal("the list changed: update this test and the docs", len(sessionOnlyControl))
 	}
 	for pat := range sessionOnlyControl {

@@ -249,6 +249,11 @@ func (st *streamState) writeChanged(out *bytes.Buffer) {
 	st.writeEvent(out, "summary", sum)
 	st.writeEvent(out, "ups", upsOv)
 	st.writeEvent(out, "power", pow)
+	if st.v.g.Admin() {
+		// admins only: a run of "Update unpowered hosts" asks for its second passkey, or a machine may switch
+		// itself off by a run's ticket (the banner on every page). Names and times; nothing of a ticket.
+		st.writeEvent(out, "run_wait", st.s.runWaitingNow())
+	}
 }
 
 // writeEvent sends one of those events unless its content is what was sent last.
@@ -286,6 +291,9 @@ func eventKey(v any) any {
 			U []model.UpsState            `json:"ups"`
 			H map[string][]model.UpsPoint `json:"history"`
 		}{x.UPS, x.History}
+	case runWaiting: // without what counts down
+		x.LeftS, x.Now = 0, time.Time{}
+		return x
 	case model.PowerOverview:
 		return struct {
 			T *float64                 `json:"total_w"`

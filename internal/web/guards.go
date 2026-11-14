@@ -55,6 +55,9 @@ var sessionOnlyControl = map[string]bool{
 	"POST /api/admin/wake-update":        true,
 	"DELETE /api/admin/wake-update/{id}": true,
 	"PUT /api/systems/{id}/wake-update":  true,
+	// the run's second confirmation is a passkey; "Keep on" for a machine a run armed is a person's decision
+	"POST /api/admin/wake-update/{id}/confirm":   true,
+	"POST /api/systems/{id}/wake-update/keep-on": true,
 	// Switching on a machine's own check of approvals needs a passkey: a token has none.
 	"POST /api/admin/approval/turn-on": true,
 	// Accepting what a machine shows about its check (a new machine id, or that the check is off) changes what
