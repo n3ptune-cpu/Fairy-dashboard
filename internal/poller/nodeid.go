@@ -520,7 +520,20 @@ func (p *Poller) configPowerOverride(id string) *config.SystemOverride {
 	return o
 }
 
-// WakeUpdateOverride returns the timings of "Update unpowered hosts" that the configuration sets for the one
+// WakeUpdateOverride returns the timings of "Update unpowered hosts" that count for the one machine shown
+// under id, in seconds; 0: it has none of its own, the panel's setting counts. They are what the configuration
+// sets for it (ConfigWakeUpdate), with what an admin decided for this machine in "Edit host" laid over that
+// (hostedit.go: runWith). Everything about a run asks here: the page, the checks of a start, the stamp of a
+// kept start and the run itself, which takes the two values once, when it starts.
+func (p *Poller) WakeUpdateOverride(id string) (offAfterS, shutdownDelayS int) {
+	offAfterS, shutdownDelayS = p.ConfigWakeUpdate(id)
+	if _, e, ok := p.HostEdit(id); ok {
+		offAfterS, shutdownDelayS = runWith(e.Run, offAfterS, shutdownDelayS)
+	}
+	return offAfterS, shutdownDelayS
+}
+
+// ConfigWakeUpdate returns the timings of "Update unpowered hosts" that the configuration sets for the one
 // machine shown under id (the wake_update: block of its systems: entry), in seconds; 0: not set, the panel's
 // own setting counts. The block is the machine's: for the agent of a Proxmox node and for that node it is
 // found under either id (SameMachine), whichever of the two the machine is shown under right now, so a
@@ -534,7 +547,7 @@ func (p *Poller) configPowerOverride(id string) *config.SystemOverride {
 // agent: so a block under the agent's own id also counts for the node's row it is shown as (AgentFor), and a
 // block under the node's id for the agent while it is shown as that node (ShownSystem). A block under a
 // node's id is not given to an agent that is not shown as that node: it may be another machine's.
-func (p *Poller) WakeUpdateOverride(id string) (offAfterS, shutdownDelayS int) {
+func (p *Poller) ConfigWakeUpdate(id string) (offAfterS, shutdownDelayS int) {
 	ids := p.SameMachine(id)
 	if _, isAgent := p.AgentByID(id); isAgent {
 		if s := p.ShownSystem(id); s != nil && !slices.Contains(ids, s.ID) {

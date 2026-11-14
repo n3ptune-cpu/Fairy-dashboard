@@ -9,18 +9,22 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
-// "Edit host", the machine itself: its name and its Wake-on-LAN details can be changed in the panel
-// (adminstate.HostEdit, state.json). The configuration (config.yaml's entry, or the one "Add host" made) is
-// the base and is never changed. This file is where the two meet:
+// "Edit host", the machine itself: its name, its Wake-on-LAN details and its own two run timings can be
+// changed in the panel (adminstate.HostEdit, state.json). The configuration (config.yaml's entry, or the one
+// "Add host" made) is the base and is never changed. This file is where the two meet:
 //
 //   - the NAME is put on the row that is shown: in the snapshot (buildSnapshot) and on the rows ShownSystem
 //     and RelaySystem hand to the other pages. The poller's own entry keeps the configuration's name;
 //   - the WAKE-ON-LAN details are put on the entry PowerOverride returns, which is what the Wake button, the
 //     wake itself and "Update unpowered hosts" ask. This is the one thing of "Edit host" that a control path
 //     reads: a wake packet goes to the MAC addresses and through the relay that count here. Where it is sent
-//     to (broadcast) and the password that goes with it are never part of a decision.
+//     to (broadcast) and the password that goes with it are never part of a decision;
+//   - its own RUN TIMINGS (after how long without an answer it counts as off, and the countdown of the
+//     shutdown a run asks it for) are put on what WakeUpdateOverride returns, which is what the page of
+//     "Update unpowered hosts", the checks of a start and the run itself ask. A decision counts only when it
+//     is a value its key can have (runWith): a number below a floor never comes into force from here.
 //
-// Both are worked out when they are used, from what state.json holds at that moment: there is no copy, so the
+// All are worked out when they are used, from what state.json holds at that moment: there is no copy, so the
 // start of the panel and a running panel cannot differ, and a change counts at once.
 
 // machineIDs is every id the machine shown under id is known under, the ids of agents first: id itself, the
@@ -78,6 +82,27 @@ func (p *Poller) HostKey(id string) string {
 		return key
 	}
 	return p.machineIDs(id)[0]
+}
+
+// runWith lays the panel's decisions about one machine's own run timings over the two values the
+// configuration has for it (0: it has none). A decision counts only when it is a value its key can have
+// (config.MachineRunTimings: the ranges config.yaml is checked against). The store's reader leaves out
+// everything else already; it is asked again here, so that no number below a floor comes into force whatever
+// the reader is changed to.
+func runWith(e adminstate.RunEdit, offAfterS, shutdownDelayS int) (int, int) {
+	for _, t := range config.MachineRunTimings() {
+		v := e.Value(t.Key)
+		if v == 0 || !t.In(v) {
+			continue
+		}
+		switch t.Key {
+		case config.KeyOffAfter:
+			offAfterS = v
+		case config.KeyShutdownDelay:
+			shutdownDelayS = v
+		}
+	}
+	return offAfterS, shutdownDelayS
 }
 
 // named puts the name an admin gave a host on its row (a node or an agent; a guest has none).
