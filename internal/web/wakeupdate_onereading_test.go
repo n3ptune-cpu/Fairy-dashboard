@@ -169,3 +169,41 @@ func TestARunHasAMachinesOwnTimingsAsTheStartReadAndComparedThem(t *testing.T) {
 		}
 	}
 }
+
+// ... and the lines of the confirmation are of that reading too. A machine's own timings change in the
+// instant after the start read them and before it is kept: "Confirm it's you" shows what was read (here: no
+// line of its own for pc-a), the stamp is of the same numbers, and the replay, which reads the new ones,
+// starts nothing.
+func TestAKeptStartsLinesAboutAMachinesOwnTimingsAreOfItsOneReading(t *testing.T) {
+	a := signedIn(t)
+	e := a.e
+	f := newFarm(t, e)
+	f.optIn("pc-a")
+	f.offline()
+	e.s.wuStartStep = func(step string) {
+		if step == "read" {
+			e.s.wuStartStep = nil
+			if _, _, err := e.s.Poller.Admin.EditHostOptions("other admin", func(o *adminstate.HostOptions) error {
+				o.SetHost("pc-a", adminstate.HostEdit{Run: adminstate.RunEdit{OffAfterS: 300, ShutdownDelayS: 10}})
+				return nil
+			}); err != nil {
+				t.Error(err)
+			}
+			e.s.Poller.Bump()
+		}
+	}
+	r := e.wuStart(a.sess, map[string]any{"hosts": []string{"pc-a"}})
+	d, _ := r.body["detail"].(map[string]any)
+	items := strs(d["items"])
+	if !stepUpRequired(r) || !slices.Contains(items, "A machine counts as off after 15 minutes without an answer; shutdown countdown 2 minutes") ||
+		slices.ContainsFunc(items, func(l string) bool { return strings.Contains(l, "its own") }) {
+		t.Fatalf("the confirmation's lines are not of the reading (pc-a had none of its own then): %d %q", r.code, items)
+	}
+	if cb := a.confirm(pendingID(r), false); cb.code != 303 {
+		t.Fatal(cb.code)
+	}
+	res, _ := e.do("GET", "/api/me", nil, "Cookie", a.sess).body["pending_result"].(map[string]any)
+	if act, _ := e.s.WakeRuns.Snapshot(); act != nil || res["ok"] != false || res["status"] != 409.0 || res["message"] != wuTimingsChanged {
+		t.Fatalf("a start confirmed without pc-a's own 5 minutes / 10 seconds: %v (a run: %v)", res, act != nil)
+	}
+}
