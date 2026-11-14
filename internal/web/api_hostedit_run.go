@@ -263,7 +263,11 @@ func (h *hoHost) runView(e adminstate.HostEdit) map[string]any {
 		}
 		rows = append(rows, row)
 	}
-	return map[string]any{"timings": rows}
+	out := map[string]any{"timings": rows, "checked_max_s": nil}
+	if h.runHeld { // the most a run takes for its countdown: the dialog says one line when the countdown is above that
+		out["checked_max_s"] = int(runMaxDelay / time.Second)
+	}
+	return out
 }
 
 // changesRun reports whether a save changed one of the machine's own run timings.

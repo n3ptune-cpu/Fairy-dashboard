@@ -346,7 +346,10 @@ func (s *Server) runTimingsView(o adminstate.RunTimings, ignored []string) map[s
 		ignored = []string{}
 	}
 	return map[string]any{"rev": o.Rev, "timings": rows, "confirm_wait_s": t.ticket().ConfirmWaitS, "active": active != nil,
-		"ignored": capLines(ignored), "ignored_count": o.Ignored}
+		"ignored": capLines(ignored), "ignored_count": o.Ignored,
+		// how many machines that check passkey approvals themselves follow the panel's countdown, and the most
+		// a run takes for them: the dialog says one line when its countdown is above that
+		"checked_hosts": s.wuHeldFollowers(), "checked_max_s": int(runMaxDelay / time.Second)}
 }
 
 // runTimingsRead: who may open the dialog: an admin with a browser session (API tokens: 403).

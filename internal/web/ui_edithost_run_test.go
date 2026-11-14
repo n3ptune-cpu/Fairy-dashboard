@@ -52,7 +52,7 @@ func TestUIEditHostRunTimingsIsAGroupOfTheDialog(t *testing.T) {
 	// is, is markup the group made itself or fixed words
 	view := regexp.MustCompile("esc\\(`[^`]*`\\)").ReplaceAllString(part[strings.Index(part, "function ehRunTag"):], "esc()")
 	for _, m := range regexp.MustCompile(`\$\{[^{}]*\}`).FindAllString(view, -1) {
-		if strings.HasPrefix(m, "${esc(") || slices.Contains([]string{`${panel ? " on" : ""}`, "${ehRunBase(t)}", "${ehRunTag(t, draft)}"}, m) {
+		if strings.HasPrefix(m, "${esc(") || slices.Contains([]string{`${panel ? " on" : ""}`, "${ehRunBase(t)}", "${ehRunTag(t, draft)}", `${ehRunChecked(d, draft) ? "" : " hidden"}`}, m) {
 			continue
 		}
 		t.Errorf("the group inserts %s without esc()", m)

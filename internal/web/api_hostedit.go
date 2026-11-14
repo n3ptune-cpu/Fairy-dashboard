@@ -118,6 +118,7 @@ type hoHost struct {
 	mine     func(id string) bool                                                        // whether something kept under id is about this machine
 	wolWith  func(base *config.Wol, e adminstate.WolEdit) (w *config.Wol, unused string) // poller.WolWith for this machine
 	run      map[string]hoRunBase                                                        // its two run timings without a decision of the panel (api_hostedit_run.go)
+	runHeld  bool                                                                        // a run that wakes it takes a countdown of at most runMaxDelay (it checks passkey approvals itself)
 }
 
 // hoOther is another host (or a guest) as far as its name goes: the row it is shown as, the ids under which
@@ -145,6 +146,9 @@ func (s *Server) hostOptionsHost(m *hoMachine) *hoHost {
 		wolWith: func(base *config.Wol, e adminstate.WolEdit) (*config.Wol, string) { return p.WolWith(row, base, e) }}
 	if h.baseName == "" {
 		h.baseName = m.row.Name
+	}
+	if w, ok := s.wuHostOf(m.row); ok {
+		h.runHeld = wuHeldToMaxDelay(w)
 	}
 	for _, a := range p.WolRelays() {
 		if m.mine(a.ID) {

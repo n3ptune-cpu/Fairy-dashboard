@@ -789,9 +789,10 @@ func (s *Server) wuCheck(b wuStartBody) (map[string]wuHost, error) {
 		case h.Checked && i < len(b.Hosts):
 			// the countdown of its shutdown is part of what the run's confirmation names, and a machine takes
 			// one of at most ten minutes there
+			// (the Edit host dialog and the Run timings dialog say so before: runView, runTimingsView)
 			if d := s.wuShutdownDelay(h.ID); d > runMaxDelay {
-				return nil, apierr.Errf(400, "%s checks passkey approvals itself, and in a run such a machine takes a shutdown countdown of at most %s; its countdown is %s (wake_update.shutdown_delay_s)",
-					h.Name, spanWords(runMaxDelay), spanWords(d))
+				return nil, apierr.Errf(400, "%s checks passkey approvals itself, and in a run such a machine takes a shutdown countdown of at most %s; its countdown is %s (%s)",
+					h.Name, spanWords(runMaxDelay), spanWords(d), s.shutdownDelayFrom(s.wuTimesNow(), h.ID))
 			}
 		}
 		out[id] = h

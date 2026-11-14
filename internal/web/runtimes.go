@@ -262,3 +262,40 @@ func (s *Server) shutdownDelayWith(t wuTimes, id string) time.Duration {
 	}
 	return t.set.ShutdownDelay
 }
+
+// shutdownDelayFrom says where the countdown shutdownDelayWith returns comes from, for a sentence that tells
+// an admin which number to change: the machine's own (a decision of "Edit host", or the wake_update: block of
+// its systems: entry), or the panel's ("Run timings", or config.yaml).
+func (s *Server) shutdownDelayFrom(t wuTimes, id string) string {
+	_, block := s.Poller.ConfigWakeUpdate(id)
+	_, own := s.Poller.WakeUpdateOverride(id)
+	switch {
+	case own > 0 && own != block:
+		return "its own, set in Edit host"
+	case own > 0:
+		return "its own, wake_update.shutdown_delay_s of its systems: entry in config.yaml"
+	case t.set.ShutdownDelay != s.WakeRuns.Settings.ShutdownDelay:
+		return "the panel's, set in Run timings"
+	}
+	return "the panel's, wake_update.shutdown_delay_s in config.yaml"
+}
+
+// wuHeldToMaxDelay reports whether a start that wakes h holds h's shutdown countdown to runMaxDelay: the
+// machine checks passkey approvals itself and can be woken by a run (wuCheck refuses such a start).
+func wuHeldToMaxDelay(h wuHost) bool {
+	return h.Checked && h.CanJoin && h.OptedIn && h.CanWake && !h.NoRun
+}
+
+// wuHeldFollowers counts the machines a start holds to runMaxDelay that have no countdown of their own: the
+// ones the panel's countdown counts for. The Run timings dialog says so when its countdown is above that.
+func (s *Server) wuHeldFollowers() int {
+	n := 0
+	for _, x := range s.Poller.Snapshot() {
+		if h, ok := s.wuHostOf(x); ok && wuHeldToMaxDelay(h) {
+			if _, own := s.wuTimings(x.ID); own == 0 {
+				n++
+			}
+		}
+	}
+	return n
+}

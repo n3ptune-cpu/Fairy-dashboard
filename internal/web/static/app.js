@@ -2785,7 +2785,7 @@ function rtConsequence(key, v) {
 }
 // Is d what GET /api/admin/run-timings gives: the list, each entry with its key, its whole numbers and where its value comes from,
 // and a count of ignored values that is a whole number (or none)?
-const rtValid = (d) => !!d && typeof d === "object" && Array.isArray(d.timings) && d.timings.length > 0 && (d.ignored_count == null || Number.isInteger(d.ignored_count))
+const rtValid = (d) => !!d && typeof d === "object" && Array.isArray(d.timings) && d.timings.length > 0 && [d.ignored_count, d.checked_hosts, d.checked_max_s].every((n) => n == null || Number.isInteger(n))
   && d.timings.every((t) => !!t && typeof t === "object" && own(RT_ROWS, t.key) && [t.value, t.config, t.min, t.max].every(Number.isInteger) && (t.from === "panel" || t.from === "config"));
 // What a field shows: what was typed, config.yaml's value after a Reset, else the value in force.
 const rtText = (t, draft) => (draft.reset[t.key] ? String(t.config) : draft.text[t.key] ?? String(t.value));
@@ -2840,6 +2840,14 @@ function rtRead(t, draft) {
   return t.key === "agent_requests_per_min" ? "to one agent" : rtReading(t.key, v).slice(String(v).length + 1);
 }
 const rtHint = (t, draft) => RT_ROWS[t.key].hint(rtParse(t, rtText(t, draft)) ?? t.value);
+// One line (its words; "": none), only while the countdown in the field is above what a run takes for a machine that
+// checks passkey approvals itself, and such a machine follows this countdown (the start of a run says the same and starts nothing).
+function rtChecked(d, draft) {
+  const t = d.timings.find((x) => x.key === "shutdown_delay_s"), n = d.checked_hosts, max = d.checked_max_s;
+  if (!t || !Number.isInteger(n) || n < 1 || !Number.isInteger(max) || (rtParse(t, rtText(t, draft)) ?? t.value) <= max) return "";
+  return (n === 1 ? "1 machine checks passkey approvals itself and uses this countdown. A run that wakes it" : n + " machines check passkey approvals themselves and use this countdown. A run that wakes one of them")
+    + " does not start while the countdown is above " + rtSpan(max) + ".";
+}
 // What is under the fields: the lines Save will change, and what the admin has to know before pressing it.
 function rtFoot(d, draft) {
   const plan = rtPlan(d, draft);
@@ -2849,6 +2857,7 @@ function rtFoot(d, draft) {
     ${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
     ${d.active ? '<p class="note warn eh-ignored" id="rt-active">A run is going: it keeps its numbers. A change counts from the next run.</p>' : ""}
     ${count ? `<p class="note warn eh-ignored">${esc(count === 1 ? "1 stored value is" : count + " stored values are")} ignored: see the panel's log.</p>` : ""}
+    ${rtChecked(d, draft) ? `<p class="note warn eh-ignored" id="rt-checked">${esc(rtChecked(d, draft))}</p>` : ""}
     ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="rt-lines">${plan.lines.map((l) => `<li${plan.means.includes(l) ? ' class="eh-sees"' : ""}>${esc(l)}</li>`).join("")}</ul>
       ${plan.own ? '<p class="note warn" id="rt-own">Asks you to confirm it\'s you, by itself, every time.</p>' : ""}` : ""}`;
 }
@@ -4378,6 +4387,13 @@ function ehRunTag(t, draft) {
   return `<span class="eh-src${panel ? " on" : ""}"${stored && t.by ? ` title="${esc(`Changed here. Last change: ${t.by}`)}"` : ""}>${panel ? "changed here" : `from ${ehRunBase(t)}`}</span>${stored
     ? `<button class="btn sm" type="button" data-eh-reset="${esc(t.key)}:" title="${esc(`Back to ${ehRunBase(t)}: ${rtReading(t.key, t.base)}`)}">Reset</button>` : ""}`;
 }
+// One line (its words; "": none), only while this machine checks passkey approvals itself and the countdown in the
+// field is above what a run takes for such a machine (the start of a run says the same and starts nothing).
+function ehRunChecked(d, draft) {
+  const max = ehHost(d)?.run?.checked_max_s, t = ehRun(d).find((x) => x.key === "shutdown_delay_s");
+  if (!t || !Number.isInteger(max) || (rtParse(t, ehRunText(t, draft)) ?? t.value) <= max) return "";
+  return "This machine checks passkey approvals itself. A run that wakes it does not start while this countdown is above " + rtSpan(max) + ".";
+}
 // The group of the dialog. Every value in it is the panel's data or what was typed, and goes through esc().
 function ehRunView(d, draft) {
   const rows = ehRun(d);
@@ -4386,7 +4402,7 @@ function ehRunView(d, draft) {
     <div class="form-grid eh-form">${rows.map((t) => `<div class="mfield"><span class="eh-cap"><label for="eh-rt-${esc(t.key)}">${esc(RT_ROWS[t.key].label)}</label><span data-eh-tag="${esc(t.key)}">${ehRunTag(t, draft)}</span></span>
       <div class="rt-in"><input class="input" id="eh-rt-${esc(t.key)}" data-eh-f="run-${esc(t.key)}" type="text" inputmode="numeric" maxlength="5" autocomplete="off" spellcheck="false" value="${esc(ehRunText(t, draft))}"><span class="rt-read" data-eh-read="${esc(t.key)}">${esc(ehRunRead(t, draft))}</span></div></div>`).join("")}
     </div>
-    <p class="note eh-hint">This machine's own, in a run of Update unpowered hosts.</p>`;
+    <p class="note eh-hint">This machine's own, in a run of Update unpowered hosts.</p><p class="note warn eh-ignored" id="eh-run-checked"${ehRunChecked(d, draft) ? "" : " hidden"}>${esc(ehRunChecked(d, draft))}</p>`;
 }
 // One line for each thing Save will change, in the panel's own words (the same lines are in "Confirm it's you"
 // and in the audit log), the request that says exactly that, and the notes about who will see what (ehNotes).
@@ -4602,6 +4618,8 @@ async function openEditHost(s) {
       const t = ehRun(eh.d).find((x) => x.key === el.dataset.ehRead);
       if (t) { el.textContent = ehRunRead(t, eh.draft); el.classList.toggle("bad", rtParse(t, ehRunText(t, eh.draft)) === null); }
     }
+    const held = $("#eh-run-checked");  // the line about a countdown a run does not take: its words, or none
+    if (held) { held.textContent = ehRunChecked(eh.d, eh.draft); held.hidden = !held.textContent; }
   };
   $("#eh-body").onclick = (e) => {
     const t = e.target.closest("[data-eh-reset], [data-eh-left], [data-eh-away]");

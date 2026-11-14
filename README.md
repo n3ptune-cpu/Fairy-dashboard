@@ -777,6 +777,13 @@ What to know before the first real run:
   * **A change counts from the next run.** A run that is going keeps the numbers it started with, to its
     end: its countdowns, its waits, its pacing and what its passkeys signed. The page shows the run's own
     numbers in the run and the new ones in the dialog.
+  * **A countdown above 10 minutes** is not taken by a run for a machine that checks passkey approvals
+    itself. While such a machine uses the panel's countdown and the number in the dialog is above 10
+    minutes, the dialog says so in one line ("1 machine checks passkey approvals itself and uses this
+    countdown. A run that wakes it does not start while the countdown is above 10 minutes."). The start
+    of such a run starts nothing, and its message names where the number comes from: "the panel's, set in
+    Run timings", "the panel's, wake_update.shutdown_delay_s in config.yaml", "its own, set in Edit host"
+    or "its own, wake_update.shutdown_delay_s of its systems: entry in config.yaml".
   * **A run uses the timings its start dialog showed.** The dialog sends what it showed with the start.
     When a timing (the panel's, or a listed machine's own) was changed while the dialog was open, nothing
     is started and nobody is asked to confirm ("The run timings are not the ones this dialog showed any
@@ -1059,7 +1066,8 @@ machine down. The approval of the confirmation lives for the one request, as eve
   does not stop it while a run is live on the machine ("Stop helper" is refused, with the reason), and a
   helper that is stopped during a run is a warning in the machine's row.
 - **The shutdown countdown** of such a machine is at most 10 minutes (`wake_update.shutdown_delay_s`, or
-  its own in `systems:`): a longer one is refused at the start.
+  its own in `systems:`): a longer one is refused at the start. The refusal names where the number comes
+  from (config.yaml, Run timings, or Edit host), and those two dialogs say it before, under their fields.
 - **The times a passkey signs** come from the timings in force at the start, also when they were changed in
   the panel ([Run timings](#update-unpowered-hosts)), through the same limits: an armed machine never
   waits for more than an hour, and the time to confirm gives way to that. A run keeps what was signed; a
@@ -1521,7 +1529,9 @@ Between "Wake-on-LAN" and the links the dialog has the group **Run timings**: th
   between, nothing is started and you press the button again.
 * A machine that checks passkey approvals itself takes a countdown of at most 10 minutes in a run. A
   longer one can be saved here, as in config.yaml; the start of a run with that machine then says so and
-  starts nothing.
+  starts nothing. The dialog says it too, in one line under the two fields, while the countdown of such
+  a machine is above 10 minutes: "This machine checks passkey approvals itself. A run that wakes it does
+  not start while this countdown is above 10 minutes."
 * A Proxmox node with an agent keeps the two under either of its ids. **Remove** of the host takes them
   with it. Remove of **another** host that was the sender of this machine's wake packets takes this
   machine's Wake-on-LAN change out and leaves its run timings and its name as they are.
