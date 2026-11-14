@@ -1366,7 +1366,10 @@ func wuConfirmText(r *wakerun.Run) string {
 		until = " until " + r.ConfirmBy.UTC().Format("15:04 UTC")
 	}
 	wait := "in time"
-	if r.Ticket != nil {
+	switch { // for how long the run asks: less than the configured wait when a machine would go before that
+	case r.ConfirmForS > 0:
+		wait = "within " + spanWords(time.Duration(r.ConfirmForS)*time.Second)
+	case r.Ticket != nil:
 		wait = "within " + spanWords(time.Duration(r.Ticket.ConfirmWaitS)*time.Second)
 	}
 	return fmt.Sprintf("%s woke %s for the run %s started, and %s for your passkey: confirm %s%s in the panel (the banner on every page). "+

@@ -868,7 +868,9 @@ such machines takes two passkeys:
    question of the machine; what ties it to its machine is the machine id Fairy has on record. For a
    machine that is on (update only), the passkey answers the machine's own question for its one update.
 2. **The confirmation.** When the woken machines are up, a strip on every page says **Your passkey is
-   needed**, with the names and the time left (10 minutes; `approval.run_approval_wait_s`); the bell, the
+   needed**, with the names and the time left (`approval.run_approval_wait_s`, 10 minutes unless you set it; less when a
+   machine that came up long before the others would switch itself off sooner: the strip counts a time in which
+   every waiting machine can still be confirmed); the bell, the
    tab's title and a notification (pushed to ntfy / Discord where that is set up) say the same. One click
    and one passkey confirm all machines that wait: each is asked for a fresh question for exactly its update
    (to the version shown) and its shutdown (with the countdown shown), and each checks the answer itself.

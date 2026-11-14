@@ -363,31 +363,48 @@ func TestTheRunIsConfirmedOnce(t *testing.T) {
 	}
 }
 
-// A machine is no longer offered 20 s before it switches itself off, and what is not offered gets nothing.
+// A machine is no longer offered 20 s before it switches itself off, and what is not offered gets nothing. The
+// run's question ends at that moment of the first machine that waits (confirmby_test.go), so that the strip
+// never counts a time in which one of them can no longer be confirmed; the rule for the single machine stays.
 func TestAMachineIsNotOfferedShortlyBeforeItSwitchesItselfOff(t *testing.T) {
 	w := newWorld(t)
 	w.checkedOff("pc-a")
 	b := w.checkedOff("pc-b")
 	b.bootTakes = 290 * time.Second // armed almost five minutes after pc-a
-	// (a ticket with a shorter wait than the panel signs, so that pc-a's time comes before the run stops asking)
+	// (a ticket with a shorter wait than the panel signs, so that pc-a's time comes before the configured wait is over)
 	w.start(StartRequest{Hosts: []string{"pc-a", "pc-b"}, Latest: "17-bbbbbbb", Ticket: &Ticket{ValidS: 420, WaitS: 700, NoticeS: 120, WithinS: 1560, ConfirmWaitS: 600}})
 	act := w.waitFor(8*time.Minute, "asked", func(r *Run) bool { return r.Approval == "needed" })
 	first := *host(act, "pc-a").SelfOffAt
+	if want := first.Add(-confirmMargin); act.ConfirmBy.Sub(want).Abs() > 2*time.Second {
+		t.Fatalf("the question ends at %s; pc-a can be confirmed until %s", clock(*act.ConfirmBy), clock(want))
+	}
+	for w.now.Before(first.Add(-confirmMargin - 3*time.Second)) {
+		w.tick()
+	}
+	if ws, err := w.m.Waiting(w.runID()); err != nil || len(ws) != 2 {
+		t.Fatalf("3 s before the question ends: %+v %v", ws, err)
+	}
+	// the rule for the single machine, by itself: from 20 s before its own time on it is not offered
+	live := w.m.active
+	pa, pb := host(live, "pc-a"), host(live, "pc-b")
+	if at := pa.chk.offMin - confirmMargin; !pa.offerable(live, at) || pa.offerable(live, at+time.Second) || !pb.offerable(live, at+time.Second) {
+		t.Fatalf("offerable around pc-a's limit: pc-a %v then %v, pc-b %v", pa.offerable(live, at), pa.offerable(live, at+time.Second), pb.offerable(live, at+time.Second))
+	}
 	for w.now.Before(first.Add(-10 * time.Second)) {
 		w.tick()
 	}
-	ws, err := w.m.Waiting(w.runID())
-	if err != nil || len(ws) != 1 || ws[0].ID != "pc-b" {
-		t.Fatalf("10 s before pc-a goes: %+v %v", ws, err)
+	if ws, err := w.m.Waiting(w.runID()); err == nil {
+		t.Fatalf("10 s before pc-a goes the run still offers: %+v", ws)
 	}
-	if begun, err := w.confirm("Ann"); err != nil || len(begun) != 1 || begun[0] != "pc-b" {
-		t.Fatalf("%v %v", begun, err)
+	if _, err := w.m.BeginConfirm(w.runID(), "Ann", []string{"pc-a", "pc-b"}); err == nil {
+		t.Fatal("a confirmation was begun 10 s before pc-a goes")
 	}
 	done := w.finish()
-	has(t, host(done, "pc-a"), StOff, "The run was confirmed without it: not confirmed, not updated. It switched itself off again.")
-	has(t, host(done, "pc-b"), StOff, "updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
-	if got := w.callsFor("pc-a"); got != "wake arm" {
-		t.Fatalf("pc-a: %q", got)
+	for _, id := range []string{"pc-a", "pc-b"} {
+		has(t, host(done, id), StOff, "Nobody confirmed within "+span(time.Duration(done.ConfirmForS)*time.Second)+": not confirmed, not updated. It switched itself off again.")
+		if got := w.callsFor(id); !strings.HasSuffix(got, "wake arm") || strings.Contains(got, "go") || strings.Contains(got, "update") || strings.Contains(got, "shutdown") {
+			t.Fatalf("%s: %q", id, got)
+		}
 	}
 }
 

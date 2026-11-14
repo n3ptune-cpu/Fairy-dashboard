@@ -765,10 +765,13 @@ type Run struct {
 	Trying   string `json:"confirm_trying,omitempty"`
 	// Ticket: the numbers of the run's tickets (nil: no machine with the check is in the run). ConfirmBy: until
 	// when the confirmation is asked for, by the panel's clock (set with "needed"). ConfirmedBy: who gave it.
-	Ticket      *Ticket    `json:"ticket,omitempty"`
-	ConfirmBy   *time.Time `json:"confirm_by,omitempty"`
-	ConfirmedBy string     `json:"confirmed_by,omitempty"`
-	Summary     string     `json:"summary,omitempty"` // one line per machine, when the run is over
+	Ticket    *Ticket    `json:"ticket,omitempty"`
+	ConfirmBy *time.Time `json:"confirm_by,omitempty"`
+	// ConfirmForS: for how long the confirmation is asked for: the ticket's confirm_wait_s, or less when a
+	// machine that waits would begin to switch itself off before that (set with "needed").
+	ConfirmForS int    `json:"confirm_for_s,omitempty"`
+	ConfirmedBy string `json:"confirmed_by,omitempty"`
+	Summary     string `json:"summary,omitempty"` // one line per machine, when the run is over
 	// Reported: the interrupted run was reported after the restart (once).
 	Reported bool `json:"reported,omitempty"`
 

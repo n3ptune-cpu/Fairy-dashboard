@@ -531,7 +531,14 @@ func (m *Manager) askConfirmation(r *Run, now time.Time) {
 	if r.Ticket == nil {
 		return
 	}
-	waiting, early := 0, 0
+	mono := m.mono()
+	// until: the end of the question on the steady clock, if it is asked now: the configured wait, or earlier,
+	// confirmMargin before the first machine that can be confirmed now begins to switch itself off. A ticket's
+	// wait counts from each machine's own arming and does not cover the time the others spend in the queue
+	// for their wake, so the first machine of a long run can be due before the configured wait is over; the
+	// time the strip counts is one in which every waiting machine can still be confirmed.
+	waiting, early, can := 0, 0, 0
+	until := mono + time.Duration(r.Ticket.ConfirmWaitS)*time.Second
 	for _, h := range r.Hosts {
 		if !h.Checked || h.Mode != ModeWake {
 			continue
@@ -541,15 +548,20 @@ func (m *Manager) askConfirmation(r *Run, now time.Time) {
 			if h.Confirm == "" && h.chk.disarm == nil {
 				waiting++
 			}
+			if h.offerable(r, mono) {
+				can++
+				if h.armedMaybe() {
+					until = min(until, h.chk.offMin-confirmMargin)
+				}
+			}
 		case StQueued, StWaking, StOnline:
 			early++
 		}
 	}
-	mono := m.mono()
 	switch {
-	case r.Approval == "" && r.Cancel == nil && r.stopped == "" && waiting > 0 && early == 0:
-		by := now.Add(time.Duration(r.Ticket.ConfirmWaitS) * time.Second)
-		r.Approval, r.ConfirmBy, r.confirmMono = "needed", &by, mono+time.Duration(r.Ticket.ConfirmWaitS)*time.Second
+	case r.Approval == "" && r.Cancel == nil && r.stopped == "" && waiting > 0 && early == 0 && can > 0:
+		by := now.Add(until - mono)
+		r.Approval, r.ConfirmBy, r.confirmMono, r.ConfirmForS = "needed", &by, until, int((until-mono+time.Second/2)/time.Second)
 		m.dirty = true
 		m.emit(EvApproval, r, nil, "", nil, "")
 	case r.Approval == "needed" && r.Trying != "" && r.Cancel == nil && r.stopped == "":
@@ -825,8 +837,13 @@ func leadWhy(r *Run, h *Host) string {
 		return "The run was confirmed without it"
 	case h.ConfirmTried != "":
 		return "The confirmation " + h.ConfirmTried + ", and nobody confirmed after that"
+	case r.Approval == "over" && r.ConfirmForS > 0:
+		return "Nobody confirmed within " + span(time.Duration(r.ConfirmForS)*time.Second)
 	case r.Approval == "over" && r.Ticket != nil:
 		return "Nobody confirmed within " + span(time.Duration(r.Ticket.ConfirmWaitS)*time.Second)
+	case r.Approval == "":
+		// the others of the run were not up before this machine could no longer be confirmed
+		return "The run could not ask for its confirmation while this machine could still be confirmed"
 	}
 	return "Nobody confirmed in time"
 }

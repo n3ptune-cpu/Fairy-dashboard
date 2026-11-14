@@ -50,7 +50,8 @@ const selfOffNoticeS = 120
 // runTimings are the numbers the two passkeys of a run sign, from the configuration:
 //
 //   - valid_s: approval.TicketValidS, always.
-//   - confirm wait: approval.run_approval_wait_s (default 600): how long the banner asks once the machines are up.
+//   - confirm wait: approval.run_approval_wait_s (default 600): how long the banner asks once the machines are up,
+//     at most (the run ends its question earlier when a machine that waits would switch itself off before that).
 //   - wait_s: how long an armed machine waits before it switches itself off: the longest another machine of
 //     the run may still need to come up (wake_update.online_timeout_s), the confirm wait, and a minute; the
 //     machines take at most an hour, and the confirm wait gives way to that.
@@ -198,7 +199,7 @@ func (s *Server) wuStartPlan(c *reqCtx, u *model.User, b wuStartBody, hosts map[
 	ap.run = rs
 	ap.message = "Confirm it's you: this passkey starts the run. For a machine that checks approvals itself and is off it signs a ticket, good for " +
 		spanWords(time.Duration(rs.numbers.ValidS)*time.Second) + ": once the run has woken the machine, the ticket lets it switch itself off again if nobody confirms. " +
-		"Its update and its shutdown need a second passkey when the machines are up (" + spanWords(time.Duration(rs.numbers.ConfirmWaitS)*time.Second) + " to give it)."
+		"Its update and its shutdown need a second passkey when the machines are up (up to " + spanWords(time.Duration(rs.numbers.ConfirmWaitS)*time.Second) + " to give it; the strip counts the time)."
 	return ap, nil
 }
 
