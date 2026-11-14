@@ -67,6 +67,11 @@ func (s *Server) helperAction(c *reqCtx, action string) error {
 	if action == "stop" {
 		// never while a run of "Update unpowered hosts" is live on the machine: the helper is what counts the
 		// wait of a ticket and switches the PC off again (api_wakeupdate_runs.go)
+		// The look and the request that follows it are under the lock the handing over of a run's ticket takes
+		// (runOps.Arm): a ticket cannot go out between the two, and a stop that waits for a ticket's request
+		// finds the run arming afterwards and is refused.
+		s.armStopMu.Lock()
+		defer s.armStopMu.Unlock()
 		if why := s.helperStopRefusal(x); why != "" {
 			return fail(apierr.New(409, why))
 		}

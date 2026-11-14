@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -318,26 +319,22 @@ func TestAStartThatLosesDoesNotWipeTheWinnersTicket(t *testing.T) {
 // the moment the request goes out. Keep on in that moment cancels nothing, and says so.
 func TestStopHelperIsRefusedFromTheMomentTheRunArms(t *testing.T) {
 	r := newRunRig(t, "pc-a")
-	r.b.Mu.Lock()
-	inner := r.b.Metrics["pc-a"]
-	r.b.Metrics["pc-a"] = func() (jsonx.M, error) { // a Windows PC with its elevated helper running
-		m, err := inner()
-		if err == nil {
-			m["helper"] = jsonx.M{"state": "running", "needed": true, "since": "2026-11-09T10:00:00Z", "features": []any{}}
-		}
-		return m, err
-	}
-	r.b.Mu.Unlock()
+	withHelper(r, "pc-a")
 	fresh := r.cookie(controller(), 0)
 	hdr := []string{"Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json"}
 	stop := func() resp {
 		return r.do("POST", "/api/systems/pc-a/helper/stop", map[string]any{"confirm": "PC-A"}, hdr...)
 	}
-	var during, keep *resp
+	// while the ticket's request is on its way: what the Stop helper route would be told (the route itself
+	// waits for that request under one lock, TestStopHelperAndTheTicketDoNotCross), and Keep on through its route
+	var during string
+	var keep *resp
 	r.gb.Relay("pc-a", func(path string, body any) (int, jsonx.M) {
-		if path == api.PathRunArm && during == nil {
-			x, y := stop(), r.do("POST", "/api/systems/pc-a/wake-update/keep-on", map[string]any{}, hdr...)
-			during, keep = &x, &y
+		if path == api.PathRunArm && keep == nil {
+			x, _ := runOps{r.s}.system("pc-a")
+			during = r.s.helperStopRefusal(x)
+			y := r.do("POST", "/api/systems/pc-a/wake-update/keep-on", map[string]any{}, hdr...)
+			keep = &y
 		}
 		return 0, nil // the request goes on to the machine
 	})
@@ -345,11 +342,11 @@ func TestStopHelperIsRefusedFromTheMomentTheRunArms(t *testing.T) {
 		t.Fatal(res)
 	}
 	r.until(t, "pc-a armed", 300, func() bool { return r.host("pc-a").Arm == wakerun.ArmArmed })
-	if during == nil {
+	if keep == nil {
 		t.Fatal("no arm request went out")
 	}
-	if during.code != 409 || !strings.Contains(string(during.raw), "PC-A is in a run of \\\"Update unpowered hosts\\\" (its ticket is on its way to it)") || !strings.Contains(string(during.raw), "Nothing was sent.") {
-		t.Fatalf("Stop helper while the ticket is on its way: %d %s", during.code, during.raw)
+	if !strings.HasPrefix(during, "PC-A is in a run of \"Update unpowered hosts\" (its ticket is on its way to it)") || !strings.HasSuffix(during, "Nothing was sent.") {
+		t.Fatalf("Stop helper while the ticket is on its way: %q", during)
 	}
 	if keep.code != 409 || !strings.Contains(string(keep.raw), "PC-A is being handed the run's ticket this very moment: nothing was cancelled. Press Keep on again in a few seconds.") {
 		t.Fatalf("Keep on while the ticket is on its way: %d %s", keep.code, keep.raw)
@@ -363,5 +360,100 @@ func TestStopHelperIsRefusedFromTheMomentTheRunArms(t *testing.T) {
 	}
 	if n := len(r.sent("pc-a", "/power")); n != 0 {
 		t.Fatalf("%d cancels were sent", n)
+	}
+}
+
+// withHelper makes the machine a Windows PC with its elevated helper running.
+func withHelper(r *runRig, id string) {
+	r.b.Mu.Lock()
+	defer r.b.Mu.Unlock()
+	inner := r.b.Metrics[id]
+	r.b.Metrics[id] = func() (jsonx.M, error) {
+		m, err := inner()
+		if err == nil {
+			m["helper"] = jsonx.M{"state": "running", "needed": true, "since": "2026-11-09T10:00:00Z", "features": []any{}}
+		}
+		return m, err
+	}
+}
+
+// "Stop helper" and the handing over of a run's ticket do not cross: the route's look at the run and its
+// request to the machine, and the ticket's request, are under one lock. Without it a stop that had passed its
+// look (the run was not arming yet) could reach the machine after the ticket: a PC armed by a ticket whose
+// helper, which counts the ticket's wait, the panel had just stopped. With the lock the ticket waits for the
+// stop, and a stop that waits for the ticket then finds the run arming and is refused.
+func TestStopHelperAndTheTicketDoNotCross(t *testing.T) {
+	r, run := started(t, "pc-a")
+	withHelper(r, "pc-a")
+	r.until(t, "pc-a online, before the run arms it", 300, func() bool { h := r.host("pc-a"); return h.OnlineAt != nil && h.State == wakerun.StOnline })
+	if h := r.host("pc-a"); h.Arm != "" || h.Asking != "" {
+		t.Fatalf("the setup: pc-a %s, arm %q, asking %q", h.State, h.Arm, h.Asking)
+	}
+	type armed struct {
+		err error
+		at  time.Time
+	}
+	type stopped struct { // what the stop's request saw, handed over from the server's goroutine
+		held, early bool
+		at          time.Time
+	}
+	armDone, stopDone, ticketBegan := make(chan armed, 1), make(chan stopped, 1), make(chan time.Time, 1)
+	r.gb.Relay("pc-a", func(path string, body any) (int, jsonx.M) {
+		switch path {
+		case api.PathHelperStop: // the route has looked at the run and is sending the stop
+			st := stopped{held: !r.s.armStopMu.TryLock()}
+			if !st.held {
+				r.s.armStopMu.Unlock()
+			}
+			go func() { // the run hands the ticket over at this very moment
+				_, err := runOps{r.s}.Arm(context.Background(), "pc-a", run.ID)
+				armDone <- armed{err, time.Now()}
+			}()
+			select {
+			case a := <-armDone:
+				st.early = true
+				armDone <- a
+			case <-time.After(300 * time.Millisecond):
+			}
+			st.at = time.Now()
+			stopDone <- st
+		case api.PathRunArm: // the ticket's request: under the same lock
+			ticketBegan <- time.Now()
+			if r.s.armStopMu.TryLock() {
+				r.s.armStopMu.Unlock()
+				t.Error("the ticket's request goes out without the lock")
+			}
+		}
+		return 0, nil
+	})
+	fresh := r.cookie(controller(), 0)
+	x := r.do("POST", "/api/systems/pc-a/helper/stop", map[string]any{"confirm": "PC-A"}, "Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json")
+	a := <-armDone
+	var st stopped
+	var ticketAt time.Time
+	select {
+	case st = <-stopDone:
+	default:
+	}
+	select {
+	case ticketAt = <-ticketBegan:
+	default:
+	}
+	stopAt := st.at
+	if x.code != 200 || stopAt.IsZero() {
+		t.Fatalf("the stop (the run was not arming when the route looked): %d %s", x.code, x.raw)
+	}
+	if !st.held {
+		t.Error("the Stop helper route sends its request without the lock")
+	}
+	if st.early || a.at.Before(stopAt) {
+		t.Errorf("the ticket was handed over while the stop was on its way (the stop's request ended at %s, the ticket's at %s)", stopAt.Format("15:04:05.000"), a.at.Format("15:04:05.000"))
+	}
+	if a.err != nil {
+		t.Fatalf("the ticket after the stop: %v", a.err)
+	}
+	// on the wire: one stop, then one ticket
+	if stops, tickets := len(r.sent("pc-a", api.PathHelperStop)), askedPaths(r.m["pc-a"], api.PathRunArm); stops != 1 || tickets != 1 || ticketAt.Before(stopAt) {
+		t.Fatalf("%d stops and %d tickets reached the machine; the stop's request ended at %s, the ticket's began at %s", stops, tickets, stopAt.Format("15:04:05.000"), ticketAt.Format("15:04:05.000"))
 	}
 }

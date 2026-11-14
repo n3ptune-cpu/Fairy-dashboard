@@ -288,6 +288,10 @@ func (o runOps) Arm(ctx context.Context, id, run string) (time.Duration, error) 
 		// answers no challenge, so the machine id is all that says which machine it is for.
 		return gone(andNames(s.machineNames(with)) + " has the same machine id now, and a run's ticket is tied to the machine id alone")
 	}
+	// Under the lock of "Stop helper" (api_helper.go): the ticket does not go out while a stop that has looked
+	// at the run is on its way to a machine. The run holds no lock of its own here (wakerun, Manager.io).
+	s.armStopMu.Lock()
+	defer s.armStopMu.Unlock()
 	ap, why := s.tickets.take(run, "arm", a.ID, s.Poller.BindingOf(a.ID).Record.MachineID)
 	if ap == nil {
 		return gone(why)

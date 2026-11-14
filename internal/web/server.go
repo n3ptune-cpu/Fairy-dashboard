@@ -96,6 +96,9 @@ type Server struct {
 	tickets *runTickets
 	// wuStartMu: keeping a start's token and starting its run are one step (startRun).
 	wuStartMu sync.Mutex
+	// armStopMu: "Stop helper" (its look at the run and its request to the machine) and the handing over of a
+	// run's ticket (runOps.Arm) are under one lock, so that the two do not cross.
+	armStopMu sync.Mutex
 
 	seenMu  sync.Mutex
 	seen    map[string]time.Time // subject -> last "last seen" write
