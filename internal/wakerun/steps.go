@@ -249,24 +249,34 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 		return
 	}
 	h.seeNone(o, after, mono)
-	if after && o.Pending != nil && o.Pending.Action == "shutdown" { // the countdown of a request without an answer may show only now
+	// The countdown of a request without an answer may show only now. It is the run's when it has the run's
+	// length, or when its agent does not say the length (ownLength: the same rule as otherShutdown).
+	if after && o.Pending != nil && o.Pending.Action == "shutdown" && ownLength(o.Pending, h.delay(r)) {
 		m.seeCountdown(r, h, o, mono, now)
 	}
 	if h.lostShutdown() && after && o.Pending != nil {
 		// A request without an answer, no countdown of it has shown, and the machine's agent shows another
-		// action as pending (a shutdown would be the run's: seeCountdown). Somebody asked for that one on the
-		// machine's page. The agent's cancel names no action: it would call that one off, and the cancel that
-		// is repeated for such a request did, within 10 s, up to 12 times in a countdown and many more with a
-		// long one, while the row said "none is pending" (review of fix8, RF8-03). No cancel is sent while it
-		// shows. The agent holds one action at a time and refuses a second, so the run's request cannot start a
-		// countdown while it is there; when it is gone the cancels go on. (otherPending is the same rule for a
-		// request that was answered; it ends the machine, this one waits, because the request can still come.)
+		// action as pending (a shutdown of the run's own length would be the run's: seeCountdown). Somebody
+		// asked for that one on the machine's page. That goes for a shutdown of another length too: the run's
+		// request, when it arrives, starts a countdown of the run's length and of no other. Every pending
+		// shutdown was taken for the run's here, so a person's own shutdown of 1 minute, asked for while the
+		// cancel was being repeated, was called off at the next cancel, and the report said "its shutdown
+		// countdown was called off" (third review of build 14, S1). The agent's cancel names no action: it would
+		// call that one off, and the cancel that is repeated for such a request did, within 10 s, up to 12 times
+		// in a countdown and many more with a long one, while the row said "none is pending" (review of fix8,
+		// RF8-03). No cancel is sent while it shows. The agent holds one action at a time and refuses a second,
+		// so the run's request cannot start a countdown while it is there; when it is gone the cancels go on.
+		// (otherPending and otherShutdown are the same rule for a request that was answered; they end the
+		// machine, this one waits, because the request can still come.)
 		if c == nil {
 			c = &callingOff{why: why}
 			h.calloff = c
 		}
 		p := *o.Pending
-		if c.other == nil {
+		if c.other == nil && p.Action == "shutdown" {
+			m.note(h, m.now(), fmt.Sprintf("a shutdown is pending on it now that is not the one the run asked for (%s): "+
+				"no cancel is sent while it shows, since its agent's cancel would call that one off", otherLength(&p, h.delay(r), now)))
+		} else if c.other == nil {
 			m.note(h, m.now(), fmt.Sprintf("another power action is pending on it now (%s at %s, by the machine's own clock), which is not the run's shutdown: "+
 				"no cancel is sent while it shows, since its agent's cancel would call that one off", p.Action, when(p.At, now)))
 		}
@@ -411,11 +421,25 @@ func (h *Host) otherShutdown(o Observation, after bool, delay time.Duration) *Pe
 	if h.lostShutdown() || !after || o.Pending == nil || o.Pending.Action != "shutdown" {
 		return nil
 	}
-	if s := o.Pending.DelayS; s == 0 || s == int(delay.Seconds()) {
+	if ownLength(o.Pending, delay) {
 		return nil
 	}
 	p := *o.Pending
 	return &p
+}
+
+// ownLength reports whether a pending shutdown has the length the run asked for (delay), as far as its agent
+// says: an agent that does not say the length (delay_s 0 or missing: an agent older than the field) shows a
+// shutdown the run cannot tell from its own, and it is taken for the run's, as every shutdown was before the
+// length was looked at. See callOff, "Whose countdown is it".
+func ownLength(p *Pending, delay time.Duration) bool {
+	return p.DelayS == 0 || p.DelayS == int(delay.Seconds())
+}
+
+// otherLength is the words for a pending shutdown of another length than the run asked for (delay): its
+// length and its end as the agent gives them, and the run's own length.
+func otherLength(p *Pending, delay time.Duration, now time.Time) string {
+	return fmt.Sprintf("a countdown of %s, due at %s by the machine's own clock; the run asked for one of %s", span(time.Duration(p.DelayS)*time.Second), when(p.At, now), span(delay))
 }
 
 // endNotKnown ends a machine whose entry in the panel was replaced while the shutdown the run asked for was
@@ -462,6 +486,12 @@ func (m *Manager) notCalledOff(r *Run, h *Host, now time.Time) {
 			// while it showed. Not "none is pending": one was.
 			m.note(h, now, fmt.Sprintf("until %s: %d cancel(s) answered with nothing pending, %d left out while another action was pending, %d that did not get through",
 				clock(untilAt), c.none, c.skipped, c.tries))
+			if p.Action == "shutdown" { // one of another length than the run asked for (callOff)
+				m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s: its shutdown request had got no answer, and no countdown of it showed. A shutdown was pending on the machine meanwhile "+
+					"that is not the one the run asked for (%s): the run sent no cancel while it showed, since its agent's cancel would have called that one off, "+
+					"and that shutdown switches the machine off unless someone cancels it on its page. ", c.why, otherLength(p, h.delay(r), now))+lostMay(r, h)+" Fairy no longer watches it."+updateTail(h))
+				return
+			}
 			m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s: its shutdown request had got no answer, and no countdown of it showed. Another power action was pending on the machine meanwhile "+
 				"(%s at %s, by the machine's own clock), which is not the run's: the run sent no cancel while it showed, since its agent's cancel would have called that one off. ",
 				c.why, p.Action, when(p.At, now))+lostMay(r, h)+" Fairy no longer watches it."+updateTail(h))
