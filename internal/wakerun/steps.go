@@ -1288,13 +1288,24 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 			m.endOtherAction(r, h, now, o.Pending, mono < h.endMin)
 			return
 		}
-		h.unpending = false // the run's own shutdown shows again
+		h.unpending, h.upAfter = false, false // the run's own shutdown shows again
 	}
 	if counting {
 		m.seeCountdown(r, h, o, mono, now)
 	}
 	if h.pendingSeen && after && o.Pending == nil && mono-o.SeenAgo > h.dueMono {
 		h.unpending = true
+	}
+	// The same answer, whether or not the countdown was seen before, for a shutdown the run knows of: after
+	// the countdown's time the machine is up and nothing is pending on it. The countdown did not switch it off:
+	// it was called off on the machine (while the panel could not reach it, or in its last seconds), or the
+	// shutdown did not happen. From here on its silence is not "switched off again": a link that drops in the
+	// minutes the run still watches made exactly that of a machine that was on (the silence branch below, and
+	// look). An agent shows a shutdown for a minute after its time, so a machine that is going off by the run's
+	// countdown does not answer like this; one that still answers longer than that minute while it goes down
+	// is, from then on, reported as "not known", not as off.
+	if after && o.Pending == nil && mono-o.SeenAgo > h.dueMono && !h.lostShutdown() {
+		h.upAfter, h.upAfterAt = true, o.SeenAt
 	}
 	// An install that begins while the countdown runs would be cut off by the machine going off. mayShutDown
 	// looks at the agent's update state right before the shutdown request and leaves a machine on that is
@@ -1382,6 +1393,12 @@ func (m *Manager) stepShutting(ctx context.Context, r *Run, h *Host, now time.Ti
 			m.end(r, h, StLeftOn, OnUnknown, now, cameOnline(h)+". Its shutdown request got no answer, Fairy never saw its countdown, and it does not answer now: "+
 				"not confirmed that it is off."+updateTail(h))
 		case lost:
+		case h.upAfter && h.seenOff(mono):
+			// It was up after its countdown, with nothing pending, and gives nothing now (the same proof of
+			// silence as for "off"): out of reach, or switched off by somebody or something else. Not the run's
+			// "switched off again", and not known.
+			m.end(r, h, StLeftOn, OnUnknown, now, asked+"Its agent still answered at "+when(h.upAfterAt, now)+", after its countdown's time, with no shutdown pending: "+
+				"the shutdown was called off on the machine, or did not happen. It does not answer now: not known whether it is on.")
 		case h.seenOff(mono):
 			// Off: after the run's own due time the machine gave nothing at all for offConfirm, as seen by at
 			// least offPolls polls in a row that were made after that time, and it had not gone out of reach

@@ -483,6 +483,9 @@ The rules, in plain words:
   them in a row; silence from before the end does not count. A machine that was already out of reach while
   its countdown was still running, or whose polling is paused, is "not confirmed that it is off", with the
   power "on or off: not known": the run cannot tell a machine that went off from a connection that dropped.
+  The same for a machine whose agent still answered after the countdown's time with no shutdown pending (the
+  shutdown was called off on the machine, or did not happen) and that stops answering later: the report says
+  when it last answered and "not known whether it is on", never "switched off again".
   A machine whose polling is paused when its shutdown would be asked for is not asked: it is left on.
   (For a Proxmox node "out of reach" begins with the first poll of its agent that got nothing, also while the
   Proxmox API still listed the node as online: that list is a little behind when a node drops out. While it

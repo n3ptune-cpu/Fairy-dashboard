@@ -704,6 +704,11 @@ type Host struct {
 	notPending bool          // the run saw that its shutdown is no longer what is pending, and another action is: silence is never its "off" (look)
 	offQuiet   bool          // it gives nothing at all right now ...
 	offSince   time.Duration // ... since this moment on the steady clock
+	// upAfter: an answer from after the run's own due time showed the machine up with no shutdown pending
+	// (stepShutting): its countdown did not switch it off, and its silence later is not the run's "off"
+	// (the watch, and look). upAfterAt: (SeenAt of) the latest such answer, for the report's words.
+	upAfter   bool
+	upAfterAt time.Time
 	// What the run has seen of the poller's row of silent polls while it watches the countdown (seeSilence):
 	silRow        uint64        // the row it is counting in
 	silN          int           // how many polls of that row it has looked at
@@ -1254,9 +1259,11 @@ func (m *Manager) look(r *Run, h *Host, now time.Time) {
 		// the run whose answer was lost (it may have arrived; then the machine is on).
 		// Nor after the run saw another action pending in its shutdown's place (notPending): the machine that
 		// then gives nothing is restarting, asleep, or was switched off by that action, not by the run.
+		// Nor after it answered, after the countdown's time, with nothing pending (upAfter): the countdown did
+		// not switch it off, and what its silence is now the run does not know.
 		asked := h.ShutdownAt != nil && !h.lostShutdown() && !h.notPending
 		switch {
-		case asked && !h.cancelUnsure && h.seenOff(mono): // the same proof the watch of the countdown asks for
+		case asked && !h.cancelUnsure && !h.upAfter && h.seenOff(mono): // the same proof the watch of the countdown asks for
 			final(StOff, OnNo, base+seenOff)
 		case now.Sub(v.since) < lookFor && mono-v.sinceMono < lookFor:
 			if now.Sub(v.kicked) >= kickEvery {
