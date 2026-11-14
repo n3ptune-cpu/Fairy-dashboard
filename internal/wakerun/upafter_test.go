@@ -107,3 +107,63 @@ func TestAMachineThatGoesSilentAtItsCountdownsEndIsOff(t *testing.T) {
 		t.Fatalf("[%s] power %q: %s (the machine is on: %v)", h.State, h.On, h.Text, pc.on)
 	}
 }
+
+// The same in the watch of a machine's own switch-off (nobody confirmed it; third look at cdd080f). The machine
+// was started again while the panel could not reach it: its run is gone, and it stays on. One answer between
+// two outages showed no run of this run's: one is not enough to say "not armed any more" (two are asked for),
+// but it did take back "out of reach before the end". The silence after it, past the due time, was "It
+// switched itself off again" for a machine that was on. Silence proves the machine's own switch-off only when
+// the last answer the run read showed this run as armed or counting down.
+func TestAnArmedMachineThatLastShowedNoRunIsNotOffByItsSilence(t *testing.T) {
+	for name, c := range map[string]struct {
+		restart bool   // the machine is started again during the first outage
+		want    string // the end of the report
+	}{
+		"started again, one answer shows no run": {restart: true,
+			want: "It was switching itself off; the last answer of its agent, at 03:19:28 UTC, showed no run on it, and it does not answer now: not confirmed that it is off."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w, pc, _ := armedRun(t, nil)
+			var t0 time.Time // the watch of its switch-off begins
+			restarted := false
+			w.afterTick = func() {
+				a, _ := w.m.Snapshot()
+				if a == nil {
+					return
+				}
+				if t0.IsZero() {
+					if stateOf(a, "pc-a") == StSelfOff {
+						t0 = w.now
+					}
+					return
+				}
+				since := w.now.Sub(t0)
+				if c.restart && since >= 10*time.Second && !restarted {
+					restarted = true
+					pc.bootedAt, pc.agentReadyAt, pc.pending, pc.updating = w.now, w.now.Add(5*time.Second), nil, false
+				}
+				pc.unreachable = since >= 5*time.Second && since != 150*time.Second // one answer, after the earliest end of its countdown
+			}
+			r := over(t, w)
+			h := host(r, "pc-a")
+			if !pc.on {
+				t.Fatal("the model: the machine went off")
+			}
+			if h.On == OnNo || h.State == StOff {
+				t.Fatalf("REPORTED OFF, AND IT IS ON: [%s] power %q: %s", h.State, h.On, h.Text)
+			}
+			if h.State != StLeftOn || h.On != OnUnknown || !strings.HasSuffix(h.Text, c.want) {
+				t.Fatalf("[%s] power %q: %s\nwant ...%s", h.State, h.On, h.Text, c.want)
+			}
+		})
+	}
+}
+
+// What is right today stays here too: the last answer showed the switch-off counting down, then nothing.
+func TestAnArmedMachineThatGoesSilentWhileItCountsDownIsOff(t *testing.T) {
+	w, pc, _ := armedRun(t, nil)
+	r := over(t, w)
+	if h := host(r, "pc-a"); h.State != StOff || h.On != OnNo || !strings.HasSuffix(h.Text, "It switched itself off again.") || pc.on {
+		t.Fatalf("[%s] power %q: %s (the machine is on: %v)", h.State, h.On, h.Text, pc.on)
+	}
+}

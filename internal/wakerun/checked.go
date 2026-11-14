@@ -126,6 +126,11 @@ type checked struct {
 	goSince time.Duration
 	goEnd   time.Duration
 	goRead  bool
+	// The watch of its own switch-off (stepSelfOff): selfSaid: an answer of its agent was read in the watch;
+	// selfWord: what the latest of them said about this run (runWord); selfAt: its SeenAt, for the report.
+	selfSaid bool
+	selfWord string
+	selfAt   time.Time
 }
 
 // disarming is a cancel of a machine's self-switch-off that the run is at (disarm).
@@ -1206,6 +1211,9 @@ func (m *Manager) stepSelfOff(ctx context.Context, r *Run, h *Host, now time.Tim
 		return
 	}
 	none := h.seeNoRun(o, word)
+	if o.Online && mono-o.SeenAgo > c.armBefore {
+		c.selfSaid, c.selfWord, c.selfAt = true, word, o.SeenAt
+	}
 	lead := cameOnline(h) + ". " + leadWhy(r, h) + ": not confirmed, not updated."
 	switch {
 	case word == BlockCancelled || word == BlockDone:
@@ -1251,6 +1259,21 @@ func (m *Manager) stepSelfOff(ctx context.Context, r *Run, h *Host, now time.Tim
 		}
 	case !o.Online && o.OnBy == "": // nothing at all from it
 		switch {
+		case h.seenOff(mono) && c.selfSaid && c.selfWord != BlockArmed && c.selfWord != BlockOffPending:
+			// Silence proves its own switch-off only when the last answer the run read showed this run as armed
+			// or counting down. One answer that shows no run (the machine was started again, the run was ended
+			// on it) is not enough for "not armed any more" (two are asked for, above), and it takes back "out
+			// of reach before the end": the silence after it was "It switched itself off again" for a machine
+			// that was on. What that silence is, the run does not know.
+			said := "showed no run on it"
+			switch c.selfWord {
+			case "":
+				said = "said nothing about the run"
+			case BlockConfirmed:
+				said = "showed the run as confirmed"
+			}
+			m.end(r, h, StLeftOn, OnUnknown, now, fmt.Sprintf("%s It was switching itself off; the last answer of its agent, at %s, %s, and it does not answer now: not confirmed that it is off.",
+				lead, when(c.selfAt, now), said))
 		case h.seenOff(mono):
 			m.end(r, h, StOff, OnNo, now, lead+" It switched itself off again.")
 		case mono-h.dueMono <= offGrace:
