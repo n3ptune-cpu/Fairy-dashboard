@@ -6,6 +6,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,7 +53,9 @@ var wolMACRe = regexp.MustCompile(`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`)
 
 // WolMACs checks the MAC addresses of a Wake-on-LAN decision and returns them as they are stored: lower
 // case with ":" (aa-bb-.. and AA:BB:.. are taken), 1 to MaxWolMACs of them, each once, none of them the
-// address of no network card (all zero, all ff).
+// address of no network card: all zero, or a group address (the lowest bit of the first byte is set:
+// multicast, and the broadcast address ff:ff:ff:ff:ff:ff). A network card's own address never has that bit,
+// so a wake packet "for" such an address wakes nothing, and nothing good is meant by one.
 func WolMACs(list []string) ([]string, error) {
 	if len(list) == 0 {
 		return nil, errors.New("Wake-on-LAN needs at least one MAC address")
@@ -66,7 +69,7 @@ func WolMACs(list []string) ([]string, error) {
 		if !wolMACRe.MatchString(m) {
 			return nil, errors.New("a MAC address must look like aa:bb:cc:dd:ee:ff")
 		}
-		if m == "00:00:00:00:00:00" || m == "ff:ff:ff:ff:ff:ff" {
+		if first, _ := strconv.ParseUint(m[:2], 16, 8); m == "00:00:00:00:00:00" || first&1 == 1 {
 			return nil, errors.New(m + " is not the address of a network card")
 		}
 		if slices.Contains(out, m) {

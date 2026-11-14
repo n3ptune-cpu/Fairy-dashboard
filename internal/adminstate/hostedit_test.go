@@ -45,7 +45,10 @@ func TestWolMACs(t *testing.T) {
 	}
 	for what, list := range map[string][]string{"none": {}, "nine": eight, "the same twice": {"aa:bb:cc:dd:ee:01", "AA-BB-CC-DD-EE-01"},
 		"too short": {"aa:bb:cc:dd:ee"}, "no separators": {"aabbccddee01"}, "not hex": {"aa:bb:cc:dd:ee:zz"}, "an address": {"10.0.0.255"},
-		"a name": {"pc-a"}, "empty": {""}, "all zero": {"00:00:00:00:00:00"}, "all ff": {"FF:FF:FF:FF:FF:FF"}, "with a port": {"aa:bb:cc:dd:ee:01:9"}} {
+		"a name": {"pc-a"}, "empty": {""}, "all zero": {"00:00:00:00:00:00"}, "all ff": {"FF:FF:FF:FF:FF:FF"}, "with a port": {"aa:bb:cc:dd:ee:01:9"},
+		// a group address (multicast: the lowest bit of the first byte), alone and next to a card's address
+		"IPv4 multicast": {"01:00:5e:00:00:01"}, "IPv6 multicast": {"33:33:00:00:00:01"}, "spanning tree": {"01-80-C2-00-00-00"}, "an odd first byte": {"03:00:00:00:00:01"},
+		"a card and a group": {"aa:bb:cc:dd:ee:01", "ab:bb:cc:dd:ee:01"}} {
 		if got, err := WolMACs(list); err == nil {
 			t.Errorf("%s: taken as %v", what, got)
 		}
@@ -153,6 +156,8 @@ func TestHostEditsReaderIsTolerant(t *testing.T) {
 		"a port as a text":           {`{"pc-a": {"wol": {"port": "9"}}}`, `"port" is not 7 or 9`},
 		"an upper-case MAC":          {`{"pc-a": {"wol": {"macs": ["AA:BB:CC:DD:EE:01"]}}}`, `not written as aa:bb:cc:dd:ee:ff`},
 		"a MAC that is none":         {`{"pc-a": {"wol": {"macs": ["10.0.0.1"]}}}`, `must look like`},
+		"a multicast MAC":            {`{"pc-a": {"wol": {"macs": ["01:00:5e:00:00:01"], "relay": "relay-a"}}}`, `01:00:5e:00:00:01 is not the address of a network card`},
+		"a card and a group address": {`{"pc-a": {"wol": {"macs": ["aa:bb:cc:dd:ee:01", "33:33:00:00:00:01"]}}}`, `33:33:00:00:00:01 is not the address of a network card`},
 		"nine MACs":                  {`{"pc-a": {"wol": {"macs": ["aa:bb:cc:dd:ee:01","aa:bb:cc:dd:ee:02","aa:bb:cc:dd:ee:03","aa:bb:cc:dd:ee:04","aa:bb:cc:dd:ee:05","aa:bb:cc:dd:ee:06","aa:bb:cc:dd:ee:07","aa:bb:cc:dd:ee:08","aa:bb:cc:dd:ee:09"]}}}`, `"macs" is not a list of 1 to 8`},
 		"macs is a text":             {`{"pc-a": {"wol": {"macs": "aa:bb:cc:dd:ee:01"}}}`, `"macs" is not a list`},
 		"a relay that is no id":      {`{"pc-a": {"wol": {"relay": "http://10.0.0.1"}}}`, `the relay is not an id`},
