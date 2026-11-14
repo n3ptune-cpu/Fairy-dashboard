@@ -44,6 +44,12 @@ type machine struct {
 	newVersion   string // what an update installs
 	behind       *bool  // what the panel knows: older than the newest release
 
+	// pollEvery: the panel polls it only this often (0: every second, like everything else), and when the run
+	// asked the poller to poll it (Kick): what the run reads between two polls is the answer of the latest one.
+	pollEvery time.Duration
+	pollDue   time.Duration // the steady clock at which its next poll is due
+	pollKick  bool          // the run asked for a poll since the latest one
+
 	updLost   string // the answer to the first update request is lost: "arrives" (the agent took it) | "never" (it did not) | "late" (it reaches the agent updLate after it left)
 	updLate   time.Duration
 	updOnWay  time.Time // the update request that is still on its way arrives then (zero: none is)
@@ -260,6 +266,9 @@ func (w *world) Kick(id string) {
 		w.kicks = map[string]int{}
 	}
 	w.kicks[id]++
+	if mc := w.ms[id]; mc != nil {
+		mc.pollKick = true
+	}
 }
 
 func (w *world) arrived(call string) {
@@ -574,6 +583,12 @@ func (w *world) poll() {
 		}
 		if mc.paused {
 			continue
+		}
+		if mc.pollEvery > 0 { // a machine that is polled seldom: only when its poll is due, or was asked for
+			if !mc.pollKick && w.mono < mc.pollDue {
+				continue
+			}
+			mc.pollKick, mc.pollDue = false, w.mono+mc.pollEvery
 		}
 		mc.obs.OnBy = ""
 		if mc.on {

@@ -552,6 +552,10 @@ The rules, in plain words:
   page, or a shutdown with another countdown length than the run asked for), no cancel is sent, and the line
   names that action. (A shutdown that somebody else asked for in that time with exactly the run's countdown
   length cannot be told from the run's own: the cancel calls it off.)
+  What the agent shows is what its latest poll brought: while a cancel is being repeated the run has the
+  machine polled every 5 seconds, however seldom it is polled otherwise. (An action asked for in the seconds
+  before a cancel is not seen yet, and a machine whose polling is paused is not polled at all: there the
+  cancel still calls off whatever is pending.)
   One case inside the countdown in which it is not sent: the machine's agent already shows another action
   than the run's shutdown as pending (someone called the shutdown off on the machine's page and asked for a
   reboot, say). The agent's cancel would call that one off, so the run sends none, and the machine's line

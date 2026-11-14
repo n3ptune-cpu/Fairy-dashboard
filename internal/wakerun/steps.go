@@ -246,6 +246,20 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 			}
 		}
 	}
+	// A cancel that is being tried again decides at every try by what the machine's agent shows as pending
+	// (below), and that is the answer of the panel's latest poll. The watch asks the poller every kickEvery to
+	// poll the machine (stepShutting); a machine whose cancel is tried again never comes there any more, so
+	// nobody asked: a machine that is polled once a minute, or whose failed polls were put off, was judged by
+	// an answer up to a minute old while the cancel went out every cancelRetry, and a shutdown a person had
+	// asked for since that answer was called off (fourth review of build 14, F2). So the poller is asked here
+	// too, for as long as a cancel is being tried again, at every step the run takes for the machine: a try
+	// then has an answer that is some seconds old. What stays: an action asked for in those last seconds is
+	// not seen, and a machine whose polling is paused is not polled at all (the run then repeats its cancel
+	// by the last answer from before the pause).
+	if c != nil && (h.kickMono == 0 || mono-h.kickMono >= kickEvery) {
+		h.kickMono = mono
+		m.Ops.Kick(h.ID)
+	}
 	switch until, _ := h.cancelUntil(); {
 	case c == nil && mono > until:
 		m.endPastDue(r, h, now, why)
