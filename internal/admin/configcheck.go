@@ -326,8 +326,21 @@ func powerLinkCheck(cfg *config.Panel) (ok, said []string) {
 // wake_update: block of its systems: entry). ok lines are what is set; said is one note for every time
 // below the default after which a machine counts as off, with what that risks. A note is no warning: the
 // value is allowed, it is the owner's decision, and it does not change the exit code.
+//
+// One note more for a countdown (shutdown_delay_s, the panel's or a machine's own) that is also one a person
+// gets from the panel: the Power menu offers 10 s, 1, 5 and 15 minutes, and a power request without a delay
+// gets 60 s. A run knows its own countdown from a shutdown somebody asked for in its place by the length
+// alone (internal/wakerun, callOff), so with such a value the two cannot be told apart, and a run that is
+// cancelled or lets go of the machine calls the person's shutdown off (third review of build 14, S7).
 func wakeUpdateCheck(cfg *config.Panel) (ok, said []string) {
 	const def = 900
+	same := func(what string, s int) string {
+		return fmt.Sprintf("%s is %d, which is also a countdown a person can choose in the Power menu of a machine's page (10 s, 1 min, 5 min, 15 min; 60 s is what a power request without a delay gets): "+
+			"a shutdown somebody asks for with that countdown in the place of the run's cannot be told from the run's own, and a run that is cancelled, or lets go of the machine, calls it off", what, s)
+	}
+	if v := cfg.WakeUpdate.ShutdownDelayS; personCountdown[v] {
+		said = append(said, same("wake_update.shutdown_delay_s", v))
+	}
 	mins := func(s int) string {
 		if s%60 == 0 {
 			return fmt.Sprintf("%d min", s/60)
@@ -360,9 +373,16 @@ func wakeUpdateCheck(cfg *config.Panel) (ok, said []string) {
 		if w.OffAfterS != 0 && w.OffAfterS < def {
 			said = append(said, risk("system "+o.ID+": wake_update.off_after_s", w.OffAfterS))
 		}
+		if personCountdown[w.ShutdownDelayS] {
+			said = append(said, same("system "+o.ID+": wake_update.shutdown_delay_s", w.ShutdownDelayS))
+		}
 	}
 	return ok, said
 }
+
+// personCountdown: the countdowns, in seconds, of a shutdown a person asks for in the panel: the Power menu's
+// four (app.js, "m-delay"), of which 60 is also what a power request without a delay gets.
+var personCountdown = map[int]bool{10: true, 60: true, 300: true, 900: true}
 
 // adminCheck reports who can administer the panel. Roles live in users.json (Users page / `fairy admin users`);
 // oidc.control_groups and oidc.bootstrap_admins only make someone admin while users.json has no admin at all.

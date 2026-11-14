@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,66 @@ func TestConfigCheckListsTheRunTimingsThatAreNotTheDefault(t *testing.T) {
 	var o, eb bytes.Buffer
 	if code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &o, &eb); code == 0 || !strings.Contains(o.String()+eb.String(), "wake_update.off_after_s must be 300-3600") {
 		t.Errorf("off_after_s: 120: exit %d\n%s%s", code, o.String(), eb.String())
+	}
+}
+
+// Third review of build 14, S7. A run knows its own countdown from a shutdown somebody asked for in its place
+// by the length alone. With a shutdown_delay_s that is also a length of the Power menu (10 s, 1, 5, 15 minutes;
+// 60 s is also what a power request without a delay gets) the two cannot be told apart: one note for the
+// panel's value and one for each machine's own, no WARN, and the exit code stays 0. The default, 2 minutes, and
+// every other length have none.
+func TestConfigCheckNotesACountdownThatIsAlsoThePowerMenus(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	t.Setenv("TOK_R", "r")
+	t.Setenv("FAIRY_SESSION_SECRET", strings.Repeat("no-secret-", 5)) // made here, for this test only
+	check := func(more string) string {
+		t.Helper()
+		y := "public_url: https://p.example\ndata_dir: " + dir + "/data\noidc: {issuer: \"https://id.example\", client_id: c, allowed_groups: [users], control_groups: [admins]}\n" +
+			"agents:\n  - {id: pc-a, url: \"http://pc-a:9101\", token_env: TOK_R}\n  - {id: pc-b, url: \"http://pc-b:9101\", token_env: TOK_R}\n  - {id: pc-c, url: \"http://pc-c:9101\", token_env: TOK_R}\n" + more
+		if err := os.WriteFile(cfg, []byte(y), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb)
+		if !strings.Contains(out.String(), "config "+cfg+": valid") || code != 0 || strings.Contains(out.String(), "WARN") {
+			t.Fatalf("exit %d, or a WARN, or no valid config:\n%s%s", code, out.String(), errb.String())
+		}
+		return out.String()
+	}
+	const what = "cannot be told from the run's own"
+	note := func(where string, s int) string {
+		return fmt.Sprintf("note  %s is %d, which is also a countdown a person can choose in the Power menu of a machine's page (10 s, 1 min, 5 min, 15 min; 60 s is what a power request without a delay gets): "+
+			"a shutdown somebody asks for with that countdown in the place of the run's cannot be told from the run's own, and a run that is cancelled, or lets go of the machine, calls it off\n", where, s)
+	}
+	for _, s := range []int{0, 120, 11, 59, 61, 30, 600, 3600} { // 0: no line at all, the default
+		line := ""
+		if s != 0 {
+			line = fmt.Sprintf("wake_update: {shutdown_delay_s: %d}\n", s)
+		}
+		if out := check(line + fmt.Sprintf("systems:\n  - {id: pc-a, wake_update: {shutdown_delay_s: %d}}\n  - {id: pc-b, name: B}\n", max(s, 45))); strings.Contains(out, what) {
+			t.Errorf("shutdown_delay_s %d: a note:\n%s", s, out)
+		}
+	}
+	for _, s := range []int{10, 60, 300, 900} {
+		out := check(fmt.Sprintf("wake_update: {shutdown_delay_s: %d}\n", s))
+		if strings.Count(out, note("wake_update.shutdown_delay_s", s)) != 1 || strings.Count(out, what) != 1 {
+			t.Errorf("the panel's shutdown_delay_s %d:\n%s", s, out)
+		}
+	}
+	// a machine's own, with the panel's at its default; and both
+	out := check("systems:\n  - {id: pc-a, wake_update: {shutdown_delay_s: 300}}\n  - {id: pc-b, wake_update: {shutdown_delay_s: 45}}\n  - {id: pc-c, wake_update: {off_after_s: 1200}}\n")
+	if strings.Count(out, note("system pc-a: wake_update.shutdown_delay_s", 300)) != 1 || strings.Count(out, what) != 1 {
+		t.Errorf("a machine's own shutdown_delay_s 300:\n%s", out)
+	}
+	out = check("wake_update: {shutdown_delay_s: 60}\nsystems:\n  - {id: pc-a, wake_update: {shutdown_delay_s: 10}}\n  - {id: pc-b, wake_update: {shutdown_delay_s: 900}}\n")
+	for _, want := range []string{note("wake_update.shutdown_delay_s", 60), note("system pc-a: wake_update.shutdown_delay_s", 10), note("system pc-b: wake_update.shutdown_delay_s", 900)} {
+		if strings.Count(out, want) != 1 {
+			t.Errorf("the output lacks (or has twice) %q:\n%s", want, out)
+		}
+	}
+	if strings.Count(out, what) != 3 {
+		t.Errorf("want three notes:\n%s", out)
 	}
 }
 

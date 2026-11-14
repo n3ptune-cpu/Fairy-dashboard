@@ -532,7 +532,9 @@ The rules, in plain words:
   report says so too: one that got no answer may have arrived, and then that machine stays on. (A shutdown
   you ask for with exactly the run's countdown length in the place of the run's cannot be told apart and is
   called off like the run's. So is any shutdown on a machine whose agent does not say the length of its
-  countdown, which an agent from before that field does not: the run takes it for its own.)
+  countdown, which an agent from before that field does not: the run takes it for its own. Keep
+  `shutdown_delay_s` different from the Power menu's 10 s, 1, 5 and 15 minutes, as the default is:
+  `fairy admin config check` says so in a `note` line when it is one of them.)
 * **The kill switch stops a run**: nothing further is started, and what was woken stays on and is reported.
   A shutdown countdown the run had already started is called off (the one request a stopped run still sends,
   and only while that countdown can still be running: after its end the run sends nothing, so that an action
