@@ -721,3 +721,36 @@ func (p *Poller) hostNamesLocked(ids []string) []string {
 	}
 	return out
 }
+
+// SharedMachineID returns the other hosts that have the machine id of agentID: on record, or shown now. It is
+// asked before a run of "Update unpowered hosts" is started with a machine that checks approvals itself. A
+// run ticket answers no challenge of its machine: the machine id is all that says which machine it is for, so
+// a second host with that id could take it. (For every other approval the binding's own alarm is enough; an
+// admin may have said which of two hosts keeps an id, Record.Holder, and then that host is in order for
+// approvals that answer its own challenge. Not for a ticket.)
+func (p *Poller) SharedMachineID(agentID string) []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	own := map[string]bool{}
+	if r, ok := p.mach.records[agentID]; ok && r.MachineID != "" {
+		own[r.MachineID] = true
+	}
+	if r := p.reportLocked(agentID); r.MachineID != "" {
+		own[r.MachineID] = true
+	}
+	var out []string
+	if len(own) == 0 {
+		return nil
+	}
+	for _, a := range p.Agents() {
+		if a.ID == agentID {
+			continue
+		}
+		if r, ok := p.mach.records[a.ID]; ok && own[r.MachineID] {
+			out = append(out, a.ID)
+		} else if r := p.reportLocked(a.ID); own[r.MachineID] {
+			out = append(out, a.ID)
+		}
+	}
+	return out
+}
