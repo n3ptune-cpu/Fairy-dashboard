@@ -91,6 +91,8 @@ type Server struct {
 	savedOnce sync.Once
 	// WakeRuns runs "Update unpowered hosts" (Updates page): one run at a time, in the background.
 	WakeRuns *wakerun.Manager
+	// rtBeforeWrite: for tests of "Run timings": called between a change's plan and its write (nil: nothing).
+	rtBeforeWrite func()
 	// tickets keeps the passkey approval of a run's start, in memory only, for the machines that check
 	// approvals themselves (runtickets.go).
 	tickets *runTickets

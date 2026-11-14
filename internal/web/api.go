@@ -37,6 +37,7 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	s.adminRoutes()
 	s.updateRoutes()
 	s.wakeUpdateRoutes()
+	s.runTimingsRoutes() // "Run timings" (api_runtimings.go)
 	s.approvalRoutes()
 	s.enrollRoutes()
 	s.notificationRoutes()
