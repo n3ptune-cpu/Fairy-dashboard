@@ -222,7 +222,7 @@ func (p *Poller) buildJobs() {
 		sch.Add(p.proxmoxJob(c))
 	}
 	for _, a := range cfg.Agents {
-		sch.Add(p.agentJob(a))
+		sch.Add(p.agentJob(a, p.AgentEntry(a.ID)))
 	}
 	for _, r := range p.Power.Runners { // phase 1: `agent` power sources read the latest agent metrics
 		r := r
@@ -264,9 +264,12 @@ func (p *Poller) proxmoxJob(c config.Proxmox) *scheduler.Job {
 // under the node's id: its own row had no poll job, so its interval could not be set and "Pause" on it showed
 // "paused" while the agent was polled as before, and pausing the node's row paused both agents (second review
 // of build 14, R6). (Systems is asked by the scheduler and must not take p.mu: AgentFor does not.)
-func (p *Poller) agentJob(a config.Agent) *scheduler.Job {
+//
+// entry is the panel's entry for the agent's id that this job polls for (AgentEntry, when the job was made):
+// what a poll of this job brings in is kept only while that entry is still the one under the id (pollEntry).
+func (p *Poller) agentJob(a config.Agent, entry int) *scheduler.Job {
 	return &scheduler.Job{Key: "agent:" + a.ID, DefaultS: p.Cfg.Intervals.Agent, TimeoutCap: p.Cfg.RequestTimeout,
-		Fn: func(ctx context.Context, t time.Duration) float64 { return p.pollAgent(ctx, a, t) },
+		Fn: func(ctx context.Context, t time.Duration) float64 { return p.pollEntry(ctx, a, entry, t) },
 		Systems: func() []string {
 			if l := p.LinkOf(a); l != "" {
 				if first, ok := p.AgentFor(l); !ok || first.ID == a.ID {
@@ -523,6 +526,7 @@ func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
 		p.agentAdded = map[string]int{}
 	}
 	p.agentAdded[a.ID]++
+	entry := p.agentAdded[a.ID]
 	p.Cfg.Agents = append(slices.Clone(p.Cfg.Agents), a)
 	if o != nil {
 		// The entry stands in the place of one with its id that is there already: that can only be the
@@ -558,7 +562,7 @@ func (p *Poller) AddAgent(a config.Agent, o *config.SystemOverride) error {
 	if seenGone {
 		p.flushSeen()
 	}
-	p.Scheduler.Add(p.agentJob(a))
+	p.Scheduler.Add(p.agentJob(a, entry))
 	p.Scheduler.Kick("agent:" + a.ID)
 	return nil
 }
@@ -570,6 +574,16 @@ func (p *Poller) AgentEntry(id string) int {
 	p.cfgMu.RLock()
 	defer p.cfgMu.RUnlock()
 	return p.agentAdded[id]
+}
+
+// entryGone reports whether the entry a poll was made for is no longer the panel's entry for its id: the
+// agent was taken out (Remove, or the first half of a Re-pair), or another one was put in its place (Add
+// host, Re-pair). It takes cfgMu and may be called with p.mu held (the lock order is p.mu, then cfgMu).
+func (p *Poller) entryGone(id string, entry int) bool {
+	p.cfgMu.RLock()
+	defer p.cfgMu.RUnlock()
+	_, ok := p.agents[id]
+	return !ok || p.agentAdded[id] != entry
 }
 
 // RemoveAgent stops polling an agent added in the panel and forgets what it reported.

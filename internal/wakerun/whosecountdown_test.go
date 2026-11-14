@@ -398,3 +398,44 @@ func TestARePairAfterCancelsForALostRequestSaysThatTheyWereSent(t *testing.T) {
 		t.Errorf("power %q: %s", h.On, h.Text)
 	}
 }
+
+// Third review of build 14, S3: "the agent that has the id now" is meant strictly. Machine A counts down; its
+// id is paired again to machine B (on for days, with a reboot somebody asked for pending). A poll of the old
+// entry was on its way and finishes after the Re-pair: what the run is shown under the id is A's answer, with
+// the run's own countdown in it, before B has answered once. The run took B for the machine it woke and sent
+// its cancel there: B's reboot was called off, and the report said "its shutdown countdown was called off ...
+// it is ON". (The poller no longer keeps such an answer: TestAPollOfAnEntryThatWasReplacedIsDropped there.
+// This is the run's own look: an answer counts only when it came under the entry the panel has now.)
+func TestAnAnswerThatCameUnderTheOldEntryDoesNotRecogniseTheMachine(t *testing.T) {
+	w := newWorld(t)
+	a := w.off("pc-a")
+	w.start(StartRequest{Hosts: []string{"pc-a"}})
+	untilState(t, w, "pc-a", StShutting)
+	w.tick()
+	if a.pending == nil || !host(active(w), "pc-a").pendingSeen {
+		t.Fatal("the fixture: no countdown, or the run has not seen it")
+	}
+	before := len(w.calls)
+	b := &machine{info: a.info, on: true, bootedAt: w.now.Add(-72 * time.Hour), agentReadyAt: w.now.Add(-71 * time.Hour),
+		version: "17-bbbbbbb", updState: "idle", shutMode: "ok", busyDone: map[string]bool{}}
+	b.info.Entry++
+	theirs := &Pending{Action: "reboot", At: w.now.Add(20 * time.Minute), DelayS: 1200}
+	b.pending = theirs
+	// what is under the id is still the old entry's answer, which came in after the Re-pair
+	b.obs, b.everAnswered, b.seenMono, b.lastAnswer = a.obs, true, w.mono, w.now
+	if b.obs.Entry == b.info.Entry || b.obs.Pending == nil {
+		t.Fatal("the fixture: the answer under the id is the old entry's, with the run's countdown")
+	}
+	w.ms["pc-a"], w.ms["old-a"] = b, a
+	w.order = append(w.order, "old-a")
+	w.m.Tick(context.Background()) // the run's step before B's own first answer
+	h := host(w.finish(), "pc-a")
+	if sent := w.calls[before:]; len(sent) != 0 || b.pending != theirs {
+		t.Errorf("WRONG MACHINE: sent %v to the machine that has the id now; its reboot is still pending: %v", sent, b.pending == theirs)
+	}
+	has(t, h, StLeftOn, rePaired+" while its shutdown was counting down (due at ", "the agent that has this id now shows another action as pending (reboot at ",
+		"so the run could not make sure that it is the machine it woke, and sent no cancel.")
+	if h.On != OnUnknown || !a.wentOff {
+		t.Errorf("[%s] the machine the run woke went off: %v: %s", h.On, a.wentOff, h.Text)
+	}
+}

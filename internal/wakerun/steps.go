@@ -185,10 +185,12 @@ func (m *Manager) cancelled(ctx context.Context, r *Run, h *Host, now time.Time)
 //     switches off (endNotKnown). For a request that got no answer and whose countdown the run never saw
 //     there is nothing to know it by: that at once.
 //
-// Limit: an answer of the OLD entry's last poll that was on its way when the entry was replaced can still come
-// in under the id (the poller lets a poll in flight finish). It shows the run's countdown, and the cancel then
-// goes to the new entry's agent. It takes a Re-pair to another machine, within the seconds of one poll, with
-// an action pending on that machine.
+// "The agent that has the id now" is meant strictly. A poll of the OLD entry that was on its way when the
+// entry was replaced finishes afterwards (the poller lets a poll in flight finish), and its answer shows the
+// run's countdown: stored under the id, it made the run take the new entry's agent for the machine it woke,
+// and the cancel went to that one (the limit this comment used to name; third review of build 14, S3). The
+// poller drops such an answer now (poller.pollEntry), and the run looks itself: an answer counts here only
+// when it came under the entry the panel has now (Observation.Entry).
 func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, why string) {
 	c := h.calloff
 	if c != nil { // a cancel that is being tried again keeps the reason it was first asked for
@@ -203,7 +205,7 @@ func (m *Manager) callOff(ctx context.Context, r *Run, h *Host, now time.Time, w
 			return
 		}
 		o := m.Ops.Observe(h.ID)
-		after := h.answeredAfter(o, mono, h.delay(r))
+		after := h.answeredAfter(o, mono, h.delay(r)) && o.Entry == info.Entry // an answer of the agent that has the id NOW
 		if !h.ownCountdown(o, after, h.delay(r)) {
 			if c == nil {
 				c = &callingOff{why: why}

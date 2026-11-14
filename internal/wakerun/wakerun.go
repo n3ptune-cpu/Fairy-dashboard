@@ -302,6 +302,9 @@ type Pending struct {
 
 // Observation is what the panel's poller last heard from a machine's agent.
 type Observation struct {
+	// Entry: the panel's entry for the machine's agent (HostInfo.Entry) under which this answer came. After a
+	// Re-pair an answer counts for the run only when it came under the entry the panel has now (callOff).
+	Entry  int
 	Online bool      // the latest poll was answered
 	SeenAt time.Time // when the last answered poll was
 	// SeenAgo: how long ago that answer came, measured by the poller on its steady clock. SeenAt is a time of

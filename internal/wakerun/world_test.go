@@ -602,7 +602,7 @@ func (w *world) poll() {
 		}
 		mc.everAnswered, mc.lastAnswer, mc.quietSince, mc.silN = true, w.now, time.Time{}, 0
 		mc.seenMono = w.mono
-		o := Observation{Online: true, SeenAt: w.now, Status: "online", OnBy: mc.obs.OnBy, Version: mc.version, UpdateEnabled: mc.updMode != "disabled",
+		o := Observation{Entry: mc.info.Entry, Online: true, SeenAt: w.now, Status: "online", OnBy: mc.obs.OnBy, Version: mc.version, UpdateEnabled: mc.updMode != "disabled",
 			UpdateState: mc.updState, UpdateMessage: mc.updMsg, LastAt: mc.lastAt, LastOK: mc.lastOK, LastMessage: mc.lastMsg, Behind: mc.behind}
 		if float64(w.now.Unix()) < mc.lastAt { // the installer has not written its result yet
 			o.LastAt, o.LastOK, o.LastMessage = 0, false, ""

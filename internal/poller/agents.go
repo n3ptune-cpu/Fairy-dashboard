@@ -135,8 +135,29 @@ func (p *Poller) linkOfLocked(a config.Agent) string {
 	return ""
 }
 
-// pollAgent returns a back-off delay (s) while the agent is unreachable, so offline hosts aren't hit every second.
+// pollAgent polls an agent for the entry the panel has under its id now (pollEntry).
 func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Duration) float64 {
+	return p.pollEntry(ctx, a, p.AgentEntry(a.ID), timeout)
+}
+
+// pollEntry returns a back-off delay (s) while the agent is unreachable, so offline hosts aren't hit every second.
+//
+// entry is the panel's entry for the id that the poll is made for (AgentEntry: the poll job's, from when it
+// was made). A poll takes seconds, and the host can be removed or paired again meanwhile (Remove, Re-pair:
+// Remove, then Add). The scheduler lets a poll that is on its way finish, and what it brought in was stored
+// under the id whatever had happened to the entry: after a Re-pair to another machine the row, "online, just
+// seen" and the pending power action of the OLD machine stood under the NEW entry until its own first answer,
+// and a wake / update run that was waiting for "the agent that has this id now" to show its countdown saw
+// it there and sent its cancel to the new machine (third review of build 14, S3; the limit callOff of
+// internal/wakerun named). An answer between the Remove and the Add left a row for a host that was gone, and
+// that row was the new entry's first.
+//
+// So the result is kept only while the entry is still the one the poll was made for: both ends, the answer
+// and the failure, look under p.mu (entryGone), and RemoveAgent forgets what is stored for the id under p.mu
+// after it took the agent out. A result that is dropped changes nothing: no row, no "seen", no failure
+// count, no power or UPS reading. (The power and UPS readings are stored after p.mu is released: they look
+// once more before that; a Remove in the instant between that look and the store is not excluded.)
+func (p *Poller) pollEntry(ctx context.Context, a config.Agent, entry int, timeout time.Duration) float64 {
 	start := time.Now()
 	began := p.mono() // the steady clock before the request leaves (quietRow.began)
 	name := "agent:" + a.ID
@@ -155,6 +176,11 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		msg := textsafe.ErrorText(devices.Describe(err))
 		interval := p.agentInterval(a.ID) // before p.mu: it asks the scheduler
 		p.mu.Lock()
+		if p.entryGone(a.ID, entry) { // not this entry's failure any more
+			p.mu.Unlock()
+			slog.Info("agent poll dropped: its entry was removed or replaced while the poll was on its way", "agent", a.ID)
+			return 0
+		}
 		now, _ := p.now()
 		seenDue := false
 		if prev, ok := p.sources[name]; !ok || prev.OK {
@@ -216,6 +242,9 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		if seenDue {
 			p.flushSeen()
 		}
+		if p.entryGone(a.ID, entry) {
+			return 0
+		}
 		p.Power.UpdateRemote(a.ID, nil, true, a.PowerLinks, a.PowerExcludeFromTotal)
 		p.UPS.UpdateFromAgent(a.ID, nil, true, a.UPSPowers, a.UPSNames)
 		if n >= 2 {
@@ -229,7 +258,13 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 	info.AskedAt = asked
 	info.seenMono = p.mono()          // the same moment as SeenAt, on the steady clock (AgentInfo.SeenAgo)
 	interval := p.agentInterval(a.ID) // before p.mu: it asks the scheduler
+	info.Entry = entry
 	p.mu.Lock()
+	if p.entryGone(a.ID, entry) { // the answer of a machine that is no longer the one under this id
+		p.mu.Unlock()
+		slog.Info("agent poll dropped: its entry was removed or replaced while the poll was on its way", "agent", a.ID)
+		return 0
+	}
 	// upMono: where the row of answers that this one belongs to began (AnsweredSinceUp). An answer after a gap
 	// that the poll loop itself cannot make (quietGap) begins a new row: the machine was off, or the panel was
 	// not watching it. A poll or two without an answer (the agent restarts after its update) does not.
@@ -275,6 +310,9 @@ func (p *Poller) pollAgent(ctx context.Context, a config.Agent, timeout time.Dur
 		p.flushSeen()
 	}
 	p.machinesChanged()
+	if p.entryGone(a.ID, entry) {
+		return 0
+	}
 	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, a.PowerLinks, a.PowerExcludeFromTotal)
 	p.UPS.UpdateFromAgent(a.ID, ups.AgentRows(payload["ups"]), false, a.UPSPowers, a.UPSNames)
 	return 0
@@ -326,7 +364,11 @@ type AgentInfo struct {
 	// AskedAt: when the poll that got the last good answer was sent (the answer says nothing about what the
 	// panel did to the machine after that moment: machines.go).
 	AskedAt time.Time
-	Online  bool // the latest poll succeeded
+	// Entry: the panel's entry for the agent's id (AgentEntry) that this answer came under. It is always the
+	// entry the panel has now (pollEntry drops every other answer); a caller that works with one agent over
+	// minutes can make sure of it once more (the wake / update run: Observation.Entry).
+	Entry  int
+	Online bool // the latest poll succeeded
 	// QuietSince: since when the panel has asked the agent, poll after poll, and got nothing at all: no answer
 	// and no other sign that the machine runs. Zero while it answers, while it shows that it runs without a
 	// usable answer (see Sign; or it is a Proxmox node that the cluster shows as online), while it was never
