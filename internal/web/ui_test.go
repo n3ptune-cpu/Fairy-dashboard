@@ -278,7 +278,8 @@ func TestUIWakeUpdate(t *testing.T) {
 		}
 	}
 	start := strings.Index(js, "// ------------------------------------------------------------ Update unpowered hosts")
-	end := strings.Index(js, "// ------------------------------------------------------------ users, roles and sites")
+	// ... up to the "Run timings" dialog, which comes next and has its own test (ui_runtimings_test.go)
+	end := strings.Index(js, "// ------------------------------------------------------------ Run timings (admins")
 	if start < 0 || end < start {
 		t.Fatal("the section is not where this test looks for it")
 	}

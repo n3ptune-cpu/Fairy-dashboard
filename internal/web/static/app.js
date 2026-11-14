@@ -2252,12 +2252,14 @@ function wakeUpdateBox() {
         `About ${esc(fmtSpan(d.settings.settle_s))} after the result it asks for a shutdown with a countdown of ${esc(fmtSpan(d.settings.shutdown_delay_s))}. You can cancel the countdown.`,
         `A machine counts as off only after ${esc(fmtSpan(d.off_after_s))} without an answer. One that stopped answering more recently may be restarting, and is left alone.`,
         `A limit: a machine switched on by a person while the run waits for it (up to ${esc(fmtSpan(d.settings.online_timeout_s))}), or just before the wake, is treated as woken by the run. It is switched off after its update. The report says "came online after the wake".`,
+        "The times above can be changed with Run timings, next to the button.",
         "You can also switch a machine on for this in the ⋯ menu on its page.",
         "Switching on, and every run, asks you to confirm it's you and is written to the Audit log.",
         "API tokens cannot start a run.",
         "After a restart of the panel a run is not continued: this page then says which machines it had woken."]))}</h3>
+      <span class="row-gap wu-btns"><button class="btn" type="button" data-act="rt-open" title="How long a run waits, counts down and when it takes a machine for off">Run timings</button>
       <button class="btn primary" type="button" data-act="wu-open" ${!why && !d.active && !d.problem ? "" : "disabled"}
-        title="${esc(why || (d.active ? "A run is going: one run at a time" : d.problem || "Choose the machines and start a run"))}">${I.onoff}Update unpowered hosts</button></div>
+        title="${esc(why || (d.active ? "A run is going: one run at a time" : d.problem || "Choose the machines and start a run"))}">${I.onoff}Update unpowered hosts</button></span></div>
     <p class="note info-keep">Wakes the machines you choose, updates their agent and switches them off again.
       <b>Fairy only switches off machines this run woke.</b> A machine that is already on is never switched off.</p>
     ${d.problem ? `<div class="warnbox">${esc(d.problem)}</div>` : ""}
@@ -2421,6 +2423,212 @@ document.addEventListener("click", async (e) => {
     if (r) flash(r.message || `${label}: done`);
   } catch (x) { flash(x.message, true); }
   fetchWakeUpdate();
+});
+
+// ------------------------------------------------------------ Run timings (admins, the "Update unpowered hosts" box)
+// The six timings of a run of "Update unpowered hosts", changed here. The panel keeps a change as its own
+// decision about that one timing (state.json); config.yaml is not written and stays the base for every timing
+// nobody changed, and Reset takes a decision out again. A change counts from the next run: a run that is going
+// keeps the numbers it started with. rt.d is the panel's answer (GET /api/admin/run-timings); rt.draft holds
+// what was typed or reset in the dialog and nothing else. Everything that is drawn or sent is made from the two
+// by the functions below, which touch no page.
+const rt = { d: null, draft: null, seq: 0, busy: false };
+const rtDraft = () => ({ text: dict(), reset: dict() });
+// The rows, in the panel's order: the name of each timing (the panel uses the same in "Confirm it's you" and
+// the audit log: api_runtimings.go, rtLabel) and its one visible sentence.
+const RT_ROWS = {
+  off_after_s: { label: "Counts as off after", hint: (v) => rtConsequence("off_after_s", v) },
+  online_timeout_s: { label: "Wait for a woken machine", hint: () => "How long a run waits for a machine it woke to come online." },
+  settle_s: { label: "Pause before the shutdown", hint: () => "Between the update's result and the shutdown request." },
+  shutdown_delay_s: { label: "Shutdown countdown", hint: () => "The time somebody at the machine has to cancel the shutdown." },
+  agent_requests_per_min: { label: "Requests a minute", hint: (v) => (v > 12 ? "An agent accepts 12 a minute: above that it refuses the rest, and your own clicks, for that minute." : "What a run sends to one agent. An agent accepts 12 a minute.") },
+  run_approval_wait_s: { label: "Time for the second passkey", hint: () => "How long a run asks for it once the woken machines are up." },
+};
+// A value as a line says it: seconds with their reading ("360 s = 6 minutes", "90 s = 1 min 30 s", "45 s"),
+// the pacing as its number. The panel makes the same words (rtReading in api_runtimings.go).
+function rtReading(key, v) {
+  if (key === "agent_requests_per_min") return `${v}`;
+  if (v < 60) return `${v} s`;
+  const h = Math.floor(v / 3600), m = Math.floor((v % 3600) / 60), s = v % 60;
+  const one = (n, unit) => (n === 1 ? `1 ${unit}` : `${n} ${unit}s`);
+  const words = !m && !s ? one(h, "hour") : !h && !s ? one(m, "minute") : [[h, "h"], [m, "min"], [s, "s"]].filter((p) => p[0] > 0).map((p) => `${p[0]} ${p[1]}`).join(" ");
+  return `${v} s = ${words}`;
+}
+// A number of seconds inside a sentence: "6 minutes", "1 min 30 s", "45 seconds".
+const rtSpan = (v) => (v < 60 ? `${v} second${v === 1 ? "" : "s"}` : rtReading("", v).split(" = ")[1]);
+// What a change means for the machines, for the three timings whose change can switch a machine off or shorten
+// the time to stop that. The panel says the same sentence in "Confirm it's you" (rtConsequence).
+function rtConsequence(key, v) {
+  if (key === "off_after_s") return `A machine that is on but silent for longer than ${rtSpan(v)} counts as off, and the run switches it off after its update.`;
+  if (key === "shutdown_delay_s") return `Somebody at a machine has ${rtSpan(v)} to cancel the run's shutdown.`;
+  if (key === "online_timeout_s") return `A machine somebody switches on while the run waits for it (up to ${rtSpan(v)}) is treated as woken by the run, and switched off after its update.`;
+  return "";
+}
+// Is d what GET /api/admin/run-timings gives: the list, each entry with its key, its whole numbers and where its value comes from?
+const rtValid = (d) => !!d && typeof d === "object" && Array.isArray(d.timings) && d.timings.length > 0
+  && d.timings.every((t) => !!t && typeof t === "object" && own(RT_ROWS, t.key) && [t.value, t.config, t.min, t.max].every(Number.isInteger) && (t.from === "panel" || t.from === "config"));
+// What a field shows: what was typed, config.yaml's value after a Reset, else the value in force.
+const rtText = (t, draft) => (draft.reset[t.key] ? String(t.config) : draft.text[t.key] ?? String(t.value));
+// What was typed, as the whole number it is (null: it is none, or outside the timing's range).
+function rtParse(t, text) {
+  const s = String(text).trim();
+  if (!/^\d{1,5}$/.test(s)) return null;
+  const v = +s;
+  return v >= t.min && v <= t.max ? v : null;
+}
+// One line for each thing Save will change, in the panel's own words (the same lines are in "Confirm it's you"
+// and in the audit log), the request that says exactly that, whether it asks for a confirmation of its own, and
+// the fields that hold something that cannot be sent.
+function rtPlan(d, draft) {
+  const lines = [], body = {}, reset = [], problems = dict(), means = [];  // means: the lines that say what a change means for the machines
+  let each = false;  // a change that asks for its own confirmation is among them
+  for (const t of d.timings) {
+    const label = RT_ROWS[t.key].label, stored = t.from === "panel";
+    let after, keep;
+    if (draft.reset[t.key]) {
+      if (!stored) continue;
+      after = t.config; keep = false; reset.push(t.key);
+    } else {
+      if (draft.text[t.key] === undefined) continue;
+      const v = rtParse(t, draft.text[t.key]);
+      if (v === null) { problems[t.key] = `${t.min} to ${t.max}`; continue; }
+      after = v; keep = v !== t.config;
+      if (after === t.value && keep === stored) continue;
+      body[t.key] = v;
+    }
+    const mine = t.confirm === "always" ? after !== t.value : t.confirm === "lower" ? after < t.value : t.confirm === "higher" ? after > t.value : false;
+    each = each || mine;
+    lines.push(`${label}: ${keep ? "" : "back to config.yaml: "}${!keep && after === t.value ? `nothing changes now (${rtReading(t.key, after)})` : `${rtReading(t.key, after)} (was ${rtReading(t.key, t.value)})`}`);
+    const c = rtConsequence(t.key, after);
+    if (c && mine) { lines.push(c); means.push(c); }  // said where the change is the kind that asks for its own confirmation
+  }
+  if (reset.length) body.reset = reset;
+  return { lines, body, own: each, problems, means };
+}
+// "from config.yaml" or "changed here", with Reset: where the value of a timing comes from once this dialog is saved.
+function rtTag(t, draft) {
+  const stored = t.from === "panel" && !draft.reset[t.key];
+  const v = draft.reset[t.key] || draft.text[t.key] === undefined ? null : rtParse(t, draft.text[t.key]);
+  const panel = draft.reset[t.key] ? false : v === null ? stored : v !== t.config;
+  return `<span class="eh-src${panel ? " on" : ""}"${stored && t.by ? ` title="${esc(`Changed here by ${t.by}. config.yaml: ${rtReading(t.key, t.config)}`)}"` : ""}>${panel ? "changed here" : "from config.yaml"}</span>${stored
+    ? `<button class="btn sm" type="button" data-rt-reset="${esc(t.key)}" title="${esc(`Back to config.yaml: ${rtReading(t.key, t.config)}`)}">Reset</button>` : ""}`;
+}
+// Next to a field: the reading of what it holds ("s = 6 minutes"), or the range when it cannot be sent.
+function rtRead(t, draft) {
+  const v = rtParse(t, rtText(t, draft));
+  if (v === null) return `${t.min} to ${t.max}`;
+  return t.key === "agent_requests_per_min" ? "to one agent" : rtReading(t.key, v).slice(String(v).length + 1);
+}
+const rtHint = (t, draft) => RT_ROWS[t.key].hint(rtParse(t, rtText(t, draft)) ?? t.value);
+// What is under the fields: the lines Save will change, and what the admin has to know before pressing it.
+function rtFoot(d, draft) {
+  const plan = rtPlan(d, draft), ignored = d.ignored?.length ? d.ignored_count || d.ignored.length : 0;
+  const any = d.timings.some((t) => t.from === "panel" && !draft.reset[t.key]) || Object.keys(plan.body).some((k) => k !== "reset" && plan.body[k] !== d.timings.find((t) => t.key === k)?.config);
+  return `${any ? '<p class="note info-keep eh-shadow">Changed here: used instead of config.yaml until Reset.</p>' : ""}
+    ${d.active ? '<p class="note warn eh-ignored" id="rt-active">A run is going: it keeps its numbers. A change counts from the next run.</p>' : ""}
+    ${ignored ? `<p class="note warn eh-ignored">${ignored === 1 ? "1 stored value is" : `${ignored} stored values are`} ignored: see the panel's log.</p>` : ""}
+    ${plan.lines.length ? `<div class="wu-sub">This will change</div><ul class="dlg-list" id="rt-lines">${plan.lines.map((l) => `<li${plan.means.includes(l) ? ' class="eh-sees"' : ""}>${esc(l)}</li>`).join("")}</ul>
+      ${plan.own ? '<p class="note warn" id="rt-own">Asks you to confirm it\'s you, by itself, every time.</p>' : ""}` : ""}`;
+}
+// The fields. They are drawn once; what follows the typing (the reading, the tag, the sentence, the lines) is
+// put in place by rtSync, so that a field keeps the focus and the cursor while it is typed in.
+function rtView(d, draft) {
+  return `${d.timings.map((t) => `<div class="rt-row">
+      <div class="rt-cap"><label for="rt-${esc(t.key)}">${esc(RT_ROWS[t.key].label)}</label><span class="rt-tag" data-rt-tag="${esc(t.key)}">${rtTag(t, draft)}</span></div>
+      <div class="rt-in"><input class="input" id="rt-${esc(t.key)}" data-rt="${esc(t.key)}" type="text" inputmode="numeric" maxlength="5" autocomplete="off" spellcheck="false"
+        aria-describedby="rt-h-${esc(t.key)}" value="${esc(rtText(t, draft))}"><span class="rt-read" data-rt-read="${esc(t.key)}">${esc(rtRead(t, draft))}</span></div>
+      <p class="note rt-hint${t.confirm === "always" ? " warn" : ""}" id="rt-h-${esc(t.key)}" data-rt-hint="${esc(t.key)}">${esc(rtHint(t, draft))}</p></div>`).join("")}
+    <div id="rt-foot">${rtFoot(d, draft)}</div>`;
+}
+const RT_INFO = () => infoBtn("run-timings", "Run timings", infoList([
+  "What you change here is kept by the panel. config.yaml is not changed and stays the base.",
+  "A changed timing is used instead of config.yaml's until Reset, also when config.yaml is edited later.",
+  "A change counts from the next run. A run that is going keeps the numbers it started with.",
+  "Counts as off after: a machine that restarts is silent too, and comes back by itself. With a time shorter than its restart takes, a run can take it for a machine it woke, and switch it off after its update. 15 minutes is the safe value.",
+  "Every change of that time asks you to confirm it's you, by itself. So do a shorter shutdown countdown and a longer wait for a woken machine.",
+  "A countdown of 10 s, 1, 5 or 15 minutes is also one of the Power menu: a run then cannot tell a shutdown somebody else asked for from its own.",
+  "A machine that checks passkey approvals takes a countdown of at most 10 minutes in a run.",
+  "The time for the second passkey gives way when a machine would wait for more than an hour in all.",
+  "One machine can have its own time to count as off and its own countdown: a wake_update: block in its systems: entry of config.yaml."]));
+function rtSync() {
+  const body = $("#rt-body");
+  if (!body || !rt.d) return;
+  const plan = rtPlan(rt.d, rt.draft), by = (k) => rt.d.timings.find((t) => t.key === k);
+  for (const el of body.querySelectorAll?.("[data-rt-tag]") || []) el.innerHTML = rtTag(by(el.dataset.rtTag), rt.draft);
+  for (const el of body.querySelectorAll?.("[data-rt-read]") || []) { el.textContent = rtRead(by(el.dataset.rtRead), rt.draft); el.classList.toggle("bad", !!plan.problems[el.dataset.rtRead]); }
+  for (const el of body.querySelectorAll?.("[data-rt-hint]") || []) el.textContent = rtHint(by(el.dataset.rtHint), rt.draft);
+  for (const el of body.querySelectorAll?.("input[data-rt]") || []) el.setAttribute("aria-invalid", plan.problems[el.dataset.rt] ? "true" : "false");
+  if ($("#rt-foot")) $("#rt-foot").innerHTML = rtFoot(rt.d, rt.draft);
+  $("#rt-save").disabled = rt.busy || !plan.lines.length || Object.keys(plan.problems).length > 0;
+}
+async function openRunTimings() {
+  const m = $("#modal");
+  const me = ++rt.seq;
+  Object.assign(rt, { d: null, draft: rtDraft(), busy: false });
+  m.innerHTML = `<form class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="rt-t" id="rt-form" novalidate>
+    <h3><span id="rt-t">Run timings</span>${RT_INFO()}</h3>
+    <div id="rt-body"><p class="note">Loading…</p></div>
+    <div class="error" id="rt-err" role="alert"></div>
+    <div class="row-gap end"><button class="btn" type="button" id="rt-x">Cancel</button><button class="btn primary" type="submit" id="rt-save" disabled>Save</button></div></form>`;
+  m.hidden = false;
+  const close = () => { closeModal(); document.querySelector('[data-act="rt-open"]')?.focus(); };
+  $("#rt-x").onclick = close;
+  const mine = () => rt.seq === me && !!$("#rt-form")?.isConnected;  // this dialog is still the one on the page
+  const fail = (msg) => { if (mine()) { $("#rt-err").textContent = msg; } };
+  const path = "/api/admin/run-timings";
+  // The answer has a time limit, as in Edit host: a dialog that says "Loading…" for ever says nothing.
+  const halt = new AbortController(), limit = setTimeout(() => halt.abort(), 15000);
+  let why = "";
+  try { rt.d = await api(path, { signal: halt.signal }); }
+  catch (x) { why = x?.name === "AbortError" ? "The panel did not answer. Close this and try again." : x.message; }
+  finally { clearTimeout(limit); }
+  if (!why && !rtValid(rt.d)) why = "The panel's answer is not what this page expects. Reload the page and try again.";
+  if (why) {
+    rt.d = null;
+    if (mine()) { $("#rt-body").innerHTML = ""; fail(why); }
+    return;
+  }
+  if (!mine()) return;
+  $("#rt-body").innerHTML = rtView(rt.d, rt.draft);
+  rtSync();
+  $("#rt-body").oninput = (e) => {
+    const t = e.target.closest("input[data-rt]");
+    if (!t) return;
+    const row = rt.d.timings.find((x) => x.key === t.dataset.rt);
+    delete rt.draft.reset[row.key];
+    if (t.value.trim() === String(row.value)) delete rt.draft.text[row.key]; else rt.draft.text[row.key] = t.value;
+    $("#rt-err").textContent = ""; rtSync();
+  };
+  $("#rt-body").onclick = (e) => {
+    const t = e.target.closest("[data-rt-reset]");
+    if (!t) return;
+    const row = rt.d.timings.find((x) => x.key === t.dataset.rtReset);
+    if (!row || row.from !== "panel") return;  // only a timing that was changed here has something to put back
+    rt.draft.reset[row.key] = true; delete rt.draft.text[row.key];
+    const field = $(`#rt-${row.key}`);
+    if (field) { field.value = String(row.config); field.focus(); }  // the Reset button is gone once pressed: its field stands for it
+    $("#rt-err").textContent = ""; rtSync();
+  };
+  $("#rt-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const plan = rtPlan(rt.d, rt.draft);
+    if (rt.busy || !plan.lines.length || Object.keys(plan.problems).length) return;
+    rt.busy = true; $("#rt-save").disabled = true; $("#rt-err").textContent = "";
+    try {
+      const r = await controlCall({ kind: "request", label: "Run timings", method: "PUT", path, body: plan.body },
+        () => api(path, { method: "PUT", body: JSON.stringify(plan.body) }));
+      if (!r) return;  // "Confirm it's you" took over: the panel runs the kept change after the sign-in
+      close(); flash(`Run timings: ${r.message || "saved"}`);
+      fetchWakeUpdate();
+    } catch (x) {
+      if (!mine()) return;  // the dialog is gone (the session ended)
+      rt.busy = false; fail(x.message); rtSync();
+    }
+  };
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="rt-open"]');
+  if (t && !t.disabled) openRunTimings();
 });
 
 // ------------------------------------------------------------ users, roles and sites (admins only)

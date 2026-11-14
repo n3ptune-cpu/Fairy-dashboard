@@ -109,12 +109,12 @@ func TestUIUpdatesPageUnpoweredHostsFold(t *testing.T) {
   const acts = (html) => [...new Set([...html.matchAll(/data-act="([a-z-]+)"/g)].map((m) => m[1]))].sort().join(" ");
   upd.data = updates([agent("pc-a")]);
 
-  // 1. no run yet: folded. The heading, the button that starts a run, the sentence with the promise, how many
-  //    machines are switched on, and the button that shows the machines
+  // 1. no run yet: folded. The heading, the two buttons (the run's timings, and the one that starts a run), the
+  //    sentence with the promise, how many machines are switched on, and the button that shows the machines
   wu.data = data({});
   let html = box();
   if (isOpen(html) || html.includes("wu-run")) fail("no run: not folded");
-  if (words(html) !== "Update unpowered hosts Update unpowered hosts Wakes the machines you choose, updates their agent and switches them off again. Fairy only switches off machines this run woke. A machine that is already on is never switched off. 3 are switched on, 2 can be chosen right now. Show the machines") fail("no run, folded: " + words(html));
+  if (words(html) !== "Update unpowered hosts Run timings Update unpowered hosts Wakes the machines you choose, updates their agent and switches them off again. Fairy only switches off machines this run woke. A machine that is already on is never switched off. 3 are switched on, 2 can be chosen right now. Show the machines") fail("no run, folded: " + words(html));
   if (fold(html)?.html.includes('aria-expanded="true"') || tag(html, 'data-act="wu-open"').disabled) fail("no run: the buttons: " + fold(html)?.html);
   // the button opens it: the table of machines with each machine's switch, and it folds again
   await click(fold(html), '[data-act="wu-fold"]');
@@ -181,12 +181,12 @@ func TestUIUpdatesPageUnpoweredHostsFold(t *testing.T) {
   upd.data = updates([agent("pc-a"), agent("pc-b", { behind: false, can_update: false })], { panel_behind: true, panel_latest: { tag: "v0.8.1", version: "19-ddddddd" } });
   pupd.data = { ready: true, behind: true, version: "18-ccccccc" };
   html = pageUpdates();
-  if (acts(html) !== "panel-upd upd-all upd-check upd-one wu-fold wu-log wu-open") fail("the page as it opens: " + acts(html));
+  if (acts(html) !== "panel-upd rt-open upd-all upd-check upd-one wu-fold wu-log wu-open") fail("the page as it opens: " + acts(html));
   if (html.indexOf('class="tiles upd-tiles"') > html.indexOf('class="table updates"') || html.indexOf('class="table updates"') > html.indexOf('data-key="wu"')) fail("the order: tiles, the table, the section");
   if ((html.match(/<table /g) || []).length !== 1) fail("one table on the page as it opens: " + (html.match(/<table /g) || []).length);
   wu.open.runs = true; wu.open.earlier = true; wu.open["r2/pc-a"] = true;
   html = pageUpdates();
-  if (acts(html) !== "panel-upd upd-all upd-check upd-one wu-fold wu-log wu-open wu-switch") fail("opened: " + acts(html));
+  if (acts(html) !== "panel-upd rt-open upd-all upd-check upd-one wu-fold wu-log wu-open wu-switch") fail("opened: " + acts(html));
   if ((html.match(/class="wu-run"/g) || []).length !== 2 || !html.includes('<ol class="wu-log">')) fail("opened: the last run, the earlier run and a machine's steps");
   if (html.includes('id="upd-run"')) fail("no run is going, and the page says one is");
   wu.data = data({ active: run("r6", "running", [runHost("pc-a", { state: "waking", on: "", update: "" }), runHost("pc-b", { state: "queued", on: "", update: "" })]), last: [bad] });
