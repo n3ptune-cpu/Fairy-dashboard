@@ -199,8 +199,13 @@ func (h *Host) confirmUnsure() bool {
 // confirmOpen: such a confirmation is open: the machine still waits, and its agent has not been read since
 // the panel learned what it was answered. Until then the run does not know that nothing was confirmed.
 func (h *Host) confirmOpen() bool {
-	c := &h.chk
-	return h.State == StApproval && h.confirmUnsure() && !c.goRead && c.disarm == nil && h.verdict == nil
+	return h.State == StApproval && h.confirmUnsure() && !h.chk.goRead
+}
+
+// saidAfterConfirm reports whether word (runWord's) is the machine's own word from after the panel learned
+// what came of the latest confirmation that left for it. An older answer says nothing about that confirmation.
+func (h *Host) saidAfterConfirm(o Observation, word string, mono time.Duration) bool {
+	return word != "" && mono-o.SeenAgo > h.chk.goEnd
 }
 
 // unsureWords begin the row of a machine whose confirmation is for its agent to settle (confirmUnsure), and
@@ -1013,7 +1018,7 @@ func (m *Manager) stepAwaiting(ctx context.Context, r *Run, h *Host, info HostIn
 		m.afterConfirm(r, h, o, now)
 		return
 	}
-	if h.confirmUnsure() && !c.goRead && word != "" && mono-o.SeenAgo > c.goEnd {
+	if h.confirmUnsure() && !c.goRead && h.saidAfterConfirm(o, word, mono) {
 		// its agent's word from after the panel was answered: the confirmation is no longer open (confirmOpen)
 		c.goRead = true
 		m.note(h, now, "its agent was read after the confirmation and does not show the run as confirmed")

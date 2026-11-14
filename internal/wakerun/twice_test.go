@@ -200,3 +200,61 @@ func TestTheMachinesWordNamesTheOneWhoseConfirmationLeftForIt(t *testing.T) {
 		t.Fatalf("approval %q by %q, want given by Bob: it was Bob's confirmation that reached pc-a", cur.Approval, cur.ConfirmedBy)
 	}
 }
+
+// The panel never learned what came of a confirmation that left (the request that carried it died with its
+// answer, and the run stopped waiting after confirmingMax): it did leave, so the machine's word settles it.
+func TestAConfirmationWhoseOutcomeThePanelNeverLearnedIsSettledByTheMachinesWord(t *testing.T) {
+	w, pc, act := askedRun(t, nil)
+	ws, err := w.m.Waiting(act.ID)
+	if err != nil || len(ws) != 1 {
+		t.Fatal(ws, err)
+	}
+	if _, err := w.m.BeginConfirm(act.ID, "Ann", []string{"pc-a"}); err != nil {
+		t.Fatal(err)
+	}
+	x := ws[0]
+	if res := w.goNow(pc, act.ID, x.To, time.Duration(x.ShutdownDelayS)*time.Second, time.Duration(x.WithinS)*time.Second); !res.OK {
+		t.Fatalf("the model: the machine did not accept: %+v", res)
+	}
+	w.advance(confirmingMax + 10*time.Second) // the run is never told (Confirmed is not called)
+	cur, _ := w.m.Snapshot()
+	h := host(cur, "pc-a")
+	if cur.Approval != "given" || cur.ConfirmedBy != "Ann" || h.Confirm != ConfirmOK {
+		t.Fatalf("approval %q by %q; pc-a confirm %q%s", cur.Approval, cur.ConfirmedBy, h.Confirm, logOf(h))
+	}
+	if !logHas(h, "the panel did not learn what came of its confirmation: what its agent shows decides") || !logHas(h, "its agent shows the run as confirmed: the confirmation did arrive") {
+		t.Fatalf("the machine's history:%s", logOf(h))
+	}
+	done := w.finish()
+	has(t, host(done, "pc-a"), StOff, "updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
+}
+
+// Its agent is out of reach from the confirmation until the run watches the machine for its own switch-off
+// (nobody could confirm it any more, by what the panel was answered). The machine is confirmed and does not
+// switch itself off: when its agent is read, the run takes that in there too, and updates it.
+func TestAConfirmationThatArrivedIsTakenInWhileTheMachineIsWatchedForItsSwitchOff(t *testing.T) {
+	w, pc, _ := askedRun(t, func(_ *world, pc *machine) { pc.chk.goTwice = true })
+	if _, err := w.confirm("Ann"); err != nil {
+		t.Fatal(err)
+	}
+	pc.unreachable = true
+	w.waitFor(40*time.Minute, "pc-a is watched for its switch-off", func(r *Run) bool { return stateOf(r, "pc-a") == StSelfOff })
+	pc.unreachable = false
+	w.advance(10 * time.Second)
+	cur, _ := w.m.Snapshot()
+	h := host(cur, "pc-a")
+	if cur.Approval != "given" || cur.ConfirmedBy != "Ann" || h.Confirm != ConfirmOK || h.State == StSelfOff {
+		t.Fatalf("approval %q by %q; pc-a confirm %q, %s %q", cur.Approval, cur.ConfirmedBy, h.Confirm, h.State, h.Text)
+	}
+	if !logHas(h, "(run refused (already_confirmed)): a confirmation did arrive, and it is not switching itself off") {
+		t.Fatalf("the machine's history:%s", logOf(h))
+	}
+	done := w.finish()
+	has(t, host(done, "pc-a"), StOff, "updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.")
+	if got := strings.Join(question(w), ", "); got != "asked, over "+EndTime+", given by Ann" {
+		t.Fatalf("the question: %s", got)
+	}
+	if open, _ := openAtEnd(w); len(open) != 1 {
+		t.Fatalf("the end of the question by time names as open: %v", open)
+	}
+}
