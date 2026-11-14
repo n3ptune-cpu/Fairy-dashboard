@@ -142,6 +142,9 @@ type Server struct {
 	backgrounds                      streamSlots    // background downloads in flight (api_settings.go)
 	wallStage                        stagedPictures // sign-in pictures that wait for "Confirm it's you" (signin_wallpaper.go)
 	agentReads                       *agentReads    // read requests passed through to an agent, in flight (agentreads.go)
+
+	// hostEditStep: tests only (api_hostoptions.go: hostEditAt). nil in the running panel.
+	hostEditStep func(step string)
 }
 
 // stopsPerMin is how many cancels (of an "Update unpowered hosts" run, of a shutdown countdown) one user may

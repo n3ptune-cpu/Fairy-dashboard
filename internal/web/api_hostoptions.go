@@ -1241,9 +1241,20 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 			return refuse(err)
 		}
 	}
+	s.hostEditAt("planned")
+	prev := "" // the assignment that was stored for the row when the new one was stored: what a failure puts back
 	if site != nil {
-		if _, err := s.Access.Assign(m.row.ID, site.assign); err != nil {
+		if prev, err = s.Access.Assign(m.row.ID, site.assign); err != nil {
 			return refuse(err)
+		}
+		if prev != m.sites.grants.Assign[m.row.ID] {
+			// Somebody changed this host's site (the Users page, another Edit host) after the lines of this
+			// request were worked out: "was site-a" and whose view moves are no longer true. Their change is
+			// put back as it was, and this request is not made.
+			if _, back := s.Access.Assign(m.row.ID, prev); back != nil {
+				params["site_not_put_back"] = prev
+			}
+			return refuse(apierr.New(409, "the site of this host was changed by somebody else just now: close this, open Edit host again and look at it"))
 		}
 	}
 	var lines, notes []string
@@ -1261,9 +1272,9 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		return err
 	})
 	if err != nil {
-		if site != nil { // the site goes back to what it was: nothing of a request that failed stays
-			if _, back := s.Access.Assign(m.row.ID, s.siteAssigned(site.was)); back != nil {
-				params["site_not_put_back"] = site.is.Site
+		if site != nil { // the site goes back to what was stored before: nothing of a request that failed stays
+			if _, back := s.Access.Assign(m.row.ID, prev); back != nil {
+				params["site_not_put_back"] = prev
 			}
 		}
 		return refuse(err)
@@ -1271,14 +1282,43 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	// A link reaches the rows with the reading agent's next answer, and that poll says so itself. A name, a
 	// site and the Wake-on-LAN details count at once: the poller's picture is made anew.
 	s.Poller.Bump()
+	s.hostEditAt("stored")
 	if site != nil {
 		lines = append([]string{site.line}, lines...)
 		changes = append([]hoChange{{Host: m.row.ID, Field: "site", Before: strOrNil(site.was.Site), After: strOrNil(site.is.Site),
 			BeforeFrom: siteFrom(site.was), AfterFrom: siteFrom(site.is), Stored: strOrNil(site.assign)}}, changes...)
 		changed = true
 	}
-	if m, err = c.hostOptionsMachine(id); err != nil { // as it is now: the name and the site may be other ones
-		return err
+	// What was saved is written to the audit log FIRST, with the machine as the request found it. Only then is
+	// the machine looked at again for the answer: when it was removed in that moment, the change is on record
+	// all the same, and the answer is made from what was known.
+	what := "links"
+	if changed {
+		params["lines"], params["changes"], params["rev"] = lines, changes, after.Rev
+		if removed > 0 { // stored changes without a line that were taken out: all of them, however many lines name them
+			params["removed_count"] = removed
+		}
+		if len(notes) > 0 {
+			params["visibility"] = notes // whose view of a machine or a device the change moves
+		}
+		c.audit(u, "host.options", m.row.ID, params, "ok")
+		if site != nil {
+			// ... and a site change also as the entry the Users page writes for one (same action, target and
+			// params), so that one search of the audit log for site.assign finds every change of a site.
+			c.audit(u, "site.assign", m.row.ID, map[string]any{"site": site.assign, "before": prev, "via": "Edit host"}, "ok")
+		}
+		// in the words of the bell and of the page: "links" while nothing else was changed
+		about := "links changed by "
+		if slices.ContainsFunc(changes, func(x hoChange) bool { return x.Host != "" }) {
+			what, about = "changes", "host edited by "
+		}
+		if s.Notes != nil {
+			s.Notes.Add(notifications.Event{Kind: "host_options", Type: "host", Severity: notifications.Info, SystemID: m.row.ID, Host: m.row.Name,
+				Text: about + actorOf(u)})
+		}
+	}
+	if now, err := c.hostOptionsMachine(id); err == nil { // as it is now: the name and the site may be other ones
+		m = now
 	}
 	out := m.view(after, nil, 0)
 	out["ok"], out["changed"], out["visibility"] = true, []string{}, []string{}
@@ -1287,34 +1327,21 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		c.json(200, out)
 		return nil
 	}
-	params["lines"], params["changes"], params["rev"] = lines, changes, after.Rev
-	if removed > 0 { // stored changes without a line that were taken out: all of them, however many lines name them
-		params["removed_count"] = removed
-	}
 	if len(notes) > 0 {
-		params["visibility"], out["visibility"] = notes, notes // whose view of a machine or a device the change moves
-	}
-	c.audit(u, "host.options", m.row.ID, params, "ok")
-	// what was saved, in the words of the bell and of the page: "links" while nothing else was changed
-	what, about := "links", "links changed by "
-	if slices.ContainsFunc(changes, func(x hoChange) bool { return x.Host != "" }) {
-		what, about = "changes", "host edited by "
-	}
-	if s.Notes != nil {
-		s.Notes.Add(notifications.Event{Kind: "host_options", Type: "host", Severity: notifications.Info, SystemID: m.row.ID, Host: m.row.Name,
-			Text: about + actorOf(u)})
+		out["visibility"] = notes
 	}
 	out["message"], out["changed"] = what+" saved", lines
 	c.json(200, out)
 	return nil
 }
 
-// siteAssigned is the assignment that was stored for a row whose site was ref ("": none, the default counted).
-func (s *Server) siteAssigned(ref siteRef) string {
-	if ref.From == fromPanel {
-		return ref.Site
+// hostEditAt tells a test where a save of "Edit host" stands ("planned": the request was looked at and
+// nothing is stored yet; "stored": both files are written, and the audit entry and the answer are still to
+// come). Nothing listens in the running panel.
+func (s *Server) hostEditAt(step string) {
+	if s.hostEditStep != nil {
+		s.hostEditStep(step)
 	}
-	return ""
 }
 
 // siteFrom is where a site comes from, in the audit log's words for a change.
