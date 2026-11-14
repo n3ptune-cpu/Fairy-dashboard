@@ -204,6 +204,9 @@ type managedRow struct {
 	Shadowed bool `json:"shadowed"`
 	// Why, for a host that is not Active: what is the matter, as it is now (managedState).
 	Why string `json:"why,omitempty"`
+	// WakeRelayOf: the machines whose Wake-on-LAN details, as changed in "Edit host", name this host as the sender
+	// of their wake packets. A Remove takes those changes out with it, and its dialog says so before (wakeLosers).
+	WakeRelayOf []string `json:"wake_relay_of,omitempty"`
 }
 
 // managedState says what an added host is right now: polled as itself (active), a copy that config.yaml's
@@ -283,7 +286,11 @@ func (s *Server) hostsPage(c *reqCtx) error {
 	for _, h := range hosts {
 		info, _ := s.Poller.AgentInfo(h.ID)
 		active, shadowed, why := s.managedState(h)
-		p.Managed = append(p.Managed, managedRow{Host: h, SystemID: h.Shown(), Online: info.Online, Active: active, Shadowed: shadowed, Why: why})
+		row := managedRow{Host: h, SystemID: h.Shown(), Online: info.Online, Active: active, Shadowed: shadowed, Why: why}
+		if !shadowed {
+			row.WakeRelayOf = s.wakeLosers(h.ID, rowsOf(h)...)
+		}
+		p.Managed = append(p.Managed, row)
 	}
 	if note := s.Managed.ListNote(); note != "" {
 		p.Skipped = []string{note}
@@ -458,7 +465,11 @@ func (s *Server) hostRemove(c *reqCtx) error {
 	}
 	// What "Edit host" changed goes with it too, for the same reason: the overrides of its own agent, and every
 	// change about one of the rows that go away with it in the overrides of other agents (api_hostoptions.go).
+	// ... and the Wake-on-LAN details changed there for OTHER machines that name this host as the sender of their
+	// wake packets: whole, with a line each in that audit entry and a sentence in the answer (wakeLosers).
+	var wakeLost []string
 	if !copyOnly {
+		wakeLost = s.wakeLosers(h.ID, rowsOf(h)...)
 		gone, notes, err := s.forgetHostOptions(actorOf(u), h.ID, rowsOf(h)...)
 		if err != nil {
 			c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
@@ -478,9 +489,12 @@ func (s *Server) hostRemove(c *reqCtx) error {
 	if copyOnly {
 		params["copy_only"] = true // the unused copy of a machine that config.yaml has: the machine stays
 	}
+	if len(wakeLost) > 0 {
+		params["wake_changes_removed"] = wakeLost // the machines it was the relay of by a change in Edit host
+	}
 	c.audit(u, "host.remove", h.ID, params, "ok")
 	text := fmt.Sprintf("removed from the panel by %s (the agent on the machine keeps running until you uninstall it)", actorOf(u))
-	msg := h.Name + " removed from the panel"
+	msg := h.Name + " removed from the panel" + wakeLostText(h.Name, wakeLost)
 	if copyOnly {
 		text = fmt.Sprintf("its unused Add host copy was removed by %s (the machine stays in the panel, as config.yaml's entry)", actorOf(u))
 		msg = "the unused Add host copy of " + h.Name + " was removed. " + h.Name + " stays in the panel as config.yaml's entry, and nothing that is stored for it was changed"

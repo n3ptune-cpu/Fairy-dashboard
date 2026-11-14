@@ -3,6 +3,7 @@ package adminstate
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"regexp"
 	"slices"
@@ -513,8 +514,12 @@ func (o *HostOptions) DropHost(id string) {
 }
 
 // forgetHosts is the part of Forget about the machines themselves: the decisions kept under one of ids go,
-// and so does, in the decisions of OTHER machines, a relay that is one of ids (the next machine added under
-// that id must not become the relay of a wake packet nobody gave it). It reports what was taken out.
+// and so do, in the decisions of OTHER machines, the Wake-on-LAN details of a machine whose relay is one of
+// ids. They go WHOLE: "these MAC addresses through that relay" was one decision, and with the relay alone
+// taken out it would become "these MAC addresses through config.yaml's relay", a packet nobody decided on.
+// config.yaml's own Wake-on-LAN counts for that machine again. (The next machine added under the removed id
+// must not become the relay of a wake packet nobody gave it either.) It reports what was taken out, and
+// says each machine that lost its Wake-on-LAN details in the log.
 func (o *HostOptions) forgetHosts(ids []string) (gone []string) {
 	for _, id := range ids {
 		if e, ok := o.Hosts[id]; ok && !e.Empty() {
@@ -522,14 +527,26 @@ func (o *HostOptions) forgetHosts(ids []string) (gone []string) {
 		}
 		o.DropHost(id)
 	}
-	for _, other := range slices.Sorted(maps.Keys(o.Hosts)) {
+	for _, other := range o.RelayUsers(ids...) {
 		e := o.Hosts[other].Clone()
-		if e.Wol == nil || !slices.Contains(ids, e.Wol.Relay) {
-			continue
-		}
-		e.Wol.Relay = ""
+		relay := e.Wol.Relay
+		e.Wol = nil
 		o.SetHost(other, e)
-		gone = append(gone, other+": it is no longer the relay of its Wake-on-LAN")
+		gone = append(gone, fmt.Sprintf("%s: the Wake-on-LAN details changed for it (they named %s as the relay): config.yaml's count for it again", other, relay))
+		slog.Warn("Edit host: a host's Wake-on-LAN details changed in the panel are taken out, because their relay is removed: config.yaml's count for it again",
+			"host", other, "relay", relay)
 	}
 	return gone
+}
+
+// RelayUsers is the machines (the ids their decisions are kept under, sorted) whose Wake-on-LAN decisions
+// name one of ids as the relay.
+func (o HostOptions) RelayUsers(ids ...string) []string {
+	var out []string
+	for _, key := range slices.Sorted(maps.Keys(o.Hosts)) {
+		if e := o.Hosts[key]; e.Wol != nil && e.Wol.Relay != "" && slices.Contains(ids, e.Wol.Relay) && !slices.Contains(ids, key) {
+			out = append(out, key)
+		}
+	}
+	return out
 }

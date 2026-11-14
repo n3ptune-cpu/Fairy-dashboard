@@ -814,19 +814,21 @@ func TestEditHostLeftoversOfMachinesThemselves(t *testing.T) {
 }
 
 // Remove of a host (and an Add under an id something is still kept for) takes what was changed about the
-// machine itself with it, and the relay decisions of other machines that name it.
+// machine itself with it, and the Wake-on-LAN details changed for other machines that name it as their relay:
+// whole (hostedit_remove_test.go has the Remove itself).
 func TestEditHostForgetTakesTheMachineItself(t *testing.T) {
 	r := hedSetup(t)
 	r.ok("pc-b", map[string]any{"name": "Den"})
+	r.ok("pc-a", map[string]any{"name": "Gaming PC"})
 	r.wol("pc-a", map[string]any{"relay": "relay-b", "port": 7})
 	gone, _, err := r.s.forgetHostOptions("test", "relay-b")
-	if err != nil || len(gone) != 1 || !strings.Contains(gone[0], "pc-a: it is no longer the relay") {
+	if err != nil || len(gone) != 1 || gone[0] != "pc-a: the Wake-on-LAN details changed for it (they named relay-b as the relay): config.yaml's count for it again" {
 		t.Fatalf("Remove of relay-b: %q %v", gone, err)
 	}
-	if st, _ := r.storedHost("pc-a")["wol"].(map[string]any); st["relay"] != nil || st["port"] != 7.0 {
+	if st := r.storedHost("pc-a"); st["wol"] != nil || st["name"] != "Gaming PC" {
 		t.Errorf("pc-a after its relay was removed: %v", st)
 	}
-	if w := r.host("pc-a", "wol"); w["relay"] != "relay-a" || w["port"] != 7.0 || w["unused"] != nil {
+	if w := r.host("pc-a", "wol"); w["relay"] != "relay-a" || w["port"] != 9.0 || w["from"] != "config" || w["unused"] != nil {
 		t.Errorf("pc-a's Wake-on-LAN after it: %v", w)
 	}
 	gone, _, err = r.s.forgetHostOptions("test", "pc-b")

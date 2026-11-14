@@ -573,3 +573,37 @@ func (x *hoSites) view() map[string]any {
 	}
 	return map[string]any{"value": strOrNil(x.ref.Site), "from": strOrNil(x.ref.From), "default": strOrNil(x.ref.Default), "choices": choices, "plans": plans}
 }
+
+// wakeLosers is the machines that lose a change with a Remove of the host with agentID (ids: its other rows):
+// those whose Wake-on-LAN details, as changed in "Edit host", name it as the sender of their wake packets. The
+// whole change of such a machine goes with the relay (adminstate: forgetHosts), never half of it. By the names
+// they are shown under, for the Remove dialog, its answer and the audit log.
+func (s *Server) wakeLosers(agentID string, ids ...string) []string {
+	keys := s.Poller.Admin.HostOptions().RelayUsers(append(slices.Clone(ids), agentID)...)
+	if len(keys) == 0 {
+		return nil
+	}
+	snap := s.Poller.Snapshot()
+	var names []string
+	for _, key := range keys {
+		name := key
+		if sys := s.Poller.ShownSystem(key); sys != nil {
+			name = sys.Name
+		} else if i := slices.IndexFunc(snap, func(x model.System) bool { return x.ID == key }); i >= 0 {
+			name = snap[i].Name
+		}
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// wakeLostText is the sentence of Remove's answer about them ("": there are none).
+func wakeLostText(removed string, names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(". %s was chosen in Edit host as the sender of the wake packets of %s: that change was taken out with it, and what config.yaml says about Wake-on-LAN counts there again",
+		removed, strings.Join(names, ", "))
+}

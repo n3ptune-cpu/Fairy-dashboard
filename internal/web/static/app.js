@@ -3542,7 +3542,11 @@ document.addEventListener("click", (e) => {
       if (r) openEnrollDialog(r);
     });
   } else {
-    typedDialog(`Remove ${h.name} from the panel?`, `The panel stops polling it and deletes its tokens${h.proxmox ? " (and its Proxmox node)" : ""}. The agent keeps running on the machine until you uninstall it there.`, h.name, "Remove", async (v) => {
+    // A host that Edit host made the sender of other machines' wake packets: that change goes with it, whole
+    // (the panel's answer says the same afterwards).
+    const wakeOf = (h.wake_relay_of || []).map((n) => `<b>${esc(n)}</b>`).join(", ");
+    const wakeNote = wakeOf ? ` It was chosen in Edit host as the sender of the wake packets of ${wakeOf}: that change is taken out with it, and what config.yaml says about Wake-on-LAN counts there again.` : "";
+    typedDialog(`Remove ${h.name} from the panel?`, `The panel stops polling it and deletes its tokens${h.proxmox ? " (and its Proxmox node)" : ""}. The agent keeps running on the machine until you uninstall it there.${wakeNote}`, h.name, "Remove", async (v) => {
       const r = await controlCall({ kind: "request", label: `Remove ${h.name}` }, () => api(path, { method: "DELETE", body: JSON.stringify({ confirm: v }) }));
       if (!r) return;
       location.hash = "#/"; loadManaged();

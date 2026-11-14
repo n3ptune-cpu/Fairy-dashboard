@@ -3,8 +3,10 @@ package adminstate
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -354,19 +356,35 @@ func TestHostEditsBuild15FileAndNewerKeys(t *testing.T) {
 	}
 }
 
-// Remove of a host: what was changed about the host itself goes, under every id it had, and so does a relay
-// decision of another host that names it. The other host's other decisions stay.
+// Remove of a host: what was changed about the host itself goes, under every id it had. A machine whose
+// Wake-on-LAN details name the removed host as the relay loses those details WHOLE (its MAC addresses and
+// port with the relay: half a decision would send a packet nobody decided on), keeps its name, and is said
+// in the log; a machine with another relay is not touched.
 func TestHostEditsForget(t *testing.T) {
+	logs := &syncLog{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
 	o := HostOptions{Agents: map[string]HostOption{}, Hosts: map[string]HostEdit{
 		"pc-a":           {Name: "Gaming PC", Wol: &WolEdit{MACs: []string{"aa:bb:cc:dd:ee:01"}}},
 		"lab-node-pve-a": {Name: "Rack"},
-		"pc-b":           {Name: "Den", Wol: &WolEdit{Relay: "pc-a", Port: 7}},
+		"pc-b":           {Name: "Den", Wol: &WolEdit{MACs: []string{"aa:bb:cc:dd:ee:02"}, Relay: "pc-a", Port: 7}},
 		"pc-c":           {Wol: &WolEdit{Relay: "pc-a"}},
-		"pc-d":           {Wol: &WolEdit{Relay: "relay-a"}},
+		"pc-d":           {Wol: &WolEdit{Relay: "relay-a", MACs: []string{"aa:bb:cc:dd:ee:04"}}},
+		"pc-e":           {Wol: &WolEdit{MACs: []string{"aa:bb:cc:dd:ee:05"}}},
 	}}
+	if got := o.RelayUsers("pc-a", "lab-node-pve-a"); !slices.Equal(got, []string{"pc-b", "pc-c"}) {
+		t.Fatalf("who has it as the relay: %v", got)
+	}
 	gone := o.Forget("pc-a", "lab-node-pve-a")
 	if len(gone) != 4 {
 		t.Fatalf("lines: %q", gone)
+	}
+	for _, want := range []string{"pc-b: the Wake-on-LAN details changed for it (they named pc-a as the relay): config.yaml's count for it again",
+		"pc-c: the Wake-on-LAN details changed for it (they named pc-a as the relay): config.yaml's count for it again"} {
+		if !slices.Contains(gone, want) {
+			t.Errorf("the lines lack %q: %q", want, gone)
+		}
 	}
 	if _, has := o.Hosts["pc-a"]; has {
 		t.Error("the host's own entry stayed")
@@ -374,13 +392,46 @@ func TestHostEditsForget(t *testing.T) {
 	if _, has := o.Hosts["lab-node-pve-a"]; has {
 		t.Error("the entry under its row's id stayed")
 	}
-	if b := o.Host("pc-b"); b.Name != "Den" || b.Wol == nil || b.Wol.Relay != "" || b.Wol.Port != 7 {
-		t.Errorf("pc-b: %+v %+v", b, b.Wol)
+	if b := o.Host("pc-b"); b.Name != "Den" || b.Wol != nil {
+		t.Errorf("pc-b keeps half a decision (or lost its name): %+v %+v", b, b.Wol)
 	}
 	if _, has := o.Hosts["pc-c"]; has {
 		t.Error("pc-c had only the relay: its entry is empty and stayed")
 	}
-	if d := o.Host("pc-d"); d.Wol == nil || d.Wol.Relay != "relay-a" {
+	if d := o.Host("pc-d"); d.Wol == nil || d.Wol.Relay != "relay-a" || len(d.Wol.MACs) != 1 {
 		t.Errorf("pc-d names another relay and was changed: %+v", d)
 	}
+	if e := o.Host("pc-e"); e.Wol == nil || len(e.Wol.MACs) != 1 {
+		t.Errorf("pc-e names no relay and was changed: %+v", e)
+	}
+	if n := logs.count("Wake-on-LAN details changed in the panel are taken out"); n != 2 {
+		t.Errorf("%d warnings for two machines that lost their Wake-on-LAN details:\n%s", n, logs.String())
+	}
+}
+
+type syncLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *syncLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func (l *syncLog) count(about string) int {
+	n := 0
+	for _, line := range strings.Split(l.String(), "\n") {
+		if strings.Contains(line, "level=WARN") && strings.Contains(line, about) {
+			n++
+		}
+	}
+	return n
 }
