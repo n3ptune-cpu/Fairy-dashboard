@@ -345,6 +345,9 @@ type PowerSourceState struct {
 	// Sockets are the sockets of a plug that the agent's own Home Assistant knows (Fairy-agent v0.10.0 on), as
 	// the agent relays them. Left out when the source has none.
 	Sockets []PowerSocket `json:"sockets,omitempty"`
+	// SocketsHidden is how many sockets of the plug this answer leaves out, because they feed a row its viewer
+	// may not see (internal/web, plug.go). Left out when it is none; never set in what the manager keeps.
+	SocketsHidden int `json:"sockets_hidden,omitempty"`
 }
 
 // PowerSocket is one socket of a plug: its state, and whether it can be switched from this panel.

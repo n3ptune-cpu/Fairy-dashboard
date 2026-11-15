@@ -887,14 +887,60 @@ func TestPlugSocketsInThePowerAnswer(t *testing.T) {
 			t.Errorf("%s/%s: the sentence for %q is %q", c.source, c.socket, c.why, get("note"))
 		}
 	}
-	// a viewer of the site: the state and the name, the row it feeds when the viewer sees that row; no tag,
-	// no switch, no reason
+	// a viewer of the site: the state and the name of a socket that is linked to nothing or to a row the viewer
+	// sees, with that row; no tag, no switch, no reason
 	ck := pe.viewerOf("Home")
-	for _, c := range []struct{ socket, link string }{{"ch1", ""}, {"ch3", "desk-pc"}, {"ch4", "lab-node-pve"}, {"ch6", ""}, {"ch8", ""}} {
+	for _, c := range []struct{ socket, link string }{{"ch1", ""}, {"ch3", "desk-pc"}, {"ch4", "lab-node-pve"}, {"ch8", ""}} {
 		s := pe.socketOf(ck, "reader/desk-bar", c.socket)
 		link, _ := s["system_id"].(string)
 		if s == nil || s["switchable"] != false || s["why"] != model.SocketReadOnly || s["tag"] != nil || s["lock"] != nil || s["note"] != nil || s["state"] != "on" || s["name"] == "" || link != c.link {
 			t.Errorf("%s for a viewer: %v", c.socket, s)
+		}
+	}
+	// A socket that feeds a row the viewer does not see is not in the viewer's answer at all: not its name
+	// ("Panel box", "Old PC"), not its state. The plug says how many are left out. (Until the second review of
+	// stage 1a this test wanted ch6 in the answer, without its link.)
+	rows := map[string]bool{}
+	for _, x := range pe.do("GET", "/api/systems", nil, "Cookie", ck).body["systems"].([]any) {
+		rows[fmt.Sprint(x.(map[string]any)["id"])] = true
+	}
+	if !rows["desk-pc"] || rows["panel-box"] || rows["old-pc"] {
+		t.Fatalf("the fixture: the viewer's rows are %v", rows)
+	}
+	power := pe.do("GET", "/api/power", nil, "Cookie", ck)
+	for _, hidden := range []string{"ch6", "ch7"} {
+		if s := pe.socketOf(ck, "reader/desk-bar", hidden); s != nil {
+			t.Errorf("a viewer gets a socket that feeds a row they do not see: %v", s)
+		}
+	}
+	for _, word := range []string{"Panel box", "Old PC", "panel-box", "old-pc"} {
+		if strings.Contains(string(power.raw), word) {
+			t.Errorf("the viewer's answer names %q", word)
+		}
+	}
+	shown, left := 0, -1.0
+	for _, x := range power.body["sources"].([]any) {
+		if src := x.(map[string]any); src["id"] == "reader/desk-bar" {
+			list, _ := src["sockets"].([]any)
+			shown, left = len(list), 0
+			if n, ok := src["sockets_hidden"].(float64); ok {
+				left = n
+			}
+			for _, k := range list {
+				id, _ := k.(map[string]any)["system_id"].(string)
+				if id != "" && !rows[id] {
+					t.Errorf("a socket in the viewer's answer feeds a row they do not see: %v", k)
+				}
+			}
+		}
+	}
+	if shown+int(left) != 8 || left < 2 || shown < 5 {
+		t.Errorf("the viewer's powerbar: %d sockets shown, %v left out; want 8 in all, ch6 and ch7 among the ones left out", shown, left)
+	}
+	// an admin's answer leaves nothing out and says so
+	for _, x := range pe.do("GET", "/api/power", nil, "Cookie", pe.admin).body["sources"].([]any) {
+		if src := x.(map[string]any); src["sockets_hidden"] != nil {
+			t.Errorf("an admin's answer leaves sockets out: %v", src["id"])
 		}
 	}
 	if s := pe.socketOf(ck, "other/rack-bar", "fan"); s != nil {

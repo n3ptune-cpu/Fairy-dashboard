@@ -311,7 +311,8 @@ func (v *view) cleanPower(st model.PowerSourceState) model.PowerSourceState {
 
 // Power is the visible power sources and their total. The sockets of a plug are in it with the panel's own
 // rules laid over what the agent says (plug.go): an admin gets, for each socket, whether it can be switched
-// from here and why not; everybody else its name and its state.
+// from here and why not; everybody else its name and its state, and not the sockets that feed a row they may
+// not see (the source then says how many it leaves out).
 func (v *view) Power() model.PowerOverview {
 	ov := v.s.Poller.Power.Overview()
 	if v.all {
@@ -341,7 +342,7 @@ func (v *view) withSockets(srcs []model.PowerSourceState) {
 		if looks == nil {
 			looks = v.s.newPlugLooks(v.snap)
 		}
-		srcs[i].Sockets = looks.sockets(srcs[i], v.g.Admin(), func(id string) bool { return v.all || v.vis[id] })
+		srcs[i].Sockets, srcs[i].SocketsHidden = looks.sockets(srcs[i], v.g.Admin(), func(id string) bool { return v.all || v.vis[id] })
 	}
 }
 

@@ -644,8 +644,17 @@ function sockEl(src, k) {
   const feeds = sockFeeds(k), [ctl, dot] = sockSign(src, k, "p");
   return `<span class="sock" data-key="${esc(k.id)}">${ctl}${sockIsSwitch(ctl) ? "" : dot}<span class="sock-name"${feeds ? ` title="${esc(`Powers ${feeds}`)}"` : ""}>${esc(k.name)}</span></span>`;
 }
-// Under a source's name on the Power page: its sockets, in the plug's own order.
-const sockets = (src) => (Array.isArray(src.sockets) && src.sockets.length ? `<div class="socks">${src.sockets.map((k) => sockEl(src, k)).join("")}</div>` : "");
+// Under a source's name on the Power page: its sockets, in the plug's own order. Somebody who may not see every
+// row gets no socket that feeds a row they do not see (`sockets_hidden` says how many the panel left out): one
+// muted line says that the plug has more.
+const sockMore = (src, shown) => {
+  const n = src.sockets_hidden;
+  return Number.isInteger(n) && n > 0 && n <= 64 ? `<span class="note sock-more">${n}${shown ? " more" : ""} socket${n === 1 ? " is" : "s are"} not shown</span>` : "";
+};
+const sockets = (src) => {
+  const list = Array.isArray(src.sockets) ? src.sockets : [], more = sockMore(src, list.length > 0);
+  return list.length || more ? `<div class="socks">${list.map((k) => sockEl(src, k)).join("")}${more}</div>` : "";
+};
 // In a host's Power panel: one line for each socket that feeds this host, of whatever plug it is a part of. A
 // plug's sign, the socket's name, and after it, muted, the plug's name (not when the two are the same: a plug
 // with one socket). On the right the switch or the lock, then the state in a word; a dot in their place for

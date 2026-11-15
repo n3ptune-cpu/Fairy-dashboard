@@ -255,17 +255,26 @@ func (s *Server) socketWhy(k socketLook) string {
 // sockets is the sockets of a source as an answer of the API carries them: the agent's row with the panel's
 // rules laid over it. admin: the viewer may switch (an admin). Everybody else gets the state and the name, no
 // tag and no reason. see says whether the viewer may see a row.
-func (l *plugLooks) sockets(st model.PowerSourceState, admin bool, see func(id string) bool) []model.PowerSocket {
+//
+// A socket that feeds a row the viewer may not see is left out for that viewer, name and state too: a socket's
+// name says what is plugged in ("Panel box", "Bob's PC"), and its state whether that machine has power, which
+// is that row's business. hidden counts them, so that the page can say that the plug has more. A socket that
+// is linked to nothing is the plug's own and is seen with the plug. Admins see every socket.
+func (l *plugLooks) sockets(st model.PowerSourceState, admin bool, see func(id string) bool) (out []model.PowerSocket, hidden int) {
 	if len(st.Sockets) == 0 {
-		return nil
+		return nil, 0
 	}
-	out := make([]model.PowerSocket, 0, len(st.Sockets)) // a new list: the manager's own is never written to
+	out = make([]model.PowerSocket, 0, len(st.Sockets)) // a new list: the manager's own is never written to
 	for _, sock := range st.Sockets {
 		k, ok := l.look(st, sock)
 		o := model.PowerSocket{ID: sock.ID, Name: sock.Name, State: sock.State, Error: sock.Error}
 		if !ok || !admin {
+			if ok && k.link != "" && !see(k.shown) {
+				hidden++
+				continue
+			}
 			o.Why = model.SocketReadOnly
-			if ok && k.row != nil && see(k.shown) {
+			if ok && k.row != nil {
 				o.SystemID = model.P(k.shown)
 			}
 			out = append(out, o)
@@ -281,7 +290,7 @@ func (l *plugLooks) sockets(st model.PowerSourceState, admin bool, see func(id s
 		}
 		out = append(out, o)
 	}
-	return out
+	return out, hidden
 }
 
 // whyText is the sentence for why this socket cannot be switched (socketWhyText), where it depends on more

@@ -60,6 +60,25 @@ if (/sock-lock|class="switch/.test(pagePower().split('<span class="sock" ')[1]))
 // sockets that are no list are not drawn
 bar.sockets = "ch1";
 if (pagePower().includes("sock-dot")) fail("sockets that are no list");
+// Sockets the panel left out for this viewer (they feed rows the viewer may not see): one muted line says how
+// many, after the ones that are shown, and alone when none is shown. Only a whole number above zero is said.
+bar.sockets = [k("ch1", { name: "Lamp", why: "read_only" })];
+for (const [n, line] of [[1, "1 more socket is not shown"], [2, "2 more sockets are not shown"], [7, "7 more sockets are not shown"]]) {
+  bar.sockets_hidden = n;
+  const row = pagePower().split('<tr class="row">')[1];
+  if (!row.includes('<span class="note sock-more">' + line + "</span></div>") || words(row).indexOf("Desk powerbar via agent relay Lamp " + line) !== 0) fail("the line for " + n + " sockets that are left out: " + words(row));
+}
+bar.sockets = [];
+bar.sockets_hidden = 3;
+if (!pagePower().split('<tr class="row">')[1].includes('<div class="socks"><span class="note sock-more">3 sockets are not shown</span></div>')) fail("a plug whose sockets are all left out: " + pagePower().split('<tr class="row">')[1]);
+bar.sockets_hidden = 1;
+if (!pagePower().includes('<span class="note sock-more">1 socket is not shown</span>')) fail("a plug whose only socket is left out");
+bar.sockets = [k("ch1", { name: "Lamp", why: "read_only" })];
+for (const bad of [0, -1, 1.5, "2", "<b>", null, undefined, NaN, 1e9, {}]) {
+  bar.sockets_hidden = bad;
+  if (/sock-more|not shown/.test(pagePower())) fail("a count that is no small whole number is said: " + JSON.stringify(bad));
+}
+delete bar.sockets_hidden;
 
 // the host's Power panel: one line for each socket that feeds this host, with the plug's name
 bar.sockets = [k("ch3", { name: "Desk PC socket", system_id: "desk-pc", lock: "panel", why: "panel", note: "Locked. This socket powers the panel." }),
