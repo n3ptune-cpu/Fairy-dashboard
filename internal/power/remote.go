@@ -286,8 +286,8 @@ func unreachableSockets(in []model.PowerSocket) []model.PowerSocket {
 // NoteSocketLinks says once in the log when the panel's entry of an agent links a socket (socket_links:
 // {"<device id>/<socket id>": <row id>}) that the agent's last answer does not have: a typing mistake, or a
 // socket that was taken out of the agent's own config. Nothing is linked for such a name, so the socket it was
-// meant for is not known to feed that machine: the panel then neither asks before it is switched off while
-// the machine runs, nor locks it. Said again only when the list of such names changes. The caller asks after
+// meant for is not known to feed that machine: the panel then cannot name the machine when the socket is
+// switched off, nor lock it for what it feeds (it asks "nothing is linked" before every "off" instead). Said again only when the list of such names changes. The caller asks after
 // an answer of the agent (UpdateRemote); `fairy admin config check` cannot know this.
 func (m *Manager) NoteSocketLinks(agentID string, links map[string]string) {
 	m.mu.Lock()

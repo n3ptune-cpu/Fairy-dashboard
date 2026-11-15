@@ -24,26 +24,36 @@ import (
 const plugActor = "n@example.com (unverified)"
 
 // One switch off and one switch on, end to end: each needs its own passkey, each is one request for one
-// socket in one direction, and the request names ids and a tag, never an entity, an address or a service.
+// socket in one direction, and the request names ids and a tag, never an entity, an address or a service. The
+// socket is linked to nothing, so its "off" is the one the page sends after "nothing is linked" was confirmed
+// (cut: TestPlugOffForASocketThatIsLinkedToNothing).
 func TestPlugSwitchOffAndOn(t *testing.T) {
 	pe := newPlugEnv(t)
 	logs := captureLog(t)
 	var answers []string
 	// an admin who signed in this second is asked all the same: the panel's own window never switches a socket
 	fresh := pe.cookie(controller(), 0)
-	r := pe.do("POST", "/api/power/socket", plugBody("reader/desk-bar", "ch1", "off"), "Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json")
+	r := pe.do("POST", "/api/power/socket", plugBody("reader/desk-bar", "ch2", "on"), "Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json")
 	if _, _, ok := approvalAsked(r); !ok {
 		t.Fatalf("inside the panel's own window: %d %s", r.code, r.raw)
 	}
 	for i, c := range []struct{ to, was, said string }{{"off", "on", "Left monitor is off."}, {"on", "off", "Left monitor is on."}} {
-		r := pe.flip("reader/desk-bar", "ch1", c.to)
+		b := plugBody("reader/desk-bar", "ch1", c.to)
+		if c.to == "off" {
+			b["cut"] = true
+		}
+		r := pe.post("/api/power/socket", b)
 		answers = append(answers, string(r.raw))
 		id, machines, ok := approvalAsked(r)
 		if !ok || len(machines) != 1 || machines[0] != "READER" {
 			t.Fatalf("%s: the dialog: %d %s", c.to, r.code, r.raw)
 		}
 		d := r.body["detail"].(map[string]any)
-		if want := "switch " + c.to + " Left monitor (Monitor powerbar)"; d["signs"] != want || d["action"] != "switch a plug socket ("+want+")" {
+		words := "switch " + c.to + " Left monitor (Monitor powerbar)"
+		if c.to == "off" {
+			words = "cut the power of whatever is plugged in: " + words
+		}
+		if d["signs"] != words || d["action"] != "switch a plug socket ("+words+")" {
 			t.Fatalf("%s: the dialog says: signs %q, action %q", c.to, d["signs"], d["action"])
 		}
 		if n := len(plugSent(pe.reader)); n != i {
@@ -85,7 +95,7 @@ func TestPlugSwitchOffAndOn(t *testing.T) {
 		p, _ := au["params"].(map[string]any)
 		if au["action"] != "plug.switch" || au["target"] != "reader/desk-bar/ch1" || au["outcome"] != "ok" || au["actor"] != plugActor ||
 			p["to"] != c.to || p["was"] != c.was || p["confirmed"] != true || p["approval"] != "sent" || p["name"] != "Left monitor" ||
-			p["plug"] != "Monitor powerbar" || p["agent"] != "reader" || p["cut"] != nil || p["linked"] != nil {
+			p["plug"] != "Monitor powerbar" || p["agent"] != "reader" || (p["cut"] == true) != (c.to == "off") || p["linked"] != nil {
 			t.Fatalf("%s: the audit entry: %v", c.to, au)
 		}
 	}
@@ -409,12 +419,6 @@ func TestPlugSwitchOffAMachineThatRuns(t *testing.T) {
 	if _, _, ok := approvalAsked(r); !ok || r.body["detail"].(map[string]any)["signs"] != "switch off Desk PC (Monitor powerbar), which powers DESK-PC" {
 		t.Fatalf("off for a socket whose machine is off: %d %s", r.code, r.raw)
 	}
-	// "cut" for a socket that nothing hangs on is refused: there is no machine to name
-	b := plugBody("reader/desk-bar", "ch1", "off")
-	b["cut"], b["confirm"] = true, "Left monitor"
-	if r := pe.post("/api/power/socket", b); r.code != 422 || !strings.Contains(fmt.Sprint(r.body["detail"]), "there is no machine whose power would be cut") {
-		t.Errorf("cut for a socket that feeds nothing: %d %s", r.code, r.raw)
-	}
 }
 
 // When the machine on a socket counts as off for the question "this machine is still running". Not answering
@@ -547,7 +551,9 @@ func TestPlugSwitchLooksAgainAfterTheApproval(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			pe := newPlugEnv(t)
 			pe.pcOff()
-			r := pe.flip("reader/desk-bar", c.socket, "off")
+			b := plugBody("reader/desk-bar", c.socket, "off")
+			b["cut"] = c.socket == "ch1" // linked to nothing: the page asked "nothing is linked" first
+			r := pe.post("/api/power/socket", b)
 			id, _, ok := approvalAsked(r)
 			if !ok {
 				t.Fatalf("the first request: %d %s", r.code, r.raw)
@@ -571,7 +577,8 @@ func TestPlugSwitchLooksAgainAfterTheApproval(t *testing.T) {
 // direction in the replay gets none, and nothing is sent.
 func TestPlugApprovalIsForTheExactRequest(t *testing.T) {
 	for name, edit := range map[string]func(body string) string{
-		"another direction": func(b string) string { return strings.Replace(b, `"to":"on"`, `"to":"off"`, 1) },
+		// ("off" for this socket, which is linked to nothing, with the answer to the page's question in it)
+		"another direction": func(b string) string { return strings.Replace(b, `"to":"on"`, `"to":"off","cut":true`, 1) },
 		"another socket": func(b string) string {
 			b = strings.Replace(b, `"socket":"ch2"`, `"socket":"ch1"`, 1)
 			return strings.Replace(b, plugTag("desk-bar", "ch2"), plugTag("desk-bar", "ch1"), 1)
@@ -1388,5 +1395,79 @@ func TestPlugAgentWithoutHomeAssistantSystem(t *testing.T) {
 	}
 	if n := len(pe.iss.Asked()); n != 0 {
 		t.Errorf("Pocket ID was asked %d times", n)
+	}
+}
+
+// A socket that is linked to nothing: the panel does not know what is plugged in. It stays switchable, but
+// "off" is never sent on the strength of one click: the first request is refused with a word of its own
+// (nothing_linked), the page asks "If a machine is plugged in here, it loses power now", and only the same
+// request with cut goes on to the passkey, whose line then says the cut. No name is typed: there is none.
+// "On" has no such question. Before the review of stage 1a (finding 1) "off" for such a socket went to the
+// passkey at once, under the words "switch off Channel 4 (Monitor powerbar)".
+func TestPlugOffForASocketThatIsLinkedToNothing(t *testing.T) {
+	pe := newPlugEnvWith(t, plugConfigWith(t, "power_links: {pc-plug: desk-pc},", ""))
+	const said = "Nothing is linked to this socket, so the panel does not know what is plugged in. If a machine is plugged in here, it loses power now. Nothing was switched."
+	for _, c := range []struct{ source, socket, name, plug string }{
+		{"reader/desk-bar", "ch1", "Left monitor", "Monitor powerbar"}, // a powerbar's socket without a line in socket_links
+		{"reader/pc-plug", "main", "PC", "PC plug"},                    // the only socket of a plug that is linked to nothing
+	} {
+		if s := pe.socketOf(pe.admin, c.source, c.socket); s["switchable"] != true || s["lock"] != nil || s["system_id"] != nil {
+			t.Fatalf("%s/%s: the fixture: %v", c.source, c.socket, s)
+		}
+		asked, passkeys := len(pe.reader.Asked()), len(pe.iss.Asked())
+		r := pe.flip(c.source, c.socket, "off")
+		d, _ := r.body["detail"].(map[string]any)
+		if r.code != 409 || d["code"] != "nothing_linked" || d["message"] != said || d["machine"] != nil {
+			t.Fatalf("%s/%s off: %d %s", c.source, c.socket, r.code, r.raw)
+		}
+		if au := pe.plugAudits()[0]; au["target"] != c.source+"/"+c.socket || au["outcome"] != "refused (nothing_linked): "+said || au["params"].(map[string]any)["cut"] != nil {
+			t.Errorf("%s/%s: the audit entry of the refusal: %v", c.source, c.socket, au)
+		}
+		if len(pe.reader.Asked()) != asked || len(pe.iss.Asked()) != passkeys {
+			t.Fatalf("%s/%s: the machine or Pocket ID was asked before the question was answered", c.source, c.socket)
+		}
+		// the answer: the same request with cut. No name is asked for, and one that is sent is not looked at
+		b := plugBody(c.source, c.socket, "off")
+		b["cut"] = true
+		r = pe.post("/api/power/socket", b)
+		id, _, ok := approvalAsked(r)
+		if !ok {
+			t.Fatalf("%s/%s off with cut: %d %s", c.source, c.socket, r.code, r.raw)
+		}
+		words := "cut the power of whatever is plugged in: switch off " + c.name + " (" + c.plug + ")"
+		if d := r.body["detail"].(map[string]any); d["signs"] != words || d["action"] != "switch a plug socket ("+words+")" {
+			t.Errorf("%s/%s: the dialog of the cut: signs %q, action %q", c.source, c.socket, d["signs"], d["action"])
+		}
+		sent := len(plugSent(pe.reader))
+		if cb := pe.approve(t, id); cb.code != 303 {
+			t.Fatal(cb.code)
+		}
+		if pr := pe.result(t); pr["ok"] != true || pr["message"] != c.name+" is off." {
+			t.Fatalf("%s/%s: result: %v", c.source, c.socket, pr)
+		}
+		got := plugSent(pe.reader)
+		if len(got) != sent+1 || got[sent].Body["cut"] != nil || got[sent].Body["confirm"] != nil || got[sent].Body["to"] != "off" {
+			t.Fatalf("%s/%s: what the machine got: %+v", c.source, c.socket, got)
+		}
+		au := pe.plugAudits()[0]
+		if p := au["params"].(map[string]any); au["outcome"] != "ok" || p["cut"] != true || p["linked"] != nil || p["approval"] != "sent" {
+			t.Errorf("%s/%s: the audit entry of the switch: %v", c.source, c.socket, au)
+		}
+	}
+	if notes := pe.do("GET", "/api/notifications", nil, "Cookie", pe.admin); !strings.Contains(string(notes.raw), "Left monitor (Monitor powerbar) switched off by "+plugActor+": power cut with nothing linked to the socket") {
+		t.Errorf("the notification: %s", notes.raw)
+	}
+	// "on" is not asked about
+	if _, _, ok := approvalAsked(pe.flip("reader/desk-bar", "ch2", "on")); !ok {
+		t.Error("on for a socket that is linked to nothing is refused")
+	}
+	// and the question is asked again every time, also right after it was answered once
+	pe.set("reader/desk-bar/ch2", "state", "on")
+	if r := pe.flip("reader/desk-bar", "ch2", "off"); r.code != 409 || !strings.Contains(string(r.raw), `"code":"nothing_linked"`) {
+		t.Errorf("a second socket: %d %s", r.code, r.raw)
+	}
+	// a socket that is linked has its own rules, not this one: a machine that runs is named
+	if r := pe.flip("reader/desk-bar", "ch3", "off"); !strings.Contains(string(r.raw), `"code":"machine_running"`) {
+		t.Errorf("a linked socket: %d %s", r.code, r.raw)
 	}
 }

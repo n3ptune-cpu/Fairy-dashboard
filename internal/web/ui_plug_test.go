@@ -433,7 +433,113 @@ const off = () => click({ source: "relay/desk-bar", socket: "ch1", to: "off" });
 			t.Errorf("app.js lacks (or has twice) %q", want)
 		}
 	}
-	if n := strings.Count(js, "cut: true"); n != 2 { // the request, and the comment that explains it
+	if n := strings.Count(js, "cut: true"); n != 3 { // the two requests (a machine that runs; nothing linked), and the comment that explains the first
 		t.Errorf("places that ask for a cut: %d", n)
+	}
+}
+
+// "Nothing is linked" (review of stage 1a, finding 1): the panel refuses "off" for a socket it knows nothing
+// about (409 nothing_linked), and the page asks before it goes on. The dialog is the same kind as "still
+// running": the title says the fact with the plug and the socket, one short line says what it can cost, Cancel
+// has the focus, and "Cut power anyway" is the red button with the passkey's mark. Nothing is typed: there is no
+// name. The button sends the same switch with cut: true, and "Confirm it's you" follows as for every switch.
+func TestUISocketLinkedToNothingAsksBeforeOff(t *testing.T) {
+	runPowerPageScript(t, "switch-unlinked", `
+const modal = { hidden: true, html: "", onclick: null }, page = { els: {} };
+Object.defineProperty(modal, "innerHTML", { get() { return this.html; }, set(v) { this.html = v; page.els = {}; } });
+const $ = (sel) => {
+  if (sel === "#modal") return modal;
+  const id = sel.slice(1), m = new RegExp('<[a-z]+[^>]* id="' + id + '"[^>]*>').exec(modal.html);
+  return m ? (page.els[id] ||= { id, value: "", textContent: "", disabled: / disabled/.test(m[0]), focus() {} }) : null;
+};
+const closed = [], closeModal = () => { closed.push(1); modal.hidden = true; modal.innerHTML = ""; };
+const focused = [], focusAtTop = (sel) => { focused.push(sel); };
+const refreshCaps = async () => {}, openPowerDialog = () => {}, location = { hash: "#/power" };
+state.caps = {};
+const k = (id, o) => ({ id, name: id, state: "on", switchable: true, tag: "t-" + id, ...o });
+const bar = src("relay/desk-bar", { name: "Desk powerbar", sockets: [k("ch1", { name: "Lamp" }), k("ch2", { name: "Printer", state: "off" })] });
+const one = src("relay/tv-plug", { name: "TV plug", sockets: [k("main", { name: "TV plug" })] });
+state.power = { total_w: 1, sources: [bar, one] };
+const click = (data) => clicks.forEach((fn) => fn({ target: { closest: () => ({ dataset: { act: "sock", ...data }, disabled: false }) } }));
+const tick = () => new Promise((r) => setTimeout(r, 5));
+const said = "Nothing is linked to this socket, so the panel does not know what is plugged in. If a machine is plugged in here, it loses power now. Nothing was switched.";
+const asks = (o = {}) => async () => { const e = new Error(said); e.status = 409; e.detail = { code: "nothing_linked", message: said, ...o }; throw e; };
+const text = (h) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+const off = (source = "relay/desk-bar", socket = "ch1") => click({ source, socket, to: "off" });
+(async () => {
+  // 1. the refusal: the dialog, and nothing else
+  answer = asks();
+  off(); await tick();
+  if (sent.length !== 1 || flashes.length !== 0 || modal.hidden) fail("after the refusal: " + JSON.stringify([sent.length, flashes, modal.hidden]));
+  if (sent[0][1].body !== '{"source":"relay/desk-bar","socket":"ch1","to":"off","tag":"t-ch1"}') fail("the first request has more than the switch: " + sent[0][1].body);
+  if (text(modal.html) !== "Desk powerbar · Lamp: nothing is linked If a machine is plugged in here, it loses power now. Cancel Cut power anyway") fail("the dialog: " + text(modal.html));
+  if (!modal.html.includes('<h3 id="nl-t">Desk powerbar · Lamp: nothing is linked</h3>') || !modal.html.includes('<p id="nl-msg">If a machine is plugged in here, it loses power now.</p>')) fail("the title and the line: " + modal.html);
+  if (!/<button class="btn" type="button" id="nl-cancel">Cancel<\/button>\s*<button class="btn danger-solid" type="button" id="nl-cut"><svg class="i-shield"><\/svg>Cut power anyway<\/button>/.test(modal.html)) fail("the buttons: " + modal.html);
+  if (focused.pop() !== "#nl-cancel") fail("the focus is not on Cancel");
+  if (/<input|td-in|Type /.test(modal.html)) fail("a name is asked for: " + modal.html);
+  if (sock.busy["relay/desk-bar/ch1"]) fail("the socket stays marked behind the dialog");
+  // 2. Cancel: nothing is sent
+  $("#nl-cancel").onclick();
+  if (closed.length !== 1 || sent.length !== 1) fail("Cancel: " + JSON.stringify([closed, sent.length]));
+  // 3. Cut power anyway: the same switch with cut, and "Confirm it's you" takes the dialog's place
+  answer = asks(); off(); await tick();
+  answer = async () => { const e = new Error("step-up"); e.stepUp = true; e.detail = { code: "step_up_required", pending: true, pending_id: "p1" }; throw e; };
+  const cut = $("#nl-cut"); closed.length = 0;
+  await cut.onclick();
+  if (sent.length !== 3 || sent[2][1].body !== '{"source":"relay/desk-bar","socket":"ch1","to":"off","tag":"t-ch1","cut":true}') fail("the cut request: " + sent[2]?.[1].body);
+  if (sent[2][2] !== "Cut power: switch off Lamp (Desk powerbar)") fail("the cut's name for the panel: " + sent[2][2]);
+  if (stepUps.length !== 1 || JSON.stringify(stepUps[0][0].body) !== '{"source":"relay/desk-bar","socket":"ch1","to":"off"}' || stepUps[0][0].kind !== "plug") fail("what Resume would ask anew: " + JSON.stringify(stepUps[0]));
+  if (closed.length !== 0 || flashes.length !== 0 || !cut.disabled) fail("the page closed the confirmation, showed a result, or left the button to be pressed twice");
+  // 3a. an answer with the result (a panel that asks for no confirmation would give it at once)
+  modal.hidden = true; modal.innerHTML = "";
+  answer = asks(); off(); await tick();
+  answer = async () => ({ ok: true, confirmed: true, message: "Lamp is off." });
+  closed.length = 0;
+  await $("#nl-cut").onclick();
+  if (closed.length !== 1 || JSON.stringify(flashes.pop()) !== '["Lamp is off.",false]') fail("the cut's result");
+  // 3b. the panel's "no": its sentence, and the dialog is gone
+  answer = asks(); off(); await tick();
+  answer = async () => { const e = new Error("Wait 4 s before you switch Lamp again."); e.status = 429; throw e; };
+  closed.length = 0;
+  await $("#nl-cut").onclick();
+  if (closed.length !== 1 || JSON.stringify(flashes.pop()) !== '["Wait 4 s before you switch Lamp again.",true]') fail("a refusal of the cut");
+  // 3c. a socket that cannot be switched any more by the time the button is pressed: nothing is sent
+  answer = asks(); off(); await tick();
+  const n = sent.length;
+  bar.sockets[0].switchable = false;
+  await $("#nl-cut").onclick();
+  if (sent.length !== n || JSON.stringify(flashes.pop()) !== '["This socket cannot be switched from here any more. Nothing was switched.",true]') fail("a cut for a socket that is locked meanwhile");
+  bar.sockets[0].switchable = true;
+  // 4. a plug with one socket of the same name is named once
+  answer = asks(); off("relay/tv-plug", "main"); await tick();
+  if (!modal.html.includes('<h3 id="nl-t">TV plug: nothing is linked</h3>')) fail("a plug's only socket: " + modal.html);
+  modal.hidden = true; modal.innerHTML = "";
+  // 5. what opens no dialog: the same word in answer to "on", and another dialog that is open
+  answer = asks(); flashes.length = 0;
+  click({ source: "relay/desk-bar", socket: "ch2", to: "on" }); await tick();
+  if (!modal.hidden || JSON.stringify(flashes) !== JSON.stringify([[said, true]])) fail("a dialog for on: " + JSON.stringify(flashes));
+  modal.hidden = false; modal.innerHTML = "<p>another dialog</p>"; flashes.length = 0;
+  answer = asks(); off(); await tick();
+  if (modal.html !== "<p>another dialog</p>" || JSON.stringify(flashes) !== JSON.stringify([[said, true]])) fail("the dialog took another dialog's place");
+  modal.hidden = true; modal.innerHTML = "";
+  // 6. names are text
+  bar.name = "<b>bar</b>"; bar.sockets[0].name = "<img src=x>";
+  answer = asks(); off(); await tick();
+  if (/<b>bar<\/b>|<img/.test(modal.html) || !modal.html.includes("&lt;b&gt;bar&lt;/b&gt; · &lt;img src=x&gt;: nothing is linked")) fail("markup from a name: " + modal.html);
+  // every request of this test: one socket, one direction, and "cut" only for "off", never with a name
+  for (const [path, o] of sent) { const b = JSON.parse(o.body); const keys = Object.keys(b).join();
+    if (path !== "/api/power/socket" || (keys !== "source,socket,to,tag" && keys !== "source,socket,to,tag,cut") || (b.cut && b.to !== "off")) fail("a request: " + o.body); }
+})().catch((e) => fail("the script: " + (e && e.stack || e)));
+`)
+	js := appJS(t)
+	for _, want := range []string{
+		`else if (to === "off" && x.detail?.code === "nothing_linked")`,
+		`If a machine is plugged in here, it loses power now.`,
+		`<button class="btn danger-solid" type="button" id="nl-cut">${I.shield}Cut power anyway</button>`,
+		`focusAtTop("#nl-cancel");`,
+	} {
+		if strings.Count(js, want) != 1 {
+			t.Errorf("app.js lacks (or has twice) %q", want)
+		}
 	}
 }

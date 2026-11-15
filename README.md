@@ -273,8 +273,9 @@ Home Assistant and an agent reads it (Fairy-agent v0.10.0 or newer on the machin
   socket has a lock that says "Set home_assistant_system for this agent in config.yaml". It has to be
   written once, as `feeds_self` has to be written on the machine. `socket_links` names the machine that
   hangs on a socket of a powerbar. The only socket of a plug needs no line: it takes the plug's own link
-  (`power_links`, or `system_hint: self`). A socket without a link is linked to nothing (a lamp, a
-  monitor). A line that can never work is refused when config.yaml is loaded (a name that is not `<device
+  (`power_links`, or `system_hint: self`). A socket without a link is linked to nothing: it may be a lamp,
+  and it may be a machine nobody wrote down, so the panel asks before every "off" for it (below). A line
+  that can never work is refused when config.yaml is loaded (a name that is not `<device
   id>/<socket id>`, an id no row can have, an empty target). **A socket that is linked to an id no row has
   is locked**, on and off, until the link is put right (a typing mistake must not leave Home Assistant's or
   the panel's own socket without its lock). `fairy admin config check` lists what is set for each agent
@@ -330,8 +331,13 @@ switched: look at the socket.
   own power dialog, and nothing follows it. **Cut power anyway** asks for the machine's name to be typed,
   and the passkey then signs "cut the power of PC-B while it is running: switch off Channel 3 (Desk
   powerbar)": the machine comes first, and long names are shortened so that the dialog never cuts the
-  sentence. It is like pulling the plug: nothing is shut down first. "On" has no such rule, and neither
-  has a socket that is linked to nothing.
+  sentence. It is like pulling the plug: nothing is shut down first. "On" has no such rule;
+* **"off" for a socket that is linked to nothing.** The panel does not know what is plugged in, so one
+  click is never enough: the page shows "Desk powerbar · Channel 4: nothing is linked. If a machine is
+  plugged in here, it loses power now." with **Cancel** in focus and **Cut power anyway**. No name is
+  typed (there is none), and the passkey then signs "cut the power of whatever is plugged in: switch off
+  Channel 4 (Desk powerbar)". Write a `socket_links` line for a socket with a machine on it; a lamp keeps
+  the question.
 
 The locks and the question about a running machine are guards against a mistake: they depend on links
 somebody wrote. What holds also against a panel that was taken over is on the machine: switching is off
@@ -2023,7 +2029,8 @@ Build 17:
    newer, `home_assistant: switching: true`); until then, and for everybody who is no admin, the sockets
    are dots that show on or off. Every switch, on and off, asks for a passkey that the machine checks
    itself. "Off" for a socket with a running machine on it is refused first ("PC-B is still running"),
-   with **Cut power anyway** behind the machine's typed name. See
+   with **Cut power anyway** behind the machine's typed name, and "off" for a socket the panel knows
+   nothing about asks first too. See
    [Switching a plug's sockets](#switching-a-plugs-sockets).
 2. **Two new keys in an agent's entry of config.yaml**: `home_assistant_system` (the machine Home
    Assistant runs on) and `socket_links` (which machine hangs on which socket of a powerbar). The panel

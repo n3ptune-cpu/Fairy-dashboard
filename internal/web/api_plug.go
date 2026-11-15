@@ -31,7 +31,8 @@ import (
 //
 // The order (plugSwitch): who asks; the limit on control requests; the body; the socket as the panel sees it
 // now (it exists, the tag is the one the page showed, the agent says it can be switched, nothing in the panel
-// locks it, the machine has the passkey check); "still running" for a switch-off; the machine's challenge and
+// locks it, the machine has the passkey check); the two questions before a switch-off ("nothing is linked" and
+// "still running"); the machine's challenge and
 // the passkey round trip; the one request to the agent; the audit entry. After the round trip the panel
 // replays the kept request through this same handler, so everything before the approval is looked at again
 // with what is true then: the PC may have been started and the socket changed while the person was at Pocket
@@ -50,16 +51,21 @@ const plugSwitchWait = 25 * time.Second
 const plugAudit = "plug.switch"
 
 // codeMachineRunning is the code of the refusal "the machine on this socket still runs": the page then offers
-// "Shut down" and "Cut power anyway".
-const codeMachineRunning = "machine_running"
+// "Shut down" and "Cut power anyway". codeNothingLinked is the code of the refusal of "off" for a socket that
+// is linked to nothing: the page then asks "If a machine is plugged in here, it loses power now".
+const (
+	codeMachineRunning = "machine_running"
+	codeNothingLinked  = "nothing_linked"
+)
 
 type plugSwitchReq struct {
 	Source string `json:"source"` // the source's id in the panel: "<agent id>/<device id>"
 	Socket string `json:"socket"`
 	To     string `json:"to"`  // on | off
 	Tag    string `json:"tag"` // the socket's tag, as the page showed it
-	// Cut and Confirm are "Cut power anyway": switch off although the machine on the socket still runs, with
-	// that machine's name typed.
+	// Cut and Confirm are "Cut power anyway": switch off although the machine on the socket still runs (or may),
+	// with that machine's name typed; and, for a socket that is linked to nothing, although the panel does not
+	// know what is plugged in (cut alone: there is no name).
 	Cut     bool   `json:"cut"`
 	Confirm string `json:"confirm"`
 }
@@ -179,6 +185,8 @@ func plugWords(k socketLook, to string, cut bool) string {
 	name = wordsName(name, plugWordsName)
 	lead, tail := "", ""
 	switch {
+	case name == "" && cut:
+		lead = "cut the power of whatever is plugged in: " // linked to nothing: the panel does not know what
 	case name == "":
 	case cut && running:
 		lead = "cut the power of " + name + " while it " + plugCutState[k.runningState()] + ": "
@@ -286,26 +294,40 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 	if k.sock.State != api.SocketStateOn && k.sock.State != api.SocketStateOff {
 		return refuse(plugErr(409, api.CodeSocketUnavailable, "Home Assistant has no state for this socket right now. Nothing was switched."))
 	}
+	// The two questions before "off". "On" has none.
+	//
+	// "Nothing is linked": the panel does not know what is plugged into this socket (no line in socket_links, and
+	// not the only socket of a plug that is linked). It may be a lamp, and it may be a machine nobody wrote down.
+	// The first request is refused; the page asks, and the same request with cut goes on. No name is typed:
+	// there is none.
+	//
 	// "Still running": a socket whose machine runs, or may, is not switched off, unless the request says "cut
 	// power anyway" with that machine's name typed. Only a sign that the machine is off lets "off" through
-	// without it (runningState). "On" has no such rule.
+	// without it (runningState).
 	name, running := k.running()
 	state := k.runningState()
 	cut := false
 	switch {
-	case b.Cut && name == "":
-		return refuse(plugErr(422, "cut_unlinked", "Nothing the panel knows of hangs on this socket, so there is no machine whose power would be cut. Nothing was switched."))
-	case b.To == api.SocketOff && running && !b.Cut:
+	case b.To != api.SocketOff:
+	case k.link == "" && !b.Cut:
+		detail := map[string]any{"code": codeNothingLinked, "message": "Nothing is linked to this socket, so the panel does not know what is plugged in. " +
+			"If a machine is plugged in here, it loses power now. Nothing was switched."}
+		return refuse(&plugError{err: apierr.New(409, detail), word: codeNothingLinked})
+	case k.link == "":
+		cut = true
+	case running && !b.Cut:
 		detail := map[string]any{"code": codeMachineRunning, "message": looks.runningWords(k), "machine": name, "state": state}
 		if k.row != nil {
 			detail["system_id"] = k.row.ID
 		}
 		return refuse(&plugError{err: apierr.New(409, detail), word: codeMachineRunning})
-	case b.To == api.SocketOff && running:
+	case running:
 		if !strings.EqualFold(strings.TrimSpace(b.Confirm), strings.TrimSpace(name)) {
 			return refuse(plugErr(422, "cut_name", fmt.Sprintf("Type %s to confirm cutting its power. Nothing was switched.", name)))
 		}
 		cut = true
+	}
+	if cut {
 		params["cut"] = true
 	}
 	// The machine's challenge for exactly this request, then the passkey. No other way leads on from here.
@@ -368,7 +390,10 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 	if !res.Confirmed {
 		e.Text += " (sent; the socket did not show it yet)"
 	}
-	if cut {
+	switch {
+	case cut && name == "":
+		e.Text += ": power cut with nothing linked to the socket"
+	case cut:
 		e.Text += ": power cut while " + name + " " + plugCutWas[state]
 	}
 	if k.row != nil {

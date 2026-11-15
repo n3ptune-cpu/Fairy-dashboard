@@ -31,7 +31,8 @@ import (
 //     (api_plug.go).
 //
 //   - "off" asks first unless the panel has a sign that the machine on the socket is off (runningState): that it
-//     does not answer is no such sign.
+//     does not answer is no such sign. And "off" for a socket that is linked to nothing asks first always: the
+//     panel does not know what is plugged in.
 //
 // These are guards against a mistake. They depend on links somebody wrote, and a panel that was taken over
 // has none of them. What holds against the panel is on the machine: switching is off unless its config turns
