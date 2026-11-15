@@ -609,7 +609,8 @@ const wallMore = (lp) => lp.sources.map((x) => {
 // that row) is the name's tooltip.
 //
 // Where the panel says an admin can switch the socket (`switchable`, with the `tag` of its row), the sign is the
-// panel's switch (.switch): knob right on green is on, knob left is off. Whether a socket can be switched is set
+// panel's switch (.switch, with "power": green when on, as everything that switches power): knob right on green
+// is on, knob left is off. Whether a socket can be switched is set
 // on the machine that reads the plug, never on this page. A click switches nothing by itself and the switch does
 // not move with it: the panel answers "Confirm it's you" first, and that dialog names the socket, the direction
 // and what hangs on the socket in the panel's own words, before a passkey is asked for. The machine that reads
@@ -634,7 +635,7 @@ function sockSign(src, k, where) {
   const dot = `<span class="sock-dot ${cls}" role="img" aria-label="${esc(word)}" title="${esc(word)}"></span>`;
   if (sockCan(k) && cls !== "none") {
     const on = cls === "on", busy = !!sock.busy[`${src.id}/${k.id}`];
-    return [`<button class="switch${busy ? " busy" : ""}" type="button" role="switch" aria-checked="${on}" data-act="sock" data-source="${esc(src.id)}" data-socket="${esc(k.id)}" data-to="${on ? "off" : "on"}" title="${on ? "On. Click to switch off." : "Off. Click to switch on."}" aria-label="${esc(`${k.name}: ${on ? "on" : "off"}`)}"${busy ? " disabled" : ""}>${busy ? '<span class="spinner"></span>' : ""}</button>`, dot];
+    return [`<button class="switch power${busy ? " busy" : ""}" type="button" role="switch" aria-checked="${on}" data-act="sock" data-source="${esc(src.id)}" data-socket="${esc(k.id)}" data-to="${on ? "off" : "on"}" title="${on ? "On. Click to switch off." : "Off. Click to switch on."}" aria-label="${esc(`${k.name}: ${on ? "on" : "off"}`)}"${busy ? " disabled" : ""}>${busy ? '<span class="spinner"></span>' : ""}</button>`, dot];
   }
   const why = sockCan(k) ? word : k.switchable !== true && typeof k.note === "string" ? k.note : "";
   return [why ? infoBtn(`sock-${where}:${src.id}/${k.id}`, k.name, `<p>${esc(why)}</p>`, { icon: I.lock, cls: "sock-lock", label: why }) : "", dot];

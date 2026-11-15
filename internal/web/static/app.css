@@ -555,14 +555,20 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .site-checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text); font-size: 12.5px; }
 /* The panel's one switch. A box that is ticked (.check input) and a button that asks for a change (.switch, with
-   role="switch" and aria-checked) look the same: a pill with a knob. Knob left on a dark track is off; knob right
-   on the green of "ok" is on. It is round, like the status dots, so that it reads as a switch at a glance; every
-   other control of the panel stays square. A .switch button has a hit area larger than what is drawn. */
+   role="switch" and aria-checked) look the same: a pill with a knob. Knob left on a dark track is off, for every
+   switch; knob right on a coloured track is on. It is round, like the status dots, so that it reads as a switch
+   at a glance; every other control of the panel stays square. A .switch button has a hit area larger than what
+   is drawn.
+   "On" has two colours. Green, the green of "ok", is power: a switch with the class "power" gives or takes the
+   power of a machine or of a socket (the sockets of a plug). Blue, the blue of links and of the focus ring
+   (--accent), is every other switch: a setting, an option of a dialog, a row of a pick list. The knob of a
+   switch that is on has the page's own black, on either colour. */
 .check input, .switch { appearance: none; position: relative; flex: none; display: inline-block; box-sizing: border-box; width: 36px; height: 20px; margin: 0; padding: 0;
   border: 1px solid var(--line2); border-radius: 10px; background: var(--well); cursor: pointer; vertical-align: middle; transition: background .12s ease, border-color .12s ease; }
 .check input::after, .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--faint);
   transition: left .12s ease, background .12s ease; }
-.check input:checked, .switch[aria-checked="true"] { background: var(--ok); border-color: var(--ok); }
+.check input:checked, .switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.check.power input:checked, .switch.power[aria-checked="true"] { background: var(--ok); border-color: var(--ok); }
 .check input:checked::after, .switch[aria-checked="true"]::after { left: 18px; background: var(--bg); }
 .check input:hover:not(:disabled), .switch:hover:not(:disabled) { border-color: var(--muted); }
 .check input:checked:hover:not(:disabled), .switch[aria-checked="true"]:hover:not(:disabled) { border-color: var(--text); }

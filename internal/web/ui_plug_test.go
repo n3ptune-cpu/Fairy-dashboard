@@ -147,7 +147,7 @@ const bar = src("relay/desk-bar", { name: "Desk powerbar", sockets: [
 state.power = { total_w: 1, sources: [bar] };
 const socks = pagePower().split('<span class="sock" ').slice(1);
 if (socks.length !== 10) fail("sockets: " + socks.length);
-const sw = (h) => (h.match(/<button class="switch( busy)?" type="button" role="switch" aria-checked="(true|false)" data-act="sock" data-source="([^"]*)" data-socket="([^"]*)" data-to="(on|off)" title="([^"]*)" aria-label="([^"]*)"( disabled)?>(<span class="spinner"><\/span>)?<\/button>/) || []).slice(1).map((x) => x || "").join("|");
+const sw = (h) => (h.match(/<button class="switch power( busy)?" type="button" role="switch" aria-checked="(true|false)" data-act="sock" data-source="([^"]*)" data-socket="([^"]*)" data-to="(on|off)" title="([^"]*)" aria-label="([^"]*)"( disabled)?>(<span class="spinner"><\/span>)?<\/button>/) || []).slice(1).map((x) => x || "").join("|");
 if (sw(socks[0]) !== "|true|relay/desk-bar|ch1|off|On. Click to switch off.|Lamp: on||") fail("a socket that is on: " + socks[0]);
 if (sw(socks[1]) !== "|false|relay/desk-bar|ch2|on|Off. Click to switch on.|Printer: off||") fail("a socket that is off: " + socks[1]);
 // the switch is the sign: no dot beside it, and the name follows it
@@ -166,7 +166,7 @@ if (sw(busy[0]) !== ' busy|true|relay/desk-bar|ch1|off|On. Click to switch off.|
 // the host's panel has the same switch
 bar.sockets = [k("ch1", { name: "Lamp", system_id: "desk-pc" })];
 delete sock.busy["relay/desk-bar/ch1"];
-if (!/<span class="sock"><button class="switch" type="button" role="switch" aria-checked="true" data-act="sock" data-source="relay\/desk-bar" data-socket="ch1" data-to="off"[^>]*><\/button><span class="sock-word">on<\/span><\/span>/.test(hostSockets("desk-pc"))) fail("the switch in the host's panel: " + hostSockets("desk-pc"));
+if (!/<span class="sock"><button class="switch power" type="button" role="switch" aria-checked="true" data-act="sock" data-source="relay\/desk-bar" data-socket="ch1" data-to="off"[^>]*><\/button><span class="sock-word">on<\/span><\/span>/.test(hostSockets("desk-pc"))) fail("the switch in the host's panel: " + hostSockets("desk-pc"));
 `)
 }
 

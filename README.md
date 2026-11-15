@@ -296,8 +296,9 @@ feed a host are in that host's Power panel. Everybody who sees the plug sees a d
 on, grey is off, a ring means Home Assistant has no state for it right now. Somebody who may see the
 machines of some sites only does not get the sockets that feed a machine they may not see, neither name
 nor state: the plug then says "2 more sockets are not shown". A socket that is linked to nothing is seen
-with its plug. An admin has a switch where
-the socket can be switched, and in its place a lock with one sentence for why where it cannot.
+with its plug. An admin has a switch where the socket can be switched, and in its place a lock with one
+sentence for why where it cannot. A socket's switch is green when it is on, as everything on the page that
+switches power; the switches of settings, options and pick lists are blue when on.
 
 **One switch.** A click switches nothing by itself. The panel answers with **Confirm it's you**: the dialog
 names the socket, the plug, the direction and the machine on the socket ("switch off Channel 3 (Desk
