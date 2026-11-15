@@ -344,6 +344,19 @@ func powerLinkCheck(cfg *config.Panel) (ok, said []string) {
 //     names a row (model.SocketLockLinkUnknown);
 //   - in home_assistant_system it is a note.
 //
+// And what the panel has to be told before it switches an agent's sockets, as far as a file shows it. This
+// command asks no machine, so it does not know which agent reports sockets or how many a plug has: it goes by
+// the two keys of an entry.
+//
+//   - socket_links without home_assistant_system is a warning: the panel switches no socket of that agent
+//     (model.SocketLockHAUnset). An agent with neither key that reports sockets is locked the same way, and
+//     only the page says it (the lock's sentence): nothing in a file shows it;
+//   - home_assistant_system without socket_links is a note: every socket of a powerbar is linked to nothing;
+//   - no panel_hosts while an entry has one of the keys is a note: the panel locks no socket as its own.
+//
+// The last two are notes because a powerbar of lamps and a panel on a machine that is on no plug are right as
+// they are, and a warning would make the exit code 1 for them for good.
+//
 // An id of the form a node or a guest has ("<prefix>qemu-105") cannot be checked here: which nodes and guests
 // there are is known to the running panel only, so a mistyped one has no line. The page says it then: the
 // socket has the lock, with the sentence that names socket_links.
@@ -371,6 +384,7 @@ func socketLinkCheck(cfg *config.Panel) (ok, warn, said []string) {
 		}
 		return false
 	}
+	keys := false // an entry has one of the two keys: the panel is set up to switch sockets
 	for _, a := range cfg.Agents {
 		if len(a.SocketLinks) == 0 && a.HomeAssistantSystem == "" {
 			continue
@@ -396,11 +410,26 @@ func socketLinkCheck(cfg *config.Panel) (ok, warn, said []string) {
 					"The panel locks that socket (it is switched neither on nor off from the panel) until the link names a row. A typing mistake in the id?", a.ID, name, to))
 			}
 		}
+		// What the panel has to be told before it switches this agent's sockets, as far as the file shows it.
+		switch {
+		case a.HomeAssistantSystem == "":
+			warn = append(warn, fmt.Sprintf("agent %s: socket_links is set and home_assistant_system is not: the panel does not know which machine this agent's Home Assistant runs on, "+
+				"and switches no socket of the plugs it relays, on or off, until home_assistant_system names that machine's row", a.ID))
+		case len(a.SocketLinks) == 0:
+			said = append(said, fmt.Sprintf("agent %s: home_assistant_system is set and socket_links is not: every socket of a powerbar this agent relays is linked to nothing "+
+				"(the only socket of a plug takes the plug's own link). The panel then asks before each \"off\" whether a machine is plugged in, "+
+				"and cannot lock a socket for what it feeds. Name the machines with socket_links", a.ID))
+		}
+		keys = true
 		if h := a.HomeAssistantSystem; h != "" && !machine(h) {
 			said = append(said, fmt.Sprintf("agent %s: home_assistant_system: %s is no agent's id and not the id of a node or a guest of a proxmox: entry. "+
 				"While no row has this id the panel cannot tell which socket feeds Home Assistant, and switches no socket of this agent that is linked to a machine. "+
 				"A typing mistake in the id?", a.ID, h))
 		}
+	}
+	if keys && len(cfg.PanelHosts) == 0 {
+		said = append(said, "panel_hosts is not set while an agent's entry has socket_links or home_assistant_system: the panel does not know which machine it runs on, "+
+			"so it locks no socket as its own. If a socket feeds the panel's machine, name that machine's row in panel_hosts")
 	}
 	return ok, warn, said
 }

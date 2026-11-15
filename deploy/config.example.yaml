@@ -98,7 +98,8 @@ agents:
     # needs no line: it takes the plug's own link (power_links).
     # socket_links: {desk-bar/ch3: agent-2}     # "<device id>/<socket id>": the row of the machine on that socket
     # home_assistant_system: qemu-104           # the row of the machine or VM this agent's Home Assistant runs on:
-    #                                           # the socket that feeds it (or its node) is never switched from here
+    #                                           # the socket that feeds it (or its node) is never switched from here.
+    #                                           # Without this line the panel switches NO socket of this agent.
   # - {id: pve1-agent, url: "http://100.64.0.5:9101", token_env: AGENT_TOKEN_PVE1, node: PVE-NODE-1}
 # Hosts added with "Add host" in the panel are NOT written here: they live in <data_dir>/managed-hosts.yaml
 # (+ <data_dir>/secrets/agent-<id>.json, 0600) and are merged with this file at start; an id written here wins.

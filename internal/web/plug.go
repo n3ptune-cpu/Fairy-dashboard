@@ -21,6 +21,9 @@ import (
 //
 //   - the link: socket_links in the panel's entry of the agent names the row; the only socket of a plug takes
 //     the plug's own link (power_links, system_hint: self); any other socket is linked to nothing;
+//   - no socket of an agent is switched while the panel's entry of it has no home_assistant_system: the panel
+//     has to be told once, in writing, where that agent's Home Assistant runs (as the agent has to be told
+//     feeds_self before it switches anything);
 //   - the locks: a socket that feeds the machine that reads the plugs, the machine Home Assistant runs on, or
 //     the panel's own, is never switched from here, in either direction; and neither is a socket whose link
 //     names no row the panel has, because for that one the panel cannot tell any of the three;
@@ -154,12 +157,18 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 		// id of the row that machine is shown as: power.Manager.Overview)
 		k.link, k.shown, k.ownLink = *st.SystemID, *st.SystemID, true
 	}
-	if k.link == "" {
-		return k, true // linked to nothing: nothing the panel knows of hangs on it
+	if k.link != "" {
+		k.row = l.rows[k.shown]
+		k.lock = l.lock(k)
+		k.knownOff, k.at, k.fresh = l.s.Poller.KnownOff(k.shown), l.now, time.Duration(l.s.Cfg.OfflineAfter*float64(time.Second))
 	}
-	k.row = l.rows[k.shown]
-	k.lock = l.lock(k)
-	k.knownOff, k.at, k.fresh = l.s.Poller.KnownOff(k.shown), l.now, time.Duration(l.s.Cfg.OfflineAfter*float64(time.Second))
+	if k.lock == "" && a.HomeAssistantSystem == "" {
+		// The panel was not told which machine this agent's Home Assistant runs on. Any socket of the agent could
+		// be the one that feeds it, a socket that is linked to nothing too (nobody wrote what hangs on it): none
+		// is switched until the key is set. What the panel does know about a socket is said first (the locks
+		// above).
+		k.lock = model.SocketLockHAUnset
+	}
 	return k, true
 }
 
@@ -174,6 +183,10 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 //     heard of the row yet): the panel cannot tell which machine that is, so it switches no socket of this
 //     agent that is linked to a machine.
 //  4. It feeds the machine this panel runs on (panel_hosts, the rule of the power menu).
+//
+// And one lock that is the agent's whole (look): while its entry has no home_assistant_system, no socket of it
+// is switched, linked or not, because 2 cannot be told for any of them.
+//
 //  5. Its link names no row the panel has right now (a typing mistake in socket_links, or a row the panel has
 //     not heard of yet). Which machine hangs on it is then not known: it could be any of the three above, and
 //     whether it runs cannot be asked. So it is locked like 3, until the link names a row. (It comes after the
@@ -273,8 +286,12 @@ func (l *plugLooks) sockets(st model.PowerSourceState, admin bool, see func(id s
 // whyText is the sentence for why this socket cannot be switched (socketWhyText), where it depends on more
 // than the reason's word: a link that names no row is put right in another place for the only socket of a plug.
 func (k socketLook) whyText(why, machine string) string {
-	if why == model.SocketLockLinkUnknown && k.ownLink {
+	switch {
+	case why == model.SocketLockLinkUnknown && k.ownLink:
 		return "Locked. This plug is linked to a machine the panel does not have: correct its link (power_links, or Edit host)."
+	case why == model.SocketLockHAUnset && k.agent.Managed:
+		// added with Add host: it has no entry in config.yaml, and Edit host has no such field
+		return "The panel does not know which machine runs Home Assistant for this plug. A machine added with Add host cannot be given that setting yet."
 	}
 	return socketWhyText(why, machine)
 }

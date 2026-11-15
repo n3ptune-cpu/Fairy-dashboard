@@ -151,8 +151,9 @@ oidc: {issuer: %q, client_id: cid, allowed_groups: [homelab], control_groups: [a
 approval: {client_id: %s}
 agents:
   - {id: pc-a, name: PC-A, url: %q, token_env: E2E_READ, control_token_env: E2E_CONTROL, power_control: true,
-     socket_links: {%s/ch1: pc-b}}
+     socket_links: {%s/ch1: pc-b}, home_assistant_system: ha-box}
   - {id: pc-b, name: PC-B, url: %q, token_env: E2E_READ, control_token_env: E2E_CONTROL, power_control: true}
+  - {id: ha-box, name: HA-BOX, url: "http://127.0.0.1:9", token_env: E2E_READ}
 `, timeout, filepath.Join(pn.dir, "data"), pn.audit, pn.iss.URL(), approvalClient, m.srv.URL, agenttest.PlugBar, pn.b.srv.URL)))
 	if err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
@@ -963,7 +964,7 @@ func TestPlugWords(t *testing.T) {
 		t.Error("the kept request has no description")
 	}
 	// every reason has a sentence of its own, and none of them is the fallback
-	for _, why := range []string{model.SocketLockAgent, model.SocketLockHomeAssistant, model.SocketLockHAUnknown, model.SocketLockPanel, model.SocketLockLinkUnknown, api.WhyFeedsSelf,
+	for _, why := range []string{model.SocketLockAgent, model.SocketLockHomeAssistant, model.SocketLockHAUnknown, model.SocketLockHAUnset, model.SocketLockPanel, model.SocketLockLinkUnknown, api.WhyFeedsSelf,
 		api.WhyNotAllowed, api.WhySwitchingOff, api.WhyNoToken, api.WhyApprovalOff, api.WhyApprovalUnavailable, model.SocketAgentUnreachable,
 		model.SocketNoControl, model.SocketNoTag} {
 		if got := socketWhyText(why, "READER"); got == "This socket cannot be switched." || got == "" {
@@ -1159,6 +1160,7 @@ func TestPlugLockOfTheNodeUnderThePanelsGuest(t *testing.T) {
 	if !ok {
 		t.Fatal("the fixture: no agent bare")
 	}
+	bare.HomeAssistantSystem = "desk-pc" // its Home Assistant is not on this node (the rig's runs in a guest of it)
 	k := socketLook{agent: bare, link: node.ID, shown: node.ID, row: node}
 	if got := l.lock(k); got != "" {
 		t.Fatalf("the fixture: the socket is locked (%s) while the panel does not run on the node", got)
@@ -1300,4 +1302,91 @@ func TestPlugOffForAMachineThatDoesNotAnswer(t *testing.T) {
 		t.Error("off is refused for a socket whose machine was seen to go off")
 	}
 	unknown(pe.flip("reader/pc-plug", "main", "off"), "DESK-PC does not answer, and its plug still measures 40 W: it may still be running. Shut it down first, or look at it.")
+}
+
+// An agent whose entry has no home_assistant_system: the panel does not know which machine its Home Assistant
+// runs on, so it cannot lock the socket that feeds it, and it switches NO socket of that agent, on or off,
+// until the key is set. Before the review of stage 1a (finding 1) such an agent's sockets had no lock and no
+// question at all: "off" for the powerbar socket of Home Assistant's box, of the reader's own node and of a
+// running PC went to the passkey at once. A host added with Add host has no entry in config.yaml and cannot
+// carry the key: its sockets are locked the same way, and the sentence says that.
+func TestPlugAgentWithoutHomeAssistantSystem(t *testing.T) {
+	pe := newPlugEnvWith(t, plugConfigWith(t, "desk-bar/ch7: old-pc},\n     home_assistant_system: lab-qemu-100}", "desk-bar/ch7: old-pc}}"))
+	const said = "The panel does not know which machine runs Home Assistant for this plug. Set home_assistant_system for this agent in config.yaml."
+	for _, c := range []struct{ source, socket, lock, note string }{
+		{"reader/desk-bar", "ch1", model.SocketLockHAUnset, said}, // linked to nothing
+		{"reader/desk-bar", "ch2", model.SocketLockHAUnset, said},
+		{"reader/desk-bar", "ch3", model.SocketLockHAUnset, said}, // a PC that runs
+		{"reader/desk-bar", "ch5", model.SocketLockHAUnset, said}, // the box Home Assistant runs on, which the panel is not told
+		{"reader/desk-bar", "ch8", model.SocketLockHAUnset, said}, // not allowed on the machine either: the panel's reason comes first
+		{"reader/pc-plug", "main", model.SocketLockHAUnset, said},
+		// what the panel does know about a socket is still said first
+		{"reader/desk-bar", "ch4", model.SocketLockAgent, "Locked. This socket powers the machine that reads the plugs."},
+		{"reader/own-plug", "main", model.SocketLockAgent, "Locked. This socket powers the machine that reads the plugs."},
+		{"reader/desk-bar", "ch6", model.SocketLockPanel, "Locked. This socket powers the panel."},
+		{"reader/desk-bar", "ch7", model.SocketLockLinkUnknown, "Locked. This socket is linked to a machine the panel does not have: correct socket_links."},
+	} {
+		s := pe.socketOf(pe.admin, c.source, c.socket)
+		if s["switchable"] != false || s["lock"] != c.lock || s["why"] != c.lock || s["note"] != c.note {
+			t.Errorf("%s/%s: %v\nwant the lock %s: %q", c.source, c.socket, s, c.lock, c.note)
+		}
+		for _, to := range []string{"off", "on"} {
+			b := plugBody(c.source, c.socket, to)
+			if to == "off" {
+				b["cut"], b["confirm"] = true, "DESK-PC" // no way round it
+			}
+			r := pe.post("/api/power/socket", b)
+			if msg, _ := plugDetailOf(r); r.code != 409 || msg != c.note+" Nothing was switched." {
+				t.Errorf("%s/%s %s: %d %s", c.source, c.socket, to, r.code, r.raw)
+			}
+			if au := pe.plugAudits()[0]; au["target"] != c.source+"/"+c.socket || au["outcome"] != "refused ("+c.lock+"): "+c.note+" Nothing was switched." {
+				t.Errorf("%s/%s %s: the audit entry: %v", c.source, c.socket, to, au)
+			}
+		}
+	}
+	if n := len(pe.reader.Asked()) + len(pe.iss.Asked()); n != 0 {
+		t.Errorf("the machine or Pocket ID was asked %d things for sockets of an agent without home_assistant_system", n)
+	}
+	// an agent whose entry has the key is not touched by its neighbour's lack of it
+	if s := pe.socketOf(pe.admin, "other/rack-bar", "fan"); s["switchable"] != true || s["lock"] != nil {
+		t.Errorf("a socket of another agent: %v", s)
+	}
+	// somebody who is no admin gets no lock and no sentence, as for every socket
+	if s := pe.socketOf(pe.viewerOf("Home"), "reader/desk-bar", "ch1"); s["lock"] != nil || s["note"] != nil || s["why"] != model.SocketReadOnly {
+		t.Errorf("a viewer: %v", s)
+	}
+
+	// a host added with Add host (managed-hosts.yaml): no entry in config.yaml, so nowhere to write the key
+	pe = newPlugEnv(t)
+	pe.b.Mu.Lock()
+	pe.b.Metrics["added"] = func() (jsonx.M, error) {
+		m := testutil.AgentMetrics()
+		m["hostname"] = "added"
+		m["power_sources"] = []any{jsonx.M{"id": "new-bar", "name": "New bar", "type": "homeassistant", "ok": true, "watts": 3.0, "sockets": []any{
+			jsonx.M{"id": "ch1", "name": "Lamp", "state": "off", "switchable": true, "why": nil, "tag": plugTag("new-bar", "ch1"), "error": nil},
+			jsonx.M{"id": "ch2", "name": "NAS", "state": "on", "switchable": true, "why": nil, "tag": plugTag("new-bar", "ch2"), "error": nil}}}}
+		return m, nil
+	}
+	pe.b.Mu.Unlock()
+	if err := pe.s.Poller.AddAgent(config.Agent{ID: "added", Name: "ADDED", URL: "http://added", Managed: true, Token: testutil.ReadToken + "x", ControlToken: testutil.ControlToken}, nil); err != nil {
+		t.Fatal(err)
+	}
+	pe.poll()
+	const added = "The panel does not know which machine runs Home Assistant for this plug. A machine added with Add host cannot be given that setting yet."
+	for _, c := range []struct{ socket, to string }{{"ch1", "on"}, {"ch2", "off"}} {
+		s := pe.socketOf(pe.admin, "added/new-bar", c.socket)
+		if s == nil || s["switchable"] != false || s["lock"] != model.SocketLockHAUnset || s["note"] != added {
+			t.Fatalf("a socket of a host added with Add host: %v", s)
+		}
+		r := pe.flip("added/new-bar", c.socket, c.to)
+		if msg, _ := plugDetailOf(r); r.code != 409 || msg != added+" Nothing was switched." {
+			t.Errorf("%s %s: %d %s", c.socket, c.to, r.code, r.raw)
+		}
+		if au := pe.plugAudits()[0]; au["outcome"] != "refused (home_assistant_unset): "+added+" Nothing was switched." {
+			t.Errorf("the audit entry: %v", au)
+		}
+	}
+	if n := len(pe.iss.Asked()); n != 0 {
+		t.Errorf("Pocket ID was asked %d times", n)
+	}
 }

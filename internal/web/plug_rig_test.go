@@ -27,7 +27,7 @@ import (
 //	          (lab-node-pve); its Home Assistant is the VM lab-qemu-100 on that node
 //	other     reads rack-bar (2); its Home Assistant is the same VM
 //	third     reads spare-bar (2); its home_assistant_system names a row that is not there
-//	bare      reads bare-bar (1); the panel has no control token for it
+//	bare      reads bare-bar (1); the panel has no control token for it; its Home Assistant is the same VM
 //	desk-pc   a PC: on desk-bar/ch3 (socket_links) and on pc-plug (power_links)
 //	panel-box the machine the panel runs on (panel_hosts): on desk-bar/ch6
 type plugEnv struct {
@@ -58,7 +58,7 @@ agents:
      socket_links: {rack-bar/node: lab-node-pve}, home_assistant_system: lab-qemu-100}
   - {id: third, name: THIRD, url: "http://third", token_env: TOK_C, control_token_env: CTL_A,
      socket_links: {spare-bar/pc: desk-pc}, home_assistant_system: lab-qemu-999}
-  - {id: bare, name: BARE, url: "http://bare", token_env: TOK_D}
+  - {id: bare, name: BARE, url: "http://bare", token_env: TOK_D, home_assistant_system: lab-qemu-100}
   - {id: desk-pc, name: DESK-PC, url: "http://desk-pc", token_env: TOK_E, site: Home}
   - {id: panel-box, name: PANEL-BOX, url: "http://panel-box", token_env: TOK_F}
 panel_hosts: [panel-box]

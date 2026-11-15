@@ -257,8 +257,8 @@ Home Assistant and an agent reads it (Fairy-agent v0.10.0 or newer on the machin
   approvals ([The check on the machine itself](#the-check-on-the-machine-itself)): without it the machine
   switches nothing. The whole of it is in the agent's AGENT.md, "Switching a plug's sockets"; run
   `fairy-agent check-config` after every change.
-* **In the panel's config.yaml**, in the entry of that agent, two optional keys say what the panel cannot
-  know by itself:
+* **In the panel's config.yaml**, in the entry of that agent, two keys say what the panel cannot know by
+  itself. They live in config.yaml only: no page writes them.
 
   ```yaml
   agents:
@@ -268,18 +268,27 @@ Home Assistant and an agent reads it (Fairy-agent v0.10.0 or newer on the machin
       home_assistant_system: lab-qemu-104         # the machine or VM this agent's Home Assistant runs on
   ```
 
-  `socket_links` names the machine that hangs on a socket of a powerbar. The only socket of a plug needs no
-  line: it takes the plug's own link (`power_links`, or `system_hint: self`). A socket without a link is
-  linked to nothing (a lamp, a monitor). `home_assistant_system` is the row of the machine Home Assistant runs
-  on. A line that can never work is refused when config.yaml is loaded (a name that is not `<device
+  `home_assistant_system` is the row of the machine Home Assistant runs on. **Without it the panel switches
+  no socket of that agent**, on or off: it could not lock the socket that feeds Home Assistant, so every
+  socket has a lock that says "Set home_assistant_system for this agent in config.yaml". It has to be
+  written once, as `feeds_self` has to be written on the machine. `socket_links` names the machine that
+  hangs on a socket of a powerbar. The only socket of a plug needs no line: it takes the plug's own link
+  (`power_links`, or `system_hint: self`). A socket without a link is linked to nothing (a lamp, a
+  monitor). A line that can never work is refused when config.yaml is loaded (a name that is not `<device
   id>/<socket id>`, an id no row can have, an empty target). **A socket that is linked to an id no row has
   is locked**, on and off, until the link is put right (a typing mistake must not leave Home Assistant's or
   the panel's own socket without its lock). `fairy admin config check` lists what is set for each agent
   and prints a `WARN` for such a link where it can tell: an id that is no agent's and has not the form of
   a node's or a guest's. A mistyped id of that form (`lab-qemu-150` for `lab-qemu-105`) it cannot tell,
-  because only the running panel knows the nodes and guests: there the lock on the page says it. Both keys are read from config.yaml only: a host
-  added with **Add host** has no entry there, so the sockets of a powerbar it reads are linked to nothing,
-  and what protects its own socket is `feeds_self` on the machine.
+  because only the running panel knows the nodes and guests: there the lock on the page says it. The check
+  also warns when an entry has `socket_links` and no `home_assistant_system`, and notes an entry with
+  `home_assistant_system` and no `socket_links`, and a missing `panel_hosts` (without it the panel locks
+  no socket as its own). It reads files and asks no machine, so it cannot know which agent reports
+  sockets: an agent with neither key is locked all the same, and only the page says so.
+
+  A host added with **Add host** has no entry in config.yaml, and **Edit host** does not have the two
+  keys, so it cannot be given them yet: the panel switches none of its sockets, and their locks say so.
+  (An entry with the same id written into config.yaml takes the place of the added one.)
 
 **On the page.** The sockets of a plug are under the plug's name on the Power page, and the sockets that
 feed a host are in that host's Power panel. Everybody who sees the plug sees a dot for each socket: green is
@@ -2016,11 +2025,13 @@ Build 17:
    itself. "Off" for a socket with a running machine on it is refused first ("PC-B is still running"),
    with **Cut power anyway** behind the machine's typed name. See
    [Switching a plug's sockets](#switching-a-plugs-sockets).
-2. **Two new keys in an agent's entry of config.yaml**, both optional: `socket_links` (which machine hangs
-   on which socket of a powerbar) and `home_assistant_system` (the machine Home Assistant runs on). With
-   them the panel names the machine in the passkey dialog, asks before the power of a running machine is
-   cut, and locks the sockets of the machine that reads the plugs, of Home Assistant's machine and of its
-   own. They are read from config.yaml only: Edit host does not have them yet.
+2. **Two new keys in an agent's entry of config.yaml**: `home_assistant_system` (the machine Home
+   Assistant runs on) and `socket_links` (which machine hangs on which socket of a powerbar). The panel
+   switches no socket of an agent until its entry has `home_assistant_system`. With the two the panel
+   names the machine in the passkey dialog, asks before the power of a machine is cut that runs or may,
+   and locks the sockets of the machine that reads the plugs, of Home Assistant's machine and of its own.
+   They are read from config.yaml only: Edit host does not have them yet, so the sockets of a host added
+   with Add host cannot be switched from the panel yet.
 3. **The audit log has `plug.switch`** for every attempt to switch a socket, also the refused ones; the
    Audit page's filter has **Plugs**.
 

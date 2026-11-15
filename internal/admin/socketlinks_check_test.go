@@ -73,6 +73,54 @@ func TestConfigCheckAndTheSocketsOfRelayedPlugs(t *testing.T) {
 		t.Errorf("the links put right (exit %d):\n%s", code, out.String())
 	}
 
+	// Three things the panel needs to be told before it switches sockets, as far as a file can show them. The
+	// check reads files and asks no machine: it does not know which agent reports sockets, so it goes by the two
+	// keys. (1) socket_links without home_assistant_system: the panel switches NO socket of that agent, a
+	// warning. (2) home_assistant_system without socket_links: every socket of a powerbar is then linked to
+	// nothing, a note. (3) no panel_hosts while an entry has one of the keys: the panel locks no socket as its
+	// own, a note. None of them for an agent, or a file, without the keys.
+	lacks := head +
+		"  - {id: relay, url: \"http://relay:9101\", token_env: TOK_R, socket_links: {desk-bar/ch3: plain}}\n" +
+		"  - {id: other, url: \"http://other:9101\", token_env: TOK_R, home_assistant_system: plain}\n" +
+		"  - {id: plain, url: \"http://plain:9101\", token_env: TOK_R}\n"
+	check := func(y string) (int, string) {
+		t.Helper()
+		if err := os.WriteFile(cfg, []byte(y), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb)
+		return code, out.String() + errb.String()
+	}
+	code, got = check(lacks)
+	const (
+		noHA = "WARN  agent relay: socket_links is set and home_assistant_system is not: the panel does not know which machine this agent's Home Assistant runs on, " +
+			"and switches no socket of the plugs it relays, on or off, until home_assistant_system names that machine's row\n"
+		noLinks = "note  agent other: home_assistant_system is set and socket_links is not: every socket of a powerbar this agent relays is linked to nothing " +
+			"(the only socket of a plug takes the plug's own link). The panel then asks before each \"off\" whether a machine is plugged in, " +
+			"and cannot lock a socket for what it feeds. Name the machines with socket_links\n"
+		noPanel = "note  panel_hosts is not set while an agent's entry has socket_links or home_assistant_system: the panel does not know which machine it runs on, " +
+			"so it locks no socket as its own. If a socket feeds the panel's machine, name that machine's row in panel_hosts\n"
+	)
+	for _, want := range []string{noHA, noLinks, noPanel} {
+		if strings.Count(got, want) != 1 {
+			t.Errorf("the output lacks (or has twice) %q\n%s", want, got)
+		}
+	}
+	if code != 1 || strings.Count(got, "WARN  ") != 1 || strings.Contains(got, "agent plain: ") {
+		t.Errorf("one warning, and no line for an agent without the keys (exit %d):\n%s", code, got)
+	}
+	// with all three said, nothing is left; and a file without the keys has none of the lines
+	code, got = check(strings.Replace(lacks, "public_url:", "panel_hosts: [plain]\npublic_url:", 1) +
+		"  - {id: full, url: \"http://full:9101\", token_env: TOK_R, socket_links: {bar/ch1: plain}, home_assistant_system: plain}\n")
+	if code != 1 || strings.Contains(got, "panel_hosts is not set") || strings.Contains(got, "agent full: socket_links is set") || strings.Contains(got, "agent full: home_assistant_system is set") {
+		t.Errorf("an entry with both keys, and panel_hosts (exit %d):\n%s", code, got)
+	}
+	code, got = check(head + "  - {id: plain, url: \"http://plain:9101\", token_env: TOK_R}\n")
+	if code != 0 || strings.Contains(got, "panel_hosts is not set") || strings.Contains(got, "home_assistant_system") {
+		t.Errorf("a file without the keys (exit %d):\n%s", code, got)
+	}
+
 	// a line that can never work: the file does not load, and the check says which agent and which line
 	bad := head + "  - {id: relay, url: \"http://relay:9101\", token_env: TOK_R, socket_links: {desk-bar: plain}}\n"
 	if err := os.WriteFile(cfg, []byte(bad), 0o600); err != nil {
