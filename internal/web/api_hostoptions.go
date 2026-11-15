@@ -75,7 +75,7 @@ func init() {
 	// in one file.
 	actionText[hostOptionsRoute] = "edit the host {id}"
 	actionList[hostOptionsRoute] = (*reqCtx).hostOptionsItems
-	actionStamp[hostOptionsRoute] = func(_ *reqCtx, p *pendingAction) string { return rtShown(p.Items) }
+	actionStamp[hostOptionsRoute] = func(_ *reqCtx, p *pendingAction) string { return rtShown(p.lines) }
 	apiDoc = append(apiDoc,
 		struct{ method, path, summary string }{"GET", "/api/admin/hosts/{id}/options", "Edit host: which UPS powers this machine, which plugs are linked to it and which count in the total, with where each value comes from (config.yaml or changed in the panel) and the agent that reads the device; under \"host\" the machine's name, its site and its Wake-on-LAN details, each with its source, the choices (sites, relays) and what is shown read-only (admins, browser session only)"},
 		struct{ method, path, summary string }{"PUT", "/api/admin/hosts/{id}/options", "Edit host: change the links of one machine: {ups: [{id, on}], plugs: [{id, linked, in_total}], reset: [{id, field: ups|plugs|total}], leftovers: true, unrelayed: [{id, kind: ups|plug}]}; only what is named changes, for this machine (leftovers: the stored changes about machines that are gone are removed; unrelayed: the stored changes about these devices are removed, each only if its reading machine does not relay it right now). Also the machine itself: name: \"...\"; site: \"<a site>\" or \"\" (the default; stored as the Users page stores it); wol: {macs: [..], relay: \"<an agent with wol_relay>\", port: 7|9} or {off: true}; reset: [{field: name|wol}]. Anything about Wake-on-LAN needs its own confirmation every time; a target address or a password of a wake packet cannot be sent. Stored as single decisions laid over config.yaml in state.json (config.yaml is not written; reset takes the decision of one line out), counts with the reading agent's next poll. Admins, browser session only (API tokens get 403), CSRF header, step-up. 422: an unknown field, UPS or plug; 409: not a host. Audited as host.options"})
@@ -1266,7 +1266,7 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	shown, replay := c.keptStamp()
 	siteStays := false // this request's site was stored and could not be put back when the rest was refused
 	notShown := func() error {
-		params["confirmed"] = strings.Split(shown, "\n")
+		params["confirmed"] = confirmedLines(shown)
 		if siteStays {
 			c.audit(u, "host.options", m.row.ID, params, "error 409: the host was changed after the confirmation was asked for; the site was stored and could not be put back, nothing else was saved")
 			return apierr.New(409, hoNotShownSiteStays)

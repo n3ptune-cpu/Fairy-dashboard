@@ -152,7 +152,7 @@ func rtConsequence(key string, v int) string {
 func init() {
 	actionText[runTimingsRoute] = "change the run timings"
 	actionList[runTimingsRoute] = (*reqCtx).runTimingsItems
-	actionStamp[runTimingsRoute] = func(_ *reqCtx, p *pendingAction) string { return rtShown(p.Items) }
+	actionStamp[runTimingsRoute] = func(_ *reqCtx, p *pendingAction) string { return rtShown(p.lines) }
 	apiDoc = append(apiDoc,
 		struct{ method, path, summary string }{"GET", "/api/admin/run-timings", "Run timings: the six timings of \"Update unpowered hosts\" (off_after_s, online_timeout_s, settle_s, shutdown_delay_s, agent_requests_per_min, run_approval_wait_s), each with the value in force, where it comes from (config.yaml or changed in the panel), config.yaml's value, its range, and `confirm` (always | lower | higher | \"\": which changes ask for their own confirmation); `confirm_wait_s`: the time for the second passkey a run started now would use; `active`: a run is going and keeps its own numbers (admins, browser session only)"},
 		struct{ method, path, summary string }{"PUT", "/api/admin/run-timings", "Run timings: change timings of \"Update unpowered hosts\": {off_after_s, online_timeout_s, settle_s, shutdown_delay_s, agent_requests_per_min, run_approval_wait_s: whole numbers in config.yaml's ranges, reset: [keys]}; only what is named changes. Stored as one decision per key laid over config.yaml in state.json (config.yaml is not written; a value equal to config.yaml's and a reset take the decision out); counts from the next run, a run that is going keeps its numbers. Admins, browser session only (API tokens get 403), CSRF header, step-up; its own confirmation every time for any change of off_after_s, for a lower shutdown_delay_s and for a higher online_timeout_s. 422: an unknown key, a value that is no whole number in its range, a key twice or both set and reset, nothing to change. Audited as wakeupdate.timings"})
@@ -373,11 +373,11 @@ func (s *Server) runTimingsGet(c *reqCtx) error {
 	return nil
 }
 
-// rtShown is the stamp of a kept change: the lines "Confirm it's you" shows for it, as one text. The replay
-// makes the lines again, from what is stored at the moment of the write, and saves only when they are these
-// (runTimingsPut): every line has the value before and the value after, so the same lines are the same
-// change, with the same sentences about what it means and the same kind of confirmation.
-func rtShown(items []string) string { return strings.Join(items, "\n") }
+// rtShown is the stamp of a kept change: made from every line of its confirmation, in full (shownStampOf).
+// The replay makes the lines again, from what is stored at the moment of the write, and saves only when the
+// stamp is the same (runTimingsPut): every line has the value before and the value after, so the same lines
+// are the same change, with the same sentences about what it means and the same kind of confirmation.
+func rtShown(lines []string) string { return shownStampOf(lines) }
 
 // rtNotShown is the answer to a confirmed change that is no longer the change its confirmation showed.
 const rtNotShown = "The run timings were changed by somebody else after you pressed Save, so what you confirmed is not what would be saved now. Nothing was saved: look at the dialog again and press Save."
@@ -472,7 +472,7 @@ func (s *Server) runTimingsPut(c *reqCtx) error {
 		confirmed = true // nobody is asked to confirm in this mode of the panel (stepUpCheck), or this is the replay
 	}
 	if err == errRtNotShown {
-		c.audit(u, rtAuditAction, "run timings", map[string]any{"confirmed": strings.Split(shown, "\n")},
+		c.audit(u, rtAuditAction, "run timings", map[string]any{"confirmed": confirmedLines(shown)},
 			"error 409: the run timings were changed after the confirmation was asked for; nothing was saved")
 		return apierr.New(409, rtNotShown)
 	}

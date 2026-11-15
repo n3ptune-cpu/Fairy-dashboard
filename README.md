@@ -1392,7 +1392,8 @@ decides who can see the UPS and its notifications. The dialog's info button says
   that your request would now do something else than that list said, nothing is saved ("This host, or a
   setting its values come from, was changed by somebody else after you pressed Save ..."): open Edit host
   again and press Save. A Reset that said "back to Run timings: 900 s" never leaves the machine with
-  another number. The site is kept in another file than the rest: when the rest of a change is refused,
+  another number. A long list is compared whole: the confirmation lists 32 lines and says how many more
+  there are ("and 9 more lines that are not listed here"), and every line counts. The site is kept in another file than the rest: when the rest of a change is refused,
   its site is taken out again, unless somebody gave the host another site in that moment (theirs stays).
   If the site cannot be taken out, the answer says so: "The new site of this host was stored and could
   not be put back; the rest of this change was not saved."

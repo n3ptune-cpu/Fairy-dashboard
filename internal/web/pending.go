@@ -3,12 +3,16 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -58,8 +62,12 @@ type pendingAction struct {
 	Action  string // what the panel itself says will run (describeAction): shown in the dialog and the audit log
 	// Items: for an action about a list (the machines of an "Update unpowered hosts" run), the panel's
 	// own line for each entry; for the accept of a machine id, what to compare first. Action is cut at
-	// maxActionText; the dialog shows these in full.
+	// maxActionText; the dialog shows these in full. They are at most maxActionItems lines, each cut at
+	// maxActionText, and one more line that says how many lines are not listed when there are more
+	// (dialogItems). lines: every line in full, as the route made them: what a stamp of the lines is made from
+	// (shownStampOf), so that a line the dialog does not list, or the part of a line it cuts, is compared too.
 	Items  []string
+	lines  []string
 	At     time.Time
 	Client client // who asked for it: only this client can arm it, and only this client's confirmation runs it
 	Round  string // the state of the step-up round trip it is armed for ("": not armed)
@@ -170,7 +178,8 @@ func (c *reqCtx) keepPending(u *model.User, plan *approvalPlan) (p *pendingActio
 			p.Items = append(p.Items, truncate(safeTarget(line), maxActionText))
 		}
 	} else if list := actionList[c.r.Pattern]; list != nil {
-		p.Items = shownItems(list(c, u))
+		p.lines = shownItems(list(c, u))
+		p.Items = dialogItems(p.lines)
 	}
 	if stamp := actionStamp[c.r.Pattern]; stamp != nil {
 		p.Stamp = stamp(c, p)
@@ -179,17 +188,52 @@ func (c *reqCtx) keepPending(u *model.User, plan *approvalPlan) (p *pendingActio
 	return p, ""
 }
 
-// shownItems is the lines of a kept action as "Confirm it's you" shows them: at most maxActionItems, each
-// cut and cleaned like every text of that dialog.
-func shownItems(lines []string) []string {
+// shownItems is every line of a kept action, in full: what the action is about, whatever the dialog lists of
+// it. A stamp of the lines is made from these (shownStampOf), never from what the dialog shows.
+func shownItems(lines []string) []string { return slices.Clone(lines) }
+
+// dialogItems is the lines "Confirm it's you" lists: at most maxActionItems, each cut and cleaned like
+// every text of that dialog. When there are more, one more line says how many are not listed: the dialog
+// never looks complete when it is not.
+func dialogItems(lines []string) []string {
 	var out []string
-	for _, line := range lines {
-		if len(out) == maxActionItems {
+	for i, line := range lines {
+		if i == maxActionItems {
+			rest := len(lines) - i
+			if rest == 1 {
+				out = append(out, "and 1 more line that is not listed here")
+			} else {
+				out = append(out, fmt.Sprintf("and %d more lines that are not listed here", rest))
+			}
 			break
 		}
 		out = append(out, truncate(safeTarget(line), maxActionText))
 	}
 	return out
+}
+
+// shownStampOf is the stamp of a kept action that rests on the lines of its confirmation ("what is
+// confirmed is what is saved": Run timings, Edit host). Its first line is a hash of ALL lines in full, each
+// with its length, so two lists that differ anywhere (in line 40 of 40, or after the 240 characters the
+// dialog shows of a line) have different stamps. After it come the lines as the dialog lists them, for the
+// audit entry of a refusal (confirmedLines). The handler makes the stamp again in the replay, from the lines
+// the same request makes then, and compares the whole text.
+func shownStampOf(lines []string) string {
+	h := sha256.New()
+	for _, l := range lines {
+		fmt.Fprintf(h, "%d:%s\n", len(l), l)
+	}
+	return hex.EncodeToString(h.Sum(nil)) + "\n" + strings.Join(dialogItems(lines), "\n")
+}
+
+// confirmedLines is the lines of the confirmation a stamp of shownStampOf was made for, as the dialog listed
+// them (none: an empty list).
+func confirmedLines(stamp string) []string {
+	_, listed, _ := strings.Cut(stamp, "\n")
+	if listed == "" {
+		return []string{}
+	}
+	return strings.Split(listed, "\n")
 }
 
 // actionStamp is, per route, what a kept request rests on besides its own text: a value the handler works
