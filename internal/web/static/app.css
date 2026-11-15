@@ -989,6 +989,9 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .sock-sw.none::after { content: none; }
 body.unreachable .sock-sw.on { border-color: var(--line2); }
 body.unreachable .sock-sw.on::after { background: var(--off); }
+/* "Cut power anyway" in the dialog of a socket whose machine still runs: the smaller button, away from the others */
+.btn.sock-cut { margin-right: auto; color: var(--muted); }
+.btn.sock-cut:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
 .info-btn.sock-lock { width: 20px; height: 20px; margin: -3px 0 -3px -3px; border-radius: 0; color: var(--faint); }
 .info-btn.sock-lock:hover, .info-btn.sock-lock[aria-expanded="true"] { color: var(--text); }
 .list-row.wall-sock > .sock { color: var(--text); }

@@ -649,19 +649,59 @@ const sockFind = (source, socket) => {
   const k = (Array.isArray(src?.sockets) ? src.sockets : []).find((x) => x.id === socket);
   return src && k ? [src, k] : [null, null];
 };
+// The one place that sends a switch. more: what "Cut power anyway" adds (cut, confirm).
+function sockAsk(src, k, to, label, more = {}) {
+  const ask = { source: src.id, socket: k.id, to };
+  return controlCall({ kind: "plug", label, method: "POST", path: "/api/power/socket", body: ask },
+    () => api("/api/power/socket", { method: "POST", body: JSON.stringify({ ...ask, tag: k.tag, ...more }) }));
+}
 async function sockSwitch(source, socket, to) {
   const [src, k] = sockFind(source, socket);
   if (!src || !k || !sockCan(k) || (to !== "on" && to !== "off")) return;
   const key = `${src.id}/${k.id}`;
   if (sock.busy[key]) return;
-  const ask = { source: src.id, socket: k.id, to };
   sock.busy[key] = true; render();
   try {
-    const r = await controlCall({ kind: "plug", label: `Switch ${to} ${k.name} (${src.name})`, method: "POST", path: "/api/power/socket", body: ask },
-      () => api("/api/power/socket", { method: "POST", body: JSON.stringify({ ...ask, tag: k.tag }) }));
+    const r = await sockAsk(src, k, to, `Switch ${to} ${k.name} (${src.name})`);
     if (r) flash(r.message || `${k.name}: sent`, r.confirmed !== true);
-  } catch (x) { flash(x.message, true); }
-  finally { delete sock.busy[key]; render(); }
+  } catch (x) {
+    // "off" for a socket whose machine is not off: the panel's sentence, and the two ways on from there
+    if (to === "off" && x.detail?.code === "machine_running") { delete sock.busy[key]; await sockRunning(source, socket, x.detail); } else flash(x.message, true);
+  } finally { delete sock.busy[key]; render(); }
+}
+// "Still running" (the panel's 409 machine_running): the socket feeds a machine that is not off, and nothing was
+// switched. The dialog has the panel's sentence and the ways on. "Shut down" opens the power dialog of that host,
+// when this user can shut it down from here. "Cut power anyway" is the smaller one: it asks for the machine's
+// name to be typed and sends the same switch with cut: true and what was typed. The panel compares the name
+// itself; then the passkey step follows as for every switch, and what is signed says "cut the power of X while
+// it is running". A socket that is linked to nothing never gets here.
+async function sockRunning(source, socket, d) {
+  const at = location.hash;
+  const name = typeof d.machine === "string" ? d.machine : "";
+  const s = typeof d.system_id === "string" ? state.byId[d.system_id] || null : null;
+  if (s && !state.caps[s.id]) await refreshCaps(s.id);
+  const [src, k] = sockFind(source, socket);
+  if (!src || !k || !name || location.hash !== at || !$("#modal").hidden) { flash(d.message || "The machine on this socket is still running. Nothing was switched.", true); return; }
+  const down = !!s && !!state.caps[s.id]?.actions.some((a) => a.action === "shutdown" && a.available);
+  const m = $("#modal");
+  m.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="sr-t"><h3 id="sr-t">${esc(k.name)} was not switched off</h3>
+    <p id="sr-msg">${esc(d.message || `${name} is still running. Shut it down first.`)}</p>
+    <div class="row-gap end"><button class="btn sm sock-cut" type="button" id="sr-cut">Cut power anyway</button>
+      <button class="btn" type="button" id="sr-cancel">Cancel</button>${down ? `<button class="btn primary" type="button" id="sr-down">Shut down</button>` : ""}</div></div>`;
+  m.hidden = false;
+  $("#sr-cancel").onclick = closeModal;
+  if (down) $("#sr-down").onclick = () => { closeModal(); openPowerDialog(s, "shutdown"); };
+  $("#sr-cut").onclick = () => sockCut(source, socket, name);
+  focusAtTop(down ? "#sr-down" : "#sr-cancel");  // never on "Cut power anyway"
+}
+function sockCut(source, socket, name) {
+  typedDialog(`Cut power to ${name}?`, "This is like pulling the plug. Nothing is shut down first: unsaved work is lost and files can be damaged.", name, "Cut power", async (typed) => {
+    const [src, k] = sockFind(source, socket);  // the socket as the page has it now
+    if (!src || !k || !sockCan(k)) throw new Error("This socket cannot be switched from here any more. Nothing was switched.");
+    const r = await sockAsk(src, k, "off", `Cut power to ${name}: switch off ${k.name} (${src.name})`, { cut: true, confirm: typed });
+    if (!r) return;  // "Confirm it's you" has taken the dialog's place
+    closeModal(); flash(r.message || `${k.name}: sent`, r.confirmed !== true);
+  });
 }
 document.addEventListener("click", (e) => {
   const t = e.target.closest?.('[data-act="sock"]');
@@ -1802,7 +1842,8 @@ function pagePower() {
       "Wall power: what plugs, UPSes and BMCs measure.",
       "CPU, GPU and battery readings on a system's page are component power reported by its agent, not wall power.",
       "A plug's sockets are under its name: a dot for on or off. A lock means it cannot be switched from here, and says why.",
-      "A socket has a switch only where the machine that reads the plug allows it, in its own config. Every switch, on or off, asks for your passkey, and that machine checks it itself."]))}</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
+      "A socket has a switch only where the machine that reads the plug allows it, in its own config. Every switch, on or off, asks for your passkey, and that machine checks it itself.",
+      "A socket with a running machine on it is not switched off: shut the machine down first. Cut power anyway is there for a machine that hangs."]))}</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
     <th class="num">Volts</th><th class="num">Amps</th><th class="num">kWh</th><th>Linked</th><th>Last hour</th></tr></thead><tbody>${p.sources.map((s) => powerSourceRow(s, chip)).join("")}</tbody></table></div>`;
 }
 // One source of the Power page. "Linked" is the row the source is linked to, from the source itself (also
