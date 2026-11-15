@@ -395,6 +395,9 @@ func TestReadmeUpgradeTextsMatchThisRelease(t *testing.T) {
 		"**The report of a run no longer says \"switched off again\" of a machine that is on** (builds 12 to 15 could)",
 		"\"Its agent still answered at HH:MM, after its countdown's time, with no shutdown pending ... It does not answer now: not known whether it is on\"",
 		"A machine that takes longer than a minute from its countdown's time to go down, and answers until then, gets the same report",
+		"That is all \"switched off again\" and \"It switched itself off again\" mean: no answer after the countdown's time",
+		"gives the same silence and can still be reported as off while it is on",
+		"The report is not corrected afterwards, and nothing is sent to a machine because of it",
 	} {
 		if !strings.Contains(section, want) {
 			t.Errorf("the section lacks %q", want)

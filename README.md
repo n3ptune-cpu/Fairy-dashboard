@@ -448,8 +448,9 @@ many machines need a look). A run that went well is no alert, so no pop-up shows
 that watched the run says once that it is over, in the line at the bottom ("Update unpowered hosts: run
 finished · 3 machines", with each machine's sentence behind **Details**), and it stays until you close it.
 A machine the report calls "is off" is shown as offline at the same moment (its dot is grey, not amber for
-another minute): the run saw it go off. While a run is going, the line under "Machines" says how many are
-switched on, not how many could be chosen: none can until the run is over.
+another minute): the run saw it stop answering after its countdown, which is what the report calls off.
+While a run is going, the line under "Machines" says how many are switched on, not how many could be chosen:
+none can until the run is over.
 
 The rules, in plain words:
 
@@ -562,6 +563,16 @@ The rules, in plain words:
   shutdown was called off on the machine, did not happen, or was still under way: an agent shows a shutdown
   for a minute after its time, and a machine can take longer than that to go down) and that stops answering
   later: the report says when it last answered and "not known whether it is on", never "switched off again".
+  So "switched off again" (for a machine that nobody confirmed: "It switched itself off again") means that
+  the machine gave no answer after its countdown's time. It does not mean that anything saw it go off, and
+  in two cases the machine is on. One: it is restarted just as its countdown ends, in the last seconds,
+  after the panel's last answered poll of it. It then gives the same 20 seconds of nothing, the report is
+  written, and when it was the run's last machine the run is over before it answers again. Two: its
+  shutdown was stopped at the machine itself, and the machine stops answering (its link drops, it goes to
+  sleep, it is restarted) at the countdown's time or in the minute after it, before its agent has said so.
+  `shutdown /a` typed at a Windows PC is such a stop: the PC's agent is not told, and goes on showing the
+  countdown until a minute after its time. The report is not corrected afterwards, and nothing is sent to
+  a machine because of it; the machine's own row shows it as online again as soon as it answers.
   A machine whose polling is paused when its shutdown would be asked for is not asked: it is left on.
   (For a Proxmox node "out of reach" begins with the first poll of its agent that got nothing, also while the
   Proxmox API still listed the node as online: that list is a little behind when a node drops out. While it
@@ -1033,7 +1044,9 @@ itself off again by itself, with a notice of 2 minutes on its screen. Whether a 
 machine itself shows, whatever the panel was answered when it handed the ticket over: a ticket that reached
 the machine twice is refused the second time, and the machine is armed all the same. Fairy says "stays ON"
 of a machine only after its agent has shown that no run is on it; the run's report says "It switched
-itself off again" only when the run saw it go. A machine that was not armed stays ON, and the report says
+itself off again" only when the machine's last word was that it is armed or counting down and it then gave
+no answer after its countdown's time (what that proves and what it does not: "The report says what the run
+saw", above). A machine that was not armed stays ON, and the report says
 so and why. **Keep on** calls a machine's switch-off off. It is in the machine's row of the run on the
 Updates page, and, once nobody is asked any more, in a strip of the machine's own on every page with the
 time it switches itself off. It is the cancel of the Power menu, and after it Fairy reads what the machine
@@ -1866,7 +1879,13 @@ Build 16:
    shutdown pending ... It does not answer now: not known whether it is on". A machine that takes longer
    than a minute from its countdown's time to go down, and answers until then, gets the same report (the
    sentence names that too: the run cannot tell the two apart). A machine that stops answering at its
-   countdown's time, with no answer after it, is off as before.
+   countdown's time, with no answer after it, is off as before. That is all "switched off again" and "It
+   switched itself off again" mean: no answer after the countdown's time. A machine that is restarted just
+   as its countdown ends, or whose shutdown was stopped at the machine itself and whose link drops (or that
+   goes to sleep) in the minute after the countdown's time, gives the same silence and can still be
+   reported as off while it is on. The report is not corrected afterwards, and nothing is sent to a machine
+   because of it. See "The report says what the run saw" in
+   [Update unpowered hosts](#update-unpowered-hosts).
 
 ### 3. From a build older than 13
 
