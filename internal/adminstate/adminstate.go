@@ -108,7 +108,7 @@ func (a *State) badShape(key, want, means string, got any) {
 // panel's next look after the command returned, not up to a second later (audit 6, r4-p2-03: in that second a
 // run's next step and a token's request still went out).
 func (a *State) ControlDisabled() *model.ControlState {
-	a.state.Refresh()
+	a.state.Look()
 	if err := a.state.Err(); err != nil {
 		return &model.ControlState{By: "fairy", Reason: "state.json is unreadable or corrupt (see the server log)"}
 	}
@@ -167,7 +167,7 @@ func powerOffList(d statefile.Data) (ids []string, raw any, ok bool) {
 // state.json is unreadable, and while "power_control_disabled" is there and is not a list of system ids: the
 // same reading as for the kill switch, see ControlDisabled).
 func (a *State) PowerDisabled(id string) bool {
-	a.state.Refresh() // now, not up to a second ago: see ControlDisabled
+	a.state.Look() // now, not up to a second ago: see ControlDisabled
 	if a.state.Err() != nil {
 		return true
 	}
@@ -210,7 +210,7 @@ func (a *State) SessionValid(sid, sub string, iat float64) bool {
 	if sid == "" || sub == "" {
 		return false
 	}
-	st, se := a.state.Refresh(), a.sessions.Refresh()
+	st, se := a.state.Look(), a.sessions.Look()
 	if a.state.Err() != nil || a.sessions.Err() != nil {
 		return false
 	}

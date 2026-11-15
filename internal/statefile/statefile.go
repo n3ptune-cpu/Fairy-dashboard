@@ -2,7 +2,8 @@
 // (state.json, sessions.json, tokens.json, users.json).
 //
 // Writes take an exclusive lock on <file>.lock, re-read, modify and atomically replace the file (mode 0600), so
-// the CLI and the running server never lose each other's changes. Readers reload when the file's mtime changes.
+// the CLI and the running server never lose each other's changes. Readers reload when the file is another one
+// than at their last look (Watched), and always after a write of their own.
 //
 // The files fail closed: a missing file is empty, but a file that cannot be read (wrong owner or permissions),
 // is not valid JSON, or EXISTS AND IS EMPTY is an error. It is never treated as empty and never overwritten,
@@ -17,6 +18,7 @@ package statefile
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,19 +41,28 @@ type Data = map[string]any
 // least "{}"), and a power cut or a full disk can leave one behind. Read as "no state" it would switch the
 // kill switch off, forget who was removed and make the next sign-in the first admin again (r2-p4-10).
 func Read(path string) (Data, error) {
+	d, _, err := readSum(path)
+	return d, err
+}
+
+// readSum is Read, and the SHA-256 of the bytes that were read: what tells one content of the file from
+// another (all zero when no bytes were read: no file, or one that is not read).
+func readSum(path string) (Data, [sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
 	b, err := ReadFile(path, MaxBytes) // a regular file of a sane size, or it is not read (safe.go)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return Data{}, nil
+			return Data{}, sum, nil
 		}
 		if IsNotAFile(err) {
-			return nil, err
+			return nil, sum, err
 		}
-		return nil, fmt.Errorf("cannot read %s: %w (it must be readable by the user Fairy runs as; "+
+		return nil, sum, fmt.Errorf("cannot read %s: %w (it must be readable by the user Fairy runs as; "+
 			"check its owner and mode, e.g. chown fairy:fairy and chmod 600)", path, err)
 	}
+	sum = sha256.Sum256(b)
 	if len(bytes.TrimSpace(b)) == 0 {
-		return nil, &DamagedError{Path: path, What: fmt.Sprintf("is empty (%d bytes): Fairy never writes an empty state file, so this one is damaged "+
+		return nil, sum, &DamagedError{Path: path, What: fmt.Sprintf("is empty (%d bytes): Fairy never writes an empty state file, so this one is damaged "+
 			"(a power cut or a full disk can leave it).", len(b))}
 	}
 	var d Data
@@ -59,9 +70,9 @@ func Read(path string) (Data, error) {
 		if err == nil {
 			err = errors.New("not a JSON object")
 		}
-		return nil, &DamagedError{Path: path, What: fmt.Sprintf("is corrupt (%v):", err)}
+		return nil, sum, &DamagedError{Path: path, What: fmt.Sprintf("is corrupt (%v):", err)}
 	}
-	return d, nil
+	return d, sum, nil
 }
 
 // DamagedError is a state file that could be read and does not hold a state: it is empty, or not a JSON object
@@ -188,7 +199,10 @@ func syncDir(dir string) {
 	}
 }
 
-// Watched is a cached view of a state file, reloaded when its mtime changes (checked at most every `every`).
+// Watched is a cached view of a state file. It looks at the file at most every `every` (Get), or now (Look),
+// and reads it again when the look finds another file than the last one did: see stamp. After a write of this
+// process the view is told to read the file, whatever a look at it says (Refresh).
+//
 // When the file becomes unreadable or corrupt the view is empty and Err reports why (fail closed); the problem
 // is logged once per change of the file.
 type Watched struct {
@@ -197,9 +211,75 @@ type Watched struct {
 	mu      sync.Mutex
 	data    Data
 	err     error
-	mtime   int64
+	seen    stamp             // what the last look at the file found
+	sum     [sha256.Size]byte // of the bytes the view was read from (zero: none were read)
 	checked time.Time
 	Version int
+}
+
+// stamp is what one look at a state file finds without reading it. Two looks with the same stamp are taken as
+// the same content, so everything that is cheap and moves with a write is in it.
+//
+// The time of the last change and the size alone are not enough (they were all of it up to build 16). A file's
+// times come from a clock that moves with the timer tick (every 4 ms at 250 Hz: on Linux before 6.13 always,
+// on a newer one still on some file systems), and with far larger steps on some file systems (a second, or
+// two). Fairy's own writes of one file are often less than a millisecond apart and of the same length ("site-a"
+// for "site-b", one version for the next, 900 for 600). The second of two such writes was not seen: the view
+// kept the first for as long as nothing else wrote the file, and the panel showed, checked and decided from
+// it. So the stamp also holds which file it is (fileID): every write puts a new file under the name
+// (WriteAtomic), and the file of one write and of the write right before it are never the same one, because
+// the older is still there when the newer is made.
+//
+// What a stamp still cannot tell: two or more writes since the last look, all in one step of the clock, the
+// last of the same size as the file that was looked at, and in a file whose number the file system gave out
+// again (the file of the write before last is free by then). A write of this process never depends on it
+// (Refresh reads); writes of another process (`fairy admin ...`) do. On Windows the stamp is the time and the
+// size (fileid_windows.go).
+type stamp struct {
+	what        int8 // notLooked, missing, outOfReach or there
+	mtime, size int64
+	id          fileID
+}
+
+const (
+	notLooked  int8 = iota // the view has not looked at the file yet
+	missing                // nothing has the name: an empty state, and no error
+	outOfReach             // something has the name and cannot be looked at: no state, and an error
+	there                  // a file: its time, size and fileID say which
+)
+
+// fileID is what the system says of a file beyond its time and size, for a stamp: the device and the number of
+// the file, which a file that took the name by a rename does not share with the one that had it, and the time
+// its entry changed (ctime: it moves with every write, and with a chmod, chown or rename, and nothing sets it
+// back). Each is zero where the system does not say it (fileIDOf, one per system).
+type fileID struct {
+	dev, ino uint64
+	ctime    int64
+}
+
+// statFile looks at a file. A variable so that a test can hold still what a look says; nothing else replaces it.
+var statFile = os.Stat
+
+// look is the stamp of the file as it is now. The error is why a name that is there cannot be looked at.
+func look(path string) (stamp, error) {
+	st, err := statFile(path)
+	switch {
+	case err == nil:
+		return stamp{what: there, mtime: st.ModTime().UnixNano(), size: st.Size(), id: fileIDOf(st)}, nil
+	case !errors.Is(err, fs.ErrNotExist):
+		return stamp{what: outOfReach}, err // e.g. the directory is not searchable: an error, not "missing"
+	}
+	// "Does not exist" is what os.Stat also says of a symbolic link whose target is away (a share that is not
+	// mounted, a file that is being moved). That is not a fresh start: something has this name, and what the
+	// file said (the kill switch, the per-host switches, the revoke-all time) is only out of reach. It read as
+	// "no state": control on, power control on for every host, every old session valid again (audit 6,
+	// r4-p2-04). Only a name that is not there at all is "missing".
+	if _, lerr := os.Lstat(path); lerr == nil {
+		return stamp{what: outOfReach}, errors.New("it is a symbolic link whose target does not exist (the panel reads its state files only as plain files)")
+	} else if !errors.Is(lerr, fs.ErrNotExist) {
+		return stamp{what: outOfReach}, lerr
+	}
+	return stamp{what: missing}, nil
 }
 
 // NewWatched returns a cached view that checks the file at most once a second.
@@ -208,83 +288,93 @@ func NewWatched(path string) *Watched { return NewWatchedEvery(path, time.Second
 // NewWatchedEvery returns a cached view that checks the file at most every `every`; every=0 stats it on every
 // Get (used for API tokens, so a revoke applies at once).
 func NewWatchedEvery(path string, every time.Duration) *Watched {
-	return &Watched{Path: path, every: every, data: Data{}, mtime: -1}
+	return &Watched{Path: path, every: every, data: Data{}}
 }
+
+// How a view is asked for its data.
+const (
+	lookInTime = iota // Get: a look at the file at most every `every`
+	lookNow           // Look: a look now
+	readNow           // Refresh: a look now, and the file is read whatever the look says
+)
 
 // Get returns the cached data, reloading it if the file changed ({} while the file is unreadable: see Err).
 func (w *Watched) Get() Data {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.getLocked(false)
+	return w.getLocked(lookInTime)
 }
 
-// Refresh checks the file now (after this process wrote it).
+// Look is Get with a look at the file now, not at most every `every`: one stat, and the file is read only when
+// it is another one than at the last look. For what must not be up to a second old when another process wrote
+// it (the kill switch, a host's power switch, a session that was ended).
+func (w *Watched) Look() Data {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.getLocked(lookNow)
+}
+
+// Refresh reads the file now. It is what this process calls after it wrote the file: what it wrote is in the
+// view when Refresh returns, also when a look at the file cannot tell the new file from the one before (see
+// stamp). The version moves only when what was read is something else than the view held.
 func (w *Watched) Refresh() Data {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.getLocked(true)
+	return w.getLocked(readNow)
 }
 
 // Err is why the file could not be used at the last check (nil when it is fine or missing).
 func (w *Watched) Err() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.getLocked(false)
+	w.getLocked(lookInTime)
 	return w.err
 }
 
-func (w *Watched) getLocked(force bool) Data {
+func (w *Watched) getLocked(how int) Data {
 	now := time.Now()
-	if !force && now.Sub(w.checked) < w.every {
+	if how == lookInTime && now.Sub(w.checked) < w.every {
 		return w.data
 	}
 	w.checked = now
-	var mt int64 = -2
-	st, statErr := os.Stat(w.Path)
-	switch {
-	case statErr == nil:
-		mt = st.ModTime().UnixNano() ^ st.Size()<<1
-	case !errors.Is(statErr, fs.ErrNotExist):
-		mt = -3 // e.g. the directory is not searchable: an error, not "missing"
+	seen, lookErr := look(w.Path)
+	other := seen != w.seen
+	// The same stamp as at the last look is the same file, with two exceptions. A file that cannot be looked
+	// at (outOfReach) has no time to tell one such state from the next, so it is judged again at every check.
+	// And after a write of this process (readNow) the file is read: its stamp can be the one of the file
+	// before.
+	if !other && !(seen.what == outOfReach && w.err != nil) && !(seen.what == there && how == readNow) {
+		return w.data
+	}
+	var (
+		data Data
+		sum  [sha256.Size]byte
+		err  error
+	)
+	switch seen.what {
+	case missing:
+		data = Data{}
+	case outOfReach:
+		data, err = Data{}, fmt.Errorf("cannot read %s: %w", w.Path, lookErr)
 	default:
-		// "Does not exist" is what os.Stat also says of a symbolic link whose target is away (a share that is
-		// not mounted, a file that is being moved). That is not a fresh start: something has this name, and
-		// what the file said (the kill switch, the per-host switches, the revoke-all time) is only out of reach.
-		// It read as "no state": control on, power control on for every host, every old session valid again
-		// (audit 6, r4-p2-04). Only a name that is not there at all is "missing".
-		if _, lerr := os.Lstat(w.Path); lerr == nil {
-			mt, statErr = -3, errors.New("it is a symbolic link whose target does not exist (the panel reads its state files only as plain files)")
-		} else if !errors.Is(lerr, fs.ErrNotExist) {
-			mt, statErr = -3, lerr
+		if data, sum, err = readSum(w.Path); err != nil {
+			data = Data{}
 		}
 	}
-	if mt != w.mtime || (w.err != nil && mt == -3) {
-		// (A file that cannot be looked at, -3, has no time to tell one such state from the next, so it is
-		// judged again at every check. The version moves only when what was found is another thing than
-		// before: the switches look at the file at every request now, audit 6 r4-p2-03, and whoever follows
-		// Version would be told of a change ten times a second for as long as the file stays out of reach.)
-		same := mt == w.mtime && w.err != nil && w.err.Error() == fmt.Errorf("cannot read %s: %w", w.Path, statErr).Error()
-		w.mtime = mt
-		if !same {
-			w.Version++
-		}
-		var err error
-		switch mt {
-		case -2:
-			w.data, err = Data{}, nil
-		case -3:
-			w.data, err = Data{}, fmt.Errorf("cannot read %s: %w", w.Path, statErr)
-		default:
-			w.data, err = Read(w.Path)
-			if err != nil {
-				w.data = Data{}
-			}
-		}
-		if err != nil && (w.err == nil || w.err.Error() != err.Error()) {
-			slog.Error("state file unusable: failing closed until it is fixed", "path", w.Path, "error", err)
-		}
-		w.err = err
+	// The version moves only when what was found is another thing than before: the switches look at the file
+	// at every request now (audit 6, r4-p2-03), and whoever follows Version would be told of a change ten
+	// times a second for as long as the file stays out of reach, or with every write of this process that
+	// changed nothing. Under the same stamp, the same bytes and the same error are the same thing, and the
+	// view stays as it is.
+	if !other && sum == w.sum && (err == nil) == (w.err == nil) && (err == nil || err.Error() == w.err.Error()) {
+		return w.data
 	}
+	w.seen, w.sum = seen, sum
+	w.Version++
+	if err != nil && (w.err == nil || w.err.Error() != err.Error()) {
+		slog.Error("state file unusable: failing closed until it is fixed", "path", w.Path, "error", err)
+	}
+	w.data, w.err = data, err
 	return w.data
 }
 
