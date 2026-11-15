@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
@@ -376,7 +377,7 @@ func TestPlugSwitchOffAMachineThatRuns(t *testing.T) {
 	if !ok {
 		t.Fatalf("cut with the name typed: %d %s", r.code, r.raw)
 	}
-	if d := r.body["detail"].(map[string]any); d["signs"] != "switch off Desk PC (Monitor powerbar): cut the power of DESK-PC while it is running" {
+	if d := r.body["detail"].(map[string]any); d["signs"] != "cut the power of DESK-PC while it is running: switch off Desk PC (Monitor powerbar)" {
 		t.Errorf("the dialog of a cut says: %q", d["signs"])
 	}
 	if cb := pe.approve(t, id); cb.code != 303 {
@@ -856,11 +857,44 @@ func TestPlugWords(t *testing.T) {
 		{socketLook{src: src, sock: sock}, "on", false, "switch on Left monitor (Monitor powerbar)"},
 		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: off}, "off", false, "switch off Left monitor (Monitor powerbar), which powers DESK-PC"},
 		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: pc}, "on", false, "switch on Left monitor (Monitor powerbar), which powers DESK-PC"},
-		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: pc}, "off", true, "switch off Left monitor (Monitor powerbar): cut the power of DESK-PC while it is running"},
-		{socketLook{src: src, sock: sock, link: "old-pc", shown: "old-pc"}, "off", true, "switch off Left monitor (Monitor powerbar): cut the power of old-pc while it is running"},
+		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: pc}, "off", true, "cut the power of DESK-PC while it is running: switch off Left monitor (Monitor powerbar)"},
+		{socketLook{src: src, sock: sock, link: "old-pc", shown: "old-pc"}, "off", true, "cut the power of old-pc while it is running: switch off Left monitor (Monitor powerbar)"},
 	} {
 		if got := plugWords(c.k, c.to, c.cut); got != c.want {
 			t.Errorf("%q, want %q", got, c.want)
+		}
+	}
+	// The dialog shows at most 200 bytes of a line (safeTarget), and cuts at the end. So the part that must be
+	// read comes first, the machine and "while it is running", and the names are shortened inside the sentence:
+	// with the longest names an agent can give (a socket's 48 bytes, a plug's 80) nothing is cut off the line
+	// "Your passkey signs" or the line "Fairy will run" (review of stage 1a, finding 5).
+	long := func(c string, n int) string { return strings.Repeat(c, n) }
+	for name, c := range map[string]struct {
+		sock, plug, machine string
+		cut                 bool
+		lead, tail          string
+	}{
+		"a cut, the longest names":        {long("S", 48), long("P", 80), "WORKSTATION-OF-THE-OFFICE-01", true, "cut the power of WORKSTATION-OF-THE-OFFICE-01 while it is running: switch off SSSS", ")"},
+		"a cut, a very long machine name": {long("S", 48), long("P", 80), long("M", 150), true, "cut the power of " + long("M", 61) + "… while it is running: switch off SSSS", ")"},
+		"off, the longest names":          {long("S", 48), long("P", 80), "WORKSTATION-OF-THE-OFFICE-01", false, "switch off SSSS", "), which powers WORKSTATION-OF-THE-OFFICE-01"},
+		"names of two-byte letters":       {long("é", 24), long("ü", 40), long("ö", 60), true, "cut the power of " + long("ö", 30) + "… while it is running: switch off éééé", ")"},
+		"a short plug and a long socket":  {long("S", 48), "Monitor powerbar", long("M", 64), true, "cut the power of " + long("M", 64) + " while it is running: switch off " + long("S", 34) + "… (Monitor powerbar)", ")"},
+		"a long plug and a short socket":  {"ch1", long("P", 80), long("M", 64), true, "cut the power of " + long("M", 64) + " while it is running: switch off ch1 (" + long("P", 47) + "…)", ")"},
+		"control characters in a name":    {"a\nb", "p\x1b[31m", "m\u202e", true, "cut the power of m%E2%80%AE while it is running: switch off a%0Ab (p%1B[31m)", ")"},
+	} {
+		k := socketLook{src: model.PowerSourceState{Name: c.plug}, sock: model.PowerSocket{Name: c.sock}, link: "desk-pc", shown: "desk-pc",
+			row: &model.System{ID: "desk-pc", Name: c.machine, Status: map[bool]string{true: "online", false: "offline"}[c.cut]}}
+		w := plugWords(k, "off", c.cut)
+		signs := truncate(safeTarget(w), maxActionText)                               // approval.go: "Your passkey signs"
+		action := truncate(safeTarget("switch a plug socket ("+w+")"), maxActionText) // pending.go: "Fairy will run"
+		if signs != w || action != "switch a plug socket ("+w+")" || len(action) > maxTarget {
+			t.Errorf("%s: the dialog cuts the words (%d bytes):\n%s\n%s", name, len(w), signs, action)
+		}
+		if !strings.HasPrefix(w, c.lead) || !strings.HasSuffix(w, c.tail) || !utf8.ValidString(w) {
+			t.Errorf("%s: %q\nwant it to begin %q and to end %q", name, w, c.lead, c.tail)
+		}
+		if c.cut && strings.Index(w, "while it is running") > strings.Index(w, "switch off") {
+			t.Errorf("%s: the names come before what is dangerous: %q", name, w)
 		}
 	}
 	if got := requestWords(api.SocketSetRequest("desk-bar", "ch1", "off", plugTag("desk-bar", "ch1"))); got != "switch off the socket ch1 of desk-bar" {

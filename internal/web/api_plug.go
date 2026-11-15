@@ -168,18 +168,56 @@ func (c *reqCtx) plugFind(b plugSwitchReq) (socketLook, *plugLooks, error) {
 
 // plugWords says one switch in words: the direction, the socket by the name the machine gives it, the plug,
 // and what hangs on the socket. They are the dialog's line "Your passkey signs" and the text of the kept
-// action.
+// action ("Fairy will run").
+//
+// Both lines are cut at 200 bytes, from the end (safeTarget). So what must be read comes first: for "Cut power
+// anyway" the machine and "while it is running", then the switch. And the words are made to fit: a socket's
+// name can be 48 bytes and a plug's 80, a machine's name longer; each is shortened inside the sentence, with
+// "…", so that the sentence itself is never cut (plugWordsMax).
 func plugWords(k socketLook, to string, cut bool) string {
-	w := fmt.Sprintf("switch %s %s (%s)", to, k.sock.Name, k.src.Name)
 	name, running := k.running()
+	name = wordsName(name, plugWordsName)
+	lead, tail := "", ""
 	switch {
 	case name == "":
 	case cut && running:
-		w += ": cut the power of " + name + " while it is running"
+		lead = "cut the power of " + name + " while it is running: "
 	default:
-		w += ", which powers " + name
+		tail = ", which powers " + name
 	}
-	return w
+	room := plugWordsMax - len(lead) - len(tail) - len("switch "+to+"  ()")
+	sock, plug := wordsName(k.sock.Name, maxTarget), wordsName(k.src.Name, maxTarget)
+	if half := room / 2; len(sock)+len(plug) > room { // the shorter of the two keeps what it needs, up to a half
+		switch {
+		case len(sock) <= half:
+			plug = wordsName(plug, room-len(sock))
+		case len(plug) <= half:
+			sock = wordsName(sock, room-len(plug))
+		default:
+			sock, plug = wordsName(sock, half), wordsName(plug, half)
+		}
+	}
+	return lead + "switch " + to + " " + sock + " (" + plug + ")" + tail
+}
+
+// plugWordsMax is the most bytes plugWords makes: the kept action's line puts "switch a plug socket (" and ")"
+// around them and is cut at maxTarget. plugWordsName is the most of a machine's name in them; with it, and with
+// the longest sentence around it, at least 20 bytes are left for each of the two other names.
+const (
+	plugWordsMax  = maxTarget - len("switch a plug socket ()") - 7
+	plugWordsName = 64
+)
+
+// wordsName is a name as plugWords puts it into its sentence: as the dialog and the audit log would write it
+// (safeTarget: a control character is written as %0A), and at most n bytes, cut on a character with "…" in the
+// place of what is left out.
+func wordsName(s string, n int) string {
+	s = safeTarget(s)
+	if len(s) <= n {
+		return s
+	}
+	const dots = "…"
+	return strings.ToValidUTF8(s[:max(n-len(dots), 0)], "") + dots
 }
 
 // plugDetail is what the description of a kept switch says about it (pending.go, actionDetail).

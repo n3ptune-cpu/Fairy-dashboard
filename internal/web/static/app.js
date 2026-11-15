@@ -692,7 +692,7 @@ async function sockSwitch(source, socket, to) {
 // here: it opens the host's own power dialog, with its own confirmation, and nothing follows it. "Cut power
 // anyway" asks for the machine's name to be typed and sends the same switch with cut: true and what was typed.
 // The panel compares the name itself; then the passkey step follows as for every switch, and what is signed says
-// "cut the power of X while it is running". A socket that is linked to nothing never gets here.
+// "cut the power of X while it is running" first, then the switch. A socket that is linked to nothing never gets here.
 const SOCK_RUNS = table({ running: "is still running", asleep: "is asleep, not off", unknown: "may still be running" });
 async function sockRunning(source, socket, d) {
   const at = location.hash;

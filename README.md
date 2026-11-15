@@ -307,8 +307,10 @@ switched: look at the socket.
   shows a dialog, "PC-B is still running", with the plug and the socket above the title. **Cancel** has
   the focus. **Shut down PC-B** is there when you may shut that host down from here: it opens the host's
   own power dialog, and nothing follows it. **Cut power anyway** asks for the machine's name to be typed,
-  and the passkey then signs "cut the power of PC-B while it is running". It is like pulling the plug:
-  nothing is shut down first. "On" has no such rule, and neither has a socket that is linked to nothing.
+  and the passkey then signs "cut the power of PC-B while it is running: switch off Channel 3 (Desk
+  powerbar)": the machine comes first, and long names are shortened so that the dialog never cuts the
+  sentence. It is like pulling the plug: nothing is shut down first. "On" has no such rule, and neither
+  has a socket that is linked to nothing.
 
 The locks and the question about a running machine are guards against a mistake: they depend on links
 somebody wrote. What holds also against a panel that was taken over is on the machine: switching is off

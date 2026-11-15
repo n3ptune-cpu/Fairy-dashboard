@@ -369,7 +369,7 @@ const off = () => click({ source: "relay/desk-bar", socket: "ch1", to: "off" });
   }
   if (sent.length !== n) fail("typing sent something");
   // 4a. the request: the same switch, with cut and what was typed; "Confirm it's you" takes the dialog's place
-  answer = async () => { const e = new Error("step-up"); e.stepUp = true; e.detail = { code: "step_up_required", pending: true, pending_id: "p2", signs: "switch off PC socket (Desk powerbar): cut the power of Desk PC while it is running" }; throw e; };
+  answer = async () => { const e = new Error("step-up"); e.stepUp = true; e.detail = { code: "step_up_required", pending: true, pending_id: "p2", signs: "cut the power of Desk PC while it is running: switch off PC socket (Desk powerbar)" }; throw e; };
   stepUps.length = 0; closed.length = 0;
   await go.onclick();
   if (sent.length !== n + 1 || sent[n][1].body !== '{"source":"relay/desk-bar","socket":"ch1","to":"off","tag":"t-ch1","cut":true,"confirm":"Desk PC"}') fail("the cut request: " + sent[n]?.[1].body);

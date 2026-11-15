@@ -342,7 +342,7 @@ func TestE2EPlugSwitch(t *testing.T) {
 	// "Cut power anyway", with PC-B's name typed: the passkey, then exactly one turn_off
 	st, out = pp.flip(agenttest.PlugBar, "ch1", "off", map[string]any{"cut": true, "confirm": "PC-B"})
 	id, _, _, ok = asked(st, out)
-	if !ok || out["detail"].(map[string]any)["signs"] != "switch off Left monitor (Monitor powerbar): cut the power of PC-B while it is running" {
+	if !ok || out["detail"].(map[string]any)["signs"] != "cut the power of PC-B while it is running: switch off Left monitor (Monitor powerbar)" {
 		t.Fatalf("cut power anyway: %d %v", st, out)
 	}
 	if res := pp.approve(id); res["ok"] != true || res["message"] != "Left monitor is off." {
