@@ -545,6 +545,9 @@ type PendingResult struct {
 	// Items: for an action about several machines (Update all), one line per machine with what happened
 	// there. The page shows Message and keeps the lines behind it until they are closed.
 	Items []string `json:"items,omitempty"`
+	// Warn: the action was taken and its result is not known to be the one asked for (a plug's socket that
+	// was sent the request and does not show the new state yet). The page shows Message as a warning.
+	Warn bool `json:"warn,omitempty"`
 }
 
 // FanEvent is one entry of the agent's fan log (mode changes, watchdog).

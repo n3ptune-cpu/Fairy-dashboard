@@ -157,11 +157,11 @@ const cases = [
   ["unknown, the helper does not answer", { state: "unknown", enforced_by: "helper", proto: 2 }, {}, ["warn", "unknown"], ["warn", "unknown"],
     ["The machine cannot say whether it checks approvals. Start the helper (Elevated helper, next to the host name)."], ["Its elevated helper is not answering."]],
   ["unknown, an old helper is running", { state: "unknown", enforced_by: "helper", proto: 2, error: "the running fairy-agent-helper is older than this agent (it knows no approvals)" }, {}, ["warn", "unknown"], ["warn", "unknown"],
-    ["Its running helper is older than its agent: it refuses fan, power and update requests. Restart the helper : Stop helper, then Start helper."], ["Nothing on the machine can check an approval until then. Stop helper and Start helper are under Elevated helper, next to the host name."]],
+    ["Its running helper is older than its agent: it refuses fan, power, update and plug requests. Restart the helper : Stop helper, then Start helper."], ["Nothing on the machine can check an approval until then. Stop helper and Start helper are under Elevated helper, next to the host name."]],
   ["some state this page does not know", { state: "later", enforced_by: "helper", proto: 2 }, {}, ["warn", "unknown"], ["warn", "unknown"],
     ["Checked by"], []],
   ["broken", { state: "broken", enforced_by: "helper", proto: 2, error: "trust file: <bad>" }, {}, ["bad", "broken"], ["bad", "broken"],
-    ["Its trust file cannot be used. It refuses fan, power and update requests until that is repaired on the machine : fairy-agent helper-trust show"],
+    ["Its trust file cannot be used. It refuses fan, power, update and plug requests until that is repaired on the machine : fairy-agent helper-trust show"],
     ["The machine says: trust file: &lt;bad&gt;", "fairy-agent helper-trust show is run on the machine, as administrator, and names what is wrong with the file."]],
   ["machine id changed", { ...base, binding: "changed" }, { machine_id: MID, shown_id: SHOWN, pinned: "turn-on", pinned_by: "nora", can_accept: true, accept: "id" }, ["bad", "required · Machine id changed"], ["bad", "required · Machine id changed"],
     ["Machine id changed. It shows another machine id than the one Fairy has on record. No approvals until an admin accepts the new id.", "Accept this machine's new id", "Machine id on record", "Machine id it shows"],
@@ -208,7 +208,7 @@ for (const [name, a, m, admin, viewer, shown, more] of cases) {
       for (const x of more) if (!behind.includes(x)) fail(name + ": More lacks " + JSON.stringify(x) + " in " + JSON.stringify(behind));
       // r4-b1-08: "More" does not say again what stands above it: no sentence of it, and not its three refrains
       for (const sent of behind.split(/(?<=[.:]) /)) if (sent.length > 40 && html.includes(sent)) fail(name + ": More repeats " + JSON.stringify(sent));
-      for (const again of ["cannot skip", "Locked", "in no run", "refuses fan, power and update requests"]) if (html.includes(again) && behind.includes(again)) fail(name + ": More says " + JSON.stringify(again) + " again");
+      for (const again of ["cannot skip", "Locked", "in no run", "refuses fan, power, update and plug requests"]) if (html.includes(again) && behind.includes(again)) fail(name + ": More says " + JSON.stringify(again) + " again");
     } else {
       for (const x of ADMINS) if (v.html.includes(x) || v.more.join(" ").includes(x) || btn.includes(x)) fail(name + ": a viewer's dialog holds " + JSON.stringify(x));
     }

@@ -59,7 +59,7 @@ const on = { state: "required", enforced_by: "helper", proto: 2 };
 const cases = [
   ["required", on, ""], ["off", { state: "off" }, ""], ["unknown", { state: "unknown" }, ""], ["required, last known", { ...on, last_known: true }, ""],
   ["a binding this page does not know", { ...on, binding: "later" }, ""],
-  ["broken", { state: "broken", error: "trust file: <bad>" }, "Approval broken: it refuses fan, power and update requests."],
+  ["broken", { state: "broken", error: "trust file: <bad>" }, "Approval broken: it refuses fan, power, update and plug requests."],
   ["changed", { ...on, binding: "changed" }, "Machine id changed: no approvals until the new id is accepted."],
   ["duplicate", { ...on, binding: "duplicate", binding_with: ["BETA"] }, "One machine id on two hosts: no approvals for either."],
   ["duplicate, the other keeps the id", { ...on, binding: "duplicate", binding_with: ["BETA", "GAMMA"], binding_held: ["BETA"] }, "One machine id on two hosts: BETA keeps it."],

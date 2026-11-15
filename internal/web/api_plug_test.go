@@ -695,7 +695,7 @@ func TestPlugSwitchAnswers(t *testing.T) {
 			t.Fatal(cb.code)
 		}
 		pr := pe.result(t)
-		if pr["ok"] != true || pr["message"] != "Sent. Lamp does not show on yet." {
+		if pr["ok"] != true || pr["warn"] != true || pr["message"] != "Sent. Lamp does not show on yet." {
 			t.Fatalf("result: %v", pr)
 		}
 		au := pe.plugAudits()[0]

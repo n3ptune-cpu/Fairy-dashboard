@@ -354,6 +354,9 @@ function showPendingResult(pr) {
   // sentence in it, as it does when the panel refuses the form at once.
   const typed = pr.path === "/api/admin/hosts" ? keptAddHost() : null;
   if (!pr.ok && typed) { openAddHost(typed, pr.message || `HTTP ${pr.status}`); return; }
+  // a plug's socket: the panel's sentence names the socket and says what is known ("Lamp is off.", "Sent. Lamp
+  // does not show off yet.", "No answer. It may have been switched: look at the socket."); nothing is put before it
+  if (pr.path === "/api/power/socket") { flash(pr.message || `${pr.label}: ${pr.ok ? "sent" : `failed · HTTP ${pr.status}`}`, !pr.ok || pr.warn === true); return; }
   // an action about several machines brings a line per machine: the count is shown, the lines stay behind it
   if (pr.items?.length) flash(`${pr.label}: ${pr.message || (pr.ok ? "done" : "not everything worked")}`, !pr.ok, pr.items);
   else if (SAID_ONCE.test(pr.path || "")) whenSystems(() => flash(saidOnce(pr) || `${pr.label}: ${pr.ok ? pr.message || "done" : `failed · ${pr.message || `HTTP ${pr.status}`}`}`, !pr.ok));
@@ -432,6 +435,7 @@ async function runPending() {
   const s = state.byId[p.system];
   try {
     if (p.kind === "power" && s) { await refreshCaps(s.id); openPowerDialog(s, p.action); }
+    else if (p.kind === "plug") await sockSwitch(p.body?.source, p.body?.socket, p.body?.to);  // asked anew, with the socket as it is now
     else if (p.kind === "request") { const r = await api(p.path, { method: p.method, body: JSON.stringify(p.body) }); flash(r?.message || `${p.label}: done`); }
     else if (p.kind === "upload") flash(`${p.label}: choose the picture again`);  // a file is not kept by the page
   } catch (e) {
@@ -598,21 +602,33 @@ const wallMore = (lp) => lp.sources.map((x) => {
 
 // ------------------------------------------------------------ plug sockets
 // The sockets of a plug that its agent's Home Assistant knows (a source's `sockets`, Fairy-agent v0.10.0). Each
-// is a dot for its state and its name: green is on, grey is off, a ring means Home Assistant has no state for
-// it right now. What hangs on a socket (when the panel was told, and the viewer sees that row) is the name's
-// tooltip. A socket an admin cannot switch from here has a lock after its name, and the one sentence that says
-// why is behind it (hover, or a click): the panel makes that sentence (`note`), with the machine's name in it.
-// Whether a socket can be switched is set on the machine that reads the plug, never on this page.
+// has a sign for its state and its name. For somebody who cannot switch it the sign is a dot: green is on, grey
+// is off, a ring means Home Assistant has no state for it right now. What hangs on a socket (when the panel was
+// told, and the viewer sees that row) is the name's tooltip. A socket an admin cannot switch from here has a
+// lock after its name, and the one sentence that says why is behind it (hover, or a click): the panel makes that
+// sentence (`note`), with the machine's name in it.
+//
+// Where the panel says an admin can switch the socket (`switchable`, with the `tag` of its row), the sign is a
+// small switch. Whether a socket can be switched is set on the machine that reads the plug, never on this page.
+// A click switches nothing by itself: the panel answers "Confirm it's you" first, and that dialog names the
+// socket, the direction and what hangs on the socket in the panel's own words, before a passkey is asked for.
+// The machine that reads the plug checks that approval itself; it is for this socket and this direction only.
 const SOCK_STATE = table({ on: ["on", "On"], off: ["off", "Off"], unavailable: ["none", "Home Assistant does not reach this socket right now"],
   unknown: ["none", "Home Assistant has no state for this socket right now"] });
 const sockState = (k) => SOCK_STATE[k.state] || SOCK_STATE.unknown;
 const sockFeeds = (k) => state.byId[k.system_id]?.name || "";
 const sockLock = (src, k, where) => (k.switchable || typeof k.note !== "string" || !k.note ? ""
   : infoBtn(`sock-${where}:${src.id}/${k.id}`, k.name, `<p>${esc(k.note)}</p>`, { icon: I.lock, cls: "sock-lock", label: k.note }));
-// The sign of a socket's state: the dot.
+const sock = { busy: dict() };  // "<source id>/<socket id>": a request to switch it is on its way
+const sockCan = (k) => k.switchable === true && typeof k.tag === "string" && k.tag !== "";
+// The sign of a socket's state: the switch for a socket this viewer can switch, else the dot. The switch says
+// what a click asks for; a socket without a state has a grey one that is no button (the panel would refuse).
 function sockSign(src, k) {
   const [cls, word] = sockState(k);
-  return `<span class="sock-dot ${cls}" role="img" aria-label="${esc(word)}" title="${esc(word)}"></span>`;
+  if (!sockCan(k)) return `<span class="sock-dot ${cls}" role="img" aria-label="${esc(word)}" title="${esc(word)}"></span>`;
+  if (cls === "none") return `<span class="sock-sw none" role="img" aria-label="${esc(word)}" title="${esc(word)}"></span>`;
+  const on = cls === "on", tip = on ? "On. Click to switch off." : "Off. Click to switch on.";
+  return `<button class="sock-sw ${cls}" type="button" role="switch" aria-checked="${on}" data-act="sock" data-source="${esc(src.id)}" data-socket="${esc(k.id)}" data-to="${on ? "off" : "on"}" title="${tip}" aria-label="${esc(`${k.name}: ${tip}`)}"${sock.busy[`${src.id}/${k.id}`] ? " disabled" : ""}></button>`;
 }
 function sockEl(src, k) {
   const feeds = sockFeeds(k);
@@ -623,6 +639,34 @@ const sockets = (src) => (Array.isArray(src.sockets) && src.sockets.length ? `<d
 // In a host's Power panel: one line for each socket that feeds this host, of whatever plug it is a part of.
 const hostSockets = (id) => (!id ? [] : state.power?.sources || []).flatMap((src) => (Array.isArray(src.sockets) ? src.sockets : []).filter((k) => k.system_id === id)
   .map((k) => `<div class="list-row wall-sock" data-key="${esc(`${src.id}/${k.id}`)}"><span>Socket · ${esc(k.name)} <span class="note">${esc(src.name)}</span></span><span class="sock">${sockSign(src, k)}${esc(sockState(k)[0] === "none" ? "no state" : k.state)}${sockLock(src, k, "h")}</span></div>`)).join("");
+
+// One switch. The socket is taken as the page has it now (its tag and its name), never from the button; the
+// direction is the one the button showed, and only "on" or "off" is ever sent. The first answer is "Confirm
+// it's you" (controlCall): after the passkey the panel sends the kept request itself and its result comes with
+// /api/me (showPendingResult). Every sentence is the panel's.
+const sockFind = (source, socket) => {
+  const src = (state.power?.sources || []).find((x) => x.id === source);
+  const k = (Array.isArray(src?.sockets) ? src.sockets : []).find((x) => x.id === socket);
+  return src && k ? [src, k] : [null, null];
+};
+async function sockSwitch(source, socket, to) {
+  const [src, k] = sockFind(source, socket);
+  if (!src || !k || !sockCan(k) || (to !== "on" && to !== "off")) return;
+  const key = `${src.id}/${k.id}`;
+  if (sock.busy[key]) return;
+  const ask = { source: src.id, socket: k.id, to };
+  sock.busy[key] = true; render();
+  try {
+    const r = await controlCall({ kind: "plug", label: `Switch ${to} ${k.name} (${src.name})`, method: "POST", path: "/api/power/socket", body: ask },
+      () => api("/api/power/socket", { method: "POST", body: JSON.stringify({ ...ask, tag: k.tag }) }));
+    if (r) flash(r.message || `${k.name}: sent`, r.confirmed !== true);
+  } catch (x) { flash(x.message, true); }
+  finally { delete sock.busy[key]; render(); }
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest?.('[data-act="sock"]');
+  if (t && !t.disabled) sockSwitch(t.dataset.source, t.dataset.socket, t.dataset.to);
+});
 
 // ------------------------------------------------------------ grouping: hosts by site
 // Every host (Proxmox node or agent) is listed under its site (site: in config.yaml, or set on the Users page);
@@ -849,7 +893,7 @@ function approvalChip(s) {
   const b = a.binding ? AP_BINDING[a.binding] : null;
   if (!b && a.state !== "broken") return "";
   const name = b ? b[0] : "Approval broken";
-  const text = b ? apBindingText(a) : `This machine's own check of approvals is broken: ${a.error || "no details"}. It refuses fan, power and update requests until that is repaired on the machine.`;
+  const text = b ? apBindingText(a) : `This machine's own check of approvals is broken: ${a.error || "no details"}. It refuses fan, power, update and plug requests until that is repaired on the machine.`;
   return infoBtn(`apflag-${s.id}`, name, `<p>${esc(text)}</p><p>Details are on <a href="#/system/${enc(s.id)}" data-ap-go="${esc(s.id)}">its page</a>.</p>`, { cls: "hflag bad", icon: I.apKey, label: `${name}: ${text}` });
 }
 // The name of the machine's own check wherever the page offers it: the button in a host's header, the title of the
@@ -923,8 +967,8 @@ function approvalBox(s) {
     const old = String(a.error || "").startsWith(AP_HELPER_OLD);
     return view(`${bind}
       <div class="${a.state === "broken" ? "warnbox bad" : "note warn"}" id="ap-error">${a.state === "broken"
-        ? "Its trust file cannot be used. It refuses fan, power and update requests until that is repaired <b>on the machine</b>: <code>fairy-agent helper-trust show</code>"
-        : old ? "Its running helper is older than its agent: it refuses fan, power and update requests. <b>Restart the helper</b>: Stop helper, then Start helper."
+        ? "Its trust file cannot be used. It refuses fan, power, update and plug requests until that is repaired <b>on the machine</b>: <code>fairy-agent helper-trust show</code>"
+        : old ? "Its running helper is older than its agent: it refuses fan, power, update and plug requests. <b>Restart the helper</b>: Stop helper, then Start helper."
         : "The machine cannot say whether it checks approvals. Start the helper (Elevated helper, next to the host name)."}</div>
       ${row("Checked by", esc(approvalBy(a)))}${proto}${agentErr}`,
       // behind "More": what the lines above do not say (they said the lead again: audit 6, r4-b1-08)
@@ -974,7 +1018,7 @@ function approvalStrip(s) {
   const a = approvalOf(s);
   if (!a || !((a.binding && AP_BINDING[a.binding]) || a.state === "broken")) return "";
   const held = Array.isArray(a.binding_held) && a.binding_held.length ? andList(a.binding_held.map(String)) : "";
-  const text = !AP_BINDING[a.binding] ? "Approval broken: it refuses fan, power and update requests."
+  const text = !AP_BINDING[a.binding] ? "Approval broken: it refuses fan, power, update and plug requests."
     : a.binding === "duplicate" && held ? `One machine id on two hosts: ${held} keeps it.` : AP_STRIP[a.binding];
   return `<div class="pending-strip bad" id="ap-strip" data-key="ap-strip"><span>${esc(text)}</span><button class="btn push" type="button" data-act="ap-dlg" aria-haspopup="dialog">${I.shield}${esc(AP_LABEL)}</button></div>`;
 }
@@ -1757,7 +1801,8 @@ function pagePower() {
     <div class="section-title">Sources${infoBtn("power", "Sources", infoList([
       "Wall power: what plugs, UPSes and BMCs measure.",
       "CPU, GPU and battery readings on a system's page are component power reported by its agent, not wall power.",
-      "A plug's sockets are under its name: a dot for on or off. A lock means it cannot be switched from here, and says why."]))}</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
+      "A plug's sockets are under its name: a dot for on or off. A lock means it cannot be switched from here, and says why.",
+      "A socket has a switch only where the machine that reads the plug allows it, in its own config. Every switch, on or off, asks for your passkey, and that machine checks it itself."]))}</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
     <th class="num">Volts</th><th class="num">Amps</th><th class="num">kWh</th><th>Linked</th><th>Last hour</th></tr></thead><tbody>${p.sources.map((s) => powerSourceRow(s, chip)).join("")}</tbody></table></div>`;
 }
 // One source of the Power page. "Linked" is the row the source is linked to, from the source itself (also
@@ -2146,7 +2191,7 @@ function auditDetails(e) {
   const open = !!audit.open[e.id];
   return `<div class="note"><button class="audit-det" type="button" data-act="audit-det" data-id="${esc(e.id)}" aria-expanded="${open}" title="${open ? "Show less" : esc(d)}">${esc(open ? d : `${d.slice(0, AUDIT_DET - 1)}…`)}</button></div>`;
 }
-const AUDIT_ACTIONS = [["", "All actions"], ["auth", "Sign-in / step-up / denied"], ["power", "Power"], ["helper", "Elevated helper"], ["fan", "Fans"], ["poll", "Polling"],
+const AUDIT_ACTIONS = [["", "All actions"], ["auth", "Sign-in / step-up / denied"], ["power", "Power"], ["helper", "Elevated helper"], ["fan", "Fans"], ["plug", "Plugs"], ["poll", "Polling"],
   ["settings", "Settings"], ["token", "API tokens"], ["control", "Kill switch"], ["host", "Host admin"], ["sessions", "Sessions"],
   ["user", "Users / roles"], ["site", "Sites"], ["update", "Updates"], ["wakeupdate", "Update unpowered hosts"]];
 async function loadAudit(reset) {

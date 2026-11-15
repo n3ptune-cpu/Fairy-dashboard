@@ -35,8 +35,18 @@ func powerPageScript(t *testing.T, js, body string) string {
 const state = { power: null, history: [], systems: [], byId: {}, ups: { ups: [] } };
 const spark = () => "", setTitle = () => {};
 const I = { close: "", info: "", lock: "" };
+// what the sockets of a plug use of the rest of the page: the click it listens for, the request it sends (and
+// what the panel answers), the line it shows, and "Confirm it's you"
+const clicks = [], document = { addEventListener: (type, fn) => { if (type === "click") clicks.push(fn); } };
+let renders = 0, ctlLabel = null, answer = async () => ({});
+const render = () => { renders++; };
+const flashes = [], flash = (msg, bad = false) => { flashes.push([msg, bad]); };
+const sent = [], api = (path, opts) => { sent.push([path, opts, ctlLabel]); return answer(path, opts); };
+const stepUps = [], showStepUp = (pending, detail) => { stepUps.push([pending, detail]); };
+const done = [], actionDone = (pending) => { done.push(pending); };
 ` + strings.Join(parts, "\n") + "\n" +
 		block("const info = { html: dict(), key: null,", "const infoBtnOf = ") +
+		block("async function controlCall(pending, fn) {", "function resumePending() {") +
 		block("const linkedPower = (id) => {", "// ------------------------------------------------------------ grouping: hosts by site") +
 		block("function pagePower() {", "// ------------------------------------------------------------ UPS page") + `
 const fail = (m) => { console.log("FAIL " + m); process.exitCode = 1; };
@@ -44,7 +54,7 @@ const words = (t) => t.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/
 const src = (id, o) => ({ id, type: "homeassistant", name: id, status: "ok", include_in_total: true, readings: [], last_success: null, error: null, via: "relay", ...o });
 const rd = (watts, system_id) => ({ source_id: "", name: "", watts, voltage: null, current: null, energy_kwh_total: null, system_id });
 ` + body + `
-if (!process.exitCode) console.log("ok");
+process.on("exit", () => { if (!process.exitCode) console.log("ok"); });  // at the end, also of a script that waits for answers
 `
 }
 

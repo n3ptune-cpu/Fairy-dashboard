@@ -479,6 +479,10 @@ func (s *Server) resumePendingWith(c *reqCtx, p *pendingAction, grant *approvalG
 	if all, ok := body["all_ok"].(bool); ok && !all {
 		res.OK = false
 	}
+	// A switch of a plug's socket that the machine could not confirm is not a plain "done" (api_plug.go).
+	if confirmed, ok := body["confirmed"].(bool); ok && !confirmed && res.OK {
+		res.Warn = true
+	}
 	if res.Message == "" && res.OK {
 		res.Message = "done"
 	}

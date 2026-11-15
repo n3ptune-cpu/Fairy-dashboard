@@ -101,3 +101,157 @@ func TestUISocketsAreOnThePowerPageAndInTheHostsPanel(t *testing.T) {
 		t.Error("a socket's green dot stays green while the panel is not reached")
 	}
 }
+
+// The switch (PLUGS-DESIGN.md, 4.3 and 4.7): where the panel says an admin can switch a socket, and gave the
+// tag of its row, the sign is a small switch that says what a click asks for. A socket without a state has a
+// grey one that is no button. Nothing else on the page is a switch: not a row without a tag, not one whose
+// "switchable" is anything but true.
+func TestUISocketSwitchIsDrawnOnlyWhereThePanelSaysSo(t *testing.T) {
+	runPowerPageScript(t, "switch-draw", `
+const k = (id, o) => ({ id, name: id, state: "on", switchable: true, tag: "t-" + id, ...o });
+const bar = src("relay/desk-bar", { name: "Desk powerbar", sockets: [
+  k("ch1", { name: "Lamp" }), k("ch2", { name: "Printer", state: "off" }), k("ch3", { name: "Gone", state: "unavailable" }), k("ch4", { name: "New", state: "weird" }),
+  k("ch5", { tag: "" }), k("ch6", { tag: undefined }), k("ch7", { switchable: "true" }), k("ch8", { switchable: 1 }), k("ch9", { switchable: false, why: "read_only" }),
+  k("c<10", { name: '"<b>q</b>', state: "off" }) ] });
+state.power = { total_w: 1, sources: [bar] };
+const socks = pagePower().split('<span class="sock" ').slice(1);
+if (socks.length !== 10) fail("sockets: " + socks.length);
+const sw = (h) => (h.match(/<button class="sock-sw (on|off)" type="button" role="switch" aria-checked="(true|false)" data-act="sock" data-source="([^"]*)" data-socket="([^"]*)" data-to="(on|off)" title="([^"]*)" aria-label="([^"]*)"( disabled)?><\/button>/) || []).slice(1).join("|");
+if (sw(socks[0]) !== "on|true|relay/desk-bar|ch1|off|On. Click to switch off.|Lamp: On. Click to switch off.|") fail("a socket that is on: " + socks[0]);
+if (sw(socks[1]) !== "off|false|relay/desk-bar|ch2|on|Off. Click to switch on.|Printer: Off. Click to switch on.|") fail("a socket that is off: " + socks[1]);
+for (const [i, word] of [[2, "Home Assistant does not reach this socket right now"], [3, "Home Assistant has no state for this socket right now"]]) {
+  if (!socks[i].includes('<span class="sock-sw none" role="img" aria-label="' + word + '" title="' + word + '"></span>') || /<button[^>]*sock-sw|data-act="sock"/.test(socks[i])) fail("a socket without a state: " + socks[i]);
+}
+for (const i of [4, 5, 6, 7, 8]) if (/sock-sw|data-act|role="switch"/.test(socks[i]) || !socks[i].includes('<span class="sock-dot on"')) fail("a switch the panel did not offer (socket " + (i + 1) + "): " + socks[i]);
+if (sw(socks[9]) !== "off|false|relay/desk-bar|c&lt;10|on|Off. Click to switch on.|&quot;&lt;b&gt;q&lt;/b&gt;: Off. Click to switch on.|") fail("ids and names are text: " + socks[9]);
+if ((pagePower().match(/data-to="/g) || []).length !== 3 || /data-to="(?!on"|off")/.test(pagePower()) || /toggle/i.test(pagePower())) fail("a direction that is not on or off");
+// while a request for a socket is on its way, its switch takes no second click
+sock.busy["relay/desk-bar/ch1"] = true;
+const busy = pagePower().split('<span class="sock" ').slice(1);
+if (!sw(busy[0]).endsWith("| disabled") || sw(busy[1]).endsWith("disabled")) fail("the switch of a socket that is being switched: " + busy[0]);
+// the host's panel has the same switch
+bar.sockets = [k("ch1", { name: "Lamp", system_id: "desk-pc" })];
+delete sock.busy["relay/desk-bar/ch1"];
+if (!/<button class="sock-sw on"[^>]*data-source="relay\/desk-bar" data-socket="ch1" data-to="off"/.test(hostSockets("desk-pc"))) fail("the switch in the host's panel: " + hostSockets("desk-pc"));
+`)
+}
+
+// A click on a switch: one request, POST /api/power/socket, with the plug, the socket, the direction the
+// button showed and the tag of the row as the page has it now. Nothing else is in it, and the direction is "on"
+// or "off" or nothing is sent. The first answer of a real panel is "Confirm it's you" (the kept action is run
+// by the panel after the passkey); every sentence shown is the panel's.
+func TestUISocketSwitchSendsOneExactRequest(t *testing.T) {
+	runPowerPageScript(t, "switch-send", `
+const k = (id, o) => ({ id, name: id, state: "on", switchable: true, tag: "t-" + id, ...o });
+const bar = src("relay/desk-bar", { name: "Desk powerbar", sockets: [k("ch1", { name: "Lamp" }), k("ch2", { name: "Printer", state: "off" }),
+  k("ch3", { name: "Locked", switchable: false, why: "panel" }), k("ch4", { name: "No tag", tag: "" })] });
+state.power = { total_w: 1, sources: [bar, src("relay/other", { sockets: [k("ch1", { name: "Other" })] })] };
+const click = (data, o = {}) => { const t = { dataset: data, disabled: false, ...o }; clicks.forEach((fn) => fn({ target: { closest: (sel) => (sel === '[data-act="sock"]' && data.act === "sock" ? t : null) } })); };
+const tick = () => new Promise((r) => setTimeout(r, 0));
+(async () => {
+  if (clicks.length !== 1) fail("click listeners of the sockets: " + clicks.length);
+  // 1. the request, and "Confirm it's you" in answer
+  answer = async () => { const e = new Error("step-up"); e.stepUp = true; e.detail = { code: "step_up_required", pending: true, pending_id: "p1" }; throw e; };
+  click({ act: "sock", source: "relay/desk-bar", socket: "ch1", to: "off" });
+  if (sent.length !== 1) fail("requests after one click: " + sent.length);
+  const [path, opts, label] = sent[0];
+  if (path !== "/api/power/socket" || opts.method !== "POST" || opts.body !== '{"source":"relay/desk-bar","socket":"ch1","to":"off","tag":"t-ch1"}') fail("the request: " + path + " " + JSON.stringify(opts));
+  if (label !== "Switch off Lamp (Desk powerbar)") fail("the action's name for the panel: " + label);
+  if (!sock.busy["relay/desk-bar/ch1"]) fail("the socket is not marked while its request is on its way");
+  click({ act: "sock", source: "relay/desk-bar", socket: "ch1", to: "off" });  // a second click meanwhile
+  if (sent.length !== 1) fail("a second request while the first is on its way");
+  await tick();
+  if (stepUps.length !== 1 || flashes.length !== 0) fail("after the panel asked for a confirmation: " + JSON.stringify([stepUps, flashes]));
+  const [pending, detail] = stepUps[0];
+  if (JSON.stringify(pending) !== '{"kind":"plug","label":"Switch off Lamp (Desk powerbar)","method":"POST","path":"/api/power/socket","body":{"source":"relay/desk-bar","socket":"ch1","to":"off"}}') fail("what the dialog is given: " + JSON.stringify(pending));
+  if (detail.pending_id !== "p1") fail("the panel's detail: " + JSON.stringify(detail));
+  if (sock.busy["relay/desk-bar/ch1"]) fail("the socket stays marked after the answer");
+
+  // 2. an answer with the result (a panel that asks for no confirmation would give it at once)
+  answer = async () => ({ ok: true, to: "on", confirmed: true, message: "Printer is on." });
+  click({ act: "sock", source: "relay/desk-bar", socket: "ch2", to: "on" });
+  await tick();
+  if (sent[1][1].body !== '{"source":"relay/desk-bar","socket":"ch2","to":"on","tag":"t-ch2"}') fail("the second request: " + sent[1][1].body);
+  if (JSON.stringify(flashes.pop()) !== '["Printer is on.",false]' || done.length !== 1) fail("the result line");
+  answer = async () => ({ ok: true, to: "on", confirmed: false, message: "Sent. Printer does not show on yet." });
+  click({ act: "sock", source: "relay/desk-bar", socket: "ch2", to: "on" });
+  await tick();
+  if (JSON.stringify(flashes.pop()) !== '["Sent. Printer does not show on yet.",true]') fail("a switch that is not confirmed is shown as a warning");
+  answer = async () => ({ ok: true });
+  click({ act: "sock", source: "relay/desk-bar", socket: "ch2", to: "on" });
+  await tick();
+  if (JSON.stringify(flashes.pop()) !== '["Printer: sent",true]') fail("an answer without a sentence is never shown as done");
+
+  // 3. a refusal, and no answer: the panel's sentence, as a failure
+  for (const msg of ["Wait 4 s before you switch Lamp again.", "No answer from RELAY. It may have been switched: look at the socket.", "Panel not reachable. No answer: it is not known whether this was done."]) {
+    answer = async () => { const e = new Error(msg); e.status = 409; throw e; };
+    click({ act: "sock", source: "relay/desk-bar", socket: "ch1", to: "off" });
+    await tick();
+    if (JSON.stringify(flashes.pop()) !== JSON.stringify([msg, true])) fail("the line for: " + msg);
+    if (sock.busy["relay/desk-bar/ch1"]) fail("the socket stays marked after a refusal");
+  }
+
+  // 4. what is never sent
+  const before = sent.length;
+  for (const d of [{ source: "relay/desk-bar", socket: "ch1", to: "toggle" }, { source: "relay/desk-bar", socket: "ch1", to: "" }, { source: "relay/desk-bar", socket: "ch1" },
+    { source: "relay/desk-bar", socket: "ch1", to: "ON" }, { source: "relay/desk-bar", socket: "ch3", to: "off" }, { source: "relay/desk-bar", socket: "ch4", to: "off" },
+    { source: "relay/desk-bar", socket: "nope", to: "off" }, { source: "relay/nope", socket: "ch1", to: "off" }, { source: "__proto__", socket: "ch1", to: "off" }, { socket: "ch1", to: "off" }]) {
+    click({ act: "sock", ...d });
+    await tick();
+  }
+  click({ act: "sock", source: "relay/desk-bar", socket: "ch1", to: "off" }, { disabled: true });
+  click({ act: "other", source: "relay/desk-bar", socket: "ch1", to: "off" });
+  await tick();
+  if (sent.length !== before || flashes.length !== 0) fail("a request that must not be sent: " + JSON.stringify(sent.slice(before)));
+
+  // 5. the tag is the row's as the page has it at the click, not the one of an older drawing
+  bar.sockets[0].tag = "t-new";
+  answer = async () => ({ ok: true, confirmed: true, message: "Lamp is off." });
+  click({ act: "sock", source: "relay/desk-bar", socket: "ch1", to: "off" });
+  await tick();
+  if (sent[sent.length - 1][1].body !== '{"source":"relay/desk-bar","socket":"ch1","to":"off","tag":"t-new"}') fail("the tag at the click: " + sent[sent.length - 1][1].body);
+  for (const [, o] of sent) { const b = JSON.parse(o.body); if (Object.keys(b).join() !== "source,socket,to,tag" || (b.to !== "on" && b.to !== "off")) fail("a body with more than one socket and one direction: " + o.body); }
+  if (!renders) fail("the page is not drawn again around a request");
+})().catch((e) => fail("the script: " + (e && e.stack || e)));
+`)
+}
+
+// The rest of the page that knows of the switch: the result of the kept action after "Confirm it's you" is the
+// panel's sentence alone (a switch that is not confirmed as a warning), "Resume" asks anew instead of sending
+// the old request again, the audit page can filter the plug entries, and the sentences about a machine whose
+// check is broken name plugs too.
+func TestUISocketSwitchInTheRestOfThePage(t *testing.T) {
+	js := appJS(t)
+	for _, want := range []string{
+		"if (pr.path === \"/api/power/socket\") { flash(pr.message || `${pr.label}: ${pr.ok ? \"sent\" : `failed · HTTP ${pr.status}`}`, !pr.ok || pr.warn === true); return; }",
+		`else if (p.kind === "plug") await sockSwitch(p.body?.source, p.body?.socket, p.body?.to);`,
+		`["fan", "Fans"], ["plug", "Plugs"],`,
+		`Every switch, on or off, asks for your passkey, and that machine checks it itself.`,
+	} {
+		if strings.Count(js, want) != 1 {
+			t.Errorf("app.js lacks (or has twice) %q", want)
+		}
+	}
+	if n := strings.Count(js, "refuses fan, power, update and plug requests"); n != 4 {
+		t.Errorf("the sentences about a machine that refuses: %d of 4 name plugs", n)
+	}
+	if strings.Contains(js, "refuses fan, power and update requests") {
+		t.Error("a sentence about a machine that refuses still leaves plugs out")
+	}
+	// the page never asks for a toggle, and has one place that sends a switch
+	if regexp.MustCompile(`(?i)["'\x60]toggle["'\x60]`).MatchString(js) {
+		t.Error("app.js names a toggle")
+	}
+	if n := strings.Count(js, `api("/api/power/socket"`); n != 1 {
+		t.Errorf("places that send a switch: %d", n)
+	}
+	b, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"\n.sock-sw {", "\n.sock-sw.on::after {", "\n.sock-sw:disabled {", "\n.sock-sw.none {", "\nbody.unreachable .sock-sw.on::after { background: var(--off); }"} {
+		if strings.Count(string(b), want) != 1 {
+			t.Errorf("app.css lacks (or has twice) %q", want)
+		}
+	}
+}
