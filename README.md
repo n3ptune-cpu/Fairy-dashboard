@@ -299,7 +299,14 @@ the socket can be switched, and in its place a lock with one sentence for why wh
 **One switch.** A click switches nothing by itself. The panel answers with **Confirm it's you**: the dialog
 names the socket, the plug, the direction and the machine on the socket ("switch off Channel 3 (Desk
 powerbar), which powers PC-B"), and Pocket ID asks for your passkey. The approval is for that one socket and
-that one direction. The machine that reads the plug checks it itself and uses it up; then it sends Home
+that one direction: what the machine checks is the plug, the socket, the direction and the socket's tag.
+Which machine hangs on the socket, and "cut the power of PC-B while it is running", are the panel's own
+words, from its links and from what it sees of that machine. So after the passkey the panel looks again
+before it sends anything: when the words it would show now are not the ones the dialog showed (the PC was
+started meanwhile, or went off), nothing is sent, the approval is not used, and the page says "This
+changed while you confirmed. Nothing was switched: look again." A request that says "Cut power anyway"
+where the panel asks no question is refused the same way. The machine that reads the plug checks the
+approval itself and uses it up; then it sends Home
 Assistant "turn on" or "turn off" for that socket (never a toggle) and watches the socket for up to 10
 seconds. The page then says "Channel 3 is off.", or "Sent. Channel 3 does not show off yet." when the socket
 did not follow in that time. When no answer comes back the page says so, and never that nothing was

@@ -53,9 +53,12 @@ const plugAudit = "plug.switch"
 // codeMachineRunning is the code of the refusal "the machine on this socket still runs": the page then offers
 // "Shut down" and "Cut power anyway". codeNothingLinked is the code of the refusal of "off" for a socket that
 // is linked to nothing: the page then asks "If a machine is plugged in here, it loses power now".
+// codeSituationChanged is the code of the refusal "what is true now is not what was confirmed": the page says
+// "look again" (plugChanged).
 const (
-	codeMachineRunning = "machine_running"
-	codeNothingLinked  = "nothing_linked"
+	codeMachineRunning   = "machine_running"
+	codeNothingLinked    = "nothing_linked"
+	codeSituationChanged = "situation_changed"
 )
 
 type plugSwitchReq struct {
@@ -120,6 +123,13 @@ func (e *plugError) Unwrap() error { return e.err }
 // plugErr is a refusal: nothing was sent to Home Assistant.
 func plugErr(status int, word, text string) error {
 	return &plugError{err: apierr.New(status, text), word: word}
+}
+
+// plugChanged is the refusal of a request that does not fit what the panel sees now: the machine on the socket
+// was started or went off, or the socket was linked or named differently, between what the person confirmed
+// and this request. Nothing was sent.
+func plugChanged(text string) error {
+	return &plugError{err: apierr.New(409, map[string]any{"code": codeSituationChanged, "message": text}), word: codeSituationChanged}
 }
 
 // plugFailed is a failure after the request was (or may have been) sent.
@@ -326,13 +336,26 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 			return refuse(plugErr(422, "cut_name", fmt.Sprintf("Type %s to confirm cutting its power. Nothing was switched.", name)))
 		}
 		cut = true
+	case b.Cut:
+		// "Cut power anyway" for a socket whose machine counts as off: it answers a question the panel does not
+		// ask. It is not taken for a plain "off": a request that says more than what is true now is not kept
+		// through a passkey round trip, during which the machine may be started.
+		return refuse(plugChanged(fmt.Sprintf("\"Cut power anyway\" answers a question the panel does not ask for this socket now: %s counts as off. Nothing was switched. Look again.", name)))
 	}
 	if cut {
 		params["cut"] = true
 	}
+	// What the passkey is asked for, in words. In the panel's replay after the round trip to Pocket ID they are
+	// made again from what is true now, and must be the ones the dialog showed: the request the machine checks
+	// names the socket, the direction and the tag, and "which powers X" and "cut the power of X while it is
+	// running" are the panel's words, so the panel does not act on words the person did not see.
+	words := plugWords(k, b.To, cut)
+	if g := c.approved(); g != nil && g.plan.signs != words {
+		return refuse(plugChanged(fmt.Sprintf("This changed while you confirmed. Your passkey was asked for %q, and it would now be %q. Nothing was switched. Look again.", g.plan.signs, words)))
+	}
 	// The machine's challenge for exactly this request, then the passkey. No other way leads on from here.
 	req := api.SocketSetRequest(k.dev, k.sock.ID, b.To, k.sock.Tag)
-	ap, err := c.confirmOne(u, "control actions", &approvalTarget{agent: k.agent, name: machine, req: req, words: plugWords(k, b.To, cut)})
+	ap, err := c.confirmOne(u, "control actions", &approvalTarget{agent: k.agent, name: machine, req: req, words: words})
 	if err != nil {
 		if isStepUp(err) {
 			return err

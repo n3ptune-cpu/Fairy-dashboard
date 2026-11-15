@@ -357,7 +357,9 @@ function showPendingResult(pr) {
   if (!pr.ok && typed) { openAddHost(typed, pr.message || `HTTP ${pr.status}`); return; }
   // a plug's socket: the panel's sentence names the socket and says what is known ("Lamp is off.", "Sent. Lamp
   // does not show off yet.", "No answer. It may have been switched: look at the socket."); nothing is put before it
-  if (pr.path === "/api/power/socket") { flash(pr.message || `${pr.label}: ${pr.ok ? "sent" : `failed · HTTP ${pr.status}`}`, !pr.ok || pr.warn === true); return; }
+  // The panel sends the kept switch only when what it would ask the passkey for now is what the dialog showed
+  // (the machine on the socket was not started, or did not go off, meanwhile): else the code says so.
+  if (pr.path === "/api/power/socket") { flash(pr.code === "situation_changed" ? SOCK_CHANGED : pr.message || `${pr.label}: ${pr.ok ? "sent" : `failed · HTTP ${pr.status}`}`, !pr.ok || pr.warn === true); return; }
   // an action about several machines brings a line per machine: the count is shown, the lines stay behind it
   if (pr.items?.length) flash(`${pr.label}: ${pr.message || (pr.ok ? "done" : "not everything worked")}`, !pr.ok, pr.items);
   else if (SAID_ONCE.test(pr.path || "")) whenSystems(() => flash(saidOnce(pr) || `${pr.label}: ${pr.ok ? pr.message || "done" : `failed · ${pr.message || `HTTP ${pr.status}`}`}`, !pr.ok));
@@ -698,6 +700,7 @@ async function sockSwitch(source, socket, to) {
 // "cut the power of X while it is running" first, then the switch. A socket that is linked to nothing never gets
 // here: it has a question of its own (sockUnlinked).
 const SOCK_RUNS = table({ running: "is still running", asleep: "is asleep, not off", unknown: "may still be running" });
+const SOCK_CHANGED = "This changed while you confirmed. Nothing was switched: look again.";
 async function sockRunning(source, socket, d) {
   const at = location.hash;
   const name = typeof d.machine === "string" ? d.machine : "";

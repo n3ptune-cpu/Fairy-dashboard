@@ -238,7 +238,9 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 func TestUISocketSwitchInTheRestOfThePage(t *testing.T) {
 	js := appJS(t)
 	for _, want := range []string{
-		"if (pr.path === \"/api/power/socket\") { flash(pr.message || `${pr.label}: ${pr.ok ? \"sent\" : `failed · HTTP ${pr.status}`}`, !pr.ok || pr.warn === true); return; }",
+		"if (pr.path === \"/api/power/socket\") { flash(pr.code === \"situation_changed\" ? SOCK_CHANGED : pr.message || `${pr.label}: ${pr.ok ? \"sent\" : `failed · HTTP ${pr.status}`}`, !pr.ok || pr.warn === true); return; }",
+		// the panel's refusal of a replay whose words are not the ones that were confirmed: the page's own short line
+		`const SOCK_CHANGED = "This changed while you confirmed. Nothing was switched: look again.";`,
 		`else if (p.kind === "plug") await sockSwitch(p.body?.source, p.body?.socket, p.body?.to);`,
 		`["fan", "Fans"], ["plug", "Plugs"],`,
 		`Every switch, on or off, asks for your passkey, and that machine checks it itself.`,

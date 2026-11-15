@@ -574,18 +574,35 @@ func TestPlugSwitchLooksAgainAfterTheApproval(t *testing.T) {
 }
 
 // The approval is handed out only for exactly the request that was approved: another socket or another
-// direction in the replay gets none, and nothing is sent.
+// direction in the replay gets none, and nothing is sent. Two things stand in the way, and each is asked here.
+// The words: what the dialog would show for the changed request is not what it showed (the socket's name, the
+// direction). And under them the approval itself, which is made for one request: a second socket with the SAME
+// name on the same plug has the same words, and still gets no approval.
 func TestPlugApprovalIsForTheExactRequest(t *testing.T) {
-	for name, edit := range map[string]func(body string) string{
+	other := func(b string) string {
+		b = strings.Replace(b, `"socket":"ch2"`, `"socket":"ch1"`, 1)
+		return strings.Replace(b, plugTag("desk-bar", "ch2"), plugTag("desk-bar", "ch1"), 1)
+	}
+	for name, c := range map[string]struct {
+		prepare func(pe *plugEnv)
+		edit    func(body string) string
+		said    string
+	}{
 		// ("off" for this socket, which is linked to nothing, with the answer to the page's question in it)
-		"another direction": func(b string) string { return strings.Replace(b, `"to":"on"`, `"to":"off","cut":true`, 1) },
-		"another socket": func(b string) string {
-			b = strings.Replace(b, `"socket":"ch2"`, `"socket":"ch1"`, 1)
-			return strings.Replace(b, plugTag("desk-bar", "ch2"), plugTag("desk-bar", "ch1"), 1)
-		},
+		"another direction": {nil, func(b string) string { return strings.Replace(b, `"to":"on"`, `"to":"off","cut":true`, 1) },
+			`Your passkey was asked for "switch on Lamp (Monitor powerbar)", and it would now be "cut the power of whatever is plugged in: switch off Lamp (Monitor powerbar)"`},
+		"another socket": {nil, other,
+			`Your passkey was asked for "switch on Lamp (Monitor powerbar)", and it would now be "switch on Left monitor (Monitor powerbar)"`},
+		"another socket of the same name": {func(pe *plugEnv) {
+			pe.set("reader/desk-bar/ch1", "name", "Lamp")
+			pe.set("reader/desk-bar/ch1", "state", "off")
+		}, other, "not the request that was approved"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			pe := newPlugEnv(t)
+			if c.prepare != nil {
+				c.prepare(pe)
+			}
 			id, _, ok := approvalAsked(pe.flip("reader/desk-bar", "ch2", "on"))
 			if !ok {
 				t.Fatal("not asked")
@@ -593,7 +610,7 @@ func TestPlugApprovalIsForTheExactRequest(t *testing.T) {
 			l := pe.s.codec.live
 			l.mu.Lock()
 			p := l.m[sidOf(pe.env, pe.admin)].pending
-			changed := edit(p.Body)
+			changed := c.edit(p.Body)
 			if changed == p.Body {
 				l.mu.Unlock()
 				t.Fatal("the test did not change the kept body:", p.Body)
@@ -604,13 +621,13 @@ func TestPlugApprovalIsForTheExactRequest(t *testing.T) {
 				t.Fatalf("callback: %d %s", cb.code, cb.raw)
 			}
 			pr := pe.result(t)
-			if pr["ok"] != false || !strings.Contains(fmt.Sprint(pr["message"]), "not the request that was approved") {
-				t.Fatalf("result: %v", pr)
+			if pr["ok"] != false || !strings.Contains(fmt.Sprint(pr["message"]), c.said) {
+				t.Fatalf("result: %v\nwant %q", pr, c.said)
 			}
 			if n := len(plugSent(pe.reader)); n != 0 {
 				t.Fatalf("the machine got %d switch requests", n)
 			}
-			if out := fmt.Sprint(pe.plugAudits()[0]["outcome"]); !strings.Contains(out, "not the request that was approved") {
+			if out := fmt.Sprint(pe.plugAudits()[0]["outcome"]); !strings.Contains(out, c.said) {
 				t.Errorf("audit: %q", out)
 			}
 		})
@@ -1470,4 +1487,109 @@ func TestPlugOffForASocketThatIsLinkedToNothing(t *testing.T) {
 	if r := pe.flip("reader/desk-bar", "ch3", "off"); !strings.Contains(string(r.raw), `"code":"machine_running"`) {
 		t.Errorf("a linked socket: %d %s", r.code, r.raw)
 	}
+}
+
+// What the passkey was asked for is what is switched. The kept request is replayed by the panel after the round
+// trip to Pocket ID, with the machine as it is THEN; when the words the dialog would show now are not the words
+// it showed, nothing is sent, the approval is not used, and the result says that the situation changed (second
+// review of stage 1a: a request that carried "cut" ahead was kept for a machine that was off, the machine was
+// started meanwhile, and the replay cut its power under a passkey line that did not say "cut").
+func TestPlugReplayRefusesWhatWasNotSigned(t *testing.T) {
+	changed := func(t *testing.T, pe *plugEnv, id, signed, now string) {
+		t.Helper()
+		if cb := pe.approve(t, id); cb.code != 303 {
+			t.Fatal(cb.code)
+		}
+		pr := pe.result(t)
+		want := "This changed while you confirmed. Your passkey was asked for \"" + signed + "\", and it would now be \"" + now + "\". Nothing was switched. Look again."
+		if pr["ok"] != false || pr["status"] != 409.0 || pr["code"] != "situation_changed" || pr["message"] != want {
+			t.Fatalf("result: %v\nwant %q", pr, want)
+		}
+		if n := len(plugSent(pe.reader)); n != 0 {
+			t.Fatalf("the machine got %d switch requests", n)
+		}
+		au := pe.plugAudits()[0]
+		if p := au["params"].(map[string]any); au["outcome"] != "refused (situation_changed): "+want || p["approval"] != nil {
+			t.Errorf("the audit entry: %v", au)
+		}
+	}
+	const off, cut, maybe = "switch off Desk PC (Monitor powerbar), which powers DESK-PC",
+		"cut the power of DESK-PC while it is running: switch off Desk PC (Monitor powerbar)",
+		"cut the power of DESK-PC while it may still be running: switch off Desk PC (Monitor powerbar)"
+
+	// 1. the review's case. The machine is off; a request with "cut" ahead cannot be kept any more (3), so the
+	// kept request is given it here, as if it had been. The machine is started; the replay would cut its power.
+	t.Run("the machine was started, and the kept request says cut", func(t *testing.T) {
+		pe := newPlugEnv(t)
+		pe.pcOff()
+		r := pe.flip("reader/desk-bar", "ch3", "off")
+		id, _, ok := approvalAsked(r)
+		if !ok || r.body["detail"].(map[string]any)["signs"] != off {
+			t.Fatalf("the first request: %d %s", r.code, r.raw)
+		}
+		l := pe.s.codec.live
+		l.mu.Lock()
+		p := l.m[sidOf(pe.env, pe.admin)].pending
+		body := strings.Replace(p.Body, `"to":"off"`, `"to":"off","cut":true,"confirm":"DESK-PC"`, 1)
+		if body == p.Body {
+			l.mu.Unlock()
+			t.Fatal("the test did not change the kept body:", p.Body)
+		}
+		p.Body = body
+		l.mu.Unlock()
+		pe.pcIs("online")
+		changed(t, pe, id, off, cut)
+	})
+	// 2. a cut that was signed for a machine that "may still be running": it answers again meanwhile. The words
+	// differ, so the person is asked again with the ones that are true now.
+	t.Run("the machine answers again after a cut was signed for one that may be running", func(t *testing.T) {
+		pe := newPlugEnv(t)
+		pe.pcSilent()
+		b := plugBody("reader/desk-bar", "ch3", "off")
+		b["cut"], b["confirm"] = true, "DESK-PC"
+		r := pe.post("/api/power/socket", b)
+		id, _, ok := approvalAsked(r)
+		if !ok || r.body["detail"].(map[string]any)["signs"] != maybe {
+			t.Fatalf("the first request: %d %s", r.code, r.raw)
+		}
+		pe.pcIs("online")
+		changed(t, pe, id, maybe, cut)
+	})
+	// 3. "cut" where the panel asks no question is not taken as a plain switch, and so cannot be kept ahead of
+	// one: the machine on the socket counts as off. Nobody is asked for a passkey.
+	t.Run("cut where nothing asks for it", func(t *testing.T) {
+		pe := newPlugEnv(t)
+		pe.pcOff()
+		b := plugBody("reader/desk-bar", "ch3", "off")
+		b["cut"], b["confirm"] = true, "DESK-PC"
+		r := pe.post("/api/power/socket", b)
+		d, _ := r.body["detail"].(map[string]any)
+		const want = "\"Cut power anyway\" answers a question the panel does not ask for this socket now: DESK-PC counts as off. Nothing was switched. Look again."
+		if r.code != 409 || d["code"] != "situation_changed" || d["message"] != want {
+			t.Fatalf("%d %s", r.code, r.raw)
+		}
+		if au := pe.plugAudits()[0]; au["outcome"] != "refused (situation_changed): "+want {
+			t.Errorf("the audit entry: %v", au)
+		}
+		if n := len(pe.reader.Asked()) + len(pe.iss.Asked()); n != 0 {
+			t.Errorf("the machine or Pocket ID was asked %d things", n)
+		}
+	})
+	// 4. nothing changed: the same words, and the switch is sent (a cut, the longest way through the route)
+	t.Run("nothing changed", func(t *testing.T) {
+		pe := newPlugEnv(t)
+		b := plugBody("reader/desk-bar", "ch3", "off")
+		b["cut"], b["confirm"] = true, "DESK-PC"
+		id, _, ok := approvalAsked(pe.post("/api/power/socket", b))
+		if !ok {
+			t.Fatal("not asked")
+		}
+		pe.poll() // the panel looks again in between, and sees the same
+		if cb := pe.approve(t, id); cb.code != 303 {
+			t.Fatal(cb.code)
+		}
+		if pr := pe.result(t); pr["ok"] != true || pr["code"] != nil || len(plugSent(pe.reader)) != 1 {
+			t.Fatalf("result: %v", pr)
+		}
+	})
 }

@@ -558,6 +558,9 @@ type PendingResult struct {
 	// Warn: the action was taken and its result is not known to be the one asked for (a plug's socket that
 	// was sent the request and does not show the new state yet). The page shows Message as a warning.
 	Warn bool `json:"warn,omitempty"`
+	// Code is the code of the action's refusal, when it has one the page has words of its own for (a plug's
+	// socket: "situation_changed").
+	Code string `json:"code,omitempty"`
 }
 
 // FanEvent is one entry of the agent's fan log (mode changes, watchdog).

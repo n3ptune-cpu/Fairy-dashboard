@@ -460,6 +460,9 @@ func (s *Server) resumePendingWith(c *reqCtx, p *pendingAction, grant *approvalG
 		res.Message = d
 	case map[string]any:
 		res.Message, _ = d["message"].(string)
+		if code, _ := d["code"].(string); code == codeSituationChanged { // api_plug.go: the page says "look again"
+			res.Code = code
+		}
 	}
 	if res.Message == "" {
 		res.Message, _ = body["message"].(string)
