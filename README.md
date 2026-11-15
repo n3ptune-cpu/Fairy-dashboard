@@ -1835,19 +1835,24 @@ Build 16:
    changed, "Wait for a woken machine" when it gets longer, "Shutdown countdown" when it gets shorter.
    "Counts as off after" is the time after which a silent machine counts as off: a machine that was
    restarting for longer than that and comes up while a run waits for it looks like one the run woke, and
-   the run switches it off after its update (one that was only out of reach or asleep is left on). A
+   the run can switch it off after its update (one that was only out of reach or asleep is left on). A
    change counts from the next run; a run that is going keeps the numbers it started with. And **a run
    uses the timings its start dialog showed**: when a timing was changed while the dialog was open,
    nothing is started and nobody is asked to confirm ("The run timings are not the ones this dialog
    showed any more ..."; the API answers 409), and the same when one is changed between your click on
-   Start and your passkey. Open the dialog again. "Confirm it's you" of a start names the two timings that
-   decide what is switched off ("A machine counts as off after 15 minutes without an answer; shutdown
-   countdown 2 minutes"). See [Update unpowered hosts](#update-unpowered-hosts).
+   Start and your passkey. Open the dialog again. "Confirm it's you" of a start that wakes a machine names
+   the two timings that decide what is switched off ("A machine counts as off after 15 minutes without an
+   answer; shutdown countdown 2 minutes"); a start that only updates machines that are on has no such
+   line, because it switches nothing off. See [Update unpowered hosts](#update-unpowered-hosts).
 3. **Edit host changes the machine itself too**: its **name**, its **site** and its **Wake-on-LAN** (the
    MAC addresses, which machine sends the wake packet, the port; or no Wake-on-LAN at all). A name and
    Wake-on-LAN details are kept in `state.json` (`host_options`, `hosts`) and used instead of
    config.yaml's until **Reset**; the site is the Users page's setting, changed from one more place. Every
-   change to Wake-on-LAN asks you to confirm it by itself. Still never changed there, whatever is sent: a
+   change to Wake-on-LAN asks you to confirm it by itself. And what you confirm is what is saved: when
+   somebody else changes the host, or a setting its values come from, between your Save and your
+   confirmation, nothing is saved ("This host, or a setting its values come from, was changed by somebody
+   else after you pressed Save ..."; the API answers 409), and you open Edit host again. Still never
+   changed there, whatever is sent: a
    host's address and its tokens, its node and owner, what the panel may do to it (power control, fan
    control, self-update, sending wake packets), and of a Wake-on-LAN the address its packets go to and its
    password. Those stay in config.yaml or on the machine (Add host, Re-pair). (Point 1 of build 15 above
@@ -1869,13 +1874,16 @@ Build 16:
    `power-day.json`, written every five minutes and when the panel stops: the graph is still there after a
    restart or an update, with a gap for the time between. There is nothing to set and no key in
    config.yaml, and an older build leaves the file alone. **Re-pair** keeps the graphs of the plugs a host
-   relays, **Remove** empties them. See [Last 24 hours](#last-24-hours).
-6. **The report of a run no longer says "switched off again" of a machine that is on** (builds 12 to 15
-   could). It happened when the run saw its shutdown countdown, the countdown did not switch the machine
-   off (it was called off at the machine while the panel could not reach it, or the shutdown did not
-   happen), the machine answered once more after the countdown's time with no shutdown pending, and the
-   link then dropped within the 5 minutes the run still watches: that silence was read as the machine
-   going off. The report now says "Its agent still answered at HH:MM, after its countdown's time, with no
+   relays, **Remove** empties them, also for a host the panel is not polling right now (one it left out
+   at its start), and a host added with **Add host** starts with empty graphs whatever was still kept
+   under its id. See [Last 24 hours](#last-24-hours).
+6. **The report of a run no longer says "switched off again" of a machine that answered after its
+   countdown** (builds 12 to 15 could, and the machine was on). It happened when the run saw its shutdown
+   countdown, the countdown did not switch the machine off (it was called off at the machine while the
+   panel could not reach it, or the shutdown did not happen), the machine answered once more after the
+   countdown's time with no shutdown pending, and the link then dropped within the 5 minutes the run
+   still watches: that silence was read as the machine going off. The report now says "Its agent still
+   answered at HH:MM, after its countdown's time, with no
    shutdown pending ... It does not answer now: not known whether it is on". A machine that takes longer
    than a minute from its countdown's time to go down, and answers until then, gets the same report (the
    sentence names that too: the run cannot tell the two apart). A machine that stops answering at its
