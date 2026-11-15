@@ -287,6 +287,11 @@ func (pe *plugEnv) socketOf(cookie, source, socket string) map[string]any {
 	if r.code != 200 {
 		pe.t.Fatalf("GET /api/power: %d %s", r.code, r.raw)
 	}
+	return pe.socketIn(r, source, socket)
+}
+
+// socketIn is one socket of an answer of GET /api/power (nil: it is not in it).
+func (pe *plugEnv) socketIn(r resp, source, socket string) map[string]any {
 	srcs, _ := r.body["sources"].([]any)
 	for _, s := range srcs {
 		src, _ := s.(map[string]any)
