@@ -933,3 +933,30 @@ func TestPlugLockOfThePanelsMachineWithoutARow(t *testing.T) {
 		t.Errorf("the machine was asked %d times for a locked socket", n)
 	}
 }
+
+// The power menu's rule for the panel's machine (powerctl.KillsPanel) is the socket's rule too: the panel runs
+// in a guest, panel_hosts names the guest, and a socket feeds that guest's node. The node is in no list. It is
+// locked all the same, and not before the panel is said to run there.
+func TestPlugLockOfTheNodeUnderThePanelsGuest(t *testing.T) {
+	pe := newPlugEnv(t)
+	snap := pe.s.Poller.Snapshot()
+	l := pe.s.newPlugLooks(snap)
+	node := l.rows["lab-node-pve"]
+	if node == nil || node.Kind != "node" || l.rows["lab-qemu-100"] == nil {
+		t.Fatalf("the fixture: the node %v and its guest %v", node, l.rows["lab-qemu-100"])
+	}
+	// a socket that feeds the node, read by an agent that runs elsewhere and has no Home Assistant of its own on it
+	bare, ok := pe.s.Poller.AgentByID("bare")
+	if !ok {
+		t.Fatal("the fixture: no agent bare")
+	}
+	k := socketLook{agent: bare, link: node.ID, shown: node.ID, row: node}
+	if got := l.lock(k); got != "" {
+		t.Fatalf("the fixture: the socket is locked (%s) while the panel does not run on the node", got)
+	}
+	pe.s.Cfg.PanelHosts = []string{"lab-qemu-100"}
+	pe.s.Poller.Cfg.PanelHosts = []string{"lab-qemu-100"}
+	if got := pe.s.newPlugLooks(snap).lock(k); got != model.SocketLockPanel {
+		t.Errorf("a socket of the node under the panel's guest: lock %q, want %q", got, model.SocketLockPanel)
+	}
+}
