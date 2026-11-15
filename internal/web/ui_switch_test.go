@@ -18,8 +18,8 @@ func TestUIThePanelHasOneSwitch(t *testing.T) {
 	css := string(b)
 	for _, want := range []string{
 		"\n.check input, .switch { appearance: none;",
-		" width: 36px; height: 20px;",
-		"border-radius: 10px;",
+		"box-sizing: border-box; width: 36px; height: 20px;",
+		"border: 1px solid var(--line2); border-radius: 10px;",
 		"\n.check input::after, .switch::after { content: \"\"; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--faint);",
 		"\n.check input:checked, .switch[aria-checked=\"true\"] { background: var(--ok); border-color: var(--ok); }",
 		"\n.check input:checked::after, .switch[aria-checked=\"true\"]::after { left: 18px; background: var(--bg); }",

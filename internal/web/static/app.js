@@ -77,6 +77,7 @@ const I = {
   settings: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>', 18),
   caret: svg('<path d="m9 6 6 6-6 6"/>', 14),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', 14),
+  plug: svg('<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/>', 14),
   collapse: svg('<path d="m15 6-6 6 6 6"/>', 18),
   menu: svg('<path d="M4 6h16M4 12h16M4 18h16"/>', 20),
   guests: svg('<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 13v8M13 17h8"/>'),
@@ -601,45 +602,58 @@ const wallMore = (lp) => lp.sources.map((x) => {
 }).join("");
 
 // ------------------------------------------------------------ plug sockets
-// The sockets of a plug that its agent's Home Assistant knows (a source's `sockets`, Fairy-agent v0.10.0). Each
-// has a sign for its state and its name. For somebody who cannot switch it the sign is a dot: green is on, grey
-// is off, a ring means Home Assistant has no state for it right now. What hangs on a socket (when the panel was
-// told, and the viewer sees that row) is the name's tooltip. A socket an admin cannot switch from here has a
-// lock after its name, and the one sentence that says why is behind it (hover, or a click): the panel makes that
-// sentence (`note`), with the machine's name in it.
+// The sockets of a plug that its agent's Home Assistant knows (a source's `sockets`, Fairy-agent v0.10.0), one
+// line each: a sign and the socket's name. What hangs on a socket (when the panel was told, and the viewer sees
+// that row) is the name's tooltip.
 //
-// Where the panel says an admin can switch the socket (`switchable`, with the `tag` of its row), the sign is a
-// small switch. Whether a socket can be switched is set on the machine that reads the plug, never on this page.
-// A click switches nothing by itself: the panel answers "Confirm it's you" first, and that dialog names the
-// socket, the direction and what hangs on the socket in the panel's own words, before a passkey is asked for.
-// The machine that reads the plug checks that approval itself; it is for this socket and this direction only.
+// Where the panel says an admin can switch the socket (`switchable`, with the `tag` of its row), the sign is the
+// panel's switch (.switch): knob right on green is on, knob left is off. Whether a socket can be switched is set
+// on the machine that reads the plug, never on this page. A click switches nothing by itself and the switch does
+// not move with it: the panel answers "Confirm it's you" first, and that dialog names the socket, the direction
+// and what hangs on the socket in the panel's own words, before a passkey is asked for. The machine that reads
+// the plug checks that approval itself; it is for this socket and this direction only. The switch shows what the
+// machine reported last, and changes when a later report says so. While the request is on its way it is dimmed,
+// with the spinner in it.
+//
+// A socket an admin cannot switch from here has a lock in the switch's place, and the one sentence that says why
+// is behind it (hover, or a click): the panel makes that sentence (`note`), with the machine's name in it. A
+// socket Home Assistant has no state for is locked the same way. After the lock, and for everybody who is no
+// admin, a dot says the state: green is on, grey is off, a ring is no state.
 const SOCK_STATE = table({ on: ["on", "On"], off: ["off", "Off"], unavailable: ["none", "Home Assistant does not reach this socket right now"],
   unknown: ["none", "Home Assistant has no state for this socket right now"] });
 const sockState = (k) => SOCK_STATE[k.state] || SOCK_STATE.unknown;
 const sockFeeds = (k) => state.byId[k.system_id]?.name || "";
-const sockLock = (src, k, where) => (k.switchable || typeof k.note !== "string" || !k.note ? ""
-  : infoBtn(`sock-${where}:${src.id}/${k.id}`, k.name, `<p>${esc(k.note)}</p>`, { icon: I.lock, cls: "sock-lock", label: k.note }));
 const sock = { busy: dict() };  // "<source id>/<socket id>": a request to switch it is on its way
 const sockCan = (k) => k.switchable === true && typeof k.tag === "string" && k.tag !== "";
-// The sign of a socket's state: the switch for a socket this viewer can switch, else the dot. The switch says
-// what a click asks for; a socket without a state has a grey one that is no button (the panel would refuse).
-function sockSign(src, k) {
+// The sign of a socket, in two parts: the control (the switch, or the lock with the reason; "" for somebody who
+// gets no reason) and the dot of its state.
+function sockSign(src, k, where) {
   const [cls, word] = sockState(k);
-  if (!sockCan(k)) return `<span class="sock-dot ${cls}" role="img" aria-label="${esc(word)}" title="${esc(word)}"></span>`;
-  if (cls === "none") return `<span class="sock-sw none" role="img" aria-label="${esc(word)}" title="${esc(word)}"></span>`;
-  const on = cls === "on", tip = on ? "On. Click to switch off." : "Off. Click to switch on.";
-  return `<button class="sock-sw ${cls}" type="button" role="switch" aria-checked="${on}" data-act="sock" data-source="${esc(src.id)}" data-socket="${esc(k.id)}" data-to="${on ? "off" : "on"}" title="${tip}" aria-label="${esc(`${k.name}: ${tip}`)}"${sock.busy[`${src.id}/${k.id}`] ? " disabled" : ""}></button>`;
+  const dot = `<span class="sock-dot ${cls}" role="img" aria-label="${esc(word)}" title="${esc(word)}"></span>`;
+  if (sockCan(k) && cls !== "none") {
+    const on = cls === "on", busy = !!sock.busy[`${src.id}/${k.id}`];
+    return [`<button class="switch${busy ? " busy" : ""}" type="button" role="switch" aria-checked="${on}" data-act="sock" data-source="${esc(src.id)}" data-socket="${esc(k.id)}" data-to="${on ? "off" : "on"}" title="${on ? "On. Click to switch off." : "Off. Click to switch on."}" aria-label="${esc(`${k.name}: ${on ? "on" : "off"}`)}"${busy ? " disabled" : ""}>${busy ? '<span class="spinner"></span>' : ""}</button>`, dot];
+  }
+  const why = sockCan(k) ? word : k.switchable !== true && typeof k.note === "string" ? k.note : "";
+  return [why ? infoBtn(`sock-${where}:${src.id}/${k.id}`, k.name, `<p>${esc(why)}</p>`, { icon: I.lock, cls: "sock-lock", label: why }) : "", dot];
 }
+const sockIsSwitch = (ctl) => ctl.startsWith("<button class=\"switch");
 function sockEl(src, k) {
-  const feeds = sockFeeds(k);
-  return `<span class="sock" data-key="${esc(k.id)}">${sockSign(src, k)}<span class="sock-name"${feeds ? ` title="${esc(`Powers ${feeds}`)}"` : ""}>${esc(k.name)}</span>${sockLock(src, k, "p")}</span>`;
+  const feeds = sockFeeds(k), [ctl, dot] = sockSign(src, k, "p");
+  return `<span class="sock" data-key="${esc(k.id)}">${ctl}${sockIsSwitch(ctl) ? "" : dot}<span class="sock-name"${feeds ? ` title="${esc(`Powers ${feeds}`)}"` : ""}>${esc(k.name)}</span></span>`;
 }
 // Under a source's name on the Power page: its sockets, in the plug's own order.
 const sockets = (src) => (Array.isArray(src.sockets) && src.sockets.length ? `<div class="socks">${src.sockets.map((k) => sockEl(src, k)).join("")}</div>` : "");
-// In a host's Power panel: one line for each socket that feeds this host, of whatever plug it is a part of, with
-// the plug's name after the socket's (not when the two are the same: a plug with one socket).
-const hostSockets = (id) => (!id ? [] : state.power?.sources || []).flatMap((src) => (Array.isArray(src.sockets) ? src.sockets : []).filter((k) => k.system_id === id)
-  .map((k) => `<div class="list-row wall-sock" data-key="${esc(`${src.id}/${k.id}`)}"><span>Socket · ${esc(k.name)}${src.name && src.name !== k.name ? ` · ${esc(src.name)}` : ""}</span><span class="sock">${sockSign(src, k)}${esc(sockState(k)[0] === "none" ? "no state" : k.state)}${sockLock(src, k, "h")}</span></div>`)).join("");
+// In a host's Power panel: one line for each socket that feeds this host, of whatever plug it is a part of. A
+// plug's sign, the socket's name, and after it, muted, the plug's name (not when the two are the same: a plug
+// with one socket). On the right the switch or the lock, then the state in a word; a dot in their place for
+// somebody who has neither.
+function hostSockets(id) {
+  return (!id ? [] : state.power?.sources || []).flatMap((src) => (Array.isArray(src.sockets) ? src.sockets : []).filter((k) => k.system_id === id).map((k) => {
+    const [ctl, dot] = sockSign(src, k, "h"), word = sockState(k)[0] === "none" ? "no state" : k.state;
+    return `<div class="list-row wall-sock" data-key="${esc(`${src.id}/${k.id}`)}"><span class="sock-what">${I.plug}<span class="sock-name">${esc(k.name)}</span>${src.name && src.name !== k.name ? `<span class="note">· ${esc(src.name)}</span>` : ""}</span><span class="sock">${ctl || dot}<span class="sock-word">${esc(word)}</span></span></div>`;
+  })).join("");
+}
 
 // One switch. The socket is taken as the page has it now (its tag and its name), never from the button; the
 // direction is the one the button showed, and only "on" or "off" is ever sent. The first answer is "Confirm
@@ -1842,7 +1856,7 @@ function pagePower() {
     <div class="section-title">Sources${infoBtn("power", "Sources", infoList([
       "Wall power: what plugs, UPSes and BMCs measure.",
       "CPU, GPU and battery readings on a system's page are component power reported by its agent, not wall power.",
-      "A plug's sockets are under its name: a dot for on or off. A lock means it cannot be switched from here, and says why.",
+      "A plug's sockets are under its name. A lock means a socket cannot be switched from here, and says why. A dot says on or off.",
       "A socket has a switch only where the machine that reads the plug allows it, in its own config. Every switch, on or off, asks for your passkey, and that machine checks it itself.",
       "A socket with a running machine on it is not switched off: shut the machine down first. Cut power anyway is there for a machine that hangs."]))}</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
     <th class="num">Volts</th><th class="num">Amps</th><th class="num">kWh</th><th>Linked</th><th>Last hour</th></tr></thead><tbody>${p.sources.map((s) => powerSourceRow(s, chip)).join("")}</tbody></table></div>`;

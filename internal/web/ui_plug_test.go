@@ -7,10 +7,10 @@ import (
 )
 
 // The sockets of a plug on the Power page (PLUGS-DESIGN.md, 5.2): under the plug's name, in the plug's own
-// order, a dot for the state and the socket's name. What hangs on a socket is the name's tooltip, when the
-// viewer has that row. A socket an admin cannot switch has a lock, and the panel's sentence for why is behind
-// it; somebody who is no admin gets no sentence and so no lock. A state the page does not know is "no state",
-// never "on" or "off".
+// order, a sign and the socket's name. What hangs on a socket is the name's tooltip, when the viewer has that
+// row. A socket an admin cannot switch has a lock where the switch would be, and the panel's sentence for why
+// is behind it; then a dot for the state. Somebody who is no admin gets no sentence, and so no lock: the dot
+// alone. A state the page does not know is "no state", never "on" or "off".
 func TestUIPowerPageShowsTheSocketsOfAPlug(t *testing.T) {
 	runPowerPageScript(t, "sockets", `
 state.systems = [{ id: "desk-pc", name: "Desk PC" }];
@@ -42,6 +42,9 @@ const locks = socks.map((h) => (h.match(/<button class="info-btn sock-lock" type
 if (locks[0] !== "sock-p:relay/desk-bar/ch1|Not switchable. It is not in the allowed list on the machine that reads this plug.|Not switchable. It is not in the allowed list on the machine that reads this plug.") fail("the lock of a socket that is not allowed: " + locks[0]);
 if (locks[2] !== "sock-p:relay/desk-bar/ch3|Locked. This socket powers the panel.|Locked. This socket powers the panel.") fail("the lock of the panel's socket: " + locks[2]);
 if (locks[1] || locks[3] || locks[4]) fail("a lock without a sentence: " + JSON.stringify(locks));
+// the lock is in the switch's place: in front of the dot and the name
+if (!/^[^>]*><button class="info-btn sock-lock"[^>]*><\/button><span class="sock-dot on"[^>]*><\/span><span class="sock-name">Lamp<\/span><\/span>/.test(socks[0])) fail("the order of lock, dot and name: " + socks[0]);
+if (!/^[^>]*><span class="sock-dot off"[^>]*><\/span><span class="sock-name">Printer<\/span><\/span>/.test(socks[1])) fail("a socket of somebody who is no admin: " + socks[1]);
 if (!info.html["sock-p:relay/desk-bar/ch3"].includes('<div class="info-t">Desk PC socket</div><p>Locked. This socket powers the panel.</p>')) fail("behind the lock: " + info.html["sock-p:relay/desk-bar/ch3"]);
 // what hangs on it: the name's tooltip, only for a row this viewer has
 if (!socks[2].includes('<span class="sock-name" title="Powers Desk PC">Desk PC socket</span>')) fail("the tooltip of a linked socket: " + socks[2]);
@@ -50,8 +53,10 @@ if (!socks[3].includes('<span class="sock-name">Gone</span>') || !socks[0].inclu
 if (/<b>x<\/b>|<img/.test(html) || /<img/.test(info.html["sock-p:relay/desk-bar/ch6"])) fail("markup from a socket's name or note");
 if (!socks[5].includes("&lt;b&gt;x&lt;/b&gt;") || !info.html["sock-p:relay/desk-bar/ch6"].includes("&lt;img src=x&gt;")) fail("the escaped name and note: " + socks[5]);
 // a socket that can be switched has no lock, whatever else its row says
-bar.sockets[0] = k("ch1", { name: "Lamp", switchable: true, note: "left over" });
+bar.sockets[0] = k("ch1", { name: "Lamp", switchable: true, tag: "t", note: "left over" });
 if (pagePower().split('<span class="sock" ')[1].includes("sock-lock")) fail("a lock on a socket that can be switched");
+bar.sockets[0] = k("ch1", { name: "Lamp", switchable: true, note: "left over" });  // "switchable" without a tag: no switch, and no reason that is true
+if (/sock-lock|class="switch/.test(pagePower().split('<span class="sock" ')[1])) fail("a row that says switchable and has no tag: " + pagePower().split('<span class="sock" ')[1]);
 // sockets that are no list are not drawn
 bar.sockets = "ch1";
 if (pagePower().includes("sock-dot")) fail("sockets that are no list");
@@ -63,10 +68,14 @@ state.power.sources.push(src("relay/pc-plug", { name: "PC plug", system_id: "des
   src("relay/dead", { name: "Dead", sockets: [k("main", { name: "Dead plug", state: "unavailable", system_id: "desk-pc", why: "read_only" })] }));
 const lines = hostSockets("desk-pc").split('<div class="list-row wall-sock"').slice(1);
 if (lines.length !== 3) fail("the host's socket lines: " + lines.length);
-if (words("<" + lines[0]) !== "Socket · Desk PC socket · Desk powerbar on") fail("a powerbar's socket: " + words("<" + lines[0]));
-if (words("<" + lines[1]) !== "Socket · PC plug off") fail("a plug's only socket: " + words("<" + lines[1]));
-if (words("<" + lines[2]) !== "Socket · Dead plug · Dead no state") fail("a socket without a state: " + words("<" + lines[2]));
+if (words("<" + lines[0]) !== "Desk PC socket · Desk powerbar on") fail("a powerbar's socket: " + words("<" + lines[0]));
+if (words("<" + lines[1]) !== "PC plug off") fail("a plug's only socket: " + words("<" + lines[1]));
+if (words("<" + lines[2]) !== "Dead plug · Dead no state") fail("a socket without a state: " + words("<" + lines[2]));
 if (!lines[0].includes('data-info="sock-h:relay/desk-bar/ch3"') || lines[1].includes("sock-lock")) fail("the lock in the host's panel: " + lines[0] + lines[1]);
+// the socket's name, then the plug's, muted; on the right the lock (or, for somebody without one, the dot), then the word
+if (!lines[0].includes('<span class="sock-what"><span class="sock-name">Desk PC socket</span><span class="note">· Desk powerbar</span></span><span class="sock"><button class="info-btn sock-lock"') ||
+  !/<\/button><span class="sock-word">on<\/span><\/span><\/div>$/.test(lines[0]) || lines[0].includes("sock-dot")) fail("a locked socket's line: " + lines[0]);
+if (!lines[1].includes('<span class="sock-what"><span class="sock-name">PC plug</span></span><span class="sock"><span class="sock-dot off"') || !lines[1].endsWith('<span class="sock-word">off</span></span></div>')) fail("a plug's only socket, for somebody who is no admin: " + lines[1]);
 if (/<b>|<img/.test(hostSockets("desk-pc"))) fail("markup in the host's lines");
 if (hostSockets("other-row") !== "" || hostSockets("") !== "" || hostSockets(undefined) !== "") fail("socket lines for a row nothing feeds");
 state.power = null;
@@ -104,9 +113,11 @@ func TestUISocketsAreOnThePowerPageAndInTheHostsPanel(t *testing.T) {
 }
 
 // The switch (PLUGS-DESIGN.md, 4.3 and 4.7): where the panel says an admin can switch a socket, and gave the
-// tag of its row, the sign is a small switch that says what a click asks for. A socket without a state has a
-// grey one that is no button. Nothing else on the page is a switch: not a row without a tag, not one whose
-// "switchable" is anything but true.
+// tag of its row, the sign is the panel's switch (.switch): a button with role="switch", aria-checked for what
+// the machine reported, the socket's name and state as its name, and what a click asks for as its tooltip. A
+// socket without a state has a lock in its place that says so. Nothing else on the page is a switch: not a row
+// without a tag, not one whose "switchable" is anything but true. While a request is on its way the switch is
+// disabled and has the spinner; it never shows a state the machine did not report.
 func TestUISocketSwitchIsDrawnOnlyWhereThePanelSaysSo(t *testing.T) {
 	runPowerPageScript(t, "switch-draw", `
 const k = (id, o) => ({ id, name: id, state: "on", switchable: true, tag: "t-" + id, ...o });
@@ -117,23 +128,26 @@ const bar = src("relay/desk-bar", { name: "Desk powerbar", sockets: [
 state.power = { total_w: 1, sources: [bar] };
 const socks = pagePower().split('<span class="sock" ').slice(1);
 if (socks.length !== 10) fail("sockets: " + socks.length);
-const sw = (h) => (h.match(/<button class="sock-sw (on|off)" type="button" role="switch" aria-checked="(true|false)" data-act="sock" data-source="([^"]*)" data-socket="([^"]*)" data-to="(on|off)" title="([^"]*)" aria-label="([^"]*)"( disabled)?><\/button>/) || []).slice(1).join("|");
-if (sw(socks[0]) !== "on|true|relay/desk-bar|ch1|off|On. Click to switch off.|Lamp: On. Click to switch off.|") fail("a socket that is on: " + socks[0]);
-if (sw(socks[1]) !== "off|false|relay/desk-bar|ch2|on|Off. Click to switch on.|Printer: Off. Click to switch on.|") fail("a socket that is off: " + socks[1]);
+const sw = (h) => (h.match(/<button class="switch( busy)?" type="button" role="switch" aria-checked="(true|false)" data-act="sock" data-source="([^"]*)" data-socket="([^"]*)" data-to="(on|off)" title="([^"]*)" aria-label="([^"]*)"( disabled)?>(<span class="spinner"><\/span>)?<\/button>/) || []).slice(1).map((x) => x || "").join("|");
+if (sw(socks[0]) !== "|true|relay/desk-bar|ch1|off|On. Click to switch off.|Lamp: on||") fail("a socket that is on: " + socks[0]);
+if (sw(socks[1]) !== "|false|relay/desk-bar|ch2|on|Off. Click to switch on.|Printer: off||") fail("a socket that is off: " + socks[1]);
+// the switch is the sign: no dot beside it, and the name follows it
+if (socks[0].includes("sock-dot") || !/<\/button><span class="sock-name">Lamp<\/span><\/span>/.test(socks[0])) fail("a dot beside a switch: " + socks[0]);
 for (const [i, word] of [[2, "Home Assistant does not reach this socket right now"], [3, "Home Assistant has no state for this socket right now"]]) {
-  if (!socks[i].includes('<span class="sock-sw none" role="img" aria-label="' + word + '" title="' + word + '"></span>') || /<button[^>]*sock-sw|data-act="sock"/.test(socks[i])) fail("a socket without a state: " + socks[i]);
+  if (!socks[i].includes('<button class="info-btn sock-lock" type="button" data-info="sock-p:relay/desk-bar/ch' + (i + 1) + '" aria-label="' + word + '" title="' + word + '"') ||
+    !socks[i].includes('<span class="sock-dot none"') || /class="switch|data-act="sock"|role="switch"/.test(socks[i])) fail("a socket without a state: " + socks[i]);
 }
-for (const i of [4, 5, 6, 7, 8]) if (/sock-sw|data-act|role="switch"/.test(socks[i]) || !socks[i].includes('<span class="sock-dot on"')) fail("a switch the panel did not offer (socket " + (i + 1) + "): " + socks[i]);
-if (sw(socks[9]) !== "off|false|relay/desk-bar|c&lt;10|on|Off. Click to switch on.|&quot;&lt;b&gt;q&lt;/b&gt;: Off. Click to switch on.|") fail("ids and names are text: " + socks[9]);
+for (const i of [4, 5, 6, 7, 8]) if (/class="switch|data-act|role="switch"|sock-lock/.test(socks[i]) || !socks[i].includes('<span class="sock-dot on"')) fail("a switch the panel did not offer (socket " + (i + 1) + "): " + socks[i]);
+if (sw(socks[9]) !== "|false|relay/desk-bar|c&lt;10|on|Off. Click to switch on.|&quot;&lt;b&gt;q&lt;/b&gt;: off||") fail("ids and names are text: " + socks[9]);
 if ((pagePower().match(/data-to="/g) || []).length !== 3 || /data-to="(?!on"|off")/.test(pagePower()) || /toggle/i.test(pagePower())) fail("a direction that is not on or off");
 // while a request for a socket is on its way, its switch takes no second click
 sock.busy["relay/desk-bar/ch1"] = true;
 const busy = pagePower().split('<span class="sock" ').slice(1);
-if (!sw(busy[0]).endsWith("| disabled") || sw(busy[1]).endsWith("disabled")) fail("the switch of a socket that is being switched: " + busy[0]);
+if (sw(busy[0]) !== ' busy|true|relay/desk-bar|ch1|off|On. Click to switch off.|Lamp: on| disabled|<span class="spinner"></span>' || /disabled|spinner|busy/.test(sw(busy[1]))) fail("the switch of a socket that is being switched: " + busy[0]);
 // the host's panel has the same switch
 bar.sockets = [k("ch1", { name: "Lamp", system_id: "desk-pc" })];
 delete sock.busy["relay/desk-bar/ch1"];
-if (!/<button class="sock-sw on"[^>]*data-source="relay\/desk-bar" data-socket="ch1" data-to="off"/.test(hostSockets("desk-pc"))) fail("the switch in the host's panel: " + hostSockets("desk-pc"));
+if (!/<span class="sock"><button class="switch" type="button" role="switch" aria-checked="true" data-act="sock" data-source="relay\/desk-bar" data-socket="ch1" data-to="off"[^>]*><\/button><span class="sock-word">on<\/span><\/span>/.test(hostSockets("desk-pc"))) fail("the switch in the host's panel: " + hostSockets("desk-pc"));
 `)
 }
 
@@ -250,10 +264,18 @@ func TestUISocketSwitchInTheRestOfThePage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"\n.sock-sw {", "\n.sock-sw.on::after {", "\n.sock-sw:disabled {", "\n.sock-sw.none {", "\nbody.unreachable .sock-sw.on::after { background: var(--off); }"} {
+	for _, want := range []string{"\n.switch.busy::after { content: none; }", "\n.switch.busy .spinner {", "\n.info-btn.sock-lock { width: 36px; height: 20px;",
+		"\nbody.unreachable .switch[data-act=\"sock\"][aria-checked=\"true\"]::after { background: var(--faint); }", "\n.list-row.wall-sock .sock-word { min-width: 52px; }"} {
 		if strings.Count(string(b), want) != 1 {
 			t.Errorf("app.css lacks (or has twice) %q", want)
 		}
+	}
+	// a socket's switch is the panel's one switch: there is no second look for it
+	if strings.Contains(string(b), "sock-sw") || strings.Contains(js, "sock-sw") {
+		t.Error("the sockets have a switch of their own again (sock-sw)")
+	}
+	if n := strings.Count(js, `role="switch"`); n != 1 {
+		t.Errorf("places that draw a switch button: %d", n)
 	}
 }
 

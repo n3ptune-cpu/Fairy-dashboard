@@ -34,7 +34,7 @@ func powerPageScript(t *testing.T, js, body string) string {
 	return `"use strict";
 const state = { power: null, history: [], systems: [], byId: {}, ups: { ups: [] } };
 const spark = () => "", setTitle = () => {};
-const I = { close: "", info: "", lock: "" };
+const I = { close: "", info: "", lock: "", plug: "" };
 // what the sockets of a plug use of the rest of the page: the click it listens for, the request it sends (and
 // what the panel answers), the line it shows, and "Confirm it's you"
 const clicks = [], document = { addEventListener: (type, fn) => { if (type === "click") clicks.push(fn); } };
