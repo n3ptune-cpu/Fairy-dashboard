@@ -171,7 +171,8 @@ point is in AGENT.md. Its Windows parts are listed there under "Not yet tested o
 A plug that neither the panel nor an agent can ask itself (a Tuya plug, a Zigbee plug) can still be read when
 a Home Assistant on the plug's network knows it. An **agent** on that network asks that Home Assistant for the
 plug's power sensor and relays the watts to the panel like every other plug it reads (Fairy-agent v0.8.0,
-`type: homeassistant`; the watts are read, nothing is switched). The whole of it, with the steps in Home
+`type: homeassistant`; reading the watts switches nothing, and switching a plug's sockets is a thing of its
+own: [Switching a plug's sockets](#switching-a-plugs-sockets)). The whole of it, with the steps in Home
 Assistant, is in the agent's
 [AGENT.md](https://github.com/n3ptune-cpu/Fairy-agent/blob/main/AGENT.md#plugs-that-are-in-home-assistant-type-homeassistant).
 In short:
@@ -239,6 +240,88 @@ In short:
 agent, not by the panel"). After a refused token an agent waits before it asks Home Assistant again (5
 minutes, 15, then an hour), because Home Assistant counts such a request as a failed login; the panel's own
 poller has no such wait.
+
+### Switching a plug's sockets
+
+An admin can switch one socket of a plug or of a powerbar on or off from the Power page, when the plug is in
+Home Assistant and an agent reads it (Fairy-agent v0.10.0 or newer on the machine that reads the plug). It is
+**off until it is turned on at that machine**: nothing in the panel can turn it on.
+
+**What is set where.**
+
+* **On the machine that reads the plug**, in the agent's own config.yaml: the sockets of a plug (`sockets:`
+  in its `power_sources` entry), and the block `home_assistant:` with `switching: true`, the list of sockets
+  that may be switched (`switch_allow`) and the list of sockets that are never switched (`feeds_self`: every
+  socket that feeds that machine itself, Home Assistant, or the network between them). The Home Assistant
+  token stays on that machine; the panel never sees or stores it. The machine also needs its own check of
+  approvals ([The check on the machine itself](#the-check-on-the-machine-itself)): without it the machine
+  switches nothing. The whole of it is in the agent's AGENT.md, "Switching a plug's sockets"; run
+  `fairy-agent check-config` after every change.
+* **In the panel's config.yaml**, in the entry of that agent, two optional keys say what the panel cannot
+  know by itself:
+
+  ```yaml
+  agents:
+    - id: nas-agent
+      # ...
+      socket_links: {desk-bar/ch3: lab-b-agent}   # "<device id>/<socket id>": the machine on that socket
+      home_assistant_system: lab-qemu-104         # the machine or VM this agent's Home Assistant runs on
+  ```
+
+  `socket_links` names the machine that hangs on a socket of a powerbar. The only socket of a plug needs no
+  line: it takes the plug's own link (`power_links`, or `system_hint: self`). A socket without a link is
+  linked to nothing (a lamp, a monitor). `home_assistant_system` is the row of the machine Home Assistant runs
+  on. A line that can never work is refused when config.yaml is loaded (a name that is not `<device
+  id>/<socket id>`, an id no row can have, an empty target); `fairy admin config check` lists what is set
+  for each agent and notes an id that is no machine's. Both keys are read from config.yaml only: a host
+  added with **Add host** has no entry there, so the sockets of a powerbar it reads are linked to nothing,
+  and what protects its own socket is `feeds_self` on the machine.
+
+**On the page.** The sockets of a plug are under the plug's name on the Power page, and the sockets that
+feed a host are in that host's Power panel. Everybody who sees the plug sees a dot for each socket: green is
+on, grey is off, a ring means Home Assistant has no state for it right now. An admin has a small switch
+where the socket can be switched, and a lock with one sentence for why where it cannot.
+
+**One switch.** A click switches nothing by itself. The panel answers with **Confirm it's you**: the dialog
+names the socket, the plug, the direction and the machine on the socket ("switch off Channel 3 (Desk
+powerbar), which powers PC-B"), and Pocket ID asks for your passkey. The approval is for that one socket and
+that one direction. The machine that reads the plug checks it itself and uses it up; then it sends Home
+Assistant "turn on" or "turn off" for that socket (never a toggle) and watches the socket for up to 10
+seconds. The page then says "Channel 3 is off.", or "Sent. Channel 3 does not show off yet." when the socket
+did not follow in that time. When no answer comes back the page says so, and never that nothing was
+switched: look at the socket.
+
+**What the panel refuses**, before anybody is asked for a passkey:
+
+* a socket the machine does not report as switchable (not in `switch_allow`, in `feeds_self`, switching
+  off, no token for it), a machine that does not answer, and a machine without its own check of approvals;
+* **locked sockets**, in both directions: the socket of the machine that reads the plugs (the agent's own
+  row, the Proxmox node it runs on, or the node of the guest it runs in), the socket of the machine Home
+  Assistant runs on (`home_assistant_system`; for a VM also its node), and the socket of the machine this
+  panel runs on. When `home_assistant_system` names an id that is no row, no socket of that agent that is
+  linked to a machine is switched until the id is put right;
+* a socket that was changed on the machine since the page was drawn, and a socket Home Assistant has no
+  state for;
+* **"off" for a socket whose machine still runs.** Every state but "offline" and "stopped" counts as
+  running, a machine that is asleep too, and so does a link to an id the panel has no row for. The page
+  shows "PC-B is still running. Shut it down first." with **Shut down** (the host's own power dialog) and,
+  smaller, **Cut power anyway**. That one asks for the machine's name to be typed, and the passkey then
+  signs "cut the power of PC-B while it is running". It is like pulling the plug: nothing is shut down
+  first. "On" has no such rule, and neither has a socket that is linked to nothing.
+
+The locks and the question about a running machine are guards against a mistake: they depend on links
+somebody wrote. What holds also against a panel that was taken over is on the machine: switching is off
+unless its own config turns it on, only the sockets listed there are switched, the ones in `feeds_self`
+never, one socket at most every `min_gap_s` seconds, and every switch needs a passkey approval that the
+machine checks itself.
+
+**Who may, and the log.** Admins, from a browser session (no API token), with the kill switch
+(`fairy admin control disable`) stopping both directions. Every attempt is in the audit log as
+`plug.switch` with who, the plug and the socket, the direction and the outcome: `ok`, `ok (not confirmed)`,
+`refused (...)` or `failed (...)`; a cut has `cut: true`. Refusals of the panel's own share a budget of ten
+entries a minute for each user, like `auth.denied`; a request that was sent to a machine is always written.
+A switch that was sent is also a notification. For scripts there is nothing to call: `POST
+/api/power/socket` takes a browser session only.
 
 ### Last 24 hours
 
@@ -1091,22 +1174,24 @@ machine down. The approval of the confirmation lives for the one request, as eve
 
 **When something is wrong** the page says which thing, not "failed":
 
-* **broken**: the machine has a trust file it cannot use and refuses fan, power and update requests until it
-  is repaired on the machine (`fairy-agent helper-trust show` names the reason). The Overview and the Updates
-  page flag such a machine.
+* **broken**: the machine has a trust file it cannot use and refuses fan, power, update and plug requests
+  until it is repaired on the machine (`fairy-agent helper-trust show` names the reason). The Overview and
+  the Updates page flag such a machine.
 * "approval refused (…)": the machine did not accept the approval; the reason is in brackets (`user`: you
   are not on its list; `token_key`: Pocket ID has a new signing key, run `helper-trust set --fetch-keys` on
   the machine; `clock` / `auth_time`: the machine's clock or the age of the passkey use).
   `nonce`: what answered is not the machine the panel has on record for this host; do not try again, look
   at the host.
 * "The helper that runs on ... is older than its agent" (Windows, after an update of the agent): press
-  **Stop helper**, then **Start helper**, next to the host's name. Until then the machine refuses fan, power
-  and update requests.
+  **Stop helper**, then **Start helper**, next to the host's name. Until then the machine refuses fan, power,
+  update and plug requests.
 * "Try again in N s": the machine has had its requests for this minute (it counts questions, actions and
   cancels apart). The panel does not try again by itself.
 * A long refusal shows its first sentence; the machine's own words are behind **Details**, and the message
   stays until you close it.
 * API tokens cannot give an approval: a control token gets 403 for these actions on such a machine.
+* A plug's socket is switched only through such a machine, and always with an approval, also on a
+  machine whose other actions need none: see [Switching a plug's sockets](#switching-a-plugs-sockets).
 
 **Known limits.**
 
@@ -1719,7 +1804,13 @@ From build 13. Nothing has to be converted, no file has to be deleted, and the u
 (From an older build: section 3 first. From build 14: `fairy update` is the whole of it. Build 14 already
 refuses the file of step 1 and knows the keys of step 2, and build 15 has no new key and refuses no file
 that build 14 started with. From build 15: the same. Build 16 has no new key in config.yaml and refuses no
-config.yaml that build 15 started with; what is new is the list "Build 16:" in section 2.)
+config.yaml that build 15 started with; what is new is the list "Build 16:" in section 2. Build 17 refuses
+no config.yaml that build 16 started with. It has two new keys, both optional, in an agent's entry:
+`socket_links` and `home_assistant_system`
+([Switching a plug's sockets](#switching-a-plugs-sockets)). Build 16 refuses a config.yaml that has either
+("field socket_links not found"), so write them only after the update; and a line of theirs that can never
+work is refused by build 17 when it starts, so run `sudo fairy admin config check` before
+`systemctl restart fairy`.)
 
 ### 1. The order
 
@@ -1894,6 +1985,24 @@ Build 16:
    reported as off while it is on. The report is not corrected afterwards, and nothing is sent to a machine
    because of it. See "The report says what the run saw" in
    [Update unpowered hosts](#update-unpowered-hosts).
+
+Build 17:
+
+1. **A plug's sockets can be switched**, one at a time, by an admin with a passkey: the Power page has the
+   sockets of a plug under its name, with a small switch where the machine that reads the plug allows it.
+   Nothing changes until switching is turned on in that agent's own config.yaml (Fairy-agent v0.10.0 or
+   newer, `home_assistant: switching: true`); until then, and for everybody who is no admin, the sockets
+   are dots that show on or off. Every switch, on and off, asks for a passkey that the machine checks
+   itself. "Off" for a socket with a running machine on it is refused first ("... is still running. Shut it
+   down first."), with **Cut power anyway** behind the machine's typed name. See
+   [Switching a plug's sockets](#switching-a-plugs-sockets).
+2. **Two new keys in an agent's entry of config.yaml**, both optional: `socket_links` (which machine hangs
+   on which socket of a powerbar) and `home_assistant_system` (the machine Home Assistant runs on). With
+   them the panel names the machine in the passkey dialog, asks before the power of a running machine is
+   cut, and locks the sockets of the machine that reads the plugs, of Home Assistant's machine and of its
+   own. They are read from config.yaml only: Edit host does not have them yet.
+3. **The audit log has `plug.switch`** for every attempt to switch a socket, also the refused ones; the
+   Audit page's filter has **Plugs**.
 
 ### 3. From a build older than 13
 
@@ -2092,6 +2201,17 @@ settings (on or off, seconds, events) are the defaults again after the next upda
   sign-out with who, whose session and from which address, and never a session id or cookie. That holds for
   `fairy admin sessions revoke <id from the list>` too: its entry names the account and the address of the
   session it ended, not the characters that were typed.
+* Switching a plug's socket (`POST /api/power/socket`, `internal/web/api_plug.go` and `plug.go`): the panel
+  holds no Home Assistant token and never talks to Home Assistant. It asks the agent that reads the plug for
+  one socket and one direction ("on" or "off"), with the tag of the socket's row and a passkey approval that
+  the agent checks itself; the approval is made for exactly that request and the agent uses it up. Whether a
+  socket can be switched at all is set in the agent's own config.yaml at the machine, and the panel has no
+  request that changes it. Admins only, browser session only (no API token), CSRF header, kill switch, the
+  rate limit of control actions, and an audit entry for every attempt. The panel's locks and its question
+  about a running machine are guards against a mistake, from links in config.yaml; a panel that was taken
+  over has none of them, and what holds then is on the machine
+  ([Switching a plug's sockets](#switching-a-plugs-sockets)). A socket's name and an agent's sentence are
+  shown as text.
 * "Update unpowered hosts" (`/api/admin/wake-update`, `internal/wakerun`): a run sends only what an
   admin can already send by hand, through the same code and the same checks (wake through a relay, the
   agent's own update, the delayed shutdown, its cancel); there is no new agent request and nothing is run on
