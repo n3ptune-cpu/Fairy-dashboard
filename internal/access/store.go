@@ -2,6 +2,7 @@ package access
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -508,6 +509,37 @@ func (s *Store) Assign(target, site string) (previous string, err error) {
 	})
 	return previous, err
 }
+
+// AssignIf is Assign for a caller that takes back a change it made itself: the target is put into site only
+// when its stored assignment is still was (what the caller stored). When somebody changed it since, nothing
+// is written: stored is what they left, and done is false.
+func (s *Store) AssignIf(target, site, was string) (stored string, done bool, err error) {
+	if target == "" || len(target) > 160 || strings.ContainsAny(target, " \t\r\n") {
+		return "", false, apierr.New(422, "invalid target")
+	}
+	_, err = s.update(func(d *Data) error {
+		if stored = d.Assign[target]; stored != was {
+			return errLeft
+		}
+		if site == "" {
+			delete(d.Assign, target)
+		} else {
+			if !d.HasSite(site) {
+				return apierr.Errf(422, "unknown site %q", site)
+			}
+			d.Assign[target] = site
+		}
+		stored, done = site, true
+		return nil
+	})
+	if errors.Is(err, errLeft) {
+		return stored, false, nil
+	}
+	return stored, done && err == nil, err
+}
+
+// errLeft stops AssignIf's write: the assignment is somebody else's by now.
+var errLeft = errors.New("the assignment was changed since")
 
 // Describe is a one-line summary of a user's access ("viewer of Alice, Bob").
 func Describe(u User) string {

@@ -318,6 +318,8 @@ func TestREADMESaysEditHostSavesWhatWasConfirmed(t *testing.T) {
 		"**What you confirm is what is saved.** When a save asks you to confirm it's you, the confirmation lists every line it will change, with the value before and after.",
 		"nothing is saved (\"" + hoNotShown[:strings.Index(hoNotShown, ", so what you confirmed")] + " ...\"): open Edit host again and press Save.",
 		"A Reset that said \"back to Run timings: 900 s\" never leaves the machine with another number.",
+		"its site is taken out again, unless somebody gave the host another site in that moment (theirs stays).",
+		"\"" + hoSiteStays[:strings.Index(hoSiteStays, " Open Edit host")] + "\"",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("the README lacks %q", want)

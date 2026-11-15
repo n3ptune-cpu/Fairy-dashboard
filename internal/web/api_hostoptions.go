@@ -1206,6 +1206,13 @@ const hoNotShown = "This host, or a setting its values come from, was changed by
 
 var errHoNotShown = errors.New("not the change that was confirmed")
 
+// hoSiteStays ends the answer to a request whose site was stored (users.json) and whose rest was not
+// (state.json), when the site could not be put back: such an answer never says "nothing was saved".
+const hoSiteStays = "The new site of this host was stored and could not be put back; the rest of this change was not saved. Open Edit host again and look at the site."
+
+// hoNotShownSiteStays is hoNotShown for that case.
+var hoNotShownSiteStays = hoNotShown[:strings.Index(hoNotShown, "Nothing was saved")] + hoSiteStays
+
 func (s *Server) hostOptionsPut(c *reqCtx) error {
 	const denied = "only admins can edit a host"
 	// Who asks comes first: a browser session, the page's header, an admin. Nobody else is told anything about
@@ -1257,8 +1264,13 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	// 900 s" when Run timings says 300 s by now). It is asked twice: here, before either file is written, and
 	// inside the locked write below, against what state.json holds at that moment.
 	shown, replay := c.keptStamp()
+	siteStays := false // this request's site was stored and could not be put back when the rest was refused
 	notShown := func() error {
 		params["confirmed"] = strings.Split(shown, "\n")
+		if siteStays {
+			c.audit(u, "host.options", m.row.ID, params, "error 409: the host was changed after the confirmation was asked for; the site was stored and could not be put back, nothing else was saved")
+			return apierr.New(409, hoNotShownSiteStays)
+		}
 		c.audit(u, "host.options", m.row.ID, params, "error 409: the host was changed after the confirmation was asked for; nothing was saved")
 		return apierr.New(409, hoNotShown)
 	}
@@ -1283,18 +1295,33 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	}
 	s.hostEditAt("planned")
 	prev := "" // the assignment that was stored for the row when the new one was stored: what a failure puts back
+	// putBack takes this request's site out again when the rest of it is not made: the assignment goes back to
+	// prev, but only while it is still the one this request stored. When somebody (the Users page, another
+	// Edit host) changed the host's site in between, theirs is left as it is, and the audit entry says so
+	// (site_left: what is stored). When the put-back cannot be written, the site stays stored
+	// (site_not_put_back), and the answer says that (siteStays).
+	putBack := func() {
+		switch left, done, back := s.Access.AssignIf(m.row.ID, prev, site.assign); {
+		case back != nil:
+			params["site_not_put_back"], siteStays = prev, true
+		case !done:
+			params["site_left"] = left
+		}
+	}
 	if site != nil {
 		if prev, err = s.Access.Assign(m.row.ID, site.assign); err != nil {
 			return refuse(err)
 		}
+		s.hostEditAt("site stored")
 		if prev != m.sites.grants.Assign[m.row.ID] {
 			// Somebody changed this host's site (the Users page, another Edit host) after the lines of this
 			// request were worked out: "was site-a" and whose view moves are no longer true. Their change is
 			// put back as it was, and this request is not made.
-			if _, back := s.Access.Assign(m.row.ID, prev); back != nil {
-				params["site_not_put_back"] = prev
+			const changed = "the site of this host was changed by somebody else just now: close this, open Edit host again and look at it"
+			if putBack(); siteStays {
+				return refuse(apierr.New(409, changed+". "+hoSiteStays))
 			}
-			return refuse(apierr.New(409, "the site of this host was changed by somebody else just now: close this, open Edit host again and look at it"))
+			return refuse(apierr.New(409, changed))
 		}
 	}
 	var lines, notes []string
@@ -1320,12 +1347,20 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	})
 	if err != nil {
 		if site != nil { // the site goes back to what was stored before: nothing of a request that failed stays
-			if _, back := s.Access.Assign(m.row.ID, prev); back != nil {
-				params["site_not_put_back"] = prev
-			}
+			putBack()
 		}
 		if err == errHoNotShown {
 			return notShown()
+		}
+		if siteStays { // not "nothing was saved": the site is stored
+			c.audit(u, "host.options", m.row.ID, params, "failed: the site was stored and could not be put back, nothing else was saved")
+			code, msg := 500, "The rest of this change could not be saved. "+hoSiteStays
+			if e, refused := err.(*apierr.Error); refused {
+				if code = e.Status; fmt.Sprint(e.Detail) != "" {
+					msg = strings.TrimRight(fmt.Sprint(e.Detail), ". ") + ". " + hoSiteStays
+				}
+			}
+			return apierr.New(code, msg)
 		}
 		return refuse(err)
 	}
@@ -1394,8 +1429,9 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 }
 
 // hostEditAt tells a test where a save of "Edit host" stands ("planned": the request was looked at and
-// nothing is stored yet; "stored": both files are written, and the audit entry and the answer are still to
-// come). Nothing listens in the running panel.
+// nothing is stored yet; "site stored": the site is written to users.json, state.json is not yet; "stored":
+// both files are written, and the audit entry and the answer are still to come). Nothing listens in the
+// running panel.
 func (s *Server) hostEditAt(step string) {
 	if s.hostEditStep != nil {
 		s.hostEditStep(step)

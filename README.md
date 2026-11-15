@@ -1392,7 +1392,10 @@ decides who can see the UPS and its notifications. The dialog's info button says
   that your request would now do something else than that list said, nothing is saved ("This host, or a
   setting its values come from, was changed by somebody else after you pressed Save ..."): open Edit host
   again and press Save. A Reset that said "back to Run timings: 900 s" never leaves the machine with
-  another number.
+  another number. The site is kept in another file than the rest: when the rest of a change is refused,
+  its site is taken out again, unless somebody gave the host another site in that moment (theirs stays).
+  If the site cannot be taken out, the answer says so: "The new site of this host was stored and could
+  not be put back; the rest of this change was not saved."
 * **A damaged override never stops the panel.** Whatever is under `host_options` that is not what Fairy
   writes is ignored with one warning in the log (and a WARN line of `fairy admin config check`);
   config.yaml's value counts for it. `fairy update` is not affected: its check reads config.yaml only.
