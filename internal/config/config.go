@@ -136,6 +136,17 @@ type Agent struct {
 	// SelfUpdate shows the agent on the Updates page with an Update button (the agent needs
 	// self_update.enabled too). Needs control_token_env.
 	SelfUpdate bool `yaml:"self_update"`
+	// SocketLinks says which machine hangs on a socket of a plug this agent relays (the sockets of a plug its
+	// Home Assistant knows, Fairy-agent v0.10.0): {"<device id>/<socket id>": <row id>}. The only socket of a
+	// plug needs no line: it takes the plug's own link (power_links, system_hint: self). The panel uses the
+	// link when such a socket is to be switched: it names the machine, asks again before the power of a
+	// machine that runs is cut, and never switches the socket of the machine that reads the plugs, of Home
+	// Assistant's machine or of its own. config.yaml only (links.go: SocketLinkProblems).
+	SocketLinks map[string]string `yaml:"socket_links"`
+	// HomeAssistantSystem is the row of the machine (or VM) that the Home Assistant runs on through which this
+	// agent reads and switches its plugs. A socket that is linked to that row, or to the node of that VM, is
+	// never switched from the panel: with it off, nothing could switch it on again. config.yaml only.
+	HomeAssistantSystem string `yaml:"home_assistant_system"`
 
 	// Managed is set for hosts added in the panel (Add host, managed-hosts.yaml): their tokens come from the
 	// panel's state folder (Token, ControlToken) instead of environment variables. Never read from config.yaml.

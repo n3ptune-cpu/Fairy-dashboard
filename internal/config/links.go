@@ -5,13 +5,19 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strings"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
 )
 
 // Links are the three link fields of an agent's entry: what the devices that agent reads are attached to.
 // They say what is SHOWN where (the UPS chip of a row, the watts of a plug on a row, the total) and with that
-// who sees a UPS or a plug. Nothing in the panel acts on them: no power action, no run and no wake reads them.
+// who sees a UPS or a plug. No power action of a machine, no run and no wake reads them. One thing does since
+// build 17: the switching of a plug's socket (internal/web, plug.go). The only socket of a plug takes the
+// plug's link (power_links), and the panel then asks before it cuts the power of that machine while it runs,
+// and locks the socket when the machine is the one that reads the plugs, Home Assistant's or the panel's.
+// These are guards against a mistake; what holds against the panel is the agent's own config (feeds_self).
 //
 //	ups_powers                {<UPS name on the agent>: [<row id>, ...]}
 //	power_links               {<device id on the agent>: <row id>}
@@ -166,6 +172,52 @@ func (l Links) Clone() Links {
 	}
 	if l.PowerExcludeFromTotal != nil {
 		out.PowerExcludeFromTotal = append([]string{}, l.PowerExcludeFromTotal...)
+	}
+	return out
+}
+
+// SocketLinkName splits the name a socket has in socket_links, "<device id>/<socket id>", into the id of the
+// plug on the agent and the id of the socket; ok is false for anything that cannot be such a name (the forms
+// are the agent's own: a plug with sockets has an id of at most 40 characters, a socket one of at most 16).
+func SocketLinkName(name string) (dev, socket string, ok bool) {
+	dev, socket, found := strings.Cut(name, "/")
+	if !found || api.CheckSocketSource(dev) != nil || !configutil.ValidID(dev) || api.CheckSocketID(socket) != nil {
+		return "", "", false
+	}
+	return dev, socket, true
+}
+
+// MaxSocketLinks is how many sockets an agent's entry can link: every socket of every plug it can relay.
+const MaxSocketLinks = MaxLinkDevices * 8
+
+// SocketLinkProblems is the check of an agent's socket_links and home_assistant_system for what can never
+// work, whatever the machines are: a name that is not "<device id>/<socket id>", a row id that no row can
+// have, a socket linked to nothing (the line is then left out instead), too many lines. Unlike the three link
+// fields (LinkProblems), these are refused when config.yaml is loaded: they are new with build 17, so no file
+// that loads today has them, and a line that cannot work would leave a socket without the panel's question
+// "this machine is still running" and without its locks, with nothing on the page to say so. Whether a row
+// or a socket with such an id exists is not known here (`fairy admin config check` has notes; the running
+// panel says in its log when the agent reports no such socket).
+func SocketLinkProblems(a Agent) []string {
+	var out []string
+	if n := len(a.SocketLinks); n > MaxSocketLinks {
+		out = append(out, fmt.Sprintf("socket_links: %d sockets, and an agent relays at most %d", n, MaxSocketLinks))
+	}
+	for _, name := range slices.Sorted(maps.Keys(a.SocketLinks)) {
+		if _, _, ok := SocketLinkName(name); !ok {
+			out = append(out, fmt.Sprintf("socket_links: %q is not \"<device id>/<socket id>\" (the ids the agent's own config gives the plug and its socket: "+
+				"lowercase letters, digits and dashes)", clipID(name)))
+			continue
+		}
+		switch to := a.SocketLinks[name]; {
+		case to == "":
+			out = append(out, fmt.Sprintf("socket_links: %s is linked to nothing: name the row of the machine that hangs on it, or leave the line out", name))
+		case !ValidRowID(to):
+			out = append(out, fmt.Sprintf("socket_links: %s: %q is not an id a row can have", name, clipID(to)))
+		}
+	}
+	if h := a.HomeAssistantSystem; h != "" && !ValidRowID(h) {
+		out = append(out, fmt.Sprintf("home_assistant_system: %q is not an id a row can have", clipID(h)))
 	}
 	return out
 }

@@ -334,6 +334,7 @@ func (p *Poller) pollEntry(ctx context.Context, a config.Agent, entry int, timeo
 	}
 	l := p.LinksOf(a) // the entry's links with what an admin changed in the panel (hostoptions.go)
 	p.Power.UpdateRemote(a.ID, jsonx.Objs(payload["power_sources"]), false, l.PowerLinks, l.PowerExcludeFromTotal)
+	p.Power.NoteSocketLinks(a.ID, a.SocketLinks) // a socket_links line for a socket the agent does not report: said once in the log
 	p.UPS.UpdateFromAgent(a.ID, ups.AgentRows(payload["ups"]), false, l.UPSPowers, a.UPSNames)
 	return 0
 }

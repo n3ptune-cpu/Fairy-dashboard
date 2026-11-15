@@ -45,6 +45,8 @@ agents:
      # and the plug in front of the UPS, which is shown and not counted (what is behind the UPS is counted
      # through the UPS)
      power_links: {mini-plug: mini-i7-agent}, power_exclude_from_total: [corner-plug],
+     # the powerbar's third socket feeds Bob's HTPC, and Bob's Home Assistant runs on this host itself
+     socket_links: {desk-bar/ch3: bob-htpc}, home_assistant_system: bob-node-mini-i7,
      wol_relay: true, control_token_env: DEMO_CONTROL_TOKEN}
   - {id: bob-laptop, name: "Bob's laptop", url: "http://100.64.0.21:9101", token_env: DEMO_TOKEN,
      group: Bob, owner: bob, site: Bob, tags: [friend, laptop]}

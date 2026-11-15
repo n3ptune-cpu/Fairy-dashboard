@@ -91,6 +91,14 @@ agents:
     # power_links: {pc-plug: agent-2, rack-plug: node-pve1}
     # power_exclude_from_total: [corner-plug]   # shown on the Power page, in no total: e.g. a plug at the input
     #                                           # of a UPS, whose machines are already counted through the UPS
+    # Sockets of such a plug (Fairy-agent v0.10.0; README: "Switching a plug's sockets"). Whether a socket can
+    # be switched is set on the machine that reads the plug, in the AGENT's config.yaml, never here. What is
+    # written here is what hangs on a socket, so that the panel can name it, ask before it cuts the power of a
+    # machine that still runs, and lock the socket of a machine that must stay on. The only socket of a plug
+    # needs no line: it takes the plug's own link (power_links).
+    # socket_links: {desk-bar/ch3: agent-2}     # "<device id>/<socket id>": the row of the machine on that socket
+    # home_assistant_system: qemu-104           # the row of the machine or VM this agent's Home Assistant runs on:
+    #                                           # the socket that feeds it (or its node) is never switched from here
   # - {id: pve1-agent, url: "http://100.64.0.5:9101", token_env: AGENT_TOKEN_PVE1, node: PVE-NODE-1}
 # Hosts added with "Add host" in the panel are NOT written here: they live in <data_dir>/managed-hosts.yaml
 # (+ <data_dir>/secrets/agent-<id>.json, 0600) and are merged with this file at start; an id written here wins.

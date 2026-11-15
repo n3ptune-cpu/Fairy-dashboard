@@ -369,6 +369,9 @@ func (c *Panel) validateAgents(errs *problems) map[string]*Agent {
 		if a.DWServiceURL != "" && !strings.HasPrefix(a.DWServiceURL, "https://") {
 			errs.add("agent %s: dwservice_url must use https://", a.ID)
 		}
+		for _, p := range SocketLinkProblems(*a) { // what a socket of its plugs feeds, and where its Home Assistant runs
+			errs.add("agent %s: %s", a.ID, p)
+		}
 	}
 	return agents
 }

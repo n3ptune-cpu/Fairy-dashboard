@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/configutil"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -97,6 +98,8 @@ func (c *cli) configCheck() int {
 	notes, problems, inferred = append(notes, rtOK...), append(problems, rtWarn...), append(inferred, rtSaid...)
 	inferred = append(inferred, systemIDCheck(cfg)...)
 	okLines, said = powerLinkCheck(cfg)
+	notes, inferred = append(notes, okLines...), append(inferred, said...)
+	okLines, said = socketLinkCheck(cfg) // what hangs on the sockets of those plugs, and where the agent's Home Assistant runs
 	notes, inferred = append(notes, okLines...), append(inferred, said...)
 	okLines, ignored, said := hostOptionsCheck(cfg) // "Edit host": what the panel changed about these links (state.json)
 	notes, problems, inferred = append(notes, okLines...), append(problems, ignored...), append(inferred, said...)
@@ -326,6 +329,71 @@ func powerLinkCheck(cfg *config.Panel) (ok, said []string) {
 				said = append(said, fmt.Sprintf("agent %s: power_links: device %s is linked to %s, which is no agent's id and not the id of a node or a guest of a proxmox: entry: "+
 					"its watts are on no row. A typing mistake in the id?", a.ID, dev, to))
 			}
+		}
+	}
+	return ok, said
+}
+
+// socketLinkCheck is about the sockets of the plugs an agent relays, as the panel's entry of that agent says
+// what hangs on them (socket_links: {"<device id>/<socket id>": <row id>}) and where the Home Assistant runs
+// that the agent reads and switches them through (home_assistant_system: <row id>). One ok line per agent that
+// has one of the two says what is set and what the panel does with it; notes say what cannot work as written:
+// a row id that is no machine's (no agent's id, not of the form a node or a guest has).
+//
+// A line of the wrong form never gets here: config.yaml does not load with it (config.SocketLinkProblems).
+// Whether the agent has such a socket is not known here: this command reads files and asks no machine. The
+// running panel says it once in its log (power.Manager, NoteSocketLinks). Whether a socket can be switched at
+// all is not in this file: that is set on the machine that reads the plug, in the agent's own config.yaml.
+//
+// Notes, not warnings: nothing is refused, and the exit code stays as it is.
+func socketLinkCheck(cfg *config.Panel) (ok, said []string) {
+	c := *cfg
+	c.Agents, c.Systems, c.Proxmox = slices.Clone(cfg.Agents), slices.Clone(cfg.Systems), slices.Clone(cfg.Proxmox)
+	_, _, _ = managed.NewStore(cfg.DataDir).Merge(&c)
+	machine := func(id string) bool {
+		for _, a := range c.Agents {
+			if a.ID == id {
+				return true
+			}
+		}
+		for _, p := range c.Proxmox {
+			for _, kind := range []string{"node-", "qemu-", "lxc-"} {
+				if strings.HasPrefix(id, p.Prefix()+kind) && len(id) > len(p.Prefix()+kind) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, a := range cfg.Agents {
+		if len(a.SocketLinks) == 0 && a.HomeAssistantSystem == "" {
+			continue
+		}
+		names := slices.Sorted(maps.Keys(a.SocketLinks))
+		var parts []string
+		for _, name := range names {
+			parts = append(parts, name+" -> "+a.SocketLinks[name])
+		}
+		line := "agent " + a.ID + ": sockets of the plugs it relays"
+		if len(parts) > 0 {
+			line += ": " + strings.Join(parts, ", ")
+		}
+		if a.HomeAssistantSystem != "" {
+			line += "; its Home Assistant runs on " + a.HomeAssistantSystem
+		}
+		ok = append(ok, line+" (the panel asks before such a socket is switched off while its machine runs, and never switches the socket of the machine that reads the plugs, "+
+			"of Home Assistant's machine or of its own; whether a socket can be switched at all is set in the agent's own config.yaml. "+
+			"The running panel says in its log when the agent reports no socket with such a name)")
+		for _, name := range names {
+			if to := a.SocketLinks[name]; !machine(to) {
+				said = append(said, fmt.Sprintf("agent %s: socket_links: socket %s is linked to %s, which is no agent's id and not the id of a node or a guest of a proxmox: entry. "+
+					"The panel then cannot tell whether that machine runs: to switch the socket off, the id has to be typed. A typing mistake in the id?", a.ID, name, to))
+			}
+		}
+		if h := a.HomeAssistantSystem; h != "" && !machine(h) {
+			said = append(said, fmt.Sprintf("agent %s: home_assistant_system: %s is no agent's id and not the id of a node or a guest of a proxmox: entry. "+
+				"While no row has this id the panel cannot tell which socket feeds Home Assistant, and switches no socket of this agent that is linked to a machine. "+
+				"A typing mistake in the id?", a.ID, h))
 		}
 	}
 	return ok, said
