@@ -333,8 +333,12 @@ func TestPlugSwitchOffAMachineThatRuns(t *testing.T) {
 	running := func(r resp, machine, system, said string) {
 		t.Helper()
 		d, _ := r.body["detail"].(map[string]any)
+		state := "running" // a link to an id no row has: the panel cannot tell, and says so
+		if system == "" {
+			state = "unknown"
+		}
 		if r.code != 409 || d["code"] != "machine_running" || d["machine"] != machine || d["message"] != said || (system != "" && d["system_id"] != system) ||
-			(system == "" && d["system_id"] != nil) {
+			(system == "" && d["system_id"] != nil) || d["state"] != state {
 			t.Fatalf("%d %s\nwant machine_running for %s: %q", r.code, r.raw, machine, said)
 		}
 	}
@@ -428,6 +432,17 @@ func TestPlugRunningRule(t *testing.T) {
 		if name, yes := k.running(); yes != c.running || name != "DESK-PC" {
 			t.Errorf("status %s (asleep %v): running %v, want %v", c.status, c.asleep, yes, c.running)
 		}
+		// which kind of "not off" the page's dialog names
+		want := map[bool]string{false: "", true: map[bool]string{false: "running", true: "asleep"}[c.asleep]}[c.running]
+		if got := k.runningState(); got != want {
+			t.Errorf("status %s (asleep %v): state %q, want %q", c.status, c.asleep, got, want)
+		}
+	}
+	if got := (socketLook{link: "old-pc", shown: "old-pc"}).runningState(); got != "unknown" {
+		t.Errorf("a link to an id without a row: state %q", got)
+	}
+	if got := (socketLook{}).runningState(); got != "" {
+		t.Errorf("a socket that is linked to nothing: state %q", got)
 	}
 	if name, yes := (socketLook{}).running(); yes || name != "" {
 		t.Error("a socket that is linked to nothing has a machine that runs")

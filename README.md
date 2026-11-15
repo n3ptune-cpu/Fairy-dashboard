@@ -279,8 +279,8 @@ Home Assistant and an agent reads it (Fairy-agent v0.10.0 or newer on the machin
 
 **On the page.** The sockets of a plug are under the plug's name on the Power page, and the sockets that
 feed a host are in that host's Power panel. Everybody who sees the plug sees a dot for each socket: green is
-on, grey is off, a ring means Home Assistant has no state for it right now. An admin has a small switch
-where the socket can be switched, and a lock with one sentence for why where it cannot.
+on, grey is off, a ring means Home Assistant has no state for it right now. An admin has a switch where
+the socket can be switched, and in its place a lock with one sentence for why where it cannot.
 
 **One switch.** A click switches nothing by itself. The panel answers with **Confirm it's you**: the dialog
 names the socket, the plug, the direction and the machine on the socket ("switch off Channel 3 (Desk
@@ -304,10 +304,11 @@ switched: look at the socket.
   state for;
 * **"off" for a socket whose machine still runs.** Every state but "offline" and "stopped" counts as
   running, a machine that is asleep too, and so does a link to an id the panel has no row for. The page
-  shows "PC-B is still running. Shut it down first." with **Shut down** (the host's own power dialog) and,
-  smaller, **Cut power anyway**. That one asks for the machine's name to be typed, and the passkey then
-  signs "cut the power of PC-B while it is running". It is like pulling the plug: nothing is shut down
-  first. "On" has no such rule, and neither has a socket that is linked to nothing.
+  shows a dialog, "PC-B is still running", with the plug and the socket above the title. **Cancel** has
+  the focus. **Shut down PC-B** is there when you may shut that host down from here: it opens the host's
+  own power dialog, and nothing follows it. **Cut power anyway** asks for the machine's name to be typed,
+  and the passkey then signs "cut the power of PC-B while it is running". It is like pulling the plug:
+  nothing is shut down first. "On" has no such rule, and neither has a socket that is linked to nothing.
 
 The locks and the question about a running machine are guards against a mistake: they depend on links
 somebody wrote. What holds also against a panel that was taken over is on the machine: switching is off
@@ -1993,8 +1994,8 @@ Build 17:
    Nothing changes until switching is turned on in that agent's own config.yaml (Fairy-agent v0.10.0 or
    newer, `home_assistant: switching: true`); until then, and for everybody who is no admin, the sockets
    are dots that show on or off. Every switch, on and off, asks for a passkey that the machine checks
-   itself. "Off" for a socket with a running machine on it is refused first ("... is still running. Shut it
-   down first."), with **Cut power anyway** behind the machine's typed name. See
+   itself. "Off" for a socket with a running machine on it is refused first ("PC-B is still running"),
+   with **Cut power anyway** behind the machine's typed name. See
    [Switching a plug's sockets](#switching-a-plugs-sockets).
 2. **Two new keys in an agent's entry of config.yaml**, both optional: `socket_links` (which machine hangs
    on which socket of a powerbar) and `home_assistant_system` (the machine Home Assistant runs on). With

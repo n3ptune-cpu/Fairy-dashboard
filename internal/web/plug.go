@@ -265,6 +265,21 @@ func (k socketLook) running() (name string, yes bool) {
 	return k.row.Name, k.row.Asleep || (k.row.Status != "offline" && k.row.Status != "stopped")
 }
 
+// runningState is which kind of "not off" it is, for the title of the page's dialog: "running"; "asleep" (the
+// panel sent the machine to sleep: it still holds what is open on it); "unknown" (linked to an id no row has
+// right now, so the panel cannot tell). "": the machine is off, or the socket is linked to nothing.
+func (k socketLook) runningState() string {
+	switch _, yes := k.running(); {
+	case !yes:
+		return ""
+	case k.row == nil:
+		return "unknown"
+	case k.row.Asleep:
+		return "asleep"
+	}
+	return "running"
+}
+
 // runningWords is the sentence for a socket whose machine still runs (the refusal of "off", and the warning of
 // "Cut power anyway"). For a Proxmox node it says how many of its guests run.
 func (l *plugLooks) runningWords(k socketLook) string {

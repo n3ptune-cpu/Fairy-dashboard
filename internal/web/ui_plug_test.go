@@ -280,10 +280,13 @@ func TestUISocketSwitchInTheRestOfThePage(t *testing.T) {
 }
 
 // "Still running" and "Cut power anyway" (PLUGS-DESIGN.md, 4.5): the panel refuses "off" for a socket whose
-// machine is not off (409 machine_running), and the page shows the panel's sentence with two ways on. "Shut
-// down" opens the power dialog of that host. "Cut power anyway" is the smaller button: the machine's name has
-// to be typed, and the same switch is sent again with cut: true and what was typed. The page's own typedDialog
-// is run here, with a page that is only as much as the two dialogs touch.
+// machine is not off (409 machine_running), and the page shows a dialog. Its title is the fact, with the one
+// name the panel has for the machine; a small line above it says which socket; one short line says what going
+// on costs, and the panel's own sentence is behind the info button. Cancel has the focus. "Shut down NAME"
+// opens the power dialog of that host, when this user can shut it down from here. "Cut power anyway" is the
+// red button with the passkey's mark: the machine's name has to be typed, and the same switch is sent again
+// with cut: true and what was typed. The page's own typedDialog is run here, with a page that is only as much
+// as the two dialogs touch.
 func TestUISocketOfARunningMachineIsNotJustSwitchedOff(t *testing.T) {
 	js := appJS(t)
 	typed := regexp.MustCompile(`(?ms)^function typedDialog\(.*?^\}$`).FindString(js)
@@ -321,20 +324,38 @@ const off = () => click({ source: "relay/desk-bar", socket: "ch1", to: "off" });
   answer = runs();
   off(); await tick();
   if (sent.length !== 1 || flashes.length !== 0 || modal.hidden) fail("after the refusal: " + JSON.stringify([sent.length, flashes, modal.hidden]));
-  if (text(modal.html) !== "PC socket was not switched off Desk PC is still running. Shut it down first. Cut power anyway Cancel Shut down") fail("the dialog: " + text(modal.html));
-  if (!/<button class="btn sm sock-cut" type="button" id="sr-cut">Cut power anyway<\/button>\s*<button class="btn" type="button" id="sr-cancel">Cancel<\/button><button class="btn primary" type="button" id="sr-down">Shut down<\/button>/.test(modal.html)) fail("the buttons: " + modal.html);
-  if (focused.pop() !== "#sr-down" || capsAsked.length !== 0) fail("the focus, and the host's actions were there already");
+  if (text(modal.html) !== "Desk powerbar · PC socket Desk PC is still running Cutting power now can lose unsaved work. Shut it down first. Cancel Shut down Desk PC Cut power anyway") fail("the dialog: " + text(modal.html));
+  if (!modal.html.includes('<div class="note" id="sr-sock">Desk powerbar · PC socket</div>') || !modal.html.includes('<h3 id="sr-t">Desk PC is still running</h3>')) fail("the socket's line and the title: " + modal.html);
+  if (!/<button class="btn" type="button" id="sr-cancel">Cancel<\/button><button class="btn" type="button" id="sr-down">Shut down Desk PC<\/button>\s*<button class="btn danger-solid" type="button" id="sr-cut"><svg class="i-shield"><\/svg>Cut power anyway<\/button>/.test(modal.html)) fail("the buttons: " + modal.html);
+  if (focused.pop() !== "#sr-cancel" || capsAsked.length !== 0) fail("the focus is not on Cancel, or the host's actions were asked for again");
+  // one name for the machine: the socket's own name is only in the socket's line
+  if ((text(modal.html).match(/PC socket/g) || []).length !== 1 || /DESK|was not switched/.test(modal.html)) fail("the names in the dialog: " + text(modal.html));
+  // the panel's own sentence, and what "Cut power anyway" is, are behind the info button
+  if (!/<p id="sr-msg">Cutting power now can lose unsaved work\. Shut it down first\.<button class="info-btn" type="button" data-info="sock-run"/.test(modal.html)) fail("the one line and its info button: " + modal.html);
+  if (info.html["sock-run"] !== '<button class="info-x" type="button" aria-label="Close"></button><div class="info-t">Cut power anyway</div><p>Desk PC is still running. Shut it down first.</p><p>It is like pulling the plug: nothing is shut down first. It asks for the machine&#39;s name, then for your passkey.</p>'.replace("&#39;", "'")) fail("behind the info button: " + info.html["sock-run"]);
   if (sock.busy["relay/desk-bar/ch1"]) fail("the socket stays marked behind the dialog");
   // 2. Shut down: the host's own power dialog
   $("#sr-down").onclick();
   if (JSON.stringify(opened) !== '[["desk-pc","shutdown"]]' || closed.length !== 1 || sent.length !== 1) fail("Shut down: " + JSON.stringify([opened, closed, sent.length]));
-  // 3. a host this user cannot shut down from here, and one whose row this user does not have: no "Shut down"
-  for (const [caps, detail, asked] of [[{ actions: [{ action: "shutdown", available: false }] }, {}, 0], [undefined, {}, 1], [undefined, { system_id: undefined }, 0], [undefined, { system_id: "hidden" }, 0]]) {
-    state.caps = caps ? { "desk-pc": caps } : {}; capsAsked.length = 0; modal.hidden = true; modal.innerHTML = "";
+  // 3. a host this user cannot shut down from here, one whose row this user does not have, and control that is
+  // switched off: no "Shut down"
+  const can = { actions: [{ action: "shutdown", available: true }] };
+  for (const [caps, detail, asked, why] of [[{ actions: [{ action: "shutdown", available: false }] }, {}, 0, ""], [undefined, {}, 1, ""], [undefined, { system_id: undefined }, 0, ""],
+    [undefined, { system_id: "hidden" }, 0, ""], [can, {}, 0, "Read-only: only admins can use control actions."]]) {
+    state.caps = caps ? { "desk-pc": caps } : {}; capsAsked.length = 0; modal.hidden = true; modal.innerHTML = ""; whyNot = why;
     answer = runs(detail);
     off(); await tick();
-    if (modal.hidden || /sr-down|Shut down</.test(modal.html) || !modal.html.includes('id="sr-cut"') || focused.pop() !== "#sr-cancel") fail("a host that cannot be shut down from here: " + modal.html);
+    if (modal.hidden || /sr-down|Shut down/.test(modal.html) || !modal.html.includes('id="sr-cut"') || focused.pop() !== "#sr-cancel") fail("a host that cannot be shut down from here: " + modal.html);
     if (capsAsked.length !== asked) fail("the host's actions asked for: " + capsAsked.length + " of " + asked);
+  }
+  whyNot = "";
+  // 3a. the title says which kind of "not off" the panel found
+  for (const [st, title] of [["running", "Desk PC is still running"], ["asleep", "Desk PC is asleep, not off"], ["unknown", "Desk PC may still be running"], [undefined, "Desk PC is still running"],
+    ["constructor", "Desk PC is still running"], ["<b>", "Desk PC is still running"]]) {
+    modal.hidden = true; modal.innerHTML = "";
+    answer = runs({ state: st });
+    off(); await tick();
+    if (!modal.html.includes('<h3 id="sr-t">' + title + "</h3>")) fail("the title for " + st + ": " + modal.html);
   }
   // 4. Cut power anyway: the name has to be typed
   const n = sent.length;
@@ -390,7 +411,8 @@ const off = () => click({ source: "relay/desk-bar", socket: "ch1", to: "off" });
   // 6. a machine's name is text
   answer = runs({ machine: "<b>x</b>", message: "<i>m</i> is still running. Shut it down first." });
   off(); await tick();
-  if (/<b>x<\/b>|<i>m<\/i>/.test(modal.html) || !modal.html.includes("&lt;i&gt;m&lt;/i&gt; is still running")) fail("markup from the panel's sentence: " + modal.html);
+  if (/<b>x<\/b>|<i>m<\/i>/.test(modal.html + info.html["sock-run"]) || !info.html["sock-run"].includes("<p>&lt;i&gt;m&lt;/i&gt; is still running. Shut it down first.</p>") ||
+    !modal.html.includes('<h3 id="sr-t">&lt;b&gt;x&lt;/b&gt; is still running</h3>')) fail("markup from the panel's sentence or the machine's name: " + modal.html + info.html["sock-run"]);
   $("#sr-cut").onclick();
   if (/<b>x<\/b>/.test(modal.html) || !modal.html.includes("<h3 id=\"td-t\">Cut power to &lt;b&gt;x&lt;/b&gt;?</h3>") || !modal.html.includes('placeholder="&lt;b&gt;x&lt;/b&gt;"')) fail("markup from the machine's name: " + modal.html);
   // every request of this test: one socket, one direction, and "cut" only with a typed name
@@ -403,6 +425,9 @@ const off = () => click({ source: "relay/desk-bar", socket: "ch1", to: "off" });
 		`"This is like pulling the plug. Nothing is shut down first: unsaved work is lost and files can be damaged."`,
 		`{ cut: true, confirm: typed }`,
 		`Cut power anyway is there for a machine that hangs.`,
+		`Cutting power now can lose unsaved work. Shut it down first.`,
+		`<button class="btn danger-solid" type="button" id="sr-cut">${I.shield}Cut power anyway</button>`,
+		`focusAtTop("#sr-cancel");`,
 	} {
 		if strings.Count(js, want) != 1 {
 			t.Errorf("app.js lacks (or has twice) %q", want)

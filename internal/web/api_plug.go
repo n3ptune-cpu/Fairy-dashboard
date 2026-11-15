@@ -243,7 +243,7 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 	case b.Cut && name == "":
 		return refuse(plugErr(422, "cut_unlinked", "Nothing the panel knows of hangs on this socket, so there is no machine whose power would be cut. Nothing was switched."))
 	case b.To == api.SocketOff && running && !b.Cut:
-		detail := map[string]any{"code": codeMachineRunning, "message": looks.runningWords(k), "machine": name}
+		detail := map[string]any{"code": codeMachineRunning, "message": looks.runningWords(k), "machine": name, "state": k.runningState()}
 		if k.row != nil {
 			detail["system_id"] = k.row.ID
 		}

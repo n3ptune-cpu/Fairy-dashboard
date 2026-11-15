@@ -685,11 +685,15 @@ async function sockSwitch(source, socket, to) {
   } finally { delete sock.busy[key]; render(); }
 }
 // "Still running" (the panel's 409 machine_running): the socket feeds a machine that is not off, and nothing was
-// switched. The dialog has the panel's sentence and the ways on. "Shut down" opens the power dialog of that host,
-// when this user can shut it down from here. "Cut power anyway" is the smaller one: it asks for the machine's
-// name to be typed and sends the same switch with cut: true and what was typed. The panel compares the name
-// itself; then the passkey step follows as for every switch, and what is signed says "cut the power of X while
-// it is running". A socket that is linked to nothing never gets here.
+// switched. The dialog says that fact in its title, with the one name the panel has for the machine, and which
+// socket it is about in a small line above it. One short line says what going on costs; the panel's own
+// sentence (a node's running guests, a machine that sleeps, a link to a row the panel does not have) is behind
+// the info button. Cancel has the focus. "Shut down NAME" is there when this user can shut that host down from
+// here: it opens the host's own power dialog, with its own confirmation, and nothing follows it. "Cut power
+// anyway" asks for the machine's name to be typed and sends the same switch with cut: true and what was typed.
+// The panel compares the name itself; then the passkey step follows as for every switch, and what is signed says
+// "cut the power of X while it is running". A socket that is linked to nothing never gets here.
+const SOCK_RUNS = table({ running: "is still running", asleep: "is asleep, not off", unknown: "may still be running" });
 async function sockRunning(source, socket, d) {
   const at = location.hash;
   const name = typeof d.machine === "string" ? d.machine : "";
@@ -697,17 +701,19 @@ async function sockRunning(source, socket, d) {
   if (s && !state.caps[s.id]) await refreshCaps(s.id);
   const [src, k] = sockFind(source, socket);
   if (!src || !k || !name || location.hash !== at || !$("#modal").hidden) { flash(d.message || "The machine on this socket is still running. Nothing was switched.", true); return; }
-  const down = !!s && !!state.caps[s.id]?.actions.some((a) => a.action === "shutdown" && a.available);
+  const down = !!s && !controlWhyNot() && !!state.caps[s.id]?.actions.some((a) => a.action === "shutdown" && a.available);
+  const more = `${typeof d.message === "string" && d.message ? `<p>${esc(d.message)}</p>` : ""}<p>It is like pulling the plug: nothing is shut down first. It asks for the machine's name, then for your passkey.</p>`;
   const m = $("#modal");
-  m.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="sr-t"><h3 id="sr-t">${esc(k.name)} was not switched off</h3>
-    <p id="sr-msg">${esc(d.message || `${name} is still running. Shut it down first.`)}</p>
-    <div class="row-gap end"><button class="btn sm sock-cut" type="button" id="sr-cut">Cut power anyway</button>
-      <button class="btn" type="button" id="sr-cancel">Cancel</button>${down ? `<button class="btn primary" type="button" id="sr-down">Shut down</button>` : ""}</div></div>`;
+  m.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="sr-t"><div class="note" id="sr-sock">${esc(src.name)} · ${esc(k.name)}</div>
+    <h3 id="sr-t">${esc(name)} ${SOCK_RUNS[d.state] || SOCK_RUNS.running}</h3>
+    <p id="sr-msg">Cutting power now can lose unsaved work. Shut it down first.${infoBtn("sock-run", "Cut power anyway", more)}</p>
+    <div class="row-gap end"><button class="btn" type="button" id="sr-cancel">Cancel</button>${down ? `<button class="btn" type="button" id="sr-down">Shut down ${esc(name)}</button>` : ""}
+      <button class="btn danger-solid" type="button" id="sr-cut">${I.shield}Cut power anyway</button></div></div>`;
   m.hidden = false;
   $("#sr-cancel").onclick = closeModal;
   if (down) $("#sr-down").onclick = () => { closeModal(); openPowerDialog(s, "shutdown"); };
   $("#sr-cut").onclick = () => sockCut(source, socket, name);
-  focusAtTop(down ? "#sr-down" : "#sr-cancel");  // never on "Cut power anyway"
+  focusAtTop("#sr-cancel");  // the safe choice
 }
 function sockCut(source, socket, name) {
   typedDialog(`Cut power to ${name}?`, "This is like pulling the plug. Nothing is shut down first: unsaved work is lost and files can be damaged.", name, "Cut power", async (typed) => {
