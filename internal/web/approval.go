@@ -60,6 +60,9 @@ type approvalPlan struct {
 	// agent id -> the canonical text of the request. After the approval the request is sent to the machines of
 	// the plan and to these, never to a machine the dialog did not show (shown; audit 6, r4-x1-04).
 	others map[string]string
+	// signs, when set, is the dialog's line "Your passkey signs" for a single action, in place of the words made
+	// from the request alone (approvalTarget.words).
+	signs string
 	// run: the start of an "Update unpowered hosts" run with machines that check approvals themselves (the
 	// run's id and which entry is whose). confirm: such a run's second confirmation (api_wakeupdate_runs.go).
 	run     *runStart
@@ -176,6 +179,9 @@ func (c *reqCtx) askApproval(u *model.User, plan *approvalPlan) error {
 		// The words are made from the request the machine was asked about and bound its challenge to, the
 		// same ones a batch's lines are made from. (A batch and a Turn on have their own lines: items.)
 		detail["signs"] = requestWords(b[0].Request)
+		if plan.signs != "" {
+			detail["signs"] = truncate(safeTarget(plan.signs), maxActionText)
+		}
 	}
 	if !math.IsInf(age, 1) {
 		detail["auth_age_s"] = math.Round(age)

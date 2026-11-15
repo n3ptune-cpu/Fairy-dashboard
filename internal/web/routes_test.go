@@ -62,6 +62,10 @@ var matrixRoutes = []writeRoute{
 	{pattern: "POST /api/systems/{id}/fan/mode", path: "/api/systems/tower/fan/mode", body: map[string]any{"mode": "full"}, adminOnly: true, stepUp: true, controlToken: true, killSwitch: true},
 	{pattern: "POST /api/systems/{id}/fan/duty", path: "/api/systems/tower/fan/duty", body: map[string]any{"zone": 0, "percent": 50}, adminOnly: true, stepUp: true, controlToken: true, killSwitch: true},
 	{pattern: "POST /api/systems/{id}/power", path: "/api/systems/laptop/power", body: "POWER", adminOnly: true, stepUp: true, controlToken: true, killSwitch: true},
+	// Switching a plug's socket: browser sessions only. It asks for the passkey approval of the machine that
+	// reads the plug, never for the panel's own confirmation (TestPlugSwitch...); this panel has no such
+	// socket, so an admin is told so (404).
+	{pattern: "POST /api/power/socket", path: "/api/power/socket", body: map[string]any{"source": "laptop/desk", "socket": "main", "to": "off", "tag": "AAAAAAAAAAAAAAAAAAAAAA"}, adminOnly: true, killSwitch: true},
 	{pattern: "PUT /api/systems/{id}/poll", path: "/api/systems/laptop/poll", body: map[string]any{"interval_s": 5}, adminOnly: true, stepUp: true, controlToken: true, killSwitch: true},
 	// a host's model name is a label an admin sets for everyone to see: guarded like the sign-in wallpaper (no
 	// confirmation, no API token, and the kill switch, which stops device control, does not stop it)

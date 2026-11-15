@@ -622,6 +622,20 @@ func relaysOwn(path string, status int, data jsonx.M) bool {
 		said := jsonx.S(data, "error")
 		return status == 502 && (strings.HasPrefix(said, "BMC refused the ") || strings.HasPrefix(said, "cannot read the fan mode: "))
 	}
+	if path == api.PathPlugSwitch || path == api.PathApprovalChallenge {
+		// The switching of a plug's socket (Fairy-agent v0.10.0): the agent answers 502 itself, with a code of its
+		// own, when its Home Assistant could not be asked (ha_unreachable: nothing was sent; also to the
+		// question about an approval, while it waits after a refused token), answered the switch request with
+		// an error (ha_refused) or did not answer it (no_answer: it may still switch). A gateway's JSON has no
+		// such code, and its 502 stays "no answer".
+		switch agentCode(data) {
+		case api.CodeHAUnreachable:
+			return status == 502
+		case api.CodeHARefused, api.CodeNoAnswer:
+			return status == 502 && path == api.PathPlugSwitch
+		}
+		return false
+	}
 	return path == "/bmc/power" && strings.HasPrefix(agentCode(data), "bmc_")
 }
 

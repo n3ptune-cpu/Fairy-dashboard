@@ -45,6 +45,10 @@ type approvalTarget struct {
 	// machineID is set for a Turn on only: the id the panel made up for the machine. Every other request is
 	// bound to the id the panel has on record for the agent (challenge).
 	machineID string
+	// words, when set, say the request for the dialog in place of requestWords: the switching of a socket
+	// names the socket and what hangs on it, which the request's own text (ids and a tag) does not. They are
+	// made by the route from the panel's view of the socket, the one the request's tag stands for.
+	words string
 }
 
 // approvalOutcome is what confirmControl decided for one target: the approval to send with it (nil: none), or
@@ -236,6 +240,9 @@ func (c *reqCtx) confirmTargets(u *model.User, what string, targets []approvalTa
 		return nil, apierr.New(apierr.Upstream, "the machines' challenges cannot be used: "+textsafe.Clip(err.Error(), 200))
 	}
 	ap := newApprovalPlan(plan)
+	if only && len(targets) == 1 {
+		ap.signs = targets[0].words
+	}
 	if len(targets) > 1 || len(others) > 0 { // a batch: the dialog lists what the one approval covers, and what it does not
 		for _, b := range bound {
 			ap.items = append(ap.items, b.Name+": "+requestWords(b.Request)+" (checked on the machine)")
@@ -281,6 +288,9 @@ func requestWords(r api.ApprovalRequest) string {
 		return fmt.Sprintf("ticket of a run: switch itself off %d s after it is armed (notice %d s) unless confirmed", *r.WaitS, *r.NoticeS)
 	case api.ApproveRunGo:
 		return "confirmation of a run: " + runGoWords(*r.To, *r.ShutdownDelayS, *r.WithinS)
+	case api.ApproveSocketSet:
+		// by its ids; the route that sends it says it with the socket's name (approvalTarget.words)
+		return fmt.Sprintf("switch %s the socket %s of %s", *r.To, *r.Socket, *r.Source)
 	}
 	return r.Verb
 }
@@ -319,6 +329,12 @@ func (c *reqCtx) challenge(t approvalTarget) (*approval.Bound, string, error) {
 		return nil, "", apierr.New(502, "agent unreachable: "+devices.Describe(err))
 	}
 	if status != 200 || powerctl.NoAnswer(api.PathApprovalChallenge, status, data, nil) != nil {
+		if t.req.Verb == api.ApproveSocketSet {
+			// the machine's own reasons not to switch this socket, said before anybody is asked for a passkey
+			if e := plugRefusal(t.name, "", status, data); e != nil {
+				return nil, "", e
+			}
+		}
 		return nil, "", challengeRefusal(t.name, status, data, c.s.unavailableWhy(t.agent.ID))
 	}
 	var ch api.ChallengeResponse
@@ -374,6 +390,14 @@ func (c *reqCtx) challenge(t approvalTarget) (*approval.Bound, string, error) {
 // way: the machine's check never says that.
 func (c *reqCtx) notNeeded(t approvalTarget, reason string) error {
 	switch {
+	case t.req.Verb == api.ApproveSocketSet:
+		// The switching of a plug's socket is never sent without an approval: a machine without the check
+		// refuses it, and no window or exception of a machine covers it. A machine never says "needs none" for
+		// this request; whatever does is not believed, for a host with a record and for one without.
+		if reason == "" {
+			reason = "no reason"
+		}
+		return apierr.New(409, t.name+" answered that switching a socket needs no approval ("+textsafe.Clip(reason, 40)+"), which no machine says: a socket is switched only with a passkey approval. Nothing was sent.")
 	case t.req.Verb == api.ApproveTrustSet:
 		return nil // Turn on: its caller takes "no challenge" as "not switched on"
 	case reason == "fan_window" && isFanRequest(t.req):

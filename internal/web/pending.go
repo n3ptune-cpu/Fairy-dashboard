@@ -279,6 +279,7 @@ var actionText = map[string]string{
 	"PUT /api/systems/{id}/wake-update":          "\"Update unpowered hosts\" for {id}",
 	"POST /api/admin/wake-update/{id}/confirm":   "confirm the update and the shutdown of the machines the run woke",
 	"POST /api/systems/{id}/wake-update/keep-on": "keep {id} on (call off its switch-off after a run)",
+	"POST /api/power/socket":                     "switch a plug socket",
 }
 
 // actionDetail is, per route, what the panel adds to the description of a kept request when the request's own
@@ -294,6 +295,8 @@ var actionDetail = map[string]func(c *reqCtx, u *model.User) string{
 	"PUT /api/systems/{id}/wake-update":  (*reqCtx).wakeUpdateSwitchDetail,
 	// which id, or that the check is off (api_machines.go)
 	"POST /api/admin/approval/accept/{id}": (*reqCtx).approvalAcceptDetail,
+	// which socket, in which direction, and what hangs on it (api_plug.go)
+	"POST /api/power/socket": (*reqCtx).plugDetail,
 }
 
 // actionList is, per route, the panel's own line for each thing a kept request is about, when it is about a

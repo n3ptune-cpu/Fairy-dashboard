@@ -309,10 +309,13 @@ func (v *view) cleanPower(st model.PowerSourceState) model.PowerSourceState {
 	return st
 }
 
-// Power is the visible power sources and their total.
+// Power is the visible power sources and their total. The sockets of a plug are in it with the panel's own
+// rules laid over what the agent says (plug.go): an admin gets, for each socket, whether it can be switched
+// from here and why not; everybody else its name and its state.
 func (v *view) Power() model.PowerOverview {
 	ov := v.s.Poller.Power.Overview()
 	if v.all {
+		v.withSockets(ov.Sources)
 		return ov
 	}
 	srcs := []model.PowerSourceState{}
@@ -321,9 +324,25 @@ func (v *view) Power() model.PowerOverview {
 			srcs = append(srcs, v.cleanPower(st))
 		}
 	}
+	v.withSockets(srcs)
 	ov.Sources = srcs
 	ov.TotalW = power.Total(srcs)
 	return ov
+}
+
+// withSockets replaces the sockets of every source in srcs (a list of this answer's own) with what this viewer
+// gets of them.
+func (v *view) withSockets(srcs []model.PowerSourceState) {
+	var looks *plugLooks
+	for i := range srcs {
+		if len(srcs[i].Sockets) == 0 {
+			continue
+		}
+		if looks == nil {
+			looks = v.s.newPlugLooks(v.snap)
+		}
+		srcs[i].Sockets = looks.sockets(srcs[i], v.g.Admin(), func(id string) bool { return v.all || v.vis[id] })
+	}
 }
 
 // PowerHistory is the history of the visible sources; each point's total is the sum of the visible sources that

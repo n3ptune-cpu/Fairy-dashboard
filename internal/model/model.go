@@ -375,7 +375,8 @@ type PowerSocket struct {
 	// to nothing (or to a row the viewer does not see).
 	SystemID *string `json:"system_id,omitempty"`
 	// Lock is set when the panel itself never switches this socket, in either direction, because of what it
-	// feeds: SocketLockAgent, SocketLockHomeAssistant or SocketLockPanel. Why is then the same word.
+	// feeds: SocketLockAgent, SocketLockHomeAssistant, SocketLockHAUnknown or SocketLockPanel. Why is then the
+	// same word.
 	Lock string `json:"lock,omitempty"`
 }
 
@@ -396,6 +397,9 @@ const (
 	SocketLockAgent = "reads_plugs"
 	// SocketLockHomeAssistant: the socket feeds the machine Home Assistant runs on (home_assistant_system).
 	SocketLockHomeAssistant = "home_assistant"
+	// SocketLockHAUnknown: home_assistant_system is set and no row has that id now, so the panel cannot tell
+	// which socket feeds Home Assistant: it then switches no socket of that agent that is linked to a machine.
+	SocketLockHAUnknown = "home_assistant_unknown"
 	// SocketLockPanel: the socket feeds the machine this panel runs on (panel_hosts).
 	SocketLockPanel = "panel"
 )

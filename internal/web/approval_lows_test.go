@@ -45,12 +45,12 @@ func TestALongRefusalStaysUntilItIsClosed(t *testing.T) {
 	script := `"use strict";
 ` + fn + `
 const fail = (m) => { console.log("FAIL " + m); process.exitCode = 1; };
-const broken = "CHARLIE cannot check approvals right now (CHARLIE says: approval unavailable: the trust file cannot be used (an administrator repairs it on the machine: fairy-agent helper-trust show)). Until that is repaired on the machine it refuses fan, power and update requests.";
+const broken = "CHARLIE cannot check approvals right now (CHARLIE says: approval unavailable: the trust file cannot be used (an administrator repairs it on the machine: fairy-agent helper-trust show)). Until that is repaired on the machine it refuses fan, power, update and plug requests.";
 const refused = "Shut down BRAVO: failed · BRAVO did not accept the approval (BRAVO says: approval refused (no_challenge): no entry holds an open challenge of this machine for exactly this request (used already, expired)). Nothing was done. A new approval is needed: press the button again.";
 let [short, more] = flashParts(broken);
 // (audit 6, r4-b1-08: Details are what the line left out, the machine's words without their brackets; they were
 // the whole text, which starts with the line's own words)
-if (short !== "CHARLIE cannot check approvals right now." || more !== "CHARLIE says: approval unavailable: the trust file cannot be used (an administrator repairs it on the machine: fairy-agent helper-trust show). Until that is repaired on the machine it refuses fan, power and update requests.") fail(short + " | " + more);
+if (short !== "CHARLIE cannot check approvals right now." || more !== "CHARLIE says: approval unavailable: the trust file cannot be used (an administrator repairs it on the machine: fairy-agent helper-trust show). Until that is repaired on the machine it refuses fan, power, update and plug requests.") fail(short + " | " + more);
 [short, more] = flashParts(refused);
 if (short !== "Shut down BRAVO: failed · BRAVO did not accept the approval." || more !== "BRAVO says: approval refused (no_challenge): no entry holds an open challenge of this machine for exactly this request (used already, expired). Nothing was done. A new approval is needed: press the button again.") fail(short + " | " + more);
 // a long text without brackets: the first sentence, and the rest behind Details

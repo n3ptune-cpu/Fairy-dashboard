@@ -15,6 +15,7 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/power", s.h(s.power))
 	m.HandleFunc("GET /api/power/history", s.h(s.powerHistory))
 	m.HandleFunc("GET /api/power/day", s.h(s.powerDay))
+	m.HandleFunc("POST /api/power/socket", s.h(s.plugSwitch))
 	m.HandleFunc("GET /api/ups", s.h(s.ups))
 	m.HandleFunc("GET /api/ups/events", s.h(s.upsEvents))
 	m.HandleFunc("GET /api/systems/{id}/fan", s.h(s.fanStatus))

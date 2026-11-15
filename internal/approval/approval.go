@@ -276,7 +276,7 @@ func ErrorText(name, code, text, why string) (msg string, ok bool) {
 	case api.CodeApprovalRefused:
 		return name + " did not accept the approval" + said + ". Nothing was done." + refusedHint(text), true
 	case api.CodeApprovalUnavailable:
-		return name + " cannot check approvals right now" + said + ". Until that is repaired on the machine it refuses fan, power and update " +
+		return name + " cannot check approvals right now" + said + ". Until that is repaired on the machine it refuses fan, power, update and plug " +
 			"requests.", true
 	case api.CodeApprovalDisabled:
 		return name + " has nothing that checks approvals (a Windows agent without its helper)" + said + ".", true

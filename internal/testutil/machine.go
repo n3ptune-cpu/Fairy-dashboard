@@ -32,6 +32,10 @@ type Machine struct {
 	PowerPending func() bool
 	OnSelfOff    func(delay time.Duration)
 
+	// Plugs is set for a machine whose agent reads plugs with sockets and switches them (Fairy-agent v0.10.0):
+	// POST /plug/switch and the challenge for socket_set answer as the agent does, with the agent's real gate.
+	Plugs *MachinePlugs
+
 	mu       sync.Mutex
 	passed   []Sent // control requests the gate let through, in order
 	asked    []Sent // every request the panel sent (also refused ones), with its body
@@ -48,6 +52,65 @@ type Sent struct {
 	Body map[string]any
 	// Approved: it carried an approval the gate accepted.
 	Approved bool
+	// Wait is the wait the panel asked for with this one request (poller.WithAgentWait; 0: the usual one).
+	Wait time.Duration
+}
+
+// MachinePlugs are the sockets of a Machine and what its made-up Home Assistant does with them. The rules are
+// the agent's (Fairy-agent, pkg/agent/plug.go), in its order: what the machine's config says about the socket,
+// the tag, the passkey check looked at and not used up, the state, then the gate's last word, which uses the
+// approval up, then the switch.
+type MachinePlugs struct {
+	// Off: switching is turned off in the machine's config (404 plug_switching_disabled).
+	Off bool
+	// Sockets by "<plug id>/<socket id>".
+	Sockets map[string]*MachineSocket
+	// HeldS: the wait after a refused token is on, with this many seconds left (502 ha_unreachable with
+	// retry_after_s, for the challenge and for the switch).
+	HeldS int
+	// Answer, when set, is what the switch request is answered with after the approval was used up, in place
+	// of a switch that works (a status of 0: it works). For Home Assistant's own failures.
+	Answer func(b api.PlugSwitch) (int, jsonx.M)
+	// Unconfirmed: the request is sent and the socket does not show the new state (200, confirmed false).
+	Unconfirmed bool
+}
+
+// MachineSocket is one socket of a Machine.
+type MachineSocket struct {
+	Tag   string
+	State string // what Home Assistant says: on, off, unavailable, unknown
+	// Refuse is the agent's own refusal for this socket ("": none): not_allowed, feeds_self, no_token.
+	Refuse string
+}
+
+// plugRefusals are the statuses of the agent's own refusals (Fairy-agent, plugRefusals).
+var plugRefusals = map[string]int{api.CodeUnknownSocket: 404, api.CodeNotAllowed: 403, api.CodeFeedsSelf: 403, api.CodeSocketChanged: 409,
+	api.CodeNoSwitchToken: 409, api.CodeSocketUnavailable: 409, api.CodeHAUnreachable: 502, api.CodePlugSwitchingDisabled: 404}
+
+func plugNo(code string, retryS int) (bool, int, jsonx.M, func()) {
+	out := jsonx.M{"error": "the machine's own sentence for " + code, "code": code}
+	if retryS > 0 {
+		out["retry_after_s"] = float64(retryS)
+	}
+	return true, plugRefusals[code], out, nil
+}
+
+// known is the agent's socketKnown: the socket, or the code of the refusal.
+func (p *MachinePlugs) known(source, socket, tag string) (*MachineSocket, string) {
+	s := p.Sockets[source+"/"+socket]
+	switch {
+	case p.Off:
+		return nil, api.CodePlugSwitchingDisabled
+	case s == nil:
+		return nil, api.CodeUnknownSocket
+	case s.Refuse == api.CodeFeedsSelf || s.Refuse == api.CodeNotAllowed:
+		return s, s.Refuse
+	case tag != s.Tag:
+		return s, api.CodeSocketChanged
+	case s.Refuse != "":
+		return s, s.Refuse
+	}
+	return s, ""
 }
 
 // NewMachine is a machine with no trust file (approval "off"), an uptime of one hour and the test's clock.
@@ -188,6 +251,20 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 		if !strict(&req) {
 			return true, 400, jsonx.M{"error": "not a request that can be approved"}, nil
 		}
+		if req.Verb == api.ApproveSocketSet {
+			if _, err := req.Canonical(); err != nil {
+				return true, 400, jsonx.M{"error": "not a request that can be approved: " + err.Error()}, nil
+			}
+			if m.Plugs == nil { // an agent that reads no plugs
+				return plugNo(api.CodePlugSwitchingDisabled, 0)
+			}
+			if _, code := m.Plugs.known(*req.Source, *req.Socket, *req.Tag); code != "" {
+				return plugNo(code, 0)
+			}
+			if st := m.Gate.StatusNow().State; st == api.ApprovalRequired && m.Plugs.HeldS > 0 {
+				return plugNo(api.CodeHAUnreachable, m.Plugs.HeldS)
+			}
+		}
 		ch, ref := m.Gate.Challenge(req)
 		if ref != nil {
 			return refusal(ref)
@@ -209,6 +286,53 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 		b, _ := json.Marshal(st)
 		_ = json.Unmarshal(b, &out)
 		return true, 200, out, nil
+	}
+	if path == api.PathPlugSwitch {
+		var in api.PlugSwitch
+		if !strict(&in) {
+			return true, 400, jsonx.M{"error": "not a switch request"}, nil
+		}
+		req := in.Request()
+		if _, err := req.Canonical(); err != nil {
+			return true, 400, jsonx.M{"error": "not a switch request: " + err.Error()}, nil
+		}
+		if m.Plugs == nil || m.Plugs.Off {
+			return plugNo(api.CodePlugSwitchingDisabled, 0)
+		}
+		sock, code := m.Plugs.known(in.Source, in.Socket, in.Tag)
+		if code != "" {
+			return plugNo(code, 0)
+		}
+		if ref := m.Gate.Look(req, in.Approval); ref != nil { // looked at in full, nothing used up
+			return refusal(ref)
+		}
+		if m.Plugs.HeldS > 0 {
+			return plugNo(api.CodeHAUnreachable, m.Plugs.HeldS)
+		}
+		was := sock.State
+		if was != api.SocketStateOn && was != api.SocketStateOff {
+			return plugNo(api.CodeSocketUnavailable, 0) // the approval is whole
+		}
+		if _, ref := m.Gate.Admit(req, in.Approval); ref != nil { // the approval is used up here
+			return refusal(ref)
+		}
+		rec.Approved = true
+		m.mu.Lock()
+		m.passed = append(m.passed, rec)
+		m.mu.Unlock()
+		if m.Plugs.Answer != nil {
+			if st, out := m.Plugs.Answer(in); st != 0 {
+				return true, st, out, nil
+			}
+		}
+		state := in.To
+		if m.Plugs.Unconfirmed {
+			state = was
+		} else {
+			sock.State = in.To
+		}
+		return true, 200, jsonx.M{"source": in.Source, "socket": in.Socket, "to": in.To, "was": was, "state": state,
+			"confirmed": state == in.To, "took_ms": float64(840)}, nil
 	}
 	if m.Runs != nil && (path == api.PathRunArm || path == api.PathRunGo) {
 		answer := func(ans api.RunAnswer, ref *approval.Refusal) (bool, int, jsonx.M, func()) {
@@ -297,6 +421,9 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 // GatedBackend is a Backend whose agents can be Machines.
 type GatedBackend struct {
 	*Backend
+	// WaitOf, when set, reads the wait one request asked for from its context (poller.AgentWait; this package
+	// cannot name the poller, whose own tests use it). It is recorded with the request (Sent.Wait).
+	WaitOf   func(ctx context.Context) (time.Duration, bool)
 	mu       sync.Mutex
 	machines map[string]*Machine
 	lies     map[string]func(path string) (int, jsonx.M)
@@ -304,6 +431,14 @@ type GatedBackend struct {
 	fails    map[string]error
 	stale    map[string]jsonx.M
 	live     map[string]func() jsonx.M
+}
+
+// waitOf reads the wait a request asked for out of its context, when the test said how (WaitOf).
+func (g *GatedBackend) waitOf(ctx context.Context) (time.Duration, bool) {
+	if g.WaitOf == nil {
+		return 0, false
+	}
+	return g.WaitOf(ctx)
 }
 
 // NewGatedBackend wraps b.
@@ -454,6 +589,13 @@ func (g *GatedBackend) AgentRequest(ctx context.Context, a config.Agent, method,
 	}
 	if m != nil && method == http.MethodPost {
 		handled, status, data, applied := m.request(path, body)
+		if wait, ok := g.waitOf(ctx); ok { // the wait the panel asked for with this one request
+			m.mu.Lock()
+			if n := len(m.asked); n > 0 {
+				m.asked[n-1].Wait = wait
+			}
+			m.mu.Unlock()
+		}
 		if handled {
 			return status, data, nil
 		}

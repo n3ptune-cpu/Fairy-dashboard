@@ -40,7 +40,8 @@ func (c *reqCtx) checkCSRF(u *model.User) error {
 // token may not run at all. A token cannot "confirm it's you": it skips the step-up, so for a token every other
 // control action is one request away. These are the ones that change what the panel trusts or switch off a
 // machine's protection: stop / start of the elevated helper (its fan watchdog), Add host, Re-pair, Remove, and
-// cancelling an Add host or Re-pair that is waiting (NEW-3: it undoes what an admin just confirmed).
+// cancelling an Add host or Re-pair that is waiting (NEW-3: it undoes what an admin just confirmed). And the
+// ones that only a passkey can confirm (Turn on, the switching of a plug's socket).
 // They need a browser session, which then goes through the step-up like everything else.
 var sessionOnlyControl = map[string]bool{
 	"POST /api/systems/{id}/helper/stop":  true,
@@ -63,6 +64,8 @@ var sessionOnlyControl = map[string]bool{
 	// Accepting what a machine shows about its check (a new machine id, or that the check is off) changes what
 	// the panel's approvals are tied to: a person who can confirm, never a token.
 	"POST /api/admin/approval/accept/{id}": true,
+	// Switching a plug's socket needs a passkey approval that the machine checks: a token has none.
+	"POST /api/power/socket": true,
 }
 
 // controlGuard: CSRF, control group / control-scope token, admin kill switch, step-up, rate limit. API tokens
