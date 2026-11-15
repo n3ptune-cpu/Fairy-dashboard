@@ -676,6 +676,16 @@ type NotSent struct{ Err error }
 func (e *NotSent) Error() string { return e.Err.Error() }
 func (e *NotSent) Unwrap() error { return e.Err }
 
+// agentWait is how long a request to an agent may take: request_timeout + 8 s (a BMC asked through PowerShell
+// is slow), or the longer wait the caller asked for with this one request (WithAgentWait).
+func (b *httpBackend) agentWait(ctx context.Context) time.Duration {
+	wait := time.Duration((b.p.Cfg.RequestTimeout + 8) * float64(time.Second))
+	if own, ok := AgentWait(ctx); ok && own > wait {
+		wait = own
+	}
+	return wait
+}
+
 func (b *httpBackend) AgentRequest(ctx context.Context, a config.Agent, method, path string, body any) (int, jsonx.M, error) {
 	toks, ok := b.tokensFor(a)
 	if !ok {
@@ -690,7 +700,7 @@ func (b *httpBackend) AgentRequest(ctx context.Context, a config.Agent, method, 
 		bb, _ := json.Marshal(body)
 		rd = strings.NewReader(string(bb))
 	}
-	cctx, cancel := context.WithTimeout(ctx, time.Duration((b.p.Cfg.RequestTimeout+8)*float64(time.Second))) // ipmi via powershell is slow
+	cctx, cancel := context.WithTimeout(ctx, b.agentWait(ctx))
 	defer cancel()
 	var gotConn atomic.Bool // a connection (new or kept) was handed to the request: from then on it may have left
 	cctx = httptrace.WithClientTrace(cctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { gotConn.Store(true) }})

@@ -828,6 +828,31 @@ func (p *Poller) AgentRequest(ctx context.Context, a config.Agent, method, path 
 	return p.Backend.AgentRequest(ctx, a, method, path, body)
 }
 
+// agentWaitKey carries the wait of one request to an agent in its context (WithAgentWait).
+type agentWaitKey struct{}
+
+// WithAgentWait returns ctx with the time one request to an agent may take, for a request the agent itself
+// works on for longer than the panel usually waits (request_timeout + 8 s, 12 s by default). The switching of a
+// plug's socket is one: the agent reads the socket's state, sends the request to Home Assistant and then
+// watches the state for up to 10 s, 18 s in all. With the usual wait the panel would report "no answer" for
+// switches that worked. The wait is carried by the context, so every Backend takes it without a change (the
+// real one, the demo's, a test's), and a request without it waits as it always did. It never shortens the
+// usual wait.
+func WithAgentWait(ctx context.Context, wait time.Duration) context.Context {
+	return context.WithValue(ctx, agentWaitKey{}, wait)
+}
+
+// AgentWait is the wait WithAgentWait put into ctx (ok false: none).
+func AgentWait(ctx context.Context) (wait time.Duration, ok bool) {
+	wait, ok = ctx.Value(agentWaitKey{}).(time.Duration)
+	return wait, ok && wait > 0
+}
+
+// AgentRequestWithin is AgentRequest for one request that may take up to wait (WithAgentWait).
+func (p *Poller) AgentRequestWithin(ctx context.Context, a config.Agent, method, path string, body any, wait time.Duration) (int, jsonx.M, error) {
+	return p.Backend.AgentRequest(WithAgentWait(ctx, wait), a, method, path, body)
+}
+
 // AgentFor returns the agent reporting for a system id (itself or linked).
 func (p *Poller) AgentFor(id string) (config.Agent, bool) {
 	if a, ok := p.AgentByID(id); ok {
