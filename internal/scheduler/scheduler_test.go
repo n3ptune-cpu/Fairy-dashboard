@@ -157,3 +157,32 @@ func TestReloadFromCLI(t *testing.T) {
 		t.Fatal("no change")
 	}
 }
+
+// An override is a write of the state file (state.json in the panel). Whoever keeps a view of that file is
+// told, as after every other write of the file in the process, and reads what was written.
+func TestSetOverrideTellsWhoKeepsAViewOfTheFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	s := New(p, true, (&clock{}).now)
+	view := statefile.NewWatchedEvery(p, time.Hour) // looks at the file once an hour by itself
+	view.Get()
+	told := 0
+	s.Written = func() { told++; view.Refresh() }
+	if err := s.SetOverride("x", &Override{Paused: true}); err != nil {
+		t.Fatal(err)
+	}
+	if po, _ := view.Get()["poll_overrides"].(map[string]any); told != 1 || po["x"] != "paused" {
+		t.Errorf("after the override the view was told %d times and holds %v", told, view.Get()["poll_overrides"])
+	}
+	if err := s.SetOverride("x", nil); err != nil {
+		t.Fatal(err)
+	}
+	if po, _ := view.Get()["poll_overrides"].(map[string]any); told != 2 || len(po) != 0 {
+		t.Errorf("after the override was taken back the view was told %d times and holds %v", told, po)
+	}
+	// a scheduler that keeps nothing in a file writes nothing and tells nobody
+	m := New("", true, (&clock{}).now)
+	m.Written = func() { t.Error("a scheduler without a state file said it wrote one") }
+	if err := m.SetOverride("x", &Override{Paused: true}); err != nil {
+		t.Fatal(err)
+	}
+}

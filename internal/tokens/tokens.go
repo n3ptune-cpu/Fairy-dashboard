@@ -255,4 +255,5 @@ func (s *Store) Touch(r *Record) {
 		}
 		return nil
 	})
+	s.watch.Refresh()
 }

@@ -41,28 +41,35 @@ type Data = map[string]any
 // least "{}"), and a power cut or a full disk can leave one behind. Read as "no state" it would switch the
 // kill switch off, forget who was removed and make the next sign-in the first admin again (r2-p4-10).
 func Read(path string) (Data, error) {
-	d, _, err := readSum(path)
-	return d, err
+	b, found, err := content(path)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return Data{}, nil
+	}
+	return parse(path, b)
 }
 
-// readSum is Read, and the SHA-256 of the bytes that were read: what tells one content of the file from
-// another (all zero when no bytes were read: no file, or one that is not read).
-func readSum(path string) (Data, [sha256.Size]byte, error) {
-	var sum [sha256.Size]byte
-	b, err := ReadFile(path, MaxBytes) // a regular file of a sane size, or it is not read (safe.go)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return Data{}, sum, nil
-		}
-		if IsNotAFile(err) {
-			return nil, sum, err
-		}
-		return nil, sum, fmt.Errorf("cannot read %s: %w (it must be readable by the user Fairy runs as; "+
-			"check its owner and mode, e.g. chown fairy:fairy and chmod 600)", path, err)
+// content is the bytes of a state file. found is false, without an error, when the file does not exist.
+func content(path string) (b []byte, found bool, err error) {
+	b, err = ReadFile(path, MaxBytes) // a regular file of a sane size, or it is not read (safe.go)
+	switch {
+	case err == nil:
+		return b, true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, false, nil
+	case IsNotAFile(err):
+		return nil, false, err
 	}
-	sum = sha256.Sum256(b)
+	return nil, false, fmt.Errorf("cannot read %s: %w (it must be readable by the user Fairy runs as; "+
+		"check its owner and mode, e.g. chown fairy:fairy and chmod 600)", path, err)
+}
+
+// parse is the state in the bytes of a state file, or why they hold none (a *DamagedError).
+func parse(path string, b []byte) (Data, error) {
 	if len(bytes.TrimSpace(b)) == 0 {
-		return nil, sum, &DamagedError{Path: path, What: fmt.Sprintf("is empty (%d bytes): Fairy never writes an empty state file, so this one is damaged "+
+		return nil, &DamagedError{Path: path, What: fmt.Sprintf("is empty (%d bytes): Fairy never writes an empty state file, so this one is damaged "+
 			"(a power cut or a full disk can leave it).", len(b))}
 	}
 	var d Data
@@ -70,9 +77,9 @@ func readSum(path string) (Data, [sha256.Size]byte, error) {
 		if err == nil {
 			err = errors.New("not a JSON object")
 		}
-		return nil, sum, &DamagedError{Path: path, What: fmt.Sprintf("is corrupt (%v):", err)}
+		return nil, &DamagedError{Path: path, What: fmt.Sprintf("is corrupt (%v):", err)}
 	}
-	return d, sum, nil
+	return d, nil
 }
 
 // DamagedError is a state file that could be read and does not hold a state: it is empty, or not a JSON object
@@ -200,8 +207,9 @@ func syncDir(dir string) {
 }
 
 // Watched is a cached view of a state file. It looks at the file at most every `every` (Get), or now (Look),
-// and reads it again when the look finds another file than the last one did: see stamp. After a write of this
-// process the view is told to read the file, whatever a look at it says (Refresh).
+// and reads it again when the look finds another file than the last one did (see stamp), and at every look
+// for a short time after it first saw the file as it is (see YoungFor). After a write of this process the view
+// is told to read the file, whatever a look at it says (Refresh).
 //
 // When the file becomes unreadable or corrupt the view is empty and Err reports why (fail closed); the problem
 // is logged once per change of the file.
@@ -212,10 +220,39 @@ type Watched struct {
 	data    Data
 	err     error
 	seen    stamp             // what the last look at the file found
+	since   time.Time         // when a look first found that
+	settled bool              // the file was read YoungFor or more after `since`: its stamp alone says what it holds
 	sum     [sha256.Size]byte // of the bytes the view was read from (zero: none were read)
 	checked time.Time
 	Version int
+	Reads   int // how often the view read the file (for tests: a look that reads when it need not is not seen otherwise)
 }
+
+// YoungFor is how long a view goes on reading a file at every look after it first saw the file as its stamp
+// says it. During that time the stamp is not trusted, and after it (and one more read) it is.
+//
+// Why: a stamp cannot tell two files apart that were written in one step of the file's clock, have the same
+// size and, when a third write got the number of the first file again, the same number (see stamp). Such
+// writes can only happen while the file's clock still shows the time in the stamp. Once the view has seen a
+// stamp for longer than one step of that clock, every later write carries a later time, the stamp changes
+// with it, and a read made from then on is the last one that is needed.
+//
+// How long: the step is the timer tick on Linux (4 ms at 250 Hz; measured on the machine this was written on:
+// 1987 of 1999 files written one after the other had the time of the one before on a ramfs, 635 of 999 on an
+// ext3 with the two fsyncs of a write), and one second on the coarsest file systems Fairy's writes work on
+// (ext3, ext4 with small inodes, older NFS). Two seconds are that second and a second of margin.
+//
+// It is counted on this process's own clock from the moment of the first look, never by comparing the file's
+// time with the time of day. A file whose time is in the future or long past (a clock that was set, a restored
+// backup, a file server with another clock) is young for exactly as long as any other, and no longer: what it
+// costs is a read and a hash at each look in those two seconds, and one read after them.
+//
+// What it rests on: the file's clock goes forward, about as fast as this process's, in steps of at most
+// YoungFor. A clock that is set back and reaches the time in the stamp a second time is not covered.
+const YoungFor = 2 * time.Second
+
+// timeNow is the time. A variable so that a test can let YoungFor pass without waiting; nothing else replaces it.
+var timeNow = time.Now
 
 // stamp is what one look at a state file finds without reading it. Two looks with the same stamp are taken as
 // the same content, so everything that is cheap and moves with a write is in it.
@@ -230,11 +267,11 @@ type Watched struct {
 // (WriteAtomic), and the file of one write and of the write right before it are never the same one, because
 // the older is still there when the newer is made.
 //
-// What a stamp still cannot tell: two or more writes since the last look, all in one step of the clock, the
+// What a stamp alone cannot tell: two or more writes since the last look, all in one step of the clock, the
 // last of the same size as the file that was looked at, and in a file whose number the file system gave out
-// again (the file of the write before last is free by then). A write of this process never depends on it
-// (Refresh reads); writes of another process (`fairy admin ...`) do. On Windows the stamp is the time and the
-// size (fileid_windows.go).
+// again (the file of the write before last is free by then); on Windows, where the stamp is the time and the
+// size (fileid_windows.go), one such write. So a view does not go by the stamp alone while such a write is
+// still possible (YoungFor), and never after a write of this process (Refresh reads).
 type stamp struct {
 	what        int8 // notLooked, missing, outOfReach or there
 	mtime, size int64
@@ -306,8 +343,8 @@ func (w *Watched) Get() Data {
 }
 
 // Look is Get with a look at the file now, not at most every `every`: one stat, and the file is read only when
-// it is another one than at the last look. For what must not be up to a second old when another process wrote
-// it (the kill switch, a host's power switch, a session that was ended).
+// it is another one than at the last look, or still young (YoungFor). For what must not be up to a second old
+// when another process wrote it (the kill switch, a host's power switch, a session that was ended).
 func (w *Watched) Look() Data {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -332,24 +369,29 @@ func (w *Watched) Err() error {
 }
 
 func (w *Watched) getLocked(how int) Data {
-	now := time.Now()
+	now := timeNow()
 	if how == lookInTime && now.Sub(w.checked) < w.every {
 		return w.data
 	}
 	w.checked = now
 	seen, lookErr := look(w.Path)
 	other := seen != w.seen
-	// The same stamp as at the last look is the same file, with two exceptions. A file that cannot be looked
+	if other {
+		w.since, w.settled = now, false
+	}
+	// The same stamp as at the last look is the same file, with three exceptions. A file that cannot be looked
 	// at (outOfReach) has no time to tell one such state from the next, so it is judged again at every check.
-	// And after a write of this process (readNow) the file is read: its stamp can be the one of the file
-	// before.
-	if !other && !(seen.what == outOfReach && w.err != nil) && !(seen.what == there && how == readNow) {
+	// After a write of this process (readNow) the file is read: its stamp can be the one of the file before.
+	// And a file the view has not known for long enough can have been written again under the same stamp by
+	// somebody who did not tell the view (YoungFor).
+	if !other && !(seen.what == outOfReach && w.err != nil) && !(seen.what == there && (how == readNow || !w.settled)) {
 		return w.data
 	}
 	var (
 		data Data
 		sum  [sha256.Size]byte
 		err  error
+		same bool // the bytes the view was read from: nothing to parse, nothing to change
 	)
 	switch seen.what {
 	case missing:
@@ -357,16 +399,34 @@ func (w *Watched) getLocked(how int) Data {
 	case outOfReach:
 		data, err = Data{}, fmt.Errorf("cannot read %s: %w", w.Path, lookErr)
 	default:
-		if data, sum, err = readSum(w.Path); err != nil {
+		w.Reads++
+		b, found, rerr := content(w.Path)
+		if rerr == nil && found {
+			sum = sha256.Sum256(b)
+		}
+		switch {
+		case rerr != nil:
+			data, err = Data{}, rerr
+		case !found: // gone between the look and the read: an empty state, as Read says
 			data = Data{}
+		case !other && sum == w.sum:
+			same = true
+		default:
+			if data, err = parse(w.Path, b); err != nil {
+				data = Data{}
+			}
+		}
+		// A read this long after the stamp was first seen is the last one the stamp needs (YoungFor).
+		if now.Sub(w.since) >= YoungFor {
+			w.settled = true
 		}
 	}
 	// The version moves only when what was found is another thing than before: the switches look at the file
 	// at every request now (audit 6, r4-p2-03), and whoever follows Version would be told of a change ten
 	// times a second for as long as the file stays out of reach, or with every write of this process that
-	// changed nothing. Under the same stamp, the same bytes and the same error are the same thing, and the
-	// view stays as it is.
-	if !other && sum == w.sum && (err == nil) == (w.err == nil) && (err == nil || err.Error() == w.err.Error()) {
+	// changed nothing, or with every look at a young file. Under the same stamp, the same bytes are the same
+	// thing, and so is the same error where no bytes were read; the view stays as it is.
+	if same || (!other && sum == w.sum && (err == nil) == (w.err == nil) && (err == nil || err.Error() == w.err.Error())) {
 		return w.data
 	}
 	w.seen, w.sum = seen, sum

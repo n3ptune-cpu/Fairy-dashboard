@@ -33,10 +33,12 @@ func TestAWriteInPlaceWithTheSameTimeAndSizeIsSeen(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"site": "site-a"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	pass := ownClock(t)
 	w := NewWatchedEvery(path, 0)
 	if got := w.Get()["site"]; got != "site-a" {
 		t.Fatalf("the first write: %v", got)
 	}
+	settle(t, w, pass) // the view goes by the stamp alone: a young file would be read whatever is in it
 	first, a := sysOf(t, path)
 	// The clock of that time moves with the timer tick on an older kernel: written again until it has moved
 	// (some milliseconds at most).
@@ -73,10 +75,12 @@ func (f onAnotherDevice) Sys() any { return &f.sys }
 func TestTheSameNumberOnAnotherDeviceIsAnotherFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	writeSite(t, path, "site-a")
+	pass := ownClock(t)
 	w := NewWatchedEvery(path, 0)
 	if got := w.Get()["site"]; got != "site-a" {
 		t.Fatalf("the first write: %v", got)
 	}
+	settle(t, w, pass) // the view goes by the stamp alone
 	st, sys := sysOf(t, path)
 	sys.Dev++
 	real := statFile

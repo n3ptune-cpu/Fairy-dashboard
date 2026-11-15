@@ -209,6 +209,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 	p.loadLastSeen()
 	p.loadMachines()
 	p.Scheduler = scheduler.New(filepath.Join(cfg.DataDir, "state.json"), cfg.Boost(), nil)
+	p.Scheduler.Written = p.Admin.StateWritten // a poll override is a write of state.json that is not p.Admin's
 	p.buildJobs()
 	for _, w := range p.NodeLinkWarnings() { // an agent's node that the configuration does not decide: said once (nodeid.go)
 		slog.Warn("config: " + w)

@@ -131,6 +131,10 @@ func (a *State) ControlDisabled() *model.ControlState {
 	return cs
 }
 
+// StateWritten is called by a part of this process that wrote state.json itself (the scheduler: a poll
+// override). The view reads the file, as it does after every write of this package.
+func (a *State) StateWritten() { a.state.Refresh() }
+
 // StateData returns state.json and a version number that changes whenever the file changes (for syncing poll
 // overrides).
 func (a *State) StateData() (statefile.Data, int) {
@@ -603,10 +607,10 @@ func (a *State) RevokeAllSessions() (int, error) {
 	if _, err := statefile.Update(a.SessionsPath, func(d statefile.Data) error { d["sessions"] = map[string]any{}; return nil }); err != nil {
 		return 0, err
 	}
+	a.sessions.Refresh() // now: sessions.json is written also when state.json then cannot be
 	if _, err := statefile.Update(a.StatePath, func(d statefile.Data) error { d["sessions_revoked_before"] = now(); return nil }); err != nil {
 		return 0, err
 	}
-	a.sessions.Refresh()
 	a.state.Refresh()
 	return n, nil
 }

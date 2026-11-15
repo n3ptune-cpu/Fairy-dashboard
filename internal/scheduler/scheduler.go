@@ -82,6 +82,7 @@ type Scheduler struct {
 	order        []string
 	overrides    map[string]Override
 	stateFile    string
+	Written      func() // called after the scheduler wrote stateFile (nil: nobody keeps a view of the file)
 	BoostEnabled bool
 	Clock        func() float64
 	boost        map[string]*boostRef
@@ -191,6 +192,9 @@ func (s *Scheduler) SetOverride(id string, v *Override) error {
 	s.mu.Unlock()
 	if s.stateFile != "" {
 		_, err := statefile.Update(s.stateFile, func(d statefile.Data) error { d["poll_overrides"] = snap; return nil })
+		if s.Written != nil { // the file is state.json, which the panel keeps a view of: it reads what was written
+			s.Written()
+		}
 		return err
 	}
 	return nil
