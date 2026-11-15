@@ -82,10 +82,11 @@ func TestEditHostComparesTheLinesTheDialogDoesNotList(t *testing.T) {
 			res, linked(r), len(lines), len(strs(params["visibility"])), maxActionItems, more)
 	}
 
-	// line 35 or line 41 is no longer true: that plug is another machine's by then
+	// line 35 or line 41 is no longer true: that plug is another machine's by then ("linked to PC-B" would
+	// now take it from Box D). Nothing else differs: the same number of lines, the same 32 in the dialog.
 	for _, line := range []int{35, 41} {
 		r, id = start(t)
-		r.ok("pc-a", map[string]any{"plugs": []any{map[string]any{"id": plug(line - 2), "linked": true}}})
+		r.ok("box-d", map[string]any{"plugs": []any{map[string]any{"id": plug(line - 2), "linked": true}}})
 		if res := confirm(t, r, id); !hoRefused(res) || linked(r) != 0 || r.row("pc-b")["name"] != "PC-B" {
 			t.Errorf("line %d of the confirmation was no longer true: %v, %d plugs linked, called %v", line, res, linked(r), r.row("pc-b")["name"])
 		}
@@ -128,6 +129,10 @@ func TestTheStampOfAConfirmationIsOfEveryLineInFull(t *testing.T) {
 		if rtShown(pair[0]) == rtShown(pair[1]) {
 			t.Errorf("%q and %q have one stamp", pair[0], pair[1])
 		}
+	}
+	// ... also among the lines the dialog does not list: the same text, cut into lines at another place
+	if x, y := append(slices.Clone(a[:maxActionItems]), "a\nb", "c"), append(slices.Clone(a[:maxActionItems]), "a", "b\nc"); rtShown(x) == rtShown(y) || !slices.Equal(dialogItems(x), dialogItems(y)) {
+		t.Error("two lists whose unlisted lines end at different places have one stamp")
 	}
 	// the lines of a refusal's audit entry are the ones the dialog listed
 	if got := confirmedLines(rtShown(a)); !slices.Equal(got, dialogItems(a)) {
