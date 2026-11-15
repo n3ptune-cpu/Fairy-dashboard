@@ -636,9 +636,10 @@ function sockEl(src, k) {
 }
 // Under a source's name on the Power page: its sockets, in the plug's own order.
 const sockets = (src) => (Array.isArray(src.sockets) && src.sockets.length ? `<div class="socks">${src.sockets.map((k) => sockEl(src, k)).join("")}</div>` : "");
-// In a host's Power panel: one line for each socket that feeds this host, of whatever plug it is a part of.
+// In a host's Power panel: one line for each socket that feeds this host, of whatever plug it is a part of, with
+// the plug's name after the socket's (not when the two are the same: a plug with one socket).
 const hostSockets = (id) => (!id ? [] : state.power?.sources || []).flatMap((src) => (Array.isArray(src.sockets) ? src.sockets : []).filter((k) => k.system_id === id)
-  .map((k) => `<div class="list-row wall-sock" data-key="${esc(`${src.id}/${k.id}`)}"><span>Socket · ${esc(k.name)} <span class="note">${esc(src.name)}</span></span><span class="sock">${sockSign(src, k)}${esc(sockState(k)[0] === "none" ? "no state" : k.state)}${sockLock(src, k, "h")}</span></div>`)).join("");
+  .map((k) => `<div class="list-row wall-sock" data-key="${esc(`${src.id}/${k.id}`)}"><span>Socket · ${esc(k.name)}${src.name && src.name !== k.name ? ` · ${esc(src.name)}` : ""}</span><span class="sock">${sockSign(src, k)}${esc(sockState(k)[0] === "none" ? "no state" : k.state)}${sockLock(src, k, "h")}</span></div>`)).join("");
 
 // One switch. The socket is taken as the page has it now (its tag and its name), never from the button; the
 // direction is the one the button showed, and only "on" or "off" is ever sent. The first answer is "Confirm

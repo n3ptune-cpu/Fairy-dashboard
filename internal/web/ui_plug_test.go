@@ -63,10 +63,11 @@ state.power.sources.push(src("relay/pc-plug", { name: "PC plug", system_id: "des
   src("relay/dead", { name: "Dead", sockets: [k("main", { name: "Dead plug", state: "unavailable", system_id: "desk-pc", why: "read_only" })] }));
 const lines = hostSockets("desk-pc").split('<div class="list-row wall-sock"').slice(1);
 if (lines.length !== 3) fail("the host's socket lines: " + lines.length);
-if (words("<" + lines[0]) !== "Socket · Desk PC socket Desk powerbar on") fail("a powerbar's socket: " + words("<" + lines[0]));
-if (words("<" + lines[1]) !== "Socket · PC plug PC plug off") fail("a plug's only socket: " + words("<" + lines[1]));
-if (words("<" + lines[2]) !== "Socket · Dead plug Dead no state") fail("a socket without a state: " + words("<" + lines[2]));
+if (words("<" + lines[0]) !== "Socket · Desk PC socket · Desk powerbar on") fail("a powerbar's socket: " + words("<" + lines[0]));
+if (words("<" + lines[1]) !== "Socket · PC plug off") fail("a plug's only socket: " + words("<" + lines[1]));
+if (words("<" + lines[2]) !== "Socket · Dead plug · Dead no state") fail("a socket without a state: " + words("<" + lines[2]));
 if (!lines[0].includes('data-info="sock-h:relay/desk-bar/ch3"') || lines[1].includes("sock-lock")) fail("the lock in the host's panel: " + lines[0] + lines[1]);
+if (/<b>|<img/.test(hostSockets("desk-pc"))) fail("markup in the host's lines");
 if (hostSockets("other-row") !== "" || hostSockets("") !== "" || hostSockets(undefined) !== "") fail("socket lines for a row nothing feeds");
 state.power = null;
 if (hostSockets("desk-pc") !== "") fail("socket lines without a power answer");
