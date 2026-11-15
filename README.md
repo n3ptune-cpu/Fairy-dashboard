@@ -319,7 +319,9 @@ machine checks itself.
 **Who may, and the log.** Admins, from a browser session (no API token), with the kill switch
 (`fairy admin control disable`) stopping both directions. Every attempt is in the audit log as
 `plug.switch` with who, the plug and the socket, the direction and the outcome: `ok`, `ok (not confirmed)`,
-`refused (...)` or `failed (...)`; a cut has `cut: true`. Each attempt has its own entry, the ones the panel
+`refused (...)` or `failed (...)`; a cut has `cut: true`. `refused` says that nothing was sent to Home
+Assistant. `failed` says that the request was sent, or that the panel cannot tell: no answer, or an answer of
+the machine that this panel does not know. Each attempt has its own entry, the ones the panel
 refuses itself too, and none is dropped. What bounds them is the limit on control requests
 (`control_rate_per_min`, 20 a minute for one admin): the route applies it before it looks at anything, and a
 request over it is answered "too many control requests; try again in N s" and is no attempt. The question

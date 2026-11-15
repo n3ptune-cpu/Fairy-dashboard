@@ -640,7 +640,23 @@ func TestPlugSwitchAnswers(t *testing.T) {
 			"The agent on READER is too old to switch plugs. Update it.", "refused (agent_too_old)"},
 		{"the control token is refused", func(api.PlugSwitch) (int, jsonx.M) { return 401, jsonx.M{"error": "unauthorized"} }, 424,
 			"agent rejected the control token (check control_token_env). Nothing was switched.", "refused (control_token)"},
-		{"a code this panel does not know", no(409, "moon_phase"), 424, "READER did not switch the socket: the machine's own sentence for moon_phase", "refused (moon_phase)"},
+		// An answer the panel does not know is never "refused" (which says that nothing was sent to Home
+		// Assistant): the panel cannot tell. A code it has no sentence for, an error without a code, and a 2xx that
+		// is not 200, whatever its body says (review of stage 1a, finding 6).
+		{"a code this panel does not know", no(409, "moon_phase"), 502,
+			"READER gave an answer this panel does not know (moon_phase: the machine's own sentence for moon_phase). It is not known whether the socket was switched: look at the socket.", "failed (moon_phase)"},
+		{"an error without a code", func(api.PlugSwitch) (int, jsonx.M) { return 500, jsonx.M{"error": "boom"} }, 502,
+			"READER gave an answer this panel does not know (http_500: boom). It is not known whether the socket was switched: look at the socket.", "failed (http_500)"},
+		{"a code that is long and not a word", func(api.PlugSwitch) (int, jsonx.M) {
+			return 409, jsonx.M{"error": "odd", "code": "<b>" + strings.Repeat("x", 300)}
+		}, 502,
+			"READER gave an answer this panel does not know (<b>" + strings.Repeat("x", 37) + "…: odd). It is not known whether the socket was switched: look at the socket.",
+			"failed (<b>" + strings.Repeat("x", 37) + "…)"},
+		{"a 201 with the answer of a switch", func(b api.PlugSwitch) (int, jsonx.M) {
+			return 201, jsonx.M{"source": b.Source, "socket": b.Socket, "to": b.To, "was": "off", "state": "on", "confirmed": true}
+		}, 502, "READER answered with HTTP 201, which is no answer to a switch. It is not known whether the socket was switched: look at the socket.", "failed (http_201)"},
+		{"a 202 with a code of a refusal", no(202, api.CodeNotAllowed), 502,
+			"READER answered with HTTP 202, which is no answer to a switch. It is not known whether the socket was switched: look at the socket.", "failed (http_202)"},
 		// no answer of the agent: a gateway's 502 and 504, an answer that is not the agent's
 		{"a gateway's 502", func(api.PlugSwitch) (int, jsonx.M) { return 502, jsonx.M{"error": "bad gateway"} }, 502,
 			"No answer from READER. It may have been switched: look at the socket.", "failed (no_answer_agent)"},

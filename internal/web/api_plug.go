@@ -292,6 +292,11 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 		return fail(plugErr(502, "not_sent", fmt.Sprintf("%s could not be reached. Nothing was sent.", machine)))
 	}
 	if status != 200 {
+		if status >= 200 && status < 300 {
+			// A "yes" that is not the one answer the agent has for a switch. Whatever its body says, the panel does
+			// not know what was done with the request: never a refusal, and never a success.
+			return fail(plugFailed(502, fmt.Sprintf("http_%d", status), fmt.Sprintf("%s answered with HTTP %d, which is no answer to a switch. %s", machine, status, plugNotKnown)))
+		}
 		return fail(s.plugAnswerRefusal(machine, k, status, data))
 	}
 	var got api.PlugSwitched
@@ -429,8 +434,13 @@ func plugRefusal(name, sock string, status int, data jsonx.M) error {
 	return nil
 }
 
+// plugNotKnown ends the sentence for an answer the panel cannot read as "switched" or as "not switched".
+const plugNotKnown = "It is not known whether the socket was switched: look at the socket."
+
 // plugAnswerRefusal is the agent's "no" to the switch request itself: one of the plug route's own codes, one
-// of the approval protocol's, the control token, its request budget, or its own words.
+// of the approval protocol's, the control token, its request budget. Anything else is an answer this panel
+// does not know (a code of a newer agent, an error without a code): it is "failed", not "refused", because
+// "refused" says that nothing was sent to Home Assistant, and the panel cannot tell that from such an answer.
 func (s *Server) plugAnswerRefusal(machine string, k socketLook, status int, data jsonx.M) error {
 	if e := plugRefusal(machine, k.sock.Name, status, data); e != nil {
 		return e
@@ -449,11 +459,13 @@ func (s *Server) plugAnswerRefusal(machine string, k socketLook, status int, dat
 	case status == 429:
 		return plugErr(429, "agent_busy", approval.Busy(machine, code, retryAfter(data), false))
 	}
-	if said == "" {
-		said = fmt.Sprintf("agent error %d", status)
-	}
+	code = textsafe.Clip(code, 40) // an agent's word, not one of the panel's: short, and clean
 	if code == "" {
 		code = fmt.Sprintf("http_%d", status)
 	}
-	return plugErr(apierr.Upstream, code, machine+" did not switch the socket: "+said)
+	what := code
+	if said != "" {
+		what += ": " + said
+	}
+	return plugFailed(502, code, fmt.Sprintf("%s gave an answer this panel does not know (%s). %s", machine, what, plugNotKnown))
 }
