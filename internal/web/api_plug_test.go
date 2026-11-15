@@ -892,3 +892,29 @@ func socketWhyTextOr(why, machine string) string {
 	}
 	return socketWhyText(why, machine)
 }
+
+// The lock of the panel's own machine holds also while that machine has no row: it is named in panel_hosts,
+// and the panel has not heard of it or it was taken out. The link alone locks the socket then, in both
+// directions (the rule of the power menu, which looks at a row, cannot say it).
+func TestPlugLockOfThePanelsMachineWithoutARow(t *testing.T) {
+	pe := newPlugEnv(t)
+	// the fixture: desk-bar/ch7 is linked to old-pc, an id no row has, and can be switched
+	if s := pe.socketOf(pe.admin, "reader/desk-bar", "ch7"); s["switchable"] != true || s["lock"] != nil {
+		t.Fatalf("the fixture: %v", s)
+	}
+	pe.s.Cfg.PanelHosts = append(pe.s.Cfg.PanelHosts, "old-pc")
+	s := pe.socketOf(pe.admin, "reader/desk-bar", "ch7")
+	if s["switchable"] != false || s["lock"] != model.SocketLockPanel || s["why"] != model.SocketLockPanel || s["note"] != "Locked. This socket powers the panel." {
+		t.Errorf("a socket of a panel host without a row: %v", s)
+	}
+	for _, to := range []string{"off", "on"} {
+		pe.nextMinute()
+		r := pe.flip("reader/desk-bar", "ch7", to)
+		if msg, _ := plugDetailOf(r); r.code != 409 || msg != "Locked. This socket powers the panel. Nothing was switched." {
+			t.Errorf("%s: %d %s", to, r.code, r.raw)
+		}
+	}
+	if n := len(pe.reader.Asked()); n != 0 {
+		t.Errorf("the machine was asked %d times for a locked socket", n)
+	}
+}

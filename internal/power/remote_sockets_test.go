@@ -116,6 +116,10 @@ func TestRelayedSocketsFromAHostileAgent(t *testing.T) {
 	if got := socketsOf(t, pm, "evil/many"); len(got) != MaxRemoteSockets || got[0].ID != "s0" || got[MaxRemoteSockets-1].ID != fmt.Sprintf("s%d", MaxRemoteSockets-1) {
 		t.Errorf("a hundred sockets: %d kept", len(got))
 	}
+	// the limit itself: an agent's own config takes at most 8 sockets for one plug, and the panel keeps no more
+	if MaxRemoteSockets != 8 {
+		t.Errorf("MaxRemoteSockets is %d: a plug of an agent has at most 8 sockets", MaxRemoteSockets)
+	}
 	by := map[string]model.PowerSocket{}
 	odd := append(socketsOf(t, pm, "evil/odd"), socketsOf(t, pm, "evil/odd2")...)
 	for _, s := range odd {
