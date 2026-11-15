@@ -374,6 +374,9 @@ type PowerSocket struct {
 	// the panel's entry of the agent, or, for the only socket of a plug, the plug's own link. Left out: linked
 	// to nothing (or to a row the viewer does not see).
 	SystemID *string `json:"system_id,omitempty"`
+	// Note is the sentence for Why, with the name of the machine that reads the plug in it: what the page
+	// shows behind the socket's lock. Only admins get it.
+	Note string `json:"note,omitempty"`
 	// Lock is set when the panel itself never switches this socket, in either direction, because of what it
 	// feeds: SocketLockAgent, SocketLockHomeAssistant, SocketLockHAUnknown or SocketLockPanel. Why is then the
 	// same word.

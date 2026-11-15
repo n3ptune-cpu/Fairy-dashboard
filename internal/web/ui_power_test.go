@@ -10,11 +10,13 @@ import (
 )
 
 // powerPageScript is the power part of app.js for node: the page's own linkedPower, wallPower, pagePower and
-// powerSourceRow are run, nothing of them is copied. What is around them is not the code under test.
+// powerSourceRow are run, with the sockets of a plug and the info button they use; nothing of them is copied.
+// What is around them is not the code under test.
 func powerPageScript(t *testing.T, js, body string) string {
 	t.Helper()
 	var parts []string
-	for _, re := range []string{`(?m)^const own = .*$`, `(?m)^const esc = .*$`, `(?m)^const enc = .*$`, `(?m)^const fmtW = .*$`, `(?m)^const upsById = .*$`, `(?m)^const infoList = .*$`} {
+	for _, re := range []string{`(?m)^const dict = .*$`, `(?m)^const table = .*$`, `(?m)^const own = .*$`, `(?m)^const esc = .*$`, `(?m)^const enc = .*$`,
+		`(?m)^const fmtW = .*$`, `(?m)^const upsById = .*$`} {
 		m := regexp.MustCompile(re).FindString(js)
 		if m == "" {
 			t.Fatalf("app.js has no %s any more", re)
@@ -30,9 +32,11 @@ func powerPageScript(t *testing.T, js, body string) string {
 		return js[i:j]
 	}
 	return `"use strict";
-const state = { power: null, history: [], systems: [], ups: { ups: [] } };
-const spark = () => "", setTitle = () => {}, infoBtn = () => "";
+const state = { power: null, history: [], systems: [], byId: {}, ups: { ups: [] } };
+const spark = () => "", setTitle = () => {};
+const I = { close: "", info: "", lock: "" };
 ` + strings.Join(parts, "\n") + "\n" +
+		block("const info = { html: dict(), key: null,", "const infoBtnOf = ") +
 		block("const linkedPower = (id) => {", "// ------------------------------------------------------------ grouping: hosts by site") +
 		block("function pagePower() {", "// ------------------------------------------------------------ UPS page") + `
 const fail = (m) => { console.log("FAIL " + m); process.exitCode = 1; };

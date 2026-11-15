@@ -51,6 +51,7 @@ type plugLooks struct {
 	rows  map[string]*model.System
 	snap  []model.System
 	agent map[string]plugRows
+	names map[string]string // the names of the agents' machines
 }
 
 // plugRows are the ids of the rows that are an agent's own machine (or the machine it runs on), and of the
@@ -61,11 +62,21 @@ type plugRows struct {
 }
 
 func (s *Server) newPlugLooks(snap []model.System) *plugLooks {
-	l := &plugLooks{s: s, snap: snap, rows: make(map[string]*model.System, len(snap)), agent: map[string]plugRows{}}
+	l := &plugLooks{s: s, snap: snap, rows: make(map[string]*model.System, len(snap)), agent: map[string]plugRows{}, names: map[string]string{}}
 	for i := range snap {
 		l.rows[snap[i].ID] = &snap[i]
 	}
 	return l
+}
+
+// machineName is the name of the machine an agent runs on, for a sentence (worked out once per agent).
+func (l *plugLooks) machineName(agentID string) string {
+	if n, ok := l.names[agentID]; ok {
+		return n
+	}
+	n := l.s.machineNames([]string{agentID})[0]
+	l.names[agentID] = n
+	return n
 }
 
 // machine returns the ids under which the machine known as id can be linked: the id itself, the machine's
@@ -230,6 +241,9 @@ func (l *plugLooks) sockets(st model.PowerSourceState, admin bool, see func(id s
 		}
 		o.Tag, o.Lock, o.Why = sock.Tag, k.lock, l.s.socketWhy(k)
 		o.Switchable = o.Why == ""
+		if o.Why != "" { // the sentence behind the lock, as the route says it when it refuses
+			o.Note = socketWhyText(o.Why, l.machineName(k.agent.ID))
+		}
 		out = append(out, o)
 	}
 	return out

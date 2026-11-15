@@ -76,6 +76,7 @@ const I = {
   power: svg('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'),
   settings: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>', 18),
   caret: svg('<path d="m9 6 6 6-6 6"/>', 14),
+  lock: svg('<rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', 14),
   collapse: svg('<path d="m15 6-6 6 6 6"/>', 18),
   menu: svg('<path d="M4 6h16M4 12h16M4 18h16"/>', 20),
   guests: svg('<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 13v8M13 17h8"/>'),
@@ -594,6 +595,34 @@ const wallMore = (lp) => lp.sources.map((x) => {
   const vals = [r.voltage != null && `${r.voltage.toFixed(1)} V`, r.current != null && `${fmtAmps(r.current)} A`, r.energy_kwh_total != null && `${fmtKWh(r.energy_kwh_total)} kWh`].filter(Boolean);
   return `<div class="list-row wall-src"><span>${esc(x.name)}</span><span>${esc(vals.join(" · "))}${dayBtn(x)}</span></div>`;
 }).join("");
+
+// ------------------------------------------------------------ plug sockets
+// The sockets of a plug that its agent's Home Assistant knows (a source's `sockets`, Fairy-agent v0.10.0). Each
+// is a dot for its state and its name: green is on, grey is off, a ring means Home Assistant has no state for
+// it right now. What hangs on a socket (when the panel was told, and the viewer sees that row) is the name's
+// tooltip. A socket an admin cannot switch from here has a lock after its name, and the one sentence that says
+// why is behind it (hover, or a click): the panel makes that sentence (`note`), with the machine's name in it.
+// Whether a socket can be switched is set on the machine that reads the plug, never on this page.
+const SOCK_STATE = table({ on: ["on", "On"], off: ["off", "Off"], unavailable: ["none", "Home Assistant does not reach this socket right now"],
+  unknown: ["none", "Home Assistant has no state for this socket right now"] });
+const sockState = (k) => SOCK_STATE[k.state] || SOCK_STATE.unknown;
+const sockFeeds = (k) => state.byId[k.system_id]?.name || "";
+const sockLock = (src, k, where) => (k.switchable || typeof k.note !== "string" || !k.note ? ""
+  : infoBtn(`sock-${where}:${src.id}/${k.id}`, k.name, `<p>${esc(k.note)}</p>`, { icon: I.lock, cls: "sock-lock", label: k.note }));
+// The sign of a socket's state: the dot.
+function sockSign(src, k) {
+  const [cls, word] = sockState(k);
+  return `<span class="sock-dot ${cls}" role="img" aria-label="${esc(word)}" title="${esc(word)}"></span>`;
+}
+function sockEl(src, k) {
+  const feeds = sockFeeds(k);
+  return `<span class="sock" data-key="${esc(k.id)}">${sockSign(src, k)}<span class="sock-name"${feeds ? ` title="${esc(`Powers ${feeds}`)}"` : ""}>${esc(k.name)}</span>${sockLock(src, k, "p")}</span>`;
+}
+// Under a source's name on the Power page: its sockets, in the plug's own order.
+const sockets = (src) => (Array.isArray(src.sockets) && src.sockets.length ? `<div class="socks">${src.sockets.map((k) => sockEl(src, k)).join("")}</div>` : "");
+// In a host's Power panel: one line for each socket that feeds this host, of whatever plug it is a part of.
+const hostSockets = (id) => (!id ? [] : state.power?.sources || []).flatMap((src) => (Array.isArray(src.sockets) ? src.sockets : []).filter((k) => k.system_id === id)
+  .map((k) => `<div class="list-row wall-sock" data-key="${esc(`${src.id}/${k.id}`)}"><span>Socket · ${esc(k.name)} <span class="note">${esc(src.name)}</span></span><span class="sock">${sockSign(src, k)}${esc(sockState(k)[0] === "none" ? "no state" : k.state)}${sockLock(src, k, "h")}</span></div>`)).join("");
 
 // ------------------------------------------------------------ grouping: hosts by site
 // Every host (Proxmox node or agent) is listed under its site (site: in config.yaml, or set on the Users page);
@@ -1608,7 +1637,7 @@ function systemOverview(s) {
     <div class="list-row"><span>Last change</span><span data-ago="${esc(s.updated_at || s.last_seen)}">${ago(s.updated_at || s.last_seen)}</span></div></div>`;
   const ups = upsOf(s);
   const power = `<div class="panel glass pad"><h3>Power</h3>
-    ${wallPower(lp)}${wallMore(lp)}
+    ${wallPower(lp)}${wallMore(lp)}${hostSockets(s.id)}
     ${ups.map((u) => `<div class="list-row"><span>${I.ups} UPS · <a href="#/ups">${esc(u.name)}</a></span><span class="${onBattery(u) ? "warn-t" : ""}">${esc(u.status.replace("_", " "))} · ${u.battery_charge?.toFixed(0) ?? "–"}% · ${fmtRuntime(u.battery_runtime_s)}</span></div>`).join("")}
     ${cp ? [["CPU package", cp.cpu_package_w], ["GPU", cp.gpu_w], ["Battery", cp.battery_w != null && !s.battery ? cp.battery_w : null], ["BMC (in-band)", cp.bmc_w]]
       .filter(([, v]) => v != null).map(([k, v]) => `<div class="list-row"><span>${k}${k === "Battery" && cp.battery_state ? ` · ${esc(cp.battery_state)}` : ""}</span><span>${fmtW(v)}</span></div>`).join("")
@@ -1727,7 +1756,8 @@ function pagePower() {
     <div class="note">${p.sources.filter((s) => s.include_in_total).length} sources counted · ${state.history.length} samples</div></div>${spark(state.history.map((h) => h.total_w))}</div>
     <div class="section-title">Sources${infoBtn("power", "Sources", infoList([
       "Wall power: what plugs, UPSes and BMCs measure.",
-      "CPU, GPU and battery readings on a system's page are component power reported by its agent, not wall power."]))}</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
+      "CPU, GPU and battery readings on a system's page are component power reported by its agent, not wall power.",
+      "A plug's sockets are under its name: a dot for on or off. A lock means it cannot be switched from here, and says why."]))}</div><div class="panel glass scroll"><table class="table"><thead><tr><th>Source</th><th>Type</th><th>Status</th><th class="num">Watts</th>
     <th class="num">Volts</th><th class="num">Amps</th><th class="num">kWh</th><th>Linked</th><th>Last hour</th></tr></thead><tbody>${p.sources.map((s) => powerSourceRow(s, chip)).join("")}</tbody></table></div>`;
 }
 // One source of the Power page. "Linked" is the row the source is linked to, from the source itself (also
@@ -1736,7 +1766,7 @@ function pagePower() {
 function powerSourceRow(s, chip) {
   const r = s.readings[0] || {};
   const linked = state.systems.find((x) => x.id === (s.system_id ?? r.system_id));
-  return `<tr class="row"><td><b>${esc(s.name)}</b>${s.via ? `<div class="note">via agent ${esc(s.via)}</div>` : ""}</td><td>${esc(s.type)}</td>
+  return `<tr class="row"><td><b>${esc(s.name)}</b>${s.via ? `<div class="note">via agent ${esc(s.via)}</div>` : ""}${sockets(s)}</td><td>${esc(s.type)}</td>
         <td>${chip(s.status)}${s.error ? `<div class="error">${esc(s.error)}</div>` : ""}</td><td class="num"><b class="value pwr">${fmtW(r.watts)}</b></td>
         <td class="num">${r.voltage?.toFixed(1) ?? "–"}</td><td class="num">${fmtAmps(r.current)}</td><td class="num">${fmtKWh(r.energy_kwh_total)}</td>
         <td>${linked ? `<a href="#/system/${enc(linked.id)}">${esc(linked.name)}</a>` : "–"}${s.include_in_total ? "" : ' <span class="chip">not in total</span>'}</td>

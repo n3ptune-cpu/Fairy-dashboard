@@ -770,6 +770,14 @@ func TestPlugSocketsInThePowerAnswer(t *testing.T) {
 			s["tag"] != plugTag(plug, c.socket) {
 			t.Errorf("%s/%s for an admin: %v", c.source, c.socket, s)
 		}
+		// the sentence behind the lock on the page: there for every socket that cannot be switched, and only there
+		machine := "PVE"
+		if strings.HasPrefix(c.source, "bare/") {
+			machine = "BARE"
+		}
+		if (get("note") != "") != (c.why != "") || get("note") != socketWhyTextOr(c.why, machine) {
+			t.Errorf("%s/%s: the sentence for %q is %q", c.source, c.socket, c.why, get("note"))
+		}
 	}
 	// a viewer of the site: the state and the name, the row it feeds when the viewer sees that row; no tag,
 	// no switch, no reason
@@ -777,7 +785,7 @@ func TestPlugSocketsInThePowerAnswer(t *testing.T) {
 	for _, c := range []struct{ socket, link string }{{"ch1", ""}, {"ch3", "desk-pc"}, {"ch4", "lab-node-pve"}, {"ch6", ""}, {"ch8", ""}} {
 		s := pe.socketOf(ck, "reader/desk-bar", c.socket)
 		link, _ := s["system_id"].(string)
-		if s == nil || s["switchable"] != false || s["why"] != model.SocketReadOnly || s["tag"] != nil || s["lock"] != nil || s["state"] != "on" || s["name"] == "" || link != c.link {
+		if s == nil || s["switchable"] != false || s["why"] != model.SocketReadOnly || s["tag"] != nil || s["lock"] != nil || s["note"] != nil || s["state"] != "on" || s["name"] == "" || link != c.link {
 			t.Errorf("%s for a viewer: %v", c.socket, s)
 		}
 	}
@@ -875,4 +883,12 @@ func TestPlugRefusalsDoNotFillTheAuditLog(t *testing.T) {
 	if len(sum) != 1 || !strings.Contains(fmt.Sprint(sum[0]["outcome"]), "51 refused requests") {
 		t.Fatalf("the dropped entries must be summed up for the admin: %v", sum)
 	}
+}
+
+// socketWhyTextOr is the sentence for a reason, "" for no reason.
+func socketWhyTextOr(why, machine string) string {
+	if why == "" {
+		return ""
+	}
+	return socketWhyText(why, machine)
 }

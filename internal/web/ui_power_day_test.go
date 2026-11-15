@@ -14,7 +14,7 @@ import (
 func powerDayScript(t *testing.T, js, body string) string {
 	t.Helper()
 	var parts []string
-	for _, re := range []string{`(?m)^const own = .*$`, `(?m)^const esc = .*$`, `(?m)^const enc = .*$`, `(?m)^const fmtW = .*$`, `(?m)^const infoList = .*$`} {
+	for _, re := range []string{`(?m)^const table = .*$`, `(?m)^const own = .*$`, `(?m)^const esc = .*$`, `(?m)^const enc = .*$`, `(?m)^const fmtW = .*$`, `(?m)^const infoList = .*$`} {
 		m := regexp.MustCompile(re).FindString(js)
 		if m == "" {
 			t.Fatalf("app.js has no %s any more", re)
