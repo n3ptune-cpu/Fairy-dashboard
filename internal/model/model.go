@@ -342,7 +342,63 @@ type PowerSourceState struct {
 	// panel's entry wins over it): "Edit host" asks it, so that it need not guess it from SystemID, which is
 	// the link as it was at that answer. Not part of any answer of the API.
 	OwnHint bool `json:"-"`
+	// Sockets are the sockets of a plug that the agent's own Home Assistant knows (Fairy-agent v0.10.0 on), as
+	// the agent relays them. Left out when the source has none.
+	Sockets []PowerSocket `json:"sockets,omitempty"`
 }
+
+// PowerSocket is one socket of a plug: its state, and whether it can be switched from this panel.
+//
+// ID, Name, State, Tag and Error are the agent's, cleaned and bounded (power.Manager). Switchable and Why start
+// as the agent's too: whether its own config.yaml lets the socket be switched (switching is turned on only
+// there, never from a browser), and the reason when it does not. The panel's answers (GET /api/power, the
+// stream) lay the panel's own rules over them and add SystemID and Lock (internal/web, plug.go): a socket is
+// then "switchable" only when the agent says so and nothing in the panel stands in the way.
+type PowerSocket struct {
+	ID   string `json:"id"`   // unique in its source: 1-16 lower-case letters, digits and dashes
+	Name string `json:"name"` // what the machine's config calls it (it should say what is plugged in)
+	// State is on, off, unavailable (Home Assistant does not reach the socket) or unknown.
+	State      string `json:"state"`
+	Switchable bool   `json:"switchable"`
+	// Why says why it cannot be switched ("" when it can): one of the agent's words (switching_off,
+	// not_allowed, feeds_self, no_token, approval_off, approval_unavailable) or one of the Socket... words
+	// below.
+	Why string `json:"why,omitempty"`
+	// Tag stands for the socket as the machine describes it now (its name and its switch). A switch request
+	// carries it back, and the machine refuses a request whose tag is not the socket's any more. Only admins
+	// get it.
+	Tag string `json:"tag,omitempty"`
+	// Error is the agent's short fixed text when the state could not be read.
+	Error *string `json:"error,omitempty"`
+	// SystemID is the row the socket feeds, as the id of the row that machine is shown as now: socket_links in
+	// the panel's entry of the agent, or, for the only socket of a plug, the plug's own link. Left out: linked
+	// to nothing (or to a row the viewer does not see).
+	SystemID *string `json:"system_id,omitempty"`
+	// Lock is set when the panel itself never switches this socket, in either direction, because of what it
+	// feeds: SocketLockAgent, SocketLockHomeAssistant or SocketLockPanel. Why is then the same word.
+	Lock string `json:"lock,omitempty"`
+}
+
+// The panel's own reasons why a socket cannot be switched (PowerSocket.Why), next to the agent's.
+const (
+	// SocketNotSwitchable: the agent says it cannot be switched, with no reason or one this panel does not know.
+	SocketNotSwitchable = "not_switchable"
+	// SocketNoTag: the agent's row has no tag of the right form, so no request can name the socket.
+	SocketNoTag = "no_tag"
+	// SocketAgentUnreachable: the agent that reads the plug does not answer; the socket's state is not known.
+	SocketAgentUnreachable = "agent_unreachable"
+	// SocketNoControl: the panel holds no control token for the agent that reads the plug.
+	SocketNoControl = "no_control"
+	// SocketReadOnly: the viewer is no admin (or control is switched off): the state is shown, no switch.
+	SocketReadOnly = "read_only"
+	// SocketLockAgent: the socket feeds the machine that reads the plugs (the agent's own row, or the Proxmox
+	// node it runs on).
+	SocketLockAgent = "reads_plugs"
+	// SocketLockHomeAssistant: the socket feeds the machine Home Assistant runs on (home_assistant_system).
+	SocketLockHomeAssistant = "home_assistant"
+	// SocketLockPanel: the socket feeds the machine this panel runs on (panel_hosts).
+	SocketLockPanel = "panel"
+)
 
 // PowerOverview is GET /api/power.
 type PowerOverview struct {

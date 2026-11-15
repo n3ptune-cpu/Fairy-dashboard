@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/redact"
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/ups"
@@ -18,6 +19,18 @@ func gpuRow(name string, uLo, uHi, vramGiB, pLo, pHi, tLo, tHi, phase float64) m
 	return map[string]any{"name": name, "vendor": "nvidia", "util_percent": r1(u),
 		"vram_used": int64((0.15 + u/160) * vramGiB * GiB), "vram_total": int64(vramGiB * GiB),
 		"temp_c": r1(wave(90, tLo, tHi, phase)), "power_w": r1(wave(70, pLo, pHi, phase))}
+}
+
+// demoSocket is one socket of a plug as an agent relays it (api.SocketRow): why is the agent's reason when its
+// own config does not let the socket be switched ("": it does). The demo's machines have no passkey check, so
+// nothing is ever switched: a click on a switch is answered with why not.
+func demoSocket(source, id, name, state, why string) map[string]any {
+	row := map[string]any{"id": id, "name": name, "state": state, "switchable": why == "", "why": nil,
+		"tag": api.SocketTag(source, id, name, "switch.demo_"+source+"_"+id), "error": nil}
+	if why != "" {
+		row["why"] = why
+	}
+	return row
 }
 
 func temp(sensor, label string, c float64) map[string]any {
@@ -111,12 +124,21 @@ func agentMetrics(id string) (map[string]any, error) {
 			"disks":  []any{}, "net": map[string]any{"bytes_recv": 0, "bytes_sent": 0},
 			"temps": []any{temp("coretemp", "Package id 0", r1(wave(60, 41, 58, 0)))}, "gpus": []any{},
 			"ups": []any{row},
-			// as an agent of v0.8.0 relays a Home Assistant power sensor: a row like every other plug's
+			// as an agent relays a Home Assistant power sensor: a row like every other plug's. From v0.10.0 on a
+			// row can have "sockets" (demoSocket): the host's own plug (its agent would switch it; the panel
+			// locks it, because it feeds the machine that reads the plugs), the plug in front of the UPS (the
+			// agent itself never switches it), and a powerbar with four sockets.
 			"power_sources": []any{
 				map[string]any{"id": "mini-plug", "name": "MINI-i7 plug (Home Assistant)", "type": "homeassistant", "ok": true,
-					"watts": r1(wave(70, 38, 96, 2)), "voltage": nil, "current": nil, "energy_kwh_total": nil, "error": nil},
+					"watts": r1(wave(70, 38, 96, 2)), "voltage": nil, "current": nil, "energy_kwh_total": nil, "error": nil,
+					"sockets": []any{demoSocket("mini-plug", "main", "MINI-i7", "on", "")}},
 				map[string]any{"id": "corner-plug", "name": "Bob's corner plug (Home Assistant)", "type": "homeassistant", "ok": true,
-					"watts": r1(wave(90, 310, 560, 1)), "voltage": nil, "current": nil, "energy_kwh_total": nil, "error": nil}},
+					"watts": r1(wave(90, 310, 560, 1)), "voltage": nil, "current": nil, "energy_kwh_total": nil, "error": nil,
+					"sockets": []any{demoSocket("corner-plug", "main", "Bob's corner", "on", api.WhyFeedsSelf)}},
+				map[string]any{"id": "desk-bar", "name": "Bob's powerbar (Home Assistant)", "type": "homeassistant", "ok": true,
+					"watts": r1(wave(80, 41, 97, 3)), "voltage": nil, "current": nil, "energy_kwh_total": nil, "error": nil,
+					"sockets": []any{demoSocket("desk-bar", "ch1", "Left monitor", "on", ""), demoSocket("desk-bar", "ch2", "Right monitor", "off", ""),
+						demoSocket("desk-bar", "ch3", "Bob's HTPC", "on", ""), demoSocket("desk-bar", "ch4", "Lamp", "off", api.WhyNotAllowed)}}},
 			"hardware": map[string]any{"system_vendor": "ASUS", "system_model": "All Series", "board_vendor": "ASUSTeK COMPUTER INC.",
 				"board_model": "Z97-A", "bios_version": "2801", "cpu_model": "Intel(R) Core(TM) i7-4790K CPU @ 4.00GHz"}})
 		feat["processes"], feat["cmdline"] = false, false // Bob keeps processes: {enabled: false}

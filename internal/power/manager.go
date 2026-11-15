@@ -32,6 +32,9 @@ type Manager struct {
 	// unreported: per agent, the device ids its entry in the panel names (power_links,
 	// power_exclude_from_total) that the agent's last answer did not have, as they were logged (UpdateRemote).
 	unreported map[string]string
+	// unlinkedSockets: per agent, the sockets its entry in the panel links (socket_links) that the agent's last
+	// answer did not have, as they were logged (NoteSocketLinks).
+	unlinkedSockets map[string]string
 
 	// Day is the last 24 hours of every source, a bucket a minute (day.go). SampleHistory feeds it.
 	Day *DayStore

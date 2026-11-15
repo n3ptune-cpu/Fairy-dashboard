@@ -30,6 +30,7 @@ var dayShapes = []dayShape{
 	{id: "bob-pc/desk-plug", baseW: 95, swingW: 325, volts: 229.8, gapFrom: 300, gapTo: 240},
 	{id: "mini-i7-agent/mini-plug", baseW: 38, swingW: 58},
 	{id: "mini-i7-agent/corner-plug", baseW: 310, swingW: 250, gapFrom: 130, gapTo: 100},
+	{id: "mini-i7-agent/desk-bar", baseW: 41, swingW: 56},
 }
 
 // SeedPowerDay gives every demo power source that has no day yet a made-up one, so that the graph can be
