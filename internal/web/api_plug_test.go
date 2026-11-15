@@ -333,12 +333,7 @@ func TestPlugSwitchOffAMachineThatRuns(t *testing.T) {
 	running := func(r resp, machine, system, said string) {
 		t.Helper()
 		d, _ := r.body["detail"].(map[string]any)
-		state := "running" // a link to an id no row has: the panel cannot tell, and says so
-		if system == "" {
-			state = "unknown"
-		}
-		if r.code != 409 || d["code"] != "machine_running" || d["machine"] != machine || d["message"] != said || (system != "" && d["system_id"] != system) ||
-			(system == "" && d["system_id"] != nil) || d["state"] != state {
+		if r.code != 409 || d["code"] != "machine_running" || d["machine"] != machine || d["message"] != said || d["system_id"] != system || d["state"] != "running" {
 			t.Fatalf("%d %s\nwant machine_running for %s: %q", r.code, r.raw, machine, said)
 		}
 	}
@@ -348,8 +343,10 @@ func TestPlugSwitchOffAMachineThatRuns(t *testing.T) {
 	if au := pe.plugAudits()[0]; au["outcome"] != "refused (machine_running): DESK-PC is still running. Shut it down first." || au["params"].(map[string]any)["linked"] != "desk-pc" {
 		t.Errorf("the audit entry of the refusal: %v", au)
 	}
-	// a link to an id no row has: not known to be off, named by the id
-	running(pe.flip("reader/desk-bar", "ch7", "off"), "old-pc", "", "This socket is linked to old-pc, and the panel has no such row right now, so it cannot tell whether that machine is off.")
+	// a link to an id no row has is no case of this question any more: the socket is locked (TestPlugLinkToARowThePanelDoesNotHave)
+	if r := pe.flip("reader/desk-bar", "ch7", "off"); r.code != 409 || strings.Contains(string(r.raw), "machine_running") {
+		t.Errorf("a link to an id no row has: %d %s", r.code, r.raw)
+	}
 	// switching ON has no such rule
 	if _, _, ok := approvalAsked(pe.flip("reader/desk-bar", "ch3", "on")); !ok {
 		t.Error("on is refused for a socket whose machine runs")
@@ -783,7 +780,7 @@ func TestPlugSocketsInThePowerAnswer(t *testing.T) {
 		{"reader/desk-bar", "ch4", "on", false, model.SocketLockAgent, model.SocketLockAgent, "lab-node-pve"},
 		{"reader/desk-bar", "ch5", "on", false, model.SocketLockHomeAssistant, model.SocketLockHomeAssistant, "lab-qemu-100"},
 		{"reader/desk-bar", "ch6", "on", false, model.SocketLockPanel, model.SocketLockPanel, "panel-box"},
-		{"reader/desk-bar", "ch7", "on", true, "", "", ""}, // linked to an id no row has: no row to name
+		{"reader/desk-bar", "ch7", "on", false, model.SocketLockLinkUnknown, model.SocketLockLinkUnknown, ""}, // linked to an id no row has: locked, no row to name
 		{"reader/desk-bar", "ch8", "on", false, api.WhyNotAllowed, "", ""},
 		{"reader/pc-plug", "main", "on", true, "", "", "desk-pc"},
 		{"reader/own-plug", "main", "on", false, model.SocketLockAgent, model.SocketLockAgent, "lab-node-pve"},
@@ -904,7 +901,7 @@ func TestPlugWords(t *testing.T) {
 		t.Error("the kept request has no description")
 	}
 	// every reason has a sentence of its own, and none of them is the fallback
-	for _, why := range []string{model.SocketLockAgent, model.SocketLockHomeAssistant, model.SocketLockHAUnknown, model.SocketLockPanel, api.WhyFeedsSelf,
+	for _, why := range []string{model.SocketLockAgent, model.SocketLockHomeAssistant, model.SocketLockHAUnknown, model.SocketLockPanel, model.SocketLockLinkUnknown, api.WhyFeedsSelf,
 		api.WhyNotAllowed, api.WhySwitchingOff, api.WhyNoToken, api.WhyApprovalOff, api.WhyApprovalUnavailable, model.SocketAgentUnreachable,
 		model.SocketNoControl, model.SocketNoTag} {
 		if got := socketWhyText(why, "READER"); got == "This socket cannot be switched." || got == "" {
@@ -1064,8 +1061,8 @@ func socketWhyTextOr(why, machine string) string {
 // directions (the rule of the power menu, which looks at a row, cannot say it).
 func TestPlugLockOfThePanelsMachineWithoutARow(t *testing.T) {
 	pe := newPlugEnv(t)
-	// the fixture: desk-bar/ch7 is linked to old-pc, an id no row has, and can be switched
-	if s := pe.socketOf(pe.admin, "reader/desk-bar", "ch7"); s["switchable"] != true || s["lock"] != nil {
+	// the fixture: desk-bar/ch7 is linked to old-pc, an id no row has: locked for that, and not as the panel's
+	if s := pe.socketOf(pe.admin, "reader/desk-bar", "ch7"); s["lock"] != model.SocketLockLinkUnknown {
 		t.Fatalf("the fixture: %v", s)
 	}
 	pe.s.Cfg.PanelHosts = append(pe.s.Cfg.PanelHosts, "old-pc")
@@ -1108,5 +1105,55 @@ func TestPlugLockOfTheNodeUnderThePanelsGuest(t *testing.T) {
 	pe.s.Poller.Cfg.PanelHosts = []string{"lab-qemu-100"}
 	if got := pe.s.newPlugLooks(snap).lock(k); got != model.SocketLockPanel {
 		t.Errorf("a socket of the node under the panel's guest: lock %q, want %q", got, model.SocketLockPanel)
+	}
+}
+
+// A link that names no row the panel has (a typing mistake in socket_links, or a row that is not there yet)
+// locks the socket, in both directions, as home_assistant_system does for the same mistake. Until the review
+// of stage 1a (finding 3) such a socket had none of the panel's three locks: a mistyped id of Home Assistant's
+// machine, of the reader's or of the panel's host was switched off with the wrong id typed and a passkey.
+func TestPlugLinkToARowThePanelDoesNotHave(t *testing.T) {
+	pe := newPlugEnv(t)
+	const said = "Locked. This socket is linked to a machine the panel does not have: correct socket_links."
+	s := pe.socketOf(pe.admin, "reader/desk-bar", "ch7") // socket_links: desk-bar/ch7: old-pc
+	if s["switchable"] != false || s["lock"] != model.SocketLockLinkUnknown || s["why"] != model.SocketLockLinkUnknown || s["note"] != said || s["system_id"] != nil {
+		t.Errorf("a socket that is linked to no row: %v", s)
+	}
+	try := func(pe *plugEnv, source, socket, said string, more map[string]any) {
+		t.Helper()
+		for _, to := range []string{"off", "on"} {
+			b := plugBody(source, socket, to)
+			if to == "off" {
+				for k, v := range more {
+					b[k] = v
+				}
+			}
+			r := pe.post("/api/power/socket", b)
+			if msg, _ := plugDetailOf(r); r.code != 409 || msg != said+" Nothing was switched." {
+				t.Errorf("%s/%s %s %v: %d %s", source, socket, to, more, r.code, r.raw)
+			}
+			if au := pe.plugAudits()[0]; au["target"] != source+"/"+socket || au["outcome"] != "refused (link_unknown): "+said+" Nothing was switched." {
+				t.Errorf("%s/%s %s: the audit entry: %v", source, socket, to, au)
+			}
+		}
+	}
+	try(pe, "reader/desk-bar", "ch7", said, nil)
+	// what got "off" through before: "cut" with the id typed
+	try(pe, "reader/desk-bar", "ch7", said, map[string]any{"cut": true, "confirm": "old-pc"})
+	// the only socket of a plug takes the plug's link: a plug that is linked to no row is locked the same way,
+	// and the sentence names the plug's link
+	pe2 := newPlugEnvWith(t, plugConfigWith(t, "power_links: {pc-plug: desk-pc}", "power_links: {pc-plug: desk-pv}"))
+	const said2 = "Locked. This plug is linked to a machine the panel does not have: correct its link (power_links, or Edit host)."
+	if s := pe2.socketOf(pe2.admin, "reader/pc-plug", "main"); s["switchable"] != false || s["lock"] != model.SocketLockLinkUnknown || s["note"] != said2 {
+		t.Errorf("the only socket of a plug that is linked to no row: %v", s)
+	}
+	try(pe2, "reader/pc-plug", "main", said2, nil)
+	if n := len(pe.reader.Asked()) + len(pe2.reader.Asked()) + len(pe.iss.Asked()) + len(pe2.iss.Asked()); n != 0 {
+		t.Errorf("a machine or Pocket ID was asked %d things for a locked socket", n)
+	}
+	// the more telling locks come first: the same link, once the id is in panel_hosts, is the panel's
+	// (TestPlugLockOfThePanelsMachineWithoutARow), and a link to a row that is there is not locked for this
+	if s := pe.socketOf(pe.admin, "reader/desk-bar", "ch3"); s["lock"] != nil || s["switchable"] != true {
+		t.Errorf("a socket that is linked to a row: %v", s)
 	}
 }

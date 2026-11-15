@@ -10,9 +10,10 @@ import (
 
 // `fairy admin config check` and the sockets of the plugs an agent relays (socket_links and
 // home_assistant_system in the panel's entry of that agent, build 17): one ok line per agent with what is set
-// and what the panel does with it, and a note for a row id that is no machine's. A link to an agent, a node or
-// a guest has none. Notes are no warnings: exit code 0. A line of the wrong form is not a note: the file does
-// not load with it.
+// and what the panel does with it. A socket that is linked to an id that is no machine's is a warning (exit code
+// 1): the panel locks that socket until the link names a row. An id of the form a node or a guest has cannot be
+// checked here, and has no line. home_assistant_system with such an id is a note. A line of the wrong form is
+// neither: the file does not load with it.
 func TestConfigCheckAndTheSocketsOfRelayedPlugs(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.yaml")
@@ -45,8 +46,8 @@ func TestConfigCheckAndTheSocketsOfRelayedPlugs(t *testing.T) {
 		"ok    agent relay: sockets of the plugs it relays: desk-bar/ch1 -> lab-node-pve-b, desk-bar/ch2 -> lab-qemu-100, desk-bar/ch3 -> plain, desk-bar/ch4 -> plian; " +
 			"its Home Assistant runs on lab-qemu-104" + tail,
 		"ok    agent other: sockets of the plugs it relays; its Home Assistant runs on lab-qmeu-104" + tail,
-		"note  agent relay: socket_links: socket desk-bar/ch4 is linked to plian, which is no agent's id and not the id of a node or a guest of a proxmox: entry. " +
-			"The panel then cannot tell whether that machine runs: to switch the socket off, the id has to be typed. A typing mistake in the id?\n",
+		"WARN  agent relay: socket_links: socket desk-bar/ch4 is linked to plian, which is no agent's id and not the id of a node or a guest of a proxmox: entry. " +
+			"The panel locks that socket (it is switched neither on nor off from the panel) until the link names a row. A typing mistake in the id?\n",
 		"note  agent other: home_assistant_system: lab-qmeu-104 is no agent's id and not the id of a node or a guest of a proxmox: entry. " +
 			"While no row has this id the panel cannot tell which socket feeds Home Assistant, and switches no socket of this agent that is linked to a machine. A typing mistake in the id?\n",
 	} {
@@ -54,14 +55,22 @@ func TestConfigCheckAndTheSocketsOfRelayedPlugs(t *testing.T) {
 			t.Errorf("the output lacks (or has twice) %q", want)
 		}
 	}
-	if n := strings.Count(got, "note  agent relay: socket_links"); n != 1 {
-		t.Errorf("%d notes about the relay's socket links, want 1 (none for a link to an agent, a node or a guest):\n%s", n, got)
+	if n := strings.Count(got, "agent relay: socket_links"); n != 1 {
+		t.Errorf("%d lines about the relay's socket links, want 1 (none for a link to an agent, a node or a guest):\n%s", n, got)
 	}
 	if strings.Contains(got, "agent plain: sockets") {
 		t.Errorf("a line for an agent with nothing set:\n%s", got)
 	}
-	if code != 0 || strings.Contains(got, "WARN  agent relay") || strings.Contains(got, "WARN  agent other") {
-		t.Errorf("notes are no warnings (exit %d):\n%s", code, got)
+	if code != 1 || strings.Count(got, "WARN  agent relay") != 1 || strings.Contains(got, "WARN  agent other") {
+		t.Errorf("one warning, for the link to no machine (exit %d):\n%s", code, got)
+	}
+	// with the link put right there is no warning left, and the exit code says so
+	if err := os.WriteFile(cfg, []byte(strings.Replace(y, "desk-bar/ch4: plian", "desk-bar/ch4: plain", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb); code != 0 || strings.Contains(out.String(), "WARN  ") {
+		t.Errorf("the links put right (exit %d):\n%s", code, out.String())
 	}
 
 	// a line that can never work: the file does not load, and the check says which agent and which line

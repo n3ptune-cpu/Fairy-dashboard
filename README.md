@@ -272,8 +272,12 @@ Home Assistant and an agent reads it (Fairy-agent v0.10.0 or newer on the machin
   line: it takes the plug's own link (`power_links`, or `system_hint: self`). A socket without a link is
   linked to nothing (a lamp, a monitor). `home_assistant_system` is the row of the machine Home Assistant runs
   on. A line that can never work is refused when config.yaml is loaded (a name that is not `<device
-  id>/<socket id>`, an id no row can have, an empty target); `fairy admin config check` lists what is set
-  for each agent and notes an id that is no machine's. Both keys are read from config.yaml only: a host
+  id>/<socket id>`, an id no row can have, an empty target). **A socket that is linked to an id no row has
+  is locked**, on and off, until the link is put right (a typing mistake must not leave Home Assistant's or
+  the panel's own socket without its lock). `fairy admin config check` lists what is set for each agent
+  and prints a `WARN` for such a link where it can tell: an id that is no agent's and has not the form of
+  a node's or a guest's. A mistyped id of that form (`lab-qemu-150` for `lab-qemu-105`) it cannot tell,
+  because only the running panel knows the nodes and guests: there the lock on the page says it. Both keys are read from config.yaml only: a host
   added with **Add host** has no entry there, so the sockets of a powerbar it reads are linked to nothing,
   and what protects its own socket is `feeds_self` on the machine.
 
@@ -299,11 +303,12 @@ switched: look at the socket.
   row, the Proxmox node it runs on, or the node of the guest it runs in), the socket of the machine Home
   Assistant runs on (`home_assistant_system`; for a VM also its node), and the socket of the machine this
   panel runs on. When `home_assistant_system` names an id that is no row, no socket of that agent that is
-  linked to a machine is switched until the id is put right;
+  linked to a machine is switched until the id is put right; and a socket whose own link names no row is
+  locked the same way ("linked to a machine the panel does not have: correct socket_links");
 * a socket that was changed on the machine since the page was drawn, and a socket Home Assistant has no
   state for;
 * **"off" for a socket whose machine still runs.** Every state but "offline" and "stopped" counts as
-  running, a machine that is asleep too, and so does a link to an id the panel has no row for. The page
+  running, and a machine that is asleep too. The page
   shows a dialog, "PC-B is still running", with the plug and the socket above the title. **Cancel** has
   the focus. **Shut down PC-B** is there when you may shut that host down from here: it opens the host's
   own power dialog, and nothing follows it. **Cut power anyway** asks for the machine's name to be typed,

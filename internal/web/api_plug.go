@@ -274,7 +274,7 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 		return refuse(plugErr(409, api.CodeSocketChanged, "This socket was changed on the machine. Nothing was switched. Look again."))
 	}
 	if why := s.socketWhy(k); why != "" {
-		return refuse(plugErr(409, why, socketWhyText(why, machine)+" Nothing was switched."))
+		return refuse(plugErr(409, why, k.whyText(why, machine)+" Nothing was switched."))
 	}
 	if k.sock.State != api.SocketStateOn && k.sock.State != api.SocketStateOff {
 		return refuse(plugErr(409, api.CodeSocketUnavailable, "Home Assistant has no state for this socket right now. Nothing was switched."))
@@ -391,6 +391,8 @@ func socketWhyText(why, machine string) string {
 		return "Locked. The panel cannot tell which machine Home Assistant runs on (home_assistant_system names no row)."
 	case model.SocketLockPanel:
 		return "Locked. This socket powers the panel."
+	case model.SocketLockLinkUnknown:
+		return "Locked. This socket is linked to a machine the panel does not have: correct socket_links."
 	case api.WhyFeedsSelf:
 		return "Locked. On " + machine + " this socket is marked as one that is never switched."
 	case api.WhyNotAllowed:

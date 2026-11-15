@@ -34,8 +34,9 @@ type plugEnv struct {
 	*approvalEnv
 	reader, other, third *testutil.Machine
 	mu                   sync.Mutex
-	pc                   string            // what the PC's agent answers: "online", "down"
-	rows                 map[string]string // the socket rows the agents report, changed by a test: "<agent>/<plug>/<socket>" -> member=value
+	pc                   string             // what the PC's agent answers: "online", "down"
+	rows                 map[string]string  // the socket rows the agents report, changed by a test: "<agent>/<plug>/<socket>" -> member=value
+	watts                map[string]float64 // what a plug measures, changed by a test: plug id -> watts (40 without a line)
 }
 
 const plugConfig = `
@@ -68,7 +69,10 @@ func plugTag(plug, socket string) string {
 	return api.SocketTag(plug, socket, "name of "+socket, "switch.example_"+strings.ReplaceAll(plug, "-", "_")+"_"+socket)
 }
 
-func newPlugEnv(t *testing.T) *plugEnv {
+func newPlugEnv(t *testing.T) *plugEnv { return newPlugEnvWith(t, plugConfig) }
+
+// newPlugEnvWith is the rig with another config.yaml for the panel (plugConfig with a line changed).
+func newPlugEnvWith(t *testing.T, yaml string) *plugEnv {
 	t.Helper()
 	for i, env := range []string{"TOK_A", "TOK_B", "TOK_C", "TOK_D", "TOK_E", "TOK_F"} {
 		t.Setenv(env, testutil.ReadToken+string(rune('a'+i)))
@@ -76,11 +80,11 @@ func newPlugEnv(t *testing.T) *plugEnv {
 	t.Setenv("CTL_A", testutil.ControlToken)
 	t.Setenv("PVE_SECRET", "pve-secret-uuid")
 	dir := t.TempDir()
-	cfg, err := config.Parse([]byte(fmt.Sprintf(plugConfig, dir+"/audit.log", dir+"/data")))
+	cfg, err := config.Parse([]byte(fmt.Sprintf(yaml, dir+"/audit.log", dir+"/data")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pe := &plugEnv{approvalEnv: &approvalEnv{}, pc: "online", rows: map[string]string{}}
+	pe := &plugEnv{approvalEnv: &approvalEnv{}, pc: "online", rows: map[string]string{}, watts: map[string]float64{}}
 	a := pe.approvalEnv
 	b := testutil.NewBackend()
 	b.PVEOf = func(string) ([]jsonx.M, error) { return testutil.HostResources("PVE", "running"), nil }
@@ -129,7 +133,13 @@ func newPlugEnv(t *testing.T) *plugEnv {
 				list = append(list, s)
 			}
 		}
-		return jsonx.M{"id": id, "name": name, "type": "homeassistant", "ok": true, "watts": 40.0, "sockets": list}
+		pe.mu.Lock()
+		defer pe.mu.Unlock()
+		watts, set := pe.watts[id]
+		if !set {
+			watts = 40
+		}
+		return jsonx.M{"id": id, "name": name, "type": "homeassistant", "ok": true, "watts": watts, "sockets": list}
 	}
 	b.Metrics["reader"] = func() (jsonx.M, error) {
 		m, _ := plain("reader")()
@@ -204,6 +214,23 @@ func (pe *plugEnv) set(socket, member, value string) {
 	pe.rows[socket+" "+member] = value
 	pe.mu.Unlock()
 	pe.poll()
+}
+
+// measures changes what a plug measures from the next poll on, and polls.
+func (pe *plugEnv) measures(plug string, watts float64) {
+	pe.mu.Lock()
+	pe.watts[plug] = watts
+	pe.mu.Unlock()
+	pe.poll()
+}
+
+// with is plugConfig with one piece of it replaced.
+func plugConfigWith(t *testing.T, old, new string) string {
+	t.Helper()
+	if strings.Count(plugConfig, old) != 1 {
+		t.Fatalf("the rig's config has %q %d times", old, strings.Count(plugConfig, old))
+	}
+	return strings.Replace(plugConfig, old, new, 1)
 }
 
 // pcIs makes the PC answer its polls ("online") or not ("down"), and polls.

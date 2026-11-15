@@ -378,8 +378,8 @@ type PowerSocket struct {
 	// shows behind the socket's lock. Only admins get it.
 	Note string `json:"note,omitempty"`
 	// Lock is set when the panel itself never switches this socket, in either direction, because of what it
-	// feeds: SocketLockAgent, SocketLockHomeAssistant, SocketLockHAUnknown or SocketLockPanel. Why is then the
-	// same word.
+	// feeds: SocketLockAgent, SocketLockHomeAssistant, SocketLockHAUnknown, SocketLockPanel or
+	// SocketLockLinkUnknown. Why is then the same word.
 	Lock string `json:"lock,omitempty"`
 }
 
@@ -405,6 +405,10 @@ const (
 	SocketLockHAUnknown = "home_assistant_unknown"
 	// SocketLockPanel: the socket feeds the machine this panel runs on (panel_hosts).
 	SocketLockPanel = "panel"
+	// SocketLockLinkUnknown: the socket is linked to an id that no row has now (a typing mistake in
+	// socket_links, or a row the panel has not heard of yet). The panel cannot tell which machine hangs on it,
+	// so none of its other locks and no question about a running machine can be trusted for it.
+	SocketLockLinkUnknown = "link_unknown"
 )
 
 // PowerOverview is GET /api/power.

@@ -99,8 +99,8 @@ func (c *cli) configCheck() int {
 	inferred = append(inferred, systemIDCheck(cfg)...)
 	okLines, said = powerLinkCheck(cfg)
 	notes, inferred = append(notes, okLines...), append(inferred, said...)
-	okLines, said = socketLinkCheck(cfg) // what hangs on the sockets of those plugs, and where the agent's Home Assistant runs
-	notes, inferred = append(notes, okLines...), append(inferred, said...)
+	okLines, sockWarn, said := socketLinkCheck(cfg) // what hangs on the sockets of those plugs, and where the agent's Home Assistant runs
+	notes, problems, inferred = append(notes, okLines...), append(problems, sockWarn...), append(inferred, said...)
 	okLines, ignored, said := hostOptionsCheck(cfg) // "Edit host": what the panel changed about these links (state.json)
 	notes, problems, inferred = append(notes, okLines...), append(problems, ignored...), append(inferred, said...)
 	dayLine, said := powerDayCheck(cfg) // the power sources' last 24 hours: where they are kept (power-day.json)
@@ -337,16 +337,22 @@ func powerLinkCheck(cfg *config.Panel) (ok, said []string) {
 // socketLinkCheck is about the sockets of the plugs an agent relays, as the panel's entry of that agent says
 // what hangs on them (socket_links: {"<device id>/<socket id>": <row id>}) and where the Home Assistant runs
 // that the agent reads and switches them through (home_assistant_system: <row id>). One ok line per agent that
-// has one of the two says what is set and what the panel does with it; notes say what cannot work as written:
-// a row id that is no machine's (no agent's id, not of the form a node or a guest has).
+// has one of the two says what is set and what the panel does with it. What cannot work as written is a row id
+// that is no machine's (no agent's id, not of the form a node or a guest has):
+//
+//   - in socket_links it is a warning (exit code 1): the panel locks that socket, on and off, until the link
+//     names a row (model.SocketLockLinkUnknown);
+//   - in home_assistant_system it is a note.
+//
+// An id of the form a node or a guest has ("<prefix>qemu-105") cannot be checked here: which nodes and guests
+// there are is known to the running panel only, so a mistyped one has no line. The page says it then: the
+// socket has the lock, with the sentence that names socket_links.
 //
 // A line of the wrong form never gets here: config.yaml does not load with it (config.SocketLinkProblems).
 // Whether the agent has such a socket is not known here: this command reads files and asks no machine. The
 // running panel says it once in its log (power.Manager, NoteSocketLinks). Whether a socket can be switched at
 // all is not in this file: that is set on the machine that reads the plug, in the agent's own config.yaml.
-//
-// Notes, not warnings: nothing is refused, and the exit code stays as it is.
-func socketLinkCheck(cfg *config.Panel) (ok, said []string) {
+func socketLinkCheck(cfg *config.Panel) (ok, warn, said []string) {
 	c := *cfg
 	c.Agents, c.Systems, c.Proxmox = slices.Clone(cfg.Agents), slices.Clone(cfg.Systems), slices.Clone(cfg.Proxmox)
 	_, _, _ = managed.NewStore(cfg.DataDir).Merge(&c)
@@ -386,8 +392,8 @@ func socketLinkCheck(cfg *config.Panel) (ok, said []string) {
 			"The running panel says in its log when the agent reports no socket with such a name)")
 		for _, name := range names {
 			if to := a.SocketLinks[name]; !machine(to) {
-				said = append(said, fmt.Sprintf("agent %s: socket_links: socket %s is linked to %s, which is no agent's id and not the id of a node or a guest of a proxmox: entry. "+
-					"The panel then cannot tell whether that machine runs: to switch the socket off, the id has to be typed. A typing mistake in the id?", a.ID, name, to))
+				warn = append(warn, fmt.Sprintf("agent %s: socket_links: socket %s is linked to %s, which is no agent's id and not the id of a node or a guest of a proxmox: entry. "+
+					"The panel locks that socket (it is switched neither on nor off from the panel) until the link names a row. A typing mistake in the id?", a.ID, name, to))
 			}
 		}
 		if h := a.HomeAssistantSystem; h != "" && !machine(h) {
@@ -396,7 +402,7 @@ func socketLinkCheck(cfg *config.Panel) (ok, said []string) {
 				"A typing mistake in the id?", a.ID, h))
 		}
 	}
-	return ok, said
+	return ok, warn, said
 }
 
 // wakeUpdateCheck lists the timings of "Update unpowered hosts" that are not the defaults a reader would

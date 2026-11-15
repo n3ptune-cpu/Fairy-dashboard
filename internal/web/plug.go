@@ -21,7 +21,8 @@ import (
 //   - the link: socket_links in the panel's entry of the agent names the row; the only socket of a plug takes
 //     the plug's own link (power_links, system_hint: self); any other socket is linked to nothing;
 //   - the locks: a socket that feeds the machine that reads the plugs, the machine Home Assistant runs on, or
-//     the panel's own, is never switched from here, in either direction;
+//     the panel's own, is never switched from here, in either direction; and neither is a socket whose link
+//     names no row the panel has, because for that one the panel cannot tell any of the three;
 //   - "still running": a socket whose machine runs is not switched off without a second, typed confirmation
 //     (api_plug.go).
 //
@@ -42,6 +43,8 @@ type socketLook struct {
 	row         *model.System
 	// lock is why the panel never switches this socket ("": no lock): model.SocketLock...
 	lock string
+	// ownLink: the link is the plug's own (the only socket of a plug), not a line of socket_links.
+	ownLink bool
 }
 
 // plugLooks answers questions about the sockets of one moment: the rows as they are now, and what was worked
@@ -138,7 +141,7 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 	} else if len(st.Sockets) == 1 && st.SystemID != nil && *st.SystemID != "" {
 		// the only socket of a plug: what the plug measures is what hangs on it (the plug's link is already the
 		// id of the row that machine is shown as: power.Manager.Overview)
-		k.link, k.shown = *st.SystemID, *st.SystemID
+		k.link, k.shown, k.ownLink = *st.SystemID, *st.SystemID, true
 	}
 	if k.link == "" {
 		return k, true // linked to nothing: nothing the panel knows of hangs on it
@@ -159,6 +162,10 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 //     heard of the row yet): the panel cannot tell which machine that is, so it switches no socket of this
 //     agent that is linked to a machine.
 //  4. It feeds the machine this panel runs on (panel_hosts, the rule of the power menu).
+//  5. Its link names no row the panel has right now (a typing mistake in socket_links, or a row the panel has
+//     not heard of yet). Which machine hangs on it is then not known: it could be any of the three above, and
+//     whether it runs cannot be asked. So it is locked like 3, until the link names a row. (It comes after the
+//     list of panel_hosts, which names ids and needs no row.)
 func (l *plugLooks) lock(k socketLook) string {
 	rows := l.of(k.agent)
 	linked := []string{k.link, k.shown}
@@ -175,7 +182,9 @@ func (l *plugLooks) lock(k socketLook) string {
 		return model.SocketLockHAUnknown
 	case slices.ContainsFunc(linked, func(id string) bool { return slices.Contains(l.s.Cfg.PanelHosts, id) }):
 		return model.SocketLockPanel
-	case k.row != nil && powerctl.KillsPanel(l.s.Poller, *k.row):
+	case k.row == nil:
+		return model.SocketLockLinkUnknown
+	case powerctl.KillsPanel(l.s.Poller, *k.row):
 		return model.SocketLockPanel
 	}
 	return ""
@@ -242,11 +251,20 @@ func (l *plugLooks) sockets(st model.PowerSourceState, admin bool, see func(id s
 		o.Tag, o.Lock, o.Why = sock.Tag, k.lock, l.s.socketWhy(k)
 		o.Switchable = o.Why == ""
 		if o.Why != "" { // the sentence behind the lock, as the route says it when it refuses
-			o.Note = socketWhyText(o.Why, l.machineName(k.agent.ID))
+			o.Note = k.whyText(o.Why, l.machineName(k.agent.ID))
 		}
 		out = append(out, o)
 	}
 	return out
+}
+
+// whyText is the sentence for why this socket cannot be switched (socketWhyText), where it depends on more
+// than the reason's word: a link that names no row is put right in another place for the only socket of a plug.
+func (k socketLook) whyText(why, machine string) string {
+	if why == model.SocketLockLinkUnknown && k.ownLink {
+		return "Locked. This plug is linked to a machine the panel does not have: correct its link (power_links, or Edit host)."
+	}
+	return socketWhyText(why, machine)
 }
 
 // running says whether the machine a socket is linked to counts as running, and how the page names it.
@@ -254,7 +272,7 @@ func (l *plugLooks) sockets(st model.PowerSourceState, admin bool, see func(id s
 // Every status but "offline" and "stopped" is running: "stale" is not off (not heard from for a moment), and
 // neither is "paused". A machine the panel sent to sleep is "offline" and still holds what is open in its
 // memory, so it counts too. A link to an id that no row has right now is not known to be off: it counts, under
-// the id as its name.
+// the id as its name (the route does not get that far: such a socket is locked).
 func (k socketLook) running() (name string, yes bool) {
 	switch {
 	case k.link == "":
