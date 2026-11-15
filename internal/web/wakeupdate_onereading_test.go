@@ -206,4 +206,22 @@ func TestAKeptStartsLinesAboutAMachinesOwnTimingsAreOfItsOneReading(t *testing.T
 	if act, _ := e.s.WakeRuns.Snapshot(); act != nil || res["ok"] != false || res["status"] != 409.0 || res["message"] != wuTimingsChanged {
 		t.Fatalf("a start confirmed without pc-a's own 5 minutes / 10 seconds: %v (a run: %v)", res, act != nil)
 	}
+	// ... and for a machine that checks approvals itself, the words of its ticket ("shut down in N s") too
+	rr := newRunRig(t, "pc-a")
+	rr.s.wuStartStep = func(step string) {
+		if step == "read" {
+			rr.s.wuStartStep = nil
+			if _, _, err := rr.s.Poller.Admin.EditHostOptions("other admin", func(o *adminstate.HostOptions) error {
+				o.SetHost("pc-a", adminstate.HostEdit{Run: adminstate.RunEdit{ShutdownDelayS: 45}})
+				return nil
+			}); err != nil {
+				t.Error(err)
+			}
+			rr.s.Poller.Bump()
+		}
+	}
+	asked := rr.req("POST", "/api/admin/wake-update", map[string]any{"hosts": []string{"pc-a"}})
+	if _, _, ok := approvalAsked(asked); !ok || !strings.Contains(string(asked.raw), "shut down in 120 s") || strings.Contains(string(asked.raw), "shut down in 45 s") {
+		t.Fatalf("the passkey's dialog has a countdown that was not read with the rest: %d %s", asked.code, asked.raw)
+	}
 }
