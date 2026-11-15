@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
@@ -26,6 +27,9 @@ import (
 //   - "still running": a socket whose machine runs is not switched off without a second, typed confirmation
 //     (api_plug.go).
 //
+//   - "off" asks first unless the panel has a sign that the machine on the socket is off (runningState): that it
+//     does not answer is no such sign.
+//
 // These are guards against a mistake. They depend on links somebody wrote, and a panel that was taken over
 // has none of them. What holds against the panel is on the machine: switching is off unless its config turns
 // it on, only listed sockets are switched, the ones in feeds_self never, and every switch needs a passkey
@@ -45,6 +49,12 @@ type socketLook struct {
 	lock string
 	// ownLink: the link is the plug's own (the only socket of a plug), not a line of socket_links.
 	ownLink bool
+	// knownOff: the linked machine was seen to go off and has given no sign of life since (Poller.KnownOff).
+	// at and fresh: the time of this look, and how old a reading of the plug may be to count (offline_after).
+	// They are what runningState needs beyond the row.
+	knownOff bool
+	at       time.Time
+	fresh    time.Duration
 }
 
 // plugLooks answers questions about the sockets of one moment: the rows as they are now, and what was worked
@@ -53,6 +63,7 @@ type plugLooks struct {
 	s     *Server
 	rows  map[string]*model.System
 	snap  []model.System
+	now   time.Time // the time of these looks, by the clock a relayed reading is stamped with (power.Manager: time.Now)
 	agent map[string]plugRows
 	names map[string]string // the names of the agents' machines
 }
@@ -65,7 +76,7 @@ type plugRows struct {
 }
 
 func (s *Server) newPlugLooks(snap []model.System) *plugLooks {
-	l := &plugLooks{s: s, snap: snap, rows: make(map[string]*model.System, len(snap)), agent: map[string]plugRows{}, names: map[string]string{}}
+	l := &plugLooks{s: s, snap: snap, rows: make(map[string]*model.System, len(snap)), agent: map[string]plugRows{}, names: map[string]string{}, now: time.Now()}
 	for i := range snap {
 		l.rows[snap[i].ID] = &snap[i]
 	}
@@ -148,6 +159,7 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 	}
 	k.row = l.rows[k.shown]
 	k.lock = l.lock(k)
+	k.knownOff, k.at, k.fresh = l.s.Poller.KnownOff(k.shown), l.now, time.Duration(l.s.Cfg.OfflineAfter*float64(time.Second))
 	return k, true
 }
 
@@ -267,12 +279,13 @@ func (k socketLook) whyText(why, machine string) string {
 	return socketWhyText(why, machine)
 }
 
-// running says whether the machine a socket is linked to counts as running, and how the page names it.
-//
-// Every status but "offline" and "stopped" is running: "stale" is not off (not heard from for a moment), and
-// neither is "paused". A machine the panel sent to sleep is "offline" and still holds what is open in its
-// memory, so it counts too. A link to an id that no row has right now is not known to be off: it counts, under
-// the id as its name (the route does not get that far: such a socket is locked).
+// socketIdleWatts: a fresh reading of a socket's own meter under this is a sign that nothing on the socket
+// runs (what a machine that is off still draws); at or over it, that something does.
+const socketIdleWatts = 5.0
+
+// running says whether the machine a socket is linked to counts as running, and how the page names it: every
+// state but "off" (runningState). A link to an id that no row has counts, under the id as its name (the route
+// does not get that far: such a socket is locked).
 func (k socketLook) running() (name string, yes bool) {
 	switch {
 	case k.link == "":
@@ -280,26 +293,64 @@ func (k socketLook) running() (name string, yes bool) {
 	case k.row == nil:
 		return k.link, true
 	}
-	return k.row.Name, k.row.Asleep || (k.row.Status != "offline" && k.row.Status != "stopped")
+	return k.row.Name, k.runningState() != ""
 }
 
-// runningState is which kind of "not off" it is, for the title of the page's dialog: "running"; "asleep" (the
-// panel sent the machine to sleep: it still holds what is open on it); "unknown" (linked to an id no row has
-// right now, so the panel cannot tell). "": the machine is off, or the socket is linked to nothing.
+// runningState is what the panel knows about the machine on a socket, for the question "this machine is still
+// running": "" (it is off, or the socket is linked to nothing), "running", "asleep" (the panel sent it to
+// sleep: it still holds what is open on it), or "unknown" (it may still be running). The page's dialog says
+// which in its title, and the words the passkey signs for "Cut power anyway" say it too.
+//
+// A machine that answers runs: every status but "offline" and "stopped" ("stale" is not off, and neither is
+// "paused"), and a machine whose agent is silent while the machine itself still answers (MachineOn).
+//
+// A machine that does not answer is NOT taken for off because of that, however long it lasts: a link that
+// dropped, an agent that was stopped or hangs, and a machine that installs updates while it shuts down all
+// look the same from here. It counts as off only with a sign of it:
+//
+//   - Proxmox says the guest is stopped;
+//   - the machine was seen to go off after a shutdown the panel asked for (Poller.MarkOff: a run of "Update
+//     unpowered hosts" saw its countdown and then nothing at all), and has given no sign of life since;
+//   - the socket has a meter of its own, and a fresh reading of it is under socketIdleWatts (ownWatts).
+//
+// The socket's own meter also says the opposite: a fresh reading at or over socketIdleWatts means something on
+// the socket still draws power, whatever else is known. Everything else is "unknown".
 func (k socketLook) runningState() string {
-	switch _, yes := k.running(); {
-	case !yes:
+	switch {
+	case k.link == "":
 		return ""
 	case k.row == nil:
 		return "unknown"
 	case k.row.Asleep:
 		return "asleep"
+	case (k.row.Status != "offline" && k.row.Status != "stopped") || k.row.MachineOn != "":
+		return "running"
 	}
-	return "running"
+	switch w, ok := k.ownWatts(); {
+	case ok && w >= socketIdleWatts:
+		return "unknown"
+	case ok, k.row.Status == "stopped", k.knownOff:
+		return ""
+	}
+	return "unknown"
 }
 
-// runningWords is the sentence for a socket whose machine still runs (the refusal of "off", and the warning of
-// "Cut power anyway"). For a Proxmox node it says how many of its guests run.
+// ownWatts is what the socket's own meter reads right now: the watts of a plug with exactly one socket, when
+// the plug is read without an error and the reading is fresh (not older than offline_after at the time of the
+// look). ok is false for a socket of a powerbar (its plug measures all its sockets together; no agent reports
+// watts per socket), for a reading without watts, for an old one, and for a look without a time.
+func (k socketLook) ownWatts() (watts float64, ok bool) {
+	if len(k.src.Sockets) != 1 || k.src.Status != "ok" || len(k.src.Readings) != 1 || k.src.Readings[0].Watts == nil || k.at.IsZero() {
+		return 0, false
+	}
+	if age := k.at.Sub(k.src.Readings[0].Timestamp); age > k.fresh || age < -k.fresh {
+		return 0, false
+	}
+	return *k.src.Readings[0].Watts, true
+}
+
+// runningWords is the sentence for a socket whose machine still runs, or may (the refusal of "off", and the
+// warning of "Cut power anyway"). For a Proxmox node it says how many of its guests run.
 func (l *plugLooks) runningWords(k socketLook) string {
 	name, _ := k.running()
 	switch {
@@ -307,6 +358,16 @@ func (l *plugLooks) runningWords(k socketLook) string {
 		return fmt.Sprintf("This socket is linked to %s, and the panel has no such row right now, so it cannot tell whether that machine is off.", name)
 	case k.row.Asleep:
 		return name + " is asleep, not shut down: what is open on it is lost when its power is cut. Shut it down first."
+	case k.runningState() == "unknown":
+		// it gives no answer (or Proxmox says it is stopped) and the panel has no sign that it is off
+		how := "does not answer"
+		if k.row.Status == "stopped" {
+			how = "is stopped"
+		}
+		if w, ok := k.ownWatts(); ok && w >= socketIdleWatts {
+			return fmt.Sprintf("%s %s, and its plug still measures %.0f W: it may still be running. Shut it down first, or look at it.", name, how, w)
+		}
+		return name + " " + how + ", which does not say that it is off: it may still be running. Shut it down first, or look at it."
 	case k.row.Kind == "node":
 		n := 0
 		for i := range l.snap {

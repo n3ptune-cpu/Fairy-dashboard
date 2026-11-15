@@ -241,14 +241,31 @@ func (pe *plugEnv) pcIs(state string) {
 	pe.poll()
 }
 
-// pcOff makes the PC a machine that is off: it stops answering, and the panel is told that it went off (as a
-// run tells it; without that the row is "stale" for offline_after, a minute).
+// pcOff makes the PC a machine that is known to be off: it stops answering, and the panel is told that it went
+// off (as a run of "Update unpowered hosts" tells it: Poller.MarkOff).
 func (pe *plugEnv) pcOff() {
 	pe.t.Helper()
 	pe.pcIs("down")
 	pe.s.Poller.MarkOff("desk-pc")
 	if x := pe.do("GET", "/api/systems/desk-pc", nil, "Cookie", pe.admin); x.body["status"] != "offline" {
 		pe.t.Fatalf("the fixture: the PC is %v, want offline", x.body["status"])
+	}
+	if !pe.s.Poller.KnownOff("desk-pc") {
+		pe.t.Fatal("the fixture: the PC is not marked as seen to go off")
+	}
+}
+
+// pcSilent makes the PC a machine that has not answered for longer than offline_after, with nothing that says
+// it is off: its row is "offline" (the panel's clock is put ten minutes ahead, then the PC stops answering).
+func (pe *plugEnv) pcSilent() {
+	pe.t.Helper()
+	pe.s.Poller.Clock = func() time.Time { return time.Now().Add(10 * time.Minute) }
+	pe.pcIs("down")
+	if x := pe.do("GET", "/api/systems/desk-pc", nil, "Cookie", pe.admin); x.body["status"] != "offline" {
+		pe.t.Fatalf("the fixture: the PC is %v, want offline", x.body["status"])
+	}
+	if pe.s.Poller.KnownOff("desk-pc") {
+		pe.t.Fatal("the fixture: the PC is marked as seen to go off")
 	}
 }
 

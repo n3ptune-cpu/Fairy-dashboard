@@ -181,7 +181,7 @@ func plugWords(k socketLook, to string, cut bool) string {
 	switch {
 	case name == "":
 	case cut && running:
-		lead = "cut the power of " + name + " while it is running: "
+		lead = "cut the power of " + name + " while it " + plugCutState[k.runningState()] + ": "
 	default:
 		tail = ", which powers " + name
 	}
@@ -199,6 +199,13 @@ func plugWords(k socketLook, to string, cut bool) string {
 	}
 	return lead + "switch " + to + " " + sock + " (" + plug + ")" + tail
 }
+
+// plugCutState says, in the words of a cut, what the panel knows about the machine whose power is cut
+// (runningState): the passkey signs that, and the notification of the switch repeats it in the past.
+var (
+	plugCutState = map[string]string{"running": "is running", "asleep": "is asleep", "unknown": "may still be running"}
+	plugCutWas   = map[string]string{"running": "was running", "asleep": "was asleep", "unknown": "may still have been running"}
+)
 
 // plugWordsMax is the most bytes plugWords makes: the kept action's line puts "switch a plug socket (" and ")"
 // around them and is cut at maxTarget. plugWordsName is the most of a machine's name in them; with it, and with
@@ -279,15 +286,17 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 	if k.sock.State != api.SocketStateOn && k.sock.State != api.SocketStateOff {
 		return refuse(plugErr(409, api.CodeSocketUnavailable, "Home Assistant has no state for this socket right now. Nothing was switched."))
 	}
-	// "Still running": a socket whose machine runs is not switched off, unless the request says "cut power
-	// anyway" with that machine's name typed. "On" has no such rule.
+	// "Still running": a socket whose machine runs, or may, is not switched off, unless the request says "cut
+	// power anyway" with that machine's name typed. Only a sign that the machine is off lets "off" through
+	// without it (runningState). "On" has no such rule.
 	name, running := k.running()
+	state := k.runningState()
 	cut := false
 	switch {
 	case b.Cut && name == "":
 		return refuse(plugErr(422, "cut_unlinked", "Nothing the panel knows of hangs on this socket, so there is no machine whose power would be cut. Nothing was switched."))
 	case b.To == api.SocketOff && running && !b.Cut:
-		detail := map[string]any{"code": codeMachineRunning, "message": looks.runningWords(k), "machine": name, "state": k.runningState()}
+		detail := map[string]any{"code": codeMachineRunning, "message": looks.runningWords(k), "machine": name, "state": state}
 		if k.row != nil {
 			detail["system_id"] = k.row.ID
 		}
@@ -360,7 +369,7 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 		e.Text += " (sent; the socket did not show it yet)"
 	}
 	if cut {
-		e.Text += ": power cut while " + name + " was running"
+		e.Text += ": power cut while " + name + " " + plugCutWas[state]
 	}
 	if k.row != nil {
 		e.SystemID = k.row.ID

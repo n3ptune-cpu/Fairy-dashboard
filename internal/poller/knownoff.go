@@ -58,6 +58,16 @@ func (p *Poller) MarkOff(id string) bool {
 	return changed
 }
 
+// KnownOff reports whether the row with this id is marked as one of a machine that was seen to go off (MarkOff)
+// and has shown no sign of life since. It is the one thing the panel keeps that says "off" and not only "does
+// not answer": the switching of a plug's socket asks it before it takes a machine for off (internal/web,
+// plug.go).
+func (p *Poller) KnownOff(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.knownOff[id]
+}
+
 // rowIsOf reports whether the row of the node with this id is this agent's (AgentFor: the first agent of the
 // configuration whose link is that node). The mark is the machine's under both of its ids, and only the
 // agent the node's row belongs to is that machine: a second agent that names the same node (one in a guest

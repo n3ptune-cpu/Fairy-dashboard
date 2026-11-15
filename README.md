@@ -307,9 +307,16 @@ switched: look at the socket.
   locked the same way ("linked to a machine the panel does not have: correct socket_links");
 * a socket that was changed on the machine since the page was drawn, and a socket Home Assistant has no
   state for;
-* **"off" for a socket whose machine still runs.** Every state but "offline" and "stopped" counts as
-  running, and a machine that is asleep too. The page
-  shows a dialog, "PC-B is still running", with the plug and the socket above the title. **Cancel** has
+* **"off" for a socket whose machine still runs, or may.** A machine that answers runs, and one that is
+  asleep counts too. A machine that **does not answer is not taken for off** because of that, however long
+  it lasts: a link that dropped, an agent that was stopped and a machine that hangs all look the same from
+  the panel. It counts as off only with a sign of it: Proxmox says the guest is stopped, a run of
+  [Update unpowered hosts](#update-unpowered-hosts) saw the machine go off, or the socket has a meter of
+  its own (the only socket of a plug) and a fresh reading of it is under 5 W. The same meter at 5 W or
+  more says that something on the socket still draws power, whatever else is known. (A machine that went
+  to sleep by itself draws as little as one that is off: the meter cannot tell the two apart.) The page
+  shows a dialog, "PC-B is still running" ("is asleep, not off", or "may still be running" where the panel
+  has no sign either way), with the plug and the socket above the title. **Cancel** has
   the focus. **Shut down PC-B** is there when you may shut that host down from here: it opens the host's
   own power dialog, and nothing follows it. **Cut power anyway** asks for the machine's name to be typed,
   and the passkey then signs "cut the power of PC-B while it is running: switch off Channel 3 (Desk

@@ -687,8 +687,8 @@ async function sockSwitch(source, socket, to) {
 // "Still running" (the panel's 409 machine_running): the socket feeds a machine that is not off, and nothing was
 // switched. The dialog says that fact in its title, with the one name the panel has for the machine, and which
 // socket it is about in a small line above it. One short line says what going on costs; the panel's own
-// sentence (a node's running guests, a machine that sleeps, a link to a row the panel does not have) is behind
-// the info button. Cancel has the focus. "Shut down NAME" is there when this user can shut that host down from
+// sentence (a node's running guests, a machine that sleeps, a machine that does not answer and is not known to
+// be off) is behind the info button. Cancel has the focus. "Shut down NAME" is there when this user can shut that host down from
 // here: it opens the host's own power dialog, with its own confirmation, and nothing follows it. "Cut power
 // anyway" asks for the machine's name to be typed and sends the same switch with cut: true and what was typed.
 // The panel compares the name itself; then the passkey step follows as for every switch, and what is signed says

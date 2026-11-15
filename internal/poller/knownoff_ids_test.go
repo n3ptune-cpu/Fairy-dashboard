@@ -95,6 +95,10 @@ func TestAnAnswerOfTheAgentEndsTheMarkOfItsNodeToo(t *testing.T) {
 	if n, a := e.marks(); !n || !a {
 		t.Fatalf("the fixture: marks node %v, agent %v", n, a)
 	}
+	// what the switching of a plug's socket asks: the mark, under the id of the row the machine is shown as
+	if !e.p.KnownOff("lab-b-node-pve-b") || !e.p.KnownOff("lab-b-agent") || e.p.KnownOff("lab-b-node-pve-a") || e.p.KnownOff("") {
+		t.Fatal("KnownOff does not say what was marked")
+	}
 	// the mark does not move the clock that "off for 15 minutes" is counted with
 	after, _, _ := e.p.AgentSeen("lab-b-agent")
 	if !before.QuietSince.Equal(after.QuietSince) || before.Silent != after.Silent {
@@ -102,7 +106,7 @@ func TestAnAnswerOfTheAgentEndsTheMarkOfItsNodeToo(t *testing.T) {
 	}
 	e.set(true, "") // the agent is back, the node's API is not
 	e.poll(5 * time.Second)
-	if n, a := e.marks(); n || a {
+	if n, a := e.marks(); n || a || e.p.KnownOff("lab-b-node-pve-b") || e.p.KnownOff("lab-b-agent") {
 		t.Fatalf("after the agent's answer: marks node %v, agent %v", n, a)
 	}
 	// the row is what it is without the mark: its node's API has been silent for 15 s, less than offline_after

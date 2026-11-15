@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
@@ -415,25 +416,70 @@ func TestPlugSwitchOffAMachineThatRuns(t *testing.T) {
 	}
 }
 
-// "Stale" is not off: a machine the panel has not heard from for a moment counts as running. Only "offline"
-// and "stopped" let a switch-off through without the typed name; a machine that sleeps counts as running.
+// When the machine on a socket counts as off for the question "this machine is still running". Not answering
+// is never enough by itself, however long it lasts: a link that dropped, an agent that was stopped or hangs and
+// a machine that installs updates while it shuts down all look like that (second review of stage 1a). It counts
+// as off only with a sign of it: Proxmox says the guest is stopped, a run of "Update unpowered hosts" saw the
+// machine go off (Poller.MarkOff), or the socket has a meter of its own (the only socket of a plug) and a fresh
+// reading of it is under 5 W. A meter of its own that still measures a load says the opposite, whatever else is
+// known. Everything in between is "unknown": the page says "may still be running" and asks for the typed name.
 func TestPlugRunningRule(t *testing.T) {
+	now := time.Now()
+	meter := func(sockets int, watts *float64, age time.Duration, status string) model.PowerSourceState {
+		st := model.PowerSourceState{Name: "PC plug", Status: status, Sockets: make([]model.PowerSocket, sockets)}
+		st.Readings = []model.PowerReading{{Watts: watts, Timestamp: now.Add(-age)}}
+		return st
+	}
+	w := func(v float64) *float64 { return &v }
+	none := model.PowerSourceState{Name: "Monitor powerbar", Status: "ok", Sockets: make([]model.PowerSocket, 8), Readings: []model.PowerReading{{Watts: w(1), Timestamp: now}}}
 	for _, c := range []struct {
-		status  string
-		asleep  bool
-		running bool
-	}{{"online", false, true}, {"stale", false, true}, {"paused", false, true}, {"error", false, true},
-		{"offline", false, false}, {"stopped", false, false}, {"offline", true, true}} {
-		row := &model.System{ID: "desk-pc", Name: "DESK-PC", Kind: "agent", Status: c.status, Asleep: c.asleep}
-		k := socketLook{link: "desk-pc", shown: "desk-pc", row: row}
-		if name, yes := k.running(); yes != c.running || name != "DESK-PC" {
-			t.Errorf("status %s (asleep %v): running %v, want %v", c.status, c.asleep, yes, c.running)
+		name     string
+		status   string
+		asleep   bool
+		on       string // the row's sign that the machine itself answers (MachineOn)
+		knownOff bool
+		src      model.PowerSourceState
+		want     string
+	}{
+		{"online", "online", false, "", false, none, "running"},
+		{"stale: not heard from for a moment", "stale", false, "", false, none, "running"},
+		{"paused", "paused", false, "", false, none, "running"},
+		{"error", "error", false, "", false, none, "running"},
+		{"offline, and nothing else is known", "offline", false, "", false, none, "unknown"},
+		{"offline, sent to sleep by the panel", "offline", true, "", false, none, "asleep"},
+		{"offline, and the machine itself answers", "offline", false, "the machine refused the connection", true, none, "running"},
+		{"offline, seen to go off", "offline", false, "", true, none, ""},
+		{"a guest Proxmox says is stopped", "stopped", false, "", false, none, ""},
+		// the socket's own meter: the only socket of a plug, a fresh reading
+		{"offline, its own plug reads 2 W", "offline", false, "", false, meter(1, w(2), 5*time.Second, "ok"), ""},
+		{"offline, its own plug reads 4.9 W", "offline", false, "", false, meter(1, w(4.9), 5*time.Second, "ok"), ""},
+		{"offline, its own plug reads 5 W", "offline", false, "", false, meter(1, w(5), 5*time.Second, "ok"), "unknown"},
+		{"seen to go off, and its own plug reads 40 W", "offline", false, "", true, meter(1, w(40), 5*time.Second, "ok"), "unknown"},
+		{"stopped, and its own plug reads 40 W", "stopped", false, "", false, meter(1, w(40), 5*time.Second, "ok"), "unknown"},
+		{"online, its own plug reads 0 W", "online", false, "", false, meter(1, w(0), 5*time.Second, "ok"), "running"},
+		{"asleep, its own plug reads 1 W", "offline", true, "", false, meter(1, w(1), 5*time.Second, "ok"), "asleep"},
+		// a reading that is old, of a plug that fails, without watts, or of a plug with more sockets says nothing
+		{"offline, a reading of 2 W that is old", "offline", false, "", false, meter(1, w(2), 5*time.Minute, "ok"), "unknown"},
+		{"offline, a reading of 2 W from the future", "offline", false, "", false, meter(1, w(2), -5*time.Minute, "ok"), "unknown"},
+		{"offline, 2 W of a plug that is stale", "offline", false, "", false, meter(1, w(2), 5*time.Second, "stale"), "unknown"},
+		{"offline, a reading without watts", "offline", false, "", false, meter(1, nil, 5*time.Second, "ok"), "unknown"},
+		{"offline, 2 W of a powerbar", "offline", false, "", false, meter(2, w(2), 5*time.Second, "ok"), "unknown"},
+		{"seen to go off, an old reading of 40 W", "offline", false, "", true, meter(1, w(40), 5*time.Minute, "ok"), ""},
+		{"seen to go off, 40 W of a powerbar", "offline", false, "", true, meter(2, w(40), 5*time.Second, "ok"), ""},
+	} {
+		row := &model.System{ID: "desk-pc", Name: "DESK-PC", Kind: "agent", Status: c.status, Asleep: c.asleep, MachineOn: c.on}
+		k := socketLook{src: c.src, link: "desk-pc", shown: "desk-pc", row: row, knownOff: c.knownOff, at: now, fresh: time.Minute}
+		if got := k.runningState(); got != c.want {
+			t.Errorf("%s: state %q, want %q", c.name, got, c.want)
 		}
-		// which kind of "not off" the page's dialog names
-		want := map[bool]string{false: "", true: map[bool]string{false: "running", true: "asleep"}[c.asleep]}[c.running]
-		if got := k.runningState(); got != want {
-			t.Errorf("status %s (asleep %v): state %q, want %q", c.status, c.asleep, got, want)
+		if name, yes := k.running(); yes != (c.want != "") || name != "DESK-PC" {
+			t.Errorf("%s: running %v (%s)", c.name, yes, name)
 		}
+	}
+	// without the time of the look nothing is fresh
+	k := socketLook{src: meter(1, w(2), 0, "ok"), link: "desk-pc", shown: "desk-pc", row: &model.System{ID: "desk-pc", Name: "DESK-PC", Status: "offline"}}
+	if got := k.runningState(); got != "unknown" {
+		t.Errorf("a look without a time: state %q", got)
 	}
 	if got := (socketLook{link: "old-pc", shown: "old-pc"}).runningState(); got != "unknown" {
 		t.Errorf("a link to an id without a row: state %q", got)
@@ -446,6 +492,16 @@ func TestPlugRunningRule(t *testing.T) {
 	}
 	if name, yes := (socketLook{link: "old-pc", shown: "old-pc"}).running(); !yes || name != "old-pc" {
 		t.Error("a link to an id without a row counts as off")
+	}
+	// the sentence for "not known to be off" says what the panel has
+	off := &model.System{ID: "desk-pc", Name: "DESK-PC", Kind: "agent", Status: "offline"}
+	for want, k := range map[string]socketLook{
+		"DESK-PC does not answer, which does not say that it is off: it may still be running. Shut it down first, or look at it.": {src: none, link: "desk-pc", shown: "desk-pc", row: off, at: now, fresh: time.Minute},
+		"DESK-PC does not answer, and its plug still measures 40 W: it may still be running. Shut it down first, or look at it.":  {src: meter(1, w(40), time.Second, "ok"), link: "desk-pc", shown: "desk-pc", row: off, knownOff: true, at: now, fresh: time.Minute},
+	} {
+		if got := (&plugLooks{}).runningWords(k); got != want {
+			t.Errorf("%q\nwant %q", got, want)
+		}
 	}
 	// a Proxmox node: the sentence says how many of its guests run
 	node := model.System{ID: "lab-node-pve", Name: "PVE", Kind: "node", Status: "online", ClusterID: model.P("lab")}
@@ -852,10 +908,16 @@ func TestPlugWords(t *testing.T) {
 	}{
 		{socketLook{src: src, sock: sock}, "off", false, "switch off Left monitor (Monitor powerbar)"},
 		{socketLook{src: src, sock: sock}, "on", false, "switch on Left monitor (Monitor powerbar)"},
-		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: off}, "off", false, "switch off Left monitor (Monitor powerbar), which powers DESK-PC"},
+		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: off, knownOff: true}, "off", false, "switch off Left monitor (Monitor powerbar), which powers DESK-PC"},
 		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: pc}, "on", false, "switch on Left monitor (Monitor powerbar), which powers DESK-PC"},
 		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: pc}, "off", true, "cut the power of DESK-PC while it is running: switch off Left monitor (Monitor powerbar)"},
-		{socketLook{src: src, sock: sock, link: "old-pc", shown: "old-pc"}, "off", true, "cut the power of old-pc while it is running: switch off Left monitor (Monitor powerbar)"},
+		// a machine that does not answer and is not known to be off, and one the panel sent to sleep: the words
+		// of a cut say which it is
+		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: off}, "off", true, "cut the power of DESK-PC while it may still be running: switch off Left monitor (Monitor powerbar)"},
+		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: off}, "off", false, "switch off Left monitor (Monitor powerbar), which powers DESK-PC"},
+		{socketLook{src: src, sock: sock, link: "desk-pc", shown: "desk-pc", row: &model.System{ID: "desk-pc", Name: "DESK-PC", Status: "offline", Asleep: true}}, "off", true,
+			"cut the power of DESK-PC while it is asleep: switch off Left monitor (Monitor powerbar)"},
+		{socketLook{src: src, sock: sock, link: "old-pc", shown: "old-pc"}, "off", true, "cut the power of old-pc while it may still be running: switch off Left monitor (Monitor powerbar)"},
 	} {
 		if got := plugWords(c.k, c.to, c.cut); got != c.want {
 			t.Errorf("%q, want %q", got, c.want)
@@ -1156,4 +1218,86 @@ func TestPlugLinkToARowThePanelDoesNotHave(t *testing.T) {
 	if s := pe.socketOf(pe.admin, "reader/desk-bar", "ch3"); s["lock"] != nil || s["switchable"] != true {
 		t.Errorf("a socket that is linked to a row: %v", s)
 	}
+}
+
+// The case the second review of stage 1a asked for: the PC runs, and its agent has not answered for longer than
+// offline_after (a link that dropped, an update, a hang). Its row is "offline", and that is no sign that the
+// machine is off: "off" for its socket is refused as "may still be running", and goes on only with the
+// machine's name typed, under a passkey line that says the cut.
+func TestPlugOffForAMachineThatDoesNotAnswer(t *testing.T) {
+	pe := newPlugEnv(t)
+	pe.pcSilent()
+	const said = "DESK-PC does not answer, which does not say that it is off: it may still be running. Shut it down first, or look at it."
+	unknown := func(r resp, said string) {
+		t.Helper()
+		d, _ := r.body["detail"].(map[string]any)
+		if r.code != 409 || d["code"] != "machine_running" || d["state"] != "unknown" || d["machine"] != "DESK-PC" || d["message"] != said || d["system_id"] != "desk-pc" {
+			t.Fatalf("%d %s\nwant machine_running, state unknown: %q", r.code, r.raw, said)
+		}
+	}
+	unknown(pe.flip("reader/desk-bar", "ch3", "off"), said)
+	if au := pe.plugAudits()[0]; au["outcome"] != "refused (machine_running): "+said {
+		t.Errorf("the audit entry: %v", au)
+	}
+	// however long it has not answered: an hour more changes nothing
+	pe.s.Poller.Clock = func() time.Time { return time.Now().Add(70 * time.Minute) }
+	pe.poll()
+	unknown(pe.flip("reader/desk-bar", "ch3", "off"), said)
+	if n := len(pe.reader.Asked()); n != 0 {
+		t.Fatalf("the machine was asked %d things", n)
+	}
+	// "on" has no such question
+	if _, _, ok := approvalAsked(pe.flip("reader/desk-bar", "ch3", "on")); !ok {
+		t.Error("on is refused for a socket whose machine does not answer")
+	}
+	// Cut power anyway: the name typed, and the passkey line says what is cut and that it may be running
+	cut := func(confirm string) resp {
+		b := plugBody("reader/desk-bar", "ch3", "off")
+		b["cut"], b["confirm"] = true, confirm
+		return pe.post("/api/power/socket", b)
+	}
+	if r := cut("Desk PC"); r.code != 422 {
+		t.Fatalf("a cut with the socket's name typed: %d %s", r.code, r.raw)
+	}
+	r := cut("DESK-PC")
+	id, _, ok := approvalAsked(r)
+	if !ok {
+		t.Fatalf("a cut with the name typed: %d %s", r.code, r.raw)
+	}
+	const words = "cut the power of DESK-PC while it may still be running: switch off Desk PC (Monitor powerbar)"
+	if d := r.body["detail"].(map[string]any); d["signs"] != words || d["action"] != "switch a plug socket ("+words+")" {
+		t.Errorf("the dialog of the cut: signs %q, action %q", d["signs"], d["action"])
+	}
+	if cb := pe.approve(t, id); cb.code != 303 {
+		t.Fatal(cb.code)
+	}
+	if pr := pe.result(t); pr["ok"] != true {
+		t.Fatalf("result: %v", pr)
+	}
+	if au := pe.plugAudits()[0]; au["outcome"] != "ok" || au["params"].(map[string]any)["cut"] != true {
+		t.Errorf("the audit entry of the cut: %v", au)
+	}
+	if notes := pe.do("GET", "/api/notifications", nil, "Cookie", pe.admin); !strings.Contains(string(notes.raw), "power cut while DESK-PC may still have been running") {
+		t.Errorf("the notification of the cut: %s", notes.raw)
+	}
+
+	// the PC's own plug (one socket, a meter of its own) still measures a load: the same answer, with the watts
+	unknown(pe.flip("reader/pc-plug", "main", "off"), "DESK-PC does not answer, and its plug still measures 40 W: it may still be running. Shut it down first, or look at it.")
+	// under 5 W in a fresh reading it is off: no question, and the passkey line names what the plug powers
+	pe.measures("pc-plug", 2)
+	r = pe.flip("reader/pc-plug", "main", "off")
+	if _, _, ok := approvalAsked(r); !ok || r.body["detail"].(map[string]any)["signs"] != "switch off PC (PC plug), which powers DESK-PC" {
+		t.Fatalf("off for a plug that measures 2 W: %d %s", r.code, r.raw)
+	}
+	// the powerbar has no meter for one socket: the PC's socket there still has the question
+	unknown(pe.flip("reader/desk-bar", "ch3", "off"), said)
+
+	// a machine that was seen to go off (a run of "Update unpowered hosts" tells the poller): no question on the
+	// powerbar; and its own plug, back at 40 W, says the opposite and wins
+	pe = newPlugEnv(t)
+	pe.pcOff()
+	if _, _, ok := approvalAsked(pe.flip("reader/desk-bar", "ch3", "off")); !ok {
+		t.Error("off is refused for a socket whose machine was seen to go off")
+	}
+	unknown(pe.flip("reader/pc-plug", "main", "off"), "DESK-PC does not answer, and its plug still measures 40 W: it may still be running. Shut it down first, or look at it.")
 }
