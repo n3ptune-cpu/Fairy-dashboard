@@ -319,9 +319,12 @@ machine checks itself.
 **Who may, and the log.** Admins, from a browser session (no API token), with the kill switch
 (`fairy admin control disable`) stopping both directions. Every attempt is in the audit log as
 `plug.switch` with who, the plug and the socket, the direction and the outcome: `ok`, `ok (not confirmed)`,
-`refused (...)` or `failed (...)`; a cut has `cut: true`. Refusals of the panel's own share a budget of ten
-entries a minute for each user, like `auth.denied`; a request that was sent to a machine is always written.
-A switch that was sent is also a notification. For scripts there is nothing to call: `POST
+`refused (...)` or `failed (...)`; a cut has `cut: true`. Each attempt has its own entry, the ones the panel
+refuses itself too, and none is dropped. What bounds them is the limit on control requests
+(`control_rate_per_min`, 20 a minute for one admin): the route applies it before it looks at anything, and a
+request over it is answered "too many control requests; try again in N s" and is no attempt. The question
+before the passkey and the panel's own request after it count as one each, so one admin switches at most
+half that many sockets a minute. A switch that was sent is also a notification. For scripts there is nothing to call: `POST
 /api/power/socket` takes a browser session only.
 
 ### Last 24 hours

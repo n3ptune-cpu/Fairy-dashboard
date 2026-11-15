@@ -227,7 +227,6 @@ func TestPlugSwitchRefusedByThePanel(t *testing.T) {
 	}
 	for _, c := range cases {
 		for _, to := range []string{"off", "on"} { // a lock holds in both directions
-			pe.nextMinute() // refusals of the panel's own are written ten to the minute for one admin
 			r := pe.flip(c.source, c.socket, to)
 			msg, _ := plugDetailOf(r)
 			if r.code != c.code || msg != c.said {
@@ -588,7 +587,6 @@ func TestPlugChallengeRefusals(t *testing.T) {
 			"Nothing was switched. (READER says: the machine's own sentence for ha_unreachable)"},
 	} {
 		c.make()
-		pe.nextMinute()
 		r := pe.flip("reader/desk-bar", "ch2", "on")
 		if msg, _ := plugDetailOf(r); r.code != c.status || msg != c.said {
 			t.Errorf("%s: %d %q\nwant %d %q", c.name, r.code, msg, c.status, c.said)
@@ -868,20 +866,112 @@ func TestPlugWords(t *testing.T) {
 	}
 }
 
-// Refusals of the panel's own can be sent without limit, so their audit entries are written ten to the minute
-// for one admin and the rest are summed up; a switch that was sent is always on record.
-func TestPlugRefusalsDoNotFillTheAuditLog(t *testing.T) {
+// Every attempt is in the audit log under its own name, also while the admin's budget of refused requests
+// ("auth.denied", ten a minute) is used up: the route has no share in that budget (review of stage 1a, finding
+// 2: ten refused requests of the same account hid which sockets were tried). What bounds the entries is the
+// limit on control requests, which the route applies before it looks at anything.
+func TestPlugAttemptsAreAllInTheAuditLog(t *testing.T) {
 	pe := newPlugEnv(t)
 	pe.nextMinute()
-	for range 60 {
-		if r := pe.flip("reader/desk-bar", "ch4", "off"); r.code != 409 {
+	// ten refused requests of the admin in this minute (no page header): ten auth.denied, and the budget is gone
+	noHeader := func() resp {
+		return pe.do("POST", "/api/power/socket", plugBody("reader/desk-bar", "ch1", "off"), "Cookie", pe.admin, "Content-Type", "application/json")
+	}
+	for range deniedPerSub + 3 {
+		if r := noHeader(); r.code != 403 {
 			t.Fatal(r.code, string(r.raw))
 		}
 	}
-	if n := len(pe.plugAudits()); n != deniedPerSub {
-		t.Fatalf("60 refused requests wrote %d plug.switch entries, want %d", n, deniedPerSub)
+	if n := len(pe.auditEntries("u2", deniedAction)); n != deniedPerSub {
+		t.Fatalf("the fixture: %d auth.denied entries, want %d (the budget is used up)", n, deniedPerSub)
 	}
-	// in that same minute a real switch is still written, with everything that happened to it
+	// "off" for Home Assistant's socket, the reader's, the panel's and a running PC's: each leaves its own entry
+	tried := []struct{ socket, outcome string }{
+		{"ch5", "refused (home_assistant): Locked. This socket powers Home Assistant. Nothing was switched."},
+		{"ch4", "refused (reads_plugs): Locked. This socket powers the machine that reads the plugs. Nothing was switched."},
+		{"ch6", "refused (panel): Locked. This socket powers the panel. Nothing was switched."},
+		{"ch3", "refused (machine_running): DESK-PC is still running. Shut it down first."},
+		{"ch9", "error 404: there is no such socket"},
+	}
+	for i, c := range tried {
+		if r := pe.flip("reader/desk-bar", c.socket, "off"); r.code != 409 && r.code != 404 {
+			t.Fatalf("%s: %d %s", c.socket, r.code, r.raw)
+		}
+		got := pe.plugAudits()
+		if len(got) != i+1 {
+			t.Fatalf("%s: %d plug.switch entries, want %d: the attempt is not on record", c.socket, len(got), i+1)
+		}
+		if got[0]["target"] != "reader/desk-bar/"+c.socket || got[0]["outcome"] != c.outcome || got[0]["params"].(map[string]any)["to"] != "off" {
+			t.Fatalf("%s: the entry %v\nwant %q", c.socket, got[0], c.outcome)
+		}
+	}
+	// the other way round: many attempts on sockets take nothing from the budget of auth.denied
+	pe.nextMinute()
+	for range 3 * deniedPerSub {
+		if r := pe.flip("reader/desk-bar", "ch8", "on"); r.code != 409 {
+			t.Fatal(r.code, string(r.raw))
+		}
+	}
+	if n := len(pe.plugAudits()); n != len(tried)+3*deniedPerSub {
+		t.Fatalf("%d plug.switch entries, want %d: one for every attempt", n, len(tried)+3*deniedPerSub)
+	}
+	before := len(pe.auditEntries("u2", deniedAction))
+	if r := noHeader(); r.code != 403 {
+		t.Fatal(r.code)
+	}
+	if n := len(pe.auditEntries("u2", deniedAction)); n != before+1 {
+		t.Errorf("refused switches used up the budget of auth.denied: %d entries, want %d", n, before+1)
+	}
+	// nothing of all this reached a machine
+	if n := len(pe.reader.Asked()); n != 0 {
+		t.Errorf("the machine was asked %d things", n)
+	}
+	pe.nextMinute()
+	for _, e := range pe.auditEntries("u2", "audit.suppressed") {
+		if strings.Contains(fmt.Sprint(e["outcome"]), "under another action") {
+			t.Errorf("a summary still counts refusals under another action: %v", e["outcome"])
+		}
+	}
+}
+
+// The limit on control requests (control_rate_per_min, for one admin) is the first thing the route asks after
+// who is calling: a request over the limit is answered 429 with the time to wait, like the other control
+// routes, before the body is read and before anything is looked up. So it is no attempt on a socket and
+// leaves no plug.switch entry, and the entries one admin can write in a minute are bounded by the limit. The
+// panel's own replay after the passkey passes the same limit, and is sent nowhere when it is over it.
+func TestPlugSwitchPassesTheControlLimitFirst(t *testing.T) {
+	pe := newPlugEnv(t)
+	pe.s.control = newRateLimiter(3)
+	for i := range 3 {
+		if r := pe.flip("reader/desk-bar", "ch4", "off"); r.code != 409 {
+			t.Fatalf("request %d inside the limit: %d %s", i+1, r.code, r.raw)
+		}
+	}
+	bodies := map[string]map[string]any{
+		"a locked socket":           plugBody("reader/desk-bar", "ch4", "off"),
+		"a socket that can be":      plugBody("reader/desk-bar", "ch1", "off"),
+		"a socket that is not here": plugBody("reader/desk-bar", "ch9", "off"),
+		"a body that is not one":    {"to": "toggle"},
+	}
+	for name, b := range bodies {
+		r := pe.post("/api/power/socket", b)
+		if msg, _ := plugDetailOf(r); r.code != 429 || !strings.HasPrefix(msg, "too many control requests; try again in ") || r.hdr.Get("Retry-After") == "" {
+			t.Errorf("%s, over the limit: %d %s (Retry-After %q)", name, r.code, r.raw, r.hdr.Get("Retry-After"))
+		}
+	}
+	if n := len(pe.plugAudits()); n != 3 {
+		t.Errorf("%d plug.switch entries, want 3: a request over the limit is not looked at", n)
+	}
+	if n := len(pe.reader.Asked()); n != 0 {
+		t.Errorf("the machine was asked %d things", n)
+	}
+	if n := len(pe.auditEntries("u2", deniedAction)); n != len(bodies) {
+		t.Errorf("%d auth.denied entries for %d requests over the limit", n, len(bodies))
+	}
+
+	// the replay after the passkey: the question was the one request the limit allowed
+	pe = newPlugEnv(t)
+	pe.s.control = newRateLimiter(1)
 	id, _, ok := approvalAsked(pe.flip("reader/desk-bar", "ch2", "on"))
 	if !ok {
 		t.Fatal("not asked")
@@ -889,14 +979,25 @@ func TestPlugRefusalsDoNotFillTheAuditLog(t *testing.T) {
 	if cb := pe.approve(t, id); cb.code != 303 {
 		t.Fatal(cb.code)
 	}
-	if au := pe.plugAudits()[0]; au["outcome"] != "ok" || au["target"] != "reader/desk-bar/ch2" {
-		t.Fatalf("the switch that was sent is not on record: %v", au)
+	pr := pe.result(t)
+	if pr["ok"] != false || pr["status"] != 429.0 || !strings.HasPrefix(fmt.Sprint(pr["message"]), "too many control requests; try again in ") {
+		t.Fatalf("the replay over the limit: %v", pr)
 	}
-	pe.nextMinute()
-	sum := pe.auditEntries("u2", "audit.suppressed")
-	// 50 refusals, and the "asked to confirm" line of the switch that was sent (its own entry above is on record)
-	if len(sum) != 1 || !strings.Contains(fmt.Sprint(sum[0]["outcome"]), "51 refused requests") {
-		t.Fatalf("the dropped entries must be summed up for the admin: %v", sum)
+	if n := len(plugSent(pe.reader)); n != 0 {
+		t.Fatalf("the machine got %d switch requests from a replay over the limit", n)
+	}
+	// with room for both, the switch is sent: the question and the replay are one request each
+	pe = newPlugEnv(t)
+	pe.s.control = newRateLimiter(2)
+	id, _, _ = approvalAsked(pe.flip("reader/desk-bar", "ch2", "on"))
+	if cb := pe.approve(t, id); cb.code != 303 {
+		t.Fatal(cb.code)
+	}
+	if pr := pe.result(t); pr["ok"] != true || len(plugSent(pe.reader)) != 1 {
+		t.Fatalf("a switch inside the limit: %v", pr)
+	}
+	if r := pe.flip("reader/desk-bar", "ch2", "off"); r.code != 429 {
+		t.Errorf("a third request with a limit of two: %d", r.code)
 	}
 }
 
@@ -923,7 +1024,6 @@ func TestPlugLockOfThePanelsMachineWithoutARow(t *testing.T) {
 		t.Errorf("a socket of a panel host without a row: %v", s)
 	}
 	for _, to := range []string{"off", "on"} {
-		pe.nextMinute()
 		r := pe.flip("reader/desk-bar", "ch7", to)
 		if msg, _ := plugDetailOf(r); r.code != 409 || msg != "Locked. This socket powers the panel. Nothing was switched." {
 			t.Errorf("%s: %d %s", to, r.code, r.raw)

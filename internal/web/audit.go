@@ -115,21 +115,6 @@ func (c *reqCtx) audit(u *model.User, action, target string, params map[string]a
 	}
 }
 
-// auditRefusal is audit for a request the panel itself refused before it asked a machine anything, on a
-// route whose refusals are in the audit log under the action's own name (the switching of a plug's socket:
-// every attempt is on record, not only the ones that were sent). An admin can send such requests without
-// limit, so they share the budget of a subject's refused requests ("auth.denied"): the first deniedPerSub of
-// a minute are written, the rest are counted in that minute's "audit.suppressed" entry for the subject. What
-// was sent to a machine is never written through here: its entry is always on record.
-func (c *reqCtx) auditRefusal(u *model.User, action, target string, params map[string]any, outcome string) {
-	ok, dropped, ips := c.s.anonAudit.allowDenied(u.Sub, actorOf(u), time.Now())
-	c.s.auditSuppressed(dropped, ips)
-	if !ok {
-		return
-	}
-	c.audit(u, action, target, params, outcome)
-}
-
 // auditAnon writes an entry about a request that is not (yet) signed in. Entries without a subject (rejected
 // tokens, failed or rate-limited sign-ins) can be caused by anyone, so they are throttled per client IP (see
 // auditThrottle); the dropped ones are summed up in an "audit.suppressed" entry.
@@ -167,7 +152,7 @@ func (s *Server) auditSuppressed(dropped, ips int) {
 		e := audit.Entry{Actor: "fairy", Action: "audit.suppressed", Source: "fairy",
 			Params: map[string]any{"dropped": d.Dropped, "action": deniedAction, "sub": d.Sub, "actor": d.Actor,
 				"per_subject_per_min": deniedPerSub},
-			Outcome: fmt.Sprintf("%d refused requests (%s, %s %s, or a refusal of the panel's own under another action) by %s not written", d.Dropped, deniedAction,
+			Outcome: fmt.Sprintf("%d refused requests (%s, or %s %s) by %s not written", d.Dropped, deniedAction,
 				stepUpAction, stepUpAsked, d.Actor)}
 		if d.Sub != "" {
 			sub := d.Sub

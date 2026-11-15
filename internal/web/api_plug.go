@@ -29,12 +29,18 @@ import (
 // agent carries the plug's id, the socket's id, the direction and the socket's tag, as the agent's own row
 // gave them. Whether a socket can be switched is set on the machine, in the agent's config.yaml.
 //
-// The order (plugSwitch): who asks; the body; the socket as the panel sees it now (it exists, the tag is the
-// one the page showed, the agent says it can be switched, nothing in the panel locks it, the machine has the
-// passkey check); "still running" for a switch-off; the machine's challenge and the passkey round trip; the
-// rate limit; the one request to the agent; the audit entry. After the round trip the panel replays the kept
-// request through this same handler, so everything before the approval is looked at again with what is true
-// then: the PC may have been started and the socket changed while the person was at Pocket ID.
+// The order (plugSwitch): who asks; the limit on control requests; the body; the socket as the panel sees it
+// now (it exists, the tag is the one the page showed, the agent says it can be switched, nothing in the panel
+// locks it, the machine has the passkey check); "still running" for a switch-off; the machine's challenge and
+// the passkey round trip; the one request to the agent; the audit entry. After the round trip the panel
+// replays the kept request through this same handler, so everything before the approval is looked at again
+// with what is true then: the PC may have been started and the socket changed while the person was at Pocket
+// ID.
+//
+// Every attempt on a socket is in the audit log as "plug.switch", the refused ones too, each with its own
+// entry: no budget is shared with other refusals. What keeps one admin from filling the log is the limit on
+// control requests, which comes before anything is read or looked up: a request over it is answered 429 and
+// is no attempt (the question before the passkey and the replay after it are one request each).
 
 // plugSwitchWait is how long the panel waits for the agent's answer to a switch: the agent reads the state
 // (3 s), sends the request (5 s) and watches the state (10 s), 18 s in all, and the answer needs its way back.
@@ -194,6 +200,11 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
+	// The limit on control requests of one admin, before the body is read and before anything is looked up. It
+	// is what bounds the audit entries below, so nothing that writes one comes before it.
+	if !s.control.allow(u.Sub) {
+		return c.limited(u, s.control, "too many control requests")
+	}
 	var b plugSwitchReq
 	if err := c.decodeBody(&b); err != nil {
 		return err
@@ -201,20 +212,15 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 	if err := b.check(); err != nil {
 		return err
 	}
-	// From here on every attempt is in the audit log, refused ones too; only "confirm first" is not an outcome.
-	// What the panel refuses itself, before it asks the machine anything, can be sent without limit: those
-	// entries share the per-subject budget of refused requests (auditRefusal). An attempt that got as far as
-	// the machine is always on record (fail).
+	// From here on every attempt is in the audit log with an entry of its own, the ones the panel refuses
+	// itself too; only "confirm first" is not an outcome.
 	target := b.Source + "/" + b.Socket
 	params := map[string]any{"to": b.To}
 	fail := func(err error) error {
 		c.audit(u, plugAudit, target, params, plugOutcome(err))
 		return err
 	}
-	refuse := func(err error) error {
-		c.auditRefusal(u, plugAudit, target, params, plugOutcome(err))
-		return err
-	}
+	refuse := fail // the panel's own "no", before the machine is asked: written like every other outcome
 	k, looks, err := c.plugFind(b)
 	if err != nil {
 		return refuse(err)
@@ -271,11 +277,6 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 		// confirmOne lets a request through without an approval where a machine checks nothing. A socket is
 		// never switched that way.
 		return fail(plugErr(409, "no_approval", "No passkey approval was given for this switch, and a socket is switched only with one. Nothing was sent."))
-	}
-	if !s.control.allow(u.Sub) {
-		params["approval"] = "not sent"
-		c.audit(u, plugAudit, target, params, "refused (rate_limit): too many control requests")
-		return c.limited(u, s.control, "too many control requests")
 	}
 	params["approval"] = "sent" // the machine checks it; the token itself is never written anywhere
 	path := api.PathPlugSwitch
