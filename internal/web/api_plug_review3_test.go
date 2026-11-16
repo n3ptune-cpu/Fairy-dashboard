@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,12 +19,15 @@ import (
 // its own unless otherExtra says where).
 //
 //	lab-node-pve2  the node PVE2, with the guests nas-vm (lab-qemu-201), panel-vm (lab-qemu-202) and the
-//	               container ct-box (lab-lxc-203); lost-vm (lab-qemu-301) is on a node the answer does not have
+//	               container ct-box (lab-lxc-203); lost-vm (lab-qemu-301) and the container lost-ct
+//	               (lab-lxc-302) are on a node the answer does not have
 //	pve2agent      the agent of the node PVE2 (node: PVE2): one machine with the node, shown as the node's row
 //	vmagent        an agent in nas-vm (links_to: lab-qemu-201); it has a row of its own
 //	ctagent        an agent in ct-box (links_to: lab-lxc-203)
 //	vm2agent       an agent in panel-vm (links_to: lab-qemu-202)
-//	sideagent      a second agent of the node (links_to: lab-node-pve2, after pve2agent): a row of its own
+//	sideagent      a second agent of the node (links_to: lab-node-pve2, after pve2agent): a row of its own.
+//	               With it the configuration does not say whose the node is (two agents name it), and the
+//	               node has no "other id"; lone leaves it out, and the node's other id is pve2agent
 //	lostagent      an agent in lost-vm (links_to: lab-qemu-301)
 type plugNodeRig struct {
 	link       string // what other's rack-bar/node is linked to
@@ -32,6 +36,7 @@ type plugNodeRig struct {
 	panelHosts string // panel_hosts ("": the rig's panel-box)
 	guests     string // the status of every guest ("": running)
 	down       string // an agent that answers at first and then stops: its row is "stale"
+	lone       bool   // without sideagent: pve2agent is the only agent that names the node
 }
 
 const plugOtherEntry = "  - {id: other, name: OTHER, url: \"http://other\", token_env: TOK_B, control_token_env: CTL_A,\n     socket_links: {rack-bar/node: lab-node-pve}, home_assistant_system: lab-qemu-100}"
@@ -39,7 +44,7 @@ const plugOtherEntry = "  - {id: other, name: OTHER, url: \"http://other\", toke
 func (c plugNodeRig) env(t *testing.T) *plugEnv {
 	t.Helper()
 	agents := []string{"pve2agent", "vmagent", "ctagent", "vm2agent", "sideagent", "lostagent"}
-	for i := range agents {
+	for i := range agents { // before one is left out: the entries name the tokens by their place in this list
 		t.Setenv(fmt.Sprintf("TOK_N%d", i), testutil.ReadToken+string(rune('n'+i)))
 	}
 	if strings.Count(plugConfig, plugOtherEntry) != 1 || strings.Count(plugConfig, "\nagents:\n") != 1 || strings.Count(plugConfig, "panel_hosts: [panel-box]") != 1 {
@@ -58,6 +63,14 @@ func (c plugNodeRig) env(t *testing.T) *plugEnv {
 		"  - {id: vm2agent, name: VM2AGENT, url: \"http://vm2agent\", token_env: TOK_N3, links_to: lab-qemu-202}\n"+
 		"  - {id: sideagent, name: SIDEAGENT, url: \"http://sideagent\", token_env: TOK_N4, links_to: lab-node-pve2}\n"+
 		"  - {id: lostagent, name: LOSTAGENT, url: \"http://lostagent\", token_env: TOK_N5, links_to: lab-qemu-301}\n", 1)
+	if c.lone {
+		const side = "  - {id: sideagent, name: SIDEAGENT, url: \"http://sideagent\", token_env: TOK_N4, links_to: lab-node-pve2}\n"
+		if strings.Count(yaml, side) != 1 {
+			t.Fatal("the fixture: no entry of sideagent to leave out")
+		}
+		yaml = strings.Replace(yaml, side, "", 1)
+		agents = slices.DeleteFunc(agents, func(id string) bool { return id == "sideagent" })
+	}
 	if c.panelHosts != "" {
 		yaml = strings.Replace(yaml, "panel_hosts: [panel-box]", "panel_hosts: ["+c.panelHosts+"]", 1)
 	}
@@ -75,7 +88,7 @@ func (c plugNodeRig) env(t *testing.T) *plugEnv {
 	pe.b.PVEOf = func(string) ([]jsonx.M, error) {
 		r := append(testutil.HostResources("PVE", "running"), jsonx.M{"id": "node/PVE2", "type": "node", "node": "PVE2", "status": "online", "cpu": 0.1,
 			"maxcpu": 8.0, "mem": float64(8 << 30), "maxmem": float64(32 << 30), "disk": float64(10 << 30), "maxdisk": float64(100 << 30), "uptime": 30.0})
-		return append(r, guest("qemu", 201, "nas-vm", "PVE2"), guest("qemu", 202, "panel-vm", "PVE2"), guest("lxc", 203, "ct-box", "PVE2"), guest("qemu", 301, "lost-vm", "GHOST")), nil
+		return append(r, guest("qemu", 201, "nas-vm", "PVE2"), guest("qemu", 202, "panel-vm", "PVE2"), guest("lxc", 203, "ct-box", "PVE2"), guest("qemu", 301, "lost-vm", "GHOST"), guest("lxc", 302, "lost-ct", "GHOST")), nil
 	}
 	for _, id := range agents {
 		pe.b.Metrics[id] = func() (jsonx.M, error) {
@@ -111,10 +124,14 @@ func (c plugNodeRig) env(t *testing.T) *plugEnv {
 			t.Fatalf("the fixture: the row of %s: %d %v", id, x.code, x.body)
 		}
 	}
-	for id, kind := range map[string]string{"lab-node-pve2": "node", "lab-qemu-201": "qemu", "lab-qemu-202": "qemu", "lab-lxc-203": "lxc", "lab-qemu-301": "qemu"} {
+	for id, kind := range map[string]string{"lab-node-pve2": "node", "lab-qemu-201": "qemu", "lab-qemu-202": "qemu", "lab-lxc-203": "lxc", "lab-qemu-301": "qemu", "lab-lxc-302": "lxc"} {
 		if x := pe.do("GET", "/api/systems/"+id, nil, "Cookie", pe.admin); x.body["kind"] != kind {
 			t.Fatalf("the fixture: %s is %v", id, x.body)
 		}
+	}
+	// the node's other id: its agent's when the configuration says whose the node is, none when two agents name it
+	if other := slices.Contains(pe.s.Poller.SameMachine("lab-node-pve2"), "pve2agent"); other != c.lone {
+		t.Fatalf("the fixture: the ids of the node are %v", pe.s.Poller.SameMachine("lab-node-pve2"))
 	}
 	return pe
 }
@@ -411,5 +428,70 @@ func TestPlugSocketLinkedToANodesAgentWhileTheNodeHasNoRow(t *testing.T) {
 	if d, _ := r.body["detail"].(map[string]any); r.code != 409 || d["code"] != codeMachineRunning || d["machine"] != "NAS-BOX" || d["system_id"] != "nas-box" || d["guest"] != nil ||
 		d["message"] != "NAS-BOX is still running. Shut it down first." {
 		t.Errorf("off: %d %s", r.code, r.raw)
+	}
+}
+
+// Finding 2 of the third review: three changes of its own to the lines of the second round passed the whole
+// suite. The code was right in each; no test asked. A test for each (the fourth, a read of the state file's
+// version without its lock, is in internal/adminstate).
+
+// M03: a container is a guest as a VM is. No test linked a socket to a container, or had the reader or Home
+// Assistant in one. What a socket that is linked to a container feeds is the container's node; and the node of
+// a container that carries Home Assistant, the reader or the panel is locked like the node of such a VM.
+func TestPlugAContainerIsAGuestLikeAVM(t *testing.T) {
+	plugNodeAsks(t, plugNodeRig{link: "lab-lxc-203"}.env(t), "linked to a container", "ct-box", "a guest of", 3)
+	for _, c := range []struct {
+		name       string
+		rig        plugNodeRig
+		lock, said string
+	}{
+		{"linked to a container, Home Assistant in a VM of its node", plugNodeRig{link: "lab-lxc-203", ha: "lab-qemu-202"}, model.SocketLockHomeAssistant, plugSaidHA},
+		{"linked to the node, Home Assistant in a container", plugNodeRig{link: "lab-node-pve2", ha: "lab-lxc-203"}, model.SocketLockHomeAssistant, plugSaidHA},
+		{"linked to a VM, Home Assistant in a container", plugNodeRig{link: "lab-qemu-201", ha: "lab-lxc-203"}, model.SocketLockHomeAssistant, plugSaidHA},
+		{"linked to the node, the reader in a container", plugNodeRig{link: "lab-node-pve2", otherExtra: "links_to: lab-lxc-203,"}, model.SocketLockAgent, plugSaidReader},
+		{"linked to a VM, the reader in a container", plugNodeRig{link: "lab-qemu-201", otherExtra: "links_to: lab-lxc-203,"}, model.SocketLockAgent, plugSaidReader},
+		{"linked to a container, the panel in a VM of its node", plugNodeRig{link: "lab-lxc-203", panelHosts: "lab-qemu-202"}, model.SocketLockPanel, plugSaidPanel},
+		{"linked to a VM, the panel in a container", plugNodeRig{link: "lab-qemu-201", panelHosts: "lab-lxc-203"}, model.SocketLockPanel, plugSaidPanel},
+	} {
+		plugNodeLocked(t, c.rig.env(t), c.name, c.lock, c.said)
+	}
+	// a container whose node the panel does not have: locked, with the sentence for a guest
+	pe := plugNodeRig{link: "lab-lxc-302"}.env(t)
+	const said = "Locked. This socket is linked to lost-ct, a virtual machine or container, and the panel does not have the Proxmox node it runs on. A socket feeds the node: link it to the node."
+	if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["switchable"] != false || s["lock"] != model.SocketLockLinkUnknown || s["note"] != said || s["system_id"] != nil {
+		t.Errorf("a container without its node: %v", s)
+	}
+	for _, to := range []string{"off", "on"} {
+		r := pe.flip("other/rack-bar", "node", to)
+		if msg, _ := plugDetailOf(r); r.code != 409 || msg != said+" Nothing was switched." {
+			t.Errorf("a container without its node, %s: %d %s", to, r.code, r.raw)
+		}
+	}
+	if n := len(pe.other.Asked()); n != 0 {
+		t.Errorf("a container without its node: the machine was asked %d things", n)
+	}
+}
+
+// M05: Home Assistant's lock sees the node of a linked guest. The second round's test for "a guest beside Home
+// Assistant's VM on one node" used the node that also carries the reader, so the reader's lock came first and
+// hid a missing one. Here the reader runs on a machine of its own, and nothing but Home Assistant's VM is on
+// the node: the lock is Home Assistant's, for a link to a VM, to a container and to the node.
+func TestPlugGuestBesideHomeAssistantsVMOnANodeWithoutTheReader(t *testing.T) {
+	for _, link := range []string{"lab-qemu-201", "lab-lxc-203", "lab-node-pve2"} {
+		pe := plugNodeRig{link: link, ha: "lab-qemu-202"}.env(t)
+		if own := pe.s.Poller.ShownID("other"); own != "other" {
+			t.Fatalf("the fixture: the reader is shown as %s", own)
+		}
+		plugNodeLocked(t, pe, "linked to "+link+", Home Assistant in lab-qemu-202", model.SocketLockHomeAssistant, plugSaidHA)
+	}
+}
+
+// M06: the node's other id is on the linked side. A node with an agent is one machine with two ids, the node's
+// and the agent's, and panel_hosts can name either. With the agent's id there, the socket of the node is the
+// panel's: linked to the node, to a guest of it, to an agent in such a guest, or to the agent's id itself.
+func TestPlugPanelHostsThatNamesTheNodesOwnAgent(t *testing.T) {
+	for _, link := range []string{"lab-node-pve2", "lab-qemu-201", "lab-lxc-203", "vmagent", "pve2agent"} {
+		pe := plugNodeRig{link: link, panelHosts: "pve2agent", lone: true}.env(t)
+		plugNodeLocked(t, pe, "linked to "+link+", panel_hosts names the node's agent", model.SocketLockPanel, plugSaidPanel)
 	}
 }
