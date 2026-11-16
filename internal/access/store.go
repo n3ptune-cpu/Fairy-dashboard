@@ -17,15 +17,21 @@ import (
 
 func validSite(s string) bool { return config.ValidSite(s) }
 
-// User is one person who has signed in (keyed by their stable OIDC subject). Email and name are kept for
-// display and for finding the user from the CLI; they are refreshed at every sign-in.
+// User is one person who has signed in (keyed by their stable OIDC subject). Email, name and user name are
+// kept for display and for finding the user from the CLI; they are refreshed at every sign-in.
 //
-// The subject is the only thing the identity provider guarantees. Name and email are what the account claims,
-// and a user may be able to edit them at the provider; EmailVerified says whether the provider vouched for the
-// address. An address that is not verified is shown, marked as such, but never selects an account (Find).
+// The subject is the only thing the identity provider guarantees. Name, user name and email are what the
+// account claims, and a user may be able to edit them at the provider; EmailVerified says whether the provider
+// vouched for the address. An address that is not verified is shown, marked as such, but never selects an
+// account (Find).
 type User struct {
-	Sub   string `json:"sub"`
-	Email string `json:"email"`
+	Sub string `json:"sub"`
+	// Username is the account's user name (the claim preferred_username) at the last sign-in that sent one: what
+	// the panel names the person by (people.go). "" = not known: the account has not signed in since the panel
+	// keeps it, or its provider sends none. Nothing is decided by it. A version that does not know the field
+	// reads the file as before and writes it back without it; the next sign-in brings it again.
+	Username string `json:"username,omitempty"`
+	Email    string `json:"email"`
 	// EmailVerified is the provider's email_verified claim at the last sign-in. nil = not known: the entry was
 	// written by a version without this field (or without a provider) and counts as not verified until the
 	// user's next sign-in or request.
@@ -265,7 +271,7 @@ func (s *Store) update(fn func(*Data) error) (Data, error) {
 // Seen does not know whether the email is verified: a new or changed address is stored as "not known" (which
 // counts as not verified), an unchanged one keeps what is stored. Sign-ins use SeenIdentity.
 func (s *Store) Seen(sub, email, name, newRole, via string) (u User, created bool, err error) {
-	return s.seen(sub, email, nil, name, newRole, via)
+	return s.seen(sub, email, nil, name, "", newRole, via)
 }
 
 // Identity is what the identity provider said about a user at a sign-in.
@@ -274,15 +280,38 @@ type Identity struct {
 	Email         string
 	EmailVerified bool // the email_verified claim was true
 	Name          string
+	Username      string // the claim preferred_username ("" = none sent: the stored one stays, like the name)
 }
 
 // SeenIdentity is Seen for a sign-in at the identity provider: it also records whether the provider verified
 // the email address. A sign-in without an address keeps the stored one, as not verified.
 func (s *Store) SeenIdentity(id Identity, newRole, via string) (u User, created bool, err error) {
-	return s.seen(id.Sub, id.Email, &id.EmailVerified, id.Name, newRole, via)
+	return s.seen(id.Sub, id.Email, &id.EmailVerified, id.Name, id.Username, newRole, via)
 }
 
-func (s *Store) seen(sub, email string, verified *bool, name, newRole, via string) (u User, created bool, err error) {
+// FillUsername gives an account the user name of a session that began before the panel kept user names, when
+// the account has none yet. A stored user name is never replaced here: what a session's cookie says is as old
+// as its sign-in, and a later sign-in may have recorded another (as with the address and the name, which only
+// a sign-in writes). done reports whether something was written.
+func (s *Store) FillUsername(sub, username string) (done bool, err error) {
+	username = CleanUsername(username)
+	if cur, ok := s.Load().Users[sub]; sub == "" || username == "" || !ok || cur.Username != "" {
+		return false, nil
+	}
+	_, err = s.update(func(d *Data) error {
+		cur, ok := d.Users[sub]
+		if !ok || cur.Username != "" {
+			return nil
+		}
+		cur.Username = username
+		d.Users[sub] = cur
+		done = true
+		return nil
+	})
+	return done && err == nil, err
+}
+
+func (s *Store) seen(sub, email string, verified *bool, name, username, newRole, via string) (u User, created bool, err error) {
 	if sub == "" {
 		return User{}, false, apierr.New(400, "missing subject")
 	}
@@ -315,6 +344,9 @@ func (s *Store) seen(sub, email string, verified *bool, name, newRole, via strin
 		}
 		if name != "" {
 			cur.Name = name
+		}
+		if username = CleanUsername(username); username != "" {
+			cur.Username = username
 		}
 		cur.LastSeen = &now
 		d.Users[sub] = cur
