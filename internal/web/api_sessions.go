@@ -486,7 +486,10 @@ func (c *reqCtx) sessionDetail(u *model.User) string {
 		return ""
 	}
 	if t.Sub != u.Sub {
-		return "of " + truncate(ownerShown(c.s.people(), t.Session), 60) + ": " + sessionText(t)
+		// another account's session: by the name the panel shows it by and by its id. The name alone does not
+		// say which account: every account without a user name is "(address hidden)", and a user name is what
+		// an account says about itself.
+		return "of " + truncate(ownerShown(c.s.people(), t.Session), 60) + " [id " + truncate(t.Sub, 64) + "]: " + sessionText(t)
 	}
 	return sessionText(t)
 }

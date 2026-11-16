@@ -380,7 +380,7 @@ func TestSessionHandlesAreOpaqueAndNotTransferable(t *testing.T) {
 	}
 	r := e.revoke("/api/admin/sessions/revoke", a.sess, handleOf(e, v))
 	d, _ := r.body["detail"].(map[string]any)
-	if !stepUpRequired(r) || d["action"] != "sign out a session (of user-u7: Chrome on macOS, 127.0.0.1)" {
+	if !stepUpRequired(r) || d["action"] != "sign out a session (of user-u7 [id u7]: Chrome on macOS, 127.0.0.1)" {
 		t.Fatalf("an admin, another person's session: %d %s", r.code, r.raw)
 	}
 	if cb := a.confirm(pendingID(r), false); cb.code != 303 || works(e, v) || !works(e, v2) || !works(e, b) || !works(e, a.sess) {

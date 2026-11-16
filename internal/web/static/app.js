@@ -3401,7 +3401,8 @@ const sessWhen = (iso) => (iso ? `<span data-ago="${esc(iso)}">${ago(iso)}</span
   : '<span class="note">unknown</span>');
 // for the button's label and the "Confirm it's you" dialog (the label goes percent-encoded in X-Fairy-Action)
 const sessName = (x) => `${x.browser || "Unknown browser"}${x.ip || x.signed_in_ip ? ` (${x.ip || x.signed_in_ip})` : ""}`;
-const sessWho = (u) => (u ? u.username || u.sub : "");
+// (with the account id: the name alone does not say which account; every account without a user name has the same)
+const sessWho = (u) => (u ? [u.username && String(u.username).slice(0, 40), "[id " + u.sub + "]"].filter(Boolean).join(" ") : "");
 function sessRow(x, everyone) {
   const u = x.user, ip = x.ip || x.signed_in_ip;
   const who = everyone ? `<td class="namecell" data-l="User"><b>${esc(u?.username || u?.sub || "–")}</b>${u?.you ? ' <span class="chip ok">you</span>' : ""}

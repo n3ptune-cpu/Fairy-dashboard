@@ -253,9 +253,15 @@ delete veil.open["u:sub-s:email"];
 const sess = (o) => ({ id: "h1", current: false, browser: "Firefox on Windows", user_agent: "UA", ip: "192.0.2.1", signed_in_ip: "192.0.2.1", also_from: [], signed_in: "2026-11-16T09:00:00Z", last_active: "2026-11-16T10:00:00Z", location: "", ...o });
 let row = sessRow(sess({ user: { sub: "sub-s", username: "PineTop", you: false } }), true);
 if (words(row.split("</td>")[0]) !== "PineTop id sub-s") fail("a session's account: " + words(row.split("</td>")[0]));
-if (!row.includes('data-label="PineTop: Firefox on Windows (192.0.2.1)"')) fail("the label of a sign-out: " + row);
+if (!row.includes('data-label="PineTop [id sub-s]: Firefox on Windows (192.0.2.1)"')) fail("the label of a sign-out: " + row);
 row = sessRow(sess({ user: { sub: "sub-o", username: "(address hidden)", you: false } }), true);
 if (words(row.split("</td>")[0]) !== "(address hidden) id sub-o") fail("a session of an account without a user name: " + words(row.split("</td>")[0]));
+// ... whose sign-out is told apart from every other such account's by the id
+if (!row.includes('data-label="(address hidden) [id sub-o]: Firefox on Windows (192.0.2.1)"')) fail("the label of a sign-out of an account without a user name: " + row);
+row = sessRow(sess({ user: { sub: "9a1b2c3d-wanda", username: "juniper · id 9a1b2c", you: false } }), true);
+if (words(row.split("</td>")[0]) !== "juniper · id 9a1b2c id 9a1b2c3d-wanda" || !row.includes('data-label="juniper · id 9a1b2c [id 9a1b2c3d-wanda]: Firefox')) fail("a session of the second account with a user name: " + row);
+row = sessRow(sess({ user: { sub: "sub-n", username: "Juniper", you: true } }), true);
+if (!row.includes('data-label="Firefox on Windows (192.0.2.1)"')) fail("the label of a sign-out of one's own session: " + row);
 // a list from a panel that still sends name and email does not print them
 row = sessRow(sess({ user: { sub: "sub-s", name: "Other Person", email: "friend@example.com", you: false } }), true);
 if (row.includes("Other Person") || row.includes("friend@example.com") || words(row.split("</td>")[0]) !== "sub-s id sub-s") fail("name and email of a session: " + row);
