@@ -356,6 +356,23 @@ func NodeAgents(cfg *config.Panel) (decided map[string]string, undecided map[str
 	return decided, undecided
 }
 
+// NamedNodes are the ids of the Proxmox nodes the agents' entries name with `node:`, each with the agents that
+// name it: what the file itself says about which nodes there are. Only where the entry can mean one node id
+// (rowNodes). For `fairy admin config check`: an agent whose id is exactly such an id names two things
+// (Poller.NamesTwo) as soon as that Proxmox API lists the node.
+func NamedNodes(cfg *config.Panel) map[string][]string {
+	named := map[string][]string{}
+	for _, a := range cfg.Agents {
+		if a.Node == "" || a.LinksTo != "" {
+			continue
+		}
+		if ids := rowNodes(a, cfg.Proxmox); len(ids) == 1 {
+			named[ids[0]] = append(named[ids[0]], a.ID)
+		}
+	}
+	return named
+}
+
 // links is nodeLinks for the configuration as it is now (config.yaml and the hosts added in the panel).
 func (p *Poller) links() (map[string]nodeLink, []string) {
 	links, whys, _ := p.linksAll()
