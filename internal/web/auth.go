@@ -677,13 +677,20 @@ func (s *Server) endRefused(sub, cookieSID string) (int, error) {
 }
 
 // verifiedClaims exchanges the authorization code (with the PKCE verifier), verifies the ID token and its nonce
-// and returns the claims, merged with userinfo when the groups claim is missing from the ID token. groupsRead
-// is false when the groups had to come from userinfo and userinfo could not be read: the claims then say
-// nothing about the groups (not "none"). On failure it returns why, for the log and audit trail only (never
-// shown to the client).
+// and returns the claims, merged with userinfo when the ID token lacks something the panel asked the provider
+// for: the groups claim (with the scope "groups"), or the user name (preferred_username, with the scope
+// "profile"). A provider may put either into userinfo alone, and without the user name the panel has nothing to
+// name the person by: everybody is "(address hidden)". groupsRead is false when the groups had to come from
+// userinfo and userinfo could not be read: the claims then say nothing about the groups (not "none"). On
+// failure it returns why, for the log and audit trail only (never shown to the client).
+//
+// A userinfo request that is made for the user name alone and fails does not fail the sign-in: the groups are
+// in the ID token, nothing is decided by a user name, and a userinfo endpoint that is down must not turn away
+// sign-ins that worked before the panel asked it. It is logged, and the account goes without a user name.
 //
 // otherSub: userinfo answered about another subject than the ID token's. Nothing of that answer is used, and
-// the caller refuses the sign-in (OIDC Core 5.3.2), whatever the account would be allowed without it.
+// the caller refuses the sign-in (OIDC Core 5.3.2), whatever the account would be allowed without it, and
+// whatever userinfo was asked for.
 func (s *Server) verifiedClaims(ctx context.Context, p *oidc.Provider, code string, sess *sessionData) (claims map[string]any, groupsRead, otherSub bool, lf *loginFailure) {
 	rawID, tok, redact, lf := s.oidc.exchangeCode(ctx, p, code, sess.Verifier)
 	if lf != nil {
@@ -706,8 +713,15 @@ func (s *Server) verifiedClaims(ctx context.Context, p *oidc.Provider, code stri
 		return nil, false, false, &loginFailure{reason: "invalid claims", attrs: []any{"error", safeErr(err, redact...)}}
 	}
 	groupsRead = true
-	if _, ok := claims[s.Cfg.OIDC.GroupsClaim]; !ok && slices.Contains(s.Cfg.OIDC.Scopes, "groups") {
-		groupsRead, otherSub = mergeUserInfo(ctx, p, tok, idt.Subject, s.Cfg.OIDC.GroupsClaim, claims, redact)
+	_, hasGroups := claims[s.Cfg.OIDC.GroupsClaim]
+	forGroups := !hasGroups && slices.Contains(s.Cfg.OIDC.Scopes, "groups")
+	forName := !hasText(claims, "preferred_username") && slices.Contains(s.Cfg.OIDC.Scopes, "profile")
+	if forGroups || forName {
+		read, other := mergeUserInfo(ctx, p, tok, idt.Subject, s.Cfg.OIDC.GroupsClaim, claims, redact, forGroups)
+		otherSub = other
+		if forGroups {
+			groupsRead = read
+		}
 	}
 	if idt.Subject == "" {
 		return nil, false, false, &loginFailure{reason: "no sub claim"}
@@ -716,12 +730,23 @@ func (s *Server) verifiedClaims(ctx context.Context, p *oidc.Provider, code stri
 	return claims, groupsRead, otherSub, nil
 }
 
+// hasText reports whether the claims have this claim as a text that is not empty.
+func hasText(claims map[string]any, k string) bool {
+	v, ok := claims[k].(string)
+	return ok && v != ""
+}
+
 // mergeUserInfo reads the userinfo endpoint for what the panel asks it for: the groups (some providers only put
-// them there), and the texts that are shown (name, e-mail address, picture) where the ID token has none. It
-// returns read = false when userinfo could not be read (the request failed, or the answer is not readable):
-// what the account's groups are is then not known. other: userinfo answered about another subject than the ID
-// token's; nothing of it is used, and the caller refuses the sign-in. A provider without a userinfo endpoint
-// has said all it says in the ID token.
+// them there), and the texts that are shown (the user name, the name, the e-mail address, the picture) where
+// the ID token has none. It returns read = false when userinfo could not be read (the request failed, or the
+// answer is not readable): what the account's groups are is then not known. other: userinfo answered about
+// another subject than the ID token's; nothing of it is used, and the caller refuses the sign-in. A provider
+// without a userinfo endpoint has said all it says in the ID token.
+//
+// forGroups: the ID token has no groups claim, and the groups are taken from userinfo. Without it (the request
+// is made for the user name alone) the groups of userinfo are not looked at: what the ID token says about the
+// groups, also that there are none, is never replaced; and an answer that names no subject at all is an answer
+// that could not be read, not one about another account.
 //
 // Nothing else is taken, and nothing the ID token says is replaced. The ID token is signed and was made for
 // this sign-in (its nonce is checked); userinfo is an unsigned answer. Every claim of it used to replace the ID
@@ -729,30 +754,41 @@ func (s *Server) verifiedClaims(ctx context.Context, p *oidc.Provider, code stri
 // Pocket ID had not asked for again, and its email_verified decided whether an e-mail address counts (audit 6,
 // r4-p1-02). So auth_time, sub, iss, aud, exp, iat, nonce, acr, amr and email_verified only ever come from the
 // ID token. An e-mail address that only userinfo gives is shown and never counts as verified.
-func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, subject, groupsClaim string, claims map[string]any, redact []string) (read, other bool) {
+func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, subject, groupsClaim string, claims map[string]any, redact []string, forGroups bool) (read, other bool) {
 	if p.UserInfoEndpoint() == "" {
 		return true, false
 	}
+	// (the log lines name the account by its subject and never by its address; the error is the status or the
+	// reason, without the answer's body: safeErr)
+	what := "the groups are not known"
+	if !forGroups {
+		what = "the sign-in goes on without a user name"
+	}
 	ui, err := p.UserInfo(ctx, oauth2.StaticTokenSource(tok))
 	if err != nil {
-		slog.Warn("OIDC userinfo request failed", "error", safeErr(err, redact...))
+		slog.Warn("OIDC userinfo request failed: "+what, "sub", subject, "error", safeErr(err, redact...))
 		return false, false
 	}
 	extra := map[string]any{}
 	if err := ui.Claims(&extra); err != nil {
-		slog.Warn("OIDC userinfo ignored", "error", safeErr(err, redact...))
+		slog.Warn("OIDC userinfo ignored: "+what, "sub", subject, "error", safeErr(err, redact...))
 		return false, false
 	}
-	if sub, ok := extra["sub"].(string); !ok || sub != subject {
-		slog.Warn("OIDC userinfo refused", "error", "userinfo sub differs from the ID token's")
+	sub, ok := extra["sub"].(string)
+	if !ok && !forGroups {
+		slog.Warn("OIDC userinfo ignored: the answer names no subject; "+what, "sub", subject)
+		return false, false
+	}
+	if !ok || sub != subject {
+		slog.Warn("OIDC userinfo refused", "sub", subject, "error", "userinfo sub differs from the ID token's")
 		return false, true
 	}
-	if v, ok := extra[groupsClaim]; ok {
+	if v, ok := extra[groupsClaim]; ok && forGroups {
 		claims[groupsClaim] = v
 	}
 	for _, k := range []string{"name", "preferred_username", "display_name", "picture", "email"} {
-		if _, has := claims[k]; has {
-			continue
+		if _, has := claims[k]; has && (k != "preferred_username" || hasText(claims, k)) {
+			continue // (an empty user name in the ID token is none: there is nothing to replace)
 		}
 		if v, ok := extra[k]; ok {
 			claims[k] = v

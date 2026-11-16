@@ -36,6 +36,7 @@ type fakeIDP struct {
 	claims        map[string]any // extra ID-token claims (groups, auth_time, ...)
 	userinfo      map[string]any // userinfo response (nil = 404)
 	userinfoFail  string         // "500": the userinfo endpoint answers 500; "garbage": 200 with a body that is not JSON; "cut": the connection breaks
+	userinfoAsked int            // how often the userinfo endpoint was asked
 	verifierOK    bool           // the last token request carried the right PKCE verifier
 	tokenRequests int
 	tokenStatus   int    // non-zero: the token endpoint answers with this status and tokenBody
@@ -94,6 +95,7 @@ func newFakeIDP(t *testing.T) *fakeIDP {
 	mux.HandleFunc("GET /userinfo", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		f.userinfoAsked++
 		switch f.userinfoFail {
 		case "500":
 			http.Error(w, "userinfo is down", http.StatusInternalServerError)
