@@ -74,7 +74,13 @@ func (s *Server) auditPage(c *reqCtx) error {
 	for _, e := range entries {
 		e["who"] = auditWho(who, e)
 	}
-	c.json(200, model.AuditPage{Entries: entries, Next: next, Private: who.Private()})
+	// What the page draws as dots is every account's address and name: for the page, so for an admin in a
+	// browser. A token gets the entries and an empty list (the Users page is closed to it for the same reason).
+	private := []string{}
+	if u.Auth != "token" {
+		private = who.Private()
+	}
+	c.json(200, model.AuditPage{Entries: entries, Next: next, Private: private})
 	return nil
 }
 

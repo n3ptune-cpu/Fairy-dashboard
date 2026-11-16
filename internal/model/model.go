@@ -730,7 +730,8 @@ type PowerResult struct {
 // maps so that lines written by older versions, with other keys, are passed through unchanged.
 //
 // Private are the e-mail addresses and names of the known accounts. The Audit page draws them as dots wherever
-// an entry holds one (its actor, its target, its details), until the admin clicks it.
+// an entry holds one (its actor, its target, its details), until the admin clicks it. It is for an admin in a
+// browser: an API token gets an empty list.
 type AuditPage struct {
 	Entries []map[string]any `json:"entries"`
 	Next    *int64           `json:"next"` // pass as ?before= for the next page; null on the last page
