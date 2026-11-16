@@ -55,6 +55,10 @@ func Build(dir, publicURL string) (*config.Panel, config.Secrets, *poller.Poller
 	return cfg, secrets, p, nil
 }
 
+// bobEmail is the made-up address of the demo's viewer: the account has it (SeedUsers), and two of the seeded
+// notifications name him by it, as a version before build 17 stored them (SeedNotes).
+const bobEmail = "bob@example.invalid"
+
 // SeedUsers fills the demo's users.json: sites Alice and Bob (named in the demo config), Alice as admin,
 // Bob as a viewer of his site, someone waiting for access, and the rack UPS's power meter (no host link)
 // assigned to Alice's site on the "Users page". Each has a user name (alice, bob, carol), which is what the
@@ -69,7 +73,7 @@ func SeedUsers(cfg *config.Panel) error {
 		sites                            []string
 	}{
 		{User.Sub, model.Deref(User.Email), "Alice", model.Deref(User.PreferredUsername), access.RoleAdmin, nil},
-		{"demo-bob", "bob@example.invalid", "Bob", "bob", access.RoleViewer, []string{"Bob"}},
+		{"demo-bob", bobEmail, "Bob", "bob", access.RoleViewer, []string{"Bob"}},
 		{"demo-carol", "carol@example.invalid", "Carol", "carol", access.RolePending, nil},
 	} {
 		id := access.Identity{Sub: u.sub, Email: u.email, EmailVerified: u.sub != "demo-carol", Name: u.name, Username: u.username}

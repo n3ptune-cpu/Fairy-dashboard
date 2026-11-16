@@ -1,6 +1,7 @@
 package demo
 
 import (
+	"strings"
 	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
@@ -8,6 +9,11 @@ import (
 
 // SeedNotes fills an empty demo Notifications page with a day of typical events (the demo's simulated data
 // changes too little to make many by itself).
+//
+// Two of them say who asked. They are stored the way a version before build 17 stored them, with the address
+// of the demo's viewer (bobEmail), and the page shows them like every such entry: by the user name of the
+// account that has the address, "requested by bob". (With an address no demo account has, they read "by
+// (address hidden)".)
 func SeedNotes(st *notifications.Store) {
 	if st == nil || len(st.List("", func(notifications.Event) bool { return true }, notifications.Filter{Limit: 1}).Events) > 0 {
 		return
@@ -21,12 +27,16 @@ func SeedNotes(st *notifications.Store) {
 		{T: at(9 * time.Hour), Kind: "update_done", Type: "update", Severity: notifications.Info, SystemID: "srv-tower", Host: "SRV-TOWER", Text: "agent updated to build 42 (1a2b3c4)"},
 		{T: at(5 * time.Hour), Kind: "temp_high", Type: "temperature", Severity: notifications.Warning, SystemID: "node-srv-pveb", Host: "SRV-PVEB", Text: "Tctl 87 °C (limit 85 °C)", Key: "temp:node-srv-pveb", Alarm: true},
 		{T: at(5*time.Hour - 6*time.Minute), Kind: "temp_ok", Type: "temperature", Severity: notifications.Info, SystemID: "node-srv-pveb", Host: "SRV-PVEB", Text: "temperature back to normal (76 °C)", Key: "temp:node-srv-pveb"},
-		{T: at(3 * time.Hour), Kind: "power_shutdown", Type: "power", Severity: notifications.Info, SystemID: "bob-pc", Host: "Bob's Ryzen PC", Text: "shut down in 1 min, requested by bob@example.com"},
+		{T: at(3 * time.Hour), Kind: "power_shutdown", Type: "power", Severity: notifications.Info, SystemID: "bob-pc", Host: "Bob's Ryzen PC", Text: "shut down in 1 min, requested by " + bobEmail},
 		{T: at(3*time.Hour - 2*time.Minute), Kind: "host_off", Type: "host", Severity: notifications.Info, SystemID: "bob-pc", Host: "Bob's Ryzen PC", Text: "off (shut down from the panel)"},
-		{T: at(2 * time.Hour), Kind: "power_wake", Type: "power", Severity: notifications.Info, SystemID: "bob-pc", Host: "Bob's Ryzen PC", Text: "woken with Wake-on-LAN by bob@example.com"},
+		{T: at(2 * time.Hour), Kind: "power_wake", Type: "power", Severity: notifications.Info, SystemID: "bob-pc", Host: "Bob's Ryzen PC", Text: "woken with Wake-on-LAN by " + bobEmail},
 		{T: at(2*time.Hour - 3*time.Minute), Kind: "host_online", Type: "host", Severity: notifications.Info, SystemID: "bob-pc", Host: "Bob's Ryzen PC", Text: "on again", Key: "offline:bob-pc"},
 		{T: at(40 * time.Minute), Kind: "host_offline", Type: "host", Severity: notifications.Warning, SystemID: "bob-laptop", Host: "Bob's laptop", Text: "offline · timeout", Key: "offline:bob-laptop", Alarm: true},
 	} {
+		if strings.Contains(e.Text, bobEmail) {
+			st.AddOld(e)
+			continue
+		}
 		st.Add(e)
 	}
 }
