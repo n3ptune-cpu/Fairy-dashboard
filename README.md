@@ -351,8 +351,24 @@ switched: look at the socket.
   that node is not marked, and neither is an agent in it: they go down without the panel. (Up to this build the two took `panel_hosts` as it is written, with the node
   of a guest that is named: an agent's id there marked the agent's own row and not the node under
   it.) An id in `panel_hosts` that the panel cannot follow to a machine (no row has it, or the node of
-  that guest has no row) counts as it is written, for the lock and for the menu: no node is marked for
-  it. When `home_assistant_system` names an id that is no row, no socket of
+  that guest has no row) still counts as it is written, for the lock and for the menu. But **the panel
+  then does not know which machine it runs on, and holds back what could take that machine down, for
+  every machine**: no socket is switched off (a socket that is on shows a lock that says so; "on" is not
+  held back), a reboot of a host (a node's row, an agent's row) asks for the typed name, and no host takes
+  part in a run. This ends when the row is there or `panel_hosts` is corrected. It is the state of a panel
+  in a VM that is named by the VM's id, in the seconds after a start, and for as long as that Proxmox API
+  does not answer (its token is refused, the node is unreachable): until this build the node under such a
+  panel had no mark and its socket no lock in that state. Naming the node next to the VM does not change
+  it (every id must be followed); an id that no row can ever have keeps the panel in that state for good,
+  and `fairy admin config check` has a `WARN` for one that is no agent's id and not written like a node's
+  or a guest's. An empty `panel_hosts` is not that state: a panel that was told nothing about its machine
+  marks and locks nothing as its own, as before. An agent must not be given an id that is written like
+  a node's or a guest's of a `proxmox:` entry (`lab-qemu-100`): the panel keeps one row for an id, so
+  such an id names two things, the panel cannot tell which is meant, and treats every link with it as a
+  link to no row (the socket is locked, `home_assistant_system` with it switches no socket of that agent,
+  `panel_hosts` with it is an id that cannot be followed); the config check warns about the agent, and
+  about `links_to` that leads from agent to agent over more than 8 agents or back to one of them, which
+  the panel does not follow either. When `home_assistant_system` names an id that is no row, no socket of
   that agent is switched, linked to a machine or not, until the id is put right, as without the key (the
   lock's sentence names the id); and a socket whose own link names no row is
   locked the same way ("linked to a machine the panel does not have: correct socket_links");
@@ -1830,35 +1846,65 @@ have it.
 ### How the panel names a person
 
 Wherever the panel says who did something, it says the **user name** of that person's account: the name the
-account has in Pocket ID (the claim `preferred_username`), not the e-mail address and not the name of the
-person. That is "Added ... by" on a machine's page, who started or cancelled a run, who asked for a
+account has in Pocket ID (the claim `preferred_username`, from the ID token, or from Pocket ID's userinfo
+when the ID token has none), not the e-mail address and not the name of the person. That is "Added ... by" on a machine's page, who started or cancelled a run, who asked for a
 countdown, who changed a name or a timing in Edit host, who put a machine id on record, the people on a
 machine's list of approvers, the Sessions page, the menu at the top right, every sentence in Notifications,
 what a machine is told about who asked (its agent shows that on the machine and writes it to its log), and
 the messages to ntfy or Discord.
 
-* **The address and the name are in two places only**, both for admins: the **Users** page and the **Audit**
-  log. There they are drawn as dots. A click (or Tab and Enter) on the dots shows that one value; a second
+* **The address and the name are in two places only**, both for admins in a browser: the **Users** page and
+  the **Audit** log. There they are drawn as dots. A click (or Tab and Enter) on the dots shows that one value; a second
   click hides it, and so does opening the page again or loading its list again. Until it is clicked the
   value is not in the page at all, so copying the row copies dots, and nothing shows when you point at it.
   Your own address is in your menu, the same way.
 * **The Audit log keeps everything it had**: an entry's `actor` is the address, as before, next to the
   account id; new entries also have the user name. The page shows the user name first and the entry's own
   text behind dots. The filter finds an entry by a user name, also an entry from before build 17, and by
-  the address it was written with (it finds it; it does not show it).
+  the address it was written with (it finds it; it does not show it). An API token with the control scope
+  reads the entries as before, with the `actor` they were written with; the list of every account's address
+  and name that the page needs for its dots is not sent to a token.
 * **Entries from before build 17** were stored with the address: who added a host, who changed a timing,
   who started a run, a sentence in Notifications. Nothing is rewritten. Where such an entry is shown, the
   panel looks the address up among its accounts and shows that account's user name. That needs exactly one
   account with that address: when two accounts give the same address, or the account was removed, the place
-  says `(address hidden)`.
+  says `(address hidden)`. In a sentence the address of a known account is replaced whatever it looks like
+  (`ops@corp` of a provider inside a network too); any other text is taken for an address when it looks like
+  one (`name@domain.tld`).
+* **A record keeps the user name, not the account.** "Added ... by", who changed a line in Edit host or a
+  run timing and who put a machine id on record keep the user name the account had then, and no account
+  id. When that account is removed and another account takes the same user name later, the record reads as
+  the new account's. The Audit log is the record of who it was: every such change has an entry there with
+  the account id. And a record an older version wrote by the *name* of an account that had no address
+  (the only accounts it named so) still shows that name after the account was removed: the panel can hide
+  a text only while it knows whose it is.
 * **An account without a user name** shows as `(address hidden)` (or `(name hidden)` when it has no
   address), not as its address. The panel learns the user name at a sign-in. A session that was open during
   the update has it in its cookie and hands it over with its first request, so in practice everybody who was
   signed in is named at once. On the Users page such an account reads "no user name yet".
 * **A user name is what the account says**, like the name and the address: the owner of an account may be
   able to change it in Pocket ID. Only the account id cannot be chosen, and nothing in the panel decides by a
-  user name: not who may sign in, not a role, not a site. An account that takes another account's user
-  name, address or name as its own user name is not shown by it.
+  user name: not who may sign in, not a role, not a site. It is kept without characters that have no width
+  (a zero width space, a soft hyphen), so that no name looks like another one and is not.
+* **Two accounts with the same user name.** Two user names are the same when they differ only in the case
+  of their letters. One account is then shown by the plain name: an account with a role before one that
+  only waits for access, and among those the one that has had the name longest (the panel keeps since when;
+  for a user name from before it kept that, the day the account was first seen). Every other one is shown
+  by the name with the start of its account id, `Juniper · id 3f6c1d`, in every place. So an account without
+  any access cannot take an admin's name away, and cannot pass for the admin. The Users page says "same user
+  name as id ..." on both rows, and the Audit page shows the account id under every entry, as always. Only
+  user names count for this: an account whose *name* or *address* is somebody's user name changes nothing
+  for that person. Three user names are not shown at all, and the Users page says which: one that is the
+  account's own e-mail address, one that is written like an address and is another account's, and one that
+  is another account's id.
+* **What a machine says about a person is not looked up.** The "requested by" of a countdown is what the
+  machine's agent answers, and whoever runs that agent can make it answer anything. It is shown when it is
+  what the panel shows an account by; any other text is `(address hidden)` when it has an `@`, else
+  `(name hidden)`. (So a countdown that build 16 started and that still runs during the update, and one an
+  API token started, read `(address hidden)` or `(name hidden)` for the time they have left; the Audit log
+  says who it was.) In the same way an address inside a notification this build makes, in a part a machine
+  supplied (the message of a failed agent update, the name of a socket), is hidden and never turned into a
+  user name.
 * `fairy admin users list`, `fairy admin sessions list` and `fairy admin audit tail` on the panel host
   print the address, as before: they are the admin's own terminal.
 
@@ -2148,10 +2194,15 @@ Build 17:
    still there for admins, as dots until they are clicked: on the **Users** page and in the **Audit** log
    (whose entries keep the address, and whose filter still finds it), and your own address in your menu.
    They are also still in the files of the data folder and in the output of `fairy admin` on the panel
-   host. An account whose Pocket ID user name is its e-mail address has no user name for the panel. See
+   host. An account whose Pocket ID user name is its e-mail address has no user name for the panel. Of two
+   accounts with the same user name one is shown by the plain name and the other with the start of its
+   account id. Check once after the update that `/api/me` in a signed-in browser has a `preferred_username`:
+   Pocket ID may send it in the ID token or in userinfo, and the panel reads both; when neither has it (the
+   client lacks the scope `profile`), everybody stays `(address hidden)`. See
    [How the panel names a person](#how-the-panel-names-a-person). Going back to build 16 works: it reads
-   `users.json` as before and leaves the user names out when it next writes the file, and it shows a user
-   name wherever build 17 stored one.
+   `users.json` and `notifications.json` as before and leaves out what it does not know when it next writes
+   them (the user names and since when an account has its own; the note that a notification was written
+   with user names), and it shows a user name wherever build 17 stored one.
 
 ### 3. From a build older than 13
 
@@ -2245,11 +2296,13 @@ settings (on or off, seconds, events) are the defaults again after the next upda
   more), all sessions of that account end on the panel at once (audit: `auth.login`, "denied: not in an
   allowed group", `sessions_revoked`). When the groups are not in the ID token the panel reads them from
   Pocket ID's userinfo; if that request fails, the sign-in fails with a page that says so and no session is
-  ended (nothing was said about the account). From userinfo the panel takes the groups, and a user name, name
-  or e-mail address to show where the ID token has none (userinfo is asked only when the groups are not in
-  the ID token); when a sign-in happened, whether an e-mail address is verified
-  and everything else come from the signed ID token alone, and a userinfo answer about another account
-  refuses the sign-in. Between two sign-ins the panel does not ask Pocket ID.
+  ended (nothing was said about the account). From userinfo the panel takes the groups when the ID token has
+  none, and a user name, name or e-mail address to show where the ID token has none. Userinfo is asked when
+  the ID token lacks the groups (and the scope `groups` is asked for) or the user name (and the scope
+  `profile` is); a request that is made for the user name alone and fails does not fail the sign-in (the
+  account goes without a user name, and the log says so). When a sign-in happened, whether an e-mail address
+  is verified, the groups an ID token has, and everything else come from the signed ID token alone, and a
+  userinfo answer about another account refuses the sign-in. Between two sign-ins the panel does not ask Pocket ID.
 * No release has a way around that sign-in. The test build (`go build -tags fairytest`,
   [TESTING-LOCAL.md](TESTING-LOCAL.md)) has no sign-in, and so it is separate code that a build without the tag
   does not contain: a test of the normal build checks that, and the release workflow stops before signing if a
