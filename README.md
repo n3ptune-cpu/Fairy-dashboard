@@ -285,7 +285,9 @@ Home Assistant and an agent reads it (Fairy-agent v0.10.0 or newer on the machin
   the panel's own socket without its lock). `fairy admin config check` lists what is set for each agent
   and prints a `WARN` for such a link where it can tell: an id that is no agent's and has not the form of
   a node's or a guest's. A mistyped id of that form (`lab-qemu-150` for `lab-qemu-105`) it cannot tell,
-  because only the running panel knows the nodes and guests: there the lock on the page says it. The check
+  because only the running panel knows the nodes and guests: there the lock on the page says it. It
+  prints the same `WARN` for a `home_assistant_system` that names such an id: the panel switches no socket
+  of that agent while no row has the id. The check
   also warns when an entry has `socket_links` and no `home_assistant_system`, and notes an entry with
   `home_assistant_system` and no `socket_links`, and a missing `panel_hosts` (without it the panel locks
   no socket as its own). It reads files and asks no machine, so it cannot know which agent reports
@@ -329,8 +331,9 @@ switched: look at the socket.
   Assistant runs on (`home_assistant_system`; for a VM also its node), and the socket of the machine this
   panel runs on. A socket that is linked to a guest feeds that guest's node, so it is locked when the node
   is one of the three, or carries one of them: a socket linked to any VM of the node that also carries
-  Home Assistant's VM is locked. When `home_assistant_system` names an id that is no row, no socket of that agent that is
-  linked to a machine is switched until the id is put right; and a socket whose own link names no row is
+  Home Assistant's VM is locked. When `home_assistant_system` names an id that is no row, no socket of
+  that agent is switched, linked to a machine or not, until the id is put right, as without the key (the
+  lock's sentence names the id); and a socket whose own link names no row is
   locked the same way ("linked to a machine the panel does not have: correct socket_links");
 * a socket that was changed on the machine since the page was drawn, and a socket Home Assistant has no
   state for;

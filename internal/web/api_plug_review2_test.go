@@ -264,3 +264,56 @@ func TestPlugSeenToGoOffIsASignForAnHour(t *testing.T) {
 		t.Errorf("the machine got %d switch requests", n)
 	}
 }
+
+// Finding 6: home_assistant_system that names no row. Without the key every socket of the agent is locked,
+// because any of them could be the one that feeds Home Assistant; with a key that names nothing (a typing
+// mistake) that is just as true, and only the sockets that were linked to a machine were locked: one that is
+// linked to nothing had the "nothing is linked" question and no lock. Now every socket of such an agent is
+// locked, on and off, with a sentence that names the id. It ends by itself when a row with that id is there.
+func TestPlugHomeAssistantSystemThatNamesNoRow(t *testing.T) {
+	// "third" reads spare-bar: pc is linked to the PC, lamp to nothing; its home_assistant_system names
+	// lab-qemu-201, a VM the panel has not heard of yet
+	pe := newPlugEnvWith(t, plugConfigWith(t, "home_assistant_system: lab-qemu-999}", "home_assistant_system: lab-qemu-201}"))
+	said := strings.Replace(plugHAUnknown, "lab-qemu-999", "lab-qemu-201", 1)
+	for _, socket := range []string{"pc", "lamp"} {
+		s := pe.socketOf(pe.admin, "third/spare-bar", socket)
+		if s["switchable"] != false || s["lock"] != model.SocketLockHAUnknown || s["why"] != model.SocketLockHAUnknown || s["note"] != said {
+			t.Errorf("%s: %v\nwant the lock %s: %q", socket, s, model.SocketLockHAUnknown, said)
+		}
+		for _, to := range []string{"off", "on"} {
+			b := plugBody("third/spare-bar", socket, to)
+			if to == "off" {
+				b["cut"], b["confirm"] = true, "DESK-PC" // no way round it
+			}
+			r := pe.post("/api/power/socket", b)
+			if msg, _ := plugDetailOf(r); r.code != 409 || msg != said+" Nothing was switched." {
+				t.Errorf("%s %s: %d %s", socket, to, r.code, r.raw)
+			}
+			if au := pe.plugAudits()[0]; au["target"] != "third/spare-bar/"+socket || au["outcome"] != "refused ("+model.SocketLockHAUnknown+"): "+said+" Nothing was switched." {
+				t.Errorf("%s %s: the audit entry: %v", socket, to, au)
+			}
+		}
+	}
+	if n := len(pe.third.Asked()) + len(pe.iss.Asked()); n != 0 {
+		t.Errorf("the machine or Pocket ID was asked %d things", n)
+	}
+	// the agents whose key names a row are not touched
+	if s := pe.socketOf(pe.admin, "other/rack-bar", "fan"); s["switchable"] != true || s["lock"] != nil {
+		t.Errorf("a socket of another agent: %v", s)
+	}
+	// somebody who is no admin gets no lock and no sentence
+	if s := pe.socketOf(pe.viewerOf("Home"), "reader/desk-bar", "ch1"); s["lock"] != nil || s["note"] != nil {
+		t.Errorf("a viewer: %v", s)
+	}
+	// the row is there (Proxmox lists the VM now): the lock is gone, and what is left are the rules of every socket
+	pe.withGuests("running")
+	if s := pe.socketOf(pe.admin, "third/spare-bar", "lamp"); s["switchable"] != true || s["lock"] != nil || s["note"] != nil {
+		t.Errorf("lamp with the row there: %v", s)
+	}
+	if s := pe.socketOf(pe.admin, "third/spare-bar", "pc"); s["switchable"] != true || s["lock"] != nil || s["system_id"] != "desk-pc" {
+		t.Errorf("pc with the row there: %v", s)
+	}
+	if _, _, ok := approvalAsked(pe.flip("third/spare-bar", "lamp", "on")); !ok {
+		t.Error("on for the lamp with the row there is refused")
+	}
+}

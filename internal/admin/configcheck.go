@@ -342,7 +342,8 @@ func powerLinkCheck(cfg *config.Panel) (ok, said []string) {
 //
 //   - in socket_links it is a warning (exit code 1): the panel locks that socket, on and off, until the link
 //     names a row (model.SocketLockLinkUnknown);
-//   - in home_assistant_system it is a note.
+//   - in home_assistant_system it is a warning too: the panel switches no socket of that agent, on or off,
+//     until the key names a row (model.SocketLockHAUnknown).
 //
 // And what the panel has to be told before it switches an agent's sockets, as far as a file shows it. This
 // command asks no machine, so it does not know which agent reports sockets or how many a plug has: it goes by
@@ -422,8 +423,8 @@ func socketLinkCheck(cfg *config.Panel) (ok, warn, said []string) {
 		}
 		keys = true
 		if h := a.HomeAssistantSystem; h != "" && !machine(h) {
-			said = append(said, fmt.Sprintf("agent %s: home_assistant_system: %s is no agent's id and not the id of a node or a guest of a proxmox: entry. "+
-				"While no row has this id the panel cannot tell which socket feeds Home Assistant, and switches no socket of this agent that is linked to a machine. "+
+			warn = append(warn, fmt.Sprintf("agent %s: home_assistant_system: %s is no agent's id and not the id of a node or a guest of a proxmox: entry. "+
+				"While no row has this id the panel cannot tell which socket feeds Home Assistant, and switches no socket of the plugs this agent relays, on or off. "+
 				"A typing mistake in the id?", a.ID, h))
 		}
 	}

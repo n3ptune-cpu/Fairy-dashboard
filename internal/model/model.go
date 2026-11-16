@@ -405,8 +405,9 @@ const (
 	SocketLockAgent = "reads_plugs"
 	// SocketLockHomeAssistant: the socket feeds the machine Home Assistant runs on (home_assistant_system).
 	SocketLockHomeAssistant = "home_assistant"
-	// SocketLockHAUnknown: home_assistant_system is set and no row has that id now, so the panel cannot tell
-	// which socket feeds Home Assistant: it then switches no socket of that agent that is linked to a machine.
+	// SocketLockHAUnknown: home_assistant_system is set and no row has that id now (a typing mistake, or a row
+	// the panel has not heard of yet), so the panel cannot tell which socket feeds Home Assistant: it then
+	// switches no socket of that agent at all, as without the key.
 	SocketLockHAUnknown = "home_assistant_unknown"
 	// SocketLockHAUnset: the panel's entry of the agent that reads the plug has no home_assistant_system, so the
 	// panel does not know which machine that agent's Home Assistant runs on and cannot lock the socket that

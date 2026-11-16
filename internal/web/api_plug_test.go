@@ -234,8 +234,9 @@ func TestPlugSwitchRefusedByThePanel(t *testing.T) {
 		{"other/rack-bar", "node", 409, model.SocketLockHomeAssistant, "Locked. This socket powers Home Assistant. Nothing was switched."},
 		// ... the machine the panel runs on ...
 		{"reader/desk-bar", "ch6", 409, model.SocketLockPanel, "Locked. This socket powers the panel. Nothing was switched."},
-		// ... and a socket that is linked to a machine while home_assistant_system names no row
-		{"third/spare-bar", "pc", 409, model.SocketLockHAUnknown, "Locked. The panel cannot tell which machine Home Assistant runs on (home_assistant_system names no row). Nothing was switched."},
+		// ... and every socket of an agent whose home_assistant_system names no row, linked to a machine or not
+		{"third/spare-bar", "pc", 409, model.SocketLockHAUnknown, plugHAUnknown + " Nothing was switched."},
+		{"third/spare-bar", "lamp", 409, model.SocketLockHAUnknown, plugHAUnknown + " Nothing was switched."},
 		// the panel has no control token for the agent
 		{"bare/bare-bar", "lamp", 409, model.SocketNoControl, "The panel has no control token for BARE. Nothing was switched."},
 	}
@@ -256,10 +257,8 @@ func TestPlugSwitchRefusedByThePanel(t *testing.T) {
 			}
 		}
 	}
-	// a socket that is linked to nothing is not locked by a home_assistant_system that names no row
-	if _, _, ok := approvalAsked(pe.flip("third/spare-bar", "lamp", "on")); !ok {
-		t.Error("a socket that feeds no machine is refused because of home_assistant_system")
-	}
+	// (Until the second review of the fixes a socket that is linked to nothing was not locked by a
+	// home_assistant_system that names no row, and this test wanted "on" for third/spare-bar/lamp to go through.)
 	// the tag the page showed is not the socket's any more
 	b := plugBody("reader/desk-bar", "ch1", "off")
 	b["tag"] = plugTag("desk-bar", "ch2")
@@ -886,7 +885,7 @@ func TestPlugSocketsInThePowerAnswer(t *testing.T) {
 		{"other/rack-bar", "node", "on", false, model.SocketLockHomeAssistant, model.SocketLockHomeAssistant, "lab-node-pve"},
 		{"other/rack-bar", "fan", "off", true, "", "", ""},
 		{"third/spare-bar", "pc", "on", false, model.SocketLockHAUnknown, model.SocketLockHAUnknown, "desk-pc"},
-		{"third/spare-bar", "lamp", "off", true, "", "", ""},
+		{"third/spare-bar", "lamp", "off", false, model.SocketLockHAUnknown, model.SocketLockHAUnknown, ""}, // linked to nothing, and locked with the agent
 		{"bare/bare-bar", "lamp", "off", false, model.SocketNoControl, "", ""},
 	} {
 		s := pe.socketOf(pe.admin, c.source, c.socket)
@@ -1199,10 +1198,17 @@ func TestPlugSwitchPassesTheControlLimitFirst(t *testing.T) {
 	}
 }
 
+// plugHAUnknown is the sentence of the lock of the rig's agent "third", whose home_assistant_system names
+// lab-qemu-999, a row that is not there.
+const plugHAUnknown = "Locked. home_assistant_system of this agent names lab-qemu-999, and the panel has no such row: it cannot tell which socket powers Home Assistant, and switches none of the sockets this agent reads. Correct home_assistant_system in config.yaml."
+
 // socketWhyTextOr is the sentence for a reason, "" for no reason.
 func socketWhyTextOr(why, machine string) string {
 	if why == "" {
 		return ""
+	}
+	if why == model.SocketLockHAUnknown {
+		return plugHAUnknown // the sentence names the id (socketLook.whyText); the rig has one such agent
 	}
 	return socketWhyText(why, machine)
 }

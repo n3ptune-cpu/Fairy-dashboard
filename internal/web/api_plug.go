@@ -451,7 +451,7 @@ func socketWhyText(why, machine string) string {
 	case model.SocketLockHomeAssistant:
 		return "Locked. This socket powers Home Assistant."
 	case model.SocketLockHAUnknown:
-		return "Locked. The panel cannot tell which machine Home Assistant runs on (home_assistant_system names no row)."
+		return "Locked. The panel cannot tell which machine Home Assistant runs on (home_assistant_system names no row): it switches none of this agent's sockets."
 	case model.SocketLockHAUnset:
 		return "The panel does not know which machine runs Home Assistant for this plug. Set home_assistant_system for this agent in config.yaml."
 	case model.SocketLockPanel:
