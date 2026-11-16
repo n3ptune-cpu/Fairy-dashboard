@@ -1,0 +1,77 @@
+{
+ "assign": {},
+ "removed": {},
+ "sites": [
+  "Home"
+ ],
+ "users": {
+  "sub-bare": {
+   "created_at": "2026-11-16T20:35:57.245025419Z",
+   "email": "",
+   "email_verified": null,
+   "last_seen": "2026-11-16T20:35:57.245025419Z",
+   "name": "Bare Nameson",
+   "role": "admin",
+   "sites": [],
+   "sub": "sub-bare",
+   "via": "panel by owner@example.com"
+  },
+  "sub-cleo": {
+   "created_at": "2026-11-16T20:35:57.248331102Z",
+   "email": "",
+   "email_verified": null,
+   "last_seen": "2026-11-16T20:35:57.248331102Z",
+   "name": "Cleo Commandline",
+   "role": "pending",
+   "sites": [],
+   "sub": "sub-cleo",
+   "via": "cli by root"
+  },
+  "sub-dana": {
+   "created_at": "2026-11-16T20:35:57.246767638Z",
+   "email": "",
+   "email_verified": null,
+   "last_seen": "2026-11-16T20:35:57.246767638Z",
+   "name": "Dana Demotedson",
+   "role": "pending",
+   "sites": [],
+   "sub": "sub-dana",
+   "via": "panel by owner@example.com"
+  },
+  "sub-owner": {
+   "created_at": "2026-11-16T20:35:57.242817981Z",
+   "email": "owner@example.com",
+   "email_verified": true,
+   "last_seen": "2026-11-16T20:35:57.242817981Z",
+   "name": "Olivia Ownerson",
+   "role": "admin",
+   "sites": [],
+   "sub": "sub-owner",
+   "via": "control_groups"
+  },
+  "sub-vee": {
+   "created_at": "2026-11-16T20:35:57.250042015Z",
+   "email": "vee@example.net",
+   "email_verified": true,
+   "last_seen": "2026-11-16T20:35:57.250042015Z",
+   "name": "Vera Viewerson",
+   "role": "viewer",
+   "sites": [
+    "Home"
+   ],
+   "sub": "sub-vee",
+   "via": "panel by owner@example.com"
+  },
+  "sub-wendy": {
+   "created_at": "2026-11-16T20:35:57.251682644Z",
+   "email": "wendy@example.org",
+   "email_verified": true,
+   "last_seen": "2026-11-16T20:35:57.251682644Z",
+   "name": "Wendy Waitingham",
+   "role": "pending",
+   "sites": [],
+   "sub": "sub-wendy",
+   "via": "first sign-in"
+  }
+ }
+}

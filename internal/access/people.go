@@ -22,10 +22,11 @@ import (
 // A stored text is turned into the user name where it is handed out (Shown, ShownIn), by looking it up among
 // the accounts of users.json. Only one account may match: an address or a name that two known accounts have
 // says nothing about which of them it was. A text that is what an account is shown by is that account's alone
-// (it is what a record keeps since build 17). And only the accounts that have a role are looked at: an account
-// that only waits for access wrote no record, and what it calls itself (a name, an address, a user name) is
-// read out of no stored text and changes how no record of another account reads. Its address is still found in
-// a sentence and hidden there, like every address.
+// (it is what a record keeps since build 17). And only the accounts that have or had a role are looked at: an
+// account that only waits for access (onlyWaits: it never had a role) wrote no record, and what it calls itself
+// (a name, an address, a user name) is read out of no stored text and changes how no record of another account
+// reads. Its address is still found in a sentence and hidden there, like every address. An account that was set
+// back to waiting may have written records while it had its role, and is looked at like an account with a role.
 //
 // A user name is what the account says, and two accounts can say the same. Only user names compete with user
 // names: an account whose display name or address is somebody's user name takes nothing away from that
@@ -227,6 +228,29 @@ func rank(u User) int {
 	return 2
 }
 
+// givenARole are the beginnings of what User.Via says of an account that has or had a role: Store.SetRole is
+// called with the first two (the Users page, `fairy admin users`), and a first sign-in that made an admin
+// writes one of the other two. They are the same in every version that wrote users.json.
+var givenARole = []string{"panel by ", "cli by ", "control_groups", "bootstrap_admins"}
+
+// onlyWaits reports whether the account waits for access and never had a role: it signed in, and nobody gave
+// it one ("first sign-in"). An account that an admin set back to waiting is not one of these, and users.json
+// tells them apart by Via alone: a role is changed by Store.SetRole only, which writes who did it there, and
+// setting an account that waits to waiting again leaves Via as it is. An account cannot write its own Via.
+// (An account that was removed and signs in again is a new account for users.json, "first sign-in": a name an
+// older version wrote for it reads as it did while the account was removed.)
+func onlyWaits(u User) bool {
+	if u.Role != RolePending {
+		return false
+	}
+	for _, by := range givenARole {
+		if strings.HasPrefix(u.Via, by) {
+			return false
+		}
+	}
+	return true
+}
+
 // People indexes the accounts.
 func (d Data) People() *People {
 	p := &People{users: d.Users, byAddr: map[string][]string{}, byName: map[string][]string{}, byNameToo: map[string][]string{},
@@ -248,7 +272,10 @@ func (d Data) People() *People {
 		// address, its name or its user name. It wrote no record (it cannot act), what it calls itself is its
 		// own choice, and it must not be the reason a record of another account reads differently: with the
 		// name "Juniper" and no address it made every record by the admin Juniper "(name hidden)".
-		if u.Role == RolePending {
+		//
+		// An account that had a role and was set back to waiting stays in: an older version wrote its name
+		// into sentences while it was an admin, and left out here that name was readable in them again.
+		if onlyWaits(u) {
 			continue
 		}
 		add(p.byAddr, u.Email, sub)
@@ -310,14 +337,14 @@ func (d Data) People() *People {
 	for sub, u := range d.Users {
 		// An account without an address and without a user name the panel shows is still written into a record
 		// by that user name (the text the audit log names it by): a stored text can mean it.
-		if p.shown[sub] == "" && u.Email == "" && u.Role != RolePending {
+		if p.shown[sub] == "" && u.Email == "" && !onlyWaits(u) {
 			add(p.byName, CleanUsername(u.Username), sub)
 		}
 	}
 	for sub, n := range p.shown {
 		// (what an account that only waits is shown by is read out of no record and no agent's answer: it
 		// chose the text, and it could choose the name a record of another account was written with)
-		if d.Users[sub].Role == RolePending {
+		if onlyWaits(d.Users[sub]) {
 			continue
 		}
 		p.byShown[fold(n)] = sub

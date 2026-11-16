@@ -1898,9 +1898,10 @@ the messages to ntfy or Discord.
   id. When that account is removed and another account takes the same user name later, the record reads as
   the new account's. The Audit log is the record of who it was: every such change has an entry there with
   the account id. And a record an older version wrote by the *name* of an account that had no address
-  (the only accounts it named so) still shows that name after the account was removed, or was set back to
-  "No access (waiting)": the panel can hide a text only while it knows whose it is, and it reads no record
-  as the text of an account that only waits (below).
+  (the only accounts it named so) still shows that name after the account was removed: the panel can hide
+  a text only while it knows whose it is. An account that was set back to "No access (waiting)" is still
+  known: its name stays hidden in what it wrote while it had its role, as for an account with a role
+  (below).
 * **An account without a user name** shows as `(address hidden)` (or `(name hidden)` when it has no
   address), not as its address. The panel learns the user name at a sign-in. A session that was open during
   the update has it in its cookie and hands it over with its first request, so in practice everybody who was
@@ -1916,7 +1917,7 @@ the messages to ntfy or Discord.
   apart: it is on the Users page, under every entry of the Audit page and in the confirmation of a change.
 * **Two accounts with the same user name.** Two user names are the same when they differ only in the case
   of their letters (and in what is removed above). One account is then shown by the plain name: an admin
-  before a viewer, a viewer before an account that only waits for access, and among those the one that has
+  before a viewer, a viewer before an account that waits for access, and among those the one that has
   had the name longest (the panel keeps since when; for a user name from before it kept that, the day the
   account was first seen), then the one with the smaller account id. Every other one is shown by the name
   with the start of its account id, `Juniper · id 3f6c1d`, in every place. So an account without any
@@ -1928,12 +1929,19 @@ the messages to ntfy or Discord.
   for that person, and nothing about how that person's records read. Three user names are not shown at
   all, and the Users page says which: one that is the account's own e-mail address, one that is written
   like an address and is another account's, and one that is another account's id.
-* **An account that only waits for access takes part in nothing.** No record and no sentence is read as
+* **An account that only waits for access takes part in nothing.** That is an account that signed in and
+  was never given a role. No record and no sentence is read as
   its name, its address or its user name, whatever it calls itself, and what a machine says about who asked
   is never read as such an account. It wrote no record: it cannot do anything in the panel. So it cannot
   make a record of another account read differently either (an account without an address that called
   itself by an admin's user name, or by a word such as "off", could). Its address (a text with an `@`) is
   still hidden wherever it stands, like every address.
+  An account that had a role and was set back to "No access (waiting)", on the Users page or with `fairy
+  admin users`, is not one of these: it may have written records while it had its role, so stored text is
+  read for it as for an account with a role, and its name and its address stay hidden there. The panel
+  tells the two apart by `via` in `users.json` (the small line under "Last seen" on the Users page): "first
+  sign-in" for an account that was never given a role, "panel by ..." or "cli by ..." once somebody changed
+  its role. An account that was removed and signs in again is a new account, "first sign-in".
 * **A user name written like one of the panel's own texts** is never shown plain: one with a `·` (the mark
   before an account id), one with a bracket (`ci (token, owner Juniper)` is the text of an API token, `root
   (cli)` of the command line), and the words `root`, `fairy`, `unknown`, `system`, `address hidden`, `name

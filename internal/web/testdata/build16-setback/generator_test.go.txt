@@ -1,0 +1,164 @@
+package web
+
+// The generator of testdata/build16-setback (kept as generator_test.go.txt; it compiles in the tree of build 16
+// only, as internal/web/zz_setback_generator_test.go, and is run there with SETBACK_DIR=<an empty folder>).
+//
+// The code of build 16 writes a data folder: the accounts, and every sentence build 16 put on the Notifications
+// list with a person in it, made by its own functions and by the expressions of its sentence builders (the file
+// and line of build 16 is named with each). The people are an admin with an e-mail address, an admin without
+// one, and two admins without one who are set back to "No access (waiting)" afterwards: one on the Users page,
+// one with `fairy admin users`. Another account only waits. All of them are made up.
+
+import (
+	"context"
+	"fmt"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/powerctl"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
+)
+
+const setbackGenConfig = `
+public_url: https://panel.example.com
+request_timeout: 1
+offline_after: 60
+audit_log: %q
+data_dir: %q
+oidc: {issuer: "https://id.example.com", client_id: cid, allowed_groups: [viewers], control_groups: [controllers]}
+proxmox:
+  - {id: home, id_prefix: home-, cluster_name: ALPHA, standalone: true, urls: ["https://alpha:8006"],
+     token_id: "fairy@pve!panel", token_secret_env: PVE_SECRET, verify_tls: false, site: Home}
+agents:
+  - {id: home-alpha-agent, name: ALPHA, url: "http://alpha", token_env: TOK_A, control_token_env: CTL_A, node: ALPHA, self_update: true, power_control: true, site: Home}
+  - {id: home-deskpc-agent, name: DESKPC, url: "http://deskpc", token_env: TOK_B, control_token_env: CTL_A, self_update: true, power_control: true, site: Home}
+`
+
+func TestGenerateBuild16Setback(t *testing.T) {
+	dir := os.Getenv("SETBACK_DIR")
+	if dir == "" {
+		t.Skip("SETBACK_DIR is not set")
+	}
+	t.Setenv("TOK_A", testutil.ReadToken+"a")
+	t.Setenv("TOK_B", testutil.ReadToken+"b")
+	t.Setenv("CTL_A", testutil.ControlToken)
+	t.Setenv("PVE_SECRET", "pve-secret-uuid")
+	cfg, err := config.Parse([]byte(fmt.Sprintf(setbackGenConfig, dir+"/audit.log", dir+"/data")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := testutil.NewBackend()
+	b.PVEOf = func(string) ([]jsonx.M, error) { return testutil.HostResources("ALPHA", "running"), nil }
+	plain := func(host string) func() (jsonx.M, error) {
+		return func() (jsonx.M, error) {
+			m := testutil.AgentMetrics()
+			m["hostname"] = host
+			delete(m, "power_sources")
+			return m, nil
+		}
+	}
+	b.Metrics = map[string]func() (jsonx.M, error){"home-alpha-agent": plain("alpha"), "home-deskpc-agent": plain("deskpc")}
+	p, err := poller.New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.PollOnce(context.Background())
+	s := New(cfg, config.Secrets{SessionSecret: strings.Repeat("s", 48)}, p, nil, "test")
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	e := &env{t: t, s: s, srv: srv, b: b}
+
+	owner := model.User{Sub: "sub-owner", Name: model.P("Olivia Ownerson"), Email: model.P("owner@example.com"), EmailVerified: true, Groups: []string{"viewers", "controllers"}}
+	bare := model.User{Sub: "sub-bare", Name: model.P("Bare Nameson"), Groups: []string{"viewers", "controllers"}}     // no e-mail address
+	dana := model.User{Sub: "sub-dana", Name: model.P("Dana Demotedson"), Groups: []string{"viewers", "controllers"}}  // no address; set back on the Users page
+	cleo := model.User{Sub: "sub-cleo", Name: model.P("Cleo Commandline"), Groups: []string{"viewers", "controllers"}} // no address; set back with the admin CLI
+	vee := model.User{Sub: "sub-vee", Name: model.P("Vera Viewerson"), Email: model.P("vee@example.net"), EmailVerified: true, Groups: []string{"viewers"}}
+	wendy := model.User{Sub: "sub-wendy", Name: model.P("Wendy Waitingham"), Email: model.P("wendy@example.org"), EmailVerified: true, Groups: []string{"viewers"}}
+
+	_ = e.s.Access.EnsureSites([]string{"Home"})
+	for _, u := range []model.User{owner, bare, dana, cleo, vee, wendy} {
+		e.cookie(u, 0) // a sign-in: the account is written as build 16 writes it
+	}
+	byPanel := "panel by " + actorOf(&owner) // api_users.go:187
+	const byCLI = "cli by root"              // admin/users.go:262: "cli by "+osUser()
+	if _, _, err := e.s.Access.SetRole("sub-vee", "viewer", []string{"Home"}, byPanel, false); err != nil {
+		t.Fatal(err)
+	}
+	// an account without an address is no admin by its group alone (build 16 wants a verified address for
+	// that): the first admin gives the three the role
+	for _, sub := range []string{"sub-bare", "sub-dana", "sub-cleo"} {
+		if _, _, err := e.s.Access.SetRole(sub, "admin", nil, byPanel, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n := 0
+	for _, u := range []model.User{owner, bare, dana, cleo} {
+		u := u
+		who := actorOf(&u)
+		t.Logf("build 16 names %s by %q", u.Sub, who)
+		x := model.System{ID: "home-deskpc-agent", Name: "DESKPC"}
+		// api_power.go:294-317, through the function itself
+		for _, a := range []string{"shutdown", "cancel", "wake", "bmc_on", "reboot"} {
+			e.s.powerEvent(x, powerctl.Request{Action: a}, model.PowerResult{Message: "the machine shuts down in 60 s"}, who)
+			n++
+		}
+		// api_machines.go:184-191, through the function itself
+		for _, acc := range []string{"off", "new", "id"} {
+			e.s.Notes.Add(notifications.Event{Kind: fmt.Sprintf("approval_ok_%s_%d", acc, n), Type: "host", Severity: notifications.Info, SystemID: x.ID, Host: x.Name,
+				Text: machineClearText(poller.MachineEvent{By: who, Accepted: acc})})
+			n++
+		}
+		// api_wakeupdate.go:1446 (wuConfirmText), through the function itself
+		run := &wakerun.Run{ID: "run-1", By: who, StartedAt: time.Now().UTC()}
+		e.s.Notes.Add(notifications.Event{Kind: fmt.Sprintf("confirm_%d", n), Type: "update", Severity: notifications.Warning, Host: wuNoteHost, Text: clipText(wuConfirmText(run), wuNoteMax)})
+		n++
+		for _, text := range []string{
+			fmt.Sprintf("panel update started by %s (%v to %v)", who, "1.0.15", "1.0.16"), // api_panelupdate.go:103
+			fmt.Sprintf("started by %s: %s", who, "2 machines"),                           // api_wakeupdate.go:1008
+			"confirmed by " + who, // api_wakeupdate.go:1262
+			"the run was cancelled by " + who + ": no confirmation is asked for any more",                                                 // :1265
+			"run started by " + who + " is over",                                                                                          // :1300
+			"the panel restarted during the run " + who + " started at " + time.Now().UTC().Format("15:04 UTC") + "; it is not continued", // :1304
+			"run started by " + who + " was cancelled by " + who,                                                                          // :1306
+			"run started by " + who + " stopped: the kill switch",                                                                         // :1308
+			fmt.Sprintf("removed from the panel by %s (the agent on the machine keeps running until you uninstall it)", who),              // api_enroll.go:542
+			fmt.Sprintf("its unused Add host copy was removed by %s (the machine stays in the panel, as config.yaml's entry)", who),       // :545
+			"elevated helper stopped by " + who + " (fans on BMC automatic control, Core Temp / BMC readings paused)",                     // api_helper.go:117
+			"elevated helper started by " + who,                                                                                           // :120
+			"run timings changed by " + who,                                                                                               // api_runtimings.go:498
+			"links changed by " + who,                                                                                                     // api_hostoptions.go:1401
+			"host edited by " + who,                                                                                                       // :1403
+			"The run was cancelled by " + who,                                                                                             // wakerun/checked.go:401 (a host's line of a run)
+			"Kept ON by " + who + ", but its switch-off could not be called off (timeout): it may switch itself off.",                     // checked.go:1620, :1656
+			"this run was confirmed already (by " + who + "): a run is confirmed once",                                                    // checked.go:841
+			"a confirmation by " + who + " is being handed to the machines right now: wait a moment for what comes of it",                 // checked.go:849
+			"No machine accepted this confirmation (by " + who + "). The run is not confirmed and still asks",                             // api_wakeupdate_runs.go:558
+		} {
+			e.s.Notes.Add(notifications.Event{Kind: fmt.Sprintf("old_%d", n), Type: "update", Severity: notifications.Info, SystemID: x.ID, Host: x.Name, Text: text})
+			n++
+		}
+	}
+	// two of the admins are set back to waiting: one by the first admin on the Users page, one on the command line
+	if _, _, err := e.s.Access.SetRole("sub-dana", "pending", nil, byPanel, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.s.Access.SetRole("sub-cleo", "pending", nil, byCLI, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.s.Notes.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	for sub, u := range e.s.Access.Load().Users {
+		t.Logf("build 16: %s has the role %s, via %q", sub, u.Role, u.Via)
+	}
+	t.Logf("%d events written", n)
+}
