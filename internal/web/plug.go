@@ -139,7 +139,7 @@ func (l *plugLooks) of(a config.Agent) plugRows {
 // of the node, as the id of the guest itself always did (third review, finding 3).
 func (l *plugLooks) panelRows() map[string]bool {
 	if l.panel == nil {
-		l.panel = l.s.Poller.PanelRows(l.row)
+		l.panel = l.s.Poller.PanelRows(l.snap)
 	}
 	return l.panel
 }

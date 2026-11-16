@@ -21,8 +21,8 @@ import (
 // "Update unpowered hosts" did not: they took the ids as they are written, and the node of a guest that is
 // named. With an agent in a guest in panel_hosts, or the id of the node's own agent, the node's menu had no
 // "The panel itself runs here", its reboot was a click, and the node could be switched on for a run. Now the
-// three ask one rule (poller.PanelRows): the row that is named, the rows on the way down, and the machine at
-// the end.
+// three ask one rule (poller.PanelRows): the row that is named, the rows on the way down, the machine at the
+// end, and the row of every agent that is the same machine as one of those.
 
 const (
 	panelRunsHere = "The panel itself runs here: shutting this down takes Fairy offline until it is powered on again by other means."
@@ -30,29 +30,41 @@ const (
 )
 
 // panelWay is one way panel_hosts can name the machine the panel runs on, and the rows the panel then runs
-// on: the row that is named, the rows on the way down from it, and the machine at the end. No other row: a
-// guest beside the panel's guest goes down without the panel.
+// on:
 //
-// What the rule does not do, as it never did: it goes down from what is named, and not up. An agent that runs
-// in the panel's guest, or beside the node's own agent, and is not itself in panel_hosts keeps a row that is
-// not marked (vm2agent while panel_hosts names lab-qemu-202; sideagent while it names the node), although a
-// shutdown through that agent would take the panel's guest or node down. Such a row is among "every other
-// row" below, so these tests hold it as it is.
+//   - the row that is named, the rows on the way down from it, and the machine at the end;
+//   - every agent's row that is the same machine as one of those: an agent that runs in the guest the panel
+//     is in (a reboot through it is a reboot of the panel's guest), an agent whose entry names such an agent,
+//     and an agent that runs on the node itself beside the node's own agent.
+//
+// No other row. A guest beside the panel's guest goes down without the panel, and so does an agent that runs
+// in such a guest.
 type panelWay struct {
 	name, panel string
 	rows        []string
 }
 
-// panelWaysOnPVE2 are the ways to say in plugNodeRig that the panel runs on the node PVE2.
+// panelWaysOnPVE2 are the ways to say in plugNodeRig that the panel runs on the node PVE2. In the rig with
+// the second agent of the node, sideagent, that agent's row is one of the rows in every one of them: it runs
+// on the node (rowsIn).
 var panelWaysOnPVE2 = []panelWay{
 	{"the node's id", "lab-node-pve2", []string{"lab-node-pve2"}},
-	{"a VM of the node", "lab-qemu-202", []string{"lab-qemu-202", "lab-node-pve2"}},
-	{"a container of the node", "lab-lxc-203", []string{"lab-lxc-203", "lab-node-pve2"}},
+	{"a VM of the node, with an agent in it", "lab-qemu-202", []string{"lab-qemu-202", "lab-node-pve2", "vm2agent"}},
+	{"a container of the node, with an agent in it", "lab-lxc-203", []string{"lab-lxc-203", "lab-node-pve2", "ctagent"}},
+	{"a VM with an agent in it, and an agent whose entry names that agent", "lab-qemu-201", []string{"lab-qemu-201", "lab-node-pve2", "vmagent", "viaagent"}},
 	{"an agent in a VM of the node", "vm2agent", []string{"vm2agent", "lab-qemu-202", "lab-node-pve2"}},
 	{"an agent in a container of the node", "ctagent", []string{"ctagent", "lab-lxc-203", "lab-node-pve2"}},
 	{"the node's own agent", "pve2agent", []string{"lab-node-pve2"}},
 	{"an agent two steps away", "viaagent", []string{"viaagent", "vmagent", "lab-qemu-201", "lab-node-pve2"}},
 	{"a second agent of the node", "sideagent", []string{"sideagent", "lab-node-pve2"}},
+}
+
+// rowsIn are the rows of a way in the rig with the second agent of the node (lone false) or without it.
+func (w panelWay) rowsIn(lone bool) []string {
+	if lone || slices.Contains(w.rows, "sideagent") {
+		return w.rows
+	}
+	return append(slices.Clone(w.rows), "sideagent")
 }
 
 // powerAsks is what the power menu asks for each action of a row of this kind ("typed": the row's name;
@@ -199,7 +211,7 @@ func TestPowerMenuSaysThePanelRunsHereHoweverPanelHostsNamesIt(t *testing.T) {
 			}
 			what := fmt.Sprintf("panel_hosts names %s (%s), lone %v", w.panel, w.name, lone)
 			pe := plugNodeRig{link: "lab-node-pve2", panelHosts: w.panel, lone: lone, power: true}.env(t)
-			panelRowsAre(t, what, pe, w.rows, plain[lone])
+			panelRowsAre(t, what, pe, w.rowsIn(lone), plain[lone])
 			// said out for the rows the finding is about: the node, and every guest on it
 			var guest string // the guest of PVE2 the panel is in ("": on the node itself)
 			for _, g := range []string{"lab-qemu-201", "lab-qemu-202", "lab-lxc-203"} {
@@ -309,6 +321,26 @@ func TestUpdateUnpoweredHostsLeavesOutTheNodeUnderThePanelHoweverItIsNamed(t *te
 	if r.code != 409 || !strings.HasPrefix(fmt.Sprint(r.body["detail"]), "PVE cannot take part: its agent cannot be updated from the panel") {
 		t.Errorf("the other node switched on for runs: %d %s", r.code, r.raw)
 	}
+	// An agent's row that is the same machine as a row the panel runs on is left out like that row: the agent in
+	// the panel's VM, and the second agent of the node. An agent in another guest of the node is not the panel's.
+	for _, c := range []struct{ panel, agent, name string }{
+		{"lab-qemu-202", "vm2agent", "VM2AGENT"}, {"lab-qemu-202", "sideagent", "SIDEAGENT"}, {"lab-node-pve2", "sideagent", "SIDEAGENT"},
+		{"lab-lxc-203", "ctagent", "CTAGENT"}, {"lab-qemu-201", "viaagent", "VIAAGENT"},
+	} {
+		pe := rig(c.panel)
+		admin := freshAdmin(pe)
+		said := c.name + " cannot take part: the panel itself runs on it"
+		if r := pe.do("PUT", "/api/systems/"+c.agent+"/wake-update", map[string]any{"enabled": true}, admin...); r.code != 409 || r.body["detail"] != said {
+			t.Errorf("panel_hosts names %s: %s switched on for runs: %d %s", c.panel, c.agent, r.code, r.raw)
+		}
+		if r := pe.do("POST", "/api/admin/wake-update", map[string]any{"update_only": []string{c.agent}}, admin...); r.code != 400 || r.body["detail"] != said {
+			t.Errorf("panel_hosts names %s: a run with %s: %d %s", c.panel, c.agent, r.code, r.raw)
+		}
+		other := pe.do("PUT", "/api/systems/vmagent/wake-update", map[string]any{"enabled": true}, admin...)
+		if inPanelsGuest := c.panel == "lab-qemu-201"; (other.body["detail"] == "VMAGENT cannot take part: the panel itself runs on it") != inPanelsGuest || other.code != 409 {
+			t.Errorf("panel_hosts names %s: vmagent, an agent in nas-vm, switched on for runs: %d %s", c.panel, other.code, other.raw)
+		}
+	}
 }
 
 // panel_hosts that cannot be followed to a machine. The power menu and "Update unpowered hosts" do what the
@@ -323,9 +355,10 @@ func TestUpdateUnpoweredHostsLeavesOutTheNodeUnderThePanelHoweverItIsNamed(t *te
 func TestPanelHostsThatCannotBeFollowedToAMachine(t *testing.T) {
 	plain := panelLookOf(t, plugNodeRig{link: "lab-node-pve2", panelHosts: "no-such-box", power: true}.env(t))
 	for _, w := range []panelWay{
-		{"an agent in a guest whose node has no row", "lostagent", []string{"lostagent", "lab-qemu-301"}},
+		// via2agent's entry names lostagent, which runs in lost-vm: the three are one machine, whichever is named
+		{"an agent in a guest whose node has no row", "lostagent", []string{"lostagent", "lab-qemu-301", "via2agent"}},
 		{"an agent two steps from such a guest", "via2agent", []string{"via2agent", "lostagent", "lab-qemu-301"}},
-		{"a VM whose node has no row", "lab-qemu-301", []string{"lab-qemu-301"}},
+		{"a VM whose node has no row", "lab-qemu-301", []string{"lab-qemu-301", "lostagent", "via2agent"}},
 		{"a container whose node has no row", "lab-lxc-302", []string{"lab-lxc-302"}},
 		{"an id no row has", "old-box", nil},
 		{"the id of a guest that is not there", "lab-qemu-999", nil},
@@ -437,5 +470,127 @@ func TestPowerMenuOfTheNodesAgentWhileTheNodeHasNoRow(t *testing.T) {
 		if line := look.run["nas-box"]; (line["why_not"] == panelRunsOnIt) != on || line["can_join"] != false {
 			t.Errorf("panel_hosts names %s: NAS-BOX on the page of Update unpowered hosts: %v", panel, line)
 		}
+	}
+}
+
+// A panel that was not told where it runs (no panel_hosts) marks no row: no menu has kills_panel or the
+// warning, no line says "the panel itself runs on it", and every answer is, byte for byte, the one of a panel
+// whose panel_hosts names a machine it does not show.
+func TestPowerMenuWithoutPanelHostsMarksNoRow(t *testing.T) {
+	for _, lone := range []bool{false, true} {
+		none := panelLookOf(t, plugNodeRig{link: "lab-node-pve2", noPanel: true, lone: lone, power: true, nodeAgent: "self_update: true, control_token_env: CTL_A,"}.env(t))
+		elsewhere := panelLookOf(t, plugNodeRig{link: "lab-node-pve2", panelHosts: "no-such-box", lone: lone, power: true, nodeAgent: "self_update: true, control_token_env: CTL_A,"}.env(t))
+		if len(none.menu) < 15 || len(none.run) < 9 {
+			t.Fatalf("the fixture: %d rows, %d of them machines with an agent", len(none.menu), len(none.run))
+		}
+		for id, menu := range none.menu {
+			if !strings.Contains(menu, `"kills_panel":false`) || !strings.Contains(menu, `"warning":null`) || strings.Contains(menu, "The panel itself") {
+				t.Errorf("lone %v, no panel_hosts: the power menu of %s: %s", lone, id, menu)
+			}
+			if menu != elsewhere.menu[id] {
+				t.Errorf("lone %v, no panel_hosts: the power menu of %s is not the one of a panel that runs elsewhere:\n%s\n%s", lone, id, menu, elsewhere.menu[id])
+			}
+		}
+		for id, line := range none.run {
+			if line["why_not"] == panelRunsOnIt || line["why"] == panelRunsOnIt || !reflect.DeepEqual(line, elsewhere.run[id]) {
+				t.Errorf("lone %v, no panel_hosts: %s on the page of Update unpowered hosts: %v, with a panel that runs elsewhere %v", lone, id, line, elsewhere.run[id])
+			}
+		}
+	}
+}
+
+// An agent whose entry names a guest the panel has no row for (links_to: lab-qemu-999) runs in that guest for
+// all the panel can know. With that id in panel_hosts the agent's row is the panel's, as it is written: no row
+// says which guest that is, and none is needed.
+func TestPowerMenuOfAnAgentInThePanelsGuestWithoutARow(t *testing.T) {
+	rig := func(panelHosts string) *plugEnv {
+		return plugNodeRig{link: "lab-node-pve2", otherExtra: "links_to: lab-qemu-999,", panelHosts: panelHosts, power: true}.env(t)
+	}
+	plain := panelLookOf(t, rig("no-such-box"))
+	if plain.kinds["other"] != "agent" || plain.kinds["lab-qemu-999"] != "" {
+		t.Fatalf("the fixture: the row of other is %q, of lab-qemu-999 %q", plain.kinds["other"], plain.kinds["lab-qemu-999"])
+	}
+	panelRowsAre(t, "panel_hosts names lab-qemu-999, the guest without a row that other runs in", rig("lab-qemu-999"), []string{"other"}, plain)
+	panelRowsAre(t, "panel_hosts names lab-qemu-998, another guest without a row", rig("lab-qemu-998"), nil, plain)
+}
+
+// An agent whose entry names the node's own agent (links_to: pve2agent) runs where that agent runs, on the
+// node. The node's agent has no row of its own while the node's row is there, so the id that is written is no
+// row's, and (with a second agent beside it) not one of the node's ids either: the way goes on to the node
+// that agent's entry names.
+func TestPowerMenuOfAnAgentWhoseEntryNamesTheNodesOwnAgent(t *testing.T) {
+	rig := func(panelHosts string) *plugEnv {
+		return plugNodeRig{link: "lab-node-pve2", otherExtra: "links_to: pve2agent,", panelHosts: panelHosts, power: true}.env(t)
+	}
+	plain := panelLookOf(t, rig("no-such-box"))
+	if plain.kinds["other"] != "agent" || plain.kinds["pve2agent"] != "" {
+		t.Fatalf("the fixture: the row of other is %q, of pve2agent %q", plain.kinds["other"], plain.kinds["pve2agent"])
+	}
+	panelRowsAre(t, "panel_hosts names the node, other's entry names the node's agent", rig("lab-node-pve2"), []string{"lab-node-pve2", "sideagent", "other"}, plain)
+	panelRowsAre(t, "panel_hosts names a VM of the node, other's entry names the node's agent", rig("lab-qemu-202"), []string{"lab-qemu-202", "lab-node-pve2", "vm2agent", "sideagent", "other"}, plain)
+	panelRowsAre(t, "panel_hosts names the other node, other's entry names this node's agent", rig("lab-node-pve"), []string{"lab-node-pve"}, plain)
+}
+
+// The lock of a socket did not need the agents' rows: a socket that is linked to an agent is followed down to
+// the machine under it, and that machine is one of the rows the panel runs on. Held here for the rows the
+// power menu now marks too, and for one it does not mark: a socket linked to an agent in ANOTHER guest of the
+// panel's node feeds that node, and is the panel's, while that agent's power menu is not.
+func TestPlugSocketLinkedToAnAgentOnThePanelsMachine(t *testing.T) {
+	for _, c := range []struct{ name, link, panel string }{
+		{"an agent in the panel's VM", "vm2agent", "lab-qemu-202"},
+		{"an agent in the panel's container", "ctagent", "lab-lxc-203"},
+		{"an agent whose entry names an agent in the panel's VM", "viaagent", "lab-qemu-201"},
+		{"the second agent of the panel's node", "sideagent", "lab-node-pve2"},
+		{"the second agent of the node, the panel in a VM of it", "sideagent", "lab-qemu-202"},
+		{"an agent in another guest of the panel's node", "vmagent", "lab-qemu-202"},
+	} {
+		plugNodeLocked(t, plugNodeRig{link: c.link, panelHosts: c.panel}.env(t), "linked to "+c.name, model.SocketLockPanel, plugSaidPanel)
+	}
+	// the panel on the other node: the same links are no lock
+	for _, link := range []string{"vm2agent", "sideagent"} {
+		pe := plugNodeRig{link: link, panelHosts: "lab-qemu-100"}.env(t)
+		if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["lock"] != nil || s["switchable"] != true || s["system_id"] != "lab-node-pve2" {
+			t.Errorf("linked to %s, the panel in a guest of the other node: %v", link, s)
+		}
+	}
+
+	// One sentence of a lock is another one now, of a socket that was locked before: it is linked to an agent
+	// whose entry names a guest the panel has no row for, and panel_hosts has that guest's id. The panel
+	// cannot follow the link to a machine (link_unknown, as before, with a panel that runs elsewhere); with
+	// the id in panel_hosts the agent's row is the panel's as it is written, and the lock says the nearer
+	// reason, as it does when panel_hosts has the agent's id and the link the guest's.
+	ghost := func(panelHosts string) map[string]any {
+		t.Setenv("TOK_G", testutil.ReadToken+"g")
+		if strings.Count(plugConfig, "socket_links: {rack-bar/node: lab-node-pve}") != 1 || strings.Count(plugConfig, "\nagents:\n") != 1 || strings.Count(plugConfig, "panel_hosts: [panel-box]") != 1 {
+			t.Fatal("the rig's config is not the one this fixture changes")
+		}
+		yaml := strings.Replace(plugConfig, "socket_links: {rack-bar/node: lab-node-pve}", "socket_links: {rack-bar/node: ghostagent}", 1)
+		yaml = strings.Replace(yaml, "\nagents:\n", "\nagents:\n  - {id: ghostagent, name: GHOSTAGENT, url: \"http://ghostagent\", token_env: TOK_G, links_to: lab-qemu-999}\n", 1)
+		pe := newPlugEnvWith(t, strings.Replace(yaml, "panel_hosts: [panel-box]", "panel_hosts: ["+panelHosts+"]", 1))
+		pe.b.Mu.Lock()
+		pe.b.Metrics["ghostagent"] = func() (jsonx.M, error) {
+			m := testutil.AgentMetrics()
+			m["hostname"] = "ghostagent"
+			delete(m, "power_sources")
+			return m, nil
+		}
+		pe.b.Mu.Unlock()
+		pe.poll()
+		pe.poll()
+		if x := pe.do("GET", "/api/systems/ghostagent", nil, "Cookie", pe.admin); x.code != 200 || x.body["kind"] != "agent" {
+			t.Fatalf("the fixture: the row of ghostagent: %d %v", x.code, x.body)
+		}
+		for _, to := range []string{"off", "on"} {
+			if r := pe.flip("other/rack-bar", "node", to); r.code != 409 {
+				t.Errorf("panel_hosts names %s: %s for the socket linked to ghostagent: %d %s", panelHosts, to, r.code, r.raw)
+			}
+		}
+		return pe.socketOf(pe.admin, "other/rack-bar", "node")
+	}
+	if s := ghost("panel-box"); s["switchable"] != false || s["lock"] != model.SocketLockLinkUnknown {
+		t.Errorf("linked to an agent in a guest without a row, the panel elsewhere: %v", s)
+	}
+	if s := ghost("lab-qemu-999"); s["switchable"] != false || s["lock"] != model.SocketLockPanel || s["note"] != plugSaidPanel {
+		t.Errorf("linked to an agent in a guest without a row, that guest in panel_hosts: %v", s)
 	}
 }

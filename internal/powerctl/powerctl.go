@@ -110,16 +110,20 @@ func orElse(a, b string) string {
 // KillsPanel reports whether the panel itself runs on this system: a shutdown of it takes the panel down.
 //
 // The rows are poller.PanelRows, the rule the lock of a socket asks too: every id of panel_hosts as it is
-// written, the row it is shown as, the guest it runs in and the node under it. So the node under the panel is
-// the panel's machine whether panel_hosts names the node, the guest the panel is in, an agent that runs in
-// that guest, the node's own agent, or a second agent of the node. (Up to the third round of stage 1a this was
-// a rule of its own: the id as it is written, and a node with a guest that is named. An agent's id was then
-// the agent's row and nothing more: the node under it had no "The panel itself runs here", a reboot of it was
-// a click, and it could take part in "Update unpowered hosts"; third review, check of the third round, C.)
+// written, the row it is shown as, the guest it runs in and the node under it, and every agent's row that is
+// the same machine as one of those (an agent in the panel's guest, a second agent of the panel's node). So
+// the node under the panel is the panel's machine whether panel_hosts names the node, the guest the panel is
+// in, an agent that runs in that guest, the node's own agent, or a second agent of the node; and a shutdown
+// or reboot through an agent in the panel's guest asks what one of that guest asks. (Up to the third round
+// of stage 1a this was a rule of its own: the id as it is written, and a node with a guest that is named. An
+// agent's id was then the agent's row and nothing more: the node under it had no "The panel itself runs
+// here", a reboot of it was a click, and it could take part in "Update unpowered hosts"; third review, check
+// of the third round, C.)
 //
-// A guest beside the panel's guest is not the panel's: it goes down without the panel.
+// A guest beside the panel's guest is not the panel's, and neither is an agent in such a guest: they go down
+// without the panel.
 func KillsPanel(p *poller.Poller, s model.System) bool {
-	return p.PanelRows(poller.RowsOf(p.Snapshot()))[s.ID]
+	return p.PanelRows(p.Snapshot())[s.ID]
 }
 
 // sameString reports whether two optional strings are both nil or equal.

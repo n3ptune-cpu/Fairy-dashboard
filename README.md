@@ -345,8 +345,10 @@ switched: look at the socket.
   [Update unpowered hosts](#update-unpowered-hosts) follow `panel_hosts` by the same rule: whichever
   of them it names, the node under the panel, the guest the panel is in and the row that is named say
   "The panel itself runs here", a reboot of one of them (and a start of that guest) asks for its typed
-  name, as a shutdown always does, and such a machine cannot take part in a run. Another guest of that
-  node is not marked: it goes down without the panel. (Up to this build the two took `panel_hosts` as it is written, with the node
+  name, as a shutdown always does, and such a machine cannot take part in a run. So does the row of an
+  agent that is the same machine: one that runs in the guest the panel is in, or on that node beside
+  the node's own agent (a reboot through it is a reboot of the panel's guest or node). Another guest of
+  that node is not marked, and neither is an agent in it: they go down without the panel. (Up to this build the two took `panel_hosts` as it is written, with the node
   of a guest that is named: an agent's id there marked the agent's own row and not the node under
   it.) An id in `panel_hosts` that the panel cannot follow to a machine (no row has it, or the node of
   that guest has no row) counts as it is written, for the lock and for the menu: no node is marked for

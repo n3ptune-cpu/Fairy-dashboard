@@ -135,10 +135,19 @@ func (p *Poller) MachineRows(id string, row func(id string) *model.System) (ids 
 	return ids, known
 }
 
-// PanelRows are the ids of the rows this panel runs on: every id of panel_hosts as it is written (an id there
-// needs no row), and what MachineRows has for it: the row it is shown as, its other id, the guest it runs in
-// when it is an agent in a guest, and the node under it. So panel_hosts can name the machine, the guest the
-// panel is in, or an agent that runs there, with the same result for all three.
+// PanelRows are the ids of the rows this panel runs on, among the rows as they are (snap):
+//
+//   - every id of panel_hosts as it is written (an id there needs no row), and what MachineRows has for it:
+//     the row it is shown as, its other id, the guest it runs in when it is an agent in a guest, and the node
+//     under it. So panel_hosts can name the machine, the guest the panel is in, or an agent that runs there,
+//     with the same result for all three;
+//   - every agent's row that is the same machine as one of those (runsOnOneOf): an agent that runs in the
+//     guest the panel is in, an agent whose entry names such an agent, and an agent that runs on the panel's
+//     node beside the node's own agent. A reboot through such an agent is a reboot of the panel's guest or
+//     node.
+//
+// A guest beside the panel's guest is not one of them, and neither is an agent that runs in such a guest: they
+// go down without the panel.
 //
 // Everything that asks "is this the panel's own machine" asks here:
 //
@@ -149,7 +158,8 @@ func (p *Poller) MachineRows(id string, row func(id string) *model.System) (ids 
 // Where panel_hosts cannot be followed to a machine (an id without a row, a guest whose node has no row, links
 // that lead back to themselves) the ids are what is written and the rows the way went over, and no node: the
 // panel cannot tell which machine that is, and does not guess one.
-func (p *Poller) PanelRows(row func(id string) *model.System) map[string]bool {
+func (p *Poller) PanelRows(snap []model.System) map[string]bool {
+	row := RowsOf(snap)
 	rows := map[string]bool{}
 	for _, h := range p.Cfg.PanelHosts {
 		ids, _ := p.MachineRows(h, row) // with h itself, row or not
@@ -157,5 +167,38 @@ func (p *Poller) PanelRows(row func(id string) *model.System) map[string]bool {
 			rows[id] = true
 		}
 	}
+	for i := range snap {
+		if p.runsOnOneOf(snap[i].ID, rows) {
+			rows[snap[i].ID] = true
+		}
+	}
 	return rows
+}
+
+// runsOnOneOf reports whether the row with this id is an agent's that runs on one of rows: the agent's entry
+// names one of them (the guest it runs in or the node it runs on, as the id is written: rows has every id of
+// its machines, and an id needs no row), or it names another agent for which that is so. It goes from agent
+// to agent only, by what their entries name (RunsOn): the first guest or node on the way is where the agent
+// runs, and when that is not one of rows the agent is another machine's. So an agent in a guest beside the
+// panel's guest is not the panel's, though its node is. An agent whose entry names the node's own agent goes
+// on to the node that agent names.
+//
+// What the panel can know about an agent that names a node while the configuration does not say that the node
+// is its own (a second agent of a node; finding A of the third review's check) is the node it names. It may be
+// that node, and is taken for it: one of rows when the node is. An agent that names nothing is a machine of
+// its own. Links that lead back end at the id that was seen.
+func (p *Poller) runsOnOneOf(id string, rows map[string]bool) bool {
+	seen := map[string]bool{}
+	for cur := id; !seen[cur]; {
+		seen[cur] = true
+		to, _ := p.RunsOn(cur)
+		if to == "" {
+			return false
+		}
+		if rows[to] {
+			return true
+		}
+		cur = to
+	}
+	return false
 }

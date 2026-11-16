@@ -44,6 +44,7 @@ type plugNodeRig struct {
 	lone       bool   // without sideagent: pve2agent is the only agent that names the node
 	power      bool   // the cluster has a power token and node_power: every node and guest has a route for its power actions
 	nodeAgent  string // more keys of pve2agent's entry ("self_update: true, control_token_env: CTL_A,")
+	noPanel    bool   // panel_hosts: [], the panel was not told where it runs
 }
 
 const plugOtherEntry = "  - {id: other, name: OTHER, url: \"http://other\", token_env: TOK_B, control_token_env: CTL_A,\n     socket_links: {rack-bar/node: lab-node-pve}, home_assistant_system: lab-qemu-100}"
@@ -80,7 +81,7 @@ func (c plugNodeRig) env(t *testing.T) *plugEnv {
 		yaml = strings.Replace(yaml, side, "", 1)
 		agents = slices.DeleteFunc(agents, func(id string) bool { return id == "sideagent" })
 	}
-	if c.panelHosts != "" {
+	if c.panelHosts != "" || c.noPanel {
 		yaml = strings.Replace(yaml, "panel_hosts: [panel-box]", "panel_hosts: ["+c.panelHosts+"]", 1)
 	}
 	if c.power {
