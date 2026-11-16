@@ -400,7 +400,8 @@ const (
 	// SocketReadOnly: the viewer is no admin (or control is switched off): the state is shown, no switch.
 	SocketReadOnly = "read_only"
 	// SocketLockAgent: the socket feeds the machine that reads the plugs (the agent's own row, or the Proxmox
-	// node it runs on).
+	// node it runs on). A socket that is linked to a guest feeds the guest's node: that holds for this lock, for
+	// Home Assistant's and for the panel's.
 	SocketLockAgent = "reads_plugs"
 	// SocketLockHomeAssistant: the socket feeds the machine Home Assistant runs on (home_assistant_system).
 	SocketLockHomeAssistant = "home_assistant"
@@ -415,8 +416,9 @@ const (
 	// SocketLockPanel: the socket feeds the machine this panel runs on (panel_hosts).
 	SocketLockPanel = "panel"
 	// SocketLockLinkUnknown: the socket is linked to an id that no row has now (a typing mistake in
-	// socket_links, or a row the panel has not heard of yet). The panel cannot tell which machine hangs on it,
-	// so none of its other locks and no question about a running machine can be trusted for it.
+	// socket_links, or a row the panel has not heard of yet), or to a guest whose node has no row. The panel
+	// cannot tell which machine hangs on it, so none of its other locks and no question about a running machine
+	// can be trusted for it.
 	SocketLockLinkUnknown = "link_unknown"
 )
 

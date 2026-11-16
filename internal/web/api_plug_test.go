@@ -455,7 +455,11 @@ func TestPlugRunningRule(t *testing.T) {
 		{"offline, sent to sleep by the panel", "offline", true, "", false, none, "asleep"},
 		{"offline, and the machine itself answers", "offline", false, "the machine refused the connection", true, none, "running"},
 		{"offline, seen to go off", "offline", false, "", true, none, ""},
-		{"a guest Proxmox says is stopped", "stopped", false, "", false, none, ""},
+		// "stopped" is what Proxmox says of a guest, and a guest is never the machine of a socket (a link to one
+		// is a link to its node: look). It is no sign that anything is off. (Until the second review of the fixes
+		// this case wanted "".)
+		{"a guest Proxmox says is stopped", "stopped", false, "", false, none, "unknown"},
+		{"stopped, its own plug reads 2 W", "stopped", false, "", false, meter(1, w(2), 5*time.Second, "ok"), ""},
 		// the socket's own meter: the only socket of a plug, a fresh reading
 		{"offline, its own plug reads 2 W", "offline", false, "", false, meter(1, w(2), 5*time.Second, "ok"), ""},
 		{"offline, its own plug reads 4.9 W", "offline", false, "", false, meter(1, w(4.9), 5*time.Second, "ok"), ""},
@@ -872,7 +876,8 @@ func TestPlugSocketsInThePowerAnswer(t *testing.T) {
 		{"reader/desk-bar", "ch2", "off", true, "", "", ""},
 		{"reader/desk-bar", "ch3", "on", true, "", "", "desk-pc"},
 		{"reader/desk-bar", "ch4", "on", false, model.SocketLockAgent, model.SocketLockAgent, "lab-node-pve"},
-		{"reader/desk-bar", "ch5", "on", false, model.SocketLockHomeAssistant, model.SocketLockHomeAssistant, "lab-qemu-100"},
+		// linked to Home Assistant's VM: the reason is Home Assistant's, and the row the socket feeds is the VM's node
+		{"reader/desk-bar", "ch5", "on", false, model.SocketLockHomeAssistant, model.SocketLockHomeAssistant, "lab-node-pve"},
 		{"reader/desk-bar", "ch6", "on", false, model.SocketLockPanel, model.SocketLockPanel, "panel-box"},
 		{"reader/desk-bar", "ch7", "on", false, model.SocketLockLinkUnknown, model.SocketLockLinkUnknown, ""}, // linked to an id no row has: locked, no row to name
 		{"reader/desk-bar", "ch8", "on", false, api.WhyNotAllowed, "", ""},
@@ -1400,11 +1405,14 @@ func TestPlugAgentWithoutHomeAssistantSystem(t *testing.T) {
 		{"reader/desk-bar", "ch1", model.SocketLockHAUnset, said}, // linked to nothing
 		{"reader/desk-bar", "ch2", model.SocketLockHAUnset, said},
 		{"reader/desk-bar", "ch3", model.SocketLockHAUnset, said}, // a PC that runs
-		{"reader/desk-bar", "ch5", model.SocketLockHAUnset, said}, // the box Home Assistant runs on, which the panel is not told
 		{"reader/desk-bar", "ch8", model.SocketLockHAUnset, said}, // not allowed on the machine either: the panel's reason comes first
 		{"reader/pc-plug", "main", model.SocketLockHAUnset, said},
 		// what the panel does know about a socket is still said first
 		{"reader/desk-bar", "ch4", model.SocketLockAgent, "Locked. This socket powers the machine that reads the plugs."},
+		// ch5 is linked to a VM (the one Home Assistant runs on, which the panel is not told). A link to a guest is
+		// a link to its node, and that node is the reader's: until the second review of the fixes this socket had
+		// the lock of the missing key
+		{"reader/desk-bar", "ch5", model.SocketLockAgent, "Locked. This socket powers the machine that reads the plugs."},
 		{"reader/own-plug", "main", model.SocketLockAgent, "Locked. This socket powers the machine that reads the plugs."},
 		{"reader/desk-bar", "ch6", model.SocketLockPanel, "Locked. This socket powers the panel."},
 		{"reader/desk-bar", "ch7", model.SocketLockLinkUnknown, "Locked. This socket is linked to a machine the panel does not have: correct socket_links."},

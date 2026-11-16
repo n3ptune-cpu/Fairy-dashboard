@@ -272,7 +272,11 @@ Home Assistant and an agent reads it (Fairy-agent v0.10.0 or newer on the machin
   no socket of that agent**, on or off: it could not lock the socket that feeds Home Assistant, so every
   socket has a lock that says "Set home_assistant_system for this agent in config.yaml". It has to be
   written once, as `feeds_self` has to be written on the machine. `socket_links` names the machine that
-  hangs on a socket of a powerbar. The only socket of a plug needs no line: it takes the plug's own link
+  hangs on a socket of a powerbar. A socket feeds a machine, so for a virtual machine or a container name
+  its Proxmox node: a link that names a guest is taken as a link to the guest's node, in every rule below
+  (the locks, the question whether the machine still runs, and the words the passkey signs), and a guest
+  whose node the panel does not have is a link it cannot follow (locked). The only socket of a plug needs
+  no line: it takes the plug's own link
   (`power_links`, or `system_hint: self`). A socket without a link is linked to nothing: it may be a lamp,
   and it may be a machine nobody wrote down, so the panel asks before every "off" for it (below). A line
   that can never work is refused when config.yaml is loaded (a name that is not `<device
@@ -323,7 +327,9 @@ switched: look at the socket.
 * **locked sockets**, in both directions: the socket of the machine that reads the plugs (the agent's own
   row, the Proxmox node it runs on, or the node of the guest it runs in), the socket of the machine Home
   Assistant runs on (`home_assistant_system`; for a VM also its node), and the socket of the machine this
-  panel runs on. When `home_assistant_system` names an id that is no row, no socket of that agent that is
+  panel runs on. A socket that is linked to a guest feeds that guest's node, so it is locked when the node
+  is one of the three, or carries one of them: a socket linked to any VM of the node that also carries
+  Home Assistant's VM is locked. When `home_assistant_system` names an id that is no row, no socket of that agent that is
   linked to a machine is switched until the id is put right; and a socket whose own link names no row is
   locked the same way ("linked to a machine the panel does not have: correct socket_links");
 * a socket that was changed on the machine since the page was drawn, and a socket Home Assistant has no
@@ -331,13 +337,16 @@ switched: look at the socket.
 * **"off" for a socket whose machine still runs, or may.** A machine that answers runs, and one that is
   asleep counts too. A machine that **does not answer is not taken for off** because of that, however long
   it lasts: a link that dropped, an agent that was stopped and a machine that hangs all look the same from
-  the panel. It counts as off only with a sign of it: Proxmox says the guest is stopped, a run of
+  the panel. It counts as off only with a sign of it: a run of
   [Update unpowered hosts](#update-unpowered-hosts) saw the machine go off, or the socket has a meter of
   its own (the only socket of a plug) and a fresh reading of it is from 0 W to under 5 W. The same meter
   at 5 W or more says that something on the socket still draws power, whatever else is known; and a
   reading below zero is no sign of anything (a meter that is put on backwards reads so for a machine that
   runs), so with it the machine is not taken for off either. (A machine that went
-  to sleep by itself draws as little as one that is off: the meter cannot tell the two apart.) The page
+  to sleep by itself draws as little as one that is off: the meter cannot tell the two apart.) That
+  Proxmox calls a guest "stopped" is no such sign: for a socket that is linked to a guest the machine in
+  question is the guest's node, the dialog names the node ("PVE-1 is still running", with the guest the
+  link names in the sentence behind the info button), and the node's name is the one to type. The page
   shows a dialog, "PC-B is still running" ("is asleep, not off", or "may still be running" where the panel
   has no sign either way), with the plug and the socket above the title. **Cancel** has
   the focus. **Shut down PC-B** is there when you may shut that host down from here: it opens the host's

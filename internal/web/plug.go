@@ -22,6 +22,8 @@ import (
 //
 //   - the link: socket_links in the panel's entry of the agent names the row; the only socket of a plug takes
 //     the plug's own link (power_links, system_hint: self); any other socket is linked to nothing;
+//   - a link to a guest (a VM, a container) is a link to the guest's node, for every rule below: a socket feeds
+//     a machine, and the machine under a guest is its node. What the guest does says nothing about the socket;
 //   - no socket of an agent is switched while the panel's entry of it has no home_assistant_system: the panel
 //     has to be told once, in writing, where that agent's Home Assistant runs (as the agent has to be told
 //     feeds_self before it switches anything);
@@ -50,6 +52,9 @@ type socketLook struct {
 	// row that machine is shown as right now, row that row (nil: no row has the id now).
 	link, shown string
 	row         *model.System
+	// guest: the link names a guest (a VM or a container), this one. A socket feeds a machine, so row and shown
+	// are then the guest's node (look); row is nil when the panel has no row for that node.
+	guest *model.System
 	// lock is why the panel never switches this socket ("": no lock): model.SocketLock...
 	lock string
 	// ownLink: the link is the plug's own (the only socket of a plug), not a line of socket_links.
@@ -161,6 +166,17 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 	}
 	if k.link != "" {
 		k.row = l.rows[k.shown]
+		if g := k.row; g != nil && (g.Kind == "qemu" || g.Kind == "lxc") {
+			// The link names a guest. What the socket feeds is the guest's node, and with it every other guest of
+			// that node: the node is the machine of this socket, for the locks, for the question whether it runs,
+			// and in the words. A guest whose node the panel has no row for is a link the panel cannot follow.
+			k.guest, k.row = g, nil
+			if g.ParentID != nil {
+				if n := l.rows[*g.ParentID]; n != nil && n.Kind == "node" {
+					k.row, k.shown = n, n.ID
+				}
+			}
+		}
 		k.lock = l.lock(k)
 		k.knownOff, k.at, k.fresh = l.s.Poller.KnownOff(k.shown), l.now, time.Duration(l.s.Cfg.OfflineAfter*float64(time.Second))
 	}
@@ -192,22 +208,40 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 //  5. Its link names no row the panel has right now (a typing mistake in socket_links, or a row the panel has
 //     not heard of yet). Which machine hangs on it is then not known: it could be any of the three above, and
 //     whether it runs cannot be asked. So it is locked like 3, until the link names a row. (It comes after the
-//     list of panel_hosts, which names ids and needs no row.)
+//     list of panel_hosts, which names ids and needs no row.) A link to a guest whose node has no row is such
+//     a link.
+//
+// For a link to a guest the linked side is the guest and its node (look), as the reader's side and Home
+// Assistant's are widened to the node of a guest (machine). So a socket that is linked to a guest of the node
+// that carries Home Assistant's VM, the reader or the panel's guest is locked: it feeds that node. The ids of
+// the link itself are asked first, so that the sentence names the nearer reason (a link to Home Assistant's
+// own VM says "powers Home Assistant", though its node may carry the reader too).
 func (l *plugLooks) lock(k socketLook) string {
 	rows := l.of(k.agent)
-	linked := []string{k.link, k.shown}
-	linked = append(linked, l.s.Poller.SameMachine(k.link)...)
-	hits := func(set map[string]bool) bool {
-		return slices.ContainsFunc(linked, func(id string) bool { return set[id] })
+	near := []string{k.link}
+	near = append(near, l.s.Poller.SameMachine(k.link)...)
+	if k.guest != nil {
+		near = append(near, k.guest.ID)
+	} else {
+		near = append(near, k.shown)
+	}
+	linked := append([]string{k.shown}, near...) // with the node of a guest (look), and that node's other id
+	linked = append(linked, l.s.Poller.SameMachine(k.shown)...)
+	hits := func(ids []string, set map[string]bool) bool {
+		return slices.ContainsFunc(ids, func(id string) bool { return id != "" && set[id] })
 	}
 	switch {
-	case hits(rows.own):
+	case hits(near, rows.own):
 		return model.SocketLockAgent
-	case rows.ha != nil && hits(rows.ha):
+	case rows.ha != nil && hits(near, rows.ha):
+		return model.SocketLockHomeAssistant
+	case hits(linked, rows.own):
+		return model.SocketLockAgent
+	case rows.ha != nil && hits(linked, rows.ha):
 		return model.SocketLockHomeAssistant
 	case rows.ha != nil && !rows.haKnown:
 		return model.SocketLockHAUnknown
-	case slices.ContainsFunc(linked, func(id string) bool { return slices.Contains(l.s.Cfg.PanelHosts, id) }):
+	case slices.ContainsFunc(linked, func(id string) bool { return id != "" && slices.Contains(l.s.Cfg.PanelHosts, id) }):
 		return model.SocketLockPanel
 	case k.row == nil:
 		return model.SocketLockLinkUnknown
@@ -298,6 +332,8 @@ func (l *plugLooks) sockets(st model.PowerSourceState, admin bool, see func(id s
 // than the reason's word: a link that names no row is put right in another place for the only socket of a plug.
 func (k socketLook) whyText(why, machine string) string {
 	switch {
+	case why == model.SocketLockLinkUnknown && k.guest != nil:
+		return "Locked. This socket is linked to " + k.guest.Name + ", a virtual machine or container, and the panel does not have the Proxmox node it runs on. A socket feeds the node: link it to the node."
 	case why == model.SocketLockLinkUnknown && k.ownLink:
 		return "Locked. This plug is linked to a machine the panel does not have: correct its link (power_links, or Edit host)."
 	case why == model.SocketLockHAUnset && k.agent.Managed:
@@ -335,6 +371,11 @@ func (k socketLook) running() (name string, yes bool) {
 // sleep: it still holds what is open on it), or "unknown" (it may still be running). The page's dialog says
 // which in its title, and the words the passkey signs for "Cut power anyway" say it too.
 //
+// The machine is the row of the link, and for a link to a guest that guest's node (look): Proxmox calling a
+// guest "stopped" says that the guest is off, and nothing about the node the socket feeds. (Until the second
+// review of the fixes "stopped" was a sign of "off": a socket linked to a stopped guest was switched off with
+// one passkey while its node, and everything else on it, ran.)
+//
 // A machine that answers runs: every status but "offline" and "stopped" ("stale" is not off, and neither is
 // "paused"), and a machine whose agent is silent while the machine itself still answers (MachineOn).
 //
@@ -342,7 +383,6 @@ func (k socketLook) running() (name string, yes bool) {
 // dropped, an agent that was stopped or hangs, and a machine that installs updates while it shuts down all
 // look the same from here. It counts as off only with a sign of it:
 //
-//   - Proxmox says the guest is stopped;
 //   - the machine was seen to go off after a shutdown the panel asked for (Poller.MarkOff: a run of "Update
 //     unpowered hosts" saw its countdown and then nothing at all), and has given no sign of life since;
 //   - the socket has a meter of its own, and a fresh reading of it is from 0 W to under socketIdleWatts
@@ -366,7 +406,7 @@ func (k socketLook) runningState() string {
 	switch w, ok := k.ownWatts(); {
 	case ok && !meterSaysOff(w):
 		return "unknown"
-	case ok, k.row.Status == "stopped", k.knownOff:
+	case ok, k.knownOff:
 		return ""
 	}
 	return "unknown"
@@ -389,6 +429,12 @@ func (k socketLook) ownWatts() (watts float64, ok bool) {
 // runningWords is the sentence for a socket whose machine still runs, or may (the refusal of "off", and the
 // warning of "Cut power anyway"). For a Proxmox node it says how many of its guests run.
 func (l *plugLooks) runningWords(k socketLook) string {
+	if k.guest != nil && k.row != nil {
+		// the link names a guest: the question is about its node, and the sentence says why
+		g := k.guest
+		k.guest = nil
+		return fmt.Sprintf("This socket is linked to %s, a guest of %s, and what it feeds is %s. ", g.Name, k.row.Name, k.row.Name) + l.runningWords(k)
+	}
 	name, _ := k.running()
 	switch {
 	case k.row == nil:
