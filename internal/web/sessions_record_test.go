@@ -125,6 +125,12 @@ func TestHostileUserAgentIsCleanedAndCut(t *testing.T) {
 func TestLastUseIsSavedOnceAMinute(t *testing.T) {
 	e := setup(t)
 	clk := e.fakeClock()
+	// The clock of this test stands still between the steps the test makes itself. It compares the second a
+	// use was stored with to the clock's second, and with a clock that runs a new second could begin between
+	// the request and the comparison.
+	start := time.Now()
+	now := func() time.Time { return start.Add(time.Duration(clk.skew.Load())) }
+	e.s.codec.now = now
 	ck := e.cookie(controller(), 0)
 	sid := sidOf(e, ck)
 	read := func() adminstate.Session {
@@ -149,8 +155,8 @@ func TestLastUseIsSavedOnceAMinute(t *testing.T) {
 		t.Fatal(r.code)
 	}
 	one := read()
-	if one.SeenTS != float64(clk.now().Unix()) || one.SeenIP != "203.0.113.9" || one.IP != "" || one.LoginIP != "" {
-		t.Fatalf("the first use: %+v (now %d)", one, clk.now().Unix())
+	if one.SeenTS != float64(now().Unix()) || one.SeenIP != "203.0.113.9" || one.IP != "" || one.LoginIP != "" {
+		t.Fatalf("the first use: %+v (now %d)", one, now().Unix())
 	}
 	clk.advance(30 * time.Second) // inside the minute: kept in memory, not written
 	if r := e.do("GET", "/api/me", nil, append(active, "X-Forwarded-For", "198.51.100.2")...); r.code != 200 || read() != one {
@@ -160,12 +166,12 @@ func TestLastUseIsSavedOnceAMinute(t *testing.T) {
 	if r := e.do("POST", "/api/me/active", nil, append(active, "X-Requested-With", "fairy", "X-Forwarded-For", "198.51.100.2")...); r.code != 204 {
 		t.Fatal(r.code)
 	}
-	if two := read(); two.SeenTS != float64(clk.now().Unix()) || two.SeenIP != "198.51.100.2" {
+	if two := read(); two.SeenTS != float64(now().Unix()) || two.SeenIP != "198.51.100.2" {
 		t.Fatalf("a use a minute later: %+v", two)
 	}
 	// the panel's memory has the last use to the second, and the addresses the session was used from
 	seen, addrs := e.s.codec.live.usage(sid)
-	if seen != clk.now().Unix() || len(addrs) != 3 || addrs[0].ip != "198.51.100.2" || addrs[1].ip != "203.0.113.9" || addrs[2].ip != "127.0.0.1" {
+	if seen != now().Unix() || len(addrs) != 3 || addrs[0].ip != "198.51.100.2" || addrs[1].ip != "203.0.113.9" || addrs[2].ip != "127.0.0.1" {
 		t.Fatalf("in memory: %d %+v", seen, addrs)
 	}
 	// an address list has an end: the latest one and three before it
