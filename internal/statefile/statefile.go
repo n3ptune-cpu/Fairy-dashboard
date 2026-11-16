@@ -224,7 +224,7 @@ type Watched struct {
 	settled bool              // the file was read YoungFor or more after `since`: its stamp alone says what it holds
 	sum     [sha256.Size]byte // of the bytes the view was read from (zero: none were read)
 	checked time.Time
-	Version int
+	Version int // moves with every change of what the view holds; beside other requests read it with Ver or GetVer
 	Reads   int // how often the view read the file (for tests: a look that reads when it need not is not seen otherwise)
 }
 
@@ -358,6 +358,23 @@ func (w *Watched) Refresh() Data {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.getLocked(readNow)
+}
+
+// Ver is the view's version: a number that moves whenever what the view holds changes. It is the field Version,
+// read under the view's lock: the field is written under it (getLocked), by every request that finds the file
+// changed, so code that runs beside other requests asks Ver or GetVer and does not read the field.
+func (w *Watched) Ver() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.Version
+}
+
+// GetVer is Get with the version of the data it returns: the two are of one look at the file.
+func (w *Watched) GetVer() (Data, int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	d := w.getLocked(lookInTime)
+	return d, w.Version
 }
 
 // Err is why the file could not be used at the last check (nil when it is fine or missing).

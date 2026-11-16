@@ -623,13 +623,13 @@ func (a *State) HostOptionsRead() (HostOptions, []string) {
 func (a *State) hostOptionsWarn(ignored []string) {
 	a.shapeMu.Lock()
 	defer a.shapeMu.Unlock()
-	if v, logged := a.shapeLog[hostOptionsKey]; logged && v == a.state.Version {
+	if v, logged := a.shapeLog[hostOptionsKey]; logged && v == a.state.Ver() {
 		return
 	}
 	if a.shapeLog == nil {
 		a.shapeLog = map[string]int{}
 	}
-	a.shapeLog[hostOptionsKey] = a.state.Version
+	a.shapeLog[hostOptionsKey] = a.state.Ver()
 	if len(a.hostOptionsSaid) > 1024 { // a file that changes its broken parts for ever: the memory of it stays small
 		a.hostOptionsSaid = nil
 	}

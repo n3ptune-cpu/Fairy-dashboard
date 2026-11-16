@@ -235,13 +235,13 @@ func (a *State) RunTimingsRead() (RunTimings, []string) {
 func (a *State) runTimingsWarn(ignored []string) {
 	a.shapeMu.Lock()
 	defer a.shapeMu.Unlock()
-	if v, logged := a.shapeLog[runTimingsKey]; logged && v == a.state.Version {
+	if v, logged := a.shapeLog[runTimingsKey]; logged && v == a.state.Ver() {
 		return
 	}
 	if a.shapeLog == nil {
 		a.shapeLog = map[string]int{}
 	}
-	a.shapeLog[runTimingsKey] = a.state.Version
+	a.shapeLog[runTimingsKey] = a.state.Ver()
 	if len(a.runTimingsSaid) > 256 {
 		a.runTimingsSaid = nil
 	}

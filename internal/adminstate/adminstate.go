@@ -84,13 +84,13 @@ func num(v any) float64 {
 func (a *State) badShape(key, want, means string, got any) {
 	a.shapeMu.Lock()
 	defer a.shapeMu.Unlock()
-	if v, logged := a.shapeLog[key]; logged && v == a.state.Version {
+	if v, logged := a.shapeLog[key]; logged && v == a.state.Ver() {
 		return
 	}
 	if a.shapeLog == nil {
 		a.shapeLog = map[string]int{}
 	}
-	a.shapeLog[key] = a.state.Version
+	a.shapeLog[key] = a.state.Ver()
 	slog.Error(fmt.Sprintf("state.json: %q is not %s: %s", key, want, means), "path", a.StatePath, "key", key, "found", fmt.Sprintf("%T", got))
 }
 
@@ -138,8 +138,7 @@ func (a *State) StateWritten() { a.state.Refresh() }
 // StateData returns state.json and a version number that changes whenever the file changes (for syncing poll
 // overrides).
 func (a *State) StateData() (statefile.Data, int) {
-	d := a.state.Get()
-	return d, a.state.Version
+	return a.state.GetVer() // the data and its version of one look, read under the view's lock
 }
 
 // powerOffList reads "power_control_disabled" out of state.json's data: the systems whose power control is
