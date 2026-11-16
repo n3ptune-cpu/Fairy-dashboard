@@ -3,6 +3,7 @@ package web
 import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notify"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/wakerun"
 )
@@ -69,6 +70,17 @@ func (s *Server) shown(stored string) string { return s.people().Shown(stored) }
 func (s *Server) fromOutside(text string) string { return s.people().FromOutside(text) }
 
 func (s *Server) shownIn(text string) string { return s.people().ShownIn(text) }
+
+// noteText is the sentence of a notification as it is handed out, in the list and on the stream: an event of an
+// older version names a person by the address, and has the user name put in its place; an event this version
+// made names people by their user names already, and nothing in it is looked up (People.HiddenIn: what else
+// looks like an address in it came from a machine).
+func noteText(who *access.People, e notifications.Event) string {
+	if e.ByName {
+		return who.HiddenIn(e.Text)
+	}
+	return who.ShownIn(e.Text)
+}
 
 // shownP is shown for a text that may be missing.
 func shownP(p *access.People, v *string) *string {

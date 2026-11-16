@@ -77,6 +77,14 @@ type Event struct {
 	// for a node or guest the panel knows from a Proxmox API. All of them share one share of the list and one
 	// push limit, however many systems that API lists.
 	Source string `json:"source,omitempty"`
+	// ByName says how Text names a person: the way this version does, by what the panel shows the person by,
+	// written when the event was made (Add). Nothing in such a text is looked up when it is handed out: an
+	// address in it is in a part a machine supplied (an error text, a name on the machine), and looking it up
+	// would tell whoever runs that machine's agent whose address it is. false: an event of an older version
+	// (the file has no such field), or one made from what an older version stored (AddOld): it names a person
+	// by the e-mail address, which is turned into the user name where the event is handed out. A version that
+	// does not know the field reads the file as before and drops it.
+	ByName bool `json:"by_name,omitempty"`
 }
 
 // owner is whose share of the list (and whose push limit) an event counts towards: its Source when it has one
@@ -270,7 +278,23 @@ func (s *Store) Subscribe() (<-chan struct{}, func()) {
 // Add records an event (ID and time filled in) and returns it. An event with a Key resolves the open alarms
 // with the same key when it is not an alarm itself (the "back to normal" event). A repeat of a merged kind is
 // counted on the event it repeats, which is returned instead (see merged).
+//
+// The text names people the way this version does (Event.ByName). AddOld is for a text made from what an
+// older version stored.
 func (s *Store) Add(e Event) Event {
+	e.ByName = true
+	return s.add(e)
+}
+
+// AddOld is Add for an event whose text names a person the way an older version did, by the e-mail address:
+// the report of a run such a version started and the restart for the update interrupted. (And what a test
+// uses to make the events of an older version.)
+func (s *Store) AddOld(e Event) Event {
+	e.ByName = false
+	return s.add(e)
+}
+
+func (s *Store) add(e Event) Event {
 	s.mu.Lock()
 	now := s.Now().UTC()
 	if e.T.IsZero() {

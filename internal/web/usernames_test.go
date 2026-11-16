@@ -173,7 +173,7 @@ func newNamesRig(t *testing.T, signIn bool) *namesRig {
 		{Kind: "host_options", Type: "host", Severity: notifications.Warning, SystemID: "laptop", Host: "LAPTOP", Text: "links changed by old@example.com"},
 		{Kind: "host_removed", Type: "enroll", Severity: notifications.Warning, Host: "GONE-BOX", Text: "removed from the panel by owner@example.com (the agent on the machine keeps running until you uninstall it)"},
 	} {
-		e.s.Notes.Add(n)
+		e.s.Notes.AddOld(n) // as that version stored them: the file had no note about how a text names people
 	}
 	// a countdown on tower that its agent was told about by build 16, and one on laptop by somebody the panel
 	// does not know (the agent keeps letters, digits, spaces and . _ @ - of what it is told)
@@ -793,7 +793,7 @@ func TestOutsideNotificationsNameByUsername(t *testing.T) {
 		t.Fatalf("the entries keep the account's own text as their target: %v", en)
 	}
 	// a warning made from what an older version stored (the store pushes warnings)
-	e.s.Notes.Add(notifications.Event{Kind: "wakeupdate_interrupted", Type: "update", Severity: notifications.Warning, Host: "Fairy panel",
+	e.s.Notes.AddOld(notifications.Event{Kind: "wakeupdate_interrupted", Type: "update", Severity: notifications.Warning, Host: "Fairy panel",
 		Text: "the panel restarted during the run owner@example.com started at 10:00 UTC; it is not continued"})
 	all := strings.Join(got, "\n")
 	if strings.Contains(all, "svc@localhost") || strings.Contains(all, "Bare Name") {
@@ -1171,9 +1171,9 @@ func TestStreamNotesNameByUsername(t *testing.T) {
 		}()
 	}
 	time.Sleep(300 * time.Millisecond) // the streams are open
-	e.s.Notes.Add(notifications.Event{Kind: "plug_switched", Type: "power", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER",
+	e.s.Notes.AddOld(notifications.Event{Kind: "plug_switched", Type: "power", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER",
 		Text: "Lamp (Desk bar) switched off by owner@example.com"})
-	e.s.Notes.Add(notifications.Event{Kind: "helper_stopped", Type: "host", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER",
+	e.s.Notes.AddOld(notifications.Event{Kind: "helper_stopped", Type: "host", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER",
 		Text: "elevated helper stopped by gone@example.com (unverified) (fans on BMC automatic control)"})
 	wg.Wait()
 	for sub, body := range bodies {

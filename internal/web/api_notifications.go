@@ -88,7 +88,8 @@ func (s *Server) notificationsList(c *reqCtx) error {
 	for i := range p.Events {
 		p.Events[i].Host = noteHost(v, p.Events[i].Event)
 		// an event of an older version says "by <address>": the user name, as in the events written now
-		p.Events[i].Text = who.ShownIn(p.Events[i].Text)
+		p.Events[i].Text = noteText(who, p.Events[i].Event)
+		p.Events[i].ByName = false // (the store's own note about the text: not a part of the answer)
 	}
 	c.json(200, p)
 	return nil

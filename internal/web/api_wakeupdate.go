@@ -1207,8 +1207,9 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 	}
 	// (The sentences below say r.By as the run has it: the user name, for a run this version started. A run an
 	// older version started has the address there: the one that the restart for the update interrupted is
-	// reported here, before anybody has signed in again. Its sentence is kept as it is and the address in it
-	// is replaced where it is handed out: the Notifications list, the stream, the message to ntfy or Discord.)
+	// reported here, before anybody has signed in again. Its sentence is kept as it is, as an event of an older
+	// version (AddOld), and the address in it is replaced where it is handed out: the Notifications list, the
+	// stream, the message to ntfy or Discord.)
 	entry := func(action, target string, params map[string]any, outcome string) {
 		if params == nil {
 			params = map[string]any{}
@@ -1218,7 +1219,11 @@ func (s *Server) wakeRunEvent(e wakerun.Event) {
 	}
 	note := func(sev, kind, sysID, host, text string) {
 		if s.Notes != nil {
-			s.Notes.Add(notifications.Event{Kind: kind, Type: "update", Severity: sev, SystemID: sysID, Host: host, Text: clipText(text, wuNoteMax)})
+			add := s.Notes.Add
+			if r.ByActor == "" {
+				add = s.Notes.AddOld
+			}
+			add(notifications.Event{Kind: kind, Type: "update", Severity: sev, SystemID: sysID, Host: host, Text: clipText(text, wuNoteMax)})
 		}
 	}
 	switch e.Kind {
