@@ -26,11 +26,12 @@ func (e *env) direct(method, path, remote string, hdr ...string) *httptest.Respo
 }
 
 // signInFrom is a whole sign-in at the fake identity provider as sub, whose callback comes from the TCP peer
-// remote with hdr. It returns the session cookie.
+// remote with hdr. It returns the session cookie. The account has the user name "user-<sub>" (and, like every
+// account of the fake provider, the address n@example.com).
 func signInFrom(e *env, idp *fakeIDP, sub, remote string, hdr ...string) string {
 	e.t.Helper()
 	e.s.Cfg.OIDC.Issuer = idp.srv.URL
-	idp.claims = map[string]any{"sub": sub, "groups": []string{"viewers", "controllers"}, "auth_time": time.Now().Unix()}
+	idp.claims = map[string]any{"sub": sub, "groups": []string{"viewers", "controllers"}, "auth_time": time.Now().Unix(), "preferred_username": "user-" + sub}
 	q, rt := idp.login(e, "/auth/login?next=/", "")
 	rec := e.direct("GET", "/auth/callback?code=c&state="+q.Get("state"), remote, append([]string{"Cookie", rt}, hdr...)...)
 	if rec.Code != 303 {

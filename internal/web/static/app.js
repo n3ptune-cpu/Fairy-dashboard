@@ -493,6 +493,82 @@ function patchChildren(a, b) {
   for (let i = an.length - 1; i >= bn.length; i--) an[i].remove();
 }
 
+// ------------------------------------------------------------ what only an admin needs: dots until clicked
+// The panel names a person by the user name of their account. The e-mail address and the name an account gives
+// are on the Users page and in the Audit log only (and a person's own address in their menu), and there they are
+// drawn as dots: veiled(key, value, what) is a real button (Tab reaches it, Enter and Space press it) whose name
+// says what it shows. Before it is pressed the value is nowhere in the page: not in the text, not in a tooltip,
+// not in an attribute, so copying the row copies dots. A press shows that one value; another press, opening the
+// page again or loading its list again hides it. (It stays through the page's own redraw every few seconds, or
+// it would be gone before it is read.) The dots are the same six for every value.
+const veil = { open: dict(), meta: dict() };
+const VEIL_DOTS = "••••••";
+function veiled(key, value, what, role) {
+  if (value == null || value === "") return "";
+  veil.meta[key] = { value: String(value), what, role };
+  const open = !!veil.open[key];
+  const state = role ? `role="${role}" tabindex="-1" aria-checked="${open}"` : `aria-pressed="${open}"`;
+  return `<button class="veil${open ? " open" : ""}" type="button" data-veil="${esc(key)}" ${state} ${open ? `title="${esc(`Hide the ${what}`)}"` : `aria-label="${esc(`Show the ${what}`)}" title="${esc(`Show the ${what}`)}"`}>${open ? esc(value) : VEIL_DOTS}</button>`;
+}
+// hide every shown value whose key starts with prefix (a page that is opened or loaded again)
+function veilReset(prefix = "") {
+  for (const k of Object.keys(veil.open)) if (k.startsWith(prefix)) delete veil.open[k];
+  document.querySelectorAll(".veil.open").forEach((b) => { if (b.dataset.veil.startsWith(prefix)) veilDraw(b); });
+}
+// draw a button again as its value is now (shown or dots). The button stays the element it is: the click that
+// pressed it goes on to the page's other listeners, which ask what it sits in (the account menu stays open).
+function veilDraw(b) {
+  const m = veil.meta[b.dataset.veil];
+  if (!m) return null;
+  const t = document.createElement("template");
+  t.innerHTML = veiled(b.dataset.veil, m.value, m.what, m.role);
+  const nb = t.content.firstChild;
+  for (const { name } of [...b.attributes]) if (!nb.hasAttribute(name)) b.removeAttribute(name);
+  for (const { name, value } of [...nb.attributes]) if (b.getAttribute(name) !== value) b.setAttribute(name, value);
+  b.textContent = nb.textContent;
+  return b;
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-veil]");
+  if (!b || !veil.meta[b.dataset.veil]) return;
+  e.preventDefault();  // never also the default of what it sits in (a form, a link)
+  const k = b.dataset.veil;
+  if (veil.open[k]) delete veil.open[k]; else veil.open[k] = true;
+  veilDraw(b)?.focus();
+});
+// A text of an Audit entry, cut where it holds something to hide: an e-mail address (anything shaped like one)
+// and the addresses and names of the known accounts (`known`, from the server; a name only where it stands as
+// a word of its own). Returns [[text, hidden], ...].
+const VEIL_ADDR = /[^\s@<>()[\]{},;:"'=|]+@[^\s@<>()[\]{},;:"'=|]*[^\s@<>()[\]{},;:"'=|.]\.[A-Za-z\u00C0-\uFFFF]{2,}/g;
+const veilWordChar = (c) => !!c && /[\p{L}\p{N}]/u.test(c);
+function veilParts(text, known) {
+  text = String(text ?? "");
+  const hit = [];
+  for (const m of text.matchAll(VEIL_ADDR)) hit.push([m.index, m.index + m[0].length]);
+  const low = text.toLowerCase();
+  for (const k of known || []) {
+    const kl = String(k).toLowerCase();
+    if (!kl) continue;
+    for (let i = low.indexOf(kl); i >= 0; i = low.indexOf(kl, i + kl.length)) {
+      if (!veilWordChar(text[i - 1]) && !veilWordChar(text[i + kl.length])) hit.push([i, i + kl.length]);
+    }
+  }
+  hit.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const out = [];
+  let at = 0;
+  for (const [from, to] of hit) {
+    if (from < at) { if (to > at && out.length && out[out.length - 1][1]) { out[out.length - 1][0] += text.slice(at, to); at = to; } continue; }
+    if (from > at) out.push([text.slice(at, from), false]);
+    out.push([text.slice(from, to), true]);
+    at = to;
+  }
+  if (at < text.length) out.push([text.slice(at), false]);
+  return out;
+}
+const veilHas = (text, known) => veilParts(text, known).some((x) => x[1]);
+const veilHtml = (key, text, what, known) => veilParts(text, known).map(([t, hidden], i) => (hidden ? veiled(`${key}:${i}`, t, what) : esc(t))).join("");
+const veilDots = (text, known) => veilParts(text, known).map(([t, hidden]) => (hidden ? VEIL_DOTS : t)).join("");
+
 // ------------------------------------------------------------ the info button (ⓘ)
 // A section keeps one short sentence on the page; the longer explanation is behind a small button next to it:
 // infoBtn(key, about, html). A click (or Enter / Space) opens a panel with `html`, laid over the page next to the
@@ -2290,12 +2366,15 @@ document.addEventListener("keydown", (e) => {
 window.addEventListener("resize", () => { if ($("#pday-plot")) sizePowerDay(); });
 
 // ------------------------------------------------------------ audit page (control group only)
-const audit = { entries: [], next: null, q: "", action: "", host: "", loading: false, error: null, open: dict() };
+const audit = { entries: [], next: null, q: "", action: "", host: "", loading: false, error: null, open: dict(), known: [] };
 // The details of an entry under its action: 64 characters, cut BEFORE they are escaped (it used to cut an entity
 // in two: machines=["ALPHA&qu), and a click shows all of them (audit 5, r1-b2-09).
 const AUDIT_DET = 64;
 function auditDetails(e) {
   const d = Object.entries(e.params || {}).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ");
+  // details that hold an address or a name: in full, each behind its dots (a button cannot stand inside the
+  // button that opens the long form, and that button's tooltip is the whole text)
+  if (veilHas(d, audit.known)) return `<div class="note">${veilHtml(`a:${e.id}:d`, d, "address or name in these details", audit.known)}</div>`;
   if (d.length <= AUDIT_DET) return d ? `<div class="note">${esc(d)}</div>` : "";
   const open = !!audit.open[e.id];
   return `<div class="note"><button class="audit-det" type="button" data-act="audit-det" data-id="${esc(e.id)}" aria-expanded="${open}" title="${open ? "Show less" : esc(d)}">${esc(open ? d : `${d.slice(0, AUDIT_DET - 1)}…`)}</button></div>`;
@@ -2313,14 +2392,25 @@ async function loadAudit(reset) {
   if (!reset && audit.next != null) qs.set("before", audit.next);
   try {
     const d = await api(`/api/audit?${qs}`);
+    if (reset) veilReset("a:");  // a list that is loaded again shows nothing that was clicked before
+    audit.known = Array.isArray(d.private) ? d.private : [];
     audit.entries = reset ? d.entries : [...audit.entries, ...d.entries];
     audit.next = d.next; audit.error = null;
   } catch (e) { audit.error = e.message; }
   audit.loading = false;
   render();
 }
+// The person of an entry: the user name first (e.who, the name the panel shows for them everywhere), then what
+// the entry itself was written with when that is something else: an address or a name behind dots, any other
+// text (an API token with its owner's id) as it is. Then the account id.
+const AUDIT_ID_TITLE = "Account id (OIDC subject): the one part of this entry the owner of the account cannot choose. The user name above is what the account calls itself, like the address or name behind the dots; '(unverified)' means Pocket ID did not verify that address.";
+function auditWho(e) {
+  const actor = String(e.actor ?? ""), who = String(e.who || actor);
+  const own = actor && actor !== who ? `<div class="note">${veilHtml(`a:${e.id}:w`, actor, "address or name this entry was written with", audit.known)}</div>` : "";
+  return `<b>${esc(who)}</b>${own}${e.sub && e.sub !== who ? `<div class="note" title="${esc(AUDIT_ID_TITLE)}">id ${esc(e.sub)}</div>` : ""}`;
+}
 const auditOutcome = (o) => {
-  const t = String(o || "");
+  const t = veilDots(String(o || ""), audit.known);  // an address in a result stays dots: the entry's actor and details have it to click
   const cls = /^ok|^required|redirected/.test(t) ? (t.startsWith("required") || t.startsWith("redirected") ? "warn" : "ok") : /^(denied|failed|error|4\d\d|5\d\d)/.test(t) ? "bad" : "";
   return `<span class="chip ${cls}" title="${esc(t)}">${esc(t.length > 30 ? t.slice(0, 28) + "…" : t)}</span>`;
 };
@@ -2329,15 +2419,15 @@ function pageAudit() {
   if (!state.me?.can_control) return '<div class="empty">The audit log is visible to admins only.</div>';
   const hosts = state.systems.map((s) => s.id).sort();
   return `<form class="toolbar audit-filters" id="audit-form" data-keep>
-      <input class="input" id="af-q" placeholder="User, token or source…" value="${esc(audit.q)}">
+      <input class="input" id="af-q" placeholder="User name, token or source…" title="Finds a user name, an account id, a token or a source. It also finds an address or a name an entry was written with, without showing it." value="${esc(audit.q)}">
       <select class="select" id="af-action">${AUDIT_ACTIONS.map(([v, l]) => `<option value="${v}" ${audit.action === v ? "selected" : ""}>${l}</option>`).join("")}</select>
       <select class="select" id="af-host"><option value="">All hosts</option>${hosts.map((h) => `<option ${audit.host === h ? "selected" : ""}>${esc(h)}</option>`).join("")}</select>
       <button class="btn" type="submit">Filter</button><span class="push note">append-only · nothing can be deleted from the UI</span></form>
     ${audit.error ? `<div class="error">${esc(audit.error)}</div>` : ""}
     <div class="panel glass scroll"><table class="table audit"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Result</th><th>Source</th><th>IP</th></tr></thead><tbody>
     ${audit.entries.map((e) => `<tr class="row" data-key="a${esc(e.id)}"><td class="nowrap"><span data-ago="${esc(e.ts)}">${ago(e.ts)}</span><div class="note">${new Date(e.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div></td>
-      <td>${esc(e.actor)}${e.sub && e.sub !== e.actor ? `<div class="note" title="Account id (OIDC subject): the one part of this entry the owner of the account cannot choose. The name or address above is what the account says it is; '(unverified)' means Pocket ID did not verify that address.">id ${esc(e.sub)}</div>` : ""}</td><td><code>${esc(e.action)}</code>${auditDetails(e)}</td>
-      <td>${e.target ? (state.byId[e.target] ? `<a href="#/system/${enc(e.target)}">${esc(state.byId[e.target].name)}</a>` : esc(e.target)) : '<span class="note">–</span>'}</td>
+      <td>${auditWho(e)}</td><td><code>${esc(e.action)}</code>${auditDetails(e)}</td>
+      <td>${e.target ? (state.byId[e.target] ? `<a href="#/system/${enc(e.target)}">${esc(state.byId[e.target].name)}</a>` : veilHtml(`a:${e.id}:t`, e.target, "account this entry is about", audit.known)) : '<span class="note">–</span>'}</td>
       <td>${auditOutcome(e.outcome)}</td><td><span class="chip ${e.source === "cli" ? "warn" : e.source.startsWith("token:") ? "tok" : ""}" title="${esc(e.source)}">${esc(e.source.length > 16 ? e.source.slice(0, 15) + "…" : e.source)}</span></td>
       <td class="note">${esc(e.ip || "–")}</td></tr>`).join("") || `<tr><td colspan="7" class="note">${audit.loading ? "Loading…" : "No entries match."}</td></tr>`}</tbody></table></div>
     ${audit.next != null ? `<div class="row-gap center"><button class="btn" data-act="audit-more">${audit.loading ? "Loading…" : "Older entries"}</button></div>` : ""}`;
@@ -3151,15 +3241,21 @@ const admin = { data: null, error: null };
 async function loadAdmin() {
   try { admin.data = await api("/api/admin/users"); admin.error = null; }
   catch (e) { admin.error = e.message; if (e.status === 403) admin.data = null; }
+  veilReset("u:");  // the list is drawn again: what was clicked is dots again
   if (current().page === "users") $("#page").innerHTML = `<div data-key="users">${pageUsers()}</div>`;
 }
 const ROLE_LABEL = table({ admin: "Admin", viewer: "Viewer", pending: "No access (waiting)" });
-// Name and e-mail are what the account claims at Pocket ID; only the account id (OIDC subject) is certain.
+// User name, name and e-mail are what the account claims at Pocket ID; only the account id (OIDC subject) is certain.
 // email_verified is true only when Pocket ID vouched for the address at the last sign-in (null = not known yet).
+// A row names the person by the user name (shown_as: what the panel calls them everywhere); the name and the
+// address are dots until they are clicked (veiled).
 const unverified = (u) => !!u?.email && u.email_verified !== true;
 const adminUser = (sub) => admin.data?.users.find((x) => x.sub === sub);
-// for confirm() texts and the action label (the label goes percent-encoded in X-Fairy-Action, see headerText)
-const userIdent = (u) => !u ? "this user" : `${u.email || u.name || u.sub}${unverified(u) ? " (unverified e-mail)" : ""}${u.email || u.name ? ` [id ${u.sub}]` : ""}`;
+const userNamed = (u) => !!u?.username && u.shown_as === u.username;  // the panel has a user name to call them by
+// for confirm() texts and the action label (the label goes percent-encoded in X-Fairy-Action, see headerText):
+// the user name and the account id, never the address or the name
+const userIdent = (u) => !u ? "this user" : `${userNamed(u) ? u.username : "the account"} [id ${u.sub}]`;
+const NO_USERNAME = "The panel has no user name for this account yet: it gets it at the account's next sign-in. Until then the panel does not show who this is anywhere else, because all it has is the address or the name.";
 const FROM_LABEL = table({ panel: "set here", config: "config.yaml", node: "from its node", link: "follows its hosts" });
 const KIND_TITLE = [["hosts", "Hosts", (t) => t.kind === "node" || t.kind === "agent"], ["guests", "VMs & containers", (t) => t.kind === "qemu" || t.kind === "lxc"],
   ["power", "Power sources", (t) => t.kind === "power"], ["ups", "UPS", (t) => t.kind === "ups"]];
@@ -3172,9 +3268,10 @@ function pageUsers() {
   const admins = d.users.filter((u) => u.role === "admin").length;
   const userRow = (u) => {
     const last = u.role === "admin" && admins <= 1;
-    return `<tr class="row" data-key="u-${esc(u.sub)}"><td class="namecell"><b title="${esc(u.name || "")}">${esc(u.name || "–")}</b>${u.you ? ' <span class="chip ok">you</span>' : ""}
-        <span class="sub">${esc(u.email || u.sub)}${unverified(u) ? ' <span class="chip warn" title="Pocket ID did not verify this address (or this person last signed in before the panel recorded it). The owner of the account may have typed it in: go by the id below.">unverified</span>' : ""}</span>
-        ${u.email ? `<span class="sub" title="Account id (OIDC subject): the one part of this row the owner of the account cannot change">id ${esc(u.sub)}</span>` : ""}</td>
+    return `<tr class="row" data-key="u-${esc(u.sub)}"><td class="namecell"><b${userNamed(u) ? "" : ` class="muted" title="${esc(NO_USERNAME)}"`}>${esc(userNamed(u) ? u.username : "no user name yet")}</b>${u.you ? ' <span class="chip ok">you</span>' : ""}
+        ${u.name ? `<span class="sub">name ${veiled(`u:${u.sub}:name`, u.name, `name of ${userIdent(u)}`)}</span>` : ""}
+        ${u.email ? `<span class="sub">e-mail ${veiled(`u:${u.sub}:email`, u.email, `e-mail address of ${userIdent(u)}`)}${unverified(u) ? ' <span class="chip warn" title="Pocket ID did not verify this address (or this person last signed in before the panel recorded it). The owner of the account may have typed it in: go by the id below.">unverified</span>' : ""}</span>` : ""}
+        <span class="sub" title="Account id (OIDC subject): the one part of this row the owner of the account cannot change">id ${esc(u.sub)}</span></td>
       <td><select class="select" data-act="u-role" data-sub="${esc(u.sub)}" ${last ? 'disabled title="The last admin cannot be demoted: make someone else admin first"' : ""}>
         ${d.roles.map((r) => `<option value="${esc(r)}" ${u.role === r ? "selected" : ""}>${esc(ROLE_LABEL[r] || r)}</option>`).join("")}</select></td>
       <td>${u.role === "admin" ? '<span class="note">every site</span>' : u.role === "pending" ? '<span class="note">nothing</span>'
@@ -3290,11 +3387,11 @@ const sessWhen = (iso) => (iso ? `<span data-ago="${esc(iso)}">${ago(iso)}</span
   : '<span class="note">unknown</span>');
 // for the button's label and the "Confirm it's you" dialog (the label goes percent-encoded in X-Fairy-Action)
 const sessName = (x) => `${x.browser || "Unknown browser"}${x.ip || x.signed_in_ip ? ` (${x.ip || x.signed_in_ip})` : ""}`;
-const sessWho = (u) => (u ? u.email || u.name || u.sub : "");
+const sessWho = (u) => (u ? u.username || u.sub : "");
 function sessRow(x, everyone) {
   const u = x.user, ip = x.ip || x.signed_in_ip;
-  const who = everyone ? `<td class="namecell" data-l="User"><b>${esc(u?.name || u?.email || u?.sub || "–")}</b>${u?.you ? ' <span class="chip ok">you</span>' : ""}
-      <span class="sub">${esc(u?.email && u?.name ? u.email : "")}</span><span class="sub" title="Account id (OIDC subject)">id ${esc(u?.sub)}</span></td>` : "";
+  const who = everyone ? `<td class="namecell" data-l="User"><b>${esc(u?.username || u?.sub || "–")}</b>${u?.you ? ' <span class="chip ok">you</span>' : ""}
+      <span class="sub" title="Account id (OIDC subject)">id ${esc(u?.sub)}</span></td>` : "";
   return `<tr class="row${x.current ? " cur" : ""}" data-key="ss-${esc(x.id)}">${who}
     <td class="namecell" data-l="Browser"><b>${esc(x.browser || "Unknown browser")}</b>${x.current ? ' <span class="chip ok">This session</span>' : ""}
       <span class="sub ua" title="${esc(x.user_agent)}">${x.user_agent ? esc(x.user_agent) : "browser not recorded"}</span></td>
@@ -4982,6 +5079,7 @@ function route() {
   closeUpdPop(false);
   if (!$("#modal").hidden && modalAt !== location.hash) closeModal();  // never confirmed: closed as Cancel closes it
   state.menu = null;
+  veilReset("a:"); veilReset("u:");  // a page that is opened again shows dots again
   const r = current();
   if (r.page === "system") {
     const s = state.byId[r.id];
@@ -5108,15 +5206,20 @@ document.addEventListener("change", async (e) => {
 // ------------------------------------------------------------ account menu (top bar, hamburger)
 // The signed-in user, Settings / Sessions / Audit / Users / Updates / Approvals and Sign out. Static DOM in the top bar (not morphed); the
 // active page is marked on every route. Keyboard: arrows / Home / End move, Escape closes and refocuses the button.
+// how the panel names the signed-in person: shown_as from /api/me (the user name, or the words that stand for an
+// address or a name while the account has none); never the name or the address
+const meShown = (me) => String(me?.shown_as || me?.preferred_username || me?.sub || "?");
 const demoViewLabel = (v) => (v === "admin" ? "Admin (everything)" : v === "pending" ? "Waiting for access" : `Viewer · ${v.slice(7)}`);
 function buildAcct() {
-  const me = state.me, who = me.name || me.preferred_username || me.sub;
+  // who: the name the panel shows for this person to everybody (the account's user name). Their own e-mail
+  // address is theirs to see, as dots until they click it (somebody may be looking at the screen with them).
+  const me = state.me, who = meShown(me);
   const sites = me.all_sites ? "every site" : (me.sites || []).join(", ") || "no sites yet";
   const roleChip = me.role === "admin" ? '<span class="chip ok">admin</span>' : `<span class="chip" title="${esc(sites)}">viewer</span>`;
-  const sub = [me.email && me.email !== who ? me.email : "", me.role === "admin" ? "" : `Sees: ${sites}`].filter(Boolean);
+  const sub = [me.email && me.email !== who ? `e-mail ${veiled("me:email", me.email, "e-mail address of your account", "menuitemcheckbox")}` : "", me.role === "admin" ? "" : esc(`Sees: ${sites}`)].filter(Boolean);
   const item = (href, ico, name) => `<a class="menu-item" role="menuitem" tabindex="-1" href="${href}" data-page="${href.slice(2)}"><span class="ico">${ico}</span><span class="name">${esc(name)}</span></a>`;
-  let html = `<div class="acct-head" role="none"><span class="avatar">${esc((who[0] || "?").toUpperCase())}</span>
-    <span class="acct-who"><span class="acct-name"><b>${esc(who)}</b>${roleChip}</span>${sub.map((x) => `<span class="note">${esc(x)}</span>`).join("")}</span></div>
+  let html = `<div class="acct-head" role="none"><span class="avatar">${esc((/[\p{L}\p{N}]/u.exec(who)?.[0] || "?").toUpperCase())}</span>
+    <span class="acct-who"><span class="acct-name"><b>${esc(who)}</b>${roleChip}</span>${sub.map((x) => `<span class="note">${x}</span>`).join("")}</span></div>
     <div class="menu-sep" role="separator"></div>
     ${item("#/settings", I.settings, "Settings")}
     ${item("#/sessions", I.sessions, "Sessions")}
@@ -5153,11 +5256,13 @@ function openAcct(focus = "first") {
   const menu = $("#acct-menu"), btn = $("#acct-btn");
   menu.hidden = false; btn.setAttribute("aria-expanded", "true");
   const items = acctItems();
-  (focus === "last" ? items[items.length - 1] : items[0])?.focus();
+  // the first entry is Settings; the dots of the e-mail address above it are reached with the Up arrow or Home
+  (focus === "last" ? items[items.length - 1] : items.find((x) => !x.dataset.veil) || items[0])?.focus();
 }
 function closeAcct(refocus = true) {
   if (!acctOpen()) return;
   $("#acct-menu").hidden = true; $("#acct-btn").setAttribute("aria-expanded", "false");
+  veilReset("me:");  // a menu that is opened again shows dots again
   if (refocus) $("#acct-btn").focus();
 }
 document.addEventListener("click", async (e) => {
@@ -5221,7 +5326,7 @@ async function boot() {
   $("#doclink").hidden = state.me.docs !== true;  // /docs exists only with enable_docs: true; the link led to a bare 404 otherwise
   if (state.me.role === "pending") {  // signed in, but no role yet: nothing else to load
     const w = $("#waiting");
-    $("#waiting-who").textContent = state.me.email || state.me.name || state.me.sub;
+    $("#waiting-who").textContent = meShown(state.me);
     $("#waiting-demo").innerHTML = demoSwitcher();
     if (state.me.demo) w.querySelector("form").hidden = true;
     w.hidden = false;

@@ -397,7 +397,7 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 	params["approval"] = "sent" // the machine checks it; the token itself is never written anywhere
 	path := api.PathPlugSwitch
 	status, data, err := s.Poller.AgentRequestWithin(c.r.Context(), k.agent, "POST", path,
-		api.PlugSwitch{Source: k.dev, Socket: k.sock.ID, To: b.To, Tag: k.sock.Tag, RequestedBy: actorOf(u), Approval: ap}, plugSwitchWait)
+		api.PlugSwitch{Source: k.dev, Socket: k.sock.ID, To: b.To, Tag: k.sock.Tag, RequestedBy: s.whoShown(u), Approval: ap}, plugSwitchWait)
 	s.Poller.Scheduler.Kick("agent:" + k.agent.ID) // the socket as it is now, not at the next poll
 	if e := unanswered(path, status, data, err); e != nil {
 		var lost *powerctl.Unanswered
@@ -433,7 +433,7 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 	}
 	c.audit(u, plugAudit, target, params, outcome)
 	e := notifications.Event{Type: "power", Severity: notifications.Info, Kind: plugNoteKind, Host: machine,
-		Text: fmt.Sprintf("%s (%s) switched %s by %s", k.sock.Name, k.src.Name, b.To, actorOf(u))}
+		Text: fmt.Sprintf("%s (%s) switched %s by %s", k.sock.Name, k.src.Name, b.To, s.whoShown(u))}
 	if !res.Confirmed {
 		e.Text += " (sent; the socket did not show it yet)"
 	}

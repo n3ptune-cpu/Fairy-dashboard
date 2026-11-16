@@ -466,10 +466,10 @@ func TestEditHostName(t *testing.T) {
 	if got := r.row("pc-a")["name"]; got != "Gaming PC" {
 		t.Errorf("the row: %v", got)
 	}
-	if st := r.storedHost("pc-a"); st["name"] != "Gaming PC" || st["by"] != ehAdmin || st["wol"] != nil {
+	if st := r.storedHost("pc-a"); st["name"] != "Gaming PC" || st["by"] != ehWho || st["wol"] != nil {
 		t.Errorf("stored: %v", st)
 	}
-	if n := r.host("pc-a", "name"); n["value"] != "Gaming PC" || n["from"] != "panel" || n["config"] != "PC-A" || n["by"] != ehAdmin {
+	if n := r.host("pc-a", "name"); n["value"] != "Gaming PC" || n["from"] != "panel" || n["config"] != "PC-A" || n["by"] != ehWho {
 		t.Errorf("the dialog: %v", n)
 	}
 	e, params := r.lastChange("pc-a")

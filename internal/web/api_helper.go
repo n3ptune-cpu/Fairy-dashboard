@@ -109,7 +109,7 @@ func (s *Server) helperAction(c *reqCtx, action string) error {
 	}
 	params["state"] = state
 	c.audit(u, auditAction, id, params, "ok")
-	who := actorOf(u)
+	who := s.whoShown(u)
 	res := HelperResult{SystemID: id, Action: action, State: state}
 	e := notifications.Event{Type: "host", Severity: notifications.Info, SystemID: id, Host: x.Name}
 	if action == "stop" {

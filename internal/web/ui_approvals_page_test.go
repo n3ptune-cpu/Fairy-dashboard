@@ -392,7 +392,7 @@ func TestUIApprovalsPageInTheMenuAndTheRouter(t *testing.T) {
 	runPageScript(t, "approvals-menu", pageTools+`
 let menu = { innerHTML: "", setAttribute() {} };
 const $ = () => menu, syncAcct = () => {};
-`+jsLines(t, js, "esc", "demoViewLabel", "hashPart")+jsFunc(t, js, "buildAcct")+jsFunc(t, js, "current")+`
+`+jsLines(t, js, "dict", "esc", "demoViewLabel", "meShown", "hashPart", "veil", "VEIL_DOTS")+jsFunc(t, js, "veiled")+jsFunc(t, js, "buildAcct")+jsFunc(t, js, "current")+`
 const entries = () => [...menu.innerHTML.matchAll(/<a class="menu-item"[^>]*href="([^"]*)"[^>]*>.*?<span class="name">(.*?)<\/span>/gs)].map((m) => m[1] + " " + m[2]);
 state.me = { sub: "u1", name: "nora", role: "admin", can_control: true, can_manage_users: true };
 buildAcct();

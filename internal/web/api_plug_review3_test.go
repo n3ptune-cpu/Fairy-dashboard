@@ -666,7 +666,7 @@ func TestPlugSwitchNoteDoesNotNameTheReaderToWhoCannotSeeIt(t *testing.T) {
 		}
 		return nil, string(r.raw)
 	}
-	const text = "Desk PC (Monitor powerbar) switched off by " + plugActor + ": power cut while DESK-PC was running"
+	const text = "Desk PC (Monitor powerbar) switched off by " + plugWho + ": power cut while DESK-PC was running"
 	home := pe.viewerOf("Home")
 	for who, hdr := range map[string][]string{"a viewer of the site of the PC": {"Cookie", home}, "a read token of the site of the PC": token("Home")} {
 		if x := pe.do("GET", "/api/systems/reader", nil, hdr...); x.code != 404 {

@@ -391,8 +391,10 @@ func (st *streamState) writeNewNotes(out *bytes.Buffer) {
 		More       int       `json:"more"`
 		MoreUrgent int       `json:"more_urgent"`
 	}{Last: last, Events: make([]newNote, 0, len(evs)), More: more, MoreUrgent: moreUrgent}
+	who := st.s.people()
 	for _, e := range evs {
-		e.Host = noteHost(st.v, e) // the name of a machine this user may not see is not sent (a switched socket)
+		e.Host = noteHost(st.v, e)   // the name of a machine this user may not see is not sent (a switched socket)
+		e.Text = who.ShownIn(e.Text) // nor an address in a sentence about a run an older version started
 		p.Events = append(p.Events, newNoteOf(e))
 	}
 	b, err := json.Marshal(p)

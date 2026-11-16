@@ -51,6 +51,7 @@ const (
 	ehNodeA, ehNodeB = "lab-a-node-pve-a", "lab-b-node-pve-b"
 	ehNAS            = "nas-agent"
 	ehAdmin          = "n@example.com (unverified)" // the audit log's name for the admin of these tests
+	ehWho            = "al-ctl"                     // the user name: what a stored change keeps and the dialog shows
 )
 
 func ehConfig(t *testing.T, nasLinks string) *config.Panel {
@@ -347,13 +348,13 @@ func TestEditHostUPSLinkIsStoredWithTheAgentThatReadsTheUPS(t *testing.T) {
 	if got := strs(p.body["changed"]); !slices.Equal(got, []string{want}) || p.body["message"] != "links saved" || p.body["rev"] != 1.0 {
 		t.Fatalf("the answer: %s", p.raw)
 	}
-	if rack := ehEntry(t, p, "ups", "nas-agent/rack"); rack["on"] != true || rack["from"] != "panel" || rack["config_on"] != false || rack["by"] != ehAdmin {
+	if rack := ehEntry(t, p, "ups", "nas-agent/rack"); rack["on"] != true || rack["from"] != "panel" || rack["config_on"] != false || rack["by"] != ehWho {
 		t.Fatalf("rack in the answer: %v", rack)
 	}
 	// stored under the agent that reads the UPS, with the id of the row PVE-B is shown as: the one decision, and
 	// no word about PVE-A (which config.yaml puts on that UPS); nothing under PVE-B
 	nas := r.storedAgent(ehNAS)
-	if got := fmt.Sprint(nas["ups_powers"]); got != "map[rack:map["+ehNodeB+":true]]" || nas["by"] != ehAdmin || nas["at"] == nil {
+	if got := fmt.Sprint(nas["ups_powers"]); got != "map[rack:map["+ehNodeB+":true]]" || nas["by"] != ehWho || nas["at"] == nil {
 		t.Fatalf("state.json, nas-agent: %v", nas)
 	}
 	if _, has := nas["power_links"]; has || r.storedAgent("lab-b-agent") != nil || len(r.storedOptions()["agents"].(map[string]any)) != 1 {
@@ -374,7 +375,7 @@ func TestEditHostUPSLinkIsStoredWithTheAgentThatReadsTheUPS(t *testing.T) {
 	}
 	// one entry in the bell, on the machine
 	notes := r.do("GET", "/api/notifications", nil, r.hdr[:2]...)
-	if n := strings.Count(string(notes.raw), `"kind":"host_options"`); n != 1 || !strings.Contains(string(notes.raw), `"text":"links changed by `+ehAdmin+`"`) ||
+	if n := strings.Count(string(notes.raw), `"kind":"host_options"`); n != 1 || !strings.Contains(string(notes.raw), `"text":"links changed by `+ehWho+`"`) ||
 		!strings.Contains(string(notes.raw), `"system_id":"`+ehNodeB+`"`) {
 		t.Fatalf("the bell: %d entries: %s", n, notes.raw)
 	}
@@ -475,7 +476,7 @@ func TestEditHostPlugLinksAndTheTotal(t *testing.T) {
 	}
 	// the answer of the change, and the dialog's data afterwards, show what counts NOW (not what config.yaml says)
 	for where, x := range map[string]resp{"the answer of the PUT": p, "the next GET": r.options(ehNodeB)} {
-		if bp := ehEntry(t, x, "plugs", "nas-agent/b-plug"); bp["in_total"] != false || bp["total_from"] != "panel" || bp["config_in_total"] != true || bp["total_by"] != ehAdmin {
+		if bp := ehEntry(t, x, "plugs", "nas-agent/b-plug"); bp["in_total"] != false || bp["total_from"] != "panel" || bp["config_in_total"] != true || bp["total_by"] != ehWho {
 			t.Fatalf("b-plug after it was taken out of the total, in %s: %v", where, bp)
 		}
 		if cp := ehEntry(t, x, "plugs", "nas-agent/corner"); cp["in_total"] != false || cp["total_from"] != "config" || cp["config_in_total"] != false {

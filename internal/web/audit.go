@@ -9,10 +9,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/apierr"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/audit"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
-	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notify"
 )
 
 func sourceOf(u *model.User) string {
@@ -25,8 +25,10 @@ func sourceOf(u *model.User) string {
 	return "ui"
 }
 
-// actorOf is how the audit log (and a notification) names who did something: a token by its name and owner, a
-// person by their e-mail address (marked when it is not verified), else user name, name, subject.
+// actorOf is how the audit log names who did something, in the entry's "actor": a token by its name and owner,
+// a person by their e-mail address (marked when it is not verified), else user name, name, subject. It is the
+// audit log's text and nothing else's: everything else the panel says about a person goes through who and
+// whoShown (people.go), which name them by their user name. An entry also carries the subject and the user name.
 func actorOf(u *model.User) string {
 	if u.Auth == "token" {
 		return model.Deref(u.TokenName) + " (token, owner " + model.Deref(u.TokenOwner) + ")"
@@ -47,9 +49,9 @@ func actorOf(u *model.User) string {
 	return u.Sub
 }
 
-// unverifiedMark follows an e-mail address the identity provider did not mark as verified, wherever the panel
-// names an account by it (audit entries, notifications, "requested by").
-const unverifiedMark = " (unverified)"
+// unverifiedMark follows an e-mail address the identity provider did not mark as verified, where the panel
+// names an account by it: in the audit log's "actor" (and in what older versions stored as "by").
+const unverifiedMark = access.UnverifiedMark
 
 // controlActions are the audited actions that also send the optional ntfy / Discord notification: control
 // actions and every change to users, roles and sites (including a new user waiting for access).
@@ -104,12 +106,20 @@ func (c *reqCtx) audit(u *model.User, action, target string, params map[string]a
 			return
 		}
 	}
-	c.s.writeAudit(audit.Entry{Actor: actorOf(u), Sub: &sub, Action: action, Target: safeTarget(target),
+	who := c.s.people()
+	c.s.writeAudit(audit.Entry{Actor: actorOf(u), Sub: &sub, Username: who.Username(sub), Action: action, Target: safeTarget(target),
 		Params: params, Outcome: outcome, Source: sourceOf(u), IP: &ip})
 	for _, p := range controlActions {
 		if strings.HasPrefix(action, p) {
+			// What leaves the panel (ntfy, Discord) names people by their user names, like the page: the person
+			// who did it, and the account a change of the Users page is about, which the entry names by its
+			// address (or its name, or an address that does not look like one: so it is looked up as a whole).
+			// An address anywhere else in it (the outcome, the details) is replaced too (outside).
 			b, _ := json.Marshal(params)
-			notify.Notify("Fairy: "+action+" on "+target, actorOf(u)+" via "+sourceOf(u)+": "+outcome+" "+string(b))
+			if strings.HasPrefix(action, "user.") {
+				target = who.Shown(target)
+			}
+			c.s.outside("Fairy: "+action+" on "+target, c.s.whoShown(u)+" via "+sourceOf(u)+": "+outcome+" "+string(b))
 			break
 		}
 	}
@@ -134,7 +144,11 @@ func (c *reqCtx) auditAnon(action, outcome, actor string, sub *string, params ma
 	if action == "auth.token_rejected" {
 		src = "token"
 	}
-	c.s.writeAudit(audit.Entry{Actor: actor, Sub: sub, Action: action, Params: params, Outcome: outcome, Source: src, IP: &ip})
+	e := audit.Entry{Actor: actor, Sub: sub, Action: action, Params: params, Outcome: outcome, Source: src, IP: &ip}
+	if sub != nil {
+		e.Username = c.s.people().Username(*sub)
+	}
+	c.s.writeAudit(e)
 }
 
 // auditSuppressed records what the throttle dropped in the last minute: one entry for the anonymous entries

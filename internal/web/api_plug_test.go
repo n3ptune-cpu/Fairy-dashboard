@@ -21,8 +21,12 @@ import (
 // testutil.Machine with the agent's rules for a socket and Fairy-agent's real gate: what "the machine got" is
 // counted, and a switch request that got past the gate carried an approval the gate accepted.
 
-// plugActor is how the panel names the admin of these tests (an address Pocket ID did not verify).
-const plugActor = "n@example.com (unverified)"
+// plugActor is how the audit log names the admin of these tests (an address Pocket ID did not verify); plugWho
+// is how the panel names them everywhere else, the machine that reads the plug included: the user name.
+const (
+	plugActor = "n@example.com (unverified)"
+	plugWho   = "al-ctl"
+)
 
 // One switch off and one switch on, end to end: each needs its own passkey, each is one request for one
 // socket in one direction, and the request names ids and a tag, never an entity, an address or a service. The
@@ -76,7 +80,7 @@ func TestPlugSwitchOffAndOn(t *testing.T) {
 			}
 		}
 		if got.Body["source"] != "desk-bar" || got.Body["socket"] != "ch1" || got.Body["to"] != c.to || got.Body["tag"] != plugTag("desk-bar", "ch1") ||
-			got.Body["requested_by"] != plugActor || !got.Approved {
+			got.Body["requested_by"] != plugWho || !got.Approved {
 			t.Fatalf("%s: the request: %+v", c.to, got)
 		}
 		if got.Wait != plugSwitchWait || plugSwitchWait.Seconds() != 25 {
@@ -115,7 +119,7 @@ func TestPlugSwitchOffAndOn(t *testing.T) {
 	}
 	// the notification, and no token anywhere
 	notes := pe.do("GET", "/api/notifications", nil, "Cookie", pe.admin)
-	if !strings.Contains(string(notes.raw), "Left monitor (Monitor powerbar) switched off by "+plugActor) {
+	if !strings.Contains(string(notes.raw), "Left monitor (Monitor powerbar) switched off by "+plugWho) {
 		t.Errorf("no notification of the switch: %s", notes.raw)
 	}
 	audit, _ := os.ReadFile(pe.s.Cfg.AuditLog)
@@ -1547,7 +1551,7 @@ func TestPlugOffForASocketThatIsLinkedToNothing(t *testing.T) {
 			t.Errorf("%s/%s: the audit entry of the switch: %v", c.source, c.socket, au)
 		}
 	}
-	if notes := pe.do("GET", "/api/notifications", nil, "Cookie", pe.admin); !strings.Contains(string(notes.raw), "Left monitor (Monitor powerbar) switched off by "+plugActor+": power cut with nothing linked to the socket") {
+	if notes := pe.do("GET", "/api/notifications", nil, "Cookie", pe.admin); !strings.Contains(string(notes.raw), "Left monitor (Monitor powerbar) switched off by "+plugWho+": power cut with nothing linked to the socket") {
 		t.Errorf("the notification: %s", notes.raw)
 	}
 	// "on" is not asked about

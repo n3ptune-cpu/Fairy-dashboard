@@ -371,6 +371,9 @@ func TestMixedRunWithAMachineThatChecksApprovals(t *testing.T) {
 	if w.body["run"] != run.ID || fmt.Sprint(w.body["hosts"]) != "[PC-A]" || w.body["left_s"].(float64) < 590 || len(w.body["armed"].([]any)) != 1 {
 		t.Fatalf("the banner's data: %s", w.raw)
 	}
+	if w.body["by"] != "al-ctl" || strings.Contains(string(w.raw), "@example") { // who started the run: the user name
+		t.Fatalf("the banner names the starter as %v: %s", w.body["by"], w.raw)
+	}
 	if active, text, n := r.confirmNote(); !active || n != 1 || !strings.Contains(text, "Fairy woke PC-A for the run") || !strings.Contains(text, "confirm within 10 minutes") ||
 		!strings.Contains(text, "Not confirmed: not updated, and a machine that is armed switches itself off again.") {
 		t.Fatalf("the notification: %v %d %q", active, n, text)

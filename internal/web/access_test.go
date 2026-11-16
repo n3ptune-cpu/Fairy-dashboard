@@ -106,8 +106,9 @@ func setupSites(t *testing.T) *env {
 	return &env{t: t, s: s, srv: srv, b: b}
 }
 
+// person is an account with the user name "user-<sub>", the name "<sub>" and the address "<sub>@example.com".
 func person(sub string) model.User {
-	return model.User{Sub: sub, Name: model.P(sub), Email: model.P(sub + "@example.com"), Groups: []string{"viewers"}}
+	return model.User{Sub: sub, Name: model.P(sub), PreferredUsername: model.P("user-" + sub), Email: model.P(sub + "@example.com"), Groups: []string{"viewers"}}
 }
 
 // streamBody reads the SSE stream for a moment and returns what was sent.

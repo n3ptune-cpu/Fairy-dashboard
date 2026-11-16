@@ -107,7 +107,7 @@ func (s *Server) powerAction(c *reqCtx) error {
 	if ap != nil {
 		params["approval"] = "sent" // the machine checks it; the token itself is never written anywhere
 	}
-	who := actorOf(u) // the one form the panel names a person by (audit 5, r1-b2-10): the countdown said the display name
+	who := s.whoShown(u) // the one form the panel names a person by (audit 5, r1-b2-10): the countdown said the display name
 	res, err := powerctl.ExecuteApproved(c.r.Context(), s.Poller, x, req, who, ap)
 	if err != nil {
 		if ap == nil && refusalCode(err) == api.CodeApprovalRequired {
@@ -233,7 +233,7 @@ func (s *Server) powerCancel(c *reqCtx, u *model.User, id string, req powerctl.R
 	if off := powerctl.ControlOff(s.Poller, x.ID); off != "" {
 		params["control_off"] = off // the cancel went through although control is off: that is said
 	}
-	who := actorOf(u)     // the same form as everywhere else the panel names who did something (audit 5, r1-b2-10)
+	who := s.whoShown(u)  // the same form as everywhere else the panel names who did something (audit 5, r1-b2-10)
 	was := x.PowerPending // what the page showed when Cancel was pressed
 	// No countdown shows, and a power request of this panel to this machine got no answer a moment ago: the
 	// cancel goes to the agent all the same (unseenPower).

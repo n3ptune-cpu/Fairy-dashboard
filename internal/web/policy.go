@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
@@ -19,6 +20,16 @@ func userFromClaims(claims map[string]any, groupsClaim string) model.User {
 	}
 	u := model.User{Sub: fmt.Sprint(claims["sub"]), Name: str("name"), PreferredUsername: str("preferred_username"),
 		Email: str("email"), Picture: str("picture"), Groups: []string{}}
+	if u.PreferredUsername != nil {
+		// The user name is what the panel names the person by, in sentences, in what it tells an agent and in
+		// notifications: it is kept without control characters, line breaks and direction overrides, and short
+		// (access.CleanUsername). One that is nothing after that is none.
+		if n := access.CleanUsername(*u.PreferredUsername); n != "" {
+			u.PreferredUsername = &n
+		} else {
+			u.PreferredUsername = nil
+		}
+	}
 	if u.Name == nil {
 		u.Name = str("display_name")
 	}

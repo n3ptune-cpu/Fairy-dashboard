@@ -16,9 +16,14 @@ import (
 // and UPS belongs to. Reads need an admin browser session; every change also needs the CSRF header, a recent
 // Pocket ID sign-in (step-up, same window as control actions) and is written to the audit log.
 
+// adminUser is one account on the Users page. It carries the account's e-mail address and name: this page and
+// the audit log are the two places that do, and the page draws them as dots until they are clicked. ShownAs is
+// how the panel names the person everywhere else (the user name, or the words that stand for an address or a
+// name while the account has none).
 type adminUser struct {
 	access.User
-	You bool `json:"you"`
+	ShownAs string `json:"shown_as"`
+	You     bool   `json:"you"`
 }
 
 type adminSite struct {
@@ -89,8 +94,11 @@ func (s *Server) adminPage(me *model.User) adminPage {
 	ref := s.sites(d, snap)
 	cfgSites := s.Cfg.Sites()
 	page := adminPage{Users: []adminUser{}, Sites: []adminSite{}, Targets: []adminTarget{}, Roles: access.Roles}
+	who := d.People()
 	for _, x := range d.SortedUsers() {
-		page.Users = append(page.Users, adminUser{x, x.Sub == me.Sub})
+		shown, _ := who.Of(x.Sub)
+		x.Via = who.ShownIn(x.Via) // "panel by <who>": an older version wrote the admin's address there
+		page.Users = append(page.Users, adminUser{x, shown, x.Sub == me.Sub})
 	}
 	names := map[string]string{}
 	for _, x := range snap {
@@ -184,7 +192,7 @@ func (s *Server) adminSetUser(c *reqCtx) error {
 		return err
 	}
 	sub := c.r.PathValue("sub")
-	before, after, err := s.Access.SetRole(sub, body.Role, body.Sites, "panel by "+actorOf(u), false)
+	before, after, err := s.Access.SetRole(sub, body.Role, body.Sites, "panel by "+s.who(u), false)
 	params := map[string]any{"sub": sub, "role": body.Role, "sites": body.Sites}
 	if err != nil {
 		c.audit(u, "user.set_role", sub, params, errorOutcome(err))
@@ -192,7 +200,9 @@ func (s *Server) adminSetUser(c *reqCtx) error {
 	}
 	params["before"] = access.Describe(before)
 	c.audit(u, "user.set_role", after.Label(), params, "ok")
-	c.json(200, map[string]any{"ok": true, "message": fmt.Sprintf("%s is now %s", after.Label(), access.Describe(after))})
+	// (the entry above keeps the account's address as its target; the answer, which the page shows, names it
+	// as the panel names a person)
+	c.json(200, map[string]any{"ok": true, "message": fmt.Sprintf("%s is now %s", s.accountShown(after), access.Describe(after))})
 	return nil
 }
 
@@ -202,7 +212,11 @@ func (s *Server) adminRemoveUser(c *reqCtx) error {
 		return err
 	}
 	sub := c.r.PathValue("sub")
-	gone, err := s.Access.Remove(sub, false, "panel by "+actorOf(u))
+	removedName := "This account" // as the panel names it, asked before it is gone
+	if cur, ok := s.Access.Load().Users[sub]; ok {
+		removedName = s.accountShown(cur)
+	}
+	gone, err := s.Access.Remove(sub, false, "panel by "+s.who(u))
 	if err != nil {
 		c.audit(u, "user.remove", sub, map[string]any{"sub": sub}, errorOutcome(err))
 		return err
@@ -210,7 +224,7 @@ func (s *Server) adminRemoveUser(c *reqCtx) error {
 	sessions, tokens := s.revokeUser(gone.Sub)
 	c.audit(u, "user.remove", gone.Label(), map[string]any{"sub": gone.Sub, "was": access.Describe(gone),
 		"sessions_revoked": sessions, "tokens_revoked": tokens}, "ok")
-	c.json(200, map[string]any{"ok": true, "message": gone.Label() + " was removed from the list"})
+	c.json(200, map[string]any{"ok": true, "message": removedName + " was removed from the list"})
 	return nil
 }
 

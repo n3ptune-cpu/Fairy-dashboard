@@ -34,11 +34,12 @@ func (s *Server) bootstrapRole(u *model.User) (role, via string) {
 	return access.RolePending, "first sign-in"
 }
 
-// identityOf is what the identity provider said about u, for users.json: the subject, the name, and the email
-// address with whether the provider verified it (the Users page and the admin CLI mark an address that is only
-// claimed, and never find an account by it).
+// identityOf is what the identity provider said about u, for users.json: the subject, the name, the user name
+// (what the panel names the person by), and the email address with whether the provider verified it (the Users
+// page and the admin CLI mark an address that is only claimed, and never find an account by it).
 func identityOf(u *model.User) access.Identity {
-	return access.Identity{Sub: u.Sub, Email: model.Deref(u.Email), EmailVerified: u.EmailVerified, Name: model.Deref(u.Name)}
+	return access.Identity{Sub: u.Sub, Email: model.Deref(u.Email), EmailVerified: u.EmailVerified, Name: model.Deref(u.Name),
+		Username: model.Deref(u.PreferredUsername)}
 }
 
 // recordUser adds a user to users.json the first time they are seen and records email, name and last seen
@@ -89,6 +90,15 @@ func (s *Server) userGrant(c *reqCtx, u *model.User) access.Grant {
 		// verified it, name) is as old as the session's sign-in; written back, an older session would undo
 		// what a later sign-in recorded (T-69). Identity is recorded at a sign-in only (recordUser).
 		_, _, _ = s.Access.Seen(u.Sub, "", "", access.RolePending, "")
+		// One thing more, once: an account that has no user name in users.json yet gets the one of this
+		// session. Sessions that began before the panel kept user names have it in their cookie, and without
+		// this the person would be "(address hidden)" to everybody until their next sign-in. A stored user
+		// name is never replaced from a cookie (FillUsername), so the rule above holds for it as well.
+		if rec.Username == "" && model.Deref(u.PreferredUsername) != "" {
+			if _, err := s.Access.FillUsername(u.Sub, *u.PreferredUsername); err != nil {
+				slog.Warn("users.json: the user name of a running session could not be written", "sub", u.Sub, "error", err)
+			}
+		}
 	}
 	return rec.Grant()
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/access"
 	"sort"
 	"strings"
 	"time"
@@ -60,11 +61,13 @@ type sessionView struct {
 	Location string `json:"location"`
 }
 
+// sessionOwner is whose session it is: the account id, and the user name the panel names the person by (the
+// words that stand for an address or a name when the account has none). The address and the name recorded at
+// the session's sign-in stay in sessions.json and in the audit entry of a sign-out; the page does not get them.
 type sessionOwner struct {
-	Sub   string `json:"sub"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
-	You   bool   `json:"you"`
+	Sub      string `json:"sub"`
+	Username string `json:"username"`
+	You      bool   `json:"you"`
 }
 
 type sessionAddr struct {
@@ -179,8 +182,9 @@ func unixTime(sec float64) *time.Time {
 	return &t
 }
 
-// ownerLabel is how a session's account is named in the audit log and in "Confirm it's you": the e-mail
-// address or name recorded at its sign-in, else the account id.
+// ownerLabel is how a session's account is named in the audit log (the target of a sign-out): the e-mail
+// address or name recorded at its sign-in, else the account id. The page and "Confirm it's you" name the
+// account by its user name (ownerShown).
 func ownerLabel(x adminstate.Session) string {
 	for _, v := range []string{x.Email, x.Name} {
 		if v != "" {
@@ -188,6 +192,16 @@ func ownerLabel(x adminstate.Session) string {
 		}
 	}
 	return x.Sub
+}
+
+// ownerShown is how a session's account is named on the Sessions page and in "Confirm it's you": as the panel
+// names that account everywhere; a session whose account is not in users.json by what its recorded label is
+// shown as (an address is hidden).
+func ownerShown(p *access.People, x adminstate.Session) string {
+	if n, ok := p.Of(x.Sub); ok {
+		return n
+	}
+	return p.Shown(ownerLabel(x))
 }
 
 // views turns sessions into what the page gets, the caller's own session first, then by account, each
@@ -213,6 +227,7 @@ func (s *Server) views(list []knownSession, current, me string, withUser bool) [
 		return a.SignedIn() > b.SignedIn()
 	})
 	out := []sessionView{}
+	who := s.people()
 	for _, k := range list {
 		v := sessionView{ID: s.codec.handle(k.SID), Current: k.SID == current, SignedIn: unixTime(k.SignedIn()),
 			LastActive: unixTime(float64(k.seen)), IP: k.lastAddr(), SignedInIP: k.SignedInIP(), AlsoFrom: []sessionAddr{},
@@ -224,7 +239,7 @@ func (s *Server) views(list []knownSession, current, me string, withUser bool) [
 			}
 		}
 		if withUser {
-			v.User = &sessionOwner{Sub: k.Sub, Name: k.Name, Email: k.Email, You: k.Sub == me}
+			v.User = &sessionOwner{Sub: k.Sub, Username: ownerShown(who, k.Session), You: k.Sub == me}
 		}
 		out = append(out, v)
 	}
@@ -471,7 +486,7 @@ func (c *reqCtx) sessionDetail(u *model.User) string {
 		return ""
 	}
 	if t.Sub != u.Sub {
-		return "of " + truncate(ownerLabel(t.Session), 60) + ": " + sessionText(t)
+		return "of " + truncate(ownerShown(c.s.people(), t.Session), 60) + ": " + sessionText(t)
 	}
 	return sessionText(t)
 }

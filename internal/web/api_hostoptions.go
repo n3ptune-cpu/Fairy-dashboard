@@ -286,6 +286,8 @@ type hoMachine struct {
 	// the machine itself: its name and Wake-on-LAN, its site (api_hostedit.go; nil where no machine is asked about)
 	host  *hoHost
 	sites *hoSites
+	// how the accounts are named, for "by" in the dialog's data (nil: as stored; view)
+	who *access.People
 }
 
 type hoUPS struct{ id, agent, name, label string }
@@ -332,7 +334,7 @@ func (c *reqCtx) hostOptionsMachine(id string) (*hoMachine, error) {
 // when a host's changes are taken out (forgetHostOptions).
 func (s *Server) hostOptionsDevices() *hoMachine {
 	p := s.Poller
-	m := &hoMachine{base: map[string]config.Links{}, names: map[string]string{}, shown: p.ShownID}
+	m := &hoMachine{base: map[string]config.Links{}, names: map[string]string{}, shown: p.ShownID, who: s.people()}
 	rows := map[string]string{}
 	for _, x := range p.Snapshot() {
 		rows[x.ID] = x.Name
@@ -1127,6 +1129,7 @@ func (m *hoMachine) view(o adminstate.HostOptions, ignored []string, ignoredCoun
 	if m.host != nil && m.sites != nil { // the machine itself: its name, its site, its Wake-on-LAN (api_hostedit.go)
 		out["host"] = m.hostView(o, m.sites)
 	}
+	byShown(m.who, out) // who changed a line, by the name the panel shows for them (state.json keeps what it was written with)
 	return out
 }
 
@@ -1331,7 +1334,7 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 	// One locked read-modify-write: the ticks are applied to what state.json holds at that moment.
 	// What a machine's own run timing is compared with (the panel's timing, where the machine has no block) is
 	// the one the same reading of the file holds.
-	after, changed, err := s.Poller.Admin.EditHostOptionsWith(actorOf(u), func(o *adminstate.HostOptions, panel adminstate.RunTimings) error {
+	after, changed, err := s.Poller.Admin.EditHostOptionsWith(s.who(u), func(o *adminstate.HostOptions, panel adminstate.RunTimings) error {
 		before := o.Clone()
 		m.host.run = s.hostRunBasesWith(m.row.ID, panel)
 		var err error
@@ -1404,7 +1407,7 @@ func (s *Server) hostOptionsPut(c *reqCtx) error {
 		}
 		if s.Notes != nil {
 			s.Notes.Add(notifications.Event{Kind: "host_options", Type: "host", Severity: notifications.Info, SystemID: m.row.ID, Host: m.row.Name,
-				Text: about + actorOf(u)})
+				Text: about + s.whoShown(u)})
 		}
 	}
 	if now, err := c.hostOptionsMachine(id); err == nil { // as it is now: the name and the site may be other ones

@@ -88,7 +88,7 @@ func TestTurnOnTakesTheMachineIDOnRecord(t *testing.T) {
 		t.Fatalf("the id in the request %q, in the entry %q, in the machine's trust file %q", sent, inEntry, trustID(t, a.laptop))
 	}
 	b := a.s.Poller.BindingOf("laptop")
-	if !b.OK() || !b.Checks() || b.Record.MachineID != sent || b.Record.How != approval.PinTurnOn || !strings.HasPrefix(b.Record.By, "n@example.com") || b.Record.State != api.ApprovalRequired {
+	if !b.OK() || !b.Checks() || b.Record.MachineID != sent || b.Record.How != approval.PinTurnOn || b.Record.By != "al-ctl" || b.Record.State != api.ApprovalRequired {
 		t.Fatalf("on record after Turn on (before any poll): %+v", b)
 	}
 	// it is in the file, and a panel that starts again on that folder has it

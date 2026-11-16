@@ -345,6 +345,7 @@ func (s *Server) runTimingsView(o adminstate.RunTimings, ignored []string) map[s
 	if ignored == nil {
 		ignored = []string{}
 	}
+	byShown(s.people(), rows)
 	return map[string]any{"rev": o.Rev, "timings": rows, "confirm_wait_s": t.ticket().ConfirmWaitS, "active": active != nil,
 		"ignored": capLines(ignored), "ignored_count": o.Ignored,
 		// how many machines that check passkey approvals themselves follow the panel's countdown, and the most
@@ -452,7 +453,7 @@ func (s *Server) runTimingsPut(c *reqCtx) error {
 		s.rtBeforeWrite()
 	}
 	for try := 0; ; try++ {
-		after, changed, err = s.Poller.Admin.EditRunTimings(actorOf(u), func(o *adminstate.RunTimings) error {
+		after, changed, err = s.Poller.Admin.EditRunTimings(s.who(u), func(o *adminstate.RunTimings) error {
 			var needsOwn bool
 			changes, lines, needsOwn = s.rtPlan(o, req)
 			if replay && rtShown(shownItems(lines)) != shown {
@@ -495,7 +496,7 @@ func (s *Server) runTimingsPut(c *reqCtx) error {
 	c.audit(u, rtAuditAction, "run timings", params, "ok")
 	if s.Notes != nil {
 		s.Notes.Add(notifications.Event{Kind: "run_timings", Type: "update", Severity: notifications.Info, Host: wuNoteHost,
-			Text: "run timings changed by " + actorOf(u)})
+			Text: "run timings changed by " + s.whoShown(u)})
 	}
 	out["message"], out["changed"] = "saved", lines
 	if active != nil {

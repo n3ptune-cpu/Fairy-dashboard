@@ -476,7 +476,7 @@ func (s *Server) wuConfirmSend(c *reqCtx, u *model.User, id string, g *approvalG
 		hostIDs = append(hostIDs, h.hostID)
 	}
 	sort.Strings(hostIDs)
-	by := actorOf(u)
+	by := s.whoShown(u)
 	begun, err := s.WakeRuns.BeginConfirm(id, by, hostIDs)
 	if err != nil {
 		c.audit(u, "wakeupdate.confirm", id, map[string]any{"run": id}, "error 409: "+err.Error())
@@ -637,7 +637,7 @@ func (s *Server) runWaitingNow() runWaiting {
 	out := runWaiting{Now: now}
 	if a, _ := s.WakeRuns.Snapshot(); a != nil && a.Approval == "needed" {
 		if waiting, err := s.WakeRuns.Waiting(a.ID); err == nil {
-			out.Run, out.By, out.ConfirmBy, out.Tried = a.ID, a.By, a.ConfirmBy, a.Tried
+			out.Run, out.By, out.ConfirmBy, out.Tried = a.ID, a.By, a.ConfirmBy, a.Tried // (a run that is going was started by this version: user names)
 			if left, ok := s.WakeRuns.ConfirmLeft(a.ID); ok {
 				out.LeftS = int(left / time.Second)
 			}
@@ -747,7 +747,7 @@ func (s *Server) wakeUpdateKeepOn(c *reqCtx) error {
 		req := powerctl.Request{Action: "cancel", PendingUnseen: true}
 		err := req.Validate()
 		if err == nil {
-			_, err = powerctl.Execute(c.r.Context(), s.Poller, x, req, actorOf(u))
+			_, err = powerctl.Execute(c.r.Context(), s.Poller, x, req, s.whoShown(u))
 		}
 		if err != nil { // every answer that is not the agent's "ok" is "not cancelled"
 			return done(apierr.Upstream, "error: not cancelled: "+shortWhy(err), "NOT cancelled ("+shortWhy(err)+"). "+itMayGo()+" Try again, or stop it at the machine.", false)
@@ -762,7 +762,7 @@ func (s *Server) wakeUpdateKeepOn(c *reqCtx) error {
 			// A cancel that finds no run ends nothing, and the ticket can still arrive: this is not "stays ON".
 			until := late.TicketUntil.UTC().Format("15:04 UTC")
 			lead := "Not known until " + until + " whether " + x.Name + " stays on: its agent shows no run now, but the run's ticket, whose request got no answer, may still reach it. "
-			if late.Active && s.WakeRuns.KeepOn(x.ID, actorOf(u)) {
+			if late.Active && s.WakeRuns.KeepOn(x.ID, s.whoShown(u)) {
 				return done(200, "not known until "+until+": the ticket may still arrive; the run keeps cancelling", lead+"The panel keeps cancelling until then, and the run's report says what came of it.", false)
 			}
 			if late.Active {

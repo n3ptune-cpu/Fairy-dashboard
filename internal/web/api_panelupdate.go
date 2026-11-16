@@ -100,7 +100,7 @@ func (s *Server) panelUpdatePost(c *reqCtx) error {
 	}
 	c.audit(u, "panel.update", "panel", params, "started")
 	s.Notes.Add(notifications.Event{Kind: "panel_update_started", Type: "update", Severity: notifications.Info,
-		Host: "Fairy panel", Text: fmt.Sprintf("panel update started by %s (%v to %v)", actorOf(u), params["from"], params["latest"])})
+		Host: "Fairy panel", Text: fmt.Sprintf("panel update started by %s (%v to %v)", s.whoShown(u), params["from"], params["latest"])})
 	c.json(202, map[string]any{"ok": true, "message": "panel update started: it restarts in a minute or two"})
 	return nil
 }

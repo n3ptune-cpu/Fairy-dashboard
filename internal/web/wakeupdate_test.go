@@ -636,6 +636,14 @@ func TestWakeUpdateRunEndToEnd(t *testing.T) {
 	if act == nil || act["state"] != "running" || len(act["hosts"].([]any)) != 2 {
 		t.Fatalf("the page while it runs: %s", page.raw)
 	}
+	// who started it: the user name. The text the audit log names them by, which the run keeps for its entries,
+	// is not sent (the address)
+	if act["by"] != "user-u1" || strings.Contains(string(page.raw), "by_actor") || strings.Contains(string(page.raw), "n@example.com") {
+		t.Errorf("the page while it runs names who started it as %v: %s", act["by"], clipText(string(page.raw), 400))
+	}
+	if a, _ := e.s.WakeRuns.Snapshot(); a == nil || a.By != "user-u1" || a.ByActor != "n@example.com"+unverifiedMark {
+		t.Errorf("the run keeps: by %q, for the audit log %q", a.By, a.ByActor)
+	}
 	run := f.finish()
 	pc, lap := hostOf(run, "pc-a"), hostOf(run, "laptop")
 	if run.State != wakerun.RunDone || pc.State != wakerun.StOff || !strings.Contains(pc.Text, "Came online after the wake, updated from 16-aaaaaaa to 17-bbbbbbb, and switched off again.") {
@@ -657,12 +665,17 @@ func TestWakeUpdateRunEndToEnd(t *testing.T) {
 		}
 	}
 	// the audit log
-	who := actorOf(&model.User{Sub: run.BySub, Name: model.P(run.By)})
+	// (the entries of the run are written under the admin's name in the audit log, with the subject and the user
+	// name; the run itself, as the page gets it, has the user name)
+	if run.By != "user-u1" {
+		t.Errorf("the run was started by %q", run.By)
+	}
+	const who = "n@example.com" + unverifiedMark
 	var lines []string
 	for _, action := range []string{"wakeupdate.start", "power.wake", "update.agent", "power.shutdown", "wakeupdate.host", "wakeupdate.end"} {
 		for _, en := range auditOf(e, action) {
 			p, _ := en["params"].(map[string]any)
-			if en["action"] != action || p["run"] != run.ID || en["actor"] != who {
+			if en["action"] != action || p["run"] != run.ID || en["actor"] != who || en["sub"] != "u1" || en["username"] != "user-u1" {
 				continue
 			}
 			lines = append(lines, fmt.Sprintf("%s %s %s", action, en["target"], en["source"]))
@@ -692,6 +705,9 @@ func TestWakeUpdateRunEndToEnd(t *testing.T) {
 	last, _ := page.body["last"].([]any)
 	if page.body["active"] != nil || len(last) != 1 || last[0].(map[string]any)["id"] != run.ID || last[0].(map[string]any)["summary"] == "" {
 		t.Fatalf("the page after the run: %s", page.raw)
+	}
+	if last[0].(map[string]any)["by"] != "user-u1" || strings.Contains(string(page.raw), "by_actor") || strings.Contains(string(page.raw), "n@example.com") {
+		t.Errorf("the page after the run names who started it as %v: %s", last[0].(map[string]any)["by"], clipText(string(page.raw), 400))
 	}
 	// nothing that is a secret is in the journal, the audit log or the page
 	journal, _ := os.ReadFile(filepath.Join(e.s.Cfg.DataDir, "wake-update.json"))
@@ -952,14 +968,14 @@ func TestPanelUpdateWaitsForARun(t *testing.T) {
 	e.s.Version = "8-ddddddd"
 	e.s.PanelUpdates = updates.Static{Tag: "build-9", Version: "9-ccccccc", Build: model.P(9), Verified: true}
 	admin := e.cookie(controller(), 0)
-	run, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "Alice", BySub: "u2"})
+	run, err := e.s.WakeRuns.Start(wakerun.StartRequest{Hosts: []string{"pc-a"}, By: "al-ctl", BySub: "u2"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	post := func() resp {
 		return e.do("POST", "/api/admin/panel-update", map[string]any{}, "Cookie", admin, "X-Requested-With", "fairy")
 	}
-	if r := post(); r.code != 409 || runner.starts != 0 || !strings.Contains(fmt.Sprint(r.body["detail"]), `"Update unpowered hosts" is running (started by Alice)`) {
+	if r := post(); r.code != 409 || runner.starts != 0 || !strings.Contains(fmt.Sprint(r.body["detail"]), `"Update unpowered hosts" is running (started by al-ctl)`) {
 		t.Fatalf("while a run is going: %d %s", r.code, r.raw)
 	}
 	if _, err := e.s.WakeRuns.CancelRun(run.ID, "Alice", false); err != nil {

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -134,8 +135,9 @@ func TestAuditDetailsAreCutBeforeTheyAreEscaped(t *testing.T) {
 		}
 		parts = append(parts, m)
 	}
+	// (the details of an entry also go through what hides an address or a name: veilJS, usernames_ui_test.go)
 	script := `"use strict";
-` + strings.Join(parts, "\n") + `
+` + strings.Join(parts[:3], "\n") + "\n" + veilJS(t, js) + parts[3] + `
 const fail = (m) => { console.log("FAIL " + m); process.exitCode = 1; };
 const e = { id: 7, params: { runs: "update all agents", machines: ["ALPHA-OFF", "BRAVO-REQ", "CHARLIE-BROKEN", "DELTA"], entries: 4 } };
 let h = auditDetails(e);
@@ -157,13 +159,17 @@ if (!process.exitCode) console.log("ok");
 
 // r1-b2-10 (audit 5): "Last Turn on · by nora@example.test", a run "started by nora@example.test", the Audit
 // page the same, and a countdown "requested by Nora Admin": the request to the machine carried the display
-// name. It carries the form of the audit log now, for a shutdown and for an update.
+// name. It carried the form of the audit log then, for a shutdown and for an update.
+//
+// Build 17: the panel names a person by the account's user name. That one form is what the machine is told,
+// for a shutdown and for an update: not the address (the machine shows it on its screen and writes it to its
+// log), not the name. The audit entry keeps the address, and has the user name next to it.
 func TestTheMachineIsToldWhoAskedInTheAuditLogsForm(t *testing.T) {
 	a := newApprovalEnv(t)
 	a.selfUpdating(t)
 	u := controller()
-	name, mail := "Nora Admin", "nora@example.test"
-	u.Name, u.Email, u.EmailVerified = &name, &mail, true
+	name, mail, handle := "Nora Admin", "nora@example.test", "nora-a"
+	u.Name, u.Email, u.EmailVerified, u.PreferredUsername = &name, &mail, true, &handle
 	fresh := a.cookie(u, 0)
 	hdr := []string{"Cookie", fresh, "X-Requested-With", "fairy", "Content-Type", "application/json"}
 	if r := a.do("POST", "/api/systems/laptop/power", a.shutdownBody(), hdr...); r.code != 200 {
@@ -173,10 +179,15 @@ func TestTheMachineIsToldWhoAskedInTheAuditLogsForm(t *testing.T) {
 		t.Fatalf("update: %d %s", r.code, r.raw)
 	}
 	p := a.laptop.Passed()
-	if len(p) != 2 || p[0].Path != "/power" || p[0].Body["requested_by"] != mail || p[1].Path != "/update" || p[1].Body["requested_by"] != mail {
+	if len(p) != 2 || p[0].Path != "/power" || p[0].Body["requested_by"] != handle || p[1].Path != "/update" || p[1].Body["requested_by"] != handle {
 		t.Fatalf("what the machine was told: %+v", p)
 	}
-	if e := a.auditEntries("", "power.shutdown"); len(e) != 1 || e[0]["actor"] != mail {
+	for _, x := range p {
+		if b, _ := json.Marshal(x.Body); strings.Contains(string(b), mail) || strings.Contains(string(b), name) {
+			t.Errorf("%s: the machine was told the address or the name: %s", x.Path, b)
+		}
+	}
+	if e := a.auditEntries("", "power.shutdown"); len(e) != 1 || e[0]["actor"] != mail || e[0]["username"] != handle || e[0]["sub"] != u.Sub {
 		t.Fatalf("the audit entry: %v", e)
 	}
 }

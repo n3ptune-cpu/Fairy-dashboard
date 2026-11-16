@@ -21,7 +21,7 @@ func (s *Server) me(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
-	me := model.Me{User: *u, CanControl: g.Admin(), Demo: s.DemoUser != nil,
+	me := model.Me{User: *u, ShownAs: s.whoShown(u), CanControl: g.Admin(), Demo: s.DemoUser != nil,
 		ControlDisabled: s.Poller.Admin.ControlDisabled(), StepUpWindowS: s.Cfg.StepUpWindowS, AuthAgeS: c.authAge(u),
 		Role: g.Role, Sites: g.Sites, AllSites: g.SeesAll(), CanManageUsers: g.Admin() && u.Auth != "token", Docs: s.Cfg.EnableDocs}
 	if me.Sites == nil {
@@ -66,11 +66,15 @@ func (s *Server) auditPage(c *reqCtx) error {
 		}
 		before = &n
 	}
-	entries, next := audit.Read(s.Cfg.AuditLog, user, action, host, before, limit)
+	who := s.people()
+	entries, next := audit.ReadWho(s.Cfg.AuditLog, user, who.Named(user), action, host, before, limit)
 	if u.Auth == "token" { // a machine id is for an admin in a browser: a token reads the entries without its characters
 		auditForToken(entries)
 	}
-	c.json(200, model.AuditPage{Entries: entries, Next: next})
+	for _, e := range entries {
+		e["who"] = auditWho(who, e)
+	}
+	c.json(200, model.AuditPage{Entries: entries, Next: next, Private: who.Private()})
 	return nil
 }
 

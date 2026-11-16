@@ -61,13 +61,17 @@ func setupWith(t *testing.T, wrap func(poller.Backend) poller.Backend) *env {
 	return &env{t: t, s: s, srv: srv, b: b}
 }
 
-var viewer = model.User{Sub: "u1", Name: model.P("Alice"), Email: model.P("n@example.com"), Groups: []string{"viewers"}}
+// viewer and controller are two accounts that give the same name and the same (not verified) address, and
+// each a user name of its own: "al-view" and "al-ctl". The panel names them by those. The name and the address
+// are in the audit log and on the Users page, and nowhere else.
+var viewer = model.User{Sub: "u1", Name: model.P("Alice"), PreferredUsername: model.P("al-view"), Email: model.P("n@example.com"), Groups: []string{"viewers"}}
 
 // controller is in a control group: admin on first sign-in. A different subject from viewer, because roles
 // now belong to the user (users.json), not to the groups in one session.
 func controller() model.User {
 	u := viewer
 	u.Sub = "u2"
+	u.PreferredUsername = model.P("al-ctl")
 	u.Groups = []string{"viewers", "controllers"}
 	return u
 }
@@ -931,7 +935,7 @@ func TestUpdatesPageAndButton(t *testing.T) {
 	r = e.do("POST", "/api/admin/updates/laptop", map[string]any{}, append([]string{"Cookie", c}, csrf...)...)
 	// who asked goes to the machine in the form the audit log names a person by (audit 5, r1-b2-10: the
 	// countdown said "requested by <name>", a run and the last Turn on "by <address>")
-	if r.code != 200 || r.body["ok"] != true || !strings.Contains(strings.Join(e.b.Requests, "\n"), "laptop POST /update map[requested_by:n@example.com (unverified)]") {
+	if r.code != 200 || r.body["ok"] != true || !strings.Contains(strings.Join(e.b.Requests, "\n"), "laptop POST /update map[requested_by:al-ctl]") {
 		t.Fatalf("update: %d %s %v", r.code, r.raw, e.b.Requests)
 	}
 	r = e.do("POST", "/api/admin/updates", map[string]any{}, append([]string{"Cookie", c}, csrf...)...)

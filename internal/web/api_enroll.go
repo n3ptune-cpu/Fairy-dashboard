@@ -317,10 +317,15 @@ func (s *Server) hostsPage(c *reqCtx) error {
 	if err != nil {
 		return apierr.New(500, "managed-hosts.yaml: "+err.Error())
 	}
+	who := s.people()
+	for i := range p.Enrollments { // (a copy of the manager's list: its own entries keep what they have)
+		p.Enrollments[i].CreatedBy = who.Shown(p.Enrollments[i].CreatedBy)
+	}
 	for _, h := range hosts {
 		info, _ := s.Poller.AgentInfo(h.ID)
 		active, shadowed, why := s.managedState(h)
 		row := managedRow{Host: h, SystemID: h.Shown(), Online: info.Online, Active: active, Shadowed: shadowed, Why: why}
+		row.AddedBy = who.Shown(h.AddedBy) // the hosts file keeps what it was written with (an address, before build 17)
 		if !shadowed {
 			row.WakeRelayOf = s.wakeLosers(h.ID, rowsOf(h)...)
 		}
@@ -361,6 +366,9 @@ func (s *Server) hostAdd(c *reqCtx) error {
 	if err != nil {
 		return err
 	}
+	// (Add host keeps who made it as the audit log names them, as before: the entries the pairing writes later,
+	// without a request, have that text as their actor. It is turned into the user name wherever it is handed
+	// out: the join code's answers, and "Added ... by" on the host's page.)
 	cr, err := s.Enroll.Create(c.r.Context(), req, nil, actorOf(u), s.nodeSystemID)
 	params := map[string]any{"name": req.Name, "os": req.OS, "site": req.Site, "node": req.Node, "options": req.Options,
 		"wol_macs": len(req.WolMACs)}
@@ -372,6 +380,7 @@ func (s *Server) hostAdd(c *reqCtx) error {
 	if c.resumed() {
 		s.Enroll.Hold(cr, c.codeHolder(u)) // made right after a step-up sign-in: the browser fetches the code once (reveal=1)
 	}
+	cr.CreatedBy = s.shown(cr.CreatedBy)
 	c.json(201, cr)
 	return nil
 }
@@ -422,6 +431,7 @@ func (s *Server) hostRepair(c *reqCtx) error {
 	if c.resumed() {
 		s.Enroll.Hold(cr, c.codeHolder(u))
 	}
+	cr.CreatedBy = s.shown(cr.CreatedBy)
 	c.json(201, cr)
 	return nil
 }
@@ -504,7 +514,7 @@ func (s *Server) hostRemove(c *reqCtx) error {
 	var wakeLost []string
 	if !copyOnly {
 		wakeLost = s.wakeLosers(h.ID, rowsOf(h)...)
-		gone, notes, err := s.forgetHostOptions(actorOf(u), h.ID, rowsOf(h)...)
+		gone, notes, err := s.forgetHostOptions(s.who(u), h.ID, rowsOf(h)...)
 		if err != nil {
 			c.audit(u, "host.remove", h.ID, nil, "error: "+err.Error())
 			return err
@@ -539,10 +549,10 @@ func (s *Server) hostRemove(c *reqCtx) error {
 		params["wake_changes_removed"] = wakeLost // the machines it was the relay of by a change in Edit host
 	}
 	c.audit(u, "host.remove", h.ID, params, "ok")
-	text := fmt.Sprintf("removed from the panel by %s (the agent on the machine keeps running until you uninstall it)", actorOf(u))
+	text := fmt.Sprintf("removed from the panel by %s (the agent on the machine keeps running until you uninstall it)", s.whoShown(u))
 	msg := h.Name + " removed from the panel" + wakeLostText(h.Name, wakeLost)
 	if copyOnly {
-		text = fmt.Sprintf("its unused Add host copy was removed by %s (the machine stays in the panel, as config.yaml's entry)", actorOf(u))
+		text = fmt.Sprintf("its unused Add host copy was removed by %s (the machine stays in the panel, as config.yaml's entry)", s.whoShown(u))
 		msg = "the unused Add host copy of " + h.Name + " was removed. " + h.Name + " stays in the panel as config.yaml's entry, and nothing that is stored for it was changed"
 	}
 	if s.Notes != nil {
@@ -584,6 +594,7 @@ func (s *Server) enrollmentGet(c *reqCtx) error {
 		if !ok {
 			return apierr.New(404, "the code was already shown, or this Add host is over: make a new code")
 		}
+		cr.CreatedBy = s.shown(cr.CreatedBy)
 		c.json(200, cr)
 		return nil
 	}
@@ -591,6 +602,7 @@ func (s *Server) enrollmentGet(c *reqCtx) error {
 	if !ok {
 		return apierr.New(404, "no such Add host (the panel restarted? make a new code)")
 	}
+	e.CreatedBy = s.shown(e.CreatedBy)
 	c.json(200, e)
 	return nil
 }

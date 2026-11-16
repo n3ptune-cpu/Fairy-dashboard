@@ -172,7 +172,7 @@ func (s *Server) machineEvent(e poller.MachineEvent) {
 		entry("approval.alarm", e.AgentID, nil, "cleared")
 		if s.Notes != nil {
 			s.Notes.Add(notifications.Event{Kind: "approval_ok", Type: "host", Severity: notifications.Info, SystemID: sys, Host: name,
-				Text: machineClearText(e), Key: key})
+				Text: machineClearText(e, s.shown(e.By)), Key: key})
 		}
 	}
 }
@@ -180,8 +180,10 @@ func (s *Server) machineEvent(e poller.MachineEvent) {
 // machineClearText says how an alarm ended. "In order again" is for a check that is on and matches the record.
 // When an admin accepted what the machine shows, the line says what was accepted and by whom: after "Accept
 // that its check is off" the check is OFF, and "in order again" read as if it were on.
-func machineClearText(e poller.MachineEvent) string {
-	by := textsafe.Clip(e.By, 80)
+//
+// by is who accepted it, as the panel names a person in a sentence (the record keeps what AcceptMachine was given).
+func machineClearText(e poller.MachineEvent, by string) string {
+	by = textsafe.Clip(by, 80)
 	switch e.Accepted {
 	case "off":
 		return "its check being off was accepted by " + by
@@ -270,7 +272,7 @@ func (s *Server) approvalAccept(c *reqCtx) error {
 	if !s.control.allow(u.Sub) {
 		return c.limited(u, s.control, "too many control requests")
 	}
-	what, before, err := s.Poller.AcceptMachine(a.ID, actorOf(u), want)
+	what, before, err := s.Poller.AcceptMachine(a.ID, s.who(u), want)
 	if what == "" { // nothing was accepted
 		return refuse(before, err)
 	}

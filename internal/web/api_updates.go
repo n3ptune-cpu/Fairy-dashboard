@@ -191,9 +191,10 @@ func updateParams(row updateRow, latest updates.Latest, all bool) map[string]any
 // callUpdate asks one agent to update itself (POST /update with the control token). Safe to run concurrently:
 // it only reads the request context.
 func (c *reqCtx) callUpdate(u *model.User, a config.Agent, ap *api.Approval) (map[string]any, error) {
-	// who asked, in the one form the panel names a person by (actorOf): the audit log, a run's "started by",
-	// "Last Turn on · by" and the countdown's "requested by" used to show two (audit 5, r1-b2-10)
-	body := map[string]any{"requested_by": actorOf(u)}
+	// who asked, in the one form the panel names a person by outside the audit log (whoShown: the user name):
+	// a run's "started by", "Last Turn on · by" and the countdown's "requested by" used to show two (audit 5,
+	// r1-b2-10)
+	body := map[string]any{"requested_by": c.s.whoShown(u)}
 	if ap != nil { // a machine that checks approvals itself: the approval made for its update
 		body["approval"] = ap
 	}

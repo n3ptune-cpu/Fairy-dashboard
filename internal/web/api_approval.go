@@ -208,8 +208,16 @@ func shownKeys(keys []api.TrustKey) []model.ApprovalKey {
 // "Knows" is deliberate: the owner label of config.yaml is a name for people. It stands for a Pocket ID user
 // only when approval.owners says so, or when the label itself is a user's id or their verified e-mail address.
 // Nobody gets onto a machine's list because their display name matches a label.
+//
+// A person on the list is named by their user name, as everywhere (people.go); the id next to it, in full, is
+// what a machine goes by. Only the ids are sent to a machine (approval.Proposal).
 func (s *Server) approvalUsersFor(a config.Agent) []approval.User {
-	users := s.Access.Load().Users
+	d := s.Access.Load()
+	users, who := d.Users, d.People()
+	nameOf := func(u access.User) string {
+		n, _ := who.Of(u.Sub)
+		return n
+	}
 	var admins []approval.User
 	if !s.approvalAnyPerson { // a test build's one admin is no Pocket ID user
 		for sub, u := range users {
@@ -240,13 +248,6 @@ func (s *Server) approvalUsersFor(a config.Agent) []approval.User {
 		}
 	}
 	return approval.Users(admins, owner, s.Cfg.Approval.Users)
-}
-
-func nameOf(u access.User) string {
-	if u.Name != "" {
-		return u.Name
-	}
-	return u.Email
 }
 
 // machineFor describes one agent for the approval page; keys are Pocket ID's current ones (nil: unknown).
@@ -283,7 +284,7 @@ func (s *Server) machineFor(a config.Agent, keys []api.TrustKey) approvalMachine
 	}
 	if b.Known && b.Record.MachineID != "" {
 		at := b.Record.At
-		m.MachineID, m.Pinned, m.PinnedBy = b.Record.MachineID, b.Record.How, b.Record.By
+		m.MachineID, m.Pinned, m.PinnedBy = b.Record.MachineID, b.Record.How, s.shown(b.Record.By)
 		if !at.IsZero() {
 			m.PinnedAt = &at
 		}
@@ -570,7 +571,7 @@ func (s *Server) turnOnRun(c *reqCtx, u *model.User, g *approvalGrant, hosts []s
 		if res.Outcome == "accepted" {
 			// on record from this moment: the id the panel made up and the passkey signed, not what was answered
 			pinned := "on record"
-			if err := s.Poller.PinMachine(a.ID, in.MachineID, approval.PinTurnOn, actorOf(u)); err != nil {
+			if err := s.Poller.PinMachine(a.ID, in.MachineID, approval.PinTurnOn, s.who(u)); err != nil {
 				res.Text += " Fairy could not write its machine id down (" + textsafe.Clip(err.Error(), 120) + "): it keeps it in memory and tries again."
 				pinned = "on record (kept in memory; machines.json could not be written: " + textsafe.Clip(err.Error(), 120) + ")"
 			}
@@ -709,7 +710,7 @@ func proofReason(text string) string {
 
 // turnOnDone keeps the report of the last Turn on for the page and logs it.
 func (s *Server) turnOnDone(u *model.User, results []turnOnResult) {
-	rep := &turnOnReport{At: s.now().UTC(), By: actorOf(u), Results: results}
+	rep := &turnOnReport{At: s.now().UTC(), By: s.whoShown(u), Results: results}
 	s.turnOnMu.Lock()
 	s.turnOnLast = rep
 	s.turnOnMu.Unlock()

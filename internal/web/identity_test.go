@@ -125,8 +125,10 @@ func TestAuditMarksAnUnverifiedAddressAndShowsTheAccountID(t *testing.T) {
 			t.Errorf("actorOf(%+v) = %q, want %q", *u, got, want)
 		}
 	}
+	// (the page: the user name first, the entry's own text behind dots, then the account id with the note that
+	// only the id cannot be chosen: usernames_ui_test.go runs it)
 	js := appJS(t)
-	if want := "<td>${esc(e.actor)}${e.sub && e.sub !== e.actor ? `<div class=\"note\" title="; !strings.Contains(js, want) || !strings.Contains(js, ">id ${esc(e.sub)}</div>") {
+	if !strings.Contains(js, "<td>${auditWho(e)}</td>") || !strings.Contains(js, "title=\"${esc(AUDIT_ID_TITLE)}\">id ${esc(e.sub)}</div>") {
 		t.Error("the Audit page does not show the account id next to the actor")
 	}
 }

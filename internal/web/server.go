@@ -27,7 +27,6 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/managed"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
-	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notify"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/panelupdate"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/settings"
@@ -151,6 +150,8 @@ type Server struct {
 
 	// hostEditStep: tests only (api_hostoptions.go: hostEditAt). nil in the running panel.
 	hostEditStep func(step string)
+	// sendOutside: tests only (people.go: outside). nil in the running panel: notify.Notify.
+	sendOutside func(title, message string)
 }
 
 // stopsPerMin is how many cancels (of an "Update unpowered hosts" run, of a shutdown countdown) one user may
@@ -180,7 +181,10 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	s.Managed = managed.NewStore(cfg.DataDir)
 	s.Notes = notifications.Open(filepath.Join(cfg.DataDir, "notifications.json"))
 	s.saved = make(chan struct{})
-	s.Notes.Push = notify.Notify
+	// What is pushed to ntfy or Discord names people by their user names, like the page. The events written
+	// now say it that way already; this is for a sentence made from what an older version stored (a run it
+	// started, a countdown it asked for).
+	s.Notes.Push = s.outside
 	s.Watch = &notifications.Watcher{Store: s.Notes}
 	addr, src, via := cfg.Enroll.PanelAddress, "config", ""
 	if addr == "" {
@@ -202,6 +206,8 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	if p.OnMachine == nil { // the record of machine ids: its alarms go to the audit log and the Notifications list
 		p.OnMachine = s.machineEvent
 	}
+	// who asked for a countdown, as the panel names a person (people.go)
+	p.SetShownBy(s.shown)
 	p.MachinesLoaded() // what reading the record of machine ids at the start changed is written now
 	// A run that was going when the panel stopped is reported here, once (audit log and a notification), and
 	// never continued. A journal that cannot be read is logged; no run starts until it is fixed.

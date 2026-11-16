@@ -722,11 +722,14 @@ func (s *Server) wakeUpdatePageData() wakeUpdatePage {
 	}
 	sort.SliceStable(p.Hosts, func(i, j int) bool { return p.Hosts[i].Name < p.Hosts[j].Name })
 	active, hist := s.WakeRuns.Snapshot()
-	p.Active = active
+	who := s.people()
+	p.Active = runShown(who, active)
 	if len(hist) > 5 {
 		hist = hist[:5]
 	}
-	p.Last = append(p.Last, hist...)
+	for _, r := range hist {
+		p.Last = append(p.Last, runShown(who, r))
+	}
 	if s.WakeRuns.JournalError() != nil {
 		p.Problem = "No run can be started: the run journal (wake-update.json in the panel's data folder) cannot be used. Look at it, then move it away."
 	} else if s.WakeRuns.JournalWriteError() != nil {
@@ -935,7 +938,7 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	s.wuStartAt("read")
 	stamp := s.wuStamp(times, b) // of the same reading: what the replay compares with the kept stamp
 	text, _ := s.wuDescribe(b, hosts, times)
-	req := wakerun.StartRequest{Hosts: b.Hosts, UpdateOnly: b.UpdateOnly, UpdateIfOn: b.UpdateIfOn, By: actorOf(u), BySub: u.Sub, Latest: latest.Version,
+	req := wakerun.StartRequest{Hosts: b.Hosts, UpdateOnly: b.UpdateOnly, UpdateIfOn: b.UpdateIfOn, By: s.whoShown(u), ByActor: actorOf(u), BySub: u.Sub, Latest: latest.Version,
 		Settings: &times.set, Own: times.own}
 	params := map[string]any{"hosts": b.Hosts, "update_only": b.UpdateOnly, "update_if_on": b.UpdateIfOn,
 		"list": wakerun.ListHash(b.Hosts, b.UpdateOnly, b.UpdateIfOn), "latest": latest.Version}
@@ -1005,7 +1008,7 @@ func (s *Server) wakeUpdateStart(c *reqCtx) error {
 	params["run"] = r.ID
 	c.audit(u, "wakeupdate.start", r.ID, params, "started: "+text)
 	s.Notes.Add(notifications.Event{Kind: "wakeupdate_started", Type: "update", Severity: notifications.Info, Host: wuNoteHost,
-		Text: fmt.Sprintf("started by %s: %s", actorOf(u), text)})
+		Text: fmt.Sprintf("started by %s: %s", s.whoShown(u), text)})
 	c.json(202, map[string]any{"ok": true, "id": r.ID, "list": r.ListHash, "message": fmt.Sprintf("run started for %d machine%s",
 		len(r.Hosts), map[bool]string{true: "", false: "s"}[len(r.Hosts) == 1])})
 	return nil
@@ -1036,7 +1039,7 @@ func (s *Server) wakeUpdateCancel(c *reqCtx) error {
 		return err
 	}
 	id := c.r.PathValue("id")
-	r, err := s.WakeRuns.CancelRun(id, actorOf(u), b.SwitchOff)
+	r, err := s.WakeRuns.CancelRun(id, s.whoShown(u), b.SwitchOff)
 	if err != nil {
 		return apierr.New(404, err.Error())
 	}
@@ -1197,13 +1200,21 @@ func (c *reqCtx) wakeUpdateSwitchDetail(*model.User) string {
 // them; the actor is the admin who started the run.
 func (s *Server) wakeRunEvent(e wakerun.Event) {
 	r := e.Run
+	who := s.people()
+	sub, actor := r.BySub, r.ByActor
+	if actor == "" { // a run an older version started: its By is the audit log's text
+		actor = r.By
+	}
+	// (The sentences below say r.By as the run has it: the user name, for a run this version started. A run an
+	// older version started has the address there: the one that the restart for the update interrupted is
+	// reported here, before anybody has signed in again. Its sentence is kept as it is and the address in it
+	// is replaced where it is handed out: the Notifications list, the stream, the message to ntfy or Discord.)
 	entry := func(action, target string, params map[string]any, outcome string) {
 		if params == nil {
 			params = map[string]any{}
 		}
 		params["run"] = r.ID
-		sub := r.BySub
-		s.writeAudit(audit.Entry{Actor: r.By, Sub: &sub, Action: action, Target: target, Source: "wake-update run", Params: params, Outcome: outcome})
+		s.writeAudit(audit.Entry{Actor: actor, Sub: &sub, Username: who.Username(sub), Action: action, Target: target, Source: "wake-update run", Params: params, Outcome: outcome})
 	}
 	note := func(sev, kind, sysID, host, text string) {
 		if s.Notes != nil {

@@ -50,22 +50,22 @@ func TestTheNotificationSaysHowAnAlarmEnded(t *testing.T) {
 	// not on record, accepted: "its machine id was accepted by ..."
 	a.setTrust(t, a.laptop, a.tower)
 	a.poll()
-	if what, _, err := a.accept("laptop", "nora@example.test"); what != "id" || err != nil {
+	if what, _, err := a.accept("laptop", "nora"); what != "id" || err != nil {
 		t.Fatal(what, err)
 	}
-	if got := last("laptop"); got != "its machine id was accepted by nora@example.test" {
+	if got := last("laptop"); got != "its machine id was accepted by nora" {
 		t.Errorf("after the accept of an id that was not on record: %q", got)
 	}
-	if what, _, err := a.accept("tower", "nora@example.test"); what != "id" || err != nil {
+	if what, _, err := a.accept("tower", "nora"); what != "id" || err != nil {
 		t.Fatal(what, err)
 	}
 	// a new id, accepted
 	a.setTrustID(t, a.laptop, otherID)
 	a.poll()
-	if what, _, err := a.accept("laptop", "nora@example.test"); what != "id" || err != nil {
+	if what, _, err := a.accept("laptop", "nora"); what != "id" || err != nil {
 		t.Fatal(what, err)
 	}
-	if got := last("laptop"); got != "its new machine id was accepted by nora@example.test" {
+	if got := last("laptop"); got != "its new machine id was accepted by nora" {
 		t.Errorf("after the accept of a new id: %q", got)
 	}
 	// an alarm that ends by itself: tower shows laptop's id for a while, then its own again. Laptop's check is
@@ -85,10 +85,12 @@ func TestTheNotificationSaysHowAnAlarmEnded(t *testing.T) {
 	// the check is gone, and an admin accepts that it is off: the check is OFF, and the line says so
 	a.clearTrust(t, a.laptop)
 	a.poll()
-	if what, _, err := a.accept("laptop", "nora@example.test"); what != "off" || err != nil {
+	if what, _, err := a.accept("laptop", "gone@example.test"); what != "off" || err != nil {
 		t.Fatal(what, err)
 	}
-	if got := last("laptop"); got != "its check being off was accepted by nora@example.test" || strings.Contains(got, "in order") {
+	// (accepted by an account the panel does not know, written down with its address as older versions did: the
+	// sentence does not hand the address out)
+	if got := last("laptop"); got != "its check being off was accepted by (address hidden)" || strings.Contains(got, "in order") {
 		t.Errorf("after \"Accept that its check is off\": %q", got)
 	}
 	// the audit log's entry for the end of an alarm is as it was

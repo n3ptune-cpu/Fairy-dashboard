@@ -76,7 +76,7 @@ func TestUserinfoGivesTheGroupsAndTheShownTexts(t *testing.T) {
 	e := setup(t)
 	idp := newFakeIDP(t)
 	e.s.Cfg.OIDC.Issuer = idp.srv.URL
-	idp.claims = map[string]any{"name": "Ann from the ID token", "email": nil} // no address in the ID token
+	idp.claims = map[string]any{"name": "Ann from the ID token", "email": nil, "preferred_username": nil} // no address and no user name in the ID token
 	idp.userinfo = map[string]any{"sub": "u1", "groups": []string{"viewers"}, "name": "Ann from userinfo", "email": "ann@example.com", "email_verified": true,
 		"preferred_username": "ann"}
 	q, rt := idp.login(e, "/auth/login?next=/", "")

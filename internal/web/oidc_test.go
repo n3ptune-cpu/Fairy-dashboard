@@ -78,8 +78,9 @@ func newFakeIDP(t *testing.T) *fakeIDP {
 			_, _ = w.Write([]byte(f.tokenBody))
 			return
 		}
+		// (the account u1: the user name "user-u1" and an address the provider does not call verified)
 		claims := map[string]any{"iss": f.srv.URL, "aud": "cid", "sub": "u1", "nonce": f.nonce,
-			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(), "email": "n@example.com"}
+			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(), "email": "n@example.com", "preferred_username": "user-u1"}
 		for k, v := range f.claims {
 			if v == nil { // a test takes a claim out of the ID token (the e-mail address it has otherwise)
 				delete(claims, k)
@@ -555,6 +556,23 @@ func TestAddHostAfterStepUpRevealsCodeOnce(t *testing.T) {
 	g := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", sess)
 	if code, _ := g.body["code"].(string); g.code != 200 || code == "" || !strings.Contains(g.body["command"].(string), code) {
 		t.Fatal("reveal", g.code, string(g.raw))
+	}
+	// who made it: by the user name, here as in every answer about an Add host (the store keeps the address)
+	if g.body["created_by"] != "user-u1" || strings.Contains(string(g.raw), "n@example.com") || e.s.Enroll.List()[0].CreatedBy != "n@example.com"+unverifiedMark {
+		t.Errorf("the answer with the code names who made it as %v (kept: %q)", g.body["created_by"], e.s.Enroll.List()[0].CreatedBy)
+	}
+	// the entries of the sign-in and of the confirmation are written outside a signed-in request: they have the
+	// address as before, and the user name the account has had since that very sign-in
+	for _, action := range []string{"auth.login", "auth.step_up"} {
+		en := auditOf(e, action)
+		if len(en) == 0 {
+			t.Fatalf("no %s entry", action)
+		}
+		for _, x := range en {
+			if x["sub"] == "u1" && (x["actor"] != "n@example.com"+unverifiedMark || x["username"] != "user-u1") {
+				t.Errorf("%s: actor %v, user name %v (%v)", action, x["actor"], x["username"], x["outcome"])
+			}
+		}
 	}
 	if g := e.do("GET", "/api/admin/enrollments/"+id+"?reveal=1", nil, "Cookie", sess); g.code != 404 {
 		t.Fatal("the code is shown once", g.code)

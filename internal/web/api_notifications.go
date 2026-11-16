@@ -84,8 +84,11 @@ func (s *Server) notificationsList(c *reqCtx) error {
 		}
 	}
 	p := s.Notes.List(sub, vis, f)
+	who := s.people()
 	for i := range p.Events {
 		p.Events[i].Host = noteHost(v, p.Events[i].Event)
+		// an event of an older version says "by <address>": the user name, as in the events written now
+		p.Events[i].Text = who.ShownIn(p.Events[i].Text)
 	}
 	c.json(200, p)
 	return nil
