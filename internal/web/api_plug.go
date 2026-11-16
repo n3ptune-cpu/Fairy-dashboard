@@ -41,7 +41,9 @@ import (
 // Every attempt on a socket is in the audit log as "plug.switch", the refused ones too, each with its own
 // entry: no budget is shared with other refusals. What keeps one admin from filling the log is the limit on
 // control requests, which comes before anything is read or looked up: a request over it is answered 429 and
-// is no attempt (the question before the passkey and the replay after it are one request each).
+// is no attempt (the question before the passkey and the replay after it are one request each). One request
+// over the limit is written all the same: the replay of a switch a passkey was given for, as "refused
+// (rate_limit)", so that the log says what became of the approval.
 
 // plugSwitchWait is how long the panel waits for the agent's answer to a switch: the agent reads the state
 // (3 s), sends the request (5 s) and watches the state (10 s), 18 s in all, and the answer needs its way back.
@@ -266,6 +268,22 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 	// The limit on control requests of one admin, before the body is read and before anything is looked up. It
 	// is what bounds the audit entries below, so nothing that writes one comes before it.
 	if !s.control.allow(u.Sub) {
+		if c.approved() != nil {
+			// The panel's own replay, after somebody gave a passkey for this switch: nothing is sent, and the log
+			// says so under the switch's own name. Without it the newest lines about the switch would be the
+			// approval's ("runs: switch a plug socket ..."), and the refusal below is one of the account's ten
+			// written refusals a minute, which may be used up. One such entry needs one passkey: it cannot fill
+			// the log. The body is the request the panel kept, read here for the entry only.
+			var b plugSwitchReq
+			target, params := "", map[string]any{"approval": "not sent"}
+			if c.decodeBody(&b) == nil && b.check() == nil {
+				target, params["to"] = b.Source+"/"+b.Socket, b.To
+				if b.Cut {
+					params["cut"] = true
+				}
+			}
+			c.audit(u, plugAudit, target, params, "refused (rate_limit): too many control requests")
+		}
 		return c.limited(u, s.control, "too many control requests")
 	}
 	var b plugSwitchReq

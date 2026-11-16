@@ -1135,7 +1135,8 @@ func TestPlugAttemptsAreAllInTheAuditLog(t *testing.T) {
 // who is calling: a request over the limit is answered 429 with the time to wait, like the other control
 // routes, before the body is read and before anything is looked up. So it is no attempt on a socket and
 // leaves no plug.switch entry, and the entries one admin can write in a minute are bounded by the limit. The
-// panel's own replay after the passkey passes the same limit, and is sent nowhere when it is over it.
+// panel's own replay after the passkey passes the same limit, and is sent nowhere when it is over it (that one
+// is written, each for one passkey: TestPlugApprovedReplayOverTheLimitIsOnRecord).
 func TestPlugSwitchPassesTheControlLimitFirst(t *testing.T) {
 	pe := newPlugEnv(t)
 	pe.s.control = newRateLimiter(3)

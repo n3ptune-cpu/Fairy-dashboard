@@ -465,3 +465,57 @@ func TestPlugSocketsOfAPlugWhoseAgentTheViewerDoesNotSee(t *testing.T) {
 		t.Errorf("a source without its agent, for a viewer of every site: %d sockets, %d left out", len(out), hidden)
 	}
 }
+
+// Finding 5: an approved switch that meets the limit on control requests in the panel's replay is on record as
+// a plug.switch entry. The limit comes before anything is looked at, and a request over it is no attempt and
+// leaves no plug.switch entry; but after somebody gave a passkey for a switch, "what became of it" must be in
+// the log. Since the limit was moved to the top of the route such a replay left only an auth.denied line,
+// which shares the account's budget of ten written refusals a minute: with that used up, the newest lines
+// were "auth.approval ok ... runs: switch a plug socket (...)" and nothing after it, as if the switch had
+// run and its entry were missing. One such entry needs one passkey, so it cannot fill the log.
+func TestPlugApprovedReplayOverTheLimitIsOnRecord(t *testing.T) {
+	pe := newPlugEnv(t)
+	pe.s.control = newRateLimiter(2)
+	id, _, ok := approvalAsked(pe.flip("reader/desk-bar", "ch2", "on")) // the first request of the two
+	if !ok {
+		t.Fatal("not asked")
+	}
+	for range 12 { // refused requests of the same admin (no page header): the account's budget of written refusals
+		pe.do("POST", "/api/power/socket", plugBody("reader/desk-bar", "ch2", "on"), "Cookie", pe.admin, "Content-Type", "application/json")
+	}
+	if r := pe.flip("reader/desk-bar", "ch6", "off"); r.code != 409 { // the second: the limit is reached
+		t.Fatalf("the fixture: %d %s", r.code, r.raw)
+	}
+	before := len(pe.plugAudits())
+	if cb := pe.approve(t, id); cb.code != 303 {
+		t.Fatal(cb.code)
+	}
+	pr := pe.result(t)
+	if pr["ok"] != false || pr["status"] != 429.0 || !strings.HasPrefix(fmt.Sprint(pr["message"]), "too many control requests; try again in ") {
+		t.Fatalf("the replay over the limit: %v", pr)
+	}
+	if n := len(plugSent(pe.reader)); n != 0 {
+		t.Fatalf("the machine got %d switch requests from a replay over the limit", n)
+	}
+	entries := pe.plugAudits()
+	if len(entries) != before+1 {
+		t.Fatalf("%d plug.switch entries after the replay, %d before it: want one more", len(entries), before)
+	}
+	au := entries[0]
+	p, _ := au["params"].(map[string]any)
+	if au["target"] != "reader/desk-bar/ch2" || au["outcome"] != "refused (rate_limit): too many control requests" || p["to"] != "on" || p["approval"] != "not sent" || au["actor"] != plugActor {
+		t.Errorf("the entry of the approved switch that was not sent: %v", au)
+	}
+	// it is the newest thing in the log about that switch: after the approval's own line
+	all := pe.auditEntries("", "")
+	if len(all) < 2 || all[0]["action"] != plugAudit || all[0]["target"] != "reader/desk-bar/ch2" {
+		t.Errorf("the newest entry of the log: %v", all[0])
+	}
+	// a request over the limit that no passkey was given for is still no attempt: no entry
+	if r := pe.flip("reader/desk-bar", "ch2", "on"); r.code != 429 {
+		t.Fatalf("a request over the limit: %d", r.code)
+	}
+	if n := len(pe.plugAudits()); n != before+1 {
+		t.Errorf("a request over the limit without an approval wrote a plug.switch entry (%d, want %d)", n, before+1)
+	}
+}

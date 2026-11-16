@@ -384,7 +384,9 @@ refuses itself too, and none is dropped. What bounds them is the limit on contro
 (`control_rate_per_min`, 20 a minute for one admin): the route applies it before it looks at anything, and a
 request over it is answered "too many control requests; try again in N s" and is no attempt. The question
 before the passkey and the panel's own request after it count as one each, so one admin switches at most
-half that many sockets a minute. A switch that was sent is also a notification. For scripts there is nothing to call: `POST
+half that many sockets a minute. When the panel's own request after a passkey meets the limit, nothing is
+sent, and that one is in the log as `refused (rate_limit)` with `approval: not sent`: the log says what
+became of every approval. A switch that was sent is also a notification. For scripts there is nothing to call: `POST
 /api/power/socket` takes a browser session only.
 
 ### Last 24 hours
