@@ -18,6 +18,9 @@ import (
 //   - shown and shownIn turn what is stored (also by older versions, with the address) into that where it is
 //     handed out. Only the Users page and the audit log hand out an address or a name.
 //
+//   - fromOutside is for a text that names a person and that somebody outside the panel supplies (an agent's
+//     "requested by"): it is shown when it is what the panel shows an account by, and never looked up among
+//     addresses and names.
 // While users.json cannot be read nobody is known: a stored address is then hidden, not shown.
 
 func (s *Server) people() *access.People { return s.Access.Load().People() }
@@ -62,6 +65,9 @@ func notKnown(u *model.User) string {
 func (s *Server) shown(stored string) string { return s.people().Shown(stored) }
 
 // shownIn is a stored sentence that may name a person, as it is handed out.
+// fromOutside is what an agent says about who asked for something, as it is handed out (People.FromOutside).
+func (s *Server) fromOutside(text string) string { return s.people().FromOutside(text) }
+
 func (s *Server) shownIn(text string) string { return s.people().ShownIn(text) }
 
 // shownP is shown for a text that may be missing.

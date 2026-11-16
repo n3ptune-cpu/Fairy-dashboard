@@ -365,14 +365,14 @@ func TestNoAnswerNamesAPersonByAddressOrName(t *testing.T) {
 	for what, wants := range map[string][]string{
 		"the admin": {`"added_by":"Juniper"`, `"added_by":"PineTop"`, `"added_by":"(address hidden)"`, `"created_by":"Juniper"`, // Add host
 			`"by":"Juniper"`, `"by":"PineTop"`, `"total_by":"PineTop"`, // Edit host, Run timings, the run
-			`"requested_by":"Juniper"`, `"requested_by":"(address hidden)"`, // the countdowns
+			`"requested_by":"(address hidden)"`,                                                                                                          // the countdowns: what an agent repeats is not looked up (it was told an address by build 16)
 			`stopped by Juniper (fans`, `switched off by PineTop"`, `links changed by (address hidden)"`, `removed from the panel by Juniper (the agent`, // notifications
 			`"username":"PineTop"`,                                  // everyone's sessions
 			`"shown_as":"Juniper"`, `"shown_as":"(address hidden)"`, // the Users page
 			`"who":"Juniper"`, `"who":"PineTop"`, `"who":"(address hidden)"`, `"via":"panel by Juniper"`},
-		"a viewer of every site":       {`"requested_by":"Juniper"`, `"requested_by":"(address hidden)"`, `stopped by Juniper (fans`, `switched off by PineTop"`, `links changed by (address hidden)"`, `"shown_as":"viewer-all"`},
-		"a viewer of one site":         {`"requested_by":"Juniper"`, `stopped by Juniper (fans`, `switched off by PineTop"`, `"shown_as":"viewer-one"`},
-		"a read token of one site":     {`"requested_by":"Juniper"`, `stopped by Juniper (fans`},
+		"a viewer of every site":       {`"requested_by":"(address hidden)"`, `stopped by Juniper (fans`, `switched off by PineTop"`, `links changed by (address hidden)"`, `"shown_as":"viewer-all"`},
+		"a viewer of one site":         {`"requested_by":"(address hidden)"`, `stopped by Juniper (fans`, `switched off by PineTop"`, `"shown_as":"viewer-one"`},
+		"a read token of one site":     {`"requested_by":"(address hidden)"`, `stopped by Juniper (fans`},
 		"an admin without a user name": {`"shown_as":"(address hidden)"`, `"added_by":"Juniper"`},
 	} {
 		for _, want := range wants {
@@ -628,7 +628,9 @@ func TestOldRecordsAreShownByUsernameAndNotRewritten(t *testing.T) {
 	if en := auditOf(e, "wakeupdate.interrupted"); len(en) != 1 || en[0]["actor"] != "owner@example.com" || en[0]["sub"] != "sub-n" {
 		t.Errorf("the audit entry of the interrupted run: %v", en)
 	}
-	if pw := e.do("GET", "/api/systems/tower/power", nil, "Cookie", r.ck["sub-l"]); pw.code != 200 || !strings.Contains(string(pw.raw), `"requested_by":"Juniper"`) {
+	// (the countdown's "requested by" is what the machine's agent repeats, and that is never looked up among
+	// the accounts: the address build 16 told it stays hidden; TestRequestedByIsNotLookedUpAmongTheAccounts)
+	if pw := e.do("GET", "/api/systems/tower/power", nil, "Cookie", r.ck["sub-l"]); pw.code != 200 || !strings.Contains(string(pw.raw), `"requested_by":"(address hidden)"`) {
 		t.Errorf("the countdown, for a viewer of the site: %d %s", pw.code, pw.raw)
 	}
 	for _, want := range []string{`stopped by Juniper (fans`, `switched off by PineTop"`, `links changed by (address hidden)"`, `"username":"PineTop"`, `"shown_as":"Juniper"`} {

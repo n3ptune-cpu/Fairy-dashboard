@@ -206,8 +206,8 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	if p.OnMachine == nil { // the record of machine ids: its alarms go to the audit log and the Notifications list
 		p.OnMachine = s.machineEvent
 	}
-	// who asked for a countdown, as the panel names a person (people.go)
-	p.SetShownBy(s.shown)
+	// who asked for a countdown, as the panel names a person; the text is the agent's (people.go, fromOutside)
+	p.SetShownBy(s.fromOutside)
 	p.MachinesLoaded() // what reading the record of machine ids at the start changed is written now
 	// A run that was going when the panel stopped is reported here, once (audit log and a notification), and
 	// never continued. A journal that cannot be read is logged; no run starts until it is fixed.
