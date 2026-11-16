@@ -25,13 +25,13 @@ func TestANotificationOfNowIsNotLookedUpAmongTheAccounts(t *testing.T) {
 	}
 	for kind, text := range map[string]string{ // (a kind each: repeats of one kind are counted on the first)
 		"update_failed":  "agent update failed: owner@example.com",
-		"helper_stopped": "agent update failed: OWNER@EXAMPLE.COM (unverified) and Bare Nameson",
+		"helper_stopped": "agent update failed: OWNER@EXAMPLE.COM (unverified), asked by Bare Nameson",
 		"update_done":    "agent now runs friend@example.com (was 14)",
 		"plug_switched":  "Lamp old@example.com (Desk bar) switched off by " + e.s.whoShown(&model.User{Sub: "sub-s", Auth: "session"}),
 	} {
 		e.s.Notes.Add(notifications.Event{Kind: kind, Type: "update", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER", Text: text})
 	}
-	e.s.Notes.AddOld(notifications.Event{Kind: "host_options", Type: "host", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER", Text: "links changed by owner@example.com and Bare Nameson"})
+	e.s.Notes.AddOld(notifications.Event{Kind: "host_options", Type: "host", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER", Text: "run started by owner@example.com was cancelled by Bare Nameson"})
 	readBob, _, err := e.s.Tokens.CreateForSites("bob-reader", "sub-n", "read", "cli:test", 0, []string{"Bob"})
 	if err != nil {
 		t.Fatal(err)
@@ -40,13 +40,13 @@ func TestANotificationOfNowIsNotLookedUpAmongTheAccounts(t *testing.T) {
 		x := e.do("GET", "/api/notifications?limit=200", nil, hdr...)
 		_, stream := e.streamBody("/api/stream", hdr...)
 		for where, body := range map[string]string{"the list": string(x.raw), "the stream": stream} {
-			for _, want := range []string{`agent update failed: (address hidden)"`, `agent update failed: (address hidden) and (name hidden)"`, `agent now runs (address hidden) (was 14)"`,
+			for _, want := range []string{`agent update failed: (address hidden)"`, `agent update failed: (address hidden), asked by (name hidden)"`, `agent now runs (address hidden) (was 14)"`,
 				`Lamp (address hidden) (Desk bar) switched off by PineTop"`} {
 				if where == "the list" && !strings.Contains(body, want) {
 					t.Errorf("%s, %s: no notification says %s", what, where, want)
 				}
 			}
-			for _, not := range []string{"failed: Juniper", "now runs PineTop", "failed: (address hidden) and bare", "Lamp (address hidden) (Desk bar) switched off by (", "by_name"} {
+			for _, not := range []string{"failed: Juniper", "now runs PineTop", "failed: (address hidden), asked by bare", "Lamp (address hidden) (Desk bar) switched off by (", "by_name"} {
 				if strings.Contains(body, not) {
 					t.Errorf("%s, %s holds %q: a text a machine supplied was looked up among the accounts", what, where, not)
 				}
@@ -55,7 +55,7 @@ func TestANotificationOfNowIsNotLookedUpAmongTheAccounts(t *testing.T) {
 				t.Errorf("%s, %s holds %q", what, where, held)
 			}
 		}
-		if !strings.Contains(string(x.raw), `links changed by Juniper and bare"`) {
+		if !strings.Contains(string(x.raw), `run started by Juniper was cancelled by bare"`) {
 			t.Errorf("%s: the event of an older version: %s", what, clipText(string(x.raw), 600))
 		}
 	}

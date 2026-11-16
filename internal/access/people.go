@@ -21,7 +21,11 @@ import (
 // stored: who added a host, who put a machine id on record, who started a run. Those records are not rewritten.
 // A stored text is turned into the user name where it is handed out (Shown, ShownIn), by looking it up among
 // the accounts of users.json. Only one account may match: an address or a name that two known accounts have
-// says nothing about which of them it was.
+// says nothing about which of them it was. A text that is what an account is shown by is that account's alone
+// (it is what a record keeps since build 17). And only the accounts that have a role are looked at: an account
+// that only waits for access wrote no record, and what it calls itself (a name, an address, a user name) is
+// read out of no stored text and changes how no record of another account reads. Its address is still found in
+// a sentence and hidden there, like every address.
 //
 // A user name is what the account says, and two accounts can say the same. Only user names compete with user
 // names: an account whose display name or address is somebody's user name takes nothing away from that
@@ -97,12 +101,12 @@ type People struct {
 	// accounts that have it as their name next to an address, which no record was ever written with.
 	byAddr, byName, byNameToo map[string][]string
 	shown                     map[string]string   // subject -> what the account is shown by: its user name, or that with its id ("" = none)
-	byShown                   map[string]string   // a shown form, folded -> the subject it is the form of
+	byShown                   map[string]string   // a shown form, folded -> the subject it is the form of (accounts with a role)
 	same                      map[string][]string // subject -> the other accounts that have the same user name, sorted
 	note                      map[string]string   // subject -> why its user name is not what it is shown by (UsernameNote)
 	names                     []string            // the names of accounts without an address, longest first (ShownIn)
 	addrs                     []string            // the addresses of the accounts (those with an "@"), longest first (ShownIn)
-	outside                   map[string][]string // a shown form as an agent repeats it (outsideForm) -> the subjects shown by it
+	outside                   map[string][]string // a shown form as an agent repeats it (outsideForm) -> the subjects shown by it (accounts with a role)
 }
 
 // fold is the form two texts are compared in: without spaces at either end, without format characters (a zero
@@ -155,7 +159,20 @@ func (d Data) People() *People {
 			index[k] = append(index[k], sub)
 		}
 	}
+	found := map[string]bool{} // the addresses that are in addrs, folded
 	for sub, u := range d.Users {
+		// Every account's address is found in a sentence and hidden there (addrs), whoever has it.
+		if k := fold(u.Email); strings.Contains(k, "@") && !found[k] {
+			found[k] = true
+			p.addrs = append(p.addrs, u.Email)
+		}
+		// An account that only waits for access takes part in nothing else: no stored text is read as its
+		// address, its name or its user name. It wrote no record (it cannot act), what it calls itself is its
+		// own choice, and it must not be the reason a record of another account reads differently: with the
+		// name "Juniper" and no address it made every record by the admin Juniper "(name hidden)".
+		if u.Role == RolePending {
+			continue
+		}
 		add(p.byAddr, u.Email, sub)
 		if u.Email == "" {
 			add(p.byName, u.Name, sub)
@@ -164,11 +181,6 @@ func (d Data) People() *People {
 			}
 		} else {
 			add(p.byNameToo, u.Name, sub)
-		}
-	}
-	for k, subs := range p.byAddr {
-		if strings.Contains(k, "@") {
-			p.addrs = append(p.addrs, d.Users[subs[0]].Email)
 		}
 	}
 	longestFirst(p.names)
@@ -214,11 +226,16 @@ func (d Data) People() *People {
 	for sub, u := range d.Users {
 		// An account without an address and without a user name the panel shows is still written into a record
 		// by that user name (the text the audit log names it by): a stored text can mean it.
-		if p.shown[sub] == "" && u.Email == "" {
+		if p.shown[sub] == "" && u.Email == "" && u.Role != RolePending {
 			add(p.byName, CleanUsername(u.Username), sub)
 		}
 	}
 	for sub, n := range p.shown {
+		// (what an account that only waits is shown by is read out of no record and no agent's answer: it
+		// chose the text, and it could choose the name a record of another account was written with)
+		if d.Users[sub].Role == RolePending {
+			continue
+		}
 		p.byShown[fold(n)] = sub
 		if k := outsideForm(n); k != "" {
 			p.outside[k] = append(p.outside[k], sub)
@@ -296,11 +313,13 @@ func containsStr(l []string, s string) bool {
 // match returns the accounts a stored text can mean, and whether one of them has it as its address, or as the
 // name (or the user name that is not shown) a record was written with:
 //
-//   - the accounts that have it as their address; the accounts without an address that have it as their name
-//     (older versions named those by it) or as a user name the panel does not show (a record is still written
-//     with it);
 //   - the account that is shown by it (what a record keeps since build 17: the user name, or the user name
-//     with the account's id behind it);
+//     with the account's id behind it), and then that account alone: no other account's name or address
+//     makes such a text "two accounts" (an account without an address whose name was an admin's user name
+//     made every record of that admin "(name hidden)");
+//   - else the accounts that have it as their address; the accounts without an address that have it as their
+//     name (older versions named those by it) or as a user name the panel does not show (a record is still
+//     written with it);
 //   - the account with that subject;
 //   - and only when it is none of these: the accounts that have it as their name next to an address. No record
 //     was written with such a name, so it stands in nobody's way; it is looked up so that it is never handed
@@ -308,8 +327,14 @@ func containsStr(l []string, s string) bool {
 //
 // A user name that an account merely has, while another account is shown by it, is not among them: only user
 // names compete with user names, and the account that is shown by the plain name is the one a record means.
+//
+// An account that only waits for access is among them by what it is shown by and by its subject, and by
+// nothing else (People).
 func (p *People) match(text string) (subs []string, address, name bool) {
 	k := fold(text)
+	if sub, ok := p.byShown[k]; ok {
+		return []string{sub}, false, false
+	}
 	add := func(l ...string) {
 		for _, sub := range l {
 			if !containsStr(subs, sub) {
@@ -321,9 +346,7 @@ func (p *People) match(text string) (subs []string, address, name bool) {
 	address = len(subs) > 0
 	add(p.byName[k]...)
 	name = len(subs) > len(p.byAddr[k])
-	if sub, ok := p.byShown[k]; ok {
-		add(sub)
-	} else if sub := p.withIDOf(text); sub != "" {
+	if sub := p.withIDOf(text); sub != "" {
 		add(sub)
 	}
 	if _, ok := p.users[text]; ok {
@@ -484,7 +507,7 @@ func (p *People) onlyUsernames(out string) bool {
 // it is handed out anywhere but on the Users page and in the audit log. Every e-mail address in it is replaced:
 // by what the one known account that has it is shown by, else by HiddenAddress; the mark for an address that
 // was not verified goes with it. The name of a known account that has no address (the only accounts older
-// versions named by their name) is replaced the same way where it stands as a word of its own.
+// versions named by their name) is replaced the same way where the sentence names who did something (words).
 //
 // An address here is, first, the address of a known account wherever it stands as a text of its own, whatever
 // it looks like ("ops@corp" of a provider inside a network, a top-level name in its ASCII form): the panel
@@ -504,8 +527,10 @@ func (p *People) ShownIn(text string) string {
 // HiddenIn is a sentence this version made, as it is handed out. The people the panel wrote into it are there
 // by what the panel shows them by already. Whatever else is in it came from outside (an error text of an
 // agent, a name on a machine), and nothing of it is looked up: every e-mail address (ShownIn says what one is)
-// becomes HiddenAddress, and the name of a known account without an address HiddenName, whoever has them. An
-// answer with a user name in it would tell whoever supplied the text whose address or name that is.
+// becomes HiddenAddress, and the name of a known account without an address HiddenName where the sentence
+// names who did something (words), whoever has them. An answer with a user name in it would tell whoever
+// supplied the text whose address or name that is. A text that is what an account is shown by stays: the
+// panel wrote it.
 func (p *People) HiddenIn(text string) string {
 	nobody := *p
 	nobody.shown = nil
@@ -663,9 +688,26 @@ func (p *People) address(addr string) string {
 	return HiddenAddress
 }
 
-// words replaces name in text where it stands as a word of its own.
+// words replaces name (the name of an account without an address) in text where the sentence names who did
+// something, and nowhere else. The sentences of the versions that named such an account by its name have who
+// did it in two places, and the name is looked for there alone:
+//
+//   - after the word "by" and one space: "switched off by X", "started by X: 3 machines", "requested by X
+//     (...)", "run started by X was cancelled by Y", "Keep on by X: ...", "panel by X";
+//   - after "the run" and one space: "the panel restarted during the run X started at ...", "woke ... for the
+//     run X started".
+//
+// And there only as a word of its own (what follows is no letter and no digit). Until the fix round after the
+// fifth review a name was replaced wherever it stood as a word: an account that called itself "off" took the
+// word out of "switched off by Juniper" for everybody.
+//
+// A name that is what an account is shown by right now is not replaced at all: it is the text the panel
+// itself writes for that account, and a record with it is that account's (match).
 func (p *People) words(text, name string) string {
 	if !strings.Contains(text, name) {
+		return text
+	}
+	if _, isShown := p.byShown[fold(name)]; isShown {
 		return text
 	}
 	repl := HiddenName
@@ -674,23 +716,38 @@ func (p *People) words(text, name string) string {
 	}
 	edge := func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }
 	var b strings.Builder
-	for {
-		i := strings.Index(text, name)
+	done := 0 // text[:done] is written
+	for at := 0; ; {
+		i := strings.Index(text[at:], name)
 		if i < 0 {
 			break
 		}
-		before, _ := utf8.DecodeLastRuneInString(text[:i])
-		after, _ := utf8.DecodeRuneInString(text[i+len(name):])
-		b.WriteString(text[:i])
-		if (i == 0 || edge(before)) && (i+len(name) == len(text) || edge(after)) {
+		i += at
+		at = i + len(name)
+		after, _ := utf8.DecodeRuneInString(text[at:])
+		if namesWho(text[:i]) && (at == len(text) || edge(after)) {
+			b.WriteString(text[done:i])
 			b.WriteString(repl)
-		} else {
-			b.WriteString(name)
+			done = at
 		}
-		text = text[i+len(name):]
 	}
-	b.WriteString(text)
+	b.WriteString(text[done:])
 	return b.String()
+}
+
+// namesWho reports whether what follows before in a sentence is who did something: before ends in the word
+// "by" (in any case of its letters) or in the words "the run", and one space.
+func namesWho(before string) bool {
+	for _, lead := range []string{"by ", "the run "} {
+		if len(before) < len(lead) || !strings.EqualFold(before[len(before)-len(lead):], lead) {
+			continue
+		}
+		r, _ := utf8.DecodeLastRuneInString(before[:len(before)-len(lead)])
+		if len(before) == len(lead) || !(unicode.IsLetter(r) || unicode.IsDigit(r)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Private are the addresses and names of the known accounts, longest first: what the Users page and the audit

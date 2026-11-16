@@ -19,6 +19,12 @@ func TestRequestedByIsNotLookedUpAmongTheAccounts(t *testing.T) {
 	r := newNamesRig(t, true)
 	e := r.env
 	e.cookie(model.User{Sub: "9a1b2c3d-wanda", Name: model.P("Waiting Wanda"), PreferredUsername: model.P("juniper"), Email: model.P("wanda@example.org"), EmailVerified: true}, 0)
+	// (a viewer: what an account that only waits is shown by is not read out of an agent's answer, below)
+	if _, _, err := e.s.Access.SetRole("9a1b2c3d-wanda", "viewer", []string{"Bob"}, "test", true); err != nil {
+		t.Fatal(err)
+	}
+	e.cookie(model.User{Sub: "7e7e7e7e-wilma", Name: model.P("Waiting Wilma"), PreferredUsername: model.P("wilma"), Email: model.P("wilma@example.org"), EmailVerified: true}, 0)
+	e.cookie(model.User{Sub: "7e7e7e7e-viewer", Name: model.P("V"), PreferredUsername: model.P("Viewer-One!"), Email: model.P("v1@example.org"), EmailVerified: true}, 0)
 	says := func(said string) string {
 		e.b.Mu.Lock()
 		e.b.Metrics["tower"] = func() (jsonx.M, error) {
@@ -49,6 +55,10 @@ func TestRequestedByIsNotLookedUpAmongTheAccounts(t *testing.T) {
 		{"juniper  id 9a1b2c", "juniper · id 9a1b2c"},
 		{"address hidden", "(address hidden)"},
 		{"unknown", "unknown"},
+		// an account that only waits asked no agent for anything: its user name is a text like any other, and
+		// one that an agent would repeat like a viewer's ("Viewer-One!") takes nothing away from the viewer
+		{"wilma", "(name hidden)"},
+		{"Viewer-One", "viewer-one"},
 		// what somebody makes an agent say
 		{"owner@example.com", "(address hidden)"},
 		{"OWNER@EXAMPLE.COM", "(address hidden)"},

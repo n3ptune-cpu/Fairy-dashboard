@@ -142,7 +142,9 @@ func TestAUsernameMustBeTheAccountsOwn(t *testing.T) {
 		// another account's NAME is a user name like any other: it is what sub-x is called, and a record that
 		// keeps it is sub-x's (no record was ever written with the name of an account that has an address)
 		{"another account's name", "Real Name", "Real Name", "", "Real Name", "Real Name"},
-		{"the name of an account without an address", "Bare Name", "Bare Name", "", "Bare Name", HiddenName}, // (older versions named that one by it: whose record it is cannot be told)
+		// (older versions named that one by it. A record keeps what its account is shown by, so the text is
+		// sub-x's now: no other account's name makes it "two accounts", or sub-b could hide every record of sub-x)
+		{"the name of an account without an address", "Bare Name", "Bare Name", "", "Bare Name", "Bare Name"},
 	} {
 		d := peopleData()
 		tr := true
@@ -203,9 +205,10 @@ func TestOnlyUsernamesCompeteWithUsernames(t *testing.T) {
 			t.Errorf("Shown(%q) = %q, want %q", stored, got, want)
 		}
 	}
-	// (the one text that is an account's ADDRESS is that account's too: which of the two a record means cannot be told)
-	if got := p.Shown("Juniper"); got != HiddenAddress {
-		t.Errorf("a text that is one account's user name and another's address: %q", got)
+	// (also the one text that is the ADDRESS of an account that waits: it wrote no record, and the admin's
+	// records were hidden by it)
+	if got := p.Shown("Juniper"); got != "Juniper" {
+		t.Errorf("a text that is one account's user name and the address of an account that waits: %q", got)
 	}
 }
 
@@ -285,11 +288,16 @@ func TestTwoAccountsWithOneUsername(t *testing.T) {
 		if got := p.Shown(tagged); got != tagged {
 			t.Errorf("%s: Shown(%q) = %q", c.name, tagged, got)
 		}
-		// an old record by address is each account's own
-		if got := p.Shown(d.Users[other].Email); got != tagged {
-			t.Errorf("%s: the old record of %s is shown as %q, want %q", c.name, other, got, tagged)
+		// an old record by address is each account's own (an account that only waits has none: its address is
+		// hidden, not looked up)
+		old := tagged
+		if d.Users[other].Role == RolePending {
+			old = HiddenAddress
 		}
-		if got := p.ShownIn("switched off by " + d.Users[other].Email + " (unverified)"); got != "switched off by "+tagged {
+		if got := p.Shown(d.Users[other].Email); got != old {
+			t.Errorf("%s: the old record of %s is shown as %q, want %q", c.name, other, got, old)
+		}
+		if got := p.ShownIn("switched off by " + d.Users[other].Email + " (unverified)"); got != "switched off by "+old {
 			t.Errorf("%s: an old sentence about %s: %q", c.name, other, got)
 		}
 		if got := p.Named("juni"); len(got) != 2 {
@@ -506,7 +514,7 @@ func TestShownInAKnownAddressOfAnyShape(t *testing.T) {
 func TestFromOutsideIsNeverLookedUpAmongAddressesAndNames(t *testing.T) {
 	d := peopleData()
 	tr := true
-	d.Users["9a1b2c-w"] = User{Sub: "9a1b2c-w", Username: "juniper", Email: "w@example.org", Role: RolePending}
+	d.Users["9a1b2c-w"] = User{Sub: "9a1b2c-w", Username: "juniper", Email: "w@example.org", Role: RoleViewer, CreatedAt: *at(2)}
 	d.Users["sub-u"] = User{Sub: "sub-u", Username: "Jüni Pér", Email: "u@example.org", EmailVerified: &tr, Role: RoleViewer}
 	d.Users["sub-k"] = User{Sub: "sub-k", Username: "Юнипер", Email: "k@example.org", Role: RoleViewer}
 	p := d.People()
@@ -553,16 +561,35 @@ func TestFromOutsideIsNeverLookedUpAmongAddressesAndNames(t *testing.T) {
 	// An agent keeps 64 bytes of what it is told. Two accounts with one long user name: what an agent can repeat
 	// of "<name>" and of "<name> · id ..." is the same text, so it names neither.
 	long := strings.Repeat("n", 64)
-	two := Data{Users: map[string]User{"aaaaaa-1": {Sub: "aaaaaa-1", Username: long, Role: RoleAdmin}, "bbbbbb-2": {Sub: "bbbbbb-2", Username: long, Role: RolePending}}}
+	two := Data{Users: map[string]User{"aaaaaa-1": {Sub: "aaaaaa-1", Username: long, Role: RoleAdmin}, "bbbbbb-2": {Sub: "bbbbbb-2", Username: long, Role: RoleViewer}}}
 	if got, _ := two.People().Of("bbbbbb-2"); got != long+" · id bbbbbb" {
 		t.Fatalf("the fixture: the second account with the long user name is shown by %q", got)
 	}
 	if got := two.People().FromOutside(long); got != HiddenName {
 		t.Errorf("64 bytes that two shown names begin with, from an agent: %q", got)
 	}
-	short := Data{Users: map[string]User{"aaaaaa-1": {Sub: "aaaaaa-1", Username: long[:40], Role: RoleAdmin}, "bbbbbb-2": {Sub: "bbbbbb-2", Username: long[:40], Role: RolePending}}}
+	short := Data{Users: map[string]User{"aaaaaa-1": {Sub: "aaaaaa-1", Username: long[:40], Role: RoleAdmin}, "bbbbbb-2": {Sub: "bbbbbb-2", Username: long[:40], Role: RoleViewer}}}
 	if got := short.People().FromOutside(long[:40] + "  id bbbbbb"); got != long[:40]+" · id bbbbbb" {
 		t.Errorf("a shorter one, as an agent repeats the second account: %q", got)
+	}
+	// An account that only waits for access asked no agent for anything, and what it is shown by is its own
+	// choice: an agent's answer is never read as that account, and such an account is never the second one an
+	// answer "cannot tell apart" (with the user name "Juniper!" it took the admin's name out of the countdown).
+	for _, username := range []string{"Juniper!", "JUNIPER", "juniper", "Juni(per)"} {
+		w := peopleData()
+		w.Users["9a1b2c-w"] = User{Sub: "9a1b2c-w", Username: username, Email: "w@example.org", Role: RolePending, CreatedAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}
+		if got := w.People().FromOutside("Juniper"); got != "Juniper" {
+			t.Errorf("next to an account that waits and calls itself %q, an agent's \"Juniper\" reads %q", username, got)
+		}
+		shown, _ := w.People().Of("9a1b2c-w")
+		if got := w.People().FromOutside(shown); got != HiddenName && got != "Juniper" {
+			t.Errorf("what an account that waits is shown by (%q), from an agent: %q", shown, got)
+		}
+	}
+	waits := peopleData()
+	waits.Users["9a1b2c-w"] = User{Sub: "9a1b2c-w", Username: "wanda", Email: "w@example.org", Role: RolePending}
+	if got := waits.People().FromOutside("wanda"); got != HiddenName {
+		t.Errorf("the user name of an account that waits, from an agent: %q", got)
 	}
 	// an account that calls itself "unknown" is not what the agent's word for nobody means
 	d.Users["sub-q"] = User{Sub: "sub-q", Username: "unknown", Email: "q@example.org"}
@@ -621,8 +648,9 @@ func TestShownInASentence(t *testing.T) {
 		{"switched off by old@example.com.", "switched off by " + HiddenAddress + "."},
 		{"elevated helper started by gone@example.org", "elevated helper started by " + HiddenAddress},
 		{"its machine id was accepted by Bare Name", "its machine id was accepted by " + HiddenName},
-		{"Bare Names are not Bare Name's", "Bare Names are not " + HiddenName + "'s"}, // a word of its own only
-		{"Real Name did it", "Real Name did it"},                                      // an account with an address was never named by its name in a sentence
+		{"accepted by Bare Names, not by Bare Name's", "accepted by Bare Names, not by " + HiddenName + "'s"}, // a word of its own only
+		{"Bare Names are not Bare Name's", "Bare Names are not Bare Name's"},                                  // and only where the sentence says who did it (TestANameInASentenceOnlyWhereItNamesWhoDidIt)
+		{"Real Name did it", "Real Name did it"},                                                              // an account with an address was never named by its name in a sentence
 		{"authentication failure for root@pam", "authentication failure for root@pam"},
 		{"ssh fairy@192.0.2.7 failed", "ssh fairy@192.0.2.7 failed"},
 		{"token fairy@pve!panel refused", "token fairy@pve!panel refused"},
