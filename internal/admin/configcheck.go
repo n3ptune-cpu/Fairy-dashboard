@@ -101,7 +101,8 @@ func (c *cli) configCheck() int {
 	notes, inferred = append(notes, okLines...), append(inferred, said...)
 	okLines, sockWarn, said := socketLinkCheck(cfg) // what hangs on the sockets of those plugs, and where the agent's Home Assistant runs
 	notes, problems, inferred = append(notes, okLines...), append(problems, sockWarn...), append(inferred, said...)
-	okLines, ignored, said := hostOptionsCheck(cfg) // "Edit host": what the panel changed about these links (state.json)
+	problems = append(problems, panelHostsCheck(cfg)...) // panel_hosts and the ids on the way down to the panel's machine
+	okLines, ignored, said := hostOptionsCheck(cfg)      // "Edit host": what the panel changed about these links (state.json)
 	notes, problems, inferred = append(notes, okLines...), append(problems, ignored...), append(inferred, said...)
 	dayLine, said := powerDayCheck(cfg) // the power sources' last 24 hours: where they are kept (power-day.json)
 	notes, inferred = append(notes, dayLine), append(inferred, said...)
