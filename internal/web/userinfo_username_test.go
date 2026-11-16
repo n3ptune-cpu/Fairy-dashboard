@@ -24,6 +24,14 @@ func signInWith(t *testing.T, idToken, userinfo map[string]any) (e *env, idp *fa
 	return e, idp, e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
 }
 
+// asked is how often the userinfo endpoint was asked. (Read under the fixture's lock: the endpoint counts in
+// its own goroutine, and after a connection that was cut it may still be in it when the panel has gone on.)
+func (f *fakeIDP) asked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.userinfoAsked
+}
+
 // The groups are in the ID token, the user name only in userinfo: the account has the user name, cleaned like
 // one from the ID token (no escape sequence, no zero width space), in its session and in users.json. Nothing
 // else of that answer is used: the groups stay the ID token's, the address is not verified by userinfo's word,
@@ -49,8 +57,8 @@ func TestUsernameComesFromUserinfoWhenTheIDTokenHasNone(t *testing.T) {
 	if me.body["sub"] != "u1" || me.body["email"] != "n@example.com" || me.body["email_verified"] == true || me.body["name"] != "Real Name" || me.body["can_control"] == true {
 		t.Errorf("/api/me: %s", me.raw)
 	}
-	if idp.userinfoAsked != 1 {
-		t.Errorf("userinfo was asked %d times, want once", idp.userinfoAsked)
+	if idp.asked() != 1 {
+		t.Errorf("userinfo was asked %d times, want once", idp.asked())
 	}
 }
 
@@ -90,8 +98,8 @@ func TestUserinfoIsAskedOnlyForWhatIsMissing(t *testing.T) {
 		idp.userinfo = map[string]any{"sub": "u1", "preferred_username": "from-userinfo", "groups": []string{"viewers"}}
 		q, rt := idp.login(e, "/auth/login?next=/", "")
 		r := e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
-		if r.code != 303 || idp.userinfoAsked != c.asked || e.s.Access.Load().Users["u1"].Username != c.username {
-			t.Errorf("%s: callback %d, userinfo asked %d times (want %d), user name %q (want %q)", c.name, r.code, idp.userinfoAsked, c.asked, e.s.Access.Load().Users["u1"].Username, c.username)
+		if r.code != 303 || idp.asked() != c.asked || e.s.Access.Load().Users["u1"].Username != c.username {
+			t.Errorf("%s: callback %d, userinfo asked %d times (want %d), user name %q (want %q)", c.name, r.code, idp.asked(), c.asked, e.s.Access.Load().Users["u1"].Username, c.username)
 		}
 	}
 }
@@ -124,7 +132,7 @@ func TestUserinfoForTheUsernameAloneMayFail(t *testing.T) {
 		if me.code != 200 || me.body["preferred_username"] != nil || me.body["shown_as"] != "(address hidden)" || fmt.Sprint(me.body["groups"]) != "[viewers]" {
 			t.Errorf("userinfo %s: /api/me %d %s", how, me.code, me.raw)
 		}
-		if idp.userinfoAsked == 0 {
+		if idp.asked() == 0 {
 			t.Errorf("userinfo %s: not asked", how)
 		}
 		out := logs.take()
@@ -151,8 +159,8 @@ func TestUserinfoAboutAnotherAccountIsRefusedAlsoForTheUsername(t *testing.T) {
 	if u, ok := e.s.Access.Load().Users["u1"]; ok && u.Username != "" {
 		t.Errorf("the user name of another account's answer was kept: %+v", u)
 	}
-	if idp.userinfoAsked != 1 {
-		t.Errorf("userinfo asked %d times", idp.userinfoAsked)
+	if idp.asked() != 1 {
+		t.Errorf("userinfo asked %d times", idp.asked())
 	}
 }
 
@@ -191,8 +199,8 @@ func TestUserinfoForTheUsernameAloneThatFailsDoesNotUndecideTheGroups(t *testing
 		for _, a := range e.auditEntries("", "auth.login") {
 			outcome = fmt.Sprint(a["outcome"])
 		}
-		if r.code != 403 || outcome != "denied: not in an allowed group" || idp.userinfoAsked != 1 {
-			t.Errorf("userinfo %s, the ID token's groups are not allowed: callback %d, audit %q, userinfo asked %d times; want 403 and the denial", how, r.code, outcome, idp.userinfoAsked)
+		if r.code != 403 || outcome != "denied: not in an allowed group" || idp.asked() != 1 {
+			t.Errorf("userinfo %s, the ID token's groups are not allowed: callback %d, audit %q, userinfo asked %d times; want 403 and the denial", how, r.code, outcome, idp.asked())
 		}
 	}
 	// ... and userinfo's groups do not let such an account in when it does answer
