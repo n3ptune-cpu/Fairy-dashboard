@@ -3247,15 +3247,28 @@ async function loadAdmin() {
 const ROLE_LABEL = table({ admin: "Admin", viewer: "Viewer", pending: "No access (waiting)" });
 // User name, name and e-mail are what the account claims at Pocket ID; only the account id (OIDC subject) is certain.
 // email_verified is true only when Pocket ID vouched for the address at the last sign-in (null = not known yet).
-// A row names the person by the user name (shown_as: what the panel calls them everywhere); the name and the
+// A row names the person by what the panel calls them everywhere (shown_as: the user name; with the start of
+// the account id behind it while another account that comes first has the same user name); the name and the
 // address are dots until they are clicked (veiled).
 const unverified = (u) => !!u?.email && u.email_verified !== true;
 const adminUser = (sub) => admin.data?.users.find((x) => x.sub === sub);
-const userNamed = (u) => !!u?.username && u.shown_as === u.username;  // the panel has a user name to call them by
+// the panel has a user name to call them by (named; a panel that does not send it yet: the user name is what it shows)
+const userNamed = (u) => !!u && (u.named ?? (!!u.username && u.shown_as === u.username));
 // for confirm() texts and the action label (the label goes percent-encoded in X-Fairy-Action, see headerText):
 // the user name and the account id, never the address or the name
-const userIdent = (u) => !u ? "this user" : `${userNamed(u) ? u.username : "the account"} [id ${u.sub}]`;
+const userIdent = (u) => !u ? "this user" : `${userNamed(u) ? u.shown_as : "the account"} [id ${u.sub}]`;
 const NO_USERNAME = "The panel has no user name for this account yet: it gets it at the account's next sign-in. Until then the panel does not show who this is anywhere else, because all it has is the address or the name.";
+// why a row has no user name in its heading although the account has one, and what stands there (username_note)
+const USERNAME_NOT_SHOWN = table({
+  is_address: "This account's user name is an e-mail address (its own, or another account's). The panel never names a person by an address, so it shows no user name for this account.",
+  is_account_id: "This account's user name is another account's id, so the panel does not show it.",
+  same_username: "Other accounts have this user name, and the panel could not give this one a form of its own." });
+const userHeading = (u) => userNamed(u) ? `<b>${esc(u.shown_as)}</b>`
+  : u.username ? `<b class="muted" title="${esc(USERNAME_NOT_SHOWN[u.username_note] || NO_USERNAME)}">user name not shown</b>`
+    : `<b class="muted" title="${esc(NO_USERNAME)}">no user name yet</b>`;
+const SAME_USERNAME = "More than one account has this user name. One of them is shown by the plain name everywhere: an account with a role before one that waits for access, then the one that has had the name longest. Every other one is shown with the start of its account id behind the name. A user name is what an account says about itself: go by the id.";
+const sameUsername = (u) => (u.same_username || []).length
+  ? `<span class="sub warn-t" title="${esc(SAME_USERNAME)}">same user name as ${u.same_username.map((id) => `id ${esc(id)}`).join(", ")}</span>` : "";
 const FROM_LABEL = table({ panel: "set here", config: "config.yaml", node: "from its node", link: "follows its hosts" });
 const KIND_TITLE = [["hosts", "Hosts", (t) => t.kind === "node" || t.kind === "agent"], ["guests", "VMs & containers", (t) => t.kind === "qemu" || t.kind === "lxc"],
   ["power", "Power sources", (t) => t.kind === "power"], ["ups", "UPS", (t) => t.kind === "ups"]];
@@ -3268,7 +3281,8 @@ function pageUsers() {
   const admins = d.users.filter((u) => u.role === "admin").length;
   const userRow = (u) => {
     const last = u.role === "admin" && admins <= 1;
-    return `<tr class="row" data-key="u-${esc(u.sub)}"><td class="namecell"><b${userNamed(u) ? "" : ` class="muted" title="${esc(NO_USERNAME)}"`}>${esc(userNamed(u) ? u.username : "no user name yet")}</b>${u.you ? ' <span class="chip ok">you</span>' : ""}
+    return `<tr class="row" data-key="u-${esc(u.sub)}"><td class="namecell">${userHeading(u)}${u.you ? ' <span class="chip ok">you</span>' : ""}
+        ${sameUsername(u)}
         ${u.name ? `<span class="sub">name ${veiled(`u:${u.sub}:name`, u.name, `name of ${userIdent(u)}`)}</span>` : ""}
         ${u.email ? `<span class="sub">e-mail ${veiled(`u:${u.sub}:email`, u.email, `e-mail address of ${userIdent(u)}`)}${unverified(u) ? ' <span class="chip warn" title="Pocket ID did not verify this address (or this person last signed in before the panel recorded it). The owner of the account may have typed it in: go by the id below.">unverified</span>' : ""}</span>` : ""}
         <span class="sub" title="Account id (OIDC subject): the one part of this row the owner of the account cannot change">id ${esc(u.sub)}</span></td>

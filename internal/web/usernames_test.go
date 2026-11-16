@@ -943,7 +943,8 @@ func TestNoAccessDecisionReadsTheUsername(t *testing.T) {
 		"internal/access/people.go": true, "internal/access/store.go": true, "internal/model/model.go": true, "internal/audit/audit.go": true,
 		"internal/web/people.go": true, "internal/web/policy.go": true, "internal/web/audit.go": true, "internal/web/auth.go": true, "internal/web/grant.go": true,
 		"internal/web/api_sessions.go": true, "internal/web/api_wakeupdate.go": true, "internal/web/testmode.go": true,
-		"internal/demo/demo.go": true, "internal/testutil/issuer.go": true,
+		"internal/web/api_users.go": true, // the Users page says whether an account is shown by a user name
+		"internal/demo/demo.go":     true, "internal/testutil/issuer.go": true,
 		"internal/web/docs.go": true, // the description of the API names the claim
 		// not an account's: the operating system's user of the command line, and the owner of a process
 		"internal/admin/format.go": true, "internal/poller/httpbackend.go": true,

@@ -203,20 +203,33 @@ const $ = () => menu, syncAcct = () => {};
 state.me = { can_manage_users: true, role: "admin" };
 const user = (o) => ({ role: "viewer", sites: [], last_seen: "2026-11-16T10:00:00Z", via: "first sign-in", you: false, email_verified: true, ...o });
 admin.data = { roles: ["admin", "viewer", "pending"], sites: [{ name: "Home", hosts: 1, users: 1, in_config: false }], targets: [], users: [
-  user({ sub: "sub-n", username: "Juniper", shown_as: "Juniper", email: "owner@example.com", name: "Real Name", role: "admin", you: true, via: "bootstrap_admins" }),
-  user({ sub: "sub-s", username: "PineTop", shown_as: "PineTop", email: "friend@example.com", email_verified: false, name: "Other Person", via: "panel by Juniper" }),
-  user({ sub: "sub-o", shown_as: "(address hidden)", email: "old@example.com", name: "Old Timer" }),
-  user({ sub: "sub-x", username: "owner@example.com", shown_as: "(address hidden)", email: "x@example.com", name: "Ex" }),  // a user name that is not its own: not shown as one
-  user({ sub: "sub-z", shown_as: "sub-z", email: "", name: "" }),
+  user({ sub: "sub-n", username: "Juniper", shown_as: "Juniper", named: true, same_username: ["9a1b2c3d-wanda"], username_note: "same_username", email: "owner@example.com", name: "Real Name", role: "admin", you: true, via: "bootstrap_admins" }),
+  user({ sub: "sub-s", username: "PineTop", shown_as: "PineTop", named: true, same_username: [], username_note: "", email: "friend@example.com", email_verified: false, name: "Other Person", via: "panel by Juniper" }),
+  user({ sub: "sub-o", shown_as: "(address hidden)", named: false, same_username: [], username_note: "", email: "old@example.com", name: "Old Timer" }),
+  user({ sub: "sub-x", username: "owner@example.com", shown_as: "(address hidden)", named: false, same_username: [], username_note: "is_address", email: "x@example.com", name: "Ex" }),  // a user name that is an address: not shown as one
+  user({ sub: "sub-z", shown_as: "sub-z", named: false, same_username: [], username_note: "", email: "", name: "" }),
+  // an account that waits and has the admin's user name in other letters: shown with the start of its id
+  user({ sub: "9a1b2c3d-wanda", username: "juniper", shown_as: "juniper · id 9a1b2c", named: true, same_username: ["sub-n"], username_note: "same_username", email: "wanda@example.org", name: "Waiting Wanda", role: "pending" }),
+  user({ sub: "sub-y", username: "sub-n", shown_as: "(address hidden)", named: false, same_username: [], username_note: "is_account_id", email: "y@example.com", name: "" }),
 ] };
-const hidden = ["owner@example.com", "friend@example.com", "old@example.com", "x@example.com", "Real Name", "Other Person", "Old Timer", "Real", "Timer"];
+const hidden = ["owner@example.com", "friend@example.com", "old@example.com", "x@example.com", "Real Name", "Other Person", "Old Timer", "Real", "Timer", "wanda@example.org", "Waiting Wanda"];
 let html = pageUsers();
 for (const p of hidden) if (html.includes(p)) fail("the Users page holds " + p + " before a click");
-const rows = html.split('<tr class="row" data-key="u-').slice(1, 6).map((r) => r.split("</td>")[0]);
-const want = ["Juniper you name •••••• e-mail •••••• id sub-n", "PineTop name •••••• e-mail •••••• unverified id sub-s",
-  "no user name yet name •••••• e-mail •••••• id sub-o", "no user name yet name •••••• e-mail •••••• id sub-x", "no user name yet id sub-z"];
+const rows = html.split('<tr class="row" data-key="u-').slice(1, 8).map((r) => r.split("</td>")[0]);
+const want = ["Juniper you same user name as id 9a1b2c3d-wanda name •••••• e-mail •••••• id sub-n", "PineTop name •••••• e-mail •••••• unverified id sub-s",
+  "no user name yet name •••••• e-mail •••••• id sub-o", "user name not shown name •••••• e-mail •••••• id sub-x", "no user name yet id sub-z",
+  "juniper · id 9a1b2c same user name as id sub-n name •••••• e-mail •••••• id 9a1b2c3d-wanda", "user name not shown e-mail •••••• id sub-y"];
 rows.forEach((r, i) => { if (words(r.slice(r.indexOf(">") + 1)) !== want[i]) fail("row " + (i + 1) + ": " + words(r.slice(r.indexOf(">") + 1))); });
 if (!rows[0].includes('<b>Juniper</b>') || !rows[2].includes('<b class="muted" title="The panel has no user name for this account yet')) fail("the name of a row: " + rows[0] + rows[2]);
+// a row never says "no user name yet" (and "it gets it at the next sign-in") for an account that has one: it says
+// which account has the same, or why the panel does not show it
+if (!rows[5].includes('<b>juniper · id 9a1b2c</b>') || !rows[5].includes('<span class="sub warn-t" title="More than one account has this user name.') || rows[5].includes("no user name")) fail("the row of the second account with a user name: " + rows[5]);
+if (!rows[0].includes('<span class="sub warn-t" title="More than one account has this user name.')) fail("the row of the first account with that user name: " + rows[0]);
+if (!rows[3].includes('title="This account&#39;s user name is an e-mail address') && !rows[3].includes("title=\"This account's user name is an e-mail address")) fail("a user name that is an address: " + rows[3]);
+if (!rows[6].includes("user name is another account") || rows[6].includes("next sign-in")) fail("a user name that is another account's id: " + rows[6]);
+if (rows[1].includes("same user name") || rows[2].includes("same user name")) fail("a row without a second account says there is one");
+// an answer of a panel that does not send named yet is read as before
+if (!userNamed({ username: "A", shown_as: "A" }) || userNamed({ username: "A", shown_as: "(address hidden)" }) || userNamed({ shown_as: "x" }) || userNamed(null)) fail("userNamed without named");
 // each value is a button that says whose what it shows, by user name and id
 const b = buttons(rows[1]);
 if (b.length !== 2 || !b[0].includes('data-veil="u:sub-s:name"') || !b[0].includes('aria-label="Show the name of PineTop [id sub-s]"') ||
@@ -224,7 +237,8 @@ if (b.length !== 2 || !b[0].includes('data-veil="u:sub-s:name"') || !b[0].includ
 if (!buttons(rows[2])[1].includes('aria-label="Show the e-mail address of the account [id sub-o]"')) fail("the button of an account without a user name: " + buttons(rows[2])[1]);
 // the confirmation of Remove, and with it the label of the change ("Confirm it's you" shows it)
 const rm = [...html.matchAll(/data-act="u-remove" data-sub="([^"]*)" data-name="([^"]*)"/g)].map((m) => m[1] + ": " + unesc(m[2]));
-if (JSON.stringify(rm) !== JSON.stringify(["sub-n: Juniper [id sub-n]", "sub-s: PineTop [id sub-s]", "sub-o: the account [id sub-o]", "sub-x: the account [id sub-x]", "sub-z: the account [id sub-z]"])) fail("Remove: " + JSON.stringify(rm));
+if (JSON.stringify(rm) !== JSON.stringify(["sub-n: Juniper [id sub-n]", "sub-s: PineTop [id sub-s]", "sub-o: the account [id sub-o]", "sub-x: the account [id sub-x]", "sub-z: the account [id sub-z]",
+  "9a1b2c3d-wanda: juniper · id 9a1b2c [id 9a1b2c3d-wanda]", "sub-y: the account [id sub-y]"])) fail("Remove: " + JSON.stringify(rm));
 if (userIdent(admin.data.users[1]) !== "PineTop [id sub-s]" || userIdent(null) !== "this user") fail("userIdent");
 // how they got their role, as the server gave it
 if (!words(html).includes("panel by Juniper")) fail("via");

@@ -20,10 +20,18 @@ import (
 // the audit log are the two places that do, and the page draws them as dots until they are clicked. ShownAs is
 // how the panel names the person everywhere else (the user name, or the words that stand for an address or a
 // name while the account has none).
+//
+// Named says that ShownAs is a user name. Two accounts can have the same user name: all but one of them are then
+// shown with a part of their id behind it, and SameUsername has the ids of the others, for each of them.
+// UsernameNote is why an account's user name is not simply what it is shown by (access.UsernameShared,
+// UsernameIsAddress, UsernameIsAccount), so that the page can say what is true of the row.
 type adminUser struct {
 	access.User
-	ShownAs string `json:"shown_as"`
-	You     bool   `json:"you"`
+	ShownAs      string   `json:"shown_as"`
+	Named        bool     `json:"named"`
+	SameUsername []string `json:"same_username"`
+	UsernameNote string   `json:"username_note"`
+	You          bool     `json:"you"`
 }
 
 type adminSite struct {
@@ -98,7 +106,12 @@ func (s *Server) adminPage(me *model.User) adminPage {
 	for _, x := range d.SortedUsers() {
 		shown, _ := who.Of(x.Sub)
 		x.Via = who.ShownIn(x.Via) // "panel by <who>": an older version wrote the admin's address there
-		page.Users = append(page.Users, adminUser{x, shown, x.Sub == me.Sub})
+		same := who.SameUsername(x.Sub)
+		if same == nil {
+			same = []string{}
+		}
+		page.Users = append(page.Users, adminUser{User: x, ShownAs: shown, Named: who.Username(x.Sub) != "", SameUsername: same,
+			UsernameNote: who.UsernameNote(x.Sub), You: x.Sub == me.Sub})
 	}
 	names := map[string]string{}
 	for _, x := range snap {
