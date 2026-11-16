@@ -285,7 +285,8 @@ func TestUISocketSwitchInTheRestOfThePage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"\n.switch.busy::after { content: none; }", "\n.switch.busy .spinner {", "\n.info-btn.sock-lock { width: 36px; height: 20px;",
+	for _, want := range []string{"\n.switch.busy::after { content: none; }", "\n.switch.busy .spinner { position: absolute; top: 2px; left: 9px; width: 12px; height: 12px;", "\n.info-btn.sock-lock { position: relative; width: 32px; height: 18px;",
+		"\n.info-btn.sock-lock svg { width: 12px; height: 12px; }", "\n.info-btn.sock-lock::before { content: \"\"; position: absolute; inset: -5px 0; }",
 		"\nbody.unreachable .switch[data-act=\"sock\"][aria-checked=\"true\"]::after { background: var(--faint); }", "\n.list-row.wall-sock .sock-word { min-width: 52px; }"} {
 		if strings.Count(string(b), want) != 1 {
 			t.Errorf("app.css lacks (or has twice) %q", want)

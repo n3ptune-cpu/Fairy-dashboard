@@ -557,24 +557,26 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 /* The panel's one switch. A box that is ticked (.check input) and a button that asks for a change (.switch, with
    role="switch" and aria-checked) look the same: a pill with a knob. Knob left on a dark track is off, for every
    switch; knob right on a coloured track is on. It is round, like the status dots, so that it reads as a switch
-   at a glance; every other control of the panel stays square. A .switch button has a hit area larger than what
-   is drawn.
+   at a glance; every other control of the panel stays square. It is 32 by 18 px with a knob of 12, and every
+   measure of it is a whole pixel: with a half, a browser at 100% moves the knob to a whole pixel and it sits
+   higher than the middle. The place to press is larger than what is drawn, for the button and for the box.
    "On" has two colours. Green, the green of "ok", is power: a switch with the class "power" gives or takes the
    power of a machine or of a socket (the sockets of a plug). Blue, the blue of links and of the focus ring
    (--accent), is every other switch: a setting, an option of a dialog, a row of a pick list. The knob of a
    switch that is on has the page's own black, on either colour. */
-.check input, .switch { appearance: none; position: relative; flex: none; display: inline-block; box-sizing: border-box; width: 36px; height: 20px; margin: 0; padding: 0;
-  border: 1px solid var(--line2); border-radius: 10px; background: var(--well); cursor: pointer; vertical-align: middle; transition: background .12s ease, border-color .12s ease; }
-.check input::after, .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--faint);
+.check input, .switch { appearance: none; position: relative; flex: none; display: inline-block; box-sizing: border-box; width: 32px; height: 18px; margin: 0; padding: 0;
+  border: 1px solid var(--line2); border-radius: 9px; background: var(--well); cursor: pointer; vertical-align: middle; transition: background .12s ease, border-color .12s ease; }
+.check input::after, .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--faint);
   transition: left .12s ease, background .12s ease; }
 .check input:checked, .switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
 .check.power input:checked, .switch.power[aria-checked="true"] { background: var(--ok); border-color: var(--ok); }
-.check input:checked::after, .switch[aria-checked="true"]::after { left: 18px; background: var(--bg); }
+.check input:checked::after, .switch[aria-checked="true"]::after { left: 16px; background: var(--bg); }
 .check input:hover:not(:disabled), .switch:hover:not(:disabled) { border-color: var(--muted); }
 .check input:checked:hover:not(:disabled), .switch[aria-checked="true"]:hover:not(:disabled) { border-color: var(--text); }
 .check input:focus-visible, .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .check input:disabled, .switch:disabled { opacity: .45; cursor: default; }
-.switch::before { content: ""; position: absolute; inset: -9px -6px; }
+.switch::before { content: ""; position: absolute; inset: -7px -8px; }
+.check input::before { content: ""; position: absolute; inset: -5px 0; }  /* the track is under 24 px: the place to press is not */
 @media (prefers-reduced-motion: reduce) { .check input, .switch, .check input::after, .switch::after { transition: none; } }
 .table.users .select, .table.assign .select { padding: 4px 8px; font-size: 12.5px; height: auto; }
 .table .nowrap { white-space: nowrap; }
@@ -998,10 +1000,13 @@ body.unreachable .chip.ok { color: var(--muted); border-color: var(--line2); }
 .sock-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--off); }
 .sock-dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(61, 220, 151, .14); }
 .sock-dot.none { background: none; border: 1px solid var(--faint); }
-/* a request to switch is on its way: dimmed (disabled), with the spinner where the knob was */
+/* a request to switch is on its way: dimmed (disabled), with the spinner where the knob was, in the middle.
+   A lock is as large as the switch whose place it takes, and can be pressed a little above and below it. */
 .switch.busy::after { content: none; }
-.switch.busy .spinner { position: absolute; top: 3px; left: 11px; width: 12px; height: 12px; color: var(--text); }
-.info-btn.sock-lock { width: 36px; height: 20px; margin: 0; border: 1px dashed var(--line2); border-radius: 10px; color: var(--faint); display: inline-grid; place-items: center; flex: none; }
+.switch.busy .spinner { position: absolute; top: 2px; left: 9px; width: 12px; height: 12px; color: var(--text); }
+.info-btn.sock-lock { position: relative; width: 32px; height: 18px; margin: 0; border: 1px dashed var(--line2); border-radius: 9px; color: var(--faint); display: inline-grid; place-items: center; flex: none; }
+.info-btn.sock-lock svg { width: 12px; height: 12px; }
+.info-btn.sock-lock::before { content: ""; position: absolute; inset: -5px 0; }
 .info-btn.sock-lock:hover, .info-btn.sock-lock[aria-expanded="true"] { color: var(--text); border-color: var(--muted); }
 /* a socket's line in a host's Power panel: the plug's sign and the socket's name, the plug's name muted after it;
    on the right the switch or the lock, then the state in a word of a fixed width, so the controls are in a column */
