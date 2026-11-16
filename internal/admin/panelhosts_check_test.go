@@ -99,6 +99,14 @@ func TestConfigCheckAndThePanelsOwnMachine(t *testing.T) {
 		t.Errorf("agents whose id is the id of a node the file names (exit %d):\n%s", code, got)
 	}
 
+	// (a node: that can mean a node of two entries names no id for certain: the agent with such an id has the
+	// note, and no warning)
+	two := strings.Replace(head, "agents:\n", "  - {id: nas, id_prefix: nas-, urls: [\"https://nas:8006\"], token_id: \"fairy@pve!panel\", token_secret_env: PVE_S}\nagents:\n", 1)
+	code, got = check(two + agent("pc7", ", node: PVE") + agent("lab-node-pve", "") + agent("nas-node-pve", ""))
+	if strings.Contains(got, "its id is also the id of the Proxmox node") || strings.Count(got, looks("lab-node-pve")) != 1 || strings.Count(got, looks("nas-node-pve")) != 1 {
+		t.Errorf("a node: that two entries can mean (exit %d):\n%s", code, got)
+	}
+
 	// links_to from agent to agent: a way over eight agents is followed, one over nine is not, as in the running
 	// panel (the same count: every agent on the way that names where it runs); and a way that comes back
 	for _, end := range []string{"lab-node-pve", "lab-qemu-100"} {

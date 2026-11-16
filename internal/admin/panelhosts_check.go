@@ -65,22 +65,17 @@ func panelHostsCheck(cfg *config.Panel) (warn, said []string) {
 		}
 	}
 	for _, a := range c.Agents {
-		seen := map[string]bool{a.ID: true}
-		// (counted as the running panel counts, poller.MachineUnder: every agent on the way that names where it
-		// runs, with links_to or node:)
-		for cur, n := a, 0; cur.LinksTo != "" || cur.Node != ""; {
-			next, isAgent := agents[cur.LinksTo]
-			back := cur.LinksTo != "" && isAgent && seen[next.ID]
-			if n++; n > poller.ChainMax || back {
+		// Counted as the running panel counts (poller.MachineUnder): every agent on the way that names where it
+		// runs, with links_to or node:. What links_to names is an agent, or a node or a guest: then the way ends
+		// at a machine, and the entry that is no agent's names nothing. A way that leads back goes round until
+		// the count says so.
+		for cur, n := a, 0; cur.LinksTo != "" || cur.Node != ""; cur = agents[cur.LinksTo] {
+			if n++; n > poller.ChainMax {
 				warn = append(warn, fmt.Sprintf("agent %s: links_to leads from agent to agent over more than %d agents, or back to one of them. The panel does not follow such a way to a machine: "+
 					"a socket that is linked to this agent is locked, and panel_hosts with it leaves the panel without a machine it knows as its own. Write the node or the guest the agent runs on in links_to",
 					a.ID, poller.ChainMax))
 				break
 			}
-			if cur.LinksTo == "" || !isAgent {
-				break // a node or a guest: the way ends at a machine
-			}
-			seen[next.ID], cur = true, next
 		}
 	}
 	return warn, said

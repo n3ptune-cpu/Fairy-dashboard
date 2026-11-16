@@ -363,7 +363,7 @@ func NodeAgents(cfg *config.Panel) (decided map[string]string, undecided map[str
 func NamedNodes(cfg *config.Panel) map[string][]string {
 	named := map[string][]string{}
 	for _, a := range cfg.Agents {
-		if a.Node == "" || a.LinksTo != "" {
+		if a.Node == "" {
 			continue
 		}
 		if ids := rowNodes(a, cfg.Proxmox); len(ids) == 1 {
