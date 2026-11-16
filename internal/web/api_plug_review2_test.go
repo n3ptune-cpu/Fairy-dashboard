@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
@@ -517,5 +518,143 @@ func TestPlugApprovedReplayOverTheLimitIsOnRecord(t *testing.T) {
 	}
 	if n := len(pe.plugAudits()); n != before+1 {
 		t.Errorf("a request over the limit without an approval wrote a plug.switch entry (%d, want %d)", n, before+1)
+	}
+}
+
+// The second review's mutation Q02 survived the suite: with the limit on control requests as ONE budget for all
+// admins together, no test failed, because no plug test had two admins. The limit is each admin's own
+// (s.control.allow(u.Sub)): one admin who uses theirs up, by mistake or on purpose, does not lock the route for
+// the other.
+func TestPlugControlLimitIsEachAdminsOwn(t *testing.T) {
+	pe := newPlugEnv(t)
+	pe.s.control = newRateLimiter(3)
+	second := model.User{Sub: "u22", Name: model.P("Second"), Email: model.P("s@example.com"), Groups: []string{"viewers", "controllers"}}
+	ck := pe.cookie(second, 0)
+	if _, _, err := pe.s.Access.SetRole("u22", "admin", nil, "test", false); err != nil {
+		t.Fatal(err)
+	}
+	other := func() resp {
+		return pe.do("POST", "/api/power/socket", plugBody("reader/desk-bar", "ch6", "off"), "Cookie", ck, "X-Requested-With", "fairy", "Content-Type", "application/json")
+	}
+	for i := range 3 {
+		if r := pe.flip("reader/desk-bar", "ch6", "off"); r.code != 409 {
+			t.Fatalf("the first admin's request %d: %d %s", i+1, r.code, r.raw)
+		}
+	}
+	if r := pe.flip("reader/desk-bar", "ch6", "off"); r.code != 429 {
+		t.Fatalf("the first admin's fourth request: %d %s", r.code, r.raw)
+	}
+	for i := range 3 { // the second admin has all of their own
+		if r := other(); r.code != 409 {
+			t.Fatalf("the second admin's request %d, after the first used up theirs: %d %s", i+1, r.code, r.raw)
+		}
+	}
+	if r := other(); r.code != 429 {
+		t.Errorf("the second admin's fourth request: %d %s", r.code, r.raw)
+	}
+	if n := len(pe.plugAudits()); n != 6 {
+		t.Errorf("%d plug.switch entries, want 3 of each admin", n)
+	}
+}
+
+// The second review's mutation Q35 survived: how old a reading of a socket's own meter may be was tested in the
+// rule alone, with the age set by hand, so the line that hands offline_after to the rule (look) was pinned by
+// nothing: with ten times offline_after no test failed. Here the route is asked. The PC is silent and its own
+// plug reads 2 W: fresh, that is a sign of "off", and "off" goes to the passkey. The same reading a little
+// older than offline_after (the reader was not polled meanwhile; the plug stays "ok" with its last reading) is
+// no sign any more, and "off" asks.
+func TestPlugMeterReadingOlderThanOfflineAfterIsNoSign(t *testing.T) {
+	pe := newPlugEnvWith(t, plugConfigWith(t, "offline_after: 60", "offline_after: 1"))
+	pe.pcSilent()
+	pe.measures("pc-plug", 2)
+	r := pe.flip("reader/pc-plug", "main", "off")
+	if _, _, ok := approvalAsked(r); !ok || r.body["detail"].(map[string]any)["signs"] != "switch off PC (PC plug), which powers DESK-PC" {
+		t.Fatalf("a fresh reading of 2 W: %d %s", r.code, r.raw)
+	}
+	time.Sleep(1300 * time.Millisecond) // offline_after, and a little
+	for _, x := range pe.do("GET", "/api/power", nil, "Cookie", pe.admin).body["sources"].([]any) {
+		if src := x.(map[string]any); src["id"] == "reader/pc-plug" && src["status"] != "ok" {
+			t.Fatalf("the fixture: the plug is %v", src["status"])
+		}
+	}
+	r = pe.flip("reader/pc-plug", "main", "off")
+	const said = "DESK-PC does not answer, which does not say that it is off: it may still be running. Shut it down first, or look at it."
+	if d, _ := r.body["detail"].(map[string]any); r.code != 409 || d["code"] != codeMachineRunning || d["state"] != "unknown" || d["message"] != said {
+		t.Fatalf("a reading of 2 W that is older than offline_after: %d %s\nwant machine_running, state unknown", r.code, r.raw)
+	}
+	// polled again, the reading is fresh again
+	pe.poll()
+	if _, _, ok := approvalAsked(pe.flip("reader/pc-plug", "main", "off")); !ok {
+		t.Error("a fresh reading after the next poll: off is refused")
+	}
+}
+
+// The second review's mutation Q18 survived: "seen to go off" is asked for the row the machine is shown as, not
+// for the id that is written in the link, and in the rig the two were always the same id. Here they are not:
+// the socket is linked to an agent (nas-box) that runs on a Proxmox node of a cluster, so the machine is shown
+// as that node's row. A run saw the machine go off: both ids have the mark, and "off" needs no question. Then
+// the cluster lists the node as offline, which ends the node's mark (the cluster says what the node is; the
+// poller's rule) and leaves the agent's. What the page shows is the node's row, without a mark: the machine "may
+// still be running", and "off" asks, whatever the mark under the agent's id says.
+func TestPlugSeenToGoOffIsAskedOfTheRowThatIsShown(t *testing.T) {
+	t.Setenv("TOK_G", testutil.ReadToken+"g")
+	yaml := plugConfigWith(t, "desk-bar/ch7: old-pc", "desk-bar/ch7: nas-box")
+	yaml = strings.Replace(yaml, "\nagents:\n", "\nagents:\n  - {id: nas-box, name: NAS-BOX, url: \"http://nas-box\", token_env: TOK_G, node: PVE2}\n", 1)
+	if !strings.Contains(yaml, "id: nas-box") {
+		t.Fatal("the rig's config was not changed")
+	}
+	pe := newPlugEnvWith(t, yaml)
+	node, on := "online", true // what the cluster says of PVE2, and whether the agent on it answers
+	pe.b.Mu.Lock()
+	pe.b.PVEOf = func(string) ([]jsonx.M, error) {
+		return append(testutil.HostResources("PVE", "running"), jsonx.M{"id": "node/PVE2", "type": "node", "node": "PVE2", "status": node, "cpu": 0.1,
+			"maxcpu": 8.0, "mem": float64(8 << 30), "maxmem": float64(32 << 30), "disk": float64(10 << 30), "maxdisk": float64(100 << 30), "uptime": 30.0}), nil
+	}
+	pe.b.Metrics["nas-box"] = func() (jsonx.M, error) {
+		if !on {
+			return nil, devices.Errf("connection failed")
+		}
+		m := testutil.AgentMetrics()
+		m["hostname"] = "nas-box"
+		delete(m, "power_sources")
+		return m, nil
+	}
+	pe.b.Mu.Unlock()
+	pe.poll()
+	pe.poll()
+	if got := pe.s.Poller.ShownID("nas-box"); got != "lab-node-pve2" {
+		t.Fatalf("the fixture: nas-box is shown as %q", got)
+	}
+	if s := pe.socketOf(pe.admin, "reader/desk-bar", "ch7"); s["switchable"] != true || s["system_id"] != "lab-node-pve2" {
+		t.Fatalf("the fixture: %v", s)
+	}
+	// it runs: the question
+	if r := pe.flip("reader/desk-bar", "ch7", "off"); r.code != 409 || r.body["detail"].(map[string]any)["state"] != "running" {
+		t.Fatalf("off while the machine runs: %d %s", r.code, r.raw)
+	}
+	// it goes off, and a run saw it: the cluster lists the node as offline, the agent does not answer
+	pe.b.Mu.Lock()
+	node, on = "offline", false
+	pe.b.Mu.Unlock()
+	pe.poll()
+	pe.s.Poller.MarkOff("nas-box")
+	if !pe.s.Poller.KnownOff("nas-box") || !pe.s.Poller.KnownOff("lab-node-pve2") {
+		t.Fatalf("the fixture: the marks after MarkOff: agent %v, node %v", pe.s.Poller.KnownOff("nas-box"), pe.s.Poller.KnownOff("lab-node-pve2"))
+	}
+	r := pe.flip("reader/desk-bar", "ch7", "off")
+	if _, _, ok := approvalAsked(r); !ok || r.body["detail"].(map[string]any)["signs"] != "switch off Old PC (Monitor powerbar), which powers PVE2" {
+		t.Fatalf("off for a machine that was seen to go off: %d %s", r.code, r.raw)
+	}
+	// the next poll of the cluster: the node's mark ends, the agent's stays
+	pe.poll()
+	if !pe.s.Poller.KnownOff("nas-box") || pe.s.Poller.KnownOff("lab-node-pve2") {
+		t.Fatalf("the fixture: the marks after the cluster's poll: agent %v, node %v; want the agent's only", pe.s.Poller.KnownOff("nas-box"), pe.s.Poller.KnownOff("lab-node-pve2"))
+	}
+	if x := pe.do("GET", "/api/systems/lab-node-pve2", nil, "Cookie", pe.admin); x.body["status"] != "offline" {
+		t.Fatalf("the fixture: PVE2 is %v", x.body["status"])
+	}
+	r = pe.flip("reader/desk-bar", "ch7", "off")
+	if d, _ := r.body["detail"].(map[string]any); r.code != 409 || d["code"] != codeMachineRunning || d["state"] != "unknown" || d["machine"] != "PVE2" || d["system_id"] != "lab-node-pve2" {
+		t.Fatalf("off when only the id in the link has the mark: %d %s\nwant machine_running, state unknown, for PVE2", r.code, r.raw)
 	}
 }
