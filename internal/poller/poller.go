@@ -127,6 +127,9 @@ type Poller struct {
 	// system id -> a run saw this machine go off after its shutdown: its row is "offline", not "stale", until it
 	// answers again (knownoff.go)
 	knownOff map[string]bool
+	// knownOffAt: when each mark of knownOff was set (MarkOff), on the steady clock. It is read only for an id
+	// that knownOff holds (KnownOffWithin); what ends a mark does not have to clear it.
+	knownOffAt map[string]time.Duration
 	// agent id -> the time of its last good answer, kept over a restart, and what state.json holds of it
 	// (lastseen.go). seenWriteAt: when the times were last written; seenDrop: entries to take out of the file.
 	lastSeen    map[string]time.Time
@@ -163,7 +166,7 @@ func New(cfg *config.Panel, secrets config.Secrets, backend Backend) (*Poller, e
 		sources: map[string]model.SourceStatus{}, sourceMono: map[string]time.Duration{}, sourceAsked: map[string]time.Duration{}, agentPower: map[string]*model.ComponentPower{},
 		pveRefs: map[string]pveRef{}, nodeCPU: map[string]string{}, nodeInflight: map[string]string{}, pveOverLimit: map[string]bool{},
 		pending: map[string]pendingNote{}, asleep: map[string]time.Time{}, clusterIDs: map[string][]string{}, fingerprints: map[string]uint64{},
-		agentFailures: map[string]int{}, agentQuiet: map[string]quietRow{}, knownOff: map[string]bool{}, agentInfo: map[string]AgentInfo{}, helperSeen: map[string]map[string]time.Time{}, snapVer: -1, snapJSONVer: -1,
+		agentFailures: map[string]int{}, agentQuiet: map[string]quietRow{}, knownOff: map[string]bool{}, knownOffAt: map[string]time.Duration{}, agentInfo: map[string]AgentInfo{}, helperSeen: map[string]map[string]time.Time{}, snapVer: -1, snapJSONVer: -1,
 		stateVersion: -1, StartedAt: time.Now().UTC(), present: map[string]bool{}}
 	for i := range cfg.Systems {
 		p.overrides[cfg.Systems[i].ID] = &cfg.Systems[i]

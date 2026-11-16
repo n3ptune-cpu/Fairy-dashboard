@@ -1,6 +1,10 @@
 package poller
 
-import "github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+import (
+	"time"
+
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+)
 
 // A machine that is known to be off. A machine that stops answering is "stale" for offline_after (60 s) before
 // it is "offline" (degrade): one missed poll is not a machine that is off, and the panel does not know better.
@@ -45,6 +49,7 @@ func (p *Poller) MarkOff(id string) bool {
 				continue // a node that its cluster shows as online, an error entry: not this function's to say
 			}
 			p.knownOff[sid] = true
+			p.knownOffAt[sid] = p.mono() // seen to go off now: the mark's age starts here, also when it was set before
 			if s.Status == "stale" {
 				p.systems[sid] = wentOff(s)
 				changed = true
@@ -60,12 +65,23 @@ func (p *Poller) MarkOff(id string) bool {
 
 // KnownOff reports whether the row with this id is marked as one of a machine that was seen to go off (MarkOff)
 // and has shown no sign of life since. It is the one thing the panel keeps that says "off" and not only "does
-// not answer": the switching of a plug's socket asks it before it takes a machine for off (internal/web,
-// plug.go).
+// not answer". The mark does not end with time: it is what keeps the row "offline", for as long as the machine
+// gives no sign of life.
 func (p *Poller) KnownOff(id string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.knownOff[id]
+}
+
+// KnownOffWithin reports whether the row is marked (KnownOff) and the machine was seen to go off no longer than
+// d ago, by the steady clock. It is for whoever takes the mark as a sign that the machine is off NOW: the
+// switching of a plug's socket asks it before it takes a machine for off (internal/web, plug.go). A machine can
+// be started by hand without the panel hearing of it (another system booted, its agent stopped, a cable), and
+// the mark of such a machine stays; an old mark says less and less.
+func (p *Poller) KnownOffWithin(id string, d time.Duration) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.knownOff[id] && p.mono()-p.knownOffAt[id] <= d
 }
 
 // rowIsOf reports whether the row of the node with this id is this agent's (AgentFor: the first agent of the

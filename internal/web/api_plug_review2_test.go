@@ -3,6 +3,7 @@ package web
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
@@ -216,5 +217,50 @@ func TestPlugSocketLinkedToAGuestWithoutItsNodeAndBesideThePanel(t *testing.T) {
 	pe.s.Poller.Cfg.PanelHosts = []string{"lab-qemu-100"}
 	if s := pe.socketOf(pe.admin, "bare/bare-bar", "lamp"); s["lock"] != nil {
 		t.Errorf("the panel runs on another node: %v", s)
+	}
+}
+
+// Finding 4: the mark "seen to go off" had no age. A run of "Update unpowered hosts" sets it, and only a sign of
+// life of the machine ends it; a machine that is started by hand later, and whose agent does not answer, kept
+// it for as long as the panel ran, and its powerbar socket was switched off with one passkey. For a socket the
+// mark is a sign of "off" for 60 minutes after it was set (socketOffMarkFor). After that the machine "may still
+// be running": the question, and the typed name. The mark itself, and the row, stay as they are.
+func TestPlugSeenToGoOffIsASignForAnHour(t *testing.T) {
+	if socketOffMarkFor != 60*time.Minute {
+		t.Fatalf("the mark counts for %v", socketOffMarkFor)
+	}
+	pe := newPlugEnv(t)
+	pe.pcOff()
+	later := func(d time.Duration) {
+		pe.s.Poller.Clock = func() time.Time { return time.Now().Add(d) }
+		pe.poll()
+		if x := pe.do("GET", "/api/systems/desk-pc", nil, "Cookie", pe.admin); x.body["status"] != "offline" || !pe.s.Poller.KnownOff("desk-pc") {
+			t.Fatalf("%v later: the PC is %v, marked %v", d, x.body["status"], pe.s.Poller.KnownOff("desk-pc"))
+		}
+	}
+	for _, d := range []time.Duration{0, 59 * time.Minute} {
+		later(d)
+		r := pe.flip("reader/desk-bar", "ch3", "off")
+		if _, _, ok := approvalAsked(r); !ok || r.body["detail"].(map[string]any)["signs"] != "switch off Desk PC (Monitor powerbar), which powers DESK-PC" {
+			t.Fatalf("%v after the PC was seen to go off: %d %s", d, r.code, r.raw)
+		}
+	}
+	const said = "DESK-PC does not answer, which does not say that it is off: it may still be running. Shut it down first, or look at it."
+	for _, d := range []time.Duration{61 * time.Minute, 30 * time.Hour} {
+		later(d)
+		r := pe.flip("reader/desk-bar", "ch3", "off")
+		if dd, _ := r.body["detail"].(map[string]any); r.code != 409 || dd["code"] != codeMachineRunning || dd["state"] != "unknown" || dd["machine"] != "DESK-PC" || dd["message"] != said {
+			t.Fatalf("%v after the PC was seen to go off: %d %s\nwant machine_running, state unknown", d, r.code, r.raw)
+		}
+		// a plain "off" is not enough any more; the cut needs the name, and signs that it may be running
+		b := plugBody("reader/desk-bar", "ch3", "off")
+		b["cut"], b["confirm"] = true, "DESK-PC"
+		r = pe.post("/api/power/socket", b)
+		if _, _, ok := approvalAsked(r); !ok || r.body["detail"].(map[string]any)["signs"] != "cut the power of DESK-PC while it may still be running: switch off Desk PC (Monitor powerbar)" {
+			t.Fatalf("%v later, the cut: %d %s", d, r.code, r.raw)
+		}
+	}
+	if n := len(plugSent(pe.reader)); n != 0 {
+		t.Errorf("the machine got %d switch requests", n)
 	}
 }

@@ -59,7 +59,8 @@ type socketLook struct {
 	lock string
 	// ownLink: the link is the plug's own (the only socket of a plug), not a line of socket_links.
 	ownLink bool
-	// knownOff: the linked machine was seen to go off and has given no sign of life since (Poller.KnownOff).
+	// knownOff: the linked machine was seen to go off, not longer ago than socketOffMarkFor, and has given no sign
+	// of life since (Poller.KnownOffWithin).
 	// at and fresh: the time of this look, and how old a reading of the plug may be to count (offline_after).
 	// They are what runningState needs beyond the row.
 	knownOff bool
@@ -178,7 +179,7 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 			}
 		}
 		k.lock = l.lock(k)
-		k.knownOff, k.at, k.fresh = l.s.Poller.KnownOff(k.shown), l.now, time.Duration(l.s.Cfg.OfflineAfter*float64(time.Second))
+		k.knownOff, k.at, k.fresh = l.s.Poller.KnownOffWithin(k.shown, socketOffMarkFor), l.now, time.Duration(l.s.Cfg.OfflineAfter*float64(time.Second))
 	}
 	if k.lock == "" && a.HomeAssistantSystem == "" {
 		// The panel was not told which machine this agent's Home Assistant runs on. Any socket of the agent could
@@ -343,6 +344,9 @@ func (k socketLook) whyText(why, machine string) string {
 	return socketWhyText(why, machine)
 }
 
+// socketOffMarkFor: how long "seen to go off" (Poller.MarkOff) stays a sign of "off" for a machine's socket.
+const socketOffMarkFor = 60 * time.Minute
+
 // socketIdleWatts: a fresh reading of a socket's own meter from 0 W to under this is a sign that nothing on the
 // socket runs (what a machine that is off still draws); at or over it, that something does.
 const socketIdleWatts = 5.0
@@ -384,7 +388,9 @@ func (k socketLook) running() (name string, yes bool) {
 // look the same from here. It counts as off only with a sign of it:
 //
 //   - the machine was seen to go off after a shutdown the panel asked for (Poller.MarkOff: a run of "Update
-//     unpowered hosts" saw its countdown and then nothing at all), and has given no sign of life since;
+//     unpowered hosts" saw its countdown and then nothing at all), not longer ago than socketOffMarkFor, and
+//     has given no sign of life since. The mark has no end of its own, and a machine can be started by hand
+//     without the panel hearing of it (another system booted, its agent stopped): an old mark is no sign;
 //   - the socket has a meter of its own, and a fresh reading of it is from 0 W to under socketIdleWatts
 //     (ownWatts, meterSaysOff).
 //

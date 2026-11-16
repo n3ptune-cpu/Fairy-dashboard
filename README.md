@@ -338,7 +338,9 @@ switched: look at the socket.
   asleep counts too. A machine that **does not answer is not taken for off** because of that, however long
   it lasts: a link that dropped, an agent that was stopped and a machine that hangs all look the same from
   the panel. It counts as off only with a sign of it: a run of
-  [Update unpowered hosts](#update-unpowered-hosts) saw the machine go off, or the socket has a meter of
+  [Update unpowered hosts](#update-unpowered-hosts) saw the machine go off in the last 60 minutes and it
+  has given no sign of life since (after the hour it "may still be running": somebody can have started it
+  without the panel hearing of it), or the socket has a meter of
   its own (the only socket of a plug) and a fresh reading of it is from 0 W to under 5 W. The same meter
   at 5 W or more says that something on the socket still draws power, whatever else is known; and a
   reading below zero is no sign of anything (a meter that is put on backwards reads so for a machine that

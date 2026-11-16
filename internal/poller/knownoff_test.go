@@ -142,3 +142,53 @@ func TestMarkOffIsForTheRowOfTheNodeToo(t *testing.T) {
 		})
 	}
 }
+
+// The mark has an age (KnownOffWithin), for whoever takes it as a sign that the machine is off right now: the
+// switching of a plug's socket. The mark itself does not end with time: the row stays "offline" and KnownOff
+// stays true until the machine gives a sign of life; and seeing the machine go off another time is a new mark.
+func TestTheMarkOfAMachineSeenToGoOffHasAnAge(t *testing.T) {
+	e := newSeenEnv(t, nil, seenStart)
+	e.set(true)
+	e.poll(0)
+	if e.p.KnownOffWithin("laptop", time.Hour) {
+		t.Fatal("a machine that answers counts as seen to go off")
+	}
+	e.set(false)
+	e.poll(5 * time.Second)
+	if !e.p.MarkOff("laptop") {
+		t.Fatal("the fixture: not marked")
+	}
+	for _, c := range []struct {
+		after  time.Duration // since the mark
+		within time.Duration
+		want   bool
+	}{
+		{0, time.Hour, true}, {59 * time.Minute, time.Hour, true}, {time.Hour, time.Hour, true}, {time.Hour + time.Second, time.Hour, false},
+		{26 * time.Hour, time.Hour, false}, {26 * time.Hour, 0, false}, {26 * time.Hour, 27 * time.Hour, true},
+	} {
+		e.b.Mu.Lock()
+		e.now = seenStart.Add(5*time.Second + c.after)
+		e.b.Mu.Unlock()
+		if got := e.p.KnownOffWithin("laptop", c.within); got != c.want {
+			t.Errorf("%v after the mark, asked for %v: %v, want %v", c.after, c.within, got, c.want)
+		}
+		if !e.p.KnownOff("laptop") || snap(e.p)["laptop"].Status != "offline" {
+			t.Errorf("%v after the mark: the mark is gone, or the row is %s", c.after, snap(e.p)["laptop"].Status)
+		}
+	}
+	// a poll without an answer changes nothing; the machine is seen to go off again: the age starts again
+	e.poll(0)
+	if e.p.KnownOffWithin("laptop", time.Hour) || !e.p.KnownOff("laptop") {
+		t.Error("a poll without an answer changed the mark")
+	}
+	e.p.MarkOff("laptop")
+	if !e.p.KnownOffWithin("laptop", time.Hour) {
+		t.Error("marked again, and the mark is old")
+	}
+	// an answer ends the mark, whatever its age; and ids without a mark have none
+	e.set(true)
+	e.poll(time.Second)
+	if e.p.KnownOffWithin("laptop", time.Hour) || e.p.KnownOff("laptop") || e.p.KnownOffWithin("nobody", time.Hour) {
+		t.Error("the mark of a machine that answers, or of an id without one")
+	}
+}
