@@ -19,17 +19,34 @@ func (s *Server) notificationRoutes() {
 	s.mux.HandleFunc("GET /api/system-sites", s.h(s.systemSites))
 }
 
-// visibleEvents is what this request's user may see.
-func (c *reqCtx) visibleEvents() (func(notifications.Event) bool, string, error) {
+// visibleEvents is what this request's user may see, with the view that decides it.
+func (c *reqCtx) visibleEvents() (func(notifications.Event) bool, *view, string, error) {
 	u, err := c.requireUser()
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	v, err := c.view()
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
-	return eventVisibility(v), u.Sub, nil
+	return eventVisibility(v), v, u.Sub, nil
+}
+
+// plugNoteKind is the kind of the note of a switched socket (plugSwitch).
+const plugNoteKind = "plug_switched"
+
+// noteHost is the `host` of an event as the user of this view gets it. For every kind of event but one it is
+// the name of the event's own machine, which that user sees (eventVisibility). The note of a switched socket
+// is the machine's that hangs ON the socket, and has as host the machine that READS the plug: another machine,
+// which can be in a site this user may not see. Somebody who does not see every site gets the name of the
+// machine on the socket there, as that row is called now (third review, finding 4). An admin, and everybody
+// else who sees every site, gets the event as it is.
+func noteHost(v *view, e notifications.Event) string {
+	if v.all || e.Kind != plugNoteKind {
+		return e.Host
+	}
+	x, _ := v.Find(e.SystemID) // a row this user sees, or the event would not be theirs; "" if it is gone
+	return x.Name
 }
 
 // eventVisibility decides which events a view's user may see.
@@ -49,7 +66,7 @@ func eventVisibility(v *view) func(notifications.Event) bool {
 }
 
 func (s *Server) notificationsList(c *reqCtx) error {
-	vis, sub, err := c.visibleEvents()
+	vis, v, sub, err := c.visibleEvents()
 	if err != nil {
 		return err
 	}
@@ -66,12 +83,16 @@ func (s *Server) notificationsList(c *reqCtx) error {
 			return apierr.New(422, "before must be an event id")
 		}
 	}
-	c.json(200, s.Notes.List(sub, vis, f))
+	p := s.Notes.List(sub, vis, f)
+	for i := range p.Events {
+		p.Events[i].Host = noteHost(v, p.Events[i].Event)
+	}
+	c.json(200, p)
 	return nil
 }
 
 func (s *Server) notificationsCount(c *reqCtx) error {
-	vis, sub, err := c.visibleEvents()
+	vis, _, sub, err := c.visibleEvents()
 	if err != nil {
 		return err
 	}

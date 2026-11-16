@@ -432,7 +432,7 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 		res.Message = fmt.Sprintf("Sent. %s does not show %s yet.", k.sock.Name, b.To)
 	}
 	c.audit(u, plugAudit, target, params, outcome)
-	e := notifications.Event{Type: "power", Severity: notifications.Info, Kind: "plug_switched", Host: machine,
+	e := notifications.Event{Type: "power", Severity: notifications.Info, Kind: plugNoteKind, Host: machine,
 		Text: fmt.Sprintf("%s (%s) switched %s by %s", k.sock.Name, k.src.Name, b.To, actorOf(u))}
 	if !res.Confirmed {
 		e.Text += " (sent; the socket did not show it yet)"

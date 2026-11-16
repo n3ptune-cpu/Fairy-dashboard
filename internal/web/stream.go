@@ -392,6 +392,7 @@ func (st *streamState) writeNewNotes(out *bytes.Buffer) {
 		MoreUrgent int       `json:"more_urgent"`
 	}{Last: last, Events: make([]newNote, 0, len(evs)), More: more, MoreUrgent: moreUrgent}
 	for _, e := range evs {
+		e.Host = noteHost(st.v, e) // the name of a machine this user may not see is not sent (a switched socket)
 		p.Events = append(p.Events, newNoteOf(e))
 	}
 	b, err := json.Marshal(p)

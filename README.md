@@ -399,7 +399,10 @@ request over it is answered "too many control requests; try again in N s" and is
 before the passkey and the panel's own request after it count as one each, so one admin switches at most
 half that many sockets a minute. When the panel's own request after a passkey meets the limit, nothing is
 sent, and that one is in the log as `refused (rate_limit)` with `approval: not sent`: the log says what
-became of every approval. A switch that was sent is also a notification. For scripts there is nothing to call: `POST
+became of every approval. A switch that was sent is also a notification, shown to whoever may see the
+machine on the socket. It names the machine that reads the plug as its host for admins; a viewer of some
+sites (and a read token limited to some) gets the name of the machine on the socket there, so the name of
+a machine of another site is not shown to them. For scripts there is nothing to call: `POST
 /api/power/socket` takes a browser session only.
 
 ### Last 24 hours

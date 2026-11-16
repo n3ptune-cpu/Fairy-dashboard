@@ -9,6 +9,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/devices"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
 
@@ -602,5 +603,106 @@ func TestPlugEverySideOfALockGoesDownToTheMachine(t *testing.T) {
 		if n := len(pe.other.Asked()); n != 0 {
 			t.Errorf("%s: the machine was asked %d things", c.name, n)
 		}
+	}
+}
+
+// Finding 4 of the third review (old): the note of a switched socket has the system of the machine ON the
+// socket, which is what decides who sees it, and as `host` the name of the machine that READS the plug. A
+// viewer of the site of the first who may not see the second got that name: of a machine of another site.
+// Such a viewer, and a read token that is limited the same way, now gets the name of the machine on the socket
+// there. An admin, and everybody who sees every site, gets what they got.
+func TestPlugSwitchNoteDoesNotNameTheReaderToWhoCannotSeeIt(t *testing.T) {
+	// the reader is in the site Lab; the PC on its socket ch3 is in Home
+	yaml := strings.Replace(plugConfig, "node: PVE, site: Home,\n     power_links: {pc-plug: desk-pc},", "node: PVE, site: Lab,\n     power_links: {pc-plug: desk-pc},", 1)
+	if yaml == plugConfig {
+		t.Fatal("the rig's config was not changed")
+	}
+	pe := newPlugEnvWith(t, yaml)
+	b := plugBody("reader/desk-bar", "ch3", "off")
+	b["cut"], b["confirm"] = true, "DESK-PC"
+	id, _, ok := approvalAsked(pe.post("/api/power/socket", b))
+	if !ok {
+		t.Fatal("the fixture: no approval was asked for the cut")
+	}
+	if cb := pe.approve(t, id); cb.code != 303 {
+		t.Fatal(cb.code)
+	}
+	if pr := pe.result(t); pr["ok"] != true {
+		t.Fatalf("the fixture: the switch: %v", pr)
+	}
+	token := func(sites ...string) []string {
+		tok, _, err := pe.s.Tokens.CreateForSites("t"+strings.Join(sites, "-"), "system", "read", "cli:test", 0, sites)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []string{"Authorization", "Bearer " + tok}
+	}
+	// the note as somebody gets it from GET /api/notifications (nil: it is not in the answer), and the answer
+	note := func(hdr []string) (map[string]any, string) {
+		t.Helper()
+		r := pe.do("GET", "/api/notifications", nil, hdr...)
+		if r.code != 200 {
+			t.Fatalf("GET /api/notifications: %d %s", r.code, r.raw)
+		}
+		for _, x := range r.body["events"].([]any) {
+			if e := x.(map[string]any); e["kind"] == "plug_switched" {
+				return e, string(r.raw)
+			}
+		}
+		return nil, string(r.raw)
+	}
+	const text = "Desk PC (Monitor powerbar) switched off by " + plugActor + ": power cut while DESK-PC was running"
+	home := pe.viewerOf("Home")
+	for who, hdr := range map[string][]string{"a viewer of the site of the PC": {"Cookie", home}, "a read token of the site of the PC": token("Home")} {
+		if x := pe.do("GET", "/api/systems/reader", nil, hdr...); x.code != 404 {
+			t.Fatalf("the fixture: %s sees the reader: %d", who, x.code)
+		}
+		e, raw := note(hdr)
+		if e == nil || e["system_id"] != "desk-pc" || e["text"] != text {
+			t.Fatalf("%s: the note of the switch: %v\n%s", who, e, raw)
+		}
+		if e["host"] != "DESK-PC" || strings.Contains(raw, "READER") {
+			t.Errorf("%s: the note has host %v, want the machine on the socket and the reader's name nowhere:\n%s", who, e["host"], raw)
+		}
+	}
+	// admins, and a read token that sees every site: as before, the machine that reads the plug
+	all, _, err := pe.s.Tokens.Create("t-all", "system", "read", "cli:test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for who, hdr := range map[string][]string{"an admin": {"Cookie", pe.admin}, "a read token without sites": {"Authorization", "Bearer " + all}} {
+		if e, raw := note(hdr); e == nil || e["host"] != "READER" || e["system_id"] != "desk-pc" || e["text"] != text {
+			t.Errorf("%s: the note of the switch: %v\n%s", who, e, raw)
+		}
+	}
+	// somebody who sees the reader and not the PC does not get the note at all (it is the PC's)
+	if e, raw := note(token("Lab")); e != nil {
+		t.Errorf("a read token of the site of the reader has the note of a socket of another site: %s", raw)
+	}
+
+	// The stream sends new notes too, the ones that are warnings or worse. A switch is none, so no note of a
+	// switch is on it today; the name is taken out there all the same, should one become urgent. A note of the
+	// kind, made here as a warning, for a stream that is opened again after the last note it had:
+	e, _ := note([]string{"Cookie", pe.admin})
+	last := fmt.Sprint(int64(e["id"].(float64)))
+	pe.s.Notes.Add(notifications.Event{Type: "power", Severity: notifications.Warning, Kind: "plug_switched", Host: "READER", SystemID: "desk-pc", Text: "made for the stream"})
+	code, stream := pe.streamBody("/api/stream", "Cookie", home, "Last-Event-ID", last)
+	if code != 200 || !strings.Contains(stream, "made for the stream") {
+		t.Fatalf("the fixture: the viewer's stream (%d) has not the note", code)
+	}
+	if !strings.Contains(stream, `"host":"DESK-PC","text":"made for the stream"`) || strings.Contains(stream, "READER") {
+		t.Errorf("the viewer's stream names the reader, or not the machine on the socket, in the note:\n%s", stream[strings.Index(stream, "event: notes_new"):])
+	}
+	if _, stream = pe.streamBody("/api/stream", "Cookie", pe.admin, "Last-Event-ID", last); !strings.Contains(stream, `"host":"READER","text":"made for the stream"`) {
+		t.Errorf("the admin's stream has not the note with the reader's name")
+	}
+	// and a note of another kind keeps its host for the viewer: it is the name of the note's own machine
+	pe.s.Notes.Add(notifications.Event{Type: "host", Severity: notifications.Warning, Kind: "temp_high", Host: "DESK-PC as it was called", SystemID: "desk-pc", Text: "another kind"})
+	r := pe.do("GET", "/api/notifications", nil, "Cookie", home)
+	if !strings.Contains(string(r.raw), `"host":"DESK-PC as it was called"`) {
+		t.Errorf("a note of another kind lost its host for the viewer: %s", r.raw)
+	}
+	if _, stream = pe.streamBody("/api/stream", "Cookie", home, "Last-Event-ID", last); !strings.Contains(stream, `"host":"DESK-PC as it was called","text":"another kind"`) {
+		t.Errorf("the viewer's stream has not the other note with its host")
 	}
 }
