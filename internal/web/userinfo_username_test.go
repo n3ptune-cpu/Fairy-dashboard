@@ -54,7 +54,8 @@ func TestUsernameComesFromUserinfoWhenTheIDTokenHasNone(t *testing.T) {
 	if gs := fmt.Sprint(me.body["groups"]); gs != "[viewers]" {
 		t.Errorf("the groups are %s: userinfo's replaced the ID token's", gs)
 	}
-	if me.body["sub"] != "u1" || me.body["email"] != "n@example.com" || me.body["email_verified"] == true || me.body["name"] != "Real Name" || me.body["can_control"] == true {
+	// (the name of that answer is not taken either: TestUserinfoForTheUsernameAloneGivesTheUsernameAlone)
+	if me.body["sub"] != "u1" || me.body["email"] != "n@example.com" || me.body["email_verified"] == true || me.body["name"] != nil || me.body["can_control"] == true {
 		t.Errorf("/api/me: %s", me.raw)
 	}
 	if idp.asked() != 1 {

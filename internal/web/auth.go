@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -737,16 +739,19 @@ func hasText(claims map[string]any, k string) bool {
 }
 
 // mergeUserInfo reads the userinfo endpoint for what the panel asks it for: the groups (some providers only put
-// them there), and the texts that are shown (the user name, the name, the e-mail address, the picture) where
-// the ID token has none. It returns read = false when userinfo could not be read (the request failed, or the
-// answer is not readable): what the account's groups are is then not known. other: userinfo answered about
+// them there) and, with them, the texts that are shown (the user name, the name, the e-mail address, the
+// picture) where the ID token has none; or the user name alone. It returns read = false when userinfo could not
+// be read (the request failed, the answer is larger than userinfoMax, or it is not readable): what the
+// account's groups are is then not known. other: userinfo answered about
 // another subject than the ID token's; nothing of it is used, and the caller refuses the sign-in. A provider
 // without a userinfo endpoint has said all it says in the ID token.
 //
 // forGroups: the ID token has no groups claim, and the groups are taken from userinfo. Without it (the request
 // is made for the user name alone) the groups of userinfo are not looked at: what the ID token says about the
-// groups, also that there are none, is never replaced; and an answer that names no subject at all is an answer
-// that could not be read, not one about another account.
+// groups, also that there are none, is never replaced; an answer that names no subject at all is an answer
+// that could not be read, not one about another account; and of the texts only preferred_username is taken,
+// not the name, the display name, the picture or the e-mail address (until the fix round after the fifth
+// review those came with it where the ID token had none).
 //
 // Nothing else is taken, and nothing the ID token says is replaced. The ID token is signed and was made for
 // this sign-in (its nonce is checked); userinfo is an unsigned answer. Every claim of it used to replace the ID
@@ -764,7 +769,7 @@ func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, sub
 	if !forGroups {
 		what = "the sign-in goes on without a user name"
 	}
-	ui, err := p.UserInfo(ctx, oauth2.StaticTokenSource(tok))
+	ui, err := p.UserInfo(boundedAnswer(ctx, userinfoMax), oauth2.StaticTokenSource(tok))
 	if err != nil {
 		slog.Warn("OIDC userinfo request failed: "+what, "sub", subject, "error", safeErr(err, redact...))
 		return false, false
@@ -786,7 +791,13 @@ func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, sub
 	if v, ok := extra[groupsClaim]; ok && forGroups {
 		claims[groupsClaim] = v
 	}
-	for _, k := range []string{"name", "preferred_username", "display_name", "picture", "email"} {
+	// Asked for the user name alone, the user name is all that is taken: every text more is one more text of an
+	// unsigned answer on the pages, and an address from it would be the account's address from then on.
+	texts := []string{"preferred_username"}
+	if forGroups {
+		texts = []string{"name", "preferred_username", "display_name", "picture", "email"}
+	}
+	for _, k := range texts {
 		if _, has := claims[k]; has && (k != "preferred_username" || hasText(claims, k)) {
 			continue // (an empty user name in the ID token is none: there is nothing to replace)
 		}
@@ -798,6 +809,63 @@ func mergeUserInfo(ctx context.Context, p *oidc.Provider, tok *oauth2.Token, sub
 		}
 	}
 	return true, false
+}
+
+// userinfoMax is how many bytes of a userinfo answer are read. A real one is a few hundred bytes; the library
+// reads whatever comes, and the panel asks userinfo at every sign-in whose ID token has no user name.
+const userinfoMax = 1 << 20
+
+// boundedAnswer is ctx with an HTTP client (oidc.ClientContext) whose answers end in an error once more than
+// max bytes of the body were read: the request then fails like one that got no answer.
+func boundedAnswer(ctx context.Context, max int64) context.Context {
+	c := http.Client{}
+	if base, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && base != nil {
+		c = *base
+	}
+	inner := c.Transport
+	if inner == nil {
+		inner = http.DefaultTransport
+	}
+	c.Transport = roundTrip(func(r *http.Request) (*http.Response, error) {
+		resp, err := inner.RoundTrip(r)
+		if err == nil {
+			resp.Body = &boundedBody{ReadCloser: resp.Body, left: max}
+		}
+		return resp, err
+	})
+	return oidc.ClientContext(ctx, &c)
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// boundedBody reads at most left bytes of a body; when there is one more, the read fails.
+type boundedBody struct {
+	io.ReadCloser
+	left int64
+}
+
+var errAnswerTooLarge = errors.New("the answer is larger than 1 MiB: not read")
+
+func (b *boundedBody) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if b.left <= 0 { // is there more? a body of exactly the bound ends here
+		var one [1]byte
+		n, err := b.ReadCloser.Read(one[:])
+		if n > 0 {
+			return 0, errAnswerTooLarge
+		}
+		return 0, err
+	}
+	if int64(len(p)) > b.left {
+		p = p[:b.left]
+	}
+	n, err := b.ReadCloser.Read(p)
+	b.left -= int64(n)
+	return n, err
 }
 
 // startSession replaces the previous session (oldSID) with a fresh one: a new random id registered in
