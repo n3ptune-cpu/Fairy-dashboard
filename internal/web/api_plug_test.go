@@ -1242,7 +1242,8 @@ func TestPlugLockOfThePanelsMachineWithoutARow(t *testing.T) {
 // The power menu's rule for the panel's machine (powerctl.KillsPanel) is the socket's rule too: the panel runs
 // in a guest, panel_hosts names the guest, and a socket feeds that guest's node. The node is in no list. It is
 // locked all the same, and not before the panel is said to run there. (Since the third review the lock works
-// that out itself, panelRows, and no longer calls KillsPanel; what this test asks is the same.)
+// that out itself, panelRows, and no longer calls KillsPanel; since the fourth round KillsPanel asks what
+// panelRows asks, poller.PanelRows. What this test asks is the same.)
 func TestPlugLockOfTheNodeUnderThePanelsGuest(t *testing.T) {
 	pe := newPlugEnv(t)
 	snap := pe.s.Poller.Snapshot()

@@ -107,19 +107,19 @@ func orElse(a, b string) string {
 	return b
 }
 
-// KillsPanel reports whether the panel itself runs on this system (or on a guest of this node).
+// KillsPanel reports whether the panel itself runs on this system: a shutdown of it takes the panel down.
+//
+// The rows are poller.PanelRows, the rule the lock of a socket asks too: every id of panel_hosts as it is
+// written, the row it is shown as, the guest it runs in and the node under it. So the node under the panel is
+// the panel's machine whether panel_hosts names the node, the guest the panel is in, an agent that runs in
+// that guest, the node's own agent, or a second agent of the node. (Up to the third round of stage 1a this was
+// a rule of its own: the id as it is written, and a node with a guest that is named. An agent's id was then
+// the agent's row and nothing more: the node under it had no "The panel itself runs here", a reboot of it was
+// a click, and it could take part in "Update unpowered hosts"; third review, check of the third round, C.)
+//
+// A guest beside the panel's guest is not the panel's: it goes down without the panel.
 func KillsPanel(p *poller.Poller, s model.System) bool {
-	if slices.Contains(p.Cfg.PanelHosts, s.ID) {
-		return true
-	}
-	if s.Kind == "node" {
-		for _, g := range p.Snapshot() {
-			if slices.Contains(p.Cfg.PanelHosts, g.ID) && poller.GuestOf(g, s) {
-				return true
-			}
-		}
-	}
-	return false
+	return p.PanelRows(poller.RowsOf(p.Snapshot()))[s.ID]
 }
 
 // sameString reports whether two optional strings are both nil or equal.

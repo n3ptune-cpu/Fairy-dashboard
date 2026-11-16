@@ -10,6 +10,7 @@ import (
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/jsonx"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/notifications"
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/poller"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/testutil"
 )
 
@@ -41,6 +42,8 @@ type plugNodeRig struct {
 	guests     string // the status of every guest ("": running)
 	down       string // an agent that answers at first and then stops: its row is "stale"
 	lone       bool   // without sideagent: pve2agent is the only agent that names the node
+	power      bool   // the cluster has a power token and node_power: every node and guest has a route for its power actions
+	nodeAgent  string // more keys of pve2agent's entry ("self_update: true, control_token_env: CTL_A,")
 }
 
 const plugOtherEntry = "  - {id: other, name: OTHER, url: \"http://other\", token_env: TOK_B, control_token_env: CTL_A,\n     socket_links: {rack-bar/node: lab-node-pve}, home_assistant_system: lab-qemu-100}"
@@ -61,7 +64,7 @@ func (c plugNodeRig) env(t *testing.T) *plugEnv {
 	yaml := strings.Replace(plugConfig, plugOtherEntry, fmt.Sprintf("  - {id: other, name: OTHER, url: \"http://other\", token_env: TOK_B, control_token_env: CTL_A, %s\n"+
 		"     socket_links: {rack-bar/node: %s}, home_assistant_system: %s}", c.otherExtra, c.link, ha), 1)
 	yaml = strings.Replace(yaml, "\nagents:\n", "\nagents:\n"+
-		"  - {id: pve2agent, name: PVE2AGENT, url: \"http://pve2agent\", token_env: TOK_N0, node: PVE2}\n"+
+		"  - {id: pve2agent, name: PVE2AGENT, url: \"http://pve2agent\", token_env: TOK_N0, "+c.nodeAgent+" node: PVE2}\n"+
 		"  - {id: vmagent, name: VMAGENT, url: \"http://vmagent\", token_env: TOK_N1, links_to: lab-qemu-201}\n"+
 		"  - {id: ctagent, name: CTAGENT, url: \"http://ctagent\", token_env: TOK_N2, links_to: lab-lxc-203}\n"+
 		"  - {id: vm2agent, name: VM2AGENT, url: \"http://vm2agent\", token_env: TOK_N3, links_to: lab-qemu-202}\n"+
@@ -79,6 +82,13 @@ func (c plugNodeRig) env(t *testing.T) *plugEnv {
 	}
 	if c.panelHosts != "" {
 		yaml = strings.Replace(yaml, "panel_hosts: [panel-box]", "panel_hosts: ["+c.panelHosts+"]", 1)
+	}
+	if c.power {
+		const tls = "token_secret_env: PVE_SECRET, verify_tls: false}"
+		if strings.Count(yaml, tls) != 1 {
+			t.Fatal("the fixture: no proxmox: entry to give a power token")
+		}
+		yaml = strings.Replace(yaml, tls, "token_secret_env: PVE_SECRET, verify_tls: false,\n     power_token_id: \"fairy@pve!power\", power_token_secret_env: PVE_SECRET, node_power: true}", 1)
 	}
 	pe := newPlugEnvWith(t, yaml)
 	down := false
@@ -222,7 +232,7 @@ const (
 // was judged by that row: none of the three locks in any arrangement in which the node is or carries Home
 // Assistant, the reader or the panel, and a cut that took the agent's name ("cut the power of VMAGENT while it
 // is running"). What such a socket can feed is the node under the guest. Whatever a socket is linked to is now
-// followed down to that machine (socketFeeds), and every rule uses it.
+// followed down to that machine (poller.MachineUnder), and every rule uses it.
 //
 // The arrangements are the review's: Home Assistant on the node itself, in another guest of it, in the node's
 // agent, in an agent in another guest; the reader on the node, in another guest; the panel on the node, in
@@ -321,7 +331,7 @@ func TestPlugLinkThatCannotBeFollowedToAMachine(t *testing.T) {
 		t.Errorf("an agent in the guest Home Assistant runs in, without its node: %v", s)
 	}
 
-	// The rule alone (socketFeeds), over rows and links made up here.
+	// The rule alone (poller.MachineUnder), over rows and links made up here.
 	row := func(id, kind, parent string) *model.System {
 		r := &model.System{ID: id, Name: strings.ToUpper(id), Kind: kind}
 		if parent != "" {
@@ -345,7 +355,7 @@ func TestPlugLinkThatCannotBeFollowedToAMachine(t *testing.T) {
 		"c1": "c2", "c2": "c3", "c3": "c4", "c4": "c5", "c5": "c6", "c6": "c7", "c7": "c8", "c8": "c9", "c9": "node-1"}
 	asked := 0
 	feeds := func(start string) (string, string) {
-		m, over := socketFeeds(start, func(id string) *model.System { return rows[id] }, func(id string) (string, bool) {
+		m, over := poller.MachineUnder(start, func(id string) *model.System { return rows[id] }, func(id string) (string, bool) {
 			if asked++; asked > 1000 {
 				t.Fatal("the rule does not end")
 			}
@@ -508,7 +518,7 @@ func TestPlugPanelHostsThatNamesTheNodesOwnAgent(t *testing.T) {
 // and by the guests of a node that are named there. An agent that runs in a guest is no guest: with its id in
 // panel_hosts the socket of the node under it had no lock, and a cut with the node's name typed went to the
 // passkey. The reader's side and Home Assistant's were widened to the machine under an agent; the panel's is
-// now too, by the same rule as a link (socketFeeds).
+// now too, by the same rule as a link (poller.MachineUnder).
 //
 // With the two arrangements that finding 1 left for here: the panel in the node's own agent while a second
 // agent names the node (so that the node has no "other id"), and the panel in an agent in another guest.
@@ -711,17 +721,21 @@ func TestPlugSwitchNoteDoesNotNameTheReaderToWhoCannotSeeIt(t *testing.T) {
 	}
 }
 
-// The power menu's rule for the panel's own host (powerctl.KillsPanel: "The panel itself runs here") is no
-// longer asked by the lock of a socket (finding 3), so nothing of the plug tests held it for a container any
-// more. It is unchanged, and this says what it is: the node of a guest that panel_hosts names, a VM or a
-// container, is the panel's host in the power menu; the node under an AGENT in a guest that panel_hosts names
-// is not (the rule has no such case), while the socket of that node is locked as the panel's.
+// The power menu's rule for the panel's own host (powerctl.KillsPanel: "The panel itself runs here") is not
+// asked by the lock of a socket since finding 3, so nothing of the plug tests held it for a container any more.
+// With a VM, a container or the node in panel_hosts the node is the panel's host in the power menu, and its
+// socket is locked as the panel's.
+//
+// Until the fourth round the rule had no case for an AGENT in a guest: the node under it was not the panel's
+// host in the menu (this test said so: kills false for vm2agent and ctagent) while its socket was locked.
+// Now the menu and the lock ask one rule (poller.PanelRows) and the node is the panel's host in all five. The
+// whole of it is in api_power_panelhost_test.go.
 func TestPowerMenuAndPanelHostsThatNamesAGuestOrAnAgent(t *testing.T) {
 	const warn = "The panel itself runs here: shutting this down takes Fairy offline until it is powered on again by other means."
 	for _, c := range []struct {
 		panel string
 		kills bool
-	}{{"lab-qemu-202", true}, {"lab-lxc-203", true}, {"lab-node-pve2", true}, {"vm2agent", false}, {"ctagent", false}} {
+	}{{"lab-qemu-202", true}, {"lab-lxc-203", true}, {"lab-node-pve2", true}, {"vm2agent", true}, {"ctagent", true}} {
 		pe := plugNodeRig{link: "lab-node-pve2", panelHosts: c.panel}.env(t)
 		caps := pe.do("GET", "/api/systems/lab-node-pve2/power", nil, "Cookie", pe.admin)
 		if caps.code != 200 || caps.body["kills_panel"] != c.kills || (caps.body["warning"] == warn) != c.kills {

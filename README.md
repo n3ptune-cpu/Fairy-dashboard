@@ -341,10 +341,16 @@ switched: look at the socket.
   Home Assistant's VM is locked. A link to an agent that runs in a guest, or beside the node's own agent,
   is followed to the node in the same way, and so is each of the three: `panel_hosts` (like
   `home_assistant_system`) can name the machine, the guest, or an agent that runs in the guest, and the
-  socket of the node under it is locked in each case. (The power menu's warning "The panel itself runs
-  here" and the list of [Update unpowered hosts](#update-unpowered-hosts) take `panel_hosts` as before:
-  the row that is named, and the node of a guest that is named. Name the guest or the node there, not
-  only an agent in the guest.) When `home_assistant_system` names an id that is no row, no socket of
+  socket of the node under it is locked in each case. The Power menu and
+  [Update unpowered hosts](#update-unpowered-hosts) follow `panel_hosts` by the same rule: whichever
+  of them it names, the node under the panel, the guest the panel is in and the row that is named say
+  "The panel itself runs here", a reboot of one of them (and a start of that guest) asks for its typed
+  name, as a shutdown always does, and such a machine cannot take part in a run. Another guest of that
+  node is not marked: it goes down without the panel. (Up to this build the two took `panel_hosts` as it is written, with the node
+  of a guest that is named: an agent's id there marked the agent's own row and not the node under
+  it.) An id in `panel_hosts` that the panel cannot follow to a machine (no row has it, or the node of
+  that guest has no row) counts as it is written, for the lock and for the menu: no node is marked for
+  it. When `home_assistant_system` names an id that is no row, no socket of
   that agent is switched, linked to a machine or not, until the id is put right, as without the key (the
   lock's sentence names the id); and a socket whose own link names no row is
   locked the same way ("linked to a machine the panel does not have: correct socket_links");

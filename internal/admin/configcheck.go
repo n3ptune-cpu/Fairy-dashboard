@@ -347,8 +347,8 @@ func powerLinkCheck(cfg *config.Panel) (ok, said []string) {
 //
 // A link that names an agent which runs in a guest (that agent's entry has links_to: with a guest's id) is a
 // warning as well. Such a socket feeds the Proxmox node under the guest, and the running panel takes the link
-// as that node's (web, socketFeeds), so nothing is unsafe; the line is there because the link names something
-// else than what loses its power, and which node that is the file does not say.
+// as that node's (poller.MachineUnder), so nothing is unsafe; the line is there because the link names
+// something else than what loses its power, and which node that is the file does not say.
 //
 // And what the panel has to be told before it switches an agent's sockets, as far as a file shows it. This
 // command asks no machine, so it does not know which agent reports sockets or how many a plug has: it goes by
