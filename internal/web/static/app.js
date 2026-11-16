@@ -3263,10 +3263,13 @@ const USERNAME_NOT_SHOWN = table({
   is_address: "This account's user name is an e-mail address (its own, or another account's). The panel never names a person by an address, so it shows no user name for this account.",
   is_account_id: "This account's user name is another account's id, so the panel does not show it.",
   same_username: "Other accounts have this user name, and the panel could not give this one a form of its own." });
-const userHeading = (u) => userNamed(u) ? `<b>${esc(u.shown_as)}</b>`
+// why a row's user name has the start of the account id behind it although no other account has the name
+const USERNAME_WITH_ID = table({
+  panel_mark: "This account's user name is written like a text of the panel's own: with the \"·\" that stands between a user name and an account id, with a bracket like an API token's name, or as one of the panel's words (\"root\", \"unknown\"). So the panel never shows it plain: it always puts the start of this account's own id behind it." });
+const userHeading = (u) => userNamed(u) ? `<b${USERNAME_WITH_ID[u.username_note] ? ` title="${esc(USERNAME_WITH_ID[u.username_note])}"` : ""}>${esc(u.shown_as)}</b>`
   : u.username ? `<b class="muted" title="${esc(USERNAME_NOT_SHOWN[u.username_note] || NO_USERNAME)}">user name hidden</b>`
     : `<b class="muted" title="${esc(NO_USERNAME)}">no user name yet</b>`;
-const SAME_USERNAME = "More than one account has this user name. One of them is shown by the plain name everywhere: an account with a role before one that waits for access, then the one that has had the name longest. Every other one is shown with the start of its account id behind the name. A user name is what an account says about itself: go by the id.";
+const SAME_USERNAME = "More than one account has this user name. One of them is shown by the plain name everywhere: an admin before a viewer, a viewer before an account that waits for access, then the one that has had the name longest. Every other one is shown with the start of its account id behind the name. A user name is what an account says about itself: go by the id.";
 const sameUsername = (u) => (u.same_username || []).length
   ? `<span class="sub warn-t" title="${esc(SAME_USERNAME)}">same user name as ${u.same_username.map((id) => `id ${esc(id)}`).join(", ")}</span>` : "";
 const FROM_LABEL = table({ panel: "set here", config: "config.yaml", node: "from its node", link: "follows its hosts" });

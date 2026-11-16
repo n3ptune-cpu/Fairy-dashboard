@@ -37,7 +37,10 @@ import (
 // that field), then the smaller account id.
 // Every other one is shown by the user name with a short form of its account id behind it ("Juniper · id
 // 3f6c1d"), everywhere, never by the plain name: so an account without any access cannot take an admin's name
-// away or pass for the admin, and nobody is left without a name.
+// away, and nobody is left without a name. A user name that is written like a text of the panel's own (with
+// the "·" of that mark, with a bracket like a token's text, or one of the panel's words such as "root") is
+// shown with its account's id in every case (marked), so that no account is shown by the text of another
+// account, of a token, of the command line or of the panel.
 //
 // A text that somebody outside the panel supplies as the name of a person (an agent's "requested by") is never
 // looked up among addresses and names: that would tell whoever runs the agent which user name belongs to an
@@ -72,7 +75,37 @@ const (
 	UsernameShared    = "same_username" // another account has the same user name: all but one are shown with a part of their id
 	UsernameIsAddress = "is_address"    // it is an e-mail address, the account's own or another account's
 	UsernameIsAccount = "is_account_id" // it is another account's id
+	UsernameMarked    = "panel_mark"    // it is written like a text of the panel's own (marked): shown with a part of the account's id, never plain
 )
+
+// ownWords are the words the panel itself shows in the place of who did something when it was no account, or
+// none it names, in their folded forms: the command line's actor, the panel, a token of nobody, what an agent
+// says when it was told nothing, and the words for an account without a user name as an agent repeats them
+// (without their brackets; with them they are marked as every text with a bracket is). A user name that is
+// one of them is never shown plain (marked).
+var ownWords = func() map[string]bool {
+	m := map[string]bool{}
+	for _, w := range []string{"root", "fairy", outsideNobody, "system", "This account", "the account", "this user", "address hidden", "name hidden"} {
+		m[fold(w)] = true
+	}
+	return m
+}()
+
+// marked reports whether a user name is written like a text of the panel's own:
+//
+//   - it has a "·", the mark between a user name and an account id ("Juniper · id 3f6c1d" as somebody's own
+//     user name, with the admin's id, read like the panel's way of saying "the account whose id begins 3f6c1d");
+//   - it has a bracket, as the text of an API token has ("ci (token, owner Juniper)" was the same text as the
+//     admin's token "ci"), the command line's "root (cli)", and the words "(address hidden)";
+//   - it is one of the panel's own words (ownWords), in any case of its letters.
+//
+// An account with such a user name is shown by it with a short form of its own id behind it, whatever its role
+// and whether another account has the name or not (People). So what an account is shown by either has no "·"
+// and no bracket and is none of those words, or ends in the mark and that account's own id: it is never the
+// text of another account, of a token (which ends in a bracket) or of the panel.
+func marked(username string) bool {
+	return strings.ContainsAny(username, "·()") || ownWords[fold(username)]
+}
 
 // CleanUsername is a user name as the panel keeps it: without control characters, escape sequences, line
 // breaks and direction overrides (textsafe.Clean), without the characters that draw nothing (blank: a name
@@ -252,12 +285,18 @@ func (d Data) People() *People {
 		sort.Slice(subs, func(i, j int) bool { return firstOf(d.Users[subs[i]], d.Users[subs[j]]) })
 		for i, sub := range subs {
 			name := CleanUsername(d.Users[sub].Username)
-			if i > 0 {
+			own := marked(name) // (the same for all of subs: they are one text in the folded form)
+			if i > 0 || own {
 				name = withID(name, sub, subs)
 			}
 			p.shown[sub] = name
+			if own {
+				p.note[sub] = UsernameMarked
+			}
 			if len(subs) > 1 {
-				p.note[sub] = UsernameShared
+				if !own {
+					p.note[sub] = UsernameShared
+				}
 				for _, other := range subs {
 					if other != sub {
 						p.same[sub] = append(p.same[sub], other)
@@ -438,7 +477,8 @@ func (p *People) Username(sub string) string { return p.shown[sub] }
 func (p *People) SameUsername(sub string) []string { return p.same[sub] }
 
 // UsernameNote is why the user name of this account is not simply what it is shown by: UsernameShared (another
-// account has the same; this one or the other is shown with a part of its id), UsernameIsAddress,
+// account has the same; this one or the other is shown with a part of its id), UsernameMarked (it is written
+// like a text of the panel's own, and shown with a part of the account's id), UsernameIsAddress,
 // UsernameIsAccount (it is shown by no user name), or "" (it is shown by its user name, or has none).
 func (p *People) UsernameNote(sub string) string { return p.note[sub] }
 

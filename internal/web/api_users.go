@@ -24,7 +24,7 @@ import (
 // Named says that ShownAs is a user name. Two accounts can have the same user name: all but one of them are then
 // shown with a part of their id behind it, and SameUsername has the ids of the others, for each of them.
 // UsernameNote is why an account's user name is not simply what it is shown by (access.UsernameShared,
-// UsernameIsAddress, UsernameIsAccount), so that the page can say what is true of the row.
+// UsernameMarked, UsernameIsAddress, UsernameIsAccount), so that the page can say what is true of the row.
 type adminUser struct {
 	access.User
 	ShownAs      string   `json:"shown_as"`
