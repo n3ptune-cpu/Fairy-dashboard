@@ -119,39 +119,45 @@ func TestShownOnlyAUniqueMatchCounts(t *testing.T) {
 	}
 }
 
-// A user name is what the account says. It is shown only when it is that account's alone: an account that
-// calls itself by another account's address, name, user name or subject is not shown by it (and the other
-// account's text is then not given to either). A user name that is the account's own address is the address.
+// A user name is what the account says. Three are no name for anybody: one that is the account's own address,
+// one that is written like an address and is another account's, and one that is another account's id. Such an
+// account is named by the words for what it has instead. Everything else is shown, and what another account
+// has as its name or its address takes it away from nobody: only user names compete with user names
+// (TestTwoAccountsWithOneUsername).
 func TestAUsernameMustBeTheAccountsOwn(t *testing.T) {
 	for _, c := range []struct {
 		name, username string
-		wantOf         string // how the account sub-x (address x@example.com) is named
+		wantOf, note   string // how the account sub-x (address x@example.com) is named, and why not by its user name
 		stored, want   string // and what a stored text is shown as
 	}{
-		{"another account's address", "owner@example.com", HiddenAddress, "owner@example.com", HiddenAddress},
-		{"another account's user name", "juniper", HiddenAddress, "Juniper", "Juniper"},
-		{"another account's name", "Real Name", HiddenAddress, "Real Name", HiddenName},
-		{"another account's subject", "sub-n", HiddenAddress, "sub-n", "sub-n"}, // the text stays: it is no address and no name
-		{"its own address", "x@example.com", HiddenAddress, "x@example.com", HiddenAddress},
-		{"its own address in other letters", "X@Example.COM", HiddenAddress, "x@example.com", HiddenAddress},
-		{"a user name of its own", "Xavier", "Xavier", "x@example.com", "Xavier"},
-		{"its own name", "Ex Person", "Ex Person", "Ex Person", "Ex Person"}, // a handle in both fields is a user name
-		{"a user name with an @ of its own", "x@handle", "x@handle", "x@example.com", "x@handle"},
+		// the admin's old records stay the admin's: sub-x has an address of its own, and its own records have that
+		{"another account's address", "owner@example.com", HiddenAddress, UsernameIsAddress, "owner@example.com", "Juniper"},
+		{"another account's address in other letters", "Owner@Example.COM", HiddenAddress, UsernameIsAddress, "owner@example.com", "Juniper"},
+		{"another account's subject", "sub-n", HiddenAddress, UsernameIsAccount, "sub-n", "Juniper"},
+		{"its own address", "x@example.com", HiddenAddress, UsernameIsAddress, "x@example.com", HiddenAddress},
+		{"its own address in other letters", "X@Example.COM", HiddenAddress, UsernameIsAddress, "x@example.com", HiddenAddress},
+		{"a user name of its own", "Xavier", "Xavier", "", "x@example.com", "Xavier"},
+		{"its own name", "Ex Person", "Ex Person", "", "Ex Person", "Ex Person"}, // a handle in both fields is a user name
+		{"a user name with an @ of its own", "x@handle", "x@handle", "", "x@example.com", "x@handle"},
+		// another account's NAME is a user name like any other: it is what sub-x is called, and a record that
+		// keeps it is sub-x's (no record was ever written with the name of an account that has an address)
+		{"another account's name", "Real Name", "Real Name", "", "Real Name", "Real Name"},
+		{"the name of an account without an address", "Bare Name", "Bare Name", "", "Bare Name", HiddenName}, // (older versions named that one by it: whose record it is cannot be told)
 	} {
 		d := peopleData()
 		tr := true
 		d.Users["sub-x"] = User{Sub: "sub-x", Username: c.username, Email: "x@example.com", EmailVerified: &tr, Name: "Ex Person"}
 		p := d.People()
-		if got, ok := p.Of("sub-x"); !ok || got != c.wantOf {
-			t.Errorf("%s: the account is named %q, want %q", c.name, got, c.wantOf)
+		if got, ok := p.Of("sub-x"); !ok || got != c.wantOf || p.UsernameNote("sub-x") != c.note {
+			t.Errorf("%s: the account is named %q (%q), want %q (%q)", c.name, got, p.UsernameNote("sub-x"), c.wantOf, c.note)
 		}
 		if got := p.Shown(c.stored); got != c.want {
 			t.Errorf("%s: Shown(%q) = %q, want %q", c.name, c.stored, got, c.want)
 		}
-		// the admin's own records stay the admin's, whatever another account calls itself
-		if c.username != "juniper" {
-			if got, _ := p.Of("sub-n"); got != "Juniper" {
-				t.Errorf("%s: the admin is named %q", c.name, got)
+		// nobody else is named differently for it, whatever sub-x calls itself
+		for sub, want := range map[string]string{"sub-n": "Juniper", "sub-s": "PineTop", "sub-o": HiddenAddress, "sub-b": HiddenName} {
+			if got, _ := p.Of(sub); got != want {
+				t.Errorf("%s: %s is named %q, want %q", c.name, sub, got, want)
 			}
 		}
 	}
@@ -164,18 +170,403 @@ func TestAUsernameMustBeTheAccountsOwn(t *testing.T) {
 	if got := d.People().Shown("panel by x@example.com and y@host"); got != HiddenAddress {
 		t.Errorf("... and with something else that holds one: %q", got)
 	}
-	// two accounts with the same user name: neither is shown by it
+	// An account WITHOUT an address of its own that calls itself by another account's address is written into
+	// records by that text (it has nothing else): an old record with the address can be either's, and is hidden.
 	d = peopleData()
-	d.Users["sub-x"] = User{Sub: "sub-x", Username: "Juniper", Email: "x@example.com"}
+	d.Users["sub-q"] = User{Sub: "sub-q", Username: "owner@example.com"}
+	if got := d.People().Shown("owner@example.com"); got != HiddenAddress {
+		t.Errorf("an address one account has and another without an address calls itself by: %q", got)
+	}
+}
+
+// What another account has as its NAME or its ADDRESS takes no user name away. An account that only waits for
+// access gave itself the display name "viewer-all", or an address that is the admin's user name: the viewer
+// and the admin are named as before, and so are their records. (Any account could blank another one's name
+// this way, in every sentence of the panel.)
+func TestOnlyUsernamesCompeteWithUsernames(t *testing.T) {
+	d := peopleData()
+	tr := true
+	d.Users["sub-v"] = User{Sub: "sub-v", Username: "viewer-all", Email: "wide@example.com", EmailVerified: &tr, Name: "Wide Viewer", Role: RoleViewer}
+	d.Users["sub-w1"] = User{Sub: "sub-w1", Username: "walt", Email: "walt@example.org", Name: "viewer-all", Role: RolePending}   // a display name
+	d.Users["sub-w2"] = User{Sub: "sub-w2", Username: "wanda", Email: "Juniper", Name: "Waiting Wanda", Role: RolePending}        // an "address" without an @
+	d.Users["sub-w3"] = User{Sub: "sub-w3", Username: "wilma", Email: "w3@example.org", Name: "PINETOP", Role: RolePending}       // in other letters
+	d.Users["sub-w4"] = User{Sub: "sub-w4", Username: "wendy", Email: "w4@example.org", Name: "Juni\u200bper", Role: RolePending} // with a zero width space
 	p := d.People()
-	if a, _ := p.Of("sub-n"); a != HiddenAddress {
-		t.Errorf("a user name two accounts have, the first: %q", a)
+	for sub, want := range map[string]string{"sub-v": "viewer-all", "sub-n": "Juniper", "sub-s": "PineTop", "sub-w1": "walt", "sub-w2": "wanda", "sub-w3": "wilma", "sub-w4": "wendy"} {
+		if got, _ := p.Of(sub); got != want || p.UsernameNote(sub) != "" || p.SameUsername(sub) != nil {
+			t.Errorf("%s is named %q (note %q, same as %v), want %q", sub, got, p.UsernameNote(sub), p.SameUsername(sub), want)
+		}
 	}
-	if b, _ := p.Of("sub-x"); b != HiddenAddress {
-		t.Errorf("a user name two accounts have, the second: %q", b)
+	// a record that keeps the user name is still that account's
+	for stored, want := range map[string]string{"viewer-all": "viewer-all", "PineTop": "PineTop", "pinetop": "PineTop"} {
+		if got := p.Shown(stored); got != want {
+			t.Errorf("Shown(%q) = %q, want %q", stored, got, want)
+		}
 	}
-	if got := p.Shown("Juniper"); got != "Juniper" { // a text that is only a user name names no address and no name
-		t.Errorf("the text of that user name: %q", got)
+	// (the one text that is an account's ADDRESS is that account's too: which of the two a record means cannot be told)
+	if got := p.Shown("Juniper"); got != HiddenAddress {
+		t.Errorf("a text that is one account's user name and another's address: %q", got)
+	}
+}
+
+func at(day int) *time.Time {
+	t := time.Date(2026, 11, day, 12, 0, 0, 0, time.UTC)
+	return &t
+}
+
+// Two accounts with one user name: the same text in its folded form (other letters, a zero width space). One
+// of them is shown by the plain name: an account with a role before one that only waits, whatever the times;
+// among equals the one that has had the user name longest (the stored time; the account's creation for a user
+// name from before that time was kept); then by subject. Every other one is shown by the name with a short
+// form of its id, never by the plain name and never by nothing.
+func TestTwoAccountsWithOneUsername(t *testing.T) {
+	tr := true
+	admin := User{Sub: "3f6c1d00-admin", Username: "Juniper", Email: "owner@example.com", EmailVerified: &tr, Name: "Real Name", Role: RoleAdmin, CreatedAt: *at(1)}
+	for _, c := range []struct {
+		name  string
+		a, b  User   // b's subject is 9a1b2c00-other
+		plain string // the subject that is shown by the plain name
+	}{
+		{"an account that waits, with the older user name", withSince(admin, at(10)),
+			User{Username: "juniper", Email: "w@example.org", Role: RolePending, CreatedAt: *at(1), UsernameSince: at(2)}, "3f6c1d00-admin"},
+		{"an account that waits, created earlier, both from before the time was kept", admin,
+			User{Username: "JUNIPER", Email: "w@example.org", Role: RolePending, CreatedAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}, "3f6c1d00-admin"},
+		{"a viewer that took the name later", withSince(admin, at(3)),
+			User{Username: "Juniper", Email: "v@example.org", Role: RoleViewer, CreatedAt: *at(1), UsernameSince: at(4)}, "3f6c1d00-admin"},
+		{"a viewer that had the name first", withSince(admin, at(5)),
+			User{Username: "Juniper", Email: "v@example.org", Role: RoleViewer, CreatedAt: *at(9), UsernameSince: at(4)}, "9a1b2c00-other"},
+		{"a viewer without sites counts as an account with a role", withSince(admin, at(5)),
+			User{Username: "Juniper", Email: "v@example.org", Role: RoleViewer, Sites: []string{}, CreatedAt: *at(1), UsernameSince: at(4)}, "9a1b2c00-other"},
+		{"a user name from before the time was kept counts from the account's creation", withSince(admin, at(5)),
+			User{Username: "Juniper", Email: "v@example.org", Role: RoleAdmin, CreatedAt: *at(4)}, "9a1b2c00-other"},
+		{"... and loses against a stored time before it", withSince(admin, at(3)),
+			User{Username: "Juniper", Email: "v@example.org", Role: RoleAdmin, CreatedAt: *at(4)}, "3f6c1d00-admin"},
+		{"the same time: by subject", withSince(admin, at(5)),
+			User{Username: "Juniper", Email: "v@example.org", Role: RoleAdmin, CreatedAt: *at(1), UsernameSince: at(5)}, "3f6c1d00-admin"},
+		{"with a zero width space", withSince(admin, at(1)),
+			User{Username: "Juni\u200bper", Email: "v@example.org", Role: RoleAdmin, CreatedAt: *at(1), UsernameSince: at(2)}, "3f6c1d00-admin"},
+		{"with a soft hyphen and spaces", withSince(admin, at(1)),
+			User{Username: " Juni\u00adper ", Email: "v@example.org", Role: RoleAdmin, CreatedAt: *at(1), UsernameSince: at(2)}, "3f6c1d00-admin"},
+	} {
+		c.b.Sub = "9a1b2c00-other"
+		d := Data{Users: map[string]User{c.a.Sub: c.a, c.b.Sub: c.b, "sub-o": {Sub: "sub-o", Email: "old@example.com", Name: "Old Timer"}}}
+		p := d.People()
+		other := c.a.Sub
+		if c.plain == other {
+			other = c.b.Sub
+		}
+		plain, _ := p.Of(c.plain)
+		tagged, _ := p.Of(other)
+		if plain != "Juniper" && fold(plain) != "JUNIPER" {
+			t.Errorf("%s: %s is shown by %q, want the plain user name", c.name, c.plain, plain)
+		}
+		if want := CleanUsername(d.Users[other].Username) + " · id " + other[:6]; tagged != want {
+			t.Errorf("%s: %s is shown by %q, want %q", c.name, other, tagged, want)
+		}
+		if strings.ContainsAny(plain+tagged, "\u200b\u00ad") || plain != strings.TrimSpace(plain) {
+			t.Errorf("%s: a shown form has a character without width, or a space at an end: %q %q", c.name, plain, tagged)
+		}
+		for _, sub := range []string{c.a.Sub, c.b.Sub} {
+			if p.UsernameNote(sub) != UsernameShared || len(p.SameUsername(sub)) != 1 || p.SameUsername(sub)[0] == sub {
+				t.Errorf("%s: %s: note %q, the same as %v", c.name, sub, p.UsernameNote(sub), p.SameUsername(sub))
+			}
+			if p.Username(sub) == "" || p.Record(sub, "x@example.org") != p.Username(sub) {
+				t.Errorf("%s: %s: Username %q, Record %q", c.name, sub, p.Username(sub), p.Record(sub, "x@example.org"))
+			}
+		}
+		// what a record keeps is shown as that account again: the plain name is the one account's, the name with
+		// the id the other's, and neither text is hidden
+		if got := p.Shown(plain); got != plain {
+			t.Errorf("%s: Shown(%q) = %q", c.name, plain, got)
+		}
+		if got := p.Shown("juniper"); got != plain {
+			t.Errorf("%s: Shown(juniper) = %q, want %q", c.name, got, plain)
+		}
+		if got := p.Shown(tagged); got != tagged {
+			t.Errorf("%s: Shown(%q) = %q", c.name, tagged, got)
+		}
+		// an old record by address is each account's own
+		if got := p.Shown(d.Users[other].Email); got != tagged {
+			t.Errorf("%s: the old record of %s is shown as %q, want %q", c.name, other, got, tagged)
+		}
+		if got := p.ShownIn("switched off by " + d.Users[other].Email + " (unverified)"); got != "switched off by "+tagged {
+			t.Errorf("%s: an old sentence about %s: %q", c.name, other, got)
+		}
+		if got := p.Named("juni"); len(got) != 2 {
+			t.Errorf("%s: a search for the name finds %v", c.name, got)
+		}
+	}
+}
+
+func withSince(u User, t *time.Time) User {
+	u.UsernameSince = t
+	return u
+}
+
+// The short form of the id is as long as it must be: two accounts that share a user name and the beginning of
+// their ids are shown with the whole id. A record that kept a name with an id is still that account's when
+// the account is shown by the plain name again (the other one was removed). And no account can be shown by a
+// text another account is shown by: a user name written like another one with its id gets its own id too.
+func TestUsernameWithIDAtTheEdges(t *testing.T) {
+	d := Data{Users: map[string]User{
+		"abcdef-1": {Sub: "abcdef-1", Username: "Juniper", Role: RoleAdmin, CreatedAt: *at(1)},
+		"abcdef-2": {Sub: "abcdef-2", Username: "juniper", Role: RoleViewer, CreatedAt: *at(2)},
+		"abcdef-3": {Sub: "abcdef-3", Username: "JUNIPER", Role: RolePending, CreatedAt: *at(3)},
+		"zz":       {Sub: "zz", Username: "Juniper", Role: RolePending, CreatedAt: *at(4)},
+	}}
+	p := d.People()
+	for sub, want := range map[string]string{"abcdef-1": "Juniper", "abcdef-2": "juniper · id abcdef-2", "abcdef-3": "JUNIPER · id abcdef-3", "zz": "Juniper · id zz"} {
+		if got, _ := p.Of(sub); got != want {
+			t.Errorf("%s is shown by %q, want %q", sub, got, want)
+		}
+	}
+	if got := p.SameUsername("abcdef-2"); !reflect.DeepEqual(got, []string{"abcdef-1", "abcdef-3", "zz"}) {
+		t.Errorf("the accounts with the same user name as abcdef-2: %v", got)
+	}
+	// the first one is removed: the viewer is the plain "juniper" now, and its record from before is still its
+	delete(d.Users, "abcdef-1")
+	p = d.People()
+	if got, _ := p.Of("abcdef-2"); got != "juniper" {
+		t.Fatalf("after the first account was removed: %q", got)
+	}
+	for stored, want := range map[string]string{"juniper · id abcdef-2": "juniper", "Juniper · id abcdef-2": "juniper", "JUNIPER · id abcdef-3": "JUNIPER · id abcdef-3", "Juniper · id abcdef": "Juniper · id abcdef", // (two ids begin so: the whole id, and a short one names neither)
+		"Juniper · id nobody": "Juniper · id nobody", " · id zz": " · id zz"} {
+		if got := p.Shown(stored); got != want {
+			t.Errorf("Shown(%q) = %q, want %q", stored, got, want)
+		}
+	}
+	// a user name that is written like another account's shown form
+	d = Data{Users: map[string]User{
+		"3f6c1d-a": {Sub: "3f6c1d-a", Username: "Juniper", Role: RoleAdmin, CreatedAt: *at(1)},
+		"3f6c1d-b": {Sub: "3f6c1d-b", Username: "Juniper", Role: RolePending, CreatedAt: *at(2)},
+		"9a1b2c-c": {Sub: "9a1b2c-c", Username: "juniper · id 3f6c1d-b", Role: RoleAdmin, CreatedAt: *at(1)},
+	}}
+	p = d.People()
+	seen := map[string]string{}
+	for sub := range d.Users {
+		n, _ := p.Of(sub)
+		if other, twice := seen[fold(n)]; twice || n == "" {
+			t.Errorf("%s and %s are both shown by %q", sub, other, n)
+		}
+		seen[fold(n)] = sub
+	}
+	if got, _ := p.Of("3f6c1d-a"); got != "Juniper" {
+		t.Errorf("the admin: %q", got)
+	}
+	if got, _ := p.Of("9a1b2c-c"); got != "juniper · id 3f6c1d-b · id 9a1b2c" {
+		t.Errorf("the account that calls itself like another one's shown form: %q", got)
+	}
+}
+
+// A user name is kept without the characters that have no width (the zero width space and joiners, the word
+// joiner, the soft hyphen: Unicode category Cf), so that no name looks like another one and is not; and
+// cleaning a clean name changes nothing.
+func TestUsernameHasNoCharactersWithoutWidth(t *testing.T) {
+	for in, want := range map[string]string{
+		"Juniper\u200b":             "Juniper",
+		"Ju\u200cni\u200dper\u2060": "Juniper",
+		"Juni\u00adper":             "Juniper",
+		"\ufeffJuniper":             "Juniper",
+		" \u200b Juniper \u200b ":   "Juniper",
+		"\u200b\u200d":              "",
+		"Jüni per":                  "Jüni per",
+		"Юнипер":                    "Юнипер",
+		"bad\xffbyte":               "badbyte",
+	} {
+		got := CleanUsername(in)
+		if got != want {
+			t.Errorf("CleanUsername(%q) = %q, want %q", in, got, want)
+		}
+		if again := CleanUsername(got); again != got {
+			t.Errorf("cleaned twice: %q, then %q", got, again)
+		}
+	}
+	// ... and a text that has one of them is compared without it: a record that kept such a name is that account's
+	d := peopleData()
+	p := d.People()
+	for _, stored := range []string{"Juni\u200bper", "\u2060juniper\u00ad", "OWNER\u200b@example.com"} {
+		if got := p.Shown(stored); got != "Juniper" {
+			t.Errorf("Shown(%q) = %q", stored, got)
+		}
+	}
+	long := CleanUsername(strings.Repeat("ab\u200b ", 40))
+	if len(long) > MaxUsername || CleanUsername(long) != long || strings.Contains(long, "\u200b") || long != strings.TrimSpace(long) {
+		t.Errorf("a long name: %q", long)
+	}
+	// the store keeps it that way, from a sign-in and from a session's cookie
+	s := NewStore(t.TempDir())
+	u, _, err := s.SeenIdentity(Identity{Sub: "sub-z", Email: "zw@example.net", Username: "Juniper\u200b"}, RolePending, "first sign-in")
+	if err != nil || u.Username != "Juniper" {
+		t.Fatalf("a sign-in: %q %v", u.Username, err)
+	}
+	if _, _, err := s.SeenIdentity(Identity{Sub: "sub-y", Email: "y@example.net"}, RolePending, "first sign-in"); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := s.FillUsername("sub-y", "Pine\u200dTop\u00ad"); !done || err != nil || s.Load().Users["sub-y"].Username != "PineTop" {
+		t.Fatalf("a session's cookie: %v %v %q", done, err, s.Load().Users["sub-y"].Username)
+	}
+}
+
+// Since when an account has its user name is kept: set with the first user name and with another one, not
+// changed by a sign-in that sends the same name (also in other letters) or none.
+func TestStoreKeepsSinceWhenTheUsername(t *testing.T) {
+	s := NewStore(t.TempDir())
+	id := Identity{Sub: "sub-n", Email: "owner@example.com", EmailVerified: true}
+	u, _, err := s.SeenIdentity(id, RoleAdmin, "first sign-in")
+	if err != nil || u.UsernameSince != nil {
+		t.Fatalf("an account without a user name: %+v %v", u, err)
+	}
+	id.Username = "Juniper"
+	u, _, _ = s.SeenIdentity(id, RoleAdmin, "")
+	first := u.UsernameSince
+	if first == nil || first.Before(u.CreatedAt) || time.Since(*first) > time.Minute {
+		t.Fatalf("the first user name: since %v", first)
+	}
+	time.Sleep(2 * time.Millisecond)
+	for _, name := range []string{"Juniper", "JUNIPER", "juni\u200bper", ""} {
+		id.Username = name
+		if u, _, _ = s.SeenIdentity(id, RoleAdmin, ""); u.UsernameSince == nil || !u.UsernameSince.Equal(*first) {
+			t.Fatalf("a sign-in with the user name %q moved the time: %v, was %v", name, u.UsernameSince, first)
+		}
+	}
+	if u, _, _ = s.Seen("sub-n", "", "", RolePending, ""); u.UsernameSince == nil || !u.UsernameSince.Equal(*first) {
+		t.Fatalf("a request moved the time: %v", u.UsernameSince)
+	}
+	id.Username = "Aspen"
+	if u, _, _ = s.SeenIdentity(id, RoleAdmin, ""); u.UsernameSince == nil || !u.UsernameSince.After(*first) {
+		t.Fatalf("another user name: since %v, the one before since %v", u.UsernameSince, first)
+	}
+	raw, _ := os.ReadFile(s.Path)
+	if !strings.Contains(string(raw), `"username_since": "`) {
+		t.Fatalf("the file has no username_since:\n%s", raw)
+	}
+	// a session's cookie that fills a user name in: from now
+	if _, _, err := s.SeenIdentity(Identity{Sub: "sub-o", Email: "old@example.com"}, RolePending, "first sign-in"); err != nil {
+		t.Fatal(err)
+	}
+	if done, _ := s.FillUsername("sub-o", "Oldie"); !done || s.Load().Users["sub-o"].UsernameSince == nil {
+		t.Fatalf("FillUsername: %+v", s.Load().Users["sub-o"])
+	}
+}
+
+// In a sentence the address of a KNOWN account is replaced wherever it stands as a text of its own, whatever it
+// looks like: an address without a dot (a provider inside a network), a top-level name in its ASCII form, in
+// any case of its letters. (It was found by its shape only, so such an address in a sentence an older version
+// stored went on to viewers, read tokens and the notification service.) What merely contains it is another
+// address.
+func TestShownInAKnownAddressOfAnyShape(t *testing.T) {
+	d := peopleData()
+	tr := true
+	d.Users["r4-corp"] = User{Sub: "r4-corp", Username: "corpuser", Email: "ops@corp", EmailVerified: &tr, Name: "Corp Opsman", Role: RoleAdmin}
+	d.Users["r4-puny"] = User{Sub: "r4-puny", Username: "punyuser", Email: "idn@beispiel.xn--p1ai", EmailVerified: &tr, Name: "Puny Coder", Role: RoleViewer}
+	d.Users["r4-none"] = User{Sub: "r4-none", Email: "svc@localhost", Name: "No Username"}
+	d.Users["r4-bang"] = User{Sub: "r4-bang", Username: "banguser", Email: "a!b#c@corp", Name: "Bang"}
+	d.Users["r4-pam"] = User{Sub: "r4-pam", Username: "pamuser", Email: "admin@pam", Name: "Pam"}
+	p := d.People()
+	for _, c := range []struct{ text, want string }{
+		{"Lamp (Desk bar) switched off by ops@corp", "Lamp (Desk bar) switched off by corpuser"},
+		{"switched off by OPS@Corp.", "switched off by corpuser."},
+		{"switched off by ops@corp (unverified), then on", "switched off by corpuser, then on"},
+		{"Fan switched on by idn@beispiel.xn--p1ai", "Fan switched on by punyuser"},
+		{"started by ops@corp: 1 machine", "started by corpuser: 1 machine"},
+		{"<ops@corp> and \"ops@corp\", see mailto:ops@corp", "<corpuser> and \"corpuser\", see mailto:corpuser"},
+		{"by svc@localhost-", "by " + HiddenAddress + "-"},
+		{"by a!b#c@corp", "by banguser"},
+		{`{"email":"ops@corp","name":"x"}`, `{"email":"corpuser","name":"x"}`},
+		{"ops@corp idn@beispiel.xn--p1ai owner@example.com", "corpuser punyuser Juniper"},
+		// not the account's address: a longer one that only holds it
+		{"devops@corp", "devops@corp"},
+		{"x.ops@corp", "x.ops@corp"},
+		{"ops@corp.example", HiddenAddress},
+		{"ops@corp-two", "ops@corp-two"},
+		{"ops@corporate", "ops@corporate"},
+		{"ops@corp@corp", "ops@corp@corp"},
+		{"ops@corp_x", "ops@corp_x"},
+		// an error text with a Proxmox user stays, unless an account has that very address
+		{"authentication failure for root@pam", "authentication failure for root@pam"},
+		{"authentication failure for admin@pam", "authentication failure for pamuser"},
+		// the user name that is put in is not read again
+		{"by ops@corp and stranger@example.org", "by corpuser and " + HiddenAddress},
+	} {
+		if got := p.ShownIn(c.text); got != c.want {
+			t.Errorf("ShownIn(%q)\n  got  %q\n  want %q", c.text, got, c.want)
+		}
+	}
+	// a user name that is itself written like an address is put in once and stays
+	d.Users["r4-at"] = User{Sub: "r4-at", Username: "me@handle.example", Email: "at@corp", Name: "At"}
+	if got := d.People().ShownIn("by at@corp, at@corp"); got != "by me@handle.example, me@handle.example" {
+		t.Errorf("a user name that looks like an address: %q", got)
+	}
+}
+
+// What an agent answers as "requested by" is whatever whoever runs the agent makes it say. It is never looked
+// up among the addresses and names of the accounts (that told them which user name belongs to an address or to
+// a name): a text that is what one account is shown by, as an agent repeats it, is shown; anything else with
+// an "@" is HiddenAddress, anything else HiddenName.
+func TestFromOutsideIsNeverLookedUpAmongAddressesAndNames(t *testing.T) {
+	d := peopleData()
+	tr := true
+	d.Users["9a1b2c-w"] = User{Sub: "9a1b2c-w", Username: "juniper", Email: "w@example.org", Role: RolePending}
+	d.Users["sub-u"] = User{Sub: "sub-u", Username: "Jüni Pér", Email: "u@example.org", EmailVerified: &tr, Role: RoleViewer}
+	d.Users["sub-k"] = User{Sub: "sub-k", Username: "Юнипер", Email: "k@example.org", Role: RoleViewer}
+	p := d.People()
+	for _, c := range []struct{ said, want string }{
+		// what the panel told an agent, as the agent repeats it
+		{"Juniper", "Juniper"},
+		{"juniper", "Juniper"},
+		{"PineTop", "PineTop"},
+		{"juniper  id 9a1b2c", "juniper · id 9a1b2c"}, // an agent drops the "·"
+		{"juniper · id 9a1b2c", "juniper · id 9a1b2c"},
+		{"Jni Pr", "Jüni Pér"}, // ... and every letter that is not A to Z
+		{"address hidden", HiddenAddress},
+		{"(address hidden)", HiddenAddress},
+		{"name hidden", HiddenName},
+		{"unknown", "unknown"}, // the agent's own word for nobody
+		{"", ""},
+		// addresses and names of accounts: never the user name
+		{"owner@example.com", HiddenAddress},
+		{"OWNER@EXAMPLE.COM", HiddenAddress},
+		{"friend@example.com unverified", HiddenAddress},
+		{"old@example.com", HiddenAddress},
+		{"nobody@example.org", HiddenAddress},
+		{"root@pam", HiddenAddress},
+		{"Real Name", HiddenName},
+		{"real name", HiddenName},
+		{"Old Timer", HiddenName},
+		{"Bare Name", HiddenName},
+		{"sub-n", HiddenName},
+		// ... and whatever else it says
+		{"Some Stranger", HiddenName},
+		{"root", HiddenName},
+		{"ci token owner Juniper", HiddenName},
+		{"Juniper and more", HiddenName},
+	} {
+		if got := p.FromOutside(c.said); got != c.want {
+			t.Errorf("FromOutside(%q) = %q, want %q", c.said, got, c.want)
+		}
+	}
+	// two accounts an agent's answer cannot tell apart: neither
+	d.Users["sub-j"] = User{Sub: "sub-j", Username: "Jni Pr", Email: "j@example.org", Role: RoleViewer}
+	if got := d.People().FromOutside("Jni Pr"); got != HiddenName {
+		t.Errorf("a text that two shown names turn into at an agent: %q", got)
+	}
+	// an account that calls itself "unknown" is not what the agent's word for nobody means
+	d.Users["sub-q"] = User{Sub: "sub-q", Username: "unknown", Email: "q@example.org"}
+	if got := d.People().FromOutside("unknown"); got != "unknown" {
+		t.Errorf("unknown: %q", got)
+	}
+	// nothing FromOutside gives holds an address or a name
+	for _, u := range d.Users {
+		for _, said := range []string{u.Email, u.Name, u.Sub, strings.ToUpper(u.Email), u.Email + " unverified"} {
+			got := d.People().FromOutside(said)
+			for _, v := range d.Users {
+				for _, private := range []string{v.Email, v.Name} {
+					if private != "" && strings.Contains(strings.ToLower(got), strings.ToLower(private)) && fold(private) != fold(v.Username) {
+						t.Errorf("FromOutside(%q) = %q holds %q", said, got, private)
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -300,7 +691,10 @@ func TestStoreKeepsTheUsername(t *testing.T) {
 	if after.Username != "Old ie" {
 		t.Fatalf("filled in as %q", after.Username)
 	}
-	after.Username = ""
+	if after.UsernameSince == nil {
+		t.Fatal("FillUsername did not keep since when")
+	}
+	after.Username, after.UsernameSince = "", nil
 	if !reflect.DeepEqual(before, after) { // nothing else of the account moves: not the role, not the address, not last seen
 		t.Fatalf("FillUsername changed more than the user name:\n%+v\n%+v", before, after)
 	}
@@ -382,7 +776,7 @@ func TestUsersFileIsReadByTheVersionBefore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"username": "Juniper"`) {
+	if !strings.Contains(string(raw), `"username": "Juniper"`) || !strings.Contains(string(raw), `"username_since": "`) {
 		t.Fatalf("the file has no user name:\n%s", raw)
 	}
 	var old build16Data
@@ -472,7 +866,7 @@ func TestShownAtTheEdges(t *testing.T) {
 		t.Errorf("the account whose address it is: %q", got) // (its own user name is its alone: it is still shown)
 	}
 	if got := q.Shown("owner@example.com"); got != HiddenAddress {
-		t.Errorf("the address that two accounts now have: %q", got) // (which of them an old record means cannot be told)
+		t.Errorf("the address one account has and another, without an address, is written into records by: %q", got) // (which of them a record means cannot be told)
 	}
 	// the dots of the Users page and the Audit log are for addresses and names, not for a user name
 	for _, v := range p.Private() {

@@ -3,6 +3,7 @@ package access
 import (
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -22,6 +23,20 @@ import (
 // the accounts of users.json. Only one account may match: an address or a name that two known accounts have
 // says nothing about which of them it was.
 //
+// A user name is what the account says, and two accounts can say the same. Only user names compete with user
+// names: an account whose display name or address is somebody's user name takes nothing away from that
+// account. Two user names are the same when their folded forms are (fold: letters without their case, no
+// format characters such as a zero width space). Of the accounts that have one user name, one is shown by it:
+// an account with a role before an account that only waits for access, and among equals the one that has had
+// the user name longest (User.UsernameSince; the account's creation for a user name from before that field).
+// Every other one is shown by the user name with a short form of its account id behind it ("Juniper · id
+// 3f6c1d"), everywhere, never by the plain name: so an account without any access cannot take an admin's name
+// away or pass for the admin, and nobody is left without a name.
+//
+// A text that somebody outside the panel supplies as the name of a person (an agent's "requested by") is never
+// looked up among addresses and names: that would tell whoever runs the agent which user name belongs to an
+// address (FromOutside).
+//
 // None of this decides anything. Roles, sites, allowed_emails and bootstrap_admins never read the user name:
 // like the name and the address it is what the account says about itself, and only the subject is certain.
 
@@ -39,61 +54,234 @@ const (
 
 	// MaxUsername is how many bytes of a user name are kept.
 	MaxUsername = 64
+
+	// idMark stands between a user name and the short form of the account's id, for an account that is not the
+	// one shown by the plain user name. shortID is how many characters of the id that form has.
+	idMark  = " · id "
+	shortID = 6
+)
+
+// The reasons a user name an account has is not what it is shown by (People.UsernameNote).
+const (
+	UsernameShared    = "same_username" // another account has the same user name: all but one are shown with a part of their id
+	UsernameIsAddress = "is_address"    // it is an e-mail address, the account's own or another account's
+	UsernameIsAccount = "is_account_id" // it is another account's id
 )
 
 // CleanUsername is a user name as the panel keeps it: without control characters, escape sequences, line
-// breaks and direction overrides (textsafe.Clean), without spaces at either end, and at most MaxUsername
-// bytes. The claim is whatever the account's provider sent.
-func CleanUsername(s string) string { return textsafe.Cut(s, MaxUsername) }
+// breaks and direction overrides (textsafe.Clean), without format characters (Unicode category Cf: the zero
+// width space and joiners, the word joiner, the soft hyphen: a name with one of them in it looks like the name
+// without), without spaces at either end, and at most MaxUsername bytes. The claim is whatever the account's
+// provider sent. Both places that take a user name in call this: where the claims are read, and where
+// users.json is written.
+func CleanUsername(s string) string {
+	return textsafe.Cut(noFormat(textsafe.Clean(s)), MaxUsername)
+}
+
+// noFormat is s without the characters of the Unicode category Cf (format characters: they have no width).
+func noFormat(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // People answers how the accounts of one users.json are named. It is made once for an answer (Data.People).
 type People struct {
-	users  map[string]User
-	byText map[string][]string // an address, a name or a user name in small letters -> the subjects that have it
-	shown  map[string]string   // subject -> the user name the account is shown by ("" = none)
-	names  []string            // the names of accounts without an address, longest first (ShownIn)
+	users map[string]User
+	// What a stored text can mean (match), each by the folded text: the accounts that have it as their address;
+	// those that older versions named by it (the name of an account without an address) and those that still
+	// write it into a record (a user name that is not shown, of an account without an address); and the
+	// accounts that have it as their name next to an address, which no record was ever written with.
+	byAddr, byName, byNameToo map[string][]string
+	shown                     map[string]string   // subject -> what the account is shown by: its user name, or that with its id ("" = none)
+	byShown                   map[string]string   // a shown form, folded -> the subject it is the form of
+	same                      map[string][]string // subject -> the other accounts that have the same user name, sorted
+	note                      map[string]string   // subject -> why its user name is not what it is shown by (UsernameNote)
+	names                     []string            // the names of accounts without an address, longest first (ShownIn)
+	addrs                     []string            // the addresses of the accounts (those with an "@"), longest first (ShownIn)
+	outside                   map[string][]string // a shown form as an agent repeats it (outsideForm) -> the subjects shown by it
 }
 
-func fold(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+// fold is the form two texts are compared in: without spaces at either end, without format characters (a zero
+// width space and the like), and every letter by its simple case fold, so that "JUNIPER", "juniper" and
+// "Juniper" with a zero width joiner in it are one text. (Composed and decomposed letters, and look-alike
+// letters of other alphabets, stay different texts: the account id tells such accounts apart.)
+func fold(s string) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		low := r // the smallest letter of those that fold to the same
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			low = min(low, f)
+		}
+		return low
+	}, s))
+}
+
+// usernameSince is since when the account has had its user name: the stored time, and for a user name from
+// before the panel kept that time the account's creation.
+func (u User) usernameSince() time.Time {
+	if u.UsernameSince != nil {
+		return *u.UsernameSince
+	}
+	return u.CreatedAt
+}
+
+// firstOf reports whether a comes before b among the accounts that have one user name: an account with a role
+// before one that only waits, then the one that has had the user name longer, then by subject (so that the
+// answer is the same every time).
+func firstOf(a, b User) bool {
+	ra, rb := a.Role == RoleAdmin || a.Role == RoleViewer, b.Role == RoleAdmin || b.Role == RoleViewer
+	if ra != rb {
+		return ra
+	}
+	if ta, tb := a.usernameSince(), b.usernameSince(); !ta.Equal(tb) {
+		return ta.Before(tb)
+	}
+	return a.Sub < b.Sub
+}
 
 // People indexes the accounts.
 func (d Data) People() *People {
-	p := &People{users: d.Users, byText: map[string][]string{}, shown: map[string]string{}}
-	add := func(text, sub string) {
-		k := fold(text)
-		if k == "" || containsStr(p.byText[k], sub) {
-			return
-		}
-		p.byText[k] = append(p.byText[k], sub)
-	}
-	for sub, u := range d.Users {
-		add(u.Email, sub)
-		add(u.Name, sub)
-		add(u.Username, sub)
-		if u.Email == "" && len(u.Name) > 1 {
-			p.names = append(p.names, u.Name)
+	p := &People{users: d.Users, byAddr: map[string][]string{}, byName: map[string][]string{}, byNameToo: map[string][]string{},
+		shown: map[string]string{}, byShown: map[string]string{}, same: map[string][]string{}, note: map[string]string{},
+		outside: map[string][]string{}}
+	add := func(index map[string][]string, text, sub string) {
+		if k := fold(text); k != "" && !containsStr(index[k], sub) {
+			index[k] = append(index[k], sub)
 		}
 	}
-	sort.Slice(p.names, func(i, j int) bool {
-		if len(p.names[i]) != len(p.names[j]) {
-			return len(p.names[i]) > len(p.names[j])
-		}
-		return p.names[i] < p.names[j]
-	})
 	for sub, u := range d.Users {
-		// A user name is shown when it is the account's alone: no other account has it as its user name, its
-		// address or its name, and it is no other account's subject. (An account could otherwise call itself
-		// by somebody else's address.) A user name that is the account's own address is the address.
-		name := u.Username
-		if name == "" || fold(name) == fold(u.Email) || len(p.byText[fold(name)]) != 1 {
-			continue
+		add(p.byAddr, u.Email, sub)
+		if u.Email == "" {
+			add(p.byName, u.Name, sub)
+			if len(u.Name) > 1 {
+				p.names = append(p.names, u.Name)
+			}
+		} else {
+			add(p.byNameToo, u.Name, sub)
 		}
-		if other, ok := d.Users[name]; ok && other.Sub != sub {
-			continue
+	}
+	for k, subs := range p.byAddr {
+		if strings.Contains(k, "@") {
+			p.addrs = append(p.addrs, d.Users[subs[0]].Email)
 		}
-		p.shown[sub] = name
+	}
+	longestFirst(p.names)
+	longestFirst(p.addrs)
+	// The user names. Only user names compete with user names: what another account has as its name or its
+	// address takes no user name away. Three user names are no name for anybody, whoever has them: one that is
+	// the account's own address (it would be the address), one that is written like an address and is another
+	// account's (the panel never names a person by an address), and one that is another account's id.
+	groups := map[string][]string{} // a user name, folded -> the subjects that have it
+	for sub, u := range d.Users {
+		name := CleanUsername(u.Username)
+		k := fold(name)
+		switch other, isID := d.Users[name]; {
+		case k == "":
+		case k == fold(u.Email), strings.Contains(k, "@") && len(p.byAddr[k]) > 0:
+			p.note[sub] = UsernameIsAddress
+		case isID && other.Sub != sub:
+			p.note[sub] = UsernameIsAccount
+		default:
+			groups[k] = append(groups[k], sub)
+		}
+	}
+	for _, subs := range groups {
+		sort.Slice(subs, func(i, j int) bool { return firstOf(d.Users[subs[i]], d.Users[subs[j]]) })
+		for i, sub := range subs {
+			name := CleanUsername(d.Users[sub].Username)
+			if i > 0 {
+				name = withID(name, sub, subs)
+			}
+			p.shown[sub] = name
+			if len(subs) > 1 {
+				p.note[sub] = UsernameShared
+				for _, other := range subs {
+					if other != sub {
+						p.same[sub] = append(p.same[sub], other)
+					}
+				}
+				sort.Strings(p.same[sub])
+			}
+		}
+	}
+	p.makeUnique()
+	for sub, u := range d.Users {
+		// An account without an address and without a user name the panel shows is still written into a record
+		// by that user name (the text the audit log names it by): a stored text can mean it.
+		if p.shown[sub] == "" && u.Email == "" {
+			add(p.byName, CleanUsername(u.Username), sub)
+		}
+	}
+	for sub, n := range p.shown {
+		p.byShown[fold(n)] = sub
+		if k := outsideForm(n); k != "" {
+			p.outside[k] = append(p.outside[k], sub)
+		}
 	}
 	return p
+}
+
+func longestFirst(l []string) {
+	sort.Slice(l, func(i, j int) bool {
+		if len(l[i]) != len(l[j]) {
+			return len(l[i]) > len(l[j])
+		}
+		return l[i] < l[j]
+	})
+}
+
+// withID is a user name with the short form of the account's id behind it. The short form is the first shortID
+// characters of the id, and the whole id when another of the accounts with that user name (group) begins the
+// same.
+func withID(name, sub string, group []string) string {
+	short := sub
+	if r := []rune(sub); len(r) > shortID {
+		short = string(r[:shortID])
+	}
+	for _, other := range group {
+		if other != sub && strings.HasPrefix(other, short) {
+			short = sub
+			break
+		}
+	}
+	return name + idMark + short
+}
+
+// makeUnique sees to it that no two accounts are shown by the same text. A user name can be written like
+// another account's user name with an id behind it ("Juniper · id 3f6c1d" as somebody's own user name): the
+// account whose own user name that is gets its id behind it too. What is still the same after that (it takes
+// user names made for it) is shown by nothing.
+func (p *People) makeUnique() {
+	for round := 0; ; round++ {
+		byForm := map[string][]string{}
+		for sub, n := range p.shown {
+			byForm[fold(n)] = append(byForm[fold(n)], sub)
+		}
+		again := false
+		for _, subs := range byForm {
+			if len(subs) < 2 {
+				continue
+			}
+			again = true
+			for _, sub := range subs {
+				p.note[sub] = UsernameShared
+				if round == 3 {
+					delete(p.shown, sub)
+				} else if p.shown[sub] == CleanUsername(p.users[sub].Username) {
+					p.shown[sub] = withID(p.shown[sub], sub, nil)
+				}
+			}
+		}
+		if !again {
+			return
+		}
+	}
 }
 
 func containsStr(l []string, s string) bool {
@@ -105,18 +293,86 @@ func containsStr(l []string, s string) bool {
 	return false
 }
 
-// match returns the accounts a text names: the one with that subject, and those that have it as their
-// address, name or user name.
-func (p *People) match(text string) []string {
-	subs := append([]string(nil), p.byText[fold(text)]...)
-	if _, ok := p.users[text]; ok && !containsStr(subs, text) {
-		subs = append(subs, text)
+// match returns the accounts a stored text can mean, and whether one of them has it as its address, or as the
+// name (or the user name that is not shown) a record was written with:
+//
+//   - the accounts that have it as their address; the accounts without an address that have it as their name
+//     (older versions named those by it) or as a user name the panel does not show (a record is still written
+//     with it);
+//   - the account that is shown by it (what a record keeps since build 17: the user name, or the user name
+//     with the account's id behind it);
+//   - the account with that subject;
+//   - and only when it is none of these: the accounts that have it as their name next to an address. No record
+//     was written with such a name, so it stands in nobody's way; it is looked up so that it is never handed
+//     out as it is.
+//
+// A user name that an account merely has, while another account is shown by it, is not among them: only user
+// names compete with user names, and the account that is shown by the plain name is the one a record means.
+func (p *People) match(text string) (subs []string, address, name bool) {
+	k := fold(text)
+	add := func(l ...string) {
+		for _, sub := range l {
+			if !containsStr(subs, sub) {
+				subs = append(subs, sub)
+			}
+		}
 	}
-	return subs
+	add(p.byAddr[k]...)
+	address = len(subs) > 0
+	add(p.byName[k]...)
+	name = len(subs) > len(p.byAddr[k])
+	if sub, ok := p.byShown[k]; ok {
+		add(sub)
+	} else if sub := p.withIDOf(text); sub != "" {
+		add(sub)
+	}
+	if _, ok := p.users[text]; ok {
+		add(text)
+	}
+	if len(subs) == 0 {
+		add(p.byNameToo[k]...)
+		name = len(subs) > 0
+	}
+	return subs, address, name
 }
 
-// Username is the user name the account with this subject is shown by; "" when it has none that can be shown.
+// withIDOf is the account a text of the form "<user name> · id <short id>" names, when no account is shown by
+// that text right now: a record kept it while two accounts had the user name, and the account is shown by the
+// plain name since (or by its whole id behind it). "" when no account or more than one fits.
+func (p *People) withIDOf(text string) string {
+	i := strings.LastIndex(text, idMark)
+	if i <= 0 {
+		return ""
+	}
+	name, short, found := fold(text[:i]), text[i+len(idMark):], ""
+	for sub, u := range p.users {
+		if p.shown[sub] == "" || fold(CleanUsername(u.Username)) != name {
+			continue
+		}
+		if sub != short && withID("", sub, nil) != idMark+short {
+			continue
+		}
+		if found != "" {
+			return ""
+		}
+		found = sub
+	}
+	return found
+}
+
+// Username is what the account with this subject is shown by: its user name, or its user name with a short
+// form of its id behind it while another account that comes first has the same; "" when it has none that can
+// be shown.
 func (p *People) Username(sub string) string { return p.shown[sub] }
+
+// SameUsername are the subjects of the other accounts that have the same user name as this one (in its folded
+// form), sorted; nil when no other account has it.
+func (p *People) SameUsername(sub string) []string { return p.same[sub] }
+
+// UsernameNote is why the user name of this account is not simply what it is shown by: UsernameShared (another
+// account has the same; this one or the other is shown with a part of its id), UsernameIsAddress,
+// UsernameIsAccount (it is shown by no user name), or "" (it is shown by its user name, or has none).
+func (p *People) UsernameNote(sub string) string { return p.note[sub] }
 
 // Of is how the account with this subject is named: by its user name; without one, by the words that stand
 // for the address or the name it would have been named by before (never by them), and an account that has
@@ -134,7 +390,7 @@ func (p *People) Of(sub string) (name string, ok bool) {
 		return HiddenAddress, true
 	case u.Name != "":
 		return HiddenName, true
-	case u.Username != "": // not the account's alone: no name, and not somebody else's
+	case u.Username != "": // an address, or somebody else's id: no name
 		return HiddenName, true
 	}
 	return sub, true
@@ -153,9 +409,10 @@ func (p *People) Record(sub, stored string) string {
 // Shown is a stored text that names a person, as it is handed out anywhere but on the Users page and in the
 // audit log. It is the one place that decides it:
 //
-//   - the text is the address, the name, the user name or the subject of exactly one known account: that
-//     account's user name; when it has none, HiddenAddress or HiddenName (a subject stays, as before);
-//   - more than one account matches: HiddenAddress or HiddenName (a text that is only a user name stays);
+//   - the text is the address, the name or the subject of exactly one known account, or what one account is
+//     shown by (its user name; with its id behind it for an account that shares the user name): what that
+//     account is shown by; when it has no user name, HiddenAddress or HiddenName (a subject stays, as before);
+//   - more than one account matches: HiddenAddress or HiddenName;
 //   - an API token ("ci (token, owner <subject>)"): the same, with the owner named like an account;
 //   - anything else is not an account's text ("root" from the command line, "fairy"): it stays, with every
 //     address in it handled as in ShownIn. What still holds an "@" after that is HiddenAddress as a whole:
@@ -178,7 +435,8 @@ func (p *People) Shown(stored string) string {
 		}
 		return name + tokenOwner + owner + ")"
 	}
-	subs := p.match(base)
+	subs, address, named := p.match(base)
+	address = address || strings.Contains(base, "@")
 	if len(subs) == 1 {
 		u := p.users[subs[0]]
 		if n := p.shown[u.Sub]; n != "" {
@@ -187,21 +445,14 @@ func (p *People) Shown(stored string) string {
 		switch {
 		case base == u.Sub:
 			return base
-		case strings.Contains(base, "@") || fold(base) == fold(u.Email):
+		case address:
 			return HiddenAddress
 		}
 		return HiddenName
 	}
 	if len(subs) > 1 {
-		private := strings.Contains(base, "@")
-		named := false
-		for _, sub := range subs {
-			u := p.users[sub]
-			private = private || fold(base) == fold(u.Email)
-			named = named || fold(base) == fold(u.Name)
-		}
 		switch {
-		case private:
+		case address:
 			return HiddenAddress
 		case named:
 			return HiddenName
@@ -231,12 +482,15 @@ func (p *People) onlyUsernames(out string) bool {
 
 // ShownIn is a sentence older versions made with a person in it ("started by a@example.com: 3 machines"), as
 // it is handed out anywhere but on the Users page and in the audit log. Every e-mail address in it is replaced:
-// by the user name of the one known account that has it, else by HiddenAddress; the mark for an address that
+// by what the one known account that has it is shown by, else by HiddenAddress; the mark for an address that
 // was not verified goes with it. The name of a known account that has no address (the only accounts older
 // versions named by their name) is replaced the same way where it stands as a word of its own.
 //
-// An address here is what looks like one: text around an "@" whose right side has a dot and ends in letters.
-// "root@pam" and "root@192.0.2.7" in an error text are left alone. The rest of the sentence is not touched.
+// An address here is, first, the address of a known account wherever it stands as a text of its own, whatever
+// it looks like ("ops@corp" of a provider inside a network, a top-level name in its ASCII form): the panel
+// knows these and need not guess. And then what looks like an address: text around an "@" whose right side has
+// a dot and ends in letters. "root@pam" and "root@192.0.2.7" in an error text are left alone (unless an
+// account has that very address). The rest of the sentence is not touched.
 func (p *People) ShownIn(text string) string {
 	if strings.Contains(text, "@") {
 		text = p.addresses(text)
@@ -247,6 +501,17 @@ func (p *People) ShownIn(text string) string {
 	return text
 }
 
+// HiddenIn is a sentence this version made, as it is handed out. The people the panel wrote into it are there
+// by what the panel shows them by already. Whatever else is in it came from outside (an error text of an
+// agent, a name on a machine), and nothing of it is looked up: every e-mail address (ShownIn says what one is)
+// becomes HiddenAddress, and the name of a known account without an address HiddenName, whoever has them. An
+// answer with a user name in it would tell whoever supplied the text whose address or name that is.
+func (p *People) HiddenIn(text string) string {
+	nobody := *p
+	nobody.shown = nil
+	return nobody.ShownIn(text)
+}
+
 func localRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("._%+-'", r)
 }
@@ -255,7 +520,77 @@ func domainRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '-'
 }
 
+// addresses replaces the addresses in a sentence: the known ones where they stand (known), and between them
+// what looks like one (byShape). What is put in is not read again.
 func (p *People) addresses(text string) string {
+	var b strings.Builder
+	for {
+		i, n := p.known(text)
+		if i < 0 {
+			b.WriteString(p.byShape(text))
+			return b.String()
+		}
+		b.WriteString(p.byShape(text[:i]))
+		b.WriteString(p.address(text[i : i+n]))
+		text = text[i+n:]
+		for _, mark := range []string{UnverifiedMark, agentMark} { // the mark was about the address
+			if strings.HasPrefix(text, mark) {
+				text = text[len(mark):]
+				break
+			}
+		}
+	}
+}
+
+// known finds the first place in text where the address of a known account stands as a text of its own, in
+// any case of its letters: at is where it begins and n how long it is there (at is -1 for none). "Of its own":
+// what stands before it is no part of an address (a letter, a digit, one of . _ % + - ' or an "@"), and
+// neither is what follows, so "ops@corp" is not found in "devops@corp" or in "ops@corp.example". A full stop
+// or a dash behind it is a part only when the address goes on after it: one that ends the sentence is not.
+func (p *People) known(text string) (at, n int) {
+	if len(p.addrs) == 0 {
+		return -1, 0
+	}
+	for i := range text {
+		if before, _ := utf8.DecodeLastRuneInString(text[:i]); i > 0 && (localRune(before) || before == '@') {
+			continue
+		}
+		for _, addr := range p.addrs { // longest first
+			n, ok := prefixFold(text[i:], addr)
+			if !ok {
+				continue
+			}
+			rest := text[i+n:]
+			after, size := utf8.DecodeRuneInString(rest)
+			if after == '.' || after == '-' {
+				after, _ = utf8.DecodeRuneInString(rest[size:])
+			}
+			if rest == "" || !(unicode.IsLetter(after) || unicode.IsDigit(after) || after == '@' || after == '_') {
+				return i, n
+			}
+		}
+	}
+	return -1, 0
+}
+
+// prefixFold reports whether text begins with want in any case of its letters, and how many bytes of text
+// that beginning is.
+func prefixFold(text, want string) (n int, ok bool) {
+	for _, w := range want {
+		r, size := utf8.DecodeRuneInString(text[n:])
+		if size == 0 || (r != w && fold(string(r)) != fold(string(w))) {
+			return 0, false
+		}
+		n += size
+	}
+	return n, true
+}
+
+// byShape replaces what looks like an address in text (isAddress).
+func (p *People) byShape(text string) string {
+	if !strings.Contains(text, "@") {
+		return text
+	}
 	var b strings.Builder
 	done := 0 // text[:done] is written
 	for at := strings.IndexByte(text, '@'); at >= 0; {
@@ -320,7 +655,7 @@ func isAddress(local, domain string) bool {
 
 // address is what stands for an e-mail address in a sentence.
 func (p *People) address(addr string) string {
-	if subs := p.byText[fold(addr)]; len(subs) == 1 {
+	if subs, _, _ := p.match(addr); len(subs) == 1 {
 		if n := p.shown[subs[0]]; n != "" {
 			return n
 		}
@@ -334,7 +669,7 @@ func (p *People) words(text, name string) string {
 		return text
 	}
 	repl := HiddenName
-	if subs := p.byText[fold(name)]; len(subs) == 1 && p.shown[subs[0]] != "" {
+	if subs, _, _ := p.match(name); len(subs) == 1 && p.shown[subs[0]] != "" {
 		repl = p.shown[subs[0]]
 	}
 	edge := func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }
@@ -365,7 +700,7 @@ func (p *People) Private() []string {
 	out := []string{}
 	for _, u := range p.users {
 		for _, v := range []string{u.Email, u.Name} {
-			if v != "" && !seen[v] && fold(v) != fold(p.shown[u.Sub]) { // (a name that is the user name is no secret)
+			if v != "" && !seen[v] && (p.shown[u.Sub] == "" || fold(v) != fold(u.Username)) { // (a name that is the shown user name is no secret)
 				seen[v] = true
 				out = append(out, v)
 			}
@@ -380,8 +715,9 @@ func (p *People) Private() []string {
 	return out
 }
 
-// Named are the subjects of the accounts whose shown user name holds text (in small letters): what a search for
-// a person by the name the panel shows finds, also in records that only have the subject.
+// Named are the subjects of the accounts that are shown by something that holds text (in any case of its
+// letters): what a search for a person by the name the panel shows finds, also in records that only have the
+// subject.
 func (p *People) Named(text string) []string {
 	text = fold(text)
 	var subs []string
@@ -389,10 +725,58 @@ func (p *People) Named(text string) []string {
 		return subs
 	}
 	for sub, n := range p.shown {
-		if strings.Contains(strings.ToLower(n), text) {
+		if strings.Contains(fold(n), text) {
 			subs = append(subs, sub)
 		}
 	}
 	sort.Strings(subs)
 	return subs
+}
+
+// outsideForm is a text as an agent repeats what it was told about who asked: an agent keeps the letters A to
+// Z, the digits, spaces and . _ @ - of it, and 64 bytes (Fairy-agent, cleanWho). Two texts with the same form
+// cannot be told apart in what an agent answers. Here also: letters without their case, one space for many.
+func outsideForm(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune(" ._@-", r) {
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	out := b.String()
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return strings.Join(strings.Fields(out), " ")
+}
+
+// outsideNobody is what an agent says when it was told nothing about who asked.
+const outsideNobody = "unknown"
+
+// FromOutside is a text that names a person and was supplied by somebody outside the panel: what a machine's
+// agent answers as "requested by" of a countdown. The agent repeats what a panel told it, and whoever runs the
+// agent can make it say anything. So the text is never looked up among the addresses and names of the
+// accounts: an answer "Juniper" for "owner@example.com" would tell them whose address that is.
+//
+//   - it is what exactly one account is shown by (as an agent repeats it: outsideForm): that;
+//   - it is the panel's own words for a person it does not name, or the agent's for nobody: those words;
+//   - anything else with an "@": HiddenAddress; anything else: HiddenName. The panel cannot tell a name from
+//     any other text, and shows neither.
+func (p *People) FromOutside(text string) string {
+	k := outsideForm(text)
+	switch subs := p.outside[k]; {
+	case strings.TrimSpace(text) == "":
+		return text
+	case len(subs) == 1:
+		return p.shown[subs[0]]
+	case k == outsideForm(HiddenAddress):
+		return HiddenAddress
+	case k == outsideForm(HiddenName):
+		return HiddenName
+	case k == outsideNobody && len(subs) == 0:
+		return outsideNobody
+	case strings.Contains(text, "@"):
+		return HiddenAddress
+	}
+	return HiddenName
 }

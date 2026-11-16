@@ -31,7 +31,12 @@ type User struct {
 	// keeps it, or its provider sends none. Nothing is decided by it. A version that does not know the field
 	// reads the file as before and writes it back without it; the next sign-in brings it again.
 	Username string `json:"username,omitempty"`
-	Email    string `json:"email"`
+	// UsernameSince is when the account first had the user name it has now (a sign-in that sends the same name
+	// in other letters does not change it). Of two accounts with the same user name the one that has had it
+	// longer is shown by the plain name (people.go). nil: the user name is from before the panel kept this, and
+	// the account's creation counts. Like Username it is dropped by a version that does not know it.
+	UsernameSince *time.Time `json:"username_since,omitempty"`
+	Email         string     `json:"email"`
 	// EmailVerified is the provider's email_verified claim at the last sign-in. nil = not known: the entry was
 	// written by a version without this field (or without a provider) and counts as not verified until the
 	// user's next sign-in or request.
@@ -303,7 +308,8 @@ func (s *Store) FillUsername(sub, username string) (done bool, err error) {
 		if !ok || cur.Username != "" {
 			return nil
 		}
-		cur.Username = username
+		now := time.Now().UTC()
+		cur.Username, cur.UsernameSince = username, &now
 		d.Users[sub] = cur
 		done = true
 		return nil
@@ -346,6 +352,9 @@ func (s *Store) seen(sub, email string, verified *bool, name, username, newRole,
 			cur.Name = name
 		}
 		if username = CleanUsername(username); username != "" {
+			if fold(cur.Username) != fold(username) { // a first user name, or another one: this account's from now on
+				cur.UsernameSince = &now
+			}
 			cur.Username = username
 		}
 		cur.LastSeen = &now
