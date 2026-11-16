@@ -182,9 +182,10 @@ func New(cfg *config.Panel, secrets config.Secrets, p *poller.Poller, demoUser *
 	s.Notes = notifications.Open(filepath.Join(cfg.DataDir, "notifications.json"))
 	s.saved = make(chan struct{})
 	// What is pushed to ntfy or Discord names people by their user names, like the page. The events written
-	// now say it that way already; this is for a sentence made from what an older version stored (a run it
-	// started, a countdown it asked for).
-	s.Notes.Push = s.outside
+	// now say it that way already, and nothing in them is looked up (an address in one is a machine's text:
+	// outsideNow); only a sentence made from what an older version stored (a run it started) has the address
+	// of a person, which is turned into the user name (outside).
+	s.Notes.Push, s.Notes.PushOld = s.outsideNow, s.outside
 	s.Watch = &notifications.Watcher{Store: s.Notes}
 	addr, src, via := cfg.Enroll.PanelAddress, "config", ""
 	if addr == "" {

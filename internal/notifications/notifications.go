@@ -156,7 +156,11 @@ type Store struct {
 	path string
 	// Push sends warnings and critical events to FAIRY_NOTIFY_URL (ntfy / Discord); may be nil.
 	Push func(title, message string)
-	Now  func() time.Time
+	// PushOld, when it is set, sends the events whose text names a person the way an older version did (AddOld:
+	// Event.ByName is false) in Push's place: whoever sends them on reads such a text differently (the address
+	// in it is a person, and is looked up), and must not read a text of now that way.
+	PushOld func(title, message string)
+	Now     func() time.Time
 
 	mu     sync.Mutex
 	d      fileData
@@ -347,6 +351,10 @@ func (s *Store) add(e Event) Event {
 	s.dirty = true
 	s.signal()
 	push := s.Push
+	pushEvent := push // the way out for this event's own text; the notice below is always a text of now
+	if !e.ByName && s.PushOld != nil && push != nil {
+		pushEvent = s.PushOld
+	}
 	var ok bool
 	var note, notice string
 	if push != nil && (e.Severity == Warning || e.Severity == Critical) {
@@ -358,7 +366,7 @@ func (s *Store) add(e Event) Event {
 		if e.Host != "" {
 			title = "Fairy: " + e.Host + ": " + e.Text
 		}
-		push(title, fmt.Sprintf("%s (%s) at %s%s", e.Text, e.Severity, e.T.Format(time.RFC3339), note))
+		pushEvent(title, fmt.Sprintf("%s (%s) at %s%s", e.Text, e.Severity, e.T.Format(time.RFC3339), note))
 	} else if notice != "" {
 		push("Fairy: "+notice, fmt.Sprintf("%s (%s) at %s", notice, Warning, e.T.Format(time.RFC3339)))
 	}

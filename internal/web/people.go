@@ -181,17 +181,35 @@ func (s *Server) accountOutside(sub string) string {
 	return ""
 }
 
-// outside sends a message to the notification service (ntfy or Discord: FAIRY_NOTIFY_URL). It is the one way
-// out for both kinds of message, the audited control actions and the warnings of the Notifications list, and
-// every e-mail address in the title or the text is replaced on the way (ShownIn): by the user name of the
-// account that has it, else by the words that stand for it. The sentences written now name people by their
-// user names already; this is for a sentence made from what an older version stored, and for whatever names
-// an account by its address in the details of an audited action.
+// outside and outsideNow send a message to the notification service (ntfy or Discord: FAIRY_NOTIFY_URL). They
+// are the one way out for both kinds of message, the audited control actions and the warnings of the
+// Notifications list, and no e-mail address leaves the panel through them.
+//
+// outsideNow is for a message this version makes: an audited action, and a notification written now
+// (notifications.Event.ByName). The people in it are named by what the panel shows them by already. Whatever
+// else is in it a machine supplied (the message of a failed agent update, the outcome of an action, a socket's
+// name), and nothing of it is looked up among the accounts (People.HiddenIn): an address in it is hidden,
+// never turned into a user name. Until the fix round after the fifth review every message went through outside,
+// and "agent update failed: owner@example.com" left as "agent update failed: Juniper": whoever runs that agent
+// and reads the channel learned whose address it is. The list and the stream never said it (noteText).
+func (s *Server) outsideNow(title, message string) {
+	who := s.people()
+	s.sendOut(who.HiddenIn(title), who.HiddenIn(message))
+}
+
+// outside is for a sentence made from what an older version stored (a notification added with AddOld: the
+// report of a run such a version started): it names a person by the e-mail address, and every address in the
+// title or the text is replaced by the user name of the account that has it, else by the words that stand for
+// it (People.ShownIn).
 func (s *Server) outside(title, message string) {
 	who := s.people()
+	s.sendOut(who.ShownIn(title), who.ShownIn(message))
+}
+
+func (s *Server) sendOut(title, message string) {
 	send := s.sendOutside
 	if send == nil {
 		send = notify.Notify
 	}
-	send(who.ShownIn(title), who.ShownIn(message))
+	send(title, message)
 }

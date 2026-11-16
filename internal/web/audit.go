@@ -122,14 +122,15 @@ func (c *reqCtx) auditAbout(u *model.User, action, target, about string, params 
 			// who did it, and the account a change of the Users page is about, which the entry names by its
 			// address (or its name, or an address that does not look like one: so it is looked up as a whole,
 			// unless the caller asked before the change how the account is named: about).
-			// An address anywhere else in it (the outcome, the details) is replaced too (outside).
+			// Whatever else is in it (the outcome, the details) may be a machine's text: an address there is
+			// hidden, not looked up (outsideNow).
 			b, _ := json.Marshal(params)
 			if about != "" {
 				target = about
 			} else if strings.HasPrefix(action, "user.") {
 				target = who.Shown(target)
 			}
-			c.s.outside("Fairy: "+action+" on "+target, c.s.whoShown(u)+" via "+sourceOf(u)+": "+outcome+" "+string(b))
+			c.s.outsideNow("Fairy: "+action+" on "+target, c.s.whoShown(u)+" via "+sourceOf(u)+": "+outcome+" "+string(b))
 			break
 		}
 	}
