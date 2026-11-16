@@ -527,6 +527,9 @@ type User struct {
 // Me is GET /api/me.
 type Me struct {
 	User
+	// ShownAs is how the panel names this person to everybody: the account's user name, or the words that stand
+	// for an address or a name when it has none. (name and email above are the caller's own, for their eyes.)
+	ShownAs         string        `json:"shown_as"`
 	CanControl      bool          `json:"can_control"`
 	Demo            bool          `json:"demo"`
 	ControlDisabled *ControlState `json:"control_disabled"`
@@ -722,11 +725,16 @@ type PowerResult struct {
 
 // AuditPage is one page of GET /api/audit, newest entry first.
 //
-// Entries are the audit-log lines as written (see audit.Entry) plus "id", the entry's byte offset. They stay
-// generic maps so that lines written by older versions, with other keys, are passed through unchanged.
+// Entries are the audit-log lines as written (see audit.Entry) plus "id", the entry's byte offset, and "who":
+// how the panel names the person of the entry (the user name; the Audit page shows it first). They stay generic
+// maps so that lines written by older versions, with other keys, are passed through unchanged.
+//
+// Private are the e-mail addresses and names of the known accounts. The Audit page draws them as dots wherever
+// an entry holds one (its actor, its target, its details), until the admin clicks it.
 type AuditPage struct {
 	Entries []map[string]any `json:"entries"`
 	Next    *int64           `json:"next"` // pass as ?before= for the next page; null on the last page
+	Private []string         `json:"private"`
 }
 
 // Normalize replaces nil slices and maps with empty ones (recursively), so JSON never has `null` where the

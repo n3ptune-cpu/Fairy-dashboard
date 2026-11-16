@@ -789,7 +789,8 @@ type Run struct {
 	EndedAt    *time.Time `json:"ended_at,omitempty"`
 	By         string     `json:"by"`
 	BySub      string     `json:"by_sub,omitempty"`
-	ListHash   string     `json:"list_hash"` // names the confirmed list and options (dialog, audit log, run)
+	ByActor    string     `json:"by_actor,omitempty"` // the starter as the audit log names them, for the run's entries ("": By, a run of an older version); By is the user name: the page, the run's sentences, the machines
+	ListHash   string     `json:"list_hash"`          // names the confirmed list and options (dialog, audit log, run)
 	UpdateIfOn bool       `json:"update_if_on"`
 	Settings   Settings   `json:"settings"`
 	Latest     string     `json:"latest,omitempty"` // the newest agent release the panel knew at the start
@@ -885,6 +886,7 @@ type StartRequest struct {
 	UpdateOnly []string // machines that are on: update, never switch off
 	UpdateIfOn bool     // a machine of Hosts that turns out to be on is updated (and left on) instead of skipped
 	By, BySub  string
+	ByActor    string // the starter as the audit log names them ("": By)
 	Latest     string
 	// ID is the run's id when it was made before the start (16 lower-case hex characters): the tickets the
 	// passkey of the start signed name it. "": Start makes one.
@@ -1089,7 +1091,7 @@ func (m *Manager) Start(req StartRequest) (*Run, error) {
 		return nil, &StartError{Busy: true, Msg: fmt.Sprintf("a run started by %s at %s is still going: one run at a time. Wait for it, or cancel it.",
 			a.By, a.StartedAt.Format("15:04 UTC"))}
 	}
-	r := &Run{ID: id, State: RunRunning, StartedAt: now, By: req.By, BySub: req.BySub, UpdateIfOn: req.UpdateIfOn,
+	r := &Run{ID: id, State: RunRunning, StartedAt: now, By: req.By, BySub: req.BySub, ByActor: req.ByActor, UpdateIfOn: req.UpdateIfOn,
 		ListHash: ListHash(req.Hosts, req.UpdateOnly, req.UpdateIfOn), Settings: set, Latest: req.Latest, Hosts: hosts, startMono: m.mono(), Ticket: ticket}
 	m.pace.setLimit(set.PerAgentMin) // the run's own pacing; what was sent in the last minute still counts
 	for _, h := range hosts {

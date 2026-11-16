@@ -1,8 +1,10 @@
 // Package audit is the append-only audit log (JSON lines) shared by the server and the admin CLI, plus a reverse
 // reader for the UI.
 //
-// Entry: {ts, actor, sub, action, target, params, outcome, source, ip}. `source` is "ui" (browser session),
-// "token:<name>" (API token), "cli" (admin CLI, actor = local OS user) or "demo". Nothing edits entries.
+// Entry: {ts, actor, sub, username, action, target, params, outcome, source, ip}. `source` is "ui" (browser
+// session), "token:<name>" (API token), "cli" (admin CLI, actor = local OS user) or "demo". Nothing edits
+// entries. `username` is there when the account had a user name at that moment (entries of older versions
+// have none).
 //
 // Size limits: a line is at most MaxLine bytes (long fields are cut, oversized params replaced by a note), and
 // the file is rotated by size (audit.log -> audit.log.1 ... audit.log.<keep>, the oldest dropped) so a flood of
@@ -58,6 +60,7 @@ func cut(s string) string {
 // bounded caps the entry's fields so its JSON line stays under MaxLine.
 func bounded(e Entry) ([]byte, error) {
 	e.Actor, e.Action, e.Target, e.Outcome, e.Source = cut(e.Actor), cut(e.Action), cut(e.Target), cut(e.Outcome), cut(e.Source)
+	e.Username = cut(e.Username)
 	if e.Sub != nil {
 		s := cut(*e.Sub)
 		e.Sub = &s
@@ -111,6 +114,9 @@ type Entry struct {
 	Outcome string         `json:"outcome"`
 	Source  string         `json:"source"`
 	IP      *string        `json:"ip"`
+	// Username is the account's user name when the entry was written ("": it had none, or the entry is not
+	// about an account). The Audit page names the person by it; actor and sub stay what they were.
+	Username string `json:"username,omitempty"`
 }
 
 // Write appends one entry with a single write() on an O_APPEND file: lines from the CLI and server never
@@ -225,16 +231,27 @@ func str(v any) string {
 	return fmt.Sprint(v)
 }
 
-// Matches applies the UI/CLI filters: user (substring of actor/sub/source), action (exact, or prefix "x." or
-// "x_": "helper" finds helper_stop and helper_start),
+// Matches applies the UI/CLI filters: user (substring of actor/sub/username/source), action (exact, or prefix
+// "x." or "x_": "helper" finds helper_stop and helper_start),
 // host (exact target).
 func Matches(e map[string]any, user, action, host string) bool {
+	return matches(e, user, nil, action, host)
+}
+
+// matches is Matches with the subjects whose entries the user filter finds too: the accounts whose user name
+// of today holds the text (an entry of an older version has the address and the subject, and no user name).
+func matches(e map[string]any, user string, subs []string, action, host string) bool {
 	if user != "" {
 		u := strings.ToLower(user)
 		ok := false
-		for _, k := range []string{"actor", "sub", "source"} {
+		for _, k := range []string{"actor", "sub", "username", "source"} {
 			if strings.Contains(strings.ToLower(str(e[k])), u) {
 				ok = true
+			}
+		}
+		if sub := str(e["sub"]); !ok && sub != "" {
+			for _, x := range subs {
+				ok = ok || x == sub
 			}
 		}
 		if !ok {
@@ -253,6 +270,12 @@ func Matches(e map[string]any, user, action, host string) bool {
 // Read returns entries newest first and the cursor for the next page (nil at the end). Each entry gets
 // `id` = its byte offset.
 func Read(path, user, action, host string, before *int64, limit int) ([]map[string]any, *int64) {
+	return ReadWho(path, user, nil, action, host, before, limit)
+}
+
+// ReadWho is Read for the Audit page: with a user filter, the entries of the accounts subs are found as well
+// (the accounts whose user name of today holds the text).
+func ReadWho(path, user string, subs []string, action, host string, before *int64, limit int) ([]map[string]any, *int64) {
 	out := []map[string]any{}
 	var next *int64
 	_ = reverseLines(path, before, func(off int64, raw []byte) bool {
@@ -280,7 +303,7 @@ func Read(path, user, action, host string, before *int64, limit int) ([]map[stri
 		if _, ok := e["source"]; !ok {
 			e["source"] = "ui"
 		}
-		if Matches(e, user, action, host) {
+		if matches(e, user, subs, action, host) {
 			e["id"] = off
 			out = append(out, e)
 			if len(out) >= limit {

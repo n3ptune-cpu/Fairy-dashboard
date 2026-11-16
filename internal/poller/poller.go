@@ -100,6 +100,7 @@ type Poller struct {
 	limitMu       sync.Mutex
 	pveOverLimit  map[string]bool // clusters whose last answer listed more than the panel takes (logged once)
 	pending       map[string]pendingNote
+	shownBy       func(string) string  // how "requested by" is handed out (SetShownBy); nil: as it is
 	asleep        map[string]time.Time // system id -> when the panel's sleep takes effect (see NoteSleep)
 	clusterIDs    map[string][]string
 	fingerprints  map[string]uint64

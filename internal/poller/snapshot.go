@@ -19,6 +19,16 @@ type pendingNote struct {
 	pending *model.PowerPending
 }
 
+// SetShownBy gives the poller the panel's way to name a person: every snapshot made from then on has "requested
+// by" of a pending power action through it (the web layer's, which knows the accounts). Without one the text
+// is handed out as the agent said it.
+func (p *Poller) SetShownBy(fn func(stored string) string) {
+	p.mu.Lock()
+	p.shownBy = fn
+	p.snapVer, p.snapJSONVer = -1, -1
+	p.mu.Unlock()
+}
+
 // NotePending shows a just-scheduled shutdown immediately (until the agent's own report catches up).
 func (p *Poller) NotePending(id string, pending *model.PowerPending) {
 	p.mu.Lock()
@@ -297,6 +307,7 @@ func (p *Poller) buildSnapshot() []model.System {
 			systems[id] = s
 		}
 	}
+	shownBy := p.shownBy
 	p.mu.Unlock()
 	list := make([]model.System, 0, len(systems))
 	for _, s := range systems {
@@ -329,6 +340,15 @@ func (p *Poller) buildSnapshot() []model.System {
 		if s.Error != nil { // the boundary: no snapshot hands out a long or uncleaned error text (T-06)
 			if c := textsafe.ErrorText(*s.Error); c != *s.Error {
 				s.Error = &c
+			}
+		}
+		// ... and none names the person who asked for a countdown by anything but what the panel names a person
+		// by (SetShownBy). An agent repeats what it was told; an older panel told it the person's address.
+		if pp := s.PowerPending; pp != nil && pp.RequestedBy != nil && *pp.RequestedBy != "" && shownBy != nil {
+			if by := shownBy(*pp.RequestedBy); by != *pp.RequestedBy {
+				c := *pp // a copy: the agent's own answer is kept as it came
+				c.RequestedBy = &by
+				s.PowerPending = &c
 			}
 		}
 		list[i] = s
