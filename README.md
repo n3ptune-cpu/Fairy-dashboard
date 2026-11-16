@@ -1806,8 +1806,9 @@ list is full, the source with the most entries gives up its own, so a standing a
 and system ("Firefox on Windows"), the address, when it signed in and when it was last used. The line marked
 **This session** is the window you are looking at. **Sign out** ends one of the other sessions, **Sign out
 everywhere else** all of them; the browser that was signed out shows the sign-in page within a few seconds.
-Admins also see "Everyone's sessions" and can sign any of them out. Viewers have the page for their own
-sessions. A person who is waiting for access does not have it.
+Admins also see "Everyone's sessions" and can sign any of them out; each line there has the account's user
+name and its id. Viewers have the page for their own sessions. A person who is waiting for access does not
+have it.
 
 * Signing another session out asks "Confirm it's you" every time, also seconds after an earlier
   confirmation. So somebody who got hold of a copy of your session cookie cannot sign you out and stay in.
@@ -1825,6 +1826,41 @@ sessions. A person who is waiting for access does not have it.
   `fairy admin sessions list | revoke | revoke-all` on the panel host work as before. The list shows the
   sign-in and the last use the way this page does, and marks an entry whose session has ended by age or
   idleness as "ended" (the file keeps such an entry for up to 30 days; this page leaves it out).
+
+### How the panel names a person
+
+Wherever the panel says who did something, it says the **user name** of that person's account: the name the
+account has in Pocket ID (the claim `preferred_username`), not the e-mail address and not the name of the
+person. That is "Added ... by" on a machine's page, who started or cancelled a run, who asked for a
+countdown, who changed a name or a timing in Edit host, who put a machine id on record, the people on a
+machine's list of approvers, the Sessions page, the menu at the top right, every sentence in Notifications,
+what a machine is told about who asked (its agent shows that on the machine and writes it to its log), and
+the messages to ntfy or Discord.
+
+* **The address and the name are in two places only**, both for admins: the **Users** page and the **Audit**
+  log. There they are drawn as dots. A click (or Tab and Enter) on the dots shows that one value; a second
+  click hides it, and so does opening the page again or loading its list again. Until it is clicked the
+  value is not in the page at all, so copying the row copies dots, and nothing shows when you point at it.
+  Your own address is in your menu, the same way.
+* **The Audit log keeps everything it had**: an entry's `actor` is the address, as before, next to the
+  account id; new entries also have the user name. The page shows the user name first and the entry's own
+  text behind dots. The filter finds an entry by a user name, also an entry from before build 17, and by
+  the address it was written with (it finds it; it does not show it).
+* **Entries from before build 17** were stored with the address: who added a host, who changed a timing,
+  who started a run, a sentence in Notifications. Nothing is rewritten. Where such an entry is shown, the
+  panel looks the address up among its accounts and shows that account's user name. That needs exactly one
+  account with that address: when two accounts give the same address, or the account was removed, the place
+  says `(address hidden)`.
+* **An account without a user name** shows as `(address hidden)` (or `(name hidden)` when it has no
+  address), not as its address. The panel learns the user name at a sign-in. A session that was open during
+  the update has it in its cookie and hands it over with its first request, so in practice everybody who was
+  signed in is named at once. On the Users page such an account reads "no user name yet".
+* **A user name is what the account says**, like the name and the address: the owner of an account may be
+  able to change it in Pocket ID. Only the account id cannot be chosen, and nothing in the panel decides by a
+  user name: not who may sign in, not a role, not a site. An account that takes another account's user
+  name, address or name as its own user name is not shown by it.
+* `fairy admin users list`, `fairy admin sessions list` and `fairy admin audit tail` on the panel host
+  print the address, as before: they are the admin's own terminal.
 
 ### Custom logo
 
@@ -2103,6 +2139,19 @@ Build 17:
    6.13, and newer ones when the data folder is on a file system without fine-grained times): a host's
    name or site, the run timings, a session that was ended. The panel now reads what it wrote, and sees a
    file another process replaced.
+5. **People are shown by their user name**, not by their e-mail address or their name: "Added ... by",
+   who started a run, who asked for a countdown, the Sessions page, the menu, the notifications, and what
+   a machine and ntfy or Discord are told. Everybody who is signed in during the update is named by the
+   user name with their first request after it, everybody else after their next sign-in; until then their
+   entries read `(address hidden)`. Entries from before the update are shown with the user name too, as
+   long as the account is still on the Users page; none of them is rewritten. The address and the name are
+   still there for admins, as dots until they are clicked: on the **Users** page and in the **Audit** log
+   (whose entries keep the address, and whose filter still finds it), and your own address in your menu.
+   They are also still in the files of the data folder and in the output of `fairy admin` on the panel
+   host. An account whose Pocket ID user name is its e-mail address has no user name for the panel. See
+   [How the panel names a person](#how-the-panel-names-a-person). Going back to build 16 works: it reads
+   `users.json` as before and leaves the user names out when it next writes the file, and it shows a user
+   name wherever build 17 stored one.
 
 ### 3. From a build older than 13
 
@@ -2196,8 +2245,9 @@ settings (on or off, seconds, events) are the defaults again after the next upda
   more), all sessions of that account end on the panel at once (audit: `auth.login`, "denied: not in an
   allowed group", `sessions_revoked`). When the groups are not in the ID token the panel reads them from
   Pocket ID's userinfo; if that request fails, the sign-in fails with a page that says so and no session is
-  ended (nothing was said about the account). From userinfo the panel takes the groups, and a name or e-mail
-  address to show where the ID token has none; when a sign-in happened, whether an e-mail address is verified
+  ended (nothing was said about the account). From userinfo the panel takes the groups, and a user name, name
+  or e-mail address to show where the ID token has none (userinfo is asked only when the groups are not in
+  the ID token); when a sign-in happened, whether an e-mail address is verified
   and everything else come from the signed ID token alone, and a userinfo answer about another account
   refuses the sign-in. Between two sign-ins the panel does not ask Pocket ID.
 * No release has a way around that sign-in. The test build (`go build -tags fairytest`,
@@ -2241,7 +2291,10 @@ settings (on or off, seconds, events) are the defaults again after the next upda
   **pending** (first sign-in of anyone else) sees a "waiting for access" page and gets 403 from every data API.
   Filtering is server-side for every endpoint and the SSE stream (`internal/web/view.go`); hidden ids answer the
   same 404 as unknown ones; a viewer's summary counts, cluster totals and the Overview's all-hosts CPU / memory totals (`totals` in `/api/summary`) only add up what they can see.
-* An account is its OIDC subject; the e-mail address is only what the account says about itself. The Users page
+* An account is its OIDC subject; the user name, the e-mail address and the name are only what the account
+  says about itself. The panel names a person by the user name and shows the address and the name to admins
+  only, on the Users page and in the audit log ([How the panel names a person](#how-the-panel-names-a-person));
+  nothing is decided by the user name. The Users page
   and `fairy admin users list` mark an address "unverified" unless Pocket ID sent `email_verified: true` at that
   person's last sign-in (Pocket ID sends `false` until an administrator there marks the address as verified, the
   person confirms it by e-mail, or Pocket ID is set to treat every address as verified). An unverified address
@@ -2334,7 +2387,8 @@ settings (on or off, seconds, events) are the defaults again after the next upda
   (or no longer) in `users.json` has no access. Only `--owner system` tokens keep their own scope.
 * Writes: admin role (or control-scope token), CSRF header `X-Requested-With: fairy` + Origin /
   Sec-Fetch-Site checks for browsers, kill switch, per-host power flags, rate limits, typed confirmation for
-  destructive power actions, append-only JSON-lines audit log (+ Audit page), optional ntfy/Discord notification.
+  destructive power actions, append-only JSON-lines audit log (+ Audit page), optional ntfy/Discord notification
+  (it names people by their user names, never by an address).
   One write passes the kill switch and the per-host power flag: the cancel of a pending shutdown, reboot or
   sleep countdown (it only stops an action; everything else in this list applies to it). Past the kill switch
   it goes for a signed-in admin only: an API token's cancel is refused while the kill switch is on (423), like
