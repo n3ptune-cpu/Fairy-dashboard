@@ -217,8 +217,8 @@ let html = pageUsers();
 for (const p of hidden) if (html.includes(p)) fail("the Users page holds " + p + " before a click");
 const rows = html.split('<tr class="row" data-key="u-').slice(1, 8).map((r) => r.split("</td>")[0]);
 const want = ["Juniper you same user name as id 9a1b2c3d-wanda name •••••• e-mail •••••• id sub-n", "PineTop name •••••• e-mail •••••• unverified id sub-s",
-  "no user name yet name •••••• e-mail •••••• id sub-o", "user name not shown name •••••• e-mail •••••• id sub-x", "no user name yet id sub-z",
-  "juniper · id 9a1b2c same user name as id sub-n name •••••• e-mail •••••• id 9a1b2c3d-wanda", "user name not shown e-mail •••••• id sub-y"];
+  "no user name yet name •••••• e-mail •••••• id sub-o", "user name hidden name •••••• e-mail •••••• id sub-x", "no user name yet id sub-z",
+  "juniper · id 9a1b2c same user name as id sub-n name •••••• e-mail •••••• id 9a1b2c3d-wanda", "user name hidden e-mail •••••• id sub-y"];
 rows.forEach((r, i) => { if (words(r.slice(r.indexOf(">") + 1)) !== want[i]) fail("row " + (i + 1) + ": " + words(r.slice(r.indexOf(">") + 1))); });
 if (!rows[0].includes('<b>Juniper</b>') || !rows[2].includes('<b class="muted" title="The panel has no user name for this account yet')) fail("the name of a row: " + rows[0] + rows[2]);
 // a row never says "no user name yet" (and "it gets it at the next sign-in") for an account that has one: it says

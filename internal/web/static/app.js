@@ -3264,7 +3264,7 @@ const USERNAME_NOT_SHOWN = table({
   is_account_id: "This account's user name is another account's id, so the panel does not show it.",
   same_username: "Other accounts have this user name, and the panel could not give this one a form of its own." });
 const userHeading = (u) => userNamed(u) ? `<b>${esc(u.shown_as)}</b>`
-  : u.username ? `<b class="muted" title="${esc(USERNAME_NOT_SHOWN[u.username_note] || NO_USERNAME)}">user name not shown</b>`
+  : u.username ? `<b class="muted" title="${esc(USERNAME_NOT_SHOWN[u.username_note] || NO_USERNAME)}">user name hidden</b>`
     : `<b class="muted" title="${esc(NO_USERNAME)}">no user name yet</b>`;
 const SAME_USERNAME = "More than one account has this user name. One of them is shown by the plain name everywhere: an account with a role before one that waits for access, then the one that has had the name longest. Every other one is shown with the start of its account id behind the name. A user name is what an account says about itself: go by the id.";
 const sameUsername = (u) => (u.same_username || []).length
