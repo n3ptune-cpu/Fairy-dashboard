@@ -31,8 +31,9 @@ import (
 // names: an account whose display name or address is somebody's user name takes nothing away from that
 // account. Two user names are the same when their folded forms are (fold: letters without their case, no
 // format characters such as a zero width space). Of the accounts that have one user name, one is shown by it:
-// an account with a role before an account that only waits for access, and among equals the one that has had
-// the user name longest (User.UsernameSince; the account's creation for a user name from before that field).
+// an admin before a viewer, a viewer before an account that only waits for access, and among equals the one
+// that has had the user name longest (User.UsernameSince; the account's creation for a user name from before
+// that field), then the smaller account id.
 // Every other one is shown by the user name with a short form of its account id behind it ("Juniper · id
 // 3f6c1d"), everywhere, never by the plain name: so an account without any access cannot take an admin's name
 // away or pass for the admin, and nobody is left without a name.
@@ -135,18 +136,34 @@ func (u User) usernameSince() time.Time {
 	return u.CreatedAt
 }
 
-// firstOf reports whether a comes before b among the accounts that have one user name: an account with a role
-// before one that only waits, then the one that has had the user name longer, then by subject (so that the
-// answer is the same every time).
+// firstOf reports whether a comes before b among the accounts that have one user name: an admin before a
+// viewer, a viewer before an account that only waits (rank); then the one that has had the user name longer;
+// then by subject (so that the answer is the same every time).
+//
+// The time alone does not decide between an admin and a viewer. It is the sign-in that brought the user name,
+// and at the first start of this build, and after build 16 wrote users.json (it drops the user name and the
+// time), that is whose browser asks first: a viewer who had set the admin's user name at the provider was the
+// plain "Juniper" from then on, and the admin "Juniper · id 3f6c1d".
 func firstOf(a, b User) bool {
-	ra, rb := a.Role == RoleAdmin || a.Role == RoleViewer, b.Role == RoleAdmin || b.Role == RoleViewer
-	if ra != rb {
-		return ra
+	if ra, rb := rank(a), rank(b); ra != rb {
+		return ra < rb
 	}
 	if ta, tb := a.usernameSince(), b.usernameSince(); !ta.Equal(tb) {
 		return ta.Before(tb)
 	}
 	return a.Sub < b.Sub
+}
+
+// rank orders the accounts that want one user name by what they may do: an admin, a viewer, any other account
+// (one that waits for access).
+func rank(u User) int {
+	switch u.Role {
+	case RoleAdmin:
+		return 0
+	case RoleViewer:
+		return 1
+	}
+	return 2
 }
 
 // People indexes the accounts.

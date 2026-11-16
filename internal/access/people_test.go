@@ -218,7 +218,7 @@ func at(day int) *time.Time {
 }
 
 // Two accounts with one user name: the same text in its folded form (other letters, a zero width space). One
-// of them is shown by the plain name: an account with a role before one that only waits, whatever the times;
+// of them is shown by the plain name: an admin before a viewer before one that only waits, whatever the times;
 // among equals the one that has had the user name longest (the stored time; the account's creation for a user
 // name from before that time was kept); then by subject. Every other one is shown by the name with a short
 // form of its id, never by the plain name and never by nothing.
@@ -236,10 +236,10 @@ func TestTwoAccountsWithOneUsername(t *testing.T) {
 			User{Username: "JUNIPER", Email: "w@example.org", Role: RolePending, CreatedAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}, "3f6c1d00-admin"},
 		{"a viewer that took the name later", withSince(admin, at(3)),
 			User{Username: "Juniper", Email: "v@example.org", Role: RoleViewer, CreatedAt: *at(1), UsernameSince: at(4)}, "3f6c1d00-admin"},
-		{"a viewer that had the name first", withSince(admin, at(5)),
-			User{Username: "Juniper", Email: "v@example.org", Role: RoleViewer, CreatedAt: *at(9), UsernameSince: at(4)}, "9a1b2c00-other"},
-		{"a viewer without sites counts as an account with a role", withSince(admin, at(5)),
-			User{Username: "Juniper", Email: "v@example.org", Role: RoleViewer, Sites: []string{}, CreatedAt: *at(1), UsernameSince: at(4)}, "9a1b2c00-other"},
+		{"a viewer that had the name first: the admin all the same (TestAnAdminComesBeforeAViewerAndAViewerBeforeOneThatWaits)", withSince(admin, at(5)),
+			User{Username: "Juniper", Email: "v@example.org", Role: RoleViewer, CreatedAt: *at(9), UsernameSince: at(4)}, "3f6c1d00-admin"},
+		{"a viewer without sites is a viewer", withSince(admin, at(5)),
+			User{Username: "Juniper", Email: "v@example.org", Role: RoleViewer, Sites: []string{}, CreatedAt: *at(1), UsernameSince: at(4)}, "3f6c1d00-admin"},
 		{"a user name from before the time was kept counts from the account's creation", withSince(admin, at(5)),
 			User{Username: "Juniper", Email: "v@example.org", Role: RoleAdmin, CreatedAt: *at(4)}, "9a1b2c00-other"},
 		{"... and loses against a stored time before it", withSince(admin, at(3)),
