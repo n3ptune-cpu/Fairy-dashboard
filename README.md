@@ -1851,9 +1851,11 @@ From build 13. Nothing has to be converted, no file has to be deleted, and the u
 refuses the file of step 1 and knows the keys of step 2, and build 15 has no new key and refuses no file
 that build 14 started with. From build 15: the same. Build 16 has no new key in config.yaml and refuses no
 config.yaml that build 15 started with; what is new is the list "Build 16:" in section 2. Build 17 refuses
-no config.yaml that build 16 started with. It has two new keys, both optional, in an agent's entry:
-`socket_links` and `home_assistant_system`
-([Switching a plug's sockets](#switching-a-plugs-sockets)). Build 16 refuses a config.yaml that has either
+no config.yaml that build 16 started with. It has two new keys in an agent's entry: `socket_links` and
+`home_assistant_system` ([Switching a plug's sockets](#switching-a-plugs-sockets)). The file loads without
+them, but without `home_assistant_system` the panel switches no socket of that agent, and a socket of a
+powerbar without a `socket_links` line counts as linked to nothing, so "off" for it asks first. Build 16
+refuses a config.yaml that has either
 ("field socket_links not found"), so write them only after the update; and a line of theirs that can never
 work is refused by build 17 when it starts, so run `sudo fairy admin config check` before
 `systemctl restart fairy`.)
@@ -2052,6 +2054,11 @@ Build 17:
    with Add host cannot be switched from the panel yet.
 3. **The audit log has `plug.switch`** for every attempt to switch a socket, also the refused ones; the
    Audit page's filter has **Plugs**.
+4. **A change saved right after another change of the same file is seen.** It could stay unseen by the
+   panel until the next change or a restart, on machines whose file times move in steps (Linux before
+   6.13, and newer ones when the data folder is on a file system without fine-grained times): a host's
+   name or site, the run timings, a session that was ended. The panel now reads what it wrote, and sees a
+   file another process replaced.
 
 ### 3. From a build older than 13
 
