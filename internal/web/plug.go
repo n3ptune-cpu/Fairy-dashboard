@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -306,9 +307,15 @@ func (k socketLook) whyText(why, machine string) string {
 	return socketWhyText(why, machine)
 }
 
-// socketIdleWatts: a fresh reading of a socket's own meter under this is a sign that nothing on the socket
-// runs (what a machine that is off still draws); at or over it, that something does.
+// socketIdleWatts: a fresh reading of a socket's own meter from 0 W to under this is a sign that nothing on the
+// socket runs (what a machine that is off still draws); at or over it, that something does.
 const socketIdleWatts = 5.0
+
+// meterSaysOff reports whether a reading of a socket's own meter is a sign that the machine is off: a number
+// from 0 W to under socketIdleWatts. A reading below zero is not one: a clamp that was put on backwards, and a
+// meter that also counts what is fed in, read below zero for a load that runs. Neither is a value that is no
+// number.
+func meterSaysOff(watts float64) bool { return watts >= 0 && watts < socketIdleWatts }
 
 // running says whether the machine a socket is linked to counts as running, and how the page names it: every
 // state but "off" (runningState). A link to an id that no row has counts, under the id as its name (the route
@@ -338,10 +345,13 @@ func (k socketLook) running() (name string, yes bool) {
 //   - Proxmox says the guest is stopped;
 //   - the machine was seen to go off after a shutdown the panel asked for (Poller.MarkOff: a run of "Update
 //     unpowered hosts" saw its countdown and then nothing at all), and has given no sign of life since;
-//   - the socket has a meter of its own, and a fresh reading of it is under socketIdleWatts (ownWatts).
+//   - the socket has a meter of its own, and a fresh reading of it is from 0 W to under socketIdleWatts
+//     (ownWatts, meterSaysOff).
 //
 // The socket's own meter also says the opposite: a fresh reading at or over socketIdleWatts means something on
-// the socket still draws power, whatever else is known. Everything else is "unknown".
+// the socket still draws power, whatever else is known. And a fresh reading that is below zero, or no number,
+// is no sign of anything: with it the machine is not taken for off, whatever else is known. Everything else is
+// "unknown".
 func (k socketLook) runningState() string {
 	switch {
 	case k.link == "":
@@ -354,7 +364,7 @@ func (k socketLook) runningState() string {
 		return "running"
 	}
 	switch w, ok := k.ownWatts(); {
-	case ok && w >= socketIdleWatts:
+	case ok && !meterSaysOff(w):
 		return "unknown"
 	case ok, k.row.Status == "stopped", k.knownOff:
 		return ""
@@ -393,6 +403,8 @@ func (l *plugLooks) runningWords(k socketLook) string {
 		}
 		if w, ok := k.ownWatts(); ok && w >= socketIdleWatts {
 			return fmt.Sprintf("%s %s, and its plug still measures %.0f W: it may still be running. Shut it down first, or look at it.", name, how, w)
+		} else if ok && !meterSaysOff(w) {
+			return fmt.Sprintf("%s %s, and its plug reads %s W, which is no sign that it is off: it may still be running. Shut it down first, or look at it.", name, how, strconv.FormatFloat(w, 'f', -1, 64))
 		}
 		return name + " " + how + ", which does not say that it is off: it may still be running. Shut it down first, or look at it."
 	case k.row.Kind == "node":

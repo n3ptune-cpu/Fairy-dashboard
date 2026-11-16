@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -459,6 +460,17 @@ func TestPlugRunningRule(t *testing.T) {
 		{"offline, its own plug reads 2 W", "offline", false, "", false, meter(1, w(2), 5*time.Second, "ok"), ""},
 		{"offline, its own plug reads 4.9 W", "offline", false, "", false, meter(1, w(4.9), 5*time.Second, "ok"), ""},
 		{"offline, its own plug reads 5 W", "offline", false, "", false, meter(1, w(5), 5*time.Second, "ok"), "unknown"},
+		// only a reading from 0 W to under 5 W is a sign of "off": a meter that reads below zero (a clamp put on
+		// backwards, a meter that also counts what is fed in) reads so for a load that runs, and a value that is
+		// no number says nothing. Such a reading is no sign either way, also next to another sign.
+		{"offline, its own plug reads 0 W", "offline", false, "", false, meter(1, w(0), 5*time.Second, "ok"), ""},
+		{"offline, its own plug reads -0.5 W", "offline", false, "", false, meter(1, w(-0.5), 5*time.Second, "ok"), "unknown"},
+		{"offline, its own plug reads -30 W", "offline", false, "", false, meter(1, w(-30), 5*time.Second, "ok"), "unknown"},
+		{"offline, its own plug reads no number", "offline", false, "", false, meter(1, w(math.NaN()), 5*time.Second, "ok"), "unknown"},
+		{"offline, its own plug reads +Inf", "offline", false, "", false, meter(1, w(math.Inf(1)), 5*time.Second, "ok"), "unknown"},
+		{"offline, its own plug reads -Inf", "offline", false, "", false, meter(1, w(math.Inf(-1)), 5*time.Second, "ok"), "unknown"},
+		{"seen to go off, and its own plug reads -30 W", "offline", false, "", true, meter(1, w(-30), 5*time.Second, "ok"), "unknown"},
+		{"seen to go off, an old reading of -30 W", "offline", false, "", true, meter(1, w(-30), 5*time.Minute, "ok"), ""},
 		{"seen to go off, and its own plug reads 40 W", "offline", false, "", true, meter(1, w(40), 5*time.Second, "ok"), "unknown"},
 		{"stopped, and its own plug reads 40 W", "stopped", false, "", false, meter(1, w(40), 5*time.Second, "ok"), "unknown"},
 		{"online, its own plug reads 0 W", "online", false, "", false, meter(1, w(0), 5*time.Second, "ok"), "running"},
@@ -501,8 +513,9 @@ func TestPlugRunningRule(t *testing.T) {
 	// the sentence for "not known to be off" says what the panel has
 	off := &model.System{ID: "desk-pc", Name: "DESK-PC", Kind: "agent", Status: "offline"}
 	for want, k := range map[string]socketLook{
-		"DESK-PC does not answer, which does not say that it is off: it may still be running. Shut it down first, or look at it.": {src: none, link: "desk-pc", shown: "desk-pc", row: off, at: now, fresh: time.Minute},
-		"DESK-PC does not answer, and its plug still measures 40 W: it may still be running. Shut it down first, or look at it.":  {src: meter(1, w(40), time.Second, "ok"), link: "desk-pc", shown: "desk-pc", row: off, knownOff: true, at: now, fresh: time.Minute},
+		"DESK-PC does not answer, which does not say that it is off: it may still be running. Shut it down first, or look at it.":                         {src: none, link: "desk-pc", shown: "desk-pc", row: off, at: now, fresh: time.Minute},
+		"DESK-PC does not answer, and its plug still measures 40 W: it may still be running. Shut it down first, or look at it.":                          {src: meter(1, w(40), time.Second, "ok"), link: "desk-pc", shown: "desk-pc", row: off, knownOff: true, at: now, fresh: time.Minute},
+		"DESK-PC does not answer, and its plug reads -30 W, which is no sign that it is off: it may still be running. Shut it down first, or look at it.": {src: meter(1, w(-30), time.Second, "ok"), link: "desk-pc", shown: "desk-pc", row: off, at: now, fresh: time.Minute},
 	} {
 		if got := (&plugLooks{}).runningWords(k); got != want {
 			t.Errorf("%q\nwant %q", got, want)

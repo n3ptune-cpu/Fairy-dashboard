@@ -333,8 +333,10 @@ switched: look at the socket.
   it lasts: a link that dropped, an agent that was stopped and a machine that hangs all look the same from
   the panel. It counts as off only with a sign of it: Proxmox says the guest is stopped, a run of
   [Update unpowered hosts](#update-unpowered-hosts) saw the machine go off, or the socket has a meter of
-  its own (the only socket of a plug) and a fresh reading of it is under 5 W. The same meter at 5 W or
-  more says that something on the socket still draws power, whatever else is known. (A machine that went
+  its own (the only socket of a plug) and a fresh reading of it is from 0 W to under 5 W. The same meter
+  at 5 W or more says that something on the socket still draws power, whatever else is known; and a
+  reading below zero is no sign of anything (a meter that is put on backwards reads so for a machine that
+  runs), so with it the machine is not taken for off either. (A machine that went
   to sleep by itself draws as little as one that is off: the meter cannot tell the two apart.) The page
   shows a dialog, "PC-B is still running" ("is asleep, not off", or "may still be running" where the panel
   has no sign either way), with the plug and the socket above the title. **Cancel** has
