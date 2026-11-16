@@ -10,7 +10,6 @@ import (
 	"github.com/n3ptune-cpu/Fairy-agent/pkg/agent/api"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
-	"github.com/n3ptune-cpu/Fairy-dashboard/internal/powerctl"
 )
 
 // The sockets of a plug, the panel's part (PLUGS-DESIGN.md, stage 1a, sections 4.2, 4.5 and 4.6).
@@ -81,6 +80,7 @@ type plugLooks struct {
 	now   time.Time // the time of these looks, by the clock a relayed reading is stamped with (power.Manager: time.Now)
 	agent map[string]plugRows
 	names map[string]string // the names of the agents' machines
+	panel map[string]bool   // panelRows, worked out once
 }
 
 // plugRows are the ids of the rows that are an agent's own machine (or the machine it runs on), and of the
@@ -112,6 +112,11 @@ func (l *plugLooks) machineName(agentID string) string {
 // other id (a Proxmox node and its agent are one machine with two ids), the id of the row it is shown as, and,
 // for a guest (a VM or a container), its node with that node's ids: what feeds the node feeds the guest.
 // known reports whether any of them is a row right now.
+//
+// It is one side of a lock (the reader's, Home Assistant's, the panel's), and goes down to the machine as the
+// other side, the link of a socket, does (socketFeeds): over an agent that runs in a guest, and over one whose
+// entry names another agent that does. The steps before that one are for what has no row right now: the id an
+// agent's entry names, and the node a guest's row names, count as they are written.
 func (l *plugLooks) machine(id string) (ids map[string]bool, known bool) {
 	p := l.s.Poller
 	ids = map[string]bool{}
@@ -136,6 +141,13 @@ func (l *plugLooks) machine(id string) (ids map[string]bool, known bool) {
 			}
 		}
 	}
+	m, over := socketFeeds(p.ShownID(id), func(x string) *model.System { return l.rows[x] }, l.runsOn)
+	for _, r := range over {
+		add(r.ID)
+	}
+	if m != nil {
+		add(m.ID)
+	}
 	return ids, known
 }
 
@@ -150,6 +162,29 @@ func (l *plugLooks) of(a config.Agent) plugRows {
 	}
 	l.agent[a.ID] = r
 	return r
+}
+
+// panelRows are the ids under which the machine this panel runs on can be linked: every id of panel_hosts as it
+// is written (an id there needs no row), and what the reader's side and Home Assistant's have for theirs
+// (machine): the row it is shown as, its other id, and the node under it when it is a guest or an agent that
+// runs on no machine of its own. So panel_hosts that names an agent in a guest, or a second agent of a node,
+// makes the socket of that node the panel's, and with it the socket of every guest of the node, as the id of
+// the guest itself always did (third review, finding 3).
+//
+// For the lock of a socket only. The power menu and "Update unpowered hosts" ask powerctl.KillsPanel, which
+// goes by the ids as they are written and by the guests of a node, as before.
+func (l *plugLooks) panelRows() map[string]bool {
+	if l.panel != nil {
+		return l.panel
+	}
+	l.panel = map[string]bool{}
+	for _, h := range l.s.Cfg.PanelHosts {
+		ids, _ := l.machine(h) // with h itself, row or not
+		for id := range ids {
+			l.panel[id] = true
+		}
+	}
+	return l.panel
 }
 
 // plugChainMax is the most rows a link is followed over before the machine under it. A real link goes over two
@@ -279,7 +314,9 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 //  3. home_assistant_system is set and no row has that id right now (a typing mistake, or the panel has not
 //     heard of the row yet): the panel cannot tell which machine that is, so it switches no socket of this
 //     agent, as without the key (look has the same lock for a socket that is linked to nothing).
-//  4. It feeds the machine this panel runs on (panel_hosts, the rule of the power menu).
+//  4. It feeds the machine this panel runs on (panel_hosts): the row that is named there, and the node under
+//     it when that is a guest or an agent that runs on no machine of its own (panelRows). That is the power
+//     menu's rule (powerctl.KillsPanel: the row itself, and a node with a guest that is named) and more.
 //
 // And one lock that is the agent's whole (look): while its entry has no home_assistant_system, or one that
 // names no row, no socket of it is switched, linked or not, because 2 cannot be told for any of them.
@@ -287,7 +324,7 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 //  5. Its link names no row the panel has right now (a typing mistake in socket_links, or a row the panel has
 //     not heard of yet). Which machine hangs on it is then not known: it could be any of the three above, and
 //     whether it runs cannot be asked. So it is locked like 3, until the link names a row. (It comes after the
-//     list of panel_hosts, which names ids and needs no row.) A link the panel cannot follow to the machine
+//     ids of panel_hosts, which need no row.) A link the panel cannot follow to the machine
 //     under it is such a link: a guest whose node has no row, an agent in a guest whose guest or node has
 //     none, links that lead back to themselves.
 //
@@ -298,6 +335,10 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 // locked: it feeds that node. The ids of the link itself are asked first, so that the sentence names the
 // nearer reason (a link to Home Assistant's own VM says "powers Home Assistant", though its node may carry
 // the reader too).
+//
+// The other side of each comparison (the reader's, Home Assistant's, the panel's: machine) holds every id of
+// its machine, the node's and its agent's. So the linked side needs the row at the end under the one id it is
+// shown as, and no list of ids as they are written is asked.
 func (l *plugLooks) lock(k socketLook) string {
 	rows := l.of(k.agent)
 	near := []string{k.link}
@@ -307,9 +348,8 @@ func (l *plugLooks) lock(k socketLook) string {
 	} else {
 		near = append(near, k.shown)
 	}
-	linked := append([]string{k.shown}, near...) // with the rows on the way to the node, the node, and its other id
+	linked := append([]string{k.shown}, near...) // with the rows on the way to the node, and the node
 	linked = append(linked, k.over...)
-	linked = append(linked, l.s.Poller.SameMachine(k.shown)...)
 	hits := func(ids []string, set map[string]bool) bool {
 		return slices.ContainsFunc(ids, func(id string) bool { return id != "" && set[id] })
 	}
@@ -324,12 +364,10 @@ func (l *plugLooks) lock(k socketLook) string {
 		return model.SocketLockHomeAssistant
 	case rows.ha != nil && !rows.haKnown:
 		return model.SocketLockHAUnknown
-	case slices.ContainsFunc(linked, func(id string) bool { return id != "" && slices.Contains(l.s.Cfg.PanelHosts, id) }):
+	case hits(linked, l.panelRows()):
 		return model.SocketLockPanel
 	case k.row == nil:
 		return model.SocketLockLinkUnknown
-	case powerctl.KillsPanel(l.s.Poller, *k.row):
-		return model.SocketLockPanel
 	}
 	return ""
 }

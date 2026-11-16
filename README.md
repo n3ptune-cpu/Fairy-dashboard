@@ -339,7 +339,12 @@ switched: look at the socket.
   panel runs on. A socket that is linked to a guest feeds that guest's node, so it is locked when the node
   is one of the three, or carries one of them: a socket linked to any VM of the node that also carries
   Home Assistant's VM is locked. A link to an agent that runs in a guest, or beside the node's own agent,
-  is followed to the node in the same way. When `home_assistant_system` names an id that is no row, no socket of
+  is followed to the node in the same way, and so is each of the three: `panel_hosts` (like
+  `home_assistant_system`) can name the machine, the guest, or an agent that runs in the guest, and the
+  socket of the node under it is locked in each case. (The power menu's warning "The panel itself runs
+  here" and the list of [Update unpowered hosts](#update-unpowered-hosts) take `panel_hosts` as before:
+  the row that is named, and the node of a guest that is named. Name the guest or the node there, not
+  only an agent in the guest.) When `home_assistant_system` names an id that is no row, no socket of
   that agent is switched, linked to a machine or not, until the id is put right, as without the key (the
   lock's sentence names the id); and a socket whose own link names no row is
   locked the same way ("linked to a machine the panel does not have: correct socket_links");

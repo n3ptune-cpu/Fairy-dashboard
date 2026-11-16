@@ -29,6 +29,9 @@ import (
 //	               With it the configuration does not say whose the node is (two agents name it), and the
 //	               node has no "other id"; lone leaves it out, and the node's other id is pve2agent
 //	lostagent      an agent in lost-vm (links_to: lab-qemu-301)
+//	viaagent       an agent whose entry names another agent, vmagent (links_to: vmagent): two rows on the way
+//	               to the node
+//	via2agent      the same over lostagent (links_to: lostagent): the way ends at a guest without its node
 type plugNodeRig struct {
 	link       string // what other's rack-bar/node is linked to
 	ha         string // other's home_assistant_system ("": desk-pc, a machine with nothing to do with PVE2)
@@ -43,7 +46,7 @@ const plugOtherEntry = "  - {id: other, name: OTHER, url: \"http://other\", toke
 
 func (c plugNodeRig) env(t *testing.T) *plugEnv {
 	t.Helper()
-	agents := []string{"pve2agent", "vmagent", "ctagent", "vm2agent", "sideagent", "lostagent"}
+	agents := []string{"pve2agent", "vmagent", "ctagent", "vm2agent", "sideagent", "lostagent", "viaagent", "via2agent"}
 	for i := range agents { // before one is left out: the entries name the tokens by their place in this list
 		t.Setenv(fmt.Sprintf("TOK_N%d", i), testutil.ReadToken+string(rune('n'+i)))
 	}
@@ -62,7 +65,9 @@ func (c plugNodeRig) env(t *testing.T) *plugEnv {
 		"  - {id: ctagent, name: CTAGENT, url: \"http://ctagent\", token_env: TOK_N2, links_to: lab-lxc-203}\n"+
 		"  - {id: vm2agent, name: VM2AGENT, url: \"http://vm2agent\", token_env: TOK_N3, links_to: lab-qemu-202}\n"+
 		"  - {id: sideagent, name: SIDEAGENT, url: \"http://sideagent\", token_env: TOK_N4, links_to: lab-node-pve2}\n"+
-		"  - {id: lostagent, name: LOSTAGENT, url: \"http://lostagent\", token_env: TOK_N5, links_to: lab-qemu-301}\n", 1)
+		"  - {id: lostagent, name: LOSTAGENT, url: \"http://lostagent\", token_env: TOK_N5, links_to: lab-qemu-301}\n"+
+		"  - {id: viaagent, name: VIAAGENT, url: \"http://viaagent\", token_env: TOK_N6, links_to: vmagent}\n"+
+		"  - {id: via2agent, name: VIA2AGENT, url: \"http://via2agent\", token_env: TOK_N7, links_to: lostagent}\n", 1)
 	if c.lone {
 		const side = "  - {id: sideagent, name: SIDEAGENT, url: \"http://sideagent\", token_env: TOK_N4, links_to: lab-node-pve2}\n"
 		if strings.Count(yaml, side) != 1 {
@@ -489,9 +494,113 @@ func TestPlugGuestBesideHomeAssistantsVMOnANodeWithoutTheReader(t *testing.T) {
 // M06: the node's other id is on the linked side. A node with an agent is one machine with two ids, the node's
 // and the agent's, and panel_hosts can name either. With the agent's id there, the socket of the node is the
 // panel's: linked to the node, to a guest of it, to an agent in such a guest, or to the agent's id itself.
+// (Since finding 3 it is the panel's side that holds both ids, panelRows, and the line of the linked side that
+// M06 took out is gone. What this test asks is the same.)
 func TestPlugPanelHostsThatNamesTheNodesOwnAgent(t *testing.T) {
 	for _, link := range []string{"lab-node-pve2", "lab-qemu-201", "lab-lxc-203", "vmagent", "pve2agent"} {
 		pe := plugNodeRig{link: link, panelHosts: "pve2agent", lone: true}.env(t)
 		plugNodeLocked(t, pe, "linked to "+link+", panel_hosts names the node's agent", model.SocketLockPanel, plugSaidPanel)
+	}
+}
+
+// Finding 3 of the third review (old): the panel's own lock went by the ids in panel_hosts as they are written,
+// and by the guests of a node that are named there. An agent that runs in a guest is no guest: with its id in
+// panel_hosts the socket of the node under it had no lock, and a cut with the node's name typed went to the
+// passkey. The reader's side and Home Assistant's were widened to the machine under an agent; the panel's is
+// now too, by the same rule as a link (socketFeeds).
+//
+// With the two arrangements that finding 1 left for here: the panel in the node's own agent while a second
+// agent names the node (so that the node has no "other id"), and the panel in an agent in another guest.
+func TestPlugPanelHostsThatNamesAnAgent(t *testing.T) {
+	for _, c := range []struct{ panel, what string }{
+		{"vm2agent", "an agent in a VM of the node"},
+		{"ctagent", "an agent in a container of the node"},
+		{"pve2agent", "the node's own agent, where a second agent names the node too"},
+		{"sideagent", "a second agent of the node"},
+		{"viaagent", "an agent whose entry names an agent in a VM of the node"},
+	} {
+		for _, link := range []string{"lab-node-pve2", "lab-qemu-201", "lab-qemu-202", "lab-lxc-203", "vmagent", "ctagent", "vm2agent", "sideagent", "pve2agent", "viaagent"} {
+			pe := plugNodeRig{link: link, panelHosts: c.panel}.env(t)
+			plugNodeLocked(t, pe, "panel_hosts names "+c.what+", linked to "+link, model.SocketLockPanel, plugSaidPanel)
+		}
+	}
+	// The panel in an agent in a guest whose node the panel does not have. The socket of that guest is the
+	// panel's, said before "the link cannot be followed"; the node PVE2 is not that node, and its socket only
+	// asks the question every "off" for a running machine asks.
+	pe := plugNodeRig{link: "lab-qemu-301", panelHosts: "lostagent"}.env(t)
+	if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["switchable"] != false || s["lock"] != model.SocketLockPanel || s["note"] != plugSaidPanel {
+		t.Errorf("the panel in an agent in a guest without its node, linked to that guest: %v", s)
+	}
+	for _, to := range []string{"off", "on"} {
+		r := pe.flip("other/rack-bar", "node", to)
+		if msg, _ := plugDetailOf(r); r.code != 409 || msg != plugSaidPanel+" Nothing was switched." {
+			t.Errorf("the panel in an agent in a guest without its node, %s: %d %s", to, r.code, r.raw)
+		}
+	}
+	pe = plugNodeRig{link: "lab-node-pve2", panelHosts: "lostagent"}.env(t)
+	if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["switchable"] != true || s["lock"] != nil || s["system_id"] != "lab-node-pve2" {
+		t.Errorf("the panel in an agent in a guest of another node, the socket of PVE2: %v", s)
+	}
+	if r := pe.flip("other/rack-bar", "node", "off"); r.code != 409 || r.body["detail"].(map[string]any)["code"] != codeMachineRunning {
+		t.Errorf("the panel in an agent in a guest of another node, off for PVE2: %d %s", r.code, r.raw)
+	}
+	// and a machine that has nothing to do with the panel's node keeps its socket: PVE, with the panel on PVE2
+	for _, panel := range []string{"vm2agent", "ctagent", "pve2agent", "sideagent", "viaagent"} {
+		pe := plugNodeRig{link: "lab-node-pve", panelHosts: panel}.env(t)
+		if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["switchable"] != true || s["lock"] != nil || s["system_id"] != "lab-node-pve" {
+			t.Errorf("panel_hosts names %s, the socket of the other node: %v", panel, s)
+		}
+	}
+}
+
+// Every side of a lock goes down to the machine in the same way. The reader's side and Home Assistant's took one
+// step from an agent (to what its entry names) and one from a guest (to its node); the link of a socket is
+// followed as far as it goes since finding 1. An entry that names another agent, which runs in a guest, is two
+// steps: the sides take them too now (machine), so that such a reader, such a Home Assistant and such a panel
+// lock the socket of the node, and a socket that is linked to such an agent is the node's.
+func TestPlugEverySideOfALockGoesDownToTheMachine(t *testing.T) {
+	plugNodeAsks(t, plugNodeRig{link: "viaagent"}.env(t), "linked to an agent whose entry names an agent in a VM", "VIAAGENT", "which runs on", 3)
+	for _, c := range []struct {
+		name       string
+		rig        plugNodeRig
+		lock, said string
+	}{
+		{"linked to such an agent, Home Assistant in another guest", plugNodeRig{link: "viaagent", ha: "lab-qemu-202"}, model.SocketLockHomeAssistant, plugSaidHA},
+		{"linked to the node, Home Assistant in such an agent", plugNodeRig{link: "lab-node-pve2", ha: "viaagent"}, model.SocketLockHomeAssistant, plugSaidHA},
+		{"linked to a container, Home Assistant in such an agent", plugNodeRig{link: "lab-lxc-203", ha: "viaagent"}, model.SocketLockHomeAssistant, plugSaidHA},
+		{"linked to the node, the reader's entry names such an agent", plugNodeRig{link: "lab-node-pve2", otherExtra: "links_to: viaagent,"}, model.SocketLockAgent, plugSaidReader},
+		{"linked to another guest, the reader's entry names such an agent", plugNodeRig{link: "lab-qemu-202", otherExtra: "links_to: viaagent,"}, model.SocketLockAgent, plugSaidReader},
+	} {
+		plugNodeLocked(t, c.rig.env(t), c.name, c.lock, c.said)
+	}
+	// What has no row right now still counts as it is written, on each side. The reader's entry names a guest
+	// the panel does not have, and the socket is linked to that id; Home Assistant, and the panel, run in a guest
+	// whose node the panel does not have, and the socket is linked to that node's id. Each is a link the panel
+	// cannot follow, and the lock says the nearer reason.
+	for _, c := range []struct {
+		name       string
+		rig        plugNodeRig
+		lock, said string
+	}{
+		{"the reader in a guest without a row, linked to that id", plugNodeRig{link: "lab-qemu-999", otherExtra: "links_to: lab-qemu-999,"}, model.SocketLockAgent, plugSaidReader},
+		{"Home Assistant in a guest whose node has no row, linked to that node's id", plugNodeRig{link: "lab-node-ghost", ha: "lab-qemu-301"}, model.SocketLockHomeAssistant, plugSaidHA},
+		{"the panel in a guest whose node has no row, linked to that node's id", plugNodeRig{link: "lab-node-ghost", panelHosts: "lab-qemu-301"}, model.SocketLockPanel, plugSaidPanel},
+		// two agents on the way to a guest whose node has no row: the rows on the way count
+		{"Home Assistant's entry names an agent in a guest without its node, linked to that guest", plugNodeRig{link: "lab-qemu-301", ha: "via2agent"}, model.SocketLockHomeAssistant, plugSaidHA},
+		{"the panel's entry names an agent in a guest without its node, linked to that guest", plugNodeRig{link: "lab-qemu-301", panelHosts: "via2agent"}, model.SocketLockPanel, plugSaidPanel},
+	} {
+		pe := c.rig.env(t)
+		if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["switchable"] != false || s["lock"] != c.lock || s["note"] != c.said || s["system_id"] != nil {
+			t.Errorf("%s: %v", c.name, s)
+		}
+		for _, to := range []string{"off", "on"} {
+			r := pe.flip("other/rack-bar", "node", to)
+			if msg, _ := plugDetailOf(r); r.code != 409 || msg != c.said+" Nothing was switched." {
+				t.Errorf("%s, %s: %d %s", c.name, to, r.code, r.raw)
+			}
+		}
+		if n := len(pe.other.Asked()); n != 0 {
+			t.Errorf("%s: the machine was asked %d things", c.name, n)
+		}
 	}
 }
