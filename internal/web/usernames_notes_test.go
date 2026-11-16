@@ -76,7 +76,7 @@ func TestAKnownAddressOfAnUnusualShapeInAnOldSentence(t *testing.T) {
 	e := r.env
 	for _, a := range []namesAccount{
 		{"r4-corp", "corpuser", "ops@corp", true, "Corp Opsman", access.RoleAdmin, nil},
-		{"r4-puny", "punyuser", "idn@beispiel.xn--p1ai", true, "Puny Coder", access.RoleViewer, []string{"Bob"}},
+		{"r4-puny", "punyuser", "idn@example.xn--zckzah", true, "Puny Coder", access.RoleViewer, []string{"Bob"}},
 		{"r4-none", "", "svc@intranet", true, "No Username", access.RoleViewer, []string{"Bob"}},
 	} {
 		e.cookie(a.user(true), 0)
@@ -86,7 +86,7 @@ func TestAKnownAddressOfAnUnusualShapeInAnOldSentence(t *testing.T) {
 	}
 	for _, n := range []notifications.Event{
 		{Kind: "plug_switched", Type: "power", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER", Text: "Lamp (Desk bar) switched off by ops@corp"},
-		{Kind: "plug_switched", Type: "power", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER", Text: "Fan (Desk bar) switched on by idn@beispiel.xn--p1ai"},
+		{Kind: "plug_switched", Type: "power", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER", Text: "Fan (Desk bar) switched on by idn@example.xn--zckzah"},
 		{Kind: "host_options", Type: "host", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER", Text: "links changed by OPS@CORP (unverified)."},
 		{Kind: "host_options", Type: "host", Severity: notifications.Warning, SystemID: "tower", Host: "TOWER", Text: "run timings changed by svc@intranet"},
 	} {
@@ -121,7 +121,7 @@ func TestAKnownAddressOfAnUnusualShapeInAnOldSentence(t *testing.T) {
 	// ... and what leaves the panel
 	var got []string
 	e.s.sendOutside = func(title, message string) { got = append(got, title+" | "+message) }
-	for _, text := range []string{"started by ops@corp: 1 machine", "links changed by idn@beispiel.xn--p1ai", `{"email":"ops@corp"}`, "by svc@intranet."} {
+	for _, text := range []string{"started by ops@corp: 1 machine", "links changed by idn@example.xn--zckzah", `{"email":"ops@corp"}`, "by svc@intranet."} {
 		e.s.outside("Fairy: test", text)
 	}
 	all := strings.Join(got, "\n")

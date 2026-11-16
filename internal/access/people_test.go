@@ -458,7 +458,7 @@ func TestShownInAKnownAddressOfAnyShape(t *testing.T) {
 	d := peopleData()
 	tr := true
 	d.Users["r4-corp"] = User{Sub: "r4-corp", Username: "corpuser", Email: "ops@corp", EmailVerified: &tr, Name: "Corp Opsman", Role: RoleAdmin}
-	d.Users["r4-puny"] = User{Sub: "r4-puny", Username: "punyuser", Email: "idn@beispiel.xn--p1ai", EmailVerified: &tr, Name: "Puny Coder", Role: RoleViewer}
+	d.Users["r4-puny"] = User{Sub: "r4-puny", Username: "punyuser", Email: "idn@example.xn--zckzah", EmailVerified: &tr, Name: "Puny Coder", Role: RoleViewer}
 	d.Users["r4-none"] = User{Sub: "r4-none", Email: "svc@localhost", Name: "No Username"}
 	d.Users["r4-bang"] = User{Sub: "r4-bang", Username: "banguser", Email: "a!b#c@corp", Name: "Bang"}
 	d.Users["r4-pam"] = User{Sub: "r4-pam", Username: "pamuser", Email: "admin@pam", Name: "Pam"}
@@ -467,13 +467,13 @@ func TestShownInAKnownAddressOfAnyShape(t *testing.T) {
 		{"Lamp (Desk bar) switched off by ops@corp", "Lamp (Desk bar) switched off by corpuser"},
 		{"switched off by OPS@Corp.", "switched off by corpuser."},
 		{"switched off by ops@corp (unverified), then on", "switched off by corpuser, then on"},
-		{"Fan switched on by idn@beispiel.xn--p1ai", "Fan switched on by punyuser"},
+		{"Fan switched on by idn@example.xn--zckzah", "Fan switched on by punyuser"},
 		{"started by ops@corp: 1 machine", "started by corpuser: 1 machine"},
 		{"<ops@corp> and \"ops@corp\", see mailto:ops@corp", "<corpuser> and \"corpuser\", see mailto:corpuser"},
 		{"by svc@localhost-", "by " + HiddenAddress + "-"},
 		{"by a!b#c@corp", "by banguser"},
 		{`{"email":"ops@corp","name":"x"}`, `{"email":"corpuser","name":"x"}`},
-		{"ops@corp idn@beispiel.xn--p1ai owner@example.com", "corpuser punyuser Juniper"},
+		{"ops@corp idn@example.xn--zckzah owner@example.com", "corpuser punyuser Juniper"},
 		// not the account's address: a longer one that only holds it
 		{"devops@corp", "devops@corp"},
 		{"x.ops@corp", "x.ops@corp"},
