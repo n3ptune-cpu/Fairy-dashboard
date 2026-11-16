@@ -1,6 +1,8 @@
 package web
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -315,5 +317,151 @@ func TestPlugHomeAssistantSystemThatNamesNoRow(t *testing.T) {
 	}
 	if _, _, ok := approvalAsked(pe.flip("third/spare-bar", "lamp", "on")); !ok {
 		t.Error("on for the lamp with the row there is refused")
+	}
+}
+
+// Finding 2 (the second review's fix "C" was not closed): somebody who may see the machines of some sites only
+// gets no socket that feeds a row they may not see. That held only while the viewer also saw the agent that
+// relays the plug. A viewer who sees the plug and not that agent got every socket, names and states, and no
+// count of hidden ones: the viewer's copy of the source loses the agent (cleanPower), the sockets were worked
+// out from that copy, could not be looked at without the agent, and a socket that cannot be looked at was
+// shown. Two ways to such a viewer, each for a cookie and for a read token that is limited to the site, and
+// each for GET /api/power and for the event stream:
+//
+//  1. the plug is put into a site by itself (the target "power:reader/desk-bar" of the Sites page): the viewer
+//     of that site sees no row at all;
+//  2. the plug follows its own link (power_links) to a row the viewer sees, and the agent that reads it is in
+//     another site.
+//
+// The sockets are now worked out from the source as the panel has it. A socket is in the answer when it is
+// linked to nothing (it is the plug's own) or to a row the viewer sees; every other one is left out and
+// counted.
+func TestPlugSocketsOfAPlugWhoseAgentTheViewerDoesNotSee(t *testing.T) {
+	type want struct {
+		shown  map[string]string // socket id -> the row it names ("": none)
+		hidden int
+		rows   []string // the viewer's rows
+	}
+	check := func(t *testing.T, pe *plugEnv, who string, hdr []string, w want) {
+		t.Helper()
+		rows := []string{}
+		for _, x := range pe.do("GET", "/api/systems", nil, hdr...).body["systems"].([]any) {
+			rows = append(rows, fmt.Sprint(x.(map[string]any)["id"]))
+		}
+		if fmt.Sprint(rows) != fmt.Sprint(w.rows) {
+			t.Fatalf("%s: the fixture: the rows are %v, want %v", who, rows, w.rows)
+		}
+		power := pe.do("GET", "/api/power", nil, hdr...)
+		if power.code != 200 {
+			t.Fatalf("%s: GET /api/power: %d %s", who, power.code, power.raw)
+		}
+		found := false
+		for _, x := range power.body["sources"].([]any) {
+			src := x.(map[string]any)
+			if src["id"] != "reader/desk-bar" {
+				continue
+			}
+			found = true
+			got := map[string]string{}
+			list, _ := src["sockets"].([]any)
+			for _, k := range list {
+				m := k.(map[string]any)
+				id, _ := m["system_id"].(string)
+				got[fmt.Sprint(m["id"])] = id
+				if m["switchable"] != false || m["why"] != model.SocketReadOnly || m["tag"] != nil || m["lock"] != nil || m["note"] != nil {
+					t.Errorf("%s: the socket %v", who, m)
+				}
+			}
+			if fmt.Sprint(got) != fmt.Sprint(w.shown) || src["sockets_hidden"] != float64(w.hidden) {
+				t.Errorf("%s: GET /api/power has the sockets %v and sockets_hidden %v, want %v and %d", who, got, src["sockets_hidden"], w.shown, w.hidden)
+			}
+			if src["via"] != nil {
+				t.Errorf("%s: the answer names the agent that relays the plug: %v", who, src["via"])
+			}
+		}
+		if !found {
+			t.Fatalf("%s: the fixture: the plug is not in the viewer's answer: %s", who, power.raw)
+		}
+		code, stream := pe.streamBody("/api/stream", hdr...)
+		if code != 200 || !strings.Contains(stream, "Monitor powerbar") || !strings.Contains(stream, fmt.Sprintf(`"sockets_hidden":%d`, w.hidden)) {
+			t.Errorf("%s: the stream (%d) has not the plug with sockets_hidden %d", who, code, w.hidden)
+		}
+		names := map[string]string{"ch1": "Left monitor", "ch2": "Lamp", "ch3": "Desk PC", "ch4": "Server", "ch5": "Home Assistant box", "ch6": "Panel box", "ch7": "Old PC", "ch8": "Printer"}
+		for id, name := range names {
+			_, shown := w.shown[id]
+			for where, body := range map[string]string{"GET /api/power": string(power.raw), "the stream": stream} {
+				if strings.Contains(body, name) != shown {
+					t.Errorf("%s: %s names the socket %q: %v, want %v", who, where, name, !shown, shown)
+				}
+			}
+		}
+	}
+	token := func(pe *plugEnv, site string) []string {
+		tok, _, err := pe.s.Tokens.CreateForSites("t-"+site, "system", "read", "cli:test", 0, []string{site})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []string{"Authorization", "Bearer " + tok}
+	}
+	t.Run("the plug is in a site by itself", func(t *testing.T) {
+		pe := newPlugEnv(t)
+		_ = pe.s.Access.EnsureSites([]string{"Home", "Lab"})
+		if _, err := pe.s.Access.Assign("power:reader/desk-bar", "Lab"); err != nil {
+			t.Fatal(err)
+		}
+		w := want{shown: map[string]string{"ch1": "", "ch2": "", "ch8": ""}, hidden: 5, rows: []string{}}
+		check(t, pe, "a viewer of the site", []string{"Cookie", pe.viewerOf("Lab")}, w)
+		check(t, pe, "a read token of the site", token(pe, "Lab"), w)
+	})
+	t.Run("the plug follows its own link", func(t *testing.T) {
+		yaml := strings.Replace(plugConfig, "node: PVE, site: Home,\n     power_links: {pc-plug: desk-pc},", "node: PVE, site: Lab,\n     power_links: {pc-plug: desk-pc, desk-bar: desk-pc},", 1)
+		if yaml == plugConfig {
+			t.Fatal("the rig's config was not changed")
+		}
+		pe := newPlugEnvWith(t, yaml)
+		w := want{shown: map[string]string{"ch1": "", "ch2": "", "ch3": "desk-pc", "ch8": ""}, hidden: 4, rows: []string{"desk-pc"}}
+		check(t, pe, "a viewer of the site", []string{"Cookie", pe.viewerOf("Home")}, w)
+		check(t, pe, "a read token of the site", token(pe, "Home"), w)
+	})
+	// nothing of this is for an admin, or for a token that sees every site: all eight, nothing left out
+	pe := newPlugEnv(t)
+	all, _, err := pe.s.Tokens.Create("t-all", "system", "read", "cli:test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for who, hdr := range map[string][]string{"an admin": {"Cookie", pe.admin}, "a read token without sites": {"Authorization", "Bearer " + all}} {
+		for _, x := range pe.do("GET", "/api/power", nil, hdr...).body["sources"].([]any) {
+			if src := x.(map[string]any); src["id"] == "reader/desk-bar" && (len(src["sockets"].([]any)) != 8 || src["sockets_hidden"] != nil) {
+				t.Errorf("%s: %d sockets, sockets_hidden %v", who, len(src["sockets"].([]any)), src["sockets_hidden"])
+			}
+		}
+	}
+	// The rule alone, for somebody who is no admin. A socket that cannot be looked at (a copy of the source
+	// without the agent that relays it) is left out for a viewer of some sites, and so is one whose link names
+	// no row, whatever that viewer may see; a viewer of every site gets them, read-only.
+	var bar model.PowerSourceState
+	for _, st := range pe.s.Poller.Power.Overview().Sources {
+		if st.ID == "reader/desk-bar" {
+			bar = st
+		}
+	}
+	if len(bar.Sockets) != 8 || bar.Via == nil {
+		t.Fatalf("the fixture: %v", bar)
+	}
+	looks := pe.s.newPlugLooks(pe.s.Poller.Snapshot())
+	every := func(string) bool { return true }
+	if out, hidden := looks.sockets(bar, false, false, every); len(out) != 7 || hidden != 1 || slices.ContainsFunc(out, func(k model.PowerSocket) bool { return k.ID == "ch7" }) {
+		t.Errorf("a viewer of some sites who sees every row there is: %d sockets, %d left out; want ch7 (linked to an id without a row) left out", len(out), hidden)
+	}
+	if out, hidden := looks.sockets(bar, false, true, every); len(out) != 8 || hidden != 0 {
+		t.Errorf("a viewer of every site: %d sockets, %d left out", len(out), hidden)
+	}
+	blind := bar
+	blind.Via = nil
+	if out, hidden := looks.sockets(blind, false, false, every); len(out) != 0 || hidden != 8 {
+		t.Errorf("a source without its agent, for a viewer of some sites: %d sockets shown, %d left out; want none and 8", len(out), hidden)
+	}
+	if out, hidden := looks.sockets(blind, false, true, every); len(out) != 8 || hidden != 0 || out[0].Why != model.SocketReadOnly || out[0].Tag != "" {
+		t.Errorf("a source without its agent, for a viewer of every site: %d sockets, %d left out", len(out), hidden)
 	}
 }

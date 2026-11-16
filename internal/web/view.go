@@ -290,7 +290,8 @@ func (v *view) Summary() model.Summary {
 	})
 }
 
-// cleanPower hides links to hidden systems and the relay agent of a hidden host.
+// cleanPower hides links to hidden systems and the relay agent of a hidden host. The sockets of a plug are not
+// its business: they are worked out from the source before it is cleaned (Power).
 func (v *view) cleanPower(st model.PowerSourceState) model.PowerSourceState {
 	rs := make([]model.PowerReading, len(st.Readings))
 	for i, r := range st.Readings {
@@ -313,37 +314,40 @@ func (v *view) cleanPower(st model.PowerSourceState) model.PowerSourceState {
 // rules laid over what the agent says (plug.go): an admin gets, for each socket, whether it can be switched
 // from here and why not; everybody else its name and its state, and not the sockets that feed a row they may
 // not see (the source then says how many it leaves out).
+//
+// The sockets are worked out from the source as the panel has it, before the viewer's copy is cleaned: what a
+// socket feeds is found through the agent that relays the plug, and cleanPower takes that agent away for a
+// viewer who may not see it. (Until the second review of the fixes they were worked out from the cleaned copy:
+// for such a viewer no socket could be looked at, and all of them were shown.)
 func (v *view) Power() model.PowerOverview {
 	ov := v.s.Poller.Power.Overview()
+	var looks *plugLooks
+	sockets := func(st model.PowerSourceState) ([]model.PowerSocket, int) {
+		if len(st.Sockets) == 0 {
+			return st.Sockets, 0
+		}
+		if looks == nil {
+			looks = v.s.newPlugLooks(v.snap)
+		}
+		return looks.sockets(st, v.g.Admin(), v.all, func(id string) bool { return v.all || v.vis[id] })
+	}
 	if v.all {
-		v.withSockets(ov.Sources)
+		for i := range ov.Sources { // a list of this answer's own
+			ov.Sources[i].Sockets, ov.Sources[i].SocketsHidden = sockets(ov.Sources[i])
+		}
 		return ov
 	}
 	srcs := []model.PowerSourceState{}
 	for _, st := range ov.Sources {
 		if v.powerVisible(st) {
-			srcs = append(srcs, v.cleanPower(st))
+			c := v.cleanPower(st)
+			c.Sockets, c.SocketsHidden = sockets(st)
+			srcs = append(srcs, c)
 		}
 	}
-	v.withSockets(srcs)
 	ov.Sources = srcs
 	ov.TotalW = power.Total(srcs)
 	return ov
-}
-
-// withSockets replaces the sockets of every source in srcs (a list of this answer's own) with what this viewer
-// gets of them.
-func (v *view) withSockets(srcs []model.PowerSourceState) {
-	var looks *plugLooks
-	for i := range srcs {
-		if len(srcs[i].Sockets) == 0 {
-			continue
-		}
-		if looks == nil {
-			looks = v.s.newPlugLooks(v.snap)
-		}
-		srcs[i].Sockets, srcs[i].SocketsHidden = looks.sockets(srcs[i], v.g.Admin(), func(id string) bool { return v.all || v.vis[id] })
-	}
 }
 
 // PowerHistory is the history of the visible sources; each point's total is the sum of the visible sources that

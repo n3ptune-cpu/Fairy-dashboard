@@ -295,14 +295,19 @@ func (s *Server) socketWhy(k socketLook) string {
 }
 
 // sockets is the sockets of a source as an answer of the API carries them: the agent's row with the panel's
-// rules laid over it. admin: the viewer may switch (an admin). Everybody else gets the state and the name, no
-// tag and no reason. see says whether the viewer may see a row.
+// rules laid over it. st is the source as the panel has it (power.Manager), not a viewer's copy of it: the
+// agent that relays the plug must be in it (look). admin: the viewer may switch (an admin). Everybody else gets
+// the state and the name, no tag and no reason. all: the viewer may see every row; see says whether the viewer
+// may see one.
 //
 // A socket that feeds a row the viewer may not see is left out for that viewer, name and state too: a socket's
 // name says what is plugged in ("Panel box", "Bob's PC"), and its state whether that machine has power, which
 // is that row's business. hidden counts them, so that the page can say that the plug has more. A socket that
-// is linked to nothing is the plug's own and is seen with the plug. Admins see every socket.
-func (l *plugLooks) sockets(st model.PowerSourceState, admin bool, see func(id string) bool) (out []model.PowerSocket, hidden int) {
+// is linked to nothing is the plug's own and is seen with the plug. Somebody who may not see every row gets a
+// socket only when the panel can say that: one that cannot be looked at (no agent to ask for its link), and
+// one whose link names no row, is left out and counted. Admins, and everybody who sees every row, see every
+// socket.
+func (l *plugLooks) sockets(st model.PowerSourceState, admin, all bool, see func(id string) bool) (out []model.PowerSocket, hidden int) {
 	if len(st.Sockets) == 0 {
 		return nil, 0
 	}
@@ -311,7 +316,7 @@ func (l *plugLooks) sockets(st model.PowerSourceState, admin bool, see func(id s
 		k, ok := l.look(st, sock)
 		o := model.PowerSocket{ID: sock.ID, Name: sock.Name, State: sock.State, Error: sock.Error}
 		if !ok || !admin {
-			if ok && k.link != "" && !see(k.shown) {
+			if !all && (!ok || (k.link != "" && (k.row == nil || !see(k.shown)))) {
 				hidden++
 				continue
 			}

@@ -301,7 +301,9 @@ Home Assistant and an agent reads it (Fairy-agent v0.10.0 or newer on the machin
 feed a host are in that host's Power panel. Everybody who sees the plug sees a dot for each socket: green is
 on, grey is off, a ring means Home Assistant has no state for it right now. Somebody who may see the
 machines of some sites only does not get the sockets that feed a machine they may not see, neither name
-nor state: the plug then says "2 more sockets are not shown". A socket that is linked to nothing is seen
+nor state: the plug then says "2 more sockets are not shown". That holds for every way such a viewer
+comes to see the plug, also when the plug is in their site and the machine that reads it is not; and a
+socket whose link names no row the panel has is left out for them too. A socket that is linked to nothing is seen
 with its plug. An admin has a switch where the socket can be switched, and in its place a lock with one
 sentence for why where it cannot. A socket's switch is green when it is on, as everything on the page that
 switches power; the switches of settings, options and pick lists are blue when on.
