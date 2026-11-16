@@ -345,6 +345,11 @@ func powerLinkCheck(cfg *config.Panel) (ok, said []string) {
 //   - in home_assistant_system it is a warning too: the panel switches no socket of that agent, on or off,
 //     until the key names a row (model.SocketLockHAUnknown).
 //
+// A link that names an agent which runs in a guest (that agent's entry has links_to: with a guest's id) is a
+// warning as well. Such a socket feeds the Proxmox node under the guest, and the running panel takes the link
+// as that node's (web, socketFeeds), so nothing is unsafe; the line is there because the link names something
+// else than what loses its power, and which node that is the file does not say.
+//
 // And what the panel has to be told before it switches an agent's sockets, as far as a file shows it. This
 // command asks no machine, so it does not know which agent reports sockets or how many a plug has: it goes by
 // the two keys of an entry.
@@ -385,6 +390,23 @@ func socketLinkCheck(cfg *config.Panel) (ok, warn, said []string) {
 		}
 		return false
 	}
+	// inGuest is the guest an agent's entry says the agent runs in (links_to: with the id of a VM or a
+	// container of a proxmox: entry), "" for any other id.
+	inGuest := func(id string) string {
+		for _, a := range c.Agents {
+			if a.ID != id {
+				continue
+			}
+			for _, p := range c.Proxmox {
+				for _, kind := range []string{"qemu-", "lxc-"} {
+					if strings.HasPrefix(a.LinksTo, p.Prefix()+kind) && len(a.LinksTo) > len(p.Prefix()+kind) {
+						return a.LinksTo
+					}
+				}
+			}
+		}
+		return ""
+	}
 	keys := false // an entry has one of the two keys: the panel is set up to switch sockets
 	for _, a := range cfg.Agents {
 		if len(a.SocketLinks) == 0 && a.HomeAssistantSystem == "" {
@@ -409,6 +431,10 @@ func socketLinkCheck(cfg *config.Panel) (ok, warn, said []string) {
 			if to := a.SocketLinks[name]; !machine(to) {
 				warn = append(warn, fmt.Sprintf("agent %s: socket_links: socket %s is linked to %s, which is no agent's id and not the id of a node or a guest of a proxmox: entry. "+
 					"The panel locks that socket (it is switched neither on nor off from the panel) until the link names a row. A typing mistake in the id?", a.ID, name, to))
+			} else if g := inGuest(to); g != "" {
+				warn = append(warn, fmt.Sprintf("agent %s: socket_links: socket %s is linked to %s, an agent that runs in a guest (its entry has links_to: %s). "+
+					"A socket feeds a machine: this one feeds the Proxmox node that guest runs on, and the panel takes the link as that node's "+
+					"(its locks, the question before \"off\" and the words of the passkey name the node). Write the node's id in the link", a.ID, name, to, g))
 			}
 		}
 		// What the panel has to be told before it switches this agent's sockets, as far as the file shows it.

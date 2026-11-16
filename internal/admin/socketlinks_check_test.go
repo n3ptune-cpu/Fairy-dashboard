@@ -144,3 +144,57 @@ func TestConfigCheckAndTheSocketsOfRelayedPlugs(t *testing.T) {
 		t.Errorf("a socket_links line of the wrong form: exit %d\n%s", code, all)
 	}
 }
+
+// A socket that is linked to an agent which runs in a guest (its entry has links_to: with the id of a VM or a
+// container) feeds the Proxmox node under that guest. The running panel takes the link as the node's (third
+// review of stage 1a, finding 1); the check says so, as a warning, because the link names something else than
+// what the socket feeds and the file alone cannot say which node that is. A link to an agent whose links_to
+// names a node, to an agent on a machine of its own, and to a guest's own id have no such line.
+func TestConfigCheckWarnsOfASocketLinkedToAnAgentInAGuest(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	t.Setenv("TOK_R", "r")
+	t.Setenv("PVE_S", "s")
+	t.Setenv("FAIRY_SESSION_SECRET", strings.Repeat("no-secret-", 5)) // made here, for this test only
+	y := "public_url: https://p.example\ndata_dir: " + dir + "/data\noidc: {issuer: \"https://id.example\", client_id: c, allowed_groups: [users], control_groups: [admins]}\n" +
+		"panel_hosts: [plain]\n" +
+		"proxmox:\n" +
+		"  - {id: lab, id_prefix: lab-, urls: [\"https://pve:8006\"], token_id: \"fairy@pve!panel\", token_secret_env: PVE_S}\n" +
+		"agents:\n" +
+		"  - {id: relay, url: \"http://relay:9101\", token_env: TOK_R,\n" +
+		"     socket_links: {desk-bar/ch1: in-vm, desk-bar/ch2: in-ct, desk-bar/ch3: on-node, desk-bar/ch4: plain, desk-bar/ch5: lab-qemu-201},\n" +
+		"     home_assistant_system: plain}\n" +
+		"  - {id: in-vm, url: \"http://in-vm:9101\", token_env: TOK_R, links_to: lab-qemu-201}\n" +
+		"  - {id: in-ct, url: \"http://in-ct:9101\", token_env: TOK_R, links_to: lab-lxc-203}\n" +
+		"  - {id: on-node, url: \"http://on-node:9101\", token_env: TOK_R, links_to: lab-node-pve}\n" +
+		"  - {id: plain, url: \"http://plain:9101\", token_env: TOK_R}\n"
+	if err := os.WriteFile(cfg, []byte(y), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb)
+	got := out.String()
+	if !strings.Contains(got, "config "+cfg+": valid") {
+		t.Fatalf("the fixture is not a valid config:\n%s%s", got, errb.String())
+	}
+	for _, c := range []struct{ socket, agent, guest string }{{"desk-bar/ch1", "in-vm", "lab-qemu-201"}, {"desk-bar/ch2", "in-ct", "lab-lxc-203"}} {
+		want := "WARN  agent relay: socket_links: socket " + c.socket + " is linked to " + c.agent + ", an agent that runs in a guest (its entry has links_to: " + c.guest + "). " +
+			"A socket feeds a machine: this one feeds the Proxmox node that guest runs on, and the panel takes the link as that node's " +
+			"(its locks, the question before \"off\" and the words of the passkey name the node). Write the node's id in the link\n"
+		if strings.Count(got, want) != 1 {
+			t.Errorf("the output lacks (or has twice) %q\n%s", want, got)
+		}
+	}
+	if code != 1 || strings.Count(got, "WARN  ") != 2 {
+		t.Errorf("two warnings, for the two links to an agent in a guest (exit %d):\n%s", code, got)
+	}
+	// with the node's id in the two links nothing is left
+	y = strings.NewReplacer("desk-bar/ch1: in-vm", "desk-bar/ch1: lab-node-pve", "desk-bar/ch2: in-ct", "desk-bar/ch2: lab-node-pve").Replace(y)
+	if err := os.WriteFile(cfg, []byte(y), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := Main([]string{"--config", cfg, "--env-file", dir + "/none.env", "config", "check"}, &out, &errb); code != 0 || strings.Contains(out.String(), "WARN  ") {
+		t.Errorf("the links put right (exit %d):\n%s", code, out.String())
+	}
+}

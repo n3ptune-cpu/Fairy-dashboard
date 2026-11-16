@@ -311,8 +311,8 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 	if k.link != "" {
 		params["linked"] = k.shown
 	}
-	if k.guest != nil {
-		params["guest"] = k.guest.ID // the link names this guest; "linked" is the node the socket feeds
+	if k.named != nil {
+		params["guest"] = k.named.ID // the link names this guest, or this agent in one; "linked" is the node the socket feeds
 	}
 	// The socket as the panel sees it now: the tag the page showed is still the socket's, the agent's own
 	// config lets it be switched, nothing in the panel locks it, and the machine has the passkey check.
@@ -351,8 +351,8 @@ func (s *Server) plugSwitch(c *reqCtx) error {
 		if k.row != nil {
 			detail["system_id"] = k.row.ID
 		}
-		if k.guest != nil {
-			detail["guest"] = k.guest.Name // the link names this guest; the machine in question is its node
+		if k.named != nil {
+			detail["guest"] = k.named.Name // the link names this guest, or this agent in one; the machine in question is its node
 		}
 		return refuse(&plugError{err: apierr.New(409, detail), word: codeMachineRunning})
 	case running:

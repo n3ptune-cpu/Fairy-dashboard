@@ -275,7 +275,12 @@ Home Assistant and an agent reads it (Fairy-agent v0.10.0 or newer on the machin
   hangs on a socket of a powerbar. A socket feeds a machine, so for a virtual machine or a container name
   its Proxmox node: a link that names a guest is taken as a link to the guest's node, in every rule below
   (the locks, the question whether the machine still runs, and the words the passkey signs), and a guest
-  whose node the panel does not have is a link it cannot follow (locked). The only socket of a plug needs
+  whose node the panel does not have is a link it cannot follow (locked). The same holds for a link that
+  names an agent which does not run on a machine of its own: an agent in a guest (its entry has `links_to:`
+  with the guest's id) is taken as that guest's node, and a second agent of a node (`links_to:` with the
+  node's id) as the node. Where such a chain ends at no row the panel has, or comes back to where it
+  began, the socket is locked. `fairy admin config check` prints a `WARN` for a link to an agent in a
+  guest: write the node's id in the link. The only socket of a plug needs
   no line: it takes the plug's own link
   (`power_links`, or `system_hint: self`). A socket without a link is linked to nothing: it may be a lamp,
   and it may be a machine nobody wrote down, so the panel asks before every "off" for it (below). A line
@@ -333,7 +338,8 @@ switched: look at the socket.
   Assistant runs on (`home_assistant_system`; for a VM also its node), and the socket of the machine this
   panel runs on. A socket that is linked to a guest feeds that guest's node, so it is locked when the node
   is one of the three, or carries one of them: a socket linked to any VM of the node that also carries
-  Home Assistant's VM is locked. When `home_assistant_system` names an id that is no row, no socket of
+  Home Assistant's VM is locked. A link to an agent that runs in a guest, or beside the node's own agent,
+  is followed to the node in the same way. When `home_assistant_system` names an id that is no row, no socket of
   that agent is switched, linked to a machine or not, until the id is put right, as without the key (the
   lock's sentence names the id); and a socket whose own link names no row is
   locked the same way ("linked to a machine the panel does not have: correct socket_links");
@@ -353,7 +359,9 @@ switched: look at the socket.
   to sleep by itself draws as little as one that is off: the meter cannot tell the two apart.) That
   Proxmox calls a guest "stopped" is no such sign: for a socket that is linked to a guest the machine in
   question is the guest's node, the dialog names the node ("PVE-1 is still running", with the guest the
-  link names in the sentence behind the info button), and the node's name is the one to type. The page
+  link names in the sentence behind the info button), and the node's name is the one to type. It is the
+  same for a link to an agent in a guest: that a run saw that agent's row go off is no sign that the node
+  is off, only a sign for the node itself counts. The page
   shows a dialog, "PC-B is still running" ("is asleep, not off", or "may still be running" where the panel
   has no sign either way), with the plug and the socket above the title. **Cancel** has
   the focus. **Shut down PC-B** is there when you may shut that host down from here: it opens the host's

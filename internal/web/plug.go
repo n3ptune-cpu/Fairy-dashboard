@@ -22,8 +22,9 @@ import (
 //
 //   - the link: socket_links in the panel's entry of the agent names the row; the only socket of a plug takes
 //     the plug's own link (power_links, system_hint: self); any other socket is linked to nothing;
-//   - a link to a guest (a VM, a container) is a link to the guest's node, for every rule below: a socket feeds
-//     a machine, and the machine under a guest is its node. What the guest does says nothing about the socket;
+//   - a link is followed down to the machine the socket can feed, for every rule below (socketFeeds): a guest
+//     (a VM, a container) is its node, and so is an agent that runs in a guest, or beside the node's own agent.
+//     A socket feeds a machine, and what the guest or that agent does says nothing about the socket;
 //   - no socket of an agent is switched while the panel's entry of it has no home_assistant_system, or one
 //     that names no row the panel has: the panel has to be told once, in writing, where that agent's Home
 //     Assistant runs (as the agent has to be told feeds_self before it switches anything);
@@ -52,9 +53,12 @@ type socketLook struct {
 	// row that machine is shown as right now, row that row (nil: no row has the id now).
 	link, shown string
 	row         *model.System
-	// guest: the link names a guest (a VM or a container), this one. A socket feeds a machine, so row and shown
-	// are then the guest's node (look); row is nil when the panel has no row for that node.
-	guest *model.System
+	// named: the link names a row that is not a machine a socket can feed, this one: a guest (a VM or a
+	// container), or an agent that runs in a guest or beside a node's own agent. row and shown are then the node
+	// under it, and over the ids of the rows on the way there, named first (look, socketFeeds); row is nil when
+	// the panel cannot follow the link to a node it has a row for.
+	named *model.System
+	over  []string
 	// lock is why the panel never switches this socket ("": no lock): model.SocketLock...
 	lock string
 	// ownLink: the link is the plug's own (the only socket of a plug), not a line of socket_links.
@@ -148,6 +152,70 @@ func (l *plugLooks) of(a config.Agent) plugRows {
 	return r
 }
 
+// plugChainMax is the most rows a link is followed over before the machine under it. A real link goes over two
+// (an agent, and the guest it runs in). The rows that were seen end a chain of links_to that leads back to
+// itself; the bound ends one that is merely long.
+const plugChainMax = 8
+
+// socketFeeds follows the row a socket is linked to (start, the id it is shown as) down to the machine the
+// socket can feed, and returns that machine's row and the rows it went over, the linked one first.
+//
+//   - a node, and a row that runs on nothing else (a PC with an agent): itself;
+//   - a guest (a VM, a container): its node;
+//   - the row of an agent that runs in a guest, or on a node whose row is another agent's (links_to:, node:):
+//     where it runs (runsOn), and on from there.
+//
+// machine is nil when the way ends at no row: the linked id has none, a guest's node has none, the row an agent
+// runs on has none (unless the configuration makes that row the agent's own machine under its other id: own),
+// or the links lead back to a row that was seen. Such a socket is locked (lock: SocketLockLinkUnknown).
+func socketFeeds(start string, row func(id string) *model.System, runsOn func(agentID string) (to string, own bool)) (machine *model.System, over []*model.System) {
+	seen := map[string]bool{}
+	for cur := start; ; {
+		r := row(cur)
+		if r == nil || seen[cur] {
+			return nil, over
+		}
+		seen[cur] = true
+		switch r.Kind {
+		case "node":
+			return r, over
+		case "qemu", "lxc":
+			over = append(over, r)
+			if r.ParentID == nil {
+				return nil, over
+			}
+			if n := row(*r.ParentID); n != nil && n.Kind == "node" {
+				return n, over
+			}
+			return nil, over
+		}
+		to, own := runsOn(r.ID)
+		if to == "" || to == r.ID || (own && row(to) == nil) {
+			return r, over
+		}
+		if len(over) == plugChainMax {
+			return nil, over
+		}
+		over, cur = append(over, r), to
+	}
+}
+
+// runsOn is where the agent with this id runs when that is not a machine of its own: the node or the guest its
+// entry names (node:, links_to:). "" for an id that is no agent's and for an agent that names neither. own
+// reports that the configuration makes that node this agent's own machine (the two are one machine with two
+// ids: SameMachine): while the node has no row, the agent's row is the machine.
+func (l *plugLooks) runsOn(agentID string) (to string, own bool) {
+	p := l.s.Poller
+	a, ok := p.AgentByID(agentID)
+	if !ok {
+		return "", false
+	}
+	if to = p.LinkOf(a); to == "" || to == agentID {
+		return "", false
+	}
+	return to, slices.Contains(p.SameMachine(agentID), to)
+}
+
 // look works out the link and the lock of one socket of st (a source an agent relays).
 func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (socketLook, bool) {
 	if st.Via == nil {
@@ -166,17 +234,21 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 		k.link, k.shown, k.ownLink = *st.SystemID, *st.SystemID, true
 	}
 	if k.link != "" {
-		k.row = l.rows[k.shown]
-		if g := k.row; g != nil && (g.Kind == "qemu" || g.Kind == "lxc") {
-			// The link names a guest. What the socket feeds is the guest's node, and with it every other guest of
-			// that node: the node is the machine of this socket, for the locks, for the question whether it runs,
-			// and in the words. A guest whose node the panel has no row for is a link the panel cannot follow.
-			k.guest, k.row = g, nil
-			if g.ParentID != nil {
-				if n := l.rows[*g.ParentID]; n != nil && n.Kind == "node" {
-					k.row, k.shown = n, n.ID
-				}
+		// What the socket feeds is a machine. A link that names a guest, or an agent that runs in one or beside a
+		// node's own agent, is followed down to the node under it, and with it every guest of that node: the node
+		// is the machine of this socket, for the locks, for the question whether it runs (the mark "seen to go
+		// off" and the state are the node's, never the guest's or that agent's) and in the words. A link the
+		// panel cannot follow to a row it has is a link to no row.
+		var over []*model.System
+		k.row, over = socketFeeds(k.shown, func(id string) *model.System { return l.rows[id] }, l.runsOn)
+		for i, r := range over {
+			if i == 0 {
+				k.named = r
 			}
+			k.over = append(k.over, r.ID)
+		}
+		if k.row != nil {
+			k.shown = k.row.ID
 		}
 		k.lock = l.lock(k)
 		k.knownOff, k.at, k.fresh = l.s.Poller.KnownOffWithin(k.shown, socketOffMarkFor), l.now, time.Duration(l.s.Cfg.OfflineAfter*float64(time.Second))
@@ -215,24 +287,28 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 //  5. Its link names no row the panel has right now (a typing mistake in socket_links, or a row the panel has
 //     not heard of yet). Which machine hangs on it is then not known: it could be any of the three above, and
 //     whether it runs cannot be asked. So it is locked like 3, until the link names a row. (It comes after the
-//     list of panel_hosts, which names ids and needs no row.) A link to a guest whose node has no row is such
-//     a link.
+//     list of panel_hosts, which names ids and needs no row.) A link the panel cannot follow to the machine
+//     under it is such a link: a guest whose node has no row, an agent in a guest whose guest or node has
+//     none, links that lead back to themselves.
 //
-// For a link to a guest the linked side is the guest and its node (look), as the reader's side and Home
+// The linked side is the link, the rows the link was followed over, and the machine at the end (look): for a
+// link to a guest, or to an agent that runs in one, the guest and its node, as the reader's side and Home
 // Assistant's are widened to the node of a guest (machine). So a socket that is linked to a guest of the node
-// that carries Home Assistant's VM, the reader or the panel's guest is locked: it feeds that node. The ids of
-// the link itself are asked first, so that the sentence names the nearer reason (a link to Home Assistant's
-// own VM says "powers Home Assistant", though its node may carry the reader too).
+// that carries Home Assistant's VM, the reader or the panel's guest, or to an agent in such a guest, is
+// locked: it feeds that node. The ids of the link itself are asked first, so that the sentence names the
+// nearer reason (a link to Home Assistant's own VM says "powers Home Assistant", though its node may carry
+// the reader too).
 func (l *plugLooks) lock(k socketLook) string {
 	rows := l.of(k.agent)
 	near := []string{k.link}
 	near = append(near, l.s.Poller.SameMachine(k.link)...)
-	if k.guest != nil {
-		near = append(near, k.guest.ID)
+	if k.named != nil {
+		near = append(near, k.named.ID)
 	} else {
 		near = append(near, k.shown)
 	}
-	linked := append([]string{k.shown}, near...) // with the node of a guest (look), and that node's other id
+	linked := append([]string{k.shown}, near...) // with the rows on the way to the node, the node, and its other id
+	linked = append(linked, k.over...)
 	linked = append(linked, l.s.Poller.SameMachine(k.shown)...)
 	hits := func(ids []string, set map[string]bool) bool {
 		return slices.ContainsFunc(ids, func(id string) bool { return id != "" && set[id] })
@@ -345,8 +421,10 @@ func (l *plugLooks) sockets(st model.PowerSourceState, admin, all bool, see func
 // and a home_assistant_system that names no row is named.
 func (k socketLook) whyText(why, machine string) string {
 	switch {
-	case why == model.SocketLockLinkUnknown && k.guest != nil:
-		return "Locked. This socket is linked to " + k.guest.Name + ", a virtual machine or container, and the panel does not have the Proxmox node it runs on. A socket feeds the node: link it to the node."
+	case why == model.SocketLockLinkUnknown && k.named != nil && (k.named.Kind == "qemu" || k.named.Kind == "lxc"):
+		return "Locked. This socket is linked to " + k.named.Name + ", a virtual machine or container, and the panel does not have the Proxmox node it runs on. A socket feeds the node: link it to the node."
+	case why == model.SocketLockLinkUnknown && k.named != nil:
+		return "Locked. This socket is linked to " + k.named.Name + ", which does not run on a machine of its own, and the panel cannot find the Proxmox node under it. A socket feeds the node: link it to the node."
 	case why == model.SocketLockLinkUnknown && k.ownLink:
 		return "Locked. This plug is linked to a machine the panel does not have: correct its link (power_links, or Edit host)."
 	case why == model.SocketLockHAUnknown:
@@ -390,8 +468,9 @@ func (k socketLook) running() (name string, yes bool) {
 // sleep: it still holds what is open on it), or "unknown" (it may still be running). The page's dialog says
 // which in its title, and the words the passkey signs for "Cut power anyway" say it too.
 //
-// The machine is the row of the link, and for a link to a guest that guest's node (look): Proxmox calling a
-// guest "stopped" says that the guest is off, and nothing about the node the socket feeds. (Until the second
+// The machine is the row of the link, and for a link to a guest, or to an agent that runs in one, the node
+// under it (look): Proxmox calling a guest "stopped" says that the guest is off, and an agent in a guest that
+// was seen to go off says that the guest went off; neither says anything about the node the socket feeds. (Until the second
 // review of the fixes "stopped" was a sign of "off": a socket linked to a stopped guest was switched off with
 // one passkey while its node, and everything else on it, ran.)
 //
@@ -450,11 +529,15 @@ func (k socketLook) ownWatts() (watts float64, ok bool) {
 // runningWords is the sentence for a socket whose machine still runs, or may (the refusal of "off", and the
 // warning of "Cut power anyway"). For a Proxmox node it says how many of its guests run.
 func (l *plugLooks) runningWords(k socketLook) string {
-	if k.guest != nil && k.row != nil {
-		// the link names a guest: the question is about its node, and the sentence says why
-		g := k.guest
-		k.guest = nil
-		return fmt.Sprintf("This socket is linked to %s, a guest of %s, and what it feeds is %s. ", g.Name, k.row.Name, k.row.Name) + l.runningWords(k)
+	if k.named != nil && k.row != nil {
+		// the link names a guest, or an agent that runs on no machine of its own: the question is about the node
+		// under it, and the sentence says why
+		n, how := k.named, "which runs on"
+		if n.Kind == "qemu" || n.Kind == "lxc" {
+			how = "a guest of"
+		}
+		k.named = nil
+		return fmt.Sprintf("This socket is linked to %s, %s %s, and what it feeds is %s. ", n.Name, how, k.row.Name, k.row.Name) + l.runningWords(k)
 	}
 	name, _ := k.running()
 	switch {
