@@ -347,21 +347,23 @@ func TestPlugLinkThatCannotBeFollowedToAMachine(t *testing.T) {
 		row("pc", "agent", ""), row("in-vm", "agent", ""), row("in-ct", "agent", ""), row("second", "agent", ""), row("in-lost", "agent", ""),
 		row("to-nothing", "agent", ""), row("nodes-own", "agent", ""), row("self", "agent", ""),
 		row("loop-a", "agent", ""), row("loop-b", "agent", ""), row("loop-c", "agent", ""), row("via-agent", "agent", ""),
+		row("d1", "agent", ""), row("d2", "agent", ""), row("d3", "agent", ""), row("d4", "agent", ""), row("d5", "agent", ""), row("d6", "agent", ""), row("d7", "agent", ""), row("d8", "agent", ""), row("own-end", "agent", ""),
 		row("c1", "agent", ""), row("c2", "agent", ""), row("c3", "agent", ""), row("c4", "agent", ""), row("c5", "agent", ""), row("c6", "agent", ""), row("c7", "agent", ""), row("c8", "agent", ""), row("c9", "agent", ""),
 	} {
 		rows[r.ID] = r
 	}
 	runs := map[string]string{"in-vm": "vm-1", "in-ct": "ct-1", "second": "node-1", "in-lost": "vm-lost", "to-nothing": "vm-404", "nodes-own": "node-404", "self": "self",
 		"loop-a": "loop-b", "loop-b": "loop-c", "loop-c": "loop-a", "via-agent": "in-vm",
+		"d1": "d2", "d2": "d3", "d3": "d4", "d4": "d5", "d5": "d6", "d6": "d7", "d7": "d8", "d8": "own-end", "own-end": "node-405",
 		"c1": "c2", "c2": "c3", "c3": "c4", "c4": "c5", "c5": "c6", "c6": "c7", "c7": "c8", "c8": "c9", "c9": "node-1"}
 	asked := 0
 	feeds := func(start string) (string, string) {
-		m, over := poller.MachineUnder(start, func(id string) *model.System { return rows[id] }, func(id string) (string, bool) {
+		m, over, _ := poller.MachineUnder(start, func(id string) *model.System { return rows[id] }, func(id string) (string, bool) {
 			if asked++; asked > 1000 {
 				t.Fatal("the rule does not end")
 			}
-			return runs[id], id == "nodes-own"
-		}, nil)
+			return runs[id], id == "nodes-own" || id == "own-end"
+		}, nil, nil)
 		ids := []string{}
 		for _, r := range over {
 			ids = append(ids, r.ID)
@@ -392,6 +394,9 @@ func TestPlugLinkThatCannotBeFollowedToAMachine(t *testing.T) {
 		{"loop-b", "", "loop-b loop-c loop-a", "the same, entered at another row"},
 		{"c1", "", "c1 c2 c3 c4 c5 c6 c7 c8", "a chain longer than any real one: not followed to its end"},
 		{"c2", "node-1", "c2 c3 c4 c5 c6 c7 c8 c9", "a chain of the longest length that is followed"},
+		// (a node's own agent whose node has no row is the machine, and an agent on the way like the others)
+		{"d2", "own-end", "d2 d3 d4 d5 d6 d7 d8", "seven agents and a node's own agent while the node has no row: eight agents"},
+		{"d1", "", "d1 d2 d3 d4 d5 d6 d7 d8", "eight agents and such an agent: nine, not followed"},
 	} {
 		if m, over := feeds(c.start); m != c.machine || over != c.over {
 			t.Errorf("%s (%s): the machine is %q over %q, want %q over %q", c.what, c.start, m, over, c.machine, c.over)

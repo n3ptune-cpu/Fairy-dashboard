@@ -126,16 +126,18 @@ func KillsPanel(p *poller.Poller, s model.System) bool {
 	return p.PanelRows(p.Snapshot())[s.ID]
 }
 
-// PanelUnknown is why the panel cannot tell which machine it runs on ("": it can, or panel_hosts is empty): an
-// id of panel_hosts has no row right now, or the node under it has none (poller.PanelUnknown). While that
-// lasts every host may be the panel's machine: a reboot of a node's or an agent's row asks for the typed name
-// (Capabilities), no host takes part in "Update unpowered hosts", and no socket is switched off.
-func PanelUnknown(p *poller.Poller) string {
-	ids := p.PanelUnknown(p.Snapshot())
-	if len(ids) == 0 {
-		return ""
+// PanelUnknown is why the panel cannot tell which machine it runs on (why is "": it can, or panel_hosts is
+// empty), with the reason that is true for each id of panel_hosts it cannot follow (no row has it, the node
+// under it has none, it names two things, links_to leads back or too far: poller.PanelUnknownWhy), and what
+// ends that (ends, to follow "Until "). While it lasts every host may be the panel's machine: a reboot of a
+// node's or an agent's row asks for the typed name (Capabilities), no host takes part in "Update unpowered
+// hosts", and no socket is switched off.
+func PanelUnknown(p *poller.Poller) (why, ends string) {
+	u := p.PanelUnknownWhy(p.Snapshot())
+	if u == nil {
+		return "", ""
 	}
-	return "the panel cannot follow panel_hosts (" + strings.Join(ids, ", ") + ") to a machine right now: no row has that id, or the node under it has none"
+	return u.Why, u.Ends
 }
 
 // sameString reports whether two optional strings are both nil or equal.
@@ -198,9 +200,9 @@ func ControlOff(p *poller.Poller, id string) string {
 func capabilities(p *poller.Poller, s model.System) model.PowerCaps {
 	kill := KillsPanel(p, s)
 	// ... or may run on it: the panel cannot tell which machine is its own, and this row is a host
-	unknown := ""
+	unknown, ends := "", ""
 	if !kill && (s.Kind == "node" || s.Kind == "agent") {
-		unknown = PanelUnknown(p)
+		unknown, ends = PanelUnknown(p)
 	}
 	pve, hasPVE := p.ClusterCfg(model.Deref(s.ClusterID))
 	typedIfKill := "click" // actions that take the panel down need the name typed, not just a click
@@ -218,7 +220,7 @@ func capabilities(p *poller.Poller, s model.System) model.PowerCaps {
 	case kill:
 		pc.Warning = model.P("The panel itself runs here: shutting this down takes Fairy offline until it is powered on again by other means.")
 	case unknown != "":
-		pc.Warning = model.P("This may be the machine the panel runs on: " + unknown + ". Until the row is there or panel_hosts is corrected, a reboot of a host asks for its name.")
+		pc.Warning = model.P("This may be the machine the panel runs on: " + unknown + ". Until " + ends + ", a reboot of a host asks for its name.")
 	}
 	return pc
 }

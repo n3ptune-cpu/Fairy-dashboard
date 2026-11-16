@@ -95,7 +95,7 @@ func runLine(t *testing.T, pe *plugEnv, id string) map[string]any {
 // the node and the VM are the panel's, and everything else is free again.
 func TestPanelThatCannotFollowPanelHostsFailsClosed(t *testing.T) {
 	warning, whyNot := panelUnknownSaid("nas-qemu-555")
-	const said = "Locked. The panel cannot follow panel_hosts (nas-qemu-555) to a machine right now: no row has that id, or the node under it has none. " +
+	const said = "Locked. The panel cannot follow panel_hosts (nas-qemu-555) to a machine right now: no row has the id nas-qemu-555. " +
 		"So it cannot tell which machine it runs on, and switches no socket off. This ends when the row is there (its Proxmox API answers) or panel_hosts is corrected."
 	for _, link := range []string{"nas-box", "nas-node-nas"} {
 		answers := false
@@ -165,10 +165,10 @@ func TestPanelThatCannotFollowPanelHostsFailsClosed(t *testing.T) {
 				t.Errorf("link %s, before the API answered: %s on the page of Update unpowered hosts: %v", link, id, line)
 			}
 		}
-		if r := pe.do("PUT", "/api/systems/nas-box/wake-update", map[string]any{"enabled": true}, admin...); r.code != 409 || !strings.Contains(fmt.Sprint(r.body["detail"]), "the panel may run on it") {
+		if r := pe.do("PUT", "/api/systems/nas-box/wake-update", map[string]any{"enabled": true}, admin...); r.code != 409 || r.body["detail"] != "NAS-BOX cannot take part: "+whyNot {
 			t.Errorf("link %s, before the API answered: NAS-BOX switched on for runs: %d %s", link, r.code, r.raw)
 		}
-		if r := pe.do("POST", "/api/admin/wake-update", map[string]any{"update_only": []string{"nas-box"}}, admin...); r.code != 400 || !strings.Contains(fmt.Sprint(r.body["detail"]), "the panel may run on it") {
+		if r := pe.do("POST", "/api/admin/wake-update", map[string]any{"update_only": []string{"nas-box"}}, admin...); r.code != 400 || r.body["detail"] != "NAS-BOX cannot take part: "+whyNot {
 			t.Errorf("link %s, before the API answered: a run with NAS-BOX: %d %s", link, r.code, r.raw)
 		}
 		// somebody who is no admin is told nothing about where the panel runs
@@ -273,7 +273,8 @@ func TestAnAgentIDThatIsAlsoAGuestsID(t *testing.T) {
 	if r := menuOf(pe, "lab-qemu-100"); r.body["kills_panel"] != true {
 		t.Errorf("panel_hosts names the id: the row with that id: %s", r.raw)
 	}
-	warning, _ := panelUnknownSaid("lab-qemu-100")
+	warning, _ := panelUnknownSaidFor("lab-qemu-100", "lab-qemu-100 is the id of an agent and of a node or a guest the Proxmox API lists, and the panel cannot tell which is meant",
+		"config.yaml is corrected (give the agent lab-qemu-100 another id)")
 	if r := menuOf(pe, "lab-node-pve"); r.body["kills_panel"] != false || r.body["panel_unknown"] != true || r.body["warning"] != warning || powerAsksOf(r) != powerAsks("node", true) {
 		t.Errorf("panel_hosts names the id: the power menu of the node under the VM: %s", r.raw)
 	}

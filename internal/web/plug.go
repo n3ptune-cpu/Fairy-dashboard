@@ -61,9 +61,9 @@ type socketLook struct {
 	over  []string
 	// lock is why the panel never switches this socket ("": no lock): model.SocketLock...
 	lock string
-	// twice: the link names an id that is an agent's and is written like a guest's or a node's
-	// (Poller.NamesTwo): which of the two is meant cannot be told, and the link is one to no row.
-	twice bool
+	// end: where the way from the link down to its machine ended when it ended at no row, and why
+	// (poller.WayEnd): the sentence of the lock says the reason that is true for it.
+	end poller.WayEnd
 	// ownLink: the link is the plug's own (the only socket of a plug), not a line of socket_links.
 	ownLink bool
 	// knownOff: the linked machine was seen to go off, not longer ago than socketOffMarkFor, and has given no sign
@@ -85,9 +85,9 @@ type plugLooks struct {
 	agent map[string]plugRows
 	names map[string]string // the names of the agents' machines
 	panel map[string]bool   // panelRows (poller.PanelRows), worked out once
-	// unknown: the ids of panel_hosts that cannot be followed to a machine (poller.PanelUnknown), worked out
-	// once (unknownDone)
-	unknown     []string
+	// unknown: the ids of panel_hosts that cannot be followed to a machine, and why (poller.PanelUnknownWhy;
+	// nil: every id is followed), worked out once (unknownDone)
+	unknown     *poller.Unknown
 	unknownDone bool
 }
 
@@ -157,13 +157,13 @@ func (l *plugLooks) panelRows() map[string]bool {
 // text is the sentence for it.
 func (l *plugLooks) offLock() (why, text string) {
 	if !l.unknownDone {
-		l.unknown, l.unknownDone = l.s.Poller.PanelUnknown(l.snap), true
+		l.unknown, l.unknownDone = l.s.Poller.PanelUnknownWhy(l.snap), true
 	}
-	if len(l.unknown) == 0 {
+	if l.unknown == nil {
 		return "", ""
 	}
-	return model.SocketLockPanelUnknown, "Locked. The panel cannot follow panel_hosts (" + strings.Join(l.unknown, ", ") + ") to a machine right now: no row has that id, or the node under it has none. " +
-		"So it cannot tell which machine it runs on, and switches no socket off. This ends when the row is there (its Proxmox API answers) or panel_hosts is corrected."
+	return model.SocketLockPanelUnknown, "Locked. T" + l.unknown.Why[1:] + ". " +
+		"So it cannot tell which machine it runs on, and switches no socket off. This ends when " + l.unknown.Ends + "."
 }
 
 // look works out the link and the lock of one socket of st (a source an agent relays).
@@ -190,9 +190,7 @@ func (l *plugLooks) look(st model.PowerSourceState, sock model.PowerSocket) (soc
 		// off" and the state are the node's, never the guest's or that agent's) and in the words. A link the
 		// panel cannot follow to a row it has is a link to no row.
 		var over []*model.System
-		if k.twice = l.s.Poller.NamesTwo(k.link); !k.twice {
-			k.row, over = poller.MachineUnder(k.shown, l.row, l.s.Poller.RunsOn, l.s.Poller.NamesTwo)
-		}
+		k.row, over, k.end = l.s.Poller.Under(k.link, l.row)
 		for i, r := range over {
 			if i == 0 {
 				k.named = r
@@ -380,9 +378,15 @@ func (l *plugLooks) sockets(st model.PowerSourceState, admin, all bool, see func
 // and a home_assistant_system that names no row is named.
 func (k socketLook) whyText(why, machine string) string {
 	switch {
-	case why == model.SocketLockLinkUnknown && k.twice:
+	case why == model.SocketLockLinkUnknown && k.end.Why == poller.WayTwice && k.end.ID == k.link:
+		// (only two things that exist make it so: an agent with that id, and a node or a guest the Proxmox API lists)
 		return "Locked. This socket is linked to " + k.link + ", and that id names two things: an agent, and a node or a guest of a Proxmox entry. " +
 			"The panel cannot tell which is meant. Give the agent another id."
+	case why == model.SocketLockLinkUnknown && k.end.Why == poller.WayTwice:
+		return "Locked. This socket is linked to " + k.link + ", and " + k.end.Text(k.link) + ". Give the agent " + k.end.ID + " another id."
+	case why == model.SocketLockLinkUnknown && (k.end.Why == poller.WayBack || k.end.Why == poller.WayLong):
+		return "Locked. This socket is linked to " + k.link + ", and " + k.end.Text(k.link) + ": the panel does not follow that to a machine. " +
+			"Write the node or the guest the agent runs on in links_to, or link the socket to the node."
 	case why == model.SocketLockLinkUnknown && k.named != nil && (k.named.Kind == "qemu" || k.named.Kind == "lxc"):
 		return "Locked. This socket is linked to " + k.named.Name + ", a virtual machine or container, and the panel does not have the Proxmox node it runs on. A socket feeds the node: link it to the node."
 	case why == model.SocketLockLinkUnknown && k.named != nil:

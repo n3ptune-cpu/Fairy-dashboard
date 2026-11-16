@@ -605,9 +605,8 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	switch {
 	case powerctl.KillsPanel(s.Poller, x):
 		h.WhyNot = "the panel itself runs on it"
-	case powerctl.PanelUnknown(s.Poller) != "":
-		// the panel does not know its own machine: no host is switched off by a run until it does
-		h.WhyNot = "the panel may run on it (" + powerctl.PanelUnknown(s.Poller) + ")"
+	case s.wuPanelUnknown() != "":
+		h.WhyNot = s.wuPanelUnknown()
 	case !a.SelfUpdate || !a.HasControl():
 		h.WhyNot = "its agent cannot be updated from the panel (self_update: true and a control token in the panel's entry for it)"
 	default:
@@ -1463,4 +1462,20 @@ func wuConfirmText(r *wakerun.Run) string {
 	return fmt.Sprintf("%s woke %s for the run %s started, and %s for your passkey: confirm %s%s in the panel (the banner on every page). "+
 		"Not confirmed: not updated, and a machine that is armed switches itself off again.",
 		"Fairy", andNames(names), r.By, map[bool]string{true: "it waits", false: "they wait"}[len(names) == 1], wait, until)
+}
+
+// wuPanelUnknown is why no host can take part in a run of "Update unpowered hosts" while the panel cannot tell
+// which machine it runs on ("": it can). The whole run is held back, for every host and for every part of a
+// run: a host that would only be updated while it is on (update_only), and the wake of one, are no cut of
+// power, and are refused with the rest. A run switches the machines it woke off again at its end, and any of
+// them may be the panel's; a run that leaves a part out for this state does not exist, and a host that cannot
+// join at all is the rule that errs to the safe side. The sentence says that, and why the panel does not know
+// its machine (powerctl.PanelUnknown).
+func (s *Server) wuPanelUnknown() string {
+	why, ends := powerctl.PanelUnknown(s.Poller)
+	if why == "" {
+		return ""
+	}
+	return "the panel cannot tell which machine it runs on, and a run switches machines off at its end. So the whole run is refused until " + ends +
+		", with this machine and with every other, also a run that would only wake or update one (" + why + ")"
 }

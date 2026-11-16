@@ -422,11 +422,12 @@ const (
 	// cannot tell which machine hangs on it, so none of its other locks and no question about a running machine
 	// can be trusted for it.
 	SocketLockLinkUnknown = "link_unknown"
-	// SocketLockPanelUnknown: panel_hosts names an id the panel cannot follow to a machine right now (no row
-	// has it: a guest of a Proxmox API that has not answered since the panel started, a typing mistake; or the
-	// id names two things). The panel then does not know which machine it runs on, and switches no socket OFF,
-	// of any agent: any of them could be the one that powers the panel. "On" is not held back. It ends when
-	// the row is there or panel_hosts is corrected.
+	// SocketLockPanelUnknown: panel_hosts names an id the panel cannot follow to a machine right now: no row
+	// has it (a guest of a Proxmox API that has not answered since the panel started, a typing mistake), the
+	// node under it has none, the id names two things, or links_to leads back or over too many agents. The
+	// panel then does not know which machine it runs on, and switches no socket OFF, of any agent: any of them
+	// could be the one that powers the panel. "On" is not held back. It ends when the row is there, or when
+	// panel_hosts or the entry that is wrong is corrected: the socket's sentence says which it is.
 	SocketLockPanelUnknown = "panel_unknown"
 )
 
@@ -718,9 +719,9 @@ type PowerCaps struct {
 	Actions    []PowerActionCap `json:"actions"`
 	Pending    *PowerPending    `json:"pending"`
 	KillsPanel bool             `json:"kills_panel"`
-	// PanelUnknown: the panel cannot tell which machine it runs on (an id of panel_hosts has no row right
-	// now), and this row is a host (a node, an agent's machine): it may be the panel's. Warning says so, and
-	// a reboot asks for the typed name as on a row with KillsPanel.
+	// PanelUnknown: the panel cannot tell which machine it runs on (it cannot follow an id of panel_hosts to
+	// a machine right now), and this row is a host (a node, an agent's machine): it may be the panel's.
+	// Warning says so, with the reason, and a reboot asks for the typed name as on a row with KillsPanel.
 	PanelUnknown bool    `json:"panel_unknown"`
 	Warning      *string `json:"warning"`
 }

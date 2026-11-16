@@ -1,6 +1,7 @@
 package poller
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -19,9 +20,9 @@ import (
 // two of them can take different ways. (Until the fourth round of stage 1a the way down was in internal/web,
 // for the sockets alone, and the power menu had an older rule of its own.)
 
-// ChainMax is the most rows a link is followed over before the machine under it. A real link goes over two (an
-// agent, and the guest it runs in). The rows that were seen end a chain of links_to that leads back to itself;
-// the bound ends one that is merely long.
+// ChainMax is the most agents a link is followed over before the machine under it: the agents on the way that
+// name where they run (links_to:, node:). A real link goes over one (an agent in a guest). The rows that were
+// seen end a chain of links_to that leads back to itself; the bound ends one that is merely long.
 const ChainMax = 8
 
 // RowsOf makes the lookup of a row by its id that the functions of this file take, over one list of rows.
@@ -33,6 +34,22 @@ func RowsOf(snap []model.System) func(id string) *model.System {
 	return func(id string) *model.System { return rows[id] }
 }
 
+// WayEnd is where a way down ended when there is no machine at its end, and why (Why is "" for a way that ends
+// at a machine). The lock of a socket, the power menu and the refusal of a run say it in words (WayEnd.Text).
+type WayEnd struct {
+	Why string // WayNoRow, WayNoNode, WayTwice, WayBack, WayLong
+	ID  string // the id the way ended at
+}
+
+// Why a way down ends at no machine.
+const (
+	WayNoRow  = "no_row"  // no row has the id (a guest of a Proxmox API that has not answered since the panel started, a typing mistake)
+	WayNoNode = "no_node" // the id is a guest's, and the node it runs on has no row
+	WayTwice  = "twice"   // the id names two things (Poller.NamesTwo)
+	WayBack   = "back"    // the links lead back to this id
+	WayLong   = "long"    // the links lead over more agents than ChainMax
+)
+
 // MachineUnder follows a row (start, the id it is shown as) down to the machine under it, and returns that
 // machine's row and the rows it went over, the first one first.
 //
@@ -41,44 +58,140 @@ func RowsOf(snap []model.System) func(id string) *model.System {
 //   - the row of an agent that runs in a guest, or on a node whose row is another agent's (links_to:, node:):
 //     where it runs (runsOn), and on from there.
 //
-// machine is nil when the way ends at no row: the id has none, a guest's node has none, the row an agent runs
-// on has none (unless the configuration makes that row the agent's own machine under its other id: own), or
-// the links lead back to a row that was seen. A socket with such a link is locked (SocketLockLinkUnknown).
+// Where an agent runs is an id as the configuration has it, and the way goes on at the row that id is SHOWN as
+// (shown: Poller.ShownID), as its start does: a node's own agent has no row of its own while the node's row is
+// there, and links_to that names such an agent by the agent's id leads to the node's row. (Until the fix round
+// after the fifth review the way went on at the id as it is written and ended there, at no row: panel_hosts
+// with an agent whose links_to names a node's own agent left the panel "without a machine it knows" for good,
+// while PanelRows, which looks ids up by what they are shown as, had the node.)
+//
+// machine is nil when the way ends at no row, and end says why: the id has none (WayNoRow), a guest's node has
+// none (WayNoNode), the links lead back to a row that was seen (WayBack), or over more agents than ChainMax
+// (WayLong). The row an agent runs on having none is WayNoRow too, unless the configuration makes that row the
+// agent's own machine under its other id (own): then the agent's row is the machine. A socket with such a link
+// is locked (SocketLockLinkUnknown).
 //
 // It is nil too when the way meets an id that names two things (twice: Poller.NamesTwo, an agent whose id is
-// written like a guest's or a node's). The rows have one row for an id, and which of the two it is right now
-// says nothing about which was meant: the way ends there, as at an id without a row.
-func MachineUnder(start string, row func(id string) *model.System, runsOn func(agentID string) (to string, own bool), twice func(id string) bool) (machine *model.System, over []*model.System) {
+// also the id of a node or a guest the Proxmox API lists; WayTwice). The rows have one row for an id, and
+// which of the two it is right now says nothing about which was meant: the way ends there.
+//
+// ChainMax counts the agents on the way that name where they run: each one the way goes on from, and one that
+// is named by its id and shown as its node's row. `fairy admin config check` counts the same from the file.
+func MachineUnder(start string, row func(id string) *model.System, runsOn func(agentID string) (to string, own bool), twice func(id string) bool,
+	shown func(id string) string) (machine *model.System, over []*model.System, end WayEnd) {
 	seen := map[string]bool{}
+	agents := 0 // the agents on the way that name where they run
 	for cur := start; ; {
+		if twice != nil && twice(cur) {
+			return nil, over, WayEnd{WayTwice, cur}
+		}
+		if seen[cur] {
+			return nil, over, WayEnd{WayBack, cur}
+		}
 		r := row(cur)
-		if r == nil || seen[cur] || (twice != nil && twice(cur)) {
-			return nil, over
+		if r == nil {
+			return nil, over, WayEnd{WayNoRow, cur}
 		}
 		seen[cur] = true
 		switch r.Kind {
 		case "node":
-			return r, over
+			return r, over, WayEnd{}
 		case "qemu", "lxc":
 			over = append(over, r)
-			if r.ParentID == nil {
-				return nil, over
+			if r.ParentID != nil {
+				if n := row(*r.ParentID); n != nil && n.Kind == "node" {
+					return n, over, WayEnd{}
+				}
 			}
-			if n := row(*r.ParentID); n != nil && n.Kind == "node" {
-				return n, over
-			}
-			return nil, over
+			return nil, over, WayEnd{WayNoNode, cur}
 		}
 		to, own := runsOn(r.ID)
-		if to == "" || to == r.ID || (own && row(to) == nil) {
-			return r, over
+		if to == "" || to == r.ID {
+			return r, over, WayEnd{}
 		}
-		if len(over) == ChainMax {
-			return nil, over
+		if agents++; agents > ChainMax {
+			return nil, over, WayEnd{WayLong, cur}
 		}
-		over, cur = append(over, r), to
+		if own && row(to) == nil {
+			return r, over, WayEnd{}
+		}
+		over = append(over, r)
+		if id, yes := twiceAt(to, runsOn, twice); yes { // as it is written, before it is looked up as a row
+			return nil, over, WayEnd{WayTwice, id}
+		}
+		cur = to
+		if shown != nil {
+			if cur = shown(to); cur != to {
+				// to is shown as another row: a node's own agent, named by its id, as a part of its node's row.
+				// It is an agent on the way like the others.
+				if next, _ := runsOn(to); next != "" {
+					if agents++; agents > ChainMax {
+						return nil, over, WayEnd{WayLong, to}
+					}
+				}
+			}
+		}
 	}
 }
+
+// twiceAt reports whether an id must not be looked up as the row it is shown as, because that row is not one
+// thing's: the id names two things (twice), or it is an agent's and where that agent runs does (the row an
+// agent is shown as is worked out from the row of that id, which is either's). which is the id that names two.
+func twiceAt(id string, runsOn func(agentID string) (to string, own bool), twice func(id string) bool) (which string, yes bool) {
+	if twice == nil {
+		return "", false
+	}
+	if twice(id) {
+		return id, true
+	}
+	if to, _ := runsOn(id); to != "" && twice(to) {
+		return to, true
+	}
+	return "", false
+}
+
+// Under follows the machine known as id (an id as a configuration has it: the link of a socket, panel_hosts,
+// home_assistant_system) down to the machine under it: MachineUnder from the row the id is shown as, with what
+// this panel knows about its agents. It is the one way down, for everything that asks.
+func (p *Poller) Under(id string, row func(id string) *model.System) (machine *model.System, over []*model.System, end WayEnd) {
+	// as it is written, before the row it is shown as is asked: that row may be another thing's (MachineUnder
+	// asks the same of every later step)
+	if which, yes := twiceAt(id, p.RunsOn, p.NamesTwo); yes {
+		return nil, nil, WayEnd{WayTwice, which}
+	}
+	return MachineUnder(p.ShownID(id), row, p.RunsOn, p.NamesTwo, p.ShownID)
+}
+
+// Text says in words why the way from the id from (as it is written in the configuration) ended at no machine.
+func (e WayEnd) Text(from string) string {
+	lead := from + " leads to " + e.ID + ", "
+	switch e.Why {
+	case WayNoRow:
+		if e.ID == from {
+			return "no row has the id " + from
+		}
+		return lead + "and no row has that id"
+	case WayNoNode:
+		if e.ID == from {
+			return from + " is a guest, and the node it runs on has no row"
+		}
+		return lead + "a guest, and the node it runs on has no row"
+	case WayTwice:
+		if e.ID == from {
+			return from + " is the id of an agent and of a node or a guest the Proxmox API lists, and the panel cannot tell which is meant"
+		}
+		return lead + "which is the id of an agent and of a node or a guest the Proxmox API lists, and the panel cannot tell which is meant"
+	case WayBack:
+		return "links_to leads from " + from + " back to " + e.ID
+	case WayLong:
+		return fmt.Sprintf("links_to leads from %s over more than %d agents", from, ChainMax)
+	}
+	return ""
+}
+
+// missing reports that the way ended because a row is not there (which a Proxmox API that answers can end),
+// and not because of what the configuration says.
+func (e WayEnd) missing() bool { return e.Why == WayNoRow || e.Why == WayNoNode }
 
 // RunsOn is where the agent with this id runs when that is not a machine of its own: the node or the guest its
 // entry names (node:, links_to:). "" for an id that is no agent's and for an agent that names neither. own
@@ -95,22 +208,30 @@ func (p *Poller) RunsOn(agentID string) (to string, own bool) {
 	return to, slices.Contains(p.SameMachine(agentID), to)
 }
 
-// NamesTwo reports whether an id names two things at once: it is an agent's id, and it is written like the id
-// of a node or a guest of a proxmox: entry (<id_prefix>node-<name>, <id_prefix>qemu-<number>,
-// <id_prefix>lxc-<number>). The panel keeps one row for an id, so the agent's row and the guest's (or the
-// node's) take each other's place, and a link or panel_hosts with that id can mean either: a guest's id is
-// followed to its node, an agent's is not. Nothing can tell which was meant, so every way that meets such an
-// id ends there (MachineUnder), and `fairy admin config check` has a WARN for the agent's entry: give the
-// agent another id.
+// NamesTwo reports whether an id names two things at once: it is an agent's id, and it is exactly the id of a
+// node or a guest that a Proxmox API has listed (<id_prefix>node-<name>, <id_prefix>qemu-<number>,
+// <id_prefix>lxc-<number>: the ids of its last answer, Poller.PVERef). The panel keeps one row for an id, so
+// the agent's row and the guest's (or the node's) take each other's place, and a link or panel_hosts with that
+// id can mean either: a guest's id is followed to its node, an agent's is not. Nothing can tell which was
+// meant, so every way that meets such an id ends there (MachineUnder).
+//
+// Only two things that exist make an id name two. How an id is written decides nothing: until the fix round
+// after the fifth review every agent whose id began like a node's id of an entry (<id_prefix>node-...) counted,
+// whether such a node existed or not, and the sockets linked to the agents lab-node-red and lab-node-pve-agent
+// were locked after the update, with a sentence about a node that is not there. So before a Proxmox API has
+// answered, an id is nobody's but the agent's; `fairy admin config check` says what it can tell from the file.
 func (p *Poller) NamesTwo(id string) bool {
 	if _, ok := p.AgentByID(id); !ok {
 		return false
 	}
-	return ProxmoxIDForm(id, p.Clusters())
+	_, _, _, _, listed := p.PVERef(id)
+	return listed
 }
 
 // ProxmoxIDForm reports whether id is written like the id of a node or a guest of one of these proxmox:
-// entries: <id_prefix>node-<name>, <id_prefix>qemu-<number> or <id_prefix>lxc-<number>.
+// entries: <id_prefix>node-<name>, <id_prefix>qemu-<number> or <id_prefix>lxc-<number>. It says what an id
+// looks like, for `fairy admin config check` (which cannot know what a Proxmox API lists); nothing in the
+// running panel is decided by it.
 func ProxmoxIDForm(id string, clusters []config.Proxmox) bool {
 	for _, c := range clusters {
 		for _, kind := range []string{"node-", "qemu-", "lxc-"} {
@@ -163,7 +284,7 @@ func (p *Poller) MachineRows(id string, row func(id string) *model.System) (ids 
 			}
 		}
 	}
-	m, over := MachineUnder(p.ShownID(id), row, p.RunsOn, p.NamesTwo)
+	m, over, _ := p.Under(id, row)
 	for _, r := range over {
 		add(r.ID)
 	}
@@ -216,7 +337,7 @@ func (p *Poller) PanelRows(snap []model.System) map[string]bool {
 // PanelUnknown are the ids of panel_hosts that cannot be followed to a machine among the rows as they are
 // (snap): no row has the id (a guest of a Proxmox API that has not answered since the panel started, a typing
 // mistake), the node of the guest or the row an agent runs on has none, the links lead back to themselves or
-// over more rows than ChainMax, or the id names two things (NamesTwo). nil when every id is followed, and
+// over more agents than ChainMax, or the id names two things (NamesTwo). nil when every id is followed, and
 // when panel_hosts is empty: a panel that was told nothing about its machine marks and locks nothing, as
 // before.
 //
@@ -234,14 +355,58 @@ func (p *Poller) PanelRows(snap []model.System) map[string]bool {
 // in a VM, named by the VM's id, did not know its node for as long as that Proxmox API had not answered; the
 // node's socket had no lock, a reboot of the node's agent was a click, and the node could join a run.)
 func (p *Poller) PanelUnknown(snap []model.System) []string {
+	u := p.PanelUnknownWhy(snap)
+	if u == nil {
+		return nil
+	}
+	return u.IDs
+}
+
+// Unknown is the state of a panel that cannot follow panel_hosts to a machine, in words that are true for the
+// ids it is about (PanelUnknownWhy).
+type Unknown struct {
+	IDs []string // the ids of panel_hosts that cannot be followed, as they are written
+	// Why: "the panel cannot follow panel_hosts (<ids>) to a machine right now: <why, for each id>".
+	Why string
+	// Ends is what ends the state, to follow "This ends when " or "Until ": the row being there (when a row is
+	// all that is missing), or the configuration being corrected, with what to change.
+	Ends string
+}
+
+// PanelUnknownWhy is PanelUnknown with the reason for every id (WayEnd.Text); nil when every id is followed.
+func (p *Poller) PanelUnknownWhy(snap []model.System) *Unknown {
 	row := RowsOf(snap)
-	var unknown []string
+	var u Unknown
+	var why, fix []string
+	missing := true
 	for _, h := range p.Cfg.PanelHosts {
-		if m, _ := MachineUnder(p.ShownID(h), row, p.RunsOn, p.NamesTwo); m == nil {
-			unknown = append(unknown, h)
+		m, _, end := p.Under(h, row)
+		if m != nil {
+			continue
+		}
+		u.IDs = append(u.IDs, h)
+		why = append(why, end.Text(h))
+		var how string
+		switch {
+		case end.missing():
+			continue
+		case end.Why == WayTwice:
+			how = "give the agent " + end.ID + " another id"
+		default:
+			how = "write the node or the guest the agent runs on in links_to"
+		}
+		if missing = false; !slices.Contains(fix, how) {
+			fix = append(fix, how)
 		}
 	}
-	return unknown
+	if u.IDs == nil {
+		return nil
+	}
+	u.Why = "the panel cannot follow panel_hosts (" + strings.Join(u.IDs, ", ") + ") to a machine right now: " + strings.Join(why, "; ")
+	if u.Ends = "the row is there (its Proxmox API answers) or panel_hosts is corrected"; !missing {
+		u.Ends = "config.yaml is corrected (" + strings.Join(fix, "; ") + ")"
+	}
+	return &u
 }
 
 // runsOnOneOf reports whether the row with this id is an agent's that runs on one of rows: the agent's entry

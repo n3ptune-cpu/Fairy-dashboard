@@ -347,9 +347,15 @@ func TestUpdateUnpoweredHostsLeavesOutTheNodeUnderThePanelHoweverItIsNamed(t *te
 // panelUnknownSaid are the two sentences of a panel that cannot follow panel_hosts (ids) to a machine: the
 // warning of a host's power menu, and why a host cannot take part in a run.
 func panelUnknownSaid(ids string) (warning, whyNot string) {
-	why := "the panel cannot follow panel_hosts (" + ids + ") to a machine right now: no row has that id, or the node under it has none"
-	return "This may be the machine the panel runs on: " + why + ". Until the row is there or panel_hosts is corrected, a reboot of a host asks for its name.",
-		"the panel may run on it (" + why + ")"
+	return panelUnknownSaidFor(ids, "no row has the id "+ids, "the row is there (its Proxmox API answers) or panel_hosts is corrected")
+}
+
+// panelUnknownSaidFor is panelUnknownSaid with the reason the ids cannot be followed and what ends the state.
+func panelUnknownSaidFor(ids, reason, ends string) (warning, whyNot string) {
+	why := "the panel cannot follow panel_hosts (" + ids + ") to a machine right now: " + reason
+	return "This may be the machine the panel runs on: " + why + ". Until " + ends + ", a reboot of a host asks for its name.",
+		"the panel cannot tell which machine it runs on, and a run switches machines off at its end. So the whole run is refused until " + ends +
+			", with this machine and with every other, also a run that would only wake or update one (" + why + ")"
 }
 
 // panelUnknownRowsAre is panelRowsAre for a panel that cannot follow panel_hosts (ids) to a machine. The rows
@@ -360,7 +366,22 @@ func panelUnknownSaid(ids string) (warning, whyNot string) {
 func panelUnknownRowsAre(t *testing.T, what string, pe *plugEnv, rows []string, plain panelLook, ids string) {
 	t.Helper()
 	got := panelLookOf(t, pe)
-	warning, whyNot := panelUnknownSaid(ids)
+	// (the reason that is true for each id of these rigs, and what ends the state)
+	reason, ends := map[string]string{
+		"lostagent":    "lostagent leads to lab-qemu-301, a guest, and the node it runs on has no row",
+		"via2agent":    "via2agent leads to lab-qemu-301, a guest, and the node it runs on has no row",
+		"lab-qemu-301": "lab-qemu-301 is a guest, and the node it runs on has no row",
+		"lab-lxc-302":  "lab-lxc-302 is a guest, and the node it runs on has no row",
+		"loopa":        "links_to leads from loopa back to loopa",
+		"loopb":        "links_to leads from loopb back to loopb",
+	}[ids], "the row is there (its Proxmox API answers) or panel_hosts is corrected"
+	if reason == "" {
+		reason = "no row has the id " + ids
+	}
+	if strings.HasPrefix(ids, "loop") {
+		ends = "config.yaml is corrected (write the node or the guest the agent runs on in links_to)"
+	}
+	warning, whyNot := panelUnknownSaidFor(ids, reason, ends)
 	if len(got.menu) != len(plain.menu) || len(got.run) != len(plain.run) {
 		t.Fatalf("%s: the fixture: %d rows and %d lines, without the panel %d and %d", what, len(got.menu), len(got.run), len(plain.menu), len(plain.run))
 	}
