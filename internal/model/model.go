@@ -383,7 +383,8 @@ type PowerSocket struct {
 	// Lock is set when the panel itself never switches this socket, in either direction, because of what it
 	// feeds, or because it cannot tell what it feeds: SocketLockAgent, SocketLockHomeAssistant,
 	// SocketLockHAUnknown, SocketLockHAUnset, SocketLockPanel or SocketLockLinkUnknown. Why is then the same
-	// word.
+	// word. One lock holds for "off" alone, SocketLockPanelUnknown: a socket that is on has it, and can then
+	// not be switched (off); a socket that is off does not, and can be switched on.
 	Lock string `json:"lock,omitempty"`
 }
 
@@ -421,6 +422,12 @@ const (
 	// cannot tell which machine hangs on it, so none of its other locks and no question about a running machine
 	// can be trusted for it.
 	SocketLockLinkUnknown = "link_unknown"
+	// SocketLockPanelUnknown: panel_hosts names an id the panel cannot follow to a machine right now (no row
+	// has it: a guest of a Proxmox API that has not answered since the panel started, a typing mistake; or the
+	// id names two things). The panel then does not know which machine it runs on, and switches no socket OFF,
+	// of any agent: any of them could be the one that powers the panel. "On" is not held back. It ends when
+	// the row is there or panel_hosts is corrected.
+	SocketLockPanelUnknown = "panel_unknown"
 )
 
 // PowerOverview is GET /api/power.
@@ -711,7 +718,11 @@ type PowerCaps struct {
 	Actions    []PowerActionCap `json:"actions"`
 	Pending    *PowerPending    `json:"pending"`
 	KillsPanel bool             `json:"kills_panel"`
-	Warning    *string          `json:"warning"`
+	// PanelUnknown: the panel cannot tell which machine it runs on (an id of panel_hosts has no row right
+	// now), and this row is a host (a node, an agent's machine): it may be the panel's. Warning says so, and
+	// a reboot asks for the typed name as on a row with KillsPanel.
+	PanelUnknown bool    `json:"panel_unknown"`
+	Warning      *string `json:"warning"`
 }
 
 // PowerResult is the answer to POST /api/systems/{id}/power.

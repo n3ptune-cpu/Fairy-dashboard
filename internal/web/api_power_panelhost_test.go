@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
@@ -197,8 +198,8 @@ func pveCalls(pe *plugEnv) []string {
 func TestPowerMenuSaysThePanelRunsHereHoweverPanelHostsNamesIt(t *testing.T) {
 	plain := map[bool]panelLook{}
 	for _, lone := range []bool{false, true} {
-		plain[lone] = panelLookOf(t, plugNodeRig{link: "lab-node-pve2", panelHosts: "no-such-box", lone: lone, power: true}.env(t))
-		for id, menu := range plain[lone].menu { // the fixture: without the panel no row is marked
+		plain[lone] = panelLookOf(t, plugNodeRig{link: "lab-node-pve2", noPanel: true, lone: lone, power: true}.env(t)) // (a panel that was told nothing marks no row)
+		for id, menu := range plain[lone].menu {                                                                        // the fixture: without the panel no row is marked
 			if !strings.Contains(menu, `"kills_panel":false`) || strings.Contains(menu, "The panel itself") {
 				t.Fatalf("the fixture: the menu of %s with a panel that runs on no row: %s", id, menu)
 			}
@@ -284,7 +285,7 @@ func TestUpdateUnpoweredHostsLeavesOutTheNodeUnderThePanelHoweverItIsNamed(t *te
 	rig := func(panelHosts string) *plugEnv {
 		return plugNodeRig{link: "lab-node-pve2", panelHosts: panelHosts, power: true, nodeAgent: "self_update: true, control_token_env: CTL_A,"}.env(t)
 	}
-	if line := panelLookOf(t, rig("no-such-box")).run["lab-node-pve2"]; line["can_join"] != true || line["why_not"] != nil {
+	if line := panelLookOf(t, rig("panel-box")).run["lab-node-pve2"]; line["can_join"] != true || line["why_not"] != nil {
 		t.Fatalf("the fixture: the line of PVE2 with a panel that runs elsewhere: %v", line)
 	}
 	var direct map[string]any
@@ -343,17 +344,97 @@ func TestUpdateUnpoweredHostsLeavesOutTheNodeUnderThePanelHoweverItIsNamed(t *te
 	}
 }
 
-// panel_hosts that cannot be followed to a machine. The power menu and "Update unpowered hosts" do what the
-// lock of a socket does (they ask the same rule): what is named counts as it is written, with the rows the
-// way went over before it ended, and no row beyond that is guessed. So the rows on the way say "The panel
-// itself runs here", and no node does: the panel cannot tell which one.
+// panelUnknownSaid are the two sentences of a panel that cannot follow panel_hosts (ids) to a machine: the
+// warning of a host's power menu, and why a host cannot take part in a run.
+func panelUnknownSaid(ids string) (warning, whyNot string) {
+	why := "the panel cannot follow panel_hosts (" + ids + ") to a machine right now: no row has that id, or the node under it has none"
+	return "This may be the machine the panel runs on: " + why + ". Until the row is there or panel_hosts is corrected, a reboot of a host asks for its name.",
+		"the panel may run on it (" + why + ")"
+}
+
+// panelUnknownRowsAre is panelRowsAre for a panel that cannot follow panel_hosts (ids) to a machine. The rows
+// that are named, and the rows the way went over, are the panel's as before (rows). Every other HOST (a node's
+// row, an agent's row) may be the panel's machine: its menu says so (panel_unknown, the warning), a reboot of
+// it asks for the typed name, and it cannot take part in a run. What is no cut is not touched: cancel and wake
+// ask nothing, as on every row. A guest that is not named is, byte for byte, what it is without the panel.
+func panelUnknownRowsAre(t *testing.T, what string, pe *plugEnv, rows []string, plain panelLook, ids string) {
+	t.Helper()
+	got := panelLookOf(t, pe)
+	warning, whyNot := panelUnknownSaid(ids)
+	if len(got.menu) != len(plain.menu) || len(got.run) != len(plain.run) {
+		t.Fatalf("%s: the fixture: %d rows and %d lines, without the panel %d and %d", what, len(got.menu), len(got.run), len(plain.menu), len(plain.run))
+	}
+	hosts := 0
+	for id, kind := range got.kinds {
+		r := pe.do("GET", "/api/systems/"+id+"/power", nil, "Cookie", pe.admin)
+		asks, line := powerAsksOf(r), got.run[id]
+		switch {
+		case slices.Contains(rows, id):
+			if r.body["kills_panel"] != true || r.body["panel_unknown"] != false || r.body["warning"] != panelRunsHere || asks != powerAsks(kind, true) {
+				t.Errorf("%s: the power menu of %s (%s), a row that is named: kills_panel %v, panel_unknown %v, warning %v, asks %q", what, id, kind, r.body["kills_panel"], r.body["panel_unknown"], r.body["warning"], asks)
+			}
+			if line != nil && (line["can_join"] != false || line["why_not"] != panelRunsOnIt) {
+				t.Errorf("%s: %s, a row that is named, on the page of Update unpowered hosts: %v", what, id, line)
+			}
+		case kind == "node" || kind == "agent":
+			hosts++
+			if r.body["kills_panel"] != false || r.body["panel_unknown"] != true || r.body["warning"] != warning || asks != powerAsks(kind, true) {
+				t.Errorf("%s: the power menu of %s (%s), a host that may be the panel's: kills_panel %v, panel_unknown %v, warning %v, asks %q;\nwant false, true, %q, %q",
+					what, id, kind, r.body["kills_panel"], r.body["panel_unknown"], r.body["warning"], asks, warning, powerAsks(kind, true))
+			}
+			// nothing but what a reboot asks is another menu than without the panel
+			if !menusDifferInRebootOnly(plain.menu[id], got.menu[id]) {
+				t.Errorf("%s: the power menu of %s differs from the one without the panel in more than the reboot's confirmation:\n%s\n%s", what, id, got.menu[id], plain.menu[id])
+			}
+			if (line == nil) != (plain.run[id] == nil) || (line != nil && (line["can_join"] != false || line["can_wake"] != false || line["why_not"] != whyNot)) {
+				t.Errorf("%s: %s, a host that may be the panel's, on the page of Update unpowered hosts: %v", what, id, line)
+			}
+		default: // a guest that is not named
+			if r.body["kills_panel"] != false || r.body["panel_unknown"] != false || r.body["warning"] != nil || asks != powerAsks(kind, false) || got.menu[id] != plain.menu[id] {
+				t.Errorf("%s: the power menu of the guest %s is not what it is without the panel:\n%s\n%s", what, id, got.menu[id], plain.menu[id])
+			}
+		}
+	}
+	if hosts < 5 {
+		t.Fatalf("%s: the fixture: %d hosts that are not named", what, hosts)
+	}
+}
+
+// menusDifferInRebootOnly reports whether two power menus are the same but for panel_unknown, the warning and
+// what a reboot asks ("click" in the one, "typed" in the other).
+func menusDifferInRebootOnly(plain, unknown string) bool {
+	var a, b map[string]any
+	if json.Unmarshal([]byte(plain), &a) != nil || json.Unmarshal([]byte(unknown), &b) != nil {
+		return false
+	}
+	delete(a, "panel_unknown")
+	delete(b, "panel_unknown")
+	delete(a, "warning")
+	delete(b, "warning")
+	for _, m := range []map[string]any{a, b} {
+		list, _ := m["actions"].([]any)
+		for _, x := range list {
+			if act, _ := x.(map[string]any); act["action"] == "reboot" {
+				delete(act, "confirm")
+			}
+		}
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+// panel_hosts that cannot be followed to a machine: an id no row has, a guest or an agent whose node has no
+// row, links that lead back. What is named counts as it is written, with the rows the way went over before it
+// ended: those rows say "The panel itself runs here", as before.
 //
-// It is not turned into "the panel may run here" for every row. An id of panel_hosts needs no row (the
-// panel's machine need not be one the panel shows; after a start the guests are not there until Proxmox has
-// answered), and then every machine would be marked, each reboot would ask for the name and no machine could
-// take part in a run, for as long as that id has no row.
+// And the panel does not know which machine it runs on. It used to guess nothing for that and mark nothing
+// more ("an id of panel_hosts needs no row"), which left the node under the panel without a mark and its
+// socket without a lock for as long as the row was missing: a panel in a VM, named by the VM's id, in the
+// minutes after a start, or for as long as that Proxmox API does not answer. Now it fails closed for every
+// host until the row is there or panel_hosts is corrected: a reboot of a node's or an agent's row asks for the
+// typed name, no host takes part in a run, and no socket is switched off. A guest that is not named is not
+// touched, and neither is anything that is no cut (TestPanelThatCannotFollowPanelHostsFailsClosed).
 func TestPanelHostsThatCannotBeFollowedToAMachine(t *testing.T) {
-	plain := panelLookOf(t, plugNodeRig{link: "lab-node-pve2", panelHosts: "no-such-box", power: true}.env(t))
+	plain := panelLookOf(t, plugNodeRig{link: "lab-node-pve2", noPanel: true, power: true}.env(t))
 	for _, w := range []panelWay{
 		// via2agent's entry names lostagent, which runs in lost-vm: the three are one machine, whichever is named
 		{"an agent in a guest whose node has no row", "lostagent", []string{"lostagent", "lab-qemu-301", "via2agent"}},
@@ -365,9 +446,9 @@ func TestPanelHostsThatCannotBeFollowedToAMachine(t *testing.T) {
 	} {
 		what := fmt.Sprintf("panel_hosts names %s (%s)", w.panel, w.name)
 		pe := plugNodeRig{link: "lab-node-pve2", panelHosts: w.panel, power: true}.env(t)
-		panelRowsAre(t, what, pe, w.rows, plain)
-		// the socket of the node says the same: it is not the panel's
-		if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["lock"] != nil || s["switchable"] != true {
+		panelUnknownRowsAre(t, what, pe, w.rows, plain, w.panel)
+		// the socket of the node says the same: it may be the panel's, and is not switched off
+		if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["lock"] != model.SocketLockPanelUnknown || s["switchable"] != false {
 			t.Errorf("%s: the socket of PVE2: %v", what, s)
 		}
 	}
@@ -382,7 +463,7 @@ func TestPanelHostsThatCannotBeFollowedToAMachine(t *testing.T) {
 		yaml := strings.Replace(plugConfig, "\nagents:\n", "\nagents:\n"+
 			"  - {id: loopa, name: LOOPA, url: \"http://loopa\", token_env: TOK_L0, links_to: loopb}\n"+
 			"  - {id: loopb, name: LOOPB, url: \"http://loopb\", token_env: TOK_L1, links_to: loopa}\n", 1)
-		pe := newPlugEnvWith(t, strings.Replace(yaml, "panel_hosts: [panel-box]", "panel_hosts: ["+panelHosts+"]", 1))
+		pe := newPlugEnvWith(t, strings.Replace(yaml, "panel_hosts: [panel-box]", "panel_hosts: ["+panelHosts+"]", 1)) // ("": the panel was told nothing)
 		pe.b.Mu.Lock()
 		for _, id := range []string{"loopa", "loopb"} {
 			pe.b.Metrics[id] = func() (jsonx.M, error) {
@@ -402,12 +483,12 @@ func TestPanelHostsThatCannotBeFollowedToAMachine(t *testing.T) {
 		}
 		return pe
 	}
-	plainLoop := panelLookOf(t, loop("no-such-box"))
+	plainLoop := panelLookOf(t, loop(""))
 	for _, w := range []panelWay{
 		{"an agent whose links lead back to it", "loopa", []string{"loopa", "loopb"}},
 		{"the other agent of the two", "loopb", []string{"loopa", "loopb"}},
 	} {
-		panelRowsAre(t, fmt.Sprintf("panel_hosts names %s (%s)", w.panel, w.name), loop(w.panel), w.rows, plainLoop)
+		panelUnknownRowsAre(t, fmt.Sprintf("panel_hosts names %s (%s)", w.panel, w.name), loop(w.panel), w.rows, plainLoop, w.panel)
 	}
 	ids := make([]string, 0, len(plainLoop.menu))
 	for id := range plainLoop.menu {
@@ -426,7 +507,7 @@ func TestPanelHostsThatCannotBeFollowedToAMachine(t *testing.T) {
 // Before the change the node's id in panel_hosts marked no row in that state: the id was compared with the
 // id of the row as it is written.
 func TestPowerMenuOfTheNodesAgentWhileTheNodeHasNoRow(t *testing.T) {
-	for _, panel := range []string{"nas-box", "nas-node-nas", "no-such-box"} {
+	for _, panel := range []string{"nas-box", "nas-node-nas", "panel-box"} { // (the last: a panel that runs on another machine)
 		t.Setenv("TOK_G", testutil.ReadToken+"g")
 		if strings.Count(plugConfig, "\nagents:\n") != 1 || strings.Count(plugConfig, "panel_hosts: [panel-box]") != 1 {
 			t.Fatal("the rig's config is not the one this fixture changes")
@@ -457,10 +538,10 @@ func TestPowerMenuOfTheNodesAgentWhileTheNodeHasNoRow(t *testing.T) {
 		if got := pe.s.Poller.SameMachine("nas-box"); fmt.Sprint(got) != "[nas-box nas-node-nas]" {
 			t.Fatalf("the fixture: the ids of the machine are %v", got)
 		}
-		on := panel != "no-such-box"
+		on := panel != "panel-box"
 		look := panelLookOf(t, pe)
 		for id, menu := range look.menu {
-			if want := on && id == "nas-box"; strings.Contains(menu, `"kills_panel":true`) != want || strings.Contains(menu, panelRunsHere) != want {
+			if want := (on && id == "nas-box") || id == panel; strings.Contains(menu, `"kills_panel":true`) != want || strings.Contains(menu, panelRunsHere) != want || strings.Contains(menu, `"panel_unknown":true`) {
 				t.Errorf("panel_hosts names %s: the power menu of %s: %s", panel, id, menu)
 			}
 		}
@@ -473,25 +554,32 @@ func TestPowerMenuOfTheNodesAgentWhileTheNodeHasNoRow(t *testing.T) {
 	}
 }
 
-// A panel that was not told where it runs (no panel_hosts) marks no row: no menu has kills_panel or the
-// warning, no line says "the panel itself runs on it", and every answer is, byte for byte, the one of a panel
-// whose panel_hosts names a machine it does not show.
+// A panel that was not told where it runs (no panel_hosts) marks no row: no menu has kills_panel, panel_unknown
+// or the warning, no line says "the panel itself runs on it", and every answer is, byte for byte, the one of a
+// panel that runs on a machine beside these (the rig's panel-box, whose own row is the one that differs). An
+// empty panel_hosts is not "the panel does not know its machine": nothing fails closed for it, as before.
 func TestPowerMenuWithoutPanelHostsMarksNoRow(t *testing.T) {
 	for _, lone := range []bool{false, true} {
 		none := panelLookOf(t, plugNodeRig{link: "lab-node-pve2", noPanel: true, lone: lone, power: true, nodeAgent: "self_update: true, control_token_env: CTL_A,"}.env(t))
-		elsewhere := panelLookOf(t, plugNodeRig{link: "lab-node-pve2", panelHosts: "no-such-box", lone: lone, power: true, nodeAgent: "self_update: true, control_token_env: CTL_A,"}.env(t))
+		elsewhere := panelLookOf(t, plugNodeRig{link: "lab-node-pve2", panelHosts: "panel-box", lone: lone, power: true, nodeAgent: "self_update: true, control_token_env: CTL_A,"}.env(t))
 		if len(none.menu) < 15 || len(none.run) < 9 {
 			t.Fatalf("the fixture: %d rows, %d of them machines with an agent", len(none.menu), len(none.run))
 		}
 		for id, menu := range none.menu {
-			if !strings.Contains(menu, `"kills_panel":false`) || !strings.Contains(menu, `"warning":null`) || strings.Contains(menu, "The panel itself") {
+			if !strings.Contains(menu, `"kills_panel":false`) || !strings.Contains(menu, `"panel_unknown":false`) || !strings.Contains(menu, `"warning":null`) || strings.Contains(menu, "The panel itself") {
 				t.Errorf("lone %v, no panel_hosts: the power menu of %s: %s", lone, id, menu)
+			}
+			if id == "panel-box" {
+				continue
 			}
 			if menu != elsewhere.menu[id] {
 				t.Errorf("lone %v, no panel_hosts: the power menu of %s is not the one of a panel that runs elsewhere:\n%s\n%s", lone, id, menu, elsewhere.menu[id])
 			}
 		}
 		for id, line := range none.run {
+			if id == "panel-box" {
+				continue
+			}
 			if line["why_not"] == panelRunsOnIt || line["why"] == panelRunsOnIt || !reflect.DeepEqual(line, elsewhere.run[id]) {
 				t.Errorf("lone %v, no panel_hosts: %s on the page of Update unpowered hosts: %v, with a panel that runs elsewhere %v", lone, id, line, elsewhere.run[id])
 			}
@@ -504,14 +592,15 @@ func TestPowerMenuWithoutPanelHostsMarksNoRow(t *testing.T) {
 // says which guest that is, and none is needed.
 func TestPowerMenuOfAnAgentInThePanelsGuestWithoutARow(t *testing.T) {
 	rig := func(panelHosts string) *plugEnv {
-		return plugNodeRig{link: "lab-node-pve2", otherExtra: "links_to: lab-qemu-999,", panelHosts: panelHosts, power: true}.env(t)
+		return plugNodeRig{link: "lab-node-pve2", otherExtra: "links_to: lab-qemu-999,", panelHosts: panelHosts, noPanel: panelHosts == "", power: true}.env(t)
 	}
-	plain := panelLookOf(t, rig("no-such-box"))
+	plain := panelLookOf(t, rig(""))
 	if plain.kinds["other"] != "agent" || plain.kinds["lab-qemu-999"] != "" {
 		t.Fatalf("the fixture: the row of other is %q, of lab-qemu-999 %q", plain.kinds["other"], plain.kinds["lab-qemu-999"])
 	}
-	panelRowsAre(t, "panel_hosts names lab-qemu-999, the guest without a row that other runs in", rig("lab-qemu-999"), []string{"other"}, plain)
-	panelRowsAre(t, "panel_hosts names lab-qemu-998, another guest without a row", rig("lab-qemu-998"), nil, plain)
+	// (which node that guest is on the panel cannot tell: every other host may be the panel's machine)
+	panelUnknownRowsAre(t, "panel_hosts names lab-qemu-999, the guest without a row that other runs in", rig("lab-qemu-999"), []string{"other"}, plain, "lab-qemu-999")
+	panelUnknownRowsAre(t, "panel_hosts names lab-qemu-998, another guest without a row", rig("lab-qemu-998"), nil, plain, "lab-qemu-998")
 }
 
 // An agent whose entry names the node's own agent (links_to: pve2agent) runs where that agent runs, on the
@@ -520,9 +609,9 @@ func TestPowerMenuOfAnAgentInThePanelsGuestWithoutARow(t *testing.T) {
 // that agent's entry names.
 func TestPowerMenuOfAnAgentWhoseEntryNamesTheNodesOwnAgent(t *testing.T) {
 	rig := func(panelHosts string) *plugEnv {
-		return plugNodeRig{link: "lab-node-pve2", otherExtra: "links_to: pve2agent,", panelHosts: panelHosts, power: true}.env(t)
+		return plugNodeRig{link: "lab-node-pve2", otherExtra: "links_to: pve2agent,", panelHosts: panelHosts, noPanel: panelHosts == "", power: true}.env(t)
 	}
-	plain := panelLookOf(t, rig("no-such-box"))
+	plain := panelLookOf(t, rig(""))
 	if plain.kinds["other"] != "agent" || plain.kinds["pve2agent"] != "" {
 		t.Fatalf("the fixture: the row of other is %q, of pve2agent %q", plain.kinds["other"], plain.kinds["pve2agent"])
 	}

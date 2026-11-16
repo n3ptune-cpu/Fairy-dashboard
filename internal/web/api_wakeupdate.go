@@ -605,6 +605,9 @@ func (s *Server) wuHostOf(x model.System) (wuHost, bool) {
 	switch {
 	case powerctl.KillsPanel(s.Poller, x):
 		h.WhyNot = "the panel itself runs on it"
+	case powerctl.PanelUnknown(s.Poller) != "":
+		// the panel does not know its own machine: no host is switched off by a run until it does
+		h.WhyNot = "the panel may run on it (" + powerctl.PanelUnknown(s.Poller) + ")"
 	case !a.SelfUpdate || !a.HasControl():
 		h.WhyNot = "its agent cannot be updated from the panel (self_update: true and a control token in the panel's entry for it)"
 	default:

@@ -361,7 +361,7 @@ func TestPlugLinkThatCannotBeFollowedToAMachine(t *testing.T) {
 				t.Fatal("the rule does not end")
 			}
 			return runs[id], id == "nodes-own"
-		})
+		}, nil)
 		ids := []string{}
 		for _, r := range over {
 			ids = append(ids, r.ID)
@@ -537,8 +537,10 @@ func TestPlugPanelHostsThatNamesAnAgent(t *testing.T) {
 		}
 	}
 	// The panel in an agent in a guest whose node the panel does not have. The socket of that guest is the
-	// panel's, said before "the link cannot be followed"; the node PVE2 is not that node, and its socket only
-	// asks the question every "off" for a running machine asks.
+	// panel's, said before "the link cannot be followed". Which node the panel runs on is then not known, and
+	// PVE2 may be it: its socket is not switched off (the lock of a panel that does not know its machine,
+	// TestPanelThatCannotFollowPanelHostsFailsClosed). It asked only the question every "off" for a running
+	// machine asks, until the fix round after the fourth review.
 	pe := plugNodeRig{link: "lab-qemu-301", panelHosts: "lostagent"}.env(t)
 	if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["switchable"] != false || s["lock"] != model.SocketLockPanel || s["note"] != plugSaidPanel {
 		t.Errorf("the panel in an agent in a guest without its node, linked to that guest: %v", s)
@@ -550,11 +552,11 @@ func TestPlugPanelHostsThatNamesAnAgent(t *testing.T) {
 		}
 	}
 	pe = plugNodeRig{link: "lab-node-pve2", panelHosts: "lostagent"}.env(t)
-	if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["switchable"] != true || s["lock"] != nil || s["system_id"] != "lab-node-pve2" {
+	if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["switchable"] != false || s["lock"] != model.SocketLockPanelUnknown || s["system_id"] != "lab-node-pve2" {
 		t.Errorf("the panel in an agent in a guest of another node, the socket of PVE2: %v", s)
 	}
-	if r := pe.flip("other/rack-bar", "node", "off"); r.code != 409 || r.body["detail"].(map[string]any)["code"] != codeMachineRunning {
-		t.Errorf("the panel in an agent in a guest of another node, off for PVE2: %d %s", r.code, r.raw)
+	if msg, _ := plugDetailOf(pe.flip("other/rack-bar", "node", "off")); !strings.HasPrefix(msg, "Locked. The panel cannot follow panel_hosts (lostagent) to a machine right now") {
+		t.Errorf("the panel in an agent in a guest of another node, off for PVE2: %s", msg)
 	}
 	// and a machine that has nothing to do with the panel's node keeps its socket: PVE, with the panel on PVE2
 	for _, panel := range []string{"vm2agent", "ctagent", "pve2agent", "sideagent", "viaagent"} {

@@ -3470,7 +3470,7 @@ function openPowerDialog(s, action) {
       action === "bmc_on" ? `Power on through the BMC, asked by ${esc(cap.via_label || "the relay agent")}. If it fails, check that the relay is cabled to (or on the network of) the BMC.` :
       action === "sleep" ? "Sleep (suspend to RAM, not hibernate). Wake it with Power on (Wake-on-LAN): from sleep that needs the network card's \"Allow this device to wake the computer\" / \"Wake on Magic Packet\"." : ""}
       <span class="note">via ${esc(cap.via_label || cap.via)}</span></p>
-    ${caps.kills_panel ? `<div class="warnbox">${esc(caps.warning)}</div>` : ""}
+    ${caps.kills_panel || caps.panel_unknown ? `<div class="warnbox">${esc(caps.warning)}</div>` : ""}
     ${cap.delayed ? `<label class="mfield">Delay <select id="m-delay"><option value="10">10 s</option><option value="60" selected>1 min</option><option value="300">5 min</option><option value="900">15 min</option></select>
       <span class="note">a countdown with Cancel is shown</span></label>` : ""}
     ${typed ? `<label class="mfield"><span>Type <b>${esc(s.name)}</b> to confirm</span><input class="input" id="m-confirm" autocomplete="off" spellcheck="false" placeholder="${esc(s.name)}"></label>` : ""}

@@ -39,7 +39,7 @@ func (s *Server) powerCaps(c *reqCtx) error {
 			a := &caps.Actions[i]
 			a.Available, a.Reason, a.Via, a.ViaLabel = false, model.P(why), nil, nil
 		}
-		caps.KillsPanel, caps.Warning = false, nil
+		caps.KillsPanel, caps.PanelUnknown, caps.Warning = false, false, nil
 	}
 	c.json(200, caps)
 	return nil

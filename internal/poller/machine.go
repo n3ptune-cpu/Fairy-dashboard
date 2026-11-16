@@ -2,7 +2,9 @@ package poller
 
 import (
 	"slices"
+	"strings"
 
+	"github.com/n3ptune-cpu/Fairy-dashboard/internal/config"
 	"github.com/n3ptune-cpu/Fairy-dashboard/internal/model"
 )
 
@@ -42,11 +44,15 @@ func RowsOf(snap []model.System) func(id string) *model.System {
 // machine is nil when the way ends at no row: the id has none, a guest's node has none, the row an agent runs
 // on has none (unless the configuration makes that row the agent's own machine under its other id: own), or
 // the links lead back to a row that was seen. A socket with such a link is locked (SocketLockLinkUnknown).
-func MachineUnder(start string, row func(id string) *model.System, runsOn func(agentID string) (to string, own bool)) (machine *model.System, over []*model.System) {
+//
+// It is nil too when the way meets an id that names two things (twice: Poller.NamesTwo, an agent whose id is
+// written like a guest's or a node's). The rows have one row for an id, and which of the two it is right now
+// says nothing about which was meant: the way ends there, as at an id without a row.
+func MachineUnder(start string, row func(id string) *model.System, runsOn func(agentID string) (to string, own bool), twice func(id string) bool) (machine *model.System, over []*model.System) {
 	seen := map[string]bool{}
 	for cur := start; ; {
 		r := row(cur)
-		if r == nil || seen[cur] {
+		if r == nil || seen[cur] || (twice != nil && twice(cur)) {
 			return nil, over
 		}
 		seen[cur] = true
@@ -89,6 +95,37 @@ func (p *Poller) RunsOn(agentID string) (to string, own bool) {
 	return to, slices.Contains(p.SameMachine(agentID), to)
 }
 
+// NamesTwo reports whether an id names two things at once: it is an agent's id, and it is written like the id
+// of a node or a guest of a proxmox: entry (<id_prefix>node-<name>, <id_prefix>qemu-<number>,
+// <id_prefix>lxc-<number>). The panel keeps one row for an id, so the agent's row and the guest's (or the
+// node's) take each other's place, and a link or panel_hosts with that id can mean either: a guest's id is
+// followed to its node, an agent's is not. Nothing can tell which was meant, so every way that meets such an
+// id ends there (MachineUnder), and `fairy admin config check` has a WARN for the agent's entry: give the
+// agent another id.
+func (p *Poller) NamesTwo(id string) bool {
+	if _, ok := p.AgentByID(id); !ok {
+		return false
+	}
+	return ProxmoxIDForm(id, p.Clusters())
+}
+
+// ProxmoxIDForm reports whether id is written like the id of a node or a guest of one of these proxmox:
+// entries: <id_prefix>node-<name>, <id_prefix>qemu-<number> or <id_prefix>lxc-<number>.
+func ProxmoxIDForm(id string, clusters []config.Proxmox) bool {
+	for _, c := range clusters {
+		for _, kind := range []string{"node-", "qemu-", "lxc-"} {
+			rest, ok := strings.CutPrefix(id, c.Prefix()+kind)
+			if !ok || rest == "" {
+				continue
+			}
+			if kind == "node-" || strings.Trim(rest, "0123456789") == "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // MachineRows returns the ids under which the machine known as id can be linked: the id itself, the machine's
 // other id (a Proxmox node and its agent are one machine with two ids), the id of the row it is shown as, and,
 // for a guest (a VM or a container), its node with that node's ids: what feeds the node feeds the guest.
@@ -117,15 +154,16 @@ func (p *Poller) MachineRows(id string, row func(id string) *model.System) (ids 
 			add(to)
 		}
 	}
+	twice := p.NamesTwo(id) // an id that names two things: counted as it is written, and no row is taken for it
 	for x := range ids {
-		if r := row(x); r != nil {
+		if r := row(x); r != nil && !twice {
 			known = true
 			if (r.Kind == "qemu" || r.Kind == "lxc") && r.ParentID != nil && *r.ParentID != "" {
 				add(*r.ParentID)
 			}
 		}
 	}
-	m, over := MachineUnder(p.ShownID(id), row, p.RunsOn)
+	m, over := MachineUnder(p.ShownID(id), row, p.RunsOn, p.NamesTwo)
 	for _, r := range over {
 		add(r.ID)
 	}
@@ -173,6 +211,37 @@ func (p *Poller) PanelRows(snap []model.System) map[string]bool {
 		}
 	}
 	return rows
+}
+
+// PanelUnknown are the ids of panel_hosts that cannot be followed to a machine among the rows as they are
+// (snap): no row has the id (a guest of a Proxmox API that has not answered since the panel started, a typing
+// mistake), the node of the guest or the row an agent runs on has none, the links lead back to themselves or
+// over more rows than ChainMax, or the id names two things (NamesTwo). nil when every id is followed, and
+// when panel_hosts is empty: a panel that was told nothing about its machine marks and locks nothing, as
+// before.
+//
+// While there is such an id the panel does not know its own machine: the rows PanelRows has are the ids as
+// they are written, and the node under the panel may be any row. So everything that could take the panel's
+// machine down fails closed for every machine, until the row is there or panel_hosts is corrected:
+//
+//   - no socket is switched off (internal/web/plug.go, SocketLockPanelUnknown). "On" is not held back, and
+//     neither is anything that is no cut of power;
+//   - a reboot of a host (a node's row, an agent's row) asks for the typed name, as on a row the panel runs on
+//     (powerctl.Capabilities); a shutdown asks for it always;
+//   - no host can take part in a run of "Update unpowered hosts", which switches its machines off at the end.
+//
+// (Until the fix round after the fourth review such an id counted as it was written and nothing more: a panel
+// in a VM, named by the VM's id, did not know its node for as long as that Proxmox API had not answered; the
+// node's socket had no lock, a reboot of the node's agent was a click, and the node could join a run.)
+func (p *Poller) PanelUnknown(snap []model.System) []string {
+	row := RowsOf(snap)
+	var unknown []string
+	for _, h := range p.Cfg.PanelHosts {
+		if m, _ := MachineUnder(p.ShownID(h), row, p.RunsOn, p.NamesTwo); m == nil {
+			unknown = append(unknown, h)
+		}
+	}
+	return unknown
 }
 
 // runsOnOneOf reports whether the row with this id is an agent's that runs on one of rows: the agent's entry
