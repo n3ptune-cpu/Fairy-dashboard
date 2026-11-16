@@ -30,7 +30,8 @@ import (
 // A user name is what the account says, and two accounts can say the same. Only user names compete with user
 // names: an account whose display name or address is somebody's user name takes nothing away from that
 // account. Two user names are the same when their folded forms are (fold: letters without their case, no
-// format characters such as a zero width space). Of the accounts that have one user name, one is shown by it:
+// characters that draw nothing such as a zero width space, one space for many). Of the accounts that have one
+// user name, one is shown by it:
 // an admin before a viewer, a viewer before an account that only waits for access, and among equals the one
 // that has had the user name longest (User.UsernameSince; the account's creation for a user name from before
 // that field), then the smaller account id.
@@ -74,23 +75,49 @@ const (
 )
 
 // CleanUsername is a user name as the panel keeps it: without control characters, escape sequences, line
-// breaks and direction overrides (textsafe.Clean), without format characters (Unicode category Cf: the zero
-// width space and joiners, the word joiner, the soft hyphen: a name with one of them in it looks like the name
-// without), without spaces at either end, and at most MaxUsername bytes. The claim is whatever the account's
-// provider sent. Both places that take a user name in call this: where the claims are read, and where
-// users.json is written.
+// breaks and direction overrides (textsafe.Clean), without the characters that draw nothing (blank: a name
+// with one of them in it looks like the name without), with one plain space wherever it has spaces of any
+// kind (oneSpace), without spaces at either end, and at most MaxUsername bytes. The claim is whatever the
+// account's provider sent. Both places that take a user name in call this: where the claims are read, and
+// where users.json is written.
 func CleanUsername(s string) string {
-	return textsafe.Cut(noFormat(textsafe.Clean(s)), MaxUsername)
+	return textsafe.Cut(oneSpace(noBlank(textsafe.Clean(s))), MaxUsername)
 }
 
-// noFormat is s without the characters of the Unicode category Cf (format characters: they have no width).
-func noFormat(s string) string {
+// blank reports the characters that draw nothing and take no room, or draw an empty place that is no space:
+//
+//   - the format characters (Unicode category Cf): the zero width space and joiners, the word joiner, the soft
+//     hyphen, the byte order mark, the Mongolian vowel separator;
+//   - the variation selectors (U+FE00 to U+FE0F, U+E0100 to U+E01EF, the Mongolian U+180B to U+180D and
+//     U+180F): they choose the form of the character before them, and after a plain letter they do nothing;
+//   - every other character with the Unicode property Default_Ignorable_Code_Point (the standard library has
+//     it as Other_Default_Ignorable_Code_Point, Cf and Variation_Selector): the combining grapheme joiner
+//     U+034F, the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0, the Khmer inherent vowels, the tag
+//     characters and the code points kept free for more of them;
+//   - the Braille pattern without dots, U+2800: a character of its own that is drawn as an empty cell.
+//
+// Until the fix round after the fifth review only Cf was removed, and "Juniper" with a variation selector or a
+// Hangul filler behind it was shown plain next to the admin Juniper.
+func blank(r rune) bool {
+	return unicode.In(r, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point) || r == 0x2800
+}
+
+// noBlank is s without the characters that draw nothing (blank).
+func noBlank(s string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.Is(unicode.Cf, r) {
+		if blank(r) {
 			return -1
 		}
 		return r
 	}, s)
+}
+
+// oneSpace is s with one plain space in the place of every run of spaces, of any kind (the Unicode category Zs:
+// the no-break space, the em space, the ideographic space; and tabs and line ends), and none at either end. A
+// page draws two spaces like one, and an em space like a space: "Pine  Top" was another user name than
+// "Pine Top" and looked the same.
+func oneSpace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // People answers how the accounts of one users.json are named. It is made once for an answer (Data.People).
@@ -110,13 +137,14 @@ type People struct {
 	outside                   map[string][]string // a shown form as an agent repeats it (outsideForm) -> the subjects shown by it (accounts with a role)
 }
 
-// fold is the form two texts are compared in: without spaces at either end, without format characters (a zero
-// width space and the like), and every letter by its simple case fold, so that "JUNIPER", "juniper" and
+// fold is the form two texts are compared in: without the characters that draw nothing (blank: a zero width
+// space, a variation selector and the like), with one plain space for every run of spaces of any kind and none
+// at either end (oneSpace), and every letter by its simple case fold, so that "JUNIPER", "juniper" and
 // "Juniper" with a zero width joiner in it are one text. (Composed and decomposed letters, and look-alike
 // letters of other alphabets, stay different texts: the account id tells such accounts apart.)
 func fold(s string) string {
-	return strings.TrimSpace(strings.Map(func(r rune) rune {
-		if unicode.Is(unicode.Cf, r) {
+	return oneSpace(strings.Map(func(r rune) rune {
+		if blank(r) {
 			return -1
 		}
 		low := r // the smallest letter of those that fold to the same
