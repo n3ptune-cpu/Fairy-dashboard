@@ -205,6 +205,7 @@ func (s *Server) adminSetUser(c *reqCtx) error {
 		return err
 	}
 	sub := c.r.PathValue("sub")
+	about := s.accountOutside(sub)
 	before, after, err := s.Access.SetRole(sub, body.Role, body.Sites, "panel by "+s.who(u), false)
 	params := map[string]any{"sub": sub, "role": body.Role, "sites": body.Sites}
 	if err != nil {
@@ -212,7 +213,7 @@ func (s *Server) adminSetUser(c *reqCtx) error {
 		return err
 	}
 	params["before"] = access.Describe(before)
-	c.audit(u, "user.set_role", after.Label(), params, "ok")
+	c.auditAbout(u, "user.set_role", after.Label(), about, params, "ok")
 	// (the entry above keeps the account's address as its target; the answer, which the page shows, names it
 	// as the panel names a person)
 	c.json(200, map[string]any{"ok": true, "message": fmt.Sprintf("%s is now %s", s.accountShown(after), access.Describe(after))})
@@ -229,13 +230,14 @@ func (s *Server) adminRemoveUser(c *reqCtx) error {
 	if cur, ok := s.Access.Load().Users[sub]; ok {
 		removedName = s.accountShown(cur)
 	}
+	about := s.accountOutside(sub) // ... and as the notification service is told: never by its address or name
 	gone, err := s.Access.Remove(sub, false, "panel by "+s.who(u))
 	if err != nil {
 		c.audit(u, "user.remove", sub, map[string]any{"sub": sub}, errorOutcome(err))
 		return err
 	}
 	sessions, tokens := s.revokeUser(gone.Sub)
-	c.audit(u, "user.remove", gone.Label(), map[string]any{"sub": gone.Sub, "was": access.Describe(gone),
+	c.auditAbout(u, "user.remove", gone.Label(), about, map[string]any{"sub": gone.Sub, "was": access.Describe(gone),
 		"sessions_revoked": sessions, "tokens_revoked": tokens}, "ok")
 	c.json(200, map[string]any{"ok": true, "message": removedName + " was removed from the list"})
 	return nil

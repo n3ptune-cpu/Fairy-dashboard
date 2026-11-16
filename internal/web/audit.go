@@ -94,6 +94,13 @@ func safeTarget(s string) string {
 }
 
 func (c *reqCtx) audit(u *model.User, action, target string, params map[string]any, outcome string) {
+	c.auditAbout(u, action, target, "", params, outcome)
+}
+
+// auditAbout is audit for a change on the Users page: about is how the account the change is about is named in
+// what leaves the panel (accountOutside, asked before the change: a removed account cannot be looked up). The
+// entry itself keeps target, the account's address. about "": the target is looked up.
+func (c *reqCtx) auditAbout(u *model.User, action, target, about string, params map[string]any, outcome string) {
 	ip := c.ip()
 	sub := u.Sub
 	// Refusals can be produced without limit: throttled per subject (auditthrottle.go). A control request that
@@ -113,10 +120,13 @@ func (c *reqCtx) audit(u *model.User, action, target string, params map[string]a
 		if strings.HasPrefix(action, p) {
 			// What leaves the panel (ntfy, Discord) names people by their user names, like the page: the person
 			// who did it, and the account a change of the Users page is about, which the entry names by its
-			// address (or its name, or an address that does not look like one: so it is looked up as a whole).
+			// address (or its name, or an address that does not look like one: so it is looked up as a whole,
+			// unless the caller asked before the change how the account is named: about).
 			// An address anywhere else in it (the outcome, the details) is replaced too (outside).
 			b, _ := json.Marshal(params)
-			if strings.HasPrefix(action, "user.") {
+			if about != "" {
+				target = about
+			} else if strings.HasPrefix(action, "user.") {
 				target = who.Shown(target)
 			}
 			c.s.outside("Fairy: "+action+" on "+target, c.s.whoShown(u)+" via "+sourceOf(u)+": "+outcome+" "+string(b))

@@ -1143,7 +1143,7 @@ func TestOnlyTheAuditLogUsesTheAddress(t *testing.T) {
 			if strings.HasPrefix(strings.TrimSpace(line), "//") {
 				continue
 			}
-			if (strings.Contains(line, ".Label()") || strings.Contains(line, "ownerLabel(")) && !strings.Contains(line, "c.audit(") && !strings.Contains(line, "func ownerLabel(") &&
+			if (strings.Contains(line, ".Label()") || strings.Contains(line, "ownerLabel(")) && !strings.Contains(line, "c.audit(") && !strings.Contains(line, "c.auditAbout(") && !strings.Contains(line, "func ownerLabel(") &&
 				!strings.Contains(line, "target := ownerLabel(") && !strings.Contains(line, "p.Shown(ownerLabel(x))") && !strings.Contains(line, "strings.ToLower(ownerLabel(") {
 				t.Errorf("%s:%d uses an account's address or name outside the audit log: %s", f, i+1, strings.TrimSpace(line))
 			}

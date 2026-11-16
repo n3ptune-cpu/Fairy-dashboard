@@ -18,10 +18,10 @@ import (
 //     stand for an address or a name. Never the address, never the name.
 //   - shown and shownIn turn what is stored (also by older versions, with the address) into that where it is
 //     handed out. Only the Users page and the audit log hand out an address or a name.
-//
 //   - fromOutside is for a text that names a person and that somebody outside the panel supplies (an agent's
 //     "requested by"): it is shown when it is what the panel shows an account by, and never looked up among
 //     addresses and names.
+//
 // While users.json cannot be read nobody is known: a stored address is then hidden, not shown.
 
 func (s *Server) people() *access.People { return s.Access.Load().People() }
@@ -65,10 +65,10 @@ func notKnown(u *model.User) string {
 // shown is a stored text that names a person (a "by" of a record), as it is handed out.
 func (s *Server) shown(stored string) string { return s.people().Shown(stored) }
 
-// shownIn is a stored sentence that may name a person, as it is handed out.
 // fromOutside is what an agent says about who asked for something, as it is handed out (People.FromOutside).
 func (s *Server) fromOutside(text string) string { return s.people().FromOutside(text) }
 
+// shownIn is a stored sentence that may name a person, as it is handed out.
 func (s *Server) shownIn(text string) string { return s.people().ShownIn(text) }
 
 // noteText is the sentence of a notification as it is handed out, in the list and on the stream: an event of an
@@ -160,13 +160,25 @@ func byShown(p *access.People, v any) {
 	}
 }
 
-// accountShown names an account in a sentence of the Users page's answers: by its user name, or as "This
-// account" while it has none (never by its address or name; the page has the row and its id).
+// accountShown names an account in a sentence of the Users page's answers: by what it is shown by (its user
+// name; with a part of its id while another account has the same), or as "This account" while it has none
+// (never by its address or name; the page has the row and its id).
 func (s *Server) accountShown(u access.User) string {
 	if n := s.people().Username(u.Sub); n != "" {
 		return n
 	}
 	return "This account"
+}
+
+// accountOutside names the account a change on the Users page is about in what leaves the panel (ntfy,
+// Discord): as the panel names it everywhere, so by its user name, or by the words that stand for its address
+// or its name. It is asked while the account is still there: after a removal nothing can be looked up, and
+// the name of an account without an address would go out as it is.
+func (s *Server) accountOutside(sub string) string {
+	if n, ok := s.people().Of(sub); ok {
+		return n
+	}
+	return ""
 }
 
 // outside sends a message to the notification service (ntfy or Discord: FAIRY_NOTIFY_URL). It is the one way
