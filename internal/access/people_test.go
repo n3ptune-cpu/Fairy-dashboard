@@ -550,6 +550,20 @@ func TestFromOutsideIsNeverLookedUpAmongAddressesAndNames(t *testing.T) {
 	if got := d.People().FromOutside("Jni Pr"); got != HiddenName {
 		t.Errorf("a text that two shown names turn into at an agent: %q", got)
 	}
+	// An agent keeps 64 bytes of what it is told. Two accounts with one long user name: what an agent can repeat
+	// of "<name>" and of "<name> · id ..." is the same text, so it names neither.
+	long := strings.Repeat("n", 64)
+	two := Data{Users: map[string]User{"aaaaaa-1": {Sub: "aaaaaa-1", Username: long, Role: RoleAdmin}, "bbbbbb-2": {Sub: "bbbbbb-2", Username: long, Role: RolePending}}}
+	if got, _ := two.People().Of("bbbbbb-2"); got != long+" · id bbbbbb" {
+		t.Fatalf("the fixture: the second account with the long user name is shown by %q", got)
+	}
+	if got := two.People().FromOutside(long); got != HiddenName {
+		t.Errorf("64 bytes that two shown names begin with, from an agent: %q", got)
+	}
+	short := Data{Users: map[string]User{"aaaaaa-1": {Sub: "aaaaaa-1", Username: long[:40], Role: RoleAdmin}, "bbbbbb-2": {Sub: "bbbbbb-2", Username: long[:40], Role: RolePending}}}
+	if got := short.People().FromOutside(long[:40] + "  id bbbbbb"); got != long[:40]+" · id bbbbbb" {
+		t.Errorf("a shorter one, as an agent repeats the second account: %q", got)
+	}
 	// an account that calls itself "unknown" is not what the agent's word for nobody means
 	d.Users["sub-q"] = User{Sub: "sub-q", Username: "unknown", Email: "q@example.org"}
 	if got := d.People().FromOutside("unknown"); got != "unknown" {

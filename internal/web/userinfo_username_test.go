@@ -171,3 +171,36 @@ func TestUserinfoForTheUsernameDoesNotMakeAConfirmationFresh(t *testing.T) {
 		t.Errorf("an old auth_time in the ID token and a new one in userinfo: callback %d, the kept shutdown was sent %d time(s); want 400 and none", cb.code, a.powerCalls())
 	}
 }
+
+// What the ID token says about the groups is said, also when userinfo, asked for the user name, does not
+// answer: an account whose ID token has groups and none that is allowed is refused as "not in an allowed
+// group" (403, and its sessions end), not as "the groups could not be read" (502, nothing ended). Userinfo was
+// not asked for the groups.
+func TestUserinfoForTheUsernameAloneThatFailsDoesNotUndecideTheGroups(t *testing.T) {
+	for _, how := range []string{"500", "404"} {
+		e := setup(t)
+		idp := newFakeIDP(t)
+		e.s.Cfg.OIDC.Issuer = idp.srv.URL
+		idp.claims = map[string]any{"groups": []string{"strangers"}, "preferred_username": nil}
+		if how != "404" {
+			idp.userinfo, idp.userinfoFail = map[string]any{"sub": "u1", "preferred_username": "Juniper", "groups": []string{"viewers"}}, how
+		}
+		q, rt := idp.login(e, "/auth/login?next=/", "")
+		r := e.do("GET", "/auth/callback?code=c&state="+q.Get("state"), nil, "Cookie", rt)
+		outcome := ""
+		for _, a := range e.auditEntries("", "auth.login") {
+			outcome = fmt.Sprint(a["outcome"])
+		}
+		if r.code != 403 || outcome != "denied: not in an allowed group" || idp.userinfoAsked != 1 {
+			t.Errorf("userinfo %s, the ID token's groups are not allowed: callback %d, audit %q, userinfo asked %d times; want 403 and the denial", how, r.code, outcome, idp.userinfoAsked)
+		}
+	}
+	// ... and userinfo's groups do not let such an account in when it does answer
+	e, _, r := signInWith(t, map[string]any{"groups": []string{"strangers"}, "preferred_username": nil}, map[string]any{"sub": "u1", "preferred_username": "Juniper", "groups": []string{"viewers", "controllers"}})
+	if r.code != 403 {
+		t.Errorf("the ID token's groups are not allowed, userinfo's are: callback %d, want 403", r.code)
+	}
+	if _, ok := e.s.Access.Load().Users["u1"]; ok {
+		t.Error("an account that was refused is in users.json")
+	}
+}
