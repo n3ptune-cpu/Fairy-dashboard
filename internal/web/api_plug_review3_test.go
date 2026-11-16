@@ -575,9 +575,9 @@ func TestPlugEverySideOfALockGoesDownToTheMachine(t *testing.T) {
 		plugNodeLocked(t, c.rig.env(t), c.name, c.lock, c.said)
 	}
 	// What has no row right now still counts as it is written, on each side. The reader's entry names a guest
-	// the panel does not have, and the socket is linked to that id; Home Assistant, and the panel, run in a guest
-	// whose node the panel does not have, and the socket is linked to that node's id. Each is a link the panel
-	// cannot follow, and the lock says the nearer reason.
+	// the panel does not have, and the socket is linked to that id; Home Assistant, the reader and the panel run
+	// in a guest (a VM, a container) whose node the panel does not have, and the socket is linked to that node's
+	// id. Each is a link the panel cannot follow, and the lock says the nearer reason.
 	for _, c := range []struct {
 		name       string
 		rig        plugNodeRig
@@ -586,6 +586,10 @@ func TestPlugEverySideOfALockGoesDownToTheMachine(t *testing.T) {
 		{"the reader in a guest without a row, linked to that id", plugNodeRig{link: "lab-qemu-999", otherExtra: "links_to: lab-qemu-999,"}, model.SocketLockAgent, plugSaidReader},
 		{"Home Assistant in a guest whose node has no row, linked to that node's id", plugNodeRig{link: "lab-node-ghost", ha: "lab-qemu-301"}, model.SocketLockHomeAssistant, plugSaidHA},
 		{"the panel in a guest whose node has no row, linked to that node's id", plugNodeRig{link: "lab-node-ghost", panelHosts: "lab-qemu-301"}, model.SocketLockPanel, plugSaidPanel},
+		// the same with a container: a container's row names its node as a VM's does
+		{"Home Assistant in a container whose node has no row, linked to that node's id", plugNodeRig{link: "lab-node-ghost", ha: "lab-lxc-302"}, model.SocketLockHomeAssistant, plugSaidHA},
+		{"the reader in a container whose node has no row, linked to that node's id", plugNodeRig{link: "lab-node-ghost", otherExtra: "links_to: lab-lxc-302,"}, model.SocketLockAgent, plugSaidReader},
+		{"the panel in a container whose node has no row, linked to that node's id", plugNodeRig{link: "lab-node-ghost", panelHosts: "lab-lxc-302"}, model.SocketLockPanel, plugSaidPanel},
 		// two agents on the way to a guest whose node has no row: the rows on the way count
 		{"Home Assistant's entry names an agent in a guest without its node, linked to that guest", plugNodeRig{link: "lab-qemu-301", ha: "via2agent"}, model.SocketLockHomeAssistant, plugSaidHA},
 		{"the panel's entry names an agent in a guest without its node, linked to that guest", plugNodeRig{link: "lab-qemu-301", panelHosts: "via2agent"}, model.SocketLockPanel, plugSaidPanel},
@@ -704,5 +708,31 @@ func TestPlugSwitchNoteDoesNotNameTheReaderToWhoCannotSeeIt(t *testing.T) {
 	}
 	if _, stream = pe.streamBody("/api/stream", "Cookie", home, "Last-Event-ID", last); !strings.Contains(stream, `"host":"DESK-PC as it was called","text":"another kind"`) {
 		t.Errorf("the viewer's stream has not the other note with its host")
+	}
+}
+
+// The power menu's rule for the panel's own host (powerctl.KillsPanel: "The panel itself runs here") is no
+// longer asked by the lock of a socket (finding 3), so nothing of the plug tests held it for a container any
+// more. It is unchanged, and this says what it is: the node of a guest that panel_hosts names, a VM or a
+// container, is the panel's host in the power menu; the node under an AGENT in a guest that panel_hosts names
+// is not (the rule has no such case), while the socket of that node is locked as the panel's.
+func TestPowerMenuAndPanelHostsThatNamesAGuestOrAnAgent(t *testing.T) {
+	const warn = "The panel itself runs here: shutting this down takes Fairy offline until it is powered on again by other means."
+	for _, c := range []struct {
+		panel string
+		kills bool
+	}{{"lab-qemu-202", true}, {"lab-lxc-203", true}, {"lab-node-pve2", true}, {"vm2agent", false}, {"ctagent", false}} {
+		pe := plugNodeRig{link: "lab-node-pve2", panelHosts: c.panel}.env(t)
+		caps := pe.do("GET", "/api/systems/lab-node-pve2/power", nil, "Cookie", pe.admin)
+		if caps.code != 200 || caps.body["kills_panel"] != c.kills || (caps.body["warning"] == warn) != c.kills {
+			t.Errorf("panel_hosts names %s: the power menu of PVE2: %d kills_panel %v, warning %v; want %v", c.panel, caps.code, caps.body["kills_panel"], caps.body["warning"], c.kills)
+		}
+		if other := pe.do("GET", "/api/systems/lab-node-pve/power", nil, "Cookie", pe.admin); other.code != 200 || other.body["kills_panel"] != false {
+			t.Errorf("panel_hosts names %s: the power menu of the other node: %d kills_panel %v", c.panel, other.code, other.body["kills_panel"])
+		}
+		// the socket of the node is the panel's in every one of them
+		if s := pe.socketOf(pe.admin, "other/rack-bar", "node"); s["lock"] != model.SocketLockPanel {
+			t.Errorf("panel_hosts names %s: the socket of PVE2: %v", c.panel, s)
+		}
 	}
 }
