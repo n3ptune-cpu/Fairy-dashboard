@@ -2078,14 +2078,15 @@ work is refused by build 17 when it starts, so run `sudo fairy admin config chec
    node it worked out by itself: nothing to do when it is the right one.
 
 Nothing has to be done on the agents: every agent build 13 worked with works with this panel. **Add host**
-and **Re-pair** now install Fairy-agent v0.10.0 (build 20). Three things need a newer agent on the machine
+and **Re-pair** now install Fairy-agent v0.11.0 (build 23). Four things need a newer agent on the machine
 that does them. Reading a plug through Home Assistant needs v0.8.0 or newer
 ([Plugs through Home Assistant](#plugs-through-home-assistant)), and v0.9.0 for the plug's volts, amperes
 and kWh. A machine with its own check of approvals switched on is taken into a run of "Update unpowered
 hosts" only with v0.9.0 or newer ([Machines with the check in a run](#machines-with-the-check-in-a-run));
 with an older agent it stays out of runs, as in build 15. And the sockets of a plug are shown and switched
 only with v0.10.0 or newer on the machine that reads the plug
-([Switching a plug's sockets](#switching-a-plugs-sockets)).
+([Switching a plug's sockets](#switching-a-plugs-sockets)). **Uninstall agent** needs v0.11.0 or newer, with
+`uninstall.enabled: true` in that machine's own config.yaml; an older agent does not offer it.
 The **Update panel** button's unit and `fairy.service` are as build 13 had them: no second run, nothing by
 hand.
 
