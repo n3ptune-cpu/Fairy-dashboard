@@ -32,6 +32,7 @@ func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 	}{
 		{"POST", "/api/systems/laptop/helper/stop", map[string]any{"confirm": name}},
 		{"POST", "/api/systems/laptop/helper/start", map[string]any{"confirm": name}},
+		{"POST", "/api/systems/laptop/uninstall", map[string]any{"confirm": name}},
 		{"POST", "/api/admin/hosts", map[string]any{"name": "SRV-WINPC", "os": "linux"}},
 		{"POST", "/api/admin/hosts/srv-winpc/repair", map[string]any{"confirm": "SRV-WINPC"}},
 		{"DELETE", "/api/admin/hosts/srv-winpc", map[string]any{"confirm": "SRV-WINPC"}},
@@ -99,8 +100,9 @@ func TestAPITokensRefusedOnSignInOnlyActions(t *testing.T) {
 func TestSignInOnlyActionsAreRealRoutes(t *testing.T) {
 	e := setup(t)
 	// 10th: switching on a machine's own check of approvals (it needs a passkey); 11th: accepting its new machine
-	// id; 12th and 13th: a run's second confirmation (a passkey) and Keep on for a machine a run armed
-	if len(sessionOnlyControl) != 14 {
+	// id; 12th and 13th: a run's second confirmation (a passkey) and Keep on for a machine a run armed; 15th:
+	// uninstalling a machine's agent (a passkey)
+	if len(sessionOnlyControl) != 15 {
 		t.Fatal("the list changed: update this test and the docs", len(sessionOnlyControl))
 	}
 	for pat := range sessionOnlyControl {

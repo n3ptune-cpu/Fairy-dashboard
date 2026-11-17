@@ -269,7 +269,7 @@ func TestUIWakeUpdate(t *testing.T) {
 		`api(path, { method: "DELETE", body: JSON.stringify(body) }));`,
 		// the per-host switch, on the page and in a machine's ⋯ menu
 		`data-act="wu-switch" data-id="${esc(h.id)}" data-name="${esc(h.name)}" data-on="${h.opted_in ? "" : "1"}"`,
-		`${wakeUpdateMenu(s)}</div>` + "`;",
+		`${wakeUpdateMenu(s)}${uninstallMenu(s)}</div>` + "`;",
 		`api(path, { method: "PUT", body: JSON.stringify(body) }));`,
 		`["wakeupdate", "Update unpowered hosts"]`, // the Audit page's filter
 	} {

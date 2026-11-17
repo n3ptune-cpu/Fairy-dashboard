@@ -108,7 +108,7 @@ func runEhPageScript(t *testing.T, name, body string, args ...string) string {
 func TestUIEditHostIsInTheMenuOfAHostForAdmins(t *testing.T) {
 	js, css := appJS(t), appCSS(t)
 	for _, want := range []string{
-		`${modelNameMenu(s)}${editHostMenu(s)}${wakeUpdateMenu(s)}</div>` + "`;", // in the ⋯ menu, under "Set model name"
+		`${modelNameMenu(s)}${editHostMenu(s)}${wakeUpdateMenu(s)}${uninstallMenu(s)}</div>` + "`;", // in the ⋯ menu, under "Set model name"
 		"function editHostMenu(s) {\n  if (!isHost(s) || !state.me?.can_manage_users) return \"\";\n  return `<button class=\"menu-item\" type=\"button\" data-act=\"edit-host\">Edit host</button>`;\n}",
 		"$(\"#eh-t\").textContent = `Edit ${s.name}`;", // the title: the host's name as text
 		`const t = e.target.closest('[data-act="edit-host"]');`,

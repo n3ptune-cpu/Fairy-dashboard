@@ -66,6 +66,10 @@ var matrixRoutes = []writeRoute{
 	// reads the plug, never for the panel's own confirmation (TestPlugSwitch...); this panel has no such
 	// socket, so an admin is told so (404).
 	{pattern: "POST /api/power/socket", path: "/api/power/socket", body: map[string]any{"source": "laptop/desk", "socket": "main", "to": "off", "tag": "AAAAAAAAAAAAAAAAAAAAAA"}, adminOnly: true, killSwitch: true},
+	// Uninstalling a machine's agent: browser sessions only, and like a socket never on the panel's own
+	// confirmation: the machine's passkey approval (TestUninstall...). This panel's laptop does not offer it,
+	// so an admin is told so (409) before any sign-in is asked for.
+	{pattern: "POST /api/systems/{id}/uninstall", path: "/api/systems/laptop/uninstall", body: "CONFIRM", adminOnly: true, killSwitch: true},
 	{pattern: "PUT /api/systems/{id}/poll", path: "/api/systems/laptop/poll", body: map[string]any{"interval_s": 5}, adminOnly: true, stepUp: true, controlToken: true, killSwitch: true},
 	// a host's model name is a label an admin sets for everyone to see: guarded like the sign-in wallpaper (no
 	// confirmation, no API token, and the kill switch, which stops device control, does not stop it)
