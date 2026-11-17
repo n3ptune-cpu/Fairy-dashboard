@@ -54,6 +54,9 @@ type gated struct {
 	power   *agenttest.PowerExec
 	gate    *approval.Gate
 	applied atomic.Int32 // the agent started its installer
+	// uninstalls counts the starts of the agent's removal (POST /uninstall, uninstall_test.go); only a machine
+	// started with gatedOpts.uninstall has the route open
+	uninstalls atomic.Int32
 
 	mu    sync.Mutex
 	ahead time.Duration // how far the machine's clock is ahead of the test's
@@ -122,8 +125,25 @@ func (g *gated) direct(t *testing.T, path string, body []byte) (int, map[string]
 	return resp.StatusCode, out
 }
 
-func startGated(t *testing.T, id string) *gated {
+func startGated(t *testing.T, id string) *gated { return startGatedOpts(t, id, gatedOpts{}) }
+
+// gatedOpts are what a machine has switched on beyond the usual (all off: the machine of every older test).
+type gatedOpts struct {
+	uninstall bool // uninstall.enabled, with an Uninstaller that counts its starts
+}
+
+// countUninstalls is the machine's Uninstaller: the Linux one starts a root unit, this one counts.
+type countUninstalls struct{ g *gated }
+
+func (c countUninstalls) Start(context.Context) error { c.g.uninstalls.Add(1); return nil }
+func (countUninstalls) ThroughHelper() bool           { return false }
+
+func startGatedOpts(t *testing.T, id string, o gatedOpts) *gated {
 	t.Helper()
+	extra := ""
+	if o.uninstall {
+		extra = "uninstall: {enabled: true}\n"
+	}
 	cfg, err := agent.Parse([]byte(`
 listen: 127.0.0.1:9101
 ipmi: {enabled: true}
@@ -131,7 +151,7 @@ fan_control: {enabled: true}
 power_control: {enabled: true}
 self_update: {enabled: true}
 control_rate_per_min: 60
-`), filepath.Join(t.TempDir(), "config.yaml"))
+`+extra), filepath.Join(t.TempDir(), "config.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,10 +174,14 @@ control_rate_per_min: 60
 		Now: g.now, Uptime: func() (time.Duration, error) { return time.Hour, nil }})
 	g.gate = gate
 	var a *agent.Agent
-	a = agent.New(cfg, agent.Tokens{Read: readTok, Control: ctlTok}, agent.Deps{Collector: agenttest.NewCollector(), GPU: agenttest.GPU{},
+	d := agent.Deps{Collector: agenttest.NewCollector(), GPU: agenttest.GPU{},
 		BMC: bmc, Updater: upd, Version: "contract", Approval: gate,
 		Fan:   agent.NewFan(g.bmc, bmc, cfg.FanControl, func() []collect.Temp { return a.LocalTemps() }),
-		Power: agent.NewPower(g.power, cfg.PowerControl.MinDelayS)})
+		Power: agent.NewPower(g.power, cfg.PowerControl.MinDelayS)}
+	if o.uninstall {
+		d.Uninstaller = countUninstalls{g}
+	}
+	a = agent.New(cfg, agent.Tokens{Read: readTok, Control: ctlTok}, d)
 	h := a.Handler()
 	g.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.Header.Get("X-Direct") == "" {
