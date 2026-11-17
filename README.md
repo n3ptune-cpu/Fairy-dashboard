@@ -128,6 +128,20 @@ shows why; older agents show "needs v0.4.2". Proxmox nodes are not offered Sleep
 (Wake-on-LAN) wakes it, which from sleep needs the network card's "Allow this device to wake the computer" /
 "Wake on Magic Packet".
 
+**Uninstall agent** (Fairy-agent 0.11.0+): the host's menu offers it only to admins, and only when the agent
+says it may (`uninstall.enabled: true` in that machine's own `config.yaml`, which nothing from the panel can
+switch on). You type the host's name, then Pocket ID asks for your passkey, and the machine checks that approval
+itself: it is for "uninstall" on exactly that machine, used once, and **a machine without the passkey check
+refuses it** (set the check up first, see [The check on the machine itself](#the-check-on-the-machine-itself)).
+The panel refuses before any sign-in when it knows the machine has no check, and it never sends the request
+without an approval, also when a machine answers that none is needed. Browser session only (API tokens get
+403), CSRF header, the kill switch, the control rate limit; audited as `agent_uninstall`
+(`POST /api/systems/{id}/uninstall`, sent to the agent's `/uninstall` with its control token and the approval).
+The agent answers `202 uninstalling` and the machine goes offline within a minute: Windows removes the agent,
+helper and updater services (the helper checks the approval there; Fairy-agent's AGENT.md, "Uninstall from the
+panel"), Linux a fixed root unit runs the removal script. **What stays:** the machine's config, tokens and logs,
+and the host in this panel's list until you press **Remove from the panel** on its page.
+
 **Power on via BMC** (Fairy-agent v0.4.2 `bmc_relay`): for a machine Wake-on-LAN cannot wake (e.g. its BMC
 shares the LAN port), `systems: [{id: agent-1, bmc_power: {relay: agent-2, target: server-bmc}}]`
 (or "Or powered on via BMC by" in Add host) names an always-on agent that can reach the BMC and its
@@ -2466,6 +2480,12 @@ settings (on or off, seconds, events) are the defaults again after the next upda
   sign-out with who, whose session and from which address, and never a session id or cookie. That holds for
   `fairy admin sessions revoke <id from the list>` too: its entry names the account and the address of the
   session it ended, not the characters that were typed.
+* Uninstall agent (`POST /api/systems/{id}/uninstall`, `internal/web/api_uninstall.go`): never without a
+  passkey approval that the machine checks itself, for "uninstall" on that machine alone, used once. The panel
+  always asks the machine for its challenge, and never believes an answer that none is needed; a machine
+  without the check refuses it (`approval_off`), and so does one whose own `config.yaml` has not switched it
+  on. The control token alone, wherever it leaks, uninstalls nothing. What the machine removes is fixed there:
+  nothing in the request chooses it.
 * Switching a plug's socket (`POST /api/power/socket`, `internal/web/api_plug.go` and `plug.go`): the panel
   holds no Home Assistant token and never talks to Home Assistant. It asks the agent that reads the plug for
   one socket and one direction ("on" or "off"), with the tag of the socket's row and a passkey approval that
