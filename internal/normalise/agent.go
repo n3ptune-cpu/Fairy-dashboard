@@ -69,6 +69,7 @@ func NormaliseAgent(cfg config.Agent, m jsonx.M, now time.Time, ts float64, rate
 		ComponentPower: agentComponentPower(m), Battery: agentBattery(m),
 		ProcessesAvailable: jsonx.Bool(features, "processes", true),
 		FanControl:         cfg.FanControl != nil && jsonx.Truthy(features["fan_control"]),
+		Uninstall:          features["uninstall"] == true,
 		Hardware:           HardwareDisplay(hw), CPUModel: clipP(jsonx.Str(hw, "cpu_model"), maxLong),
 		PowerPending: Pending(jsonx.Obj(m, "power_control")),
 		Group:        cfg.Group, Owner: cfg.Owner, Tags: slices.Clone(cfg.Tags), LastSeen: model.P(now),

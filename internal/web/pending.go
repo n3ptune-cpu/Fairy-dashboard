@@ -253,6 +253,7 @@ var actionText = map[string]string{
 	"POST /api/systems/{id}/fan/duty":            "fan speed of {id}",
 	"POST /api/systems/{id}/helper/stop":         "stop the helper on {id}",
 	"POST /api/systems/{id}/helper/start":        "start the helper on {id}",
+	"POST /api/systems/{id}/uninstall":           "uninstall the agent on {id}",
 	"PUT /api/systems/{id}/poll":                 "polling of {id}",
 	"POST /api/admin/hosts":                      "Add host",
 	"POST /api/admin/hosts/{id}/repair":          "Re-pair {id}",

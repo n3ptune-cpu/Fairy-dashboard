@@ -30,6 +30,7 @@ func (s *Server) apiRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/systems/{id}/power", s.h(s.powerAction))
 	m.HandleFunc("POST /api/systems/{id}/helper/stop", s.h(s.helperStop))
 	m.HandleFunc("POST /api/systems/{id}/helper/start", s.h(s.helperStart))
+	m.HandleFunc("POST /api/systems/{id}/uninstall", s.h(s.agentUninstall))
 	m.HandleFunc("GET /api/systems/{id}/poll", s.h(s.getPoll))
 	m.HandleFunc("PUT /api/systems/{id}/poll", s.h(s.putPoll))
 	m.HandleFunc("PUT /api/systems/{id}/custom-model", s.h(s.customModelPut))

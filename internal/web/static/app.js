@@ -1773,7 +1773,7 @@ function pollMenu(s) {
     "Default is the rate from config.yaml."];
   return `<div class="menu poll" role="menu"><div class="menu-title">Polling rate${infoBtn("poll-menu", "Polling rate", infoList(more))}</div>
     ${POLL_CHOICES.map(([v, label]) => `<button class="menu-item ${String(cur) === String(v) ? "on" : ""}" data-act="poll" data-v="${v}" ${why ? `disabled title="${esc(why)}"` : ""}>${label}${v === "default" ? '<span class="note">config</span>' : ""}</button>`).join("")}
-    ${modelNameMenu(s)}${editHostMenu(s)}${wakeUpdateMenu(s)}</div>`;
+    ${modelNameMenu(s)}${editHostMenu(s)}${wakeUpdateMenu(s)}${uninstallMenu(s)}</div>`;
 }
 const POWER_LABEL = table({ shutdown: "Shut down", reboot: "Reboot", sleep: "Sleep", cancel: "Cancel pending", start: "Start", stop: "Stop (hard)", wake: "Power on (Wake-on-LAN)", bmc_on: "Power on (via BMC)" });
 function powerMenu(s) {
@@ -4952,6 +4952,38 @@ document.addEventListener("click", (e) => {
 
 // ------------------------------------------------------------ elevated helper Stop / Start
 // Same prompt as a power action: the host's name typed, then the step-up sign-in if needed; audited by the panel.
+// ------------------------------------------------------------ Uninstall the machine's own agent (Fairy-agent 0.11.0)
+// Shown only when the agent offers it (its config.yaml says uninstall.enabled). The host's name typed, then the
+// machine's own passkey check (the dialog of every approved request): the panel never sends it without that.
+function uninstallMenu(s) {
+  if (s.kind !== "agent" || !s.uninstall || !state.me?.can_control) return "";
+  const why = controlWhyNot();
+  return `<div class="menu-sep"></div><button class="menu-item danger" type="button" data-act="uninstall"
+    ${why ? `disabled title="${esc(why)}"` : ""}>Uninstall agent<span class="note">passkey</span></button>`;
+}
+function openUninstallDialog(s) {
+  state.menu = null; render();
+  const lines = [
+    "Removes the Fairy agent's services from this machine. It goes offline within a minute, and the panel cannot reach it afterwards.",
+    "Your passkey is asked next: the machine checks that approval itself, and refuses without one.",
+    "Its config, tokens and logs stay on the machine; delete them there when you are sure.",
+    "The host stays in this panel until you press Remove from the panel on its page."];
+  typedDialog(`Uninstall the agent on ${s.name}?`, `<ul class="dlg-list">${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`, s.name, "Uninstall agent",
+    async (v) => {
+      const path = `/api/systems/${enc(s.id)}/uninstall`, body = { confirm: v };
+      const r = await controlCall({ kind: "request", label: `Uninstall the agent on ${s.name}`, system: s.id, method: "POST", path, body },
+        () => api(path, { method: "POST", body: JSON.stringify(body) }));
+      if (!r) return;  // the passkey step took over
+      closeModal(); flash(r.message);
+      render();
+    }, "danger-solid");
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="uninstall"]');
+  const s = t && !t.disabled && state.byId[current().id];
+  if (s?.kind === "agent") openUninstallDialog(s);
+});
+
 function openHelperDialog(s, action) {
   const f = s.helper?.features || [], stop = action === "stop";
   state.menu = null; render();

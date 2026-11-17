@@ -50,6 +50,8 @@ var sessionOnlyControl = map[string]bool{
 	"POST /api/admin/hosts/{id}/repair":   true,
 	"DELETE /api/admin/hosts/{id}":        true,
 	"DELETE /api/admin/enrollments/{id}":  true,
+	// Uninstalling a machine's agent takes the panel's way to the machine away: a passkey, so a person.
+	"POST /api/systems/{id}/uninstall": true,
 	// "Update unpowered hosts": a run works for many minutes after the one request that starts it, and
 	// which machines it may touch is decided by the per-host switch. Starting, cancelling and that switch need
 	// a person who can confirm.

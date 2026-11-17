@@ -36,6 +36,11 @@ type Machine struct {
 	// POST /plug/switch and the challenge for socket_set answer as the agent does, with the agent's real gate.
 	Plugs *MachinePlugs
 
+	// Uninstall: the machine's config says uninstall.enabled (Fairy-agent 0.11.0): POST /uninstall answers as the
+	// agent does (agent/uninstall.go), with the agent's real gate, once. Uninstalled: it was started.
+	Uninstall   bool
+	Uninstalled bool
+
 	mu       sync.Mutex
 	passed   []Sent // control requests the gate let through, in order
 	asked    []Sent // every request the panel sent (also refused ones), with its body
@@ -333,6 +338,35 @@ func (m *Machine) request(path string, body any) (handled bool, status int, data
 		}
 		return true, 200, jsonx.M{"source": in.Source, "socket": in.Socket, "to": in.To, "was": was, "state": state,
 			"confirmed": state == in.To, "took_ms": float64(840)}, nil
+	}
+	if path == api.PathUninstall {
+		// the agent's order: strict body, no trust is approval_off, the approval looked at, once, then used up
+		var in api.UninstallRequest
+		if !strict(&in) {
+			return true, 400, jsonx.M{"error": "not an uninstall request"}, nil
+		}
+		if !m.Uninstall {
+			return true, 404, jsonx.M{"error": "that is disabled on this agent", "code": api.CodeUninstallDisabled}, nil
+		}
+		req := api.ApprovalRequest{Verb: api.ApproveUninstall}
+		if ref := m.Gate.Look(req, in.Approval); ref != nil {
+			return refusal(ref)
+		}
+		m.mu.Lock()
+		done := m.Uninstalled
+		m.mu.Unlock()
+		if done {
+			return true, 409, jsonx.M{"error": "an uninstall was already started on this machine", "code": api.CodeUninstallBusy}, nil
+		}
+		if _, ref := m.Gate.Admit(req, in.Approval); ref != nil {
+			return refusal(ref)
+		}
+		rec.Approved = true
+		m.mu.Lock()
+		m.Uninstalled = true
+		m.passed = append(m.passed, rec)
+		m.mu.Unlock()
+		return true, 202, jsonx.M{"state": api.UninstallStarted}, nil
 	}
 	if m.Runs != nil && (path == api.PathRunArm || path == api.PathRunGo) {
 		answer := func(ans api.RunAnswer, ref *approval.Refusal) (bool, int, jsonx.M, func()) {

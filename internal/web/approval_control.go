@@ -288,6 +288,8 @@ func requestWords(r api.ApprovalRequest) string {
 		return fmt.Sprintf("ticket of a run: switch itself off %d s after it is armed (notice %d s) unless confirmed", *r.WaitS, *r.NoticeS)
 	case api.ApproveRunGo:
 		return "confirmation of a run: " + runGoWords(*r.To, *r.ShutdownDelayS, *r.WithinS)
+	case api.ApproveUninstall:
+		return "uninstall of its agent (its services are removed; config and tokens stay)"
 	case api.ApproveSocketSet:
 		// by its ids; the route that sends it says it with the socket's name (approvalTarget.words)
 		return fmt.Sprintf("switch %s the socket %s of %s", *r.To, *r.Socket, *r.Source)
@@ -398,6 +400,13 @@ func (c *reqCtx) notNeeded(t approvalTarget, reason string) error {
 			reason = "no reason"
 		}
 		return apierr.New(409, t.name+" answered that switching a socket needs no approval ("+textsafe.Clip(reason, 40)+"), which no machine says: a socket is switched only with a passkey approval. Nothing was sent.")
+	case t.req.Verb == api.ApproveUninstall:
+		// The same for an uninstall: a machine without the check refuses it (approval_off), and none says
+		// "needs none" for it.
+		if reason == "" {
+			reason = "no reason"
+		}
+		return apierr.New(409, t.name+" answered that uninstalling its agent needs no approval ("+textsafe.Clip(reason, 40)+"), which no machine says: an agent is uninstalled only with a passkey approval. Nothing was sent.")
 	case t.req.Verb == api.ApproveTrustSet:
 		return nil // Turn on: its caller takes "no challenge" as "not switched on"
 	case reason == "fan_window" && isFanRequest(t.req):

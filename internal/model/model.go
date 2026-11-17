@@ -263,6 +263,9 @@ type System struct {
 	// true, or false with SleepNote saying why. Not copied onto a Proxmox node an agent runs on.
 	Sleep     *bool   `json:"sleep,omitempty"`
 	SleepNote *string `json:"sleep_note,omitempty"`
+	// Uninstall: the host's agent offers "Uninstall agent" (its features.uninstall: uninstall.enabled in its own
+	// config.yaml, Fairy-agent 0.11.0). The menu item shows only then; the machine still decides.
+	Uninstall bool `json:"uninstall,omitempty"`
 	// Helper is the Windows agent's elevated helper (nil: Linux, or an agent older than v0.5.0).
 	Helper *Helper `json:"helper,omitempty"`
 	// Approval is the machine's own check of passkey approvals (nil: an agent from before it, or none).
